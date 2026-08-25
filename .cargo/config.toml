@@ -1,0 +1,14 @@
+# Both flags are load-bearing — verified by the integration spike (research/reports/fill-0.md):
+#
+# +crt-static: the bun-webkit JSC prebuilt, redjs's C++ glue and vendored yoga are all /MT.
+#   Without this the link mixes libcmt with msvcrt (LNK4098, two heaps, allocator-crossing
+#   crashes the moment a pointer allocated on one side is freed on the other).
+#
+# /STACK 8 MiB reserve, 1 MiB commit: the PE default 1 MiB gives JSC only ~8k JS frames
+#   before RangeError; 8 MiB gives ~45k. Vue's patch/unmount recursion needs the headroom.
+#   The reserve is address space, not RAM.
+#
+# Always build with an explicit `--target x86_64-pc-windows-msvc` so build scripts and
+# proc macros are compiled for the host WITHOUT these rustflags.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608,1048576"]

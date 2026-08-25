@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    # "crates/vn-runtime",  # JS host: context boot, pump, bridge, host_fn!
+    # "crates/vn-tree",     # retained node tree + renderer host fns
+    # "crates/vn-css",      # StyleEngine trait, cascade, animator
+    # "crates/vn-window",   # window chrome: backdrops, dark mode, titlebar
+    # "crates/vn-app",      # host binary shell
+]
+
+# vendor/redjs is a git submodule (https://github.com/argon-chat/redjs) consumed as a
+# path dep (vendor/redjs/redjs). NOTE: it currently path-depends on `../../redcss`
+# (PEWPEW's CSS crate) unconditionally — until that dep is feature-gated upstream,
+# building redjs from this workspace requires either the PEWPEW checkout or a
+# vendor/redcss stub. Tracked in docs/ARCHITECTURE.md §5.
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

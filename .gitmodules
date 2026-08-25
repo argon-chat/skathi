@@ -1,0 +1,3 @@
+[submodule "vendor/redjs"]
+	path = vendor/redjs
+	url = https://github.com/argon-chat/redjs.git

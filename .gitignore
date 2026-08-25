@@ -1,0 +1,14 @@
+# Rust
+/target/
+
+# JS
+node_modules/
+dist/
+
+# Research clones (read-only study material; reports are tracked)
+/research/zed/
+/research/gpui-vue/
+
+# Local junk
+*.log
+.DS_Store
