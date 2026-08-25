@@ -1,3 +1,8 @@
 [submodule "vendor/redjs"]
 	path = vendor/redjs
 	url = https://github.com/argon-chat/redjs.git
+[submodule "vendor/zed"]
+	path = vendor/zed
+	url = https://github.com/argon-chat/zed.git
+	branch = vue-native
+	shallow = true

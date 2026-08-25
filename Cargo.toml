@@ -5,8 +5,18 @@ members = [
     # "crates/vn-tree",     # retained node tree + renderer host fns
     # "crates/vn-css",      # StyleEngine trait, cascade, animator
     # "crates/vn-window",   # window chrome: backdrops, dark mode, titlebar
-    # "crates/vn-app",      # host binary shell
+    "crates/vn-app",        # host binary shell
 ]
+# Path deps inside the workspace directory auto-join the workspace unless
+# excluded; vendor crates must resolve against their OWN workspace roots
+# (zed's / redjs's) for `.workspace = true` field inheritance.
+exclude = ["vendor"]
+
+# Replicated from vendor/zed's workspace root: gpui depends on async-task
+# APIs that only exist on this fork rev, and [patch] sections apply only from
+# THIS workspace root, never from a path dependency's own workspace.
+[patch.crates-io]
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 
 # vendor/redjs is a git submodule (https://github.com/argon-chat/redjs) consumed as a
 # path dep (vendor/redjs/redjs). NOTE: it currently path-depends on `../../redcss`
