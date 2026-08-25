@@ -81,12 +81,16 @@ const nodeOps = {
   },
 };
 
+const hyphenate = (s) => s.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
+
 function patchProp(el, key, prev, next) {
   if (key === "style") {
     const p = prev || {};
     const n = next || {};
-    for (const k in p) if (!(k in n)) __vn_set_style(el.id, I(k), "");
-    for (const k in n) if (p[k] !== n[k]) __vn_set_style(el.id, I(k), String(n[k]));
+    for (const k in p) if (!(k in n)) __vn_set_style(el.id, I(hyphenate(k)), "");
+    for (const k in n) if (p[k] !== n[k]) __vn_set_style(el.id, I(hyphenate(k)), String(n[k]));
+  } else if (key === "class") {
+    if (prev !== next) __vn_set_class(el.id, next == null ? "" : String(next));
   } else if (key.startsWith("on")) {
     const name = key.slice(2).toLowerCase();
     const code = EV_CODES[name];
@@ -111,56 +115,53 @@ __vn_set_dispatcher((nodeId, evCode) => {
 
 const renderer = createRenderer({ ...nodeOps, patchProp });
 
-// ---- demo app: a reactive counter ----------------------------------------
+// ---- demo app: real CSS — classes, :hover, descendant selectors ----------
+__vn_set_stylesheet(`
+  .stack {
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 16px; background: #ffffff14; border-radius: 12px;
+  }
+  .title { font-size: 15px; color: #ffffff; }
+  .title .accent { color: #7fd4ff; font-weight: 700; }
+  .btn {
+    display: flex; padding: 10px; width: 170px;
+    background: #4f8cff59; border-radius: 8px;
+    font-size: 13px; color: #ffffff; cursor: pointer;
+    border: 1px solid #6ea4ff66;
+  }
+  .btn:hover  { background: #4f8cffcc; border: 1px solid #9cc2ffcc; }
+  .btn:active { background: #2f6ce0; }
+  .hint { font-size: 12px; color: #a5f3a5; }
+  .stack .footnote { font-size: 11px; color: #ffffff66; }
+`);
+
 const App = {
   setup() {
     const count = ref(0);
     return () =>
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
-            padding: "16px",
-            background: "#ffffff14",
-            borderRadius: "12px",
+      h("div", { class: "stack" }, [
+        h("div", { class: "title" }, [
+          "Vue " + version + " + real CSS — count = ",
+          h("span", { class: "accent" }, String(count.value)),
+        ]),
+        h(
+          "div",
+          {
+            class: "btn",
+            // inline style must beat the sheet (cascade order proof):
+            style: count.value >= 10 ? { background: "#e0a03c99" } : null,
+            onClick: () => count.value++,
           },
-        },
-        [
-          h(
-            "div",
-            { style: { fontSize: "15px", color: "#ffffff" } },
-            `Vue ${version} says: count = ${count.value}`,
-          ),
-          h(
-            "div",
-            {
-              style: {
-                padding: "10px",
-                width: "140px",
-                background: "#4f8cff59",
-                borderRadius: "8px",
-                fontSize: "13px",
-                color: "#ffffff",
-              },
-              onClick: () => count.value++,
-            },
-            "Click me (+1)",
-          ),
-          count.value > 0 && count.value % 5 === 0
-            ? h(
-                "div",
-                { style: { fontSize: "12px", color: "#a5f3a5" } },
-                `conditional branch: ${count.value} is divisible by 5`,
-              )
-            : null,
-        ],
-      );
+          count.value >= 10 ? "inline style override (>=10)" : "Click me (+1) — hover me too",
+        ),
+        count.value > 0 && count.value % 5 === 0
+          ? h("div", { class: "hint" }, `conditional: ${count.value} is divisible by 5`)
+          : null,
+        h("div", { class: "footnote" }, "styled by vn-css: lightningcss + parcel_selectors + gpui ladder"),
+      ]);
   },
 };
 
 const root = mk(__vn_create_root(), 1, "root");
 renderer.createApp(App).mount(root);
-__vn_log(`Vue ${version} mounted through the __vn_* renderer`);
+__vn_log(`Vue ${version} mounted; stylesheet compiled by vn-css`);

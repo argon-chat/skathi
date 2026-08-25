@@ -14,7 +14,6 @@ pub enum Kind {
     Anchor,
 }
 
-#[derive(Debug)]
 pub struct Node {
     pub kind: Kind,
     pub tag: u32,
@@ -23,10 +22,16 @@ pub struct Node {
     /// Text content: node text for `Kind::Text`, inline text (exclusive with
     /// children) for `Kind::Element` via `setElementText`.
     pub text: String,
-    /// (interned key, raw value) pairs, last write wins. v0 style transport.
+    /// (interned kebab-case property, raw value) pairs, last write wins —
+    /// the inline-style transport; parsed lazily into `inline_cache`.
     pub style: Vec<(u32, String)>,
+    pub classes: Vec<String>,
     /// Bitmask of EV_* the JS side listens for.
     pub listeners: u32,
+    pub(crate) inline_dirty: bool,
+    pub(crate) inline_cache: Option<std::rc::Rc<gpui::StyleRefinement>>,
+    /// The folded cascade result, filled by the restyle pass.
+    pub computed: Option<vn_css::ComputedStates>,
 }
 
 #[derive(Default)]
@@ -113,7 +118,11 @@ impl Tree {
             children: Vec::new(),
             text: String::new(),
             style: Vec::new(),
+            classes: Vec::new(),
             listeners: 0,
+            inline_dirty: false,
+            inline_cache: None,
+            computed: None,
         })
     }
 
@@ -219,11 +228,21 @@ impl Tree {
 
     pub fn set_style(&mut self, id: u32, key: u32, value: String) {
         if let Some(n) = self.node_mut(id) {
-            if let Some(slot) = n.style.iter_mut().find(|(k, _)| *k == key) {
+            if value.is_empty() {
+                n.style.retain(|(k, _)| *k != key);
+            } else if let Some(slot) = n.style.iter_mut().find(|(k, _)| *k == key) {
                 slot.1 = value;
             } else {
                 n.style.push((key, value));
             }
+            n.inline_dirty = true;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_class(&mut self, id: u32, classes: &str) {
+        if let Some(n) = self.node_mut(id) {
+            n.classes = classes.split_whitespace().map(str::to_string).collect();
             self.dirty = true;
         }
     }
@@ -242,5 +261,151 @@ impl Tree {
 
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// The restyle pass: re-parse dirty inline styles, then run the cascade
+    /// for every element node. Runs once per JS wave that touched the tree —
+    /// never during a draw.
+    pub fn restyle(&mut self, engine: Option<&vn_css::Engine>) {
+        // 1. Re-parse changed inline styles.
+        let dirty_inline: Vec<u32> = (1..self.nodes.len() as u32)
+            .filter(|&id| self.node(id).is_some_and(|n| n.inline_dirty))
+            .collect();
+        for id in dirty_inline {
+            let body = {
+                let n = self.node(id).unwrap();
+                n.style
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", self.name(*k), v))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            let mut diags = Vec::new();
+            let parsed = (!body.is_empty()).then(|| std::rc::Rc::new(vn_css::parse_inline(&body, &mut diags)));
+            for d in diags {
+                eprintln!("[css inline] {d}");
+            }
+            let n = self.node_mut(id).unwrap();
+            n.inline_cache = parsed;
+            n.inline_dirty = false;
+        }
+
+        // 2. Cascade (immutable walk), then store.
+        let computed: Vec<(u32, vn_css::ComputedStates)> = {
+            let this: &Tree = self;
+            (1..this.nodes.len() as u32)
+                .filter_map(|id| {
+                    let n = this.node(id)?;
+                    if n.kind != Kind::Element {
+                        return None;
+                    }
+                    let inline = n.inline_cache.as_deref();
+                    let states = match engine {
+                        Some(e) => e.compute(NodeRef { tree: this, id }, inline),
+                        None => vn_css::ComputedStates {
+                            base: inline
+                                .map(|r| std::rc::Rc::new(r.clone()))
+                                .unwrap_or_default(),
+                            hover: None,
+                            active: None,
+                        },
+                    };
+                    Some((id, states))
+                })
+                .collect()
+        };
+        for (id, states) in computed {
+            if let Some(n) = self.node_mut(id) {
+                n.computed = Some(states);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// cascade wiring
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static ENGINE: RefCell<Option<vn_css::Engine>> = const { RefCell::new(None) };
+}
+
+pub fn set_engine(engine: vn_css::Engine) {
+    for d in &engine.diagnostics {
+        eprintln!("[css] {d}");
+    }
+    ENGINE.with(|c| *c.borrow_mut() = Some(engine));
+}
+
+/// Restyles under the current engine (or inline-only when none is set).
+pub fn restyle_all() {
+    ENGINE.with(|eng| {
+        let eng = eng.borrow();
+        with_tree(|t| t.restyle(eng.as_ref()));
+    });
+}
+
+/// The matcher's view of one element node.
+#[derive(Clone, Copy)]
+pub struct NodeRef<'t> {
+    pub tree: &'t Tree,
+    pub id: u32,
+}
+
+impl<'t> NodeRef<'t> {
+    fn node(&self) -> &'t Node {
+        self.tree.node(self.id).expect("NodeRef points at a live node")
+    }
+
+    fn element_sibling(&self, forward: bool) -> Option<NodeRef<'t>> {
+        let parent = self.node().parent;
+        if parent == 0 {
+            return None;
+        }
+        let siblings = &self.tree.node(parent)?.children;
+        let pos = siblings.iter().position(|&c| c == self.id)?;
+        let range: Box<dyn Iterator<Item = u32>> = if forward {
+            Box::new(siblings[pos + 1..].iter().copied())
+        } else {
+            Box::new(siblings[..pos].iter().rev().copied())
+        };
+        for id in range {
+            if self.tree.node(id).is_some_and(|n| n.kind == Kind::Element) {
+                return Some(NodeRef { tree: self.tree, id });
+            }
+        }
+        None
+    }
+}
+
+impl<'t> vn_css::MatchDom for NodeRef<'t> {
+    fn parent(&self) -> Option<Self> {
+        let p = self.node().parent;
+        (p != 0).then(|| NodeRef { tree: self.tree, id: p })
+    }
+    fn prev_sibling(&self) -> Option<Self> {
+        self.element_sibling(false)
+    }
+    fn next_sibling(&self) -> Option<Self> {
+        self.element_sibling(true)
+    }
+    fn has_tag(&self, name: &str) -> bool {
+        self.tree.name(self.node().tag) == name
+    }
+    fn tag_eq(&self, other: &Self) -> bool {
+        self.node().tag == other.node().tag
+    }
+    fn has_class(&self, name: &str) -> bool {
+        self.node().classes.iter().any(|c| c == name)
+    }
+    fn is_empty(&self) -> bool {
+        self.node().children.is_empty() && self.node().text.is_empty()
+    }
+    fn is_root(&self) -> bool {
+        self.node().parent == 0
     }
 }

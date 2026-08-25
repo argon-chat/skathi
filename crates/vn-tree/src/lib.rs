@@ -89,6 +89,21 @@ host_fn!(fn vn_set_style(g, args) {
     UNDEF
 });
 
+host_fn!(fn vn_set_class(g, args) {
+    let id = arg_id(args.arg(0));
+    let classes = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    tree::with_tree(|t| t.set_class(id, &classes));
+    UNDEF
+});
+
+host_fn!(fn vn_set_stylesheet(g, args) {
+    let css = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
+    tree::set_engine(vn_css::Engine::compile(&css));
+    // Every node needs a fresh cascade under the new sheet.
+    tree::with_tree(|t| t.mark_dirty());
+    UNDEF
+});
+
 host_fn!(fn vn_set_listener(g, args) {
     let id = arg_id(args.arg(0));
     let event = arg_id(args.arg(1));
@@ -121,6 +136,8 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_insert", 3, vn_insert as *const _),
         ("__vn_remove", 1, vn_remove as *const _),
         ("__vn_set_style", 3, vn_set_style as *const _),
+        ("__vn_set_class", 2, vn_set_class as *const _),
+        ("__vn_set_stylesheet", 1, vn_set_stylesheet as *const _),
         ("__vn_set_listener", 3, vn_set_listener as *const _),
         ("__vn_create_root", 0, vn_create_root as *const _),
         ("__vn_set_dispatcher", 1, vn_set_dispatcher as *const _),
@@ -130,10 +147,14 @@ pub fn install(rt: &JsRuntime) {
     }
 }
 
-/// True when mutations happened since the last call — the pump uses this to
-/// notify the root view exactly once per JS wave.
-pub fn take_dirty() -> bool {
-    tree::with_tree(|t| t.take_dirty())
+/// Call after a JS wave: if the tree changed, run the restyle pass (inline
+/// parse + cascade) and report `true` so the caller notifies the root view.
+pub fn flush_changes() -> bool {
+    let dirty = tree::with_tree(|t| t.take_dirty());
+    if dirty {
+        tree::restyle_all();
+    }
+    dirty
 }
 
 /// Dispatches an input event into JS (through the registered dispatcher) and

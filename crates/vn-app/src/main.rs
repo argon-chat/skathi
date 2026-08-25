@@ -97,7 +97,7 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     });
     // One notify per JS wave that touched the tree — the draw right after
     // this callback picks it up (same frame).
-    if vn_tree::take_dirty() {
+    if vn_tree::flush_changes() {
         SHELL.with(|s| {
             if let Some(shell) = s.borrow().as_ref().and_then(|w| w.upgrade()) {
                 shell.update(cx, |_, cx| cx.notify());
