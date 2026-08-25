@@ -96,6 +96,13 @@ host_fn!(fn vn_set_class(g, args) {
     UNDEF
 });
 
+host_fn!(fn vn_add_scope(g, args) {
+    let id = arg_id(args.arg(0));
+    let scope = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    tree::with_tree(|t| t.add_scope(id, scope));
+    UNDEF
+});
+
 host_fn!(fn vn_set_stylesheet(g, args) {
     let css = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     tree::set_engine(vn_css::Engine::compile(&css));
@@ -137,6 +144,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_remove", 1, vn_remove as *const _),
         ("__vn_set_style", 3, vn_set_style as *const _),
         ("__vn_set_class", 2, vn_set_class as *const _),
+        ("__vn_add_scope", 2, vn_add_scope as *const _),
         ("__vn_set_stylesheet", 1, vn_set_stylesheet as *const _),
         ("__vn_set_listener", 3, vn_set_listener as *const _),
         ("__vn_create_root", 0, vn_create_root as *const _),

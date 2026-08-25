@@ -26,6 +26,9 @@ pub struct Node {
     /// the inline-style transport; parsed lazily into `inline_cache`.
     pub style: Vec<(u32, String)>,
     pub classes: Vec<String>,
+    /// Vue `<style scoped>` hashes (`data-v-...`); a child component's root
+    /// carries two — its own and its parent's.
+    pub scopes: Vec<String>,
     /// Bitmask of EV_* the JS side listens for.
     pub listeners: u32,
     pub(crate) inline_dirty: bool,
@@ -119,6 +122,7 @@ impl Tree {
             text: String::new(),
             style: Vec::new(),
             classes: Vec::new(),
+            scopes: Vec::new(),
             listeners: 0,
             inline_dirty: false,
             inline_cache: None,
@@ -237,6 +241,15 @@ impl Tree {
             }
             n.inline_dirty = true;
             self.dirty = true;
+        }
+    }
+
+    pub fn add_scope(&mut self, id: u32, scope: String) {
+        if let Some(n) = self.node_mut(id) {
+            if !n.scopes.contains(&scope) {
+                n.scopes.push(scope);
+                self.dirty = true;
+            }
         }
     }
 
@@ -401,6 +414,9 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
     }
     fn has_class(&self, name: &str) -> bool {
         self.node().classes.iter().any(|c| c == name)
+    }
+    fn has_scope(&self, name: &str) -> bool {
+        self.node().scopes.iter().any(|s| s == name)
     }
     fn is_empty(&self) -> bool {
         self.node().children.is_empty() && self.node().text.is_empty()

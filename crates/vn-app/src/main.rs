@@ -20,6 +20,7 @@ const PRELUDE_JS: &str = r#"
     globalThis.__VUE_OPTIONS_API__ = true;
     globalThis.__VUE_PROD_DEVTOOLS__ = false;
     globalThis.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__ = false;
+    globalThis.__VN_CSS__ = [];
     let ticks = 0;
     setInterval(() => {
         ticks += 1;

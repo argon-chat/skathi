@@ -216,6 +216,9 @@ fn probe_runnable(sel: &Selector<'_>) -> bool {
         fn has_class(&self, _: &str) -> bool {
             false
         }
+        fn has_scope(&self, _: &str) -> bool {
+            false
+        }
         fn is_empty(&self) -> bool {
             true
         }

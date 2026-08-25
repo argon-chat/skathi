@@ -29,6 +29,8 @@ pub trait MatchDom: Copy {
     fn has_tag(&self, name: &str) -> bool;
     fn tag_eq(&self, other: &Self) -> bool;
     fn has_class(&self, name: &str) -> bool;
+    /// Vue `<style scoped>` hash: does the node carry `data-v-...`?
+    fn has_scope(&self, name: &str) -> bool;
     fn is_empty(&self) -> bool;
     fn is_root(&self) -> bool;
 }
@@ -94,10 +96,16 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
     fn attr_matches(
         &self,
         _ns: &NamespaceConstraint<&<Self::Impl as SelectorImpl<'i>>::NamespaceUrl>,
-        _local_name: &<Self::Impl as SelectorImpl<'i>>::LocalName,
-        _operation: &AttrSelectorOperation<&<Self::Impl as SelectorImpl<'i>>::AttrValue>,
+        local_name: &<Self::Impl as SelectorImpl<'i>>::LocalName,
+        operation: &AttrSelectorOperation<&<Self::Impl as SelectorImpl<'i>>::AttrValue>,
     ) -> bool {
-        false // attributes land with Vue scoped-CSS support
+        // Vue scoped CSS: `[data-v-xxxx]` is a bare-presence test on the hot
+        // path of every scoped rule. Other attribute selectors: later.
+        let name: &str = local_name.0.as_ref();
+        if name.starts_with("data-v-") {
+            return matches!(operation, AttrSelectorOperation::Exists) && self.0.has_scope(name);
+        }
+        false
     }
 
     fn match_non_ts_pseudo_class<F>(
