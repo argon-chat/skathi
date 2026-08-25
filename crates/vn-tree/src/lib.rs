@@ -21,12 +21,13 @@ mod tree;
 pub use render::build_root;
 pub use tree::{
     with_tree, EV_BLUR, EV_CLICK, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP, EV_MOUSEDOWN,
-    EV_MOUSEUP, EV_WHEEL,
+    EV_MOUSEUP, EV_SCROLL, EV_WHEEL,
 };
 
 /// The numeric payload a native input event carries into JS. Meaning by event:
 /// mouse: a=x b=y c=button d=modifier bits; wheel: a=deltaX b=deltaY d=mods;
-/// key: d=mods + `key` (DOM name); input: `key` = the new text value.
+/// key: d=mods + `key` (DOM name); input: `key` = the new text value;
+/// scroll: a=scrollLeft b=scrollTop (CSS convention — positive px).
 /// Modifier bits: 1 ctrl, 2 shift, 4 alt, 8 meta.
 #[derive(Default)]
 pub struct EventPayload<'a> {
@@ -191,8 +192,19 @@ pub fn flush_changes() -> bool {
     if dirty {
         tree::restyle_all();
         render::gc_node_state();
+        tree::animator_gc();
     }
     dirty
+}
+
+/// True while any CSS transition runs — the host keeps repainting.
+pub fn animating() -> bool {
+    tree::animating()
+}
+
+/// Mirrors the OS reduced-motion preference into the transition animator.
+pub fn set_reduce_motion(on: bool) {
+    tree::set_reduce_motion(on);
 }
 
 /// Dispatches an input event into JS (through the registered dispatcher) and

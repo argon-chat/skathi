@@ -18,16 +18,17 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, ShapedLine, Task, UTF16Selection, Window, px,
+    App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, KeyDownEvent,
+    KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ShapedLine,
+    Subscription, Task, UTF16Selection, Window, px,
 };
 
 use super::boundaries;
 use super::{
     Backspace, ClearSelection, Copy, Cut, Delete, DeleteToEnd, DeleteToStart, DeleteWordLeft,
-    DeleteWordRight, End, Home, Left, OnChange, Paste, Redo, Right, SelectAll, SelectEnd,
+    DeleteWordRight, End, Home, Left, OnChange, OnKeyDown, Paste, Redo, Right, SelectAll, SelectEnd,
     SelectHome, SelectLeft, SelectRight, SelectWordLeft, SelectWordRight, ShowCharacterPalette,
-    Undo, WordLeft, WordRight,
+    TextInputHandlers, Undo, WordLeft, WordRight,
 };
 
 /// How many self-reported values are remembered so the framework echoing them
@@ -141,12 +142,31 @@ pub struct TextInputState {
     marked_range: Option<Range<usize>>,
     read_only: bool,
     on_change: Option<OnChange>,
+    on_key_down: Option<OnKeyDown>,
+
+    /// Set when `on_key_down` cancelled a keystroke that would have produced a
+    /// character.
+    ///
+    /// Consuming the key event is usually enough — a platform that asks the app
+    /// first (Windows re-sends `WM_KEYDOWN` as `WM_GPUI_KEYDOWN` and skips
+    /// `TranslateMessage` when it is handled) then never produces the
+    /// character. But not every path is gated on that: gpui's own
+    /// `replay_pending_input` feeds `dispatch_input` straight to the input
+    /// handler after a multi-stroke binding fails to complete. So the widget
+    /// also refuses the text itself. Cleared by the next keystroke.
+    suppress_text_input: bool,
+    /// Keeps the app-wide keystroke interceptor alive for this input's
+    /// lifetime; see [`Self::on_intercept_keystroke`].
+    _key_interceptor: Option<Subscription>,
 
     /// Values we reported through `on_change`, newest last.
     pending_values: VecDeque<String>,
-    /// The last value the framework pushed in, so re-syncing an unchanged prop
-    /// every frame is free.
-    last_synced_value: Option<String>,
+    /// The framework's write counter for the last value assignment we applied,
+    /// so re-reading an untouched prop every frame is free. Keyed on the
+    /// counter rather than the string: two assignments of the same value are
+    /// two assignments, and the second one still has to land if the user typed
+    /// in between (`v-model` clearing a field the user refilled).
+    last_synced_write: Option<u32>,
 
     undo_stack: Vec<EditSnapshot>,
     redo_stack: Vec<EditSnapshot>,
@@ -170,6 +190,17 @@ impl TextInputState {
     /// in the signature so the framework's construction site does not have to
     /// change when it becomes needed.
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // A DOM `keydown` listener runs before the browser's default action for
+        // the key. gpui resolves key *bindings* (our editing actions) before it
+        // ever reaches element key listeners, so a plain `on_key_down` would
+        // arrive after `backspace` had already deleted. The keystroke
+        // interceptor is the one hook that runs first — `cx.stop_propagation()`
+        // in it suppresses binding dispatch for the keystroke.
+        let weak = cx.weak_entity();
+        let interceptor = cx.intercept_keystrokes(move |event, window, cx| {
+            weak.update(cx, |this, cx| this.on_intercept_keystroke(event, window, cx))
+                .ok();
+        });
         Self {
             focus_handle: cx.focus_handle(),
             content: String::new(),
@@ -178,8 +209,11 @@ impl TextInputState {
             marked_range: None,
             read_only: false,
             on_change: None,
+            on_key_down: None,
+            suppress_text_input: false,
+            _key_interceptor: Some(interceptor),
             pending_values: VecDeque::new(),
-            last_synced_value: None,
+            last_synced_write: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             is_selecting: false,
@@ -201,15 +235,20 @@ impl TextInputState {
 
     /// Controlled-value sync from the framework (Vue `v-model`).
     ///
-    /// Idempotent: passing the same value again is a no-op, so this can be
-    /// called unconditionally every frame. A value that matches one this input
-    /// itself reported is swallowed (echo ring); any other change is treated as
-    /// external and hard-resets content, caret and undo history.
-    pub fn sync_value(&mut self, value: &str, cx: &mut Context<Self>) {
-        if self.last_synced_value.as_deref() == Some(value) {
+    /// `write` identifies the *assignment*: the framework bumps it every time
+    /// something writes the `value` prop, even when the string is unchanged.
+    /// Idempotent in that re-passing the same `write` is a no-op, so this can
+    /// be called unconditionally every frame; a fresh `write` always lands,
+    /// which is what makes `v-model` able to clear a field twice in a row.
+    ///
+    /// A value that matches one this input itself reported is swallowed (echo
+    /// ring); any other change is treated as external and hard-resets content,
+    /// caret and undo history.
+    pub fn sync_value(&mut self, value: &str, write: u32, cx: &mut Context<Self>) {
+        if self.last_synced_write == Some(write) {
             return;
         }
-        self.last_synced_value = Some(value.to_owned());
+        self.last_synced_write = Some(write);
 
         if take_echo(&mut self.pending_values, value) {
             return;
@@ -245,9 +284,53 @@ impl TextInputState {
     }
 
     /// Per-frame parameters pushed in by [`super::text_input`].
-    pub(crate) fn set_frame_params(&mut self, on_change: OnChange, read_only: bool) {
-        self.on_change = Some(on_change);
+    pub(crate) fn set_frame_params(&mut self, handlers: TextInputHandlers, read_only: bool) {
+        self.on_change = handlers.on_change;
+        self.on_key_down = handlers.on_key_down;
         self.read_only = read_only;
+    }
+
+    /// DOM `tabindex`: `Some(n >= 0)` puts this input in the tab order at index
+    /// `n`, `Some(n < 0)` keeps it focusable but skipped by `Tab`, `None` takes
+    /// it out. gpui reads both values off the focus handle when the element is
+    /// painted, so this rewrites the handle in place (same `FocusId` — focus is
+    /// not disturbed).
+    pub fn set_tab_index(&mut self, index: Option<isize>) {
+        let tab_index = index.unwrap_or(0);
+        let tab_stop = index.is_some_and(|n| n >= 0);
+        if self.focus_handle.tab_index == tab_index && self.focus_handle.tab_stop == tab_stop {
+            return;
+        }
+        self.focus_handle = self.focus_handle.clone().tab_index(tab_index).tab_stop(tab_stop);
+    }
+
+    /// The `keydown` hook, run for every keystroke the window sees, before gpui
+    /// resolves key bindings. Only the focused input reacts.
+    fn on_intercept_keystroke(
+        &mut self,
+        event: &KeystrokeEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.suppress_text_input = false;
+        if !self.focus_handle.is_focused(window) {
+            return;
+        }
+        let Some(on_key_down) = self.on_key_down.clone() else {
+            return;
+        };
+        let key_down = KeyDownEvent {
+            keystroke: event.keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        };
+        if on_key_down(&key_down, window, cx) {
+            return;
+        }
+        // preventDefault(): no binding action for this keystroke, and no
+        // character insertion if it was going to produce one.
+        self.suppress_text_input = event.keystroke.key_char.is_some();
+        cx.stop_propagation();
     }
 
     // ---------------------------------------------------------------- editing
@@ -861,6 +944,11 @@ impl EntityInputHandler for TextInputState {
         cx: &mut Context<Self>,
     ) {
         if self.read_only {
+            return;
+        }
+        // The keystroke that would have produced this text was cancelled by a
+        // `keydown` handler; the platform still delivered the character.
+        if std::mem::take(&mut self.suppress_text_input) && range_utf16.is_none() {
             return;
         }
         let range = range_utf16

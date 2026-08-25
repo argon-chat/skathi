@@ -22,37 +22,90 @@ use lightningcss::values::color::CssColor;
 use lightningcss::values::length::{Length as CssLength, LengthPercentage, LengthPercentageOrAuto, LengthValue};
 use lightningcss::values::percentage::DimensionPercentage;
 
-/// Converts a declaration block into (normal, important) refinements.
-pub(crate) fn convert_block(
-    block: &DeclarationBlock,
-    diagnostics: &mut Vec<String>,
-) -> (Option<Rc<StyleRefinement>>, Option<Rc<StyleRefinement>>) {
-    let mut convert = |props: &[Property]| -> Option<Rc<StyleRefinement>> {
-        if props.is_empty() {
-            return None;
-        }
-        let mut r = StyleRefinement::default();
-        for p in props {
-            apply(p, &mut r, diagnostics);
-        }
-        Some(Rc::new(r))
-    };
-    (convert(&block.declarations), convert(&block.important_declarations))
+use crate::transition::{Collector, TransitionSpec};
+
+/// One declaration block, split into the normal/important refinements and the
+/// transition lists each half declares (`None` = the half declared none, which
+/// is what lets a later rule's `transition` override an earlier one without an
+/// empty list being mistaken for `transition: none`).
+pub(crate) struct Converted {
+    pub normal: Option<Rc<StyleRefinement>>,
+    pub important: Option<Rc<StyleRefinement>>,
+    pub normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
+    pub important_transitions: Option<Rc<Vec<TransitionSpec>>>,
+}
+
+/// Converts a declaration block into (normal, important) refinements plus the
+/// transitions each half declares.
+pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<String>) -> Converted {
+    let mut convert =
+        |props: &[Property]| -> (Option<Rc<StyleRefinement>>, Option<Rc<Vec<TransitionSpec>>>) {
+            if props.is_empty() {
+                return (None, None);
+            }
+            let mut r = StyleRefinement::default();
+            let mut transitions = Collector::default();
+            let mut styled = false;
+            for p in props {
+                if transitions.take(p, diagnostics) {
+                    continue;
+                }
+                apply(p, &mut r, diagnostics);
+                styled = true;
+            }
+            (
+                styled.then(|| Rc::new(r)),
+                transitions.finish().map(Rc::new),
+            )
+        };
+    let (normal, normal_transitions) = convert(&block.declarations);
+    let (important, important_transitions) = convert(&block.important_declarations);
+    Converted {
+        normal,
+        important,
+        normal_transitions,
+        important_transitions,
+    }
 }
 
 /// Parses an inline `style` body ("color: red; padding: 4px") into a
 /// refinement — the transport for Vue `:style` objects and `style=""` strings.
+///
+/// Transitions declared inline are DROPPED here (the refinement has nowhere to
+/// carry them); use [`parse_inline_with_transitions`] to keep them.
 pub fn parse_inline(body: &str, diagnostics: &mut Vec<String>) -> StyleRefinement {
+    let (refinement, transitions) = parse_inline_with_transitions(body, diagnostics);
+    if !transitions.is_empty() {
+        diagnostics.push(
+            "inline `transition` is parsed but dropped by parse_inline — the caller must use \
+             parse_inline_with_transitions to honor it"
+                .into(),
+        );
+    }
+    refinement
+}
+
+/// Parses an inline `style` body into a refinement plus the transitions it
+/// declares. An empty `Vec` means "declared none"; `transition: none` also
+/// yields an empty `Vec` (it clears, and inline is the last cascade origin).
+pub fn parse_inline_with_transitions(
+    body: &str,
+    diagnostics: &mut Vec<String>,
+) -> (StyleRefinement, Vec<TransitionSpec>) {
     let mut r = StyleRefinement::default();
+    let mut transitions = Collector::default();
     match DeclarationBlock::parse_string(body, ParserOptions::default()) {
         Ok(block) => {
             for p in block.declarations.iter().chain(block.important_declarations.iter()) {
+                if transitions.take(p, diagnostics) {
+                    continue;
+                }
                 apply(p, &mut r, diagnostics);
             }
         }
         Err(e) => diagnostics.push(format!("inline style parse error: {e} in {body:?}")),
     }
-    r
+    (r, transitions.finish().unwrap_or_default())
 }
 
 // ---------------------------------------------------------------------------

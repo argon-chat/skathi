@@ -27,8 +27,11 @@ const EV_CODES = {
   focus: 7,
   blur: 8,
   input: 9,
+  scroll: 10,
 };
-const NO_BUBBLE = new Set(["focus", "blur"]);
+// Per the UI Events spec these fire at the target only. (`scroll` bubbles from
+// the *document*, never from an element.)
+const NO_BUBBLE = new Set(["focus", "blur", "scroll"]);
 const nodesById = new Map();
 
 // ---- JS mirror nodes ------------------------------------------------------
@@ -59,6 +62,10 @@ function mk(id, kind, tag) {
   if (kind === 1) {
     n.tagName = String(tag).toUpperCase();
     n.value = "";
+    // Scroll containers report their position through these, exactly like the
+    // DOM: CSS convention, positive px, 0 before the first scroll.
+    n.scrollLeft = 0;
+    n.scrollTop = 0;
     // Own-property methods shadow any prototype ones: these route into the
     // same registry the renderer's props use, so propagation sees both.
     n.addEventListener = (name, fn, opts) => addExtraListener(n, name, fn, opts);
@@ -136,7 +143,11 @@ const nodeOps = {
   setScopeId: (el, id) => __vn_add_scope(el.id, id),
 };
 
-const hyphenate = (s) => s.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
+// @vue/shared's hyphenate, verbatim: `\B` so a leading capital is only
+// lowercased, never prefixed. Style keys are camelCase either way, but
+// `withKeys` runs it over `KeyboardEvent.key` — "Enter" must become "enter",
+// not "-enter", or every `@keydown.enter` silently stops matching.
+const hyphenate = (s) => s.replace(/\B([A-Z])/g, "-$1").toLowerCase();
 
 function patchProp(el, key, prev, next) {
   if (key === "style") {
@@ -291,6 +302,10 @@ function synthesize(name, a, b, c, d, key) {
         if (typeof InputEvent === "function")
           return new InputEvent(name, { ...common, data: key ?? null });
         break;
+      case "scroll":
+        // A plain Event in every browser; the position is read off e.target.
+        if (typeof Event === "function") return new Event(name, common);
+        break;
     }
   } catch (e) {
     /* fall through to the generic event */
@@ -303,7 +318,9 @@ function synthesize(name, a, b, c, d, key) {
         ? { key: key ?? "", ...M }
         : name === "input"
           ? { data: key ?? null }
-          : { clientX: a, clientY: b, button: c, ...M };
+          : name === "focus" || name === "blur" || name === "scroll"
+            ? {}
+            : { clientX: a, clientY: b, button: c, ...M };
   for (const k in extra) Object.defineProperty(ev, k, { value: extra[k], configurable: true });
   return ev;
 }
@@ -375,6 +392,11 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // input/change: the payload string is the new value — mirror it onto the
   // node BEFORE dispatch so `e.target.value` reads like the browser.
   if ((name === "input" || name === "change") && key != null) target.value = key;
+  // scroll: same idea — the position lives on the element, not on the event.
+  if (name === "scroll") {
+    target.scrollLeft = a;
+    target.scrollTop = b;
+  }
   const ev = synthesize(name, a, b, c, d, key);
   return propagate(target, name, ev);
 });

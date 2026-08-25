@@ -4,9 +4,11 @@
 use std::cell::{OnceCell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::c_void;
+use std::sync::OnceLock;
 
 use redjs::api::{Context, Error, Value};
 use redjs::ffi::{self, RjsPumpStats};
+use redjs::webapi::fsutil::{ContentReadFn, ContentSinkFn};
 
 pub use redjs::web::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 
@@ -119,6 +121,42 @@ impl JsRuntime {
         ERRORS.with(|e| e.borrow_mut().drain(..).collect())
     }
 
+    /// Installs the host content provider consulted by `fetch()` and image
+    /// loads BEFORE the on-disk roots — the seam a shipped exe uses to serve
+    /// its assets straight out of the binary (research/reports/vue-renderer.md
+    /// §e.4).
+    ///
+    /// `f` receives a content-relative UTF-8 key with query/hash stripped,
+    /// separators normalized to `/`, and any leading `./` or `/` trimmed
+    /// (redjs `webapi::fsutil::clean_relative`), so `fetch("/assets/a.png")`,
+    /// `fetch("./assets/a.png")` and `fetch("assets/a.png")` all arrive as
+    /// `assets/a.png`. `None` = miss, and resolution falls through to the
+    /// on-disk roots from `redjs_webshim_install` — which is what keeps the dev
+    /// loop (loose files) working when no provider is installed.
+    ///
+    /// ## Why `Send + Sync` and not the plain `Fn` the rest of this crate uses
+    ///
+    /// The raw ABI is a bare `extern "C" fn` **with no user-data pointer**
+    /// (`ContentReadFn = fn(*const u8, usize, ContentSinkFn, *mut c_void)
+    /// -> i32`; the `*mut c_void` belongs to the *sink*, not to us), so the
+    /// closure cannot ride along on the call — it has to live in a process
+    /// global that a trampoline reaches. redjs also documents reads as
+    /// arriving from any JS thread. Hence: one provider per process, set once.
+    /// A second call is a no-op with an advisory rather than a silent swap.
+    pub fn set_content_provider(&self, f: impl Fn(&str) -> Option<Vec<u8>> + Send + Sync + 'static) {
+        if PROVIDER.set(Box::new(f)).is_err() {
+            eprintln!("[vn-runtime] set_content_provider called twice — keeping the first provider");
+            return;
+        }
+        unsafe { ffi::redjs_content_provider_set(self.ctx.raw(), content_read as *const c_void) };
+    }
+
+    /// Unregisters the provider for this context; local reads go back to the
+    /// on-disk roots. (The closure itself stays alive — see the note above.)
+    pub fn clear_content_provider(&self) {
+        unsafe { ffi::redjs_content_provider_set(self.ctx.raw(), std::ptr::null()) };
+    }
+
     /// `Name: message` + stack for an exception value, extracted immediately
     /// into owned strings.
     pub fn describe(&self, exc: Value) -> JsError {
@@ -136,6 +174,49 @@ impl JsRuntime {
             (true, true) => self.ctx.to_rust_string(exc).unwrap_or_default(),
         };
         JsError { header, stack }
+    }
+}
+
+// --- host content provider --------------------------------------------------
+
+type Provider = Box<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
+static PROVIDER: OnceLock<Provider> = OnceLock::new();
+
+/// ABI tripwire: `redjs_content_provider_set` takes an untyped `*const c_void`,
+/// so this is the only thing that makes a signature drift in redjs a compile
+/// error here instead of a stack-corrupting call at runtime.
+const _: ContentReadFn = content_read;
+
+/// The C-ABI trampoline handed to `redjs_content_provider_set`. Returns 0 after
+/// calling `sink` exactly once (hit) or non-zero (miss). Panic-shielded: a
+/// panic here would unwind through redjs' `fetch` implementation, so it is
+/// converted into a miss instead.
+unsafe extern "C" fn content_read(
+    path_ptr: *const u8,
+    path_len: usize,
+    sink: ContentSinkFn,
+    sink_ctx: *mut c_void,
+) -> i32 {
+    const MISS: i32 = 1;
+    let Some(provider) = PROVIDER.get() else { return MISS };
+    if path_ptr.is_null() {
+        return MISS;
+    }
+    let bytes = core::slice::from_raw_parts(path_ptr, path_len);
+    let Ok(key) = std::str::from_utf8(bytes) else { return MISS };
+    let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider(key)));
+    match found {
+        Ok(Some(data)) => {
+            // Contract: exactly one sink call with the FULL bytes. Empty is a
+            // legitimate hit (an empty file), and redjs' sink no-ops on len 0.
+            sink(sink_ctx, data.as_ptr(), data.len());
+            0
+        }
+        Ok(None) => MISS,
+        Err(_) => {
+            eprintln!("[vn-runtime] content provider panicked for {key:?} — treated as a miss");
+            MISS
+        }
     }
 }
 

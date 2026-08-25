@@ -2,6 +2,19 @@
 //! a Mica gpui window. The JS below drives the UI through two `host_fn!`s;
 //! the pump runs as a self-rescheduling `on_next_frame` callback — before the
 //! frame's draw, so a JS mutation lands in the same frame.
+//!
+//! ## Two boot modes, one shell
+//!
+//! Everything below the [`boot_mode`] alias is identical in both builds; only
+//! *where the JS comes from* differs, and each mode owns one file:
+//!
+//! - **dev** (default) — [`dev`]: reads `packages/vue-native/dist` off disk and
+//!   polls `changes.json` for HMR. Needs the `bun build.ts --watch` loop.
+//! - **prod** (`--features prod`) — [`prod`]: `include_str!`s the single IIFE
+//!   from `bun prod.ts` plus the app's assets, so the exe runs standalone with
+//!   no dist/ folder, no watcher and no filesystem reads at all.
+//!
+//! Both expose exactly `boot(&JsRuntime)` and `poll_frame(frame_no: u32)`.
 
 use std::cell::RefCell;
 
@@ -13,9 +26,23 @@ use gpui_platform::application;
 use vn_runtime::{JsRuntime, Phase, host_fn, with_app, with_published, with_published_app};
 use vn_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 
+#[cfg(not(feature = "prod"))]
+mod dev;
+#[cfg(not(feature = "prod"))]
+mod json; // only the dev transport parses JSON
+#[cfg(feature = "prod")]
+mod prod;
+
+#[cfg(not(feature = "prod"))]
+use dev as boot_mode;
+#[cfg(feature = "prod")]
+use prod as boot_mode;
+
 /// Vue's esm-bundler build reads these three flags off globalThis (bun refuses
 /// to inline them — must run BEFORE the app bundle, since ESM import hoisting
-/// would put the bundle's Vue code first otherwise).
+/// would put the bundle's Vue code first otherwise). Identical in both modes:
+/// the dev/prod split is in the *bundle's* `define` block (build.ts vs
+/// prod.ts), not here.
 const PRELUDE_JS: &str = r#"
     globalThis.__VUE_OPTIONS_API__ = true;
     globalThis.__VUE_PROD_DEVTOOLS__ = false;
@@ -28,166 +55,8 @@ const PRELUDE_JS: &str = r#"
     }, 500);
 "#;
 
-// ---------------------------------------------------------------------------
-// Dev loop: file-based HMR transport (no HTTP server, no WebSocket — the JS
-// engine has neither, and the host can read files anyway).
-//
-//   dist/vendor.js          IIFE: @vue/runtime-core + renderer + __VN__ loader
-//   dist/modules/<enc>.js   one classic script per app source file, each
-//                           `__VN__.define("<id>", factory)`; <enc> is the id
-//                           with "/" replaced by "__", plus ".js"
-//   dist/manifest.json      { rev, vendorRev, entry, modules: ["<id>", ...] }
-//   dist/changes.json       { rev, vendorRev, changed: [{ id, kind }] }
-//
-// changes.json is written LAST by the watcher and is the only file we poll:
-// once its mtime moves, every module script and the manifest are already on
-// disk. We re-eval each changed module script (which redefines its factory and
-// re-registers its CSS) and then hand the raw changes JSON to
-// `__VN__.hmrApply`, which decides rerender / reload / css-only per entry.
-// ---------------------------------------------------------------------------
-
-mod json;
-
-const DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/vue-native/dist");
-
-fn dist(rel: &str) -> std::path::PathBuf {
-    std::path::Path::new(DIST).join(rel)
-}
-
-/// `apps/hello/src/App.vue` -> `dist/modules/apps__hello__src__App.vue.js`
-fn module_path(id: &str) -> std::path::PathBuf {
-    dist("modules").join(format!("{}.js", id.replace('/', "__")))
-}
-
-fn mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
-    std::fs::metadata(path).and_then(|m| m.modified()).ok()
-}
-
-struct Manifest {
-    vendor_rev: f64,
-    entry: String,
-    modules: Vec<String>,
-}
-
-fn read_manifest() -> Option<Manifest> {
-    let path = dist("manifest.json");
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| eprintln!("[dev] read {}: {e} — run `bun build.ts` in packages/vue-native", path.display()))
-        .ok()?;
-    let v = json::parse(&text)?;
-    Some(Manifest {
-        vendor_rev: v.get("vendorRev").and_then(json::Json::as_f64).unwrap_or(0.0),
-        entry: v.get("entry").and_then(json::Json::as_str)?.to_string(),
-        modules: v
-            .get("modules")
-            .and_then(json::Json::as_arr)?
-            .iter()
-            .filter_map(|m| m.as_str().map(str::to_string))
-            .collect(),
-    })
-}
-
 thread_local! {
-    static CHANGES_STAMP: std::cell::Cell<Option<std::time::SystemTime>> =
-        const { std::cell::Cell::new(None) };
-    static VENDOR_REV: std::cell::Cell<f64> = const { std::cell::Cell::new(-1.0) };
     static FRAME_NO: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str) -> bool {
-    let src = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[dev] read {}: {e}", path.display());
-            return false;
-        }
-    };
-    if let Err(e) = rt.eval(&src, url) {
-        eprintln!("[dev] {url}: {}\n{}", e.header, e.stack);
-        return false;
-    }
-    true
-}
-
-/// Full boot (also used for a cold restart when vendor.js changed): vendor
-/// bundle -> every module script (registration only, nothing executes) ->
-/// `__VN__.boot(entry)`, which requires the entry and mounts the app.
-fn boot_app(rt: &JsRuntime) {
-    let Some(manifest) = read_manifest() else { return };
-    if !eval_path(rt, &dist("vendor.js"), "vn://vendor.js") {
-        return;
-    }
-    for id in &manifest.modules {
-        eval_path(rt, &module_path(id), &format!("vn://{id}"));
-    }
-    let js = format!("__VN__.boot({});", json::quote(&manifest.entry));
-    if let Err(e) = rt.eval(&js, "vn://boot.js") {
-        eprintln!("[dev] boot: {}\n{}", e.header, e.stack);
-    }
-    VENDOR_REV.with(|v| v.set(manifest.vendor_rev));
-    CHANGES_STAMP.with(|s| s.set(mtime(&dist("changes.json"))));
-}
-
-fn cold_restart(rt: &JsRuntime) {
-    eprintln!("[dev] vendor.js changed — cold restart (state is lost)");
-    if let Err(e) = rt.eval(
-        "globalThis.__VN_TEARDOWN__ && globalThis.__VN_TEARDOWN__();",
-        "vn://teardown.js",
-    ) {
-        eprintln!("[dev] teardown: {}\n{}", e.header, e.stack);
-    }
-    boot_app(rt);
-}
-
-/// Polled from the frame pump. Returns without touching JS unless
-/// `dist/changes.json` moved since we last looked.
-fn poll_dev_changes() {
-    let changes_path = dist("changes.json");
-    let current = mtime(&changes_path);
-    let moved = CHANGES_STAMP.with(|s| {
-        let prev = s.get();
-        if prev == current {
-            return false;
-        }
-        s.set(current);
-        prev.is_some() && current.is_some()
-    });
-    if !moved {
-        return;
-    }
-    let Ok(text) = std::fs::read_to_string(&changes_path) else { return };
-    let Some(changes) = json::parse(&text) else {
-        eprintln!("[dev] changes.json is not valid JSON");
-        return;
-    };
-    let vendor_rev = changes.get("vendorRev").and_then(json::Json::as_f64).unwrap_or(0.0);
-
-    JsRuntime::with(|rt| {
-        if VENDOR_REV.with(|v| v.get()) != vendor_rev {
-            cold_restart(rt);
-            return;
-        }
-        let ids: Vec<String> = changes
-            .get("changed")
-            .and_then(json::Json::as_arr)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|c| c.get("id").and_then(json::Json::as_str).map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if ids.is_empty() {
-            return;
-        }
-        // Redefine first (each script re-registers its factory + CSS), then let
-        // the loader decide what to tell __VUE_HMR_RUNTIME__ about each id.
-        for id in &ids {
-            eval_path(rt, &module_path(id), &format!("vn://{id}"));
-        }
-        if let Err(e) = rt.eval(&format!("__VN__.hmrApply({text});"), "vn://hmr.js") {
-            eprintln!("[dev] hmrApply: {}\n{}", e.header, e.stack);
-        }
-    });
 }
 
 struct Shell {
@@ -242,17 +111,16 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         return; // I9: no JS after a caught native panic.
     }
     with_published(window, cx, Phase::Commit, || {
-        // Dev loop: poll dist/changes.json (~2×/s at 60 fps) and apply HMR
-        // BEFORE the pump, so everything Vue schedules while patching (its
-        // post-flush queue, the reload path's queueJob) drains in this frame.
+        // Dev loop: poll dist/changes.json and apply HMR BEFORE the pump, so
+        // everything Vue schedules while patching (its post-flush queue, the
+        // reload path's queueJob) drains in this frame. In prod this is an
+        // empty inline fn.
         let n = FRAME_NO.with(|f| {
             let n = f.get().wrapping_add(1);
             f.set(n);
             n
         });
-        if n % 30 == 0 {
-            poll_dev_changes();
-        }
+        boot_mode::poll_frame(n);
         JsRuntime::with(|rt| {
             rt.pump(PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS);
             for err in rt.drain_errors() {
@@ -261,8 +129,10 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         });
     });
     // One notify per JS wave that touched the tree — the draw right after
-    // this callback picks it up (same frame).
-    if vn_tree::flush_changes() {
+    // this callback picks it up (same frame). While CSS transitions run, keep
+    // repainting: `on_next_frame` alone re-arms but does not redraw.
+    vn_tree::set_reduce_motion(cx.reduce_motion());
+    if vn_tree::flush_changes() || vn_tree::animating() {
         SHELL.with(|s| {
             if let Some(shell) = s.borrow().as_ref().and_then(|w| w.upgrade()) {
                 shell.update(cx, |_, cx| cx.notify());
@@ -368,7 +238,7 @@ fn main() {
                 if let Err(e) = rt.eval(PRELUDE_JS, "vn://prelude.js") {
                     eprintln!("[js boot] {}\n{}", e.header, e.stack);
                 }
-                boot_app(rt);
+                boot_mode::boot(rt);
             });
         });
         cx.activate(true);

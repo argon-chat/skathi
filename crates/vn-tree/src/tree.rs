@@ -15,6 +15,7 @@ pub const EV_KEYUP: u32 = 6;
 pub const EV_FOCUS: u32 = 7;
 pub const EV_BLUR: u32 = 8;
 pub const EV_INPUT: u32 = 9;
+pub const EV_SCROLL: u32 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -36,10 +37,17 @@ pub struct Node {
     /// the inline-style transport; parsed lazily into `inline_cache`.
     pub style: Vec<(u32, String)>,
     pub classes: Vec<String>,
-    /// Generic element properties/attributes (interned name, string value) —
-    /// the DOM-compat channel (`value`, `placeholder`, `disabled`, ...).
-    /// Native widgets (text input etc.) read what they understand.
-    pub props: Vec<(u32, String)>,
+    /// Generic element properties/attributes (interned name, string value,
+    /// write counter) — the DOM-compat channel (`value`, `placeholder`,
+    /// `disabled`, ...). Native widgets (text input etc.) read what they
+    /// understand.
+    ///
+    /// The counter ticks on *every* assignment, including one that stores the
+    /// same string again. In the DOM `el.value = x` always assigns; a native
+    /// widget that dedupes on the string alone cannot tell a controlled input
+    /// being re-forced to a value the user has since typed over from a prop
+    /// nobody touched. See [`Tree::prop_write`].
+    pub props: Vec<(u32, String, u32)>,
     /// Vue `<style scoped>` hashes (`data-v-...`); a child component's root
     /// carries two — its own and its parent's.
     pub scopes: Vec<String>,
@@ -47,6 +55,7 @@ pub struct Node {
     pub listeners: u32,
     pub(crate) inline_dirty: bool,
     pub(crate) inline_cache: Option<std::rc::Rc<gpui::StyleRefinement>>,
+    pub(crate) inline_transitions: Option<std::rc::Rc<Vec<vn_css::TransitionSpec>>>,
     /// The folded cascade result, filled by the restyle pass.
     pub computed: Option<vn_css::ComputedStates>,
 }
@@ -141,6 +150,7 @@ impl Tree {
             listeners: 0,
             inline_dirty: false,
             inline_cache: None,
+            inline_transitions: None,
             computed: None,
         })
     }
@@ -262,12 +272,13 @@ impl Tree {
     pub fn set_prop(&mut self, id: u32, key: u32, value: Option<String>) {
         if let Some(n) = self.node_mut(id) {
             match value {
-                None => n.props.retain(|(k, _)| *k != key),
+                None => n.props.retain(|(k, _, _)| *k != key),
                 Some(v) => {
-                    if let Some(slot) = n.props.iter_mut().find(|(k, _)| *k == key) {
+                    if let Some(slot) = n.props.iter_mut().find(|(k, _, _)| *k == key) {
                         slot.1 = v;
+                        slot.2 = slot.2.wrapping_add(1);
                     } else {
-                        n.props.push((key, v));
+                        n.props.push((key, v, 0));
                     }
                 }
             }
@@ -276,12 +287,19 @@ impl Tree {
     }
 
     pub fn prop<'a>(&'a self, id: u32, name: &str) -> Option<&'a str> {
+        self.prop_write(id, name).map(|(v, _)| v)
+    }
+
+    /// The property value together with its write counter — see [`Node::props`].
+    /// Consumers that must react to *assignments* rather than to value changes
+    /// (a controlled `<input>`) key off the counter.
+    pub fn prop_write<'a>(&'a self, id: u32, name: &str) -> Option<(&'a str, u32)> {
         let key = *self.name_ids.get(name)?;
         self.node(id)?
             .props
             .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, v)| v.as_str())
+            .find(|(k, _, _)| *k == key)
+            .map(|(_, v, write)| (v.as_str(), *write))
     }
 
     pub fn add_scope(&mut self, id: u32, scope: String) {
@@ -338,12 +356,21 @@ impl Tree {
                     .join("; ")
             };
             let mut diags = Vec::new();
-            let parsed = (!body.is_empty()).then(|| std::rc::Rc::new(vn_css::parse_inline(&body, &mut diags)));
+            let (parsed, transitions) = if body.is_empty() {
+                (None, None)
+            } else {
+                let (r, t) = vn_css::parse_inline_with_transitions(&body, &mut diags);
+                (
+                    Some(std::rc::Rc::new(r)),
+                    (!t.is_empty()).then(|| std::rc::Rc::new(t)),
+                )
+            };
             for d in diags {
                 eprintln!("[css inline] {d}");
             }
             let n = self.node_mut(id).unwrap();
             n.inline_cache = parsed;
+            n.inline_transitions = transitions;
             n.inline_dirty = false;
         }
 
@@ -358,24 +385,42 @@ impl Tree {
                     }
                     let inline = n.inline_cache.as_deref();
                     let states = match engine {
-                        Some(e) => e.compute(NodeRef { tree: this, id }, inline),
+                        Some(e) => e.compute_with(
+                            NodeRef { tree: this, id },
+                            inline,
+                            n.inline_transitions.as_ref(),
+                        ),
                         None => vn_css::ComputedStates {
                             base: inline
                                 .map(|r| std::rc::Rc::new(r.clone()))
                                 .unwrap_or_default(),
                             hover: None,
                             active: None,
+                            ..Default::default()
                         },
                     };
                     Some((id, states))
                 })
                 .collect()
         };
-        for (id, states) in computed {
-            if let Some(n) = self.node_mut(id) {
-                n.computed = Some(states);
+        // 3. Store + feed the transition animator. ONE Instant for the whole
+        // pass (tracks started together must not drift), change-gated via
+        // ComputedStates: PartialEq.
+        let now = std::time::Instant::now();
+        ANIMATOR.with(|a| {
+            let mut animator = a.borrow_mut();
+            for (id, states) in computed {
+                if let Some(n) = self.node_mut(id) {
+                    if n.computed.as_ref() != Some(&states) {
+                        animator.on_computed(id, n.computed.as_ref(), &states, now);
+                        n.computed = Some(states);
+                    }
+                }
             }
-        }
+            for d in animator.take_diagnostics() {
+                eprintln!("[css transition] {d}");
+            }
+        });
     }
 }
 
@@ -385,6 +430,34 @@ impl Tree {
 
 thread_local! {
     static ENGINE: RefCell<Option<vn_css::Engine>> = const { RefCell::new(None) };
+    static ANIMATOR: RefCell<vn_css::Animator> = RefCell::new(vn_css::Animator::new());
+}
+
+/// The per-frame interpolated overlay for a node (None = idle).
+pub fn animation_overlay(id: u32, now: std::time::Instant) -> Option<gpui::StyleRefinement> {
+    ANIMATOR.with(|a| a.borrow().overlay(id, now))
+}
+
+/// True while any transition runs — the host keeps repainting. Also drops
+/// settled tracks (visually a no-op: a finished track equals the base).
+pub fn animating() -> bool {
+    let now = std::time::Instant::now();
+    ANIMATOR.with(|a| {
+        let mut a = a.borrow_mut();
+        a.finish_settled(now);
+        a.any_active(now)
+    })
+}
+
+pub fn animator_gc() {
+    ANIMATOR.with(|a| {
+        a.borrow_mut()
+            .gc(&|id| read_tree(|t| t.node(id).is_some()));
+    });
+}
+
+pub fn set_reduce_motion(on: bool) {
+    ANIMATOR.with(|a| a.borrow_mut().set_reduce_motion(on));
 }
 
 pub fn set_engine(engine: vn_css::Engine) {

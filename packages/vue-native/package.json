@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "bun build.ts",
-    "watch": "bun build.ts --watch"
+    "watch": "bun build.ts --watch",
+    "build:prod": "bun prod.ts"
   }
 }

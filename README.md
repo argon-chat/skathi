@@ -14,7 +14,23 @@ macOS later.
 - LLVM (`clang-cl` on PATH) — redjs compiles its JSC glue with it
 - bun (JS tooling)
 - `git submodule update --init` then `vendor/redjs/setup.ps1` (fetches the ~1.1 GB
-  bun-webkit prebuilt) and `bun run fetch:yoga` inside it
+  bun-webkit prebuilt); the lean build vue-native uses needs no vendored yoga
+
+## Dev loop
+
+```powershell
+cd packages/vue-native
+bun install
+bun build.ts --watch          # SFC compiler + module registry + HMR watcher
+cd ../..
+cargo build --target x86_64-pc-windows-msvc -p vn-app
+./target/x86_64-pc-windows-msvc/debug/vn-app.exe
+```
+
+Edit `apps/hello/src/*.vue` while the app runs: template edits hot-patch with
+component state preserved, style edits restyle in place, script edits reload
+the component. The window is a Mica-backdrop gpui window; the app is plain
+browser-flavored Vue (`<script setup>`, `<style scoped>`, `v-model`, `@click`).
 
 Build with an explicit target: `cargo build --target x86_64-pc-windows-msvc`
 (see `.cargo/config.toml` for why).

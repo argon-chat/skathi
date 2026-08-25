@@ -19,8 +19,12 @@ pub struct TextInputState { /* content, selection, marked range, undo,
 impl TextInputState {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self;
 
-    /// Controlled-value sync from the framework (Vue v-model). Idempotent.
-    pub fn sync_value(&mut self, value: &str, cx: &mut Context<Self>);
+    /// Controlled-value sync from the framework (Vue v-model). `write` is the
+    /// framework's assignment counter; re-passing the same one is a no-op.
+    pub fn sync_value(&mut self, value: &str, write: u32, cx: &mut Context<Self>);
+
+    /// DOM `tabindex`: Some(n) = tab stop at index n, None = out of tab order.
+    pub fn set_tab_index(&mut self, index: Option<isize>);
 
     pub fn text(&self) -> &str;
 
@@ -45,16 +49,28 @@ pub struct TextInputOptions {
     pub caret_color: Hsla,
     pub font_size: Pixels,
     pub disabled: bool,
+    pub tab_index: Option<isize>,
 }
 
-// ---- user edits ------------------------------------------------------------
-pub type OnChange = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+// ---- per-frame event sinks -------------------------------------------------
+pub type OnChange  = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+/// Runs BEFORE the widget acts on the keystroke. `false` == preventDefault():
+/// no key-binding action and no character insertion for that keystroke.
+pub type OnKeyDown = Rc<dyn Fn(&KeyDownEvent, &mut Window, &mut App) -> bool>;
+pub type OnKeyUp   = Rc<dyn Fn(&KeyUpEvent, &mut Window, &mut App)>;
+
+#[derive(Clone, Default)]
+pub struct TextInputHandlers {
+    pub on_change: Option<OnChange>,
+    pub on_key_down: Option<OnKeyDown>,
+    pub on_key_up: Option<OnKeyUp>,
+}
 
 // ---- the element for one frame --------------------------------------------
 pub fn text_input(
     state: &Entity<TextInputState>,
     options: TextInputOptions,
-    on_change: OnChange,
+    handlers: TextInputHandlers,
     cx: &mut App,                 // <- deviation, see below
 ) -> AnyElement;
 
@@ -66,8 +82,8 @@ pub const KEY_CONTEXT: &str;
 Per-frame usage:
 
 ```rust
-state.update(cx, |state, cx| state.sync_value(&node.value, cx));   // 1
-let element = text_input(&state, options, on_change, cx);          // 2
+state.update(cx, |state, cx| state.sync_value(&value, write, cx));  // 1
+let element = text_input(&state, options, handlers, cx);            // 2
 ```
 
 ## Deviations from the requested contract
@@ -76,7 +92,7 @@ let element = text_input(&state, options, on_change, cx);          // 2
 |---|-----------|-----|
 | 1 | `text_input(..., cx: &mut App)` takes an extra context | `on_change` and `disabled` must reach the *entity* — the platform calls `EntityInputHandler::replace_text_in_range` on the entity directly, not through anything the returned element owns — and reaching into an `Entity` needs an `App`. The focus handle for `track_focus` also comes from `state.read(cx)`. |
 | 2 | `TextInputState::new(window, cx)` ignores `window` | Nothing in construction needs it today; the parameter is kept so the framework's call site does not change when it does. |
-| 3 | `sync_value` is idempotent | It remembers the last value the framework passed and returns immediately if it is unchanged, so vn-tree can call it unconditionally every frame without tracking prop changes itself (and an *uncontrolled* input — one whose `value` prop never changes — is not reset to that prop on every frame). |
+| 3 | `sync_value` takes a write counter and is idempotent *per counter* | It remembers the last **assignment** the framework passed and returns immediately if the counter is unchanged, so vn-tree can call it unconditionally every frame without tracking prop changes itself (and an *uncontrolled* input — one whose `value` prop is never assigned again — is not reset to that prop every frame). Keying on the counter instead of on the string is what lets `v-model` clear the same field twice: the second `""` is a *different assignment* even though it is the same string, and the user has typed in between. |
 | 4 | `on_change` fires deferred (`Window::defer`) | It is invoked after the edit's `Entity::update` has finished, so the callback may re-enter this entity — including calling `sync_value` — without the "entity already borrowed" panic. Ordering is preserved, and the echo-ring entry is pushed *synchronously* before the deferral, so an echo can never overtake it. |
 | 5 | `disabled` means read-only, not inert | No typing/paste/cut/undo/redo, `accepts_text_input() == false` (so the IME will not target it) and no caret. Focus, selection and copy still work, like a `readonly` HTML input rather than a `disabled` one. Nothing in the contract distinguished the two; flip `read_only` in `TextInputState` if a harder lock is wanted. |
 | 6 | Extra public API on the state | `focus_handle`, `focus`, `is_focused`, `selected_range`, `marked_range` — vn-tree needs the handle for autofocus/`.focus()`/focus events, and the ranges are useful for automation/a11y. |

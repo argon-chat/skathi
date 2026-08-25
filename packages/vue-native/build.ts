@@ -7,12 +7,27 @@
 //                             Rebuilt only when packages/vue-native/src/* change.
 //   dist/modules/<enc>.js     one CLASSIC SCRIPT per app source file:
 //                               __VN__.setCss("<id>", "...")      (if it has <style>)
-//                               __VN__.define("<id>", function (require, module, exports) { ... })
+//                               __VN__.setDeps("<id>", ["<id>", ...])
+//                               __VN__.define("<id>", function (require, module, exports) { ... },
+//                                             "<bodyHash>")
 //                             <enc> = id with "/" -> "__".
-//   dist/manifest.json        { rev, vendorRev, entry, modules: ["<id>", ...] }
+//   dist/manifest.json        { rev, vendorRev, entry, modules: ["<id>", ...],
+//                               deps: { "<id>": ["<imported id>", ...] } }
 //   dist/changes.json         { rev, vendorRev, changed: [{ id, kind }] }
 //
 // Module ids are workspace-relative POSIX paths ("apps/hello/src/App.vue").
+//
+// The module GRAPH is what makes a shared plain .js file hot-reloadable: the
+// loader walks importers up to the nearest .vue components and reloads those
+// through Vue's HMR record instead of restarting the app. It rides along in the
+// per-module script (`setDeps`) because the loader never reads manifest.json —
+// only the Rust host does. `manifest.deps` mirrors it for tooling (prod builds,
+// debugging) and is additively ignored by the host's reader.
+//
+// `bodyHash` (3rd arg of define) hashes the FACTORY BODY only — not the CSS —
+// so a <style>-only edit redefines the module without invalidating its require
+// cache entry, leaving the live exports (and the component def Vue's HMR record
+// already owns) in place.
 //
 // `kind` is derived by diffing each .vue file's previous descriptor blocks:
 //   script/scriptSetup changed, or a <style> block's scoped/module/lang shape
@@ -199,8 +214,71 @@ const vuePlugin = {
   },
 };
 
+// ---- module dependency graph ----------------------------------------------
+// We build every module with external:"*", so each import survives the CJS
+// transform as a literal `require("<spec>")` — the specifiers are recoverable
+// straight from the emitted body, no second parse of the source needed.
+//
+// Bare specifiers ("vue", "vue-native", node_modules) are vendor: they live in
+// vendor.js, are never hot-reloaded, and are deliberately kept OUT of the graph.
+
+const REQUIRE_RE = /\brequire\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
+
+/** Same candidate list as loader.js `resolveId` — keep the two in lockstep. */
+const CANDIDATE_EXTS = ["", ".js", ".ts", ".mjs", ".vue", "/index.js", "/index.ts", "/index.vue"];
+
+function normalizeId(path: string): string {
+  const out: string[] = [];
+  for (const seg of path.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      out.pop();
+      continue;
+    }
+    out.push(seg);
+  }
+  return out.join("/");
+}
+
+function unquote(raw: string): string | null {
+  try {
+    if (raw.charCodeAt(0) === 34 /* " */) return JSON.parse(raw);
+    const inner = raw.slice(1, -1).replace(/\\'/g, "'").replace(/"/g, '\\"');
+    return JSON.parse('"' + inner + '"');
+  } catch {
+    return null;
+  }
+}
+
+/** Resolved, deduped, in-graph ids that `id`'s emitted body requires. */
+function depsOf(id: string, body: string, ids: Set<string>): string[] {
+  const slash = id.lastIndexOf("/");
+  const dir = slash < 0 ? "" : id.slice(0, slash);
+  const found: string[] = [];
+  REQUIRE_RE.lastIndex = 0;
+  for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
+    const spec = unquote(m[1]);
+    if (spec === null || spec.charCodeAt(0) !== 46 /* . */) continue; // bare -> vendor
+    const base = normalizeId((dir ? dir + "/" : "") + spec);
+    const hit = CANDIDATE_EXTS.map((ext) => base + ext).find((cand) => ids.has(cand));
+    if (!hit) {
+      // Not a divergence we can paper over: the loader will throw the same way
+      // a browser would 404 — say so now, while there is a file to point at.
+      console.warn(
+        `${stamp()} ${id}: import ${J(spec)} resolves to no built module — ` +
+          `require() will throw at runtime`,
+      );
+      continue;
+    }
+    if (hit !== id && !found.includes(hit)) found.push(hit);
+  }
+  return found;
+}
+
+const moduleDeps = new Map<string, string[]>(); // id -> dep ids
+
 /** ESM -> CJS for one file, everything else external, wrapped in __VN__.define. */
-async function buildModule(absPath: string) {
+async function buildModule(absPath: string, ids: Set<string>) {
   const id = toId(absPath);
   capturedCss = null;
   const result = await Bun.build({
@@ -220,11 +298,18 @@ async function buildModule(absPath: string) {
     throw new Error(`${id}: emitted createStaticVNode — hoistStatic leaked back on (F7)`);
   }
 
+  const deps = depsOf(id, body, ids);
+  moduleDeps.set(id, deps);
+
   const out: string[] = [`// vue-native module: ${id}`];
   if (capturedCss !== null) out.push(`__VN__.setCss(${J(id)}, ${J(capturedCss)});`);
+  // Guarded: a module script is also readable by an older vendor.js (a dist
+  // that was only half-rebuilt) — a missing setDeps must degrade to "no graph",
+  // not to a TypeError that kills the whole script.
+  out.push(`__VN__.setDeps && __VN__.setDeps(${J(id)}, ${J(deps)});`);
   out.push(`__VN__.define(${J(id)}, function (require, module, exports) {`);
   out.push(body);
-  out.push("});");
+  out.push(`}, ${J(Bun.hash(body).toString(16))});`);
   writeAtomic(join(MODULES_DIR, encId(id)), out.join("\n"));
 }
 
@@ -291,9 +376,14 @@ function writeManifest(files: string[]) {
     if (seen.has(enc)) throw new Error(`module filename collision for ${id} -> ${enc}`);
     seen.add(enc);
   }
+  // `deps` is additive: the host's reader only looks at vendorRev/entry/modules.
+  // The loader gets the same edges from each module script's setDeps() call —
+  // this copy is for tooling (prod bundling, graph debugging).
+  const deps: Record<string, string[]> = {};
+  for (const id of ids) deps[id] = moduleDeps.get(id) ?? [];
   writeAtomic(
     join(DIST, "manifest.json"),
-    JSON.stringify({ rev, vendorRev, entry: toId(ENTRY_ABS), modules: ids }, null, 2) + "\n",
+    JSON.stringify({ rev, vendorRev, entry: toId(ENTRY_ABS), modules: ids, deps }, null, 2) + "\n",
   );
 }
 
@@ -315,10 +405,12 @@ async function fullBuild(reason: string) {
   const t0 = Date.now();
   const bytes = await buildVendor(); // also refreshes vendorRev
   const files = scanSources(APP_SRC_DIR);
+  const ids = new Set(files.map(toId));
   prevBlocks.clear();
+  moduleDeps.clear();
   for (const abs of files) {
     const src = await Bun.file(abs).text();
-    await buildModule(abs);
+    await buildModule(abs, ids);
     prevBlocks.set(abs, blocksOf(abs, src));
   }
   rev++;
@@ -335,6 +427,7 @@ async function fullBuild(reason: string) {
 async function incrementalBuild() {
   ensureDirs();
   const files = scanSources(APP_SRC_DIR);
+  const ids = new Set(files.map(toId));
   const changed: { id: string; kind: Kind }[] = [];
   let structural = false;
 
@@ -347,7 +440,7 @@ async function incrementalBuild() {
     if (!kind) continue;
     if (isNew) structural = true;
     try {
-      await buildModule(abs);
+      await buildModule(abs, ids);
     } catch (e) {
       console.error(`${stamp()} ${String(e)}`);
       return; // leave dist untouched; the app keeps running the last good build
@@ -359,6 +452,7 @@ async function incrementalBuild() {
   for (const abs of Array.from(prevBlocks.keys())) {
     if (alive.has(abs)) continue;
     prevBlocks.delete(abs);
+    moduleDeps.delete(toId(abs));
     try {
       rmSync(join(MODULES_DIR, encId(toId(abs))));
     } catch {}

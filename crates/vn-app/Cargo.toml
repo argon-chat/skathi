@@ -4,6 +4,20 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+# Self-contained release build: the Vue bundle and the app's assets are baked
+# into the exe (crates/vn-app/src/prod.rs), the dev manifest/HMR polling is
+# compiled out entirely, and the process never touches dist/ or any other file.
+#
+# NOT implied by `--release` — a release build of the dev shell is a legitimate
+# thing to want (fast HMR loop, optimized host). Opt in explicitly:
+#
+#   cd packages/vue-native && bun prod.ts          # writes dist/app.prod.js
+#   cargo build --release -p vn-app --features prod
+#
+# `bun prod.ts` MUST have run first: prod.rs `include_str!`s its output.
+prod = []
+
 [dependencies]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false }

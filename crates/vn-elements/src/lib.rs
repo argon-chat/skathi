@@ -16,18 +16,25 @@
 //!
 //! // every frame
 //! state.update(cx, |state, cx| state.sync_value(&node.value, cx));
-//! let element = text_input(&state, options, on_change, cx);
+//! let element = text_input(&state, options, handlers, cx);
 //! ```
 //!
 //! See `README.md` for the full integration contract and for what was stripped
 //! from the gpui-vue implementation this is adapted from.
 
+pub mod tab_nav;
 pub mod text_input;
 
-pub use text_input::{KEY_CONTEXT, OnChange, TextInputOptions, TextInputState, text_input};
+pub use tab_nav::{FocusNext, FocusPrev};
+pub use text_input::{
+    KEY_CONTEXT, OnChange, OnKeyDown, OnKeyUp, TextInputHandlers, TextInputOptions, TextInputState,
+    text_input,
+};
 
-/// One-time app setup for every widget in this crate (key bindings, actions).
-/// Call once at startup, before any window is opened.
+/// One-time app setup for every widget in this crate (key bindings, actions),
+/// plus the window-wide `Tab`/`Shift-Tab` focus traversal every focusable node
+/// participates in. Call once at startup, before any window is opened.
 pub fn init(cx: &mut gpui::App) {
     text_input::init(cx);
+    tab_nav::init(cx);
 }
