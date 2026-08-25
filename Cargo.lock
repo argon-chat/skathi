@@ -5396,6 +5396,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "vn-runtime",
+ "vn-tree",
 ]
 
 [[package]]
@@ -5404,6 +5405,14 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "redjs",
+]
+
+[[package]]
+name = "vn-tree"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "vn-runtime",
 ]
 
 [[package]]

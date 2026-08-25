@@ -1,0 +1,9 @@
+[package]
+name = "vn-tree"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
+vn-runtime = { path = "../vn-runtime" }
