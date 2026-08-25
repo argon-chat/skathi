@@ -5618,6 +5618,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "vn-elements",
  "vn-runtime",
  "vn-tree",
 ]
@@ -5629,6 +5630,13 @@ dependencies = [
  "gpui",
  "lightningcss",
  "parcel_selectors",
+]
+
+[[package]]
+name = "vn-elements"
+version = "0.1.0"
+dependencies = [
+ "gpui",
 ]
 
 [[package]]
@@ -5645,6 +5653,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "vn-css",
+ "vn-elements",
  "vn-runtime",
 ]
 

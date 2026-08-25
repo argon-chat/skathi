@@ -4,7 +4,17 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
+// Event codes — the JS side (packages/vue-native/src/runtime.js EV_CODES)
+// must stay in lockstep.
 pub const EV_CLICK: u32 = 1;
+pub const EV_MOUSEDOWN: u32 = 2;
+pub const EV_MOUSEUP: u32 = 3;
+pub const EV_WHEEL: u32 = 4;
+pub const EV_KEYDOWN: u32 = 5;
+pub const EV_KEYUP: u32 = 6;
+pub const EV_FOCUS: u32 = 7;
+pub const EV_BLUR: u32 = 8;
+pub const EV_INPUT: u32 = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -26,6 +36,10 @@ pub struct Node {
     /// the inline-style transport; parsed lazily into `inline_cache`.
     pub style: Vec<(u32, String)>,
     pub classes: Vec<String>,
+    /// Generic element properties/attributes (interned name, string value) —
+    /// the DOM-compat channel (`value`, `placeholder`, `disabled`, ...).
+    /// Native widgets (text input etc.) read what they understand.
+    pub props: Vec<(u32, String)>,
     /// Vue `<style scoped>` hashes (`data-v-...`); a child component's root
     /// carries two — its own and its parent's.
     pub scopes: Vec<String>,
@@ -122,6 +136,7 @@ impl Tree {
             text: String::new(),
             style: Vec::new(),
             classes: Vec::new(),
+            props: Vec::new(),
             scopes: Vec::new(),
             listeners: 0,
             inline_dirty: false,
@@ -242,6 +257,31 @@ impl Tree {
             n.inline_dirty = true;
             self.dirty = true;
         }
+    }
+
+    pub fn set_prop(&mut self, id: u32, key: u32, value: Option<String>) {
+        if let Some(n) = self.node_mut(id) {
+            match value {
+                None => n.props.retain(|(k, _)| *k != key),
+                Some(v) => {
+                    if let Some(slot) = n.props.iter_mut().find(|(k, _)| *k == key) {
+                        slot.1 = v;
+                    } else {
+                        n.props.push((key, v));
+                    }
+                }
+            }
+            self.dirty = true;
+        }
+    }
+
+    pub fn prop<'a>(&'a self, id: u32, name: &str) -> Option<&'a str> {
+        let key = *self.name_ids.get(name)?;
+        self.node(id)?
+            .props
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.as_str())
     }
 
     pub fn add_scope(&mut self, id: u32, scope: String) {

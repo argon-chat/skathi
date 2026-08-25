@@ -8,6 +8,7 @@
     "@vue/runtime-core": "^3.5.0"
   },
   "scripts": {
-    "build": "bun build ./src/entry.js --outfile=dist/app.js --format=iife --target=browser --define:__DEV__=true --define:process.env.NODE_ENV='\"development\"' --define:__FEATURE_SUSPENSE__=true --define:__COMPAT__=false --define:__BROWSER__=false --define:__ESM_BUNDLER__=true --define:__GLOBAL__=false --define:__NODE_JS__=false --define:__SSR__=false --define:__TEST__=false --define:__VERSION__='\"3.5\"'"
+    "build": "bun build.ts",
+    "watch": "bun build.ts --watch"
   }
 }

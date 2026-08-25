@@ -7,4 +7,5 @@ publish = false
 [dependencies]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 vn-css = { path = "../vn-css" }
+vn-elements = { path = "../vn-elements" }
 vn-runtime = { path = "../vn-runtime" }

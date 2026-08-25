@@ -19,7 +19,23 @@ mod render;
 mod tree;
 
 pub use render::build_root;
-pub use tree::{with_tree, EV_CLICK};
+pub use tree::{
+    with_tree, EV_BLUR, EV_CLICK, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP, EV_MOUSEDOWN,
+    EV_MOUSEUP, EV_WHEEL,
+};
+
+/// The numeric payload a native input event carries into JS. Meaning by event:
+/// mouse: a=x b=y c=button d=modifier bits; wheel: a=deltaX b=deltaY d=mods;
+/// key: d=mods + `key` (DOM name); input: `key` = the new text value.
+/// Modifier bits: 1 ctrl, 2 shift, 4 alt, 8 meta.
+#[derive(Default)]
+pub struct EventPayload<'a> {
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
+    pub d: f64,
+    pub key: Option<&'a str>,
+}
 
 use std::ffi::c_void;
 
@@ -96,6 +112,18 @@ host_fn!(fn vn_set_class(g, args) {
     UNDEF
 });
 
+host_fn!(fn vn_set_prop(g, args) {
+    let id = arg_id(args.arg(0));
+    let key = arg_id(args.arg(1));
+    let value = if args.arg(2).is_undefined() || args.arg(2).is_null() {
+        None
+    } else {
+        unsafe { read_string(g, args.arg(2).0) }
+    };
+    tree::with_tree(|t| t.set_prop(id, key, value));
+    UNDEF
+});
+
 host_fn!(fn vn_add_scope(g, args) {
     let id = arg_id(args.arg(0));
     let scope = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
@@ -144,6 +172,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_remove", 1, vn_remove as *const _),
         ("__vn_set_style", 3, vn_set_style as *const _),
         ("__vn_set_class", 2, vn_set_class as *const _),
+        ("__vn_set_prop", 3, vn_set_prop as *const _),
         ("__vn_add_scope", 2, vn_add_scope as *const _),
         ("__vn_set_stylesheet", 1, vn_set_stylesheet as *const _),
         ("__vn_set_listener", 3, vn_set_listener as *const _),
@@ -161,28 +190,43 @@ pub fn flush_changes() -> bool {
     let dirty = tree::with_tree(|t| t.take_dirty());
     if dirty {
         tree::restyle_all();
+        render::gc_node_state();
     }
     dirty
 }
 
 /// Dispatches an input event into JS (through the registered dispatcher) and
 /// drains microtasks so Vue's reactive flush lands in the same frame. Must be
-/// called with `Phase::Commit` published.
-pub fn dispatch_event(node: u32, event: u32) {
+/// called with `Phase::Commit` published. Returns `false` when a JS handler
+/// called `preventDefault()`.
+pub fn dispatch_event(node: u32, event: u32, payload: &EventPayload) -> bool {
     let f = tree::dispatcher();
     if f == 0 {
-        return;
+        return true;
     }
     JsRuntime::with(|rt| {
-        let args = [Value::int32(node as i32), Value::int32(event as i32)];
-        if let Err(vn_runtime::redjs::api::Error::Exception(e)) =
-            rt.ctx().call(Value(f), Value::undefined(), &args)
-        {
-            let err = rt.describe(e);
-            eprintln!("[js dispatch] {}\n{}", err.header, err.stack);
-        }
+        let key = payload.key.map(|k| rt.ctx().string(k));
+        let args = [
+            Value::int32(node as i32),
+            Value::int32(event as i32),
+            Value::double(payload.a),
+            Value::double(payload.b),
+            Value::double(payload.c),
+            Value::double(payload.d),
+            key.unwrap_or_else(Value::undefined),
+        ];
+        let proceed = match rt.ctx().call(Value(f), Value::undefined(), &args) {
+            Ok(v) => v.as_bool().unwrap_or(true),
+            Err(vn_runtime::redjs::api::Error::Exception(e)) => {
+                let err = rt.describe(e);
+                eprintln!("[js dispatch] {}\n{}", err.header, err.stack);
+                true
+            }
+            Err(_) => true,
+        };
         // Vue schedules its patch flush on Promise microtasks: drain now so
         // the DOM ops run inside this very listener's Commit publication.
         rt.ctx().drain_microtasks();
-    });
+        proceed
+    })
 }
