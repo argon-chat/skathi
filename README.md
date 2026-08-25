@@ -34,3 +34,40 @@ browser-flavored Vue (`<script setup>`, `<style scoped>`, `v-model`, `@click`).
 
 Build with an explicit target: `cargo build --target x86_64-pc-windows-msvc`
 (see `.cargo/config.toml` for why).
+
+## Tailwind CSS
+
+Standard Tailwind utility classes work in `.vue` templates — compiled by the
+**real** Tailwind JIT, matched by the same class matcher that runs your own
+`<style scoped>`:
+
+```html
+<div class="flex flex-col gap-2 p-4 rounded-xl bg-white/10
+            hover:bg-white/25 transition-colors duration-300">
+```
+
+An app opts in by dropping a `tailwind.config.js` next to its `src/`
+(`apps/hello/tailwind.config.js`); without one the builders emit exactly what
+they emitted before. Both builders run Tailwind themselves — no PostCSS step to
+wire up, no extra watcher:
+
+- **dev** — the utilities sheet is written as a synthetic module,
+  `dist/modules/.vn__tailwind.css.js` (id `.vn/tailwind.css`), which rides the
+  ordinary `setCss` transport. Its id sorts first, so utilities land ahead of
+  every component `<style>` in the aggregate. Adding a class that was never used
+  before re-runs Tailwind and ships a **`css-only`** change: the app restyles
+  without a rerender, a reload, or any loss of component state.
+- **prod** — the same sheet is pushed into `__VN_CSS__` ahead of the SFC styles.
+
+**Pinned to Tailwind v3.4, deliberately.** v3 core utilities emit literal
+declarations (`padding: 1rem`, `background-color: rgb(255 255 255 / 0.1)`) that
+`crates/vn-css` maps straight onto gpui. v4 routes nearly everything through
+`var(--tw-*)` + `calc()` + `@property`, which the engine does not resolve yet —
+a v4 bump would degrade almost every utility. The rationale, the ordering
+decision, and what v4 would need from vn-css live in
+[`packages/vue-native/tailwind.ts`](packages/vue-native/tailwind.ts); the
+per-app config choices (preflight off, `*Opacity` core plugins off) are
+documented inline in [`apps/hello/tailwind.config.js`](apps/hello/tailwind.config.js).
+
+Utilities the engine cannot render never fail silently — vn-css prints a
+one-shot advisory per gap on every stylesheet compile (`[css] …` on stderr).

@@ -182,15 +182,104 @@ fn lp_absolute(lp: &LengthPercentage) -> Option<AbsoluteLength> {
     }
 }
 
+fn gap_definite(v: &lightningcss::properties::align::GapValue) -> Option<DefiniteLength> {
+    use lightningcss::properties::align::GapValue;
+    match v {
+        GapValue::LengthPercentage(lp) => lp_definite(lp),
+        GapValue::Normal => None,
+    }
+}
+
+/// The cross-axis alignment keywords, shared by `align-items` / `align-self`
+/// (gpui aliases `AlignSelf = AlignItems`).
+fn self_position(v: &SelfPosition) -> gpui::AlignItems {
+    use gpui::AlignItems as G;
+    match v {
+        SelfPosition::Center => G::Center,
+        SelfPosition::Start | SelfPosition::FlexStart | SelfPosition::SelfStart => G::FlexStart,
+        SelfPosition::End | SelfPosition::FlexEnd | SelfPosition::SelfEnd => G::FlexEnd,
+    }
+}
+
+/// `repeat(N, minmax(<min>, 1fr))` — the ONLY track list gpui's `GridTemplate`
+/// can express, and (not by accident) exactly what Tailwind's `grid-cols-N` /
+/// `grid-rows-N` emit. Anything else returns `None` and gets an advisory.
+fn grid_template(v: &lightningcss::properties::grid::TrackSizing) -> Option<gpui::GridTemplate> {
+    use lightningcss::properties::grid::{
+        RepeatCount, TrackBreadth, TrackListItem, TrackSize, TrackSizing,
+    };
+    let TrackSizing::TrackList(list) = v else {
+        return None; // `none`
+    };
+    let [TrackListItem::TrackRepeat(repeat)] = list.items.as_slice() else {
+        return None;
+    };
+    let RepeatCount::Number(count) = repeat.count else {
+        return None; // auto-fill / auto-fit
+    };
+    if count < 0 {
+        return None;
+    }
+    let [TrackSize::MinMax { min, max }] = repeat.track_sizes.as_slice() else {
+        return None;
+    };
+    // The max half must be the `1fr` that makes the tracks share the space.
+    if !matches!(max, TrackBreadth::Flex(f) if *f == 1.0) {
+        return None;
+    }
+    let min_size = match min {
+        TrackBreadth::Length(DimensionPercentage::Dimension(l)) if length_value_px(l) == Some(0.0) => {
+            gpui::GridTemplateMinSize::Zero
+        }
+        TrackBreadth::MinContent => gpui::GridTemplateMinSize::MinContent,
+        TrackBreadth::MaxContent => gpui::GridTemplateMinSize::MaxContent,
+        _ => return None,
+    };
+    Some(gpui::GridTemplate {
+        repeat: count as u16,
+        min_size,
+    })
+}
+
+/// Advisories are ONE-SHOT: `diagnostics` accumulates for a whole stylesheet
+/// compile, and a generated sheet hits the same gap over and over (a broad
+/// Tailwind sweep produced 123 `--tw-*` declarations and 63 `var()`-composed
+/// values). Printing each would bury every other message, so a given advisory
+/// is recorded once and the rest are folded into it.
+pub(crate) fn once(diagnostics: &mut Vec<String>, msg: String) {
+    if !diagnostics.iter().any(|d| *d == msg) {
+        diagnostics.push(msg);
+    }
+}
+
+fn unsupported(diagnostics: &mut Vec<String>, what: &str) {
+    once(diagnostics, format!("unsupported value for {what} (v1)"));
+}
+
+/// [`color`] only understands a resolved RGBA. `currentColor`, `color-mix()`,
+/// `light-dark()` and friends land here — and USED to fall through silently,
+/// which meant Tailwind's `bg-current` / `text-current` did nothing at all with
+/// no way to find out.
+fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
+    once(
+        diagnostics,
+        format!(
+            "`{what}` value does not resolve to a concrete color (v1) — `currentColor`, \
+             `color-mix()` and system colors are not computed"
+        ),
+    );
+}
+
+/// The single advisory every `--*` declaration folds into.
+const CUSTOM_PROPS: &str = "custom properties are stored nowhere yet (v1) — var()-composed \
+                            utilities like shadows/transforms/rings degrade";
+
 // ---------------------------------------------------------------------------
 // the mapper
 // ---------------------------------------------------------------------------
 
 fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
     use Property::*;
-    let mut unsupported_value = |what: &str| {
-        diagnostics.push(format!("unsupported value for {what} (v1)"));
-    };
     match p {
         Display(d) => {
             use lightningcss::properties::display::Display as D;
@@ -214,25 +303,82 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
         }
         FlexGrow(v, _) => r.flex_grow = Some(*v),
         FlexShrink(v, _) => r.flex_shrink = Some(*v),
+        FlexBasis(v, _) => r.flex_basis = lpa_length(v),
+        // `flex: 1 1 0%` (Tailwind `flex-1`), `flex: 0 1 auto` (`flex-initial`), …
+        Flex(v, _) => {
+            r.flex_grow = Some(v.grow);
+            r.flex_shrink = Some(v.shrink);
+            r.flex_basis = lpa_length(&v.basis);
+        }
+        FlexWrap(v, _) => {
+            use lightningcss::properties::flex::FlexWrap as W;
+            r.flex_wrap = Some(match v {
+                W::NoWrap => gpui::FlexWrap::NoWrap,
+                W::Wrap => gpui::FlexWrap::Wrap,
+                W::WrapReverse => gpui::FlexWrap::WrapReverse,
+            });
+        }
         AlignItems(v, _) => {
             use gpui::AlignItems as G;
             let mapped = match v {
                 lightningcss::properties::align::AlignItems::Stretch => Some(G::Stretch),
-                lightningcss::properties::align::AlignItems::SelfPosition { value, .. } => match value {
-                    SelfPosition::Center => Some(G::Center),
-                    SelfPosition::Start | SelfPosition::FlexStart | SelfPosition::SelfStart => {
-                        Some(G::FlexStart)
-                    }
-                    SelfPosition::End | SelfPosition::FlexEnd | SelfPosition::SelfEnd => {
-                        Some(G::FlexEnd)
-                    }
-                },
+                lightningcss::properties::align::AlignItems::SelfPosition { value, .. } => {
+                    Some(self_position(value))
+                }
                 lightningcss::properties::align::AlignItems::BaselinePosition(_) => Some(G::Baseline),
                 _ => None,
             };
             match mapped {
                 Some(m) => r.align_items = Some(m),
-                None => unsupported_value("align-items"),
+                None => unsupported(diagnostics, "align-items"),
+            }
+        }
+        AlignSelf(v, _) => {
+            use lightningcss::properties::align::AlignSelf as A;
+            let mapped = match v {
+                // `self-auto`: inherit the parent's align-items. gpui spells
+                // that as "unset", and a refinement cannot express "clear" —
+                // so leave the field alone rather than pin it to Stretch.
+                A::Auto => None,
+                A::Stretch => Some(gpui::AlignItems::Stretch),
+                A::BaselinePosition(_) => Some(gpui::AlignItems::Baseline),
+                A::SelfPosition { value, .. } => Some(self_position(value)),
+                A::Normal => None,
+            };
+            match mapped {
+                Some(m) => r.align_self = Some(m),
+                // `auto`/`normal` mean "defer to the parent", which is already
+                // what an unset refinement does — but say so, because a rule
+                // that MEANT to undo an earlier `self-center` will not.
+                None => unsupported(
+                    diagnostics,
+                    "align-self: auto/normal — cannot undo an earlier align-self",
+                ),
+            }
+        }
+        AlignContent(v, _) => {
+            use gpui::AlignContent as G;
+            use lightningcss::properties::align::AlignContent as A;
+            let mapped = match v {
+                A::ContentDistribution(d) => {
+                    use lightningcss::properties::align::ContentDistribution as CD;
+                    Some(match d {
+                        CD::SpaceBetween => G::SpaceBetween,
+                        CD::SpaceAround => G::SpaceAround,
+                        CD::SpaceEvenly => G::SpaceEvenly,
+                        CD::Stretch => G::Stretch,
+                    })
+                }
+                A::ContentPosition { value, .. } => Some(match value {
+                    ContentPosition::Center => G::Center,
+                    ContentPosition::Start | ContentPosition::FlexStart => G::FlexStart,
+                    ContentPosition::End | ContentPosition::FlexEnd => G::FlexEnd,
+                }),
+                _ => None,
+            };
+            match mapped {
+                Some(m) => r.align_content = Some(m),
+                None => unsupported(diagnostics, "align-content"),
             }
         }
         JustifyContent(v, _) => {
@@ -258,22 +404,20 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
             };
             match mapped {
                 Some(m) => r.justify_content = Some(m),
-                None => unsupported_value("justify-content"),
+                None => unsupported(diagnostics, "justify-content"),
             }
         }
         Gap(gap) => {
-            use lightningcss::properties::align::GapValue;
-            if let GapValue::LengthPercentage(lp) = &gap.row {
-                if let Some(v) = lp_definite(lp) {
-                    r.gap.height = Some(v);
-                }
+            if let Some(v) = gap_definite(&gap.row) {
+                r.gap.height = Some(v);
             }
-            if let GapValue::LengthPercentage(lp) = &gap.column {
-                if let Some(v) = lp_definite(lp) {
-                    r.gap.width = Some(v);
-                }
+            if let Some(v) = gap_definite(&gap.column) {
+                r.gap.width = Some(v);
             }
         }
+        // Tailwind `gap-y-*` / `gap-x-*` emit the longhands, never the shorthand.
+        RowGap(v) => r.gap.height = gap_definite(v),
+        ColumnGap(v) => r.gap.width = gap_definite(v),
         Width(v) => r.size.width = size_length(v),
         Height(v) => r.size.height = size_length(v),
         MinWidth(v) => r.min_size.width = size_length(v),
@@ -306,7 +450,7 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
                 P::Absolute => gpui::Position::Absolute,
                 P::Static | P::Relative => gpui::Position::Relative,
                 _ => {
-                    unsupported_value("position (fixed/sticky)");
+                    unsupported(diagnostics, "position (fixed/sticky)");
                     gpui::Position::Relative
                 }
             });
@@ -325,17 +469,38 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
             r.overflow.x = Some(overflow(v.x));
             r.overflow.y = Some(overflow(v.y));
         }
+        // The longhands are what Tailwind's `overflow-x-*` / `overflow-y-*`
+        // emit; the shorthand only covers `overflow-*`.
+        OverflowX(v) => r.overflow.x = Some(overflow(*v)),
+        OverflowY(v) => r.overflow.y = Some(overflow(*v)),
+        Visibility(v) => {
+            use lightningcss::properties::display::Visibility as V;
+            r.visibility = Some(match v {
+                V::Visible => gpui::Visibility::Visible,
+                V::Hidden => gpui::Visibility::Hidden,
+                V::Collapse => {
+                    // `collapse` only differs from `hidden` inside tables and
+                    // flex containers, neither of which gpui models.
+                    unsupported(diagnostics, "visibility: collapse (treated as hidden)");
+                    gpui::Visibility::Hidden
+                }
+            });
+        }
+        AspectRatio(v) => match &v.ratio {
+            Some(ratio) if !v.auto && ratio.1 != 0.0 => r.aspect_ratio = Some(ratio.0 / ratio.1),
+            // `aspect-auto` / `auto <ratio>`: a refinement cannot say "clear",
+            // so an earlier ratio survives.
+            _ => unsupported(diagnostics, "aspect-ratio: auto — cannot undo an earlier ratio"),
+        },
         Opacity(v) => r.opacity = Some(v.0),
-        Color(c) => {
-            if let Some(c) = color(c) {
-                r.text.color = Some(c);
-            }
-        }
-        BackgroundColor(c) => {
-            if let Some(c) = color(c) {
-                r.background = Some(gpui::Fill::Color(c.into()));
-            }
-        }
+        Color(c) => match color(c) {
+            Some(c) => r.text.color = Some(c),
+            None => unresolved_color(diagnostics, "color"),
+        },
+        BackgroundColor(c) => match color(c) {
+            Some(c) => r.background = Some(gpui::Fill::Color(c.into())),
+            None => unresolved_color(diagnostics, "background-color"),
+        },
         Background(layers) => {
             // Shorthand: per CSS the color lives on the LAST layer. v1 takes
             // the color only; gradients/images are a later mapper stage.
@@ -347,8 +512,9 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
         }
         BorderColor(v) => {
             // gpui has one border color for all four sides — take the top.
-            if let Some(c) = color(&v.top) {
-                r.border_color = Some(c);
+            match color(&v.top) {
+                Some(c) => r.border_color = Some(c),
+                None => unresolved_color(diagnostics, "border-color"),
             }
         }
         Border(b) => {
@@ -362,10 +528,25 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
             if let Some(c) = color(&b.color) {
                 r.border_color = Some(c);
             }
-            r.border_style = Some(match b.style {
-                LineStyle::Dashed => gpui::BorderStyle::Dashed,
-                _ => gpui::BorderStyle::Solid,
-            });
+            set_border_style(r, b.style, diagnostics);
+        }
+        // Tailwind emits the `border-width` shorthand for `border-2` and the
+        // per-side longhands for `border-t` / `border-x-2`.
+        BorderWidth(v) => {
+            r.border_widths.top = border_width_px(&v.top).map(|w| px(w).into());
+            r.border_widths.right = border_width_px(&v.right).map(|w| px(w).into());
+            r.border_widths.bottom = border_width_px(&v.bottom).map(|w| px(w).into());
+            r.border_widths.left = border_width_px(&v.left).map(|w| px(w).into());
+        }
+        BorderTopWidth(v) => r.border_widths.top = border_width_px(v).map(|w| px(w).into()),
+        BorderRightWidth(v) => r.border_widths.right = border_width_px(v).map(|w| px(w).into()),
+        BorderBottomWidth(v) => r.border_widths.bottom = border_width_px(v).map(|w| px(w).into()),
+        BorderLeftWidth(v) => r.border_widths.left = border_width_px(v).map(|w| px(w).into()),
+        // gpui has ONE border style for the whole box — take the top side, the
+        // same compromise `border-color` already makes.
+        BorderStyle(v) => set_border_style(r, v.top, diagnostics),
+        BorderTopStyle(v) | BorderRightStyle(v) | BorderBottomStyle(v) | BorderLeftStyle(v) => {
+            set_border_style(r, *v, diagnostics);
         }
         BorderRadius(v, _) => {
             r.corner_radii.top_left = lp_absolute(&v.top_left.0);
@@ -373,6 +554,27 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
             r.corner_radii.bottom_left = lp_absolute(&v.bottom_left.0);
             r.corner_radii.bottom_right = lp_absolute(&v.bottom_right.0);
         }
+        // `rounded-t` / `rounded-tl-lg` never use the shorthand.
+        BorderTopLeftRadius(v, _) => r.corner_radii.top_left = lp_absolute(&v.0),
+        BorderTopRightRadius(v, _) => r.corner_radii.top_right = lp_absolute(&v.0),
+        BorderBottomRightRadius(v, _) => r.corner_radii.bottom_right = lp_absolute(&v.0),
+        BorderBottomLeftRadius(v, _) => r.corner_radii.bottom_left = lp_absolute(&v.0),
+        // `grid-cols-N` / `grid-rows-N` -> `repeat(N, minmax(0, 1fr))`, which is
+        // exactly (and only) what gpui's GridTemplate models.
+        GridTemplateColumns(v) => match grid_template(v) {
+            Some(t) => r.grid_cols = Some(t),
+            None => unsupported(
+                diagnostics,
+                "grid-template-columns (only `repeat(N, minmax(0|min-content|max-content, 1fr))`)",
+            ),
+        },
+        GridTemplateRows(v) => match grid_template(v) {
+            Some(t) => r.grid_rows = Some(t),
+            None => unsupported(
+                diagnostics,
+                "grid-template-rows (only `repeat(N, minmax(0|min-content|max-content, 1fr))`)",
+            ),
+        },
         BoxShadow(shadows, _) => {
             let mut out = Vec::new();
             for s in shadows.iter() {
@@ -418,7 +620,7 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
             };
             match n {
                 Some(n) => r.text.font_weight = Some(gpui::FontWeight(n)),
-                None => unsupported_value("font-weight (bolder/lighter)"),
+                None => unsupported(diagnostics, "font-weight (bolder/lighter)"),
             }
         }
         LineHeight(v) => {
@@ -427,6 +629,17 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
                 CssLineHeight::Length(lp) => lp_definite(lp),
                 CssLineHeight::Normal => Some(relative(1.2)),
             };
+        }
+        FontStyle(v) => {
+            use lightningcss::properties::font::FontStyle as FS;
+            r.text.font_style = Some(match v {
+                FS::Normal => gpui::FontStyle::Normal,
+                FS::Italic => gpui::FontStyle::Italic,
+                FS::Oblique(_) => {
+                    unsupported(diagnostics, "font-style: oblique <angle> (angle ignored)");
+                    gpui::FontStyle::Oblique
+                }
+            });
         }
         TextAlign(v) => {
             use gpui::TextAlign as G;
@@ -438,7 +651,57 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
             };
             match mapped {
                 Some(m) => r.text.text_align = Some(m),
-                None => unsupported_value("text-align"),
+                None => unsupported(diagnostics, "text-align"),
+            }
+        }
+        WhiteSpace(v) => {
+            use lightningcss::properties::text::WhiteSpace as WS;
+            r.text.white_space = Some(match v {
+                WS::Normal => gpui::WhiteSpace::Normal,
+                WS::NoWrap => gpui::WhiteSpace::Nowrap,
+                WS::Pre => {
+                    // gpui collapses runs of whitespace unconditionally; only
+                    // the WRAP half of `pre` survives the trip.
+                    unsupported(diagnostics, "white-space: pre (whitespace is still collapsed)");
+                    gpui::WhiteSpace::Nowrap
+                }
+                WS::PreWrap | WS::PreLine | WS::BreakSpaces => {
+                    unsupported(
+                        diagnostics,
+                        "white-space: pre-wrap/pre-line/break-spaces (whitespace is still collapsed)",
+                    );
+                    gpui::WhiteSpace::Normal
+                }
+            });
+        }
+        TextOverflow(v, _) => {
+            use lightningcss::properties::overflow::TextOverflow as TO;
+            match v {
+                TO::Ellipsis => r.text.text_overflow = Some(gpui::TextOverflow::Truncate("…".into())),
+                // A refinement cannot express "clear", so `text-clip` after an
+                // `text-ellipsis` is a no-op rather than a reset.
+                TO::Clip => unsupported(
+                    diagnostics,
+                    "text-overflow: clip — cannot undo an earlier ellipsis",
+                ),
+            }
+        }
+        TextDecorationLine(v, _) => {
+            use lightningcss::properties::text::TextDecorationLine as TDL;
+            if v.contains(TDL::Underline) {
+                r.text.underline = Some(gpui::UnderlineStyle::default());
+            }
+            if v.contains(TDL::LineThrough) {
+                r.text.strikethrough = Some(gpui::StrikethroughStyle::default());
+            }
+            if v.intersects(TDL::Overline | TDL::Blink) {
+                unsupported(diagnostics, "text-decoration-line: overline/blink");
+            }
+            if v.is_empty() {
+                unsupported(
+                    diagnostics,
+                    "text-decoration-line: none — cannot undo an earlier underline",
+                );
             }
         }
         Cursor(c) => {
@@ -453,16 +716,134 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
                 r.mouse_cursor = Some(m);
             }
         }
-        Custom(_) | Unparsed(_) => {
-            diagnostics.push(format!(
-                "custom properties / var() not resolved yet (v1): {}",
-                prop_name(p)
-            ));
+        // `backdrop-filter` — `blur()` is the one filter function the renderer
+        // implements (gpui `BackdropBlurRect`, D3D11 Dual-Kawase pyramid).
+        // Everything else in the list is advised rather than silently dropped.
+        BackdropFilter(list, _) => apply_backdrop_filter(list, r, diagnostics),
+        // `--tw-shadow`, `--tw-translate-x`, … A generated sheet declares these
+        // by the hundred, so EVERY `--*` folds into one advisory: the story is
+        // identical for all of them and the per-name list is pure noise.
+        Custom(c) => match &c.name {
+            lightningcss::properties::custom::CustomPropertyName::Custom(_) => {
+                once(diagnostics, CUSTOM_PROPS.to_string());
+            }
+            // Not a custom property at all — an unknown/vendor-prefixed one
+            // (`-webkit-line-clamp`), which is a real "we do not map this".
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name) => {
+                once(
+                    diagnostics,
+                    format!("property not mapped (v1): {}", name.0.as_ref()),
+                );
+            }
+        },
+        // A KNOWN property whose value did not parse into a typed value —
+        // almost always `var()`-composed (`box-shadow: var(--tw-shadow)`).
+        // One advisory per property name: which property degraded is the
+        // useful half, how many rules did it is not.
+        Unparsed(u) => {
+            once(
+                diagnostics,
+                format!(
+                    "`{}` value is unresolved (v1) — {CUSTOM_PROPS}",
+                    u.property_id.name()
+                ),
+            );
         }
         other => {
-            diagnostics.push(format!("property not mapped (v1): {}", prop_name(other)));
+            once(
+                diagnostics,
+                format!("property not mapped (v1): {}", prop_name(other)),
+            );
         }
     }
+}
+
+/// `backdrop-filter` → `StyleRefinement::backdrop_blur`.
+///
+/// The renderer implements exactly one filter function, `blur()`. The CSS
+/// grammar allows a whole list, so the compat rule is: apply the blur if there
+/// is one, advise about everything that did not survive, and never fail
+/// silently.
+///
+/// `backdrop-filter: none` maps to a 0px radius rather than "undeclared" — a
+/// refinement has no way to say "explicitly nothing", and 0px is what actually
+/// cancels a blur inherited from an earlier rule in the cascade.
+fn apply_backdrop_filter(
+    list: &lightningcss::properties::effects::FilterList,
+    r: &mut StyleRefinement,
+    diagnostics: &mut Vec<String>,
+) {
+    use lightningcss::properties::effects::{Filter, FilterList};
+
+    let filters = match list {
+        FilterList::None => {
+            r.backdrop_blur = Some(px(0.0));
+            return;
+        }
+        FilterList::Filters(filters) => filters,
+    };
+
+    let mut blur_radius = None;
+    let mut others = Vec::new();
+    for filter in filters.iter() {
+        match filter {
+            Filter::Blur(length) => match css_length_px(length) {
+                Some(radius) if blur_radius.is_none() => blur_radius = Some(radius.max(0.0)),
+                Some(_) => others.push("a second blur()"),
+                // `blur(calc(...))`, `blur(1vw)`, … — the length converter is
+                // the same one every other property uses.
+                None => others.push("blur() with a non-absolute length"),
+            },
+            Filter::Brightness(_) => others.push("brightness()"),
+            Filter::Contrast(_) => others.push("contrast()"),
+            Filter::Grayscale(_) => others.push("grayscale()"),
+            Filter::HueRotate(_) => others.push("hue-rotate()"),
+            Filter::Invert(_) => others.push("invert()"),
+            Filter::Opacity(_) => others.push("opacity()"),
+            Filter::Saturate(_) => others.push("saturate()"),
+            Filter::Sepia(_) => others.push("sepia()"),
+            Filter::DropShadow(_) => others.push("drop-shadow()"),
+            Filter::Url(_) => others.push("url() SVG filters"),
+        }
+    }
+
+    if let Some(radius) = blur_radius {
+        r.backdrop_blur = Some(px(radius));
+    }
+    if !others.is_empty() {
+        once(
+            diagnostics,
+            format!(
+                "backdrop-filter: only blur() is implemented (v1) — dropped {}",
+                others.join(", ")
+            ),
+        );
+    }
+}
+
+/// gpui models exactly two border styles. `none`/`hidden` are NOT a third: per
+/// CSS they compute `border-width` to 0, which is what we do here — that is
+/// also what makes Tailwind's `border-none` render as no border.
+fn set_border_style(r: &mut StyleRefinement, s: LineStyle, diagnostics: &mut Vec<String>) {
+    if matches!(s, LineStyle::None | LineStyle::Hidden) {
+        let zero: AbsoluteLength = px(0.0).into();
+        r.border_widths.top = Some(zero);
+        r.border_widths.right = Some(zero);
+        r.border_widths.bottom = Some(zero);
+        r.border_widths.left = Some(zero);
+        return;
+    }
+    r.border_style = Some(match s {
+        LineStyle::Dashed => gpui::BorderStyle::Dashed,
+        LineStyle::Solid => gpui::BorderStyle::Solid,
+        _ => {
+            unsupported(
+                diagnostics,
+                "border-style (dotted/double/groove/ridge/inset/outset render as solid)",
+            );
+            gpui::BorderStyle::Solid
+        }
+    });
 }
 
 fn lp_definite_of_lpa(v: &LengthPercentageOrAuto) -> Option<DefiniteLength> {
@@ -493,4 +874,265 @@ fn border_width_px(w: &lightningcss::properties::border::BorderSideWidth) -> Opt
 fn prop_name(p: &Property) -> String {
     let d = format!("{p:?}");
     d.split(['(', ' ', '{']).next().unwrap_or("?").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses a declaration list the way a rule body would be parsed.
+    fn map(body: &str) -> (StyleRefinement, Vec<String>) {
+        let mut diagnostics = Vec::new();
+        let r = parse_inline(body, &mut diagnostics);
+        (r, diagnostics)
+    }
+
+    fn clean(body: &str) -> StyleRefinement {
+        let (r, d) = map(body);
+        assert!(d.is_empty(), "{body:?} produced {d:?}");
+        r
+    }
+
+    // ---- overflow longhands (Tailwind `overflow-x-*` / `overflow-y-*`) ----
+
+    #[test]
+    fn overflow_longhands_set_one_axis_each() {
+        let r = clean("overflow-x: hidden");
+        assert_eq!(r.overflow.x, Some(Overflow::Hidden));
+        assert_eq!(r.overflow.y, None, "overflow-x must not touch the y axis");
+
+        let r = clean("overflow-y: scroll");
+        assert_eq!(r.overflow.y, Some(Overflow::Scroll));
+        assert_eq!(r.overflow.x, None);
+
+        // `auto` is Scroll (what makes the box scrollable), `visible` is neither.
+        assert_eq!(clean("overflow-y: auto").overflow.y, Some(Overflow::Scroll));
+        assert_eq!(
+            clean("overflow-x: visible").overflow.x,
+            Some(Overflow::Visible)
+        );
+    }
+
+    #[test]
+    fn a_longhand_after_the_shorthand_wins_on_its_axis_only() {
+        let r = clean("overflow: hidden; overflow-y: scroll");
+        assert_eq!(r.overflow.x, Some(Overflow::Hidden));
+        assert_eq!(r.overflow.y, Some(Overflow::Scroll));
+    }
+
+    // ---- gap longhands (Tailwind `gap-x-*` / `gap-y-*`) ------------------
+
+    #[test]
+    fn gap_longhands_map_to_the_matching_axis() {
+        // CSS row-gap is the VERTICAL gap -> gpui's gap.height.
+        let r = clean("row-gap: 4px; column-gap: 8px");
+        assert_eq!(r.gap.height, Some(px(4.0).into()));
+        assert_eq!(r.gap.width, Some(px(8.0).into()));
+    }
+
+    // ---- border width / style / radius longhands -------------------------
+
+    #[test]
+    fn border_width_shorthand_and_longhands() {
+        let r = clean("border-width: 2px");
+        let two: AbsoluteLength = px(2.0).into();
+        assert_eq!(r.border_widths.top, Some(two));
+        assert_eq!(r.border_widths.left, Some(two));
+
+        let r = clean("border-top-width: 4px");
+        assert_eq!(r.border_widths.top, Some(px(4.0).into()));
+        assert_eq!(r.border_widths.bottom, None);
+    }
+
+    #[test]
+    fn border_style_none_computes_the_widths_to_zero() {
+        // Exactly what a browser does — and what makes `border-none` work.
+        let r = clean("border: 3px solid red; border-style: none");
+        let zero: AbsoluteLength = px(0.0).into();
+        assert_eq!(r.border_widths.top, Some(zero));
+        assert_eq!(r.border_widths.right, Some(zero));
+        assert_eq!(r.border_widths.bottom, Some(zero));
+        assert_eq!(r.border_widths.left, Some(zero));
+    }
+
+    #[test]
+    fn border_style_dashed_and_an_advisory_for_the_rest() {
+        assert_eq!(
+            clean("border-style: dashed").border_style,
+            Some(gpui::BorderStyle::Dashed)
+        );
+        let (r, d) = map("border-style: dotted");
+        assert_eq!(r.border_style, Some(gpui::BorderStyle::Solid));
+        assert!(d.iter().any(|m| m.contains("border-style")), "{d:?}");
+    }
+
+    #[test]
+    fn corner_radius_longhands() {
+        let r = clean("border-top-left-radius: 8px; border-bottom-right-radius: 2px");
+        assert_eq!(r.corner_radii.top_left, Some(px(8.0).into()));
+        assert_eq!(r.corner_radii.bottom_right, Some(px(2.0).into()));
+        assert_eq!(r.corner_radii.top_right, None);
+    }
+
+    // ---- flex shorthand / basis / wrap -----------------------------------
+
+    #[test]
+    fn flex_shorthand_fills_all_three_fields() {
+        // Tailwind `flex-1`.
+        let r = clean("flex: 1 1 0%");
+        assert_eq!(r.flex_grow, Some(1.0));
+        assert_eq!(r.flex_shrink, Some(1.0));
+        assert_eq!(r.flex_basis, Some(Length::Definite(relative(0.0))));
+
+        // Tailwind `flex-none`.
+        let r = clean("flex: none");
+        assert_eq!(r.flex_grow, Some(0.0));
+        assert_eq!(r.flex_shrink, Some(0.0));
+        assert_eq!(r.flex_basis, Some(Length::Auto));
+    }
+
+    #[test]
+    fn flex_wrap_maps_all_three_keywords() {
+        assert_eq!(clean("flex-wrap: wrap").flex_wrap, Some(gpui::FlexWrap::Wrap));
+        assert_eq!(
+            clean("flex-wrap: wrap-reverse").flex_wrap,
+            Some(gpui::FlexWrap::WrapReverse)
+        );
+        assert_eq!(
+            clean("flex-wrap: nowrap").flex_wrap,
+            Some(gpui::FlexWrap::NoWrap)
+        );
+    }
+
+    #[test]
+    fn align_self_and_align_content() {
+        assert_eq!(
+            clean("align-self: center").align_self,
+            Some(gpui::AlignItems::Center)
+        );
+        assert_eq!(
+            clean("align-content: space-between").align_content,
+            Some(gpui::AlignContent::SpaceBetween)
+        );
+        // `self-auto` cannot be expressed as a refinement — it must say so.
+        let (r, d) = map("align-self: auto");
+        assert_eq!(r.align_self, None);
+        assert!(d.iter().any(|m| m.contains("align-self")), "{d:?}");
+    }
+
+    // ---- grid templates (Tailwind `grid-cols-N`) -------------------------
+
+    #[test]
+    fn grid_cols_maps_tailwinds_repeat_minmax() {
+        let r = clean("grid-template-columns: repeat(3, minmax(0, 1fr))");
+        assert_eq!(
+            r.grid_cols,
+            Some(gpui::GridTemplate {
+                repeat: 3,
+                min_size: gpui::GridTemplateMinSize::Zero,
+            })
+        );
+        let r = clean("grid-template-rows: repeat(2, minmax(0, 1fr))");
+        assert_eq!(r.grid_rows.map(|t| t.repeat), Some(2));
+    }
+
+    #[test]
+    fn an_unmodelable_track_list_is_an_advisory_not_a_wrong_grid() {
+        let (r, d) = map("grid-template-columns: 200px 1fr");
+        assert_eq!(r.grid_cols, None);
+        assert!(d.iter().any(|m| m.contains("grid-template-columns")), "{d:?}");
+    }
+
+    // ---- typography / visibility / aspect-ratio --------------------------
+
+    #[test]
+    fn typography_longhands() {
+        assert_eq!(
+            clean("font-style: italic").text.font_style,
+            Some(gpui::FontStyle::Italic)
+        );
+        assert_eq!(
+            clean("white-space: nowrap").text.white_space,
+            Some(gpui::WhiteSpace::Nowrap)
+        );
+        assert!(clean("text-decoration-line: underline")
+            .text
+            .underline
+            .is_some());
+        assert!(clean("text-decoration-line: line-through")
+            .text
+            .strikethrough
+            .is_some());
+        assert!(matches!(
+            clean("text-overflow: ellipsis").text.text_overflow,
+            Some(gpui::TextOverflow::Truncate(_))
+        ));
+    }
+
+    #[test]
+    fn visibility_and_aspect_ratio() {
+        assert_eq!(
+            clean("visibility: hidden").visibility,
+            Some(gpui::Visibility::Hidden)
+        );
+        assert_eq!(clean("aspect-ratio: 16 / 9").aspect_ratio, Some(16.0 / 9.0));
+    }
+
+    // ---- diagnostics are ONE-SHOT ----------------------------------------
+
+    #[test]
+    fn every_custom_property_folds_into_one_advisory() {
+        let (_, d) = map(
+            "--tw-shadow: 0 0 #0000; --tw-ring-color: red; --tw-translate-x: 0; \
+             --tw-scale-x: 1; --whatever: 3",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(
+            d[0].contains("custom properties are stored nowhere yet"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn a_var_composed_value_names_the_property_it_broke() {
+        let (r, d) = map("box-shadow: var(--tw-shadow)");
+        assert_eq!(r.box_shadow, None);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d[0].contains("box-shadow"), "{d:?}");
+    }
+
+    #[test]
+    fn a_repeated_unmapped_property_is_reported_once() {
+        let (_, d) = map("z-index: 1; z-index: 2; z-index: 3");
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    #[test]
+    fn currentcolor_is_advised_rather_than_dropped_in_silence() {
+        let (r, d) = map("background-color: currentColor");
+        assert_eq!(r.background, None);
+        assert!(d.iter().any(|m| m.contains("background-color")), "{d:?}");
+    }
+
+    // ---- the end-to-end Tailwind card ------------------------------------
+
+    #[test]
+    fn the_demo_cards_utilities_all_render() {
+        // Byte-for-byte what Tailwind v3.4 emits for
+        // `flex flex-col gap-2 p-4 rounded-xl bg-white/10 text-sm font-semibold`.
+        let r = clean(
+            "display: flex; flex-direction: column; gap: 0.5rem; padding: 1rem; \
+             border-radius: 0.75rem; background-color: rgb(255 255 255 / 0.1); \
+             font-size: 0.875rem; line-height: 1.25rem; font-weight: 600",
+        );
+        assert_eq!(r.display, Some(gpui::Display::Flex));
+        assert_eq!(r.flex_direction, Some(gpui::FlexDirection::Column));
+        assert_eq!(r.gap.width, Some(px(8.0).into()));
+        assert_eq!(r.gap.height, Some(px(8.0).into()));
+        assert_eq!(r.padding.top, Some(px(16.0).into()));
+        assert_eq!(r.corner_radii.top_left, Some(px(12.0).into()));
+        assert_eq!(r.text.font_size, Some(px(14.0).into()));
+        assert_eq!(r.text.font_weight, Some(gpui::FontWeight(600.0)));
+        assert!(matches!(r.background, Some(gpui::Fill::Color(_))));
+    }
 }

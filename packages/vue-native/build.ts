@@ -29,6 +29,16 @@
 // cache entry, leaving the live exports (and the component def Vue's HMR record
 // already owns) in place.
 //
+// TAILWIND rides the same transport as a SYNTHETIC CSS-ONLY MODULE: when the
+// app has a tailwind.config.* (see ./tailwind.ts), the generated utilities
+// sheet is written as dist/modules/.vn__tailwind.css.js — a real module script
+// the host evals like any other, that calls setCss/setDeps/define and whose
+// factory is empty. Nothing new in the protocol; the id (".vn/tailwind.css")
+// sorts first, so utilities land ahead of every component <style> in the
+// aggregate. A template edit that introduces a new class re-runs Tailwind and
+// emits a "css-only" change entry — the running app restyles with NO component
+// churn (no rerender, no reload, no state loss).
+//
 // `kind` is derived by diffing each .vue file's previous descriptor blocks:
 //   script/scriptSetup changed, or a <style> block's scoped/module/lang shape
 //                                changed          -> "reload"
@@ -49,6 +59,8 @@ import { parse, compileScript, compileTemplate, compileStyle } from "@vue/compil
 import type { SFCDescriptor } from "@vue/compiler-sfc";
 import { resolve, dirname, join, relative, sep } from "path";
 import { mkdirSync, readdirSync, renameSync, statSync, writeFileSync, rmSync } from "fs";
+
+import { TW_ID, findConfig, generate as generateTailwind } from "./tailwind";
 
 // ---- paths ----------------------------------------------------------------
 
@@ -313,6 +325,41 @@ async function buildModule(absPath: string, ids: Set<string>) {
   writeAtomic(join(MODULES_DIR, encId(id)), out.join("\n"));
 }
 
+// ---- tailwind: the synthetic css-only module -------------------------------
+// Absent a tailwind.config.*, EVERY line below is inert and the emitted
+// manifest/module set is byte-identical to a pre-Tailwind build.
+
+const TW_CONFIG = findConfig(APP_SRC_DIR, WS_ROOT);
+/** Last generated utilities sheet — the change detector for watch mode. */
+let twCss: string | null = null;
+/** Constant: the factory body never changes, so define() never invalidates. */
+const TW_HASH = Bun.hash("").toString(16);
+
+/** Runs Tailwind and rewrites the module script. True when the CSS moved. */
+async function buildTailwind(): Promise<boolean> {
+  if (!TW_CONFIG) return false;
+  const t0 = Date.now();
+  const css = await generateTailwind(TW_CONFIG);
+  moduleDeps.set(TW_ID, []);
+  if (css === twCss) return false;
+  twCss = css;
+  writeAtomic(
+    join(MODULES_DIR, encId(TW_ID)),
+    [
+      `// vue-native module: ${TW_ID} (synthetic — Tailwind utilities, generated)`,
+      `// source: ${toId(TW_CONFIG)}; do not edit`,
+      `__VN__.setCss(${J(TW_ID)}, ${J(css)});`,
+      `__VN__.setDeps && __VN__.setDeps(${J(TW_ID)}, []);`,
+      `__VN__.define(${J(TW_ID)}, function (require, module, exports) {`,
+      `}, ${J(TW_HASH)});`,
+    ].join("\n"),
+  );
+  console.log(
+    `${stamp()} tailwind: ${(css.length / 1024).toFixed(1)} KB of utilities in ${Date.now() - t0} ms`,
+  );
+  return true;
+}
+
 // ---- change classification ------------------------------------------------
 
 type Blocks = { src: string; script: string; template: string; styleShape: string; styleText: string };
@@ -369,7 +416,12 @@ let rev = 0;
 let vendorRev = 0; // content hash of vendor.js, set by buildVendor()
 
 function writeManifest(files: string[]) {
-  const ids = files.map(toId);
+  // The synthetic Tailwind module goes FIRST: the host evals `modules` in
+  // order, the loader's cssOrder is first-setCss-wins, so this is what puts
+  // the utilities layer ahead of every component <style>. (It also sorts
+  // first — "." < any letter — which keeps prod.ts's sorted aggregation in
+  // agreement without a second rule.)
+  const ids = (TW_CONFIG ? [TW_ID] : []).concat(files.map(toId));
   const seen = new Set<string>();
   for (const id of ids) {
     const enc = encId(id);
@@ -408,6 +460,8 @@ async function fullBuild(reason: string) {
   const ids = new Set(files.map(toId));
   prevBlocks.clear();
   moduleDeps.clear();
+  twCss = null; // force a rewrite: the module file may not exist yet
+  await buildTailwind();
   for (const abs of files) {
     const src = await Bun.file(abs).text();
     await buildModule(abs, ids);
@@ -420,7 +474,9 @@ async function fullBuild(reason: string) {
   // emitted vendor bundle).
   writeChanges([]);
   console.log(
-    `${stamp()} full build (${reason}): vendor ${(bytes / 1024) | 0} KB + ${files.length} modules in ${Date.now() - t0} ms`,
+    `${stamp()} full build (${reason}): vendor ${(bytes / 1024) | 0} KB + ${files.length} modules` +
+      (TW_CONFIG ? ` + tailwind (${toId(TW_CONFIG)})` : "") +
+      ` in ${Date.now() - t0} ms`,
   );
 }
 
@@ -458,6 +514,14 @@ async function incrementalBuild() {
     } catch {}
     structural = true;
   }
+
+  // ALWAYS re-run Tailwind: a class list changes with the template (a
+  // "rerender" edit), with a `:class` binding (a "reload" edit), and even with
+  // a plain .js file that builds class strings — there is no cheaper signal
+  // than "some content file moved", which is exactly what got us here.
+  // A new utility therefore arrives as its OWN css-only entry, next to (not
+  // instead of) whatever the edited component needs.
+  if (await buildTailwind()) changed.push({ id: TW_ID, kind: "css-only" });
 
   if (!changed.length && !structural) return;
   rev++;
@@ -498,5 +562,18 @@ if (WATCH) {
   };
   watch(APP_SRC_DIR, { recursive: true }, schedule(false));
   watch(RUNTIME_SRC_DIR, { recursive: true }, schedule(true));
-  console.log(`watching ${APP_SRC_DIR} and ${RUNTIME_SRC_DIR} ...`);
+  const watched = [APP_SRC_DIR, RUNTIME_SRC_DIR];
+  if (TW_CONFIG) {
+    // The config lives OUTSIDE the source tree (apps/hello/, not apps/hello/src/),
+    // so editing the theme would otherwise never reach the running app. One
+    // non-recursive watch on its directory, filtered to the config file itself.
+    const configDir = dirname(TW_CONFIG);
+    const configName = relative(configDir, TW_CONFIG);
+    watch(configDir, { recursive: false }, (evt, file) => {
+      if (String(file ?? "") !== configName) return;
+      schedule(false)(evt, file);
+    });
+    watched.push(TW_CONFIG);
+  }
+  console.log(`watching ${watched.join(", ")} ...`);
 }

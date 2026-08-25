@@ -88,8 +88,43 @@ const wide = ref(false);
 
     <Counter />
 
+    <!--
+      Pure Tailwind: not one of these classes exists in this file's <style>.
+      They come from the real Tailwind JIT (v3.4) through the synthetic
+      ".vn/tailwind.css" module. `hover:` rides vn-css's state ladder;
+      `transition-colors` + `duration-300` animate the background swap.
+    -->
+    <div class="flex flex-col gap-2 p-4 rounded-xl bg-white/10 hover:bg-white/25 transition-colors duration-300 border-2 border-emerald-400/70">
+      <div class="text-sm font-semibold text-white">Tailwind card</div>
+      <div class="text-xs text-white/70">
+        flex flex-col gap-2 p-4 rounded-xl bg-white/10 — hover me
+      </div>
+      <div class="text-xs font-mono text-sky-300">hover:bg-white/25 · transition-colors duration-300</div>
+    </div>
+
     <div class="label">App-scoped .label — must be BLUE</div>
     <div class="hint">last wheel ΔY over the card: {{ wheelY.toFixed(1) }}</div>
+
+    <!-- ===================================================================
+         backdrop-filter: blur() — GPU backdrop blur (gpui BackdropBlurRect)
+         Two identical translucent panels sit over the same colour stripes.
+         The LEFT one declares `backdrop-filter: blur(16px)`, the RIGHT one
+         does not: the stripe edges must be smeared under the left panel and
+         razor-sharp under the right one.
+         =================================================================== -->
+    <div class="bf-demo">
+      <div class="bf-stripes">
+        <div class="bf-s bf-s1"></div>
+        <div class="bf-s bf-s2"></div>
+        <div class="bf-s bf-s3"></div>
+        <div class="bf-s bf-s4"></div>
+        <div class="bf-s bf-s5"></div>
+        <div class="bf-s bf-s6"></div>
+      </div>
+      <div class="bf-panel bf-blur">blur(16px)</div>
+      <div class="bf-panel bf-plain">no filter</div>
+    </div>
+    <!-- =============== end backdrop-filter demo ========================= -->
   </div>
 </template>
 
@@ -116,7 +151,8 @@ const wide = ref(false);
   font-size: 13px;
   color: #ffffff;
 }
-/* vn-css maps the `overflow` shorthand (not the overflow-x/-y longhands yet). */
+/* vn-css maps the `overflow` shorthand and the overflow-x / overflow-y
+   longhands (Tailwind's `overflow-y-auto` and friends). */
 .scrollbox {
   overflow: scroll;
   height: 90px;
@@ -156,5 +192,52 @@ const wide = ref(false);
 .hint {
   font-size: 11px;
   color: #ffffff88;
+}
+
+/* ===== backdrop-filter: blur() demo ================================== */
+.bf-demo {
+  position: relative;
+  width: 380px;
+  height: 120px;
+}
+.bf-stripes {
+  display: flex;
+  flex-direction: row;
+  width: 380px;
+  height: 120px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.bf-s {
+  width: 64px;
+  height: 120px;
+}
+.bf-s1 { background: #ff3b30; }
+.bf-s2 { background: #ffcc00; }
+.bf-s3 { background: #34c759; }
+.bf-s4 { background: #00c7ff; }
+.bf-s5 { background: #5e5ce6; }
+.bf-s6 { background: #ff2d95; }
+
+.bf-panel {
+  position: absolute;
+  top: 22px;
+  width: 160px;
+  height: 76px;
+  padding: 8px;
+  background: #ffffff2e;
+  border: 1px solid #ffffff55;
+  border-radius: 14px;
+  font-size: 12px;
+  color: #ffffff;
+}
+/* The one under test. */
+.bf-blur {
+  left: 18px;
+  backdrop-filter: blur(16px);
+}
+/* Identical panel, no filter — the control. */
+.bf-plain {
+  left: 202px;
 }
 </style>

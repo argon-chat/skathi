@@ -93,7 +93,7 @@ impl Engine {
         let mut order = 0u32;
         for rule in &sheet.rules.0 {
             let CssRule::Style(style) = rule else {
-                diagnostics.push(format!("at-rule ignored (v1): {rule:?}").chars().take(120).collect());
+                at_rule_ignored(rule, &mut diagnostics);
                 continue;
             };
             let converted = mapper::convert_block(&style.declarations, &mut diagnostics);
@@ -218,6 +218,31 @@ impl Engine {
             transitions: transitions.unwrap_or_default(),
         }
     }
+}
+
+/// One advisory PER AT-RULE KIND, not per rule: a generated sheet carries one
+/// `@media` block per responsive/dark variant in the app (a broad Tailwind
+/// sweep produced nine), and nine truncated `Debug` dumps bury everything else.
+/// The message says what silently will not apply, which is the part that costs
+/// an author an afternoon.
+fn at_rule_ignored(rule: &CssRule<'_>, diagnostics: &mut Vec<String>) {
+    let msg = match rule {
+        CssRule::Media(_) => "@media rules are dropped (v1) — responsive and `dark:` variants \
+                              (`sm:`, `md:`, `lg:`, `print:`, `motion-reduce:`) do not apply"
+            .to_string(),
+        CssRule::Supports(_) => {
+            "@supports rules are dropped (v1) — the whole block never applies".to_string()
+        }
+        CssRule::Keyframes(_) => "@keyframes are dropped (v1) — CSS animations are not implemented; \
+                                  `transition` is"
+            .to_string(),
+        CssRule::FontFace(_) => "@font-face is dropped (v1) — only system fonts resolve".to_string(),
+        other => format!("at-rule ignored (v1): {other:?}")
+            .chars()
+            .take(120)
+            .collect(),
+    };
+    mapper::once(diagnostics, msg);
 }
 
 /// Classifies a selector's interaction-state bucket from its RIGHTMOST
@@ -460,6 +485,53 @@ mod tests {
         let states = engine.compute(box_node(), None);
         assert_eq!(states.base.opacity, Some(0.5));
         assert_eq!(states.transitions[0].delay, Duration::from_millis(20));
+    }
+
+    /// Tailwind splits one CSS `transition` across TWO utility classes, and
+    /// vn-css folds transitions whole-list (README deviation 2). Pinned here
+    /// because the combination is what every Tailwind app writes:
+    ///
+    ///   .transition-colors  property list + cubic-bezier(.4,0,.2,1) + 150ms
+    ///   .duration-300       transition-duration: 300ms          <- emitted LAST
+    ///
+    /// A browser cascades the two per-longhand and keeps the property list. We
+    /// let the later rule replace the whole list, so the result is `all 300ms
+    /// ease`. Background-color still transitions (it is inside `all`), but the
+    /// property narrowing and Tailwind's easing curve are lost.
+    #[test]
+    fn tailwinds_transition_colors_plus_duration_300_folds_to_all() {
+        let t = transitions(
+            ".box { /* .transition-colors */ \
+               transition-property: color, background-color, border-color, \
+                                    text-decoration-color, fill, stroke; \
+               transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); \
+               transition-duration: 150ms } \
+             .box { /* .duration-300 */ transition-duration: 300ms }",
+        );
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!(t[0].property, TransitionProperty::All);
+        assert_eq!(t[0].duration, Duration::from_millis(300));
+        assert_eq!(t[0].easing, Easing::Ease, "Tailwind's curve does not survive");
+        // The point that matters for the demo card: background-color IS covered.
+        assert!(spec_for(&t, &TransitionProperty::BackgroundColor).is_some());
+    }
+
+    /// `transition-colors` on its own keeps Tailwind's list and curve.
+    #[test]
+    fn tailwinds_transition_colors_alone_keeps_its_list_and_curve() {
+        let t = transitions(
+            ".box { /* .transition-colors */ \
+               transition-property: color, background-color, border-color, \
+                                    text-decoration-color, fill, stroke; \
+               transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); \
+               transition-duration: 150ms }",
+        );
+        assert_eq!(t.len(), 6);
+        assert_eq!(t[1].property, TransitionProperty::BackgroundColor);
+        assert_eq!(t[1].duration, Duration::from_millis(150));
+        assert_eq!(t[1].easing, Easing::CubicBezier(0.4, 0.0, 0.2, 1.0));
+        // `fill` / `stroke` have no gpui slot — they become Other, not an error.
+        assert!(matches!(t[4].property, TransitionProperty::Other(_)));
     }
 
     #[test]

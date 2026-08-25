@@ -38,6 +38,8 @@ import { parse, compileScript, compileTemplate, compileStyle } from "@vue/compil
 import { resolve, dirname, join, relative, sep } from "path";
 import { mkdirSync, renameSync, writeFileSync } from "fs";
 
+import { TW_ID, findConfig, generate as generateTailwind } from "./tailwind";
+
 // ---- paths ----------------------------------------------------------------
 
 const argv = process.argv.slice(2);
@@ -48,7 +50,12 @@ const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relat
 const RUNTIME_ENTRY = join(PKG_DIR, "src", "runtime.js");
 
 const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.js"));
+const APP_SRC_DIR = dirname(ENTRY_ABS);
 const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
+
+/// Same discovery rule as the dev builder — no config, no Tailwind, and the
+/// emitted bundle is byte-identical to a pre-Tailwind one.
+const TW_CONFIG = findConfig(APP_SRC_DIR, WS_ROOT);
 
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const J = (v: unknown) => JSON.stringify(v);
@@ -178,6 +185,7 @@ const vuePlugin = {
 
 async function build() {
   const t0 = Date.now();
+  let tailwindMs = 0;
   mkdirSync(dirname(OUT_FILE), { recursive: true });
   cssById.clear();
 
@@ -210,6 +218,16 @@ async function build() {
   // the stylesheet on mount, so the first paint is already styled. Sorted by
   // module id so the cascade order matches the dev loader's (which aggregates
   // in sorted-file-scan order).
+  //
+  // The Tailwind utilities sheet is keyed under the SAME synthetic id the dev
+  // builder uses (".vn/tailwind.css"), whose leading "." sorts it first — so
+  // dev and prod put the utilities layer in exactly the same place: ahead of
+  // every component <style>. See tailwind.ts for why that ordering is right.
+  if (TW_CONFIG) {
+    const t = Date.now();
+    cssById.set(TW_ID, await generateTailwind(TW_CONFIG));
+    tailwindMs = Date.now() - t;
+  }
   const css = Array.from(cssById.keys())
     .sort()
     .map((id) => `(globalThis.__VN_CSS__ ??= []).push(${J(cssById.get(id))});`)
@@ -223,9 +241,13 @@ async function build() {
   ].join("\n");
   writeAtomic(OUT_FILE, out);
 
+  const sfcs = cssById.size - (TW_CONFIG ? 1 : 0);
   console.log(
-    `prod build: ${(out.length / 1024) | 0} KB (${cssById.size} styled SFC${cssById.size === 1 ? "" : "s"}) ` +
-      `-> ${relative(WS_ROOT, OUT_FILE).split(sep).join("/")} in ${Date.now() - t0} ms`,
+    `prod build: ${(out.length / 1024) | 0} KB (${sfcs} styled SFC${sfcs === 1 ? "" : "s"}` +
+      (TW_CONFIG
+        ? ` + ${((cssById.get(TW_ID)?.length ?? 0) / 1024).toFixed(1)} KB tailwind in ${tailwindMs} ms`
+        : "") +
+      `) -> ${relative(WS_ROOT, OUT_FILE).split(sep).join("/")} in ${Date.now() - t0} ms`,
   );
 }
 

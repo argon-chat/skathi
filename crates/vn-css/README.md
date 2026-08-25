@@ -333,7 +333,7 @@ project's browser-compat-first policy.
 
 ## 6. Tests
 
-`cargo test --target x86_64-pc-windows-msvc -p vn-css` — 58 unit tests:
+`cargo test --target x86_64-pc-windows-msvc -p vn-css` — 79 unit tests:
 
 * `transition::tests` (23) — shorthand/longhand parsing, list cycling,
   shorthand-name expansion, `none`, shorthand/longhand override order,
@@ -346,7 +346,18 @@ project's browser-compat-first policy.
   CSS-initial substitution, percentage/auto/unit snapping with one-shot
   advisories, `all` expansion, cancellation, gc/clear, `settles_at`,
   reduce-motion, opacity clamping, `refine`-on-top-of-base.
-* `tests` in `lib.rs` (9) — cascade folding: specificity, later-rule
+* `mapper::tests` (19) — the property arms and their advisories: overflow /
+  gap / border-width / border-radius longhands, `border-style: none` computing
+  the widths to zero, the `flex` shorthand, `flex-wrap`, `align-self` /
+  `align-content`, `grid-template-columns: repeat(N, minmax(0, 1fr))` (and the
+  advisory for track lists gpui cannot model), `font-style` / `white-space` /
+  `text-decoration-line` / `text-overflow`, `visibility`, `aspect-ratio`,
+  one-shot folding of `--*` declarations and of repeated unmapped properties,
+  the `currentColor` advisory, and an end-to-end block of real Tailwind v3.4
+  output.
+* `tests` in `lib.rs` (11) — cascade folding: specificity, later-rule
   replacement, `transition: none`, `!important`, state-rule rejection, inline
-  override via `compute_with`, no false "property not mapped" diagnostics, and
-  `ComputedStates` value equality (the change-detection primitive from §1.1).
+  override via `compute_with`, no false "property not mapped" diagnostics,
+  `ComputedStates` value equality (the change-detection primitive from §1.1),
+  and the two Tailwind `transition-colors` / `duration-*` cases that pin how
+  deviation 2 (whole-list folding) plays out for utility CSS.
