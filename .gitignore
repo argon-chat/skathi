@@ -12,3 +12,8 @@ dist/
 # Local junk
 *.log
 .DS_Store
+
+# Pinned contributor toolchain (see crates/vn-effects/tools/slang.manifest.json).
+# `bun packages/vue-native/fetch-slang.ts` populates it; nothing in `cargo build`
+# needs it, because the generated effect HLSL is checked in.
+/tools/

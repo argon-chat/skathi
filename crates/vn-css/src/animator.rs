@@ -17,7 +17,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AbsoluteLength, DefiniteLength, Fill, Hsla, Interpolate, Length, Pixels, Rems, StyleRefinement,
+    AbsoluteLength, DefiniteLength, EffectSpec, Fill, Hsla, Interpolate, Length, Pixels, Rems,
+    StyleRefinement,
 };
 
 use crate::transition::{covered, spec_for, Easing, TransitionProperty};
@@ -34,6 +35,10 @@ enum Animatable {
     Color(Hsla),
     Pixels(Pixels),
     Rems(Rems),
+    /// `--shading`. The whole spec travels together because only the eight
+    /// `params` interpolate — the id, the flags and the schema metadata must
+    /// MATCH for a transition to exist at all (see [`unify`]).
+    Effect(EffectSpec),
 }
 
 /// Why a slot cannot be interpolated (kept comparable so an *unchanged*
@@ -134,6 +139,9 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         RowGap => slot_definite(r.gap.height),
         ColumnGap => slot_definite(r.gap.width),
         FontSize => slot_absolute(r.text.font_size),
+        Shading => r
+            .vn_effect
+            .map_or(Slot::Missing, |e| Slot::Value(Animatable::Effect(e))),
         All | Other(_) => Slot::Missing,
     }
 }
@@ -179,6 +187,11 @@ fn install(r: &mut StyleRefinement, p: &TransitionProperty, v: Animatable) {
         RowGap => r.gap.height = definite(),
         ColumnGap => r.gap.width = definite(),
         FontSize => r.text.font_size = to_absolute(v),
+        Shading => {
+            if let Animatable::Effect(spec) = v {
+                r.vn_effect = Some(spec);
+            }
+        }
         All | Other(_) => {}
     }
 }
@@ -216,6 +229,12 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         (Number(_), Number(_)) | (Color(_), Color(_)) | (Pixels(_), Pixels(_)) | (Rems(_), Rems(_)) => {
             Some((a, b))
         }
+        // Two `--shading` endpoints interpolate only when they are the SAME
+        // effect: `frost(0.2)` -> `frost(0.8)` is a parameter sweep, but
+        // `frost(…)` -> `glow(…)` is a different fragment pipeline with a
+        // different parameter meaning per slot, and lerping between them would
+        // paint nonsense. Different ids snap, with an advisory naming both.
+        (Effect(x), Effect(y)) if x.id == y.id => Some((a, b)),
         (Pixels(p), Rems(r)) if r.0 == 0.0 => Some((Pixels(p), Pixels(gpui::Pixels::from(0.0)))),
         (Pixels(p), Rems(r)) if p.as_f32() == 0.0 => Some((Rems(gpui::Rems(0.0)), Rems(r))),
         (Rems(r), Pixels(p)) if p.as_f32() == 0.0 => Some((Rems(r), Rems(gpui::Rems(0.0)))),
@@ -231,6 +250,22 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
         (Color(a), Color(b)) => Color(clamp_hsla(Hsla::interpolate(a, b, t))),
         (Pixels(a), Pixels(b)) => Pixels(gpui::Pixels::interpolate(a, b, t)),
         (Rems(a), Rems(b)) => Rems(gpui::Rems::interpolate(a, b, t)),
+        (Effect(a), Effect(b)) => {
+            // `unify` guarantees the ids match, so every slot means the same
+            // thing on both sides and sweeps componentwise. Colour parameters
+            // therefore interpolate in straight sRGB rather than through HSLA
+            // the way `background-color` does — the params vector is opaque
+            // floats to everything but the shader, and sRGB is what the CSS
+            // default interpolation for legacy colours is anyway.
+            let mut spec = b;
+            for (slot, value) in spec.params.iter_mut().enumerate() {
+                *value = f32::interpolate(a.params[slot], b.params[slot], t);
+            }
+            // Keep repainting for as long as EITHER endpoint wants to, or an
+            // animated grain would freeze the moment a transition starts.
+            spec.animated = a.animated || b.animated;
+            Effect(spec)
+        }
         // Unreachable: tracks are only created from unified endpoints.
         _ => to,
     }
@@ -529,15 +564,35 @@ impl Animator {
         match unify(from, to) {
             Some((from, to)) => Endpoints::Pair(from, to),
             None => {
-                self.warn_once(format!(
-                    "transition of {} between different length units is not animatable yet (v1) \
-                     — snapping",
-                    property.name()
-                ));
+                self.warn_once(match (from, to) {
+                    // A different effect id is a different fragment pipeline
+                    // with a different meaning per parameter slot. This is a
+                    // real CSS-visible behaviour, not a gap, so it says what
+                    // happened rather than "not supported yet".
+                    (Animatable::Effect(a), Animatable::Effect(b)) => format!(
+                        "transition of --shading between different effects (`{}` -> `{}`) \
+                         cannot interpolate — snapping",
+                        effect_name(a.id),
+                        effect_name(b.id)
+                    ),
+                    _ => format!(
+                        "transition of {} between different length units is not animatable yet \
+                         (v1) — snapping",
+                        property.name()
+                    ),
+                });
                 Endpoints::Snap
             }
         }
     }
+}
+
+/// The author-facing name of an effect id, for advisories.
+fn effect_name(id: u32) -> &'static str {
+    vn_effects::EFFECTS
+        .get(id as usize)
+        .map(|effect| effect.name)
+        .unwrap_or("none")
 }
 
 enum Endpoints {
@@ -563,9 +618,8 @@ mod tests {
         };
         ComputedStates {
             base: Rc::new(base),
-            hover: None,
-            active: None,
             transitions: Rc::new(transitions),
+            ..Default::default()
         }
     }
 
@@ -1030,5 +1084,134 @@ mod tests {
             );
             assert!((0.0..=1.0).contains(&v), "opacity left 0..1: {v}");
         }
+    }
+
+    // -- `--shading` ------------------------------------------------------
+
+    /// Builds a refinement carrying one `--shading` declaration, through the
+    /// real mapper — so these tests cover the whole chain, not just the
+    /// animator's half of it.
+    fn with_shading(value: &str) -> StyleRefinement {
+        let mut diagnostics = Vec::new();
+        let r = crate::parse_inline(&format!("--shading: {value}"), &mut diagnostics);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(r.vn_effect.is_some(), "--shading: {value} did not map");
+        r
+    }
+
+    fn shading_of(r: &StyleRefinement) -> EffectSpec {
+        r.vn_effect.expect("overlay carries --shading")
+    }
+
+    #[test]
+    fn effect_params_interpolate() {
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: --shading 1s linear";
+        let old = states(with_shading("frost(0.2, 8px)"), css);
+        let new = states(with_shading("frost(0.8, 20px)"), css);
+        a.on_computed(1, Some(&old), &new, now);
+
+        let half = shading_of(&a.overlay(1, now + Duration::from_millis(500)).unwrap());
+        assert_eq!(half.id, gpui::effect_id::FROST);
+        assert!((half.params[0] - 0.5).abs() < 1e-3, "{}", half.params[0]);
+        assert!((half.params[1] - 14.0).abs() < 1e-3, "{}", half.params[1]);
+        // The schema metadata rides along untouched, so the painter still knows
+        // which slot is the blur radius.
+        assert_eq!(half.backdrop_blur_radius(), half.params[1]);
+        assert!(a.take_diagnostics().is_empty());
+
+        let end = shading_of(&a.overlay(1, now + Duration::from_millis(1000)).unwrap());
+        assert_eq!(end.params[0], 0.8);
+        assert_eq!(end.params[1], 20.0);
+    }
+
+    #[test]
+    fn effect_color_params_interpolate_componentwise() {
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: --shading 1s linear";
+        let old = states(with_shading("glow(#000000, 10px, 0)"), css);
+        let new = states(with_shading("glow(#ffffff, 30px, 1)"), css);
+        a.on_computed(1, Some(&old), &new, now);
+        let half = shading_of(&a.overlay(1, now + Duration::from_millis(500)).unwrap());
+        assert!((half.params[0] - 20.0).abs() < 1e-3);
+        assert!((half.params[1] - 0.5).abs() < 1e-3);
+        for channel in 4..7 {
+            assert!((half.params[channel] - 0.5).abs() < 1e-3, "slot {channel}");
+        }
+        // …and the dilation follows the interpolated radius, so the halo's quad
+        // grows with it instead of popping at the end.
+        assert!((half.bleed() - 20.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn different_effects_snap_with_an_advisory_naming_both() {
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: --shading 1s linear";
+        let old = states(with_shading("frost(0.5)"), css);
+        let new = states(with_shading("glow(10px, 0.5)"), css);
+        a.on_computed(1, Some(&old), &new, now);
+        assert!(a.overlay(1, now).is_none());
+
+        let diags = a.take_diagnostics();
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].contains("frost"), "{diags:?}");
+        assert!(diags[0].contains("glow"), "{diags:?}");
+
+        // …and it stays one-shot.
+        a.on_computed(2, Some(&old), &new, now);
+        assert!(a.take_diagnostics().is_empty());
+    }
+
+    /// `all` is the 25 real CSS properties. A custom property is not one of
+    /// them — a browser would not animate `--shading` under `all` either —
+    /// so it has to be named.
+    #[test]
+    fn all_does_not_cover_shading_but_naming_it_does() {
+        let mut a = Animator::new();
+        let now = t0();
+        let all = "transition: all 1s linear";
+        let old = states(with_shading("frost(0.2)"), all);
+        let new = states(with_shading("frost(0.8)"), all);
+        a.on_computed(1, Some(&old), &new, now);
+        assert!(a.overlay(1, now).is_none(), "`all` must not cover --shading");
+        assert!(a.take_diagnostics().is_empty());
+
+        let named = "transition: all 1s linear, --shading 1s linear";
+        let old = states(with_shading("frost(0.2)"), named);
+        let new = states(with_shading("frost(0.8)"), named);
+        a.on_computed(2, Some(&old), &new, now);
+        assert!(a.overlay(2, now).is_some());
+    }
+
+    /// `--shading: none` is a VALUE, so a transition into it has two present
+    /// endpoints with different ids and must snap rather than silently do
+    /// nothing.
+    #[test]
+    fn transitioning_to_none_snaps() {
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: --shading 1s linear";
+        let old = states(with_shading("frost(0.5)"), css);
+        let new = states(with_shading("none"), css);
+        a.on_computed(1, Some(&old), &new, now);
+        assert!(a.overlay(1, now).is_none());
+        assert_eq!(a.take_diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn an_animated_endpoint_keeps_the_whole_transition_animated() {
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: --shading 1s linear";
+        let old = states(with_shading("noise(0.1, 2px, 0)"), css);
+        let new = states(with_shading("noise(0.6, 2px, 24)"), css);
+        a.on_computed(1, Some(&old), &new, now);
+        let half = shading_of(&a.overlay(1, now + Duration::from_millis(500)).unwrap());
+        assert!(half.animated, "grain must not freeze mid-transition");
+        assert!((half.params[0] - 0.35).abs() < 1e-3);
+        assert!((half.params[2] - 12.0).abs() < 1e-3);
     }
 }

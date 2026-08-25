@@ -207,6 +207,121 @@ pub fn set_reduce_motion(on: bool) {
     tree::set_reduce_motion(on);
 }
 
+/// Publishes the window environment `@media` conditions are evaluated against:
+/// viewport size in CSS px, the OS/window colour scheme and the reduced-motion
+/// preference. Call it once per frame — it is a cheap compare, and on the frame
+/// where something actually changed it marks the whole tree dirty so the next
+/// [`flush_changes`] re-cascades every node (a resize or theme flip can flip any
+/// `@media` rule in the sheet).
+///
+/// Returns `true` on the frames where the environment changed.
+pub fn set_env(viewport_width: f32, viewport_height: f32, dark: bool, reduce_motion: bool) -> bool {
+    let changed = tree::set_env(vn_css::Env {
+        viewport_width,
+        viewport_height,
+        dark,
+        reduce_motion,
+    });
+    if changed {
+        tree::with_tree(|t| t.mark_dirty());
+    }
+    changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each `#[test]` runs on its own thread, so the tree/engine/env
+    /// thread-locals start fresh — no cross-test bleed.
+    fn opacity_of(id: u32) -> Option<f32> {
+        tree::read_tree(|t| {
+            t.node(id)
+                .and_then(|n| n.computed.as_ref())
+                .and_then(|c| c.base.opacity)
+        })
+    }
+
+    /// The contract the host relies on: a changed environment invalidates
+    /// EVERYTHING (any `@media` rule in the sheet may have flipped), and an
+    /// unchanged one costs nothing.
+    #[test]
+    fn env_changes_mark_the_whole_tree_dirty_exactly_once() {
+        tree::with_tree(|t| t.take_dirty());
+        assert!(set_env(800.0, 600.0, false, false));
+        assert!(tree::with_tree(|t| t.take_dirty()));
+        // Same four values again: no change, no invalidation.
+        assert!(!set_env(800.0, 600.0, false, false));
+        assert!(!tree::with_tree(|t| t.take_dirty()));
+        // A theme flip alone counts…
+        assert!(set_env(800.0, 600.0, true, false));
+        assert!(tree::with_tree(|t| t.take_dirty()));
+        // …and so does a one-pixel resize.
+        assert!(set_env(801.0, 600.0, true, false));
+        assert!(tree::with_tree(|t| t.take_dirty()));
+    }
+
+    /// End to end through the real tree: an element property drives
+    /// `:disabled`, and a property write alone is enough to re-cascade.
+    #[test]
+    fn element_properties_drive_the_cascade() {
+        let child = tree::with_tree(|t| {
+            let root = t.create_root();
+            let tag = t.intern("input");
+            let child = t.create_element(tag);
+            t.insert(child, root, 0);
+            t.set_class(child, "field");
+            child
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".field { opacity: 1 } .field:disabled { opacity: 0.4 }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(child), Some(1.0));
+
+        // Exactly what `patchProp` does for `:disabled="true"`.
+        tree::with_tree(|t| {
+            let key = t.intern("disabled");
+            t.set_prop(child, key, Some("true".into()));
+        });
+        assert!(flush_changes(), "a prop write must dirty the tree");
+        assert_eq!(opacity_of(child), Some(0.4));
+
+        // …and `:disabled="false"` is not disabled, as in a browser.
+        tree::with_tree(|t| {
+            let key = t.intern("disabled");
+            t.set_prop(child, key, Some("false".into()));
+        });
+        flush_changes();
+        assert_eq!(opacity_of(child), Some(1.0));
+    }
+
+    /// `@media` conditions read the published env, and moving it re-cascades.
+    #[test]
+    fn media_conditions_follow_the_published_env() {
+        let child = tree::with_tree(|t| {
+            let root = t.create_root();
+            let tag = t.intern("div");
+            let child = t.create_element(tag);
+            t.insert(child, root, 0);
+            t.set_class(child, "box");
+            child
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".box { opacity: 0.1 } @media (min-width: 640px) { .box { opacity: 0.9 } }",
+        ));
+
+        set_env(500.0, 600.0, false, false);
+        flush_changes();
+        assert_eq!(opacity_of(child), Some(0.1));
+
+        // The resize alone — no tree mutation at all — must re-cascade.
+        assert!(set_env(700.0, 600.0, false, false));
+        assert!(flush_changes());
+        assert_eq!(opacity_of(child), Some(0.9));
+    }
+}
+
 /// Dispatches an input event into JS (through the registered dispatcher) and
 /// drains microtasks so Vue's reactive flush lands in the same frame. Must be
 /// called with `Phase::Commit` published. Returns `false` when a JS handler

@@ -191,6 +191,10 @@ fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Co
     if new_focus != 0 {
         js_dispatch(new_focus, tree::EV_FOCUS, &EventPayload::default(), window, cx);
     }
+    // A focus move can change what `:focus` / `:focus-visible` paint even when
+    // no JS handler ran (an `<input>` folds its focus rungs at build time), so
+    // the repaint cannot be left to `flush_changes`.
+    cx.notify();
 }
 
 /// Subscribes `id` to its handle's focus changes, once. gpui fires these from
@@ -332,11 +336,30 @@ fn build_node<V: 'static>(
                     || bit(tree::EV_KEYUP)
                     || bit(tree::EV_FOCUS)
                     || bit(tree::EV_BLUR));
-            let handle = focusable.then(|| focus_handle_for(id, tab_index, cx));
+            // gpui's `.focus()` / `.focus_visible()` rungs are keyed on a
+            // TRACKED focus handle, so a node with a `:focus` rule needs one
+            // even with no listeners and no `tabindex`. It must not become
+            // click-focusable though: in a browser a plain <div> carrying a
+            // `:focus` rule still needs `tabindex` before it can ever focus.
+            let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+            let handle =
+                (focusable || (!is_input && styled_focus)).then(|| focus_handle_for(id, tab_index, cx));
             if let Some(h) = &handle {
                 d = d.track_focus(h);
-                watch_focus(id, h, window, cx);
+                if focusable {
+                    watch_focus(id, h, window, cx);
+                }
+                if let Some(cs) = &node.computed {
+                    if let Some(f) = cs.focus.clone() {
+                        d = d.focus(move |_| (*f).clone());
+                    }
+                    if let Some(f) = cs.focus_visible.clone() {
+                        d = d.focus_visible(move |_| (*f).clone());
+                    }
+                }
             }
+            // Only a browser-focusable node takes focus from a press.
+            let click_focus = handle.clone().filter(|_| focusable);
 
             if bit(tree::EV_CLICK) {
                 d = d.on_click(cx.listener(move |_, ev: &ClickEvent, window, cx| {
@@ -345,7 +368,7 @@ fn build_node<V: 'static>(
                 }));
             }
             if bit(tree::EV_MOUSEDOWN) || focusable {
-                let handle = handle.clone();
+                let handle = click_focus;
                 d = d.on_any_mouse_down(cx.listener(move |_, ev: &MouseDownEvent, window, cx| {
                     if let Some(h) = &handle {
                         // Focus follows the press, as in a browser; the
@@ -447,6 +470,26 @@ fn build_node<V: 'static>(
                 // (mouse, Tab and programmatic focus all land on it), so the
                 // focus/blur events hang off it.
                 watch_focus(id, &focus_target, window, cx);
+                // `:focus` on an `<input>` cannot ride gpui's ladder: the
+                // focus identity lives on the editor's handle INSIDE the
+                // widget, and tracking that same handle on the wrapper as well
+                // would enter it into the tab order twice (Tab would stop here
+                // on two consecutive presses). The rungs are folded into the
+                // wrapper's style instead, read live off that handle — same
+                // pixels, one tab stop.
+                if let Some(cs) = &node.computed {
+                    if focus_target.is_focused(window) {
+                        use gpui::Refineable as _;
+                        if let Some(f) = &cs.focus {
+                            d.style().refine(f);
+                        }
+                        if let Some(f) = &cs.focus_visible {
+                            if window.last_input_was_keyboard() {
+                                d.style().refine(f);
+                            }
+                        }
+                    }
+                }
                 // Clicks on the wrapper's padding/border focus the editor —
                 // the HTML behavior.
                 d = d.on_any_mouse_down(cx.listener(move |_, _: &MouseDownEvent, window, cx| {

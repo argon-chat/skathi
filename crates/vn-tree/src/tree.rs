@@ -341,7 +341,7 @@ impl Tree {
     /// The restyle pass: re-parse dirty inline styles, then run the cascade
     /// for every element node. Runs once per JS wave that touched the tree —
     /// never during a draw.
-    pub fn restyle(&mut self, engine: Option<&vn_css::Engine>) {
+    pub fn restyle(&mut self, engine: Option<&vn_css::Engine>, env: &vn_css::Env) {
         // 1. Re-parse changed inline styles.
         let dirty_inline: Vec<u32> = (1..self.nodes.len() as u32)
             .filter(|&id| self.node(id).is_some_and(|n| n.inline_dirty))
@@ -389,13 +389,12 @@ impl Tree {
                             NodeRef { tree: this, id },
                             inline,
                             n.inline_transitions.as_ref(),
+                            env,
                         ),
                         None => vn_css::ComputedStates {
                             base: inline
                                 .map(|r| std::rc::Rc::new(r.clone()))
                                 .unwrap_or_default(),
-                            hover: None,
-                            active: None,
                             ..Default::default()
                         },
                     };
@@ -431,6 +430,34 @@ impl Tree {
 thread_local! {
     static ENGINE: RefCell<Option<vn_css::Engine>> = const { RefCell::new(None) };
     static ANIMATOR: RefCell<vn_css::Animator> = RefCell::new(vn_css::Animator::new());
+    /// The `@media` environment the cascade is currently evaluated against —
+    /// the native stand-in for a browser's viewport + OS preferences. The host
+    /// refreshes it every frame from the window (see [`set_env`]).
+    static ENV: Cell<vn_css::Env> = Cell::new(vn_css::Env::default());
+}
+
+/// Publishes the current window environment. Returns `true` when it CHANGED,
+/// which obliges the caller to mark the tree dirty: a resize or a theme flip
+/// can turn any `@media` rule in the sheet on or off, so every node has to be
+/// re-cascaded. Both events are rare enough that a full invalidation is the
+/// right trade against tracking which rules a condition feeds.
+pub fn set_env(env: vn_css::Env) -> bool {
+    // `prefers-reduced-motion` is also what suppresses running transitions.
+    // Pushed unconditionally (the animator only reacts to the false→true edge)
+    // so it cannot be missed on the one frame where the rest of the env happens
+    // to equal the default.
+    set_reduce_motion(env.reduce_motion);
+    ENV.with(|e| {
+        if e.get() == env {
+            return false;
+        }
+        e.set(env);
+        true
+    })
+}
+
+pub fn env() -> vn_css::Env {
+    ENV.with(|e| e.get())
 }
 
 /// The per-frame interpolated overlay for a node (None = idle).
@@ -469,9 +496,10 @@ pub fn set_engine(engine: vn_css::Engine) {
 
 /// Restyles under the current engine (or inline-only when none is set).
 pub fn restyle_all() {
+    let env = env();
     ENGINE.with(|eng| {
         let eng = eng.borrow();
-        with_tree(|t| t.restyle(eng.as_ref()));
+        with_tree(|t| t.restyle(eng.as_ref(), &env));
     });
 }
 
@@ -530,6 +558,18 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
     }
     fn has_scope(&self, name: &str) -> bool {
         self.node().scopes.iter().any(|s| s == name)
+    }
+    /// The DOM attribute channel, straight off `Node::props`. Names are
+    /// interned once per sheet compile's worth of lookups; an attribute a
+    /// selector asks for that JS has never written has no id at all, which is
+    /// the cheap "absent" answer.
+    fn attr(&self, name: &str) -> Option<&str> {
+        let key = *self.tree.name_ids.get(name)?;
+        self.node()
+            .props
+            .iter()
+            .find(|(k, _, _)| *k == key)
+            .map(|(_, v, _)| v.as_str())
     }
     fn is_empty(&self) -> bool {
         self.node().children.is_empty() && self.node().text.is_empty()

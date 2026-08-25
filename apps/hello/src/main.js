@@ -1,4 +1,5 @@
 import { createApp } from "vue-native";
-import App from "./App.vue";
+import AppShell from "./AppShell.vue";
+import { router } from "./router.js";
 
-createApp(App).mount();
+createApp(AppShell).use(router).mount();

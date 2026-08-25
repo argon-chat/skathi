@@ -117,6 +117,17 @@ async function buildVendor() {
     format: "iife",
     target: "browser",
     define: DEFINES,
+    plugins: [
+      {
+        // vue-router (and anything else vendored later) imports from "vue";
+        // in the vendor bundle that must be OUR runtime module. Exact-match
+        // filter only — bun 1.4 crashes on catch-all onResolve filters.
+        name: "vendor-vue-alias",
+        setup(b: any) {
+          b.onResolve({ filter: /^vue$/ }, () => ({ path: join(RUNTIME_SRC_DIR, "runtime.js") }));
+        },
+      },
+    ],
   });
   if (!result.success) {
     for (const log of result.logs) console.error(log);

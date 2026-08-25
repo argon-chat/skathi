@@ -31,8 +31,24 @@ pub trait MatchDom: Copy {
     fn has_class(&self, name: &str) -> bool;
     /// Vue `<style scoped>` hash: does the node carry `data-v-...`?
     fn has_scope(&self, name: &str) -> bool;
+    /// An attribute's value, or `None` when the node does not carry it. This is
+    /// the DOM attribute channel — everything Vue assigns that is not `class`,
+    /// `style` or an `on*` listener lands here, so it backs `[disabled]`,
+    /// `[data-state="open"]`, `[aria-expanded]`, `#id`, `:disabled` and
+    /// `:checked` alike. There is no separate "is the attribute present"
+    /// question: a present attribute with no value is `Some("")`, as in HTML.
+    fn attr(&self, name: &str) -> Option<&str>;
     fn is_empty(&self) -> bool;
     fn is_root(&self) -> bool;
+}
+
+/// The HTML rule for a boolean attribute (`disabled`, `checked`): present is
+/// true whatever the value — except that Vue writes `:disabled="false"` through
+/// as the string `"false"`, and `<input :disabled="false">` must NOT be
+/// disabled. (In a browser Vue removes the attribute instead; our prop channel
+/// keeps it and carries the value, so the value is what we read.)
+fn boolean_attr<D: MatchDom>(node: &D, name: &str) -> bool {
+    node.attr(name).is_some_and(|v| v != "false")
 }
 
 #[derive(Clone, Copy)]
@@ -100,12 +116,24 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
         operation: &AttrSelectorOperation<&<Self::Impl as SelectorImpl<'i>>::AttrValue>,
     ) -> bool {
         // Vue scoped CSS: `[data-v-xxxx]` is a bare-presence test on the hot
-        // path of every scoped rule. Other attribute selectors: later.
+        // path of every scoped rule, and scope hashes live in their own list
+        // rather than the property map.
         let name: &str = local_name.0.as_ref();
         if name.starts_with("data-v-") {
             return matches!(operation, AttrSelectorOperation::Exists) && self.0.has_scope(name);
         }
-        false
+        // Everything else comes off the property map. `eval_str` is
+        // parcel's own operator implementation (`=`, `~=`, `|=`, `^=`, `$=`,
+        // `*=`, plus the `i`/`s` case flags), so the semantics are the
+        // browser's by construction.
+        //
+        // Namespaces are ignored: `@namespace` is not implemented, and the
+        // audit rejects `[ns|attr]` at compile time rather than answering it
+        // wrongly here.
+        match self.0.attr(name) {
+            Some(value) => operation.eval_str(value),
+            None => false,
+        }
     }
 
     fn match_non_ts_pseudo_class<F>(
@@ -117,9 +145,25 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
     where
         F: FnMut(&Self, ElementSelectorFlags),
     {
-        // The cascade computes "would this match WHEN in the state" — the
-        // state buckets are classified separately and gpui picks them live.
-        matches!(pc, PseudoClass::Hover | PseudoClass::Active)
+        match pc {
+            // Interaction states: the cascade computes "would this match WHEN
+            // in the state" — the buckets are classified separately and gpui's
+            // ladder picks them live, so here they are unconditionally true.
+            PseudoClass::Hover
+            | PseudoClass::Active
+            | PseudoClass::Focus
+            | PseudoClass::FocusVisible => true,
+            // Property states: the element property IS the state, so these are
+            // matched for real and their rules fold into the base bucket. A
+            // property write already marks the tree dirty, so the next restyle
+            // picks the change up — no ladder, no round trip.
+            PseudoClass::Disabled => boolean_attr(&self.0, "disabled"),
+            PseudoClass::Enabled => !boolean_attr(&self.0, "disabled"),
+            PseudoClass::Checked => boolean_attr(&self.0, "checked"),
+            // Everything else is rejected by the compile-time audit, so a rule
+            // carrying it never reaches the matcher.
+            _ => false,
+        }
     }
 
     fn match_pseudo_element(
@@ -138,10 +182,13 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
     }
     fn has_id(
         &self,
-        _id: &<Self::Impl as SelectorImpl<'i>>::Identifier,
-        _case_sensitivity: CaseSensitivity,
+        id: &<Self::Impl as SelectorImpl<'i>>::Identifier,
+        case_sensitivity: CaseSensitivity,
     ) -> bool {
-        false // ids land with the attribute story
+        // `id` is a plain DOM attribute on the property channel.
+        self.0
+            .attr("id")
+            .is_some_and(|v| case_sensitivity.eq(v.as_bytes(), id.0.as_ref().as_bytes()))
     }
     fn has_class(
         &self,

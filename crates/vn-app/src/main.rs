@@ -48,6 +48,14 @@ const PRELUDE_JS: &str = r#"
     globalThis.__VUE_PROD_DEVTOOLS__ = false;
     globalThis.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__ = false;
     globalThis.__VN_CSS__ = [];
+    // Browser-compat: redjs ships no `history`; vue-router's dev build touches
+    // it at startup even with memory history (its isBrowser heuristic sees our
+    // window/document). Inert stub, like `location`. TODO: move into redjs
+    // webapi as a proper native class.
+    globalThis.history = {
+        state: null, length: 1, scrollRestoration: "auto",
+        pushState() {}, replaceState() {}, go() {}, back() {}, forward() {},
+    };
     let ticks = 0;
     setInterval(() => {
         ticks += 1;
@@ -128,10 +136,27 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
             }
         });
     });
+    // The `@media` environment, refreshed from the window every frame: the
+    // viewport in CSS px (gpui `Pixels` are already logical), the OS/window
+    // colour scheme and the reduced-motion preference. `set_env` is a compare
+    // on four values; on the frame one of them actually moved it marks the
+    // whole tree dirty so `flush_changes` below re-cascades everything —
+    // resizes and theme flips are rare, and any rule in the sheet can turn on
+    // or off. It also feeds the transition animator's reduced-motion switch.
+    let viewport = window.viewport_size();
+    let dark = matches!(
+        window.appearance(),
+        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+    );
+    vn_tree::set_env(
+        f32::from(viewport.width),
+        f32::from(viewport.height),
+        dark,
+        cx.reduce_motion(),
+    );
     // One notify per JS wave that touched the tree — the draw right after
     // this callback picks it up (same frame). While CSS transitions run, keep
     // repainting: `on_next_frame` alone re-arms but does not redraw.
-    vn_tree::set_reduce_motion(cx.reduce_motion());
     if vn_tree::flush_changes() || vn_tree::animating() {
         SHELL.with(|s| {
             if let Some(shell) = s.borrow().as_ref().and_then(|w| w.upgrade()) {

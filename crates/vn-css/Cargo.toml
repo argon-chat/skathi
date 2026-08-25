@@ -11,3 +11,4 @@ gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 # version lightningcss resolves so the two share one `Selector` type.
 lightningcss = { version = "1.0.0-alpha.72", default-features = false }
 parcel_selectors = "0.28.3"
+vn-effects = { path = "../vn-effects" }

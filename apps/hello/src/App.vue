@@ -45,6 +45,20 @@ const focused = ref("nothing");
 // Plain browser CSS: `transition:` on the base rule animates class-driven
 // changes (width + background here). Toggled by click.
 const wide = ref(false);
+
+// --- round 5 (appended block) ----------------------------------------------
+// These drive ELEMENT PROPERTIES, not classes: `:disabled`, `:checked` and
+// `[data-state="…"]` are answered by the cascade straight off the property
+// map, so flipping a ref restyles without a single state class.
+const locked = ref(false);
+const checked = ref(false);
+const open = ref(false);
+
+// --- shaders (appended block) ----------------------------------------------
+// `--shading` params are floats, so `transition: --shading 420ms` interpolates
+// them like any other animatable value. State-rule transitions (:hover) are
+// rejected by design, so this rides a click-toggled class exactly like `.anim`.
+const hot = ref(false);
 </script>
 
 <template>
@@ -125,6 +139,103 @@ const wide = ref(false);
       <div class="bf-panel bf-plain">no filter</div>
     </div>
     <!-- =============== end backdrop-filter demo ========================= -->
+
+    <!-- ===================================================================
+         ROUND 5 (appended block) — everything below is answered by the CSS
+         cascade alone. No JS reads a focus state, no handler adds a state
+         class: `:focus` / `:focus-visible` ride gpui's focus rungs,
+         `:disabled` / `:checked` / `[data-state]` read the element's own
+         properties, and the `@media` blocks are evaluated against the live
+         window (size, OS theme, reduced-motion).
+         =================================================================== -->
+    <div class="r5">
+      <div class="r5-title">round 5 — :focus · props · [attr] · @media</div>
+
+      <!-- :focus on the native <input>. -->
+      <input class="field r5-focus" tabindex="3" placeholder="Tab or click me — :focus ring" />
+
+      <!-- :focus on a plain tabbable div rides gpui's .focus() rung;
+           :focus-visible only lights up when focus arrived from the KEYBOARD,
+           exactly as in a browser. -->
+      <div class="r5-box" tabindex="4">
+        plain div, tabindex=4 — blue on :focus, amber on :focus-visible (Tab)
+      </div>
+
+      <!-- :disabled reads the property, so v-bind alone restyles. -->
+      <div class="r5-row">
+        <input class="field r5-input" :disabled="locked" :value="locked ? 'locked' : 'editable'" />
+        <div class="r5-toggle" @click="locked = !locked">{{ locked ? "unlock" : "lock" }} — :disabled</div>
+      </div>
+
+      <div class="r5-check" :checked="checked" @click="checked = !checked">:checked = {{ checked }} — click me</div>
+
+      <!-- [attr="…"] — the exact shape Tailwind's `data-[state=open]:` emits. -->
+      <div class="r5-state" :data-state="open ? 'open' : 'closed'" @click="open = !open">
+        [data-state="{{ open ? "open" : "closed" }}"] — click me
+      </div>
+
+      <!-- @media, hand written: resize the window across 640px and 900px. -->
+      <div class="r5-media">@media width: GREY &lt; 640px · BLUE ≥ 640px · GREEN ≥ 900px</div>
+      <div class="r5-dark">@media (prefers-color-scheme: dark) — AMBER while the OS theme is dark</div>
+      <div class="r5-motion">@media (prefers-reduced-motion: reduce) — RED when the OS asks for less motion</div>
+
+      <!-- …and the same four capabilities through Tailwind's own variants. -->
+      <div class="flex flex-col gap-2 p-3 rounded-lg bg-white/5 border border-white/20 text-xs text-white/60 sm:text-sky-300 lg:text-emerald-300 dark:bg-amber-400/10">
+        <div class="font-mono">tailwind: sm:text-sky-300 · lg:text-emerald-300 · dark:bg-amber-400/10</div>
+        <input class="field focus:border-sky-400 disabled:opacity-40" tabindex="5" :disabled="locked" placeholder="tailwind focus: + disabled:" />
+      </div>
+    </div>
+    <!-- =============== end round 5 demo ================================== -->
+
+    <!-- ===================================================================
+         SHADERS (appended block) — `--shading`, the custom effect system.
+         Sources: crates/vn-effects/shaders/*.slang, compiled by
+         `bun shaders.ts` to checked-in HLSL and run at ps_5_0 on a
+         gpui EffectQuad primitive.
+
+           frost  reads the render-target snapshot (same machinery as
+                  backdrop-filter) and adds grain + a rim highlight.
+           noise  animated film grain OVER the element.
+           glow   a halo centred on the rounded-rect edge, reaching OUTSIDE
+                  the border box — the primitive's quad is dilated for it.
+
+         A browser parses `--shading`, stores it and renders nothing, so this
+         whole block degrades to plain cards there rather than erroring.
+         =================================================================== -->
+    <div class="fx">
+      <div class="fx-title">--shading — frost · noise · glow</div>
+
+      <!-- Same colour stripes as the backdrop-filter demo: frost has to smear
+           the edges under the left panel and leave them razor-sharp under the
+           right one, PLUS carry its own grain and rim. -->
+      <div class="fx-demo">
+        <div class="fx-stripes">
+          <div class="fx-s fx-s1"></div>
+          <div class="fx-s fx-s2"></div>
+          <div class="fx-s fx-s3"></div>
+          <div class="fx-s fx-s4"></div>
+          <div class="fx-s fx-s5"></div>
+          <div class="fx-s fx-s6"></div>
+        </div>
+        <div class="fx-panel fx-frost">frost(0.85, 14px)</div>
+        <div class="fx-panel fx-plain">no --shading</div>
+      </div>
+
+      <div class="fx-row">
+        <div class="fx-card fx-noise">
+          <div class="fx-card-name">noise(0.4, 2px, 18)</div>
+          <div class="fx-card-note">animated film grain</div>
+        </div>
+
+        <!-- `transition: --shading` over the param vector: radius, strength
+             and every colour channel sweep together. -->
+        <div class="fx-card fx-glow" :class="{ 'fx-hot': hot }" @click="hot = !hot">
+          <div class="fx-card-name">glow — click me</div>
+          <div class="fx-card-note">{{ hot ? "#ff2d95 · 34px · 1" : "#7fd4ff · 10px · 0.35" }}</div>
+        </div>
+      </div>
+    </div>
+    <!-- =============== end shaders demo ================================== -->
   </div>
 </template>
 
@@ -239,5 +350,264 @@ const wide = ref(false);
 /* Identical panel, no filter — the control. */
 .bf-plain {
   left: 202px;
+}
+</style>
+
+<!-- ===================================================================
+     ROUND 5 (appended block) — a second <style scoped> block; the SFC
+     pipeline concatenates every style block under the same `data-v-` hash.
+     =================================================================== -->
+<style scoped>
+.r5 {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #ffffff0f;
+  border: 1px solid #ffffff1f;
+}
+.r5-title {
+  font-size: 12px;
+  color: #ffffffcc;
+}
+
+/* :focus — on an <input> the rung is folded from the editor's own focus
+   handle (tracking it on the wrapper too would double the tab stop). */
+.r5-focus {
+  width: 300px;
+}
+.r5-focus:focus {
+  border-color: #7fd4ff;
+  background: #7fd4ff26;
+}
+
+/* The round-1/2 controls get a ring from the same one-line rule — the
+   `<input>` through the folded path, the scroll box through gpui's rung. */
+.field:focus {
+  border-color: #7fd4ff;
+}
+.scrollbox:focus {
+  border-color: #7fd4ff;
+  background: #7fd4ff1f;
+}
+.scrollbox:focus-visible {
+  border-color: #ffcc00;
+}
+
+/* :focus / :focus-visible on a plain tabbable div — gpui's .focus() and
+   .focus_visible() rungs. The latter needs the focus to have come from the
+   keyboard, which is exactly what the browser means by :focus-visible. */
+.r5-box {
+  width: 300px;
+  padding: 6px;
+  font-size: 11px;
+  color: #ffffffaa;
+  border: 1px solid #ffffff2e;
+  border-radius: 6px;
+}
+.r5-box:focus {
+  border-color: #7fd4ff;
+  color: #ffffff;
+}
+.r5-box:focus-visible {
+  border-color: #ffcc00;
+  color: #ffcc00;
+}
+
+/* :disabled / :checked are ELEMENT PROPERTIES, so they fold into the base
+   bucket — there is no gpui rung for them and none is needed. */
+.r5-row {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+}
+.r5-input {
+  width: 150px;
+}
+.r5-input:disabled {
+  opacity: 0.35;
+  border-color: #ff3b3080;
+}
+.r5-toggle {
+  padding: 6px;
+  font-size: 11px;
+  color: #ffffff;
+  background: #4f8cff59;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.r5-check {
+  padding: 6px;
+  font-size: 11px;
+  color: #ffffff88;
+  border: 1px solid #ffffff2e;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.r5-check:checked {
+  color: #34c759;
+  border-color: #34c759;
+  background: #34c75926;
+}
+
+/* [attr="value"] straight off the property map. */
+.r5-state {
+  padding: 6px;
+  font-size: 11px;
+  color: #ffffff88;
+  border: 1px solid #ffffff2e;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.r5-state[data-state="open"] {
+  color: #ff2d95;
+  border-color: #ff2d95;
+}
+
+/* @media against the live window environment. */
+.r5-media,
+.r5-dark,
+.r5-motion {
+  font-size: 11px;
+  color: #ffffff66;
+}
+@media (min-width: 640px) {
+  .r5-media {
+    color: #7fd4ff;
+  }
+}
+@media (min-width: 900px) {
+  .r5-media {
+    color: #34c759;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .r5-dark {
+    color: #ffcc00;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .r5-motion {
+    color: #ff3b30;
+  }
+}
+</style>
+
+<!-- ===================================================================
+     SHADERS (appended block) — a third <style scoped> block. The SFC
+     pipeline concatenates them, so appending never disturbs what is
+     above.
+     =================================================================== -->
+<style scoped>
+.fx {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #ffffff0a;
+  border: 1px solid #ffffff1f;
+}
+.fx-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffffcc;
+}
+
+/* --- frost over the colour stripes ------------------------------------- */
+.fx-demo {
+  position: relative;
+  width: 380px;
+  height: 120px;
+}
+.fx-stripes {
+  display: flex;
+  flex-direction: row;
+  width: 380px;
+  height: 120px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.fx-s {
+  width: 64px;
+  height: 120px;
+}
+.fx-s1 { background: #ff3b30; }
+.fx-s2 { background: #ffcc00; }
+.fx-s3 { background: #34c759; }
+.fx-s4 { background: #00c7ff; }
+.fx-s5 { background: #5e5ce6; }
+.fx-s6 { background: #ff2d95; }
+
+.fx-panel {
+  position: absolute;
+  top: 22px;
+  width: 160px;
+  height: 76px;
+  padding: 8px;
+  background: #ffffff1a;
+  border: 1px solid #ffffff55;
+  border-radius: 14px;
+  font-size: 12px;
+  color: #ffffff;
+}
+/* The one under test: `strength` fades the whole treatment, `radius` is the
+   backdrop blur the renderer builds the Dual-Kawase pyramid for, and the
+   third argument tints it. */
+.fx-frost {
+  left: 18px;
+  --shading: frost(0.85, 14px, #cfe9ff1f);
+}
+/* Identical panel, no effect — the control. */
+.fx-plain {
+  left: 202px;
+}
+
+/* --- noise + glow cards ------------------------------------------------ */
+.fx-row {
+  display: flex;
+  flex-direction: row;
+  gap: 44px;
+  /* The glow's halo reaches `radius` OUTSIDE the card, so leave it room. */
+  padding: 18px 22px;
+}
+.fx-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 150px;
+  padding: 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  color: #ffffff;
+}
+.fx-card-name {
+  font-weight: 600;
+}
+.fx-card-note {
+  font-size: 11px;
+  color: #ffffff8c;
+}
+
+/* Film grain painted over the card's own background. `speed` > 0 makes the
+   effect animated, which is what keeps the window repainting. */
+.fx-noise {
+  background: #2b3350;
+  border: 1px solid #ffffff2e;
+  --shading: noise(0.4, 2px, 18);
+}
+
+/* `transition: --shading` interpolates the param vector — radius, strength
+   and all four colour channels sweep together. Driven by a click-toggled
+   class, because state-rule transitions are rejected by design. */
+.fx-glow {
+  background: #1d2233;
+  border: 1px solid #ffffff2e;
+  --shading: glow(#7fd4ff, 10px, 0.35);
+  transition: --shading 420ms ease;
+}
+.fx-glow.fx-hot {
+  --shading: glow(#ff2d95, 34px, 1);
 }
 </style>

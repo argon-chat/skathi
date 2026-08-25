@@ -28,6 +28,10 @@
 // fall back to a state-losing hard restart.
 
 import * as runtimeNs from "./runtime.js";
+// vue-router (memory history — no browser location/history needed) rides the
+// vendor bundle so real router-based apps work unchanged. Its internal
+// `import ... from "vue"` is aliased to runtime.js by the vendor build.
+import * as vueRouterNs from "vue-router";
 
 const factories = new Map(); // id -> function (require, module, exports)
 const cache = new Map(); // id -> { id, exports }
@@ -215,6 +219,8 @@ for (const alias of ["vue", "vue-native"]) {
   factories.set(alias, () => {});
   cache.set(alias, { id: alias, exports: vueExports });
 }
+factories.set("vue-router", () => {});
+cache.set("vue-router", { id: "vue-router", exports: vueRouterNs });
 
 // ---- boot / restart -------------------------------------------------------
 
@@ -256,7 +262,7 @@ function hardRestart(reason) {
   log("hard restart (" + reason + ")");
   teardown();
   for (const id of Array.from(cache.keys())) {
-    if (id !== "vue" && id !== "vue-native") cache.delete(id);
+    if (id !== "vue" && id !== "vue-native" && id !== "vue-router") cache.delete(id);
   }
   degraded = true; // cleared once the entry actually ran again
   requireId(entryId, null);

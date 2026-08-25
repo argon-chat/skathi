@@ -81,13 +81,26 @@ pub enum TransitionProperty {
     ColumnGap,
     /// `font-size`
     FontSize,
+    /// `--shading` — the effect parameter vector.
+    ///
+    /// Deliberately NOT part of [`Self::animatable`], so `transition: all` does
+    /// not cover it and it has to be named explicitly
+    /// (`transition: --shading 300ms`). Two reasons: `all` in CSS means "every
+    /// animatable *property*", and a custom property is not one — a browser
+    /// would not animate `--shading` under `all` either, since animating a
+    /// custom property needs an `@property` registration it does not have. And
+    /// an effect quad is the one style here that can cost a render-target
+    /// snapshot per frame, so opting into animating it should be explicit.
+    Shading,
     /// `all` — expands to every animatable property at diff time.
     All,
     /// A property vn-css parses but cannot animate yet (one-shot advisory).
     Other(Rc<str>),
 }
 
-/// The number of concrete properties `all` expands to.
+/// The number of concrete properties `all` expands to. `--shading`
+/// ([`TransitionProperty::Shading`]) is transitionable but deliberately outside
+/// this set — see that variant.
 pub const ANIMATABLE_COUNT: usize = 25;
 
 impl TransitionProperty {
@@ -155,6 +168,7 @@ impl TransitionProperty {
             RowGap => "row-gap",
             ColumnGap => "column-gap",
             FontSize => "font-size",
+            Shading => "--shading",
             All => "all",
             Other(name) => name,
         }
@@ -556,6 +570,11 @@ fn expand(id: &PropertyId) -> Expansion {
         "row-gap" => one(RowGap),
         "column-gap" => one(ColumnGap),
         "font-size" => one(FontSize),
+        // lightningcss parses an unknown property id — including a custom
+        // property — into `PropertyId::Custom`, whose `name()` keeps the
+        // leading dashes. `--shading` is the one custom property vue-native
+        // maps, so it is the one that animates.
+        "--shading" => one(Shading),
         other => one(Other(Rc::from(other))),
     }
 }

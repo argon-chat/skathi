@@ -5,12 +5,16 @@
   "type": "module",
   "dependencies": {
     "@vue/compiler-sfc": "^3.5.41",
-    "@vue/runtime-core": "^3.5.0"
+    "@vue/runtime-core": "^3.5.0",
+    "vue-router": "4"
   },
   "scripts": {
     "build": "bun build.ts",
     "watch": "bun build.ts --watch",
-    "build:prod": "bun prod.ts"
+    "build:prod": "bun prod.ts",
+    "shaders": "bun shaders.ts",
+    "shaders:check": "bun shaders.ts --check",
+    "shaders:fetch": "bun fetch-slang.ts"
   },
   "devDependencies": {
     "postcss": "^8.4.31",

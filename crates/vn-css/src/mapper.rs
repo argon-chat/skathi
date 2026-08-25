@@ -274,6 +274,12 @@ fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
 const CUSTOM_PROPS: &str = "custom properties are stored nowhere yet (v1) — var()-composed \
                             utilities like shadows/transforms/rings degrade";
 
+// `--shading`, the one custom property that IS mapped. Declared here rather
+// than in lib.rs so the whole effect surface — the module, its interception in
+// the `Custom(_)` branch below, and nothing else — lands in one place.
+#[path = "effect.rs"]
+pub(crate) mod effect;
+
 // ---------------------------------------------------------------------------
 // the mapper
 // ---------------------------------------------------------------------------
@@ -724,6 +730,21 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
         // by the hundred, so EVERY `--*` folds into one advisory: the story is
         // identical for all of them and the per-name list is pure noise.
         Custom(c) => match &c.name {
+            // `--shading` is the ONE custom property vue-native interprets: a
+            // GPU effect has no web equivalent, so it needs a spelling a
+            // browser parses, stores and ignores rather than one a browser
+            // DROPS. Intercepted here, ahead of the fold-everything advisory,
+            // because it is a real mapped property that merely happens to be
+            // spelled as a custom property. Everything about it — grammar,
+            // schemas, advisories, the inheritance divergence — lives in
+            // `crate::effect`.
+            lightningcss::properties::custom::CustomPropertyName::Custom(name)
+                if name.0.as_ref() == effect::SHADING =>
+            {
+                if let Some(spec) = effect::parse(&c.value, diagnostics) {
+                    r.vn_effect = Some(spec);
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Custom(_) => {
                 once(diagnostics, CUSTOM_PROPS.to_string());
             }
