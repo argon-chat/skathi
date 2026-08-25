@@ -28,13 +28,44 @@ const PRELUDE_JS: &str = r#"
     }, 500);
 "#;
 
+const BUNDLE_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/vue-native/dist/app.js"
+);
+
 fn app_bundle() -> String {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../packages/vue-native/dist/app.js"
-    );
-    std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {path}: {e} — run `bun run build` in packages/vue-native"))
+    std::fs::read_to_string(BUNDLE_PATH).unwrap_or_else(|e| {
+        panic!("read {BUNDLE_PATH}: {e} — run `bun build.ts` in packages/vue-native")
+    })
+}
+
+fn bundle_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(BUNDLE_PATH).and_then(|m| m.modified()).ok()
+}
+
+thread_local! {
+    static BUNDLE_STAMP: std::cell::Cell<Option<std::time::SystemTime>> =
+        const { std::cell::Cell::new(None) };
+    static FRAME_NO: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Dev hot-restart: tear the Vue app down and re-eval the fresh bundle in the
+/// SAME context (the JSC context can never be recreated — teardown fastfails).
+/// State is lost by design; real HMR (module registry + __VUE_HMR_RUNTIME__)
+/// is the follow-up.
+fn reload_bundle() {
+    eprintln!("[dev] bundle changed — hot restart");
+    JsRuntime::with(|rt| {
+        if let Err(e) = rt.eval(
+            "globalThis.__VN_TEARDOWN__ && globalThis.__VN_TEARDOWN__();",
+            "vn://teardown.js",
+        ) {
+            eprintln!("[dev] teardown: {}\n{}", e.header, e.stack);
+        }
+        if let Err(e) = rt.eval(&app_bundle(), "vn://app.js") {
+            eprintln!("[dev] reload: {}\n{}", e.header, e.stack);
+        }
+    });
 }
 
 struct Shell {
@@ -95,6 +126,26 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
                 eprintln!("[js uncaught] {}\n{}", err.header, err.stack);
             }
         });
+        // Dev loop: watch the bundle's mtime (~2×/s at 60 fps) and hot-restart
+        // the Vue app when `bun build.ts --watch` rewrites it.
+        let n = FRAME_NO.with(|f| {
+            let n = f.get().wrapping_add(1);
+            f.set(n);
+            n
+        });
+        if n % 30 == 0 {
+            let current = bundle_mtime();
+            let stale = BUNDLE_STAMP.with(|s| {
+                let changed = s.get().is_some() && current.is_some() && s.get() != current;
+                if s.get().is_none() || changed {
+                    s.set(current);
+                }
+                changed
+            });
+            if stale {
+                reload_bundle();
+            }
+        }
     });
     // One notify per JS wave that touched the tree — the draw right after
     // this callback picks it up (same frame).

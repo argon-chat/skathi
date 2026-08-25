@@ -130,6 +130,17 @@ export function createApp(rootComponent, rootProps = null) {
     }
     const root = mk(__vn_create_root(), 1, "root");
     const vm = mount(root);
+    // Dev hot-restart: the host calls this before re-evaling a new bundle.
+    globalThis.__VN_TEARDOWN__ = () => {
+      try {
+        app.unmount();
+      } catch (e) {
+        __vn_log("teardown: " + e);
+      }
+      __vn_remove(root.id);
+      globalThis.__VN_CSS__ = [];
+      globalThis.__VN_TEARDOWN__ = undefined;
+    };
     __vn_log(`Vue ${version} app mounted (vue-native runtime)`);
     return vm;
   };

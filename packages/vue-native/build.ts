@@ -11,8 +11,9 @@
 import { parse, compileScript, compileStyle } from "@vue/compiler-sfc";
 import { resolve, dirname } from "path";
 
-const entry = resolve(process.argv[2] ?? "../../apps/hello/src/main.js");
-const outfile = resolve(process.argv[3] ?? "dist/app.js");
+const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const entry = resolve(positional[0] ?? "../../apps/hello/src/main.js");
+const outfile = resolve(positional[1] ?? "dist/app.js");
 const runtimePath = resolve(import.meta.dir, "src/runtime.js");
 
 const vuePlugin = {
@@ -82,7 +83,8 @@ const vuePlugin = {
   },
 };
 
-const result = await Bun.build({
+async function buildOnce() {
+  const result = await Bun.build({
   entrypoints: [entry],
   format: "iife",
   target: "browser",
@@ -102,9 +104,33 @@ const result = await Bun.build({
   },
 });
 
-if (!result.success) {
-  for (const log of result.logs) console.error(log);
-  process.exit(1);
+  if (!result.success) {
+    for (const log of result.logs) console.error(log);
+    throw new Error("build failed");
+  }
+  // Atomic-ish: write to a temp file, then rename, so the host never reads a
+  // half-written bundle from its mtime watcher.
+  const tmp = outfile + ".tmp";
+  await Bun.write(tmp, await result.outputs[0].text());
+  const { renameSync } = await import("fs");
+  renameSync(tmp, outfile);
+  console.log(`[${new Date().toLocaleTimeString()}] bundled -> ${outfile}`);
 }
-await Bun.write(outfile, await result.outputs[0].text());
-console.log(`bundled ${entry} -> ${outfile} (${(await Bun.file(outfile).size) ?? "?"} bytes)`);
+
+await buildOnce().catch((e) => {
+  console.error(e);
+  if (!process.argv.includes("--watch")) process.exit(1);
+});
+
+if (process.argv.includes("--watch")) {
+  const { watch } = await import("fs");
+  let timer: any = null;
+  const trigger = (_evt: any, file: any) => {
+    if (file && String(file).endsWith(".tmp")) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => buildOnce().catch((e) => console.error(String(e))), 60);
+  };
+  watch(dirname(entry), { recursive: true }, trigger);
+  watch(resolve(import.meta.dir, "src"), { recursive: true }, trigger);
+  console.log(`watching ${dirname(entry)} ...`);
+}
