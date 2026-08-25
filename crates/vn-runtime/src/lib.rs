@@ -1,0 +1,49 @@
+//! vn-runtime — the JS host seam of vue-native: one JSC context (via redjs) on
+//! gpui's main thread, pumped once per frame, with a phase-gated bridge that is
+//! the only way a JS host function may reach `&mut Window` / `&mut App`.
+//!
+//! Invariants (see docs/ARCHITECTURE.md §1 and research/reports/fill-1.md §9):
+//! - One VM, one thread: VM thread == gpui main thread == Win32 UI thread.
+//! - The context is created once and never released (teardown fastfails in
+//!   this JSC prebuilt).
+//! - Every `extern "sysv64"` host function is written with [`host_fn!`] and is
+//!   therefore `catch_unwind`-shielded: a Rust panic becomes a JS exception
+//!   and poisons the runtime instead of aborting the process.
+//! - The uncaught-JS handler is a pure sink; errors are drained after each
+//!   pump, never acted on re-entrantly.
+
+pub mod bridge;
+pub mod runtime;
+
+pub use bridge::{Phase, with_app, with_commit, with_published, with_published_app};
+pub use runtime::{JsError, JsRuntime};
+
+// Re-exported so `host_fn!` expansions and downstream crates use the same redjs.
+pub use redjs;
+
+/// Defines a panic-shielded `extern "sysv64"` JSC host function.
+///
+/// The body receives `$g: *mut c_void` (the JSGlobalObject) and
+/// `$args: redjs::api::HostArgs`, and must evaluate to a `u64` (an encoded
+/// JSValue — `redjs::api::Value::undefined().0` when there is nothing to
+/// return). A panic inside the body is converted into a thrown JS `Error` and
+/// poisons the runtime (I9): the pump stops scheduling further JS.
+#[macro_export]
+macro_rules! host_fn {
+    ($vis:vis fn $name:ident($g:ident, $args:ident) $body:block) => {
+        $vis unsafe extern "sysv64" fn $name(
+            g: *mut ::core::ffi::c_void,
+            cf: *mut ::core::ffi::c_void,
+        ) -> u64 {
+            match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                let $g = g;
+                let $args = unsafe { $crate::redjs::api::HostArgs::new(cf) };
+                let _ = &$args;
+                $body
+            })) {
+                Ok(v) => v,
+                Err(payload) => $crate::bridge::panic_to_js(g, payload),
+            }
+        }
+    };
+}

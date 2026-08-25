@@ -12,3 +12,10 @@
 # proc macros are compiled for the host WITHOUT these rustflags.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608,1048576"]
+
+[env]
+# Dev-machine location of the pinned bun-webkit prebuilt (fetched once by
+# PEWPEW's packages/jscore/setup.ps1). TODO: a vue-native setup script that
+# fetches into vendor/redjs/prebuilt so this path becomes machine-independent
+# (vendor/redjs/setup.ps1 already does exactly that when run in place).
+BUN_WEBKIT_DIR = "Z:\\!argon\\PEWPEW\\packages\\jscore\\prebuilt\\bun-webkit"

@@ -1,0 +1,11 @@
+[package]
+name = "vn-runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Lean redjs: no game-engine host classes (audio/physics/mesh/css-host/yoga-host
+# are all off) — JSC, the web platform layer, timers/rAF/microtask pump.
+redjs = { path = "../../vendor/redjs/redjs", default-features = false }
+gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    # "crates/vn-runtime",  # JS host: context boot, pump, bridge, host_fn!
+    "crates/vn-runtime",    # JS host: context boot, pump, bridge, host_fn!
     # "crates/vn-tree",     # retained node tree + renderer host fns
     # "crates/vn-css",      # StyleEngine trait, cascade, animator
     # "crates/vn-window",   # window chrome: backdrops, dark mode, titlebar
