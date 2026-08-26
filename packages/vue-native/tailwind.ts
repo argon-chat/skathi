@@ -49,12 +49,23 @@
 // ---------------------------------------------------------------------------
 // WHAT WE ASK TAILWIND FOR
 // ---------------------------------------------------------------------------
-// `@tailwind utilities;` only — deliberately NOT `base` or `components`:
-//   * `base` is preflight (disabled in the config anyway) plus the
-//     `*, ::before, ::after { --tw-*: ... }` universal-defaults block. Both are
-//     pure noise here: the host has no UA stylesheet to reset, we have no
-//     pseudo-element support, and the `--tw-*` seeds go nowhere.
-//   * `components` is just the `container` plugin, which is media-query-only.
+// `@tailwind base; @tailwind utilities;` — deliberately NOT `components`
+// (which is just the `container` plugin, media-query-only).
+//
+// `base` was excluded until compat round 6, on the grounds that it is preflight
+// (disabled in every vue-native config anyway) plus the
+// `*, ::before, ::after { --tw-*: … }` universal-defaults block, and "the
+// `--tw-*` seeds go nowhere". They go somewhere NOW: vn-css stores custom
+// properties and substitutes `var()`, and those seeds are what makes
+// `--tw-ring-inset`, `--tw-shadow`, `--tw-translate-x` &c resolve at all.
+// Without them every compound utility — shadows, rings, transforms, `space-*`,
+// `divide-*` — is invalid at computed-value time and drops, exactly as it would
+// in a browser served the same sheet.
+//
+// The `::before` / `::after` halves of that selector list are dropped by the
+// selector audit with one advisory (no pseudo-element support); the `*` half
+// compiles and is what carries the seeds.
+//
 // JIT means the sheet contains ONLY the utilities the app's templates actually
 // use, so the diagnostics an app sees are about ITS OWN classes.
 
@@ -107,8 +118,9 @@ export function findConfig(startDir: string, stopDir: string): string | null {
 /// mtime tracking decides whether to rebuild its context), so watch mode can
 /// simply call this again after any template edit.
 export async function generate(configPath: string): Promise<string> {
-  const result = await postcss([tailwindcss(configPath) as any]).process("@tailwind utilities;\n", {
-    from: undefined,
-  });
+  const result = await postcss([tailwindcss(configPath) as any]).process(
+    "@tailwind base;\n@tailwind utilities;\n",
+    { from: undefined },
+  );
   return result.css;
 }

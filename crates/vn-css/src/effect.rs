@@ -663,6 +663,13 @@ mod tests {
 
     #[test]
     fn advisories_are_one_shot() {
+        // The unknown-effect advisory embeds `known_effects()`, and the effect
+        // registry is PROCESS-WIDE and additive — so if a sibling test installs
+        // the user-manifest fixture between two iterations of the loop below,
+        // the two advisories differ by that list and `once` correctly declines
+        // to dedupe them. Pin the registry to its final state first; the OnceLock
+        // makes this the same install whichever test gets there first.
+        with_user_effects();
         let mut diagnostics = Vec::new();
         for _ in 0..3 {
             let block = DeclarationBlock::parse_string(

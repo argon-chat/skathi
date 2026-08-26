@@ -11,7 +11,22 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRenderer, version } from "@vue/runtime-core";
+import {
+  BaseTransition,
+  BaseTransitionPropsValidators,
+  createRenderer,
+  createVNode,
+  defineComponent,
+  Fragment,
+  getCurrentInstance,
+  getTransitionRawChildren,
+  h,
+  resolveTransitionHooks,
+  setTransitionHooks,
+  toRaw,
+  useTransitionState,
+  version,
+} from "@vue/runtime-core";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.js");
@@ -42,6 +57,13 @@ export function createRuntime() {
     classes: [],
     logs: [],
     dispatcher: null,
+    /** `__vn_query` answers: selector -> ids (or a `!advisory` string). */
+    queryAnswers: new Map(),
+    queryCalls: [],
+    /** `__vn_bounds` answers: node id -> "x,y,w,h". */
+    boundsById: new Map(),
+    /** `__vn_computed_style` answers: node id -> "k=v\n…". */
+    computedById: new Map(),
   };
   const intern = (name) => {
     let i = host.names.indexOf(name);
@@ -50,9 +72,41 @@ export function createRuntime() {
   };
   const nameOf = (id) => host.names[id];
 
+  // A private `globalThis` per world: runtime.js installs the missing DOM
+  // globals (MutationObserver, DocumentFragment, getComputedStyle, …) on it,
+  // and each test must get its own set rather than whichever world happened to
+  // run first.
+  const fakeGlobal = {
+    document: {
+      body: {},
+      documentElement: {},
+      head: {},
+    },
+    requestAnimationFrame: (cb) => setTimeout(cb, 0),
+    // The windowing host (crates/vn-app/src/window.prelude.js) publishes itself
+    // on the REAL global before the app bundle evaluates, and runtime-window's
+    // tests fake it the same way. Carry it into the private world so the two
+    // stay compatible: the world is private so that each test gets its own DOM
+    // globals, not so that it is sealed off from the host.
+    __VN_WINDOW__: globalThis.__VN_WINDOW__,
+  };
+
   const params = [
     "createRenderer",
+    "createVNode",
+    "defineComponent",
+    "Fragment",
+    "getCurrentInstance",
+    "getTransitionRawChildren",
+    "h",
+    "resolveTransitionHooks",
+    "setTransitionHooks",
+    "toRaw",
+    "useTransitionState",
+    "BaseTransition",
+    "BaseTransitionPropsValidators",
     "version",
+    "globalThis",
     "console",
     "__vn_intern",
     "__vn_create_element",
@@ -71,11 +125,27 @@ export function createRuntime() {
     "__vn_create_root",
     "__vn_set_dispatcher",
     "__vn_log",
+    "__vn_query",
+    "__vn_bounds",
+    "__vn_computed_style",
   ];
   let nextId = 1;
   const args = [
     createRenderer,
+    createVNode,
+    defineComponent,
+    Fragment,
+    getCurrentInstance,
+    getTransitionRawChildren,
+    h,
+    resolveTransitionHooks,
+    setTransitionHooks,
+    toRaw,
+    useTransitionState,
+    BaseTransition,
+    BaseTransitionPropsValidators,
     version,
+    fakeGlobal,
     {
       log: (m) => host.logs.push(String(m)),
       warn: (m) => host.logs.push(String(m)),
@@ -100,20 +170,29 @@ export function createRuntime() {
       host.dispatcher = fn;
     },
     (m) => host.logs.push(String(m)),
+    (selector, root, mode) => {
+      host.queryCalls.push({ selector, root, mode });
+      return host.queryAnswers.get(`${selector}|${mode}`) ?? host.queryAnswers.get(selector) ?? "";
+    },
+    (id) => host.boundsById.get(id) ?? "",
+    (id) => host.computedById.get(id) ?? "",
   ];
 
   // eslint-disable-next-line no-new-func
   const exports = new Function(
     ...params,
-    `${body}\nreturn { patchProp, nodeOps, EV_CODES, canonicalEvent, hyphenate, createApp, handlers,
-      appWindow, defineWindow, getCurrentWindow };`,
+    `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
+       createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
+       writeClass, appWindow, defineWindow, getCurrentWindow };`,
   )(...args);
 
   return {
     ...exports,
     host,
+    /** The private global runtime.js installed its DOM shims on. */
+    global: fakeGlobal,
     /** A stand-in host element: enough surface for patchProp. */
-    el: (id = 1) => ({ id, value: "" }),
+    el: (id = 1) => ({ id, value: "", attrs: Object.create(null), className: "" }),
     /** Advisories only (warnCompat prefixes every one of them). */
     advisories: () => host.logs.filter((l) => l.startsWith("[vue-native compat]")),
     /** Listener flag writes for one event code. */

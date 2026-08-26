@@ -16,13 +16,20 @@ use lightningcss::properties::font::{AbsoluteFontWeight, FontFamily as CssFontFa
 use lightningcss::properties::overflow::OverflowKeyword;
 use lightningcss::properties::size::Size as CssSize;
 use lightningcss::properties::text::TextAlign as CssTextAlign;
-use lightningcss::properties::Property;
-use lightningcss::stylesheet::ParserOptions;
+use lightningcss::properties::{Property, PropertyId};
+use lightningcss::stylesheet::{ParserOptions, PrinterOptions};
 use lightningcss::values::color::CssColor;
 use lightningcss::values::length::{Length as CssLength, LengthPercentage, LengthPercentageOrAuto, LengthValue};
 use lightningcss::values::percentage::DimensionPercentage;
 
 use crate::transition::{Collector, TransitionSpec};
+use crate::vars::{self, Vars};
+
+/// `(name, raw value text)` pairs — the transport for both channels that cannot
+/// be mapped at sheet-compile time: `--x` declarations (which fold into the
+/// element's [`Vars`] map) and known properties whose value referenced `var()`
+/// (which are substituted and re-parsed per element).
+pub type Decls = Vec<(String, String)>;
 
 /// CSS `object-fit`, the sizing rule for a REPLACED element's content box.
 ///
@@ -42,6 +49,28 @@ pub enum ObjectFit {
     Cover,
     ScaleDown,
     None,
+}
+
+/// One component of a `translate()`, in the unit it was written in.
+///
+/// A percentage translate resolves against the ELEMENT'S OWN size, which no
+/// layout property can express — the renderer resolves it against the box the
+/// node was painted at last frame (see `vn-tree`'s `apply_computed_style`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TranslateLen {
+    Px(f32),
+    /// Fraction, not percent: `-50%` is `-0.5`.
+    Percent(f32),
+}
+
+impl TranslateLen {
+    /// Resolves to pixels against the element's own `size` along this axis.
+    pub fn to_px(self, own_size: f32) -> f32 {
+        match self {
+            TranslateLen::Px(v) => v,
+            TranslateLen::Percent(f) => f * own_size,
+        }
+    }
 }
 
 /// CSS `window-drag` — "this element drags the OS window" (docs/WINDOWING.md
@@ -92,7 +121,7 @@ pub enum WindowControl {
 /// The refinement is the cascade's whole payload for every other property, so
 /// this is deliberately tiny and `Copy`: one folded value per node, refined in
 /// the same (specificity, order) sweep as the refinements themselves.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Extras {
     /// `object-fit` — only meaningful on a replaced element (`<img>`); parsed
     /// and folded for every element, exactly as a browser does.
@@ -104,11 +133,25 @@ pub struct Extras {
     pub window_drag: Option<WindowDrag>,
     /// `--window-control`. Never inherited (D-14).
     pub window_control: Option<WindowControl>,
+    /// `position: fixed`. gpui/taffy have one out-of-flow position (`Absolute`,
+    /// resolved against the element's PARENT), so `fixed` maps onto it and the
+    /// renderer additionally paints the node in a deferred layer so it lands
+    /// above its siblings. See the advisory in the `Position` arm.
+    pub fixed: Option<bool>,
+    /// `z-index`. gpui has no per-element z, so a POSITIVE z-index becomes a
+    /// deferred draw with that priority (which is a real "paints above
+    /// everything else"); a negative one cannot be expressed at all.
+    pub z_index: Option<i32>,
+    /// `pointer-events: none` — the node takes no listeners and no hover/active
+    /// rungs, which is how a hitbox stops existing in gpui.
+    pub pointer_events_none: Option<bool>,
+    /// The `translate()` part of a `transform`, in CSS order (x, y).
+    pub translate: Option<(TranslateLen, TranslateLen)>,
 }
 
 impl Extras {
     pub(crate) fn is_empty(&self) -> bool {
-        self.object_fit.is_none() && self.window_drag.is_none() && self.window_control.is_none()
+        *self == Extras::default()
     }
 
     /// Later-wins merge, matching `Refineable::refine` for the refinements.
@@ -121,6 +164,31 @@ impl Extras {
         }
         if other.window_control.is_some() {
             self.window_control = other.window_control;
+        }
+        if other.fixed.is_some() {
+            self.fixed = other.fixed;
+        }
+        if other.z_index.is_some() {
+            self.z_index = other.z_index;
+        }
+        if other.pointer_events_none.is_some() {
+            self.pointer_events_none = other.pointer_events_none;
+        }
+        if other.translate.is_some() {
+            self.translate = other.translate;
+        }
+    }
+
+    /// True when this node has to be painted in gpui's deferred layer for its
+    /// stacking to be right: `position: fixed`, or a positive `z-index`.
+    pub fn deferred_priority(&self) -> Option<usize> {
+        let z = self.z_index.unwrap_or(0);
+        if z > 0 {
+            Some(z as usize)
+        } else if self.fixed == Some(true) {
+            Some(0)
+        } else {
+            None
         }
     }
 }
@@ -136,47 +204,226 @@ pub(crate) struct Converted {
     pub important_transitions: Option<Rc<Vec<TransitionSpec>>>,
     pub normal_extras: Extras,
     pub important_extras: Extras,
+    /// `--x` declarations, in source order (`None` = the half declared none).
+    pub normal_custom: Option<Rc<Decls>>,
+    pub important_custom: Option<Rc<Decls>>,
+    /// Known properties whose value referenced `var()`.
+    pub normal_dynamic: Option<Rc<Decls>>,
+    pub important_dynamic: Option<Rc<Decls>>,
+}
+
+/// One converted declaration half.
+#[derive(Default)]
+struct Half {
+    refinement: Option<Rc<StyleRefinement>>,
+    transitions: Option<Rc<Vec<TransitionSpec>>>,
+    extras: Extras,
+    custom: Option<Rc<Decls>>,
+    dynamic: Option<Rc<Decls>>,
+}
+
+/// Which channel a declaration travels on.
+enum Channel {
+    /// `--x: …` — folds into the element's custom-property map instead of into
+    /// a refinement. (`--shading` is the one exception; see [`effect`].)
+    Custom(String, String),
+    /// A known property whose value referenced `var()`. lightningcss hands
+    /// these back as `Property::Unparsed`; they are substituted and re-parsed
+    /// per element, because the value depends on where the element sits.
+    Dynamic(String, String),
+    /// Everything else — mapped once, here.
+    Static,
+}
+
+/// The raw value text of a declaration, recovered by printing it back out.
+/// `Property`'s own `ToCss` writes `name: value`, and a property name can never
+/// contain `:`, so the split is exact.
+fn value_text(p: &Property) -> Option<String> {
+    let css = p.to_css_string(false, PrinterOptions::default()).ok()?;
+    let (_, value) = css.split_once(':')?;
+    Some(value.trim().to_string())
+}
+
+fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
+    use lightningcss::properties::custom::CustomPropertyName;
+    match p {
+        Property::Custom(c) => match &c.name {
+            // `--shading` is a REAL mapped property that merely happens to be
+            // spelled as a custom property (a GPU effect has no web equivalent,
+            // so it needs a spelling a browser parses, stores and ignores). It
+            // therefore keeps travelling on the static channel.
+            CustomPropertyName::Custom(name) if name.0.as_ref() == effect::SHADING => Channel::Static,
+            // `--window-control` is the same shape of thing: a real interpreted
+            // property spelled as a custom one so a browser degrades it to
+            // "does nothing" rather than dropping it (see [`WindowControl`]).
+            // It must NOT fold into the element's `Vars` map — the renderer
+            // reads it off `Extras`, and it is deliberately not inherited
+            // (docs/WINDOWING.md D-14), which every real custom property is.
+            CustomPropertyName::Custom(name) if name.0.as_ref() == WINDOW_CONTROL => Channel::Static,
+            CustomPropertyName::Custom(name) => match value_text(p) {
+                Some(v) => Channel::Custom(name.0.as_ref().to_string(), v),
+                None => {
+                    once(
+                        diagnostics,
+                        format!(
+                            "`{}` could not be serialized back to text and was dropped (v1)",
+                            name.0.as_ref()
+                        ),
+                    );
+                    Channel::Static
+                }
+            },
+            // An unknown/vendor-prefixed property (`-webkit-line-clamp`), or a
+            // real CSS property lightningcss has no typed representation for
+            // (`object-fit`). Both are handled by `apply`.
+            CustomPropertyName::Unknown(_) => Channel::Static,
+        },
+        Property::Unparsed(u) => match value_text(p) {
+            Some(v) => Channel::Dynamic(u.property_id.name().to_string(), v),
+            None => Channel::Static,
+        },
+        _ => Channel::Static,
+    }
 }
 
 /// Converts a declaration block into (normal, important) refinements plus the
-/// transitions each half declares.
+/// transitions, custom properties and `var()`-composed declarations each half
+/// declares.
 pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<String>) -> Converted {
-    type Half = (
-        Option<Rc<StyleRefinement>>,
-        Option<Rc<Vec<TransitionSpec>>>,
-        Extras,
-    );
     let mut convert = |props: &[Property]| -> Half {
         if props.is_empty() {
-            return (None, None, Extras::default());
+            return Half::default();
         }
         let mut r = StyleRefinement::default();
         let mut extras = Extras::default();
         let mut transitions = Collector::default();
+        let mut custom: Decls = Vec::new();
+        let mut dynamic: Decls = Vec::new();
         let mut styled = false;
         for p in props {
-            if transitions.take(p, diagnostics) {
-                continue;
+            match channel(p, diagnostics) {
+                Channel::Custom(name, value) => custom.push((name, value)),
+                Channel::Dynamic(name, value) => dynamic.push((name, value)),
+                Channel::Static => {
+                    if transitions.take(p, diagnostics) {
+                        continue;
+                    }
+                    // Within one block the mapped declarations are folded now
+                    // and the `var()`-composed ones per element afterwards, so
+                    // a block that declares the SAME property both ways loses
+                    // the source order between them. Rare enough to be worth
+                    // saying rather than modelling.
+                    let id = p.property_id();
+                    if dynamic.iter().any(|(n, _)| *n == id.name()) {
+                        once(
+                            diagnostics,
+                            format!(
+                                "`{}` is declared twice in one rule, once through var() and once \
+                                 literally — the literal one wins regardless of source order (v1)",
+                                id.name()
+                            ),
+                        );
+                    }
+                    apply(p, &mut r, &mut extras, diagnostics);
+                    styled = true;
+                }
             }
-            apply(p, &mut r, &mut extras, diagnostics);
-            styled = true;
         }
-        (
-            styled.then(|| Rc::new(r)),
-            transitions.finish().map(Rc::new),
+        Half {
+            refinement: styled.then(|| Rc::new(r)),
+            transitions: transitions.finish().map(Rc::new),
             extras,
-        )
+            custom: (!custom.is_empty()).then(|| Rc::new(custom)),
+            dynamic: (!dynamic.is_empty()).then(|| Rc::new(dynamic)),
+        }
     };
-    let (normal, normal_transitions, normal_extras) = convert(&block.declarations);
-    let (important, important_transitions, important_extras) = convert(&block.important_declarations);
+    let normal = convert(&block.declarations);
+    let important = convert(&block.important_declarations);
     Converted {
-        normal,
-        important,
-        normal_transitions,
-        important_transitions,
-        normal_extras,
-        important_extras,
+        normal: normal.refinement,
+        important: important.refinement,
+        normal_transitions: normal.transitions,
+        important_transitions: important.transitions,
+        normal_extras: normal.extras,
+        important_extras: important.extras,
+        normal_custom: normal.custom,
+        important_custom: important.custom,
+        normal_dynamic: normal.dynamic,
+        important_dynamic: important.dynamic,
     }
+}
+
+// ---------------------------------------------------------------------------
+// computed-value time: var() substitution + re-parse
+// ---------------------------------------------------------------------------
+
+/// Applies one `var()`-composed declaration against an element's resolved
+/// custom-property map: substitute the text, re-parse it through lightningcss
+/// with the ORIGINAL property id, then hand the typed property to the ordinary
+/// mapper. Every property the mapper already supports therefore supports
+/// `var()` with no per-property code.
+///
+/// Three failure modes, each with its own advisory and none of them silent:
+/// * the substitution itself is invalid (missing variable with no fallback,
+///   a reference cycle) — the declaration is dropped, exactly as CSS says;
+/// * the substituted text does not parse as that property — also dropped, and
+///   also what a browser does;
+/// * the property parses but vn-css does not map it — the ordinary
+///   "property not mapped" advisory, from `apply`.
+pub(crate) fn apply_dynamic(
+    name: &str,
+    raw: &str,
+    vars: &Vars,
+    r: &mut StyleRefinement,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
+    let value = match vars::substitute_with(raw, vars) {
+        Ok(v) => v,
+        Err(e) => {
+            once(
+                diagnostics,
+                format!(
+                    "`{name}: {raw}` is invalid at computed-value time — {} (the declaration was \
+                     dropped, as it would be in a browser)",
+                    e.describe()
+                ),
+            );
+            return;
+        }
+    };
+    let property = match Property::parse_string(PropertyId::from(name), &value, ParserOptions::default())
+    {
+        Ok(p) => p,
+        Err(_) => {
+            once(
+                diagnostics,
+                format!("`{name}: {value}` did not parse after var() substitution (v1)"),
+            );
+            return;
+        }
+    };
+    // A `transition` is folded into its own list at sheet-compile time and the
+    // list is per rule, not per element — so a var()-composed one has nowhere
+    // to land. Say so instead of applying it as an unmapped property.
+    if matches!(
+        property,
+        Property::Transition(..)
+            | Property::TransitionProperty(..)
+            | Property::TransitionDuration(..)
+            | Property::TransitionDelay(..)
+            | Property::TransitionTimingFunction(..)
+    ) {
+        once(
+            diagnostics,
+            format!(
+                "`{name}` composed with var() is not honoured (v1) — the transition list is folded \
+                 once per rule, not per element; declare the transition literally"
+            ),
+        );
+        return;
+    }
+    apply(&property, r, x, diagnostics);
 }
 
 /// Parses an inline `style` body ("color: red; padding: 4px") into a
@@ -214,21 +461,77 @@ pub fn parse_inline_full(
     body: &str,
     diagnostics: &mut Vec<String>,
 ) -> (StyleRefinement, Vec<TransitionSpec>, Extras) {
+    let inline = parse_inline_style(body, diagnostics);
+    (
+        inline.refinement.map(|r| (*r).clone()).unwrap_or_default(),
+        inline.transitions.map(|t| (*t).clone()).unwrap_or_default(),
+        inline.extras,
+    )
+}
+
+/// Everything an inline `style` body contributes to the cascade.
+///
+/// The custom-property and `var()` halves cannot be folded here the way the
+/// mapped declarations are: both depend on where the element sits in the tree,
+/// so they ride along as text and are resolved by [`Engine::compute_node`]
+/// (crate::Engine) exactly like a rule's are.
+#[derive(Clone, Debug, Default)]
+pub struct InlineStyle {
+    pub refinement: Option<Rc<StyleRefinement>>,
+    /// `None` = the body declared no `transition` at all (which is what lets a
+    /// matched rule's list survive); `Some([])` is `transition: none`.
+    pub transitions: Option<Rc<Vec<TransitionSpec>>>,
+    pub extras: Extras,
+    /// `--x` declarations. This is the channel `element.style.setProperty("--x")`
+    /// lands on — reka-ui writes its `--reka-popper-*` sizing vars that way.
+    pub custom: Decls,
+    /// Known properties whose value referenced `var()`.
+    pub dynamic: Decls,
+}
+
+impl InlineStyle {
+    pub fn is_empty(&self) -> bool {
+        self.refinement.is_none()
+            && self.transitions.is_none()
+            && self.extras == Extras::default()
+            && self.custom.is_empty()
+            && self.dynamic.is_empty()
+    }
+}
+
+/// Parses an inline `style` body into everything it contributes.
+pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineStyle {
     let mut r = StyleRefinement::default();
     let mut extras = Extras::default();
     let mut transitions = Collector::default();
+    let mut custom: Decls = Vec::new();
+    let mut dynamic: Decls = Vec::new();
+    let mut styled = false;
     match DeclarationBlock::parse_string(body, ParserOptions::default()) {
         Ok(block) => {
             for p in block.declarations.iter().chain(block.important_declarations.iter()) {
-                if transitions.take(p, diagnostics) {
-                    continue;
+                match channel(p, diagnostics) {
+                    Channel::Custom(name, value) => custom.push((name, value)),
+                    Channel::Dynamic(name, value) => dynamic.push((name, value)),
+                    Channel::Static => {
+                        if transitions.take(p, diagnostics) {
+                            continue;
+                        }
+                        apply(p, &mut r, &mut extras, diagnostics);
+                        styled = true;
+                    }
                 }
-                apply(p, &mut r, &mut extras, diagnostics);
             }
         }
         Err(e) => diagnostics.push(format!("inline style parse error: {e} in {body:?}")),
     }
-    (r, transitions.finish().unwrap_or_default(), extras)
+    InlineStyle {
+        refinement: styled.then(|| Rc::new(r)),
+        transitions: transitions.finish().map(Rc::new),
+        extras,
+        custom,
+        dynamic,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -259,10 +562,61 @@ fn length_value_px(v: &LengthValue) -> Option<f32> {
     }
 }
 
+/// `calc()` over ABSOLUTE lengths, evaluated to pixels.
+///
+/// This is the third item on the Tailwind-v4 list in
+/// `packages/vue-native/tailwind.ts`, and it is what makes shadcn's own radius
+/// scale work: `rounded-md` is `border-radius: calc(var(--radius) - 2px)`, so
+/// without it three quarters of the corner radii in the library vanish the
+/// moment the theme stops being pre-resolved.
+///
+/// Percentages are deliberately NOT evaluated: they need the containing block,
+/// which does not exist until layout. A `calc()` that mixes one in returns
+/// `None` and takes the ordinary "value is unresolved" path.
+fn calc_px<V>(calc: &lightningcss::values::calc::Calc<V>, leaf: &dyn Fn(&V) -> Option<f32>) -> Option<f32> {
+    use lightningcss::values::calc::{Calc, MathFunction};
+    match calc {
+        Calc::Value(v) => leaf(v),
+        Calc::Number(n) => Some(*n),
+        Calc::Sum(a, b) => Some(calc_px(a, leaf)? + calc_px(b, leaf)?),
+        Calc::Product(n, v) => Some(n * calc_px(v, leaf)?),
+        Calc::Function(f) => match &**f {
+            MathFunction::Calc(c) => calc_px(c, leaf),
+            MathFunction::Min(list) => list
+                .iter()
+                .map(|c| calc_px(c, leaf))
+                .try_fold(f32::INFINITY, |acc, v| Some(acc.min(v?))),
+            MathFunction::Max(list) => list
+                .iter()
+                .map(|c| calc_px(c, leaf))
+                .try_fold(f32::NEG_INFINITY, |acc, v| Some(acc.max(v?))),
+            MathFunction::Clamp(lo, v, hi) => {
+                Some(calc_px(v, leaf)?.clamp(calc_px(lo, leaf)?, calc_px(hi, leaf)?))
+            }
+            MathFunction::Abs(v) => Some(calc_px(v, leaf)?.abs()),
+            MathFunction::Sign(v) => Some(calc_px(v, leaf)?.signum()),
+            // round()/rem()/mod()/hypot() have no user in any sheet we serve;
+            // they take the "unresolved" path with the ordinary advisory.
+            _ => None,
+        },
+    }
+}
+
 fn css_length_px(l: &CssLength) -> Option<f32> {
     match l {
         CssLength::Value(v) => length_value_px(v),
-        CssLength::Calc(_) => None,
+        CssLength::Calc(c) => calc_px(c, &|v: &CssLength| css_length_px(v)),
+    }
+}
+
+/// The absolute half of a `<length-percentage>` inside a `calc()`.
+fn lp_leaf_px(lp: &LengthPercentage) -> Option<f32> {
+    match lp {
+        DimensionPercentage::Dimension(v) => length_value_px(v),
+        // A percentage needs the containing block; a calc() that mixes one in
+        // is left unresolved rather than guessed at.
+        DimensionPercentage::Percentage(_) => None,
+        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px),
     }
 }
 
@@ -270,7 +624,7 @@ fn lp_definite(lp: &LengthPercentage) -> Option<DefiniteLength> {
     match lp {
         DimensionPercentage::Dimension(v) => length_value_px(v).map(|p| px(p).into()),
         DimensionPercentage::Percentage(p) => Some(relative(p.0)),
-        DimensionPercentage::Calc(_) => None,
+        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(|p| px(p).into()),
     }
 }
 
@@ -301,7 +655,8 @@ fn max_size_length(v: &lightningcss::properties::size::MaxSize) -> Option<Length
 fn lp_absolute(lp: &LengthPercentage) -> Option<AbsoluteLength> {
     match lp {
         DimensionPercentage::Dimension(v) => length_value_px(v).map(|p| px(p).into()),
-        _ => None,
+        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(|p| px(p).into()),
+        DimensionPercentage::Percentage(_) => None,
     }
 }
 
@@ -379,6 +734,10 @@ fn unsupported(diagnostics: &mut Vec<String>, what: &str) {
     once(diagnostics, format!("unsupported value for {what} (v1)"));
 }
 
+fn warn_once(diagnostics: &mut Vec<String>, msg: &str) {
+    once(diagnostics, msg.to_string());
+}
+
 /// [`color`] only understands a resolved RGBA. `currentColor`, `color-mix()`,
 /// `light-dark()` and friends land here — and USED to fall through silently,
 /// which meant Tailwind's `bg-current` / `text-current` did nothing at all with
@@ -393,9 +752,6 @@ fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
     );
 }
 
-/// The single advisory every `--*` declaration folds into.
-const CUSTOM_PROPS: &str = "custom properties are stored nowhere yet (v1) — var()-composed \
-                            utilities like shadows/transforms/rings degrade";
 
 // `--shading`, the one custom property that IS mapped. Declared here rather
 // than in lib.rs so the whole effect surface — the module, its interception in
@@ -411,22 +767,7 @@ pub(crate) mod effect;
 /// declaration arrives as an unknown property carrying a raw token list — the
 /// same shape `--shading` uses, minus the function call.
 fn object_fit(value: &lightningcss::properties::custom::TokenList, diagnostics: &mut Vec<String>) -> Option<ObjectFit> {
-    use lightningcss::properties::custom::{Token, TokenOrValue};
-    let mut idents = value.0.iter().filter_map(|t| match t {
-        TokenOrValue::Token(Token::Ident(s)) => Some(s.as_ref()),
-        _ => None,
-    });
-    let first = idents.next();
-    // `object-fit: scale-down` is one ident; `object-fit: cover cover` is not
-    // valid CSS and a browser drops the whole declaration.
-    if idents.next().is_some() {
-        once(
-            diagnostics,
-            "`object-fit` takes a single keyword — the declaration was dropped".into(),
-        );
-        return None;
-    }
-    match first {
+    match single_ident(value, "object-fit", diagnostics) {
         Some("fill") => Some(ObjectFit::Fill),
         Some("contain") => Some(ObjectFit::Contain),
         Some("cover") => Some(ObjectFit::Cover),
@@ -720,14 +1061,71 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         MarginLeft(v) => r.margin.left = lpa_length(v),
         Position(v) => {
             use lightningcss::properties::position::Position as P;
+            x.fixed = Some(matches!(v, P::Fixed));
             r.position = Some(match v {
                 P::Absolute => gpui::Position::Absolute,
+                // `fixed` is an out-of-flow box against the VIEWPORT. taffy has
+                // exactly one out-of-flow mode and it resolves against the
+                // element's parent, so that is what `fixed` becomes — plus a
+                // deferred paint layer (see `Extras::deferred_priority`) so the
+                // box lands above its siblings the way a fixed one does.
+                //
+                // The two agree exactly when the fixed element's parent IS the
+                // window — which is the case that matters, because a portalled
+                // overlay (`<Teleport to="body">`) has the app root as its
+                // parent. They diverge when a `fixed` element is left inside a
+                // smaller ancestor: it is then positioned against that ancestor
+                // rather than the viewport.
+                P::Fixed => {
+                    warn_once(
+                        diagnostics,
+                        "`position: fixed` is laid out as `absolute` against its PARENT (v1) — \
+                         gpui/taffy have no viewport-relative box. It is painted in a deferred \
+                         layer so it still stacks above its siblings; portal the element to the \
+                         app root (Vue's `<Teleport>`) to make the two agree",
+                    );
+                    gpui::Position::Absolute
+                }
                 P::Static | P::Relative => gpui::Position::Relative,
                 _ => {
-                    unsupported(diagnostics, "position (fixed/sticky)");
+                    unsupported(diagnostics, "position: sticky");
                     gpui::Position::Relative
                 }
             });
+        }
+        // gpui has no per-element z. A POSITIVE z-index becomes a deferred draw
+        // with that priority — a real "paints (and hit-tests) above everything
+        // else", which is what every overlay uses it for. A negative one would
+        // have to paint BELOW its siblings, and there is no lever for that.
+        ZIndex(v) => {
+            use lightningcss::properties::position::ZIndex as Z;
+            match v {
+                Z::Integer(n) if *n > 0 => x.z_index = Some(*n),
+                Z::Integer(n) if *n < 0 => {
+                    warn_once(
+                        diagnostics,
+                        "a negative `z-index` cannot paint below its siblings (v1) — gpui has no \
+                         per-element z and its deferred layer only paints ON TOP; reorder the \
+                         elements instead",
+                    );
+                    x.z_index = Some(*n);
+                }
+                Z::Integer(n) => x.z_index = Some(*n),
+                Z::Auto => x.z_index = Some(0),
+            }
+        }
+        Transform(list, _) => apply_transform(list, x, diagnostics),
+        // taffy is border-box and only border-box, so `border-box` is not a
+        // divergence — it is the model. `content-box` is one, and says so.
+        BoxSizing(v, _) => {
+            use lightningcss::properties::size::BoxSizing as BS;
+            if matches!(v, BS::ContentBox) {
+                warn_once(
+                    diagnostics,
+                    "`box-sizing: content-box` is not supported (v1) — taffy sizes every box as \
+                     `border-box`, so padding and border stay INSIDE the declared width/height",
+                );
+            }
         }
         Top(v) => r.inset.top = lpa_length(v),
         Right(v) => r.inset.right = lpa_length(v),
@@ -994,16 +1392,13 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         // implements (gpui `BackdropBlurRect`, D3D11 Dual-Kawase pyramid).
         // Everything else in the list is advised rather than silently dropped.
         BackdropFilter(list, _) => apply_backdrop_filter(list, r, diagnostics),
-        // `--tw-shadow`, `--tw-translate-x`, … A generated sheet declares these
-        // by the hundred, so EVERY `--*` folds into one advisory: the story is
-        // identical for all of them and the per-name list is pure noise.
         Custom(c) => match &c.name {
             // `--shading` is the ONE custom property vue-native interprets: a
             // GPU effect has no web equivalent, so it needs a spelling a
             // browser parses, stores and ignores rather than one a browser
-            // DROPS. Intercepted here, ahead of the fold-everything advisory,
-            // because it is a real mapped property that merely happens to be
-            // spelled as a custom property. Everything about it — grammar,
+            // DROPS. It is a real mapped property that merely happens to be
+            // spelled as a custom property, so `channel()` keeps it on the
+            // static channel and it lands here. Everything about it — grammar,
             // schemas, advisories, the inheritance divergence — lives in
             // `crate::effect`.
             lightningcss::properties::custom::CustomPropertyName::Custom(name)
@@ -1015,7 +1410,9 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             }
             // `--window-control` — the second interpreted custom property; see
             // [`WindowControl`] for why the caption-button role is spelled as
-            // one rather than as a `window-drag` value.
+            // one rather than as a `window-drag` value. `channel()` keeps it on
+            // the static channel with `--shading`, which is how it reaches here
+            // instead of folding into the element's `Vars` map.
             lightningcss::properties::custom::CustomPropertyName::Custom(name)
                 if name.0.as_ref() == WINDOW_CONTROL =>
             {
@@ -1023,9 +1420,9 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     x.window_control = Some(c);
                 }
             }
-            lightningcss::properties::custom::CustomPropertyName::Custom(_) => {
-                once(diagnostics, CUSTOM_PROPS.to_string());
-            }
+            // Every other `--x` travels the custom-property channel (see
+            // `channel`) and never reaches the mapper.
+            lightningcss::properties::custom::CustomPropertyName::Custom(_) => {}
             // Not a custom property at all — an unknown/vendor-prefixed one
             // (`-webkit-line-clamp`), which is a real "we do not map this".
             //
@@ -1055,6 +1452,28 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     x.window_drag = Some(d);
                 }
             }
+            // `pointer-events` is a real CSS property that lightningcss has no
+            // typed representation for either. `none` is expressed by giving
+            // the node no hitbox at all: no listeners, no hover/active rungs
+            // (see `vn-tree`'s renderer). It therefore stops REACTING; a click
+            // still does not fall through to whatever is painted underneath,
+            // because gpui resolves hits per hitbox rather than per pixel.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "pointer-events" =>
+            {
+                match single_ident(&c.value, "pointer-events", diagnostics) {
+                    Some("none") => x.pointer_events_none = Some(true),
+                    Some("auto") => x.pointer_events_none = Some(false),
+                    other => once(
+                        diagnostics,
+                        format!(
+                            "unsupported value for pointer-events: {} — only `none` and `auto` \
+                             are modelled (SVG-only values have nothing to apply to)",
+                            other.unwrap_or("<not a keyword>")
+                        ),
+                    ),
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name) => {
                 once(
                     diagnostics,
@@ -1062,10 +1481,11 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 );
             }
         },
-        // A KNOWN property whose value did not parse into a typed value —
-        // almost always `var()`-composed (`box-shadow: var(--tw-shadow)`).
-        // One advisory per property name: which property degraded is the
-        // useful half, how many rules did it is not.
+        // A KNOWN property whose value did not parse into a typed value. These
+        // are `var()`-composed and travel the dynamic channel, so reaching the
+        // mapper means the value was STILL unparsed after substitution — an
+        // unbalanced `var(` or a token stream that is not valid for the
+        // property. Kept as a defensive advisory rather than silence.
         Unparsed(u) => {
             // `env(titlebar-area-*)` is the one `env()` an app is likely to
             // reach for here (docs/WINDOWING.md §2.4), and the generic
@@ -1079,7 +1499,7 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             once(
                 diagnostics,
                 format!(
-                    "`{}` value is unresolved (v1) — {CUSTOM_PROPS}",
+                    "`{}` value is still unresolved after var() substitution (v1)",
                     u.property_id.name()
                 ),
             );
@@ -1090,6 +1510,124 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 format!("property not mapped (v1): {}", prop_name(other)),
             );
         }
+    }
+}
+
+/// `transform` — the `translate()` half only.
+///
+/// gpui applies transformation matrices to sprites (SVG paths), never to laid
+/// out element trees, so there is no way to rotate, scale or skew a box. What
+/// there IS a way to do is MOVE one, and translation is what the reused
+/// component libraries actually need: shadcn centres its dialog with
+/// `translate(-50%, -50%)`, slides its switch thumb with `translateX(1.25rem)`
+/// and drives its progress bar with `translateX(-38%)`.
+///
+/// The move is applied as a layout offset by the renderer, so — unlike a real
+/// transform — it participates in layout. For an absolutely positioned box
+/// (every centring case) the two are identical; for an in-flow one the
+/// following siblings shift too, which is what the advisory says.
+///
+/// Tailwind always emits the full identity chain
+/// (`translate(…) rotate(0) skewX(0) skewY(0) scaleX(1) scaleY(1)`), so
+/// identity components are recognised and pass silently — only a REAL rotate/
+/// scale/skew is advised about.
+fn apply_transform(
+    list: &lightningcss::properties::transform::TransformList,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
+    use lightningcss::properties::transform::Transform as T;
+    use lightningcss::values::percentage::NumberOrPercentage;
+
+    fn len(v: &LengthPercentage) -> Option<TranslateLen> {
+        match v {
+            DimensionPercentage::Dimension(l) => length_value_px(l).map(TranslateLen::Px),
+            DimensionPercentage::Percentage(p) => Some(TranslateLen::Percent(p.0)),
+            DimensionPercentage::Calc(_) => None,
+        }
+    }
+    fn is_one(v: &NumberOrPercentage) -> bool {
+        match v {
+            NumberOrPercentage::Number(n) => *n == 1.0,
+            NumberOrPercentage::Percentage(p) => p.0 == 1.0,
+        }
+    }
+
+    let zero = TranslateLen::Px(0.0);
+    let (mut tx, mut ty) = (zero, zero);
+    let mut moved = false;
+    let mut dropped: Vec<&str> = Vec::new();
+    for t in &list.0 {
+        match t {
+            T::Translate(a, b) => match (len(a), len(b)) {
+                (Some(a), Some(b)) => {
+                    (tx, ty) = (a, b);
+                    moved = true;
+                }
+                _ => dropped.push("translate() with a calc() length"),
+            },
+            T::TranslateX(a) => match len(a) {
+                Some(a) => {
+                    tx = a;
+                    moved = true;
+                }
+                None => dropped.push("translateX() with a calc() length"),
+            },
+            T::TranslateY(b) => match len(b) {
+                Some(b) => {
+                    ty = b;
+                    moved = true;
+                }
+                None => dropped.push("translateY() with a calc() length"),
+            },
+            // `translate3d(x, y, 0)` is what @floating-ui writes for EVERY
+            // positioned element (it opts into GPU compositing); the Z axis is
+            // always 0 there, and a non-zero one has nothing to mean without a
+            // perspective transform.
+            T::Translate3d(a, b, z) => match (len(a), len(b)) {
+                (Some(a), Some(b)) => {
+                    (tx, ty) = (a, b);
+                    moved = true;
+                    if !matches!(css_length_px(z), Some(0.0)) {
+                        dropped.push("the Z axis of a 3D translate");
+                    }
+                }
+                _ => dropped.push("translate3d() with a calc() length"),
+            },
+            // Identity components (what Tailwind's transform stack is made of
+            // when only a translate utility is applied) are genuinely nothing.
+            T::Rotate(a) | T::RotateZ(a) | T::RotateX(a) | T::RotateY(a) if a.to_degrees() == 0.0 => {}
+            T::SkewX(a) | T::SkewY(a) if a.to_degrees() == 0.0 => {}
+            T::Skew(a, b) if a.to_degrees() == 0.0 && b.to_degrees() == 0.0 => {}
+            T::ScaleX(s) | T::ScaleY(s) | T::ScaleZ(s) if is_one(s) => {}
+            T::Scale(a, b) if is_one(a) && is_one(b) => {}
+            T::Rotate(_) | T::RotateX(_) | T::RotateY(_) | T::RotateZ(_) | T::Rotate3d(..) => {
+                dropped.push("rotate()")
+            }
+            T::Scale(..) | T::ScaleX(_) | T::ScaleY(_) | T::ScaleZ(_) | T::Scale3d(..) => {
+                dropped.push("scale()")
+            }
+            T::Skew(..) | T::SkewX(_) | T::SkewY(_) => dropped.push("skew()"),
+            T::Matrix(_) | T::Matrix3d(_) => dropped.push("matrix()"),
+            T::Perspective(_) => dropped.push("perspective()"),
+            T::TranslateZ(_) => dropped.push("the Z axis of a 3D translate"),
+        }
+    }
+    if moved {
+        x.translate = Some((tx, ty));
+    }
+    if !dropped.is_empty() {
+        dropped.sort_unstable();
+        dropped.dedup();
+        once(
+            diagnostics,
+            format!(
+                "`transform` supports translate() only (v1) — dropped {}. gpui applies no matrix \
+                 to a laid out box; the translate itself is applied as a LAYOUT offset, so an \
+                 in-flow element's siblings move with it",
+                dropped.join(", ")
+            ),
+        );
     }
 }
 
@@ -1415,30 +1953,78 @@ mod tests {
 
     // ---- diagnostics are ONE-SHOT ----------------------------------------
 
+    /// Custom properties are STORED, not advised about: they leave the mapper
+    /// on their own channel and land in the element's [`Vars`] map.
     #[test]
-    fn every_custom_property_folds_into_one_advisory() {
-        let (_, d) = map(
-            "--tw-shadow: 0 0 #0000; --tw-ring-color: red; --tw-translate-x: 0; \
-             --tw-scale-x: 1; --whatever: 3",
+    fn custom_properties_travel_their_own_channel() {
+        let mut d = Vec::new();
+        let inline = parse_inline_style(
+            "--tw-shadow: 0 0 #0000; --tw-ring-color: red; --whatever: 3; color: blue",
+            &mut d,
         );
-        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(
+            inline.custom,
+            vec![
+                ("--tw-shadow".to_string(), "0 0 #0000".to_string()),
+                ("--tw-ring-color".to_string(), "red".to_string()),
+                ("--whatever".to_string(), "3".to_string()),
+            ]
+        );
+        // …and the mapped declaration in the same body is unaffected.
+        assert!(inline.refinement.is_some_and(|r| r.text.color.is_some()));
+    }
+
+    /// A `var()`-composed value is deferred, not dropped: it rides the dynamic
+    /// channel as text and is substituted per element.
+    #[test]
+    fn a_var_composed_value_is_deferred_to_computed_value_time() {
+        let mut d = Vec::new();
+        let inline = parse_inline_style("box-shadow: var(--tw-shadow)", &mut d);
+        assert!(d.is_empty(), "{d:?}");
+        assert!(inline.refinement.is_none());
+        assert_eq!(
+            inline.dynamic,
+            vec![("box-shadow".to_string(), "var(--tw-shadow)".to_string())]
+        );
+    }
+
+    /// …and once the variable is known, the ordinary mapper arm runs.
+    #[test]
+    fn apply_dynamic_substitutes_then_maps() {
+        let mut d = Vec::new();
+        let vars = crate::vars::resolve(
+            &Rc::new(Vars::default()),
+            &[("--tw-shadow".to_string(), "0 1px 2px 0 rgb(0 0 0 / 0.5)".to_string())],
+            &mut d,
+        );
+        let mut r = StyleRefinement::default();
+        let mut x = Extras::default();
+        apply_dynamic("box-shadow", "var(--tw-shadow)", &vars, &mut r, &mut x, &mut d);
+        assert!(d.is_empty(), "{d:?}");
+        let shadows = r.box_shadow.expect("box-shadow mapped");
+        assert_eq!(shadows.len(), 1);
+        assert_eq!(shadows[0].blur_radius, px(2.0));
+    }
+
+    /// An unresolvable reference drops the declaration and says why — the CSS
+    /// "invalid at computed-value time" rule, never a silent nothing.
+    #[test]
+    fn an_unresolvable_var_is_an_advisory_not_silence() {
+        let mut d = Vec::new();
+        let mut r = StyleRefinement::default();
+        let mut x = Extras::default();
+        apply_dynamic("box-shadow", "var(--nope)", &Vars::default(), &mut r, &mut x, &mut d);
+        assert_eq!(r.box_shadow, None);
         assert!(
-            d[0].contains("custom properties are stored nowhere yet"),
+            d.iter().any(|m| m.contains("invalid at computed-value time") && m.contains("--nope")),
             "{d:?}"
         );
     }
 
     #[test]
-    fn a_var_composed_value_names_the_property_it_broke() {
-        let (r, d) = map("box-shadow: var(--tw-shadow)");
-        assert_eq!(r.box_shadow, None);
-        assert_eq!(d.len(), 1, "{d:?}");
-        assert!(d[0].contains("box-shadow"), "{d:?}");
-    }
-
-    #[test]
     fn a_repeated_unmapped_property_is_reported_once() {
-        let (_, d) = map("z-index: 1; z-index: 2; z-index: 3");
+        let (_, d) = map("letter-spacing: 1px; letter-spacing: 2px; letter-spacing: 3px");
         assert_eq!(d.len(), 1, "{d:?}");
     }
 
@@ -1447,6 +2033,126 @@ mod tests {
         let (r, d) = map("background-color: currentColor");
         assert_eq!(r.background, None);
         assert!(d.iter().any(|m| m.contains("background-color")), "{d:?}");
+    }
+
+    // ---- calc() over absolute lengths ------------------------------------
+
+    #[test]
+    fn calc_sums_and_products_resolve_to_pixels() {
+        // shadcn's own radius scale, once `--radius` resolves: `rounded-md` is
+        // `calc(var(--radius) - 2px)`.
+        assert_eq!(
+            clean("border-radius: calc(0.5rem - 2px)").corner_radii.top_left,
+            Some(px(6.0).into())
+        );
+        assert_eq!(clean("padding-top: calc(1rem + 4px)").padding.top, Some(px(20.0).into()));
+        assert_eq!(clean("width: calc(2 * 8px)").size.width, Some(Length::Definite(px(16.0).into())));
+        assert_eq!(
+            clean("border-top-width: calc(4px + 1px)").border_widths.top,
+            Some(px(5.0).into())
+        );
+        assert_eq!(
+            clean("width: min(100px, 40px)").size.width,
+            Some(Length::Definite(px(40.0).into()))
+        );
+        assert_eq!(
+            clean("width: clamp(10px, 4px, 100px)").size.width,
+            Some(Length::Definite(px(10.0).into()))
+        );
+    }
+
+    /// A percentage inside a `calc()` needs the containing block, which does not
+    /// exist before layout — so it stays unresolved rather than being guessed.
+    #[test]
+    fn a_percentage_inside_calc_is_not_guessed_at() {
+        let (r, _) = map("width: calc(100% - 8px)");
+        assert_eq!(r.size.width, None);
+    }
+
+    // ---- positioning (compat roadmap G3) ---------------------------------
+
+    fn extras(body: &str) -> (Extras, Vec<String>) {
+        let mut d = Vec::new();
+        let inline = parse_inline_style(body, &mut d);
+        (inline.extras, d)
+    }
+
+    #[test]
+    fn absolute_and_inset_map_straight_through() {
+        let r = clean("position: absolute; inset: 0; left: 50%; top: 8px");
+        assert_eq!(r.position, Some(gpui::Position::Absolute));
+        assert_eq!(r.inset.right, Some(Length::Definite(px(0.0).into())));
+        assert_eq!(r.inset.left, Some(Length::Definite(relative(0.5))));
+        assert_eq!(r.inset.top, Some(Length::Definite(px(8.0).into())));
+    }
+
+    #[test]
+    fn fixed_is_absolute_plus_a_deferred_layer_and_says_so() {
+        let (x, d) = extras("position: fixed");
+        assert_eq!(x.fixed, Some(true));
+        assert_eq!(x.deferred_priority(), Some(0));
+        assert!(d.iter().any(|m| m.contains("position: fixed")), "{d:?}");
+        // …and a later `relative` really undoes it.
+        let (x, _) = extras("position: fixed; position: relative");
+        assert_eq!(x.fixed, Some(false));
+        assert_eq!(x.deferred_priority(), None);
+    }
+
+    #[test]
+    fn a_positive_z_index_becomes_a_deferred_priority() {
+        let (x, d) = extras("z-index: 50");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(x.z_index, Some(50));
+        assert_eq!(x.deferred_priority(), Some(50));
+
+        // A negative one has no lever at all — and must say so.
+        let (x, d) = extras("z-index: -1");
+        assert_eq!(x.deferred_priority(), None);
+        assert!(d.iter().any(|m| m.contains("negative `z-index`")), "{d:?}");
+    }
+
+    #[test]
+    fn pointer_events_maps_both_keywords() {
+        assert_eq!(extras("pointer-events: none").0.pointer_events_none, Some(true));
+        assert_eq!(extras("pointer-events: auto").0.pointer_events_none, Some(false));
+        let (x, d) = extras("pointer-events: visiblePainted");
+        assert_eq!(x.pointer_events_none, None);
+        assert!(d.iter().any(|m| m.contains("pointer-events")), "{d:?}");
+    }
+
+    #[test]
+    fn translate_is_kept_in_its_authored_unit() {
+        let (x, d) = extras("transform: translate(-50%, -50%)");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(
+            x.translate,
+            Some((TranslateLen::Percent(-0.5), TranslateLen::Percent(-0.5)))
+        );
+        assert_eq!(TranslateLen::Percent(-0.5).to_px(400.0), -200.0);
+
+        let (x, _) = extras("transform: translateX(1.25rem)");
+        assert_eq!(x.translate, Some((TranslateLen::Px(20.0), TranslateLen::Px(0.0))));
+    }
+
+    /// Tailwind's `-translate-x-1/2` emits the whole identity chain; only a
+    /// REAL rotate/scale/skew is worth an advisory.
+    #[test]
+    fn tailwinds_identity_transform_chain_is_silent() {
+        let (x, d) = extras(
+            "transform: translate(-50%, -50%) rotate(0) skewX(0) skewY(0) scaleX(1) scaleY(1)",
+        );
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(
+            x.translate,
+            Some((TranslateLen::Percent(-0.5), TranslateLen::Percent(-0.5)))
+        );
+
+        let (x, d) = extras("transform: translateY(4px) rotate(45deg) scale(1.5)");
+        assert_eq!(x.translate, Some((TranslateLen::Px(0.0), TranslateLen::Px(4.0))));
+        assert!(
+            d.iter().any(|m| m.contains("rotate()") && m.contains("scale()")),
+            "{d:?}"
+        );
     }
 
     // ---- the end-to-end Tailwind card ------------------------------------

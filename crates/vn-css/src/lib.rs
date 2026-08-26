@@ -26,6 +26,7 @@ mod element;
 mod mapper;
 mod media;
 mod transition;
+mod vars;
 
 use std::rc::Rc;
 
@@ -40,10 +41,11 @@ use parcel_selectors::parser::Component;
 pub use animator::Animator;
 pub use element::MatchDom;
 pub use mapper::{
-    parse_inline, parse_inline_full, parse_inline_with_transitions, Extras, ObjectFit,
-    WindowControl, WindowDrag,
+    parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, Decls,
+    Extras, InlineStyle, ObjectFit, TranslateLen, WindowControl, WindowDrag,
 };
 pub use media::{match_media, DisplayMode, Env};
+pub use vars::Vars;
 pub use transition::{
     covered, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec, ANIMATABLE_COUNT,
 };
@@ -79,6 +81,13 @@ pub struct ComputedStates {
     /// Computed properties a `StyleRefinement` cannot carry (`object-fit`).
     /// Folded from the BASE state only — see [`Extras`].
     pub extras: Extras,
+    /// The element's resolved custom properties: what it inherited from its
+    /// parent, overridden by what it declared. Children read this one, which is
+    /// why the restyle pass must walk in document order.
+    ///
+    /// Shared with the parent by `Rc` when the element declares none of its own
+    /// — so the `PartialEq` above stays O(1) for almost every node.
+    pub vars: Rc<Vars>,
 }
 
 impl ComputedStates {
@@ -97,6 +106,12 @@ struct RuleEntry {
     important_transitions: Option<Rc<Vec<TransitionSpec>>>,
     normal_extras: Extras,
     important_extras: Extras,
+    /// `--x` declarations and `var()`-composed ones: both are resolved per
+    /// element (see [`Engine::compute_node`]), so the rule carries their text.
+    normal_custom: Option<Rc<Decls>>,
+    important_custom: Option<Rc<Decls>>,
+    normal_dynamic: Option<Rc<Decls>>,
+    important_dynamic: Option<Rc<Decls>>,
     specificity: u32,
     order: u32,
     states: u8,
@@ -228,6 +243,10 @@ impl Engine {
                     important_transitions: converted.important_transitions.clone(),
                     normal_extras: converted.normal_extras,
                     important_extras: converted.important_extras,
+                    normal_custom: converted.normal_custom.clone(),
+                    important_custom: converted.important_custom.clone(),
+                    normal_dynamic: converted.normal_dynamic.clone(),
+                    important_dynamic: converted.important_dynamic.clone(),
                     specificity: sel.specificity(),
                     order: *order,
                     states,
@@ -282,6 +301,10 @@ impl Engine {
 
     /// [`Self::compute_with`], additionally folding the [`Extras`] an inline
     /// `style` declared (parse them with [`parse_inline_full`]).
+    ///
+    /// Custom properties are NOT resolved on this path (the element has no
+    /// parent map to inherit from) — use [`Self::compute_node`] for that. Kept
+    /// because it is the shape every non-tree caller and every unit test wants.
     pub fn compute_full<D: MatchDom>(
         &self,
         node: D,
@@ -289,6 +312,42 @@ impl Engine {
         inline_transitions: Option<&Rc<Vec<TransitionSpec>>>,
         inline_extras: Extras,
         env: &Env,
+    ) -> ComputedStates {
+        let style = InlineStyle {
+            refinement: inline.map(|r| Rc::new(r.clone())),
+            transitions: inline_transitions.cloned(),
+            extras: inline_extras,
+            ..Default::default()
+        };
+        let mut diagnostics = Vec::new();
+        self.compute_node(
+            node,
+            Some(&style),
+            &Rc::new(Vars::default()),
+            env,
+            &mut diagnostics,
+        )
+    }
+
+    /// The full cascade for one node, including CSS custom properties.
+    ///
+    /// `parent_vars` is the resolved custom-property map of this node's PARENT
+    /// (the tree root passes an empty one). Custom properties inherit, so the
+    /// caller must walk the tree in document order and thread each node's
+    /// [`ComputedStates::vars`] into its children — that ordering requirement is
+    /// the one structural difference custom properties make to the cascade.
+    ///
+    /// `diagnostics` collects the advisories that can only be known here rather
+    /// than at sheet-compile time: a `var()` that resolves to nothing, a
+    /// reference cycle, a substituted value that does not parse. They are
+    /// per-element, so the caller is expected to dedupe before logging.
+    pub fn compute_node<D: MatchDom>(
+        &self,
+        node: D,
+        inline: Option<&InlineStyle>,
+        parent_vars: &Rc<Vars>,
+        env: &Env,
+        diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
         let el = element::El(node);
         let mut matched: Vec<&RuleEntry> = Vec::new();
@@ -308,6 +367,24 @@ impl Engine {
         }
         matched.sort_by_key(|r| (r.specificity, r.order));
 
+        // ---- 1. custom properties, first: every other declaration reads them.
+        // Duplicates are left in — `vars::resolve` folds by name with last-wins,
+        // which is exactly the cascade order they are pushed in.
+        let mut own_custom: Decls = Vec::new();
+        for important_pass in [false, true] {
+            for r in &matched {
+                let declared = if important_pass { &r.important_custom } else { &r.normal_custom };
+                if let Some(list) = declared {
+                    own_custom.extend(list.iter().cloned());
+                }
+            }
+        }
+        if let Some(inline) = inline {
+            own_custom.extend(inline.custom.iter().cloned());
+        }
+        let vars = vars::resolve(parent_vars, &own_custom, diagnostics);
+
+        // ---- 2. the refinements.
         let mut base = StyleRefinement::default();
         let mut hover = StyleRefinement::default();
         let mut active = StyleRefinement::default();
@@ -323,7 +400,7 @@ impl Engine {
         // advised about that), so every matched rule folds into one value in
         // cascade order — the last, most specific declaration wins.
         let mut extras = Extras::default();
-        let mut fold = |important_pass: bool| {
+        for important_pass in [false, true] {
             for r in &matched {
                 extras.refine(if important_pass {
                     &r.important_extras
@@ -340,43 +417,56 @@ impl Engine {
                         transitions = Some(t.clone());
                     }
                 }
-                let Some(refinement) = (if important_pass { &r.important } else { &r.normal }) else {
+                let refinement = if important_pass { &r.important } else { &r.normal };
+                let dynamic = if important_pass { &r.important_dynamic } else { &r.normal_dynamic };
+                if refinement.is_none() && dynamic.is_none() {
                     continue;
-                };
+                }
                 // One rung per rule. A compound that names several ladder
                 // states (`:hover:focus`) cannot be expressed as a conjunction
                 // in gpui's ladder, so it lands on the strongest rung it names
                 // — `classify_states` already warned about the approximation.
-                match r.states {
-                    0 => base.refine(refinement),
+                let bucket = match r.states {
+                    0 => &mut base,
                     s if s & STATE_ACTIVE != 0 => {
-                        active.refine(refinement);
                         any_active = true;
+                        &mut active
                     }
                     s if s & STATE_HOVER != 0 => {
-                        hover.refine(refinement);
                         any_hover = true;
+                        &mut hover
                     }
                     s if s & STATE_FOCUS_VISIBLE != 0 => {
-                        focus_visible.refine(refinement);
                         any_focus_visible = true;
+                        &mut focus_visible
                     }
                     _ => {
-                        focus.refine(refinement);
                         any_focus = true;
+                        &mut focus
+                    }
+                };
+                if let Some(refinement) = refinement {
+                    bucket.refine(refinement);
+                }
+                if let Some(list) = dynamic {
+                    for (name, raw) in list.iter() {
+                        mapper::apply_dynamic(name, raw, &vars, bucket, &mut extras, diagnostics);
                     }
                 }
             }
-        };
-        fold(false);
-        fold(true);
+        }
         if let Some(inline) = inline {
-            base.refine(inline);
+            if let Some(r) = &inline.refinement {
+                base.refine(r);
+            }
+            for (name, raw) in &inline.dynamic {
+                mapper::apply_dynamic(name, raw, &vars, &mut base, &mut extras, diagnostics);
+            }
+            if let Some(t) = &inline.transitions {
+                transitions = Some(t.clone());
+            }
+            extras.refine(&inline.extras);
         }
-        if let Some(t) = inline_transitions {
-            transitions = Some(t.clone());
-        }
-        extras.refine(&inline_extras);
         ComputedStates {
             base: Rc::new(base),
             hover: any_hover.then(|| Rc::new(hover)),
@@ -385,6 +475,7 @@ impl Engine {
             focus_visible: any_focus_visible.then(|| Rc::new(focus_visible)),
             transitions: transitions.unwrap_or_default(),
             extras,
+            vars,
         }
     }
 }
@@ -1728,23 +1819,32 @@ mod tests {
         }
     }
 
-    /// `--window-control` must not fall into the "custom properties are stored
-    /// nowhere" fold that every `--tw-*` declaration lands in.
+    /// `--window-control` must not fall into the custom-property channel that
+    /// every `--tw-*` declaration travels: it is an interpreted property that
+    /// merely borrows the spelling, it lands on `Extras`, and — unlike a real
+    /// custom property — it is deliberately NOT inherited (D-14).
+    ///
+    /// (Before compat round 6 this was observable as an "custom properties are
+    /// stored nowhere" advisory at sheet-compile time. Custom properties are
+    /// stored for real now, so the assertion moved to where the value lands.)
     #[test]
-    fn window_control_does_not_report_as_an_unstored_custom_property() {
-        let engine = Engine::compile(".box { --window-control: close }");
-        assert!(
-            !engine.diagnostics.iter().any(|d| d.contains("stored nowhere")),
-            "{:?}",
-            engine.diagnostics
+    fn window_control_does_not_fold_into_the_custom_property_map() {
+        let mut diags = Vec::new();
+        let engine = Engine::compile(".box { --window-control: close; --tw-shadow: 0 0 0 red }");
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let computed = engine.compute_node(
+            box_node(),
+            None,
+            &Rc::new(Vars::default()),
+            &Env::default(),
+            &mut diags,
         );
-        // …while a genuine custom property still does.
-        let engine = Engine::compile(".box { --tw-shadow: 0 0 0 red }");
-        assert!(
-            engine.diagnostics.iter().any(|d| d.contains("stored nowhere")),
-            "{:?}",
-            engine.diagnostics
-        );
+        // Interpreted: it reached `Extras`…
+        assert_eq!(computed.extras.window_control, Some(WindowControl::Close));
+        // …and it is NOT in the map children would inherit, while a genuine
+        // custom property declared in the same block is.
+        assert_eq!(computed.vars.get(mapper::WINDOW_CONTROL), None);
+        assert!(computed.vars.get("--tw-shadow").is_some(), "{:?}", computed.vars);
     }
 
     #[test]
@@ -1784,23 +1884,41 @@ mod tests {
     /// `env(titlebar-area-*)` gets a SPECIFIC advisory naming the property and
     /// printing the working alternative, not the generic "value is unresolved"
     /// line an author would have to decode (A-15, D-18).
+    ///
+    /// An unresolved `env()` arrives as `Property::Unparsed`, which compat
+    /// round 6 routed onto the DYNAMIC (`var()`-substitution) channel — so the
+    /// advisory is now raised per element at computed-value time rather than
+    /// once at sheet-compile time. `vn-tree`'s restyle pass logs and dedupes
+    /// that channel exactly like the compile-time one, so the author sees the
+    /// same single line; only the observation point in this test moved.
+    fn computed_value_diagnostics(css: &str) -> Vec<String> {
+        let engine = Engine::compile(css);
+        let mut diags = engine.diagnostics.clone();
+        engine.compute_node(
+            box_node(),
+            None,
+            &Rc::new(Vars::default()),
+            &Env::default(),
+            &mut diags,
+        );
+        diags
+    }
+
     #[test]
     fn env_titlebar_area_names_itself_and_the_alternative() {
-        let engine = Engine::compile(".box { margin-left: env(titlebar-area-x, 0px) }");
+        let diags = computed_value_diagnostics(".box { margin-left: env(titlebar-area-x, 0px) }");
         assert!(
-            engine
-                .diagnostics
+            diags
                 .iter()
                 .any(|d| d.contains("titlebar-area") && d.contains("getTitlebarAreaRect")),
-            "{:?}",
-            engine.diagnostics
+            "{diags:?}"
         );
         // …while another `env()` keeps the generic line.
-        let engine = Engine::compile(".box { padding-left: env(safe-area-inset-left) }");
+        let diags = computed_value_diagnostics(".box { padding-left: env(safe-area-inset-left) }");
+        assert!(!diags.iter().any(|d| d.contains("titlebar-area")), "{diags:?}");
         assert!(
-            !engine.diagnostics.iter().any(|d| d.contains("titlebar-area")),
-            "{:?}",
-            engine.diagnostics
+            diags.iter().any(|d| d.contains("unresolved")),
+            "the generic line must still fire: {diags:?}"
         );
     }
 
@@ -1929,6 +2047,224 @@ mod tests {
         assert!(err.contains("visited"), "{err}");
         // Injection guard: a selector may not carry a declaration block.
         assert!(query_all(".a { color: red } .b", &c).unwrap_err().contains('{'));
+    }
+
+    // -----------------------------------------------------------------------
+    // custom properties + var()  (compat roadmap G1)
+    // -----------------------------------------------------------------------
+
+    /// `:root` + a class subtree + a leaf, with real parent links — the exact
+    /// shape shadcn's theme relies on (`:root { --x }` … `.dark { --x }` …).
+    fn themed_doc() -> Doc {
+        Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("root", "", 0, vec![]),      // 1 — the tree root, `:root`
+                ("div", "page", 1, vec![]),   // 2
+                ("button", "btn", 2, vec![]), // 3
+            ],
+        }
+    }
+
+    /// Runs the real restyle ORDER — parent first, child inheriting its map —
+    /// which is what the tree's document-order walk does for real.
+    fn cascade(engine: &Engine, doc: &Doc, env: &Env) -> Vec<ComputedStates> {
+        let mut out: Vec<ComputedStates> = Vec::new();
+        let mut diagnostics = Vec::new();
+        for i in 1..doc.nodes.len() {
+            let parent = doc.nodes[i].2;
+            let parent_vars = if parent == 0 {
+                Rc::new(Vars::default())
+            } else {
+                out[parent - 1].vars.clone()
+            };
+            out.push(engine.compute_node(
+                DocRef { doc, i },
+                None,
+                &parent_vars,
+                env,
+                &mut diagnostics,
+            ));
+        }
+        out
+    }
+
+    #[test]
+    fn custom_properties_inherit_down_the_tree_and_substitute() {
+        let engine = Engine::compile(
+            ":root { --fg: rgb(10 20 30) } .btn { color: var(--fg) }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = themed_doc();
+        let states = cascade(&engine, &d, &Env::default());
+        // Declared on the root. (The stored text is lightningcss's own
+        // serialization of the token stream — `rgb(10 20 30)` round-trips as
+        // `#0a141e`. Equivalent for every consumer; the one visible difference
+        // from a browser is what `getComputedStyle().getPropertyValue("--fg")`
+        // reads back.)
+        assert_eq!(states[0].vars.get("--fg"), Some("#0a141e"));
+        // …inherited two levels down (and the Rc is SHARED, not rebuilt)…
+        assert!(Rc::ptr_eq(&states[0].vars, &states[2].vars));
+        // …and the button's `color` resolved through it.
+        assert!(states[2].base.text.color.is_some());
+    }
+
+    /// The dark-mode mechanism: a class on an ancestor redefines the token and
+    /// everything under it repaints, with no rule of its own changing.
+    #[test]
+    fn a_class_on_an_ancestor_can_redefine_an_inherited_token() {
+        let engine = Engine::compile(
+            ":root { --bg: #ffffff } .dark { --bg: #000000 } .btn { background-color: var(--bg) }",
+        );
+        let light = themed_doc();
+        let mut dark = themed_doc();
+        dark.nodes[2].1 = "page dark";
+
+        let l = cascade(&engine, &light, &Env::default());
+        let k = cascade(&engine, &dark, &Env::default());
+        assert_eq!(l[2].vars.get("--bg"), Some("#fff"));
+        assert_eq!(k[2].vars.get("--bg"), Some("#000"));
+        assert_ne!(l[2].base.background, k[2].base.background);
+        // The root itself is untouched by the class on its child.
+        assert_eq!(k[0].vars.get("--bg"), Some("#fff"));
+    }
+
+    /// `@media (prefers-color-scheme: dark)` redefining tokens is the OTHER
+    /// half of dark mode, and it must reach the same var map.
+    #[test]
+    fn media_scoped_redefinitions_reach_the_var_map() {
+        let engine = Engine::compile(
+            ":root { --bg: #ffffff } \
+             @media (prefers-color-scheme: dark) { :root { --bg: #000000 } } \
+             .btn { background-color: var(--bg) }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = themed_doc();
+        let light = cascade(&engine, &d, &env_at(800.0, false, false));
+        let dark = cascade(&engine, &d, &env_at(800.0, true, false));
+        assert_eq!(light[0].vars.get("--bg"), Some("#fff"));
+        assert_eq!(dark[0].vars.get("--bg"), Some("#000"));
+        assert_ne!(light[2].base.background, dark[2].base.background);
+    }
+
+    /// Custom properties cascade like any other declaration: specificity, then
+    /// document order, with `!important` on top.
+    #[test]
+    fn custom_property_declarations_obey_the_cascade() {
+        let engine = Engine::compile(
+            ".btn { --v: a } button.btn { --v: b } .btn { --v: c } \
+             .page { --w: 1 } .page { --w: 2 !important } .page { --w: 3 }",
+        );
+        let d = themed_doc();
+        let states = cascade(&engine, &d, &Env::default());
+        // `button.btn` (0,1,1) beats both `.btn` rules (0,1,0).
+        assert_eq!(states[2].vars.get("--v"), Some("b"));
+        // `!important` beats a later normal declaration.
+        assert_eq!(states[1].vars.get("--w"), Some("2"));
+    }
+
+    /// An unresolvable reference drops ONLY that declaration, and says so.
+    #[test]
+    fn an_unresolvable_var_drops_one_declaration_with_an_advisory() {
+        let engine = Engine::compile(".btn { opacity: 0.5; color: var(--nope) }");
+        let d = themed_doc();
+        let mut diagnostics = Vec::new();
+        let s = engine.compute_node(
+            DocRef { doc: &d, i: 3 },
+            None,
+            &Rc::new(Vars::default()),
+            &Env::default(),
+            &mut diagnostics,
+        );
+        assert_eq!(s.base.opacity, Some(0.5), "the sibling declaration survives");
+        assert_eq!(s.base.text.color, None);
+        assert!(
+            diagnostics.iter().any(|m| m.contains("--nope")),
+            "{diagnostics:?}"
+        );
+    }
+
+    /// …and a fallback makes it resolve instead.
+    #[test]
+    fn a_fallback_rescues_an_unset_variable() {
+        let engine = Engine::compile(".btn { opacity: var(--nope, 0.25) }");
+        let d = themed_doc();
+        let s = cascade(&engine, &d, &Env::default());
+        assert_eq!(s[2].base.opacity, Some(0.25));
+    }
+
+    #[test]
+    fn a_reference_cycle_is_reported_and_invalidates_the_users() {
+        let engine = Engine::compile(":root { --a: var(--b); --b: var(--a) } .btn { opacity: var(--a, 1) }");
+        let d = themed_doc();
+        let mut diagnostics = Vec::new();
+        let mut vars = Rc::new(Vars::default());
+        let mut opacity = None;
+        for i in 1..d.nodes.len() {
+            let s = engine.compute_node(DocRef { doc: &d, i }, None, &vars, &Env::default(), &mut diagnostics);
+            vars = s.vars.clone();
+            opacity = s.base.opacity;
+        }
+        assert!(diagnostics.iter().any(|m| m.contains("cycle")), "{diagnostics:?}");
+        // The cycle members are unset, so the fallback applies.
+        assert_eq!(opacity, Some(1.0));
+    }
+
+    /// A custom property declared in a `<style scoped>` rule reaches the map
+    /// through the scope hash like every other declaration does. (`DocRef`
+    /// reports no scopes, so the scoped rule must NOT match — the negative half
+    /// of the same test.)
+    #[test]
+    fn scoped_rules_carry_custom_properties_through_the_normal_matcher() {
+        let engine = Engine::compile(".page[data-v-abc] { --v: 1 } .page { --v: 2 }");
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = themed_doc();
+        let s = cascade(&engine, &d, &Env::default());
+        assert_eq!(s[1].vars.get("--v"), Some("2"), "the unscoped rule is the only match");
+    }
+
+    /// Tailwind's whole `--tw-*` compound stack, end to end: the shadow the
+    /// `shadow-sm` utility composes must actually reach `box_shadow`.
+    #[test]
+    fn tailwinds_shadow_compound_renders() {
+        let engine = Engine::compile(
+            ".btn { --tw-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); \
+                    box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), \
+                                var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow) }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = themed_doc();
+        let s = cascade(&engine, &d, &Env::default());
+        let shadows = s[2].base.box_shadow.as_ref().expect("box-shadow");
+        assert_eq!(shadows.len(), 3, "{shadows:?}");
+        assert_eq!(shadows[2].blur_radius, gpui::px(2.0));
+    }
+
+    /// The shadcn theme shape, verbatim: `--primary: H S% L%` used through
+    /// `hsl(var(--primary))`, which is what makes `bg-primary` a real colour.
+    #[test]
+    fn the_shadcn_token_shape_resolves_to_a_colour() {
+        let engine = Engine::compile(
+            ":root { --primary: 240 5.9% 10% } .btn { background-color: hsl(var(--primary)) }",
+        );
+        let d = themed_doc();
+        let s = cascade(&engine, &d, &Env::default());
+        assert!(
+            matches!(s[2].base.background, Some(gpui::Fill::Color(_))),
+            "{:?}",
+            s[2].base.background
+        );
+    }
+
+    /// A node that declares nothing shares its parent's map by pointer, so the
+    /// `ComputedStates` change test stays cheap.
+    #[test]
+    fn a_node_that_declares_nothing_shares_the_parents_map() {
+        let engine = Engine::compile(":root { --a: 1 }");
+        let d = themed_doc();
+        let s = cascade(&engine, &d, &Env::default());
+        assert!(Rc::ptr_eq(&s[0].vars, &s[1].vars));
+        assert!(Rc::ptr_eq(&s[1].vars, &s[2].vars));
     }
 
     /// `:hover` matches in a query the same way it matches in the cascade —

@@ -1,40 +1,26 @@
-// Generates apps/shadcn/tailwind.config.js by PRE-RESOLVING shadcn-vue's
-// CSS-custom-property theme into literal values.
+// Generates apps/shadcn/tailwind.config.js and src/Theme.vue from shadcn-vue's
+// own token layer.
 //
 //   bun tools/gen-theme.ts
 //
 // ---------------------------------------------------------------------------
-// WHY THIS FILE EXISTS — compat gap #1
+// WHAT CHANGED IN COMPAT ROUND 6
 // ---------------------------------------------------------------------------
-// shadcn's entire design-token layer is CSS custom properties:
+// This file used to PRE-RESOLVE the theme: every `hsl(var(--token))` became a
+// literal `hsl(H S% L% / <alpha-value>)` and every `var(--radius)` /
+// `calc(var(--radius) ± Npx)` became a literal rem, because vn-css had no
+// custom-property store (m10 gap G1). That baked the light theme in: `.dark
+// { --primary: … }` could not work, and neither could runtime theming.
 //
-//     :root { --primary: 240 5.9% 10%; }                 (a stylesheet)
-//     colors: { primary: 'hsl(var(--primary))' }         (tailwind.config.js)
-//     class="bg-primary"  ->  background-color: hsl(var(--primary))
+// vn-css now implements custom properties and `var()` for real — they cascade,
+// they INHERIT, `var(--x, fallback)` substitutes into the using declaration,
+// and `calc()` over absolute lengths evaluates. So the config below is
+// upstream's, VERBATIM: `hsl(var(--border))`, `calc(var(--radius) - 2px)` and
+// all. The indirection is resolved where a browser resolves it — at cascade
+// time, per element — which is what makes the dark-mode toggle in App.vue flip
+// the whole page by changing ONE class.
 //
-// vn-css has no custom-property store: a `--x:` declaration folds nowhere and
-// `var()` leaves the declaration as `Property::Unparsed`, so EVERY themed color
-// in EVERY shadcn component would render as nothing. (See
-// crates/vn-css/src/mapper.rs — the "custom properties are stored nowhere yet
-// (v1)" advisory — and packages/vue-native/tailwind.ts, which spells out the
-// same blocker for Tailwind v4.)
-//
-// So we resolve the indirection at BUILD time, where a browser would resolve it
-// at cascade time. The component sources stay byte-identical to upstream — they
-// only ever write `bg-primary`, never `var()` — and the utilities Tailwind emits
-// become literal `hsl(240 5.9% 10% / 1)`, which lightningcss parses into an RGBA
-// and vn-css renders.
-//
-// WHAT THIS COSTS (i.e. what a real custom-property implementation would buy):
-//   * runtime theme switching. `.dark { --primary: ... }` cannot work: the
-//     override is a custom property, and the utility no longer reads one.
-//     We bake the LIGHT theme. Same for the per-theme palettes on the
-//     shadcn "themes" page and for user-set `--radius`.
-//   * `hsl(var(--x) / 0.5)` composition anywhere outside Tailwind's own
-//     `<alpha-value>` mechanism.
-//   * any app CSS that reads a token directly (`color: hsl(var(--border))`).
-//
-// The token table below is copied VERBATIM from the `:root` block of
+// The token tables are copied verbatim from the `:root` and `.dark` blocks of
 // apps/www/.vitepress/theme/style.css at shadcn-vue v2.2.0 — the same values
 // the CLI writes into a real project's index.css.
 
@@ -43,60 +29,71 @@ import { join } from "path";
 
 const APP = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 
-/** shadcn-vue v2.2.0 default theme, `:root` (light). `H S% L%`, no `hsl()`. */
-const TOKENS: Record<string, string> = {
-  "background": "0 0% 100%",
-  "foreground": "240 10% 3.9%",
-  "card": "0 0% 100%",
+/** shadcn-vue v2.2.0 default theme. `H S% L%`, no `hsl()` — upstream's shape. */
+const LIGHT: Record<string, string> = {
+  background: "0 0% 100%",
+  foreground: "240 10% 3.9%",
+  card: "0 0% 100%",
   "card-foreground": "240 10% 3.9%",
-  "popover": "0 0% 100%",
+  popover: "0 0% 100%",
   "popover-foreground": "240 10% 3.9%",
-  "primary": "240 5.9% 10%",
+  primary: "240 5.9% 10%",
   "primary-foreground": "0 0% 98%",
-  "secondary": "240 4.8% 95.9%",
+  secondary: "240 4.8% 95.9%",
   "secondary-foreground": "240 5.9% 10%",
-  "muted": "240 4.8% 95.9%",
+  muted: "240 4.8% 95.9%",
   "muted-foreground": "240 3.8% 46.1%",
-  "accent": "240 4.8% 95.9%",
+  accent: "240 4.8% 95.9%",
   "accent-foreground": "240 5.9% 10%",
-  "destructive": "0 72.22% 50.59%",
+  destructive: "0 72.22% 50.59%",
   "destructive-foreground": "0 0% 98%",
-  "border": "240 5.9% 90%",
-  "input": "240 5.9% 90%",
-  "ring": "240 5% 64.9%",
+  border: "240 5.9% 90%",
+  input: "240 5.9% 90%",
+  ring: "240 5% 64.9%",
 };
 
-/** `--radius: 0.5rem`, and the three calc()s the config derives from it. */
-const RADIUS_REM = 0.5;
-const radius = (deltaPx: number) => `${RADIUS_REM + deltaPx / 16}rem`;
+const DARK: Record<string, string> = {
+  background: "240 10% 3.9%",
+  foreground: "0 0% 98%",
+  card: "240 10% 3.9%",
+  "card-foreground": "0 0% 98%",
+  popover: "240 10% 3.9%",
+  "popover-foreground": "0 0% 98%",
+  primary: "0 0% 98%",
+  "primary-foreground": "240 5.9% 10%",
+  secondary: "240 3.7% 15.9%",
+  "secondary-foreground": "0 0% 98%",
+  muted: "240 3.7% 15.9%",
+  "muted-foreground": "240 5% 64.9%",
+  accent: "240 3.7% 15.9%",
+  "accent-foreground": "0 0% 98%",
+  destructive: "0 62.8% 30.6%",
+  "destructive-foreground": "0 0% 98%",
+  border: "240 3.7% 15.9%",
+  input: "240 3.7% 15.9%",
+  ring: "240 4.9% 83.9%",
+};
 
-/**
- * `hsl(var(--primary))` / `hsl(var(--destructive) / <alpha-value>)`
- *   -> `hsl(240 5.9% 10% / <alpha-value>)`
- *
- * `<alpha-value>` is kept (added when upstream omitted it) so Tailwind's slash
- * syntax keeps working — `bg-primary/90` is all over the button variants, and
- * vue-native's Tailwind pin turns the *Opacity core plugins off precisely so
- * that slash-opacity is the one opacity mechanism (see apps/hello/tailwind.config.js).
- */
-function color(token: string): string {
-  const value = TOKENS[token];
-  if (!value) throw new Error(`no token --${token}`);
-  return `hsl(${value} / <alpha-value>)`;
-}
+const RADIUS = "0.5rem";
+
+const block = (tokens: Record<string, string>, indent = "  ") =>
+  Object.entries(tokens)
+    .map(([k, v]) => `${indent}--${k}: ${v};`)
+    .join("\n");
+
+// ---------------------------------------------------------------------------
+// tailwind.config.js — upstream, unmodified except for `corePlugins`
+// ---------------------------------------------------------------------------
 
 const config = `// GENERATED by tools/gen-theme.ts — do not edit; run \`bun tools/gen-theme.ts\`.
 //
-// This is shadcn-vue v2.2.0's apps/www/tailwind.config.js with two mechanical
-// substitutions and one vue-native block:
+// shadcn-vue v2.2.0's apps/www/tailwind.config.js, VERBATIM: the colour scale
+// reads \`hsl(var(--token))\` and the radius scale reads \`var(--radius)\`, exactly
+// as upstream writes them. vn-css resolves both at cascade time (compat round 6
+// G1), which is what makes the theme swappable at runtime.
 //
-//   1. every \`hsl(var(--token))\` -> the literal \`hsl(H S% L% / <alpha-value>)\`
-//   2. every \`var(--radius)\` / \`calc(var(--radius) ± Npx)\` -> a literal rem
-//   3. \`corePlugins\` copied from apps/hello/tailwind.config.js (preflight and
-//      the legacy *Opacity plugins off — see that file for why)
-//
-// (1) and (2) are compat gap #1: vn-css has no custom-property store. See
-// tools/gen-theme.ts for the full rationale and for what they cost.
+// The one addition is \`corePlugins\`, copied from apps/hello/tailwind.config.js:
+// preflight and the legacy *Opacity plugins are off — see that file for why.
 
 const { join } = require("node:path");
 const animate = require("tailwindcss-animate");
@@ -119,53 +116,49 @@ module.exports = {
     container: { center: true, padding: "2rem", screens: { "2xl": "1536px" } },
     extend: {
       colors: {
-        border: ${JSON.stringify(color("border"))},
-        input: ${JSON.stringify(color("input"))},
-        ring: ${JSON.stringify(color("ring"))},
-        background: ${JSON.stringify(color("background"))},
-        foreground: ${JSON.stringify(color("foreground"))},
+        border: "hsl(var(--border) / <alpha-value>)",
+        input: "hsl(var(--input) / <alpha-value>)",
+        ring: "hsl(var(--ring) / <alpha-value>)",
+        background: "hsl(var(--background) / <alpha-value>)",
+        foreground: "hsl(var(--foreground) / <alpha-value>)",
         primary: {
-          DEFAULT: ${JSON.stringify(color("primary"))},
-          foreground: ${JSON.stringify(color("primary-foreground"))},
+          DEFAULT: "hsl(var(--primary) / <alpha-value>)",
+          foreground: "hsl(var(--primary-foreground) / <alpha-value>)",
         },
         secondary: {
-          DEFAULT: ${JSON.stringify(color("secondary"))},
-          foreground: ${JSON.stringify(color("secondary-foreground"))},
+          DEFAULT: "hsl(var(--secondary) / <alpha-value>)",
+          foreground: "hsl(var(--secondary-foreground) / <alpha-value>)",
         },
         destructive: {
-          DEFAULT: ${JSON.stringify(color("destructive"))},
-          foreground: ${JSON.stringify(color("destructive-foreground"))},
+          DEFAULT: "hsl(var(--destructive) / <alpha-value>)",
+          foreground: "hsl(var(--destructive-foreground) / <alpha-value>)",
         },
         muted: {
-          DEFAULT: ${JSON.stringify(color("muted"))},
-          foreground: ${JSON.stringify(color("muted-foreground"))},
+          DEFAULT: "hsl(var(--muted) / <alpha-value>)",
+          foreground: "hsl(var(--muted-foreground) / <alpha-value>)",
         },
         accent: {
-          DEFAULT: ${JSON.stringify(color("accent"))},
-          foreground: ${JSON.stringify(color("accent-foreground"))},
+          DEFAULT: "hsl(var(--accent) / <alpha-value>)",
+          foreground: "hsl(var(--accent-foreground) / <alpha-value>)",
         },
         popover: {
-          DEFAULT: ${JSON.stringify(color("popover"))},
-          foreground: ${JSON.stringify(color("popover-foreground"))},
+          DEFAULT: "hsl(var(--popover) / <alpha-value>)",
+          foreground: "hsl(var(--popover-foreground) / <alpha-value>)",
         },
         card: {
-          DEFAULT: ${JSON.stringify(color("card"))},
-          foreground: ${JSON.stringify(color("card-foreground"))},
+          DEFAULT: "hsl(var(--card) / <alpha-value>)",
+          foreground: "hsl(var(--card-foreground) / <alpha-value>)",
         },
       },
       borderRadius: {
-        xl: ${JSON.stringify(radius(4))},
-        lg: ${JSON.stringify(radius(0))},
-        md: ${JSON.stringify(radius(-2))},
-        sm: ${JSON.stringify(radius(-4))},
+        xl: "calc(var(--radius) + 4px)",
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
       },
-      // Upstream targets \`var(--reka-accordion-content-height)\`, a variable
-      // reka-ui writes onto the element at runtime — the same var() blocker one
-      // level down. Substituted with \`auto\` for consistency; moot either way,
-      // since vn-css drops @keyframes wholesale.
       keyframes: {
-        "accordion-down": { from: { height: "0" }, to: { height: "auto" } },
-        "accordion-up": { from: { height: "auto" }, to: { height: "0" } },
+        "accordion-down": { from: { height: "0" }, to: { height: "var(--reka-accordion-content-height)" } },
+        "accordion-up": { from: { height: "var(--reka-accordion-content-height)" }, to: { height: "0" } },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -183,8 +176,61 @@ module.exports = {
 };
 `;
 
+// ---------------------------------------------------------------------------
+// src/Theme.vue — the token layer, i.e. shadcn's index.css
+// ---------------------------------------------------------------------------
+//
+// A component rather than a stylesheet because vue-native collects CSS from SFC
+// `<style>` blocks. It renders its slot and nothing else, so it adds no box.
+//
+// Three origins, exactly the pattern a real shadcn app ships:
+//   :root                              the light theme
+//   @media (prefers-color-scheme:dark) the OS preference
+//   .dark / .light                     an explicit choice, on any ancestor
+// The class blocks beat the media block because they sit on a DESCENDANT of
+// `:root`, and custom properties inherit — so the nearest declaration wins,
+// with no specificity war.
+
+const theme = `<!-- GENERATED by tools/gen-theme.ts — do not edit. -->
+<script setup>
+// shadcn-vue v2.2.0's design tokens, in the shape upstream ships them.
+// Renders its slot and nothing else: this component exists for its <style>.
+</script>
+
+<template>
+  <slot />
+</template>
+
+<style>
+/* The light theme, on the tree root. */
+:root {
+${block(LIGHT)}
+  --radius: ${RADIUS};
+}
+
+/* The OS preference. A window that opens on a dark desktop is dark. */
+@media (prefers-color-scheme: dark) {
+  :root {
+${block(DARK, "    ")}
+  }
+}
+
+/* An explicit choice, on any ancestor — custom properties inherit, so the
+   nearest declaration wins over both blocks above. This is the class Tailwind's
+   \`darkMode: ["class"]\` variant also keys on. */
+.dark {
+${block(DARK)}
+}
+
+.light {
+${block(LIGHT)}
+}
+</style>
+`;
+
 writeFileSync(join(APP, "tailwind.config.js"), config);
+writeFileSync(join(APP, "src/Theme.vue"), theme);
 console.log(
-  `tailwind.config.js: ${Object.keys(TOKENS).length} colour tokens + radius pre-resolved` +
-    ` (light theme, shadcn-vue v2.2.0)`,
+  `tailwind.config.js + src/Theme.vue: ${Object.keys(LIGHT).length} tokens × 2 themes, ` +
+    `upstream var() indirection intact (shadcn-vue v2.2.0)`,
 );

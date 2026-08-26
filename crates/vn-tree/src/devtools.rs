@@ -42,10 +42,13 @@ pub struct NodeInfo {
 }
 
 fn event_names(mask: u32) -> Vec<&'static str> {
-    const NAMES: [(u32, &str); 10] = [
+    const NAMES: [(u32, &str); 13] = [
         (tree::EV_CLICK, "click"),
         (tree::EV_MOUSEDOWN, "mousedown"),
         (tree::EV_MOUSEUP, "mouseup"),
+        (tree::EV_MOUSEMOVE, "mousemove"),
+        (tree::EV_MOUSEENTER, "mouseenter"),
+        (tree::EV_MOUSELEAVE, "mouseleave"),
         (tree::EV_WHEEL, "wheel"),
         (tree::EV_KEYDOWN, "keydown"),
         (tree::EV_KEYUP, "keyup"),

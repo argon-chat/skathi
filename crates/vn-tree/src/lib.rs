@@ -15,6 +15,7 @@
 //! few inline properties onto `gpui::Styled` calls. The real CSS layer
 //! (vn-css: stylesheets, cascade, per-state refinements) replaces it.
 
+mod dom;
 mod img;
 pub mod log;
 mod lottie;
@@ -27,7 +28,8 @@ pub use img::{asset_base, set_asset_base};
 pub use render::{build_root, control_hitboxes, painted_drag_region};
 pub use tree::{
     with_tree, EV_BLUR, EV_CLICK, EV_COMPLETE, EV_ENTERFRAME, EV_FOCUS, EV_INPUT, EV_KEYDOWN,
-    EV_KEYUP, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEUP, EV_SCROLL, EV_WHEEL,
+    EV_KEYUP, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEENTER, EV_MOUSELEAVE, EV_MOUSEMOVE,
+    EV_MOUSEUP, EV_SCROLL, EV_WHEEL,
 };
 
 /// The numeric payload a native input event carries into JS. Meaning by event:
@@ -166,6 +168,53 @@ host_fn!(fn vn_set_dispatcher(g, args) {
     UNDEF
 });
 
+// ---------------------------------------------------------------------------
+// the DOM surface (compat roadmap G2) — see `dom.rs` for the semantics
+// ---------------------------------------------------------------------------
+
+/// Builds a JS string Value for a host fn to return. The runtime thread-local
+/// holds the same context the host call is running in, so this is the same
+/// `Context` — not a second one.
+fn ret_string(s: &str) -> u64 {
+    JsRuntime::with(|rt| rt.ctx().string(s).0)
+}
+
+// `querySelectorAll` / `matches` / `closest`, answered by the REAL cascade
+// matcher. Returns the matched ids comma-joined, `""` for no match, or
+// `"!<advisory>"` when the selector is one the engine cannot run — the JS side
+// turns that into the same advisory text a rule using it would print.
+host_fn!(fn vn_query(g, args) {
+    let selector = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
+    let root = arg_id(args.arg(1));
+    let mode = match arg_id(args.arg(2)) {
+        1 => dom::QueryMode::SelfOnly,
+        2 => dom::QueryMode::Closest,
+        _ => dom::QueryMode::Descendants,
+    };
+    let out = match dom::query(&selector, root, mode) {
+        Ok(ids) => ids.iter().map(u32::to_string).collect::<Vec<_>>().join(","),
+        Err(e) => format!("!{e}"),
+    };
+    ret_string(&out)
+});
+
+// `getBoundingClientRect()` — `"x,y,w,h"`, or `""` when the node was not
+// painted in the last frame (detached / `display: none`).
+host_fn!(fn vn_bounds(_g, args) {
+    let id = arg_id(args.arg(0));
+    let out = match dom::bounds(id) {
+        Some((x, y, w, h)) => format!("{x},{y},{w},{h}"),
+        None => String::new(),
+    };
+    ret_string(&out)
+});
+
+// `getComputedStyle(el)` — `name=value` lines; see `dom::computed_style`.
+host_fn!(fn vn_computed_style(_g, args) {
+    let id = arg_id(args.arg(0));
+    ret_string(&dom::computed_style(id).unwrap_or_default())
+});
+
 /// Registers the whole `__vn_*` protocol surface on the JS global.
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
@@ -185,6 +234,9 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_set_listener", 3, vn_set_listener as *const _),
         ("__vn_create_root", 0, vn_create_root as *const _),
         ("__vn_set_dispatcher", 1, vn_set_dispatcher as *const _),
+        ("__vn_query", 3, vn_query as *const _),
+        ("__vn_bounds", 1, vn_bounds as *const _),
+        ("__vn_computed_style", 1, vn_computed_style as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
@@ -228,6 +280,7 @@ pub fn lotties_animating() -> bool {
 ///   page stop swallowing keystrokes after it deactivates.
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     render::apply_pending_blur(window, cx);
+    render::ensure_root_focus(window, cx);
     lottie::tick(window, cx)
 }
 
@@ -348,6 +401,57 @@ mod tests {
         });
         flush_changes();
         assert_eq!(opacity_of(child), Some(1.0));
+    }
+
+    /// Custom properties inherit through the REAL tree, which is what obliges
+    /// the restyle pass to walk in document order rather than by node id.
+    #[test]
+    fn custom_properties_inherit_through_the_real_tree() {
+        let (mid, leaf) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let mid = t.create_element(div);
+            let leaf = t.create_element(div);
+            // Deliberately inserted CHILD-FIRST so the id order and the document
+            // order disagree — the pass must follow the tree, not the slab.
+            t.insert(leaf, mid, 0);
+            t.insert(mid, root, 0);
+            t.set_class(mid, "page");
+            t.set_class(leaf, "leaf");
+            (mid, leaf)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ":root { --v: 0.2 } .page { --v: 0.8 } .leaf { opacity: var(--v) }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(leaf), Some(0.8));
+
+        // Removing the override falls back to the root's value — i.e. the child
+        // really re-reads its ancestors rather than caching a literal.
+        tree::with_tree(|t| t.set_class(mid, "other"));
+        flush_changes();
+        assert_eq!(opacity_of(leaf), Some(0.2));
+    }
+
+    /// `element.style.setProperty("--x", …)` — reka-ui's `--reka-popper-*`
+    /// channel — reaches the map and the subtree that reads it.
+    #[test]
+    fn an_inline_custom_property_reaches_the_subtree() {
+        let leaf = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let host = t.create_element(div);
+            let leaf = t.create_element(div);
+            t.insert(host, root, 0);
+            t.insert(leaf, host, 0);
+            t.set_class(leaf, "leaf");
+            let key = t.intern("--v");
+            t.set_style(host, key, "0.35".into());
+            leaf
+        });
+        tree::set_engine(vn_css::Engine::compile(".leaf { opacity: var(--v, 1) }"));
+        tree::restyle_all();
+        assert_eq!(opacity_of(leaf), Some(0.35));
     }
 
     /// `@media` conditions read the published env, and moving it re-cascades.

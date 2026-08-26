@@ -284,6 +284,32 @@ fn reaches_root(t: &Tree, id: u32) -> bool {
 /// the `Some → None` edge it watches for is not guaranteed to happen. Clearing
 /// `FOCUSED_NODE` first keeps the two paths from both firing: `focus_transition`
 /// returns early when the focus is already where it is being moved to.
+/// Keeps SOMETHING focused, so keystrokes have a dispatch path to travel.
+///
+/// A browser's document always has a focus target: with nothing else focused,
+/// `document.body` has it, and that is why a `keydown` listener on `document`
+/// fires for every keystroke. gpui has no such default — with nothing focused,
+/// a key event's dispatch path is the window's root node alone and NO element
+/// listener runs. So the app root (which is vue-native's `document`) takes focus
+/// whenever nothing else has it.
+///
+/// Anything the app focuses for real — an `<input>`, a `tabindex`ed node — takes
+/// over immediately and stays, because the root is its ANCESTOR in the dispatch
+/// tree and so keeps receiving the keystrokes anyway.
+pub(crate) fn ensure_root_focus(window: &mut Window, cx: &mut App) {
+    if window.focused(cx).is_some() {
+        return;
+    }
+    let root = tree::read_tree(|t| t.root);
+    if root == 0 {
+        return;
+    }
+    let Some(handle) = FOCUS_HANDLES.with(|m| m.borrow().get(&root).cloned()) else {
+        return;
+    };
+    window.focus(&handle, cx);
+}
+
 pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
     let pending = PENDING_BLUR.with(|p| p.replace(0));
     // Re-check: focus may legitimately have moved on since the mutation (the
@@ -319,6 +345,12 @@ fn mods_bits(m: &gpui::Modifiers) -> f64 {
         bits |= 8;
     }
     bits as f64
+}
+
+/// `MouseEvent.button` for an event that carries no press: the DOM says `-1`
+/// for `mousemove`/`mouseenter` when no button is down.
+fn button_code_opt(b: Option<MouseButton>) -> f64 {
+    b.map(button_code).unwrap_or(-1.0)
 }
 
 fn button_code(b: MouseButton) -> f64 {
@@ -652,7 +684,7 @@ fn build_node<V: 'static>(
     // vn-css has no inherited properties at all, so the fold happens here, on
     // the way down. A browser allows the property on a replaced element too,
     // hence `<img>` and `<lottie>` get the same treatment.
-    let extras = node.computed.as_ref().map(|cs| cs.extras).unwrap_or_default();
+    let extras = extras_of(node);
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
@@ -664,30 +696,83 @@ fn build_node<V: 'static>(
         Kind::Text if node.text.is_empty() => Empty.into_any_element(),
         Kind::Text => SharedString::from(node.text.clone()).into_any_element(),
         Kind::Anchor => Empty.into_any_element(),
-        Kind::Element if t.name(node.tag) == "img" => {
-            probe(id, build_img(t, id, node, window, cx, now, control_area))
+        // Metadata content renders NOTHING in a browser — it is not a box, it
+        // is instructions. reka-ui injects a `<style>` element at runtime to
+        // hide a scroll container's scrollbars, and painting its source as text
+        // put a paragraph of CSS at the top of the page.
+        Kind::Element if is_metadata(t.name(node.tag)) => {
+            if t.name(node.tag) == "style" {
+                warn_compat(
+                    "runtime-style-element",
+                    "a <style> element in the tree renders nothing (as in a browser) but its CSS \
+                     is NOT installed either — vue-native's stylesheet is set once per build from \
+                     the SFC <style> blocks, so a stylesheet injected at runtime has no effect",
+                );
+            }
+            Empty.into_any_element()
         }
-        Kind::Element if t.name(node.tag) == "lottie" => {
-            probe(id, build_lottie(t, id, node, window, cx, now, control_area))
-        }
-        Kind::Element => probe(id, {
+        // `stack` moves the PAINT into gpui's deferred layer for `position:
+        // fixed` / positive `z-index`; the window-control hitbox rides the
+        // inner element either way, and a deferred paint puts it *above* the
+        // content it escaped — which is the order the fork's topmost-first
+        // resolution (F-01) already wants.
+        Kind::Element if t.name(node.tag) == "img" => stack(
+            &extras,
+            probe(id, build_img(t, id, node, window, cx, now, control_area)),
+        ),
+        Kind::Element if t.name(node.tag) == "lottie" => stack(
+            &extras,
+            probe(id, build_lottie(t, id, node, window, cx, now, control_area)),
+        ),
+        Kind::Element => stack(&extras, probe(id, {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
             let mut d = with_control_area(div().id(id as usize), id, control_area);
-            let mut scrolls = false;
             if let Some(cs) = &node.computed {
                 d = apply_computed_style(d, cs, id, now);
-                // `overflow: scroll|auto` on either axis. The style itself is
-                // all gpui's layout/clipping needs (it came in through the
-                // wholesale assignment above, so calling `.overflow_y_scroll()`
-                // here would only re-set what is already set); what makes the
-                // box actually *scroll* is a scroll offset to paint through —
-                // `track_scroll` supplies one that outlives the frame, and its
-                // presence is also what makes gpui insert the hitbox and the
-                // wheel listener that move it.
-                scrolls = cs.base.overflow.x == Some(Overflow::Scroll)
-                    || cs.base.overflow.y == Some(Overflow::Scroll);
             }
+            // "The window IS the root" (see `createApp().mount()`): the root
+            // element is vue-native's viewport, so it fills the box the host
+            // gives it unless a rule says otherwise. Without this it sizes to
+            // its CONTENT, and then `height: 100%` on its child resolves
+            // against an indefinite parent — which is to say `overflow: auto`
+            // never scrolls and `position: fixed` (laid out against the root)
+            // lands wherever the content happens to end.
+            if id == t.root {
+                let style = d.style();
+                let full = gpui::Length::Definite(gpui::relative(1.0));
+                style.size.width.get_or_insert(full);
+                style.size.height.get_or_insert(full);
+                // A viewport SCROLLS its overflow — that is the one behaviour
+                // that makes "the root is the viewport" hold for content taller
+                // than the window. Without it the overflow simply paints
+                // outside the box, over whatever the host draws below.
+                style.overflow.x.get_or_insert(Overflow::Scroll);
+                style.overflow.y.get_or_insert(Overflow::Scroll);
+                // …and it is also the node that stands in for `document`. gpui
+                // dispatches a keystroke down the FOCUS path, so a listener on
+                // an element that is not on that path never fires — which would
+                // make every `document.addEventListener("keydown")` inert, and
+                // with it every Escape-to-dismiss in the ecosystem. Tracking a
+                // focus handle here puts the root on the path;
+                // [`ensure_root_focus`] is what keeps something on it when the
+                // app has focused nothing of its own (the browser's "the body
+                // has focus by default").
+                d = d.track_focus(&focus_handle_for(id, None, cx));
+            }
+            // `overflow: scroll|auto` on either axis. The style itself is all
+            // gpui's layout/clipping needs (it came in through the wholesale
+            // assignment above, so calling `.overflow_y_scroll()` here would
+            // only re-set what is already set); what makes the box actually
+            // *scroll* is a scroll offset to paint through — `track_scroll`
+            // supplies one that outlives the frame, and its presence is also
+            // what makes gpui insert the hitbox and the wheel listener that
+            // move it. Read off the FINAL style, so the root's viewport-scroll
+            // default counts too.
+            let scrolls = {
+                let overflow = &d.style().overflow;
+                overflow.x == Some(Overflow::Scroll) || overflow.y == Some(Overflow::Scroll)
+            };
             let scroll_handle = scrolls.then(|| {
                 SCROLL_HANDLES.with(|m| m.borrow_mut().entry(id).or_default().clone())
             });
@@ -695,7 +780,7 @@ fn build_node<V: 'static>(
                 d = d.track_scroll(h);
             }
 
-            let mask = node.listeners;
+            let mask = pointer_mask(node);
             let bit = move |ev: u32| mask & (1 << ev) != 0;
             let is_input = t.name(node.tag) == "input";
             // `<input>` is tabbable by default in HTML; a plain <div> is not.
@@ -812,14 +897,53 @@ fn build_node<V: 'static>(
                 )
                 .into_any_element()
             }
-        }),
+        })),
+    }
+}
+
+/// HTML metadata content: elements that carry instructions, not a box. A
+/// browser gives all of these `display: none` from its UA stylesheet.
+fn is_metadata(tag: &str) -> bool {
+    matches!(tag, "style" | "script" | "template" | "head" | "meta" | "link" | "title" | "base")
+}
+
+/// The computed [`vn_css::Extras`] of a node (the default before the first
+/// cascade, which is also what an unstyled node computes to).
+fn extras_of(node: &crate::tree::Node) -> vn_css::Extras {
+    node.computed.as_ref().map(|cs| cs.extras).unwrap_or_default()
+}
+
+/// The bits `pointer-events: none` turns off — the pointer half of the event
+/// set. Keyboard and focus listeners are deliberately NOT in it: in a browser
+/// `pointer-events: none` makes an element transparent to the POINTER only, and
+/// a `tabindex`ed one still focuses and still receives keystrokes.
+const POINTER_BITS: u32 = (1 << tree::EV_CLICK)
+    | (1 << tree::EV_MOUSEDOWN)
+    | (1 << tree::EV_MOUSEUP)
+    | (1 << tree::EV_MOUSEMOVE)
+    | (1 << tree::EV_MOUSEENTER)
+    | (1 << tree::EV_MOUSELEAVE)
+    | (1 << tree::EV_WHEEL);
+
+/// The node's listener mask with `pointer-events: none` applied. Together with
+/// the hover/active rungs being skipped in [`apply_computed_style`], this is
+/// what stops gpui giving the node a hitbox at all.
+fn pointer_mask(node: &crate::tree::Node) -> u32 {
+    let inert = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.extras.pointer_events_none == Some(true));
+    if inert {
+        node.listeners & !POINTER_BITS
+    } else {
+        node.listeners
     }
 }
 
 /// The style half every element shares: the folded base refinement assigned
-/// wholesale, the running transition overlay refined over it, then gpui's own
-/// hover/active ladder rungs (the FnOnce builders run eagerly — only the
-/// resulting refinement is stored).
+/// wholesale, the running transition overlay refined over it, the `translate()`
+/// offset, then gpui's own hover/active ladder rungs (the FnOnce builders run
+/// eagerly — only the resulting refinement is stored).
 fn apply_computed_style<E>(
     mut e: E,
     cs: &vn_css::ComputedStates,
@@ -834,13 +958,83 @@ where
         use gpui::Refineable as _;
         e.style().refine(&overlay);
     }
-    if let Some(h) = cs.hover.clone() {
-        e = e.hover(move |_| (*h).clone());
-    }
-    if let Some(a) = cs.active.clone() {
-        e = e.active(move |_| (*a).clone());
+    apply_translate(e.style(), id, cs);
+    // `pointer-events: none` means the node is not interactive at all — so it
+    // must not carry gpui's hover/active rungs either, which are exactly what
+    // would make gpui insert a hitbox for it.
+    if cs.extras.pointer_events_none != Some(true) {
+        if let Some(h) = cs.hover.clone() {
+            e = e.hover(move |_| (*h).clone());
+        }
+        if let Some(a) = cs.active.clone() {
+            e = e.active(move |_| (*a).clone());
+        }
     }
     e
+}
+
+/// `transform: translate(…)` as a LAYOUT offset (compat roadmap G3).
+///
+/// gpui applies no matrix to a laid out box, so the only way to move one is to
+/// move it in layout — margins are the additive channel that works for both an
+/// in-flow box and an absolutely positioned one (taffy adds the margin to the
+/// inset-resolved origin).
+///
+/// A PERCENTAGE translate resolves against the element's own size, which is not
+/// known until it has been laid out — so it is resolved against the rectangle
+/// the node was painted at in the previous frame, exactly like `<lottie>`'s
+/// intrinsic sizing. A box that has never been painted translates by 0 on its
+/// first frame and lands correctly on the second; since a translate does not
+/// change the box's SIZE, that converges rather than oscillates.
+fn apply_translate(style: &mut gpui::StyleRefinement, id: u32, cs: &vn_css::ComputedStates) {
+    let Some((tx, ty)) = cs.extras.translate else {
+        return;
+    };
+    let (w, h) = prev_size_of(id).unwrap_or((0.0, 0.0));
+    let (dx, dy) = (tx.to_px(w), ty.to_px(h));
+    if dx == 0.0 && dy == 0.0 {
+        return;
+    }
+    fn shift(slot: &mut Option<gpui::Length>, delta: f32, id: u32, side: &str) {
+        match slot {
+            None => *slot = Some(gpui::Length::Definite(gpui::px(delta).into())),
+            Some(gpui::Length::Definite(gpui::DefiniteLength::Absolute(
+                gpui::AbsoluteLength::Pixels(p),
+            ))) => {
+                *slot = Some(gpui::Length::Definite(gpui::px(f32::from(*p) + delta).into()));
+            }
+            // `margin: auto` (centring) or a percentage margin cannot absorb a
+            // pixel offset. Rather than silently pick one, say which node.
+            _ => warn_compat(
+                "translate-margin",
+                &format!(
+                    "`transform: translate()` is applied as a margin offset, and node {id} already \
+                     has a non-pixel `margin-{side}` (auto or a percentage) — the translate was \
+                     dropped on that axis"
+                ),
+            ),
+        }
+    }
+    if dx != 0.0 {
+        shift(&mut style.margin.left, dx, id, "left");
+    }
+    if dy != 0.0 {
+        shift(&mut style.margin.top, dy, id, "top");
+    }
+}
+
+/// Wraps a node that has to escape its siblings' paint order — `position:
+/// fixed`, or a positive `z-index` — in gpui's deferred layer.
+///
+/// `Deferred` keeps the child's LAYOUT where it is (it returns the child's own
+/// `LayoutId`) and only moves the PAINT to after every ancestor, ordered by
+/// priority; gpui sorts those stably, so two elements with the same `z-index`
+/// keep document order, exactly as CSS says they should.
+fn stack(extras: &vn_css::Extras, el: AnyElement) -> AnyElement {
+    match extras.deferred_priority() {
+        Some(priority) => gpui::deferred(el).with_priority(priority).into_any_element(),
+        None => el,
+    }
 }
 
 /// The listener half every element shares. `keys_here` is false for `<input>`,
@@ -892,6 +1086,32 @@ where
                 }),
             );
         }
+    }
+    // The pointer family (compat roadmap G4). gpui sources exactly two things
+    // here — "the mouse moved while over me" and "the mouse entered/left me" —
+    // and the JS runtime derives the whole W3C pointer/mouse set from them.
+    //
+    // `on_hover` is what makes `mouseenter`/`mouseleave` (and therefore
+    // `pointerenter`/`pointerleave`) correct rather than approximated: gpui
+    // tracks the hovered hitbox itself and reports both edges, so the
+    // non-bubbling "entered this element" semantics come for free instead of
+    // being reconstructed from move coordinates.
+    if bit(tree::EV_MOUSEMOVE) {
+        e = e.on_mouse_move(cx.listener(move |_, ev: &gpui::MouseMoveEvent, window, cx| {
+            let payload = mouse_payload(ev.position, button_code_opt(ev.pressed_button), &ev.modifiers);
+            js_dispatch(id, tree::EV_MOUSEMOVE, &payload, window, cx);
+        }));
+    }
+    if bit(tree::EV_MOUSEENTER) || bit(tree::EV_MOUSELEAVE) {
+        e = e.on_hover(cx.listener(move |_, hovered: &bool, window, cx| {
+            let event = if *hovered { tree::EV_MOUSEENTER } else { tree::EV_MOUSELEAVE };
+            if !bit(event) {
+                return;
+            }
+            let position = window.mouse_position();
+            let payload = mouse_payload(position, -1.0, &window.modifiers());
+            js_dispatch(id, event, &payload, window, cx);
+        }));
     }
     if bit(tree::EV_WHEEL) {
         e = e.on_scroll_wheel(cx.listener(move |_, ev: &ScrollWheelEvent, window, cx| {
@@ -1172,7 +1392,7 @@ fn build_img<V: 'static>(
         alt_element(&failed_alt)
     });
 
-    let mask = node.listeners;
+    let mask = pointer_mask(node);
     let bit = |ev: u32| mask & (1 << ev) != 0;
     // `<img>` is not focusable in HTML without `tabindex`.
     let tab_index = tab_index_of(t, id);
@@ -1350,7 +1570,7 @@ fn build_lottie<V: 'static>(
         }
     }
 
-    let mask = node.listeners;
+    let mask = pointer_mask(node);
     let bit = |ev: u32| mask & (1 << ev) != 0;
     // Like `<img>`: not focusable in HTML without `tabindex`.
     let tab_index = tab_index_of(t, id);
@@ -1421,7 +1641,7 @@ fn build_input<V: 'static>(
         tab_index,
     };
 
-    let mask = node.listeners;
+    let mask = pointer_mask(node);
     let bit = move |ev: u32| mask & (1 << ev) != 0;
 
     let on_change: vn_elements::OnChange = std::rc::Rc::new(move |text, window, cx| {

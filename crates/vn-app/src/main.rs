@@ -248,7 +248,21 @@ impl Render for Shell {
                     .flex_col()
                     .gap(px(16.))
                     // The Vue-driven subtree, straight from the retained tree.
-                    .child(vn_tree::build_root(window, cx))
+                    //
+                    // `flex_1().min_h(0)` is what gives the app root a DEFINITE
+                    // box: vue-native's model is "the window is the root", so
+                    // the root element sizes itself to 100% of whatever it is
+                    // handed (see `vn_tree`'s `build_node`). An auto-height slot
+                    // would make `h-full` and `overflow: auto` in the app
+                    // resolve against an indefinite parent — i.e. never scroll —
+                    // and would put a `position: fixed` overlay wherever the
+                    // content happens to end rather than over the viewport.
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .child(vn_tree::build_root(window, cx)),
+                    )
                     .child(
                         div()
                             .p(px(12.))
