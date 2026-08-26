@@ -179,10 +179,10 @@ fn ret_string(s: &str) -> u64 {
     JsRuntime::with(|rt| rt.ctx().string(s).0)
 }
 
-/// `querySelectorAll` / `matches` / `closest`, answered by the REAL cascade
-/// matcher. Returns the matched ids comma-joined, `""` for no match, or
-/// `"!<advisory>"` when the selector is one the engine cannot run — the JS side
-/// turns that into the same advisory text a rule using it would print.
+// `querySelectorAll` / `matches` / `closest`, answered by the REAL cascade
+// matcher. Returns the matched ids comma-joined, `""` for no match, or
+// `"!<advisory>"` when the selector is one the engine cannot run — the JS side
+// turns that into the same advisory text a rule using it would print.
 host_fn!(fn vn_query(g, args) {
     let selector = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let root = arg_id(args.arg(1));
@@ -198,8 +198,8 @@ host_fn!(fn vn_query(g, args) {
     ret_string(&out)
 });
 
-/// `getBoundingClientRect()` — `"x,y,w,h"`, or `""` when the node was not
-/// painted in the last frame (detached / `display: none`).
+// `getBoundingClientRect()` — `"x,y,w,h"`, or `""` when the node was not
+// painted in the last frame (detached / `display: none`).
 host_fn!(fn vn_bounds(_g, args) {
     let id = arg_id(args.arg(0));
     let out = match dom::bounds(id) {
@@ -209,7 +209,7 @@ host_fn!(fn vn_bounds(_g, args) {
     ret_string(&out)
 });
 
-/// `getComputedStyle(el)` — `name=value` lines; see [`dom::computed_style`].
+// `getComputedStyle(el)` — `name=value` lines; see `dom::computed_style`.
 host_fn!(fn vn_computed_style(_g, args) {
     let id = arg_id(args.arg(0));
     ret_string(&dom::computed_style(id).unwrap_or_default())
@@ -280,6 +280,7 @@ pub fn lotties_animating() -> bool {
 ///   page stop swallowing keystrokes after it deactivates.
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     render::apply_pending_blur(window, cx);
+    render::ensure_root_focus(window, cx);
     lottie::tick(window, cx)
 }
 

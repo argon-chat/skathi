@@ -158,6 +158,24 @@ const ElementProto =
 // node-level surface (see `NODE_MEMBERS` below).
 const TextProto = Object.create(Object.prototype);
 
+// A mirror node must never become reactive state.
+//
+// In a browser this is automatic: `Object.prototype.toString.call(divElement)`
+// is `[object HTMLDivElement]`, which Vue's `getTargetType` classifies as
+// INVALID, so `reactive(node)` hands the node straight back. Our mirrors are
+// `Object.create(HTMLElement.prototype)` and stringify as `[object Object]`, so
+// Vue would wrap each one in a Proxy — and then `set.has(node)`,
+// `array.indexOf(node)` and `a === b` all start answering NO for the same node
+// reached two different ways. reka-ui's DismissableLayer stack, its Collection
+// ordering and its focus guards are ALL identity comparisons; every one of them
+// silently breaks.
+//
+// `__v_skip` (Vue's `markRaw` flag) on the prototypes restores the browser's
+// behaviour for every node at once, at zero per-node cost.
+for (const proto of [ElementProto, TextProto]) {
+  Object.defineProperty(proto, "__v_skip", { value: true, configurable: true });
+}
+
 function mk(id, kind, tag) {
   const n = Object.create(kind === 1 ? ElementProto : TextProto);
   n.id = id;
@@ -286,12 +304,25 @@ const nodeOps = {
 // not "-enter", or every `@keydown.enter` silently stops matching.
 const hyphenate = (s) => s.replace(/\B([A-Z])/g, "-$1").toLowerCase();
 
+/// A `:style` key as CSS spells it. Custom properties are already CSS-cased and
+/// are CASE-SENSITIVE, so hyphenating `--rekaPopperWidth` would rename it.
+const styleKey = (k) => (k.startsWith("--") ? k : hyphenate(k));
+
 function patchProp(el, key, prev, next) {
   if (key === "style") {
     const p = prev || {};
     const n = next || {};
-    for (const k in p) if (!(k in n)) __vn_set_style(el.id, I(hyphenate(k)), "");
-    for (const k in n) if (p[k] !== n[k]) __vn_set_style(el.id, I(hyphenate(k)), String(n[k]));
+    for (const k in p) if (!(k in n)) __vn_set_style(el.id, I(styleKey(k)), "");
+    for (const k in n) {
+      if (p[k] === n[k]) continue;
+      // runtime-dom's `setStyle` rule: a null/undefined value CLEARS the
+      // property. Stringifying it instead writes the literal text "undefined",
+      // which makes the whole declaration block unparseable — and
+      // `:style="{ transform: maybeUndefined }"` is an extremely common shape
+      // (it is what @floating-ui/vue's `floatingStyles` produces before its
+      // first measurement).
+      __vn_set_style(el.id, I(styleKey(k)), n[k] == null ? "" : String(n[k]));
+    }
   } else if (key === "class") {
     if (prev !== next) {
       el.className = next == null ? "" : String(next);
@@ -412,21 +443,107 @@ function bucketsAlive(b) {
 /// Several event NAMES can share one host code (`pointerdown` rides
 /// `mousedown`), so the flag is the OR over every name that maps to it —
 /// switching a `pointerdown` listener off must not silence a `mousedown` one.
+/// A custom event name has no host code at all and needs no flag: it is
+/// dispatched from JS.
 function syncListenerFlag(id, name) {
   const code = hostCode(name);
   if (!code) return;
   const m = handlers.get(id);
-  const on = NAMES_BY_CODE[code].some((n) => m?.[n] && bucketsAlive(m[n]));
+  let on = NAMES_BY_CODE[code].some((n) => m?.[n] && bucketsAlive(m[n]));
+  // Document- and window-level listeners ride the APP ROOT's bit: the host
+  // delivers events to nodes, and the root is the node that stands in for the
+  // document. See `globalHandlers` below.
+  if (!on && appRoot && id === appRoot.id) {
+    on = NAMES_BY_CODE[code].some((n) =>
+      [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n])),
+    );
+  }
   __vn_set_listener(id, code, on);
+}
+
+// ---- document / window level listeners ------------------------------------
+// reka-ui's DismissableLayer (outside click, Escape), its focus guards and
+// every "click outside to close" implementation in the ecosystem bind on
+// `document` or `window`, neither of which is a node in the mirror tree. They
+// get their own registry, joined onto the SAME propagation walk one level above
+// the app root — which is exactly where a browser's event path puts them.
+//
+// Without this, a Dialog opens and never closes, and a menu stays open forever.
+const globalHandlers = new Map(); // target object -> { [event name]: buckets }
+const isMirrorNode = (n) => !!n && typeof n.id === "number" && nodesById.get(n.id) === n;
+
+function addGlobalListener(target, rawName, fn, opts) {
+  if (!fn) return false;
+  const name = canonicalEvent(rawName);
+  if (!hostCode(name)) return false;
+  let m = globalHandlers.get(target);
+  if (!m) globalHandlers.set(target, (m = {}));
+  const buckets = ensureBuckets(m, name);
+  const capture = opts === true || (opts && opts.capture);
+  (capture ? buckets.extraC : buckets.extraB).push({ fn, once: !!(opts && opts.once) });
+  if (appRoot) syncListenerFlag(appRoot.id, name);
+  return true;
+}
+
+function removeGlobalListener(target, rawName, fn, opts) {
+  const name = canonicalEvent(rawName);
+  const buckets = globalHandlers.get(target)?.[name];
+  if (!buckets) return false;
+  const capture = opts === true || (opts && opts.capture);
+  const arr = capture ? buckets.extraC : buckets.extraB;
+  const i = arr.findIndex((e) => e.fn === fn);
+  if (i >= 0) arr.splice(i, 1);
+  if (appRoot) syncListenerFlag(appRoot.id, name);
+  return true;
+}
+
+/// Installs the interception on one EventTarget-ish global. Events the host CAN
+/// deliver are taken over; everything else still reaches the engine's own
+/// EventTarget, so redjs' web APIs keep working.
+function interceptGlobalTarget(target) {
+  if (!target) return;
+  const nativeAdd = typeof target.addEventListener === "function" ? target.addEventListener.bind(target) : null;
+  const nativeRemove =
+    typeof target.removeEventListener === "function" ? target.removeEventListener.bind(target) : null;
+  try {
+    Object.defineProperty(target, "addEventListener", {
+      value: (name, fn, opts) => {
+        if (!addGlobalListener(target, name, fn, opts)) nativeAdd?.(name, fn, opts);
+      },
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(target, "removeEventListener", {
+      value: (name, fn, opts) => {
+        if (!removeGlobalListener(target, name, fn, opts)) nativeRemove?.(name, fn, opts);
+      },
+      configurable: true,
+      writable: true,
+    });
+  } catch (e) {
+    warnCompat(
+      "global-listeners",
+      "document/window event listeners could not be intercepted on this engine — a component " +
+        `that closes itself on an outside click or Escape will stay open (${e})`,
+    );
+  }
 }
 
 // EventTarget-shaped registration for reused browser components/directives
 // (vModelText uses this path). Merged into the same propagation walk.
+/// Does this name look like an event the PLATFORM sources? Those are the ones
+/// worth an advisory when the host cannot deliver them — a listener for one will
+/// simply never fire. A name with a dot or a capital in it is a component's own
+/// custom event (`"select.select"`, `"focusScope.autoFocusOnMount"` — reka-ui
+/// dispatches a dozen of them), and those work fine: they are dispatched from JS
+/// through [`dispatchEvent`] and never touch the host at all.
+const looksNative = (name) => /^[a-z]+$/.test(name);
+
 function addExtraListener(node, rawName, fn, opts) {
   if (!fn) return;
   const name = canonicalEvent(rawName);
   const code = hostCode(name);
-  if (!code) {
+  if (!code && looksNative(name)) {
     warnCompat(
       `event:${name}`,
       `addEventListener("${rawName}") — this event type is not delivered by the native host yet; ` +
@@ -510,6 +627,24 @@ const queryOne = (selector, rootId, mode = 0) => hostQuery(selector, rootId, mod
 const ZERO_RECT = {
   x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0,
 };
+
+/// The viewport, as `document.documentElement` reports it.
+///
+/// The coordinate space every rect here lives in is the WINDOW'S CLIENT AREA
+/// (that is what gpui hands each element during prepaint), and the app root is
+/// inset within it by whatever chrome the host draws. So the viewport is the
+/// rectangle from the client-area origin to the far corner of the app root —
+/// NOT the root's own box. Reporting the root's size instead would leave
+/// @floating-ui clipping against `(0,0,rootW,rootH)` while measuring elements in
+/// a space offset by the chrome, and every popover would be pushed against the
+/// left edge by the `shift` middleware.
+function viewportRect() {
+  if (!appRoot) return { ...ZERO_RECT };
+  const r = rectOf(appRoot);
+  const width = Math.round(r.x + r.width);
+  const height = Math.round(r.y + r.height);
+  return { x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height };
+}
 function rectOf(node) {
   const raw = node.id ? __vn_bounds(node.id) : "";
   // A node that was not painted (detached, `display: none`, parked in a
@@ -679,6 +814,12 @@ for (const [name, pick] of [
   });
 }
 defineDomGet("offsetParent", () => null);
+// The border widths a browser reports here. gpui's painted rectangle is the
+// BORDER box and the cascade's border widths are not published, so 0 is the
+// honest constant — @floating-ui adds these to every clipping rect, and
+// `undefined` there turns the whole computation into NaN.
+defineDomGet("clientTop", () => 0);
+defineDomGet("clientLeft", () => 0);
 defineDom("scrollIntoView", function () {
   warnCompat(
     "scrollIntoView",
@@ -833,6 +974,38 @@ defineDom("focus", function () {
   );
 });
 defineDom("blur", function () {});
+
+// -- dispatchEvent: a component's own events, through the SAME capture/bubble
+//    walk the host's events take. reka-ui builds its whole selection protocol
+//    out of this (`select.select`, `menu.itemSelect`,
+//    `dismissableLayer.pointerDownOutside`, `focusScope.autoFocusOnMount`): it
+//    adds a one-shot listener for a custom name and immediately dispatches it,
+//    so without this an option click reaches a handler that is never called.
+defineDom(
+  "dispatchEvent",
+  function (ev) {
+    if (!ev || typeof ev.type !== "string") return true;
+    return propagate(this, canonicalEvent(ev.type), ev);
+  },
+  NODE_MEMBERS,
+);
+
+// -- pointer capture. gpui captures the mouse implicitly for the duration of a
+//    press, which is what this API is FOR — so the capture itself is already
+//    the platform's behaviour and only the browser BOOKKEEPING has to exist,
+//    consistently. reka-ui's Select opens on `pointerdown` and immediately
+//    releases the capture it would otherwise hold; a missing
+//    `hasPointerCapture` is a TypeError that kills the open outright.
+defineDom("setPointerCapture", function (pointerId) {
+  (this._pointerCaptures || (this._pointerCaptures = new Set())).add(pointerId);
+});
+defineDom("hasPointerCapture", function (pointerId) {
+  return !!this._pointerCaptures?.has(pointerId);
+});
+defineDom("releasePointerCapture", function (pointerId) {
+  this._pointerCaptures?.delete(pointerId);
+});
+
 defineDom("insertAdjacentElement", function (_where, el) {
   warnCompat(
     "insertAdjacentElement",
@@ -1002,12 +1175,19 @@ function invoke(buckets, phase, ev, node, name, state) {
     }
     entry.fn.call(node, ev);
   }
-  syncListenerFlag(node.id, name);
+  if (isMirrorNode(node)) syncListenerFlag(node.id, name);
+  else if (appRoot) syncListenerFlag(appRoot.id, name);
 }
 
 function propagate(target, name, ev) {
   const path = [];
   for (let n = target; n; n = n.parentNode) path.push(n);
+  // …and above the root, the document and the window — where a browser's event
+  // path puts them, and where every dismissable-layer implementation listens.
+  if (globalHandlers.size) {
+    if (globalThis.document) path.push(globalThis.document);
+    path.push(globalThis);
+  }
   Object.defineProperty(ev, "target", { value: target, configurable: true });
   const state = { stopped: false, immediate: false };
   const origStop = ev.stopPropagation?.bind(ev);
@@ -1022,7 +1202,9 @@ function propagate(target, name, ev) {
     origStopIm?.();
   };
   const at = (node, phase) => {
-    const buckets = handlers.get(node.id)?.[name];
+    const buckets = isMirrorNode(node)
+      ? handlers.get(node.id)?.[name]
+      : globalHandlers.get(node)?.[name];
     if (buckets) invoke(buckets, phase, ev, node, name, state);
   };
   // capture: root -> target (exclusive)
@@ -1118,6 +1300,7 @@ export function createApp(rootComponent, rootProps = null) {
       globalThis.__VN_TEARDOWN__ = undefined;
       appRoot = null;
       observers.clear();
+      globalHandlers.clear();
     };
     __vn_log(`Vue ${version} app mounted (vue-native runtime)`);
     return vm;
@@ -1243,25 +1426,78 @@ defineGlobal(
   },
 );
 
-// -- ResizeObserver. gpui recomputes layout every frame and publishes no
-//    per-element resize signal, so this one really is inert — and says so the
-//    first time anything observes.
+// -- ResizeObserver, sampled from the host's real layout.
+//
+// gpui recomputes layout every frame and publishes no per-element resize
+// SIGNAL, but it does publish the resulting rectangle (`__vn_bounds`) — so the
+// observer polls its targets once per animation frame and reports the frames on
+// which a size actually changed. That is a frame of latency against a browser's
+// notification, and it costs one host call per observed element per frame while
+// anything is observed (nothing is, until something floats).
+//
+// It has to be real: @floating-ui's `autoUpdate` positions an element ONCE and
+// then waits for a ResizeObserver to tell it the element has been laid out. An
+// inert observer means every popover, tooltip, dropdown and select keeps the
+// position computed from its pre-layout 0×0 box — which is to say none of them
+// is ever placed at all.
+const resizeObservers = new Set();
+let resizePollQueued = false;
+
+function scheduleResizePoll() {
+  if (resizePollQueued) return;
+  const raf = globalThis.requestAnimationFrame;
+  if (typeof raf !== "function") return;
+  resizePollQueued = true;
+  raf(pollResizeObservers);
+}
+
+function pollResizeObservers() {
+  resizePollQueued = false;
+  let observing = false;
+  for (const ob of [...resizeObservers]) {
+    if (!ob._targets.size) continue;
+    observing = true;
+    const entries = [];
+    for (const [node, last] of ob._targets) {
+      const r = rectOf(node);
+      if (last && last.w === r.width && last.h === r.height) continue;
+      ob._targets.set(node, { w: r.width, h: r.height });
+      const box = [{ inlineSize: r.width, blockSize: r.height }];
+      entries.push({ target: node, contentRect: r, borderBoxSize: box, contentBoxSize: box, devicePixelContentBoxSize: box });
+    }
+    if (entries.length) {
+      try {
+        ob._callback(entries, ob);
+      } catch (e) {
+        console.error(`[vue-native] ResizeObserver callback threw: ${e}`);
+      }
+    }
+  }
+  if (observing) scheduleResizePoll();
+}
+
 defineGlobal(
   "ResizeObserver",
   class ResizeObserver {
     constructor(callback) {
       this._callback = callback;
+      this._targets = new Map(); // node -> last reported {w, h}
     }
-    observe() {
-      warnCompat(
-        "ResizeObserver",
-        "ResizeObserver never fires — the host publishes no per-element resize signal; anything " +
-          "that re-measures on resize (auto-sizing popovers, virtualised lists) keeps its first " +
-          "measurement",
-      );
+    observe(node) {
+      if (!node || typeof node.id !== "number") return;
+      // `null` = "no size reported yet", so the first poll always fires —
+      // which is what a browser does on `observe()` too.
+      this._targets.set(node, null);
+      resizeObservers.add(this);
+      scheduleResizePoll();
     }
-    unobserve() {}
-    disconnect() {}
+    unobserve(node) {
+      this._targets.delete(node);
+    }
+    disconnect() {
+      this._targets.clear();
+      resizeObservers.delete(this);
+    }
   },
 );
 
@@ -1341,6 +1577,11 @@ function computedStyleFor(node) {
   }
   const read = (k) => {
     const key = String(k);
+    // Framework probes, not CSS: Vue's reactivity asks every object it touches
+    // for `__v_isReadonly`/`__v_raw`, promise-detection asks for `then`. None
+    // of those are properties a stylesheet can declare, so they answer
+    // `undefined` (not `""`) and never warn.
+    if (!/^[a-zA-Z-]/.test(key) || key.startsWith("__") || key === "then") return undefined;
     const css = key.startsWith("--") ? key : hyphenate(key);
     if (css in map) return map[css];
     warnCompat(
@@ -1386,8 +1627,20 @@ if (doc) {
   const defDocGet = (name, get) => {
     if (!(name in doc)) Object.defineProperty(doc, name, { get, configurable: true });
   };
-  defDoc("querySelector", (sel) => queryOne(sel, appRoot ? appRoot.id : 0));
-  defDoc("querySelectorAll", (sel) => hostQuery(sel, appRoot ? appRoot.id : 0, 0));
+  // These three are FORCE-installed, not filled in: redjs ships its own
+  // `querySelector`/`getElementById` backed by a registry of the elements IT
+  // created, which is empty here — the retained tree is ours. Leaving the
+  // engine's in place is the difference between "finds the node" and "silently
+  // finds nothing", which is what made every `DialogContent` log a false
+  // "requires a DialogTitle" accessibility warning.
+  const forceDoc = (name, value) =>
+    Object.defineProperty(doc, name, { value, configurable: true, writable: true });
+  const rootId = () => (appRoot ? appRoot.id : 0);
+  forceDoc("querySelector", (sel) => queryOne(sel, rootId()));
+  forceDoc("querySelectorAll", (sel) => hostQuery(sel, rootId(), 0));
+  forceDoc("getElementById", (id) =>
+    queryOne(`[id=${JSON.stringify(String(id))}]`, rootId()),
+  );
   defDoc("createDocumentFragment", () => new globalThis.DocumentFragment());
   defDoc("createTreeWalker", (root, whatToShow = 0xffffffff, filter = null) => {
     // A real pre-order walker over the mirror tree — focus traps use it to
@@ -1426,6 +1679,37 @@ if (doc) {
   });
   defDocGet("defaultView", () => globalThis);
   defDocGet("activeElement", () => null);
+  // `document.addEventListener("keydown"|"pointerdown"|…)` is how every
+  // dismissable layer in the ecosystem closes itself.
+  interceptGlobalTarget(doc);
+  interceptGlobalTarget(globalThis);
+  // The window's own viewport metrics. redjs reports 0 for these; the window IS
+  // the app root here, so they are the root's painted box — and floating
+  // positioning reads them.
+  for (const [name, axis] of [
+    ["innerWidth", "width"],
+    ["innerHeight", "height"],
+    ["outerWidth", "width"],
+    ["outerHeight", "height"],
+  ]) {
+    try {
+      Object.defineProperty(globalThis, name, {
+        get: () => viewportRect()[axis],
+        configurable: true,
+      });
+    } catch {
+      /* a non-configurable engine property — leave it alone */
+    }
+  }
+  for (const name of ["scrollX", "scrollY", "pageXOffset", "pageYOffset"]) {
+    try {
+      if (typeof globalThis[name] !== "number") {
+        Object.defineProperty(globalThis, name, { value: 0, configurable: true, writable: true });
+      }
+    } catch {
+      /* ditto */
+    }
+  }
   // `document.body` / `documentElement` are plain objects in redjs, and three
   // libraries (aria-hidden, reka's scroll lock, floating-ui) reach straight for
   // `.style` / `.contains` on them. Point them at the app root once it exists,
@@ -1433,8 +1717,30 @@ if (doc) {
   for (const name of ["body", "documentElement", "head"]) {
     const el = doc[name];
     if (!el || typeof el !== "object") continue;
-    const inert = () => appRoot;
-    if (!el.style) el.style = { setProperty() {}, removeProperty() {}, getPropertyValue: () => "" };
+    // `document.body.style.pointerEvents = "none"` (reka's scroll lock) and
+    // `documentElement.style.removeProperty("--scrollbar-width")` are the two
+    // shapes that actually turn up. redjs already gives these objects a plain
+    // `style` bag with NO methods on it, so the methods are what must be filled
+    // in — a missing `removeProperty` throws inside an unmount hook and leaves
+    // the component half-torn-down.
+    //
+    // The writes are a property bag, not a style: `document.body` is not a node
+    // in the retained tree, so there is nothing to apply them to.
+    if (!el.style || typeof el.style !== "object") el.style = {};
+    const s = el.style;
+    if (typeof s.setProperty !== "function") {
+      s.setProperty = (k, v) => {
+        s[String(k)] = v == null ? "" : String(v);
+      };
+    }
+    if (typeof s.removeProperty !== "function") {
+      s.removeProperty = (k) => {
+        const prev = s[String(k)] ?? "";
+        delete s[String(k)];
+        return prev;
+      };
+    }
+    if (typeof s.getPropertyValue !== "function") s.getPropertyValue = (k) => s[String(k)] ?? "";
     if (!el.querySelector) el.querySelector = (s) => queryOne(s, appRoot ? appRoot.id : 0);
     if (!el.querySelectorAll) el.querySelectorAll = (s) => hostQuery(s, appRoot ? appRoot.id : 0, 0);
     if (!el.contains) el.contains = (n) => !!appRoot && (n === appRoot || isAncestor(appRoot, n));
@@ -1445,18 +1751,39 @@ if (doc) {
     if (!el.appendChild) el.appendChild = (n) => n;
     if (!el.removeChild) el.removeChild = (n) => n;
     if (!el.insertAdjacentElement) el.insertAdjacentElement = (_w, n) => n;
-    if (!el.getBoundingClientRect) el.getBoundingClientRect = () => (appRoot ? rectOf(appRoot) : { ...ZERO_RECT });
+    el.getBoundingClientRect = () => ({ ...viewportRect(), toJSON() { return this; } });
     if (!el.addEventListener) el.addEventListener = () => {};
     if (!el.removeEventListener) el.removeEventListener = () => {};
-    if (!("clientWidth" in el)) Object.defineProperty(el, "clientWidth", { get: () => (appRoot ? rectOf(appRoot).width : 0), configurable: true });
-    if (!("clientHeight" in el)) Object.defineProperty(el, "clientHeight", { get: () => (appRoot ? rectOf(appRoot).height : 0), configurable: true });
-    if (!("offsetHeight" in el)) Object.defineProperty(el, "offsetHeight", { get: () => (appRoot ? rectOf(appRoot).height : 0), configurable: true });
-    if (!("scrollLeft" in el)) el.scrollLeft = 0;
-    if (!("scrollTop" in el)) el.scrollTop = 0;
+    // The viewport dimensions, ALL of them. @floating-ui computes the document
+    // rect as `Math.max(html.scrollWidth, html.clientWidth, body.scrollWidth,
+    // body.clientWidth)` — one missing member makes that NaN, and the NaN then
+    // travels silently through every offset until nothing is positioned at all.
+    for (const [name, axis] of [
+      ["clientWidth", "width"],
+      ["clientHeight", "height"],
+      ["offsetWidth", "width"],
+      ["offsetHeight", "height"],
+      ["scrollWidth", "width"],
+      ["scrollHeight", "height"],
+    ]) {
+      Object.defineProperty(el, name, { get: () => viewportRect()[axis], configurable: true });
+    }
+    for (const name of ["clientTop", "clientLeft"]) {
+      Object.defineProperty(el, name, { get: () => 0, configurable: true });
+    }
+    // …and the scroll offsets under BOTH names. @floating-ui reads
+    // `element.scrollLeft` when `element instanceof Element` and
+    // `element.scrollX` when it is not — and `document.documentElement` here is
+    // a plain redjs object, not an Element, so it takes the second branch. A
+    // missing `scrollX` made every horizontal offset NaN while the vertical
+    // ones stayed correct, which is a genuinely baffling way for positioning to
+    // fail.
+    for (const name of ["scrollLeft", "scrollTop", "scrollX", "scrollY"]) {
+      if (typeof el[name] !== "number") el[name] = 0;
+    }
     if (!("children" in el)) Object.defineProperty(el, "children", { get: () => (appRoot ? appRoot.children : []), configurable: true });
     if (!("ownerDocument" in el)) Object.defineProperty(el, "ownerDocument", { get: () => doc, configurable: true });
     if (!("parentNode" in el)) Object.defineProperty(el, "parentNode", { get: () => null, configurable: true });
-    void inert;
   }
 }
 

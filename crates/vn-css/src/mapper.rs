@@ -499,10 +499,61 @@ fn length_value_px(v: &LengthValue) -> Option<f32> {
     }
 }
 
+/// `calc()` over ABSOLUTE lengths, evaluated to pixels.
+///
+/// This is the third item on the Tailwind-v4 list in
+/// `packages/vue-native/tailwind.ts`, and it is what makes shadcn's own radius
+/// scale work: `rounded-md` is `border-radius: calc(var(--radius) - 2px)`, so
+/// without it three quarters of the corner radii in the library vanish the
+/// moment the theme stops being pre-resolved.
+///
+/// Percentages are deliberately NOT evaluated: they need the containing block,
+/// which does not exist until layout. A `calc()` that mixes one in returns
+/// `None` and takes the ordinary "value is unresolved" path.
+fn calc_px<V>(calc: &lightningcss::values::calc::Calc<V>, leaf: &dyn Fn(&V) -> Option<f32>) -> Option<f32> {
+    use lightningcss::values::calc::{Calc, MathFunction};
+    match calc {
+        Calc::Value(v) => leaf(v),
+        Calc::Number(n) => Some(*n),
+        Calc::Sum(a, b) => Some(calc_px(a, leaf)? + calc_px(b, leaf)?),
+        Calc::Product(n, v) => Some(n * calc_px(v, leaf)?),
+        Calc::Function(f) => match &**f {
+            MathFunction::Calc(c) => calc_px(c, leaf),
+            MathFunction::Min(list) => list
+                .iter()
+                .map(|c| calc_px(c, leaf))
+                .try_fold(f32::INFINITY, |acc, v| Some(acc.min(v?))),
+            MathFunction::Max(list) => list
+                .iter()
+                .map(|c| calc_px(c, leaf))
+                .try_fold(f32::NEG_INFINITY, |acc, v| Some(acc.max(v?))),
+            MathFunction::Clamp(lo, v, hi) => {
+                Some(calc_px(v, leaf)?.clamp(calc_px(lo, leaf)?, calc_px(hi, leaf)?))
+            }
+            MathFunction::Abs(v) => Some(calc_px(v, leaf)?.abs()),
+            MathFunction::Sign(v) => Some(calc_px(v, leaf)?.signum()),
+            // round()/rem()/mod()/hypot() have no user in any sheet we serve;
+            // they take the "unresolved" path with the ordinary advisory.
+            _ => None,
+        },
+    }
+}
+
 fn css_length_px(l: &CssLength) -> Option<f32> {
     match l {
         CssLength::Value(v) => length_value_px(v),
-        CssLength::Calc(_) => None,
+        CssLength::Calc(c) => calc_px(c, &|v: &CssLength| css_length_px(v)),
+    }
+}
+
+/// The absolute half of a `<length-percentage>` inside a `calc()`.
+fn lp_leaf_px(lp: &LengthPercentage) -> Option<f32> {
+    match lp {
+        DimensionPercentage::Dimension(v) => length_value_px(v),
+        // A percentage needs the containing block; a calc() that mixes one in
+        // is left unresolved rather than guessed at.
+        DimensionPercentage::Percentage(_) => None,
+        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px),
     }
 }
 
@@ -510,7 +561,7 @@ fn lp_definite(lp: &LengthPercentage) -> Option<DefiniteLength> {
     match lp {
         DimensionPercentage::Dimension(v) => length_value_px(v).map(|p| px(p).into()),
         DimensionPercentage::Percentage(p) => Some(relative(p.0)),
-        DimensionPercentage::Calc(_) => None,
+        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(|p| px(p).into()),
     }
 }
 
@@ -541,7 +592,8 @@ fn max_size_length(v: &lightningcss::properties::size::MaxSize) -> Option<Length
 fn lp_absolute(lp: &LengthPercentage) -> Option<AbsoluteLength> {
     match lp {
         DimensionPercentage::Dimension(v) => length_value_px(v).map(|p| px(p).into()),
-        _ => None,
+        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(|p| px(p).into()),
+        DimensionPercentage::Percentage(_) => None,
     }
 }
 
@@ -1342,6 +1394,20 @@ fn apply_transform(
                 }
                 None => dropped.push("translateY() with a calc() length"),
             },
+            // `translate3d(x, y, 0)` is what @floating-ui writes for EVERY
+            // positioned element (it opts into GPU compositing); the Z axis is
+            // always 0 there, and a non-zero one has nothing to mean without a
+            // perspective transform.
+            T::Translate3d(a, b, z) => match (len(a), len(b)) {
+                (Some(a), Some(b)) => {
+                    (tx, ty) = (a, b);
+                    moved = true;
+                    if !matches!(css_length_px(z), Some(0.0)) {
+                        dropped.push("the Z axis of a 3D translate");
+                    }
+                }
+                _ => dropped.push("translate3d() with a calc() length"),
+            },
             // Identity components (what Tailwind's transform stack is made of
             // when only a translate utility is applied) are genuinely nothing.
             T::Rotate(a) | T::RotateZ(a) | T::RotateX(a) | T::RotateY(a) if a.to_degrees() == 0.0 => {}
@@ -1358,7 +1424,7 @@ fn apply_transform(
             T::Skew(..) | T::SkewX(_) | T::SkewY(_) => dropped.push("skew()"),
             T::Matrix(_) | T::Matrix3d(_) => dropped.push("matrix()"),
             T::Perspective(_) => dropped.push("perspective()"),
-            T::TranslateZ(_) | T::Translate3d(..) => dropped.push("the Z axis of a 3D translate"),
+            T::TranslateZ(_) => dropped.push("the Z axis of a 3D translate"),
         }
     }
     if moved {
@@ -1781,6 +1847,40 @@ mod tests {
         let (r, d) = map("background-color: currentColor");
         assert_eq!(r.background, None);
         assert!(d.iter().any(|m| m.contains("background-color")), "{d:?}");
+    }
+
+    // ---- calc() over absolute lengths ------------------------------------
+
+    #[test]
+    fn calc_sums_and_products_resolve_to_pixels() {
+        // shadcn's own radius scale, once `--radius` resolves: `rounded-md` is
+        // `calc(var(--radius) - 2px)`.
+        assert_eq!(
+            clean("border-radius: calc(0.5rem - 2px)").corner_radii.top_left,
+            Some(px(6.0).into())
+        );
+        assert_eq!(clean("padding-top: calc(1rem + 4px)").padding.top, Some(px(20.0).into()));
+        assert_eq!(clean("width: calc(2 * 8px)").size.width, Some(Length::Definite(px(16.0).into())));
+        assert_eq!(
+            clean("border-top-width: calc(4px + 1px)").border_widths.top,
+            Some(px(5.0).into())
+        );
+        assert_eq!(
+            clean("width: min(100px, 40px)").size.width,
+            Some(Length::Definite(px(40.0).into()))
+        );
+        assert_eq!(
+            clean("width: clamp(10px, 4px, 100px)").size.width,
+            Some(Length::Definite(px(10.0).into()))
+        );
+    }
+
+    /// A percentage inside a `calc()` needs the containing block, which does not
+    /// exist before layout — so it stays unresolved rather than being guessed.
+    #[test]
+    fn a_percentage_inside_calc_is_not_guessed_at() {
+        let (r, _) = map("width: calc(100% - 8px)");
+        assert_eq!(r.size.width, None);
     }
 
     // ---- positioning (compat roadmap G3) ---------------------------------

@@ -327,12 +327,21 @@ pub(crate) fn resolve(
         .into_iter()
         .filter_map(|(k, v)| match v {
             Slot::Done(value) => Some((k.into_boxed_str(), value.into_boxed_str())),
-            // `Busy`/`Raw` can only survive a panic path; drop them rather than
-            // publish a half-resolved value.
+            // `Busy` is a name left mid-cycle; `Raw` cannot survive the loop
+            // above. Both are invalid at computed-value time, i.e. unset.
             _ => None,
         })
         .collect();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
+    // Tailwind's universal-defaults block declares the whole `--tw-*` family on
+    // EVERY element (`*, ::before, ::after { --tw-shadow: 0 0 #0000; … }`), so
+    // most elements "declare" custom properties whose resolved values are
+    // identical to their parent's. Sharing the parent's `Rc` in that case keeps
+    // the `ComputedStates` change test at pointer-compare speed for the whole
+    // tree instead of turning it into a 20-entry string compare per node.
+    if entries == parent.entries {
+        return parent.clone();
+    }
     Rc::new(Vars { entries })
 }
 

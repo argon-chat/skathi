@@ -206,6 +206,119 @@ describe("classList and the transition-class merge", () => {
   });
 });
 
+describe("mirror nodes are not reactive state", () => {
+  test("a node carries Vue's markRaw flag, as a real DOM node effectively does", () => {
+    // In a browser `reactive(divElement)` hands the element straight back —
+    // `Object.prototype.toString.call(div)` is `[object HTMLDivElement]`, which
+    // Vue classifies as an INVALID reactive target. Our mirrors stringify as
+    // `[object Object]`, so without the flag Vue proxies them and every
+    // identity comparison (`set.has(node)`, `array.indexOf(node)`) starts
+    // answering NO for the same node reached two ways — which is exactly what
+    // reka-ui's layer stack, Collection ordering and focus guards are built on.
+    const rt = createRuntime();
+    const { button, text } = tree(rt);
+    expect(button.__v_skip).toBe(true);
+    expect(text.__v_skip).toBe(true);
+  });
+});
+
+describe("custom events and dispatchEvent", () => {
+  test("a component's own event round-trips through the normal propagation walk", () => {
+    // reka-ui's whole selection protocol is this: add a one-shot listener for a
+    // custom name, then dispatch it on the same node.
+    const rt = createRuntime();
+    const { section: outer, button: inner } = tree(rt);
+    const seen = [];
+    inner.addEventListener("select.select", (e) => seen.push(`at-target:${e.type}`), { once: true });
+    outer.addEventListener("select.select", () => seen.push("bubbled"));
+
+    const ok = inner.dispatchEvent(new CustomEvent("select.select", { bubbles: true, cancelable: true }));
+    expect(seen).toEqual(["at-target:select.select", "bubbled"]);
+    expect(ok).toBe(true);
+    // `once` really was once.
+    inner.dispatchEvent(new CustomEvent("select.select", { bubbles: true }));
+    expect(seen.filter((s) => s.startsWith("at-target")).length).toBe(1);
+  });
+
+  test("a custom event registers NO host listener and produces no advisory", () => {
+    const rt = createRuntime();
+    const { button: inner } = tree(rt);
+    inner.addEventListener("focusScope.autoFocusOnMount", () => {});
+    expect(rt.host.listeners).toEqual([]);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("…but a PLATFORM event the host cannot deliver still says so", () => {
+    const rt = createRuntime();
+    const { button: inner } = tree(rt);
+    inner.addEventListener("animationend", () => {});
+    expect(rt.advisories().length).toBe(1);
+    expect(rt.advisories()[0]).toContain("animationend");
+  });
+
+  test("preventDefault on a dispatched event is reported to the dispatcher", () => {
+    const rt = createRuntime();
+    const { button: inner } = tree(rt);
+    inner.addEventListener("menu.itemSelect", (e) => e.preventDefault());
+    const ok = inner.dispatchEvent(new CustomEvent("menu.itemSelect", { bubbles: true, cancelable: true }));
+    expect(ok).toBe(false);
+  });
+});
+
+describe("document- and window-level listeners", () => {
+  test("a document listener rides the app root's host listener bit", () => {
+    const rt = createRuntime();
+    const app = rt.createApp({ render: () => null });
+    app.mount();
+    rt.host.listeners.length = 0;
+
+    rt.global.document.addEventListener("keydown", () => {});
+    // The root is the node that stands in for `document`, so its bit is what
+    // gets set — nothing else in the tree listens for keydown.
+    expect(rt.host.listeners.at(-1)).toMatchObject({ code: rt.EV_CODES.keydown, on: true });
+  });
+
+  test("an event dispatched at a node reaches document and window listeners after it", () => {
+    const rt = createRuntime();
+    const app = rt.createApp({ render: () => null });
+    app.mount();
+    const node = rt.nodeOps.createElement("div");
+    rt.nodeOps.insert(node, rt.nodesById.get(rt.host.listeners[0]?.id ?? 1) ?? node, null);
+
+    const order = [];
+    node.addEventListener("keydown", () => order.push("node"));
+    rt.global.document.addEventListener("keydown", () => order.push("document"));
+    globalThis.addEventListener?.call?.(globalThis, "keydown", () => {});
+
+    rt.host.dispatcher(node.id, rt.EV_CODES.keydown, 0, 0, 0, 0, "Escape");
+    expect(order).toEqual(["node", "document"]);
+  });
+});
+
+describe("ResizeObserver samples the host's layout", () => {
+  test("it fires once for the first size and again only when the size changes", async () => {
+    const rt = createRuntime();
+    const { button } = tree(rt);
+    rt.host.boundsById.set(button.id, "0,0,100,40");
+    const seen = [];
+    const ob = new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.width)));
+    ob.observe(button);
+
+    const frame = () => new Promise((r) => setTimeout(r, 4));
+    await frame();
+    expect(seen).toEqual([[100]]);
+    // No change -> no callback.
+    await frame();
+    expect(seen).toEqual([[100]]);
+    // A real change -> exactly one more.
+    rt.host.boundsById.set(button.id, "0,0,250,40");
+    await frame();
+    await frame();
+    expect(seen).toEqual([[100], [250]]);
+    ob.disconnect();
+  });
+});
+
 describe("missing globals (G5)", () => {
   test("MutationObserver sees real childList and attribute mutations, batched on a microtask", async () => {
     const rt = createRuntime();

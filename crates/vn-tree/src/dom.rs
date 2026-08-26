@@ -103,14 +103,30 @@ fn ancestors_from(t: &Tree, id: u32) -> Vec<u32> {
     out
 }
 
-/// `getBoundingClientRect()` — `(x, y, width, height)` in CSS px, relative to
-/// the window's client area, from the last frame the node was painted in.
+/// `getBoundingClientRect()` — `(x, y, width, height)` in CSS px, from the last
+/// frame the node was painted in, relative to **the app root**.
+///
+/// The app root is JS's viewport: it is the box `position: fixed` resolves
+/// against (see the mapper), it is what `document.documentElement` reports, and
+/// it is where a `<Teleport to="body">` lands. Reporting window-client
+/// coordinates instead would leave @floating-ui measuring elements in one space
+/// and clipping them against another, offset by whatever chrome the host draws
+/// around the root — and every popover pinned to the left edge by the `shift`
+/// middleware, which is exactly how that failure looks.
+///
+/// (Devtools keeps the WINDOW-relative numbers — see [`crate::render::bounds_of`]
+/// — because a screenshot is a window, not a root. The two differ by the root's
+/// origin and nothing else.)
 ///
 /// `None` = never painted this frame: detached, `display: none`, or parked in a
 /// `<KeepAlive>` cache container. A browser answers an all-zero rect for all
 /// three, which is what the JS side substitutes.
 pub fn bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
-    crate::render::bounds_of(id)
+    let (x, y, w, h) = crate::render::bounds_of(id)?;
+    let (ox, oy) = crate::render::bounds_of(tree::read_tree(|t| t.root))
+        .map(|(rx, ry, _, _)| (rx, ry))
+        .unwrap_or((0.0, 0.0));
+    Some((x - ox, y - oy, w, h))
 }
 
 /// `getComputedStyle(el)` — the useful subset, as `name=value` lines.

@@ -283,6 +283,32 @@ fn reaches_root(t: &Tree, id: u32) -> bool {
 /// the `Some → None` edge it watches for is not guaranteed to happen. Clearing
 /// `FOCUSED_NODE` first keeps the two paths from both firing: `focus_transition`
 /// returns early when the focus is already where it is being moved to.
+/// Keeps SOMETHING focused, so keystrokes have a dispatch path to travel.
+///
+/// A browser's document always has a focus target: with nothing else focused,
+/// `document.body` has it, and that is why a `keydown` listener on `document`
+/// fires for every keystroke. gpui has no such default — with nothing focused,
+/// a key event's dispatch path is the window's root node alone and NO element
+/// listener runs. So the app root (which is vue-native's `document`) takes focus
+/// whenever nothing else has it.
+///
+/// Anything the app focuses for real — an `<input>`, a `tabindex`ed node — takes
+/// over immediately and stays, because the root is its ANCESTOR in the dispatch
+/// tree and so keeps receiving the keystrokes anyway.
+pub(crate) fn ensure_root_focus(window: &mut Window, cx: &mut App) {
+    if window.focused(cx).is_some() {
+        return;
+    }
+    let root = tree::read_tree(|t| t.root);
+    if root == 0 {
+        return;
+    }
+    let Some(handle) = FOCUS_HANDLES.with(|m| m.borrow().get(&root).cloned()) else {
+        return;
+    };
+    window.focus(&handle, cx);
+}
+
 pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
     let pending = PENDING_BLUR.with(|p| p.replace(0));
     // Re-check: focus may legitimately have moved on since the mutation (the
@@ -505,6 +531,21 @@ fn build_node<V: 'static>(
         Kind::Text if node.text.is_empty() => Empty.into_any_element(),
         Kind::Text => SharedString::from(node.text.clone()).into_any_element(),
         Kind::Anchor => Empty.into_any_element(),
+        // Metadata content renders NOTHING in a browser — it is not a box, it
+        // is instructions. reka-ui injects a `<style>` element at runtime to
+        // hide a scroll container's scrollbars, and painting its source as text
+        // put a paragraph of CSS at the top of the page.
+        Kind::Element if is_metadata(t.name(node.tag)) => {
+            if t.name(node.tag) == "style" {
+                warn_compat(
+                    "runtime-style-element",
+                    "a <style> element in the tree renders nothing (as in a browser) but its CSS \
+                     is NOT installed either — vue-native's stylesheet is set once per build from \
+                     the SFC <style> blocks, so a stylesheet injected at runtime has no effect",
+                );
+            }
+            Empty.into_any_element()
+        }
         Kind::Element if t.name(node.tag) == "img" => stack(
             &extras_of(node),
             probe(id, build_img(t, id, node, window, cx, now)),
@@ -520,6 +561,31 @@ fn build_node<V: 'static>(
             let mut scrolls = false;
             if let Some(cs) = &node.computed {
                 d = apply_computed_style(d, cs, id, now);
+            }
+            // "The window IS the root" (see `createApp().mount()`): the root
+            // element is vue-native's viewport, so it fills the box the host
+            // gives it unless a rule says otherwise. Without this it sizes to
+            // its CONTENT, and then `height: 100%` on its child resolves
+            // against an indefinite parent — which is to say `overflow: auto`
+            // never scrolls and `position: fixed` (laid out against the root)
+            // lands wherever the content happens to end.
+            if id == t.root {
+                let style = d.style();
+                let full = gpui::Length::Definite(gpui::relative(1.0));
+                style.size.width.get_or_insert(full);
+                style.size.height.get_or_insert(full);
+                // …and it is also the node that stands in for `document`. gpui
+                // dispatches a keystroke down the FOCUS path, so a listener on
+                // an element that is not on that path never fires — which would
+                // make every `document.addEventListener("keydown")` inert, and
+                // with it every Escape-to-dismiss in the ecosystem. Tracking a
+                // focus handle here puts the root on the path;
+                // [`ensure_root_focus`] is what keeps something on it when the
+                // app has focused nothing of its own (the browser's "the body
+                // has focus by default").
+                d = d.track_focus(&focus_handle_for(id, None, cx));
+            }
+            if let Some(cs) = &node.computed {
                 // `overflow: scroll|auto` on either axis. The style itself is
                 // all gpui's layout/clipping needs (it came in through the
                 // wholesale assignment above, so calling `.overflow_y_scroll()`
@@ -653,6 +719,12 @@ fn build_node<V: 'static>(
             }
         })),
     }
+}
+
+/// HTML metadata content: elements that carry instructions, not a box. A
+/// browser gives all of these `display: none` from its UA stylesheet.
+fn is_metadata(tag: &str) -> bool {
+    matches!(tag, "style" | "script" | "template" | "head" | "meta" | "link" | "title" | "base")
 }
 
 /// The computed [`vn_css::Extras`] of a node (the default before the first
