@@ -325,6 +325,57 @@ mod tests {
         assert_eq!(opacity_of(child), Some(1.0));
     }
 
+    /// Custom properties inherit through the REAL tree, which is what obliges
+    /// the restyle pass to walk in document order rather than by node id.
+    #[test]
+    fn custom_properties_inherit_through_the_real_tree() {
+        let (mid, leaf) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let mid = t.create_element(div);
+            let leaf = t.create_element(div);
+            // Deliberately inserted CHILD-FIRST so the id order and the document
+            // order disagree — the pass must follow the tree, not the slab.
+            t.insert(leaf, mid, 0);
+            t.insert(mid, root, 0);
+            t.set_class(mid, "page");
+            t.set_class(leaf, "leaf");
+            (mid, leaf)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ":root { --v: 0.2 } .page { --v: 0.8 } .leaf { opacity: var(--v) }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(leaf), Some(0.8));
+
+        // Removing the override falls back to the root's value — i.e. the child
+        // really re-reads its ancestors rather than caching a literal.
+        tree::with_tree(|t| t.set_class(mid, "other"));
+        flush_changes();
+        assert_eq!(opacity_of(leaf), Some(0.2));
+    }
+
+    /// `element.style.setProperty("--x", …)` — reka-ui's `--reka-popper-*`
+    /// channel — reaches the map and the subtree that reads it.
+    #[test]
+    fn an_inline_custom_property_reaches_the_subtree() {
+        let leaf = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let host = t.create_element(div);
+            let leaf = t.create_element(div);
+            t.insert(host, root, 0);
+            t.insert(leaf, host, 0);
+            t.set_class(leaf, "leaf");
+            let key = t.intern("--v");
+            t.set_style(host, key, "0.35".into());
+            leaf
+        });
+        tree::set_engine(vn_css::Engine::compile(".leaf { opacity: var(--v, 1) }"));
+        tree::restyle_all();
+        assert_eq!(opacity_of(leaf), Some(0.35));
+    }
+
     /// `@media` conditions read the published env, and moving it re-cascades.
     #[test]
     fn media_conditions_follow_the_published_env() {

@@ -16,13 +16,20 @@ use lightningcss::properties::font::{AbsoluteFontWeight, FontFamily as CssFontFa
 use lightningcss::properties::overflow::OverflowKeyword;
 use lightningcss::properties::size::Size as CssSize;
 use lightningcss::properties::text::TextAlign as CssTextAlign;
-use lightningcss::properties::Property;
-use lightningcss::stylesheet::ParserOptions;
+use lightningcss::properties::{Property, PropertyId};
+use lightningcss::stylesheet::{ParserOptions, PrinterOptions};
 use lightningcss::values::color::CssColor;
 use lightningcss::values::length::{Length as CssLength, LengthPercentage, LengthPercentageOrAuto, LengthValue};
 use lightningcss::values::percentage::DimensionPercentage;
 
 use crate::transition::{Collector, TransitionSpec};
+use crate::vars::{self, Vars};
+
+/// `(name, raw value text)` pairs — the transport for both channels that cannot
+/// be mapped at sheet-compile time: `--x` declarations (which fold into the
+/// element's [`Vars`] map) and known properties whose value referenced `var()`
+/// (which are substituted and re-parsed per element).
+pub type Decls = Vec<(String, String)>;
 
 /// CSS `object-fit`, the sizing rule for a REPLACED element's content box.
 ///
@@ -80,47 +87,219 @@ pub(crate) struct Converted {
     pub important_transitions: Option<Rc<Vec<TransitionSpec>>>,
     pub normal_extras: Extras,
     pub important_extras: Extras,
+    /// `--x` declarations, in source order (`None` = the half declared none).
+    pub normal_custom: Option<Rc<Decls>>,
+    pub important_custom: Option<Rc<Decls>>,
+    /// Known properties whose value referenced `var()`.
+    pub normal_dynamic: Option<Rc<Decls>>,
+    pub important_dynamic: Option<Rc<Decls>>,
+}
+
+/// One converted declaration half.
+#[derive(Default)]
+struct Half {
+    refinement: Option<Rc<StyleRefinement>>,
+    transitions: Option<Rc<Vec<TransitionSpec>>>,
+    extras: Extras,
+    custom: Option<Rc<Decls>>,
+    dynamic: Option<Rc<Decls>>,
+}
+
+/// Which channel a declaration travels on.
+enum Channel {
+    /// `--x: …` — folds into the element's custom-property map instead of into
+    /// a refinement. (`--shading` is the one exception; see [`effect`].)
+    Custom(String, String),
+    /// A known property whose value referenced `var()`. lightningcss hands
+    /// these back as `Property::Unparsed`; they are substituted and re-parsed
+    /// per element, because the value depends on where the element sits.
+    Dynamic(String, String),
+    /// Everything else — mapped once, here.
+    Static,
+}
+
+/// The raw value text of a declaration, recovered by printing it back out.
+/// `Property`'s own `ToCss` writes `name: value`, and a property name can never
+/// contain `:`, so the split is exact.
+fn value_text(p: &Property) -> Option<String> {
+    let css = p.to_css_string(false, PrinterOptions::default()).ok()?;
+    let (_, value) = css.split_once(':')?;
+    Some(value.trim().to_string())
+}
+
+fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
+    use lightningcss::properties::custom::CustomPropertyName;
+    match p {
+        Property::Custom(c) => match &c.name {
+            // `--shading` is a REAL mapped property that merely happens to be
+            // spelled as a custom property (a GPU effect has no web equivalent,
+            // so it needs a spelling a browser parses, stores and ignores). It
+            // therefore keeps travelling on the static channel.
+            CustomPropertyName::Custom(name) if name.0.as_ref() == effect::SHADING => Channel::Static,
+            CustomPropertyName::Custom(name) => match value_text(p) {
+                Some(v) => Channel::Custom(name.0.as_ref().to_string(), v),
+                None => {
+                    once(
+                        diagnostics,
+                        format!(
+                            "`{}` could not be serialized back to text and was dropped (v1)",
+                            name.0.as_ref()
+                        ),
+                    );
+                    Channel::Static
+                }
+            },
+            // An unknown/vendor-prefixed property (`-webkit-line-clamp`), or a
+            // real CSS property lightningcss has no typed representation for
+            // (`object-fit`). Both are handled by `apply`.
+            CustomPropertyName::Unknown(_) => Channel::Static,
+        },
+        Property::Unparsed(u) => match value_text(p) {
+            Some(v) => Channel::Dynamic(u.property_id.name().to_string(), v),
+            None => Channel::Static,
+        },
+        _ => Channel::Static,
+    }
 }
 
 /// Converts a declaration block into (normal, important) refinements plus the
-/// transitions each half declares.
+/// transitions, custom properties and `var()`-composed declarations each half
+/// declares.
 pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<String>) -> Converted {
-    type Half = (
-        Option<Rc<StyleRefinement>>,
-        Option<Rc<Vec<TransitionSpec>>>,
-        Extras,
-    );
     let mut convert = |props: &[Property]| -> Half {
         if props.is_empty() {
-            return (None, None, Extras::default());
+            return Half::default();
         }
         let mut r = StyleRefinement::default();
         let mut extras = Extras::default();
         let mut transitions = Collector::default();
+        let mut custom: Decls = Vec::new();
+        let mut dynamic: Decls = Vec::new();
         let mut styled = false;
         for p in props {
-            if transitions.take(p, diagnostics) {
-                continue;
+            match channel(p, diagnostics) {
+                Channel::Custom(name, value) => custom.push((name, value)),
+                Channel::Dynamic(name, value) => dynamic.push((name, value)),
+                Channel::Static => {
+                    if transitions.take(p, diagnostics) {
+                        continue;
+                    }
+                    // Within one block the mapped declarations are folded now
+                    // and the `var()`-composed ones per element afterwards, so
+                    // a block that declares the SAME property both ways loses
+                    // the source order between them. Rare enough to be worth
+                    // saying rather than modelling.
+                    let id = p.property_id();
+                    if dynamic.iter().any(|(n, _)| *n == id.name()) {
+                        once(
+                            diagnostics,
+                            format!(
+                                "`{}` is declared twice in one rule, once through var() and once \
+                                 literally — the literal one wins regardless of source order (v1)",
+                                id.name()
+                            ),
+                        );
+                    }
+                    apply(p, &mut r, &mut extras, diagnostics);
+                    styled = true;
+                }
             }
-            apply(p, &mut r, &mut extras, diagnostics);
-            styled = true;
         }
-        (
-            styled.then(|| Rc::new(r)),
-            transitions.finish().map(Rc::new),
+        Half {
+            refinement: styled.then(|| Rc::new(r)),
+            transitions: transitions.finish().map(Rc::new),
             extras,
-        )
+            custom: (!custom.is_empty()).then(|| Rc::new(custom)),
+            dynamic: (!dynamic.is_empty()).then(|| Rc::new(dynamic)),
+        }
     };
-    let (normal, normal_transitions, normal_extras) = convert(&block.declarations);
-    let (important, important_transitions, important_extras) = convert(&block.important_declarations);
+    let normal = convert(&block.declarations);
+    let important = convert(&block.important_declarations);
     Converted {
-        normal,
-        important,
-        normal_transitions,
-        important_transitions,
-        normal_extras,
-        important_extras,
+        normal: normal.refinement,
+        important: important.refinement,
+        normal_transitions: normal.transitions,
+        important_transitions: important.transitions,
+        normal_extras: normal.extras,
+        important_extras: important.extras,
+        normal_custom: normal.custom,
+        important_custom: important.custom,
+        normal_dynamic: normal.dynamic,
+        important_dynamic: important.dynamic,
     }
+}
+
+// ---------------------------------------------------------------------------
+// computed-value time: var() substitution + re-parse
+// ---------------------------------------------------------------------------
+
+/// Applies one `var()`-composed declaration against an element's resolved
+/// custom-property map: substitute the text, re-parse it through lightningcss
+/// with the ORIGINAL property id, then hand the typed property to the ordinary
+/// mapper. Every property the mapper already supports therefore supports
+/// `var()` with no per-property code.
+///
+/// Three failure modes, each with its own advisory and none of them silent:
+/// * the substitution itself is invalid (missing variable with no fallback,
+///   a reference cycle) — the declaration is dropped, exactly as CSS says;
+/// * the substituted text does not parse as that property — also dropped, and
+///   also what a browser does;
+/// * the property parses but vn-css does not map it — the ordinary
+///   "property not mapped" advisory, from `apply`.
+pub(crate) fn apply_dynamic(
+    name: &str,
+    raw: &str,
+    vars: &Vars,
+    r: &mut StyleRefinement,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
+    let value = match vars::substitute_with(raw, vars) {
+        Ok(v) => v,
+        Err(e) => {
+            once(
+                diagnostics,
+                format!(
+                    "`{name}: {raw}` is invalid at computed-value time — {} (the declaration was \
+                     dropped, as it would be in a browser)",
+                    e.describe()
+                ),
+            );
+            return;
+        }
+    };
+    let property = match Property::parse_string(PropertyId::from(name), &value, ParserOptions::default())
+    {
+        Ok(p) => p,
+        Err(_) => {
+            once(
+                diagnostics,
+                format!("`{name}: {value}` did not parse after var() substitution (v1)"),
+            );
+            return;
+        }
+    };
+    // A `transition` is folded into its own list at sheet-compile time and the
+    // list is per rule, not per element — so a var()-composed one has nowhere
+    // to land. Say so instead of applying it as an unmapped property.
+    if matches!(
+        property,
+        Property::Transition(..)
+            | Property::TransitionProperty(..)
+            | Property::TransitionDuration(..)
+            | Property::TransitionDelay(..)
+            | Property::TransitionTimingFunction(..)
+    ) {
+        once(
+            diagnostics,
+            format!(
+                "`{name}` composed with var() is not honoured (v1) — the transition list is folded \
+                 once per rule, not per element; declare the transition literally"
+            ),
+        );
+        return;
+    }
+    apply(&property, r, x, diagnostics);
 }
 
 /// Parses an inline `style` body ("color: red; padding: 4px") into a
@@ -158,21 +337,77 @@ pub fn parse_inline_full(
     body: &str,
     diagnostics: &mut Vec<String>,
 ) -> (StyleRefinement, Vec<TransitionSpec>, Extras) {
+    let inline = parse_inline_style(body, diagnostics);
+    (
+        inline.refinement.map(|r| (*r).clone()).unwrap_or_default(),
+        inline.transitions.map(|t| (*t).clone()).unwrap_or_default(),
+        inline.extras,
+    )
+}
+
+/// Everything an inline `style` body contributes to the cascade.
+///
+/// The custom-property and `var()` halves cannot be folded here the way the
+/// mapped declarations are: both depend on where the element sits in the tree,
+/// so they ride along as text and are resolved by [`Engine::compute_node`]
+/// (crate::Engine) exactly like a rule's are.
+#[derive(Clone, Debug, Default)]
+pub struct InlineStyle {
+    pub refinement: Option<Rc<StyleRefinement>>,
+    /// `None` = the body declared no `transition` at all (which is what lets a
+    /// matched rule's list survive); `Some([])` is `transition: none`.
+    pub transitions: Option<Rc<Vec<TransitionSpec>>>,
+    pub extras: Extras,
+    /// `--x` declarations. This is the channel `element.style.setProperty("--x")`
+    /// lands on — reka-ui writes its `--reka-popper-*` sizing vars that way.
+    pub custom: Decls,
+    /// Known properties whose value referenced `var()`.
+    pub dynamic: Decls,
+}
+
+impl InlineStyle {
+    pub fn is_empty(&self) -> bool {
+        self.refinement.is_none()
+            && self.transitions.is_none()
+            && self.extras == Extras::default()
+            && self.custom.is_empty()
+            && self.dynamic.is_empty()
+    }
+}
+
+/// Parses an inline `style` body into everything it contributes.
+pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineStyle {
     let mut r = StyleRefinement::default();
     let mut extras = Extras::default();
     let mut transitions = Collector::default();
+    let mut custom: Decls = Vec::new();
+    let mut dynamic: Decls = Vec::new();
+    let mut styled = false;
     match DeclarationBlock::parse_string(body, ParserOptions::default()) {
         Ok(block) => {
             for p in block.declarations.iter().chain(block.important_declarations.iter()) {
-                if transitions.take(p, diagnostics) {
-                    continue;
+                match channel(p, diagnostics) {
+                    Channel::Custom(name, value) => custom.push((name, value)),
+                    Channel::Dynamic(name, value) => dynamic.push((name, value)),
+                    Channel::Static => {
+                        if transitions.take(p, diagnostics) {
+                            continue;
+                        }
+                        apply(p, &mut r, &mut extras, diagnostics);
+                        styled = true;
+                    }
                 }
-                apply(p, &mut r, &mut extras, diagnostics);
             }
         }
         Err(e) => diagnostics.push(format!("inline style parse error: {e} in {body:?}")),
     }
-    (r, transitions.finish().unwrap_or_default(), extras)
+    InlineStyle {
+        refinement: styled.then(|| Rc::new(r)),
+        transitions: transitions.finish().map(Rc::new),
+        extras,
+        custom,
+        dynamic,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -337,9 +572,6 @@ fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
     );
 }
 
-/// The single advisory every `--*` declaration folds into.
-const CUSTOM_PROPS: &str = "custom properties are stored nowhere yet (v1) — var()-composed \
-                            utilities like shadows/transforms/rings degrade";
 
 // `--shading`, the one custom property that IS mapped. Declared here rather
 // than in lib.rs so the whole effect surface — the module, its interception in
@@ -832,16 +1064,13 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         // implements (gpui `BackdropBlurRect`, D3D11 Dual-Kawase pyramid).
         // Everything else in the list is advised rather than silently dropped.
         BackdropFilter(list, _) => apply_backdrop_filter(list, r, diagnostics),
-        // `--tw-shadow`, `--tw-translate-x`, … A generated sheet declares these
-        // by the hundred, so EVERY `--*` folds into one advisory: the story is
-        // identical for all of them and the per-name list is pure noise.
         Custom(c) => match &c.name {
             // `--shading` is the ONE custom property vue-native interprets: a
             // GPU effect has no web equivalent, so it needs a spelling a
             // browser parses, stores and ignores rather than one a browser
-            // DROPS. Intercepted here, ahead of the fold-everything advisory,
-            // because it is a real mapped property that merely happens to be
-            // spelled as a custom property. Everything about it — grammar,
+            // DROPS. It is a real mapped property that merely happens to be
+            // spelled as a custom property, so `channel()` keeps it on the
+            // static channel and it lands here. Everything about it — grammar,
             // schemas, advisories, the inheritance divergence — lives in
             // `crate::effect`.
             lightningcss::properties::custom::CustomPropertyName::Custom(name)
@@ -851,9 +1080,9 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     r.vn_effect = Some(spec);
                 }
             }
-            lightningcss::properties::custom::CustomPropertyName::Custom(_) => {
-                once(diagnostics, CUSTOM_PROPS.to_string());
-            }
+            // Every other `--x` travels the custom-property channel (see
+            // `channel`) and never reaches the mapper.
+            lightningcss::properties::custom::CustomPropertyName::Custom(_) => {}
             // Not a custom property at all — an unknown/vendor-prefixed one
             // (`-webkit-line-clamp`), which is a real "we do not map this".
             //
@@ -874,15 +1103,16 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 );
             }
         },
-        // A KNOWN property whose value did not parse into a typed value —
-        // almost always `var()`-composed (`box-shadow: var(--tw-shadow)`).
-        // One advisory per property name: which property degraded is the
-        // useful half, how many rules did it is not.
+        // A KNOWN property whose value did not parse into a typed value. These
+        // are `var()`-composed and travel the dynamic channel, so reaching the
+        // mapper means the value was STILL unparsed after substitution — an
+        // unbalanced `var(` or a token stream that is not valid for the
+        // property. Kept as a defensive advisory rather than silence.
         Unparsed(u) => {
             once(
                 diagnostics,
                 format!(
-                    "`{}` value is unresolved (v1) — {CUSTOM_PROPS}",
+                    "`{}` value is still unresolved after var() substitution (v1)",
                     u.property_id.name()
                 ),
             );
@@ -1218,25 +1448,73 @@ mod tests {
 
     // ---- diagnostics are ONE-SHOT ----------------------------------------
 
+    /// Custom properties are STORED, not advised about: they leave the mapper
+    /// on their own channel and land in the element's [`Vars`] map.
     #[test]
-    fn every_custom_property_folds_into_one_advisory() {
-        let (_, d) = map(
-            "--tw-shadow: 0 0 #0000; --tw-ring-color: red; --tw-translate-x: 0; \
-             --tw-scale-x: 1; --whatever: 3",
+    fn custom_properties_travel_their_own_channel() {
+        let mut d = Vec::new();
+        let inline = parse_inline_style(
+            "--tw-shadow: 0 0 #0000; --tw-ring-color: red; --whatever: 3; color: blue",
+            &mut d,
         );
-        assert_eq!(d.len(), 1, "{d:?}");
-        assert!(
-            d[0].contains("custom properties are stored nowhere yet"),
-            "{d:?}"
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(
+            inline.custom,
+            vec![
+                ("--tw-shadow".to_string(), "0 0 #0000".to_string()),
+                ("--tw-ring-color".to_string(), "red".to_string()),
+                ("--whatever".to_string(), "3".to_string()),
+            ]
+        );
+        // …and the mapped declaration in the same body is unaffected.
+        assert!(inline.refinement.is_some_and(|r| r.text.color.is_some()));
+    }
+
+    /// A `var()`-composed value is deferred, not dropped: it rides the dynamic
+    /// channel as text and is substituted per element.
+    #[test]
+    fn a_var_composed_value_is_deferred_to_computed_value_time() {
+        let mut d = Vec::new();
+        let inline = parse_inline_style("box-shadow: var(--tw-shadow)", &mut d);
+        assert!(d.is_empty(), "{d:?}");
+        assert!(inline.refinement.is_none());
+        assert_eq!(
+            inline.dynamic,
+            vec![("box-shadow".to_string(), "var(--tw-shadow)".to_string())]
         );
     }
 
+    /// …and once the variable is known, the ordinary mapper arm runs.
     #[test]
-    fn a_var_composed_value_names_the_property_it_broke() {
-        let (r, d) = map("box-shadow: var(--tw-shadow)");
+    fn apply_dynamic_substitutes_then_maps() {
+        let mut d = Vec::new();
+        let vars = crate::vars::resolve(
+            &Rc::new(Vars::default()),
+            &[("--tw-shadow".to_string(), "0 1px 2px 0 rgb(0 0 0 / 0.5)".to_string())],
+            &mut d,
+        );
+        let mut r = StyleRefinement::default();
+        let mut x = Extras::default();
+        apply_dynamic("box-shadow", "var(--tw-shadow)", &vars, &mut r, &mut x, &mut d);
+        assert!(d.is_empty(), "{d:?}");
+        let shadows = r.box_shadow.expect("box-shadow mapped");
+        assert_eq!(shadows.len(), 1);
+        assert_eq!(shadows[0].blur_radius, px(2.0));
+    }
+
+    /// An unresolvable reference drops the declaration and says why — the CSS
+    /// "invalid at computed-value time" rule, never a silent nothing.
+    #[test]
+    fn an_unresolvable_var_is_an_advisory_not_silence() {
+        let mut d = Vec::new();
+        let mut r = StyleRefinement::default();
+        let mut x = Extras::default();
+        apply_dynamic("box-shadow", "var(--nope)", &Vars::default(), &mut r, &mut x, &mut d);
         assert_eq!(r.box_shadow, None);
-        assert_eq!(d.len(), 1, "{d:?}");
-        assert!(d[0].contains("box-shadow"), "{d:?}");
+        assert!(
+            d.iter().any(|m| m.contains("invalid at computed-value time") && m.contains("--nope")),
+            "{d:?}"
+        );
     }
 
     #[test]

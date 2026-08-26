@@ -59,11 +59,11 @@ pub struct Node {
     /// Bitmask of EV_* the JS side listens for.
     pub listeners: u32,
     pub(crate) inline_dirty: bool,
-    pub(crate) inline_cache: Option<std::rc::Rc<gpui::StyleRefinement>>,
-    pub(crate) inline_transitions: Option<std::rc::Rc<Vec<vn_css::TransitionSpec>>>,
-    /// Computed values an inline `style` declared that a `StyleRefinement`
-    /// cannot carry (`object-fit`). `Copy`, so no `Rc` needed.
-    pub(crate) inline_extras: vn_css::Extras,
+    /// Everything the inline `style` body contributes: the mapped refinement,
+    /// its transitions and `object-fit`, plus the `--x` declarations and
+    /// `var()`-composed values that can only be resolved once the node's place
+    /// in the tree is known.
+    pub(crate) inline: Option<std::rc::Rc<vn_css::InlineStyle>>,
     /// The folded cascade result, filled by the restyle pass.
     pub computed: Option<vn_css::ComputedStates>,
 }
@@ -92,6 +92,15 @@ pub fn with_tree<R>(f: impl FnOnce(&mut Tree) -> R) -> R {
 /// Read-only access for the render walk.
 pub fn read_tree<R>(f: impl FnOnce(&Tree) -> R) -> R {
     TREE.with(|t| f(&t.borrow()))
+}
+
+/// One line per distinct CSS advisory, whatever how many elements hit it.
+fn warn_css(msg: &str) {
+    let fresh = CSS_WARNED.with(|w| w.borrow_mut().insert(msg.to_string()));
+    if fresh {
+        eprintln!("{msg}");
+        crate::log::record("css", msg.to_string());
+    }
 }
 
 pub(crate) fn set_dispatcher(f: u64) {
@@ -157,9 +166,7 @@ impl Tree {
             scopes: Vec::new(),
             listeners: 0,
             inline_dirty: false,
-            inline_cache: None,
-            inline_transitions: None,
-            inline_extras: vn_css::Extras::default(),
+            inline: None,
             computed: None,
         })
     }
@@ -351,6 +358,17 @@ impl Tree {
     /// for every element node. Runs once per JS wave that touched the tree —
     /// never during a draw.
     pub fn restyle(&mut self, engine: Option<&vn_css::Engine>, env: &vn_css::Env) {
+        match engine {
+            Some(e) => self.restyle_with(e, env),
+            // Before the first `__vn_set_stylesheet` there is no sheet, but the
+            // cascade still has work to do (inline styles, and the custom
+            // properties an inline `style` declares), so it runs against an
+            // empty one rather than a second, divergent code path.
+            None => NO_SHEET.with(|e| self.restyle_with(e, env)),
+        }
+    }
+
+    fn restyle_with(&mut self, engine: &vn_css::Engine, env: &vn_css::Env) {
         // 1. Re-parse changed inline styles.
         let dirty_inline: Vec<u32> = (1..self.nodes.len() as u32)
             .filter(|&id| self.node(id).is_some_and(|n| n.inline_dirty))
@@ -365,57 +383,74 @@ impl Tree {
                     .join("; ")
             };
             let mut diags = Vec::new();
-            let (parsed, transitions, extras) = if body.is_empty() {
-                (None, None, vn_css::Extras::default())
+            let parsed = if body.is_empty() {
+                None
             } else {
-                let (r, t, x) = vn_css::parse_inline_full(&body, &mut diags);
-                (
-                    Some(std::rc::Rc::new(r)),
-                    (!t.is_empty()).then(|| std::rc::Rc::new(t)),
-                    x,
-                )
+                let style = vn_css::parse_inline_style(&body, &mut diags);
+                (!style.is_empty()).then(|| std::rc::Rc::new(style))
             };
             for d in diags {
-                eprintln!("[css inline] {d}");
-                crate::log::record("css", format!("[css inline] {d}"));
+                warn_css(&format!("[css inline] {d}"));
             }
             let n = self.node_mut(id).unwrap();
-            n.inline_cache = parsed;
-            n.inline_transitions = transitions;
-            n.inline_extras = extras;
+            n.inline = parsed;
             n.inline_dirty = false;
         }
 
         // 2. Cascade (immutable walk), then store.
+        //
+        // The walk is DOCUMENT ORDER, not id order, and that is a requirement
+        // rather than a nicety: CSS custom properties inherit, so a node's map
+        // is its parent's plus its own declarations, and the parent must
+        // therefore be computed first. Every parentless node is a walk root —
+        // the mounted root plus any detached subtree (a `<KeepAlive>` cache
+        // container is never inserted, and its contents still need styles for
+        // the frame they are re-attached in).
+        let mut diagnostics: Vec<String> = Vec::new();
         let computed: Vec<(u32, vn_css::ComputedStates)> = {
             let this: &Tree = self;
-            (1..this.nodes.len() as u32)
-                .filter_map(|id| {
-                    let n = this.node(id)?;
-                    if n.kind != Kind::Element {
-                        return None;
-                    }
-                    let inline = n.inline_cache.as_deref();
-                    let states = match engine {
-                        Some(e) => e.compute_full(
+            let root_vars = std::rc::Rc::new(vn_css::Vars::default());
+            let mut out = Vec::new();
+            let mut roots: Vec<u32> = Vec::new();
+            if this.root != 0 && this.node(this.root).is_some() {
+                roots.push(this.root);
+            }
+            roots.extend(
+                (1..this.nodes.len() as u32)
+                    .filter(|&id| id != this.root)
+                    .filter(|&id| this.node(id).is_some_and(|n| n.parent == 0)),
+            );
+            let mut stack: Vec<(u32, std::rc::Rc<vn_css::Vars>)> = Vec::new();
+            for r in roots {
+                stack.push((r, root_vars.clone()));
+                while let Some((id, parent_vars)) = stack.pop() {
+                    let Some(n) = this.node(id) else { continue };
+                    // Text and anchor nodes have no cascade of their own; they
+                    // simply pass the map down to whatever hangs under them.
+                    let child_vars = if n.kind == Kind::Element {
+                        let states = engine.compute_node(
                             NodeRef { tree: this, id },
-                            inline,
-                            n.inline_transitions.as_ref(),
-                            n.inline_extras,
+                            n.inline.as_deref(),
+                            &parent_vars,
                             env,
-                        ),
-                        None => vn_css::ComputedStates {
-                            base: inline
-                                .map(|r| std::rc::Rc::new(r.clone()))
-                                .unwrap_or_default(),
-                            extras: n.inline_extras,
-                            ..Default::default()
-                        },
+                            &mut diagnostics,
+                        );
+                        let vars = states.vars.clone();
+                        out.push((id, states));
+                        vars
+                    } else {
+                        parent_vars
                     };
-                    Some((id, states))
-                })
-                .collect()
+                    for &c in n.children.iter().rev() {
+                        stack.push((c, child_vars.clone()));
+                    }
+                }
+            }
+            out
         };
+        for d in diagnostics {
+            warn_css(&format!("[css] {d}"));
+        }
         // 3. Store + feed the transition animator. ONE Instant for the whole
         // pass (tracks started together must not drift), change-gated via
         // ComputedStates: PartialEq.
@@ -443,6 +478,16 @@ impl Tree {
 // ---------------------------------------------------------------------------
 
 thread_local! {
+    /// The cascade used before any stylesheet is installed — an empty sheet, so
+    /// inline styles and their custom properties take exactly the same path
+    /// they will once a sheet arrives.
+    static NO_SHEET: vn_css::Engine = vn_css::Engine::compile("");
+    /// Runtime CSS advisories already printed. The cascade's compile-time
+    /// diagnostics are deduped inside the engine; these come from computed-value
+    /// time (an unresolvable `var()`, a reference cycle) and are therefore
+    /// per-element, so a page with 200 buttons must not print 200 lines.
+    static CSS_WARNED: RefCell<std::collections::HashSet<String>> =
+        RefCell::new(std::collections::HashSet::new());
     static ENGINE: RefCell<Option<vn_css::Engine>> = const { RefCell::new(None) };
     static ANIMATOR: RefCell<vn_css::Animator> = RefCell::new(vn_css::Animator::new());
     /// The `@media` environment the cascade is currently evaluated against —
@@ -503,6 +548,9 @@ pub fn set_reduce_motion(on: bool) {
 }
 
 pub fn set_engine(engine: vn_css::Engine) {
+    // A new sheet is a new set of gaps: an advisory suppressed against the old
+    // one must be free to speak again (this is the HMR path).
+    CSS_WARNED.with(|w| w.borrow_mut().clear());
     for d in &engine.diagnostics {
         eprintln!("[css] {d}");
         crate::log::record("css", format!("[css] {d}"));
