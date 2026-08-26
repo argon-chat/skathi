@@ -32,17 +32,51 @@ pub struct Env {
     pub dark: bool,
     /// `prefers-reduced-motion: reduce`.
     pub reduce_motion: bool,
+    /// `resolution` in `dppx` — the window's DPI scale factor. This is the only
+    /// observable a DPI change moves: `devicePixelRatio` has no event in any
+    /// spec, so `matchMedia("(resolution: 1.5dppx)")` + a `change` listener is
+    /// the canonical way to notice one (docs/WINDOWING.md §1.6).
+    pub scale_factor: f32,
+    /// `display-mode` — which chrome mode the window is in.
+    pub display_mode: DisplayMode,
+}
+
+/// The `display-mode` media feature. Never `browser`: we are permanently an
+/// installed app window (docs/WINDOWING.md §0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// OS-drawn chrome (`titleBarStyle: "default"`).
+    Standalone,
+    /// Custom chrome (`titleBarStyle: "hidden"`) — the titlebar strip belongs
+    /// to content, which is exactly what WCO means (D-11).
+    WindowControlsOverlay,
+    /// The window is fullscreen, in either chrome mode.
+    Fullscreen,
+}
+
+impl DisplayMode {
+    /// The CSS keyword, which is also what `matchMedia` and the JS-side
+    /// chrome-mode read report.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DisplayMode::Standalone => "standalone",
+            DisplayMode::WindowControlsOverlay => "window-controls-overlay",
+            DisplayMode::Fullscreen => "fullscreen",
+        }
+    }
 }
 
 impl Default for Env {
-    /// A plain light 1024x768 desktop — the value tests and any caller that has
-    /// no window yet see. The host overwrites it on the first frame.
+    /// A plain light 1024x768 desktop at 1x — the value tests and any caller
+    /// that has no window yet see. The host overwrites it on the first frame.
     fn default() -> Self {
         Env {
             viewport_width: 1024.0,
             viewport_height: 768.0,
             dark: false,
             reduce_motion: false,
+            scale_factor: 1.0,
+            display_mode: DisplayMode::WindowControlsOverlay,
         }
     }
 }
@@ -104,6 +138,10 @@ pub(crate) enum Feature {
     ColorScheme(bool),
     /// `prefers-reduced-motion: reduce` (`true`) / `no-preference` (`false`).
     ReducedMotion(bool),
+    /// `resolution` / `min-resolution` / `max-resolution`, normalised to dppx.
+    Resolution(Cmp, f32),
+    /// `display-mode: standalone | window-controls-overlay | fullscreen`.
+    Display(DisplayMode),
 }
 
 impl Feature {
@@ -113,6 +151,8 @@ impl Feature {
             Feature::Height(cmp, px) => cmp.eval(env.viewport_height, px),
             Feature::ColorScheme(dark) => env.dark == dark,
             Feature::ReducedMotion(reduce) => env.reduce_motion == reduce,
+            Feature::Resolution(cmp, dppx) => cmp.eval(env.scale_factor, dppx),
+            Feature::Display(mode) => env.display_mode == mode,
         }
     }
 }
@@ -172,6 +212,7 @@ pub(crate) type Unsupported = &'static str;
 pub(crate) const SUPPORTED: &str = "supported: `screen`/`all`/`print` media types, \
      `width`/`min-width`/`max-width`, `height`/`min-height`/`max-height` (px lengths, \
      range and interval syntax), `prefers-color-scheme`, `prefers-reduced-motion`, \
+     `resolution`/`min-resolution`/`max-resolution` (dppx/dpi/dpcm), `display-mode`, \
      combined with `and`/`or`/`not`/`,`";
 
 /// Parses a whole media list (the comma-separated prelude) into one condition.
@@ -257,6 +298,36 @@ fn ident<'a>(value: &'a MediaFeatureValue<'_>) -> Result<&'a str, Unsupported> {
     }
 }
 
+/// `resolution` in any of its three units, normalised to `dppx` — which is what
+/// `devicePixelRatio` and gpui's `scale_factor()` both are. 96 dpi = 1 dppx is
+/// the CSS definition of a reference pixel, not an approximation.
+fn dppx(value: &MediaFeatureValue<'_>) -> Result<f32, Unsupported> {
+    use lightningcss::values::resolution::Resolution;
+    match value {
+        MediaFeatureValue::Resolution(r) => Ok(match r {
+            Resolution::Dppx(v) => *v,
+            Resolution::Dpi(v) => *v / 96.0,
+            Resolution::Dpcm(v) => *v * 2.54 / 96.0,
+        }),
+        _ => Err("a media feature value of the wrong type"),
+    }
+}
+
+/// `display-mode: <ident>`. `browser` and `minimal-ui` parse but can never
+/// match — we are permanently an installed app window — which is the
+/// browser-honest answer and keeps a ported PWA's `browser` branch compiling.
+fn display_mode(value: &MediaFeatureValue<'_>) -> Result<Cond, Unsupported> {
+    Ok(match ident(value)? {
+        "standalone" => Cond::Feature(Feature::Display(DisplayMode::Standalone)),
+        "window-controls-overlay" => {
+            Cond::Feature(Feature::Display(DisplayMode::WindowControlsOverlay))
+        }
+        "fullscreen" => Cond::Feature(Feature::Display(DisplayMode::Fullscreen)),
+        "browser" | "minimal-ui" | "picture-in-picture" => Cond::Never,
+        _ => return Err("an unknown `display-mode` value"),
+    })
+}
+
 fn sized(id: MediaFeatureId, cmp: Cmp, px: f32) -> Feature {
     match id {
         MediaFeatureId::Width => Feature::Width(cmp, px),
@@ -265,10 +336,15 @@ fn sized(id: MediaFeatureId, cmp: Cmp, px: f32) -> Feature {
 }
 
 fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
-    use MediaFeatureId::{Height, PrefersColorScheme, PrefersReducedMotion, Width};
+    use MediaFeatureId::{
+        DisplayMode as DisplayModeId, Height, PrefersColorScheme, PrefersReducedMotion, Resolution,
+        Width,
+    };
     Ok(match f {
         QueryFeature::Plain { name, value } => match standard(name)? {
             id @ (Width | Height) => Cond::Feature(sized(id, Cmp::Eq, length_px(value)?)),
+            Resolution => Cond::Feature(Feature::Resolution(Cmp::Eq, dppx(value)?)),
+            DisplayModeId => display_mode(value)?,
             PrefersColorScheme => match ident(value)? {
                 "dark" => Cond::Feature(Feature::ColorScheme(true)),
                 "light" => Cond::Feature(Feature::ColorScheme(false)),
@@ -289,12 +365,16 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
             // which on every platform we run on it does.
             PrefersColorScheme => Cond::Always,
             PrefersReducedMotion => Cond::Feature(Feature::ReducedMotion(true)),
+            // A screen always has a non-zero resolution, and we are always in
+            // SOME display mode.
+            Resolution | DisplayModeId => Cond::Always,
             _ => return Err("an unsupported media feature"),
         },
         QueryFeature::Range { name, operator, value } => match standard(name)? {
             id @ (Width | Height) => {
                 Cond::Feature(sized(id, Cmp::from(*operator), length_px(value)?))
             }
+            Resolution => Cond::Feature(Feature::Resolution(Cmp::from(*operator), dppx(value)?)),
             _ => return Err("a range comparison on a feature that has no numeric value"),
         },
         QueryFeature::Interval { name, start, start_operator, end, end_operator } => {
@@ -304,10 +384,47 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
                     Cond::Feature(sized(id, Cmp::from(*start_operator).flip(), length_px(start)?)),
                     Cond::Feature(sized(id, Cmp::from(*end_operator), length_px(end)?)),
                 ]),
+                Resolution => Cond::And(vec![
+                    Cond::Feature(Feature::Resolution(
+                        Cmp::from(*start_operator).flip(),
+                        dppx(start)?,
+                    )),
+                    Cond::Feature(Feature::Resolution(Cmp::from(*end_operator), dppx(end)?)),
+                ]),
                 _ => return Err("a range comparison on a feature that has no numeric value"),
             }
         }
     })
+}
+
+/// `window.matchMedia(query)` — parse one prelude and evaluate it against
+/// `env`, through the SAME compiler and the SAME evaluator the cascade uses.
+///
+/// Sharing the code is the whole point: a `matchMedia` that answered from a
+/// second implementation could drift from `@media`, and one that answered
+/// `false` forever (which is what redjs ships) is the exact failure the
+/// compat-first policy exists to prevent (D-09).
+///
+/// `Err` carries the human reason a prelude was rejected, so the JS side can
+/// turn it into the same advisory the stylesheet compiler would have printed.
+/// A browser treats a syntactically invalid media list as `not all` — always
+/// false — so the caller reports `matches: false` alongside the advisory.
+pub fn match_media(query: &str, env: &Env) -> Result<bool, String> {
+    use lightningcss::rules::CssRule;
+    use lightningcss::stylesheet::{ParserOptions, StyleSheet};
+
+    // lightningcss exposes no standalone media-list parser, so the query is
+    // compiled as the prelude of a throwaway `@media` block — the same path a
+    // stylesheet takes, which is what guarantees identical acceptance.
+    let css = format!("@media {query} {{ }}");
+    let sheet = StyleSheet::parse(&css, ParserOptions::default())
+        .map_err(|e| format!("could not be parsed ({e})"))?;
+    let Some(CssRule::Media(m)) = sheet.rules.0.first() else {
+        return Err("is not a media query".to_string());
+    };
+    parse_list(&m.query)
+        .map(|cond| cond.eval(env))
+        .map_err(|why| format!("uses {why} — {SUPPORTED}"))
 }
 
 /// The prelude's source text, for advisories.
@@ -334,7 +451,7 @@ mod tests {
     }
 
     fn env(w: f32, dark: bool, reduce: bool) -> Env {
-        Env { viewport_width: w, viewport_height: 800.0, dark, reduce_motion: reduce }
+        Env { viewport_width: w, viewport_height: 800.0, dark, reduce_motion: reduce, ..Env::default() }
     }
 
     #[test]
@@ -420,7 +537,6 @@ mod tests {
         for prelude in [
             "(hover: hover)",
             "(orientation: landscape)",
-            "(min-resolution: 2dppx)",
             "(prefers-contrast: more)",
             "tv",
             "(min-width: 40em)",
@@ -428,5 +544,63 @@ mod tests {
         ] {
             assert!(cond(prelude).is_err(), "{prelude} should be rejected");
         }
+    }
+
+    /// `resolution` is the ONLY way a stylesheet (or `matchMedia`) can observe
+    /// a DPI change — `devicePixelRatio` has no event in any spec.
+    #[test]
+    fn resolution_normalises_every_unit_to_dppx() {
+        let hidpi = Env { scale_factor: 2.0, ..Env::default() };
+        let lodpi = Env { scale_factor: 1.0, ..Env::default() };
+
+        let c = cond("(min-resolution: 2dppx)").unwrap();
+        assert_eq!(c, Cond::Feature(Feature::Resolution(Cmp::Ge, 2.0)));
+        assert!(c.eval(&hidpi));
+        assert!(!c.eval(&lodpi));
+
+        // 96dpi === 1dppx by the CSS definition of a reference pixel.
+        assert_eq!(
+            cond("(min-resolution: 192dpi)").unwrap(),
+            Cond::Feature(Feature::Resolution(Cmp::Ge, 2.0))
+        );
+        // 1dpcm = 2.54/96 dppx.
+        let dpcm = cond("(min-resolution: 96dpcm)").unwrap();
+        assert!(dpcm.eval(&Env { scale_factor: 3.0, ..Env::default() }));
+
+        // Exact form and the range/interval syntaxes.
+        assert!(cond("(resolution: 1.5dppx)")
+            .unwrap()
+            .eval(&Env { scale_factor: 1.5, ..Env::default() }));
+        assert!(cond("(resolution > 1dppx)").unwrap().eval(&hidpi));
+        let i = cond("(1dppx < resolution < 3dppx)").unwrap();
+        assert!(i.eval(&hidpi));
+        assert!(!i.eval(&lodpi));
+        // The boolean form: a screen always has SOME resolution.
+        assert_eq!(cond("(resolution)").unwrap(), Cond::Always);
+    }
+
+    /// `display-mode` is the CSS-side feature detect for custom chrome, and the
+    /// branch a component ported from a real PWA takes (D-11).
+    #[test]
+    fn display_mode_reports_the_chrome_mode() {
+        let wco = Env { display_mode: DisplayMode::WindowControlsOverlay, ..Env::default() };
+        let standalone = Env { display_mode: DisplayMode::Standalone, ..Env::default() };
+        let fs = Env { display_mode: DisplayMode::Fullscreen, ..Env::default() };
+
+        let c = cond("(display-mode: window-controls-overlay)").unwrap();
+        assert!(c.eval(&wco));
+        assert!(!c.eval(&standalone));
+        assert!(!c.eval(&fs));
+
+        assert!(cond("(display-mode: standalone)").unwrap().eval(&standalone));
+        assert!(cond("(display-mode: fullscreen)").unwrap().eval(&fs));
+
+        // We are permanently an installed app window, so `browser` parses (a
+        // ported PWA's fallback branch stays compilable) and never matches.
+        let browser = cond("(display-mode: browser)").unwrap();
+        assert_eq!(browser, Cond::Never);
+        assert!(!browser.eval(&wco));
+
+        assert!(cond("(display-mode: nonsense)").is_err());
     }
 }

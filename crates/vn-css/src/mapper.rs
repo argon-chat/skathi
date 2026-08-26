@@ -44,6 +44,49 @@ pub enum ObjectFit {
     None,
 }
 
+/// CSS `window-drag` — "this element drags the OS window" (docs/WINDOWING.md
+/// §2.1).
+///
+/// The CSSWG resolved on 2026-01-21 to standardise Electron's
+/// `-webkit-app-region` as `window-drag: none | move`, and separately that the
+/// property is INHERITED. Chromium ships it with `app-region` and
+/// `-webkit-app-region` as permanent aliases, so all three spellings are
+/// accepted here and `window-drag` is canonical.
+///
+/// Inheritance is the one thing this type cannot express on its own: vn-css
+/// has no inherited properties at all, so the fold happens at tree-build time
+/// in `vn-tree`'s render pass, which carries the parent's effective value down
+/// the recursion (docs/WINDOWING.md §5.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowDrag {
+    /// `window-drag: move` / `app-region: drag`.
+    Move,
+    /// `window-drag: none` / `app-region: no-drag` — the initial value, and
+    /// the way a button opts out of an ancestor's drag region.
+    None,
+}
+
+/// CSS `--window-control` — the deliberate extension (docs/WINDOWING.md §2.2).
+///
+/// The web has no word for "this element is the maximize button", and it needs
+/// one because that single fact is what Windows 11 requires in order to offer
+/// snap layouts (answer `WM_NCHITTEST` with `HTMAXBUTTON`).
+///
+/// Spelled as a CUSTOM property for the same reason `--shading` is: a browser
+/// parses, stores and ignores a custom property, whereas it DROPS an unknown
+/// value of a known property — and `window-drag: maximize` in a browser would
+/// therefore fall back to the *inherited* `move`, making the button draggable.
+/// A custom property degrades to "does nothing", which is correct.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowControl {
+    Minimize,
+    Maximize,
+    Close,
+    /// `--window-control: none` — an explicit "not a caption button", so a
+    /// rule can cancel one set by an earlier rule.
+    None,
+}
+
 /// Computed values that a `gpui::StyleRefinement` has nowhere to carry.
 ///
 /// The refinement is the cascade's whole payload for every other property, so
@@ -54,17 +97,30 @@ pub struct Extras {
     /// `object-fit` — only meaningful on a replaced element (`<img>`); parsed
     /// and folded for every element, exactly as a browser does.
     pub object_fit: Option<ObjectFit>,
+    /// `window-drag` / `app-region` / `-webkit-app-region`. `None` here means
+    /// "this element declared nothing", which is what lets the renderer
+    /// inherit the parent's effective value — not the same as
+    /// `Some(WindowDrag::None)`, which is an explicit opt-out.
+    pub window_drag: Option<WindowDrag>,
+    /// `--window-control`. Never inherited (D-14).
+    pub window_control: Option<WindowControl>,
 }
 
 impl Extras {
     pub(crate) fn is_empty(&self) -> bool {
-        self.object_fit.is_none()
+        self.object_fit.is_none() && self.window_drag.is_none() && self.window_control.is_none()
     }
 
     /// Later-wins merge, matching `Refineable::refine` for the refinements.
     pub(crate) fn refine(&mut self, other: &Extras) {
         if other.object_fit.is_some() {
             self.object_fit = other.object_fit;
+        }
+        if other.window_drag.is_some() {
+            self.window_drag = other.window_drag;
+        }
+        if other.window_control.is_some() {
+            self.window_control = other.window_control;
         }
     }
 }
@@ -382,6 +438,86 @@ fn object_fit(value: &lightningcss::properties::custom::TokenList, diagnostics: 
                 format!(
                     "unsupported value for object-fit: {} — expected fill | contain | cover | \
                      scale-down | none",
+                    other.unwrap_or("<not a keyword>")
+                ),
+            );
+            None
+        }
+    }
+}
+
+/// The custom-property name that carries a caption-button role.
+pub(crate) const WINDOW_CONTROL: &str = "--window-control";
+
+/// The single keyword a token list carries, or `None` when it carries zero or
+/// more than one (a browser drops a multi-keyword declaration on any of these
+/// properties).
+fn single_ident<'a>(
+    value: &'a lightningcss::properties::custom::TokenList<'_>,
+    what: &str,
+    diagnostics: &mut Vec<String>,
+) -> Option<&'a str> {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let mut idents = value.0.iter().filter_map(|t| match t {
+        TokenOrValue::Token(Token::Ident(s)) => Some(s.as_ref()),
+        _ => None,
+    });
+    let first = idents.next();
+    if idents.next().is_some() {
+        once(
+            diagnostics,
+            format!("`{what}` takes a single keyword — the declaration was dropped"),
+        );
+        return None;
+    }
+    first
+}
+
+/// `window-drag: move | none` and its two legacy spellings
+/// (`app-region: drag | no-drag`, `-webkit-app-region: …`).
+///
+/// All three property names are accepted with no advisory (D-13); both value
+/// vocabularies are accepted on all three names, because Chromium does the same
+/// and an author who mixes them is not making a mistake worth a warning. An
+/// unrecognised VALUE does advise (A-11).
+fn window_drag(
+    property: &str,
+    value: &lightningcss::properties::custom::TokenList,
+    diagnostics: &mut Vec<String>,
+) -> Option<WindowDrag> {
+    match single_ident(value, property, diagnostics) {
+        Some("move") | Some("drag") => Some(WindowDrag::Move),
+        Some("none") | Some("no-drag") => Some(WindowDrag::None),
+        other => {
+            once(
+                diagnostics,
+                format!(
+                    "unsupported value for `{property}`: {} — expected `move` | `none` \
+                     (or the legacy `drag` | `no-drag`)",
+                    other.unwrap_or("<not a keyword>")
+                ),
+            );
+            None
+        }
+    }
+}
+
+/// `--window-control: minimize | maximize | close | none`.
+fn window_control(
+    value: &lightningcss::properties::custom::TokenList,
+    diagnostics: &mut Vec<String>,
+) -> Option<WindowControl> {
+    match single_ident(value, WINDOW_CONTROL, diagnostics) {
+        Some("minimize") => Some(WindowControl::Minimize),
+        Some("maximize") => Some(WindowControl::Maximize),
+        Some("close") => Some(WindowControl::Close),
+        Some("none") => Some(WindowControl::None),
+        other => {
+            once(
+                diagnostics,
+                format!(
+                    "unsupported value for `{WINDOW_CONTROL}`: {} — expected \
+                     `minimize` | `maximize` | `close` | `none`",
                     other.unwrap_or("<not a keyword>")
                 ),
             );
@@ -851,6 +987,16 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     r.vn_effect = Some(spec);
                 }
             }
+            // `--window-control` — the second interpreted custom property; see
+            // [`WindowControl`] for why the caption-button role is spelled as
+            // one rather than as a `window-drag` value.
+            lightningcss::properties::custom::CustomPropertyName::Custom(name)
+                if name.0.as_ref() == WINDOW_CONTROL =>
+            {
+                if let Some(c) = window_control(&c.value, diagnostics) {
+                    x.window_control = Some(c);
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Custom(_) => {
                 once(diagnostics, CUSTOM_PROPS.to_string());
             }
@@ -865,6 +1011,22 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             {
                 if let Some(fit) = object_fit(&c.value, diagnostics) {
                     x.object_fit = Some(fit);
+                }
+            }
+            // `window-drag` is a REAL CSS property (CSS Basic User Interface 4,
+            // CSSWG 2026-01-21) that lightningcss has no typed representation
+            // for yet, so it lands in the same bucket `object-fit` does.
+            // `app-region` / `-webkit-app-region` are Chromium's permanent
+            // aliases and are accepted with NO advisory — Chromium states it is
+            // not deprecating them, so warning would be pure noise (D-13).
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(
+                    name.0.as_ref(),
+                    "window-drag" | "app-region" | "-webkit-app-region"
+                ) =>
+            {
+                if let Some(d) = window_drag(name.0.as_ref(), &c.value, diagnostics) {
+                    x.window_drag = Some(d);
                 }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name) => {

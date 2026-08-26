@@ -41,8 +41,9 @@ pub use animator::Animator;
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_with_transitions, Extras, ObjectFit,
+    WindowControl, WindowDrag,
 };
-pub use media::Env;
+pub use media::{match_media, DisplayMode, Env};
 pub use transition::{
     covered, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec, ANIMATABLE_COUNT,
 };
@@ -192,14 +193,17 @@ impl Engine {
                 if !audit_selector(sel, &mut self.diagnostics) {
                     continue;
                 }
-                // gpui's `img()` carries ONE `ObjectFit` for the element, not a
-                // per-state ladder like the refinements — so `object-fit` in a
-                // `:hover` rule would apply all the time. Say so rather than
-                // let it look conditional.
+                // The `Extras` have no state ladder to install into — gpui's
+                // `img()` carries ONE `ObjectFit` for the element, and the
+                // window hit test reads an already-PAINTED frame, so a
+                // state-dependent drag region would be a hit-test/paint race
+                // (docs/WINDOWING.md D-16). So a state rule's extras apply all
+                // the time; say so rather than let them look conditional.
                 if states != 0 && !declares_extras.is_empty() {
                     self.diagnostics.push(format!(
-                        "`object-fit` on a state selector applies unconditionally (v1) — gpui's \
-                         image element has a single object-fit, not a state ladder: {}",
+                        "{} on a state selector applies unconditionally (v1) — these values are \
+                         read from the base state only, not from gpui's state ladder: {}",
+                        extras_names(&declares_extras),
                         sel_text(sel)
                     ));
                 }
@@ -689,6 +693,23 @@ fn probe_runnable(sel: &Selector<'_>) -> bool {
         matches_selector(sel, 0, None, &el, &mut ctx, &mut |_, _| {});
     }))
     .is_ok()
+}
+
+/// Names the extras a block actually declared, so the state-selector advisory
+/// says `window-drag` when that is what was written and `object-fit` when it
+/// is not.
+fn extras_names(e: &Extras) -> String {
+    let mut names: Vec<&str> = Vec::new();
+    if e.object_fit.is_some() {
+        names.push("`object-fit`");
+    }
+    if e.window_drag.is_some() {
+        names.push("`window-drag`");
+    }
+    if e.window_control.is_some() {
+        names.push("`--window-control`");
+    }
+    names.join(" / ")
 }
 
 fn sel_text(sel: &Selector<'_>) -> String {
@@ -1245,7 +1266,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn env_at(width: f32, dark: bool, reduce_motion: bool) -> Env {
-        Env { viewport_width: width, viewport_height: 800.0, dark, reduce_motion }
+        Env { viewport_width: width, viewport_height: 800.0, dark, reduce_motion, ..Env::default() }
     }
 
     #[test]
@@ -1615,6 +1636,165 @@ mod tests {
             "{:?}",
             engine.diagnostics
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // window-drag / --window-control (docs/WINDOWING.md §2.1, §2.2)
+    // -----------------------------------------------------------------------
+
+    fn drag_of(css: &str) -> Option<WindowDrag> {
+        Engine::compile(css)
+            .compute(box_node(), None, &Env::default())
+            .extras
+            .window_drag
+    }
+
+    /// All three property spellings, both value vocabularies, no advisory —
+    /// Chromium keeps `app-region`/`-webkit-app-region` permanently, so warning
+    /// about them would be pure noise (D-13).
+    #[test]
+    fn every_window_drag_spelling_parses_without_an_advisory() {
+        for (css, want) in [
+            ("window-drag: move", WindowDrag::Move),
+            ("window-drag: none", WindowDrag::None),
+            ("app-region: drag", WindowDrag::Move),
+            ("app-region: no-drag", WindowDrag::None),
+            ("-webkit-app-region: drag", WindowDrag::Move),
+            ("-webkit-app-region: no-drag", WindowDrag::None),
+        ] {
+            let engine = Engine::compile(&format!(".box {{ {css} }}"));
+            assert!(engine.diagnostics.is_empty(), "{css}: {:?}", engine.diagnostics);
+            assert_eq!(
+                engine.compute(box_node(), None, &Env::default()).extras.window_drag,
+                Some(want),
+                "{css}"
+            );
+        }
+    }
+
+    /// Undeclared must stay `None`, distinct from an explicit `none`: the
+    /// renderer INHERITS the parent's effective value through the `None` case
+    /// and stops at the explicit one.
+    #[test]
+    fn undeclared_window_drag_is_distinct_from_an_explicit_none() {
+        assert_eq!(drag_of(".box { opacity: 0.5 }"), None);
+        assert_eq!(drag_of(".box { window-drag: none }"), Some(WindowDrag::None));
+    }
+
+    #[test]
+    fn window_drag_folds_by_specificity_and_importance() {
+        assert_eq!(
+            drag_of(".box { window-drag: move } div.box { app-region: no-drag }"),
+            Some(WindowDrag::None)
+        );
+        assert_eq!(
+            drag_of("div.box { window-drag: none } .box { window-drag: move !important }"),
+            Some(WindowDrag::Move)
+        );
+    }
+
+    #[test]
+    fn bad_window_drag_value_is_advised_and_dropped() {
+        let engine = Engine::compile(".box { window-drag: sideways }");
+        assert!(
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("window-drag") && d.contains("sideways")),
+            "{:?}",
+            engine.diagnostics
+        );
+        assert_eq!(
+            engine.compute(box_node(), None, &Env::default()).extras.window_drag,
+            None
+        );
+    }
+
+    #[test]
+    fn window_control_keywords_all_map() {
+        for (css, want) in [
+            ("minimize", WindowControl::Minimize),
+            ("maximize", WindowControl::Maximize),
+            ("close", WindowControl::Close),
+            ("none", WindowControl::None),
+        ] {
+            let engine = Engine::compile(&format!(".box {{ --window-control: {css} }}"));
+            assert!(engine.diagnostics.is_empty(), "{css}: {:?}", engine.diagnostics);
+            assert_eq!(
+                engine.compute(box_node(), None, &Env::default()).extras.window_control,
+                Some(want),
+                "--window-control: {css}"
+            );
+        }
+    }
+
+    /// `--window-control` must not fall into the "custom properties are stored
+    /// nowhere" fold that every `--tw-*` declaration lands in.
+    #[test]
+    fn window_control_does_not_report_as_an_unstored_custom_property() {
+        let engine = Engine::compile(".box { --window-control: close }");
+        assert!(
+            !engine.diagnostics.iter().any(|d| d.contains("stored nowhere")),
+            "{:?}",
+            engine.diagnostics
+        );
+        // …while a genuine custom property still does.
+        let engine = Engine::compile(".box { --tw-shadow: 0 0 0 red }");
+        assert!(
+            engine.diagnostics.iter().any(|d| d.contains("stored nowhere")),
+            "{:?}",
+            engine.diagnostics
+        );
+    }
+
+    #[test]
+    fn bad_window_control_value_is_advised() {
+        let engine = Engine::compile(".box { --window-control: restore }");
+        assert!(
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("--window-control") && d.contains("restore")),
+            "{:?}",
+            engine.diagnostics
+        );
+    }
+
+    /// The hit test reads an already-PAINTED frame, so a `:hover` drag region
+    /// would be a paint race. It applies unconditionally and says so (A-12) —
+    /// and the advisory names the property that was actually written.
+    #[test]
+    fn window_drag_on_a_state_selector_is_advised_by_name() {
+        let engine = Engine::compile(".box:hover { window-drag: none }");
+        assert!(
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("`window-drag`") && d.contains("unconditionally")),
+            "{:?}",
+            engine.diagnostics
+        );
+        assert!(
+            !engine.diagnostics.iter().any(|d| d.contains("object-fit")),
+            "the advisory must name the property that was written: {:?}",
+            engine.diagnostics
+        );
+    }
+
+    #[test]
+    fn inline_window_drag_beats_the_sheet() {
+        let engine = Engine::compile("div.box { window-drag: move }");
+        let mut diags = Vec::new();
+        let (r, t, x) = parse_inline_full("window-drag: none", &mut diags);
+        assert!(diags.is_empty(), "{diags:?}");
+        let computed = engine.compute_full(
+            box_node(),
+            Some(&r),
+            (!t.is_empty()).then(|| Rc::new(t)).as_ref(),
+            x,
+            &Env::default(),
+        );
+        assert_eq!(computed.extras.window_drag, Some(WindowDrag::None));
     }
 
     // -----------------------------------------------------------------------
