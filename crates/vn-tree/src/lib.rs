@@ -24,7 +24,7 @@ mod tree;
 pub mod devtools;
 
 pub use img::{asset_base, set_asset_base};
-pub use render::build_root;
+pub use render::{build_root, control_hitboxes, painted_drag_region};
 pub use tree::{
     with_tree, EV_BLUR, EV_CLICK, EV_COMPLETE, EV_ENTERFRAME, EV_FOCUS, EV_INPUT, EV_KEYDOWN,
     EV_KEYUP, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEUP, EV_SCROLL, EV_WHEEL,
@@ -237,29 +237,54 @@ pub fn set_reduce_motion(on: bool) {
 }
 
 /// Publishes the window environment `@media` conditions are evaluated against:
-/// viewport size in CSS px, the OS/window colour scheme and the reduced-motion
-/// preference. Call it once per frame — it is a cheap compare, and on the frame
-/// where something actually changed it marks the whole tree dirty so the next
-/// [`flush_changes`] re-cascades every node (a resize or theme flip can flip any
-/// `@media` rule in the sheet).
+/// viewport size in CSS px, the OS/window colour scheme, the reduced-motion
+/// preference, the DPI scale (`resolution`) and the chrome mode
+/// (`display-mode`). Call it once per frame — it is a cheap compare, and on the
+/// frame where something actually changed it marks the whole tree dirty so the
+/// next [`flush_changes`] re-cascades every node (a resize or theme flip can
+/// flip any `@media` rule in the sheet).
 ///
 /// Returns `true` on the frames where the environment changed.
-pub fn set_env(viewport_width: f32, viewport_height: f32, dark: bool, reduce_motion: bool) -> bool {
-    let changed = tree::set_env(vn_css::Env {
-        viewport_width,
-        viewport_height,
-        dark,
-        reduce_motion,
-    });
+pub fn set_env(env: vn_css::Env) -> bool {
+    let changed = tree::set_env(env);
     if changed {
         tree::with_tree(|t| t.mark_dirty());
     }
     changed
 }
 
+/// The environment the last [`set_env`] published — the source `matchMedia`
+/// evaluates against, so JS and CSS can never disagree.
+pub fn env() -> vn_css::Env {
+    tree::env()
+}
+
+/// Evaluates one media-query string against the live [`env`], exactly as the
+/// cascade would. `Err` carries the reason the prelude could not be compiled.
+///
+/// This is what makes `window.matchMedia` truthful: before it, `@media
+/// (max-width: 600px)` worked in CSS while `matchMedia("(max-width: 600px)")`
+/// answered `false` forever — the precise failure the compat-first policy
+/// exists to prevent (docs/WINDOWING.md §1.6, D-09).
+pub fn match_media(query: &str) -> Result<bool, String> {
+    vn_css::match_media(query, &tree::env())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The four inputs these tests actually vary; the DPI scale and the chrome
+    /// mode come from the default.
+    fn env(w: f32, h: f32, dark: bool, reduce_motion: bool) -> vn_css::Env {
+        vn_css::Env {
+            viewport_width: w,
+            viewport_height: h,
+            dark,
+            reduce_motion,
+            ..vn_css::Env::default()
+        }
+    }
 
     /// Each `#[test]` runs on its own thread, so the tree/engine/env
     /// thread-locals start fresh — no cross-test bleed.
@@ -277,16 +302,16 @@ mod tests {
     #[test]
     fn env_changes_mark_the_whole_tree_dirty_exactly_once() {
         tree::with_tree(|t| t.take_dirty());
-        assert!(set_env(800.0, 600.0, false, false));
+        assert!(set_env(env(800.0, 600.0, false, false)));
         assert!(tree::with_tree(|t| t.take_dirty()));
         // Same four values again: no change, no invalidation.
-        assert!(!set_env(800.0, 600.0, false, false));
+        assert!(!set_env(env(800.0, 600.0, false, false)));
         assert!(!tree::with_tree(|t| t.take_dirty()));
         // A theme flip alone counts…
-        assert!(set_env(800.0, 600.0, true, false));
+        assert!(set_env(env(800.0, 600.0, true, false)));
         assert!(tree::with_tree(|t| t.take_dirty()));
         // …and so does a one-pixel resize.
-        assert!(set_env(801.0, 600.0, true, false));
+        assert!(set_env(env(801.0, 600.0, true, false)));
         assert!(tree::with_tree(|t| t.take_dirty()));
     }
 
@@ -340,12 +365,12 @@ mod tests {
             ".box { opacity: 0.1 } @media (min-width: 640px) { .box { opacity: 0.9 } }",
         ));
 
-        set_env(500.0, 600.0, false, false);
+        set_env(env(500.0, 600.0, false, false));
         flush_changes();
         assert_eq!(opacity_of(child), Some(0.1));
 
         // The resize alone — no tree mutation at all — must re-cascade.
-        assert!(set_env(700.0, 600.0, false, false));
+        assert!(set_env(env(700.0, 600.0, false, false)));
         assert!(flush_changes());
         assert_eq!(opacity_of(child), Some(0.9));
     }

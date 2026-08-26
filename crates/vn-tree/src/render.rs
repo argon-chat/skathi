@@ -30,8 +30,9 @@ use gpui::prelude::*;
 use gpui::{
     div, AnyElement, App, ClickEvent, Context, Empty, FocusHandle, KeyDownEvent, KeyUpEvent,
     MouseButton, MouseDownEvent, MouseUpEvent, Overflow, Point, ScrollHandle, ScrollWheelEvent,
-    SharedString, Subscription, Window,
+    SharedString, Subscription, Window, WindowControlArea,
 };
+use vn_css::{WindowControl, WindowDrag};
 
 use crate::tree::{self, Kind, Tree};
 use crate::EventPayload;
@@ -463,6 +464,128 @@ fn focus_handle_for<V: 'static>(id: u32, tab_index: Option<isize>, cx: &mut Cont
     })
 }
 
+// ---------------------------------------------------------------------------
+// window-drag / --window-control  (docs/WINDOWING.md §2.1, §2.2, §5.1)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Whether the frame currently being built painted ANY `window-drag: move`
+    /// region. The host reads it to retire its fallback titlebar the first
+    /// time the app declares a drag region of its own (§4.2 mode 2) — never
+    /// silently removing a behaviour an app with no config still relies on.
+    static ANY_DRAG_REGION: Cell<bool> = const { Cell::new(false) };
+    /// Every control hitbox this frame emitted, `(node id, area)`.
+    ///
+    /// Drag regions are the one part of this surface that a synthesised
+    /// `ctl.ts click` can never exercise: `WM_NCHITTEST` is a real OS message
+    /// and the content dispatch path never reaches it. This is the
+    /// eval-reachable debug hook the acceptance transcript needs instead
+    /// (docs/WINDOWING.md §13 "Acceptance").
+    static CONTROL_HITBOXES: RefCell<Vec<(u32, WindowControlArea)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// `true` if the last painted frame contained a `window-drag: move` region.
+pub fn painted_drag_region() -> bool {
+    ANY_DRAG_REGION.with(|c| c.get())
+}
+
+/// The control hitboxes the last painted frame emitted, in paint order.
+pub fn control_hitboxes() -> Vec<(u32, WindowControlArea)> {
+    CONTROL_HITBOXES.with(|v| v.borrow().clone())
+}
+
+/// Folds the one INHERITED property vn-css carries and decides whether this
+/// node needs a gpui window-control hitbox.
+///
+/// Returns `(effective window-drag for this node and its subtree, the hitbox to
+/// emit)`.
+///
+/// A hitbox is emitted only where the effective value DIFFERS from the parent's
+/// (D-15). Under the topmost-first resolution this fork's gpui now uses
+/// (fork item F-01), the hit test walks outward until it finds a hitbox, and
+/// the nearest ancestor that *changed* the value is exactly the one carrying
+/// the right answer — so a 30-node titlebar produces two or three hitboxes
+/// instead of thirty.
+fn window_control_of(
+    extras: &vn_css::Extras,
+    parent: Option<WindowDrag>,
+) -> (Option<WindowDrag>, Option<WindowControlArea>) {
+    let effective = extras.window_drag.or(parent);
+    // A caption button wins outright: it is implicitly `window-drag: none` for
+    // hit-test purposes, so declaring both is redundant but harmless.
+    let area = match extras.window_control {
+        Some(WindowControl::Minimize) => Some(WindowControlArea::Min),
+        Some(WindowControl::Maximize) => Some(WindowControlArea::Max),
+        Some(WindowControl::Close) => Some(WindowControlArea::Close),
+        // `--window-control: none` cancels a role an earlier rule set; it does
+        // NOT by itself carve the element out of an ancestor's drag region —
+        // that is what `window-drag: none` is for.
+        Some(WindowControl::None) | None => match (effective, parent) {
+            (Some(WindowDrag::Move), p) if p != Some(WindowDrag::Move) => {
+                Some(WindowControlArea::Drag)
+            }
+            (Some(WindowDrag::None), Some(WindowDrag::Move)) => Some(WindowControlArea::NoDrag),
+            _ => None,
+        },
+    };
+    (effective, area)
+}
+
+/// The compat-first law running in the UNUSUAL direction: we warn because we
+/// are *more* permissive than the platform we are compatible with.
+///
+/// In a browser (and in Electron) a drag region swallows every pointer event,
+/// so an interactive element inside one emits no clicks and no hover unless it
+/// declares `window-drag: none`. gpui instead FORWARDS non-client mouse events
+/// into the content tree (`handle_nc_mouse_down_msg` and friends), so the same
+/// button keeps working here — and silently breaks the day the component is
+/// dropped into Electron or a PWA. Dev builds say so once (A-13).
+fn advise_interactive_in_drag_region(
+    t: &Tree,
+    node: &crate::tree::Node,
+    extras: &vn_css::Extras,
+    effective: Option<WindowDrag>,
+) {
+    if effective != Some(WindowDrag::Move) {
+        return;
+    }
+    // Declaring either opt-out is the fix; a caption button is opted out by
+    // definition (§2.2).
+    if extras.window_drag == Some(WindowDrag::None) || extras.window_control.is_some() {
+        return;
+    }
+    const POINTER: u32 = (1 << tree::EV_CLICK) | (1 << tree::EV_MOUSEDOWN) | (1 << tree::EV_MOUSEUP);
+    if node.listeners & POINTER == 0 {
+        return;
+    }
+    let tag = t.name(node.tag);
+    warn_compat(
+        "window-drag/interactive",
+        &format!(
+            "<{tag}> has a pointer listener inside a `window-drag: move` region without \
+             `window-drag: none`. In a browser and in Electron a drag region swallows ALL \
+             pointer events, so this element would be dead there; vue-native still delivers \
+             the click. Add `window-drag: none` (or `--window-control: …` for a caption \
+             button) — see docs/WINDOWING.md §2.1."
+        ),
+    );
+}
+
+/// Records the emitted hitbox (for [`control_hitboxes`] / the fallback-titlebar
+/// signal) and attaches it to the element.
+fn with_control_area<E: gpui::InteractiveElement>(
+    e: E,
+    id: u32,
+    area: Option<WindowControlArea>,
+) -> E {
+    let Some(area) = area else { return e };
+    if area == WindowControlArea::Drag {
+        ANY_DRAG_REGION.with(|c| c.set(true));
+    }
+    CONTROL_HITBOXES.with(|v| v.borrow_mut().push((id, area)));
+    e.window_control_area(area)
+}
+
 /// Builds the current tree root (or nothing) for the hosting view `V`.
 pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyElement {
     // ONE clock read per frame: nodes animating together must sample the same
@@ -472,11 +595,15 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     // side map above. `render()` is the only entry point, so this is the only
     // place that can know a new element tree is being built.
     reset_bounds();
+    ANY_DRAG_REGION.with(|c| c.set(false));
+    CONTROL_HITBOXES.with(|v| v.borrow_mut().clear());
     tree::read_tree(|t| {
         if t.root == 0 {
             Empty.into_any_element()
         } else {
-            build_node(t, t.root, window, cx, now)
+            // The root inherits nothing: `window-drag`'s initial value is
+            // `none`, spelled here as "nobody declared anything".
+            build_node(t, t.root, window, cx, now, None)
         }
     })
 }
@@ -487,10 +614,18 @@ fn build_node<V: 'static>(
     window: &mut Window,
     cx: &mut Context<V>,
     now: std::time::Instant,
+    parent_drag: Option<WindowDrag>,
 ) -> AnyElement {
     let Some(node) = t.node(id) else {
         return Empty.into_any_element();
     };
+    // `window-drag` is inherited (the CSSWG resolved that explicitly) and
+    // vn-css has no inherited properties at all, so the fold happens here, on
+    // the way down. A browser allows the property on a replaced element too,
+    // hence `<img>` and `<lottie>` get the same treatment.
+    let extras = node.computed.as_ref().map(|cs| cs.extras).unwrap_or_default();
+    let (drag, control_area) = window_control_of(&extras, parent_drag);
+    advise_interactive_in_drag_region(t, node, &extras, drag);
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
         // element out as a full line box — and Vue anchors every Fragment
@@ -500,15 +635,15 @@ fn build_node<V: 'static>(
         Kind::Text => SharedString::from(node.text.clone()).into_any_element(),
         Kind::Anchor => Empty.into_any_element(),
         Kind::Element if t.name(node.tag) == "img" => {
-            probe(id, build_img(t, id, node, window, cx, now))
+            probe(id, build_img(t, id, node, window, cx, now, control_area))
         }
         Kind::Element if t.name(node.tag) == "lottie" => {
-            probe(id, build_lottie(t, id, node, window, cx, now))
+            probe(id, build_lottie(t, id, node, window, cx, now, control_area))
         }
         Kind::Element => probe(id, {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
-            let mut d = div().id(id as usize);
+            let mut d = with_control_area(div().id(id as usize), id, control_area);
             let mut scrolls = false;
             if let Some(cs) = &node.computed {
                 d = apply_computed_style(d, cs, id, now);
@@ -640,8 +775,12 @@ fn build_node<V: 'static>(
             } else if !node.text.is_empty() {
                 d.child(node.text.clone()).into_any_element()
             } else {
-                d.children(node.children.iter().map(|&c| build_node(t, c, window, cx, now)))
-                    .into_any_element()
+                d.children(
+                    node.children
+                        .iter()
+                        .map(|&c| build_node(t, c, window, cx, now, drag)),
+                )
+                .into_any_element()
             }
         }),
     }
@@ -944,6 +1083,7 @@ fn build_img<V: 'static>(
     window: &mut Window,
     cx: &mut Context<V>,
     now: std::time::Instant,
+    control_area: Option<WindowControlArea>,
 ) -> AnyElement {
     let src = t.prop(id, "src").unwrap_or("").to_string();
     let alt = t.prop(id, "alt").unwrap_or("").to_string();
@@ -952,7 +1092,7 @@ fn build_img<V: 'static>(
         // Nothing loadable at all (empty/unsupported `src` — already advised).
         // A browser still lays the element out and paints the alt text, so the
         // node keeps its box and its styles.
-        let mut d = div().id(id as usize);
+        let mut d = with_control_area(div().id(id as usize), id, control_area);
         if let Some(cs) = &node.computed {
             d = apply_computed_style(d, cs, id, now);
         }
@@ -960,7 +1100,7 @@ fn build_img<V: 'static>(
         return d.child(alt_element(&alt)).into_any_element();
     };
 
-    let mut e = gpui::img(source).id(id as usize);
+    let mut e = with_control_area(gpui::img(source).id(id as usize), id, control_area);
     if let Some(cs) = &node.computed {
         e = apply_computed_style(e, cs, id, now);
     }
@@ -1088,11 +1228,12 @@ fn build_lottie<V: 'static>(
     window: &mut Window,
     cx: &mut Context<V>,
     now: std::time::Instant,
+    control_area: Option<WindowControlArea>,
 ) -> AnyElement {
     // Load (once per `src`) and push this frame's props into the transport.
     let intrinsic = crate::lottie::sync(t, id);
 
-    let mut d = div().id(id as usize);
+    let mut d = with_control_area(div().id(id as usize), id, control_area);
     if let Some(cs) = &node.computed {
         d = apply_computed_style(d, cs, id, now);
     }
