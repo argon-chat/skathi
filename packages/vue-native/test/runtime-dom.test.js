@@ -44,12 +44,23 @@ describe("tree queries answered from the mirror", () => {
     expect(button.nodeName).toBe("BUTTON");
   });
 
+  test("`children` is element-only, `childNodes` is everything", () => {
+    // The DOM's own split, and it is load-bearing: `aria-hidden` walks
+    // `parent.children` and calls `getAttribute` on each member, so a text
+    // mirror in that list is one logged failure per node.
+    const rt = createRuntime();
+    const { section, button, span, text } = tree(rt);
+    expect(section.children).toEqual([button, span]);
+    expect(button.childNodes).toEqual([text]);
+    expect(button.children).toEqual([]);
+  });
+
   test("setElementText is readable back through textContent", () => {
     const rt = createRuntime();
     const { button } = tree(rt);
     rt.nodeOps.setElementText(button, "Save");
     expect(button.textContent).toBe("Save");
-    expect(button.children.length).toBe(0);
+    expect(button.childNodes.length).toBe(0);
   });
 });
 
@@ -366,6 +377,7 @@ describe("missing globals (G5)", () => {
     const child = rt.nodeOps.createElement("div");
     rt.nodeOps.insert(child, frag, null);
     expect(frag.children).toEqual([child]);
+    expect(frag.childNodes).toEqual([child]);
     // Detached: it hangs off no root, so it is not painted.
     expect(child.isConnected).toBe(false);
   });

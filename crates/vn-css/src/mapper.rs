@@ -978,6 +978,18 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             }
         }
         Transform(list, _) => apply_transform(list, x, diagnostics),
+        // taffy is border-box and only border-box, so `border-box` is not a
+        // divergence — it is the model. `content-box` is one, and says so.
+        BoxSizing(v, _) => {
+            use lightningcss::properties::size::BoxSizing as BS;
+            if matches!(v, BS::ContentBox) {
+                warn_once(
+                    diagnostics,
+                    "`box-sizing: content-box` is not supported (v1) — taffy sizes every box as \
+                     `border-box`, so padding and border stay INSIDE the declared width/height",
+                );
+            }
+        }
         Top(v) => r.inset.top = lpa_length(v),
         Right(v) => r.inset.right = lpa_length(v),
         Bottom(v) => r.inset.bottom = lpa_length(v),

@@ -148,7 +148,11 @@ pub fn bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
 /// have to keep in sync with a browser's.
 pub fn computed_style(id: u32) -> Option<String> {
     tree::read_tree(|t| {
-        let cs = t.node(id)?.computed.as_ref()?;
+        // A node that exists but has not been cascaded yet (created earlier in
+        // this same JS wave) computes to the initial values, not to nothing —
+        // a browser has no "not styled yet" state to report.
+        let default = vn_css::ComputedStates::default();
+        let cs = t.node(id)?.computed.as_ref().unwrap_or(&default);
         let mut out = String::new();
         let mut put = |k: &str, v: String| {
             out.push_str(k);
@@ -157,68 +161,64 @@ pub fn computed_style(id: u32) -> Option<String> {
             out.push('\n');
         };
 
-        if let Some(d) = cs.base.display {
-            put(
-                "display",
-                match d {
-                    gpui::Display::Block => "block",
-                    gpui::Display::Flex => "flex",
-                    gpui::Display::Grid => "grid",
-                    gpui::Display::None => "none",
-                }
-                .into(),
-            );
-        }
-        if let Some(p) = cs.base.position {
-            // `fixed` is laid out as absolute (see the mapper) but the AUTHORED
-            // value is what a component reads back, and floating-ui branches on
-            // exactly this string.
-            put(
-                "position",
-                match (cs.extras.fixed, p) {
-                    (Some(true), _) => "fixed",
-                    (_, gpui::Position::Absolute) => "absolute",
-                    (_, gpui::Position::Relative) => "relative",
-                }
-                .into(),
-            );
-        }
-        if let Some(v) = cs.base.visibility {
-            put(
-                "visibility",
-                match v {
-                    gpui::Visibility::Visible => "visible",
-                    gpui::Visibility::Hidden => "hidden",
-                }
-                .into(),
-            );
-        }
-        for (name, axis) in [("overflow-x", cs.base.overflow.x), ("overflow-y", cs.base.overflow.y)] {
-            if let Some(o) = axis {
-                put(
-                    name,
-                    match o {
-                        gpui::Overflow::Visible => "visible",
-                        gpui::Overflow::Hidden => "hidden",
-                        gpui::Overflow::Clip => "clip",
-                        gpui::Overflow::Scroll => "scroll",
-                    }
-                    .into(),
-                );
+        // Every property in the published set ALWAYS has a value: a browser's
+        // computed style has no "absent", and a component that reads `display`
+        // expects a keyword, not "". So an undeclared property reports its CSS
+        // initial value and only a property OUTSIDE the set reads "" (with the
+        // advisory the JS side prints).
+        put(
+            "display",
+            match cs.base.display.unwrap_or(gpui::Display::Block) {
+                gpui::Display::Block => "block",
+                gpui::Display::Flex => "flex",
+                gpui::Display::Grid => "grid",
+                gpui::Display::None => "none",
             }
-        }
-        if let Some(o) = cs.base.opacity {
-            put("opacity", format!("{o}"));
-        }
-        if let Some(z) = cs.extras.z_index {
-            put("z-index", format!("{z}"));
-        }
-        if cs.extras.pointer_events_none.is_some() {
-            put(
-                "pointer-events",
-                if cs.extras.pointer_events_none == Some(true) { "none" } else { "auto" }.into(),
-            );
-        }
+            .into(),
+        );
+        // `fixed` is laid out as absolute (see the mapper) but the AUTHORED
+        // value is what a component reads back, and @floating-ui branches on
+        // exactly this string.
+        put(
+            "position",
+            match (cs.extras.fixed, cs.base.position) {
+                (Some(true), _) => "fixed",
+                (_, Some(gpui::Position::Absolute)) => "absolute",
+                (_, Some(gpui::Position::Relative)) => "relative",
+                (_, None) => "static",
+            }
+            .into(),
+        );
+        put(
+            "visibility",
+            match cs.base.visibility.unwrap_or(gpui::Visibility::Visible) {
+                gpui::Visibility::Visible => "visible",
+                gpui::Visibility::Hidden => "hidden",
+            }
+            .into(),
+        );
+        let overflow_name = |o: Option<gpui::Overflow>| match o.unwrap_or(gpui::Overflow::Visible) {
+            gpui::Overflow::Visible => "visible",
+            gpui::Overflow::Hidden => "hidden",
+            gpui::Overflow::Clip => "clip",
+            gpui::Overflow::Scroll => "scroll",
+        };
+        put("overflow-x", overflow_name(cs.base.overflow.x).into());
+        put("overflow-y", overflow_name(cs.base.overflow.y).into());
+        // The shorthand, which is what `isOverflowElement` in @floating-ui reads.
+        put(
+            "overflow",
+            format!("{} {}", overflow_name(cs.base.overflow.x), overflow_name(cs.base.overflow.y)),
+        );
+        put("opacity", format!("{}", cs.base.opacity.unwrap_or(1.0)));
+        put(
+            "z-index",
+            cs.extras.z_index.map(|z| z.to_string()).unwrap_or_else(|| "auto".into()),
+        );
+        put(
+            "pointer-events",
+            if cs.extras.pointer_events_none == Some(true) { "none" } else { "auto" }.into(),
+        );
         put(
             "transform",
             match cs.extras.translate {
@@ -226,6 +226,29 @@ pub fn computed_style(id: u32) -> Option<String> {
                 None => "none".into(),
             },
         );
+        // The containing-block probe every floating-ui build runs. None of these
+        // is applied by the renderer, so their initial value IS what happens —
+        // reporting it is more honest than reporting nothing, and it lets
+        // `isContainingBlock` answer correctly instead of by accident.
+        for name in ["translate", "rotate", "scale", "perspective", "filter"] {
+            put(name, "none".into());
+        }
+        put("will-change", "auto".into());
+        put("contain", "none".into());
+        put("container-type", "normal".into());
+        put(
+            "backdrop-filter",
+            match cs.base.backdrop_blur {
+                Some(r) => format!("blur({}px)", f32::from(r)),
+                None => "none".into(),
+            },
+        );
+        // `@keyframes` are dropped, so no animation ever runs — and `none` is
+        // exactly what makes reka-ui's `Presence` unmount immediately instead of
+        // waiting forever for an `animationend` that cannot come.
+        put("animation-name", "none".into());
+        put("animation-duration", "0s".into());
+        put("animation-delay", "0s".into());
         // The transition list, in the shape runtime-dom's `<Transition>` reads
         // it: a comma-joined value per longhand, one entry per list item.
         if cs.transitions.is_empty() {
@@ -241,12 +264,11 @@ pub fn computed_style(id: u32) -> Option<String> {
             put("transition-delay", join(&|s| secs(s.delay)));
         }
         // The USED size, i.e. the painted rectangle — the only place a real
-        // number exists. Absent (rather than "0px") when the node has not been
-        // painted, which is the honest answer.
-        if let Some((_, _, w, h)) = crate::render::bounds_of(id) {
-            put("width", format!("{w}px"));
-            put("height", format!("{h}px"));
-        }
+        // number exists. A node that has not been painted reports `0px`, which
+        // is what a browser reports for a `display: none` one.
+        let (w, h) = crate::render::bounds_of(id).map(|(_, _, w, h)| (w, h)).unwrap_or((0.0, 0.0));
+        put("width", format!("{w}px"));
+        put("height", format!("{h}px"));
         // gpui lays out left-to-right unconditionally; floating-ui asks.
         put("direction", "ltr".into());
         for (name, value) in cs.vars.iter() {

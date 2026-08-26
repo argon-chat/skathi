@@ -182,7 +182,7 @@ function mk(id, kind, tag) {
   n.kind = kind;
   n.tag = tag;
   n.parentNode = null;
-  n.children = [];
+  n.childNodes = [];
   if (kind === 1) {
     n.tagName = String(tag).toUpperCase();
     n.value = "";
@@ -210,7 +210,7 @@ function mk(id, kind, tag) {
 
 function forEachDeep(n, f) {
   f(n);
-  for (const c of n.children) forEachDeep(c, f);
+  for (const c of n.childNodes) forEachDeep(c, f);
 }
 
 const handlers = new Map(); // node id -> { click: fn }
@@ -231,14 +231,14 @@ const nodeOps = {
     __vn_set_text(node.id, node.text);
   },
   setElementText: (node, text) => {
-    for (const c of node.children) {
+    for (const c of node.childNodes) {
       c.parentNode = null;
       forEachDeep(c, (n) => {
         handlers.delete(n.id);
         nodesById.delete(n.id);
       });
     }
-    node.children.length = 0;
+    node.childNodes.length = 0;
     // The element's OWN text (exclusive with children, exactly as in the host
     // tree) — `textContent` reads it back.
     node.ownText = String(text);
@@ -248,16 +248,16 @@ const nodeOps = {
   insert: (child, parent, anchor) => {
     // insert is also move: detach from the old mirror parent first.
     if (child.parentNode) {
-      const cs = child.parentNode.children;
+      const cs = child.parentNode.childNodes;
       const i = cs.indexOf(child);
       if (i >= 0) cs.splice(i, 1);
     }
-    let idx = parent.children.length;
+    let idx = parent.childNodes.length;
     if (anchor != null) {
-      const i = parent.children.indexOf(anchor);
+      const i = parent.childNodes.indexOf(anchor);
       if (i >= 0) idx = i;
     }
-    parent.children.splice(idx, 0, child);
+    parent.childNodes.splice(idx, 0, child);
     child.parentNode = parent;
     __vn_insert(child.id, parent.id, anchor ? anchor.id : 0);
     notifyMutation(parent, "childList", { addedNodes: [child], removedNodes: [] });
@@ -265,8 +265,8 @@ const nodeOps = {
   remove: (child) => {
     const p = child.parentNode;
     if (p) {
-      const i = p.children.indexOf(child);
-      if (i >= 0) p.children.splice(i, 1);
+      const i = p.childNodes.indexOf(child);
+      if (i >= 0) p.childNodes.splice(i, 1);
       child.parentNode = null;
       notifyMutation(p, "childList", { addedNodes: [], removedNodes: [child] });
     }
@@ -280,8 +280,8 @@ const nodeOps = {
   nextSibling: (node) => {
     const p = node.parentNode;
     if (!p) return null;
-    const i = p.children.indexOf(node);
-    return i >= 0 ? (p.children[i + 1] ?? null) : null;
+    const i = p.childNodes.indexOf(node);
+    return i >= 0 ? (p.childNodes[i + 1] ?? null) : null;
   },
   // <style scoped>: Vue stamps every element a scoped component renders (and
   // child component roots) with its data-v id — the Rust matcher buckets on it.
@@ -717,12 +717,15 @@ defineDomGet(
   },
   [TextProto],
 );
-// `children` on the mirror is EVERY child node (the renderer's own list), so
-// `childNodes` is its DOM name; the element-only views are derived.
-defineDomGet("childNodes", function () {
-  return this.children;
+// `childNodes` is the renderer's own list: every child node, in order.
+// `children` is the DOM's ELEMENT-only view of it, and the distinction is
+// load-bearing — `aria-hidden` (which reka's Dialog uses to hide the rest of
+// the page) walks `parent.children` and calls `getAttribute` on each, so
+// handing it text and comment mirrors made it log one failure per node.
+const elementChildren = (n) => (n.childNodes || []).filter((c) => c.kind === 1);
+defineDomGet("children", function () {
+  return elementChildren(this);
 });
-const elementChildren = (n) => (n.children || []).filter((c) => c.kind === 1);
 defineDomGet("firstElementChild", function () {
   return elementChildren(this)[0] ?? null;
 });
@@ -736,8 +739,8 @@ defineDomGet("childElementCount", function () {
 function elementSibling(node, step) {
   const p = node.parentNode;
   if (!p) return null;
-  for (let i = p.children.indexOf(node) + step; i >= 0 && i < p.children.length; i += step) {
-    if (p.children[i].kind === 1) return p.children[i];
+  for (let i = p.childNodes.indexOf(node) + step; i >= 0 && i < p.childNodes.length; i += step) {
+    if (p.childNodes[i].kind === 1) return p.childNodes[i];
   }
   return null;
 }
@@ -754,7 +757,7 @@ defineDomGet(
     const walk = (n) => {
       if (n.kind === 2) out += n.text ?? "";
       else if (n.kind === 1 && n.ownText) out += n.ownText;
-      for (const c of n.children || []) walk(c);
+      for (const c of n.childNodes || []) walk(c);
     };
     walk(this);
     return out;
@@ -1568,7 +1571,10 @@ for (const [name, tag] of Object.entries(TAG_CLASSES)) {
 //    an unsupported one would in a browser — with one advisory naming it.
 const computedCache = new WeakMap();
 function computedStyleFor(node) {
-  const raw = node?.id ? __vn_computed_style(node.id) : "";
+  // `document.body` / `documentElement` are not nodes in the retained tree;
+  // they stand for the app root, so that is whose style they report.
+  const id = typeof node?.id === "number" ? node.id : appRoot?.id;
+  const raw = id ? __vn_computed_style(id) : "";
   const map = Object.create(null);
   for (const line of raw.split("\n")) {
     if (!line) continue;
@@ -1647,7 +1653,7 @@ if (doc) {
     // collect tabbable candidates, and an empty one silently traps nothing.
     const flat = [];
     const walk = (n) => {
-      for (const c of n.children || []) {
+      for (const c of n.childNodes || []) {
         const show = c.kind === 1 ? 1 : c.kind === 2 ? 4 : 128;
         if (whatToShow & show) flat.push(c);
         walk(c);
