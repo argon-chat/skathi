@@ -17,15 +17,25 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const LOADER_PATH = join(HERE, "../src/loader.js");
 
-const RUNTIME_IMPORT = /^\s*import\s+\*\s+as\s+runtimeNs\s+from\s+["']\.\/runtime\.js["'];?\s*$/m;
+// Every `import * as NS from "..."` at the top of loader.js: the runtime one
+// plus one per VENDORED LIBRARY (vue-router, pinia, …). All of them are
+// stripped and re-bound as parameters — the runtime gets the stub below, the
+// vendored ones get an empty namespace, which is all the registry seeding
+// needs (the tests never call into those libraries).
+const NS_IMPORT = /^\s*import\s+\*\s+as\s+(\w+)\s+from\s+["']([^"']+)["'];?[^\S\n]*$/gm;
+const RUNTIME_SPEC = "./runtime.js";
 
 /** A fresh loader world. */
 export function createLoader() {
   const raw = readFileSync(LOADER_PATH, "utf8");
-  if (!RUNTIME_IMPORT.test(raw)) {
+  const namespaces = []; // [localName, specifier]
+  const src = raw.replace(NS_IMPORT, (_m, local, spec) => {
+    namespaces.push([local, spec]);
+    return "";
+  });
+  if (!namespaces.some(([local, spec]) => local === "runtimeNs" && spec === RUNTIME_SPEC)) {
     throw new Error("loader.js no longer imports ./runtime.js the expected way — update this harness");
   }
-  const src = raw.replace(RUNTIME_IMPORT, "");
 
   const logs = [];
   const stylesheets = [];
@@ -40,13 +50,15 @@ export function createLoader() {
     error: (m) => logs.push(String(m)),
   };
 
-  // eslint-disable-next-line no-new-func
-  new Function("globalThis", "runtimeNs", "__vn_set_stylesheet", "console", src)(
+  const params = ["globalThis", "__vn_set_stylesheet", "console", ...namespaces.map(([n]) => n)];
+  const args = [
     sandbox,
-    runtimeNs,
     (css) => stylesheets.push(css),
     consoleStub,
-  );
+    ...namespaces.map(([n]) => (n === "runtimeNs" ? runtimeNs : {})),
+  ];
+  // eslint-disable-next-line no-new-func
+  new Function(...params, src)(...args);
 
   const world = {
     VN: sandbox.__VN__,

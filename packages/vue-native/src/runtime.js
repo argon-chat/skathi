@@ -429,6 +429,15 @@ export function createApp(rootComponent, rootProps = null) {
         __vn_log("teardown: " + e);
       }
       __vn_remove(root.id);
+      // Detached-but-live nodes: <KeepAlive> creates its cache container with
+      // createElement and NEVER inserts or removes it (Vue moves subtrees in
+      // and out of it), so nothing above ever tells us to free it. After
+      // app.unmount() every node Vue owns is gone from the mirror, so whatever
+      // is left is exactly that kind of orphan — free it or the host arena
+      // grows by one node per KeepAlive on every hot restart.
+      for (const id of Array.from(nodesById.keys())) __vn_remove(id);
+      nodesById.clear();
+      handlers.clear();
       globalThis.__VN_CSS__ = [];
       globalThis.__VN_TEARDOWN__ = undefined;
     };

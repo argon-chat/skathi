@@ -28,10 +28,15 @@
 // fall back to a state-losing hard restart.
 
 import * as runtimeNs from "./runtime.js";
-// vue-router (memory history — no browser location/history needed) rides the
-// vendor bundle so real router-based apps work unchanged. Its internal
-// `import ... from "vue"` is aliased to runtime.js by the vendor build.
+// Vendored libraries ride the vendor bundle so real library-based apps work
+// unchanged: there is no node_modules resolution at runtime (classic scripts
+// only), so anything an app may `import` from npm has to be baked in here and
+// pre-seeded into the registry below. Their own `import ... from "vue"` is
+// aliased to runtime.js by the vendor build (see build.ts).
+//   vue-router  memory history — no browser location/history needed.
+//   pinia       store library; `createPinia()` is an ordinary app plugin.
 import * as vueRouterNs from "vue-router";
+import * as piniaNs from "pinia";
 
 const factories = new Map(); // id -> function (require, module, exports)
 const cache = new Map(); // id -> { id, exports }
@@ -219,8 +224,21 @@ for (const alias of ["vue", "vue-native"]) {
   factories.set(alias, () => {});
   cache.set(alias, { id: alias, exports: vueExports });
 }
-factories.set("vue-router", () => {});
-cache.set("vue-router", { id: "vue-router", exports: vueRouterNs });
+
+// Vendored npm packages: one registry entry each, exports handed over
+// verbatim. `VENDOR_IDS` is what the invalidation paths below skip — these
+// module records are the *live library instances* (vue-router's route state,
+// pinia's active-pinia pointer), so dropping them on a hard restart would hand
+// the fresh app a second copy of every library.
+const VENDOR_IDS = new Set(["vue", "vue-native"]);
+for (const [name, ns] of [
+  ["vue-router", vueRouterNs],
+  ["pinia", piniaNs],
+]) {
+  factories.set(name, () => {});
+  cache.set(name, { id: name, exports: ns });
+  VENDOR_IDS.add(name);
+}
 
 // ---- boot / restart -------------------------------------------------------
 
@@ -262,7 +280,7 @@ function hardRestart(reason) {
   log("hard restart (" + reason + ")");
   teardown();
   for (const id of Array.from(cache.keys())) {
-    if (id !== "vue" && id !== "vue-native" && id !== "vue-router") cache.delete(id);
+    if (!VENDOR_IDS.has(id)) cache.delete(id);
   }
   degraded = true; // cleared once the entry actually ran again
   requireId(entryId, null);

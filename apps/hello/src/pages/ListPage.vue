@@ -1,10 +1,19 @@
 <script setup>
-import { ref } from "vue";
+import { onActivated, onDeactivated, ref } from "vue";
+import { useSession } from "../stores/session.js";
+
+const session = useSession();
 
 const rows = Array.from({ length: 25 }, (_, i) => `row ${i + 1}`);
 const scrollTop = ref(0);
 const onScroll = (e) => (scrollTop.value = e.target.scrollTop);
 const wheelY = ref(0);
+
+// The scroll OFFSET is host state (a gpui ScrollHandle keyed by node id), not
+// component state: KeepAlive moves the node rather than destroying it, so the
+// handle — and the position — survive the tab switch on their own.
+onActivated(() => console.log("[app] ListPage ACTIVATED (scrollTop=" + scrollTop.value + ")"));
+onDeactivated(() => console.log("[app] ListPage DEACTIVATED (scrollTop=" + scrollTop.value + ")"));
 </script>
 
 <template>
@@ -15,6 +24,10 @@ const wheelY = ref(0);
     </div>
     <div class="hint">scrollTop: {{ scrollTop.toFixed(0) }}px (wheel over the box)</div>
     <div class="hint">last wheel ΔY over the card: {{ wheelY.toFixed(1) }}</div>
+    <div class="hint keep">
+      &lt;KeepAlive&gt;: leave and come back — the box stays where you left it
+    </div>
+    <div class="hint store">pinia (same store as the header): {{ session.badge }}</div>
   </div>
 </template>
 
@@ -42,6 +55,14 @@ const wheelY = ref(0);
   border: 1px solid #ffffff2e;
   border-radius: 6px;
 }
+/* :focus rides gpui's focus rung; :focus-visible only when Tab brought it. */
+.scrollbox:focus {
+  border-color: #7fd4ff;
+  background: #7fd4ff1f;
+}
+.scrollbox:focus-visible {
+  border-color: #ffcc00;
+}
 .row {
   padding: 4px;
   font-size: 12px;
@@ -50,5 +71,11 @@ const wheelY = ref(0);
 .hint {
   font-size: 11px;
   color: #ffffff88;
+}
+.keep {
+  color: #a5f3a5;
+}
+.store {
+  color: #ffd479;
 }
 </style>

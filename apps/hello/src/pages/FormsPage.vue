@@ -1,5 +1,11 @@
 <script setup>
-import { ref, computed } from "vue";
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from "vue";
+import { useSession } from "../stores/session.js";
+
+// --- pinia -----------------------------------------------------------------
+// The store is created on first use and lives in the app's effect scope, so
+// every page (and the shell header) reads the very same instance.
+const session = useSession();
 
 const name = ref("");
 const focused = ref("nothing");
@@ -9,6 +15,7 @@ const submit = () => {
   const v = name.value.trim();
   if (!v) return;
   submitted.value = [...submitted.value.slice(-2), v];
+  session.addNote(v); // …and into the SHARED store, read by every other tab
   name.value = "";
 };
 const ellipsis = (s) => (s.length > 14 ? s.slice(0, 14) + "…" : s);
@@ -24,6 +31,20 @@ const guardDigits = (e) => {
     blocked.value++;
   }
 };
+
+// --- KeepAlive lifecycle ---------------------------------------------------
+// setup / mounted run ONCE; activated / deactivated run on every tab switch.
+// `visits` counts how often this page came back — proof the instance is the
+// same one, not a fresh mount.
+const activations = ref(0);
+console.log("[app] FormsPage setup ran");
+onMounted(() => console.log("[app] FormsPage mounted"));
+onUnmounted(() => console.log("[app] FormsPage unmounted"));
+onActivated(() => {
+  activations.value++;
+  console.log("[app] FormsPage ACTIVATED (#" + activations.value + ")");
+});
+onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
 </script>
 
 <template>
@@ -43,6 +64,27 @@ const guardDigits = (e) => {
     <div class="hint">Enter-submitted: {{ submittedText }}</div>
     <div class="hint">last e.key: {{ lastKey }} — digits blocked by preventDefault: {{ blocked }}</div>
     <div class="hint">focus → {{ focused }}</div>
+    <div class="hint keep">
+      &lt;KeepAlive&gt;: setup ran once · onActivated fired {{ activations }}× — the text above
+      survives a tab switch
+    </div>
+
+    <!-- ===== pinia: shared state edited here, read everywhere ============ -->
+    <div class="store">
+      <div class="store-title">pinia store "session" — shared across every tab</div>
+      <div class="store-row">
+        <div class="btn" @click="session.bump()">visits++ ({{ session.visits }})</div>
+        <div class="btn ghost" @click="session.reset()">reset</div>
+        <div class="btn ghost" @click="session.setUser(session.user === 'guest' ? 'yuuki' : 'guest')">
+          user = {{ session.user }}
+        </div>
+      </div>
+      <div class="hint">store.badge (a computed inside the store): {{ session.badge }}</div>
+      <div class="hint">
+        store.notes ({{ session.noteCount }}): {{ session.notes.join(" · ") || "—" }} — Enter above
+        appends here too
+      </div>
+    </div>
   </div>
 </template>
 
@@ -69,8 +111,55 @@ const guardDigits = (e) => {
   font-size: 13px;
   color: #ffffff;
 }
+.field:focus {
+  border-color: #7fd4ff;
+}
 .hint {
   font-size: 11px;
   color: #ffffff88;
+}
+.keep {
+  color: #a5f3a5;
+}
+
+/* ===== pinia block ===================================================== */
+.store {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #ffd4790f;
+  border: 1px solid #ffd47933;
+}
+.store-title {
+  font-size: 12px;
+  color: #ffd479;
+}
+.store-row {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+}
+.btn {
+  padding: 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #ffffff;
+  background: #4f8cff59;
+  border: 1px solid #6ea4ff66;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.btn:hover {
+  background: #4f8cffcc;
+}
+.btn.ghost {
+  background: #ffffff0d;
+  border: 1px solid #ffffff2e;
+  color: #ffffffcc;
+}
+.btn.ghost:hover {
+  background: #ffffff22;
 }
 </style>
