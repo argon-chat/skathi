@@ -54,6 +54,28 @@ const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.js
 const APP_SRC_DIR = dirname(ENTRY_ABS);
 const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
 
+// `apps/<app>/vn.config.json`'s `window` block, emitted next to the bundle as
+// `dist/window.json` and `include_str!`d by crates/vn-app/src/prod.rs. The
+// host reads it BEFORE `cx.open_window`, so it cannot ride inside the bundle
+// (which evaluates long after the window exists) - see docs/WINDOWING.md 4.1.
+// Always written, `{}` when the app declares none: a missing file would be a
+// Rust compile error, which is the right failure mode for the bundle but not
+// for an optional config.
+const APP_ROOT = APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR;
+const WINDOW_JSON = join(dirname(OUT_FILE), "window.json");
+
+function windowConfig(): string {
+  const path = join(APP_ROOT, "vn.config.json");
+  if (!existsSync(path)) return "{}";
+  try {
+    const cfg = JSON.parse(readFileSync(path, "utf8"));
+    return JSON.stringify(cfg?.window ?? {}, null, 2);
+  } catch (e) {
+    console.error(`[prod] ${path}: ${e}`);
+    return "{}";
+  }
+}
+
 /// Same discovery rule as the dev builder — no config, no Tailwind, and the
 /// emitted bundle is byte-identical to a pre-Tailwind one.
 const TW_CONFIG = findConfig(APP_SRC_DIR, WS_ROOT);
@@ -321,6 +343,8 @@ async function build() {
     body,
   ].join("\n");
   writeAtomic(OUT_FILE, out);
+  writeAtomic(WINDOW_JSON, windowConfig() + "
+");
 
   const sfcs = cssById.size - (TW_CONFIG ? 1 : 0);
   console.log(

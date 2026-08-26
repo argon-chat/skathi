@@ -105,7 +105,8 @@ export function createRuntime() {
   // eslint-disable-next-line no-new-func
   const exports = new Function(
     ...params,
-    `${body}\nreturn { patchProp, nodeOps, EV_CODES, canonicalEvent, hyphenate, createApp, handlers };`,
+    `${body}\nreturn { patchProp, nodeOps, EV_CODES, canonicalEvent, hyphenate, createApp, handlers,
+      appWindow, defineWindow, getCurrentWindow };`,
   )(...args);
 
   return {

@@ -114,6 +114,30 @@ const MODULES_DIR = join(DIST, "modules");
 
 const SOURCE_EXT = /\.(vue|js|ts|mjs)$/;
 
+// ---- vn.config.json -------------------------------------------------------
+// `apps/<app>/vn.config.json`'s `window` block is copied VERBATIM into the
+// manifest. The Rust host reads it BEFORE `cx.open_window`, which is the only
+// moment creation-time gpui options (min size, resizable, titlebar, backdrop)
+// can be set without a visible flash (docs/WINDOWING.md 4.1).
+//
+// It sits next to `src/`, i.e. where a Vite app keeps `index.html` - the same
+// directory a relative `<img src>` resolves against.
+const VN_CONFIG_DIR = APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR;
+const VN_CONFIG_PATH = join(VN_CONFIG_DIR, "vn.config.json");
+
+function readWindowConfig(): Record<string, unknown> | undefined {
+  if (!existsSync(VN_CONFIG_PATH)) return undefined;
+  try {
+    const cfg = JSON.parse(readFileSync(VN_CONFIG_PATH, "utf8"));
+    return cfg && typeof cfg.window === "object" && cfg.window ? cfg.window : undefined;
+  } catch (e) {
+    // A malformed config must not take the whole build down, but it must also
+    // never be silently ignored - the window would just look wrong.
+    console.error(`[build] ${VN_CONFIG_PATH}: ${e}`);
+    return undefined;
+  }
+}
+
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const encId = (id: string) => id.split("/").join("__") + ".js";
 const J = (v: unknown) => JSON.stringify(v);
@@ -689,7 +713,11 @@ function writeManifest(files: string[]) {
   for (const id of ids) deps[id] = moduleDeps.get(id) ?? [];
   writeAtomic(
     join(DIST, "manifest.json"),
-    JSON.stringify({ rev, vendorRev, entry: toId(ENTRY_ABS), modules: ids, deps }, null, 2) + "\n",
+    JSON.stringify(
+      { rev, vendorRev, entry: toId(ENTRY_ABS), modules: ids, deps, window: readWindowConfig() },
+      null,
+      2,
+    ) + "\n",
   );
 }
 

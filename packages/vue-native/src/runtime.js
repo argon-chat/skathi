@@ -631,6 +631,51 @@ export function withKeys(fn, keys) {
   };
 }
 
+// ---- windowing (docs/WINDOWING.md tier 3) ---------------------------------
+//
+// `appWindow` itself is built in the host's JS prelude (crates/vn-app/src/
+// window.prelude.js) because the host observer, the state snapshot and the
+// standard tier-1 globals all have to exist before the app bundle evaluates.
+// This module is only its NAMESPACE: apps say
+//
+//     import { appWindow } from "vue-native";
+//
+// rather than reaching for a global, which is what keeps the extension
+// namespaced (tier 3) instead of pretending to be a web API.
+//
+// `getCurrentWindow()` exists only so ported Tauri code runs unmodified. When
+// multi-window lands it keeps meaning "this window" and `appWindow` keeps being
+// its binding — neither gets renamed.
+const windowHost = globalThis.__VN_WINDOW__;
+// The advisory is LAZY, not eager: a host without the window prelude (the unit
+// test harness, a future embedder) must not be scolded for an API it never
+// touches — an advisory that fires on code nobody wrote is noise.
+const missing = () =>
+  warnCompat(
+    "appWindow",
+    "the windowing host is missing (crates/vn-app/src/window.prelude.js did not evaluate) — " +
+      "`appWindow` is inert. See docs/WINDOWING.md.",
+  );
+const inertWindow = new Proxy(
+  {},
+  {
+    get(_t, key) {
+      missing();
+      // `isMaximized()` and friends must still answer a boolean, and every
+      // verb must still be callable, so inert code paths do not throw.
+      return typeof key === "string" && key.startsWith("is") ? () => false : () => undefined;
+    },
+    set() {
+      missing();
+      return true;
+    },
+  },
+);
+
+export const appWindow = windowHost ? windowHost.appWindow : inertWindow;
+export const defineWindow = windowHost ? windowHost.defineWindow : missing;
+export const getCurrentWindow = () => appWindow;
+
 // Compiled SFC code and app code import everything Vue-ish from here
 // ("vue" / "vue-native" are aliased to this module). Local exports win over
 // the star re-export, so our createApp shadows runtime-core's.
