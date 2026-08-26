@@ -1,11 +1,14 @@
 //! Measures the two backends against each other, windowless.
 //!
 //! ```text
-//! cargo run --release -p vn-lottie --features thorvg --example compare
-//! cargo run --release -p vn-lottie --features thorvg --example compare -- --png out/
-//! cargo run --release -p vn-lottie --features thorvg --example compare -- --soak probes/worm.json
-//! cargo run --release -p vn-lottie --features thorvg --example compare -- --golden
+//! cargo run --release -p vn-lottie --example compare
+//! cargo run --release -p vn-lottie --example compare -- --png out/
+//! cargo run --release -p vn-lottie --example compare -- --golden
+//! cargo run --release -p vn-lottie --example compare -- --soak probes/worm.json
 //! ```
+//!
+//! It measures whichever backends are compiled in, so `--no-default-features`
+//! turns it into a `rasterlottie`-only run rather than an error.
 //!
 //! `--golden` scores each backend against `LottieFiles/test-files`' own frame-0
 //! reference renders — the only external opinion on which one is *right* when

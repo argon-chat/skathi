@@ -1,7 +1,7 @@
 //! Proves `crates/vn-lottie/src/normalize.rs` is a no-op for ThorVG.
 //!
 //! ```text
-//! cargo run --release -p vn-lottie --features thorvg //!     --example normalize-neutrality -- crates/vn-lottie/tests/corpus/real-world
+//! cargo run --release -p vn-lottie --example normalize-neutrality -- //!     crates/vn-lottie/tests/corpus/real-world
 //! ```
 //!
 //! The compatibility pass exists because `rasterlottie` rejects two ordinary
