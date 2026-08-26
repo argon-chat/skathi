@@ -15,6 +15,7 @@
 //! few inline properties onto `gpui::Styled` calls. The real CSS layer
 //! (vn-css: stylesheets, cascade, per-state refinements) replaces it.
 
+mod dom;
 mod img;
 pub mod log;
 mod lottie;
@@ -27,7 +28,8 @@ pub use img::{asset_base, set_asset_base};
 pub use render::build_root;
 pub use tree::{
     with_tree, EV_BLUR, EV_CLICK, EV_COMPLETE, EV_ENTERFRAME, EV_FOCUS, EV_INPUT, EV_KEYDOWN,
-    EV_KEYUP, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEUP, EV_SCROLL, EV_WHEEL,
+    EV_KEYUP, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEENTER, EV_MOUSELEAVE, EV_MOUSEMOVE,
+    EV_MOUSEUP, EV_SCROLL, EV_WHEEL,
 };
 
 /// The numeric payload a native input event carries into JS. Meaning by event:
@@ -166,6 +168,53 @@ host_fn!(fn vn_set_dispatcher(g, args) {
     UNDEF
 });
 
+// ---------------------------------------------------------------------------
+// the DOM surface (compat roadmap G2) — see `dom.rs` for the semantics
+// ---------------------------------------------------------------------------
+
+/// Builds a JS string Value for a host fn to return. The runtime thread-local
+/// holds the same context the host call is running in, so this is the same
+/// `Context` — not a second one.
+fn ret_string(s: &str) -> u64 {
+    JsRuntime::with(|rt| rt.ctx().string(s).0)
+}
+
+/// `querySelectorAll` / `matches` / `closest`, answered by the REAL cascade
+/// matcher. Returns the matched ids comma-joined, `""` for no match, or
+/// `"!<advisory>"` when the selector is one the engine cannot run — the JS side
+/// turns that into the same advisory text a rule using it would print.
+host_fn!(fn vn_query(g, args) {
+    let selector = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
+    let root = arg_id(args.arg(1));
+    let mode = match arg_id(args.arg(2)) {
+        1 => dom::QueryMode::SelfOnly,
+        2 => dom::QueryMode::Closest,
+        _ => dom::QueryMode::Descendants,
+    };
+    let out = match dom::query(&selector, root, mode) {
+        Ok(ids) => ids.iter().map(u32::to_string).collect::<Vec<_>>().join(","),
+        Err(e) => format!("!{e}"),
+    };
+    ret_string(&out)
+});
+
+/// `getBoundingClientRect()` — `"x,y,w,h"`, or `""` when the node was not
+/// painted in the last frame (detached / `display: none`).
+host_fn!(fn vn_bounds(_g, args) {
+    let id = arg_id(args.arg(0));
+    let out = match dom::bounds(id) {
+        Some((x, y, w, h)) => format!("{x},{y},{w},{h}"),
+        None => String::new(),
+    };
+    ret_string(&out)
+});
+
+/// `getComputedStyle(el)` — `name=value` lines; see [`dom::computed_style`].
+host_fn!(fn vn_computed_style(_g, args) {
+    let id = arg_id(args.arg(0));
+    ret_string(&dom::computed_style(id).unwrap_or_default())
+});
+
 /// Registers the whole `__vn_*` protocol surface on the JS global.
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
@@ -185,6 +234,9 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_set_listener", 3, vn_set_listener as *const _),
         ("__vn_create_root", 0, vn_create_root as *const _),
         ("__vn_set_dispatcher", 1, vn_set_dispatcher as *const _),
+        ("__vn_query", 3, vn_query as *const _),
+        ("__vn_bounds", 1, vn_bounds as *const _),
+        ("__vn_computed_style", 1, vn_computed_style as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);

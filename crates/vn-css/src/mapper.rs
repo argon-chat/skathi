@@ -51,27 +51,88 @@ pub enum ObjectFit {
     None,
 }
 
+/// One component of a `translate()`, in the unit it was written in.
+///
+/// A percentage translate resolves against the ELEMENT'S OWN size, which no
+/// layout property can express — the renderer resolves it against the box the
+/// node was painted at last frame (see `vn-tree`'s `apply_computed_style`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TranslateLen {
+    Px(f32),
+    /// Fraction, not percent: `-50%` is `-0.5`.
+    Percent(f32),
+}
+
+impl TranslateLen {
+    /// Resolves to pixels against the element's own `size` along this axis.
+    pub fn to_px(self, own_size: f32) -> f32 {
+        match self {
+            TranslateLen::Px(v) => v,
+            TranslateLen::Percent(f) => f * own_size,
+        }
+    }
+}
+
 /// Computed values that a `gpui::StyleRefinement` has nowhere to carry.
 ///
 /// The refinement is the cascade's whole payload for every other property, so
 /// this is deliberately tiny and `Copy`: one folded value per node, refined in
 /// the same (specificity, order) sweep as the refinements themselves.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Extras {
     /// `object-fit` — only meaningful on a replaced element (`<img>`); parsed
     /// and folded for every element, exactly as a browser does.
     pub object_fit: Option<ObjectFit>,
+    /// `position: fixed`. gpui/taffy have one out-of-flow position (`Absolute`,
+    /// resolved against the element's PARENT), so `fixed` maps onto it and the
+    /// renderer additionally paints the node in a deferred layer so it lands
+    /// above its siblings. See the advisory in the `Position` arm.
+    pub fixed: Option<bool>,
+    /// `z-index`. gpui has no per-element z, so a POSITIVE z-index becomes a
+    /// deferred draw with that priority (which is a real "paints above
+    /// everything else"); a negative one cannot be expressed at all.
+    pub z_index: Option<i32>,
+    /// `pointer-events: none` — the node takes no listeners and no hover/active
+    /// rungs, which is how a hitbox stops existing in gpui.
+    pub pointer_events_none: Option<bool>,
+    /// The `translate()` part of a `transform`, in CSS order (x, y).
+    pub translate: Option<(TranslateLen, TranslateLen)>,
 }
 
 impl Extras {
     pub(crate) fn is_empty(&self) -> bool {
-        self.object_fit.is_none()
+        *self == Extras::default()
     }
 
     /// Later-wins merge, matching `Refineable::refine` for the refinements.
     pub(crate) fn refine(&mut self, other: &Extras) {
         if other.object_fit.is_some() {
             self.object_fit = other.object_fit;
+        }
+        if other.fixed.is_some() {
+            self.fixed = other.fixed;
+        }
+        if other.z_index.is_some() {
+            self.z_index = other.z_index;
+        }
+        if other.pointer_events_none.is_some() {
+            self.pointer_events_none = other.pointer_events_none;
+        }
+        if other.translate.is_some() {
+            self.translate = other.translate;
+        }
+    }
+
+    /// True when this node has to be painted in gpui's deferred layer for its
+    /// stacking to be right: `position: fixed`, or a positive `z-index`.
+    pub fn deferred_priority(&self) -> Option<usize> {
+        let z = self.z_index.unwrap_or(0);
+        if z > 0 {
+            Some(z as usize)
+        } else if self.fixed == Some(true) {
+            Some(0)
+        } else {
+            None
         }
     }
 }
@@ -558,6 +619,10 @@ fn unsupported(diagnostics: &mut Vec<String>, what: &str) {
     once(diagnostics, format!("unsupported value for {what} (v1)"));
 }
 
+fn warn_once(diagnostics: &mut Vec<String>, msg: &str) {
+    once(diagnostics, msg.to_string());
+}
+
 /// [`color`] only understands a resolved RGBA. `currentColor`, `color-mix()`,
 /// `light-dark()` and friends land here — and USED to fall through silently,
 /// which meant Tailwind's `bg-current` / `text-current` did nothing at all with
@@ -586,22 +651,39 @@ pub(crate) mod effect;
 /// `object-fit: <keyword>`. lightningcss has no typed `object-fit`, so the
 /// declaration arrives as an unknown property carrying a raw token list — the
 /// same shape `--shading` uses, minus the function call.
-fn object_fit(value: &lightningcss::properties::custom::TokenList, diagnostics: &mut Vec<String>) -> Option<ObjectFit> {
+fn single_ident<'a>(
+    value: &'a lightningcss::properties::custom::TokenList<'a>,
+) -> Option<&'a str> {
     use lightningcss::properties::custom::{Token, TokenOrValue};
     let mut idents = value.0.iter().filter_map(|t| match t {
         TokenOrValue::Token(Token::Ident(s)) => Some(s.as_ref()),
         _ => None,
     });
     let first = idents.next();
-    // `object-fit: scale-down` is one ident; `object-fit: cover cover` is not
-    // valid CSS and a browser drops the whole declaration.
+    // `object-fit: cover cover` is not valid CSS and a browser drops the whole
+    // declaration; so does anything that is not a bare keyword.
     if idents.next().is_some() {
+        return None;
+    }
+    first
+}
+
+fn object_fit(value: &lightningcss::properties::custom::TokenList, diagnostics: &mut Vec<String>) -> Option<ObjectFit> {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let multiple = value
+        .0
+        .iter()
+        .filter(|t| matches!(t, TokenOrValue::Token(Token::Ident(_))))
+        .count()
+        > 1;
+    if multiple {
         once(
             diagnostics,
             "`object-fit` takes a single keyword — the declaration was dropped".into(),
         );
         return None;
     }
+    let first = single_ident(value);
     match first {
         Some("fill") => Some(ObjectFit::Fill),
         Some("contain") => Some(ObjectFit::Contain),
@@ -790,15 +872,60 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         MarginLeft(v) => r.margin.left = lpa_length(v),
         Position(v) => {
             use lightningcss::properties::position::Position as P;
+            x.fixed = Some(matches!(v, P::Fixed));
             r.position = Some(match v {
                 P::Absolute => gpui::Position::Absolute,
+                // `fixed` is an out-of-flow box against the VIEWPORT. taffy has
+                // exactly one out-of-flow mode and it resolves against the
+                // element's parent, so that is what `fixed` becomes — plus a
+                // deferred paint layer (see `Extras::deferred_priority`) so the
+                // box lands above its siblings the way a fixed one does.
+                //
+                // The two agree exactly when the fixed element's parent IS the
+                // window — which is the case that matters, because a portalled
+                // overlay (`<Teleport to="body">`) has the app root as its
+                // parent. They diverge when a `fixed` element is left inside a
+                // smaller ancestor: it is then positioned against that ancestor
+                // rather than the viewport.
+                P::Fixed => {
+                    warn_once(
+                        diagnostics,
+                        "`position: fixed` is laid out as `absolute` against its PARENT (v1) — \
+                         gpui/taffy have no viewport-relative box. It is painted in a deferred \
+                         layer so it still stacks above its siblings; portal the element to the \
+                         app root (Vue's `<Teleport>`) to make the two agree",
+                    );
+                    gpui::Position::Absolute
+                }
                 P::Static | P::Relative => gpui::Position::Relative,
                 _ => {
-                    unsupported(diagnostics, "position (fixed/sticky)");
+                    unsupported(diagnostics, "position: sticky");
                     gpui::Position::Relative
                 }
             });
         }
+        // gpui has no per-element z. A POSITIVE z-index becomes a deferred draw
+        // with that priority — a real "paints (and hit-tests) above everything
+        // else", which is what every overlay uses it for. A negative one would
+        // have to paint BELOW its siblings, and there is no lever for that.
+        ZIndex(v) => {
+            use lightningcss::properties::position::ZIndex as Z;
+            match v {
+                Z::Integer(n) if *n > 0 => x.z_index = Some(*n),
+                Z::Integer(n) if *n < 0 => {
+                    warn_once(
+                        diagnostics,
+                        "a negative `z-index` cannot paint below its siblings (v1) — gpui has no \
+                         per-element z and its deferred layer only paints ON TOP; reorder the \
+                         elements instead",
+                    );
+                    x.z_index = Some(*n);
+                }
+                Z::Integer(n) => x.z_index = Some(*n),
+                Z::Auto => x.z_index = Some(0),
+            }
+        }
+        Transform(list, _) => apply_transform(list, x, diagnostics),
         Top(v) => r.inset.top = lpa_length(v),
         Right(v) => r.inset.right = lpa_length(v),
         Bottom(v) => r.inset.bottom = lpa_length(v),
@@ -1096,6 +1223,28 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     x.object_fit = Some(fit);
                 }
             }
+            // `pointer-events` is a real CSS property that lightningcss has no
+            // typed representation for either. `none` is expressed by giving
+            // the node no hitbox at all: no listeners, no hover/active rungs
+            // (see `vn-tree`'s renderer). It therefore stops REACTING; a click
+            // still does not fall through to whatever is painted underneath,
+            // because gpui resolves hits per hitbox rather than per pixel.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "pointer-events" =>
+            {
+                match single_ident(&c.value) {
+                    Some("none") => x.pointer_events_none = Some(true),
+                    Some("auto") => x.pointer_events_none = Some(false),
+                    other => once(
+                        diagnostics,
+                        format!(
+                            "unsupported value for pointer-events: {} — only `none` and `auto` \
+                             are modelled (SVG-only values have nothing to apply to)",
+                            other.unwrap_or("<not a keyword>")
+                        ),
+                    ),
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name) => {
                 once(
                     diagnostics,
@@ -1123,6 +1272,110 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 format!("property not mapped (v1): {}", prop_name(other)),
             );
         }
+    }
+}
+
+/// `transform` — the `translate()` half only.
+///
+/// gpui applies transformation matrices to sprites (SVG paths), never to laid
+/// out element trees, so there is no way to rotate, scale or skew a box. What
+/// there IS a way to do is MOVE one, and translation is what the reused
+/// component libraries actually need: shadcn centres its dialog with
+/// `translate(-50%, -50%)`, slides its switch thumb with `translateX(1.25rem)`
+/// and drives its progress bar with `translateX(-38%)`.
+///
+/// The move is applied as a layout offset by the renderer, so — unlike a real
+/// transform — it participates in layout. For an absolutely positioned box
+/// (every centring case) the two are identical; for an in-flow one the
+/// following siblings shift too, which is what the advisory says.
+///
+/// Tailwind always emits the full identity chain
+/// (`translate(…) rotate(0) skewX(0) skewY(0) scaleX(1) scaleY(1)`), so
+/// identity components are recognised and pass silently — only a REAL rotate/
+/// scale/skew is advised about.
+fn apply_transform(
+    list: &lightningcss::properties::transform::TransformList,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
+    use lightningcss::properties::transform::Transform as T;
+    use lightningcss::values::percentage::NumberOrPercentage;
+
+    fn len(v: &LengthPercentage) -> Option<TranslateLen> {
+        match v {
+            DimensionPercentage::Dimension(l) => length_value_px(l).map(TranslateLen::Px),
+            DimensionPercentage::Percentage(p) => Some(TranslateLen::Percent(p.0)),
+            DimensionPercentage::Calc(_) => None,
+        }
+    }
+    fn is_one(v: &NumberOrPercentage) -> bool {
+        match v {
+            NumberOrPercentage::Number(n) => *n == 1.0,
+            NumberOrPercentage::Percentage(p) => p.0 == 1.0,
+        }
+    }
+
+    let zero = TranslateLen::Px(0.0);
+    let (mut tx, mut ty) = (zero, zero);
+    let mut moved = false;
+    let mut dropped: Vec<&str> = Vec::new();
+    for t in &list.0 {
+        match t {
+            T::Translate(a, b) => match (len(a), len(b)) {
+                (Some(a), Some(b)) => {
+                    (tx, ty) = (a, b);
+                    moved = true;
+                }
+                _ => dropped.push("translate() with a calc() length"),
+            },
+            T::TranslateX(a) => match len(a) {
+                Some(a) => {
+                    tx = a;
+                    moved = true;
+                }
+                None => dropped.push("translateX() with a calc() length"),
+            },
+            T::TranslateY(b) => match len(b) {
+                Some(b) => {
+                    ty = b;
+                    moved = true;
+                }
+                None => dropped.push("translateY() with a calc() length"),
+            },
+            // Identity components (what Tailwind's transform stack is made of
+            // when only a translate utility is applied) are genuinely nothing.
+            T::Rotate(a) | T::RotateZ(a) | T::RotateX(a) | T::RotateY(a) if a.to_degrees() == 0.0 => {}
+            T::SkewX(a) | T::SkewY(a) if a.to_degrees() == 0.0 => {}
+            T::Skew(a, b) if a.to_degrees() == 0.0 && b.to_degrees() == 0.0 => {}
+            T::ScaleX(s) | T::ScaleY(s) | T::ScaleZ(s) if is_one(s) => {}
+            T::Scale(a, b) if is_one(a) && is_one(b) => {}
+            T::Rotate(_) | T::RotateX(_) | T::RotateY(_) | T::RotateZ(_) | T::Rotate3d(..) => {
+                dropped.push("rotate()")
+            }
+            T::Scale(..) | T::ScaleX(_) | T::ScaleY(_) | T::ScaleZ(_) | T::Scale3d(..) => {
+                dropped.push("scale()")
+            }
+            T::Skew(..) | T::SkewX(_) | T::SkewY(_) => dropped.push("skew()"),
+            T::Matrix(_) | T::Matrix3d(_) => dropped.push("matrix()"),
+            T::Perspective(_) => dropped.push("perspective()"),
+            T::TranslateZ(_) | T::Translate3d(..) => dropped.push("the Z axis of a 3D translate"),
+        }
+    }
+    if moved {
+        x.translate = Some((tx, ty));
+    }
+    if !dropped.is_empty() {
+        dropped.sort_unstable();
+        dropped.dedup();
+        once(
+            diagnostics,
+            format!(
+                "`transform` supports translate() only (v1) — dropped {}. gpui applies no matrix \
+                 to a laid out box; the translate itself is applied as a LAYOUT offset, so an \
+                 in-flow element's siblings move with it",
+                dropped.join(", ")
+            ),
+        );
     }
 }
 
@@ -1519,7 +1772,7 @@ mod tests {
 
     #[test]
     fn a_repeated_unmapped_property_is_reported_once() {
-        let (_, d) = map("z-index: 1; z-index: 2; z-index: 3");
+        let (_, d) = map("letter-spacing: 1px; letter-spacing: 2px; letter-spacing: 3px");
         assert_eq!(d.len(), 1, "{d:?}");
     }
 
@@ -1528,6 +1781,92 @@ mod tests {
         let (r, d) = map("background-color: currentColor");
         assert_eq!(r.background, None);
         assert!(d.iter().any(|m| m.contains("background-color")), "{d:?}");
+    }
+
+    // ---- positioning (compat roadmap G3) ---------------------------------
+
+    fn extras(body: &str) -> (Extras, Vec<String>) {
+        let mut d = Vec::new();
+        let inline = parse_inline_style(body, &mut d);
+        (inline.extras, d)
+    }
+
+    #[test]
+    fn absolute_and_inset_map_straight_through() {
+        let r = clean("position: absolute; inset: 0; left: 50%; top: 8px");
+        assert_eq!(r.position, Some(gpui::Position::Absolute));
+        assert_eq!(r.inset.right, Some(Length::Definite(px(0.0).into())));
+        assert_eq!(r.inset.left, Some(Length::Definite(relative(0.5))));
+        assert_eq!(r.inset.top, Some(Length::Definite(px(8.0).into())));
+    }
+
+    #[test]
+    fn fixed_is_absolute_plus_a_deferred_layer_and_says_so() {
+        let (x, d) = extras("position: fixed");
+        assert_eq!(x.fixed, Some(true));
+        assert_eq!(x.deferred_priority(), Some(0));
+        assert!(d.iter().any(|m| m.contains("position: fixed")), "{d:?}");
+        // …and a later `relative` really undoes it.
+        let (x, _) = extras("position: fixed; position: relative");
+        assert_eq!(x.fixed, Some(false));
+        assert_eq!(x.deferred_priority(), None);
+    }
+
+    #[test]
+    fn a_positive_z_index_becomes_a_deferred_priority() {
+        let (x, d) = extras("z-index: 50");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(x.z_index, Some(50));
+        assert_eq!(x.deferred_priority(), Some(50));
+
+        // A negative one has no lever at all — and must say so.
+        let (x, d) = extras("z-index: -1");
+        assert_eq!(x.deferred_priority(), None);
+        assert!(d.iter().any(|m| m.contains("negative `z-index`")), "{d:?}");
+    }
+
+    #[test]
+    fn pointer_events_maps_both_keywords() {
+        assert_eq!(extras("pointer-events: none").0.pointer_events_none, Some(true));
+        assert_eq!(extras("pointer-events: auto").0.pointer_events_none, Some(false));
+        let (x, d) = extras("pointer-events: visiblePainted");
+        assert_eq!(x.pointer_events_none, None);
+        assert!(d.iter().any(|m| m.contains("pointer-events")), "{d:?}");
+    }
+
+    #[test]
+    fn translate_is_kept_in_its_authored_unit() {
+        let (x, d) = extras("transform: translate(-50%, -50%)");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(
+            x.translate,
+            Some((TranslateLen::Percent(-0.5), TranslateLen::Percent(-0.5)))
+        );
+        assert_eq!(TranslateLen::Percent(-0.5).to_px(400.0), -200.0);
+
+        let (x, _) = extras("transform: translateX(1.25rem)");
+        assert_eq!(x.translate, Some((TranslateLen::Px(20.0), TranslateLen::Px(0.0))));
+    }
+
+    /// Tailwind's `-translate-x-1/2` emits the whole identity chain; only a
+    /// REAL rotate/scale/skew is worth an advisory.
+    #[test]
+    fn tailwinds_identity_transform_chain_is_silent() {
+        let (x, d) = extras(
+            "transform: translate(-50%, -50%) rotate(0) skewX(0) skewY(0) scaleX(1) scaleY(1)",
+        );
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(
+            x.translate,
+            Some((TranslateLen::Percent(-0.5), TranslateLen::Percent(-0.5)))
+        );
+
+        let (x, d) = extras("transform: translateY(4px) rotate(45deg) scale(1.5)");
+        assert_eq!(x.translate, Some((TranslateLen::Px(0.0), TranslateLen::Px(4.0))));
+        assert!(
+            d.iter().any(|m| m.contains("rotate()") && m.contains("scale()")),
+            "{d:?}"
+        );
     }
 
     // ---- the end-to-end Tailwind card ------------------------------------

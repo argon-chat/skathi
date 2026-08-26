@@ -42,7 +42,7 @@ pub use animator::Animator;
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, Decls,
-    Extras, InlineStyle, ObjectFit,
+    Extras, InlineStyle, ObjectFit, TranslateLen,
 };
 pub use media::Env;
 pub use vars::Vars;

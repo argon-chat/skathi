@@ -21,6 +21,16 @@ pub const EV_SCROLL: u32 = 10;
 pub const EV_COMPLETE: u32 = 11;
 pub const EV_LOOPCOMPLETE: u32 = 12;
 pub const EV_ENTERFRAME: u32 = 13;
+// The pointer family. Only the three the host can actually SOURCE have codes:
+// gpui gives us a move-while-hovered listener and an enter/leave pair, and
+// everything else in the W3C pointer family is derived from these (and from
+// mousedown/mouseup) inside the JS runtime — `pointerdown` is `mousedown`,
+// `pointerenter` is `mouseenter`, and so on. Adding a code per alias would put
+// the same gpui listener on the element several times over.
+pub const EV_MOUSEMOVE: u32 = 14;
+/// Non-bubbling, per the UI Events spec: fires only on the element entered.
+pub const EV_MOUSEENTER: u32 = 15;
+pub const EV_MOUSELEAVE: u32 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

@@ -320,6 +320,12 @@ fn mods_bits(m: &gpui::Modifiers) -> f64 {
     bits as f64
 }
 
+/// `MouseEvent.button` for an event that carries no press: the DOM says `-1`
+/// for `mousemove`/`mouseenter` when no button is down.
+fn button_code_opt(b: Option<MouseButton>) -> f64 {
+    b.map(button_code).unwrap_or(-1.0)
+}
+
 fn button_code(b: MouseButton) -> f64 {
     match b {
         MouseButton::Left => 0.0,
@@ -499,13 +505,15 @@ fn build_node<V: 'static>(
         Kind::Text if node.text.is_empty() => Empty.into_any_element(),
         Kind::Text => SharedString::from(node.text.clone()).into_any_element(),
         Kind::Anchor => Empty.into_any_element(),
-        Kind::Element if t.name(node.tag) == "img" => {
-            probe(id, build_img(t, id, node, window, cx, now))
-        }
-        Kind::Element if t.name(node.tag) == "lottie" => {
-            probe(id, build_lottie(t, id, node, window, cx, now))
-        }
-        Kind::Element => probe(id, {
+        Kind::Element if t.name(node.tag) == "img" => stack(
+            &extras_of(node),
+            probe(id, build_img(t, id, node, window, cx, now)),
+        ),
+        Kind::Element if t.name(node.tag) == "lottie" => stack(
+            &extras_of(node),
+            probe(id, build_lottie(t, id, node, window, cx, now)),
+        ),
+        Kind::Element => stack(&extras_of(node), probe(id, {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
             let mut d = div().id(id as usize);
@@ -530,7 +538,7 @@ fn build_node<V: 'static>(
                 d = d.track_scroll(h);
             }
 
-            let mask = node.listeners;
+            let mask = pointer_mask(node);
             let bit = move |ev: u32| mask & (1 << ev) != 0;
             let is_input = t.name(node.tag) == "input";
             // `<input>` is tabbable by default in HTML; a plain <div> is not.
@@ -643,14 +651,47 @@ fn build_node<V: 'static>(
                 d.children(node.children.iter().map(|&c| build_node(t, c, window, cx, now)))
                     .into_any_element()
             }
-        }),
+        })),
+    }
+}
+
+/// The computed [`vn_css::Extras`] of a node (the default before the first
+/// cascade, which is also what an unstyled node computes to).
+fn extras_of(node: &crate::tree::Node) -> vn_css::Extras {
+    node.computed.as_ref().map(|cs| cs.extras).unwrap_or_default()
+}
+
+/// The bits `pointer-events: none` turns off — the pointer half of the event
+/// set. Keyboard and focus listeners are deliberately NOT in it: in a browser
+/// `pointer-events: none` makes an element transparent to the POINTER only, and
+/// a `tabindex`ed one still focuses and still receives keystrokes.
+const POINTER_BITS: u32 = (1 << tree::EV_CLICK)
+    | (1 << tree::EV_MOUSEDOWN)
+    | (1 << tree::EV_MOUSEUP)
+    | (1 << tree::EV_MOUSEMOVE)
+    | (1 << tree::EV_MOUSEENTER)
+    | (1 << tree::EV_MOUSELEAVE)
+    | (1 << tree::EV_WHEEL);
+
+/// The node's listener mask with `pointer-events: none` applied. Together with
+/// the hover/active rungs being skipped in [`apply_computed_style`], this is
+/// what stops gpui giving the node a hitbox at all.
+fn pointer_mask(node: &crate::tree::Node) -> u32 {
+    let inert = node
+        .computed
+        .as_ref()
+        .is_some_and(|cs| cs.extras.pointer_events_none == Some(true));
+    if inert {
+        node.listeners & !POINTER_BITS
+    } else {
+        node.listeners
     }
 }
 
 /// The style half every element shares: the folded base refinement assigned
-/// wholesale, the running transition overlay refined over it, then gpui's own
-/// hover/active ladder rungs (the FnOnce builders run eagerly — only the
-/// resulting refinement is stored).
+/// wholesale, the running transition overlay refined over it, the `translate()`
+/// offset, then gpui's own hover/active ladder rungs (the FnOnce builders run
+/// eagerly — only the resulting refinement is stored).
 fn apply_computed_style<E>(
     mut e: E,
     cs: &vn_css::ComputedStates,
@@ -665,13 +706,83 @@ where
         use gpui::Refineable as _;
         e.style().refine(&overlay);
     }
-    if let Some(h) = cs.hover.clone() {
-        e = e.hover(move |_| (*h).clone());
-    }
-    if let Some(a) = cs.active.clone() {
-        e = e.active(move |_| (*a).clone());
+    apply_translate(e.style(), id, cs);
+    // `pointer-events: none` means the node is not interactive at all — so it
+    // must not carry gpui's hover/active rungs either, which are exactly what
+    // would make gpui insert a hitbox for it.
+    if cs.extras.pointer_events_none != Some(true) {
+        if let Some(h) = cs.hover.clone() {
+            e = e.hover(move |_| (*h).clone());
+        }
+        if let Some(a) = cs.active.clone() {
+            e = e.active(move |_| (*a).clone());
+        }
     }
     e
+}
+
+/// `transform: translate(…)` as a LAYOUT offset (compat roadmap G3).
+///
+/// gpui applies no matrix to a laid out box, so the only way to move one is to
+/// move it in layout — margins are the additive channel that works for both an
+/// in-flow box and an absolutely positioned one (taffy adds the margin to the
+/// inset-resolved origin).
+///
+/// A PERCENTAGE translate resolves against the element's own size, which is not
+/// known until it has been laid out — so it is resolved against the rectangle
+/// the node was painted at in the previous frame, exactly like `<lottie>`'s
+/// intrinsic sizing. A box that has never been painted translates by 0 on its
+/// first frame and lands correctly on the second; since a translate does not
+/// change the box's SIZE, that converges rather than oscillates.
+fn apply_translate(style: &mut gpui::StyleRefinement, id: u32, cs: &vn_css::ComputedStates) {
+    let Some((tx, ty)) = cs.extras.translate else {
+        return;
+    };
+    let (w, h) = prev_size_of(id).unwrap_or((0.0, 0.0));
+    let (dx, dy) = (tx.to_px(w), ty.to_px(h));
+    if dx == 0.0 && dy == 0.0 {
+        return;
+    }
+    fn shift(slot: &mut Option<gpui::Length>, delta: f32, id: u32, side: &str) {
+        match slot {
+            None => *slot = Some(gpui::Length::Definite(gpui::px(delta).into())),
+            Some(gpui::Length::Definite(gpui::DefiniteLength::Absolute(
+                gpui::AbsoluteLength::Pixels(p),
+            ))) => {
+                *slot = Some(gpui::Length::Definite(gpui::px(f32::from(*p) + delta).into()));
+            }
+            // `margin: auto` (centring) or a percentage margin cannot absorb a
+            // pixel offset. Rather than silently pick one, say which node.
+            _ => warn_compat(
+                "translate-margin",
+                &format!(
+                    "`transform: translate()` is applied as a margin offset, and node {id} already \
+                     has a non-pixel `margin-{side}` (auto or a percentage) — the translate was \
+                     dropped on that axis"
+                ),
+            ),
+        }
+    }
+    if dx != 0.0 {
+        shift(&mut style.margin.left, dx, id, "left");
+    }
+    if dy != 0.0 {
+        shift(&mut style.margin.top, dy, id, "top");
+    }
+}
+
+/// Wraps a node that has to escape its siblings' paint order — `position:
+/// fixed`, or a positive `z-index` — in gpui's deferred layer.
+///
+/// `Deferred` keeps the child's LAYOUT where it is (it returns the child's own
+/// `LayoutId`) and only moves the PAINT to after every ancestor, ordered by
+/// priority; gpui sorts those stably, so two elements with the same `z-index`
+/// keep document order, exactly as CSS says they should.
+fn stack(extras: &vn_css::Extras, el: AnyElement) -> AnyElement {
+    match extras.deferred_priority() {
+        Some(priority) => gpui::deferred(el).with_priority(priority).into_any_element(),
+        None => el,
+    }
 }
 
 /// The listener half every element shares. `keys_here` is false for `<input>`,
@@ -723,6 +834,32 @@ where
                 }),
             );
         }
+    }
+    // The pointer family (compat roadmap G4). gpui sources exactly two things
+    // here — "the mouse moved while over me" and "the mouse entered/left me" —
+    // and the JS runtime derives the whole W3C pointer/mouse set from them.
+    //
+    // `on_hover` is what makes `mouseenter`/`mouseleave` (and therefore
+    // `pointerenter`/`pointerleave`) correct rather than approximated: gpui
+    // tracks the hovered hitbox itself and reports both edges, so the
+    // non-bubbling "entered this element" semantics come for free instead of
+    // being reconstructed from move coordinates.
+    if bit(tree::EV_MOUSEMOVE) {
+        e = e.on_mouse_move(cx.listener(move |_, ev: &gpui::MouseMoveEvent, window, cx| {
+            let payload = mouse_payload(ev.position, button_code_opt(ev.pressed_button), &ev.modifiers);
+            js_dispatch(id, tree::EV_MOUSEMOVE, &payload, window, cx);
+        }));
+    }
+    if bit(tree::EV_MOUSEENTER) || bit(tree::EV_MOUSELEAVE) {
+        e = e.on_hover(cx.listener(move |_, hovered: &bool, window, cx| {
+            let event = if *hovered { tree::EV_MOUSEENTER } else { tree::EV_MOUSELEAVE };
+            if !bit(event) {
+                return;
+            }
+            let position = window.mouse_position();
+            let payload = mouse_payload(position, -1.0, &window.modifiers());
+            js_dispatch(id, event, &payload, window, cx);
+        }));
     }
     if bit(tree::EV_WHEEL) {
         e = e.on_scroll_wheel(cx.listener(move |_, ev: &ScrollWheelEvent, window, cx| {
@@ -1002,7 +1139,7 @@ fn build_img<V: 'static>(
         alt_element(&failed_alt)
     });
 
-    let mask = node.listeners;
+    let mask = pointer_mask(node);
     let bit = |ev: u32| mask & (1 << ev) != 0;
     // `<img>` is not focusable in HTML without `tabindex`.
     let tab_index = tab_index_of(t, id);
@@ -1179,7 +1316,7 @@ fn build_lottie<V: 'static>(
         }
     }
 
-    let mask = node.listeners;
+    let mask = pointer_mask(node);
     let bit = |ev: u32| mask & (1 << ev) != 0;
     // Like `<img>`: not focusable in HTML without `tabindex`.
     let tab_index = tab_index_of(t, id);
@@ -1250,7 +1387,7 @@ fn build_input<V: 'static>(
         tab_index,
     };
 
-    let mask = node.listeners;
+    let mask = pointer_mask(node);
     let bit = move |ev: u32| mask & (1 << ev) != 0;
 
     let on_change: vn_elements::OnChange = std::rc::Rc::new(move |text, window, cx| {
