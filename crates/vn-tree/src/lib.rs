@@ -455,6 +455,125 @@ mod tests {
         assert_eq!(opacity_of(leaf), Some(0.35));
     }
 
+    // -----------------------------------------------------------------------
+    // restyle scoping (docs/ARCHITECTURE.md §11)
+    //
+    // A mutation recascades the mutated node's SUBTREE, not the document. These
+    // are the four ways that could be wrong.
+    // -----------------------------------------------------------------------
+
+    /// A descendant combinator reads every ancestor, so a class change on a
+    /// container has to reach the leaf under it — the subtree walk is exactly
+    /// what makes that hold.
+    #[test]
+    fn a_class_change_restyles_the_whole_subtree_under_it() {
+        let (mid, leaf) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let mid = t.create_element(div);
+            let leaf = t.create_element(div);
+            t.insert(mid, root, 0);
+            t.insert(leaf, mid, 0);
+            t.set_class(leaf, "leaf");
+            (mid, leaf)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".leaf { opacity: 0.1 } .page .leaf { opacity: 0.9 }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(leaf), Some(0.1));
+
+        // Only `mid` is touched; the leaf two nodes down must still move.
+        tree::with_tree(|t| t.set_class(mid, "page"));
+        flush_changes();
+        assert_eq!(opacity_of(leaf), Some(0.9));
+    }
+
+    /// The same, through the custom-property channel: an inherited `--x`
+    /// redefined on an ancestor has to re-resolve every `var(--x)` beneath it.
+    #[test]
+    fn an_inherited_var_flip_restyles_the_descendants_that_read_it() {
+        let (mid, leaf) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let mid = t.create_element(div);
+            let leaf = t.create_element(div);
+            t.insert(mid, root, 0);
+            t.insert(leaf, mid, 0);
+            t.set_class(mid, "a");
+            t.set_class(leaf, "leaf");
+            (mid, leaf)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".a { --v: 0.25 } .b { --v: 0.75 } .leaf { opacity: var(--v, 1) }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(leaf), Some(0.25));
+
+        tree::with_tree(|t| t.set_class(mid, "b"));
+        flush_changes();
+        assert_eq!(opacity_of(leaf), Some(0.75));
+    }
+
+    /// `+` and `~` are the one combinator that reads SIDEWAYS, so a sheet that
+    /// uses them makes a mark reach its following siblings too.
+    #[test]
+    fn a_sibling_combinator_still_sees_a_class_change_next_door() {
+        let (first, second) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let first = t.create_element(div);
+            let second = t.create_element(div);
+            t.insert(first, root, 0);
+            t.insert(second, root, 0);
+            t.set_class(second, "second");
+            (first, second)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".second { opacity: 0.2 } .marker + .second { opacity: 0.8 }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(second), Some(0.2));
+
+        // Nothing about `second` changed — only the element BEFORE it.
+        tree::with_tree(|t| t.set_class(first, "marker"));
+        flush_changes();
+        assert_eq!(opacity_of(second), Some(0.8));
+    }
+
+    /// A structural pseudo reads the parent's child list, so an insert has to
+    /// recascade the siblings around it — which is why every insert/remove
+    /// marks the PARENT rather than the moved node.
+    #[test]
+    fn inserting_a_child_recascades_the_siblings_a_structural_pseudo_reads() {
+        let (parent, only) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            let only = t.create_element(div);
+            t.insert(parent, root, 0);
+            t.insert(only, parent, 0);
+            t.set_class(only, "item");
+            (parent, only)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".item { opacity: 0.3 } .item:last-child { opacity: 0.7 }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(only), Some(0.7), "the only child is the last child");
+
+        // Appending a second child makes the first one stop being `:last-child`
+        // even though nothing on it was written.
+        tree::with_tree(|t| {
+            let div = t.intern("div");
+            let second = t.create_element(div);
+            t.insert(second, parent, 0);
+            t.set_class(second, "item");
+        });
+        flush_changes();
+        assert_eq!(opacity_of(only), Some(0.3));
+    }
+
     /// `@media` conditions read the published env, and moving it re-cascades.
     #[test]
     fn media_conditions_follow_the_published_env() {

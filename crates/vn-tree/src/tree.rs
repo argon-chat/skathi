@@ -78,12 +78,28 @@ pub struct Node {
     pub computed: Option<vn_css::ComputedStates>,
 }
 
+/// Above this many separately-marked nodes, scoping stops paying: the
+/// bookkeeping (ancestor checks, per-root walks, repeated visits where two
+/// marks overlap) costs more than one straight pass over the document. A Vue
+/// wave that touches a quarter of the tree is a page change, not a hover.
+const SCOPED_RESTYLE_LIMIT: usize = 64;
+
 #[derive(Default)]
 pub struct Tree {
     nodes: Vec<Option<Node>>,
     free: Vec<u32>,
     pub root: u32,
     dirty: bool,
+    /// Nodes whose own cascade inputs changed since the last restyle — the
+    /// roots of the subtrees the next pass has to recompute. See
+    /// [`Tree::mark_restyle`].
+    dirty_nodes: Vec<u32>,
+    /// "Everything": a new stylesheet or a changed `@media` environment can
+    /// flip any rule in the sheet, so no subtree is safe.
+    dirty_all: bool,
+    /// Nodes whose inline `style` text changed and must be re-parsed. Tracked
+    /// rather than rediscovered, so the pass never scans the whole slab.
+    inline_dirty_nodes: Vec<u32>,
     names: Vec<String>,
     name_ids: HashMap<String, u32>,
 }
@@ -164,7 +180,7 @@ impl Tree {
 
     fn fresh(&mut self, kind: Kind, tag: u32) -> u32 {
         self.dirty = true;
-        self.alloc(Node {
+        let id = self.alloc(Node {
             kind,
             tag,
             parent: 0,
@@ -178,7 +194,9 @@ impl Tree {
             inline_dirty: false,
             inline: None,
             computed: None,
-        })
+        });
+        self.mark_restyle(id);
+        id
     }
 
     pub fn create_element(&mut self, tag: u32) -> u32 {
@@ -204,6 +222,7 @@ impl Tree {
         if let Some(n) = self.node_mut(id) {
             n.text = text;
             self.dirty = true;
+            self.mark_restyle(id);
         }
     }
 
@@ -221,6 +240,7 @@ impl Tree {
             n.text = text;
         }
         self.dirty = true;
+        self.mark_restyle(id);
     }
 
     /// Insert-or-move `child` under `parent`, before `anchor` (0 = append).
@@ -228,6 +248,13 @@ impl Tree {
         if child == 0 || parent == 0 || child == anchor {
             return;
         }
+        // Both ends: the old parent loses a child, the new one gains one, and
+        // marking a parent covers every sibling AND the moved subtree itself.
+        let old_parent = self.node(child).map(|n| n.parent).unwrap_or(0);
+        if old_parent != 0 {
+            self.mark_restyle(old_parent);
+        }
+        self.mark_restyle(parent);
         self.detach(child);
         // An element with inline text gaining a real child: the inline text
         // is stale Vue state (setElementText always precedes) — drop it.
@@ -263,6 +290,10 @@ impl Tree {
     /// Vue calls remove exactly once per unmounted subtree root: recursively
     /// destroy native state and recycle every id.
     pub fn remove(&mut self, id: u32) {
+        let parent = self.node(id).map(|n| n.parent).unwrap_or(0);
+        if parent != 0 {
+            self.mark_restyle(parent);
+        }
         self.detach(id);
         self.free_subtree(id);
         self.dirty = true;
@@ -292,6 +323,8 @@ impl Tree {
             }
             n.inline_dirty = true;
             self.dirty = true;
+            self.inline_dirty_nodes.push(id);
+            self.mark_restyle(id);
         }
     }
 
@@ -309,6 +342,7 @@ impl Tree {
                 }
             }
             self.dirty = true;
+            self.mark_restyle(id);
         }
     }
 
@@ -333,6 +367,7 @@ impl Tree {
             if !n.scopes.contains(&scope) {
                 n.scopes.push(scope);
                 self.dirty = true;
+                self.mark_restyle(id);
             }
         }
     }
@@ -341,6 +376,7 @@ impl Tree {
         if let Some(n) = self.node_mut(id) {
             n.classes = classes.split_whitespace().map(str::to_string).collect();
             self.dirty = true;
+            self.mark_restyle(id);
         }
     }
 
@@ -360,8 +396,38 @@ impl Tree {
         std::mem::take(&mut self.dirty)
     }
 
+    /// "Something changed that no subtree is safe from": a new stylesheet, or a
+    /// changed `@media` environment. Both can flip any rule in the sheet.
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+        self.dirty_all = true;
+    }
+
+    /// "This element's own cascade inputs changed" — its classes, attributes,
+    /// scope hashes, inline style, text, or child list.
+    ///
+    /// The mark is a SUBTREE root, not a node: a descendant combinator lets any
+    /// rule read every ancestor, so `.card .title` starts matching the moment
+    /// `card` appears three levels up. Descendants are therefore always
+    /// recomputed; ancestors never are (nothing in the supported selector set
+    /// reads downwards — `:has()` is rejected at sheet-compile time, and the
+    /// structural pseudos that read the child list are handled by marking the
+    /// PARENT wherever the child list changes). Siblings are covered only when
+    /// the sheet actually contains `+` / `~`; see [`Tree::restyle_roots`].
+    fn mark_restyle(&mut self, id: u32) {
+        if self.dirty_all || id == 0 {
+            return;
+        }
+        if self.dirty_nodes.len() >= SCOPED_RESTYLE_LIMIT {
+            // Past the limit the list stops being worth keeping — one straight
+            // document pass is cheaper than the bookkeeping.
+            self.dirty_nodes.clear();
+            self.dirty_all = true;
+            return;
+        }
+        if !self.dirty_nodes.contains(&id) {
+            self.dirty_nodes.push(id);
+        }
     }
 
     /// The restyle pass: re-parse dirty inline styles, then run the cascade
@@ -378,14 +444,120 @@ impl Tree {
         }
     }
 
+    /// The subtree roots this pass has to walk, in an order where an ancestor
+    /// is always computed before anything under it.
+    ///
+    /// `dirty_all` (a new sheet, a changed `@media` environment, or simply too
+    /// many separate marks) answers "the whole document": the mounted root plus
+    /// every parentless node, since a `<KeepAlive>` cache container is never
+    /// inserted and its contents still need styles for the frame they are
+    /// re-attached in.
+    ///
+    /// Otherwise the marks are expanded and pruned:
+    ///
+    /// * a mark whose ancestor is also marked is dropped — the ancestor's walk
+    ///   already covers it;
+    /// * a mark is promoted upwards past any ancestor that has never been
+    ///   cascaded, so a freshly mounted subtree is never entered with a parent
+    ///   map that does not exist yet;
+    /// * with `+` / `~` anywhere in the sheet, every FOLLOWING element sibling
+    ///   of a mark joins it — that is exactly how far a sibling combinator can
+    ///   see, and sheets without one pay nothing;
+    /// * the result is ordered shallowest-first, because custom properties
+    ///   inherit and a child must never be computed before its parent.
+    fn restyle_roots(&mut self, engine: &vn_css::Engine) -> Vec<u32> {
+        let marks = std::mem::take(&mut self.dirty_nodes);
+        if std::mem::take(&mut self.dirty_all) {
+            let mut roots: Vec<u32> = Vec::new();
+            if self.root != 0 && self.node(self.root).is_some() {
+                roots.push(self.root);
+            }
+            roots.extend(
+                (1..self.nodes.len() as u32)
+                    .filter(|&id| id != self.root)
+                    .filter(|&id| self.node(id).is_some_and(|n| n.parent == 0)),
+            );
+            return roots;
+        }
+
+        let mut marked: Vec<u32> = marks
+            .into_iter()
+            .filter(|&id| self.node(id).is_some())
+            .collect();
+        if marked.is_empty() {
+            return Vec::new();
+        }
+        if engine.uses_sibling_combinators() {
+            let mut extra: Vec<u32> = Vec::new();
+            for &id in &marked {
+                let Some(parent) = self.node(id).map(|n| n.parent).filter(|&p| p != 0) else {
+                    continue;
+                };
+                let Some(siblings) = self.node(parent).map(|n| &n.children) else { continue };
+                let Some(pos) = siblings.iter().position(|&c| c == id) else { continue };
+                extra.extend(siblings[pos + 1..].iter().copied());
+            }
+            marked.extend(extra);
+        }
+        let set: std::collections::HashSet<u32> = marked.iter().copied().collect();
+
+        let mut roots: Vec<u32> = Vec::new();
+        for &id in &set {
+            if self.ancestors(id).any(|a| set.contains(&a)) {
+                continue; // an ancestor's walk already covers this one
+            }
+            // Promote past ancestors that have never been cascaded — their maps
+            // are what a scoped walk would inherit from.
+            let mut root = id;
+            while let Some(parent) = self.node(root).map(|n| n.parent).filter(|&p| p != 0) {
+                match self.node(parent) {
+                    Some(p) if p.computed.is_none() => root = parent,
+                    _ => break,
+                }
+            }
+            roots.push(root);
+        }
+        roots.sort_unstable();
+        roots.dedup();
+        // Promotion can put one root above another; drop the covered ones so no
+        // subtree is walked twice, then order parents before children.
+        let promoted: std::collections::HashSet<u32> = roots.iter().copied().collect();
+        roots.retain(|&id| !self.ancestors(id).any(|a| promoted.contains(&a)));
+        roots.sort_by_key(|&id| self.depth(id));
+        roots
+    }
+
+    /// This node's ancestors, nearest first. Bounded, so a corrupt parent chain
+    /// cannot hang the pump.
+    fn ancestors(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
+        let mut cursor = self.node(id).map(|n| n.parent).unwrap_or(0);
+        let mut budget = 1024;
+        std::iter::from_fn(move || {
+            if cursor == 0 || budget == 0 {
+                return None;
+            }
+            budget -= 1;
+            let out = cursor;
+            cursor = self.node(cursor).map(|n| n.parent).unwrap_or(0);
+            Some(out)
+        })
+    }
+
+    fn depth(&self, id: u32) -> u32 {
+        self.ancestors(id).count() as u32
+    }
+
     fn restyle_with(&mut self, engine: &vn_css::Engine, env: &vn_css::Env) {
         let pass = crate::perf::Span::start();
         let phase = crate::perf::Span::start();
-        // 1. Re-parse changed inline styles.
-        let dirty_inline: Vec<u32> = (1..self.nodes.len() as u32)
-            .filter(|&id| self.node(id).is_some_and(|n| n.inline_dirty))
-            .collect();
+        // 1. Re-parse changed inline styles. The list is kept by `set_style`
+        // rather than rediscovered — a scan of the whole slab per pass is the
+        // one thing a scoped restyle must not do.
+        let dirty_inline = std::mem::take(&mut self.inline_dirty_nodes);
         for id in dirty_inline {
+            if !self.node(id).is_some_and(|n| n.inline_dirty) {
+                continue; // freed, or already re-parsed (the list can repeat).
+            }
             let body = {
                 let n = self.node(id).unwrap();
                 n.style
@@ -422,22 +594,26 @@ impl Tree {
         // container is never inserted, and its contents still need styles for
         // the frame they are re-attached in).
         let mut diagnostics: Vec<String> = Vec::new();
+        let roots = self.restyle_roots(engine);
         let computed: Vec<(u32, vn_css::ComputedStates)> = {
             let this: &Tree = self;
             let root_vars = std::rc::Rc::new(vn_css::Vars::default());
             let mut out = Vec::new();
-            let mut roots: Vec<u32> = Vec::new();
-            if this.root != 0 && this.node(this.root).is_some() {
-                roots.push(this.root);
-            }
-            roots.extend(
-                (1..this.nodes.len() as u32)
-                    .filter(|&id| id != this.root)
-                    .filter(|&id| this.node(id).is_some_and(|n| n.parent == 0)),
-            );
             let mut stack: Vec<(u32, std::rc::Rc<vn_css::Vars>)> = Vec::new();
             for r in roots {
-                stack.push((r, root_vars.clone()));
+                // A scoped root inherits from its parent's already-computed map;
+                // `restyle_roots` guarantees the parent has one (it promotes the
+                // root upwards until that holds), so this cannot read a stale
+                // ancestor.
+                let inherited = this
+                    .node(r)
+                    .map(|n| n.parent)
+                    .filter(|&p| p != 0)
+                    .and_then(|p| this.node(p))
+                    .and_then(|p| p.computed.as_ref())
+                    .map(|c| c.vars.clone())
+                    .unwrap_or_else(|| root_vars.clone());
+                stack.push((r, inherited));
                 while let Some((id, parent_vars)) = stack.pop() {
                     let Some(n) = this.node(id) else { continue };
                     // Text and anchor nodes have no cascade of their own; they
