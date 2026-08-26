@@ -88,6 +88,18 @@ pub fn boot(rt: &JsRuntime) {
 #[inline(always)]
 pub fn poll_frame(_frame_no: u32) {}
 
+/// The `window` block of `apps/<app>/vn.config.json`, inlined by `bun prod.ts`
+/// as `dist/window.json` (`{}` when the app declares none) — the same JSON the
+/// dev host reads out of `dist/manifest.json`.
+///
+/// `include_str!` for the same reason `APP_JS` uses it: shipping an exe whose
+/// window config silently disappeared is worse than a compile error.
+pub fn window_config() -> Option<String> {
+    const RAW: &str =
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/vue-native/dist/window.json"));
+    Some(RAW.to_string())
+}
+
 fn warn_missing_asset(key: &str) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static WARNED: AtomicBool = AtomicBool::new(false);

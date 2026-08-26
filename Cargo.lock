@@ -5670,6 +5670,7 @@ dependencies = [
  "gpui_platform",
  "image",
  "raw-window-handle",
+ "vn-css",
  "vn-elements",
  "vn-runtime",
  "vn-tree",

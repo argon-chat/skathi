@@ -115,6 +115,19 @@ fn publish_asset_base(entry: &str) {
     vn_tree::set_asset_base(base.to_path_buf());
 }
 
+/// The `window` block of `apps/<app>/vn.config.json`, which `build.ts` copies
+/// verbatim into `dist/manifest.json` (docs/WINDOWING.md §4.1).
+///
+/// Read BEFORE `cx.open_window`, which is why it is a third function next to
+/// [`boot`] and [`poll_frame`] rather than something the boot path hands over:
+/// creation-time-only gpui options cannot be applied afterwards without a
+/// visible flash.
+pub fn window_config() -> Option<String> {
+    let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
+    let v = json::parse(&text)?;
+    Some(v.get("window")?.to_json())
+}
+
 pub fn boot(rt: &JsRuntime) {
     let Some(manifest) = read_manifest() else { return };
     publish_asset_base(&manifest.entry);

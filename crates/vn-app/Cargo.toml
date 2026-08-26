@@ -29,6 +29,7 @@ gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }
 raw-window-handle = "0.6"
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false }
+vn-css = { path = "../vn-css" }
 vn-elements = { path = "../vn-elements" }
 vn-runtime = { path = "../vn-runtime" }
 vn-tree = { path = "../vn-tree" }
@@ -36,7 +37,14 @@ vn-tree = { path = "../vn-tree" }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Storage_Xps",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    # `RtlGetVersion` — the only version query Windows does not lie about for an
+    # unmanifested process, and the way `backdrop: "mica"` knows it is on Win11.
+    "Wdk_System_SystemServices",
 ] }
+

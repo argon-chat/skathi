@@ -19,8 +19,8 @@
 use std::cell::RefCell;
 
 use gpui::{
-    App, Bounds, Context, TitlebarOptions, WeakEntity, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowOptions, div, prelude::*, px, rgba, size,
+    App, Bounds, Context, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowControlArea,
+    WindowOptions, div, prelude::*, px, rgba, size,
 };
 use gpui_platform::application;
 use vn_runtime::{JsRuntime, Phase, host_fn, with_app, with_published, with_published_app};
@@ -30,11 +30,11 @@ use vn_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 mod dev;
 #[cfg(not(feature = "prod"))]
 mod devtools; // the automation surface (docs/DEVTOOLS.md) — dev builds only
-#[cfg(not(feature = "prod"))]
-mod json; // the dev transport and the devtools wire share one JSON codec
+mod json; // the dev transport, the devtools wire and vn.config.json share one codec
 mod perf;
 #[cfg(feature = "prod")]
 mod prod;
+mod window; // windowing & chrome (docs/WINDOWING.md)
 
 #[cfg(not(feature = "prod"))]
 use dev as boot_mode;
@@ -65,6 +65,13 @@ const PRELUDE_JS: &str = r#"
         __vn_set_status(`runtime: tick ${ticks}, uptime ${(performance.now() / 1000).toFixed(1)}s`);
     }, 500);
 "#;
+
+/// The windowing surface's JS half (docs/WINDOWING.md tiers 1 & 2) — its own
+/// file because it is real JavaScript, not a four-line stub. Evaluated right
+/// after [`PRELUDE_JS`] and before the app bundle, so `document.title`,
+/// `screen`, `matchMedia` and `navigator.windowControlsOverlay` are already
+/// their real selves when the first component's `<script setup>` runs.
+const WINDOW_PRELUDE_JS: &str = include_str!("window.prelude.js");
 
 thread_local! {
     static FRAME_NO: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -149,6 +156,13 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
             n
         });
         boot_mode::poll_frame(n);
+        // The window-state funnel (docs/WINDOWING.md §5.3): ONE snapshot, then
+        // resize → visibility → the JS observer, in that order, all inside the
+        // same JS wave the pump below runs in. Before `rt.pump` so a `resize`
+        // handler's DOM mutations drain in this frame, and so
+        // `fullscreenchange` fires after the viewport has finished resizing —
+        // which the Fullscreen spec requires.
+        vn_runtime::with_commit(|window, cx| window::pump(window, cx));
         JsRuntime::with(|rt| {
             rt.pump(PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS);
             for err in rt.drain_errors() {
@@ -165,24 +179,15 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         #[cfg(not(feature = "prod"))]
         devtools::pump();
     });
-    // The `@media` environment, refreshed from the window every frame: the
-    // viewport in CSS px (gpui `Pixels` are already logical), the OS/window
-    // colour scheme and the reduced-motion preference. `set_env` is a compare
-    // on four values; on the frame one of them actually moved it marks the
-    // whole tree dirty so `flush_changes` below re-cascades everything —
-    // resizes and theme flips are rare, and any rule in the sheet can turn on
-    // or off. It also feeds the transition animator's reduced-motion switch.
-    let viewport = window.viewport_size();
-    let dark = matches!(
-        window.appearance(),
-        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
-    );
-    vn_tree::set_env(
-        f32::from(viewport.width),
-        f32::from(viewport.height),
-        dark,
-        cx.reduce_motion(),
-    );
+    // The `@media` environment (viewport, colour scheme, reduced motion, DPI
+    // scale, chrome mode) is published inside `window::pump` above, next to the
+    // snapshot the same numbers come from — one source, so JS and CSS can never
+    // disagree about the viewport.
+    //
+    // The fallback titlebar retires here rather than in `render`: this runs
+    // after the frame that painted, so "did the app declare a drag region" has
+    // an answer (docs/WINDOWING.md §4.2 mode 2).
+    window::note_painted_frame();
     // Everything that needs a `Window` and could not run from a host fn: the
     // `<lottie>` transport is advanced by this frame's wall-clock delta (and
     // its `complete`/`loopComplete`/`enterFrame` events dispatched), and a node
@@ -206,23 +211,29 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The built-in titlebar is a FALLBACK, not furniture (D-23): an app
+        // that declares no drag region would otherwise be unmovable, so it
+        // stays until the app paints a `window-drag: move` region of its own —
+        // and then retires, with one `[window]` log line. Never silently
+        // removing a behaviour an app relied on.
+        let fallback = window::fallback_titlebar().then(|| {
+            div()
+                .id("titlebar")
+                .window_control_area(WindowControlArea::Drag)
+                .h(px(36.))
+                .px(px(14.))
+                .flex()
+                .items_center()
+                .text_size(px(13.))
+                .child("vue-native — gpui + JSC + Vue")
+        });
         div()
             .flex()
             .flex_col()
             .size_full()
             .text_color(gpui::white())
             .font_family(".SystemUIFont")
-            .child(
-                div()
-                    .id("titlebar")
-                    .window_control_area(WindowControlArea::Drag)
-                    .h(px(36.))
-                    .px(px(14.))
-                    .flex()
-                    .items_center()
-                    .text_size(px(13.))
-                    .child("vue-native — gpui + JSC + Vue"),
-            )
+            .children(fallback)
             .child(
                 div()
                     .flex_1()
@@ -287,29 +298,38 @@ fn main() {
             rt.register("__vn_log", 1, vn_log as *const _);
             rt.register("__vn_perf_mark", 1, vn_perf_mark as *const _);
             vn_tree::install(rt);
+            window::install(rt);
             #[cfg(not(feature = "prod"))]
             devtools::install(rt);
         });
 
-        // `VN_WINDOW=1280x900` — a perf/screenshot harness needs a viewport it
-        // chose; everything else keeps the 640x420 default.
-        let (w, h) = std::env::var("VN_WINDOW")
-            .ok()
-            .and_then(|v| {
-                let (w, h) = v.split_once(['x', 'X'])?;
-                Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?))
-            })
-            .unwrap_or((640., 420.));
-        let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
+        // The window block of `apps/<app>/vn.config.json`, read BEFORE
+        // `open_window` because that is the only tier that can set the
+        // creation-time-only gpui options (`window_min_size`, `is_resizable`,
+        // `is_minimizable`, `titlebar`, `window_background`) with no visible
+        // flash. Environment still wins on top (`VN_WINDOW`, `VN_WINDOW_FOCUS`)
+        // — the perf and screenshot harnesses depend on it (D-21).
+        let cfg = window::load_config(boot_mode::window_config());
+        let bounds = Bounds::centered(None, size(px(cfg.width), px(cfg.height)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_background: WindowBackgroundAppearance::MicaBackdrop,
+                window_background: cfg.backdrop.to_gpui(),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("vue-native".into()),
+                    title: Some(cfg.title.clone().into()),
+                    // `titleBarStyle: "hidden"` — the v1 default and the only
+                    // mode gpui can actually produce today (getting real OS
+                    // chrome is fork item F-03; asking for it advises A-17 and
+                    // lands here).
                     appears_transparent: true,
                     ..Default::default()
                 }),
+                is_resizable: cfg.resizable,
+                is_minimizable: cfg.minimizable,
+                window_min_size: cfg
+                    .min_width
+                    .zip(cfg.min_height)
+                    .map(|(w, h)| size(px(w), px(h))),
                 // A permanently armed pump must not opt the window into the
                 // 33 ms unfocused throttle (JS timers would coarsen with it).
                 inactive_frame_interval: None,
@@ -321,6 +341,10 @@ fn main() {
                     log: Vec::new(),
                 });
                 SHELL.with(|s| *s.borrow_mut() = Some(shell.downgrade()));
+                window::init(&cfg, window, cx);
+                // `beforeunload`: `on_window_should_close` is a SYNCHRONOUS
+                // boolean, which is precisely the web event's shape.
+                window.on_window_should_close(cx, |_, _| window::should_close());
                 window.on_next_frame(pump_frame);
                 shell
             },
@@ -331,6 +355,9 @@ fn main() {
         with_published_app(cx, || {
             JsRuntime::with(|rt| {
                 if let Err(e) = rt.eval(PRELUDE_JS, "vn://prelude.js") {
+                    eprintln!("[js boot] {}\n{}", e.header, e.stack);
+                }
+                if let Err(e) = rt.eval(WINDOW_PRELUDE_JS, "vn://window.js") {
                     eprintln!("[js boot] {}\n{}", e.header, e.stack);
                 }
                 // `VN_SCENARIO=<name>` — a harness app can pin itself to one
@@ -350,6 +377,11 @@ fn main() {
                     }
                 }
                 boot_mode::boot(rt);
+                // `DOMContentLoaded` + `load`, once, after the app bundle has
+                // evaluated — several reused browser components wait on these,
+                // and redjs has exported the hook since day one with nothing
+                // ever calling it.
+                window::content_loaded();
             });
         });
         cx.activate(true);
