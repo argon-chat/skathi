@@ -7,14 +7,17 @@
 
 use std::time::Duration;
 
-use vn_lottie::{Direction, LoopMode, LottieError, LottieEvent, LottieState, PlayMode};
+use vn_lottie::{Backend, Direction, LoopMode, LottieError, LottieEvent, LottieState, PlayMode};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
-fn load(name: &str) -> LottieState {
+fn bytes(name: &str) -> Vec<u8> {
     let path = format!("{FIXTURES}/{name}");
-    let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("read {path}: {error}"));
-    LottieState::load(&bytes).unwrap_or_else(|error| panic!("load {name}: {error}"))
+    std::fs::read(&path).unwrap_or_else(|error| panic!("read {path}: {error}"))
+}
+
+fn load(name: &str) -> LottieState {
+    LottieState::load(&bytes(name)).unwrap_or_else(|error| panic!("load {name}: {error}"))
 }
 
 /// Every fixture, and what each is here to prove is renderable.
@@ -29,15 +32,20 @@ const ALL: &[&str] = &[
     "position-hold.json",
     "terminator-keyframe.json",
     "sticker.tgs",
+    "spinning-star.tgs",
 ];
 
 /// The subset that actually moves. The `LottieFiles/test-files` feature
 /// fixtures are single-frame by design — they isolate *rendering* of one
 /// feature, not its animation — so motion is asserted against these instead.
+///
+/// `the_animated_list_matches_what_the_documents_animate` keeps this honest:
+/// the list is checked against the files, not against the README.
 const ANIMATED: &[&str] = &[
     "position-linear.json",
     "position-hold.json",
     "terminator-keyframe.json",
+    "spinning-star.tgs",
 ];
 
 /// One frame of RGBA at 128px, as a flat buffer, for pixel-level assertions.
@@ -126,11 +134,83 @@ fn every_fixture_rasterises_something_visible() {
 fn the_animation_actually_moves() {
     for name in ANIMATED {
         let mut state = load(name);
-        let distinct = sweep(&mut state, 5)
-            .into_iter()
+        let frames = sweep(&mut state, 5);
+        let distinct = frames
+            .iter()
+            .cloned()
             .collect::<std::collections::HashSet<_>>()
             .len();
         assert!(distinct >= 2, "{name}: all 5 sampled frames are identical");
+
+        // Distinct rasters are not enough on their own — a one-pixel flicker
+        // would pass. Require a real share of the canvas to differ between the
+        // first sample and at least one later one.
+        let changed = frames[1..]
+            .iter()
+            .map(|later| {
+                frames[0]
+                    .chunks_exact(4)
+                    .zip(later.chunks_exact(4))
+                    .filter(|(a, b)| a != b)
+                    .count()
+            })
+            .max()
+            .unwrap_or(0);
+        let total = frames[0].len() / 4;
+        assert!(
+            changed * 200 >= total,
+            "{name}: only {changed}/{total} pixels ever change — is it really animated?",
+        );
+    }
+}
+
+/// Every fixture is scanned for animated properties (`"a": 1` on a property
+/// object) and the result is compared with [`ANIMATED`].
+///
+/// This is the test whose absence let the fixtures README describe `star.json`
+/// as having an "animated transform" for a whole milestone: the transport
+/// tests never needed a moving file, so nothing contradicted the prose. A
+/// claim about a fixture belongs in an assertion, not a table.
+#[test]
+fn the_animated_list_matches_what_the_documents_animate() {
+    fn animated_property_count(value: &serde_json::Value) -> usize {
+        match value {
+            // A Lottie property is `{"a": 0 | 1, "k": ...}`; `a: 1` means the
+            // `k` is a keyframe list rather than a static value.
+            serde_json::Value::Object(map) => {
+                let here = usize::from(
+                    map.get("a").and_then(serde_json::Value::as_u64) == Some(1)
+                        && map.contains_key("k"),
+                );
+                here + map.values().map(animated_property_count).sum::<usize>()
+            }
+            serde_json::Value::Array(items) => items.iter().map(animated_property_count).sum(),
+            _ => 0,
+        }
+    }
+
+    for name in ALL {
+        let raw = bytes(name);
+        // `.tgs` is gzipped; the crate sniffs the same magic in `load`.
+        let text = if raw.starts_with(&[0x1f, 0x8b]) {
+            use std::io::Read as _;
+            let mut text = String::new();
+            flate2::read::GzDecoder::new(&raw[..])
+                .read_to_string(&mut text)
+                .expect("gunzip");
+            text
+        } else {
+            String::from_utf8(raw).expect("utf-8")
+        };
+        let document: serde_json::Value = serde_json::from_str(&text).expect("parse");
+        let animated = animated_property_count(&document) > 0;
+        assert_eq!(
+            animated,
+            ANIMATED.contains(name),
+            "{name}: the document {} animated properties, ANIMATED says {}",
+            if animated { "has" } else { "has no" },
+            ANIMATED.contains(name),
+        );
     }
 }
 
@@ -508,4 +588,79 @@ fn rendering_retires_superseded_rasters_for_the_atlas() {
 
     // Teardown hands back everything still held.
     assert_eq!(state.take_all_images().len(), 2);
+}
+
+// ---- backends ------------------------------------------------------------
+
+/// Guards the two-backend claim against being vacuous.
+///
+/// The comparison harness runs this exact binary twice, once with
+/// `VN_LOTTIE_BACKEND=thorvg`. If the feature is off, `Backend::preferred`
+/// falls back rather than panicking — correct at run time, useless in a test
+/// run that believes it is exercising ThorVG. So fail here instead.
+#[test]
+fn the_backend_under_test_is_the_one_the_environment_asked_for() {
+    let requested = std::env::var("VN_LOTTIE_BACKEND");
+    let active = load("star.json").backend();
+    match requested.as_deref() {
+        Ok("thorvg") => {
+            assert!(
+                Backend::ThorVg.is_available(),
+                "VN_LOTTIE_BACKEND=thorvg, but the crate was built without --features thorvg",
+            );
+            assert_eq!(active, Backend::ThorVg);
+        }
+        Ok("rasterlottie") => assert_eq!(active, Backend::Rasterlottie),
+        _ => assert_eq!(active, Backend::COMPILED_DEFAULT),
+    }
+}
+
+/// The seam's actual contract: swapping the engine changes the pixels, and
+/// nothing else.
+///
+/// Metadata comes from the document rather than from either backend, and the
+/// raster geometry is computed once and handed to both, so these must match
+/// exactly for every fixture — a difference here means the abstraction leaks
+/// and `crates/vn-tree/src/lottie.rs` would have to care which engine is on.
+#[cfg(feature = "thorvg")]
+#[test]
+fn both_backends_agree_on_everything_except_the_pixels() {
+    for name in ALL {
+        let raw = bytes(name);
+        let mut raster = LottieState::load_with(Backend::Rasterlottie, &raw)
+            .unwrap_or_else(|error| panic!("{name} on rasterlottie: {error}"));
+        let mut thorvg = LottieState::load_with(Backend::ThorVg, &raw)
+            .unwrap_or_else(|error| panic!("{name} on thorvg: {error}"));
+
+        assert_eq!(raster.backend(), Backend::Rasterlottie);
+        assert_eq!(thorvg.backend(), Backend::ThorVg);
+        assert_eq!(raster.meta(), thorvg.meta(), "{name}: metadata differs");
+        assert_eq!(
+            raster.advisories(),
+            thorvg.advisories(),
+            "{name}: advisories differ",
+        );
+
+        for frame in [0.0, raster.meta().total_frames * 0.5] {
+            let a = {
+                raster.seek_frame(frame);
+                raster.render_frame((128.0, 128.0), 1.0).expect("raster")
+            };
+            let b = {
+                thorvg.seek_frame(frame);
+                thorvg.render_frame((128.0, 128.0), 1.0).expect("thorvg")
+            };
+            assert_eq!(
+                (a.size(0).width.0, a.size(0).height.0),
+                (b.size(0).width.0, b.size(0).height.0),
+                "{name} @ {frame}: raster dimensions differ",
+            );
+            assert!(
+                opaque_pixels(b.as_bytes(0).unwrap()) > 0,
+                "{name} @ {frame}: thorvg drew nothing where rasterlottie drew \
+                 {} opaque pixels",
+                opaque_pixels(a.as_bytes(0).unwrap()),
+            );
+        }
+    }
 }

@@ -7,13 +7,19 @@ members = [
     "crates/vn-elements",   # native widgets (text input, ...)
     "crates/vn-effects",    # `--shading` registry + .slang sources + generated HLSL
     "crates/vn-lottie",     # Lottie/.tgs playback behind the `<lottie>` element
+    "crates/vn-thorvg-sys", # vendored ThorVG C++ + checked-in FFI (vn-lottie's `thorvg` feature)
     # "crates/vn-window",   # window chrome: backdrops, dark mode, titlebar
     "crates/vn-app",        # host binary shell
 ]
 # Path deps inside the workspace directory auto-join the workspace unless
 # excluded; vendor crates must resolve against their OWN workspace roots
 # (zed's / redjs's) for `.workspace = true` field inheritance.
-exclude = ["vendor"]
+#
+# regen-bindings is a CONTRIBUTOR tool that depends on `bindgen` (and so on
+# libclang). Excluding it keeps that dependency out of the workspace lockfile
+# entirely — `cargo build` here never resolves it. Same split as
+# crates/vn-effects' slangc.
+exclude = ["vendor", "crates/vn-thorvg-sys/tools/regen-bindings"]
 
 # Replicated from vendor/zed's workspace root: gpui depends on async-task
 # APIs that only exist on this fork rev, and [patch] sections apply only from

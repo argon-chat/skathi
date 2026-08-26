@@ -5712,6 +5712,7 @@ dependencies = [
  "image",
  "rasterlottie",
  "serde_json",
+ "vn-thorvg-sys",
 ]
 
 [[package]]
@@ -5720,6 +5721,13 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "redjs",
+]
+
+[[package]]
+name = "vn-thorvg-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
