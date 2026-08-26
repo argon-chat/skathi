@@ -242,45 +242,56 @@ pub(crate) fn substitute_with(text: &str, vars: &Vars) -> Result<String, VarErro
 // building one element's map
 // ---------------------------------------------------------------------------
 
-enum Slot {
+enum Slot<'a> {
     /// Declared on this element, not resolved yet.
-    Raw(String),
-    /// Resolved (inherited values arrive already in this state).
+    Raw(&'a str),
+    /// Resolved.
     Done(String),
     /// Being resolved right now — seeing this again is a cycle.
     Busy,
+    /// Invalid at computed-value time. NOT the same as absent: the inherited
+    /// value does not come back (CSS Variables §3), so a lookup that lands here
+    /// must answer "unset" instead of falling through to the parent.
+    Dropped,
 }
 
 /// Resolves one name, recursing through the references in its value.
-fn force(
-    slots: &mut HashMap<String, Slot>,
+///
+/// Only names this element DECLARES live in `slots`; everything else is read
+/// straight off the parent map, which is already fully resolved. That is what
+/// keeps the map from being copied per element — see [`resolve`].
+fn force<'a>(
+    slots: &mut HashMap<&'a str, Slot<'a>>,
+    parent: &Vars,
     name: &str,
     diagnostics: &mut Vec<String>,
 ) -> Result<Option<String>, VarError> {
     match slots.get(name) {
-        None => Ok(None),
+        None => Ok(parent.get(name).map(str::to_string)),
+        Some(Slot::Dropped) => Ok(None),
         Some(Slot::Done(v)) => Ok(Some(v.clone())),
         Some(Slot::Busy) => Err(VarError::Cycle(name.to_string())),
         Some(Slot::Raw(_)) => {
-            let Some(Slot::Raw(raw)) = slots.insert(name.to_string(), Slot::Busy) else {
-                unreachable!("checked Raw above")
+            // `key` is the borrowed name already in the map — reused so the
+            // re-insert allocates nothing.
+            let (key, raw) = match slots.get_key_value(name) {
+                Some((k, Slot::Raw(raw))) => (*k, *raw),
+                _ => unreachable!("checked Raw above"),
             };
-            let resolved = substitute(&raw, &mut |inner| force(slots, inner, diagnostics));
+            slots.insert(key, Slot::Busy);
+            let resolved = substitute(raw, &mut |inner| force(slots, parent, inner, diagnostics));
             match resolved {
                 Ok(value) => {
-                    slots.insert(name.to_string(), Slot::Done(value.clone()));
+                    slots.insert(key, Slot::Done(value.clone()));
                     Ok(Some(value))
                 }
                 Err(e) => {
-                    // Invalid at computed-value time: the property behaves as
-                    // if it were not declared at all — the INHERITED value does
-                    // not come back (CSS Variables §3), so the name is dropped.
                     diagnostics.push(format!(
                         "`{name}` is invalid at computed-value time — {} (the custom property is \
                          treated as unset on this element and everything under it)",
                         e.describe()
                     ));
-                    slots.remove(name);
+                    slots.insert(key, Slot::Dropped);
                     Ok(None)
                 }
             }
@@ -292,53 +303,104 @@ fn force(
 /// won the cascade on this element (`own`, already folded so the last entry per
 /// name is the winner).
 ///
-/// When `own` is empty the parent's `Rc` is returned as-is — no allocation, no
-/// comparison, which is the whole reason the map is refcounted.
+/// Two shapes are answered without building anything, because between them they
+/// are almost every element on a Tailwind page:
+///
+/// * `own` is empty — the parent's `Rc` comes straight back.
+/// * every declaration is a literal that already equals what the element
+///   inherited. Tailwind's universal-defaults block
+///   (`*, ::before, ::after { --tw-shadow: 0 0 #0000; … }`) declares ~40 custom
+///   properties on EVERY element, and on all but the topmost one the resolved
+///   values are exactly the parent's — so the map that would be built is the
+///   map that already exists. This case was **81% of the whole cascade** on
+///   `apps/shadcn` before it was special-cased (~104 µs per element, debug);
+///   see research/reports/m11/perf-restyle-rebuild.md §3.
+///
+/// The general path resolves only the names this element declares, reading
+/// everything else off the parent map in place, and merges the two sorted
+/// lists. The parent map is never copied.
 pub(crate) fn resolve(
     parent: &Rc<Vars>,
-    own: &[(String, String)],
+    own: &[&(String, String)],
     diagnostics: &mut Vec<String>,
 ) -> Rc<Vars> {
     if own.is_empty() {
         return parent.clone();
     }
-    let mut slots: HashMap<String, Slot> = parent
-        .entries
+    // The "declares exactly what it inherited" fast path. A literal (no `var()`)
+    // resolves to itself, so a declaration whose text already equals the
+    // inherited value cannot change the map — and if EVERY declaration is like
+    // that, neither can the element. Duplicates are safe: two entries for one
+    // name that disagree cannot both equal the parent's value, so the check
+    // fails and the general path runs.
+    if own
         .iter()
-        .map(|(k, v)| (k.to_string(), Slot::Done(v.to_string())))
-        .collect();
+        .all(|(name, raw)| find_var(raw.as_bytes(), 0).is_none() && parent.get(name) == Some(&**raw))
+    {
+        return parent.clone();
+    }
+
+    let mut slots: HashMap<&str, Slot<'_>> = HashMap::with_capacity(own.len());
     for (name, raw) in own {
-        slots.insert(name.clone(), Slot::Raw(raw.clone()));
+        slots.insert(name.as_str(), Slot::Raw(raw.as_str()));
     }
     for (name, _) in own {
         // The Err arm cannot escape here: `force` converts every failure of its
         // own value into "unset" + an advisory. A cycle detected while resolving
         // a DIFFERENT name propagates out as Err, and means this name is invalid
         // too — same treatment.
-        if let Err(e) = force(&mut slots, name, diagnostics) {
+        if let Err(e) = force(&mut slots, parent, name, diagnostics) {
             diagnostics.push(format!(
                 "`{name}` is invalid at computed-value time — {}",
                 e.describe()
             ));
-            slots.remove(name);
+            slots.insert(name.as_str(), Slot::Dropped);
         }
     }
-    let mut entries: Vec<(Box<str>, Box<str>)> = slots
+
+    // The element's own resolved entries, sorted; then merged with the parent's
+    // (already sorted) list, own winning on a name collision and a dropped name
+    // removing the inherited value.
+    let mut mine: Vec<(&str, String)> = slots
         .into_iter()
         .filter_map(|(k, v)| match v {
-            Slot::Done(value) => Some((k.into_boxed_str(), value.into_boxed_str())),
-            // `Busy` is a name left mid-cycle; `Raw` cannot survive the loop
-            // above. Both are invalid at computed-value time, i.e. unset.
+            Slot::Done(value) => Some((k, value)),
+            // `Busy` is a name left mid-cycle, `Raw` cannot survive the loop
+            // above, `Dropped` is invalid at computed-value time. All three are
+            // "unset on this element", and all three must still SHADOW the
+            // inherited value.
             _ => None,
         })
         .collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    // Tailwind's universal-defaults block declares the whole `--tw-*` family on
-    // EVERY element (`*, ::before, ::after { --tw-shadow: 0 0 #0000; … }`), so
-    // most elements "declare" custom properties whose resolved values are
-    // identical to their parent's. Sharing the parent's `Rc` in that case keeps
-    // the `ComputedStates` change test at pointer-compare speed for the whole
-    // tree instead of turning it into a 20-entry string compare per node.
+    mine.sort_by(|a, b| a.0.cmp(b.0));
+    let declared: std::collections::HashSet<&str> = own.iter().map(|(n, _)| n.as_str()).collect();
+
+    let mut entries: Vec<(Box<str>, Box<str>)> =
+        Vec::with_capacity(parent.entries.len() + mine.len());
+    let mut mine_iter = mine.into_iter().peekable();
+    for (k, v) in &parent.entries {
+        while mine_iter.peek().is_some_and(|(mk, _)| *mk < &**k) {
+            let (mk, mv) = mine_iter.next().unwrap();
+            entries.push((mk.into(), mv.into_boxed_str()));
+        }
+        if declared.contains(&**k) {
+            // Shadowed: either by a resolved value (emitted below) or by a
+            // dropped one (emitted by nobody, which is the point).
+            if mine_iter.peek().is_some_and(|(mk, _)| *mk == &**k) {
+                let (mk, mv) = mine_iter.next().unwrap();
+                entries.push((mk.into(), mv.into_boxed_str()));
+            }
+            continue;
+        }
+        entries.push((k.clone(), v.clone()));
+    }
+    for (mk, mv) in mine_iter {
+        entries.push((mk.into(), mv.into_boxed_str()));
+    }
+
+    // Even off the fast path an element can land on its parent's exact map (a
+    // `var()`-composed value that resolves to what was inherited). Sharing the
+    // `Rc` keeps the `ComputedStates` change test at pointer-compare speed.
     if entries == parent.entries {
         return parent.clone();
     }
@@ -355,7 +417,13 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         let mut d = Vec::new();
-        resolve(&Rc::new(Vars::default()), &own, &mut d)
+        resolve(&Rc::new(Vars::default()), &refs(&own), &mut d)
+    }
+
+    /// `resolve` takes borrowed declarations (the cascade never copies them);
+    /// the tests still want to write literals.
+    fn refs(own: &[(String, String)]) -> Vec<&(String, String)> {
+        own.iter().collect()
     }
 
     #[test]
@@ -389,7 +457,7 @@ mod tests {
     fn a_fallbackless_missing_reference_invalidates_the_declaration() {
         let own = vec![("--x".to_string(), "var(--nope)".to_string())];
         let mut d = Vec::new();
-        let v = resolve(&Rc::new(Vars::default()), &own, &mut d);
+        let v = resolve(&Rc::new(Vars::default()), &refs(&own), &mut d);
         assert_eq!(v.get("--x"), None);
         assert!(d.iter().any(|m| m.contains("invalid at computed-value time")), "{d:?}");
     }
@@ -401,7 +469,7 @@ mod tests {
             ("--b".to_string(), "var(--a)".to_string()),
         ];
         let mut d = Vec::new();
-        let v = resolve(&Rc::new(Vars::default()), &own, &mut d);
+        let v = resolve(&Rc::new(Vars::default()), &refs(&own), &mut d);
         assert!(v.get("--a").is_none() && v.get("--b").is_none(), "{v:?}");
         assert!(d.iter().any(|m| m.contains("cycle")), "{d:?}");
     }
@@ -413,15 +481,85 @@ mod tests {
         let same = resolve(&parent, &[], &mut d);
         assert!(Rc::ptr_eq(&parent, &same));
 
-        let child = resolve(
-            &parent,
-            &[("--b".to_string(), "9".to_string())],
-            &mut d,
-        );
+        let own = vec![("--b".to_string(), "9".to_string())];
+        let child = resolve(&parent, &refs(&own), &mut d);
         assert_eq!(child.get("--a"), Some("1"));
         assert_eq!(child.get("--b"), Some("9"));
         // …and the parent is untouched.
         assert_eq!(parent.get("--b"), Some("2"));
+    }
+
+    /// The fast path: an element that re-declares exactly what it inherited
+    /// (Tailwind's universal `--tw-*` block on every element) must share the
+    /// parent's `Rc`, not rebuild an identical map.
+    #[test]
+    fn redeclaring_the_inherited_value_shares_the_parents_map() {
+        let parent = vars(&[("--a", "1"), ("--b", "0 0 #0000")]);
+        let mut d = Vec::new();
+        let same = vec![
+            ("--a".to_string(), "1".to_string()),
+            ("--b".to_string(), "0 0 #0000".to_string()),
+        ];
+        let child = resolve(&parent, &refs(&same), &mut d);
+        assert!(Rc::ptr_eq(&parent, &child), "identical declarations must not rebuild the map");
+
+        // …and one differing value is enough to take the general path.
+        let differs = vec![
+            ("--a".to_string(), "1".to_string()),
+            ("--b".to_string(), "2".to_string()),
+        ];
+        let child = resolve(&parent, &refs(&differs), &mut d);
+        assert!(!Rc::ptr_eq(&parent, &child));
+        assert_eq!(child.get("--a"), Some("1"));
+        assert_eq!(child.get("--b"), Some("2"));
+    }
+
+    /// A `var()`-valued declaration is never taken as "same as inherited" on
+    /// text alone — `--a: var(--b)` sitting under an ancestor whose `--a` is
+    /// literally the string `var(--b)` still has to resolve.
+    #[test]
+    fn a_var_reference_never_takes_the_identical_fast_path() {
+        let parent = vars(&[("--b", "red"), ("--a", "var(--b)")]);
+        // The parent's own `--a` resolved to `red`; a child re-declaring the
+        // same TEXT resolves to `red` too, so the map is equal — but it must be
+        // reached by resolving, not by assuming.
+        let mut d = Vec::new();
+        let own = vec![("--a".to_string(), "var(--b)".to_string())];
+        let child = resolve(&parent, &refs(&own), &mut d);
+        assert_eq!(child.get("--a"), Some("red"));
+    }
+
+    /// CSS Variables §3: a declaration that is invalid at computed-value time
+    /// makes the property UNSET on this element and everything under it — the
+    /// inherited value does not come back.
+    #[test]
+    fn an_invalid_declaration_shadows_the_inherited_value() {
+        let parent = vars(&[("--keep", "k"), ("--x", "inherited")]);
+        let mut d = Vec::new();
+        let own = vec![("--x".to_string(), "var(--nope)".to_string())];
+        let child = resolve(&parent, &refs(&own), &mut d);
+        assert_eq!(child.get("--x"), None, "the parent's value must not come back");
+        assert_eq!(child.get("--keep"), Some("k"));
+    }
+
+    /// The merge of "what I inherited" with "what I declared" keeps the entry
+    /// list sorted whichever side a name falls on — `get` binary-searches it.
+    #[test]
+    fn the_merged_map_stays_sorted() {
+        let parent = vars(&[("--m", "m"), ("--z", "z")]);
+        let mut d = Vec::new();
+        let own = vec![
+            ("--zz".to_string(), "9".to_string()),
+            ("--a".to_string(), "1".to_string()),
+            ("--m".to_string(), "2".to_string()),
+        ];
+        let child = resolve(&parent, &refs(&own), &mut d);
+        let names: Vec<&str> = child.iter().map(|(k, _)| k).collect();
+        assert_eq!(names, vec!["--a", "--m", "--z", "--zz"]);
+        assert_eq!(child.get("--a"), Some("1"));
+        assert_eq!(child.get("--m"), Some("2"));
+        assert_eq!(child.get("--z"), Some("z"));
+        assert_eq!(child.get("--zz"), Some("9"));
     }
 
     /// A child override is visible to a child-declared property that reads it.
@@ -429,14 +567,11 @@ mod tests {
     fn an_override_is_seen_by_the_elements_own_references() {
         let parent = vars(&[("--hue", "10")]);
         let mut d = Vec::new();
-        let child = resolve(
-            &parent,
-            &[
-                ("--hue".to_string(), "200".to_string()),
-                ("--color".to_string(), "hsl(var(--hue) 50% 50%)".to_string()),
-            ],
-            &mut d,
-        );
+        let own = vec![
+            ("--hue".to_string(), "200".to_string()),
+            ("--color".to_string(), "hsl(var(--hue) 50% 50%)".to_string()),
+        ];
+        let child = resolve(&parent, &refs(&own), &mut d);
         assert_eq!(child.get("--color"), Some("hsl(200 50% 50%)"));
     }
 

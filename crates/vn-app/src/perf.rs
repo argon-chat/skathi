@@ -277,7 +277,8 @@ fn report_phases() {
     if p.restyle_passes > 0 {
         eprintln!(
             "[vn-perf]   restyle passes={:<4} nodes={:<7} sel={:<7} total={:.1}ms  \
-             avg={:.2}  max={:.2}   [inline {:.1} · cascade {:.1} · store {:.1}]",
+             avg={:.2}  max={:.2}   [inline {:.1} · cascade {:.1} (match {:.1} · vars {:.1} · \
+             fold {:.1}) · store {:.1}]",
             p.restyle_passes,
             compact(p.nodes_cascaded),
             compact(p.rules_tested),
@@ -286,6 +287,9 @@ fn report_phases() {
             p.restyle_max_ms,
             p.inline_ms,
             p.cascade_ms,
+            p.match_ms,
+            p.vars_ms,
+            p.fold_ms,
             p.store_ms,
         );
     }

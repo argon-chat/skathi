@@ -1995,7 +1995,7 @@ mod tests {
         let mut d = Vec::new();
         let vars = crate::vars::resolve(
             &Rc::new(Vars::default()),
-            &[("--tw-shadow".to_string(), "0 1px 2px 0 rgb(0 0 0 / 0.5)".to_string())],
+            &[&("--tw-shadow".to_string(), "0 1px 2px 0 rgb(0 0 0 / 0.5)".to_string())],
             &mut d,
         );
         let mut r = StyleRefinement::default();

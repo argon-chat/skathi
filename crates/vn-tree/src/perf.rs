@@ -57,6 +57,11 @@ pub struct Phases {
     pub inline_ms: f32,
     /// Time inside `Engine::compute_node` — matching + folding + `var()`.
     pub cascade_ms: f32,
+    /// …split three ways by vn-css itself: running selectors, resolving the
+    /// element's custom properties, folding the matched declarations.
+    pub match_ms: f32,
+    pub vars_ms: f32,
+    pub fold_ms: f32,
     /// Time storing the results and feeding the animator (the change gate).
     pub store_ms: f32,
     /// Elements handed to `compute_node` across the window.
@@ -105,6 +110,9 @@ thread_local! {
         restyle_max_ms: 0.0,
         inline_ms: 0.0,
         cascade_ms: 0.0,
+        match_ms: 0.0,
+        vars_ms: 0.0,
+        fold_ms: 0.0,
         store_ms: 0.0,
         nodes_cascaded: 0,
         rules_tested: 0,
@@ -163,13 +171,16 @@ pub fn note_restyle(total_ms: f32, inline_ms: f32, cascade_ms: f32, store_ms: f3
     if !enabled() {
         return;
     }
-    let rules = vn_css::perf::take_rules_tested();
+    let (rules, match_ms, vars_ms, fold_ms) = vn_css::perf::take();
     with(|p| {
         p.restyle_passes += 1;
         p.restyle_ms += total_ms;
         p.restyle_max_ms = p.restyle_max_ms.max(total_ms);
         p.inline_ms += inline_ms;
         p.cascade_ms += cascade_ms;
+        p.match_ms += match_ms;
+        p.vars_ms += vars_ms;
+        p.fold_ms += fold_ms;
         p.store_ms += store_ms;
         p.nodes_cascaded += nodes;
         p.rules_tested += rules;

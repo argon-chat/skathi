@@ -134,6 +134,9 @@ pub struct Engine {
     /// One entry per distinct `@media` prelude in the sheet; rules point at
     /// theirs by index. Evaluated against the [`Env`] on every cascade.
     conditions: Vec<media::Cond>,
+    /// Any `+` / `~` anywhere in the sheet — see
+    /// [`Engine::uses_sibling_combinators`].
+    sibling_combinators: bool,
     pub diagnostics: Vec<String>,
 }
 
@@ -204,6 +207,36 @@ fn bucket_of(sel: &Selector<'_>) -> Bucket {
     }
 }
 
+/// `.a + .b` / `.a ~ .b` anywhere in this selector, INCLUDING inside a
+/// functional pseudo — `:is(.a + .b)` reads a sibling just as literally.
+fn has_sibling_combinator(sel: &Selector<'_>) -> bool {
+    let mut iter = sel.iter();
+    loop {
+        for component in &mut iter {
+            let nested = match component {
+                Component::Negation(list)
+                | Component::Where(list)
+                | Component::Is(list)
+                | Component::Any(_, list) => list,
+                _ => continue,
+            };
+            if list_has_sibling_combinator(nested) {
+                return true;
+            }
+        }
+        match iter.next_sequence() {
+            Some(parcel_selectors::parser::Combinator::NextSibling)
+            | Some(parcel_selectors::parser::Combinator::LaterSibling) => return true,
+            Some(_) => continue,
+            None => return false,
+        }
+    }
+}
+
+fn list_has_sibling_combinator(list: &[Selector<'_>]) -> bool {
+    list.iter().any(has_sibling_combinator)
+}
+
 impl RuleIndex {
     fn file(&mut self, sel: &Selector<'_>, rule: u32) {
         match bucket_of(sel) {
@@ -211,6 +244,26 @@ impl RuleIndex {
             Bucket::Class(k) => self.by_class.entry(k).or_default().push(rule),
             Bucket::Tag(k) => self.by_tag.entry(k).or_default().push(rule),
             Bucket::Any => self.any.push(rule),
+        }
+    }
+}
+
+/// Is the `VN_PERF` probe on? vn-css cannot see vn-tree's copy of the flag and
+/// the three `Instant`s per element are only free when nobody is looking.
+fn perf_on() -> bool {
+    static ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    match ON.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let on = std::env::var("VN_PERF")
+                .map(|v| {
+                    let v = v.trim().to_ascii_lowercase();
+                    !(v.is_empty() || v == "0" || v == "false" || v == "off")
+                })
+                .unwrap_or(false);
+            ON.store(if on { 2 } else { 1 }, std::sync::atomic::Ordering::Relaxed);
+            on
         }
     }
 }
@@ -240,6 +293,7 @@ impl Engine {
             rules: Vec::new(),
             index: RuleIndex { enabled: rule_index_enabled(), ..RuleIndex::default() },
             conditions: Vec::new(),
+            sibling_combinators: false,
             diagnostics: Vec::new(),
         };
         let src: &'static str = Box::leak(css.to_string().into_boxed_str());
@@ -254,6 +308,19 @@ impl Engine {
         let mut order = 0u32;
         engine.collect(&sheet.rules.0, None, &mut order);
         engine
+    }
+
+    /// Does any selector in the sheet use `+` or `~`?
+    ///
+    /// The restyle pass needs this to know how far a mutation reaches. A change
+    /// to one element can only affect elements the selectors can *see* from it:
+    /// descendants always (a descendant combinator reads every ancestor), and
+    /// FOLLOWING SIBLINGS only if the sheet actually contains a sibling
+    /// combinator. Most sheets do not, and asking the question once per
+    /// stylesheet is what lets a hover flip restyle a subtree instead of a
+    /// document (docs/ARCHITECTURE.md §11).
+    pub fn uses_sibling_combinators(&self) -> bool {
+        self.sibling_combinators
     }
 
     /// Hands `f` every rule this element could match, once each. With the index
@@ -378,6 +445,7 @@ impl Engine {
                         sel_text(sel)
                     ));
                 }
+                self.sibling_combinators |= has_sibling_combinator(sel);
                 self.index.file(sel, self.rules.len() as u32);
                 // `sheet` is a leaked &'static, so its selectors are 'static too.
                 self.rules.push(RuleEntry {
@@ -494,6 +562,8 @@ impl Engine {
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
+        let probe = perf_on();
+        let t0 = probe.then(std::time::Instant::now);
         let el = element::El(node);
         let mut matched: Vec<&RuleEntry> = Vec::new();
         let mut tested = 0u64;
@@ -513,28 +583,33 @@ impl Engine {
                 matched.push(rule);
             }
         });
-        perf::note_rules_tested(tested);
         // The index hands the candidates back bucket by bucket, so this sort is
         // what restores the cascade's document order — it is not an
         // optimization detail, it is the cascade.
         matched.sort_by_key(|r| (r.specificity, r.order));
+        let t1 = probe.then(std::time::Instant::now);
 
         // ---- 1. custom properties, first: every other declaration reads them.
         // Duplicates are left in — `vars::resolve` folds by name with last-wins,
         // which is exactly the cascade order they are pushed in.
-        let mut own_custom: Decls = Vec::new();
+        // Borrowed, not cloned: Tailwind's universal block alone is ~40
+        // declarations, and cloning two `String`s each per element is 16 K
+        // allocations per restyle on a 200-element page for values nobody
+        // mutates.
+        let mut own_custom: Vec<&(String, String)> = Vec::new();
         for important_pass in [false, true] {
             for r in &matched {
                 let declared = if important_pass { &r.important_custom } else { &r.normal_custom };
                 if let Some(list) = declared {
-                    own_custom.extend(list.iter().cloned());
+                    own_custom.extend(list.iter());
                 }
             }
         }
         if let Some(inline) = inline {
-            own_custom.extend(inline.custom.iter().cloned());
+            own_custom.extend(inline.custom.iter());
         }
         let vars = vars::resolve(parent_vars, &own_custom, diagnostics);
+        let t2 = probe.then(std::time::Instant::now);
 
         // ---- 2. the refinements.
         let mut base = StyleRefinement::default();
@@ -618,6 +693,12 @@ impl Engine {
                 transitions = Some(t.clone());
             }
             extras.refine(&inline.extras);
+        }
+        if let (Some(t0), Some(t1), Some(t2)) = (t0, t1, t2) {
+            let ms = |a: std::time::Instant, b: std::time::Instant| {
+                b.saturating_duration_since(a).as_secs_f32() * 1000.0
+            };
+            perf::note_node(tested, ms(t0, t1), ms(t1, t2), ms(t2, std::time::Instant::now()));
         }
         ComputedStates {
             base: Rc::new(base),
