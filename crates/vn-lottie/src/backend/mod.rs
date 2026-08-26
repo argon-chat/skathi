@@ -6,8 +6,8 @@
 //!
 //! | | crate | build cost |
 //! | --- | --- | --- |
+//! | [`Backend::ThorVg`] (default) | `vn-thorvg-sys` (vendored ThorVG 1.1.0 C++) | feature `thorvg`, ~54 s once |
 //! | [`Backend::Rasterlottie`] | `rasterlottie` (pure Rust, `tiny-skia`) | none |
-//! | [`Backend::ThorVg`] | `vn-thorvg-sys` (vendored ThorVG 1.1.0 C++) | feature `thorvg` |
 //!
 //! The split is deliberately *below* metadata: [`LottieMeta`] is read from the
 //! JSON document by [`crate::state`], not from whatever the backend happens to
@@ -20,8 +20,10 @@
 //! [`Backend::preferred`] resolves, in order:
 //!
 //! 1. `VN_LOTTIE_BACKEND=thorvg|rasterlottie` in the environment — which is
-//!    how the comparison harness runs the *same* test binary on both engines.
-//! 2. the `thorvg-default` cargo feature,
+//!    how the comparison harness runs the *same* test binary on both engines,
+//!    and how a user works around a file one engine gets wrong without a
+//!    rebuild.
+//! 2. the `thorvg-default` cargo feature (on by default),
 //! 3. `rasterlottie`.
 //!
 //! An unavailable or misspelled value falls back rather than panicking: a
@@ -116,8 +118,13 @@ pub(crate) struct Raster {
 }
 
 /// A loaded animation, ready to draw. One variant per [`Backend`].
+///
+/// The `rasterlottie` payload is boxed because it is five times the size of
+/// the ThorVG one (which is four pointers and a `Vec`), and this enum lives
+/// inline in every `LottieState` the host keeps per node. One pointer chase
+/// per `render_frame` against a rasterisation measured in microseconds.
 pub(crate) enum Rasteriser {
-    Rasterlottie(raster::Rasterlottie),
+    Rasterlottie(Box<raster::Rasterlottie>),
     #[cfg(feature = "thorvg")]
     ThorVg(thorvg::ThorVg),
 }
@@ -136,7 +143,8 @@ impl Rasteriser {
         meta: &LottieMeta,
     ) -> Result<Self, LottieError> {
         match backend {
-            Backend::Rasterlottie => raster::Rasterlottie::load(document).map(Self::Rasterlottie),
+            Backend::Rasterlottie => raster::Rasterlottie::load(document)
+                .map(|inner| Self::Rasterlottie(Box::new(inner))),
             #[cfg(feature = "thorvg")]
             Backend::ThorVg => thorvg::ThorVg::load(document, meta).map(Self::ThorVg),
             #[cfg(not(feature = "thorvg"))]

@@ -1,6 +1,6 @@
 //! The [`rasterlottie`] backend — pure Rust, `tiny-skia`, no build step.
 //!
-//! This is the default. Its distinguishing behaviour is that it *validates*:
+//! Its distinguishing behaviour is that it *validates*:
 //! `analyze_animation` walks the model and refuses anything it cannot draw
 //! exactly, so an unsupported feature surfaces as
 //! [`LottieError::Unsupported`] at load with one advisory line per feature,

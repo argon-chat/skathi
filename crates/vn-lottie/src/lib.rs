@@ -31,13 +31,15 @@
 //! [`LottieMeta`], the transport and the events are all shared, and both
 //! engines hand back BGRA for the same [`gpui::RenderImage`].
 //!
-//! * [`Backend::Rasterlottie`] — [`rasterlottie`], pure Rust on `tiny-skia`.
-//!   The default, and always compiled in.
 //! * [`Backend::ThorVg`] — the vendored ThorVG 1.1.0 C++ engine, behind the
-//!   `thorvg` cargo feature. Wider format coverage (text, layer effects,
-//!   expressions) at the cost of a C++ compile; still one `cargo build`, still
-//!   no cmake, no `libclang`, no network fetch and no system libraries, because
-//!   `crates/vn-thorvg-sys` vendors the source and checks the FFI in.
+//!   `thorvg` cargo feature, **on by default**. Much wider format coverage
+//!   (merge paths, layer effects, expressions) and 1.5–13× faster; still one
+//!   `cargo build`, still no cmake, no `libclang`, no network fetch and no
+//!   system libraries, because `crates/vn-thorvg-sys` vendors the source and
+//!   checks the FFI in.
+//! * [`Backend::Rasterlottie`] — [`rasterlottie`], pure Rust on `tiny-skia`.
+//!   Always compiled in, and the fallback for the one measured file ThorVG
+//!   draws wrong (`bell.json`, whose Fill effect ThorVG drops).
 //!
 //! `research/reports/m10/lottie.md` has the original selection, and
 //! `research/reports/m11/thorvg.md` the two-backend comparison.

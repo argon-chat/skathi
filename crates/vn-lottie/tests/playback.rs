@@ -664,3 +664,38 @@ fn both_backends_agree_on_everything_except_the_pixels() {
         }
     }
 }
+
+/// Loads and renders from eight threads at once.
+///
+/// This is a regression test for a real crash, not a hypothetical: ThorVG
+/// 1.1.0 keeps unsynchronised process-global state, and before
+/// `backend::thorvg`'s engine lock this suite died with
+/// `STATUS_ACCESS_VIOLATION` in **12 of 40** `--test-threads=8` runs while
+/// every serial run passed. A safe Rust API must not offer memory corruption
+/// as the price of a thread pool.
+///
+/// Each `LottieState` is built *inside* its thread because the ThorVG variant
+/// is `!Send` by construction; what is shared is the engine underneath them.
+#[test]
+fn concurrent_loads_and_renders_do_not_corrupt_the_engine() {
+    let payloads: Vec<Vec<u8>> = ALL.iter().map(|name| bytes(name)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let payloads = &payloads;
+            scope.spawn(move || {
+                for _ in 0..4 {
+                    for raw in payloads {
+                        let mut state = LottieState::load(raw).expect("load");
+                        let total = state.meta().total_frames;
+                        for step in 0..3 {
+                            state.seek_frame(total * step as f32 / 3.0);
+                            state.render_frame((96.0, 96.0), 1.0).expect("render");
+                            let _ = state.take_retired();
+                        }
+                        let _ = state.take_all_images();
+                    }
+                }
+            });
+        }
+    });
+}

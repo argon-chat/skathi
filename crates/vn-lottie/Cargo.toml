@@ -5,21 +5,29 @@ edition = "2021"
 publish = false
 
 [features]
-default = []
+# ThorVG is the default renderer as of m11: it draws 25/25 of the measured
+# corpus where `rasterlottie` draws 18/25, and it is closer to the upstream
+# reference renders on every fixture. The measurements, and the one file it
+# gets *wrong*, are in `research/reports/m11/thorvg.md`.
+#
+# Reverting is this one line — `default = []` puts `rasterlottie` back, and
+# `VN_LOTTIE_BACKEND=rasterlottie` does it at run time with no rebuild.
+default = ["thorvg-default"]
 # Compiles the ThorVG backend in alongside `rasterlottie`. Both are then
 # selectable per load (`LottieState::load_with`) or per process
 # (`VN_LOTTIE_BACKEND`); this feature does NOT change which one `load` picks.
 thorvg = ["dep:vn-thorvg-sys"]
 # Makes ThorVG what a plain `LottieState::load` uses. Split from `thorvg` so
-# flipping the default is a one-word change in whoever depends on this crate,
-# and so the comparison harness can build both engines with either default.
+# the choice of default and the choice of what is compiled in stay separate:
+# the comparison harness needs both engines with either default.
 thorvg-default = ["thorvg"]
 
 [dependencies]
-# Pure-Rust Lottie parser + rasteriser (tiny-skia backend). The default
-# backend: no C/C++ toolchain, no cmake/meson, no system libraries.
-# See `research/reports/m10/lottie.md` for the original comparison and
-# `research/reports/m11/thorvg.md` for the two-backend one.
+# Pure-Rust Lottie parser + rasteriser (tiny-skia backend). No longer the
+# default (see `[features]`), but always compiled in: it is the fallback with
+# no C++ in it at all, and the only engine that gets `bell.json`'s Fill effect
+# right. `research/reports/m10/lottie.md` is the original selection,
+# `research/reports/m11/thorvg.md` the two-backend comparison.
 #
 # `gif` is off (we never export GIFs); `images` and `text` stay on because real
 # Bodymovin exports lean on embedded image assets and glyph-backed text layers.
@@ -27,8 +35,9 @@ rasterlottie = { version = "0.2.2", default-features = false, features = [
     "images",
     "text",
 ] }
-# Vendored ThorVG 1.1.0 (C++) + checked-in FFI. Optional, so a default build
-# never compiles a line of C++; see `crates/vn-thorvg-sys/VENDOR.md`.
+# Vendored ThorVG 1.1.0 (C++) + checked-in FFI. Still `optional`, so
+# `--no-default-features` really does produce a build with no C++ in it;
+# see `crates/vn-thorvg-sys/VENDOR.md` for the vendoring and the pin.
 vn-thorvg-sys = { path = "../vn-thorvg-sys", optional = true }
 # `.tgs` (Telegram sticker) is gzipped Lottie JSON, whichever backend draws it.
 # `rust_backend` keeps the pure-Rust promise (miniz_oxide); the C `zlib`
@@ -51,3 +60,12 @@ gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-featur
 # already in the graph, so this adds nothing to the build.
 serde_json = "1"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# `examples/compare.rs --png` writes a frame per file per backend, which is how
+# "which one is right" is actually settled. Encoder only; the runtime dep above
+# stays decoder-free.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[example]]
+name = "normalize-neutrality"
+# Talks to `vn-thorvg-sys` directly, so it only exists when that is compiled in.
+required-features = ["thorvg"]

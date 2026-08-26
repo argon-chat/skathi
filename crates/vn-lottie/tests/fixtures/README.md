@@ -40,8 +40,20 @@ Source paths under `data/`, at `main`:
 `shapes/star.json`, `shapes/rectangle.json`, `shape-modifiers/trim-group.json`,
 `layers/precomp.json`, `layers/mask.json`, `layers/solid-layer.json`.
 
-Each has a sibling `*-00.png` golden render upstream, useful if these tests ever
-grow image-diff assertions.
+## `golden/`
+
+Upstream's own frame-0 reference renders for those six, committed unmodified
+from the same CC0 `data/` tree (`<name>-00.png`, at the authored canvas size).
+
+They are the only **external** opinion on which backend is drawing a file
+correctly. `cargo run --release -p vn-lottie --features thorvg --example
+compare -- --golden` scores both against them; it is what established that
+`trim-group.json` is drawn correctly by ThorVG and *wrongly* by `rasterlottie`
+(Δ 0.0010 vs 0.0396 — see `research/reports/m11/thorvg.md` §4).
+
+Not wired into `tests/playback.rs`: a hard pixel threshold across two
+rasterisers with different antialiasing is a flaky test, and the harness is
+where a number that needs a human eye belongs.
 
 ## `sticker.tgs` — the wrapper, not the motion
 

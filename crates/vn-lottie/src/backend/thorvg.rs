@@ -9,9 +9,35 @@
 //!
 //! # Safety
 //!
-//! Everything below is one object graph owned by one [`ThorVg`], never shared
-//! and never sent across threads (the raw pointers make the struct `!Send`
-//! automatically, which is what we want — ThorVG's canvas is not thread-safe):
+//! ## The engine is process-global and not concurrency-safe
+//!
+//! Every `tvg_*` call goes through [`ENGINE`], a plain global mutex. That is
+//! not defensive programming, it is a measured requirement: ThorVG 1.1.0's
+//! software engine keeps unsynchronised process-global state (the loader
+//! registry, the renderer refcount, the composition pools), and two threads
+//! each driving their *own* animation and their *own* canvas is enough to
+//! corrupt it. Measured on this crate's own test suite:
+//!
+//! | | crashes |
+//! | --- | --- |
+//! | `--test-threads=8`, no lock | **12 / 40** runs, `STATUS_ACCESS_VIOLATION` |
+//! | `--test-threads=1`, no lock | 0 / 40 |
+//! | `--test-threads=8`, this lock | 0 / 40 |
+//!
+//! The lock is uncontended in the only configuration that matters — gpui
+//! paints on one thread — and an uncontended `Mutex` is tens of nanoseconds
+//! against a rasterisation measured in tens of *micro*seconds, so it does not
+//! show up in the numbers in `research/reports/m11/thorvg.md` §5. Serialising
+//! is also the honest wrapper: a safe Rust API must not hand out a way to
+//! corrupt memory by doing something as ordinary as loading two animations
+//! from a thread pool.
+//!
+//! ## Object lifetimes
+//!
+//! Everything else is one object graph owned by one [`ThorVg`], never shared
+//! (the raw pointers make the struct `!Send` automatically, which is a useful
+//! second line of defence — a `LottieState` cannot travel between threads even
+//! though the lock would now make that survivable):
 //!
 //! * `animation` owns `picture` (`Animation::Impl` calls `picture->ref()`),
 //!   and `canvas` takes a second reference in `tvg_canvas_add`. Both are
@@ -40,23 +66,35 @@ use crate::state::{LottieError, LottieMeta};
 /// loader in turn.
 const MIME_LOTTIE: &[u8] = b"lottie+json\0";
 
-/// Brings the global engine up exactly once per process.
+/// The one lock every `tvg_*` call in this module is made under. See the
+/// module docs for the measurement that makes it mandatory.
+///
+/// It guards a `Result` rather than `()` so engine start-up happens exactly
+/// once, inside the same critical section: `tvg_engine_init` mutates the same
+/// globals everything else touches.
+static ENGINE: std::sync::Mutex<Option<Result<(), i32>>> = std::sync::Mutex::new(None);
+
+/// Takes the engine lock, bringing ThorVG up on first use.
 ///
 /// `threads = 0` keeps ThorVG's TaskScheduler on the calling thread. That is
 /// deliberate: frames are rasterised inline from gpui's paint pass, a sticker
 /// at 256px is a fraction of a millisecond, and a background pool would buy
-/// nothing while making the timing non-deterministic for the fixtures.
+/// nothing while making the timing non-deterministic.
 ///
 /// The engine is never terminated. `tvg_engine_term` is refcounted against
 /// `init`, and there is no point in the process where the last `LottieState`
 /// is provably gone; leaking one engine for the process lifetime is the
 /// cheaper correctness argument.
-fn init_engine() -> Result<(), LottieError> {
-    static ENGINE: std::sync::OnceLock<Result<(), i32>> = std::sync::OnceLock::new();
-    match ENGINE.get_or_init(|| unsafe {
+fn engine() -> Result<std::sync::MutexGuard<'static, Option<Result<(), i32>>>, LottieError> {
+    // A poisoned lock means a previous caller panicked mid-render. ThorVG's
+    // own state is still consistent (it is C++ with no unwinding through it),
+    // so recovering is right — refusing every subsequent frame would not be.
+    let mut guard = ENGINE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let started = *guard.get_or_insert_with(|| unsafe {
         tvg::tvg_engine_init(0).ok().map_err(|error| error as i32)
-    }) {
-        Ok(()) => Ok(()),
+    });
+    match started {
+        Ok(()) => Ok(guard),
         Err(code) => Err(LottieError::Parse(format!(
             "ThorVG engine initialisation failed (Tvg_Result {code})"
         ))),
@@ -92,7 +130,9 @@ pub(crate) struct ThorVg {
 
 impl ThorVg {
     pub fn load(document: Value, meta: &LottieMeta) -> Result<Self, LottieError> {
-        init_engine()?;
+        // Held for the whole of `load`: `tvg_picture_load_data` registers the
+        // loader in ThorVG's process-global `LoaderMgr`.
+        let _engine = engine()?;
 
         // ThorVG's loader parses text, so the document goes back to JSON here.
         // That is also the point at which `crate::normalize`'s rewrites become
@@ -160,6 +200,9 @@ impl ThorVg {
         if width == 0 || height == 0 {
             return None;
         }
+        // Held across the whole update/draw/sync sequence, which is the unit
+        // ThorVG's internals assume nothing else is running alongside.
+        let _engine = engine().ok()?;
         unsafe {
             if self.target != (width, height) {
                 // Allocate first, retarget second, drop the old buffer third:
@@ -226,6 +269,10 @@ impl ThorVg {
 
 impl Drop for ThorVg {
     fn drop(&mut self) {
+        // Teardown unregisters the loader from the same global registry that
+        // `load` touched, so it takes the same lock. If the engine never came
+        // up there is nothing to destroy.
+        let Ok(_engine) = engine() else { return };
         // Canvas first: it releases its reference to the picture, then the
         // animation releases the last one and the picture is freed. Doing it
         // the other way round works too (both are refcounts) but this order
