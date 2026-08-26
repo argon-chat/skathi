@@ -15,11 +15,11 @@ describe("patchProp: on* props", () => {
 
   test("an event the host does not deliver warns instead of vanishing", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(), "onPointerdown", null, () => {});
+    rt.patchProp(rt.el(), "onContextmenu", null, () => {});
     const advisories = rt.advisories();
     expect(advisories.length).toBe(1);
     // Same shape as the addEventListener advisory next to it.
-    expect(advisories[0]).toContain("@pointerdown");
+    expect(advisories[0]).toContain("@contextmenu");
     expect(advisories[0]).toContain("not delivered by the native host yet");
     expect(advisories[0]).toContain("will never fire");
     // …and no listener flag was set, because there is no code to set it under.
@@ -28,20 +28,20 @@ describe("patchProp: on* props", () => {
 
   test("the advisory is one per event name per session, not one per patch", () => {
     const rt = createRuntime();
-    for (let i = 0; i < 5; i++) rt.patchProp(rt.el(i), "onPointerdown", null, () => {});
-    rt.patchProp(rt.el(), "onPointermove", null, () => {});
+    for (let i = 0; i < 5; i++) rt.patchProp(rt.el(i), "onContextmenu", null, () => {});
+    rt.patchProp(rt.el(), "onDblclick", null, () => {});
     expect(rt.advisories().length).toBe(2);
     // A *different* world starts over — the dedup set is per module instance.
     const other = createRuntime();
-    other.patchProp(other.el(), "onPointerdown", null, () => {});
+    other.patchProp(other.el(), "onContextmenu", null, () => {});
     expect(other.advisories().length).toBe(1);
   });
 
   test("addEventListener and the prop path share one dedup key", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(3), "onPointerdown", null, () => {});
+    rt.patchProp(rt.el(3), "onContextmenu", null, () => {});
     const node = rt.nodeOps.createElement("div");
-    node.addEventListener("pointerdown", () => {});
+    node.addEventListener("contextmenu", () => {});
     expect(rt.advisories().length).toBe(1);
   });
 
