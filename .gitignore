@@ -17,3 +17,8 @@ dist/
 # `bun packages/vue-native/fetch-slang.ts` populates it; nothing in `cargo build`
 # needs it, because the generated effect HLSL is checked in.
 /tools/
+
+# Fetched Lottie measurement corpus (crates/vn-lottie/tools/fetch-corpus.sh).
+# Third-party After Effects exports, pinned by commit, measured but not
+# redistributed — see the script for why.
+/crates/vn-lottie/tests/corpus/

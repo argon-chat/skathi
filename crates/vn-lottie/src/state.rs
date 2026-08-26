@@ -12,8 +12,9 @@ use std::time::Duration;
 
 use gpui::RenderImage;
 use image::{Frame, RgbaImage};
-use rasterlottie::{Animation, PreparedAnimation, RenderConfig, Renderer, Rgba8};
+use serde_json::Value;
 
+use crate::backend::{self, Backend, Rasteriser};
 use crate::normalize::{self, Normalization};
 
 /// Why a Lottie could not be loaded.
@@ -211,7 +212,7 @@ struct CachedFrame {
 /// The host keeps one of these per node in a side map keyed by node id, exactly
 /// as it keeps `TextInputState` for `<input>` — see `CONTRACT.md`.
 pub struct LottieState {
-    prepared: PreparedAnimation,
+    renderer: Rasteriser,
     meta: LottieMeta,
     advisories: Vec<String>,
 
@@ -252,6 +253,19 @@ impl LottieState {
     /// comes back as [`LottieError::Unsupported`] carrying one advisory line
     /// per feature.
     pub fn load(bytes: &[u8]) -> Result<Self, LottieError> {
+        Self::load_with(Backend::preferred(), bytes)
+    }
+
+    /// [`Self::load`], with the rasteriser named explicitly.
+    ///
+    /// Everything outside the rasterisation itself — the gunzip, the
+    /// [`crate::normalize`] pass, [`LottieMeta`], the transport, the events —
+    /// is backend-independent by construction, so the only thing this changes
+    /// is which engine draws and therefore which files draw *correctly*.
+    ///
+    /// Asking for a backend that was not compiled in is an error rather than a
+    /// silent downgrade; use [`Backend::is_available`] to check first.
+    pub fn load_with(backend: Backend, bytes: &[u8]) -> Result<Self, LottieError> {
         let json = if bytes.starts_with(&[0x1f, 0x8b]) {
             use std::io::Read as _;
             let mut text = String::new();
@@ -263,43 +277,15 @@ impl LottieState {
             String::from_utf8_lossy(bytes).into_owned()
         };
 
-        let mut document: serde_json::Value =
-            serde_json::from_str(&json).map_err(LottieError::Json)?;
+        let mut document: Value = serde_json::from_str(&json).map_err(LottieError::Json)?;
         let telegram_sticker = document.get("tgs").is_some();
         let normalization = normalize::normalize(&mut document);
 
-        let animation: Animation = serde_json::from_value(document)
-            .map_err(|error| LottieError::Parse(error.to_string()))?;
-
-        let report = rasterlottie::analyze_animation(&animation);
-        if !report.is_supported() {
-            return Err(LottieError::Unsupported(
-                report
-                    .issues
-                    .iter()
-                    .map(|issue| format!("{} ({:?}): {}", issue.path, issue.kind, issue.detail))
-                    .collect(),
-            ));
-        }
-
-        let meta = LottieMeta {
-            version: animation.version.clone(),
-            frame_rate: animation.frame_rate,
-            in_point: animation.in_point,
-            out_point: animation.out_point,
-            total_frames: animation.duration_frames(),
-            duration: Duration::from_secs_f32(animation.duration_seconds().max(0.0)),
-            width: animation.width,
-            height: animation.height,
-            telegram_sticker,
-        };
-
-        let prepared = Renderer::default()
-            .prepare(&animation)
-            .map_err(|error| LottieError::Parse(error.to_string()))?;
+        let meta = read_meta(&document, telegram_sticker)?;
+        let renderer = Rasteriser::load(backend, document, &meta)?;
 
         Ok(Self {
-            prepared,
+            renderer,
             frame: meta.in_point,
             meta,
             advisories: advisories_for(normalization),
@@ -321,6 +307,11 @@ impl LottieState {
     /// Everything the file said about itself.
     pub fn meta(&self) -> &LottieMeta {
         &self.meta
+    }
+
+    /// Which rasteriser is drawing this animation.
+    pub fn backend(&self) -> Backend {
+        self.renderer.backend()
     }
 
     /// Non-fatal notes about what the compatibility pass had to rewrite, for the
@@ -618,22 +609,17 @@ impl LottieState {
             }
         }
 
-        let raster_scale = (width_px as f32 / self.meta.width.max(1) as f32)
-            .min(height_px as f32 / self.meta.height.max(1) as f32);
+        let intrinsic = (self.meta.width.max(1), self.meta.height.max(1));
+        let raster_scale = (width_px as f32 / intrinsic.0 as f32)
+            .min(height_px as f32 / intrinsic.1 as f32);
+        let (raster_width, raster_height) = backend::raster_size(intrinsic, raster_scale);
         let raster = self
-            .prepared
-            .render_frame(
-                self.frame,
-                RenderConfig::new(Rgba8::TRANSPARENT, raster_scale),
-            )
-            .ok()?;
+            .renderer
+            .render(self.frame, raster_scale, raster_width, raster_height)?;
 
-        // rasterlottie hands back RGBA; gpui's atlas wants BGRA.
-        let mut pixels = raster.pixels;
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-        }
-        let buffer = RgbaImage::from_raw(raster.width, raster.height, pixels)?;
+        // `RgbaImage` is a byte container here, not a colour-space claim: the
+        // bytes are already BGRA, which is what gpui's atlas uploads.
+        let buffer = RgbaImage::from_raw(raster.width, raster.height, raster.bgra)?;
         let image = Arc::new(RenderImage::new(vec![Frame::new(buffer)]));
 
         // Retire the frame *before* last: the scene that painted it has been
@@ -680,19 +666,75 @@ impl LottieState {
     }
 }
 
+/// Reads [`LottieMeta`] straight out of the Bodymovin document.
+///
+/// Deliberately **not** delegated to a backend. Both engines expose their own
+/// idea of the timeline — `rasterlottie` through its `Animation` model,
+/// ThorVG through `tvg_animation_get_total_frame`/`_duration`, which report a
+/// 0-based frame count and a duration already divided by the frame rate — and
+/// routing metadata through either would make `meta()` depend on which one is
+/// compiled in. The document is the single source of truth instead.
+///
+/// The required fields mirror `rasterlottie::Animation`'s non-`default`ed
+/// ones, so a document that is not a Lottie fails here with the same
+/// [`LottieError::Parse`] it always did.
+fn read_meta(document: &Value, telegram_sticker: bool) -> Result<LottieMeta, LottieError> {
+    fn number(document: &Value, key: &str) -> Result<f32, LottieError> {
+        document
+            .get(key)
+            .and_then(Value::as_f64)
+            .map(|value| value as f32)
+            .ok_or_else(|| {
+                LottieError::Parse(format!("missing or non-numeric required field {key:?}"))
+            })
+    }
+
+    let frame_rate = number(document, "fr")?;
+    let in_point = number(document, "ip")?;
+    let out_point = number(document, "op")?;
+    let width = number(document, "w")?.max(0.0) as u32;
+    let height = number(document, "h")?.max(0.0) as u32;
+    let total_frames = out_point - in_point;
+
+    Ok(LottieMeta {
+        // `"v"` is optional in the wild — hand-authored files often omit it —
+        // so it defaults rather than failing the load.
+        version: document
+            .get("v")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        frame_rate,
+        in_point,
+        out_point,
+        total_frames,
+        duration: Duration::from_secs_f32(if frame_rate > 0.0 {
+            (total_frames / frame_rate).max(0.0)
+        } else {
+            0.0
+        }),
+        width,
+        height,
+        telegram_sticker,
+    })
+}
+
 fn advisories_for(normalization: Normalization) -> Vec<String> {
     let mut advisories = Vec::new();
+    // Worded without naming a backend: the pass runs for both, and while
+    // `rasterlottie` *needs* it (it rejects the file outright), ThorVG reads
+    // both idioms natively and merely gets a document that already says the
+    // same thing more explicitly.
     if normalization.terminator_keyframes > 0 {
         advisories.push(format!(
-            "filled {} Bodymovin terminator keyframe(s) ({{\"t\": n}} with no \"s\"); \
-             the renderer cannot read them but their value is implied by the previous keyframe",
+            "filled {} Bodymovin terminator keyframe(s) ({{\"t\": n}} with no \"s\") \
+             with the value the previous keyframe implies",
             normalization.terminator_keyframes
         ));
     }
     if normalization.solid_layers > 0 {
         advisories.push(format!(
-            "rewrote {} solid layer(s) into equivalent filled rectangles; \
-             the renderer has no solid-layer support",
+            "rewrote {} solid layer(s) into the equivalent filled rectangles",
             normalization.solid_layers
         ));
     }

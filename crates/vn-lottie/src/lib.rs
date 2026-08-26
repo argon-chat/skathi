@@ -24,17 +24,28 @@
 //! let element = lottie(&mut state, &options, window, cx);
 //! ```
 //!
-//! # Backend
+//! # Backends
 //!
-//! Rasterisation is [`rasterlottie`] (pure Rust, `tiny-skia`), rendering ARGB
-//! frames into a [`gpui::RenderImage`] — the same raster-frames approach
-//! Telegram uses for stickers. It was chosen over rlottie, ThorVG and Skia's
-//! Skottie because it is the only option that builds on Windows MSVC with
-//! `+crt-static` in one `cargo build`, with no cmake, no `libclang`, no network
-//! fetch and no system libraries. `research/reports/m10/lottie.md` has the
-//! comparison and the measurements.
+//! Rasterisation happens behind [`Backend`], and which engine is doing it
+//! changes nothing above [`state`]: the `.tgs` gunzip, the [`normalize`] pass,
+//! [`LottieMeta`], the transport and the events are all shared, and both
+//! engines hand back BGRA for the same [`gpui::RenderImage`].
 //!
-//! Real After Effects exports do not reach that backend unaltered: see
+//! * [`Backend::ThorVg`] — the vendored ThorVG 1.1.0 C++ engine, behind the
+//!   `thorvg` cargo feature, **on by default**. Much wider format coverage
+//!   (merge paths, layer effects, expressions) and 1.5–13× faster; still one
+//!   `cargo build`, still no cmake, no `libclang`, no network fetch and no
+//!   system libraries, because `crates/vn-thorvg-sys` vendors the source and
+//!   checks the FFI in.
+//! * [`Backend::Rasterlottie`] — [`rasterlottie`], pure Rust on `tiny-skia`.
+//!   Always compiled in, and the fallback for the one measured file ThorVG
+//!   draws wrong (`bell.json`, whose Fill effect ThorVG drops).
+//!
+//! `research/reports/m10/lottie.md` has the original selection, and
+//! `research/reports/m11/thorvg.md` the two-backend comparison.
+//! `VN_LOTTIE_BACKEND=thorvg|rasterlottie` overrides the choice at run time.
+//!
+//! Real After Effects exports do not reach `rasterlottie` unaltered: see
 //! [`normalize`] for the two Bodymovin idioms that have to be rewritten first,
 //! and why skipping that step rejects most files in the wild.
 //!
@@ -45,10 +56,12 @@
 //! `<lottie-player>` disagree — notably the defaults of `autoplay` and `loop` —
 //! `CONTRACT.md` records which one this follows and why.
 
+pub mod backend;
 pub mod element;
 pub mod normalize;
 pub mod state;
 
+pub use backend::Backend;
 pub use element::{lottie, LottieFit, LottieOptions};
 pub use normalize::Normalization;
 pub use state::{

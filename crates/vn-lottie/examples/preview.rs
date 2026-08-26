@@ -60,9 +60,12 @@ impl Render for Preview {
             self.frame_ms * 0.9 + elapsed * 0.1
         };
 
+        // The backend is on screen so a screenshot is self-evidencing: a
+        // capture that says `thorvg` cannot be mistaken for the default one.
+        let backend = self.state.backend();
         let meta = self.state.meta();
         let readout = format!(
-            "{}  |  frame {:>7.2} / {:.0}  |  loop {}  |  {:.2} ms/frame  |  {}x{} @ {:.0}%",
+            "{}  |  {backend}  |  frame {:>7.2} / {:.0}  |  loop {}  |  {:.2} ms/frame  |  {}x{} @ {:.0}%",
             self.name,
             self.state.frame(),
             meta.total_frames,
@@ -137,7 +140,8 @@ fn open_fixture(name: &str) -> LottieState {
     let state = LottieState::load(&bytes).unwrap_or_else(|error| panic!("load {name}: {error}"));
     let meta = state.meta();
     println!(
-        "{name}: {}x{} @ {} fps, {} frames ({:.2}s){}",
+        "{name} [{}]: {}x{} @ {} fps, {} frames ({:.2}s){}",
+        state.backend(),
         meta.width,
         meta.height,
         meta.frame_rate,
