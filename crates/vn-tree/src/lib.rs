@@ -25,7 +25,7 @@ mod tree;
 pub mod devtools;
 
 pub use img::{asset_base, set_asset_base};
-pub use render::{build_root, control_hitboxes, painted_drag_region};
+pub use render::{build_root, control_hitboxes, flush_pending_mouse_move, painted_drag_region};
 pub use tree::{
     with_tree, EV_BLUR, EV_CLICK, EV_COMPLETE, EV_ENTERFRAME, EV_FOCUS, EV_INPUT, EV_KEYDOWN,
     EV_KEYUP, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEENTER, EV_MOUSELEAVE, EV_MOUSEMOVE,

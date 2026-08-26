@@ -384,6 +384,39 @@ fn dom_key(k: &str) -> String {
     }
 }
 
+/// The one `mousemove` a frame is allowed to deliver (browser event
+/// coalescing: UAs align `mousemove`/`pointermove` to the frame clock and drop
+/// the rest). Written by the per-node `on_mouse_move` handlers, drained by
+/// [`flush_pending_mouse_move`] from the frame pump.
+///
+/// Doubles as the per-move dedup: gpui runs bubble-phase move handlers
+/// topmost-first, so for one physical move every listening ANCESTOR fires
+/// after the innermost node. The first claim (= innermost, the browser's
+/// target) wins; the ancestors see their own position already stored and drop
+/// out — without this, one move dispatched k full capture/bubble walks for k
+/// nested listeners, and each JS mutation forced a full-tree rebuild. That is
+/// the exact shape that took shadcn to 10 fps under the cursor.
+struct PendingMouseMove {
+    id: u32,
+    position: Point<gpui::Pixels>,
+    button: f64,
+    modifiers: gpui::Modifiers,
+}
+
+thread_local! {
+    static PENDING_MOUSE_MOVE: std::cell::RefCell<Option<PendingMouseMove>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Deliver the frame's coalesced `mousemove` (if any). Called by the host's
+/// pump BEFORE the JS pump, so everything the handler schedules (Vue's queue,
+/// microtasks) drains in the same frame.
+pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
+    let Some(p) = PENDING_MOUSE_MOVE.with(|c| c.borrow_mut().take()) else { return };
+    let payload = mouse_payload(p.position, p.button, &p.modifiers);
+    js_dispatch_app(p.id, tree::EV_MOUSEMOVE, &payload, window, cx);
+}
+
 fn mouse_payload(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers) -> EventPayload<'static> {
     EventPayload {
         a: f64::from(position.x),
@@ -1097,9 +1130,24 @@ where
     // non-bubbling "entered this element" semantics come for free instead of
     // being reconstructed from move coordinates.
     if bit(tree::EV_MOUSEMOVE) {
-        e = e.on_mouse_move(cx.listener(move |_, ev: &gpui::MouseMoveEvent, window, cx| {
-            let payload = mouse_payload(ev.position, button_code_opt(ev.pressed_button), &ev.modifiers);
-            js_dispatch(id, tree::EV_MOUSEMOVE, &payload, window, cx);
+        // No dispatch here — stash and let the pump deliver ONE mousemove per
+        // frame (see PendingMouseMove). Same position = same physical move
+        // seen by an outer listener: the innermost already claimed it.
+        e = e.on_mouse_move(cx.listener(move |_, ev: &gpui::MouseMoveEvent, _window, _cx| {
+            PENDING_MOUSE_MOVE.with(|c| {
+                let mut slot = c.borrow_mut();
+                if let Some(p) = slot.as_ref() {
+                    if p.position == ev.position {
+                        return;
+                    }
+                }
+                *slot = Some(PendingMouseMove {
+                    id,
+                    position: ev.position,
+                    button: button_code_opt(ev.pressed_button),
+                    modifiers: ev.modifiers,
+                });
+            });
         }));
     }
     if bit(tree::EV_MOUSEENTER) || bit(tree::EV_MOUSELEAVE) {

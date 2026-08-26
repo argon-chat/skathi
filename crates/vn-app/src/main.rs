@@ -59,11 +59,10 @@ const PRELUDE_JS: &str = r#"
         state: null, length: 1, scrollRestoration: "auto",
         pushState() {}, replaceState() {}, go() {}, back() {}, forward() {},
     };
-    let ticks = 0;
-    setInterval(() => {
-        ticks += 1;
-        __vn_set_status(`runtime: tick ${ticks}, uptime ${(performance.now() / 1000).toFixed(1)}s`);
-    }, 500);
+    // (The milestone-1 500ms "tick" status heartbeat used to live here. Every
+    // update was a shell notify, i.e. a FULL element-tree rebuild — 40-100ms
+    // twice a second on a component-heavy app. Status now only moves on real
+    // events.)
 "#;
 
 /// The windowing surface's JS half (docs/WINDOWING.md tiers 1 & 2) — its own
@@ -145,6 +144,10 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     if vn_runtime::bridge::poisoned() {
         return; // I9: no JS after a caught native panic.
     }
+    // The frame's ONE coalesced mousemove (browsers align move events to the
+    // frame clock; see PendingMouseMove in vn-tree). Dispatched before the
+    // pump block so whatever the handler schedules drains this same frame.
+    vn_tree::flush_pending_mouse_move(window, cx);
     with_published(window, cx, Phase::Commit, || {
         // Dev loop: poll dist/changes.json and apply HMR BEFORE the pump, so
         // everything Vue schedules while patching (its post-flush queue, the
