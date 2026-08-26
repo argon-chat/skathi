@@ -64,6 +64,9 @@ thread_local! {
     static SCROLL_REPORTED: RefCell<HashMap<u32, (f32, f32)>> = RefCell::new(HashMap::new());
     /// One-shot compat advisories already emitted (keyed by message).
     static WARNED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// Absolute (window-space) layout bounds of every node that was actually
+    /// PAINTED in the last frame gpui drew — see [`record_bounds`].
+    static BOUNDS: RefCell<HashMap<u32, (f32, f32, f32, f32)>> = RefCell::new(HashMap::new());
 }
 
 /// Browser-compat advisory: say what was dropped and what to do instead, once.
@@ -71,8 +74,125 @@ fn warn_compat(key: &str, msg: &str) {
     WARNED.with(|w| {
         if w.borrow_mut().insert(key.to_string()) {
             eprintln!("[vue-native compat] {msg}");
+            crate::log::record("advisory", msg);
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// the bounds side map
+// ---------------------------------------------------------------------------
+//
+// COMPAT ROADMAP G3 (research/reports/m10/shadcn.md): this map is deliberately
+// the backing store a future `getBoundingClientRect()` will read. A browser
+// answers that question off the last completed layout; gpui has no retained
+// layout tree to ask after the fact, so the only place the number exists is the
+// bounds gpui hands each element during prepaint. `BoundsProbe` below captures
+// it there for every mirrored node — one entry per node per drawn frame, no
+// extra taffy node, no extra hitbox.
+//
+// A node that was not painted (detached, or living in a <KeepAlive> cache
+// container that is never inserted) simply never records, so it reads back as
+// `None` — which is also what a browser reports for a detached element
+// (an all-zero rect). Devtools surfaces that as `bounds: null` rather than
+// inventing zeros.
+
+/// Called from `build_root`, i.e. once per `render()`: last frame's rectangles
+/// are about to be replaced by this frame's, and anything that stops being
+/// painted must stop having bounds.
+fn reset_bounds() {
+    BOUNDS.with(|m| m.borrow_mut().clear());
+}
+
+fn record_bounds(id: u32, bounds: gpui::Bounds<gpui::Pixels>) {
+    BOUNDS.with(|m| {
+        m.borrow_mut().insert(
+            id,
+            (
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+            ),
+        );
+    });
+}
+
+/// `(x, y, width, height)` in CSS pixels, window-relative, from the last frame
+/// this node was painted in — `None` when it was not painted at all.
+pub fn bounds_of(id: u32) -> Option<(f32, f32, f32, f32)> {
+    BOUNDS.with(|m| m.borrow().get(&id).copied())
+}
+
+/// A transparent wrapper that records the bounds gpui laid its inner element
+/// out at. It contributes NO layout of its own: `request_layout` returns the
+/// inner element's own `LayoutId`, so taffy sees exactly the tree it saw
+/// before and `bounds` here is the inner element's own rectangle.
+struct BoundsProbe {
+    id: u32,
+    inner: AnyElement,
+}
+
+impl gpui::IntoElement for BoundsProbe {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for BoundsProbe {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        (self.inner.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        record_bounds(self.id, bounds);
+        self.inner.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut (),
+        _prepaint: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.inner.paint(window, cx);
+    }
+}
+
+/// Wraps a built element so its rectangle lands in the side map. Text and
+/// anchor nodes are skipped — they have no box a selector can ask about.
+fn probe(id: u32, inner: AnyElement) -> AnyElement {
+    BoundsProbe { id, inner }.into_any_element()
 }
 
 /// Drops per-node state for nodes that no longer exist. Called from
@@ -84,6 +204,7 @@ pub(crate) fn gc_node_state() {
     INPUT_STATES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    BOUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     img_src::gc(live);
     let focused = FOCUSED_NODE.with(|f| f.get());
     if focused != 0 && !live(focused) {
@@ -256,6 +377,10 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     // ONE clock read per frame: nodes animating together must sample the same
     // instant or they skew.
     let now = std::time::Instant::now();
+    // This frame's rectangles replace last frame's wholesale — see the bounds
+    // side map above. `render()` is the only entry point, so this is the only
+    // place that can know a new element tree is being built.
+    reset_bounds();
     tree::read_tree(|t| {
         if t.root == 0 {
             Empty.into_any_element()
@@ -283,8 +408,10 @@ fn build_node<V: 'static>(
         Kind::Text if node.text.is_empty() => Empty.into_any_element(),
         Kind::Text => SharedString::from(node.text.clone()).into_any_element(),
         Kind::Anchor => Empty.into_any_element(),
-        Kind::Element if t.name(node.tag) == "img" => build_img(t, id, node, window, cx, now),
-        Kind::Element => {
+        Kind::Element if t.name(node.tag) == "img" => {
+            probe(id, build_img(t, id, node, window, cx, now))
+        }
+        Kind::Element => probe(id, {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
             let mut d = div().id(id as usize);
@@ -422,7 +549,7 @@ fn build_node<V: 'static>(
                 d.children(node.children.iter().map(|&c| build_node(t, c, window, cx, now)))
                     .into_any_element()
             }
-        }
+        }),
     }
 }
 
@@ -539,6 +666,117 @@ where
         }));
     }
     e
+}
+
+// ---------------------------------------------------------------------------
+// programmatic driving (vn-devtools; also the `el.focus()` groundwork)
+// ---------------------------------------------------------------------------
+
+/// The focus handle that IS this node's focus identity, if it has one.
+///
+/// `<input>` is the interesting case: its identity lives on the editor's own
+/// handle inside the native widget (see [`build_input`]), not on the wrapper —
+/// so focusing the wrapper's handle would focus nothing a keystroke can reach.
+fn focus_target_of(id: u32, cx: &App) -> Option<FocusHandle> {
+    if let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) {
+        return Some(state.read(cx).focus_handle());
+    }
+    FOCUS_HANDLES.with(|m| m.borrow().get(&id).cloned())
+}
+
+/// `el.focus()`, host-side. Only a node the renderer already decided is
+/// focusable has a handle — a plain `<div>` with no `tabindex`, no key/focus
+/// listener and no `:focus` rule has none, which is exactly the set a browser
+/// refuses to focus too.
+///
+/// The `focus`/`blur` events are NOT synthesized here: they come out of the
+/// gpui focus observers ([`watch_focus`]), so programmatic focus reports
+/// identically to a click or a `Tab` — the invariant the module header states.
+pub(crate) fn focus_node(id: u32, window: &mut Window, cx: &mut App) -> Result<(), String> {
+    let Some(handle) = focus_target_of(id, cx) else {
+        return Err(format!(
+            "node {id} is not focusable — it has no tabindex, no key/focus listener and no \
+             `:focus` rule, so the renderer never gave it a focus handle (a browser would refuse \
+             `el.focus()` on it for the same reason)"
+        ));
+    };
+    window.focus(&handle, cx);
+    Ok(())
+}
+
+/// True while `id` owns keyboard focus. Used to wait out the frame a
+/// programmatic focus needs before the native input handler is installed.
+pub(crate) fn is_node_focused(id: u32, window: &Window, cx: &App) -> bool {
+    focus_target_of(id, cx).is_some_and(|h| h.is_focused(window))
+}
+
+/// The live text of a native `<input>` — the widget's own buffer, not the
+/// `value` prop, so it reflects typing that JS has not echoed back yet.
+pub(crate) fn input_value(id: u32, cx: &App) -> Option<String> {
+    INPUT_STATES.with(|m| m.borrow().get(&id).map(|s| s.read(cx).text().to_string()))
+}
+
+/// Drives a scroll container's own [`ScrollHandle`] by `(dx, dy)` CSS pixels
+/// and fires the same `scroll` event the wheel listener fires (position after
+/// the move, CSS sign convention). Returns the new `(scrollLeft, scrollTop)`.
+///
+/// Only a node the cascade gave `overflow: scroll|auto` has a handle; anything
+/// else is a real error rather than a silent no-op.
+pub(crate) fn scroll_node(
+    id: u32,
+    dx: f32,
+    dy: f32,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(f32, f32), String> {
+    let Some(handle) = SCROLL_HANDLES.with(|m| m.borrow().get(&id).cloned()) else {
+        return Err(format!(
+            "node {id} is not a scroll container — nothing in the cascade gave it \
+             `overflow: scroll` or `overflow: auto`, so there is no scroll offset to move"
+        ));
+    };
+    // gpui offsets are <= 0 (content shifted up/left); CSS scrollTop/scrollLeft
+    // count down/right as positive, and so does the `dy` a caller passes.
+    let offset = handle.offset();
+    let max = handle.max_offset();
+    let want = gpui::point(offset.x - gpui::px(dx), offset.y - gpui::px(dy));
+    // The same clamp gpui's own wheel handler applies, so a programmatic scroll
+    // cannot leave the box somewhere a real wheel could not.
+    let clamped = gpui::point(
+        want.x.clamp(-max.x, gpui::px(0.)),
+        want.y.clamp(-max.y, gpui::px(0.)),
+    );
+    handle.set_offset(clamped);
+    let (left, top) = (-f32::from(clamped.x), -f32::from(clamped.y));
+    let moved = SCROLL_REPORTED.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.get(&id) == Some(&(left, top)) {
+            return false;
+        }
+        m.insert(id, (left, top));
+        true
+    });
+    if moved {
+        let payload = EventPayload { a: left as f64, b: top as f64, ..Default::default() };
+        js_dispatch_app(id, tree::EV_SCROLL, &payload, window, cx);
+    }
+    window.refresh();
+    Ok((left, top))
+}
+
+/// Synthesizes one input event on `id` through exactly the path a real gpui
+/// listener takes: publish `Phase::Commit`, hand the compact payload to the JS
+/// dispatcher (which builds the W3C event and runs capture/bubble over the
+/// mirror tree), then flush the tree so Vue's wave repaints in this frame.
+/// Returns `false` when a handler called `preventDefault()`.
+pub(crate) fn synth_event(
+    id: u32,
+    event: u32,
+    payload: &EventPayload,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    js_dispatch_app(id, event, payload, window, cx)
 }
 
 // ---------------------------------------------------------------------------

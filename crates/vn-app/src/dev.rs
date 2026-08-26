@@ -26,7 +26,7 @@ const DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/vue-nati
 /// How often the frame pump calls [`poll`] — every 30th frame, ~2×/s at 60 fps.
 const POLL_EVERY_FRAMES: u32 = 30;
 
-fn dist(rel: &str) -> std::path::PathBuf {
+pub(crate) fn dist(rel: &str) -> std::path::PathBuf {
     // VN_DIST points one exe at another app's build output (build.ts already
     // takes [entry] [dist-dir] positionals). This is what lets several dev
     // hosts run side by side without sharing packages/vue-native/dist.

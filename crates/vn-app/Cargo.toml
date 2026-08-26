@@ -20,7 +20,23 @@ prod = []
 
 [dependencies]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
+# vn-devtools' screenshot path (dev only, but Cargo has no per-feature
+# exclusion for a dependency a `prod` build simply never calls).
+# `image` and `windows` are pinned to the versions gpui already resolves, so
+# neither adds a second copy to the graph; `raw-window-handle` is the only way
+# to name the `HasWindowHandle` impl gpui puts on `Window` (gpui does not
+# re-export the crate).
+image = { version = "0.25", default-features = false, features = ["png"] }
+raw-window-handle = "0.6"
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false }
 vn-elements = { path = "../vn-elements" }
 vn-runtime = { path = "../vn-runtime" }
 vn-tree = { path = "../vn-tree" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_Xps",
+    "Win32_UI_WindowsAndMessaging",
+] }

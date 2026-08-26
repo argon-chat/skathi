@@ -1,9 +1,11 @@
-//! A ~150-line JSON reader for the two dev-loop control files
-//! (`dist/manifest.json`, `dist/changes.json`).
+//! A small JSON reader/writer for the dev-loop control files
+//! (`dist/manifest.json`, `dist/changes.json`) and the vn-devtools wire.
 //!
-//! Both are written by our own `packages/vue-native/build.ts`, so this only
-//! has to be correct, not fast or forgiving — and it keeps `vn-app` free of a
-//! serde dependency for two files that never leave the dev loop.
+//! Both file formats are written by our own `packages/vue-native/build.ts`, so
+//! the reader only has to be correct, not fast or forgiving. The writer exists
+//! for the same reason: `serde` + `serde_json` + derives is a lot of build for
+//! one newline-delimited protocol that never leaves localhost, and the whole
+//! thing is ~90 lines.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Json {
@@ -39,6 +41,83 @@ impl Json {
             Json::Arr(a) => Some(a),
             _ => None,
         }
+    }
+
+    // -- writing ----------------------------------------------------------
+    // Constructors short enough to build a response inline.
+
+    pub fn s(v: impl Into<String>) -> Json {
+        Json::Str(v.into())
+    }
+    pub fn n(v: impl Into<f64>) -> Json {
+        Json::Num(v.into())
+    }
+    pub fn obj(entries: Vec<(&str, Json)>) -> Json {
+        Json::Obj(entries.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
+    pub fn arr(items: Vec<Json>) -> Json {
+        Json::Arr(items)
+    }
+
+    /// Compact (no whitespace) — the wire is newline-delimited, so a value may
+    /// not contain a raw newline anywhere. `quote` escapes them; numbers that
+    /// are not finite become `null`, exactly as `JSON.stringify` does.
+    pub fn write(&self, out: &mut String) {
+        match self {
+            Json::Null => out.push_str("null"),
+            Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Json::Num(n) if n.is_finite() => {
+                if *n == n.trunc() && n.abs() < 1e15 {
+                    out.push_str(&format!("{}", *n as i64));
+                } else {
+                    out.push_str(&format!("{n}"));
+                }
+            }
+            Json::Num(_) => out.push_str("null"),
+            Json::Str(s) => out.push_str(&quote(s)),
+            Json::Arr(items) => {
+                out.push('[');
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    v.write(out);
+                }
+                out.push(']');
+            }
+            Json::Obj(entries) => {
+                out.push('{');
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&quote(k));
+                    out.push(':');
+                    v.write(out);
+                }
+                out.push('}');
+            }
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        let mut out = String::new();
+        self.write(&mut out);
+        out
+    }
+}
+
+/// A value the host must pass through byte-for-byte because JS already
+/// stringified it (`eval`'s result). Wrapping it in [`Json::Str`] would quote
+/// it a second time.
+#[derive(Debug, Clone)]
+pub struct Raw(pub String);
+
+impl From<Raw> for Json {
+    /// Parses the pre-stringified text back, falling back to a string when it
+    /// is not valid JSON — never emits a malformed line onto the wire.
+    fn from(raw: Raw) -> Json {
+        parse(&raw.0).unwrap_or(Json::Str(raw.0))
     }
 }
 
@@ -242,5 +321,30 @@ mod tests {
     fn rejects_trailing_garbage() {
         assert!(parse("{} x").is_none());
         assert!(parse("{\"a\":1,}").is_none());
+    }
+
+    #[test]
+    fn writes_what_it_reads() {
+        let text = r#"{"ok":true,"data":{"n":[1,2.5,-3],"s":"a\"b\n","z":null}}"#;
+        let v = parse(text).unwrap();
+        let round = v.to_json();
+        assert_eq!(parse(&round).unwrap(), v);
+        // Integers do not grow a `.0`, and control chars stay escaped so the
+        // newline-delimited wire cannot be split by a payload.
+        assert!(round.contains(r#""n":[1,2.5,-3]"#), "{round}");
+        assert!(!round.contains('\n'), "{round}");
+    }
+
+    #[test]
+    fn non_finite_numbers_become_null_like_json_stringify() {
+        assert_eq!(Json::Num(f64::NAN).to_json(), "null");
+        assert_eq!(Json::Num(f64::INFINITY).to_json(), "null");
+    }
+
+    #[test]
+    fn raw_passes_pre_stringified_json_through_once() {
+        assert_eq!(Json::from(Raw("{\"a\":1}".into())).to_json(), "{\"a\":1}");
+        // …and degrades to a plain string rather than corrupting the line.
+        assert_eq!(Json::from(Raw("not json".into())).to_json(), "\"not json\"");
     }
 }

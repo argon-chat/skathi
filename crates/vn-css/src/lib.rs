@@ -697,6 +697,107 @@ fn sel_text(sel: &Selector<'_>) -> String {
         .unwrap_or_else(|_| "<selector>".into())
 }
 
+// ---------------------------------------------------------------------------
+// standalone selector queries (devtools / future `vn test`)
+// ---------------------------------------------------------------------------
+
+/// What [`query_all`] found.
+#[derive(Debug, Default)]
+pub struct QueryResult {
+    /// Indices into the `candidates` slice, in the order they were given
+    /// (document order, if the caller passed them that way).
+    pub matched: Vec<usize>,
+    /// Advisories that did NOT stop the query — the same text the sheet
+    /// compiler would print. The caller is expected to surface them.
+    pub warnings: Vec<String>,
+}
+
+/// Matches a standalone selector against a list of candidate nodes.
+///
+/// This is deliberately the SAME code path the cascade uses — the selector is
+/// parsed by lightningcss, run through [`classify_states`], [`probe_runnable`]
+/// and [`audit_selector`], and matched by `parcel_selectors` against
+/// [`element::El`]. A selector the sheet compiler would reject comes back as
+/// `Err(advisory)` rather than silently matching nothing, which is the whole
+/// point: `query(":has(.x)")` must say why, exactly like a rule using it does.
+///
+/// Candidates rather than a root node because [`MatchDom`] deliberately has no
+/// child accessor (the matcher never walks downwards); the caller owns the tree
+/// and hands us its elements in document order.
+pub fn query_all<D: MatchDom>(selector: &str, candidates: &[D]) -> Result<QueryResult, String> {
+    let sel = selector.trim();
+    if sel.is_empty() {
+        return Err("empty selector".into());
+    }
+    // The selector is spliced into a one-rule stylesheet to reach exactly the
+    // parser the cascade uses; `{`/`}` would let it declare rules of its own.
+    if sel.contains(['{', '}']) {
+        return Err("a selector cannot contain `{` or `}`".into());
+    }
+    let src = format!("{sel}{{color:red}}");
+    let sheet = StyleSheet::parse(&src, ParserOptions::default())
+        .map_err(|e| format!("selector parse error: {e}"))?;
+    let mut diagnostics: Vec<String> = Vec::new();
+    let mut selectors: Vec<&Selector<'_>> = Vec::new();
+    for rule in &sheet.rules.0 {
+        let CssRule::Style(style) = rule else {
+            return Err(format!("`{sel}` is not a selector"));
+        };
+        for s in &style.selectors.0 {
+            let states = match classify_states(s, &mut diagnostics) {
+                Some(states) => states,
+                None => return Err(join_diagnostics(&diagnostics)),
+            };
+            if !probe_runnable(s) {
+                return Err(format!(
+                    "selector rejected (matcher cannot run it — :has()/nesting?): {}",
+                    sel_text(s)
+                ));
+            }
+            if !audit_selector(s, &mut diagnostics) {
+                return Err(join_diagnostics(&diagnostics));
+            }
+            if states != 0 {
+                // Honest about the one place a query diverges from a browser's
+                // `querySelectorAll`: the cascade answers interaction pseudos
+                // with "would match when in that state" (gpui's ladder picks
+                // them live), so they cannot filter a query either.
+                diagnostics.push(format!(
+                    "`{}` names an interaction state — the matcher answers `:hover`/`:active`/\
+                     `:focus`/`:focus-visible` as \"would match when in that state\" (the cascade's \
+                     own semantics), so the query is NOT filtered by the live state",
+                    sel_text(s)
+                ));
+            }
+            selectors.push(s);
+        }
+    }
+    if selectors.is_empty() {
+        return Err(format!("`{sel}` matched no selector"));
+    }
+    let mut matched = Vec::new();
+    for (i, candidate) in candidates.iter().enumerate() {
+        let el = element::El(*candidate);
+        let hit = selectors.iter().any(|s| {
+            let mut ctx: MatchingContext<'_, '_, element::Impl> =
+                MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
+            matches_selector(s, 0, None, &el, &mut ctx, &mut |_, _| {})
+        });
+        if hit {
+            matched.push(i);
+        }
+    }
+    Ok(QueryResult { matched, warnings: diagnostics })
+}
+
+fn join_diagnostics(diagnostics: &[String]) -> String {
+    if diagnostics.is_empty() {
+        "selector rejected".to_string()
+    } else {
+        diagnostics.join("; ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1513,6 +1614,132 @@ mod tests {
             !engine.diagnostics.iter().any(|d| d.contains("not mapped")),
             "{:?}",
             engine.diagnostics
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // query_all
+    // -----------------------------------------------------------------------
+
+    /// A flat forest with real parent/sibling links, enough for descendant and
+    /// `:nth-child()` selectors.
+    struct Doc {
+        /// `(tag, classes, parent, attrs)`
+        nodes: Vec<(&'static str, &'static str, usize, Vec<(&'static str, &'static str)>)>,
+    }
+
+    #[derive(Clone, Copy)]
+    struct DocRef<'d> {
+        doc: &'d Doc,
+        i: usize,
+    }
+
+    impl<'d> DocRef<'d> {
+        fn siblings(&self) -> Vec<usize> {
+            let parent = self.doc.nodes[self.i].2;
+            (0..self.doc.nodes.len())
+                .filter(|&j| j != 0 && self.doc.nodes[j].2 == parent)
+                .collect()
+        }
+    }
+
+    impl<'d> MatchDom for DocRef<'d> {
+        fn parent(&self) -> Option<Self> {
+            let p = self.doc.nodes[self.i].2;
+            (p != 0).then(|| DocRef { doc: self.doc, i: p })
+        }
+        fn prev_sibling(&self) -> Option<Self> {
+            let sibs = self.siblings();
+            let pos = sibs.iter().position(|&j| j == self.i)?;
+            (pos > 0).then(|| DocRef { doc: self.doc, i: sibs[pos - 1] })
+        }
+        fn next_sibling(&self) -> Option<Self> {
+            let sibs = self.siblings();
+            let pos = sibs.iter().position(|&j| j == self.i)?;
+            sibs.get(pos + 1).map(|&j| DocRef { doc: self.doc, i: j })
+        }
+        fn has_tag(&self, name: &str) -> bool {
+            self.doc.nodes[self.i].0 == name
+        }
+        fn tag_eq(&self, other: &Self) -> bool {
+            self.doc.nodes[self.i].0 == other.doc.nodes[other.i].0
+        }
+        fn has_class(&self, name: &str) -> bool {
+            self.doc.nodes[self.i].1.split_whitespace().any(|c| c == name)
+        }
+        fn has_scope(&self, _name: &str) -> bool {
+            false
+        }
+        fn attr(&self, name: &str) -> Option<&str> {
+            self.doc.nodes[self.i].3.iter().find(|(k, _)| *k == name).map(|(_, v)| *v)
+        }
+        fn is_empty(&self) -> bool {
+            !self.doc.nodes.iter().any(|n| n.2 == self.i)
+        }
+        fn is_root(&self) -> bool {
+            self.doc.nodes[self.i].2 == 0
+        }
+    }
+
+    /// index 0 is the reserved "no parent" slot, exactly like the real tree.
+    fn doc() -> Doc {
+        Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "nav", 0, vec![]),
+                ("a", "tab router-link-active", 1, vec![("href", "/")]),
+                ("a", "tab", 1, vec![("href", "/list")]),
+                ("input", "field", 1, vec![("disabled", "true")]),
+            ],
+        }
+    }
+
+    fn refs(d: &Doc) -> Vec<DocRef<'_>> {
+        (1..d.nodes.len()).map(|i| DocRef { doc: d, i }).collect()
+    }
+
+    #[test]
+    fn query_all_uses_the_real_matcher() {
+        let d = doc();
+        let c = refs(&d);
+        assert_eq!(query_all(".tab", &c).unwrap().matched, vec![1, 2]);
+        assert_eq!(query_all(".tab.router-link-active", &c).unwrap().matched, vec![1]);
+        assert_eq!(query_all(".nav a", &c).unwrap().matched, vec![1, 2]);
+        assert_eq!(query_all("input:disabled", &c).unwrap().matched, vec![3]);
+        assert_eq!(query_all("[href=\"/list\"]", &c).unwrap().matched, vec![2]);
+        // A selector list is a union, in candidate order.
+        assert_eq!(query_all("input, .router-link-active", &c).unwrap().matched, vec![1, 3]);
+        assert!(query_all(".nope", &c).unwrap().matched.is_empty());
+    }
+
+    /// The audit is the whole reason this shares the cascade's code: an
+    /// unsupported selector must SAY so, not answer "no matches".
+    #[test]
+    fn query_all_reports_unsupported_selectors_like_the_cascade_does() {
+        let d = doc();
+        let c = refs(&d);
+        let err = query_all(".nav:has(.tab)", &c).unwrap_err();
+        assert!(err.contains(":has()"), "{err}");
+        let err = query_all("a::before", &c).unwrap_err();
+        assert!(err.contains("pseudo-element"), "{err}");
+        let err = query_all("a:visited", &c).unwrap_err();
+        assert!(err.contains("visited"), "{err}");
+        // Injection guard: a selector may not carry a declaration block.
+        assert!(query_all(".a { color: red } .b", &c).unwrap_err().contains('{'));
+    }
+
+    /// `:hover` matches in a query the same way it matches in the cascade —
+    /// "would match" — and the divergence rides back as a warning.
+    #[test]
+    fn query_all_warns_about_interaction_states() {
+        let d = doc();
+        let c = refs(&d);
+        let r = query_all(".tab:hover", &c).unwrap();
+        assert_eq!(r.matched, vec![1, 2]);
+        assert!(
+            r.warnings.iter().any(|w| w.contains("interaction state")),
+            "{:?}",
+            r.warnings
         );
     }
 }

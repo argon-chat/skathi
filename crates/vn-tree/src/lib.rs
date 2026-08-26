@@ -16,8 +16,11 @@
 //! (vn-css: stylesheets, cascade, per-state refinements) replaces it.
 
 mod img;
+pub mod log;
 mod render;
 mod tree;
+
+pub mod devtools;
 
 pub use img::{asset_base, set_asset_base};
 pub use render::build_root;
@@ -349,6 +352,7 @@ pub fn dispatch_event(node: u32, event: u32, payload: &EventPayload) -> bool {
             Err(vn_runtime::redjs::api::Error::Exception(e)) => {
                 let err = rt.describe(e);
                 eprintln!("[js dispatch] {}\n{}", err.header, err.stack);
+                log::record("js", format!("[js dispatch] {}\n{}", err.header, err.stack));
                 true
             }
             Err(_) => true,

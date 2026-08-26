@@ -93,6 +93,7 @@ fn warn(msg: String) {
     SEEN.with(|s| {
         if s.borrow_mut().insert(msg.clone()) {
             eprintln!("[vue-native compat] {msg}");
+            crate::log::record("advisory", msg);
         }
     });
 }

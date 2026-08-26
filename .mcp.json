@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "vn-devtools": {
+      "command": "bun",
+      "args": ["packages/vue-native/devtools/mcp.ts"],
+      "env": {}
+    }
+  }
+}

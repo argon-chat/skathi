@@ -372,6 +372,7 @@ impl Tree {
             };
             for d in diags {
                 eprintln!("[css inline] {d}");
+                crate::log::record("css", format!("[css inline] {d}"));
             }
             let n = self.node_mut(id).unwrap();
             n.inline_cache = parsed;
@@ -426,6 +427,7 @@ impl Tree {
             }
             for d in animator.take_diagnostics() {
                 eprintln!("[css transition] {d}");
+                crate::log::record("css", format!("[css transition] {d}"));
             }
         });
     }
@@ -498,6 +500,7 @@ pub fn set_reduce_motion(on: bool) {
 pub fn set_engine(engine: vn_css::Engine) {
     for d in &engine.diagnostics {
         eprintln!("[css] {d}");
+        crate::log::record("css", format!("[css] {d}"));
     }
     ENGINE.with(|c| *c.borrow_mut() = Some(engine));
 }

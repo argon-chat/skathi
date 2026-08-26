@@ -29,7 +29,9 @@ use vn_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 #[cfg(not(feature = "prod"))]
 mod dev;
 #[cfg(not(feature = "prod"))]
-mod json; // only the dev transport parses JSON
+mod devtools; // the automation surface (docs/DEVTOOLS.md) — dev builds only
+#[cfg(not(feature = "prod"))]
+mod json; // the dev transport and the devtools wire share one JSON codec
 mod perf;
 #[cfg(feature = "prod")]
 mod prod;
@@ -98,6 +100,9 @@ fn update_shell(g: *mut core::ffi::c_void, f: impl FnOnce(&mut Shell)) -> u64 {
 host_fn!(fn vn_set_status(g, args) {
     let text = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
         .unwrap_or_default();
+    // A status line is the CURRENT value, not a stream — devtools keeps it in
+    // its own slot so a 2 Hz status ticker cannot evict the log ring.
+    vn_tree::log::set_status(text.clone());
     update_shell(g, move |shell| shell.status = text)
 });
 
@@ -114,6 +119,7 @@ host_fn!(fn vn_perf_mark(g, args) {
 host_fn!(fn vn_log(g, args) {
     let text = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
         .unwrap_or_default();
+    vn_tree::log::record("log", text.clone());
     update_shell(g, move |shell| {
         shell.log.push(text);
         if shell.log.len() > 8 {
@@ -147,8 +153,17 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
             rt.pump(PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS);
             for err in rt.drain_errors() {
                 eprintln!("[js uncaught] {}\n{}", err.header, err.stack);
+                vn_tree::log::record(
+                    "error",
+                    format!("[js uncaught] {}\n{}", err.header, err.stack),
+                );
             }
         });
+        // One queued devtools command per frame, in the SAME publication the
+        // pump just used: a command can therefore never observe a half-applied
+        // patch, and anything it schedules drains with the next frame's wave.
+        #[cfg(not(feature = "prod"))]
+        devtools::pump();
     });
     // The `@media` environment, refreshed from the window every frame: the
     // viewport in CSS px (gpui `Pixels` are already logical), the OS/window
@@ -254,12 +269,18 @@ fn main() {
     application().run(|cx: &mut App| {
         vn_elements::init(cx); // key bindings for the native <input> widget
         publish_app_root();
+        // Before the runtime exists, so the log ring is already recording when
+        // the first advisory fires.
+        #[cfg(not(feature = "prod"))]
+        devtools::start();
         JsRuntime::init();
         JsRuntime::with(|rt| {
             rt.register("__vn_set_status", 1, vn_set_status as *const _);
             rt.register("__vn_log", 1, vn_log as *const _);
             rt.register("__vn_perf_mark", 1, vn_perf_mark as *const _);
             vn_tree::install(rt);
+            #[cfg(not(feature = "prod"))]
+            devtools::install(rt);
         });
 
         // `VN_WINDOW=1280x900` — a perf/screenshot harness needs a viewport it

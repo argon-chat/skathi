@@ -18,10 +18,12 @@
     "shaders:fetch": "bun fetch-slang.ts"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "postcss": "^8.4.31",
     "tailwindcss": "3.4"
   },
   "comments": {
-    "tailwindcss": "PINNED to 3.4.x, NOT a floating major. v3 core utilities emit literal declarations (padding: 1rem, rgb(255 255 255 / .1)) that crates/vn-css maps straight onto gpui; v4 routes everything through var(--tw-*) + calc() + @property, which the engine does not resolve yet, so a v4 bump would degrade nearly every utility to a diagnostic. See packages/vue-native/tailwind.ts."
+    "tailwindcss": "PINNED to 3.4.x, NOT a floating major. v3 core utilities emit literal declarations (padding: 1rem, rgb(255 255 255 / .1)) that crates/vn-css maps straight onto gpui; v4 routes everything through var(--tw-*) + calc() + @property, which the engine does not resolve yet, so a v4 bump would degrade nearly every utility to a diagnostic. See packages/vue-native/tailwind.ts.",
+    "@modelcontextprotocol/sdk": "devDependency, not a runtime one: it is used ONLY by devtools/mcp.ts (the vn-devtools MCP server, see docs/DEVTOOLS.md). Nothing in an app bundle imports it, and devtools/ctl.ts is deliberately dependency-free so an agent can drive the app through Bash without `bun install` having run."
   }
 }
