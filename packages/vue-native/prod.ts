@@ -61,11 +61,16 @@ const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
 // Always written, `{}` when the app declares none: a missing file would be a
 // Rust compile error, which is the right failure mode for the bundle but not
 // for an optional config.
-const APP_ROOT = APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR;
+//
+// It sits next to `src/`, which is NOT the same thing as the app's package
+// root: `APP_ROOT` below walks up to the nearest `package.json`/`node_modules`
+// for module resolution and can land a level higher. Same name, same rule and
+// same reason as `build.ts`'s `VN_CONFIG_DIR`.
+const VN_CONFIG_DIR = APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR;
 const WINDOW_JSON = join(dirname(OUT_FILE), "window.json");
 
 function windowConfig(): string {
-  const path = join(APP_ROOT, "vn.config.json");
+  const path = join(VN_CONFIG_DIR, "vn.config.json");
   if (!existsSync(path)) return "{}";
   try {
     const cfg = JSON.parse(readFileSync(path, "utf8"));
@@ -343,8 +348,7 @@ async function build() {
     body,
   ].join("\n");
   writeAtomic(OUT_FILE, out);
-  writeAtomic(WINDOW_JSON, windowConfig() + "
-");
+  writeAtomic(WINDOW_JSON, windowConfig() + "\n");
 
   const sfcs = cssById.size - (TW_CONFIG ? 1 : 0);
   console.log(
