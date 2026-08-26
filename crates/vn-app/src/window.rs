@@ -858,6 +858,16 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     let json = snapshot_json(&s);
     let ctx = JsRuntime::with(|rt| rt.raw());
 
+    // Publish the snapshot to JS BEFORE anything fires. `redjs_dom_resize`
+    // dispatches the trusted `resize` SYNCHRONOUSLY, so a handler that reads
+    // `outerWidth` or `screenX` from it would otherwise see LAST frame's
+    // numbers while `innerWidth` already held this frame's — the kind of
+    // half-updated view a browser never shows.
+    let dirty = prev.as_ref().is_none_or(|p| *p != s);
+    if dirty {
+        notify("sync", &json);
+    }
+
     let mut kinds: Vec<&str> = Vec::new();
     match &prev {
         None => kinds.push("boot"),
@@ -909,6 +919,9 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
                 || p.maximized != s.maximized
                 || p.fullscreen != s.fullscreen
                 || p.title_bar_height != s.title_bar_height
+                // Retiring the fallback titlebar hands the app the top strip:
+                // the titlebar area is genuinely new geometry.
+                || p.fallback_titlebar != s.fallback_titlebar
             {
                 kinds.push("geometrychange");
             }
@@ -1207,8 +1220,22 @@ fn arg_bool(v: Value) -> bool {
 }
 
 host_fn!(fn vn_window_state(_g, _args) {
-    // The exact-read escape hatch AND the boot seed. Reads the published
-    // snapshot, so it costs no Win32 calls and never needs a phase.
+    // The exact-read escape hatch AND the boot seed.
+    //
+    // Re-reads the window when a Commit phase is live, which is what makes
+    // `appWindow.isMaximized()` exact IMMEDIATELY after `maximize()` — the
+    // state verbs go through live Win32 queries (`IsZoomed`/`IsIconic`), so
+    // there is no reason to make a caller wait a frame for them. Geometry
+    // still lags by one frame, because gpui's bounds cache is refreshed from
+    // `WM_MOVE`/`WM_SIZE` (docs/WINDOWING.md §3.1) — and the CSSOM View spec
+    // tells authors to expect exactly that from `moveTo`.
+    //
+    // Outside a Commit phase (module scope, a timer that outran the pump) it
+    // falls back to the published snapshot rather than throwing: nothing on
+    // this surface may throw the phase error.
+    if let Some(s) = with_commit(|window, cx| snapshot(window, cx)) {
+        SNAPSHOT.with(|c| *c.borrow_mut() = s);
+    }
     let json = SNAPSHOT.with(|s| snapshot_json(&s.borrow()));
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });

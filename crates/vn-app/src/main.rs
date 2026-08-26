@@ -216,24 +216,30 @@ impl Render for Shell {
         // stays until the app paints a `window-drag: move` region of its own —
         // and then retires, with one `[window]` log line. Never silently
         // removing a behaviour an app relied on.
-        let fallback = window::fallback_titlebar().then(|| {
-            div()
-                .id("titlebar")
-                .window_control_area(WindowControlArea::Drag)
-                .h(px(36.))
-                .px(px(14.))
-                .flex()
-                .items_center()
-                .text_size(px(13.))
-                .child("vue-native — gpui + JSC + Vue")
-        });
-        div()
+        let shell = div()
             .flex()
             .flex_col()
             .size_full()
             .text_color(gpui::white())
-            .font_family(".SystemUIFont")
-            .children(fallback)
+            .font_family(".SystemUIFont");
+        if !window::fallback_titlebar() {
+            // Custom chrome, mode 1: the app owns the WHOLE window — its own
+            // titlebar included. No host padding, no host status panel; the
+            // shell is a bare mount point.
+            return shell.child(vn_tree::build_root(window, cx));
+        }
+        shell
+            .child(
+                div()
+                    .id("titlebar")
+                    .window_control_area(WindowControlArea::Drag)
+                    .h(px(36.))
+                    .px(px(14.))
+                    .flex()
+                    .items_center()
+                    .text_size(px(13.))
+                    .child("vue-native — gpui + JSC + Vue"),
+            )
             .child(
                 div()
                     .flex_1()

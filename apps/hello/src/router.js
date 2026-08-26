@@ -8,6 +8,7 @@ import FormsPage from "./pages/FormsPage.vue";
 import ListPage from "./pages/ListPage.vue";
 import MotionPage from "./pages/MotionPage.vue";
 import StylesPage from "./pages/StylesPage.vue";
+import WindowPage from "./pages/WindowPage.vue";
 import LabPage from "./App.vue";
 
 export const router = createRouter({
@@ -17,6 +18,7 @@ export const router = createRouter({
     { path: "/list", name: "list", component: ListPage },
     { path: "/motion", name: "motion", component: MotionPage },
     { path: "/styles", name: "styles", component: StylesPage },
+    { path: "/window", name: "window", component: WindowPage },
     { path: "/lab", name: "lab", component: LabPage },
   ],
 });

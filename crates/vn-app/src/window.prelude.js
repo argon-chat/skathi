@@ -437,6 +437,10 @@
 
   __vn_window_observe((kinds, json) => {
     S = JSON.parse(json);
+    // "sync" publishes the new snapshot and fires nothing: the host calls it
+    // before the trusted `resize`, so every getter already answers with this
+    // frame's numbers by the time the first handler runs.
+    if (kinds === "sync") return true;
     if (kinds === "close-requested") {
       // A cancelled `beforeunload` vetoes the close and hands the app
       // `close-requested`; v1 shows no UA confirmation dialog (D-27).

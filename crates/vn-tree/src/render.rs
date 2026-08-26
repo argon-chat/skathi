@@ -571,6 +571,35 @@ fn advise_interactive_in_drag_region(
     );
 }
 
+/// The double-action hazard (A-14).
+///
+/// gpui performs the min/max/close action itself on the `WM_NCLBUTTONUP` pair
+/// AND forwards a synthesised MouseDown/MouseUp into the tree, which the
+/// renderer turns into a `click`. So an element carrying both
+/// `--window-control: maximize` and `@click="appWindow.toggleMaximize()"`
+/// toggles TWICE. Pick one — say which, rather than silently choosing a winner.
+fn advise_double_action(t: &Tree, node: &crate::tree::Node, extras: &vn_css::Extras) {
+    let role = match extras.window_control {
+        Some(WindowControl::Minimize) => "minimize",
+        Some(WindowControl::Maximize) => "maximize",
+        Some(WindowControl::Close) => "close",
+        _ => return,
+    };
+    if node.listeners & ((1 << tree::EV_CLICK) | (1 << tree::EV_MOUSEUP)) == 0 {
+        return;
+    }
+    let tag = t.name(node.tag);
+    warn_compat(
+        "window-control/double-action",
+        &format!(
+            "<{tag}> declares `--window-control: {role}` AND a click handler: the window will act \
+             TWICE — the OS performs the action on the non-client click and the handler runs on \
+             the forwarded one. Use one or the other (`--window-control` also gives you Windows \
+             11 snap layouts) — see docs/WINDOWING.md §2.2."
+        ),
+    );
+}
+
 /// Records the emitted hitbox (for [`control_hitboxes`] / the fallback-titlebar
 /// signal) and attaches it to the element.
 fn with_control_area<E: gpui::InteractiveElement>(
@@ -626,6 +655,7 @@ fn build_node<V: 'static>(
     let extras = node.computed.as_ref().map(|cs| cs.extras).unwrap_or_default();
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
+    advise_double_action(t, node, &extras);
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
         // element out as a full line box — and Vue anchors every Fragment

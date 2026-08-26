@@ -13,6 +13,7 @@
 //
 // `:exclude` keeps ONE page out of the cache on purpose: the Lab tab remounts
 // every visit, which is what proves pinia state is independent of KeepAlive.
+import Titlebar from "./components/Titlebar.vue";
 import { useSession } from "./stores/session.js";
 
 const session = useSession();
@@ -22,13 +23,19 @@ const excluded = ["LabPage"];
 </script>
 
 <template>
-  <div class="shell">
+  <div class="frame">
+    <!-- The app's own titlebar. Declaring a `window-drag: move` region is what
+         retires the host's built-in fallback strip (docs/WINDOWING.md §4.2
+         mode 2) and hands the app the whole window. -->
+    <Titlebar />
+    <div class="shell">
     <div class="bar">
       <div class="nav">
         <RouterLink class="tab" to="/">Forms</RouterLink>
         <RouterLink class="tab" to="/list">List</RouterLink>
         <RouterLink class="tab" to="/motion">Motion</RouterLink>
         <RouterLink class="tab" to="/styles">Styles</RouterLink>
+        <RouterLink class="tab" to="/window">Window</RouterLink>
         <RouterLink class="tab" to="/lab">Lab</RouterLink>
       </div>
       <!-- Live store read, visible on EVERY tab. -->
@@ -40,15 +47,25 @@ const excluded = ["LabPage"];
         <component :is="Component" />
       </KeepAlive>
     </RouterView>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
 .shell {
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: 10px;
   padding: 14px;
+  /* The app owns the whole window now, so it also owns the scrollport the
+     host's 24px-padded content box used to imply. */
+  overflow-y: scroll;
 }
 .bar {
   display: flex;

@@ -1,0 +1,19 @@
+{
+  "$comment": "Window configuration — docs/WINDOWING.md §4.1. build.ts copies the `window` block verbatim into dist/manifest.json; the host reads it BEFORE cx.open_window, which is the only moment creation-time gpui options can be set without a visible flash. VN_WINDOW / VN_WINDOW_FOCUS still win on top.",
+  "window": {
+    "title": "vue-native — hello",
+    "width": 980,
+    "height": 720,
+
+    "minWidth": 420,
+    "minHeight": 320,
+
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 36,
+
+    "backdrop": "mica",
+    "resizable": true,
+    "minimizable": true,
+    "maximizable": true
+  }
+}
