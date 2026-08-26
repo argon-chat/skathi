@@ -1,27 +1,41 @@
-//! vn-effect: frost
-//! vn-struct: Frost
-//! vn-backdrop: true
-//
 // `--shading: frost(<strength>, <radius>?, <tint>?)`
 //
-//   params0.x  strength  0..1   how completely the frost replaces the backdrop
-//   params0.y  radius    device px, the backdrop blur radius (also applied by
-//                        the renderer, which builds the Dual-Kawase pyramid)
-//   params1    tint      straight-alpha RGBA laid over the frosted backdrop
+// The backdrop arrives already blurred to `radius` (the renderer builds the
+// Dual-Kawase pyramid before the effect runs). On top of it this adds a faint,
+// static frozen-glass grain and a rim highlight, which is what makes frost read
+// as *frost* rather than as plain `backdrop-filter: blur()`.
 //
-// The backdrop arrives already blurred to `radius`. On top of it this adds a
-// faint, static frozen-glass grain and a rim highlight, which is what makes
-// frost read as *frost* rather than as plain `backdrop-filter: blur()`.
+// The only built-in that reads the backdrop, so the only one that costs a
+// render-target snapshot.
 
 import vn;
 
+[VnEffect("frost")]
+[VnDoc("blurred backdrop + crystalline grain + rim highlight")]
 struct Frost : IEffect
 {
+    /// How completely the frost replaces the backdrop. `frost(0)` is a no-op
+    /// even with a large radius.
+    [VnDefault("0.5")] [VnRange(0.0, 1.0)]
+    float strength;
+
+    /// The backdrop blur radius. Applied by the renderer, not read here.
+    /// The Dual-Kawase pyramid saturates at 5 levels; past that a larger
+    /// radius changes nothing, so the range makes the ceiling visible in an
+    /// advisory instead of silently.
+    [VnLength] [VnOptional] [VnBackdropRadius] [VnDefault("12")] [VnRange(0.0, 25.0)]
+    float radius;
+
+    /// Straight-alpha RGBA laid over the frosted backdrop.
+    /// `[VnDefault]` takes CSS-ish text, so a colour default can be written
+    /// either as a hex literal (`"#ffffff10"`) or as four channels — which is
+    /// the only way to spell an alpha that is not a multiple of 1/255.
+    [VnColor] [VnOptional] [VnDefault("1 1 1 0.06")]
+    float4 tint;
+
     float4 shade(EffectInput input)
     {
-        float strength = saturate(input.params0.x);
-        float4 tint = input.params1;
-
+        float amount = saturate(strength);
         float4 backdrop = input.backdrop;
 
         // Frozen-glass grain: two lattices at different scales, one of them
@@ -38,16 +52,16 @@ struct Frost : IEffect
         float3 frosted = backdrop.rgb;
         // Grain and rim act on the premultiplied colour, so they scale with
         // whatever alpha the backdrop already carries.
-        frosted += backdrop.a * (crystal * 0.055 + rim) * strength;
+        frosted += backdrop.a * (crystal * 0.055 + rim) * amount;
 
         float4 result = float4(frosted, backdrop.a);
         if (tint.a > 0.0)
         {
-            result = vn_over(result, vn_premultiply(float4(tint.rgb, tint.a * strength)));
+            result = vn_over(result, vn_premultiply(float4(tint.rgb, tint.a * amount)));
         }
 
         // `strength` also fades the whole treatment back toward the untouched
-        // backdrop, so `frost(0)` is a no-op even with a large radius.
-        return lerp(backdrop, result, strength);
+        // backdrop.
+        return lerp(backdrop, result, amount);
     }
 };

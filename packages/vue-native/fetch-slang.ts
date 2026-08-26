@@ -6,10 +6,12 @@
 // verifies its sha256 BEFORE extracting anything, and unpacks the three files
 // `shaders.ts` needs into `tools/slang/win-x64/` (gitignored).
 //
-// You need this ONLY to author or edit a `.slang` source. The generated HLSL is
-// checked in, so `cargo build`, CI and every contributor who is not writing a
-// shader need neither this download nor a second SDK — see docs/SHADERS.md
-// §2.3 for why that trade was made.
+// You need this ONLY to author or edit a `.slang` source — a BUILT-IN effect
+// under `crates/vn-effects/shaders/`, or your own app's under
+// `apps/<app>/shaders/` (docs/SHADERS-AUTHORING.md). The built-ins' generated
+// HLSL is checked in, so `cargo build`, CI and every contributor who is not
+// writing a shader need neither this download nor a second SDK — see
+// docs/SHADERS.md §2.3 for why that trade was made.
 //
 // Vendoring the 35 MB into git was the alternative (open question 3). Fetching
 // won for exactly the reason above: nothing in the build depends on it.

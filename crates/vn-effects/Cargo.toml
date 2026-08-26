@@ -4,14 +4,19 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# The `--shading` effect registry: what each built-in effect is called, what
-# arguments it takes, and what those arguments default to.
+# The `--shading` effect registry: what each effect is called, what arguments it
+# takes, and what those arguments default to.
 #
 # This crate is DATA plus the `.slang` sources and their checked-in slangc
 # output (`shaders/` and `generated/`). It deliberately holds no rendering code:
 # the primitive lives in gpui, the pipelines in gpui_windows, and the CSS
 # grammar in vn-css. What lives here is the single description all three agree
-# on. `cargo build` never invokes slangc — see docs/SHADERS.md §2.3.
+# on — and since schema 4 that description is not written by hand at all, it is
+# slangc's reflection of the effect structs, emitted as `effects.json` by
+# `bun shaders.ts`. `cargo build` never invokes slangc — see docs/SHADERS.md
+# §2.3.
 
 [dependencies]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

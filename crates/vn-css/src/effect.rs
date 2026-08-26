@@ -28,6 +28,17 @@
 //! * `--shading: none` clears, and is a VALUE ([`EffectSpec::NONE`]) rather
 //!   than an absent field, because a refinement cannot spell "explicitly
 //!   nothing" and that is what has to cancel an effect set by an earlier rule.
+//!
+//! # The schema is not written here
+//!
+//! This module knows the *grammar* (`<effect>(<args>)`, commas, `none`); it
+//! knows nothing about which effects exist or what they take. That comes from
+//! [`vn_effects::lookup`], whose registry is parsed at startup from slangc's
+//! reflection of the `.slang` sources — the built-ins from a checked-in
+//! `effects.json`, an app's own from `$VN_EFFECTS_DIR`. Adding an effect
+//! therefore touches no Rust at all, and an unknown name is an advisory rather
+//! than a compile error, because whether an effect exists is a *runtime*
+//! question now.
 
 use gpui::EffectSpec;
 use lightningcss::properties::custom::{Token, TokenList, TokenOrValue};
@@ -140,11 +151,17 @@ pub fn parse(value: &TokenList, diagnostics: &mut Vec<String>) -> Option<EffectS
             let function = functions[0];
             let name = function.name.0.as_ref();
             let Some(schema) = vn_effects::lookup(name) else {
+                // The registry is built-ins PLUS whatever `$VN_EFFECTS_DIR`
+                // contributed, so "unknown" here can mean either "typo" or
+                // "you have not compiled your app's shaders yet". Say both.
                 advise(
                     diagnostics,
                     &format!(
-                        "`--shading: {name}(…)` is not a built-in effect (v1) — available: {}",
-                        known_effects()
+                        "`--shading: {name}(…)` is not a known effect — available: {}. An app's \
+                         own effect must be compiled with `bun shaders.ts --app <app> --out \
+                         <dir>` and the host run with {}=<dir>.",
+                        known_effects(),
+                        vn_effects::EFFECTS_DIR_ENV,
                     ),
                 );
                 return None;
@@ -432,6 +449,10 @@ mod tests {
 
     /// The type-directed half of the matcher: `glow`'s first parameter is an
     /// OPTIONAL colour, so both arities have to land in the right slots.
+    ///
+    /// The slots come from `glow.slang`'s reflection, where the colour is
+    /// declared first (CSS argument order) but pinned with `[VnSlot(4)]` so the
+    /// packing stays radius 0, strength 1, colour 4..7.
     #[test]
     fn glow_skips_its_optional_leading_color() {
         let with = spec("--shading: glow(#7fd4ff, 24px, 0.9)");
@@ -470,6 +491,110 @@ mod tests {
     #[test]
     fn unitless_zero_is_a_valid_length() {
         assert_eq!(spec("--shading: glow(0, 0.5)").params[0], 0.0);
+    }
+
+    // -- app-supplied effects ----------------------------------------------
+
+    /// A manifest of the shape `bun shaders.ts --app … --out …` writes from
+    /// slangc's reflection. Registering it is all it takes for the grammar
+    /// below to accept `ripple(…)`: this module has no per-effect code.
+    const USER_MANIFEST: &str = r#"{
+      "schema": 4,
+      "kind": "user",
+      "effects": [
+        {
+          "name": "ripple",
+          "backdrop": false,
+          "signature": "ripple(<number:speed>, <length:wavelength>?, <color:tint>?)",
+          "backdropRadiusParam": null,
+          "bleedParam": null,
+          "animatedParam": 0,
+          "params": [
+            { "name": "speed", "kind": "number", "slot": 0, "required": true,
+              "default": [1.5, 0, 0, 0], "range": [0, 8] },
+            { "name": "wavelength", "kind": "length", "slot": 1, "required": false,
+              "default": [24, 0, 0, 0], "range": [1, 512] },
+            { "name": "tint", "kind": "color", "slot": 4, "required": false,
+              "default": [0.5, 0.8, 1, 1], "range": null }
+          ]
+        },
+        {
+          "name": "aurora",
+          "backdrop": true,
+          "signature": "aurora(<number:intensity>, <length:blur>?)",
+          "backdropRadiusParam": 1,
+          "bleedParam": null,
+          "animatedParam": null,
+          "params": [
+            { "name": "intensity", "kind": "number", "slot": 0, "required": true,
+              "default": [0.6, 0, 0, 0], "range": [0, 1] },
+            { "name": "blur", "kind": "length", "slot": 1, "required": false,
+              "default": [8, 0, 0, 0], "range": [0, 25] }
+          ]
+        }
+      ]
+    }"#;
+
+    /// Installs the fixture once per test binary. The registry is process-wide
+    /// and additive — the built-ins keep their ids — so tests that do not care
+    /// about app effects are unaffected either way.
+    fn with_user_effects() {
+        static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        ONCE.get_or_init(|| {
+            let user =
+                vn_effects::parse_manifest(USER_MANIFEST, gpui::effect_id::COUNT, false, "<test>")
+                    .expect("fixture manifest parses");
+            vn_effects::install_user_effects(user);
+        });
+    }
+
+    #[test]
+    fn an_app_effect_parses_from_its_reflected_schema() {
+        with_user_effects();
+        let s = spec("--shading: ripple(2.5, 40px, #ff8800)");
+        assert_eq!(s.id, effect_id::COUNT);
+        assert_eq!(s.params[0], 2.5);
+        assert_eq!(s.params[1], 40.0);
+        assert_eq!(s.params[4], 1.0);
+        assert!((s.params[5] - 136.0 / 255.0).abs() < 1e-3);
+        assert_eq!(s.params[6], 0.0);
+        // `wavelength` is the only length, so only its bit is set.
+        assert_eq!(s.length_mask, 1 << 1);
+        // `[VnAnimated]` on `speed`, and 2.5 > 0.
+        assert!(s.animated);
+        assert_eq!(s.flags, 0);
+    }
+
+    #[test]
+    fn an_app_effects_optional_arguments_default_from_the_shader() {
+        with_user_effects();
+        let s = spec("--shading: ripple(0)");
+        assert_eq!(s.params[0], 0.0);
+        assert_eq!(s.params[1], 24.0);
+        assert_eq!(&s.params[4..8], &[0.5, 0.8, 1.0, 1.0]);
+        assert!(!s.animated, "speed 0 must not pin the window at 60 fps");
+    }
+
+    #[test]
+    fn an_app_effect_can_ask_for_the_backdrop() {
+        with_user_effects();
+        let s = spec("--shading: aurora(0.8, 20px)");
+        assert_eq!(s.id, effect_id::COUNT + 1);
+        assert_eq!(s.flags, gpui::EFFECT_FLAG_NEEDS_BACKDROP);
+        assert_eq!(s.backdrop_blur_radius(), 20.0);
+    }
+
+    #[test]
+    fn an_app_effect_validates_like_a_builtin() {
+        with_user_effects();
+        let (s, diagnostics) = shading("--shading: ripple(#ff0000)");
+        assert!(s.is_none());
+        assert!(diagnostics[0].contains("speed"), "{diagnostics:?}");
+        assert!(diagnostics[0].contains("ripple(<number:speed>"), "{diagnostics:?}");
+
+        let (clamped, diagnostics) = shading("--shading: ripple(99)");
+        assert_eq!(clamped.unwrap().params[0], 8.0);
+        assert!(diagnostics[0].contains("clamped"), "{diagnostics:?}");
     }
 
     // -- advisories --------------------------------------------------------

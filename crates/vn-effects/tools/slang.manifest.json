@@ -31,7 +31,9 @@
   "knownIssues": [
     "The slangc CLI reads and writes REAL FILES only — there is no stdin/stdout mode for HLSL output. shaders.ts therefore stages the wrapped source in a temp directory instead of compiling in place.",
     "It mangles non-ASCII paths (PEWPEW hit this with Cyrillic directory names and worked around it by wrapping the C API instead). shaders.ts stages into an ASCII temp directory, which sidesteps it.",
-    "#line directives in the output carry the ABSOLUTE path of the input, so a temp directory's random name would land in the checked-in artifact. shaders.ts rewrites it to a stable repo-relative name.",
-    "PEWPEW also reports output-file races when several slangc processes run concurrently. shaders.ts compiles serially, which avoids it."
+    "#line directives in the output carry the ABSOLUTE path of the input, so a temp directory's random name would land in the checked-in artifact. shaders.ts rewrites it to a stable name — repo-relative for a built-in, the author's real .slang path for an app effect, so a runtime D3DCompile diagnostic points at the source.",
+    "PEWPEW also reports output-file races when several slangc processes run concurrently. shaders.ts compiles serially, which avoids it.",
+    "-reflection-json re-emits a string literal's SOURCE SPELLING rather than its value, so a C escape leaks into the JSON: [VnDoc(\"the element's edge\")] produces \\' and JSON.parse rejects the whole file. shaders.ts repairs the escapes before parsing (readReflection); glow.slang keeps an apostrophe in its [VnDoc] on purpose so the path stays exercised.",
+    "Reflection describes a ConstantBuffer<T> even when nothing references it and the HLSL backend has eliminated it. That is load-bearing, not incidental: it is how shaders.ts learns an effect struct's fields without them reaching the shader. If a future slangc stops reporting eliminated parameters, the probe pass has to reference the buffer and the real pass has to stop declaring it."
   ]
 }
