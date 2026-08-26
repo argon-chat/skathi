@@ -34,9 +34,10 @@
 // from it (or refactoring a shared module out of it) is off limits; the two
 // must be merged into a shared `sfc.ts` next round.
 
-import { parse, compileScript, compileTemplate, compileStyle } from "@vue/compiler-sfc";
+import { parse, compileScript, compileTemplate, compileStyle, registerTS } from "@vue/compiler-sfc";
+import { createRequire } from "module";
 import { resolve, dirname, join, relative, sep } from "path";
-import { mkdirSync, renameSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "fs";
 
 import { TW_ID, findConfig, generate as generateTailwind } from "./tailwind";
 
@@ -56,6 +57,53 @@ const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
 /// Same discovery rule as the dev builder — no config, no Tailwind, and the
 /// emitted bundle is byte-identical to a pre-Tailwind one.
 const TW_CONFIG = findConfig(APP_SRC_DIR, WS_ROOT);
+
+// ---- app package root + TypeScript-aware SFC compilation -------------------
+// Mirrors build.ts exactly; see the long comment there for why `fs` and
+// `registerTS` are both required to compile a component that writes
+// `defineProps<SomeImportedType>()`. npm DEPENDENCIES need nothing special
+// here: prod is a single Bun bundle, so a bare specifier resolves and inlines
+// like any other import (only "vue"/"vue-native" are re-pointed, below).
+function findAppRoot(startDir: string, stopDir: string): string {
+  let dir = startDir;
+  for (;;) {
+    if (existsSync(join(dir, "package.json")) || existsSync(join(dir, "node_modules"))) return dir;
+    if (dir === stopDir) return startDir;
+    const parent = dirname(dir);
+    if (parent === dir) return startDir;
+    dir = parent;
+  }
+}
+const APP_ROOT = findAppRoot(APP_SRC_DIR, WS_ROOT);
+const appRequire = createRequire(join(APP_ROOT, "package.json"));
+/** Resolves the runtime's OWN vendored deps (vue-router, pinia). */
+const runtimeRequire = createRequire(join(PKG_DIR, "package.json"));
+
+const SFC_FS = {
+  fileExists: (file: string) => existsSync(file),
+  readFile: (file: string) => {
+    try {
+      return readFileSync(file, "utf-8");
+    } catch {
+      return undefined;
+    }
+  },
+  realpath: (file: string) => {
+    try {
+      return realpathSync.native(file);
+    } catch {
+      return file;
+    }
+  },
+};
+
+try {
+  const ts = appRequire("typescript");
+  registerTS(() => ts);
+} catch {
+  // No typescript in the app: fine unless it actually imports types across a
+  // package boundary, and compileScript's own error says so precisely.
+}
 
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const J = (v: unknown) => JSON.stringify(v);
@@ -93,6 +141,8 @@ const scopeIdOf = (id: string) => Bun.hash(id).toString(16).slice(0, 8);
 
 /** id -> compiled css, filled by the .vue onLoad hook below. */
 const cssById = new Map<string, string>();
+/** The Bun loader the emitted chunk needs ("ts" for <script lang="ts">). */
+let capturedLoader: "js" | "ts" = "js";
 
 function compileVue(absPath: string, source: string): string {
   const id = toId(absPath);
@@ -103,6 +153,10 @@ function compileVue(absPath: string, source: string): string {
   const shortId = scopeIdOf(id);
   const scopeId = `data-v-${shortId}`;
   const hasScoped = descriptor.styles.some((s) => s.scoped);
+  // Same rule as build.ts: compileScript leaves TS syntax in its output, so the
+  // chunk must be handed to Bun with the matching loader.
+  const isTS = /^tsx?$/.test(descriptor.scriptSetup?.lang ?? descriptor.script?.lang ?? "");
+  capturedLoader = isTS ? "ts" : "js";
 
   const chunks: string[] = [];
 
@@ -110,6 +164,7 @@ function compileVue(absPath: string, source: string): string {
     const compiled = compileScript(descriptor, {
       id: shortId,
       isProd: true,
+      fs: SFC_FS,
       // Prod has no HMR, so the render fn may be inlined into setup() —
       // smaller output and one less property lookup per render.
       inlineTemplate: true,
@@ -135,7 +190,7 @@ function compileVue(absPath: string, source: string): string {
         isProd: true,
         scoped: hasScoped,
         slotted: descriptor.slotted,
-        compilerOptions: { hoistStatic: false },
+        compilerOptions: { hoistStatic: false, expressionPlugins: isTS ? ["typescript"] : [] },
       });
       if (t.errors.length) {
         throw new Error(`${id} <template>: ${t.errors.map(String).join("; ")}`);
@@ -149,6 +204,19 @@ function compileVue(absPath: string, source: string): string {
   // via setScopeId, which reads exactly this property.
   if (hasScoped) chunks.push(`_sfc_main.__scopeId = ${J(scopeId)};`);
   chunks.push("export default _sfc_main;");
+
+  // F7 tripwire, applied to the COMPILED SFC rather than to the finished
+  // bundle: `createStaticVNode` needs `insertStaticContent`, which the host
+  // does not implement, so a hoistStatic leak must fail the build. It has to be
+  // checked here — the bundle also *contains* runtime-core's own definition of
+  // the function (any namespace re-export, e.g. through vue-router or pinia,
+  // keeps it from being tree-shaken), so scanning the output is a false
+  // positive waiting to happen. The compiled template is the only place the
+  // leak can originate.
+  const code = chunks.join("\n");
+  if (/\bcreateStaticVNode\b/.test(code)) {
+    throw new Error(`${id}: emitted createStaticVNode — hoistStatic leaked back on (F7)`);
+  }
 
   const cssChunks: string[] = [];
   for (const style of descriptor.styles) {
@@ -164,7 +232,7 @@ function compileVue(absPath: string, source: string): string {
   }
   if (cssChunks.length) cssById.set(id, cssChunks.join("\n"));
 
-  return chunks.join("\n");
+  return code;
 }
 
 const vuePlugin = {
@@ -174,9 +242,17 @@ const vuePlugin = {
     // helpers) and "vue-native" (app code) have to resolve somewhere: both are
     // our runtime module, exactly as the loader aliases them at runtime.
     build.onResolve({ filter: /^(vue|vue-native)$/ }, () => ({ path: RUNTIME_ENTRY }));
+    // The other two pre-seeded ids ride vendor.js in dev, which means they are
+    // resolved from THIS package's node_modules, not the app's. Prod has no
+    // vendor bundle, so the same resolution has to be spelled out or an app
+    // that uses them (apps/hello uses both) fails to build.
+    build.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: any) => ({
+      path: runtimeRequire.resolve(args.path),
+    }));
     build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
       const source = await Bun.file(args.path).text();
-      return { contents: compileVue(args.path, source), loader: "js" };
+      const contents = compileVue(args.path, source);
+      return { contents, loader: capturedLoader };
     });
   },
 };
@@ -204,11 +280,8 @@ async function build() {
   }
   const body = await result.outputs[0].text();
 
-  // F7 tripwire: createStaticVNode needs insertStaticContent, which the host
-  // does not implement — its presence means hoistStatic leaked back on.
-  if (/\bcreateStaticVNode\b/.test(body)) {
-    throw new Error("emitted createStaticVNode — hoistStatic leaked back on (F7)");
-  }
+  // (The F7 createStaticVNode tripwire now runs per-SFC inside compileVue —
+  // see the comment there for why the finished bundle is the wrong place.)
   // The whole point of the prod define block: no dev branches survive.
   if (/\b__DEV__\b/.test(body)) {
     throw new Error("__DEV__ survived minification — the define block did not apply");

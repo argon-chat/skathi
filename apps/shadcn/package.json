@@ -1,0 +1,22 @@
+{
+  "name": "vue-native-shadcn-trial",
+  "private": true,
+  "version": "0.0.1",
+  "description": "shadcn-vue compatibility trial app for vue-native (milestone 10, track C).",
+  "dependencies": {
+    "@vueuse/core": "^14.4.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-vue-next": "^0.475.0",
+    "reka-ui": "^2.2.1",
+    "tailwind-merge": "^2.6.0"
+  },
+  "devDependencies": {
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "5.8.3"
+  },
+  "scripts": {
+    "registry": "bun tools/fetch-registry.ts",
+    "theme": "bun tools/gen-theme.ts"
+  }
+}

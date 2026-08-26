@@ -39,6 +39,29 @@
 // emits a "css-only" change entry — the running app restyles with NO component
 // churn (no rerender, no reload, no state loss).
 //
+// npm DEPENDENCIES ride the same transport as SHARED SYNTHETIC MODULES, one
+// per bare specifier the app imports (`reka-ui`, `clsx`, `@vueuse/core`, …).
+// Each is a full Bun bundle of that package — its own transitive npm graph
+// inlined — emitted as `dist/modules/<spec>.js` under the bare specifier as its
+// module id, which is exactly what `require("reka-ui")` resolves to in the
+// loader (bare ids are registry keys, used verbatim). `vue`, `vue-native`,
+// `vue-router` and `pinia` stay EXTERNAL inside those bundles, so a library's
+// own `import { ref } from "vue"` lands on our runtime, not a second copy.
+//
+// ONE SHARED COPY, NOT ONE PER IMPORTER. Inlining a package into every module
+// that imports it is simpler, but it is also wrong for any library that keeps
+// module-scope identity — and the headless-primitive libraries this exists for
+// are exactly that. reka-ui's `createContext` mints `Symbol()` injection keys
+// at module scope:
+//
+//     const injectionKey: InjectionKey<...> = Symbol(symbolDescription)
+//
+// With one copy per importer, `AccordionRoot` (Accordion.vue) and
+// `AccordionItem` (AccordionItem.vue) each get their OWN symbol, so the inject
+// misses and every multi-file primitive throws at setup. Same class of bug for
+// singleton registries and `instanceof` checks. A bundler in the browser
+// dedupes for the same reason; so do we.
+//
 // `kind` is derived by diffing each .vue file's previous descriptor blocks:
 //   script/scriptSetup changed, or a <style> block's scoped/module/lang shape
 //                                changed          -> "reload"
@@ -55,10 +78,21 @@
 // - the scope id hashes the module id ONLY, never the source, so [data-v-x]
 //   stays stable across edits.
 
-import { parse, compileScript, compileTemplate, compileStyle } from "@vue/compiler-sfc";
+import { parse, compileScript, compileTemplate, compileStyle, registerTS } from "@vue/compiler-sfc";
 import type { SFCDescriptor } from "@vue/compiler-sfc";
+import { createRequire } from "module";
 import { resolve, dirname, join, relative, sep } from "path";
-import { mkdirSync, readdirSync, renameSync, statSync, writeFileSync, rmSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+  rmSync,
+} from "fs";
 
 import { TW_ID, findConfig, generate as generateTailwind } from "./tailwind";
 
@@ -83,6 +117,76 @@ const SOURCE_EXT = /\.(vue|js|ts|mjs)$/;
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const encId = (id: string) => id.split("/").join("__") + ".js";
 const J = (v: unknown) => JSON.stringify(v);
+
+// ---- the app's own package root -------------------------------------------
+// An app may carry its own package.json + node_modules (apps/shadcn does;
+// apps/hello does not). Bare specifiers, `typescript` and everything Bun
+// resolves for the app are resolved from HERE, never from the builder's own
+// node_modules — otherwise every app would have to declare its dependencies in
+// packages/vue-native/package.json, which is backwards.
+function findAppRoot(startDir: string, stopDir: string): string {
+  let dir = startDir;
+  for (;;) {
+    if (existsSync(join(dir, "package.json")) || existsSync(join(dir, "node_modules"))) return dir;
+    if (dir === stopDir) return startDir;
+    const parent = dirname(dir);
+    if (parent === dir) return startDir;
+    dir = parent;
+  }
+}
+const APP_ROOT = findAppRoot(APP_SRC_DIR, WS_ROOT);
+const appRequire = createRequire(join(APP_ROOT, "package.json"));
+
+// ---- <script lang="ts"> across files ---------------------------------------
+// `defineProps<TabsRootProps>()` where the type is IMPORTED (the dominant style
+// in real component libraries — every shadcn-vue wrapper does it) makes
+// compileScript read and parse other files to build the runtime props object.
+// Two things have to be handed to it or it throws instead:
+//
+//   fs         Bun is not detected as Node by compiler-sfc's environment probe,
+//              so without this every such component fails with
+//              "No fs option provided to `compileScript` in non-Node environment".
+//   registerTS resolving a type across a *package* boundary ("reka-ui") goes
+//              through TypeScript's own module resolution; compiler-sfc treats
+//              `typescript` as an optional peer and errors with
+//              "TypeScript is required as a peer dep for vue …" when absent.
+//              We load it from the APP's node_modules, so an app that needs
+//              cross-package type resolution declares `typescript` itself and
+//              apps that don't stay dependency-free.
+const SFC_FS = {
+  fileExists: (file: string) => existsSync(file),
+  readFile: (file: string) => {
+    try {
+      return readFileSync(file, "utf-8");
+    } catch {
+      return undefined;
+    }
+  },
+  realpath: (file: string) => {
+    try {
+      return realpathSync.native(file);
+    } catch {
+      return file;
+    }
+  },
+};
+
+const TS_AVAILABLE = (() => {
+  try {
+    const ts = appRequire("typescript");
+    registerTS(() => ts);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+// ---- bare specifiers -------------------------------------------------------
+// Provided by vendor.js and pre-seeded in the loader's registry: they must stay
+// external everywhere (a second copy of Vue would be a second reactivity
+// system), and they are never emitted as modules.
+const PRESEEDED = ["vue", "vue-native", "vue-router", "pinia"];
+const isPreseeded = (spec: string) => PRESEEDED.includes(spec);
 
 // Vue's esm-bundler build reads these as bare identifiers.
 const DEFINES: Record<string, string> = {
@@ -154,6 +258,8 @@ const scopeIdOf = (id: string) => Bun.hash(id).toString(16).slice(0, 8);
 
 /** Filled by the .vue onLoad hook; each Bun.build below handles exactly one file. */
 let capturedCss: string | null = null;
+/** Ditto: the Bun loader the emitted chunk needs ("ts" for <script lang="ts">). */
+let capturedLoader: "js" | "ts" = "js";
 
 function compileVue(absPath: string, source: string): string {
   const id = toId(absPath);
@@ -164,6 +270,12 @@ function compileVue(absPath: string, source: string): string {
   const shortId = scopeIdOf(id);
   const scopeId = `data-v-${shortId}`;
   const hasScoped = descriptor.styles.some((s) => s.scoped);
+  // compileScript strips the type-only bits it understands but leaves the rest
+  // of the TS syntax in place (interfaces, `satisfies`, annotations on plain
+  // locals) — the bundler is expected to transpile. Loading that chunk as "js"
+  // is a syntax error, so the loader has to follow the block's `lang`.
+  const isTS = /^tsx?$/.test(descriptor.scriptSetup?.lang ?? descriptor.script?.lang ?? "");
+  capturedLoader = isTS ? "ts" : "js";
 
   const chunks: string[] = [];
   let bindings: any;
@@ -173,6 +285,7 @@ function compileVue(absPath: string, source: string): string {
       id: shortId,
       inlineTemplate: false, // REQUIRED for rerender-based HMR
       genDefaultAs: "_sfc_main",
+      fs: SFC_FS, // imported-type resolution — see SFC_FS above
     });
     bindings = compiled.bindings;
     chunks.push(compiled.content);
@@ -190,6 +303,8 @@ function compileVue(absPath: string, source: string): string {
       compilerOptions: {
         hoistStatic: false, // compileTemplate force-sets true; our spread wins (F7)
         bindingMetadata: bindings,
+        // `{{ x as string }}` / `v-bind="p as any"` parse only with this on.
+        expressionPlugins: isTS ? ["typescript"] : [],
       },
     });
     if (t.errors.length) {
@@ -232,7 +347,8 @@ const vuePlugin = {
   setup(build: any) {
     build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
       const source = await Bun.file(args.path).text();
-      return { contents: compileVue(args.path, source), loader: "js" };
+      const contents = compileVue(args.path, source);
+      return { contents, loader: capturedLoader };
     });
   },
 };
@@ -242,8 +358,11 @@ const vuePlugin = {
 // transform as a literal `require("<spec>")` — the specifiers are recoverable
 // straight from the emitted body, no second parse of the source needed.
 //
-// Bare specifiers ("vue", "vue-native", node_modules) are vendor: they live in
-// vendor.js, are never hot-reloaded, and are deliberately kept OUT of the graph.
+// Bare specifiers are split two ways: PRESEEDED ones ("vue", "vue-native",
+// "vue-router", "pinia") live in vendor.js and are deliberately kept OUT of the
+// graph; every other one is an npm package we emit as its own shared module
+// (see the header) and is likewise out of the graph — it never changes, so it
+// has nothing to contribute to HMR's importer walk.
 
 const REQUIRE_RE = /\brequire\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
 
@@ -298,7 +417,23 @@ function depsOf(id: string, body: string, ids: Set<string>): string[] {
   return found;
 }
 
+/** Non-preseeded bare specifiers `body` requires — i.e. the npm packages. */
+function bareOf(body: string): string[] {
+  const found: string[] = [];
+  REQUIRE_RE.lastIndex = 0;
+  for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
+    const spec = unquote(m[1]);
+    if (spec === null) continue;
+    const c = spec.charCodeAt(0);
+    if (c === 46 /* . */ || c === 47 /* / */) continue; // relative/absolute -> graph
+    if (isPreseeded(spec) || found.includes(spec)) continue;
+    found.push(spec);
+  }
+  return found;
+}
+
 const moduleDeps = new Map<string, string[]>(); // id -> dep ids
+const moduleBare = new Map<string, string[]>(); // id -> npm specifiers it requires
 
 /** ESM -> CJS for one file, everything else external, wrapped in __VN__.define. */
 async function buildModule(absPath: string, ids: Set<string>) {
@@ -323,6 +458,7 @@ async function buildModule(absPath: string, ids: Set<string>) {
 
   const deps = depsOf(id, body, ids);
   moduleDeps.set(id, deps);
+  moduleBare.set(id, bareOf(body));
 
   const out: string[] = [`// vue-native module: ${id}`];
   if (capturedCss !== null) out.push(`__VN__.setCss(${J(id)}, ${J(capturedCss)});`);
@@ -334,6 +470,100 @@ async function buildModule(absPath: string, ids: Set<string>) {
   out.push(body);
   out.push(`}, ${J(Bun.hash(body).toString(16))});`);
   writeAtomic(join(MODULES_DIR, encId(id)), out.join("\n"));
+}
+
+// ---- npm dependencies: one shared module per bare specifier ----------------
+// Absent any npm import (apps/hello), `npmBuilt` stays empty and every line
+// below is inert — the emitted manifest and module set are byte-identical to a
+// pre-npm build.
+
+/** specifier -> emitted body size, for the log and for change detection. */
+const npmBuilt = new Map<string, number>();
+/** Specifiers we already complained about, so watch mode says it once. */
+const npmFailed = new Set<string>();
+
+/** Bundles one npm package into a classic module script. False = unresolvable. */
+async function buildNpmModule(spec: string): Promise<boolean> {
+  let entry: string;
+  try {
+    // Resolved from the APP root, not ours: the app owns its dependencies.
+    entry = appRequire.resolve(spec);
+  } catch (e) {
+    if (!npmFailed.has(spec)) {
+      npmFailed.add(spec);
+      console.warn(
+        `${stamp()} cannot resolve ${J(spec)} from ${toId(APP_ROOT)} — ` +
+          `require(${J(spec)}) will throw at runtime (is it installed?)`,
+      );
+    }
+    return false;
+  }
+  const result = await Bun.build({
+    entrypoints: [entry],
+    format: "cjs" as any,
+    target: "browser", // picks the browser/ESM conditions, not node builtins
+    // The ONLY externals: everything else (the package's own transitive npm
+    // graph) is inlined, because nothing outside this bundle can require it.
+    external: PRESEEDED,
+    define: DEFINES,
+  });
+  if (!result.success) {
+    for (const log of result.logs) console.error(log);
+    throw new Error(`npm module build failed: ${spec}`);
+  }
+  const body = await result.outputs[0].text();
+  moduleDeps.set(spec, []);
+  moduleBare.set(spec, []);
+  writeAtomic(
+    join(MODULES_DIR, encId(spec)),
+    [
+      `// vue-native module: ${spec} (npm dependency, bundled from ${toId(entry)})`,
+      `__VN__.setDeps && __VN__.setDeps(${J(spec)}, []);`,
+      `__VN__.define(${J(spec)}, function (require, module, exports) {`,
+      body,
+      // Constant across rebuilds unless the package itself changes, so a
+      // rebuild never invalidates the live exports (and with them every
+      // module-scope Symbol / singleton the package handed out).
+      `}, ${J(Bun.hash(body).toString(16))});`,
+    ].join("\n"),
+  );
+  npmBuilt.set(spec, body.length);
+  return true;
+}
+
+/** Emitted npm module ids, sorted — manifest order. */
+const npmIds = () => Array.from(npmBuilt.keys()).sort();
+
+/**
+ * Reconciles the emitted npm modules with what the app currently imports.
+ * Returns the specifiers ADDED by this pass (they need a change entry so the
+ * running host evaluates their scripts before hmrApply re-requires importers).
+ */
+async function syncNpmModules(): Promise<string[]> {
+  const wanted = new Set<string>();
+  for (const list of moduleBare.values()) for (const spec of list) wanted.add(spec);
+
+  for (const spec of Array.from(npmBuilt.keys())) {
+    if (wanted.has(spec)) continue;
+    npmBuilt.delete(spec);
+    moduleDeps.delete(spec);
+    moduleBare.delete(spec);
+    try {
+      rmSync(join(MODULES_DIR, encId(spec)));
+    } catch {}
+  }
+
+  const added: string[] = [];
+  for (const spec of Array.from(wanted).sort()) {
+    if (npmBuilt.has(spec)) continue;
+    const t0 = Date.now();
+    if (!(await buildNpmModule(spec))) continue;
+    added.push(spec);
+    console.log(
+      `${stamp()} npm ${spec}: ${((npmBuilt.get(spec) ?? 0) / 1024) | 0} KB in ${Date.now() - t0} ms`,
+    );
+  }
+  return added;
 }
 
 // ---- tailwind: the synthetic css-only module -------------------------------
@@ -432,7 +662,11 @@ function writeManifest(files: string[]) {
   // the utilities layer ahead of every component <style>. (It also sorts
   // first — "." < any letter — which keeps prod.ts's sorted aggregation in
   // agreement without a second rule.)
-  const ids = (TW_CONFIG ? [TW_ID] : []).concat(files.map(toId));
+  // npm modules go between the utilities sheet and the app's own files: they
+  // must be REGISTERED before the entry runs (the host evals `modules` in
+  // order, then boots), and they contribute no CSS, so their position relative
+  // to the Tailwind layer is irrelevant.
+  const ids = (TW_CONFIG ? [TW_ID] : []).concat(npmIds(), files.map(toId));
   const seen = new Set<string>();
   for (const id of ids) {
     const enc = encId(id);
@@ -471,22 +705,30 @@ async function fullBuild(reason: string) {
   const ids = new Set(files.map(toId));
   prevBlocks.clear();
   moduleDeps.clear();
-  twCss = null; // force a rewrite: the module file may not exist yet
+  moduleBare.clear();
+  npmBuilt.clear(); // force a rewrite: the module files may not exist yet
+  twCss = null; // ditto
   await buildTailwind();
   for (const abs of files) {
     const src = await Bun.file(abs).text();
     await buildModule(abs, ids);
     prevBlocks.set(abs, blocksOf(abs, src));
   }
+  await syncNpmModules(); // needs every module's `require`s to be known first
   rev++;
   writeManifest(files);
   // Empty change list: if vendorRev actually moved the host cold-restarts,
   // otherwise this is a no-op ping (e.g. a runtime edit that did not alter the
   // emitted vendor bundle).
   writeChanges([]);
+  const npmBytes = Array.from(npmBuilt.values()).reduce((a, b) => a + b, 0);
   console.log(
     `${stamp()} full build (${reason}): vendor ${(bytes / 1024) | 0} KB + ${files.length} modules` +
+      (npmBuilt.size ? ` + ${npmBuilt.size} npm (${(npmBytes / 1024) | 0} KB)` : "") +
       (TW_CONFIG ? ` + tailwind (${toId(TW_CONFIG)})` : "") +
+      // Cross-package `defineProps<T>()` silently depends on this; say so once
+      // per build instead of leaving a confusing compile error as the only clue.
+      (TS_AVAILABLE ? " [ts type resolution on]" : "") +
       ` in ${Date.now() - t0} ms`,
   );
 }
@@ -520,9 +762,19 @@ async function incrementalBuild() {
     if (alive.has(abs)) continue;
     prevBlocks.delete(abs);
     moduleDeps.delete(toId(abs));
+    moduleBare.delete(toId(abs));
     try {
       rmSync(join(MODULES_DIR, encId(toId(abs))));
     } catch {}
+    structural = true;
+  }
+
+  // A newly-imported package needs its script EVALUATED before hmrApply
+  // re-requires the importer, so it rides in `changed` like any other module.
+  // hmrApply sees a non-.vue id nothing has required yet and skips it, which is
+  // exactly right: registering the factory was the whole job.
+  for (const spec of await syncNpmModules()) {
+    changed.push({ id: spec, kind: "reload" });
     structural = true;
   }
 

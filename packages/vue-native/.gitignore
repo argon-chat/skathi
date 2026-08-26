@@ -1,0 +1,9 @@
+# Build output. The root .gitignore covers `dist/`; parallel app builds use
+# `bun build.ts <entry> <dist-dir>` with a per-app directory (VN_DIST points the
+# host at it), so `dist-hello/`, `dist-shadcn/`, `dist-imgperf/` … all appear
+# here too. One pattern covers every present and future variant.
+dist*/
+
+# Single-file production bundle (prod.ts default output lives under dist/, but
+# an explicit out-file next to the builder should not be committed either).
+app.prod.js
