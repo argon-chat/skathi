@@ -27,7 +27,13 @@ const DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/vue-nati
 const POLL_EVERY_FRAMES: u32 = 30;
 
 fn dist(rel: &str) -> std::path::PathBuf {
-    std::path::Path::new(DIST).join(rel)
+    // VN_DIST points one exe at another app's build output (build.ts already
+    // takes [entry] [dist-dir] positionals). This is what lets several dev
+    // hosts run side by side without sharing packages/vue-native/dist.
+    match std::env::var_os("VN_DIST") {
+        Some(dir) if !dir.is_empty() => std::path::PathBuf::from(dir).join(rel),
+        _ => std::path::Path::new(DIST).join(rel),
+    }
 }
 
 /// `apps/hello/src/App.vue` -> `dist/modules/apps__hello__src__App.vue.js`
