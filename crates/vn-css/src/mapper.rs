@@ -449,6 +449,32 @@ fn object_fit(value: &lightningcss::properties::custom::TokenList, diagnostics: 
 /// The custom-property name that carries a caption-button role.
 pub(crate) const WINDOW_CONTROL: &str = "--window-control";
 
+const TITLEBAR_AREA_ENV: &str =
+    "`env()` is not implemented in crates/vn-css yet, so `env(titlebar-area-…)` fell back to its \
+     default. Read the rect from `navigator.windowControlsOverlay.getTitlebarAreaRect()` and bind \
+     it as an inline style — see docs/WINDOWING.md §2.4.";
+
+/// Whether a declaration's token list references `env(titlebar-area-*)`.
+///
+/// lightningcss keeps an unresolved `env()` as `TokenOrValue::Env`, and an
+/// unknown UA variable (which `titlebar-area-*` is, since lightningcss only
+/// knows the `safe-area-inset-*` family) arrives as
+/// `EnvironmentVariableName::Unknown`. A fallback argument is itself a token
+/// list, so the scan recurses.
+fn names_titlebar_area(value: &lightningcss::properties::custom::TokenList) -> bool {
+    use lightningcss::properties::custom::{EnvironmentVariableName, TokenOrValue};
+    value.0.iter().any(|t| match t {
+        TokenOrValue::Env(e) => {
+            let named = match &e.name {
+                EnvironmentVariableName::Unknown(id) => id.0.starts_with("titlebar-area"),
+                _ => false,
+            };
+            named || e.fallback.as_ref().is_some_and(names_titlebar_area)
+        }
+        _ => false,
+    })
+}
+
 /// The single keyword a token list carries, or `None` when it carries zero or
 /// more than one (a browser drops a multi-keyword declaration on any of these
 /// properties).
@@ -1041,6 +1067,15 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         // One advisory per property name: which property degraded is the
         // useful half, how many rules did it is not.
         Unparsed(u) => {
+            // `env(titlebar-area-*)` is the one `env()` an app is likely to
+            // reach for here (docs/WINDOWING.md §2.4), and the generic
+            // "unresolved value" line would leave an author guessing. Name the
+            // property and print the working alternative instead — the CSS
+            // half of Window Controls Overlay is deferred, the JS half is not.
+            if names_titlebar_area(&u.value) {
+                once(diagnostics, TITLEBAR_AREA_ENV.to_string());
+                return;
+            }
             once(
                 diagnostics,
                 format!(

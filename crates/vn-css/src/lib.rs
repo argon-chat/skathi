@@ -1781,6 +1781,29 @@ mod tests {
         );
     }
 
+    /// `env(titlebar-area-*)` gets a SPECIFIC advisory naming the property and
+    /// printing the working alternative, not the generic "value is unresolved"
+    /// line an author would have to decode (A-15, D-18).
+    #[test]
+    fn env_titlebar_area_names_itself_and_the_alternative() {
+        let engine = Engine::compile(".box { margin-left: env(titlebar-area-x, 0px) }");
+        assert!(
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("titlebar-area") && d.contains("getTitlebarAreaRect")),
+            "{:?}",
+            engine.diagnostics
+        );
+        // …while another `env()` keeps the generic line.
+        let engine = Engine::compile(".box { padding-left: env(safe-area-inset-left) }");
+        assert!(
+            !engine.diagnostics.iter().any(|d| d.contains("titlebar-area")),
+            "{:?}",
+            engine.diagnostics
+        );
+    }
+
     #[test]
     fn inline_window_drag_beats_the_sheet() {
         let engine = Engine::compile("div.box { window-drag: move }");

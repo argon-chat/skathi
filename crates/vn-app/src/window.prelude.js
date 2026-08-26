@@ -399,9 +399,14 @@
   // whole value of the advisory (A-16).
   const CREATION_ONLY = [
     "width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight",
-    "frame", "titleBarStyle", "resizable", "minimizable", "maximizable", "closable", "movable",
+    "resizable", "minimizable", "maximizable", "closable", "movable",
     "titleBarFallback", "focus",
   ];
+  // These two are not merely creation-time: they need a different WINDOW STYLE,
+  // and `SetWindowLongPtr(GWL_STYLE)` + SWP_FRAMECHANGED mid-session desyncs
+  // gpui's cached `border_offset` and hit-test flags — and flickers. Refused
+  // rather than faked (D-25), with its own wording.
+  const STYLE_ONLY = ["frame", "titleBarStyle"];
   const defineWindow = (opts) => {
     if (!opts || typeof opts !== "object") return;
     for (const key of Object.keys(opts)) {
@@ -410,6 +415,14 @@
       if (key === "alwaysOnTop") { appWindow.alwaysOnTop = opts.alwaysOnTop; continue; }
       if (key === "titleBarHeight") { __vn_window_set_titlebar_height(opts.titleBarHeight); continue; }
       if (key === "titleBarOverlay") { appWindow.setTitleBarOverlay(opts.titleBarOverlay); continue; }
+      if (STYLE_ONLY.includes(key)) {
+        warn(
+          `style-only:${key}`,
+          `\`${key}\` cannot change after the window is created — it needs a different window ` +
+            "style, which would desync the hit test and flicker. Declare it in vn.config.json.",
+        );
+        continue;
+      }
       if (CREATION_ONLY.includes(key)) {
         warn(
           `creation-only:${key}`,
