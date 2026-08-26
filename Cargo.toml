@@ -37,3 +37,20 @@ async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+
+# Dependencies are optimized even in a debug build; our own crates are not.
+#
+# This is a PERFORMANCE-OF-THE-DEV-LOOP setting, and it was measured rather than
+# assumed (research/reports/m11/perf-restyle-rebuild.md §5). With the cascade
+# fixed, what was left of a mutation frame on `apps/shadcn` was gpui's own
+# element work — and three quarters of THAT was taffy's `compute_layout` running
+# unoptimized: 31 ms to lay out 548 nodes. The same is true of parcel_selectors
+# inside the cascade and of gpui's scene building. None of it is code we debug;
+# all of it runs on every frame.
+#
+# `"*"` covers dependencies only, so `vn-*` keep full debug info and cheap
+# incremental rebuilds — the edit-compile-run loop is unchanged. The cost is one
+# slower build the first time after this line changes (and after a `cargo
+# clean`), because every dependency, gpui included, is rebuilt.
+[profile.dev.package."*"]
+opt-level = 2

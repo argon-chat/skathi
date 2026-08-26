@@ -574,6 +574,38 @@ mod tests {
         assert_eq!(opacity_of(only), Some(0.3));
     }
 
+    /// Past the mark limit the pass falls back to one straight document walk.
+    /// The cliff must be invisible: everything still ends up correct, including
+    /// the nodes whose marks were dropped on the way over the edge.
+    #[test]
+    fn a_wave_that_marks_more_than_the_limit_still_restyles_everything() {
+        let ids = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let ids: Vec<u32> = (0..200)
+                .map(|_| {
+                    let id = t.create_element(div);
+                    t.insert(id, root, 0);
+                    id
+                })
+                .collect();
+            ids
+        });
+        tree::set_engine(vn_css::Engine::compile(".on { opacity: 0.6 }"));
+        tree::restyle_all();
+
+        // 200 separate class writes — well past SCOPED_RESTYLE_LIMIT.
+        tree::with_tree(|t| {
+            for &id in &ids {
+                t.set_class(id, "on");
+            }
+        });
+        flush_changes();
+        for &id in &ids {
+            assert_eq!(opacity_of(id), Some(0.6), "node {id} was left unstyled");
+        }
+    }
+
     /// `@media` conditions read the published env, and moving it re-cascades.
     #[test]
     fn media_conditions_follow_the_published_env() {
