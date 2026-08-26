@@ -39,7 +39,9 @@ use parcel_selectors::parser::Component;
 
 pub use animator::Animator;
 pub use element::MatchDom;
-pub use mapper::{parse_inline, parse_inline_with_transitions};
+pub use mapper::{
+    parse_inline, parse_inline_full, parse_inline_with_transitions, Extras, ObjectFit,
+};
 pub use media::Env;
 pub use transition::{
     covered, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec, ANIMATABLE_COUNT,
@@ -73,6 +75,9 @@ pub struct ComputedStates {
     pub focus_visible: Option<Rc<StyleRefinement>>,
     /// The folded `transition` list. Empty means "no transitions".
     pub transitions: Rc<Vec<TransitionSpec>>,
+    /// Computed properties a `StyleRefinement` cannot carry (`object-fit`).
+    /// Folded from the BASE state only — see [`Extras`].
+    pub extras: Extras,
 }
 
 impl ComputedStates {
@@ -89,6 +94,8 @@ struct RuleEntry {
     important: Option<Rc<StyleRefinement>>,
     normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
     important_transitions: Option<Rc<Vec<TransitionSpec>>>,
+    normal_extras: Extras,
+    important_extras: Extras,
     specificity: u32,
     order: u32,
     states: u8,
@@ -166,6 +173,11 @@ impl Engine {
             let converted = mapper::convert_block(&style.declarations, &mut self.diagnostics);
             let declares_transition =
                 converted.normal_transitions.is_some() || converted.important_transitions.is_some();
+            let declares_extras = {
+                let mut e = converted.normal_extras;
+                e.refine(&converted.important_extras);
+                e
+            };
             for sel in &style.selectors.0 {
                 let Some(states) = classify_states(sel, &mut self.diagnostics) else {
                     continue;
@@ -179,6 +191,17 @@ impl Engine {
                 }
                 if !audit_selector(sel, &mut self.diagnostics) {
                     continue;
+                }
+                // gpui's `img()` carries ONE `ObjectFit` for the element, not a
+                // per-state ladder like the refinements — so `object-fit` in a
+                // `:hover` rule would apply all the time. Say so rather than
+                // let it look conditional.
+                if states != 0 && !declares_extras.is_empty() {
+                    self.diagnostics.push(format!(
+                        "`object-fit` on a state selector applies unconditionally (v1) — gpui's \
+                         image element has a single object-fit, not a state ladder: {}",
+                        sel_text(sel)
+                    ));
                 }
                 if states != 0 && declares_transition {
                     // State refinements are installed into gpui's own state
@@ -199,6 +222,8 @@ impl Engine {
                     important: converted.important.clone(),
                     normal_transitions: converted.normal_transitions.clone(),
                     important_transitions: converted.important_transitions.clone(),
+                    normal_extras: converted.normal_extras,
+                    important_extras: converted.important_extras,
                     specificity: sel.specificity(),
                     order: *order,
                     states,
@@ -248,6 +273,19 @@ impl Engine {
         inline_transitions: Option<&Rc<Vec<TransitionSpec>>>,
         env: &Env,
     ) -> ComputedStates {
+        self.compute_full(node, inline, inline_transitions, Extras::default(), env)
+    }
+
+    /// [`Self::compute_with`], additionally folding the [`Extras`] an inline
+    /// `style` declared (parse them with [`parse_inline_full`]).
+    pub fn compute_full<D: MatchDom>(
+        &self,
+        node: D,
+        inline: Option<&StyleRefinement>,
+        inline_transitions: Option<&Rc<Vec<TransitionSpec>>>,
+        inline_extras: Extras,
+        env: &Env,
+    ) -> ComputedStates {
         let el = element::El(node);
         let mut matched: Vec<&RuleEntry> = Vec::new();
         for rule in &self.rules {
@@ -277,8 +315,17 @@ impl Engine {
         // `transition` replaces the whole list (`transition: none` therefore
         // clears it). State-rule transitions are rejected at compile time.
         let mut transitions: Option<Rc<Vec<TransitionSpec>>> = None;
+        // `object-fit` has no state ladder to install into (compile time already
+        // advised about that), so every matched rule folds into one value in
+        // cascade order — the last, most specific declaration wins.
+        let mut extras = Extras::default();
         let mut fold = |important_pass: bool| {
             for r in &matched {
+                extras.refine(if important_pass {
+                    &r.important_extras
+                } else {
+                    &r.normal_extras
+                });
                 if r.states == 0 {
                     let declared = if important_pass {
                         &r.important_transitions
@@ -325,6 +372,7 @@ impl Engine {
         if let Some(t) = inline_transitions {
             transitions = Some(t.clone());
         }
+        extras.refine(&inline_extras);
         ComputedStates {
             base: Rc::new(base),
             hover: any_hover.then(|| Rc::new(hover)),
@@ -332,6 +380,7 @@ impl Engine {
             focus: any_focus.then(|| Rc::new(focus)),
             focus_visible: any_focus_visible.then(|| Rc::new(focus_visible)),
             transitions: transitions.unwrap_or_default(),
+            extras,
         }
     }
 }
@@ -1345,5 +1394,125 @@ mod tests {
                 None
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // object-fit — the one computed value that rides `Extras`, not the
+    // refinement (gpui keeps ObjectFit on the img element, not in Style).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn object_fit_keywords_all_map() {
+        for (css, want) in [
+            ("fill", ObjectFit::Fill),
+            ("contain", ObjectFit::Contain),
+            ("cover", ObjectFit::Cover),
+            ("scale-down", ObjectFit::ScaleDown),
+            ("none", ObjectFit::None),
+        ] {
+            let engine = Engine::compile(&format!(".box {{ object-fit: {css} }}"));
+            assert!(engine.diagnostics.is_empty(), "{css}: {:?}", engine.diagnostics);
+            assert_eq!(
+                engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+                Some(want),
+                "object-fit: {css}"
+            );
+        }
+    }
+
+    /// Undeclared stays `None` — the renderer is what supplies the browser
+    /// initial value (`fill`), so "nobody said" and "somebody said fill" stay
+    /// distinguishable through the cascade.
+    #[test]
+    fn object_fit_is_absent_when_undeclared() {
+        let engine = Engine::compile(".box { opacity: 0.5 }");
+        assert_eq!(
+            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            None
+        );
+    }
+
+    #[test]
+    fn object_fit_folds_by_specificity_and_order() {
+        let engine = Engine::compile(
+            ".box { object-fit: contain } div.box { object-fit: cover } .box { object-fit: none }",
+        );
+        // `div.box` (0,1,1) beats both `.box` rules (0,1,0) regardless of order.
+        assert_eq!(
+            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            Some(ObjectFit::Cover)
+        );
+    }
+
+    #[test]
+    fn important_object_fit_wins() {
+        let engine = Engine::compile("div.box { object-fit: cover } .box { object-fit: none !important }");
+        assert_eq!(
+            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            Some(ObjectFit::None)
+        );
+    }
+
+    #[test]
+    fn inline_object_fit_beats_the_sheet() {
+        let engine = Engine::compile("div.box { object-fit: cover }");
+        let mut diags = Vec::new();
+        let (r, t, x) = parse_inline_full("object-fit: contain", &mut diags);
+        assert!(diags.is_empty(), "{diags:?}");
+        let computed = engine.compute_full(
+            box_node(),
+            Some(&r),
+            (!t.is_empty()).then(|| Rc::new(t)).as_ref(),
+            x,
+            &Env::default(),
+        );
+        assert_eq!(computed.extras.object_fit, Some(ObjectFit::Contain));
+    }
+
+    /// A bad keyword must leave an advisory, never silently do nothing.
+    #[test]
+    fn bad_object_fit_value_is_advised() {
+        let engine = Engine::compile(".box { object-fit: squish }");
+        assert!(
+            engine.diagnostics.iter().any(|d| d.contains("object-fit")),
+            "{:?}",
+            engine.diagnostics
+        );
+        assert_eq!(
+            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            None
+        );
+    }
+
+    /// gpui's image element has ONE object-fit, not a hover/active ladder — so
+    /// a state rule that declares it is a real divergence and gets said out loud.
+    #[test]
+    fn object_fit_on_a_state_selector_is_advised() {
+        let engine = Engine::compile(".box:hover { object-fit: cover }");
+        assert!(
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("object-fit") && d.contains("unconditionally")),
+            "{:?}",
+            engine.diagnostics
+        );
+        // And it does apply — unconditionally, as advertised.
+        assert_eq!(
+            engine.compute(box_node(), None, &Env::default()).extras.object_fit,
+            Some(ObjectFit::Cover)
+        );
+    }
+
+    /// `object-fit` must not be swallowed by the "property not mapped" fold —
+    /// that advisory is for properties we genuinely do not implement.
+    #[test]
+    fn object_fit_does_not_report_as_unmapped() {
+        let engine = Engine::compile(".box { object-fit: cover }");
+        assert!(
+            !engine.diagnostics.iter().any(|d| d.contains("not mapped")),
+            "{:?}",
+            engine.diagnostics
+        );
     }
 }

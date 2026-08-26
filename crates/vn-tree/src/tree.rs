@@ -56,6 +56,9 @@ pub struct Node {
     pub(crate) inline_dirty: bool,
     pub(crate) inline_cache: Option<std::rc::Rc<gpui::StyleRefinement>>,
     pub(crate) inline_transitions: Option<std::rc::Rc<Vec<vn_css::TransitionSpec>>>,
+    /// Computed values an inline `style` declared that a `StyleRefinement`
+    /// cannot carry (`object-fit`). `Copy`, so no `Rc` needed.
+    pub(crate) inline_extras: vn_css::Extras,
     /// The folded cascade result, filled by the restyle pass.
     pub computed: Option<vn_css::ComputedStates>,
 }
@@ -151,6 +154,7 @@ impl Tree {
             inline_dirty: false,
             inline_cache: None,
             inline_transitions: None,
+            inline_extras: vn_css::Extras::default(),
             computed: None,
         })
     }
@@ -356,13 +360,14 @@ impl Tree {
                     .join("; ")
             };
             let mut diags = Vec::new();
-            let (parsed, transitions) = if body.is_empty() {
-                (None, None)
+            let (parsed, transitions, extras) = if body.is_empty() {
+                (None, None, vn_css::Extras::default())
             } else {
-                let (r, t) = vn_css::parse_inline_with_transitions(&body, &mut diags);
+                let (r, t, x) = vn_css::parse_inline_full(&body, &mut diags);
                 (
                     Some(std::rc::Rc::new(r)),
                     (!t.is_empty()).then(|| std::rc::Rc::new(t)),
+                    x,
                 )
             };
             for d in diags {
@@ -371,6 +376,7 @@ impl Tree {
             let n = self.node_mut(id).unwrap();
             n.inline_cache = parsed;
             n.inline_transitions = transitions;
+            n.inline_extras = extras;
             n.inline_dirty = false;
         }
 
@@ -385,16 +391,18 @@ impl Tree {
                     }
                     let inline = n.inline_cache.as_deref();
                     let states = match engine {
-                        Some(e) => e.compute_with(
+                        Some(e) => e.compute_full(
                             NodeRef { tree: this, id },
                             inline,
                             n.inline_transitions.as_ref(),
+                            n.inline_extras,
                             env,
                         ),
                         None => vn_css::ComputedStates {
                             base: inline
                                 .map(|r| std::rc::Rc::new(r.clone()))
                                 .unwrap_or_default(),
+                            extras: n.inline_extras,
                             ..Default::default()
                         },
                     };

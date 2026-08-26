@@ -30,6 +30,7 @@ use vn_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 mod dev;
 #[cfg(not(feature = "prod"))]
 mod json; // only the dev transport parses JSON
+mod perf;
 #[cfg(feature = "prod")]
 mod prod;
 
@@ -100,6 +101,16 @@ host_fn!(fn vn_set_status(g, args) {
     update_shell(g, move |shell| shell.status = text)
 });
 
+// `__vn_perf_mark("<label>")` — labels the frame-time window the profiler is
+// accumulating (see `perf`). A no-op unless `VN_PERF` is set, so a perf harness
+// app can call it unconditionally.
+host_fn!(fn vn_perf_mark(g, args) {
+    let text = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
+        .unwrap_or_default();
+    perf::mark(&text);
+    vn_runtime::redjs::api::Value::undefined().0
+});
+
 host_fn!(fn vn_log(g, args) {
     let text = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
         .unwrap_or_default();
@@ -115,6 +126,9 @@ host_fn!(fn vn_log(g, args) {
 /// callbacks drain first), so `cx.notify()` from a host fn is picked up by the
 /// very same frame.
 fn pump_frame(window: &mut Window, cx: &mut App) {
+    // One `Instant` read per frame when VN_PERF is on, an atomic load when it
+    // is off. `on_next_frame` re-arms every frame, so this IS the frame clock.
+    perf::frame();
     if vn_runtime::bridge::poisoned() {
         return; // I9: no JS after a caught native panic.
     }
@@ -220,17 +234,44 @@ impl Render for Shell {
     }
 }
 
+/// The directory a relative `<img src>` resolves against — vue-native's
+/// stand-in for the document URL a browser resolves against.
+///
+/// `VN_APP_ROOT` wins when set; otherwise the dev transport derives it from the
+/// manifest entry (`apps/<app>/src/main.js` → `apps/<app>/`) in [`dev::boot`],
+/// and the prod build — which reads no files at all — leaves it unset, so
+/// relative paths fall back to the working directory with an advisory.
+fn publish_app_root() {
+    if let Some(dir) = std::env::var_os("VN_APP_ROOT") {
+        if !dir.is_empty() {
+            vn_tree::set_asset_base(std::path::PathBuf::from(dir));
+        }
+    }
+}
+
 fn main() {
+    perf::boot();
     application().run(|cx: &mut App| {
         vn_elements::init(cx); // key bindings for the native <input> widget
+        publish_app_root();
         JsRuntime::init();
         JsRuntime::with(|rt| {
             rt.register("__vn_set_status", 1, vn_set_status as *const _);
             rt.register("__vn_log", 1, vn_log as *const _);
+            rt.register("__vn_perf_mark", 1, vn_perf_mark as *const _);
             vn_tree::install(rt);
         });
 
-        let bounds = Bounds::centered(None, size(px(640.), px(420.)), cx);
+        // `VN_WINDOW=1280x900` — a perf/screenshot harness needs a viewport it
+        // chose; everything else keeps the 640x420 default.
+        let (w, h) = std::env::var("VN_WINDOW")
+            .ok()
+            .and_then(|v| {
+                let (w, h) = v.split_once(['x', 'X'])?;
+                Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?))
+            })
+            .unwrap_or((640., 420.));
+        let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -262,6 +303,22 @@ fn main() {
             JsRuntime::with(|rt| {
                 if let Err(e) = rt.eval(PRELUDE_JS, "vn://prelude.js") {
                     eprintln!("[js boot] {}\n{}", e.header, e.stack);
+                }
+                // `VN_SCENARIO=<name>` — a harness app can pin itself to one
+                // screen at boot so a measurement is one process, one scenario,
+                // no input. Published as a plain global; an app that does not
+                // look for it never notices. (JSON-quoted: the value is
+                // whatever the shell handed us.)
+                let scenario = std::env::var("VN_SCENARIO").unwrap_or_default();
+                if !scenario.is_empty() {
+                    let safe: String = scenario
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                        .collect();
+                    let js = format!("globalThis.__VN_SCENARIO__ = \"{safe}\";");
+                    if let Err(e) = rt.eval(&js, "vn://scenario.js") {
+                        eprintln!("[js boot] {}\n{}", e.header, e.stack);
+                    }
                 }
                 boot_mode::boot(rt);
             });

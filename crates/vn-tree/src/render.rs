@@ -35,6 +35,7 @@ use gpui::{
 
 use crate::tree::{self, Kind, Tree};
 use crate::EventPayload;
+use crate::img as img_src;
 use vn_elements::{text_input, TextInputHandlers, TextInputOptions, TextInputState};
 use vn_runtime::{with_published, Phase};
 
@@ -83,6 +84,7 @@ pub(crate) fn gc_node_state() {
     INPUT_STATES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    img_src::gc(live);
     let focused = FOCUSED_NODE.with(|f| f.get());
     if focused != 0 && !live(focused) {
         FOCUSED_NODE.with(|f| f.set(0));
@@ -281,28 +283,14 @@ fn build_node<V: 'static>(
         Kind::Text if node.text.is_empty() => Empty.into_any_element(),
         Kind::Text => SharedString::from(node.text.clone()).into_any_element(),
         Kind::Anchor => Empty.into_any_element(),
+        Kind::Element if t.name(node.tag) == "img" => build_img(t, id, node, window, cx, now),
         Kind::Element => {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
             let mut d = div().id(id as usize);
             let mut scrolls = false;
             if let Some(cs) = &node.computed {
-                // Base wholesale; state refinements go into gpui's own
-                // interactivity ladder (the spike-proven installation trick —
-                // the FnOnce builders run eagerly, only the result is stored).
-                *d.style() = (*cs.base).clone();
-                // Running CSS transitions: interpolated values refined over
-                // the base, before the hover/active ladder installs.
-                if let Some(overlay) = tree::animation_overlay(id, now) {
-                    use gpui::Refineable as _;
-                    d.style().refine(&overlay);
-                }
-                if let Some(h) = cs.hover.clone() {
-                    d = d.hover(move |_| (*h).clone());
-                }
-                if let Some(a) = cs.active.clone() {
-                    d = d.active(move |_| (*a).clone());
-                }
+                d = apply_computed_style(d, cs, id, now);
                 // `overflow: scroll|auto` on either axis. The style itself is
                 // all gpui's layout/clipping needs (it came in through the
                 // wholesale assignment above, so calling `.overflow_y_scroll()`
@@ -360,80 +348,12 @@ fn build_node<V: 'static>(
             }
             // Only a browser-focusable node takes focus from a press.
             let click_focus = handle.clone().filter(|_| focusable);
-
-            if bit(tree::EV_CLICK) {
-                d = d.on_click(cx.listener(move |_, ev: &ClickEvent, window, cx| {
-                    let payload = mouse_payload(ev.position(), 0.0, &ev.modifiers());
-                    js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
-                }));
-            }
-            if bit(tree::EV_MOUSEDOWN) || focusable {
-                let handle = click_focus;
-                d = d.on_any_mouse_down(cx.listener(move |_, ev: &MouseDownEvent, window, cx| {
-                    if let Some(h) = &handle {
-                        // Focus follows the press, as in a browser; the
-                        // focus/blur events come out of the subscription.
-                        window.focus(h, cx);
-                    }
-                    if bit(tree::EV_MOUSEDOWN) {
-                        let payload = mouse_payload(ev.position, button_code(ev.button), &ev.modifiers);
-                        js_dispatch(id, tree::EV_MOUSEDOWN, &payload, window, cx);
-                    }
-                }));
-            }
-            if bit(tree::EV_MOUSEUP) {
-                // gpui's API is per-button here (no any-button variant on the
-                // element traits) — attach one listener per button.
-                for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
-                    d = d.on_mouse_up(
-                        button,
-                        cx.listener(move |_, ev: &MouseUpEvent, window, cx| {
-                            let payload =
-                                mouse_payload(ev.position, button_code(ev.button), &ev.modifiers);
-                            js_dispatch(id, tree::EV_MOUSEUP, &payload, window, cx);
-                        }),
-                    );
-                }
-            }
-            if bit(tree::EV_WHEEL) {
-                d = d.on_scroll_wheel(cx.listener(move |_, ev: &ScrollWheelEvent, window, cx| {
-                    let delta = ev.delta.pixel_delta(gpui::px(16.0));
-                    let payload = EventPayload {
-                        a: f64::from(delta.x),
-                        b: f64::from(delta.y),
-                        c: 0.0,
-                        d: mods_bits(&ev.modifiers),
-                        key: None,
-                    };
-                    js_dispatch(id, tree::EV_WHEEL, &payload, window, cx);
-                }));
-            }
             // `<input>` forwards its own keystrokes from inside the widget (it
             // has to run before gpui resolves the editing key bindings), so the
             // wrapper must not also listen — the editor is its descendant and
             // would deliver every key twice.
-            if bit(tree::EV_KEYDOWN) && !is_input {
-                d = d.on_key_down(cx.listener(move |_, ev: &KeyDownEvent, window, cx| {
-                    let key = dom_key(&ev.keystroke.key);
-                    let payload = EventPayload {
-                        d: mods_bits(&ev.keystroke.modifiers),
-                        key: Some(&key),
-                        ..Default::default()
-                    };
-                    js_dispatch(id, tree::EV_KEYDOWN, &payload, window, cx);
-                }));
-            }
-            if bit(tree::EV_KEYUP) && !is_input {
-                d = d.on_key_up(cx.listener(move |_, ev: &KeyUpEvent, window, cx| {
-                    let key = dom_key(&ev.keystroke.key);
-                    let payload = EventPayload {
-                        d: mods_bits(&ev.keystroke.modifiers),
-                        key: Some(&key),
-                        ..Default::default()
-                    };
-                    js_dispatch(id, tree::EV_KEYUP, &payload, window, cx);
-                }));
-            }
+            d = bind_events(d, id, mask, click_focus, focusable, !is_input, cx);
+
             // `scroll` reports the position *after* the move. gpui installs its
             // own wheel listener that advances the offset during
             // `Interactivity::paint`, i.e. after ours; mouse listeners bubble
@@ -504,6 +424,279 @@ fn build_node<V: 'static>(
             }
         }
     }
+}
+
+/// The style half every element shares: the folded base refinement assigned
+/// wholesale, the running transition overlay refined over it, then gpui's own
+/// hover/active ladder rungs (the FnOnce builders run eagerly — only the
+/// resulting refinement is stored).
+fn apply_computed_style<E>(
+    mut e: E,
+    cs: &vn_css::ComputedStates,
+    id: u32,
+    now: std::time::Instant,
+) -> E
+where
+    E: gpui::Styled + gpui::StatefulInteractiveElement + 'static,
+{
+    *e.style() = (*cs.base).clone();
+    if let Some(overlay) = tree::animation_overlay(id, now) {
+        use gpui::Refineable as _;
+        e.style().refine(&overlay);
+    }
+    if let Some(h) = cs.hover.clone() {
+        e = e.hover(move |_| (*h).clone());
+    }
+    if let Some(a) = cs.active.clone() {
+        e = e.active(move |_| (*a).clone());
+    }
+    e
+}
+
+/// The listener half every element shares. `keys_here` is false for `<input>`,
+/// whose editor forwards its own keystrokes from inside the widget.
+#[allow(clippy::too_many_arguments)]
+fn bind_events<E, V>(
+    mut e: E,
+    id: u32,
+    mask: u32,
+    click_focus: Option<FocusHandle>,
+    focusable: bool,
+    keys_here: bool,
+    cx: &mut Context<V>,
+) -> E
+where
+    E: gpui::StatefulInteractiveElement + 'static,
+    V: 'static,
+{
+    let bit = move |ev: u32| mask & (1 << ev) != 0;
+    if bit(tree::EV_CLICK) {
+        e = e.on_click(cx.listener(move |_, ev: &ClickEvent, window, cx| {
+            let payload = mouse_payload(ev.position(), 0.0, &ev.modifiers());
+            js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
+        }));
+    }
+    if bit(tree::EV_MOUSEDOWN) || focusable {
+        let handle = click_focus;
+        e = e.on_any_mouse_down(cx.listener(move |_, ev: &MouseDownEvent, window, cx| {
+            if let Some(h) = &handle {
+                // Focus follows the press, as in a browser; the focus/blur
+                // events come out of the subscription.
+                window.focus(h, cx);
+            }
+            if bit(tree::EV_MOUSEDOWN) {
+                let payload = mouse_payload(ev.position, button_code(ev.button), &ev.modifiers);
+                js_dispatch(id, tree::EV_MOUSEDOWN, &payload, window, cx);
+            }
+        }));
+    }
+    if bit(tree::EV_MOUSEUP) {
+        // gpui's API is per-button here (no any-button variant on the element
+        // traits) — attach one listener per button.
+        for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
+            e = e.on_mouse_up(
+                button,
+                cx.listener(move |_, ev: &MouseUpEvent, window, cx| {
+                    let payload = mouse_payload(ev.position, button_code(ev.button), &ev.modifiers);
+                    js_dispatch(id, tree::EV_MOUSEUP, &payload, window, cx);
+                }),
+            );
+        }
+    }
+    if bit(tree::EV_WHEEL) {
+        e = e.on_scroll_wheel(cx.listener(move |_, ev: &ScrollWheelEvent, window, cx| {
+            let delta = ev.delta.pixel_delta(gpui::px(16.0));
+            let payload = EventPayload {
+                a: f64::from(delta.x),
+                b: f64::from(delta.y),
+                c: 0.0,
+                d: mods_bits(&ev.modifiers),
+                key: None,
+            };
+            js_dispatch(id, tree::EV_WHEEL, &payload, window, cx);
+        }));
+    }
+    if bit(tree::EV_KEYDOWN) && keys_here {
+        e = e.on_key_down(cx.listener(move |_, ev: &KeyDownEvent, window, cx| {
+            let key = dom_key(&ev.keystroke.key);
+            let payload = EventPayload {
+                d: mods_bits(&ev.keystroke.modifiers),
+                key: Some(&key),
+                ..Default::default()
+            };
+            js_dispatch(id, tree::EV_KEYDOWN, &payload, window, cx);
+        }));
+    }
+    if bit(tree::EV_KEYUP) && keys_here {
+        e = e.on_key_up(cx.listener(move |_, ev: &KeyUpEvent, window, cx| {
+            let key = dom_key(&ev.keystroke.key);
+            let payload = EventPayload {
+                d: mods_bits(&ev.keystroke.modifiers),
+                key: Some(&key),
+                ..Default::default()
+            };
+            js_dispatch(id, tree::EV_KEYUP, &payload, window, cx);
+        }));
+    }
+    e
+}
+
+// ---------------------------------------------------------------------------
+// <img>
+// ---------------------------------------------------------------------------
+
+/// What a browser paints when an image is broken: the `alt` text. An empty
+/// `alt` collapses to nothing, exactly as `alt=""` (the "decorative image"
+/// spelling) does in HTML.
+fn alt_element(alt: &str) -> AnyElement {
+    if alt.is_empty() {
+        Empty.into_any_element()
+    } else {
+        div()
+            .child(SharedString::from(alt.to_string()))
+            .into_any_element()
+    }
+}
+
+fn gpui_object_fit(fit: vn_css::ObjectFit) -> gpui::ObjectFit {
+    match fit {
+        vn_css::ObjectFit::Fill => gpui::ObjectFit::Fill,
+        vn_css::ObjectFit::Contain => gpui::ObjectFit::Contain,
+        vn_css::ObjectFit::Cover => gpui::ObjectFit::Cover,
+        vn_css::ObjectFit::ScaleDown => gpui::ObjectFit::ScaleDown,
+        vn_css::ObjectFit::None => gpui::ObjectFit::None,
+    }
+}
+
+/// The HTML `width` / `height` **attributes** — presentational hints, so they
+/// only fill in a dimension no CSS rule declared (in a browser they sit in the
+/// author-level-beating "presentational hints" origin, i.e. below every real
+/// declaration). Values are unitless CSS pixels.
+fn presentational_size(t: &Tree, id: u32, style: &mut gpui::StyleRefinement) {
+    fn hint(t: &Tree, id: u32, attr: &str, slot: &mut Option<gpui::Length>) {
+        let Some(raw) = t.prop(id, attr) else { return };
+        if slot.is_some() {
+            return; // CSS wins over a presentational hint.
+        }
+        match raw.trim().parse::<f32>() {
+            Ok(v) if v >= 0.0 => *slot = Some(gpui::Length::Definite(gpui::px(v).into())),
+            _ => warn_compat(
+                &format!("img-{attr}-attr"),
+                &format!(
+                    "<img {attr}=\"{raw}\"> is not a non-negative integer; HTML only allows \
+                     unitless pixels there — the attribute was ignored (use CSS {attr} instead)"
+                ),
+            ),
+        }
+    }
+    hint(t, id, "width", &mut style.size.width);
+    hint(t, id, "height", &mut style.size.height);
+}
+
+/// `<img>` — a REPLACED element, so it is a gpui `img()` rather than a `div`
+/// with a background.
+///
+/// * `src` resolution and its compat advisories live in [`crate::img`].
+/// * Sizing follows the browser: with no CSS size the intrinsic (natural) pixel
+///   size is used, and one CSS dimension plus `auto` derives the other from the
+///   intrinsic aspect ratio — gpui's `Img::request_layout` implements exactly
+///   that, so nothing is needed here beyond letting the refinement through.
+/// * `object-fit` comes off the cascade (`ComputedStates::extras`); the initial
+///   value is the CSS one, `fill`, NOT gpui's `Contain` default.
+/// * A source that fails to load renders `alt`, never a panic, and leaves one
+///   advisory naming the `src` that was tried.
+fn build_img<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+) -> AnyElement {
+    let src = t.prop(id, "src").unwrap_or("").to_string();
+    let alt = t.prop(id, "alt").unwrap_or("").to_string();
+
+    let Some(source) = img_src::source_for(id, &src) else {
+        // Nothing loadable at all (empty/unsupported `src` — already advised).
+        // A browser still lays the element out and paints the alt text, so the
+        // node keeps its box and its styles.
+        let mut d = div().id(id as usize);
+        if let Some(cs) = &node.computed {
+            d = apply_computed_style(d, cs, id, now);
+        }
+        presentational_size(t, id, d.style());
+        return d.child(alt_element(&alt)).into_any_element();
+    };
+
+    let mut e = gpui::img(source).id(id as usize);
+    if let Some(cs) = &node.computed {
+        e = apply_computed_style(e, cs, id, now);
+    }
+    presentational_size(t, id, e.style());
+
+    let fit = node
+        .computed
+        .as_ref()
+        .and_then(|cs| cs.extras.object_fit)
+        .map(gpui_object_fit)
+        // CSS initial value. gpui's ImageStyle defaults to Contain, which would
+        // silently letterbox every sized <img> the web would have stretched.
+        .unwrap_or(gpui::ObjectFit::Fill);
+    e = e.object_fit(fit);
+
+    // gpui runs this only when the load actually failed, which makes it the
+    // one place that knows a `src` is broken — there is no decode callback to
+    // hang a DOM `error` event on (see research/reports/m10/images.md).
+    // A data: URL is its own content — printing all of it buries the log.
+    let failed_src: String = if src.chars().count() > 64 {
+        format!(
+            "{}…({} chars)",
+            src.chars().take(48).collect::<String>(),
+            src.chars().count()
+        )
+    } else {
+        src.clone()
+    };
+    let failed_alt = alt.clone();
+    e = e.with_fallback(move || {
+        warn_compat(
+            &format!("img-load:{failed_src}"),
+            &format!(
+                "<img src=\"{failed_src}\"> could not be loaded or decoded — painting the alt \
+                 text instead (a browser would also fire an `error` event; vue-native does not \
+                 yet)"
+            ),
+        );
+        alt_element(&failed_alt)
+    });
+
+    let mask = node.listeners;
+    let bit = |ev: u32| mask & (1 << ev) != 0;
+    // `<img>` is not focusable in HTML without `tabindex`.
+    let tab_index = tab_index_of(t, id);
+    let focusable = tab_index.is_some()
+        || bit(tree::EV_KEYDOWN)
+        || bit(tree::EV_KEYUP)
+        || bit(tree::EV_FOCUS)
+        || bit(tree::EV_BLUR);
+    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
+    if let Some(h) = &handle {
+        e = e.track_focus(h);
+        if focusable {
+            watch_focus(id, h, window, cx);
+        }
+        if let Some(cs) = &node.computed {
+            if let Some(f) = cs.focus.clone() {
+                e = e.focus(move |_| (*f).clone());
+            }
+            if let Some(f) = cs.focus_visible.clone() {
+                e = e.focus_visible(move |_| (*f).clone());
+            }
+        }
+    }
+    let click_focus = handle.filter(|_| focusable);
+    bind_events(e, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
 /// The native `<input>` widget: persistent `TextInputState` entity per node,

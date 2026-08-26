@@ -1,0 +1,7 @@
+# 11.4 MB of generated test images — reproducible in seconds, so the generator
+# is the source of truth, not the bytes:
+#
+#   pwsh -File apps/imgperf/gen-assets.ps1
+#
+# (Add -Force to regenerate over existing files.)
+assets/

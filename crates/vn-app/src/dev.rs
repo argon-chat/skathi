@@ -93,8 +93,31 @@ fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str) -> bool {
 /// Full boot (also used for a cold restart when vendor.js changed): vendor
 /// bundle -> every module script (registration only, nothing executes) ->
 /// `__VN__.boot(entry)`, which requires the entry and mounts the app.
+/// The base a relative `<img src>` resolves against, derived the only way the
+/// dev host can know it: from the manifest's entry module.
+///
+/// `apps/imgperf/src/main.js` → `apps/imgperf/` — the entry's directory with a
+/// trailing `src/` stripped, i.e. where a Vite app would keep `index.html`. A
+/// browser resolves a relative URL against the document; this is our document's
+/// directory. `VN_APP_ROOT` (read in `main.rs`) overrides and wins, so this
+/// never clobbers an explicit choice.
+fn publish_asset_base(entry: &str) {
+    if std::env::var_os("VN_APP_ROOT").is_some_and(|v| !v.is_empty()) {
+        return;
+    }
+    const WORKSPACE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let entry_path = std::path::Path::new(WORKSPACE).join(entry);
+    let Some(dir) = entry_path.parent() else { return };
+    let base = match dir.file_name() {
+        Some(name) if name == "src" => dir.parent().unwrap_or(dir),
+        _ => dir,
+    };
+    vn_tree::set_asset_base(base.to_path_buf());
+}
+
 pub fn boot(rt: &JsRuntime) {
     let Some(manifest) = read_manifest() else { return };
+    publish_asset_base(&manifest.entry);
     if !eval_path(rt, &dist("vendor.js"), "vn://vendor.js") {
         return;
     }

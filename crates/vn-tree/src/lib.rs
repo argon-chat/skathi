@@ -15,9 +15,11 @@
 //! few inline properties onto `gpui::Styled` calls. The real CSS layer
 //! (vn-css: stylesheets, cascade, per-state refinements) replaces it.
 
+mod img;
 mod render;
 mod tree;
 
+pub use img::{asset_base, set_asset_base};
 pub use render::build_root;
 pub use tree::{
     with_tree, EV_BLUR, EV_CLICK, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP, EV_MOUSEDOWN,

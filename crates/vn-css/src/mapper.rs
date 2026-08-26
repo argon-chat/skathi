@@ -24,6 +24,51 @@ use lightningcss::values::percentage::DimensionPercentage;
 
 use crate::transition::{Collector, TransitionSpec};
 
+/// CSS `object-fit`, the sizing rule for a REPLACED element's content box.
+///
+/// It lives here rather than in a `StyleRefinement` because gpui keeps it out
+/// of `Style` entirely: `ObjectFit` is a field of the `img()` element's own
+/// `ImageStyle`, set through the `StyledImage` trait. A local mirror (rather
+/// than `gpui::ObjectFit`) is what lets [`ComputedStates`](crate::ComputedStates)
+/// stay `Clone + PartialEq` — gpui's enum derives neither.
+///
+/// The browser initial value is `fill`; gpui's `ImageStyle::default()` is
+/// `Contain`, so the renderer must state `Fill` explicitly when no rule
+/// declares one (see `vn-tree`'s `build_img`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectFit {
+    Fill,
+    Contain,
+    Cover,
+    ScaleDown,
+    None,
+}
+
+/// Computed values that a `gpui::StyleRefinement` has nowhere to carry.
+///
+/// The refinement is the cascade's whole payload for every other property, so
+/// this is deliberately tiny and `Copy`: one folded value per node, refined in
+/// the same (specificity, order) sweep as the refinements themselves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Extras {
+    /// `object-fit` — only meaningful on a replaced element (`<img>`); parsed
+    /// and folded for every element, exactly as a browser does.
+    pub object_fit: Option<ObjectFit>,
+}
+
+impl Extras {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.object_fit.is_none()
+    }
+
+    /// Later-wins merge, matching `Refineable::refine` for the refinements.
+    pub(crate) fn refine(&mut self, other: &Extras) {
+        if other.object_fit.is_some() {
+            self.object_fit = other.object_fit;
+        }
+    }
+}
+
 /// One declaration block, split into the normal/important refinements and the
 /// transition lists each half declares (`None` = the half declared none, which
 /// is what lets a later rule's `transition` override an earlier one without an
@@ -33,38 +78,48 @@ pub(crate) struct Converted {
     pub important: Option<Rc<StyleRefinement>>,
     pub normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
     pub important_transitions: Option<Rc<Vec<TransitionSpec>>>,
+    pub normal_extras: Extras,
+    pub important_extras: Extras,
 }
 
 /// Converts a declaration block into (normal, important) refinements plus the
 /// transitions each half declares.
 pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<String>) -> Converted {
-    let mut convert =
-        |props: &[Property]| -> (Option<Rc<StyleRefinement>>, Option<Rc<Vec<TransitionSpec>>>) {
-            if props.is_empty() {
-                return (None, None);
+    type Half = (
+        Option<Rc<StyleRefinement>>,
+        Option<Rc<Vec<TransitionSpec>>>,
+        Extras,
+    );
+    let mut convert = |props: &[Property]| -> Half {
+        if props.is_empty() {
+            return (None, None, Extras::default());
+        }
+        let mut r = StyleRefinement::default();
+        let mut extras = Extras::default();
+        let mut transitions = Collector::default();
+        let mut styled = false;
+        for p in props {
+            if transitions.take(p, diagnostics) {
+                continue;
             }
-            let mut r = StyleRefinement::default();
-            let mut transitions = Collector::default();
-            let mut styled = false;
-            for p in props {
-                if transitions.take(p, diagnostics) {
-                    continue;
-                }
-                apply(p, &mut r, diagnostics);
-                styled = true;
-            }
-            (
-                styled.then(|| Rc::new(r)),
-                transitions.finish().map(Rc::new),
-            )
-        };
-    let (normal, normal_transitions) = convert(&block.declarations);
-    let (important, important_transitions) = convert(&block.important_declarations);
+            apply(p, &mut r, &mut extras, diagnostics);
+            styled = true;
+        }
+        (
+            styled.then(|| Rc::new(r)),
+            transitions.finish().map(Rc::new),
+            extras,
+        )
+    };
+    let (normal, normal_transitions, normal_extras) = convert(&block.declarations);
+    let (important, important_transitions, important_extras) = convert(&block.important_declarations);
     Converted {
         normal,
         important,
         normal_transitions,
         important_transitions,
+        normal_extras,
+        important_extras,
     }
 }
 
@@ -74,7 +129,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
 /// Transitions declared inline are DROPPED here (the refinement has nowhere to
 /// carry them); use [`parse_inline_with_transitions`] to keep them.
 pub fn parse_inline(body: &str, diagnostics: &mut Vec<String>) -> StyleRefinement {
-    let (refinement, transitions) = parse_inline_with_transitions(body, diagnostics);
+    let (refinement, transitions, _) = parse_inline_full(body, diagnostics);
     if !transitions.is_empty() {
         diagnostics.push(
             "inline `transition` is parsed but dropped by parse_inline — the caller must use \
@@ -92,7 +147,19 @@ pub fn parse_inline_with_transitions(
     body: &str,
     diagnostics: &mut Vec<String>,
 ) -> (StyleRefinement, Vec<TransitionSpec>) {
+    let (r, t, _) = parse_inline_full(body, diagnostics);
+    (r, t)
+}
+
+/// [`parse_inline_with_transitions`] plus the [`Extras`] the body declared —
+/// the form the retained tree uses, so an inline `style="object-fit: cover"`
+/// wins over the sheet the way every other inline declaration does.
+pub fn parse_inline_full(
+    body: &str,
+    diagnostics: &mut Vec<String>,
+) -> (StyleRefinement, Vec<TransitionSpec>, Extras) {
     let mut r = StyleRefinement::default();
+    let mut extras = Extras::default();
     let mut transitions = Collector::default();
     match DeclarationBlock::parse_string(body, ParserOptions::default()) {
         Ok(block) => {
@@ -100,12 +167,12 @@ pub fn parse_inline_with_transitions(
                 if transitions.take(p, diagnostics) {
                     continue;
                 }
-                apply(p, &mut r, diagnostics);
+                apply(p, &mut r, &mut extras, diagnostics);
             }
         }
         Err(e) => diagnostics.push(format!("inline style parse error: {e} in {body:?}")),
     }
-    (r, transitions.finish().unwrap_or_default())
+    (r, transitions.finish().unwrap_or_default(), extras)
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +351,46 @@ pub(crate) mod effect;
 // the mapper
 // ---------------------------------------------------------------------------
 
-fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
+/// `object-fit: <keyword>`. lightningcss has no typed `object-fit`, so the
+/// declaration arrives as an unknown property carrying a raw token list — the
+/// same shape `--shading` uses, minus the function call.
+fn object_fit(value: &lightningcss::properties::custom::TokenList, diagnostics: &mut Vec<String>) -> Option<ObjectFit> {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let mut idents = value.0.iter().filter_map(|t| match t {
+        TokenOrValue::Token(Token::Ident(s)) => Some(s.as_ref()),
+        _ => None,
+    });
+    let first = idents.next();
+    // `object-fit: scale-down` is one ident; `object-fit: cover cover` is not
+    // valid CSS and a browser drops the whole declaration.
+    if idents.next().is_some() {
+        once(
+            diagnostics,
+            "`object-fit` takes a single keyword — the declaration was dropped".into(),
+        );
+        return None;
+    }
+    match first {
+        Some("fill") => Some(ObjectFit::Fill),
+        Some("contain") => Some(ObjectFit::Contain),
+        Some("cover") => Some(ObjectFit::Cover),
+        Some("scale-down") => Some(ObjectFit::ScaleDown),
+        Some("none") => Some(ObjectFit::None),
+        other => {
+            once(
+                diagnostics,
+                format!(
+                    "unsupported value for object-fit: {} — expected fill | contain | cover | \
+                     scale-down | none",
+                    other.unwrap_or("<not a keyword>")
+                ),
+            );
+            None
+        }
+    }
+}
+
+fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mut Vec<String>) {
     use Property::*;
     match p {
         Display(d) => {
@@ -750,6 +856,17 @@ fn apply(p: &Property, r: &mut StyleRefinement, diagnostics: &mut Vec<String>) {
             }
             // Not a custom property at all — an unknown/vendor-prefixed one
             // (`-webkit-line-clamp`), which is a real "we do not map this".
+            //
+            // `object-fit` is a REAL CSS property that lightningcss simply has
+            // no typed representation for, so it lands in this bucket too; it
+            // is intercepted here and parsed by hand.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "object-fit" =>
+            {
+                if let Some(fit) = object_fit(&c.value, diagnostics) {
+                    x.object_fit = Some(fit);
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name) => {
                 once(
                     diagnostics,
