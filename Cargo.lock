@@ -5729,6 +5729,7 @@ dependencies = [
  "gpui",
  "vn-css",
  "vn-elements",
+ "vn-lottie",
  "vn-runtime",
 ]
 

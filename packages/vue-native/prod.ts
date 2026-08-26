@@ -174,6 +174,10 @@ function compileVue(absPath: string, source: string): string {
           // compileTemplate hard-defaults this to true and then spreads
           // compilerOptions over it, so ours wins (F7).
           hoistStatic: false,
+          // vue-native host elements the HTML tag list does not contain —
+          // without this `<lottie>` compiles to resolveComponent("lottie").
+          // Lockstep with build.ts, where the rationale is written out.
+          isCustomElement: (tag: string) => tag === "lottie",
         },
       },
     });
@@ -190,7 +194,11 @@ function compileVue(absPath: string, source: string): string {
         isProd: true,
         scoped: hasScoped,
         slotted: descriptor.slotted,
-        compilerOptions: { hoistStatic: false, expressionPlugins: isTS ? ["typescript"] : [] },
+        compilerOptions: {
+          hoistStatic: false,
+          expressionPlugins: isTS ? ["typescript"] : [],
+          isCustomElement: (tag: string) => tag === "lottie",
+        },
       });
       if (t.errors.length) {
         throw new Error(`${id} <template>: ${t.errors.map(String).join("; ")}`);

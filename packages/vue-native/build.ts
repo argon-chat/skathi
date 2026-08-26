@@ -305,6 +305,15 @@ function compileVue(absPath: string, source: string): string {
         bindingMetadata: bindings,
         // `{{ x as string }}` / `v-bind="p as any"` parse only with this on.
         expressionPlugins: isTS ? ["typescript"] : [],
+        // vue-native HOST ELEMENTS the HTML tag list does not contain. Without
+        // this the SFC compiler classifies an unknown lowercase tag as a
+        // COMPONENT, so `<lottie>` would compile to resolveComponent("lottie")
+        // and warn "Failed to resolve component" on every render. This is the
+        // same escape hatch a browser app uses
+        // (`app.config.compilerOptions.isCustomElement`), applied at build time
+        // because our templates are precompiled. Keep in lockstep with
+        // prod.ts and with the tag tests in crates/vn-tree/src/render.rs.
+        isCustomElement: (tag: string) => tag === "lottie",
       },
     });
     if (t.errors.length) {

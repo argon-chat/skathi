@@ -28,10 +28,36 @@ const EV_CODES = {
   blur: 8,
   input: 9,
   scroll: 10,
+  // <lottie> playback (crates/vn-lottie/CONTRACT.md §2). The names are
+  // lottie-web's, camelCase and all, so `e.type` reads the same as it does on a
+  // browser <lottie-player>.
+  complete: 11,
+  loopComplete: 12,
+  enterFrame: 13,
 };
+// Vue hyphenates an `@camelCase` listener prop (`onLoopComplete` becomes
+// "loop-complete"), which is the well-known reason `@loopComplete` silently
+// misses a web component's camelCase event in a browser. We accept BOTH
+// spellings and fold them onto the canonical camelCase name, so `@loopComplete`
+// works from a template and `addEventListener("loopComplete")` works from JS.
+const EVENT_ALIASES = {
+  "loop-complete": "loopComplete",
+  loopcomplete: "loopComplete",
+  "enter-frame": "enterFrame",
+  enterframe: "enterFrame",
+};
+const canonicalEvent = (name) => EVENT_ALIASES[name] ?? name;
 // Per the UI Events spec these fire at the target only. (`scroll` bubbles from
-// the *document*, never from an element.)
-const NO_BUBBLE = new Set(["focus", "blur", "scroll"]);
+// the *document*, never from an element.) The Lottie events are CustomEvents
+// dispatched on the element by <lottie-player>, i.e. `bubbles: false`.
+const NO_BUBBLE = new Set([
+  "focus",
+  "blur",
+  "scroll",
+  "complete",
+  "loopComplete",
+  "enterFrame",
+]);
 const nodesById = new Map();
 
 // ---- JS mirror nodes ------------------------------------------------------
@@ -158,7 +184,12 @@ function patchProp(el, key, prev, next) {
   } else if (key === "class") {
     if (prev !== next) __vn_set_class(el.id, next == null ? "" : String(next));
   } else if (key.startsWith("on") && key.length > 2) {
-    // onClick / onClickCapture / onClickOnce / onClickCaptureOnce
+    // runtime-dom's `parseName`, same order: strip the option suffixes, then
+    // read the name.
+    //   onClick / onClickCapture / onClickOnce / onClickCaptureOnce
+    //   on:loopComplete — the case-PRESERVING spelling compiler-dom emits for
+    //                     a custom element's camelCase event (`@loopComplete`
+    //                     on <lottie>). Everything else is hyphenated.
     let rest = key.slice(2);
     let capture = false;
     let once = false;
@@ -171,9 +202,28 @@ function patchProp(el, key, prev, next) {
         rest = rest.slice(0, -7);
       } else break;
     }
-    const name = rest.toLowerCase();
+    const namespaced = rest.startsWith(":");
+    // Hyphenate, don't lowercase — `\B` keeps a leading capital bare, so
+    // "Click" -> "click" and "LoopComplete" -> "loop-complete", exactly as in a
+    // browser. `canonicalEvent` folds that back onto the camelCase name the
+    // host actually emits.
+    const name = namespaced ? rest.slice(1) : canonicalEvent(hyphenate(rest));
     const code = EV_CODES[name];
-    if (!code) return;
+    if (!code) {
+      // Compat-first: a listener the host will never deliver must not vanish in
+      // silence. `onUpdate:modelValue` & friends are excluded — a `:` inside
+      // (rather than in front of) the name marks a component-emit prop that
+      // leaked onto an element, which a browser also binds to an event that
+      // never fires, also silently.
+      if (namespaced || !rest.includes(":")) {
+        warnCompat(
+          `event:${name}`,
+          `@${name} — this event type is not delivered by the native host yet; ` +
+            `the handler will never fire`,
+        );
+      }
+      return;
+    }
     let m = handlers.get(el.id);
     if (!m) {
       m = {};
@@ -231,13 +281,14 @@ function syncListenerFlag(id, name, buckets) {
 
 // EventTarget-shaped registration for reused browser components/directives
 // (vModelText uses this path). Merged into the same propagation walk.
-function addExtraListener(node, name, fn, opts) {
+function addExtraListener(node, rawName, fn, opts) {
   if (!fn) return;
+  const name = canonicalEvent(rawName);
   const code = EV_CODES[name];
   if (!code) {
     warnCompat(
       `event:${name}`,
-      `addEventListener("${name}") — this event type is not delivered by the native host yet; ` +
+      `addEventListener("${rawName}") — this event type is not delivered by the native host yet; ` +
         `the listener will never fire`,
     );
     return;
@@ -254,7 +305,8 @@ function addExtraListener(node, name, fn, opts) {
   syncListenerFlag(node.id, name, buckets);
 }
 
-function removeExtraListener(node, name, fn, opts) {
+function removeExtraListener(node, rawName, fn, opts) {
+  const name = canonicalEvent(rawName);
   const buckets = handlers.get(node.id)?.[name];
   if (!buckets) return;
   const capture = opts === true || (opts && opts.capture);
@@ -306,6 +358,14 @@ function synthesize(name, a, b, c, d, key) {
         // A plain Event in every browser; the position is read off e.target.
         if (typeof Event === "function") return new Event(name, common);
         break;
+      case "complete":
+      case "loopComplete":
+      case "enterFrame":
+        // <lottie-player> dispatches CustomEvents; lottie-web hands its own
+        // listeners a plain object with these fields. Both shapes are served:
+        // the numbers sit on `detail` AND directly on the event.
+        return withProps(new CustomEvent(name, { ...common, detail: lottieDetail(name, a, b, c, d) }),
+                         lottieDetail(name, a, b, c, d));
     }
   } catch (e) {
     /* fall through to the generic event */
@@ -320,9 +380,24 @@ function synthesize(name, a, b, c, d, key) {
           ? { data: key ?? null }
           : name === "focus" || name === "blur" || name === "scroll"
             ? {}
-            : { clientX: a, clientY: b, button: c, ...M };
+            : name === "complete" || name === "loopComplete" || name === "enterFrame"
+              ? lottieDetail(name, a, b, c, d)
+              : { clientX: a, clientY: b, button: c, ...M };
   for (const k in extra) Object.defineProperty(ev, k, { value: extra[k], configurable: true });
   return ev;
+}
+
+function withProps(ev, props) {
+  for (const k in props) Object.defineProperty(ev, k, { value: props[k], configurable: true });
+  return ev;
+}
+
+// The payload crates/vn-tree/src/lottie.rs sends, named the way lottie-web
+// names it (`currentTime` / `totalTime` are frame counts there too).
+function lottieDetail(name, a, b, c, d) {
+  if (name === "enterFrame") return { currentTime: a, totalTime: b, elapsed: c, progress: d };
+  if (name === "loopComplete") return { currentTime: a, totalTime: b, currentLoop: c };
+  return { currentTime: a, totalTime: b, loops: c };
 }
 
 function invoke(buckets, phase, ev, node, name, state) {

@@ -15,10 +15,10 @@
 use std::path::{Path, PathBuf};
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, TRUE};
 use windows::Win32::Graphics::Gdi::{
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
-    DeleteDC, DeleteObject, GetDC, HBITMAP, HDC, ReleaseDC, SelectObject,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, ClientToScreen, CreateCompatibleDC, CreateDIBSection,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP, HDC, ReleaseDC, SelectObject,
 };
 // `PrintWindow` lives under Storage::Xps in windows-rs' generated metadata
 // (it is a user32 export the XPS printing headers declare), while the flag it
@@ -35,6 +35,16 @@ pub struct Shot {
     pub height: u32,
     pub hwnd: isize,
     pub iconic: bool,
+    /// Where the CLIENT area starts inside the captured bitmap, in bitmap
+    /// pixels. `PrintWindow` captures the whole window rectangle — which on
+    /// Windows 10/11 includes the invisible resize border (typically 8 px on
+    /// the left, right and bottom) — while `query`/`tree` report bounds in CSS
+    /// pixels relative to the client area. Without this offset the two cannot
+    /// be lined up, so cropping a screenshot to one element is guesswork.
+    pub client_origin: (i32, i32),
+    /// Bitmap pixels per CSS pixel, i.e. the window's scale factor. Completes
+    /// the mapping: `bitmap_x = css_x * scale + client_origin.0`.
+    pub scale: f32,
 }
 
 /// `<dist>/screenshots/<n>.png` — next to the bundle the host is running, so
@@ -132,6 +142,8 @@ pub fn capture(path: &Path) -> Result<Shot, String> {
         return Err("the window has a zero-sized rectangle — nothing to capture".into());
     }
     let iconic = unsafe { IsIconic(hwnd) }.as_bool();
+    let client_origin = client_origin(hwnd, &rect);
+    let scale = vn_runtime::with_commit(|window, _| window.scale_factor()).unwrap_or(1.0);
 
     // Top-down (negative height) 32-bit BGRA, so row 0 is the top row and the
     // buffer needs no vertical flip afterwards.
@@ -203,5 +215,23 @@ pub fn capture(path: &Path) -> Result<Shot, String> {
         height: height as u32,
         hwnd: hwnd_raw,
         iconic,
+        client_origin,
+        scale,
     })
+}
+
+/// The client area's top-left corner expressed inside the captured window
+/// rectangle. `ClientToScreen(0,0)` gives it in screen space; subtracting the
+/// window rect's origin puts it in bitmap space, which is where a caller
+/// cropping a screenshot to a `query` rectangle needs it.
+///
+/// Falls back to `(0, 0)` rather than failing: a screenshot with a slightly
+/// wrong offset is far more useful than no screenshot.
+fn client_origin(hwnd: HWND, window_rect: &RECT) -> (i32, i32) {
+    let mut origin = POINT { x: 0, y: 0 };
+    if unsafe { ClientToScreen(hwnd, &mut origin) }.as_bool() {
+        (origin.x - window_rect.left, origin.y - window_rect.top)
+    } else {
+        (0, 0)
+    }
 }

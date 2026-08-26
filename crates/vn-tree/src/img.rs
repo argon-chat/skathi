@@ -84,6 +84,79 @@ pub(crate) fn source_for(id: u32, src: &str) -> Option<ImageSource> {
     })
 }
 
+/// The raw FILE bytes behind a `src`, for elements that need the document
+/// rather than a decoded image — `<lottie>` parses Bodymovin JSON (or a gzipped
+/// `.tgs`) itself, so `ImageSource` is no use to it.
+///
+/// The URL grammar is [`resolve`]'s, verbatim: `data:` URIs, `file://` URLs,
+/// absolute Windows paths and relative/root-relative paths against the app root
+/// all mean here exactly what they mean for `<img src>`. Only the *result* type
+/// differs, so `<lottie src>` and `<img src>` can never drift apart.
+///
+/// `Err` carries the advisory text the caller should route through its compat
+/// channel — nothing is printed here, because the caller knows the element name.
+pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
+    let src = src.trim();
+    if src.is_empty() {
+        return Err(format!("<{tag} src=\"\">: the src is empty — nothing to load"));
+    }
+    let lower_scheme = src
+        .split_once(':')
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let path = match lower_scheme.as_str() {
+        "data" => return data_bytes(tag, src),
+        "http" | "https" => {
+            return Err(format!(
+                "<{tag} src=\"{src}\">: http(s) sources are not supported yet — this build wires \
+                 no HTTP client into gpui (`Application::with_http_client`). Use a local file path \
+                 or a data: URI."
+            ))
+        }
+        "file" => file_url(src)
+            .ok_or_else(|| format!("<{tag} src=\"{src}\">: malformed file: URL"))?,
+        // A single-letter "scheme" is a Windows drive, never a URL scheme.
+        s if s.len() == 1 && s.chars().all(|c| c.is_ascii_alphabetic()) => PathBuf::from(src),
+        "" => relative_to_base(src),
+        other => {
+            return Err(format!(
+                "<{tag} src=\"{src}\">: the `{other}:` URL scheme is not supported — use a file \
+                 path or a data: URI."
+            ))
+        }
+    };
+    std::fs::read(&path).map_err(|e| {
+        format!(
+            "<{tag} src=\"{src}\">: could not read {} — {e}",
+            path.display()
+        )
+    })
+}
+
+/// `data:` URI → payload bytes. The media type is *not* checked: unlike `<img>`,
+/// which needs it to pick a decoder, a `<lottie>` payload is sniffed by the
+/// crate itself (gzip magic → `.tgs`, otherwise JSON).
+fn data_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
+    let body = src.get(5..).unwrap_or_default(); // after "data:"
+    let Some((meta, payload)) = body.split_once(',') else {
+        return Err(format!(
+            "<{tag} src=\"{}…\">: malformed data: URL (no comma)",
+            head(src)
+        ));
+    };
+    if meta.to_ascii_lowercase().split(';').any(|p| p.trim() == "base64") {
+        base64_decode(payload).ok_or_else(|| {
+            format!(
+                "<{tag} src=\"{}…\">: data: URL payload is not valid base64",
+                head(src)
+            )
+        })
+    } else {
+        Ok(percent_decode(payload).into_bytes())
+    }
+}
+
 /// Advisories are one-shot per message, like the renderer's.
 fn warn(msg: String) {
     thread_local! {

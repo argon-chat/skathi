@@ -5,6 +5,14 @@ Nothing here is aspirational — every entry names an API that exists in
 `vn-lottie` today. Written to be mechanical; if a step needs a judgement call,
 that is a bug in this document.
 
+> **Status: IMPLEMENTED** (2026-08-26, milestone 10 integration track).
+> `crates/vn-tree/src/lottie.rs` is the element layer, `render.rs::build_lottie`
+> builds the box, `vn_tree::frame_tick` drives the pump from `vn-app`. Where the
+> element layer deliberately differs from this document, the difference is
+> recorded in [§8 Element-layer decisions](#8-element-layer-decisions) — **the
+> element layer wins**; the sections above it describe the *crate's* semantics.
+> Report: `research/reports/m10/integration.md`.
+
 ```html
 <lottie src="sticker.tgs" autoplay loop speed="1.5" @complete="onDone" />
 ```
@@ -212,3 +220,112 @@ fn build_lottie<V: 'static>(
 `vn_lottie::lottie` rasterises (from cache when nothing moved) and releases
 retired atlas tiles. **Do not call `LottieState::render_frame` directly** — it
 does not release them, and at 60fps that is one leaked texture per frame.
+
+## 8. Element-layer decisions
+
+Where the shipped `<lottie>` element differs from §1–§7 above. §1–§7 describe
+the **crate**; this section describes the **element**, and for anything written
+in a Vue template the element is what applies. All of it lives in
+`crates/vn-tree/src/lottie.rs`, which carries the same list in its module docs.
+
+### 8.1 `autoplay` and `loop` default to `false`
+
+§1 and §5 say `true`, following lottie-web's `loadAnimation()`. The element
+follows the **`<lottie-player>` web component** instead, which defaults both to
+`false` — a genuine split in the ecosystem, decided on the grounds that
+`<lottie>` is *markup*, and the markup precedent is the web component. Pasting a
+`<lottie-player>` tag into a vue-native template therefore behaves the way it did
+in the browser; a `lottie-web` user gets the other surprise, which is why this is
+documented rather than left implicit.
+
+Overridden at the element layer, **not** in the crate: a Rust embedder driving
+`LottieState` directly is in lottie-web's world, so `LottieState::load` still
+comes back playing and looping.
+
+### 8.2 `loopComplete` is suppressed on the completing boundary
+
+§5 offers the one-line fix and §2 calls the extra event "the one deliberate
+divergence". It is now suppressed, and slightly more broadly than §5 proposes:
+the filter is *"drop the `LoopComplete` whose count equals `advance.loop_count`
+when `advance.completed` is set"*, which covers `LoopMode::Count` as well as
+`LoopMode::None`. lottie-web fires `complete` alone at the end of a counted loop
+too.
+
+### 8.3 `:loop="n"` maps to `Count(n + 1)`
+
+§1 says `:loop="3"` → `Count(3)`, "which plays 4 times". The crate's
+`Count(n)` actually plays exactly **n** times (`keep_going = loops_done < count`,
+and `loops_done` is incremented first), so the mapping needs the `+ 1` to mean
+what lottie-web's `loop: n` means — *n repeats*, i.e. n + 1 plays. Combined with
+§8.2 the event stream is then lottie-web's exactly: `loopComplete` ×n, then
+`complete`.
+
+Left as a mapping rather than a crate change so the crate's 36 tests keep
+describing the crate. If `LoopMode::Count` is ever redefined to mean "repeats",
+this mapping must lose its `+ 1` on the same commit.
+
+The `complete` payload's `c` (loops completed) is `loop_count - 1` when the tick
+completed, so it equals lottie-web's `playCount`: `0` for a non-looping play,
+`n` for `:loop="n"`.
+
+### 8.4 `autoplay` is edge-triggered, not load-only
+
+`<lottie-player>` reads `autoplay` at load and exposes `.play()` / `.pause()`
+methods for everything after. We have no element methods, so a *change* to the
+prop is treated as a play/pause command — which is what makes
+`:autoplay="isPlaying"` usable as the transport control markup needs it to be.
+A deliberate, documented superset: the load-time behaviour is identical, and a
+value that never changes never issues a command (so a paused animation is not
+restarted every frame).
+
+### 8.5 Event names accept both spellings
+
+The events are registered under lottie-web's own camelCase names (`complete`,
+`loopComplete`, `enterFrame`), so `e.type` reads as it does in the browser.
+`compiler-dom` emits the case-preserving `on:loopComplete` prop for a custom
+element, which lands on the right name directly; the hyphenated spelling
+(`loop-complete`, what `onLoopComplete` would hyphenate to) and the all-lowercase
+one are accepted as aliases and folded onto the same bucket. All three therefore
+work from a template, and `addEventListener("loopComplete")` works from JS.
+
+### 8.6 The box, and `object-fit`
+
+Implemented as §6 specifies — CSS `width`/`height` win, one dimension derives the
+other from the intrinsic aspect ratio, neither means the intrinsic canvas size —
+with one addition: **a relatively sized box** (`width: 100%`, a flex child) is not
+resolvable at build time, because gpui lays out after the element tree is built.
+Those rasterise at the rectangle the node was *painted at in the previous frame*
+(a new `PREV_BOUNDS` side map next to the devtools `BOUNDS` one), falling back to
+the computed pair on the very first frame. The crate re-rasterises on any size
+change, so the picture is correct from frame two with no layout pass of our own.
+
+`object-fit` is wired: it comes off the cascade (`ComputedStates::extras`, the
+same source `<img>` uses), with the `objectfit` attribute as a presentational
+fallback, defaulting to `contain` per §6 — **not** to the CSS initial value
+`fill` that `<img>` uses, because this element mirrors `<lottie-player>`'s
+`preserveAspectRatio: "xMidYMid meet"`.
+
+`grayscale` is always `false`: the cascade does not carry `filter` yet. One line
+in `build_lottie` the day `Extras` grows the property.
+
+### 8.7 `segment` takes a string
+
+`:segment="[10, 40]"` cannot reach the host: `patchProp` drops non-primitive prop
+values with its own advisory. `segment="10,40"` (or `"10 40"`) is the supported
+spelling.
+
+### 8.8 A detached `<lottie>` keeps its clock running
+
+§3 keys the side map on node id and §4 on `needs_frame()`, neither of which knows
+about reachability — so a `<KeepAlive>`-cached page's animation keeps ticking
+while it is parked in the detached storage container. That is deliberate and it
+is the browser behaviour: a `<lottie-player>` in a detached subtree never cancels
+its rAF loop. Nothing is painted meanwhile and no raster is produced (the element
+is not built), so the cost is the transport arithmetic.
+
+### 8.9 GC drops go through a queue
+
+§3 notes `gc_node_state` has no `Window`. It queues the images instead: `gc`
+pushes `take_all_images()` into a `PENDING_DROPS` list which `frame_tick` drains
+into `App::drop_image` on the next frame. Same for a `src` swap, which retires
+the whole previous state.

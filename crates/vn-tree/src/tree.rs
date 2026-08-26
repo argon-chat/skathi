@@ -16,6 +16,11 @@ pub const EV_FOCUS: u32 = 7;
 pub const EV_BLUR: u32 = 8;
 pub const EV_INPUT: u32 = 9;
 pub const EV_SCROLL: u32 = 10;
+// `<lottie>` playback events, named after lottie-web's so a component ports
+// from the browser unchanged (crates/vn-lottie/CONTRACT.md §2).
+pub const EV_COMPLETE: u32 = 11;
+pub const EV_LOOPCOMPLETE: u32 = 12;
+pub const EV_ENTERFRAME: u32 = 13;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

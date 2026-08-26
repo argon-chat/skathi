@@ -183,10 +183,18 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         dark,
         cx.reduce_motion(),
     );
+    // Everything that needs a `Window` and could not run from a host fn: the
+    // `<lottie>` transport is advanced by this frame's wall-clock delta (and
+    // its `complete`/`loopComplete`/`enterFrame` events dispatched), and a node
+    // that was focused when it got detached loses gpui focus. Before the draw,
+    // so the raster a `<lottie>` paints is the one this tick moved to.
+    let lottie_moved = vn_tree::frame_tick(window, cx);
     // One notify per JS wave that touched the tree — the draw right after
-    // this callback picks it up (same frame). While CSS transitions run, keep
-    // repainting: `on_next_frame` alone re-arms but does not redraw.
-    if vn_tree::flush_changes() || vn_tree::animating() {
+    // this callback picks it up (same frame). While CSS transitions run or a
+    // Lottie plays, keep repainting: `on_next_frame` alone re-arms but does not
+    // redraw.
+    if vn_tree::flush_changes() || vn_tree::animating() || lottie_moved || vn_tree::lotties_animating()
+    {
         SHELL.with(|s| {
             if let Some(shell) = s.borrow().as_ref().and_then(|w| w.upgrade()) {
                 shell.update(cx, |_, cx| cx.notify());

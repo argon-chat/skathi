@@ -17,6 +17,7 @@
 
 mod img;
 pub mod log;
+mod lottie;
 mod render;
 mod tree;
 
@@ -25,8 +26,8 @@ pub mod devtools;
 pub use img::{asset_base, set_asset_base};
 pub use render::build_root;
 pub use tree::{
-    with_tree, EV_BLUR, EV_CLICK, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP, EV_MOUSEDOWN,
-    EV_MOUSEUP, EV_SCROLL, EV_WHEEL,
+    with_tree, EV_BLUR, EV_CLICK, EV_COMPLETE, EV_ENTERFRAME, EV_FOCUS, EV_INPUT, EV_KEYDOWN,
+    EV_KEYUP, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEUP, EV_SCROLL, EV_WHEEL,
 };
 
 /// The numeric payload a native input event carries into JS. Meaning by event:
@@ -205,6 +206,29 @@ pub fn flush_changes() -> bool {
 /// True while any CSS transition runs — the host keeps repainting.
 pub fn animating() -> bool {
     tree::animating()
+}
+
+/// True while any `<lottie>` still needs frames (crates/vn-lottie/CONTRACT.md
+/// §4). Folded into the host's `animating()` OR-chain next to [`animating`], so
+/// a playing animation keeps the pump awake and a paused one lets it sleep.
+pub fn lotties_animating() -> bool {
+    lottie::any_playing()
+}
+
+/// The per-frame work that needs a `Window` and cannot be done from a host fn.
+/// Call it once per frame from the pump, BEFORE the draw; returns `true` when
+/// something moved and the window must repaint.
+///
+/// Two jobs today:
+/// * every `<lottie>` is advanced by the wall-clock delta and its events are
+///   dispatched (CONTRACT.md §4) — this is also where retired atlas tiles go
+///   back to gpui, since `flush_changes` has no `Window` to hand them to;
+/// * a node that was focused when it got detached from the painted tree loses
+///   gpui focus, which is the browser's rule and what makes a `<KeepAlive>`
+///   page stop swallowing keystrokes after it deactivates.
+pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
+    render::apply_pending_blur(window, cx);
+    lottie::tick(window, cx)
 }
 
 /// Mirrors the OS reduced-motion preference into the transition animator.

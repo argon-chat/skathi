@@ -67,10 +67,19 @@ thread_local! {
     /// Absolute (window-space) layout bounds of every node that was actually
     /// PAINTED in the last frame gpui drew — see [`record_bounds`].
     static BOUNDS: RefCell<HashMap<u32, (f32, f32, f32, f32)>> = RefCell::new(HashMap::new());
+    /// The previous frame's [`BOUNDS`], kept because the element tree for frame
+    /// N is BUILT before frame N's prepaint runs — so the only rectangle a
+    /// builder can read is last frame's. `<lottie>` needs it to rasterise into
+    /// a box whose size CSS expresses relatively (`width: 100%`, flex).
+    static PREV_BOUNDS: RefCell<HashMap<u32, (f32, f32, f32, f32)>> = RefCell::new(HashMap::new());
+    /// The focused node that was detached from the painted tree and must lose
+    /// gpui focus (0 = nothing pending). Set from `gc_node_state` (which has no
+    /// `Window`), applied by [`apply_pending_blur`] on the next frame that does.
+    static PENDING_BLUR: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Browser-compat advisory: say what was dropped and what to do instead, once.
-fn warn_compat(key: &str, msg: &str) {
+pub(crate) fn warn_compat(key: &str, msg: &str) {
     WARNED.with(|w| {
         if w.borrow_mut().insert(key.to_string()) {
             eprintln!("[vue-native compat] {msg}");
@@ -101,7 +110,8 @@ fn warn_compat(key: &str, msg: &str) {
 /// are about to be replaced by this frame's, and anything that stops being
 /// painted must stop having bounds.
 fn reset_bounds() {
-    BOUNDS.with(|m| m.borrow_mut().clear());
+    let last = BOUNDS.with(|m| std::mem::take(&mut *m.borrow_mut()));
+    PREV_BOUNDS.with(|m| *m.borrow_mut() = last);
 }
 
 fn record_bounds(id: u32, bounds: gpui::Bounds<gpui::Pixels>) {
@@ -122,6 +132,19 @@ fn record_bounds(id: u32, bounds: gpui::Bounds<gpui::Pixels>) {
 /// this node was painted in — `None` when it was not painted at all.
 pub fn bounds_of(id: u32) -> Option<(f32, f32, f32, f32)> {
     BOUNDS.with(|m| m.borrow().get(&id).copied())
+}
+
+/// The rectangle this node was painted at in the frame BEFORE the one being
+/// built. Only builders need this — `bounds_of` is the answer to "where is it
+/// now", which is what devtools and a future `getBoundingClientRect()` want.
+fn prev_size_of(id: u32) -> Option<(f32, f32)> {
+    PREV_BOUNDS.with(|m| {
+        m.borrow()
+            .get(&id)
+            .copied()
+            .filter(|(_, _, w, h)| *w > 0.0 && *h > 0.0)
+            .map(|(_, _, w, h)| (w, h))
+    })
 }
 
 /// A transparent wrapper that records the bounds gpui laid its inner element
@@ -205,11 +228,79 @@ pub(crate) fn gc_node_state() {
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     BOUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    PREV_BOUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     img_src::gc(live);
+    crate::lottie::gc(live);
     let focused = FOCUSED_NODE.with(|f| f.get());
-    if focused != 0 && !live(focused) {
-        FOCUSED_NODE.with(|f| f.set(0));
+    if focused == 0 {
+        return;
     }
+    if !live(focused) {
+        FOCUSED_NODE.with(|f| f.set(0));
+        return;
+    }
+    // The browser rule: **detaching the focused element blurs it.** A node can
+    // stay allocated and yet stop being part of the document — `<KeepAlive>`
+    // moves a deactivated page into a container that is never inserted, and
+    // `build_root` walks from `t.root` only, so that subtree is not painted.
+    // Liveness (above) is not enough: gpui would keep routing keystrokes to a
+    // handle whose element is nowhere in the tree, so a deactivated page's
+    // `<input>` kept its focus ring AND kept receiving `keydown` while the
+    // characters went nowhere (research/reports/m10/keepalive-state.md §4.1).
+    if !tree::read_tree(|t| reaches_root(t, focused)) {
+        PENDING_BLUR.with(|p| p.set(focused));
+    }
+}
+
+/// Does `id` still hang off the painted root? Walks `Node::parent`, which is a
+/// handful of hops, and only ever runs when something is focused and the tree
+/// just changed.
+fn reaches_root(t: &Tree, id: u32) -> bool {
+    if t.root == 0 {
+        return false;
+    }
+    let mut cursor = id;
+    // The tree is a tree, but a corrupt parent chain must not hang the pump.
+    for _ in 0..1024 {
+        if cursor == t.root {
+            return true;
+        }
+        match t.node(cursor) {
+            Some(node) if node.parent != 0 => cursor = node.parent,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Releases focus for a node that was detached while focused, and tells JS.
+/// Runs from the frame pump, which is the first place after the mutation that
+/// holds a `Window`.
+///
+/// The `blur` event is dispatched here rather than left to gpui's focus-lost
+/// observer, because that observer compares the *drawn* focus paths — and a
+/// node that is no longer painted may already have dropped out of the path, so
+/// the `Some → None` edge it watches for is not guaranteed to happen. Clearing
+/// `FOCUSED_NODE` first keeps the two paths from both firing: `focus_transition`
+/// returns early when the focus is already where it is being moved to.
+pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
+    let pending = PENDING_BLUR.with(|p| p.replace(0));
+    // Re-check: focus may legitimately have moved on since the mutation (the
+    // same wave that detached the page can focus something on the new one), and
+    // a page can be re-attached before this frame runs.
+    if pending == 0 || FOCUSED_NODE.with(|f| f.get()) != pending {
+        return;
+    }
+    if tree::read_tree(|t| reaches_root(t, pending)) {
+        return;
+    }
+    // gpui first — this is what stops keystrokes reaching the detached node.
+    window.blur();
+    FOCUSED_NODE.with(|f| f.set(0));
+    js_dispatch_app(pending, tree::EV_BLUR, &EventPayload::default(), window, cx);
+    // `:focus` rungs read the handle live, so the repaint cannot wait for a
+    // JS handler to have changed something.
+    window.refresh();
 }
 
 fn mods_bits(m: &gpui::Modifiers) -> f64 {
@@ -272,7 +363,7 @@ fn mouse_payload(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers
 
 /// Publish → dispatch → flush; the shape every listener shares. Returns
 /// `false` when a JS handler called `preventDefault()`.
-fn js_dispatch_app(id: u32, event: u32, payload: &EventPayload, window: &mut Window, cx: &mut App) -> bool {
+pub(crate) fn js_dispatch_app(id: u32, event: u32, payload: &EventPayload, window: &mut Window, cx: &mut App) -> bool {
     let proceed = with_published(window, cx, Phase::Commit, || {
         crate::dispatch_event(id, event, payload)
     });
@@ -410,6 +501,9 @@ fn build_node<V: 'static>(
         Kind::Anchor => Empty.into_any_element(),
         Kind::Element if t.name(node.tag) == "img" => {
             probe(id, build_img(t, id, node, window, cx, now))
+        }
+        Kind::Element if t.name(node.tag) == "lottie" => {
+            probe(id, build_lottie(t, id, node, window, cx, now))
         }
         Kind::Element => probe(id, {
             // Every mirrored node gets a stable ElementId — hover/active/
@@ -935,6 +1029,175 @@ fn build_img<V: 'static>(
     }
     let click_focus = handle.filter(|_| focusable);
     bind_events(e, id, mask, click_focus, focusable, true, cx).into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// <lottie>
+// ---------------------------------------------------------------------------
+
+fn lottie_fit(fit: vn_css::ObjectFit) -> vn_lottie::LottieFit {
+    match fit {
+        vn_css::ObjectFit::Fill => vn_lottie::LottieFit::Fill,
+        vn_css::ObjectFit::Contain => vn_lottie::LottieFit::Contain,
+        vn_css::ObjectFit::Cover => vn_lottie::LottieFit::Cover,
+        vn_css::ObjectFit::ScaleDown => vn_lottie::LottieFit::ScaleDown,
+        vn_css::ObjectFit::None => vn_lottie::LottieFit::None,
+    }
+}
+
+/// One CSS length in pixels, when it can be known without layout. `50%` and
+/// `auto` cannot be — the caller falls back to the rectangle the node was
+/// painted at last frame.
+fn definite_px(len: Option<gpui::Length>, rem: gpui::Pixels) -> Option<f32> {
+    match len? {
+        gpui::Length::Definite(gpui::DefiniteLength::Absolute(a)) => {
+            Some(f32::from(a.to_pixels(rem)))
+        }
+        _ => None,
+    }
+}
+
+/// True when the style declares this dimension at all (`auto` is "it doesn't").
+fn is_sized(len: Option<gpui::Length>) -> bool {
+    matches!(len, Some(gpui::Length::Definite(_)))
+}
+
+/// `<lottie src="sticker.tgs" autoplay loop speed="1.5" @complete="…" />` — a
+/// replaced element whose content is a rasterised Lottie frame.
+///
+/// Structurally it is a styled box (so the cascade, `background`, borders and
+/// the event listeners all work exactly as on a `<div>`) wrapping the crate's
+/// `size_full()` image. The transport, the load and the events live in
+/// [`crate::lottie`]; the only thing decided here is the BOX, per CONTRACT.md §6:
+///
+/// * CSS `width`/`height` win outright;
+/// * with neither, the box takes the animation's intrinsic canvas size — the
+///   `<img>` rule;
+/// * with one, the other follows from the intrinsic aspect ratio.
+///
+/// The raster is produced at the size the node was actually painted at last
+/// frame when that is known, so a relatively sized box (`width: 100%`, a flex
+/// child) rasterises at its real pixel size instead of a guess. On the first
+/// frame — and only then — the computed pair above is used instead; the crate
+/// re-rasterises on any size change, so the picture is correct from frame two
+/// with no layout pass of our own.
+fn build_lottie<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+) -> AnyElement {
+    // Load (once per `src`) and push this frame's props into the transport.
+    let intrinsic = crate::lottie::sync(t, id);
+
+    let mut d = div().id(id as usize);
+    if let Some(cs) = &node.computed {
+        d = apply_computed_style(d, cs, id, now);
+    }
+    presentational_size(t, id, d.style());
+
+    if let Some((iw, ih)) = intrinsic {
+        let (iw, ih) = (iw.max(1) as f32, ih.max(1) as f32);
+        let rem = window.rem_size();
+        let (style_w, style_h) = {
+            let size = &d.style().size;
+            (size.width, size.height)
+        };
+        let (sized_w, sized_h) = (is_sized(style_w), is_sized(style_h));
+        let painted = prev_size_of(id);
+        // A relatively sized axis is only knowable from the last paint.
+        let known_w = definite_px(style_w, rem).or(painted.filter(|_| sized_w).map(|p| p.0));
+        let known_h = definite_px(style_h, rem).or(painted.filter(|_| sized_h).map(|p| p.1));
+
+        let (fill_w, fill_h) = match (sized_w, sized_h) {
+            (true, true) => (None, None),
+            // One axis given: the other comes off the intrinsic aspect ratio,
+            // exactly as it does for an `<img>` with one CSS dimension.
+            (true, false) => (None, known_w.map(|w| w * ih / iw).or(Some(ih))),
+            (false, true) => (known_h.map(|h| h * iw / ih).or(Some(iw)), None),
+            (false, false) => (Some(iw), Some(ih)),
+        };
+        if let Some(w) = fill_w {
+            d.style().size.width = Some(gpui::Length::Definite(gpui::px(w).into()));
+        }
+        if let Some(h) = fill_h {
+            d.style().size.height = Some(gpui::Length::Definite(gpui::px(h).into()));
+        }
+
+        // What to rasterise into. Last frame's rectangle is the truth when we
+        // have it; otherwise the box just computed.
+        let size = painted.unwrap_or((
+            known_w.or(fill_w).unwrap_or(iw),
+            known_h.or(fill_h).unwrap_or(ih),
+        ));
+
+        let object_fit = node
+            .computed
+            .as_ref()
+            .and_then(|cs| cs.extras.object_fit)
+            .map(lottie_fit)
+            // The `objectfit` attribute is the `<lottie-player>` spelling; CSS
+            // beats it, the way a presentational hint always loses.
+            .or_else(|| match t.prop(id, "objectfit").map(str::trim) {
+                Some("fill") => Some(vn_lottie::LottieFit::Fill),
+                Some("contain") => Some(vn_lottie::LottieFit::Contain),
+                Some("cover") => Some(vn_lottie::LottieFit::Cover),
+                Some("scale-down") => Some(vn_lottie::LottieFit::ScaleDown),
+                Some("none") => Some(vn_lottie::LottieFit::None),
+                Some(other) => {
+                    warn_compat(
+                        &format!("lottie-objectfit:{other}"),
+                        &format!(
+                            "<lottie objectfit=\"{other}\"> is not an object-fit keyword — use \
+                             fill, contain, cover, scale-down or none"
+                        ),
+                    );
+                    None
+                }
+                None => None,
+            })
+            // NOT the CSS initial value (`fill`): `<lottie-player>`'s default is
+            // `preserveAspectRatio: "xMidYMid meet"`, i.e. contain, and this
+            // element mirrors that component. CONTRACT.md §6.
+            .unwrap_or(vn_lottie::LottieFit::Contain);
+
+        let options = vn_lottie::LottieOptions {
+            size,
+            scale: window.scale_factor(),
+            object_fit,
+            // gpui's image element implements `filter: grayscale(1)` natively,
+            // but the cascade does not carry `filter` yet — wire it here the
+            // day `Extras` grows the property.
+            grayscale: false,
+        };
+        if let Some(child) =
+            crate::lottie::with_state(id, |s| vn_lottie::lottie(s, &options, window, &mut **cx))
+        {
+            d = d.child(child);
+        }
+    }
+
+    let mask = node.listeners;
+    let bit = |ev: u32| mask & (1 << ev) != 0;
+    // Like `<img>`: not focusable in HTML without `tabindex`.
+    let tab_index = tab_index_of(t, id);
+    let focusable = tab_index.is_some()
+        || bit(tree::EV_KEYDOWN)
+        || bit(tree::EV_KEYUP)
+        || bit(tree::EV_FOCUS)
+        || bit(tree::EV_BLUR);
+    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
+    if let Some(h) = &handle {
+        d = d.track_focus(h);
+        if focusable {
+            watch_focus(id, h, window, cx);
+        }
+    }
+    let click_focus = handle.filter(|_| focusable);
+    bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
 /// The native `<input>` widget: persistent `TextInputState` entity per node,

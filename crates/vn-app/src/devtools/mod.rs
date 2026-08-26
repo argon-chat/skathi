@@ -948,6 +948,13 @@ fn cmd_screenshot(path: Option<&str>) -> String {
                 ("width", Json::n(f64::from(shot.width))),
                 ("height", Json::n(f64::from(shot.height))),
                 ("hwnd", Json::s(format!("{:#x}", shot.hwnd))),
+                // How to line a `query`/`tree` rectangle up with these pixels:
+                // the capture is the whole WINDOW rect (invisible resize border
+                // included), while bounds are CSS px inside the CLIENT area.
+                //   bitmap_x = css_x * scale + clientX
+                ("clientX", Json::n(f64::from(shot.client_origin.0))),
+                ("clientY", Json::n(f64::from(shot.client_origin.1))),
+                ("scale", Json::n(f64::from(shot.scale))),
             ];
             if shot.iconic {
                 entries.push(("iconic", Json::Bool(true)));
