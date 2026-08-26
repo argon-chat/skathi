@@ -35,7 +35,11 @@ use std::rc::Rc;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Vars {
     /// `(--name, fully substituted value)`, sorted by name.
-    entries: Vec<(Box<str>, Box<str>)>,
+    ///
+    /// `Rc<str>` rather than `Box<str>`: a child that overrides one property
+    /// carries the other 40 through unchanged, and a refcount bump per entry is
+    /// what keeps that from being 80 allocations per element on a Tailwind page.
+    entries: Vec<(Rc<str>, Rc<str>)>,
 }
 
 impl Vars {
@@ -319,6 +323,13 @@ fn force<'a>(
 /// The general path resolves only the names this element declares, reading
 /// everything else off the parent map in place, and merges the two sorted
 /// lists. The parent map is never copied.
+/// Can this declaration change anything? A literal (no `var()`) resolves to
+/// itself, so one whose text already equals the inherited value is a no-op —
+/// which is what Tailwind's universal block is on every element but the first.
+fn inert(raw: &str, name: &str, parent: &Vars) -> bool {
+    find_var(raw.as_bytes(), 0).is_none() && parent.get(name) == Some(raw)
+}
+
 pub(crate) fn resolve(
     parent: &Rc<Vars>,
     own: &[&(String, String)],
@@ -333,18 +344,32 @@ pub(crate) fn resolve(
     // that, neither can the element. Duplicates are safe: two entries for one
     // name that disagree cannot both equal the parent's value, so the check
     // fails and the general path runs.
-    if own
-        .iter()
-        .all(|(name, raw)| find_var(raw.as_bytes(), 0).is_none() && parent.get(name) == Some(&**raw))
-    {
+    if own.iter().all(|(name, raw)| inert(raw, name, parent)) {
         return parent.clone();
     }
 
-    let mut slots: HashMap<&str, Slot<'_>> = HashMap::with_capacity(own.len());
-    for (name, raw) in own {
-        slots.insert(name.as_str(), Slot::Raw(raw.as_str()));
+    // The general path still only has to look at the names that can MOVE. Fold
+    // to one declaration per name first — last wins, the cascade order they
+    // were pushed in — and only then drop the inert ones, because a name whose
+    // last declaration differs from the parent's value is live even if an
+    // earlier one matched it.
+    let mut folded: Vec<(&str, &str)> = Vec::with_capacity(own.len());
+    let mut seen: std::collections::HashSet<&str> =
+        std::collections::HashSet::with_capacity(own.len());
+    for (name, raw) in own.iter().rev() {
+        if seen.insert(name.as_str()) && !inert(raw, name, parent) {
+            folded.push((name.as_str(), raw.as_str()));
+        }
     }
-    for (name, _) in own {
+    if folded.is_empty() {
+        return parent.clone();
+    }
+
+    let mut slots: HashMap<&str, Slot<'_>> = HashMap::with_capacity(folded.len());
+    for (name, raw) in &folded {
+        slots.insert(name, Slot::Raw(raw));
+    }
+    for (name, _) in &folded {
         // The Err arm cannot escape here: `force` converts every failure of its
         // own value into "unset" + an advisory. A cycle detected while resolving
         // a DIFFERENT name propagates out as Err, and means this name is invalid
@@ -354,7 +379,7 @@ pub(crate) fn resolve(
                 "`{name}` is invalid at computed-value time — {}",
                 e.describe()
             ));
-            slots.insert(name.as_str(), Slot::Dropped);
+            slots.insert(name, Slot::Dropped);
         }
     }
 
@@ -373,29 +398,29 @@ pub(crate) fn resolve(
         })
         .collect();
     mine.sort_by(|a, b| a.0.cmp(b.0));
-    let declared: std::collections::HashSet<&str> = own.iter().map(|(n, _)| n.as_str()).collect();
+    let declared: std::collections::HashSet<&str> = folded.iter().map(|(n, _)| *n).collect();
 
-    let mut entries: Vec<(Box<str>, Box<str>)> =
+    let mut entries: Vec<(Rc<str>, Rc<str>)> =
         Vec::with_capacity(parent.entries.len() + mine.len());
     let mut mine_iter = mine.into_iter().peekable();
     for (k, v) in &parent.entries {
         while mine_iter.peek().is_some_and(|(mk, _)| *mk < &**k) {
             let (mk, mv) = mine_iter.next().unwrap();
-            entries.push((mk.into(), mv.into_boxed_str()));
+            entries.push((mk.into(), mv.into()));
         }
         if declared.contains(&**k) {
             // Shadowed: either by a resolved value (emitted below) or by a
             // dropped one (emitted by nobody, which is the point).
             if mine_iter.peek().is_some_and(|(mk, _)| *mk == &**k) {
                 let (mk, mv) = mine_iter.next().unwrap();
-                entries.push((mk.into(), mv.into_boxed_str()));
+                entries.push((mk.into(), mv.into()));
             }
             continue;
         }
         entries.push((k.clone(), v.clone()));
     }
     for (mk, mv) in mine_iter {
-        entries.push((mk.into(), mv.into_boxed_str()));
+        entries.push((mk.into(), mv.into()));
     }
 
     // Even off the fast path an element can land on its parent's exact map (a
@@ -512,6 +537,31 @@ mod tests {
         assert!(!Rc::ptr_eq(&parent, &child));
         assert_eq!(child.get("--a"), Some("1"));
         assert_eq!(child.get("--b"), Some("2"));
+    }
+
+    /// Skipping declarations that cannot move anything must not skip the
+    /// cascade's last-wins rule: which of two declarations for one name is
+    /// inert depends on which one is LAST.
+    #[test]
+    fn dropping_inert_declarations_respects_last_wins() {
+        let parent = vars(&[("--a", "1")]);
+        let mut d = Vec::new();
+
+        // …, --a: 1, --a: 2  →  2 wins, even though the first matched the parent.
+        let later_differs = vec![
+            ("--a".to_string(), "1".to_string()),
+            ("--a".to_string(), "2".to_string()),
+        ];
+        assert_eq!(resolve(&parent, &refs(&later_differs), &mut d).get("--a"), Some("2"));
+
+        // …, --a: 2, --a: 1  →  1 wins, which IS the inherited value.
+        let later_matches = vec![
+            ("--a".to_string(), "2".to_string()),
+            ("--a".to_string(), "1".to_string()),
+        ];
+        let child = resolve(&parent, &refs(&later_matches), &mut d);
+        assert_eq!(child.get("--a"), Some("1"));
+        assert!(Rc::ptr_eq(&parent, &child), "the winning declaration is inert");
     }
 
     /// A `var()`-valued declaration is never taken as "same as inherited" on
