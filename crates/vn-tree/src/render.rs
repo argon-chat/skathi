@@ -77,6 +77,10 @@ thread_local! {
     /// gpui focus (0 = nothing pending). Set from `gc_node_state` (which has no
     /// `Window`), applied by [`apply_pending_blur`] on the next frame that does.
     static PENDING_BLUR: Cell<u32> = const { Cell::new(0) };
+    /// Nodes lowered in the build currently running — the VN_PERF counter. One
+    /// `Cell` increment per node, unconditionally: the branch a probe check
+    /// would add costs as much as the add.
+    static BUILT: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Browser-compat advisory: say what was dropped and what to do instead, once.
@@ -154,6 +158,11 @@ fn prev_size_of(id: u32) -> Option<(f32, f32)> {
 /// before and `bounds` here is the inner element's own rectangle.
 struct BoundsProbe {
     id: u32,
+    /// The root node's probe brackets the WHOLE recursion in each of gpui's
+    /// three element phases, which makes it the one place that can time them
+    /// (see [`crate::perf::Phases`]). False everywhere else — the timing hooks
+    /// are behind this flag AND behind `VN_PERF`.
+    root: bool,
     inner: AnyElement,
 }
 
@@ -183,7 +192,13 @@ impl gpui::Element for BoundsProbe {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, ()) {
-        (self.inner.request_layout(window, cx), ())
+        if !self.root {
+            return (self.inner.request_layout(window, cx), ());
+        }
+        let span = crate::perf::Span::start();
+        let layout = self.inner.request_layout(window, cx);
+        crate::perf::note_layout_req(span.ms());
+        (layout, ())
     }
 
     fn prepaint(
@@ -196,7 +211,14 @@ impl gpui::Element for BoundsProbe {
         cx: &mut App,
     ) {
         record_bounds(self.id, bounds);
+        if !self.root {
+            self.inner.prepaint(window, cx);
+            return;
+        }
+        crate::perf::note_taffy_gap();
+        let span = crate::perf::Span::start();
         self.inner.prepaint(window, cx);
+        crate::perf::note_prepaint(span.ms());
     }
 
     fn paint(
@@ -209,14 +231,24 @@ impl gpui::Element for BoundsProbe {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if !self.root {
+            self.inner.paint(window, cx);
+            return;
+        }
+        let span = crate::perf::Span::start();
         self.inner.paint(window, cx);
+        crate::perf::note_paint(span.ms());
     }
 }
 
 /// Wraps a built element so its rectangle lands in the side map. Text and
 /// anchor nodes are skipped — they have no box a selector can ask about.
 fn probe(id: u32, inner: AnyElement) -> AnyElement {
-    BoundsProbe { id, inner }.into_any_element()
+    probe_at(id, false, inner)
+}
+
+fn probe_at(id: u32, root: bool, inner: AnyElement) -> AnyElement {
+    BoundsProbe { id, root, inner }.into_any_element()
 }
 
 /// Drops per-node state for nodes that no longer exist. Called from
@@ -685,13 +717,15 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     // ONE clock read per frame: nodes animating together must sample the same
     // instant or they skew.
     let now = std::time::Instant::now();
+    let span = crate::perf::Span::start();
+    BUILT.with(|c| c.set(0));
     // This frame's rectangles replace last frame's wholesale — see the bounds
     // side map above. `render()` is the only entry point, so this is the only
     // place that can know a new element tree is being built.
     reset_bounds();
     ANY_DRAG_REGION.with(|c| c.set(false));
     CONTROL_HITBOXES.with(|v| v.borrow_mut().clear());
-    tree::read_tree(|t| {
+    let el = tree::read_tree(|t| {
         if t.root == 0 {
             Empty.into_any_element()
         } else {
@@ -699,7 +733,9 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
             // `none`, spelled here as "nobody declared anything".
             build_node(t, t.root, window, cx, now, None)
         }
-    })
+    });
+    crate::perf::note_build(span.ms(), BUILT.with(|c| c.get()));
+    el
 }
 
 fn build_node<V: 'static>(
@@ -713,6 +749,7 @@ fn build_node<V: 'static>(
     let Some(node) = t.node(id) else {
         return Empty.into_any_element();
     };
+    BUILT.with(|c| c.set(c.get() + 1));
     // `window-drag` is inherited (the CSSWG resolved that explicitly) and
     // vn-css has no inherited properties at all, so the fold happens here, on
     // the way down. A browser allows the property on a replaced element too,
@@ -757,7 +794,7 @@ fn build_node<V: 'static>(
             &extras,
             probe(id, build_lottie(t, id, node, window, cx, now, control_area)),
         ),
-        Kind::Element => stack(&extras, probe(id, {
+        Kind::Element => stack(&extras, probe_at(id, id == t.root, {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
             let mut d = with_control_area(div().id(id as usize), id, control_area);

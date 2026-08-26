@@ -25,6 +25,7 @@ mod animator;
 mod element;
 mod mapper;
 mod media;
+pub mod perf;
 mod transition;
 mod vars;
 
@@ -128,15 +129,119 @@ struct RuleEntry {
 /// documented tradeoff until `into_owned` is wired).
 pub struct Engine {
     rules: Vec<RuleEntry>,
+    /// The rule index — see [`RuleIndex`].
+    index: RuleIndex,
     /// One entry per distinct `@media` prelude in the sheet; rules point at
     /// theirs by index. Evaluated against the [`Env`] on every cascade.
     conditions: Vec<media::Cond>,
     pub diagnostics: Vec<String>,
 }
 
+/// Which rules an element could possibly match, keyed off the RIGHTMOST
+/// compound of each selector.
+///
+/// A compound is a conjunction: `.card .title` can only match an element that
+/// carries `title`, and `button.ghost` only one whose tag is `button`. So a
+/// rule can be filed under one key its subject must have, and an element only
+/// ever has to run the selectors filed under the keys it actually carries plus
+/// the ones that could not be keyed at all (`*`, `[data-x]`, `:root`).
+///
+/// This is the browsers' oldest cascade optimization and it is what turns
+/// `elements × rules-in-the-sheet` into `elements × a-handful`: on the shadcn
+/// app a 25 KB Tailwind sheet went from ~1.5 M selector runs per restyle to
+/// ~28 K (research/reports/m11/perf-restyle-rebuild.md).
+///
+/// It is a pure FILTER: everything it hands back still goes through
+/// `matches_selector`, and the cascade sorts by `(specificity, order)`
+/// afterwards, so bucket order cannot affect the result. `VN_CSS_NO_RULE_INDEX=1`
+/// turns it off and tests every rule against every element — the A/B switch the
+/// perf report's before/after column was measured with, and the first thing to
+/// try if a rule ever seems not to apply.
+#[derive(Default)]
+struct RuleIndex {
+    by_id: std::collections::HashMap<Box<str>, Vec<u32>>,
+    by_class: std::collections::HashMap<Box<str>, Vec<u32>>,
+    by_tag: std::collections::HashMap<Box<str>, Vec<u32>>,
+    /// Rules whose rightmost compound names no id, class or tag — every
+    /// element has to run these.
+    any: Vec<u32>,
+    enabled: bool,
+}
+
+/// The key a selector's rightmost compound can be filed under.
+enum Bucket {
+    Id(Box<str>),
+    Class(Box<str>),
+    Tag(Box<str>),
+    Any,
+}
+
+/// Files a selector by the strongest key its rightmost compound guarantees.
+///
+/// Only TOP-LEVEL components of that compound count. A class inside
+/// `:not()` / `:is()` / `:where()` guarantees nothing about the element (it may
+/// even be a negation), so such a selector falls into [`RuleIndex::any`] and is
+/// simply always tested — conservative, never wrong.
+fn bucket_of(sel: &Selector<'_>) -> Bucket {
+    let mut class: Option<Box<str>> = None;
+    let mut tag: Option<Box<str>> = None;
+    // `iter()` yields the RIGHTMOST compound and stops at the first combinator
+    // (the same contract `classify_states` relies on).
+    for component in sel.iter() {
+        match component {
+            Component::ID(id) => return Bucket::Id(id.0.as_ref().into()),
+            Component::Class(c) if class.is_none() => class = Some(c.0.as_ref().into()),
+            // `is_html_element_in_html_document()` is false for us, so the
+            // matcher compares against `name` as written, never `lower_name`.
+            Component::LocalName(ln) if tag.is_none() => tag = Some(ln.name.0.as_ref().into()),
+            _ => {}
+        }
+    }
+    match (class, tag) {
+        (Some(c), _) => Bucket::Class(c),
+        (None, Some(t)) => Bucket::Tag(t),
+        (None, None) => Bucket::Any,
+    }
+}
+
+impl RuleIndex {
+    fn file(&mut self, sel: &Selector<'_>, rule: u32) {
+        match bucket_of(sel) {
+            Bucket::Id(k) => self.by_id.entry(k).or_default().push(rule),
+            Bucket::Class(k) => self.by_class.entry(k).or_default().push(rule),
+            Bucket::Tag(k) => self.by_tag.entry(k).or_default().push(rule),
+            Bucket::Any => self.any.push(rule),
+        }
+    }
+}
+
+/// The escape hatch, read once per process.
+fn rule_index_enabled() -> bool {
+    static ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    match ON.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let off = std::env::var("VN_CSS_NO_RULE_INDEX")
+                .map(|v| {
+                    let v = v.trim().to_ascii_lowercase();
+                    !(v.is_empty() || v == "0" || v == "false" || v == "off")
+                })
+                .unwrap_or(false);
+            ON.store(if off { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+            !off
+        }
+    }
+}
+
 impl Engine {
     pub fn compile(css: &str) -> Engine {
-        let mut engine = Engine { rules: Vec::new(), conditions: Vec::new(), diagnostics: Vec::new() };
+        let mut engine = Engine {
+            rules: Vec::new(),
+            index: RuleIndex { enabled: rule_index_enabled(), ..RuleIndex::default() },
+            conditions: Vec::new(),
+            diagnostics: Vec::new(),
+        };
         let src: &'static str = Box::leak(css.to_string().into_boxed_str());
         let sheet: &'static StyleSheet<'static> =
             match StyleSheet::parse(src, ParserOptions::default()) {
@@ -149,6 +254,45 @@ impl Engine {
         let mut order = 0u32;
         engine.collect(&sheet.rules.0, None, &mut order);
         engine
+    }
+
+    /// Hands `f` every rule this element could match, once each. With the index
+    /// off (or on a sheet compiled before it existed) that is simply every rule.
+    fn candidates<D: MatchDom>(&self, node: &D, f: &mut dyn FnMut(u32)) {
+        if !self.index.enabled {
+            for i in 0..self.rules.len() as u32 {
+                f(i);
+            }
+            return;
+        }
+        for &i in &self.index.any {
+            f(i);
+        }
+        if !self.index.by_tag.is_empty() {
+            if let Some(v) = self.index.by_tag.get(node.tag_name()) {
+                for &i in v {
+                    f(i);
+                }
+            }
+        }
+        if !self.index.by_class.is_empty() {
+            node.each_class(&mut |c| {
+                if let Some(v) = self.index.by_class.get(c) {
+                    for &i in v {
+                        f(i);
+                    }
+                }
+            });
+        }
+        if !self.index.by_id.is_empty() {
+            if let Some(id) = node.attr("id") {
+                if let Some(v) = self.index.by_id.get(id) {
+                    for &i in v {
+                        f(i);
+                    }
+                }
+            }
+        }
     }
 
     /// Walks one rule list, descending into `@media` blocks so their style
@@ -234,6 +378,7 @@ impl Engine {
                         sel_text(sel)
                     ));
                 }
+                self.index.file(sel, self.rules.len() as u32);
                 // `sheet` is a leaked &'static, so its selectors are 'static too.
                 self.rules.push(RuleEntry {
                     selector: sel,
@@ -351,20 +496,27 @@ impl Engine {
     ) -> ComputedStates {
         let el = element::El(node);
         let mut matched: Vec<&RuleEntry> = Vec::new();
-        for rule in &self.rules {
+        let mut tested = 0u64;
+        self.candidates(&node, &mut |i| {
+            let rule = &self.rules[i as usize];
             // Cheaper than matching, and it has to run first anyway: a rule
             // inside a `@media` block that does not hold is simply not there.
             if let Some(c) = rule.condition {
                 if !self.conditions[c as usize].eval(env) {
-                    continue;
+                    return;
                 }
             }
+            tested += 1;
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
                 MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
             if matches_selector(rule.selector, 0, None, &el, &mut ctx, &mut |_, _| {}) {
                 matched.push(rule);
             }
-        }
+        });
+        perf::note_rules_tested(tested);
+        // The index hands the candidates back bucket by bucket, so this sort is
+        // what restores the cascade's document order — it is not an
+        // optimization detail, it is the cascade.
         matched.sort_by_key(|r| (r.specificity, r.order));
 
         // ---- 1. custom properties, first: every other declaration reads them.
@@ -764,6 +916,10 @@ fn probe_runnable(sel: &Selector<'_>) -> bool {
         fn has_class(&self, _: &str) -> bool {
             false
         }
+        fn tag_name(&self) -> &str {
+            ""
+        }
+        fn each_class(&self, _: &mut dyn FnMut(&str)) {}
         fn has_scope(&self, _: &str) -> bool {
             false
         }
@@ -942,6 +1098,14 @@ mod tests {
         }
         fn has_class(&self, name: &str) -> bool {
             self.class.split_whitespace().any(|c| c == name)
+        }
+        fn tag_name(&self) -> &str {
+            self.tag
+        }
+        fn each_class(&self, f: &mut dyn FnMut(&str)) {
+            for c in self.class.split_whitespace() {
+                f(c);
+            }
         }
         fn has_scope(&self, _: &str) -> bool {
             false
@@ -1987,6 +2151,14 @@ mod tests {
         }
         fn has_class(&self, name: &str) -> bool {
             self.doc.nodes[self.i].1.split_whitespace().any(|c| c == name)
+        }
+        fn tag_name(&self) -> &str {
+            self.doc.nodes[self.i].0
+        }
+        fn each_class(&self, f: &mut dyn FnMut(&str)) {
+            for c in self.doc.nodes[self.i].1.split_whitespace() {
+                f(c);
+            }
         }
         fn has_scope(&self, _name: &str) -> bool {
             false

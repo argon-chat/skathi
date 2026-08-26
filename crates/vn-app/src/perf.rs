@@ -8,7 +8,15 @@
 //! ```text
 //! [vn-perf] boot->first-frame 214.7ms
 //! [vn-perf] tag=grid-400-cached  t=+3.0s  frames=180  avg=16.7  p50=16.6  p95=17.9  max=31.2  fps=59.9
+//! [vn-perf]   restyle passes=12  nodes=6.1K  sel=340.2K total=48.3ms  avg=4.02  max=6.10  [inline 0.1 · cascade 44.0 · store 4.2]
+//! [vn-perf]   build   passes=180 nodes=90.0K              total=210.4ms avg=1.17  max=3.90
 //! ```
+//!
+//! The two indented lines are the phase breakdown ([`vn_tree::perf`]) for the
+//! SAME second as the frame line above them: where the milliseconds went, how
+//! many elements were re-cascaded and rebuilt, and how many selectors the
+//! matcher actually ran. They are what makes "the mutation frame costs 90 ms"
+//! an actionable statement instead of a complaint.
 //!
 //! `__vn_perf_mark("<label>")` (registered in `main.rs`) labels the scenario
 //! from the Vue app: it flushes the window in progress, prints a banner and
@@ -55,6 +63,23 @@ struct State {
     /// Frames since the current tag started.
     tagged_frames: u64,
     tag_start: Instant,
+
+    // ---- the four-bucket frame accounting (see `pump_done`/`render_*`).
+    /// The last stamp taken, whichever bucket it closed.
+    cursor: Instant,
+    pump_ms: f32,
+    setup_ms: f32,
+    render_ms: f32,
+    /// The tail of a frame that DREW: gpui's layout, paint, present — plus
+    /// whatever is left of the vsync interval, which on a slow frame is
+    /// nothing. Split from the idle tail because mixing them hides the number
+    /// that matters: what one drawn frame actually costs.
+    tail_draw_ms: f32,
+    /// The tail of a frame that drew nothing — pure wait for the next vsync.
+    tail_idle_ms: f32,
+    draws: u32,
+    /// Did the frame currently being measured reach `render()`?
+    drew: bool,
 }
 
 thread_local! {
@@ -77,6 +102,14 @@ pub fn boot() {
             tag: "startup".into(),
             tagged_frames: 0,
             tag_start: now,
+            cursor: now,
+            pump_ms: 0.0,
+            setup_ms: 0.0,
+            render_ms: 0.0,
+            tail_draw_ms: 0.0,
+            tail_idle_ms: 0.0,
+            draws: 0,
+            drew: false,
         });
     });
     eprintln!("[vn-perf] probe on (VN_PERF) — frame stats every {}s", HOW_OFTEN.as_secs());
@@ -104,11 +137,62 @@ pub fn frame() {
             st.tagged_frames += 1;
         }
         st.last_frame = Some(now);
+        // Closes the previous frame's tail (everything after the last stamp:
+        // gpui's layout, paint, present, and the vsync wait).
+        let tail = ms_since(st.cursor, now);
+        if std::mem::take(&mut st.drew) {
+            st.tail_draw_ms += tail;
+        } else {
+            st.tail_idle_ms += tail;
+        }
+        st.cursor = now;
         if now - st.window_start >= HOW_OFTEN {
             report(st, now);
             st.samples.clear();
             st.window_start = now;
         }
+    });
+}
+
+fn ms_since(then: Instant, now: Instant) -> f32 {
+    now.saturating_duration_since(then).as_secs_f32() * 1000.0
+}
+
+/// Closes a bucket and opens the next. The four calls below partition the wall
+/// clock exactly — `pump + setup + render + tail` is the frame — which is what
+/// makes "the mutation frame costs 90 ms" answerable rather than arguable.
+fn stamp(f: impl FnOnce(&mut State, f32)) {
+    if !enabled() {
+        return;
+    }
+    let now = Instant::now();
+    STATE.with(|s| {
+        let mut slot = s.borrow_mut();
+        let Some(st) = slot.as_mut() else { return };
+        let dt = ms_since(st.cursor, now);
+        st.cursor = now;
+        f(st, dt);
+    });
+}
+
+/// The JS pump (host fns, HMR poll, timers/rAF/microtasks, the tree flush)
+/// finished; gpui is about to decide whether to draw.
+pub fn pump_done() {
+    stamp(|st, dt| st.pump_ms += dt);
+}
+
+/// gpui reached the hosting view's `render()` — everything between here and
+/// [`pump_done`] is gpui's own per-frame setup for a draw it decided to do.
+pub fn render_begin() {
+    stamp(|st, dt| st.setup_ms += dt);
+}
+
+/// The element tree for this frame is built; layout and paint follow.
+pub fn render_done() {
+    stamp(|st, dt| {
+        st.render_ms += dt;
+        st.draws += 1;
+        st.drew = true;
     });
 }
 
@@ -138,6 +222,113 @@ pub fn mark(tag: &str) {
     });
 }
 
+/// `12345` -> `12.3K`, `1234567` -> `1.23M` — the counters run to millions and
+/// a raw digit string makes the two columns that matter unreadable.
+fn compact(n: u64) -> String {
+    match n {
+        0..=9_999 => n.to_string(),
+        10_000..=999_999 => format!("{:.1}K", n as f64 / 1e3),
+        _ => format!("{:.2}M", n as f64 / 1e6),
+    }
+}
+
+/// The wall-clock partition of the window: every millisecond of the second is
+/// in exactly one of the four buckets, so a slow second can be attributed
+/// before anything is optimized.
+fn report_frame_split(st: &mut State) {
+    let total = st.pump_ms + st.setup_ms + st.render_ms + st.tail_draw_ms + st.tail_idle_ms;
+    if total <= 0.0 {
+        return;
+    }
+    // `gpui/frame` is what one DRAWN frame costs outside our own code: gpui's
+    // pre-render setup, its layout/prepaint/paint, the present, and whatever is
+    // left of the vsync interval (on a slow frame, nothing).
+    let per_draw = if st.draws > 0 {
+        (st.setup_ms + st.tail_draw_ms) / st.draws as f32
+    } else {
+        0.0
+    };
+    eprintln!(
+        "[vn-perf]   frame   draws={:<4} pump={:.1}ms ({:.0}%)  render={:.1}ms ({:.0}%)  \
+         gpui={:.1}ms ({:.0}%, {:.1}/draw)  idle-wait={:.1}ms",
+        st.draws,
+        st.pump_ms,
+        100.0 * st.pump_ms / total,
+        st.render_ms,
+        100.0 * st.render_ms / total,
+        st.setup_ms + st.tail_draw_ms,
+        100.0 * (st.setup_ms + st.tail_draw_ms) / total,
+        per_draw,
+        st.tail_idle_ms,
+    );
+    st.pump_ms = 0.0;
+    st.setup_ms = 0.0;
+    st.render_ms = 0.0;
+    st.tail_draw_ms = 0.0;
+    st.tail_idle_ms = 0.0;
+    st.draws = 0;
+}
+
+/// The phase breakdown, printed right under the frame line so both describe the
+/// same second. Silent when nothing ran (an idle second still draws, so `build`
+/// is always there; `restyle` only appears when something actually mutated).
+fn report_phases() {
+    let Some(p) = vn_tree::perf::take() else { return };
+    if p.restyle_passes > 0 {
+        eprintln!(
+            "[vn-perf]   restyle passes={:<4} nodes={:<7} sel={:<7} total={:.1}ms  \
+             avg={:.2}  max={:.2}   [inline {:.1} · cascade {:.1} · store {:.1}]",
+            p.restyle_passes,
+            compact(p.nodes_cascaded),
+            compact(p.rules_tested),
+            p.restyle_ms,
+            p.restyle_ms / p.restyle_passes as f32,
+            p.restyle_max_ms,
+            p.inline_ms,
+            p.cascade_ms,
+            p.store_ms,
+        );
+    }
+    if p.build_passes > 0 {
+        eprintln!(
+            "[vn-perf]   build   passes={:<4} nodes={:<7} {:<12} total={:.1}ms  \
+             avg={:.2}  max={:.2}",
+            p.build_passes,
+            compact(p.elements_built),
+            "",
+            p.build_ms,
+            p.build_ms / p.build_passes as f32,
+            p.build_max_ms,
+        );
+    }
+    if p.draw_passes > 0 {
+        eprintln!(
+            "[vn-perf]   gpui    draws={:<4} layout-req={:.1}ms  taffy={:.1}ms  \
+             prepaint={:.1}ms  paint={:.1}ms   (per draw: {:.1} + {:.1} + {:.1} + {:.1})",
+            p.draw_passes,
+            p.layout_req_ms,
+            p.taffy_ms,
+            p.prepaint_ms,
+            p.paint_ms,
+            p.layout_req_ms / p.draw_passes as f32,
+            p.taffy_ms / p.draw_passes as f32,
+            p.prepaint_ms / p.draw_passes as f32,
+            p.paint_ms / p.draw_passes as f32,
+        );
+    }
+    if p.js_passes > 0 {
+        eprintln!(
+            "[vn-perf]   js      events={:<3} {:<28} total={:.1}ms  avg={:.2}  max={:.2}   \
+             (inside pump/paint+wait, not extra)",
+            p.js_passes,
+            "",
+            p.js_ms,
+            p.js_ms / p.js_passes as f32,
+            p.js_max_ms,
+        );
+    }
+}
+
 fn report(st: &mut State, now: Instant) {
     if st.samples.is_empty() {
         return;
@@ -164,4 +355,6 @@ fn report(st: &mut State, now: Instant) {
         1000.0 / avg,
         sorted.iter().filter(|&&v| v > 33.0).count(),
     );
+    report_frame_split(st);
+    report_phases();
 }

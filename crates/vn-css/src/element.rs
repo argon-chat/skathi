@@ -29,6 +29,14 @@ pub trait MatchDom: Copy {
     fn has_tag(&self, name: &str) -> bool;
     fn tag_eq(&self, other: &Self) -> bool;
     fn has_class(&self, name: &str) -> bool;
+    /// This element's tag name, for the rule index — the same string
+    /// [`Self::has_tag`] compares against. (`has_tag` stays: the matcher asks
+    /// the question that way, and a node kind with no tag can answer `false` to
+    /// everything while still reporting `""` here.)
+    fn tag_name(&self) -> &str;
+    /// Calls `f` once per class on this element, for the rule index. Order is
+    /// irrelevant — the cascade re-sorts by `(specificity, order)`.
+    fn each_class(&self, f: &mut dyn FnMut(&str));
     /// Vue `<style scoped>` hash: does the node carry `data-v-...`?
     fn has_scope(&self, name: &str) -> bool;
     /// An attribute's value, or `None` when the node does not carry it. This is

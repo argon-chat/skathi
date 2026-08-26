@@ -19,6 +19,7 @@ mod dom;
 mod img;
 pub mod log;
 mod lottie;
+pub mod perf;
 mod render;
 mod tree;
 
@@ -489,6 +490,13 @@ pub fn dispatch_event(node: u32, event: u32, payload: &EventPayload) -> bool {
     if f == 0 {
         return true;
     }
+    let span = perf::Span::start();
+    let proceed = dispatch_event_inner(f, node, event, payload);
+    perf::note_js(span.ms());
+    proceed
+}
+
+fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload) -> bool {
     JsRuntime::with(|rt| {
         let key = payload.key.map(|k| rt.ctx().string(k));
         let args = [

@@ -379,6 +379,8 @@ impl Tree {
     }
 
     fn restyle_with(&mut self, engine: &vn_css::Engine, env: &vn_css::Env) {
+        let pass = crate::perf::Span::start();
+        let phase = crate::perf::Span::start();
         // 1. Re-parse changed inline styles.
         let dirty_inline: Vec<u32> = (1..self.nodes.len() as u32)
             .filter(|&id| self.node(id).is_some_and(|n| n.inline_dirty))
@@ -406,6 +408,9 @@ impl Tree {
             n.inline = parsed;
             n.inline_dirty = false;
         }
+
+        let inline_ms = phase.ms();
+        let phase = crate::perf::Span::start();
 
         // 2. Cascade (immutable walk), then store.
         //
@@ -458,6 +463,9 @@ impl Tree {
             }
             out
         };
+        let cascade_ms = phase.ms();
+        let cascaded = computed.len() as u64;
+        let phase = crate::perf::Span::start();
         for d in diagnostics {
             warn_css(&format!("[css] {d}"));
         }
@@ -480,6 +488,7 @@ impl Tree {
                 crate::log::record("css", format!("[css transition] {d}"));
             }
         });
+        crate::perf::note_restyle(pass.ms(), inline_ms, cascade_ms, phase.ms(), cascaded);
     }
 }
 
@@ -629,6 +638,14 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
     }
     fn has_class(&self, name: &str) -> bool {
         self.node().classes.iter().any(|c| c == name)
+    }
+    fn tag_name(&self) -> &str {
+        self.tree.name(self.node().tag)
+    }
+    fn each_class(&self, f: &mut dyn FnMut(&str)) {
+        for c in &self.node().classes {
+            f(c);
+        }
     }
     fn has_scope(&self, name: &str) -> bool {
         self.node().scopes.iter().any(|s| s == name)

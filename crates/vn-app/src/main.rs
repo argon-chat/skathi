@@ -210,10 +210,22 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         });
     }
     window.on_next_frame(pump_frame);
+    // Closes the `pump` bucket: everything after this is gpui's — its decision
+    // to draw, the draw itself, the present, and the wait for the next vsync.
+    perf::pump_done();
 }
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        perf::render_begin();
+        let el = self.render_body(window, cx);
+        perf::render_done();
+        el
+    }
+}
+
+impl Shell {
+    fn render_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         // The built-in titlebar is a FALLBACK, not furniture (D-23): an app
         // that declares no drag region would otherwise be unmovable, so it
         // stays until the app paints a `window-drag: move` region of its own —
