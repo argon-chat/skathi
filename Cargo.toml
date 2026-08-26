@@ -6,6 +6,7 @@ members = [
     "crates/vn-css",        # stylesheets, cascade, per-state refinements
     "crates/vn-elements",   # native widgets (text input, ...)
     "crates/vn-effects",    # `--shading` registry + .slang sources + generated HLSL
+    "crates/vn-lottie",     # Lottie/.tgs playback behind the `<lottie>` element
     # "crates/vn-window",   # window chrome: backdrops, dark mode, titlebar
     "crates/vn-app",        # host binary shell
 ]
