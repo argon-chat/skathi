@@ -558,7 +558,6 @@ fn build_node<V: 'static>(
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
             let mut d = div().id(id as usize);
-            let mut scrolls = false;
             if let Some(cs) = &node.computed {
                 d = apply_computed_style(d, cs, id, now);
             }
@@ -574,6 +573,12 @@ fn build_node<V: 'static>(
                 let full = gpui::Length::Definite(gpui::relative(1.0));
                 style.size.width.get_or_insert(full);
                 style.size.height.get_or_insert(full);
+                // A viewport SCROLLS its overflow — that is the one behaviour
+                // that makes "the root is the viewport" hold for content taller
+                // than the window. Without it the overflow simply paints
+                // outside the box, over whatever the host draws below.
+                style.overflow.x.get_or_insert(Overflow::Scroll);
+                style.overflow.y.get_or_insert(Overflow::Scroll);
                 // …and it is also the node that stands in for `document`. gpui
                 // dispatches a keystroke down the FOCUS path, so a listener on
                 // an element that is not on that path never fires — which would
@@ -585,18 +590,19 @@ fn build_node<V: 'static>(
                 // has focus by default").
                 d = d.track_focus(&focus_handle_for(id, None, cx));
             }
-            if let Some(cs) = &node.computed {
-                // `overflow: scroll|auto` on either axis. The style itself is
-                // all gpui's layout/clipping needs (it came in through the
-                // wholesale assignment above, so calling `.overflow_y_scroll()`
-                // here would only re-set what is already set); what makes the
-                // box actually *scroll* is a scroll offset to paint through —
-                // `track_scroll` supplies one that outlives the frame, and its
-                // presence is also what makes gpui insert the hitbox and the
-                // wheel listener that move it.
-                scrolls = cs.base.overflow.x == Some(Overflow::Scroll)
-                    || cs.base.overflow.y == Some(Overflow::Scroll);
-            }
+            // `overflow: scroll|auto` on either axis. The style itself is all
+            // gpui's layout/clipping needs (it came in through the wholesale
+            // assignment above, so calling `.overflow_y_scroll()` here would
+            // only re-set what is already set); what makes the box actually
+            // *scroll* is a scroll offset to paint through — `track_scroll`
+            // supplies one that outlives the frame, and its presence is also
+            // what makes gpui insert the hitbox and the wheel listener that
+            // move it. Read off the FINAL style, so the root's viewport-scroll
+            // default counts too.
+            let scrolls = {
+                let overflow = &d.style().overflow;
+                overflow.x == Some(Overflow::Scroll) || overflow.y == Some(Overflow::Scroll)
+            };
             let scroll_handle = scrolls.then(|| {
                 SCROLL_HANDLES.with(|m| m.borrow_mut().entry(id).or_default().clone())
             });
