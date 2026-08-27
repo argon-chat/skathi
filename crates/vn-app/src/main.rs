@@ -76,6 +76,59 @@ thread_local! {
     static FRAME_NO: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+// ---------------------------------------------------------------------------
+// `VN_LOG` — gpui's own log records, on demand
+// ---------------------------------------------------------------------------
+//
+// gpui reports things only it knows through the `log` facade: which DXGI
+// adapter the renderer chose, the Direct3D feature level, device-lost
+// recovery, DirectWrite fallbacks. Nothing in this process had ever installed a
+// sink, so all of it was dropped on the floor — which is how "gpui might be
+// rendering on a virtual display adapter" stayed a suspicion instead of a fact
+// (research/reports/m11/video.md §5, R1).
+//
+// Off unless `VN_LOG` is set, because these are not app-developer messages: the
+// app-facing channels are the compat advisories and the devtools log ring.
+// `VN_LOG=info` (or `error`/`warn`/`debug`/`trace`) writes them to stderr.
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!(
+                "[{} {}] {}",
+                record.level(),
+                record.target(),
+                record.args()
+            );
+        }
+    }
+    fn flush(&self) {}
+}
+
+fn install_logger() {
+    let Ok(level) = std::env::var("VN_LOG") else { return };
+    let filter = match level.trim().to_ascii_lowercase().as_str() {
+        "" | "info" | "1" | "true" => log::LevelFilter::Info,
+        "error" => log::LevelFilter::Error,
+        "warn" => log::LevelFilter::Warn,
+        "debug" => log::LevelFilter::Debug,
+        "trace" => log::LevelFilter::Trace,
+        "off" => return,
+        other => {
+            eprintln!("[vn] VN_LOG={other:?} is not a level — using info");
+            log::LevelFilter::Info
+        }
+    };
+    static LOGGER: StderrLogger = StderrLogger;
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(filter);
+    }
+}
+
 struct Shell {
     status: String,
     log: Vec<String>,
@@ -319,6 +372,8 @@ fn publish_app_root() {
 }
 
 fn main() {
+    // Before anything gpui does, so the renderer's boot messages are visible.
+    install_logger();
     perf::boot();
     application().run(|cx: &mut App| {
         vn_elements::init(cx); // key bindings for the native <input> widget

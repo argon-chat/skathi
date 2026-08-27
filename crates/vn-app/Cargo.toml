@@ -27,6 +27,10 @@ gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 # to name the `HasWindowHandle` impl gpui puts on `Window` (gpui does not
 # re-export the crate).
 image = { version = "0.25", default-features = false, features = ["png"] }
+# gpui logs through the `log` facade and nothing in this process ever installed
+# a sink, so every `log::info!` in the renderer — the GPU it picked included —
+# was discarded. `VN_LOG=<level>` turns them on (see `logger` in main.rs).
+log = "0.4"
 raw-window-handle = "0.6"
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false }
 vn-css = { path = "../vn-css" }
