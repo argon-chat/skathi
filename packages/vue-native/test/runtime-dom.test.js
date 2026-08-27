@@ -262,9 +262,22 @@ describe("custom events and dispatchEvent", () => {
   test("…but a PLATFORM event the host cannot deliver still says so", () => {
     const rt = createRuntime();
     const { button: inner } = tree(rt);
-    inner.addEventListener("animationend", () => {});
+    inner.addEventListener("contextmenu", () => {});
     expect(rt.advisories().length).toBe(1);
-    expect(rt.advisories()[0]).toContain("animationend");
+    expect(rt.advisories()[0]).toContain("contextmenu");
+  });
+
+  // m12 items 3 and 6: these four used to belong in the test above. vn-css's
+  // animator sources them now — it is the only thing that knows when a track
+  // finishes — so they register a real host listener and say nothing.
+  test("the CSS animation/transition events are delivered, not advised", () => {
+    for (const name of ["transitionend", "animationstart", "animationend", "animationcancel"]) {
+      const rt = createRuntime();
+      const { button: inner } = tree(rt);
+      inner.addEventListener(name, () => {});
+      expect(rt.advisories()).toEqual([]);
+      expect(rt.host.listeners.length).toBe(1);
+    }
   });
 
   test("preventDefault on a dispatched event is reported to the dispatcher", () => {

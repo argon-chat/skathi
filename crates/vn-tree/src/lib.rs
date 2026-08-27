@@ -273,7 +273,7 @@ pub fn lotties_animating() -> bool {
 /// Call it once per frame from the pump, BEFORE the draw; returns `true` when
 /// something moved and the window must repaint.
 ///
-/// Two jobs today:
+/// Three jobs today:
 /// * every `<lottie>` is advanced by the wall-clock delta and its events are
 ///   dispatched (CONTRACT.md §4) — this is also where retired atlas tiles go
 ///   back to gpui, since `flush_changes` has no `Window` to hand them to;
@@ -283,7 +283,12 @@ pub fn lotties_animating() -> bool {
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     render::apply_pending_blur(window, cx);
     render::ensure_root_focus(window, cx);
-    lottie::tick(window, cx)
+    // `transitionend` / `animationstart` / `animationend` / `animationcancel`:
+    // the animator queues them from the restyle pass and the paint clock, and
+    // this is the one per-frame hook that has a `Window` to dispatch with.
+    tree::advance_animations();
+    let anim = render::dispatch_anim_events(window, cx);
+    lottie::tick(window, cx) || anim
 }
 
 /// Mirrors the OS reduced-motion preference into the transition animator.

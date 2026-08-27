@@ -343,6 +343,57 @@ pub(crate) fn ensure_root_focus(window: &mut Window, cx: &mut App) {
     window.focus(&handle, cx);
 }
 
+/// Dispatches the `transitionend` / `animation*` events vn-css's animator
+/// queued, once per frame.
+///
+/// It has to happen here rather than inside the animator because dispatching
+/// into JS needs a `Window` (the runtime's capture/bubble walk can run app code
+/// that mutates the tree, which then has to repaint), and the animator runs from
+/// the restyle pass and from the paint clock, neither of which has one.
+///
+/// Returns `true` when a handler changed something and the window must redraw.
+pub(crate) fn dispatch_anim_events(window: &mut Window, cx: &mut App) -> bool {
+    let events = tree::take_anim_events();
+    if events.is_empty() {
+        return false;
+    }
+    let mut moved = false;
+    for event in events {
+        let code = match event.kind {
+            vn_css::AnimEventKind::TransitionEnd => tree::EV_TRANSITIONEND,
+            vn_css::AnimEventKind::AnimationStart => tree::EV_ANIMATIONSTART,
+            vn_css::AnimEventKind::AnimationEnd => tree::EV_ANIMATIONEND,
+            vn_css::AnimEventKind::AnimationCancel => tree::EV_ANIMATIONCANCEL,
+        };
+        // No listener anywhere on the path means nothing to deliver to. The
+        // bit is the node's own; the runtime's walk handles ancestors, so this
+        // is only a cheap "nobody on this element" filter — the full check is
+        // the listener mask the JS side maintains for the whole path.
+        let listening = tree::read_tree(|t| {
+            let mut cursor = event.node;
+            for _ in 0..1024 {
+                match t.node(cursor) {
+                    Some(n) if n.listeners & (1 << code) != 0 => return true,
+                    Some(n) if n.parent != 0 => cursor = n.parent,
+                    _ => return false,
+                }
+            }
+            false
+        });
+        if !listening {
+            continue;
+        }
+        let payload = EventPayload {
+            a: event.elapsed as f64,
+            key: Some(&event.name),
+            ..Default::default()
+        };
+        js_dispatch_app(event.node, code, &payload, window, cx);
+        moved = true;
+    }
+    moved
+}
+
 pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
     let pending = PENDING_BLUR.with(|p| p.replace(0));
     // Re-check: focus may legitimately have moved on since the mutation (the
@@ -1081,7 +1132,7 @@ where
     E: gpui::Styled + gpui::StatefulInteractiveElement + 'static,
 {
     *e.style() = (*cs.base).clone();
-    if let Some(overlay) = tree::animation_overlay(id, now) {
+    if let Some(overlay) = tree::animation_overlay(id, &cs.base, now) {
         use gpui::Refineable as _;
         e.style().refine(&overlay);
     }
@@ -1674,9 +1725,14 @@ impl<E: gpui::Element + gpui::Styled> gpui::Element for SvgTint<E> {
 ///
 /// `Transformation::into_matrix` rotates and scales about the element's own
 /// centre, which is CSS's initial `transform-origin: 50% 50%`.
-fn svg_transformation(extras: &vn_css::Extras) -> Option<gpui::Transformation> {
-    let rotate = extras.rotate;
-    let scale = extras.scale;
+fn svg_transformation(
+    id: u32,
+    extras: &vn_css::Extras,
+    now: std::time::Instant,
+) -> Option<gpui::Transformation> {
+    // The animated value when a `@keyframes` is driving it (`animate-spin`),
+    // the element's own otherwise.
+    let (rotate, scale) = tree::animation_transform(id, extras, now);
     if rotate.is_none() && scale.is_none() {
         return None;
     }
@@ -1736,7 +1792,7 @@ fn build_svg<V: 'static>(
     }
 
     let mut leaf = gpui::svg().data(&doc);
-    if let Some(transformation) = svg_transformation(&extras) {
+    if let Some(transformation) = svg_transformation(id, &extras, now) {
         leaf = leaf.with_transformation(transformation);
     }
     let mut e = with_control_area(leaf.id(id as usize), id, control_area);

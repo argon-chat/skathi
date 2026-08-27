@@ -4,6 +4,22 @@ import Counter from "../components/Counter.vue";
 
 const wide = ref(false);
 
+// --- CSS animations + the events they fire ----------------------------------
+// `transitionend` and `animationstart`/`end`/`cancel` come from vn-css's own
+// animator (m12 items 3 and 6): the host drains its event queue once a frame
+// and dispatches through the ordinary capture/bubble walk, so these are real
+// DOM events with `propertyName` / `animationName` / `elapsedTime`.
+const ends = ref(0);
+const lastEnd = ref("—");
+const onTransitionEnd = (e) => {
+  ends.value++;
+  lastEnd.value = `${e.propertyName} after ${e.elapsedTime}s`;
+};
+const spinning = ref(true);
+const animStarts = ref(0);
+const animEnds = ref(0);
+const animCancels = ref(0);
+
 // --- <lottie> ---------------------------------------------------------------
 // A REAL Telegram sticker (.tgs = gzipped Bodymovin JSON), resolved through the
 // same asset base as <img src>: "assets/…" means apps/hello/assets/… .
@@ -42,8 +58,51 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
 <template>
   <div class="card">
     <div class="title">Motion — CSS transitions + &lt;lottie&gt; playback</div>
-    <div class="anim" :class="{ wide }" @click="wide = !wide">
+    <div
+      class="anim"
+      :class="{ wide }"
+      @click="wide = !wide"
+      @transitionend="onTransitionEnd"
+    >
       transition: {{ wide ? "wide" : "narrow" }} — click me
+    </div>
+    <div class="hint">
+      transitionend fired {{ ends }}× — last: {{ lastEnd }} (a real event, not a timer)
+    </div>
+
+    <!-- ===== @keyframes ================================================== -->
+    <!-- Three CSS animations on one row: an opacity pulse, a colour cycle with
+         a mid keyframe, and `spin` on an inline <svg> — the only element a real
+         rotation matrix can reach here (m12 items 1 / 3 / 4). -->
+    <div class="kf-row">
+      <div class="pulse">pulse</div>
+      <div class="cycle">cycle</div>
+      <div
+        class="spinner"
+        @click="spinning = !spinning"
+        @animationstart="animStarts++"
+        @animationend="animEnds++"
+        @animationcancel="animCancels++"
+      >
+        <svg
+          class="spin"
+          :style="{ animationPlayState: spinning ? 'running' : 'paused' }"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+        >
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
+      </div>
+    </div>
+    <div class="hint">
+      animation events: start {{ animStarts }} · end {{ animEnds }} · cancel {{ animCancels }} —
+      click the spinner to toggle animation-play-state ({{ spinning ? "running" : "paused" }})
     </div>
 
     <!-- ===== <lottie> ==================================================== -->
@@ -96,6 +155,71 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
 .title {
   font-size: 14px;
   color: #ffffff;
+}
+/* ===== @keyframes ======================================================= */
+/* Three shapes of animation, all through the same engine:
+   - `pulse` interpolates one property back and forth, forever;
+   - `cycle` has a MID keyframe with its own timing function, which is what
+     makes the per-segment easing observable;
+   - `spin` rotates, and rotation only reaches an inline <svg> — gpui carries a
+     transformation matrix on a sprite and none at all on a laid out box. */
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+@keyframes cycle {
+  0% {
+    background-color: #4f8cff59;
+  }
+  50% {
+    background-color: #ff7ad959;
+    animation-timing-function: steps(3, jump-end);
+  }
+  100% {
+    background-color: #4f8cff59;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.kf-row {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+}
+.pulse,
+.cycle,
+.spinner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 90px;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: #ffffff;
+  background: #ffffff1a;
+  border: 1px solid #ffffff2e;
+}
+.pulse {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.cycle {
+  animation: cycle 2.4s linear infinite;
+}
+.spinner {
+  width: 44px;
+  cursor: pointer;
+  color: #7fd4ff;
+}
+.spin {
+  width: 20px;
+  height: 20px;
+  animation: spin 1s linear infinite;
 }
 .anim {
   transition: width 350ms ease, background-color 350ms ease, border-radius 350ms ease;

@@ -22,6 +22,7 @@ use lightningcss::values::color::CssColor;
 use lightningcss::values::length::{Length as CssLength, LengthPercentage, LengthPercentageOrAuto, LengthValue};
 use lightningcss::values::percentage::DimensionPercentage;
 
+use crate::keyframes::{AnimationCollector, AnimationPatch, AnimationSpec};
 use crate::transition::{Collector, TransitionSpec};
 use crate::vars::{self, Vars};
 
@@ -260,6 +261,14 @@ pub(crate) struct Converted {
     pub important: Option<Rc<StyleRefinement>>,
     pub normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
     pub important_transitions: Option<Rc<Vec<TransitionSpec>>>,
+    /// The folded `animation` list each half declares (`None` = none declared,
+    /// which is what lets a later rule's `animation` override an earlier one
+    /// without an empty list being mistaken for `animation: none`).
+    pub normal_animations: Option<Rc<Vec<AnimationSpec>>>,
+    pub important_animations: Option<Rc<Vec<AnimationSpec>>>,
+    /// Longhand-only `animation-*` declarations — see [`AnimationPatch`].
+    pub normal_animation_patch: Option<AnimationPatch>,
+    pub important_animation_patch: Option<AnimationPatch>,
     pub normal_extras: Extras,
     pub important_extras: Extras,
     /// `--x` declarations, in source order (`None` = the half declared none).
@@ -275,6 +284,8 @@ pub(crate) struct Converted {
 struct Half {
     refinement: Option<Rc<StyleRefinement>>,
     transitions: Option<Rc<Vec<TransitionSpec>>>,
+    animations: Option<Rc<Vec<AnimationSpec>>>,
+    animation_patch: Option<AnimationPatch>,
     extras: Extras,
     custom: Option<Rc<Decls>>,
     dynamic: Option<Rc<Decls>>,
@@ -355,6 +366,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
         let mut r = StyleRefinement::default();
         let mut extras = Extras::default();
         let mut transitions = Collector::default();
+        let mut animations = AnimationCollector::default();
         let mut custom: Decls = Vec::new();
         let mut dynamic: Decls = Vec::new();
         let mut styled = false;
@@ -364,6 +376,9 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
                 Channel::Dynamic(name, value) => dynamic.push((name, value)),
                 Channel::Static => {
                     if transitions.take(p, diagnostics) {
+                        continue;
+                    }
+                    if animations.take(p, diagnostics) {
                         continue;
                     }
                     // Within one block the mapped declarations are folded now
@@ -387,9 +402,12 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
                 }
             }
         }
+        let (animation_list, animation_patch) = animations.finish();
         Half {
             refinement: styled.then(|| Rc::new(r)),
             transitions: transitions.finish().map(Rc::new),
+            animations: animation_list.map(Rc::new),
+            animation_patch,
             extras,
             custom: (!custom.is_empty()).then(|| Rc::new(custom)),
             dynamic: (!dynamic.is_empty()).then(|| Rc::new(dynamic)),
@@ -402,6 +420,10 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
         important: important.refinement,
         normal_transitions: normal.transitions,
         important_transitions: important.transitions,
+        normal_animations: normal.animations,
+        important_animations: important.animations,
+        normal_animation_patch: normal.animation_patch,
+        important_animation_patch: important.animation_patch,
         normal_extras: normal.extras,
         important_extras: important.extras,
         normal_custom: normal.custom,
@@ -539,6 +561,16 @@ pub struct InlineStyle {
     /// `None` = the body declared no `transition` at all (which is what lets a
     /// matched rule's list survive); `Some([])` is `transition: none`.
     pub transitions: Option<Rc<Vec<TransitionSpec>>>,
+    /// Same rule for `animation`. This is not decoration: reka-ui's `Presence`
+    /// writes `style.animationName = "none"` to CANCEL a running exit
+    /// animation, and `style.animationFillMode = "forwards"` to pin the last
+    /// frame while it unmounts. Dropping either leaves an element animating
+    /// after the component decided it should stop.
+    pub animations: Option<Rc<Vec<AnimationSpec>>>,
+    /// Longhand-only `animation-*` — see [`AnimationPatch`]. reka-ui writes
+    /// `style.animationFillMode = "forwards"` on its own, and folding that as a
+    /// LIST would delete the very animation it means to freeze.
+    pub animation_patch: Option<AnimationPatch>,
     pub extras: Extras,
     /// `--x` declarations. This is the channel `element.style.setProperty("--x")`
     /// lands on — reka-ui writes its `--reka-popper-*` sizing vars that way.
@@ -551,6 +583,8 @@ impl InlineStyle {
     pub fn is_empty(&self) -> bool {
         self.refinement.is_none()
             && self.transitions.is_none()
+            && self.animations.is_none()
+            && self.animation_patch.is_none()
             && self.extras == Extras::default()
             && self.custom.is_empty()
             && self.dynamic.is_empty()
@@ -562,6 +596,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     let mut r = StyleRefinement::default();
     let mut extras = Extras::default();
     let mut transitions = Collector::default();
+    let mut animations = AnimationCollector::default();
     let mut custom: Decls = Vec::new();
     let mut dynamic: Decls = Vec::new();
     let mut styled = false;
@@ -575,6 +610,9 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
                         if transitions.take(p, diagnostics) {
                             continue;
                         }
+                        if animations.take(p, diagnostics) {
+                            continue;
+                        }
                         apply(p, &mut r, &mut extras, diagnostics);
                         styled = true;
                     }
@@ -583,9 +621,12 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
         }
         Err(e) => diagnostics.push(format!("inline style parse error: {e} in {body:?}")),
     }
+    let (animation_list, animation_patch) = animations.finish();
     InlineStyle {
         refinement: styled.then(|| Rc::new(r)),
         transitions: transitions.finish().map(Rc::new),
+        animations: animation_list.map(Rc::new),
+        animation_patch,
         extras,
         custom,
         dynamic,

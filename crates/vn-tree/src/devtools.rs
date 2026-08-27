@@ -42,7 +42,7 @@ pub struct NodeInfo {
 }
 
 fn event_names(mask: u32) -> Vec<&'static str> {
-    const NAMES: [(u32, &str); 13] = [
+    const NAMES: [(u32, &str); 17] = [
         (tree::EV_CLICK, "click"),
         (tree::EV_MOUSEDOWN, "mousedown"),
         (tree::EV_MOUSEUP, "mouseup"),
@@ -56,6 +56,10 @@ fn event_names(mask: u32) -> Vec<&'static str> {
         (tree::EV_BLUR, "blur"),
         (tree::EV_INPUT, "input"),
         (tree::EV_SCROLL, "scroll"),
+        (tree::EV_TRANSITIONEND, "transitionend"),
+        (tree::EV_ANIMATIONSTART, "animationstart"),
+        (tree::EV_ANIMATIONEND, "animationend"),
+        (tree::EV_ANIMATIONCANCEL, "animationcancel"),
     ];
     NAMES.iter().filter(|(ev, _)| mask & (1 << ev) != 0).map(|(_, n)| *n).collect()
 }
@@ -174,6 +178,9 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
         }
         if !cs.transitions.is_empty() {
             out.push(("transitions", format!("{:#?}", cs.transitions)));
+        }
+        if !cs.animations.is_empty() {
+            out.push(("animations", format!("{:#?}", cs.animations)));
         }
         if cs.extras != vn_css::Extras::default() {
             out.push(("extras", format!("{:#?}", cs.extras)));

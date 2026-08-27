@@ -243,12 +243,36 @@ pub fn computed_style(id: u32) -> Option<String> {
                 None => "none".into(),
             },
         );
-        // `@keyframes` are dropped, so no animation ever runs — and `none` is
-        // exactly what makes reka-ui's `Presence` unmount immediately instead of
-        // waiting forever for an `animationend` that cannot come.
-        put("animation-name", "none".into());
-        put("animation-duration", "0s".into());
-        put("animation-delay", "0s".into());
+        // The animation list. reka-ui's `Presence` reads `animationName` to
+        // decide whether to wait for an `animationend` at all — `none` means
+        // "unmount now", anything else means "wait for the event" — so this has
+        // to be the truth, or an exit animation either never plays or never
+        // finishes.
+        if cs.animations.is_empty() {
+            put("animation-name", "none".into());
+            put("animation-duration", "0s".into());
+            put("animation-delay", "0s".into());
+            put("animation-fill-mode", "none".into());
+        } else {
+            let join = |f: &dyn Fn(&vn_css::AnimationSpec) -> String| {
+                cs.animations.iter().map(f).collect::<Vec<_>>().join(", ")
+            };
+            put("animation-name", join(&|s| s.name.to_string()));
+            put("animation-duration", join(&|s| secs(s.duration)));
+            put("animation-delay", join(&|s| secs(s.delay)));
+            put(
+                "animation-fill-mode",
+                join(&|s| {
+                    match s.fill {
+                        vn_css::FillMode::None => "none",
+                        vn_css::FillMode::Forwards => "forwards",
+                        vn_css::FillMode::Backwards => "backwards",
+                        vn_css::FillMode::Both => "both",
+                    }
+                    .to_string()
+                }),
+            );
+        }
         // The transition list, in the shape runtime-dom's `<Transition>` reads
         // it: a comma-joined value per longhand, one entry per list item.
         if cs.transitions.is_empty() {
