@@ -2141,10 +2141,33 @@ function transitionTimeout(el) {
 }
 
 let endId = 0;
+/// End a `<Transition>` phase on the REAL `transitionend`, with the computed
+/// timeout as the safety net — which is exactly runtime-dom's own strategy, and
+/// is now possible because vn-css's animator sources the event (m12 item 6).
+///
+/// The event matters rather than merely being tidier: the timer reports the
+/// declared duration whatever actually happened, so a transition the engine cut
+/// short (reduced motion, a competing write to the same property, the element
+/// being restyled mid-flight) left the phase class on for its full nominal
+/// length. The event fires when the track actually settles.
+///
+/// The net is still armed, and for the same two reasons runtime-dom arms it: an
+/// element whose transition never starts (the property did not actually change)
+/// fires nothing at all, and a property that is not animatable here settles
+/// without an event.
 function whenTransitionEnds(el, explicitTimeout, resolve) {
   const id = (el._endId = ++endId);
+  let done = false;
   const resolveIfNotStale = () => {
-    if (id === el._endId) resolve();
+    if (done || id !== el._endId) return;
+    done = true;
+    el.removeEventListener?.("transitionend", onEnd);
+    resolve();
+  };
+  const onEnd = (e) => {
+    // Only this element's own transitions end this phase — a descendant's
+    // bubbles through, and runtime-dom filters it the same way.
+    if (e.target === el) resolveIfNotStale();
   };
   if (explicitTimeout != null) {
     setTimeout(resolveIfNotStale, explicitTimeout);
@@ -2155,13 +2178,7 @@ function whenTransitionEnds(el, explicitTimeout, resolve) {
     resolve();
     return;
   }
-  warnCompat(
-    "transition:end",
-    "<Transition> ends its phases on a TIMER read from the element's computed transition-duration/" +
-      "-delay — vue-native delivers no `transitionend` event, so a transition interrupted by the " +
-      "engine (reduced motion, a competing property write) still reports its full duration. " +
-      "runtime-dom uses the same timer as its own fallback, so the timing matches",
-  );
+  el.addEventListener?.("transitionend", onEnd);
   setTimeout(resolveIfNotStale, timeout + 1);
 }
 

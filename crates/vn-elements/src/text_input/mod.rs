@@ -166,6 +166,16 @@ pub struct TextInputOptions {
     /// of being dropped, `up`/`down` move by visual line, and the box scrolls
     /// vertically rather than horizontally.
     pub multiline: bool,
+    /// The cascade gave this element no `color` of its own, so the editor
+    /// should paint in the INHERITED one.
+    ///
+    /// `color` is an inherited property in CSS and vn-css folds no inherited
+    /// properties, but gpui carries a text style down the PAINT walk — so the
+    /// widget reads `window.text_style()` at prepaint instead of being handed a
+    /// guess. Without it an `<input>` that styles only its border paints its
+    /// text in the framework's fallback colour, which is white-on-white in a
+    /// light theme.
+    pub inherit_color: bool,
     /// `<textarea rows>` — the INTRINSIC height, in lines. As in HTML it is
     /// only a minimum: a CSS `height`/`min-height` still wins and content past
     /// it scrolls. Ignored unless `multiline`.
@@ -185,6 +195,7 @@ impl Default for TextInputOptions {
             tab_index: None,
             multiline: false,
             rows: DEFAULT_ROWS,
+            inherit_color: false,
         }
     }
 }

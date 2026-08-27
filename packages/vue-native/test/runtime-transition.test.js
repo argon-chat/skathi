@@ -105,8 +105,28 @@ describe("the class pipeline", () => {
     expect(lastClass(rt)).toContain("fade-enter-to");
     await new Promise((r) => setTimeout(r, 80));
     expect(done).toBe(true);
-    // …and the one honest divergence is stated out loud.
-    expect(rt.advisories().some((a) => a.includes("TIMER"))).toBe(true);
+    // The timer is the SAFETY NET now rather than the mechanism, so there is
+    // no divergence left to state — runtime-dom arms the same fallback.
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  // m12 item 6: the phase ends on the real event when one arrives, well before
+  // the computed timeout would. That is the difference that matters — a
+  // transition the engine cut short used to hold its phase class for the full
+  // declared duration.
+  test("a real transitionend ends the phase before the timer would", async () => {
+    const rt = createRuntime();
+    const node = el(rt);
+    rt.host.computedById.set(node.id, "transition-duration=5s\ntransition-delay=0s\n");
+    const hooks = rt.resolveTransitionProps({ name: "fade" });
+    let done = false;
+    hooks.onEnter(node, () => (done = true));
+    await tick();
+    await tick();
+    await tick();
+    expect(done).toBe(false);
+    node.dispatchEvent(new CustomEvent("transitionend", { bubbles: true }));
+    expect(done).toBe(true);
   });
 
   test("an explicit `duration` wins over the computed one", async () => {

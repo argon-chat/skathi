@@ -2050,6 +2050,9 @@ fn build_input<V: 'static>(
     }
 
     let text_style = node.computed.as_ref().map(|cs| cs.base.text.clone());
+    // No `color` of its own means the widget inherits one at paint time; the
+    // value here is only the fallback for the frame before it paints.
+    let inherit_color = text_style.as_ref().and_then(|ts| ts.color).is_none();
     let text_color = text_style
         .as_ref()
         .and_then(|ts| ts.color)
@@ -2075,6 +2078,7 @@ fn build_input<V: 'static>(
             || t.prop(id, "readonly").is_some_and(|v| v != "false"),
         tab_index,
         multiline,
+        inherit_color,
         rows: t
             .prop(id, "rows")
             .and_then(|v| v.trim().parse::<usize>().ok())

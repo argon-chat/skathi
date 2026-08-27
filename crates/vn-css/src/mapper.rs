@@ -996,14 +996,37 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
     use Property::*;
     match p {
         Display(d) => {
-            use lightningcss::properties::display::Display as D;
+            use lightningcss::properties::display::{Display as D, DisplayOutside};
             r.display = Some(match d {
                 D::Keyword(DisplayKeyword::None) => gpui::Display::None,
-                D::Pair(pair) => match pair.inside {
-                    DisplayInside::Flex(_) => gpui::Display::Flex,
-                    DisplayInside::Grid => gpui::Display::Grid,
-                    _ => gpui::Display::Block,
-                },
+                D::Pair(pair) => {
+                    // `inline-flex` / `inline-grid` / `inline-block` DO map:
+                    // taffy models the INNER display type, and that is what
+                    // decides how the children lay out. What it has no notion
+                    // of is the OUTER one — every box here is block-level, so
+                    // an inline-flex box still takes a line of its own instead
+                    // of sitting in a line box beside its siblings, and it
+                    // fills the available width instead of shrinking to fit.
+                    //
+                    // shadcn's Badge and Button are `inline-flex` and look
+                    // right regardless, because they sit inside flex rows where
+                    // block-level vs inline-level never arises.
+                    if matches!(pair.outside, DisplayOutside::Inline) {
+                        warn_once(
+                            diagnostics,
+                            "`display: inline-*` maps to its BLOCK-level equivalent (v1) — taffy \
+                             models the inner display type (flex/grid/flow) but has no inline \
+                             formatting context, so the box still takes a line of its own and \
+                             fills the available width rather than shrinking to fit it. Put it in \
+                             a flex row, or give it an explicit width, for the same result",
+                        );
+                    }
+                    match pair.inside {
+                        DisplayInside::Flex(_) => gpui::Display::Flex,
+                        DisplayInside::Grid => gpui::Display::Grid,
+                        _ => gpui::Display::Block,
+                    }
+                }
                 _ => gpui::Display::Block,
             });
         }

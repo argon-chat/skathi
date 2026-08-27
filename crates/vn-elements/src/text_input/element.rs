@@ -113,6 +113,15 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> TextPrepaint {
         let line_height = line_height_for(window, self.options.font_size);
+        // `color` is inherited in CSS; gpui carries the ambient text style down
+        // the paint walk, so this is the element's real inherited colour rather
+        // than a framework default (see `TextInputOptions::inherit_color`).
+        if self.options.inherit_color {
+            let inherited = window.text_style().color;
+            self.options.text_color = inherited;
+            self.options.caret_color = inherited;
+            self.options.placeholder_color = gpui::Hsla { a: inherited.a * 0.45, ..inherited };
+        }
         let (content, marked_range) = {
             let state = self.state.read(cx);
             (state.text().to_owned(), state.marked_range())
