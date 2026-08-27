@@ -8,6 +8,7 @@ members = [
     "crates/vn-effects",    # `--shading` registry + .slang sources + generated HLSL
     "crates/vn-lottie",     # Lottie/.tgs playback behind the `<lottie>` element
     "crates/vn-video",      # <video> playback: portable core + the Media Foundation backend
+    "crates/vn-voice",      # LiveKit voice: the actor, the playout mixer, the JS host fns
     "crates/vn-thorvg-sys", # vendored ThorVG C++ + checked-in FFI (vn-lottie's `thorvg` feature)
     # "crates/vn-window",   # window chrome: backdrops, dark mode, titlebar
     "crates/vn-app",        # host binary shell
