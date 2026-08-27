@@ -37,6 +37,17 @@ vn-css = { path = "../vn-css" }
 vn-elements = { path = "../vn-elements" }
 vn-runtime = { path = "../vn-runtime" }
 vn-tree = { path = "../vn-tree" }
+# LiveKit voice. NOT dev-gated: `vn_voice::pump()` runs in every build, because
+# voice is an application capability rather than an automation surface.
+vn-voice = { path = "../vn-voice" }
+# The DEV token minter only (`dev.rs`, behind `#[cfg(not(feature = "prod"))]`).
+# `access-token` is just `jsonwebtoken` + `hmac` — no HTTP client — and it lives
+# here rather than in vn-voice on purpose: an API secret compiled into a client
+# binary is the classic LiveKit footgun, so the half of the app that ships
+# (`--features prod`) must not be able to mint one (docs/VOICE.md D-15).
+# Cargo has no per-feature exclusion for a dependency a prod build never calls,
+# same as `image` above.
+livekit-api = { version = "0.6", default-features = false, features = ["access-token"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # `<video>` decodes onto the renderer's own D3D11 device, and this is the only

@@ -21,6 +21,77 @@ use vn_runtime::JsRuntime;
 
 use crate::json;
 
+// ---------------------------------------------------------------------------
+// the dev voice token (docs/VOICE.md §2.6, D-15)
+// ---------------------------------------------------------------------------
+//
+// An API secret in a client binary is the classic LiveKit footgun, so the
+// minter lives HERE — in the dev half, compiled out of `--features prod`
+// entirely — and never in `vn-voice`. `apps/hello`'s Voice page calls
+// `__vn_dev_voice_token(identity, room)`, gets a JWT, and passes it to
+// `room.connect()` exactly as a browser app would pass one fetched from its
+// backend. In a prod build the host fn does not exist and the app falls back to
+// `TokenSource.endpoint`.
+//
+// The key/secret pair matches `tools/livekit/livekit-dev.yaml`. The secret is
+// >= 32 characters because livekit-server refuses to start otherwise ("secret
+// is too short"), and it is a well-known dev value on a LOOPBACK-ONLY server —
+// there is nothing here to leak.
+
+/// Where the loopback dev server listens. Handed to JS alongside the token so
+/// the app never hard-codes a URL.
+const DEV_URL: &str = "ws://127.0.0.1:7880";
+const DEV_API_KEY: &str = "devkey";
+const DEV_API_SECRET: &str = "secret-secret-secret-secret-1234";
+
+// `__vn_dev_voice_token(identity, room)` -> {"serverUrl":…,"participantToken":…}
+//
+// The shape `TokenSource.endpoint()` resolves to, so an app can swap between
+// this and a real backend by changing one line.
+vn_runtime::host_fn!(fn vn_dev_voice_token(g, args) {
+    use livekit_api::access_token::{AccessToken, VideoGrants};
+
+    let identity = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
+        .unwrap_or_default();
+    let room = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(1).0) }
+        .unwrap_or_default();
+    if identity.is_empty() || room.is_empty() {
+        return vn_runtime::bridge::throw_error(
+            g,
+            1,
+            "__vn_dev_voice_token(identity, room): both arguments are required",
+        );
+    }
+
+    // `VideoGrants` defaults can_publish / can_subscribe / can_publish_data to
+    // TRUE, so naming the room and `room_join` is the whole grant.
+    let grants = VideoGrants { room_join: true, room: room.clone(), ..Default::default() };
+    let token = AccessToken::with_api_key(DEV_API_KEY, DEV_API_SECRET)
+        .with_identity(&identity)
+        .with_name(&identity)
+        .with_ttl(std::time::Duration::from_secs(3600))
+        .with_grants(grants)
+        .to_jwt();
+
+    match token {
+        Ok(jwt) => {
+            let payload = format!(
+                "{{\"serverUrl\":{},\"participantToken\":{}}}",
+                json::quote(DEV_URL),
+                json::quote(&jwt)
+            );
+            JsRuntime::with(|rt| rt.ctx().string(&payload).0)
+        }
+        Err(e) => vn_runtime::bridge::throw_error(g, 0, &format!("could not mint a dev token: {e}")),
+    }
+});
+
+/// Registers the dev-only host fns. Called from `main` next to
+/// `devtools::install`, inside the same `#[cfg(not(feature = "prod"))]`.
+pub fn install(rt: &JsRuntime) {
+    rt.register("__vn_dev_voice_token", 2, vn_dev_voice_token as *const _);
+}
+
 const DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/vue-native/dist");
 
 /// How often the frame pump calls [`poll`] — every 30th frame, ~2×/s at 60 fps.

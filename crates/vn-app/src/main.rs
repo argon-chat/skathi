@@ -234,6 +234,15 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         // patch, and anything it schedules drains with the next frame's wave.
         #[cfg(not(feature = "prod"))]
         devtools::pump();
+        // Voice events, drained bounded, in this SAME publication — and NOT
+        // dev-gated, because voice is an application capability rather than an
+        // automation surface. A room event therefore can never observe a
+        // half-applied patch, and whatever its JS handler schedules (a Vue
+        // patch off `RoomEvent.ParticipantConnected`, say) drains in this
+        // frame's wave. `on_next_frame` re-arms unconditionally, so a queued
+        // event is at most ONE frame late — 6 ms at 165 Hz — and no new wake
+        // seam was needed. See crates/vn-voice/CONTRACT.md §3.
+        vn_voice::pump();
     });
     // The `@media` environment (viewport, colour scheme, reduced motion, DPI
     // scale, chrome mode) is published inside `window::pump` above, next to the
@@ -499,8 +508,17 @@ fn main() {
             rt.register("__vn_perf_mark", 1, vn_perf_mark as *const _);
             vn_tree::install(rt);
             window::install(rt);
+            // `__vn_voice_*` — the five host fns behind "livekit-client".
+            // Registered in every build; the JS shim is pre-seeded into the
+            // vendor bundle either way, and an app that never constructs a
+            // Room costs one idle registration.
+            vn_voice::install(rt);
             #[cfg(not(feature = "prod"))]
             devtools::install(rt);
+            // `__vn_dev_voice_token` — the LiveKit dev token minter. Dev only,
+            // on purpose: an API secret must not exist in a shipped binary.
+            #[cfg(not(feature = "prod"))]
+            dev::install(rt);
         });
 
         // The window block of `apps/<app>/vn.config.json`, read BEFORE
@@ -581,6 +599,23 @@ fn main() {
                         .collect();
                     let js = format!("globalThis.__VN_SCENARIO__ = \"{safe}\";");
                     if let Err(e) = rt.eval(&js, "vn://scenario.js") {
+                        eprintln!("[js boot] {}\n{}", e.header, e.stack);
+                    }
+                }
+                // `VN_VOICE_IDENTITY=<name>` — which participant THIS process is
+                // in a voice room. The two-instance demo runs the same app in
+                // two VN_DIST slots against one SFU, and without a per-process
+                // identity they would collide on it. Same publishing shape and
+                // the same filter as VN_SCENARIO above; an app that does not
+                // look for it never notices. (docs/VOICE.md §3.1)
+                let identity = std::env::var("VN_VOICE_IDENTITY").unwrap_or_default();
+                if !identity.is_empty() {
+                    let safe: String = identity
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                        .collect();
+                    let js = format!("globalThis.__VN_VOICE_IDENTITY__ = \"{safe}\";");
+                    if let Err(e) = rt.eval(&js, "vn://voice-identity.js") {
                         eprintln!("[js boot] {}\n{}", e.header, e.stack);
                     }
                 }
