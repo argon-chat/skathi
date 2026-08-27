@@ -651,7 +651,8 @@ fn advise_interactive_in_drag_region(
     if extras.window_drag == Some(WindowDrag::None) || extras.window_control.is_some() {
         return;
     }
-    const POINTER: u32 = (1 << tree::EV_CLICK) | (1 << tree::EV_MOUSEDOWN) | (1 << tree::EV_MOUSEUP);
+    const POINTER: u64 =
+        (1 << tree::EV_CLICK) | (1 << tree::EV_MOUSEDOWN) | (1 << tree::EV_MOUSEUP);
     if node.listeners & POINTER == 0 {
         return;
     }
@@ -851,7 +852,7 @@ fn build_node<V: 'static>(
             }
 
             let mask = pointer_mask(node);
-            let bit = move |ev: u32| mask & (1 << ev) != 0;
+            let bit = move |ev: u32| mask & (1u64 << ev) != 0;
             let is_input = t.name(node.tag) == "input";
             // `<input>` is tabbable by default in HTML; a plain <div> is not.
             let tab_index = tab_index_of(t, id).or(is_input.then_some(0));
@@ -987,7 +988,7 @@ fn extras_of(node: &crate::tree::Node) -> vn_css::Extras {
 /// set. Keyboard and focus listeners are deliberately NOT in it: in a browser
 /// `pointer-events: none` makes an element transparent to the POINTER only, and
 /// a `tabindex`ed one still focuses and still receives keystrokes.
-const POINTER_BITS: u32 = (1 << tree::EV_CLICK)
+const POINTER_BITS: u64 = (1 << tree::EV_CLICK)
     | (1 << tree::EV_MOUSEDOWN)
     | (1 << tree::EV_MOUSEUP)
     | (1 << tree::EV_MOUSEMOVE)
@@ -998,7 +999,7 @@ const POINTER_BITS: u32 = (1 << tree::EV_CLICK)
 /// The node's listener mask with `pointer-events: none` applied. Together with
 /// the hover/active rungs being skipped in [`apply_computed_style`], this is
 /// what stops gpui giving the node a hitbox at all.
-fn pointer_mask(node: &crate::tree::Node) -> u32 {
+fn pointer_mask(node: &crate::tree::Node) -> u64 {
     let inert = node
         .computed
         .as_ref()
@@ -1113,7 +1114,7 @@ fn stack(extras: &vn_css::Extras, el: AnyElement) -> AnyElement {
 fn bind_events<E, V>(
     mut e: E,
     id: u32,
-    mask: u32,
+    mask: u64,
     click_focus: Option<FocusHandle>,
     focusable: bool,
     keys_here: bool,
@@ -1123,7 +1124,7 @@ where
     E: gpui::StatefulInteractiveElement + 'static,
     V: 'static,
 {
-    let bit = move |ev: u32| mask & (1 << ev) != 0;
+    let bit = move |ev: u32| mask & (1u64 << ev) != 0;
     if bit(tree::EV_CLICK) {
         e = e.on_click(cx.listener(move |_, ev: &ClickEvent, window, cx| {
             let payload = mouse_payload(ev.position(), 0.0, &ev.modifiers());
@@ -1478,7 +1479,7 @@ fn build_img<V: 'static>(
     });
 
     let mask = pointer_mask(node);
-    let bit = |ev: u32| mask & (1 << ev) != 0;
+    let bit = |ev: u32| mask & (1u64 << ev) != 0;
     // `<img>` is not focusable in HTML without `tabindex`.
     let tab_index = tab_index_of(t, id);
     let focusable = tab_index.is_some()
@@ -1656,7 +1657,7 @@ fn build_lottie<V: 'static>(
     }
 
     let mask = pointer_mask(node);
-    let bit = |ev: u32| mask & (1 << ev) != 0;
+    let bit = |ev: u32| mask & (1u64 << ev) != 0;
     // Like `<img>`: not focusable in HTML without `tabindex`.
     let tab_index = tab_index_of(t, id);
     let focusable = tab_index.is_some()
@@ -1727,7 +1728,7 @@ fn build_input<V: 'static>(
     };
 
     let mask = pointer_mask(node);
-    let bit = move |ev: u32| mask & (1 << ev) != 0;
+    let bit = move |ev: u32| mask & (1u64 << ev) != 0;
 
     let on_change: vn_elements::OnChange = std::rc::Rc::new(move |text, window, cx| {
         js_dispatch_app(

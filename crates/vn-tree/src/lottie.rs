@@ -366,7 +366,7 @@ fn drain_pending_drops(window: &mut Window, cx: &mut App) {
 /// alike.
 fn dispatch_events(id: u32, advance: &Advance, window: &mut Window, cx: &mut App) {
     let listeners = tree::read_tree(|t| t.node(id).map(|n| n.listeners)).unwrap_or(0);
-    let listens = |ev: u32| listeners & (1 << ev) != 0;
+    let listens = |ev: u32| listeners & (1u64 << ev) != 0;
     if listeners == 0 {
         return;
     }

@@ -41,23 +41,14 @@ pub struct NodeInfo {
     pub bounds: Option<(f32, f32, f32, f32)>,
 }
 
-fn event_names(mask: u32) -> Vec<&'static str> {
-    const NAMES: [(u32, &str); 13] = [
-        (tree::EV_CLICK, "click"),
-        (tree::EV_MOUSEDOWN, "mousedown"),
-        (tree::EV_MOUSEUP, "mouseup"),
-        (tree::EV_MOUSEMOVE, "mousemove"),
-        (tree::EV_MOUSEENTER, "mouseenter"),
-        (tree::EV_MOUSELEAVE, "mouseleave"),
-        (tree::EV_WHEEL, "wheel"),
-        (tree::EV_KEYDOWN, "keydown"),
-        (tree::EV_KEYUP, "keyup"),
-        (tree::EV_FOCUS, "focus"),
-        (tree::EV_BLUR, "blur"),
-        (tree::EV_INPUT, "input"),
-        (tree::EV_SCROLL, "scroll"),
-    ];
-    NAMES.iter().filter(|(ev, _)| mask & (1 << ev) != 0).map(|(_, n)| *n).collect()
+/// The listener bits as names, off [`tree::EVENT_NAMES`] — the single table, so
+/// this listing cannot drift behind the codes the way it did before.
+fn event_names(mask: u64) -> Vec<&'static str> {
+    tree::EVENT_NAMES
+        .iter()
+        .filter(|(ev, _)| mask & (1u64 << ev) != 0)
+        .map(|(_, n)| *n)
+        .collect()
 }
 
 /// The mounted root's node id (0 = nothing mounted yet).

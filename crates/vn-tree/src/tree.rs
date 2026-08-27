@@ -32,6 +32,33 @@ pub const EV_MOUSEMOVE: u32 = 14;
 pub const EV_MOUSEENTER: u32 = 15;
 pub const EV_MOUSELEAVE: u32 = 16;
 
+/// Every host event code with the name JS knows it by — the ONE table, so a
+/// listing (devtools) can never lag the codes again. It did: `event_names` in
+/// `devtools.rs` stopped at code 10 and never learned the three `<lottie>`
+/// events, which made a `@complete` handler invisible to `vn_tree`.
+///
+/// Derived names (`pointerdown` from `mousedown`, `focusin` from `focus`) are
+/// deliberately absent: they have no code of their own — the JS runtime
+/// synthesises them from the source event.
+pub const EVENT_NAMES: &[(u32, &str)] = &[
+    (EV_CLICK, "click"),
+    (EV_MOUSEDOWN, "mousedown"),
+    (EV_MOUSEUP, "mouseup"),
+    (EV_WHEEL, "wheel"),
+    (EV_KEYDOWN, "keydown"),
+    (EV_KEYUP, "keyup"),
+    (EV_FOCUS, "focus"),
+    (EV_BLUR, "blur"),
+    (EV_INPUT, "input"),
+    (EV_SCROLL, "scroll"),
+    (EV_COMPLETE, "complete"),
+    (EV_LOOPCOMPLETE, "loopComplete"),
+    (EV_ENTERFRAME, "enterFrame"),
+    (EV_MOUSEMOVE, "mousemove"),
+    (EV_MOUSEENTER, "mouseenter"),
+    (EV_MOUSELEAVE, "mouseleave"),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Element,
@@ -67,7 +94,16 @@ pub struct Node {
     /// carries two — its own and its parent's.
     pub scopes: Vec<String>,
     /// Bitmask of EV_* the JS side listens for.
-    pub listeners: u32,
+    ///
+    /// **`u64`, not `u32`.** The transport is already per-code
+    /// (`__vn_set_listener(id, code, on)`), so the width is purely an internal
+    /// storage decision — but it is a decision with a ceiling, and the `<video>`
+    /// element alone needs 13 codes for its v1 event set and 22 for the full
+    /// HTML media set. At 16 codes used the old `u32` left no room for that, for
+    /// `<audio>`, or for the `<img>` `@load`/`@error` pair the m10 images report
+    /// flagged. Widened as a standalone change so it is never a merge conflict
+    /// with the element work that needs it (research/reports/m11/video.md §9.4).
+    pub listeners: u64,
     pub(crate) inline_dirty: bool,
     /// Everything the inline `style` body contributes: the mapped refinement,
     /// its transitions and `object-fit`, plus the `--x` declarations and
@@ -382,7 +418,13 @@ impl Tree {
 
     pub fn set_listener(&mut self, id: u32, event: u32, on: bool) {
         if let Some(n) = self.node_mut(id) {
-            let bit = 1u32 << event;
+            // `event` is a code, not a bit index the caller can be trusted with:
+            // a JS mirror that has drifted ahead of this build would otherwise
+            // shift past the width and panic in debug / wrap in release.
+            if event >= u64::BITS {
+                return;
+            }
+            let bit = 1u64 << event;
             if on {
                 n.listeners |= bit;
             } else {
