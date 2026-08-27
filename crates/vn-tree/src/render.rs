@@ -970,14 +970,59 @@ fn build_node<V: 'static>(
                 d.child(node.text.clone()).into_any_element()
             } else {
                 d.children(
-                    node.children
-                        .iter()
-                        .map(|&c| build_node(t, c, window, cx, now, drag)),
+                    laid_out_children(t, node)
+                        .map(|c| build_node(t, c, window, cx, now, drag)),
                 )
                 .into_any_element()
             }
         })),
     }
+}
+
+/// Does this node produce a box the parent's layout has to make room for?
+///
+/// **Fragment anchors and empty text nodes do not, and that is a compat fix.**
+/// Vue anchors every `Fragment` — every `v-for`, every multi-root component,
+/// every `<Teleport>` — with `createComment()` or `createText("")`, and reka-ui
+/// components are almost all multi-root, so on `apps/shadcn` **325 of 548 tree
+/// nodes** are one of the two. In a browser a comment node and an empty text
+/// node are not boxes at all: they generate no CSS box, they are not flex
+/// items, and `gap` does not put a gap around them. Lowering them into
+/// `gpui::Empty` made every one of them a REAL taffy node AND a REAL flex item,
+/// so a `flex gap-2` container with three components in it laid out with five
+/// gaps instead of two.
+///
+/// Skipping them here fixes that spacing *and* cuts taffy's input by ~60 %
+/// (research/reports/m11/perf-restyle-rebuild.md §7 measured it and deliberately
+/// left it for a compat round, because it is visible).
+///
+/// The anchors keep their protocol role in full: they are still real nodes in
+/// the retained tree, still returned by `nextSibling`, still valid `anchor`
+/// arguments to `insert`. Only the LAYOUT lowering skips them — which is
+/// exactly the browser's split between the node tree and the box tree.
+///
+/// An empty `<div>` is NOT in this set: a browser lays that out (it is an
+/// element, it generates a box), and so do we.
+fn generates_a_box(t: &Tree, id: u32) -> bool {
+    match t.node(id) {
+        None => false,
+        Some(n) => match n.kind {
+            Kind::Anchor => false,
+            Kind::Text => !n.text.is_empty(),
+            Kind::Element => true,
+        },
+    }
+}
+
+/// The children of `node` that become layout nodes, in document order.
+fn laid_out_children<'t>(
+    t: &'t Tree,
+    node: &'t crate::tree::Node,
+) -> impl Iterator<Item = u32> + 't {
+    node.children
+        .iter()
+        .copied()
+        .filter(move |&c| generates_a_box(t, c))
 }
 
 /// HTML metadata content: elements that carry instructions, not a box. A
@@ -1986,4 +2031,91 @@ fn build_input<V: 'static>(
 
     let focus_target = state.read(cx).focus_handle();
     (text_input(&state, options, handlers, cx), focus_target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tree::with_tree;
+
+    /// `<div class="flex gap-2">` with three components in it. Vue anchors each
+    /// one, so the child list is element/anchor/element/anchor/element plus the
+    /// empty text nodes a Fragment leaves behind.
+    ///
+    /// A browser puts TWO gaps in that row, because a comment and an empty text
+    /// node generate no box. Emitting a `gpui::Empty` for each of them made
+    /// them flex items and the row laid out with five.
+    #[test]
+    fn fragment_anchors_are_not_flex_items() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let row = t.create_element(div);
+            let mut boxes = Vec::new();
+            for _ in 0..3 {
+                let anchor = t.create_anchor();
+                t.insert(anchor, row, 0);
+                let blank = t.create_text();
+                t.insert(blank, row, 0); // createText("") — a Fragment anchor
+                let item = t.create_element(div);
+                t.insert(item, row, 0);
+                boxes.push(item);
+            }
+            let node = t.node(row).unwrap();
+            assert_eq!(node.children.len(), 9, "the retained tree keeps all nine");
+            let laid_out: Vec<u32> = laid_out_children(t, node).collect();
+            assert_eq!(laid_out, boxes, "only the three elements are flex items");
+        });
+    }
+
+    /// The anchors keep their protocol role: still real nodes, still valid
+    /// insertion points. Skipping them is a LAYOUT decision, not a tree one.
+    #[test]
+    fn a_skipped_anchor_is_still_an_insertion_point() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            let anchor = t.create_anchor();
+            t.insert(anchor, parent, 0);
+            let later = t.create_element(div);
+            t.insert(later, parent, 0);
+            // Vue's `insert(child, parent, anchor)` — before the comment.
+            let first = t.create_element(div);
+            t.insert(first, parent, anchor);
+
+            let node = t.node(parent).unwrap();
+            assert_eq!(node.children, vec![first, anchor, later]);
+            assert_eq!(
+                laid_out_children(t, node).collect::<Vec<_>>(),
+                vec![first, later],
+                "the anchor still orders the boxes without being one"
+            );
+        });
+    }
+
+    /// The boundary cases an over-eager filter would get wrong: an EMPTY
+    /// element is a box (a browser lays `<div></div>` out), and a text node
+    /// with content is one too (an anonymous flex item).
+    #[test]
+    fn an_empty_element_is_still_a_box() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            let empty_div = t.create_element(div);
+            t.insert(empty_div, parent, 0);
+            let text = t.create_text();
+            t.set_text(text, "hello".to_string());
+            t.insert(text, parent, 0);
+            let blank = t.create_text();
+            t.insert(blank, parent, 0);
+
+            let node = t.node(parent).unwrap();
+            assert_eq!(
+                laid_out_children(t, node).collect::<Vec<_>>(),
+                vec![empty_div, text]
+            );
+            assert!(!generates_a_box(t, blank));
+            // A node that no longer exists never generates a box.
+            assert!(!generates_a_box(t, 99_999));
+        });
+    }
 }
