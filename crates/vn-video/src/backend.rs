@@ -320,11 +320,23 @@ pub trait VideoBackend {
     /// order. Must not call back into the tree.
     fn drain_events(&mut self, sink: &mut dyn FnMut(MediaEvent));
 
-    /// Release decode resources but keep the element alive — what a parked
-    /// `<KeepAlive>` page or an off-screen video should do. The default is a
-    /// pause, which is correct-but-expensive; a backend that can do better
-    /// should.
+    /// Park: stop decoding and give back what can be given back cheaply, while
+    /// keeping enough state that [`resume`](VideoBackend::resume) is not a
+    /// reload. What a `<KeepAlive>`-parked page or an off-screen video does.
+    ///
+    /// **It must be reversible without re-running the load algorithm.** The
+    /// first version of this tore the Media Foundation pipeline down entirely
+    /// (`SetSource("")`) and rebuilt it on resume, which released ~20 MiB while
+    /// parked and then leaked ~5 MiB per cycle and killed the process after
+    /// about ten of them. Keeping the decoder is the cheaper trade: it costs
+    /// resident memory that is bounded, instead of an unbounded one.
+    ///
+    /// The default is a pause, which is always correct.
     fn suspend(&mut self) {
         self.pause();
     }
+
+    /// Unpark. The position and the loaded source survive [`suspend`], so the
+    /// default — resume playing if the element wants to — is usually right.
+    fn resume(&mut self) {}
 }

@@ -229,8 +229,24 @@ impl VideoState {
             return;
         }
         self.suspended = true;
-        self.pushed.playing = false;
         self.backend.suspend();
+    }
+
+    /// Puts back what [`Self::suspend`] released and restores the transport.
+    ///
+    /// The position and the loaded source SURVIVE a suspend — the backend
+    /// contract requires it (`VideoBackend::suspend`) — so this is a resume,
+    /// not a reload. The first version did reload, and that leaked ~5 MiB per
+    /// park/unpark cycle and killed the process after about ten of them.
+    pub fn resume(&mut self) {
+        if !self.suspended {
+            return;
+        }
+        self.suspended = false;
+        self.backend.resume();
+        if self.pushed.playing {
+            self.backend.play();
+        }
     }
 
     pub fn suspended(&self) -> bool {
@@ -302,10 +318,12 @@ impl VideoState {
             return false;
         }
         // Not `wants_playing`: a seek on a paused video still has to produce
-        // the frame at the new position, and a load still has to produce the
-        // poster frame.
+        // the frame at the new position, a load still has to produce its first
+        // frame, and a load still IN PROGRESS has to keep the host repainting
+        // or the events that end it are collected and never drawn.
         !self.backend.paused()
             || self.backend.seeking()
+            || self.backend.network_state() == NetworkState::Loading
             || (self.backend.ready_state() >= ReadyState::HaveMetadata && self.cached.is_none())
     }
 
@@ -499,15 +517,38 @@ mod tests {
         assert_eq!(produced, retired, "{produced} frames produced, {retired} released");
     }
 
-    /// A parked `<KeepAlive>` page must stop costing a decoder.
+    /// A parked `<KeepAlive>` page must stop costing a decoder — and must come
+    /// BACK when it is reactivated, at the position it was left at and in the
+    /// transport state it was left in. (It did not: `suspend` tore the pipeline
+    /// down and nothing ever put it back, so returning to the page showed
+    /// `--:--` and a dead element.)
     #[test]
-    fn suspending_stops_asking_for_frames() {
+    fn parking_releases_the_decoder_and_unparking_restores_it() {
         let mut s = state();
         s.set_source(MediaSource::Path("synthetic".into())).unwrap();
         s.set_playing(true);
+        let request = FrameRequest { max_size: (320, 180) };
+        let start = Instant::now();
+        for i in 0..30u32 {
+            s.advance(start + Duration::from_millis(16 * i as u64), &request);
+        }
+        let left_at = s.current_time();
+        assert!(left_at > 0.0, "the clock did not move, so the test proves nothing");
         assert!(s.needs_frames());
+
         s.suspend();
-        assert!(!s.needs_frames());
-        assert!(!s.wants_playing());
+        assert!(!s.needs_frames(), "a parked element must stop asking for frames");
+        assert!(s.suspended());
+
+        s.resume();
+        assert!(!s.suspended());
+        assert!(s.wants_playing(), "it was playing when parked");
+        // The position is restored at `loadedmetadata`, which the reload emits.
+        s.advance(start + Duration::from_secs(1), &request);
+        assert!(
+            (s.current_time() - left_at).abs() < 0.1,
+            "resumed at {} instead of {left_at}",
+            s.current_time()
+        );
     }
 }

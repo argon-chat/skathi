@@ -37,6 +37,7 @@
 //! exactly the format gpui's atlas uses. No NV12 shader, no colour matrix, no
 //! BT.601-vs-709 decision.
 
+mod codecs;
 mod notify;
 mod present;
 
@@ -57,7 +58,8 @@ use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFMediaEngine, IMFMediaEngineClassFactory, IMFMediaEngineNotify,
     IMFDXGIDeviceManager, MFCreateAttributes, MFCreateDXGIDeviceManager, MFStartup,
     CLSID_MFMediaEngineClassFactory, MFSTARTUP_FULL, MF_MEDIA_ENGINE_CALLBACK,
-    MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
+    MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC,
+    MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
     MF_VERSION,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER,
@@ -100,6 +102,13 @@ pub unsafe fn set_shared_device(ptr: *mut c_void, generation: u64) {
 /// The renderer's device if one was published, else a private one built the
 /// same way. `bool` = "this is the renderer's own device".
 fn device() -> Result<(ID3D11Device, bool), MediaError> {
+    // `VN_VIDEO_DEVICE=private` forces the fallback. An escape hatch worth
+    // keeping: sharing the renderer's device is the whole zero-copy argument,
+    // so when a machine misbehaves the first question is always "is it the
+    // sharing?", and answering it should not need a rebuild.
+    if std::env::var("VN_VIDEO_DEVICE").is_ok_and(|v| v == "private") {
+        return Ok((private_device()?, false));
+    }
     let raw = SHARED_DEVICE.load(Ordering::Acquire);
     if !raw.is_null() {
         // SAFETY: the host publishes a device it owns for the process lifetime.
@@ -331,43 +340,35 @@ impl MediaEngineBackend {
     /// the owner constraint "no reliance on Store codec extensions" turns into
     /// something a developer can act on.
     ///
-    /// Written from a LIVE probe, never a table: what is decodable here is a
-    /// property of this machine's installed packages, not of the build.
+    /// Built from a LIVE registry probe at the moment of failure, never a
+    /// build-time table: what is decodable here is a property of this machine's
+    /// installed Store packages, and one of them can appear after we shipped.
     fn unsupported_advisory(&self) -> String {
         let src = &self.current_src;
-        let probe = |mime: &str| self.can_play_type(mime) != CanPlay::No;
-        let mut missing: Vec<&str> = Vec::new();
-        if !probe("video/mp4; codecs=\"hev1.1.6.L93.B0\"") {
-            missing.push("HEVC/H.265 (Microsoft.HEVCVideoExtension)");
-        }
-        if !probe("video/mp4; codecs=\"av01.0.05M.08\"") {
-            missing.push("AV1 (Microsoft.AV1VideoExtension)");
-        }
-        if !probe("video/webm; codecs=\"vp9\"") {
-            missing.push("VP9/WebM (Microsoft.VP9VideoExtensions + Microsoft.WebMediaExtensions)");
-        }
-        let baseline = if probe("video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\"") {
-            "H.264 + AAC in MP4 does work on this machine"
-        } else {
-            "even H.264 + AAC in MP4 is unavailable here, which means the Windows media stack \
-             itself is missing (N/KN edition without the Media Feature Pack)"
-        };
+        let (installed, missing) = codecs::installed_summary();
         let mut out = format!(
-            "<video src=\"{src}\"> could not be played: no decoder on THIS machine handles it. \
-             {baseline}."
+            "<video src=\"{src}\"> could not be played. Media Foundation refused the file: either \
+             its CONTAINER has no source registered on this machine, its codec has no decoder, \
+             or the file is damaged/truncated. (An extension that lies about the contents is the \
+             single most common cause — check what the file really is.)"
         );
+        out.push_str(&format!(
+            " Video decoders installed on this machine: {}.",
+            if installed.is_empty() { "none".to_string() } else { installed.join(", ") }
+        ));
         if !missing.is_empty() {
-            out.push_str(&format!(
-                " Not installed here: {}. Either install the extension or re-encode the clip to \
-                 H.264 (`ffmpeg -i in -c:v libx264 -profile:v high -pix_fmt yuv420p -c:a aac \
-                 out.mp4`), which needs nothing extra anywhere.",
-                missing.join(", ")
-            ));
+            out.push_str(&format!(" NOT installed: {}.", missing.join(", ")));
+        }
+        if codecs::have_decoder(codecs::Codec::H264) {
+            out.push_str(
+                " The always-safe fix is to re-encode to the inbox baseline: `ffmpeg -i in \
+                 -c:v libx264 -profile:v high -pix_fmt yuv420p -c:a aac out.mp4`, which needs no \
+                 Store extension on any Windows install.",
+            );
         } else {
             out.push_str(
-                " Every codec probed IS installed, so the file itself is likely damaged or uses \
-                 a container Media Foundation does not read (MP4/MOV, MKV/WebM, AVI, ASF are the \
-                 ones it does).",
+                " H.264 itself is missing, which means the Windows media stack is not fully \
+                 installed — an N/KN edition without the Media Feature Pack.",
             );
         }
         out
@@ -391,10 +392,33 @@ impl MediaEngineBackend {
     }
 }
 
+/// `VN_VIDEO_LOG=1` — a trace of the load handshake, on stderr.
+///
+/// Kept because the failure it exists for is invisible otherwise: `SetSource`
+/// and `Load` can both return `S_OK` and leave `networkState` at EMPTY, and
+/// there is no error anywhere to notice. Two lines of trace is the difference
+/// between "the video does not play" and "the URL was malformed".
+fn trace(args: std::fmt::Arguments<'_>) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static ON: AtomicU8 = AtomicU8::new(2);
+    let on = match ON.load(Ordering::Relaxed) {
+        2 => {
+            let on = std::env::var("VN_VIDEO_LOG").is_ok_and(|v| v != "0") as u8;
+            ON.store(on, Ordering::Relaxed);
+            on
+        }
+        v => v,
+    };
+    if on == 1 {
+        eprintln!("[vn-video] {args}");
+    }
+}
+
 impl VideoBackend for MediaEngineBackend {
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError> {
         let MediaSource::Path(path) = source;
         let url = file_url(path);
+        trace(format_args!("load {url}  (shared device: {})", self.shared_device));
         self.current_src = path.display().to_string();
         self.last_pts = i64::MIN;
         self.presenter.reset();
@@ -409,9 +433,24 @@ impl VideoBackend for MediaEngineBackend {
                 path.display()
             ))
         })?;
-        // `SetSource` starts the resource-selection algorithm by itself; `Load`
-        // is what re-runs it, and calling it here would fire a second
-        // `loadstart`.
+        // `SetSource` alone leaves `networkState` at EMPTY: unlike the DOM,
+        // where assigning `src` runs the media element load algorithm, the
+        // Media Engine wants to be told. `SetPreload(AUTOMATIC)` then says
+        // "fetch the whole thing", which is what a local file wants.
+        // [measured: without the Load() below, readyState and networkState both
+        // stay 0 forever and no event is ever raised.]
+        let _ = unsafe { self.engine.SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC) };
+        unsafe { self.engine.Load() }.map_err(|e| {
+            MediaError::new(
+                MediaErrorCode::SrcNotSupported,
+                format!("the media could not be loaded: {e}"),
+            )
+        })?;
+        trace(format_args!(
+            "  after Load(): networkState={} readyState={}",
+            unsafe { self.engine.GetNetworkState() },
+            unsafe { self.engine.GetReadyState() },
+        ));
         Ok(())
     }
 
@@ -489,15 +528,15 @@ impl VideoBackend for MediaEngineBackend {
         self.engine_error()
     }
 
+    /// **Not `IMFMediaEngine::CanPlayType`.** [measured] that method answers
+    /// `"probably"` for `video/ogg; codecs="theora"` on this machine — a
+    /// container Media Foundation has no source for, carrying a codec with no
+    /// decoder installed. It appears to answer on the shape of the MIME string
+    /// rather than on the registry, which makes it worse than useless for the
+    /// one question that matters: can THIS machine play THIS file. `codecs.rs`
+    /// asks `MFTEnumEx` instead.
     fn can_play_type(&self, mime_type: &str) -> CanPlay {
-        let Ok(answer) = (unsafe { self.engine.CanPlayType(&BSTR::from(mime_type)) }) else {
-            return CanPlay::No;
-        };
-        match answer.0 {
-            2 => CanPlay::Probably,
-            1 => CanPlay::Maybe,
-            _ => CanPlay::No,
-        }
+        codecs::can_play_type(mime_type)
     }
 
     fn present(&mut self, request: &FrameRequest) -> Option<VideoFrame> {
@@ -524,11 +563,16 @@ impl VideoBackend for MediaEngineBackend {
         }
         self.last_pts = pts;
 
-        let image = self.presenter.transfer(&self.engine, size)?;
+        // Pipeline only while PLAYING. A paused element produces one frame per
+        // seek with nothing behind it, so a frame of latency there is not
+        // latency at all — it is the wrong picture, permanently. See
+        // `Presenter::transfer`.
+        let pipeline = !self.paused();
+        let (image, frame_pts) = self.presenter.transfer(&self.engine, size, pts, pipeline)?;
         Some(VideoFrame {
             image,
             // MF reports the presentation time in 100 ns units.
-            pts: pts as f64 / 10_000_000.0,
+            pts: frame_pts as f64 / 10_000_000.0,
             size,
         })
     }
@@ -547,12 +591,18 @@ impl VideoBackend for MediaEngineBackend {
 
     fn suspend(&mut self) {
         self.pause();
+        // Our own textures go back — two staging surfaces plus the transfer
+        // target, i.e. 3 x (painted area x 4 bytes).
         self.presenter.reset();
-        // `SetSource("")` tears the pipeline down (the spec's "media element
-        // load algorithm" with no source), releasing the decoder, the DPB and
-        // the video-processor pool — ~28 MiB of RAM and ~68 MiB of VRAM per
-        // 1080p stream. `load` puts it back.
-        let _ = unsafe { self.engine.SetSource(&BSTR::new()) };
+        self.last_pts = i64::MIN;
+        // NOT `SetSource("")`. Tearing the engine's pipeline down here and
+        // rebuilding it in `resume` is what a browser effectively does with a
+        // detached video, and it does release ~20 MiB of the ~28 MiB a 1080p
+        // pipeline holds — but [measured] it also grows the process by ~5 MiB
+        // per park/unpark cycle and takes it down after about ten. A bounded
+        // resident cost beats an unbounded one, so the decoder stays. See
+        // CONTRACT.md section 5 for the diagnosis this needs before it can come
+        // back.
     }
 }
 
@@ -562,7 +612,18 @@ impl VideoBackend for MediaEngineBackend {
 /// a `#` or a `%` in it is read as a URL fragment/escape and the open fails
 /// with a "file not found" that names a file the user can see is there.
 fn file_url(path: &Path) -> String {
-    let text = path.to_string_lossy().replace('\\', "/");
+    let raw = path.to_string_lossy();
+    // Strip Windows extended-length prefixes first. `Path::canonicalize`
+    // produces them, and they are FILESYSTEM syntax, not URL syntax: Media
+    // Foundation fails such a URL with ERROR_INVALID_NAME (0x8007007B), which
+    // surfaces as "the source is not supported" for a file that plainly exists
+    // and plainly decodes. [measured — this one cost an hour.]
+    let stripped = raw
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| raw.strip_prefix(r"\\?\").map(str::to_string))
+        .unwrap_or_else(|| raw.to_string());
+    let text = stripped.replace('\\', "/");
     let mut out = String::from("file:///");
     for byte in text.bytes() {
         match byte {

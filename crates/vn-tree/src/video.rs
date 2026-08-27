@@ -57,14 +57,14 @@ struct Entry {
     /// Last `autoplay` value seen, so play/pause is edge-triggered off the
     /// *prop* (decision 1 in the module docs).
     autoplay: bool,
+    /// The last value each transport PROP had. Every one of them is pushed
+    /// only when it CHANGES — see the note on `sync`.
+    props: Props,
     /// Last `currentTime` write counter seen (decision 2).
     seek_write: Option<u32>,
     /// The box the element was last built at, in physical pixels — what the
     /// next tick asks the decoder for. Written by the build, read by the tick.
     frame_box: (u32, u32),
-    /// Was this node built in the frame just past? A node that stops being
-    /// built has been detached or `display: none`d, and must stop decoding.
-    built: bool,
     /// The events emitted since JS last drained them, newest last. A ring
     /// rather than a queue: this is a *debug and bridge* surface
     /// (`__vn_media_events`), and an app that never drains it must not grow.
@@ -91,6 +91,22 @@ const RING: usize = 32;
 /// `"false"` (which is what `:attr="false"` serialises to through `patchProp`).
 fn bool_attr(raw: Option<&str>) -> bool {
     raw.is_some_and(|v| v.trim() != "false")
+}
+
+/// The transport props, as last read off the tree. Compared to decide whether
+/// a prop MOVED — see `sync`.
+#[derive(PartialEq)]
+struct Props {
+    looping: bool,
+    muted: bool,
+    volume: f64,
+    rate: f64,
+}
+
+impl Default for Props {
+    fn default() -> Self {
+        Self { looping: false, muted: false, volume: 1.0, rate: 1.0 }
+    }
 }
 
 fn number_attr(raw: Option<&str>) -> Option<f64> {
@@ -179,9 +195,9 @@ pub(crate) fn sync(t: &Tree, id: u32) -> Option<(u32, u32)> {
                     src: src.clone(),
                     state: load(&src),
                     autoplay,
+                    props: Props::default(),
                     seek_write: None,
                     frame_box: (0, 0),
-                    built: true,
                     recent: Vec::new(),
                     warned_error: false,
                 },
@@ -189,20 +205,44 @@ pub(crate) fn sync(t: &Tree, id: u32) -> Option<(u32, u32)> {
         }
 
         let entry = map.get_mut(&id)?;
-        entry.built = true;
         let state = entry.state.as_mut()?;
+        // Being BUILT means being in the painted tree, so this is where a
+        // `<KeepAlive>` page coming back out of the cache puts its decoder
+        // back (the tick is what took it away — see `attached`).
+        state.resume();
 
-        // --- transport, every frame (the crate no-ops on unchanged values) ---
-        state.set_looping(bool_attr(t.prop(id, "loop")));
-        state.set_muted(bool_attr(t.prop(id, "muted")));
-        state.set_volume(number_attr(t.prop(id, "volume")).unwrap_or(1.0));
-        // The DOM property is `playbackRate`; Vue hyphenates/lowercases an
-        // attribute, so both spellings arrive here and both are accepted.
-        state.set_rate(
-            number_attr(t.prop(id, "playbackrate"))
+        // --- transport: pushed only where the PROP CHANGED ---------------
+        //
+        // Not "pushed every frame". The tree hands us every prop on every
+        // build, so re-applying them unconditionally would overwrite anything
+        // set through the element's own API a frame earlier — `el.muted = false`
+        // would flip back to `muted` sixty times a second because the ATTRIBUTE
+        // still says `muted`. That is not what a browser does: `patchProp` only
+        // writes when Vue's diff says the binding moved, and an attribute is a
+        // starting value, not a per-frame assertion.
+        let props = Props {
+            looping: bool_attr(t.prop(id, "loop")),
+            muted: bool_attr(t.prop(id, "muted")),
+            volume: number_attr(t.prop(id, "volume")).unwrap_or(1.0),
+            // The DOM property is `playbackRate`; Vue hyphenates/lowercases an
+            // attribute, so both spellings arrive here and both are accepted.
+            rate: number_attr(t.prop(id, "playbackrate"))
                 .or_else(|| number_attr(t.prop(id, "playback-rate")))
                 .unwrap_or(1.0),
-        );
+        };
+        if fresh || props.looping != entry.props.looping {
+            state.set_looping(props.looping);
+        }
+        if fresh || props.muted != entry.props.muted {
+            state.set_muted(props.muted);
+        }
+        if fresh || props.volume != entry.props.volume {
+            state.set_volume(props.volume);
+        }
+        if fresh || props.rate != entry.props.rate {
+            state.set_rate(props.rate);
+        }
+        entry.props = props;
 
         // `currentTime`: the WRITE COUNTER decides, not the value (decision 2).
         if let Some((value, write)) = t
@@ -350,12 +390,12 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
         let mut map = m.borrow_mut();
         let mut out = Vec::new();
         for (&id, entry) in map.iter_mut() {
-            // A node that was not built last frame is detached, `display:
-            // none`, or parked in a `<KeepAlive>` cache — stop decoding
-            // (decision 3 in the module docs).
-            let built = std::mem::take(&mut entry.built);
+            let attached = attached(id);
             let Some(state) = entry.state.as_mut() else { continue };
-            if !built {
+            // Detached — unmounted, or parked in a `<KeepAlive>` cache
+            // container that is never inserted — means stop decoding
+            // (decision 3 in the module docs).
+            if !attached {
                 state.suspend();
                 continue;
             }
@@ -395,6 +435,42 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
         dispatch_events(id, &events, window, cx);
     }
     moved
+}
+
+/// Is this node still part of the painted document?
+///
+/// **Not "was it built last frame".** gpui only rebuilds the element tree when
+/// the host notifies, and the host only notifies when something moved — so a
+/// paused or still-loading `<video>` legitimately goes many frames without
+/// being built, and inferring "detached" from that suspends the element and
+/// tears the pipeline down before it ever produced a frame. (It did. The
+/// symptom was `networkState` walking 3 → 0 and no event ever arriving.)
+///
+/// The tree answers it without a draw: `<KeepAlive>` parks a deactivated page
+/// in a container it creates and never inserts, so a parked subtree's parent
+/// chain simply does not reach the root.
+///
+/// `display: none` deliberately does NOT suspend — a browser keeps decoding a
+/// hidden video, and so do we.
+fn attached(id: u32) -> bool {
+    tree::read_tree(|t| {
+        let root = t.root;
+        let mut cursor = id;
+        // Bounded, so a corrupt parent chain cannot hang the pump.
+        for _ in 0..4096 {
+            if cursor == 0 {
+                return false;
+            }
+            if cursor == root {
+                return true;
+            }
+            match t.node(cursor) {
+                Some(n) => cursor = n.parent,
+                None => return false,
+            }
+        }
+        false
+    })
 }
 
 fn drain_pending_drops(window: &mut Window, cx: &mut App) {
