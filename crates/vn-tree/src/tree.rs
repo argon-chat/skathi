@@ -274,7 +274,7 @@ impl Tree {
         self.nodes.get(id as usize).and_then(Option::as_ref)
     }
 
-    fn node_mut(&mut self, id: u32) -> Option<&mut Node> {
+    pub(crate) fn node_mut(&mut self, id: u32) -> Option<&mut Node> {
         self.nodes.get_mut(id as usize).and_then(Option::as_mut)
     }
 

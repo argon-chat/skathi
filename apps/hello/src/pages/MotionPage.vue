@@ -134,6 +134,18 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
       the row keeps its four upright slots, which is the browser's rule.
     </div>
 
+    <!-- ===== negative z-index (m13 item 4) =============================== -->
+    <!-- The green panel is `position: absolute; inset: 0; z-index: -1` INSIDE
+         the blue card, and it is painted first — behind the card's text and its
+         sibling badge, in front of the card's own background. That is CSS 2.1
+         Appendix E's rule, and it costs no layout because an absolutely
+         positioned box does not care where it sits among its siblings. -->
+    <div class="z-card">
+      <div class="z-under">z-index: -1 — behind the text, in front of the card's background</div>
+      <div class="z-text">in-flow content</div>
+      <div class="z-badge">sibling</div>
+    </div>
+
     <!-- ===== <lottie> ==================================================== -->
     <div class="lottie-row">
       <lottie
@@ -299,6 +311,42 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
 }
 .tx-hover.tilted {
   transform: rotate(-12deg) scale(1.1) translate(10px, 0);
+}
+/* ===== negative z-index ================================================ */
+.z-card {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  height: 54px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: #1d4ed8;
+  border: 1px solid #93c5fd;
+}
+.z-under {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: #16a34a;
+  font-size: 10px;
+  color: #dcfce7;
+}
+.z-text {
+  font-size: 12px;
+  color: #ffffff;
+}
+.z-badge {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #f59e0b;
+  font-size: 10px;
+  color: #1c1917;
 }
 .anim {
   transition: width 350ms ease, background-color 350ms ease, border-radius 350ms ease;

@@ -1155,21 +1155,16 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         }
         // gpui has no per-element z. A POSITIVE z-index becomes a deferred draw
         // with that priority — a real "paints (and hit-tests) above everything
-        // else", which is what every overlay uses it for. A negative one would
-        // have to paint BELOW its siblings, and there is no lever for that.
+        // else", which is what every overlay uses it for. A NEGATIVE one has to
+        // paint below its siblings, which the renderer does by moving the
+        // element to the front of its parent's child list — legal only when the
+        // element is out of flow, because that list is also taffy's. Only the
+        // renderer knows which, so the advisory lives there
+        // (`render::advise_negative_z`), the same split `transform` used to
+        // have.
         ZIndex(v) => {
             use lightningcss::properties::position::ZIndex as Z;
             match v {
-                Z::Integer(n) if *n > 0 => x.z_index = Some(*n),
-                Z::Integer(n) if *n < 0 => {
-                    warn_once(
-                        diagnostics,
-                        "a negative `z-index` cannot paint below its siblings (v1) — gpui has no \
-                         per-element z and its deferred layer only paints ON TOP; reorder the \
-                         elements instead",
-                    );
-                    x.z_index = Some(*n);
-                }
                 Z::Integer(n) => x.z_index = Some(*n),
                 Z::Auto => x.z_index = Some(0),
             }
@@ -2201,10 +2196,13 @@ mod tests {
         assert_eq!(x.z_index, Some(50));
         assert_eq!(x.deferred_priority(), Some(50));
 
-        // A negative one has no lever at all — and must say so.
+        // A negative one computes and takes NO deferred layer (it paints
+        // below, not above). Whether it can be honoured is a renderer question
+        // — out-of-flow yes, in-flow no — so there is no advisory here.
         let (x, d) = extras("z-index: -1");
+        assert_eq!(x.z_index, Some(-1));
         assert_eq!(x.deferred_priority(), None);
-        assert!(d.iter().any(|m| m.contains("negative `z-index`")), "{d:?}");
+        assert!(d.is_empty(), "{d:?}");
     }
 
     #[test]

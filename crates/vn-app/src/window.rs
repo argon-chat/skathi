@@ -1809,6 +1809,48 @@ mod tests {
         assert!(!cfg.title_bar_fallback);
     }
 
+    /// `"titleBarFallback": false` is the one-line answer to windowing-2 §8.11:
+    /// an app that declares its own titlebar and sizes it purely from
+    /// `env(titlebar-area-height)` sees 0 for the ONE frame before the host's
+    /// fallback strip retires, because the strip legitimately belongs to the
+    /// host until then. Turning the fallback off means it never belongs to the
+    /// host, so the rect is real from the first frame.
+    ///
+    /// This walks the whole chain — JSON → `Config` → the boot `Snapshot` →
+    /// `env(titlebar-area-*)` — because every link in it already existed and
+    /// what was never checked is that they agree.
+    #[test]
+    fn title_bar_fallback_false_gives_a_real_env_rect_on_the_first_frame() {
+        let cfg = load_config(Some(
+            r#"{"titleBarStyle":"hidden","titleBarHeight":36,"titleBarFallback":false}"#
+                .to_string(),
+        ));
+        assert!(!cfg.title_bar_fallback);
+
+        // The boot snapshot, as `init` builds it: `fallback_titlebar` is the
+        // config value verbatim, and nothing has painted yet.
+        let boot = Snapshot {
+            inner_width: 980.0,
+            inner_height: 720.0,
+            title_bar_height: cfg.title_bar_height,
+            fallback_titlebar: cfg.title_bar_fallback,
+            ..Snapshot::default()
+        };
+        assert_eq!(titlebar_area(&boot), (true, (0.0, 0.0, 980.0, 36.0)));
+        assert_eq!(css_env(&boot, false, false).titlebar_area, [0.0, 0.0, 980.0, 36.0]);
+
+        // …and the default (fallback ON) is the zero rect until it retires,
+        // which is the behaviour the report described and is still correct:
+        // the strip is the host's, and saying otherwise would be the lie.
+        let default_cfg = load_config(Some(
+            r#"{"titleBarStyle":"hidden","titleBarHeight":36}"#.to_string(),
+        ));
+        assert!(default_cfg.title_bar_fallback);
+        let first_frame = Snapshot { fallback_titlebar: true, ..boot.clone() };
+        assert_eq!(titlebar_area(&first_frame), (false, (0.0, 0.0, 0.0, 0.0)));
+        assert_eq!(css_env(&first_frame, false, false).titlebar_area, [0.0; 4]);
+    }
+
     #[test]
     fn title_bar_overlay_parses_electrons_shape() {
         let cfg = load_config(Some(

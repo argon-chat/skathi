@@ -850,6 +850,7 @@ fn build_node<V: 'static>(
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
+    advise_negative_z(t, id, &extras);
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
         // element out as a full line box — and Vue anchors every Fragment
@@ -1068,6 +1069,7 @@ fn build_node<V: 'static>(
             } else {
                 d.children(
                     laid_out_children(t, node)
+                        .into_iter()
                         .map(|c| build_node(t, c, window, cx, now, drag)),
                 )
                 .into_any_element()
@@ -1112,14 +1114,60 @@ fn generates_a_box(t: &Tree, id: u32) -> bool {
 }
 
 /// The children of `node` that become layout nodes, in document order.
-fn laid_out_children<'t>(
-    t: &'t Tree,
-    node: &'t crate::tree::Node,
-) -> impl Iterator<Item = u32> + 't {
-    node.children
+fn laid_out_children(t: &Tree, node: &crate::tree::Node) -> Vec<u32> {
+    let mut kids: Vec<u32> = node
+        .children
         .iter()
         .copied()
-        .filter(move |&c| generates_a_box(t, c))
+        .filter(|&c| generates_a_box(t, c))
+        .collect();
+    // Negative `z-index`, for the case where it is expressible.
+    //
+    // CSS 2.1 Appendix E paints a negative-z child AFTER its parent's own
+    // background and border and BEFORE the parent's in-flow content — it goes
+    // behind its SIBLINGS, not behind its parent. gpui paints a `Div`'s
+    // children in the order they were added, so moving such a child to the
+    // front IS that rule, exactly.
+    //
+    // The catch is that the same order is taffy's, so reordering an IN-FLOW
+    // child would move its box. An out-of-flow child (`position: absolute` or
+    // `fixed`) is laid out against the container regardless of where it sits
+    // among its siblings, so for those — which is every real use of a negative
+    // z-index: a decorative layer under the content — the reorder is free.
+    // `advise_negative_z` covers the in-flow case, which stays unexpressible.
+    //
+    // `sort_by_key` is stable, so ties keep document order, which is what CSS
+    // says happens within a z-level.
+    if kids.iter().any(|&c| paint_first_z(t, c).is_some()) {
+        kids.sort_by_key(|&c| paint_first_z(t, c).unwrap_or(0));
+    }
+    kids
+}
+
+/// The negative `z-index` of an out-of-flow child, i.e. one that can be moved
+/// to the front of the paint order without moving its box. `None` for
+/// everything else, which sorts as 0 and keeps its place.
+fn paint_first_z(t: &Tree, id: u32) -> Option<i32> {
+    let node = t.node(id)?;
+    let computed = node.computed.as_ref()?;
+    let z = computed.extras.z_index?;
+    if z >= 0 {
+        return None;
+    }
+    let out_of_flow = computed.extras.fixed == Some(true)
+        || matches!(computed.base.position, Some(gpui::Position::Absolute));
+    out_of_flow.then_some(z)
+}
+
+/// A negative `z-index` on an IN-FLOW element — the half that has no lever.
+fn advise_negative_z(t: &Tree, id: u32, extras: &vn_css::Extras) {
+    if extras.z_index.is_none_or(|z| z >= 0) || paint_first_z(t, id).is_some() {
+        return;
+    }
+    warn_compat(
+        "z-index-negative-in-flow",
+        "a negative `z-index` on an IN-FLOW element cannot paint below its siblings (v1) —          gpui paints a container's children in the order they were added, which is also the          order taffy lays them out in, so moving one would move its box. It works on an          out-of-flow element (`position: absolute` / `fixed`), which is what a decorative          layer under the content should be; otherwise reorder the elements",
+    );
 }
 
 /// HTML metadata content: elements that carry instructions, not a box. A
@@ -2261,8 +2309,65 @@ mod tests {
             }
             let node = t.node(row).unwrap();
             assert_eq!(node.children.len(), 9, "the retained tree keeps all nine");
-            let laid_out: Vec<u32> = laid_out_children(t, node).collect();
+            let laid_out: Vec<u32> = laid_out_children(t, node);
             assert_eq!(laid_out, boxes, "only the three elements are flex items");
+        });
+    }
+
+    /// A negative `z-index` on an OUT-OF-FLOW child paints first, which is
+    /// CSS 2.1 Appendix E's rule (after the parent's background, before the
+    /// parent's in-flow content) and costs nothing, because taffy lays an
+    /// absolutely positioned box out against the container regardless of where
+    /// it sits among its siblings.
+    ///
+    /// An IN-FLOW one keeps its place: moving it would move its box, which is
+    /// worse than not honouring the declaration.
+    #[test]
+    fn a_negative_z_index_paints_first_only_when_it_costs_no_layout() {
+        fn styled(z: i32, absolute: bool) -> vn_css::ComputedStates {
+            let mut base = gpui::StyleRefinement::default();
+            if absolute {
+                base.position = Some(gpui::Position::Absolute);
+            }
+            vn_css::ComputedStates {
+                base: std::rc::Rc::new(base),
+                extras: vn_css::Extras { z_index: Some(z), ..Default::default() },
+                ..Default::default()
+            }
+        }
+
+        with_tree(|t| {
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            let plain = t.create_element(div);
+            t.insert(plain, parent, 0);
+            let in_flow_behind = t.create_element(div);
+            t.insert(in_flow_behind, parent, 0);
+            let behind = t.create_element(div);
+            t.insert(behind, parent, 0);
+            let far_behind = t.create_element(div);
+            t.insert(far_behind, parent, 0);
+
+            t.node_mut(in_flow_behind).unwrap().computed = Some(styled(-1, false));
+            t.node_mut(behind).unwrap().computed = Some(styled(-1, true));
+            t.node_mut(far_behind).unwrap().computed = Some(styled(-5, true));
+
+            let node = t.node(parent).unwrap();
+            assert_eq!(
+                node.children,
+                vec![plain, in_flow_behind, behind, far_behind],
+                "document order is unchanged in the retained tree"
+            );
+            assert_eq!(
+                laid_out_children(t, node),
+                vec![far_behind, behind, plain, in_flow_behind],
+                "the two out-of-flow ones move to the front, most negative first; the in-flow                  one keeps its place"
+            );
+            // …and the in-flow one is the case that gets the advisory.
+            assert!(paint_first_z(t, behind).is_some());
+            assert!(paint_first_z(t, far_behind).is_some());
+            assert!(paint_first_z(t, in_flow_behind).is_none());
+            assert!(paint_first_z(t, plain).is_none());
         });
     }
 
@@ -2284,7 +2389,7 @@ mod tests {
             let node = t.node(parent).unwrap();
             assert_eq!(node.children, vec![first, anchor, later]);
             assert_eq!(
-                laid_out_children(t, node).collect::<Vec<_>>(),
+                laid_out_children(t, node),
                 vec![first, later],
                 "the anchor still orders the boxes without being one"
             );
@@ -2309,7 +2414,7 @@ mod tests {
 
             let node = t.node(parent).unwrap();
             assert_eq!(
-                laid_out_children(t, node).collect::<Vec<_>>(),
+                laid_out_children(t, node),
                 vec![empty_div, text]
             );
             assert!(!generates_a_box(t, blank));
