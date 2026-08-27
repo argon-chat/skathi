@@ -205,12 +205,49 @@ impl MediaEvent {
 
 /// Where the media comes from. Resolved by the caller (the element layer runs
 /// the `<img src>` URL grammar), so a backend never parses a URL.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum MediaSource {
     /// A local file. The backend turns it into whatever its platform wants —
     /// a `file://` URL for Media Foundation, an `AVURLAsset` on macOS.
     Path(PathBuf),
+    /// An absolute `http(s)://` URL, handed to the platform verbatim.
+    ///
+    /// Both target platforms have a network source of their own that reads
+    /// ahead, seeks by range request and never materialises the whole clip:
+    /// Media Foundation's scheme handler and `AVURLAsset`. Downloading first
+    /// would be strictly worse — it would turn a 30-minute stream into a
+    /// 30-minute wait and a file the size of the clip.
+    Uri(String),
+    /// Bytes the caller already has — a `data:` URI.
+    ///
+    /// `mime` is the URI's media type, which is the only hint the platform gets
+    /// about what the bytes are (there is no filename and no `Content-Type`).
+    /// An empty string means the URI declared none, and the platform sniffs.
+    Bytes {
+        mime: String,
+        data: Arc<Vec<u8>>,
+    },
 }
+
+/// Compared to answer one question — "is this the source that is already
+/// loaded?" — so [`MediaSource::Bytes`] compares by IDENTITY, not by content.
+///
+/// The element layer memoises the decode per `src` string, so two `Bytes` from
+/// the same `data:` URI ARE the same `Arc`; two from different URIs are not,
+/// whatever their contents. Comparing megabytes of payload to answer a question
+/// the pointer already answers would be a per-load memcmp for nothing.
+impl PartialEq for MediaSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Path(a), Self::Path(b)) => a == b,
+            (Self::Uri(a), Self::Uri(b)) => a == b,
+            (Self::Bytes { data: a, .. }, Self::Bytes { data: b, .. }) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MediaSource {}
 
 /// What the element wants of the next frame.
 ///

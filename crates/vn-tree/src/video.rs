@@ -288,14 +288,19 @@ fn load(src: &str) -> Option<VideoState> {
         // not-yet-resolved binding hits this on its first frame).
         return None;
     }
-    let path = match crate::img::resolve_path("video", src) {
-        Ok(path) => path,
+    let source = match crate::img::resolve_media("video", src) {
+        Ok(source) => source,
         Err(msg) => {
             crate::render::warn_compat(&format!("video-src:{src}"), &msg);
             return None;
         }
     };
-    if !path.exists() {
+    // A missing FILE is worth its own message, because the platform's answer to
+    // it ("the source is not supported") names neither the resolved path nor the
+    // base it was resolved against. A missing URL is not: the server's status is
+    // the useful half there, and only the network source knows it.
+    if matches!(&source, MediaSource::Path(p) if !p.exists()) {
+        let MediaSource::Path(path) = &source else { unreachable!() };
         crate::render::warn_compat(
             &format!("video-src:{src}"),
             &format!(
@@ -315,7 +320,7 @@ fn load(src: &str) -> Option<VideoState> {
         }
     };
     let mut state = VideoState::new(backend);
-    match state.set_source(MediaSource::Path(path)) {
+    match state.set_source(source) {
         Ok(()) => Some(state),
         Err(error) => {
             report(src, &error);

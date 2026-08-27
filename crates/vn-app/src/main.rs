@@ -512,11 +512,41 @@ fn publish_video_device() {
 #[cfg(not(target_os = "windows"))]
 fn publish_video_device() {}
 
+/// The HTTP client gpui fetches `Resource::Uri` assets through.
+///
+/// Without one, `App::http_client()` is gpui's `NullHttpClient`, which fails
+/// every request with "No HttpClient available" a frame after the element asked
+/// — the silent failure the m10 images report chose an advisory over rather
+/// than shipping.
+///
+/// The user agent is the app's, not a browser's. Nothing here pretends to be
+/// Chrome: a server that serves us different bytes because of the UA string is
+/// a server whose answer we would rather see honestly.
+///
+/// A failure to build one is not fatal — it leaves gpui's null client in place,
+/// which is exactly the behaviour every build had before this. It is logged, so
+/// "my images do not load" has an answer in `VN_LOG=warn`.
+fn install_http_client(app: gpui::Application) -> gpui::Application {
+    match reqwest_client::ReqwestClient::user_agent(concat!(
+        "vue-native/",
+        env!("CARGO_PKG_VERSION")
+    )) {
+        Ok(client) => app.with_http_client(std::sync::Arc::new(client)),
+        Err(e) => {
+            log::warn!(
+                "could not build an HTTP client ({e}); http(s) <img> and <video> sources will \
+                 fail to load. Local paths and data: URIs are unaffected."
+            );
+            app
+        }
+    }
+}
+
 fn main() {
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
     perf::boot();
-    application().run(|cx: &mut App| {
+    install_http_client(application()).run(|cx: &mut App| {
         vn_elements::init(cx); // key bindings for the native <input> widget
         publish_app_root();
         // Before the runtime exists, so the log ring is already recording when

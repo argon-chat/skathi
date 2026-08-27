@@ -46,7 +46,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 
-use windows::core::{Interface, BSTR};
+use windows::core::{Interface, BSTR, HSTRING};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
 use windows::Win32::Graphics::Direct3D11::{
@@ -57,7 +57,9 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Media::MediaFoundation::{
     IMFAttributes, IMFMediaEngine, IMFMediaEngineClassFactory, IMFMediaEngineNotify,
     IMFDXGIDeviceManager, MFCreateAttributes, MFCreateDXGIDeviceManager, MFStartup,
-    CLSID_MFMediaEngineClassFactory, MFSTARTUP_FULL, MF_MEDIA_ENGINE_CALLBACK,
+    MF_BYTESTREAM_CONTENT_TYPE,
+    CLSID_MFMediaEngineClassFactory, IMFMediaEngineEx, MFCreateMFByteStreamOnStream,
+    MFSTARTUP_FULL, MF_MEDIA_ENGINE_CALLBACK,
     MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC,
     MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
     MF_VERSION,
@@ -203,6 +205,21 @@ pub struct MediaEngineBackend {
     /// `Ok(())`, so the HRESULT cannot be used for that).
     last_pts: i64,
     shared_device: bool,
+    /// The bytes of a `data:` source that was handed to the engine IN MEMORY
+    /// and has not yet been proved to work.
+    ///
+    /// `SetSourceFromByteStream` reports its verdict asynchronously, like every
+    /// other load: it returns `S_OK` and the engine raises `MF_MEDIA_ENGINE_
+    /// EVENT_ERROR` a moment later if the resolver could not make sense of the
+    /// stream. So the temp-file fallback cannot be a `?` on the call — it has
+    /// to hang off the error, which is what [`Self::retry_bytes_from_file`]
+    /// does. Cleared the moment the load succeeds far enough to raise
+    /// `loadedmetadata`, and after one retry either way.
+    bytes_retry: Option<(String, Arc<Vec<u8>>)>,
+    /// Has `play()` been called more recently than `pause()`? The engine's own
+    /// `GetPaused` cannot answer this across a reload, and the reload in
+    /// [`Self::retry_bytes_from_file`] has to put the transport back.
+    wants_playing: bool,
     /// The `src` last handed to the engine, for the error advisories.
     current_src: String,
 }
@@ -285,8 +302,165 @@ impl MediaEngineBackend {
             presenter: present::Presenter::new(device),
             last_pts: i64::MIN,
             shared_device,
+            bytes_retry: None,
+            wants_playing: false,
             current_src: String::new(),
         })
+    }
+
+    /// `SetSource(url)` — the whole of what `Path` and `Uri` need.
+    fn set_source_url(&self, url: &str) -> Result<(), MediaError> {
+        unsafe { self.engine.SetSource(&BSTR::from(url)) }.map_err(|e| {
+            MediaError::new(
+                MediaErrorCode::SrcNotSupported,
+                format!("could not set the media source: {e}"),
+            )
+        })
+    }
+
+    /// `data:` — the bytes without a file.
+    ///
+    /// # The in-memory path, and why it is not the default
+    ///
+    /// `IMFMediaEngineEx::SetSourceFromByteStream(stream, url)` looks like the
+    /// answer: `MFCreateMFByteStreamOnStream` wraps any `IStream` (and
+    /// `CreateStreamOnHGlobal` makes one over a block of memory), so the whole
+    /// path would be HGLOBAL → `IStream` → `IMFByteStream` → engine, with the
+    /// bytes copied once and never touching the filesystem. It is what m12's
+    /// report named as the shape of this feature.
+    ///
+    /// It does not work, and the reason is the second argument. [measured, this
+    /// machine, a 6 KB baseline-H.264 MP4 that plays fine from a file]
+    ///
+    /// | `url` passed | result |
+    /// | --- | --- |
+    /// | `"video/mp4"` (the MIME type — the obvious misreading) | `MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED` |
+    /// | `"file:///vn-media.mp4"` (synthesised, right extension) | **`0x80070002 ERROR_FILE_NOT_FOUND`** |
+    /// | `""` | `0x80004003 E_POINTER`, synchronously |
+    ///
+    /// The middle row is the finding: MF **opens the URL** rather than reading
+    /// the stream it was just handed, so the parameter is not a hint — it is
+    /// the source. A byte stream that has no URL therefore has nothing to put
+    /// there, and `SetSourceFromByteStream` cannot serve one.
+    ///
+    /// So the default is the temp file, which always works. `MF_BYTESTREAM_
+    /// CONTENT_TYPE` and the extension logic are kept because they are correct
+    /// and cost nothing, and the byte-stream attempt is kept behind
+    /// `VN_VIDEO_DATA_BYTESTREAM=1` so a future Windows build (or a media type
+    /// whose handler behaves differently) can be re-tested in one environment
+    /// variable rather than one rebuild.
+    ///
+    /// The temp file is named by the content hash, so re-mounting the same
+    /// `data:` URI writes once, and it is left in the OS temp directory rather
+    /// than deleted — Media Foundation reads it lazily for as long as the
+    /// element lives, so deleting it on return would break playback rather than
+    /// tidy up.
+    fn set_source_bytes(&mut self, mime: &str, data: &Arc<Vec<u8>>) -> Result<(), MediaError> {
+        if std::env::var("VN_VIDEO_DATA_BYTESTREAM").is_ok_and(|v| v == "1") {
+            match self.set_source_from_memory(mime, data) {
+                Ok(()) => {
+                    // It returned S_OK; the engine's verdict arrives later, and
+                    // `retry_bytes_from_file` is what catches a refusal.
+                    self.bytes_retry = Some((mime.to_string(), data.clone()));
+                    return Ok(());
+                }
+                Err(e) => trace(format_args!(
+                    "  SetSourceFromByteStream failed synchronously ({e}); staging a temp file"
+                )),
+            }
+        }
+        // Straight to the file: there is no later attempt to make.
+        self.bytes_retry = None;
+        let path = temp_file_for(mime, data).map_err(|e| {
+            MediaError::new(
+                MediaErrorCode::SrcNotSupported,
+                format!("a data: URI could not be staged to a temp file: {e}"),
+            )
+            .with_advisory(
+                "<video src=\"data:…\">: the bytes could not be written to the temp directory, \
+                 and Media Foundation cannot take them any other way (see `set_source_bytes`). \
+                 Use a file path.",
+            )
+        })?;
+        trace(format_args!("  staged to {}", path.display()));
+        self.set_source_url(&file_url(&path))
+    }
+
+    /// Second attempt at a `data:` source that went out as a byte stream and
+    /// was refused ASYNCHRONOUSLY: stage the bytes as a file and load that.
+    /// Returns `true` when a retry actually started, so the error that
+    /// triggered it should be swallowed rather than raised at the element.
+    ///
+    /// Only reachable under `VN_VIDEO_DATA_BYTESTREAM=1` — the default path
+    /// stages the file up front, because the byte-stream API cannot serve a
+    /// stream with no URL (see [`Self::set_source_bytes`]).
+    fn retry_bytes_from_file(&mut self) -> bool {
+        let Some((mime, data)) = self.bytes_retry.take() else {
+            return false;
+        };
+        // The reload runs the load algorithm again, which puts the engine back
+        // at paused/0. Whatever the element already asked for has to be
+        // re-asserted afterwards, or an `autoplay` clip sits on its first frame.
+        let was_playing = self.wants_playing;
+        trace(format_args!(
+            "  in-memory byte stream refused: {:?}",
+            self.engine_error().map(|e| e.message)
+        ));
+        let Ok(path) = temp_file_for(&mime, &data) else {
+            trace(format_args!("  data: retry could not write a temp file"));
+            return false;
+        };
+        trace(format_args!("  retrying from {}", path.display()));
+        self.last_pts = i64::MIN;
+        self.presenter.reset();
+        if self.set_source_url(&file_url(&path)).is_err() {
+            return false;
+        }
+        let _ = unsafe { self.engine.SetPreload(MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC) };
+        if unsafe { self.engine.Load() }.is_err() {
+            return false;
+        }
+        if was_playing {
+            let _ = unsafe { self.engine.Play() };
+        }
+        true
+    }
+
+    fn set_source_from_memory(&self, mime: &str, data: &[u8]) -> windows::core::Result<()> {
+        use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
+        use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+        unsafe {
+            // `fDeleteOnRelease: TRUE` hands ownership of the HGLOBAL to the
+            // stream, so the block lives exactly as long as the engine's
+            // reference to it — which is longer than this function.
+            let global = GlobalAlloc(GMEM_MOVEABLE, data.len())?;
+            let locked = GlobalLock(global);
+            if locked.is_null() {
+                return Err(windows::core::Error::from_thread());
+            }
+            std::ptr::copy_nonoverlapping(data.as_ptr(), locked as *mut u8, data.len());
+            let _ = GlobalUnlock(global);
+            let stream = CreateStreamOnHGlobal(global, true)?;
+            let byte_stream = MFCreateMFByteStreamOnStream(&stream)?;
+
+            // The MIME type goes where it belongs: `MF_BYTESTREAM_CONTENT_TYPE`
+            // on the stream, which is the same attribute MF's own network
+            // source sets from a `Content-Type` header.
+            if !mime.is_empty() {
+                if let Ok(attributes) = byte_stream.cast::<IMFAttributes>() {
+                    let _ =
+                        attributes.SetString(&MF_BYTESTREAM_CONTENT_TYPE, &HSTRING::from(mime));
+                }
+            }
+            // The best of three bad options — see `set_source_bytes` for the
+            // measurements. Never `BSTR::new()`: that is a NULL BSTR, and
+            // handing one to `mfmediaengine.dll` takes the process down with
+            // no panic and no message (m12 §6.6 found that the hard way).
+            let url = format!("file:///vn-media{}", extension_for(mime));
+            let engine_ex: IMFMediaEngineEx = self.engine.cast()?;
+            engine_ex.SetSourceFromByteStream(&byte_stream, &BSTR::from(url.as_str()))
+        }
     }
 
     /// True when frames are being decoded onto the renderer's own device — the
@@ -327,7 +501,28 @@ impl MediaEngineBackend {
                     "<video>: encrypted media (EME / PlayReady / Widevine) is not supported and \
                      is not planned — see crates/vn-video/CONTRACT.md §7.",
                 ),
-            // 4 = MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED, and everything unknown.
+            // 4 = MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED, and everything
+            // unknown.
+            //
+            // A NETWORK source that never arrived lands here too — MF reports
+            // "not supported" for a URL it could not open, which is technically
+            // true and completely unhelpful. [measured: a `<video>` pointed at
+            // a dead port reported code 4 with the codec advisory, blaming this
+            // machine's decoder set for a connection that was refused.] A
+            // browser answers MEDIA_ERR_NETWORK there, so we do too, and the
+            // advisory says what actually happened.
+            _ if src.starts_with("http://") || src.starts_with("https://") => MediaError::new(
+                MediaErrorCode::Network,
+                format!("the source could not be opened{extended}"),
+            )
+            .with_advisory(format!(
+                "<video src=\"{src}\">: Media Foundation could not open the URL. It reports \
+                 \"not supported\" for every network failure, so this is most likely the server \
+                 rather than the codec: an unreachable host, a 404, a redirect to a scheme it \
+                 does not speak, or an HTML error page served with 200. A file that IS \
+                 reachable but undecodable reports the same code — load it from disk once to \
+                 tell the two apart."
+            )),
             _ => MediaError::new(
                 MediaErrorCode::SrcNotSupported,
                 format!("the source is not supported{extended}"),
@@ -416,23 +611,53 @@ fn trace(args: std::fmt::Arguments<'_>) {
 
 impl VideoBackend for MediaEngineBackend {
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError> {
-        let MediaSource::Path(path) = source;
-        let url = file_url(path);
-        trace(format_args!("load {url}  (shared device: {})", self.shared_device));
-        self.current_src = path.display().to_string();
         self.last_pts = i64::MIN;
         self.presenter.reset();
-        unsafe { self.engine.SetSource(&BSTR::from(url.as_str())) }.map_err(|e| {
-            MediaError::new(
-                MediaErrorCode::SrcNotSupported,
-                format!("could not set the media source: {e}"),
-            )
-            .with_advisory(format!(
-                "<video src=\"{}\">: Media Foundation refused the URL. Local file paths and \
-                 file:// URLs are what this build supports.",
-                path.display()
-            ))
-        })?;
+        match source {
+            MediaSource::Path(path) => {
+                let url = file_url(path);
+                trace(format_args!(
+                    "load {url}  (shared device: {})",
+                    self.shared_device
+                ));
+                self.current_src = path.display().to_string();
+                self.set_source_url(&url).map_err(|e| {
+                    e.with_advisory(format!(
+                        "<video src=\"{}\">: Media Foundation refused the URL. Local file \
+                         paths and file:// URLs are what this build supports.",
+                        path.display()
+                    ))
+                })?;
+            }
+            // Handed to MF verbatim. Its scheme handler reads ahead and seeks
+            // by HTTP range request, so a long clip starts playing while it is
+            // still arriving and never becomes a file or a `Vec<u8>` — the same
+            // reason `Path` is a path and not bytes.
+            MediaSource::Uri(url) => {
+                trace(format_args!("load {url}  (MF network source)"));
+                self.current_src = url.clone();
+                self.set_source_url(url).map_err(|e| {
+                    e.with_advisory(format!(
+                        "<video src=\"{url}\">: Media Foundation refused the URL. It handles \
+                         http(s) through its own network source, so this is the server's answer \
+                         rather than a missing feature — check the URL, and note that a redirect \
+                         to a scheme MF does not know, or an HTML error page served with 200, \
+                         fails here rather than at the socket."
+                    ))
+                })?;
+            }
+            // A `data:` URI. The bytes are already in memory, so they are
+            // wrapped as an `IMFByteStream` over an `IStream` rather than
+            // written out — see `set_source_bytes`.
+            MediaSource::Bytes { mime, data } => {
+                trace(format_args!(
+                    "load data: {} bytes, mime {mime:?}",
+                    data.len()
+                ));
+                self.current_src = format!("data:{mime} ({} bytes)", data.len());
+                self.set_source_bytes(mime, data)?;
+            }
+        }
         // `SetSource` alone leaves `networkState` at EMPTY: unlike the DOM,
         // where assigning `src` runs the media element load algorithm, the
         // Media Engine wants to be told. `SetPreload(AUTOMATIC)` then says
@@ -455,10 +680,12 @@ impl VideoBackend for MediaEngineBackend {
     }
 
     fn play(&mut self) {
+        self.wants_playing = true;
         let _ = unsafe { self.engine.Play() };
     }
 
     fn pause(&mut self) {
+        self.wants_playing = false;
         let _ = unsafe { self.engine.Pause() };
     }
 
@@ -603,9 +830,23 @@ impl VideoBackend for MediaEngineBackend {
             std::mem::take(&mut *queue)
         };
         for code in raw {
-            if let Some(event) = notify::translate(code) {
-                sink(event);
+            let Some(event) = notify::translate(code) else { continue };
+            // A `data:` source that the in-memory byte stream could not open
+            // gets exactly one more try, from a temp file. The error is
+            // SWALLOWED for that attempt: the element is not broken yet, and
+            // raising `error` here would fire a JS handler and set
+            // `MediaError` for a source that is about to start playing.
+            if event == MediaEvent::Error && self.bytes_retry.is_some() {
+                if self.retry_bytes_from_file() {
+                    continue;
+                }
             }
+            // Anything that means the load got somewhere retires the retry:
+            // whatever path we are on is working.
+            if event == MediaEvent::LoadedMetadata {
+                self.bytes_retry = None;
+            }
+            sink(event);
         }
     }
 
@@ -626,7 +867,64 @@ impl VideoBackend for MediaEngineBackend {
     }
 }
 
-/// `C:\x\a.mp4` → `file:///C:/x/a.mp4`, percent-escaping what a URL must.
+/// `C:\x\a.mp4` → `file:/// The filename extension Media Foundation's source resolver should see for a
+/// `data:` URI's media type.
+///
+/// Not a codec table and not a claim about what plays — it is a HINT that picks
+/// a byte-stream handler, and the handler then reads the actual bytes. An
+/// unknown type gets no extension, which leaves `MF_BYTESTREAM_CONTENT_TYPE`
+/// and content sniffing to do the work, exactly as an unknown `Content-Type`
+/// would over http.
+fn extension_for(mime: &str) -> &'static str {
+    match mime.trim() {
+        "video/mp4" | "video/x-m4v" | "audio/mp4" => ".mp4",
+        "video/quicktime" => ".mov",
+        "video/webm" | "audio/webm" => ".webm",
+        "video/ogg" | "application/ogg" => ".ogv",
+        "audio/ogg" => ".ogg",
+        "video/x-matroska" => ".mkv",
+        "video/x-ms-wmv" | "video/x-ms-asf" => ".wmv",
+        "video/mpeg" => ".mpg",
+        "video/avi" | "video/x-msvideo" => ".avi",
+        "audio/mpeg" | "audio/mp3" => ".mp3",
+        "audio/wav" | "audio/x-wav" | "audio/wave" => ".wav",
+        "audio/flac" | "audio/x-flac" => ".flac",
+        "audio/aac" | "audio/aacp" => ".aac",
+        _ => "",
+    }
+}
+
+/// Stages `data:` bytes as a file, named by their content hash so the same URI
+/// mounted twice writes once.
+///
+/// Deliberately NOT deleted on return: Media Foundation opens the file lazily
+/// and keeps reading it for as long as the element lives, so removing it here
+/// would break playback rather than tidy up. It lands in the OS temp directory,
+/// which is what that directory is for, and is reused across process runs (the
+/// name is a pure function of the bytes).
+fn temp_file_for(mime: &str, data: &[u8]) -> std::io::Result<std::path::PathBuf> {
+    // FNV-1a. A collision here costs the wrong video, not memory safety, and at
+    // 64 bits with a handful of clips per app it is not a risk anyone meets.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in data {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    // The extension is a real hint here, not decoration: the source resolver
+    // picks a byte-stream handler from it before anything reads the bytes.
+    let ext = match extension_for(mime) {
+        "" => ".bin",
+        other => other,
+    };
+    let path = std::env::temp_dir().join(format!("vn-video-{hash:016x}{ext}"));
+    let already_there = path.metadata().is_ok_and(|m| m.len() as usize == data.len());
+    if !already_there {
+        std::fs::write(&path, data)?;
+    }
+    Ok(path)
+}
+
+///C:/x/a.mp4`, percent-escaping what a URL must.
 ///
 /// Media Foundation accepts a bare path too, but only sometimes — a path with
 /// a `#` or a `%` in it is read as a URL fragment/escape and the open fails
