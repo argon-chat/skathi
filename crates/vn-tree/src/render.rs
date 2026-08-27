@@ -850,7 +850,6 @@ fn build_node<V: 'static>(
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
-    advise_untransformable(t, node, &extras);
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
         // element out as a full line box — and Vue anchors every Fragment
@@ -1180,7 +1179,6 @@ where
         use gpui::Refineable as _;
         e.style().refine(&overlay);
     }
-    apply_translate(e.style(), id, cs);
     // `pointer-events: none` means the node is not interactive at all — so it
     // must not carry gpui's hover/active rungs either, which are exactly what
     // would make gpui insert a hitbox for it.
@@ -1193,56 +1191,6 @@ where
         }
     }
     e
-}
-
-/// `transform: translate(…)` as a LAYOUT offset (compat roadmap G3).
-///
-/// gpui applies no matrix to a laid out box, so the only way to move one is to
-/// move it in layout — margins are the additive channel that works for both an
-/// in-flow box and an absolutely positioned one (taffy adds the margin to the
-/// inset-resolved origin).
-///
-/// A PERCENTAGE translate resolves against the element's own size, which is not
-/// known until it has been laid out — so it is resolved against the rectangle
-/// the node was painted at in the previous frame, exactly like `<lottie>`'s
-/// intrinsic sizing. A box that has never been painted translates by 0 on its
-/// first frame and lands correctly on the second; since a translate does not
-/// change the box's SIZE, that converges rather than oscillates.
-fn apply_translate(style: &mut gpui::StyleRefinement, id: u32, cs: &vn_css::ComputedStates) {
-    let Some((tx, ty)) = cs.extras.translate else {
-        return;
-    };
-    let (w, h) = prev_size_of(id).unwrap_or((0.0, 0.0));
-    let (dx, dy) = (tx.to_px(w), ty.to_px(h));
-    if dx == 0.0 && dy == 0.0 {
-        return;
-    }
-    fn shift(slot: &mut Option<gpui::Length>, delta: f32, id: u32, side: &str) {
-        match slot {
-            None => *slot = Some(gpui::Length::Definite(gpui::px(delta).into())),
-            Some(gpui::Length::Definite(gpui::DefiniteLength::Absolute(
-                gpui::AbsoluteLength::Pixels(p),
-            ))) => {
-                *slot = Some(gpui::Length::Definite(gpui::px(f32::from(*p) + delta).into()));
-            }
-            // `margin: auto` (centring) or a percentage margin cannot absorb a
-            // pixel offset. Rather than silently pick one, say which node.
-            _ => warn_compat(
-                "translate-margin",
-                &format!(
-                    "`transform: translate()` is applied as a margin offset, and node {id} already \
-                     has a non-pixel `margin-{side}` (auto or a percentage) — the translate was \
-                     dropped on that axis"
-                ),
-            ),
-        }
-    }
-    if dx != 0.0 {
-        shift(&mut style.margin.left, dx, id, "left");
-    }
-    if dy != 0.0 {
-        shift(&mut style.margin.top, dy, id, "top");
-    }
 }
 
 /// Wraps a node that has to escape its siblings' paint order — `position:
@@ -1760,53 +1708,6 @@ impl<E: gpui::Element + gpui::Styled> gpui::Element for SvgTint<E> {
     }
 }
 
-/// `rotate()` / `scale()` as a sprite transformation.
-///
-/// This is the ONE place in the framework where a real CSS transform matrix
-/// applies: gpui's `MonochromeSprite` carries a `TransformationMatrix`, and an
-/// SVG leaf is a monochrome sprite. A laid out box is not, which is why
-/// [`advise_untransformable`] exists.
-///
-/// `Transformation::into_matrix` rotates and scales about the element's own
-/// centre, which is CSS's initial `transform-origin: 50% 50%`.
-fn svg_transformation(
-    id: u32,
-    extras: &vn_css::Extras,
-    now: std::time::Instant,
-) -> Option<gpui::Transformation> {
-    // The animated value when a `@keyframes` is driving it (`animate-spin`),
-    // the element's own otherwise.
-    let (rotate, scale) = tree::animation_transform(id, extras, now);
-    if rotate.is_none() && scale.is_none() {
-        return None;
-    }
-    let mut t = gpui::Transformation::default();
-    if let Some(deg) = rotate {
-        t = t.with_rotation(gpui::radians(deg.to_radians()));
-    }
-    if let Some((sx, sy)) = scale {
-        t = t.with_scaling(gpui::size(sx, sy));
-    }
-    Some(t)
-}
-
-/// A `rotate()`/`scale()` on anything that is not an `<svg>` leaf.
-fn advise_untransformable(t: &Tree, node: &crate::tree::Node, extras: &vn_css::Extras) {
-    if extras.rotate.is_none() && extras.scale.is_none() {
-        return;
-    }
-    if t.name(node.tag) == "svg" {
-        return;
-    }
-    warn_compat(
-        "transform-rotate-scale",
-        "`transform: rotate()/scale()` applies only to an inline <svg> (v1) — gpui carries a \
-         transformation matrix on a SPRITE (which is what an <svg> leaf paints as) and none at \
-         all on a laid out box, so the declaration was dropped on this element. `translate()` \
-         works everywhere; `animate-spin` on an icon works",
-    );
-}
-
 /// Inline `<svg>` — a replaced element whose content is the serialized subtree.
 ///
 /// * The children are NOT lowered (`crate::svg` explains why).
@@ -1835,11 +1736,11 @@ fn build_svg<V: 'static>(
         );
     }
 
-    let mut leaf = gpui::svg().data(&doc);
-    if let Some(transformation) = svg_transformation(id, &extras, now) {
-        leaf = leaf.with_transformation(transformation);
-    }
-    let mut e = with_control_area(leaf.id(id as usize), id, control_area);
+    // No `with_transformation` here any more. `transform` is a paint-level
+    // property on the style now (m13 item 2), so `Style::paint` pushes the
+    // matrix for the whole element and `Window::paint_svg` composes it into the
+    // sprite. Setting it here as well would apply it twice.
+    let mut e = with_control_area(gpui::svg().data(&doc).id(id as usize), id, control_area);
     let mut inherit = true;
     if let Some(cs) = &node.computed {
         inherit = cs.base.text.color.is_none();

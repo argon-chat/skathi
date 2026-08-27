@@ -44,7 +44,7 @@ pub use animator::{AnimEvent, AnimEventKind, Animator};
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, Decls,
-    Extras, InlineStyle, ObjectFit, SvgPaint, TranslateLen, WindowControl, WindowDrag,
+    Extras, InlineStyle, ObjectFit, SvgPaint, WindowControl, WindowDrag,
 };
 pub use media::{match_media, DisplayMode, Env};
 pub use keyframes::{
@@ -842,12 +842,12 @@ impl Engine {
                 .normal_animation_patch
                 .or(converted.important_animation_patch)
                 .and_then(|p| p.easing);
-            // `transform: rotate()/scale()` computes into `Extras`, not into the
-            // refinement — and that is the ONE transform an SVG leaf can honour
-            // (m12 item 4), so the keyframe has to carry it.
-            let mut extras = converted.normal_extras;
-            extras.refine(&converted.important_extras);
-            if !any && easing.is_none() && extras.rotate.is_none() && extras.scale.is_none() {
+            // `transform` used to need a second channel here, because it
+            // computed into `Extras` rather than into the refinement. It is a
+            // real refinement property now (`Style::vn_transform`, m13 item 2),
+            // so `any` above already sees it and a keyframe carries it like any
+            // other animatable value.
+            if !any && easing.is_none() {
                 continue;
             }
             let style = Rc::new(style);
@@ -870,7 +870,6 @@ impl Engine {
                     offset: offset.clamp(0.0, 1.0),
                     easing,
                     style: style.clone(),
-                    extras,
                 });
             }
         }

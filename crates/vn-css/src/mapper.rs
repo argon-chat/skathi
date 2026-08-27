@@ -6,7 +6,10 @@
 
 use std::rc::Rc;
 
-use gpui::{px, relative, AbsoluteLength, DefiniteLength, Hsla, Length, Overflow, StyleRefinement};
+use gpui::{
+    px, relative, AbsoluteLength, DefiniteLength, Hsla, Length, Overflow, StyleRefinement,
+    TransformLength, TransformSpec,
+};
 use lightningcss::declaration::DeclarationBlock;
 use lightningcss::properties::align::{ContentPosition, SelfPosition};
 use lightningcss::properties::border::LineStyle;
@@ -50,28 +53,6 @@ pub enum ObjectFit {
     Cover,
     ScaleDown,
     None,
-}
-
-/// One component of a `translate()`, in the unit it was written in.
-///
-/// A percentage translate resolves against the ELEMENT'S OWN size, which no
-/// layout property can express — the renderer resolves it against the box the
-/// node was painted at last frame (see `vn-tree`'s `apply_computed_style`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TranslateLen {
-    Px(f32),
-    /// Fraction, not percent: `-50%` is `-0.5`.
-    Percent(f32),
-}
-
-impl TranslateLen {
-    /// Resolves to pixels against the element's own `size` along this axis.
-    pub fn to_px(self, own_size: f32) -> f32 {
-        match self {
-            TranslateLen::Px(v) => v,
-            TranslateLen::Percent(f) => f * own_size,
-        }
-    }
 }
 
 /// CSS `window-drag` — "this element drags the OS window" (docs/WINDOWING.md
@@ -146,16 +127,6 @@ pub struct Extras {
     /// `pointer-events: none` — the node takes no listeners and no hover/active
     /// rungs, which is how a hitbox stops existing in gpui.
     pub pointer_events_none: Option<bool>,
-    /// The `translate()` part of a `transform`, in CSS order (x, y).
-    pub translate: Option<(TranslateLen, TranslateLen)>,
-    /// The `rotate()` part of a `transform`, in DEGREES about the Z axis.
-    /// Only an `<svg>` leaf can honour it — gpui's `MonochromeSprite` carries a
-    /// `TransformationMatrix` and a laid out box does not — so on any other
-    /// element the renderer advises and drops it (m12 item 4).
-    pub rotate: Option<f32>,
-    /// The `scale()` part of a `transform`, as (x, y) factors. Same story as
-    /// [`Extras::rotate`].
-    pub scale: Option<(f32, f32)>,
     /// SVG `fill` — see [`SvgPaint`].
     pub fill: Option<SvgPaint>,
     /// SVG `stroke` — see [`SvgPaint`].
@@ -220,15 +191,6 @@ impl Extras {
         }
         if other.pointer_events_none.is_some() {
             self.pointer_events_none = other.pointer_events_none;
-        }
-        if other.translate.is_some() {
-            self.translate = other.translate;
-        }
-        if other.rotate.is_some() {
-            self.rotate = other.rotate;
-        }
-        if other.scale.is_some() {
-            self.scale = other.scale;
         }
         if other.fill.is_some() {
             self.fill = other.fill;
@@ -1212,7 +1174,11 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 Z::Auto => x.z_index = Some(0),
             }
         }
-        Transform(list, _) => apply_transform(list, x, diagnostics),
+        // `transform` is a PAINT-level property now (gpui's
+        // `Style::vn_transform`), so it goes into the refinement rather than
+        // into `Extras` — which is what gives it `:hover`, transitions and
+        // `@keyframes` through the ordinary machinery.
+        Transform(list, _) => apply_transform(list, r, diagnostics),
         // SVG paint. Only meaningful on an `<svg>` leaf (see `SvgPaint`), but —
         // like `object-fit` on a non-replaced element — it is parsed and folded
         // for every node, because that is what a browser computes.
@@ -1645,16 +1611,16 @@ fn is_current_color(c: &lightningcss::values::color::CssColor) -> bool {
 /// scale/skew is advised about.
 fn apply_transform(
     list: &lightningcss::properties::transform::TransformList,
-    x: &mut Extras,
+    r: &mut StyleRefinement,
     diagnostics: &mut Vec<String>,
 ) {
     use lightningcss::properties::transform::Transform as T;
     use lightningcss::values::percentage::NumberOrPercentage;
 
-    fn len(v: &LengthPercentage) -> Option<TranslateLen> {
+    fn len(v: &LengthPercentage) -> Option<TransformLength> {
         match v {
-            DimensionPercentage::Dimension(l) => length_value_px(l).map(TranslateLen::Px),
-            DimensionPercentage::Percentage(p) => Some(TranslateLen::Percent(p.0)),
+            DimensionPercentage::Dimension(l) => length_value_px(l).map(TransformLength::Pixels),
+            DimensionPercentage::Percentage(p) => Some(TransformLength::Fraction(p.0)),
             DimensionPercentage::Calc(_) => None,
         }
     }
@@ -1671,33 +1637,23 @@ fn apply_transform(
         }
     }
 
-    let zero = TranslateLen::Px(0.0);
+    let zero = TransformLength::ZERO;
     let (mut tx, mut ty) = (zero, zero);
-    let mut moved = false;
-    let mut rotate: Option<f32> = None;
-    let mut scale: Option<(f32, f32)> = None;
+    let mut rotate = 0.0f32;
+    let mut scale = (1.0f32, 1.0f32);
     let mut dropped: Vec<&str> = Vec::new();
     for t in &list.0 {
         match t {
             T::Translate(a, b) => match (len(a), len(b)) {
-                (Some(a), Some(b)) => {
-                    (tx, ty) = (a, b);
-                    moved = true;
-                }
+                (Some(a), Some(b)) => (tx, ty) = (a, b),
                 _ => dropped.push("translate() with a calc() length"),
             },
             T::TranslateX(a) => match len(a) {
-                Some(a) => {
-                    tx = a;
-                    moved = true;
-                }
+                Some(a) => tx = a,
                 None => dropped.push("translateX() with a calc() length"),
             },
             T::TranslateY(b) => match len(b) {
-                Some(b) => {
-                    ty = b;
-                    moved = true;
-                }
+                Some(b) => ty = b,
                 None => dropped.push("translateY() with a calc() length"),
             },
             // `translate3d(x, y, 0)` is what @floating-ui writes for EVERY
@@ -1707,7 +1663,6 @@ fn apply_transform(
             T::Translate3d(a, b, z) => match (len(a), len(b)) {
                 (Some(a), Some(b)) => {
                     (tx, ty) = (a, b);
-                    moved = true;
                     if !matches!(css_length_px(z), Some(0.0)) {
                         dropped.push("the Z axis of a 3D translate");
                     }
@@ -1721,27 +1676,17 @@ fn apply_transform(
             T::Skew(a, b) if a.to_degrees() == 0.0 && b.to_degrees() == 0.0 => {}
             T::ScaleX(s) | T::ScaleY(s) | T::ScaleZ(s) if is_one(s) => {}
             T::Scale(a, b) if is_one(a) && is_one(b) => {}
-            // Z-axis rotation is the one rotate a 2D sprite matrix can carry,
-            // and it is the case that matters (`animate-spin` on an icon).
-            // `rotateX`/`rotateY` need a 3D projection and are dropped.
-            T::Rotate(a) | T::RotateZ(a) => {
-                rotate = Some(rotate.unwrap_or(0.0) + a.to_degrees());
-            }
+            // Z-axis rotation is the one rotate a 2D matrix can carry, and with
+            // paint-level transforms it now reaches every element rather than
+            // only an `<svg>` leaf. `rotateX`/`rotateY` need a 3D projection
+            // and are dropped.
+            T::Rotate(a) | T::RotateZ(a) => rotate += a.to_degrees(),
             T::RotateX(_) | T::RotateY(_) | T::Rotate3d(..) => dropped.push("rotate3d()/rotateX()/rotateY()"),
-            T::Scale(a, b) => match (factor(a), factor(b)) {
-                (sx, sy) => {
-                    let (px, py) = scale.unwrap_or((1.0, 1.0));
-                    scale = Some((px * sx, py * sy));
-                }
-            },
-            T::ScaleX(s) => {
-                let (px, py) = scale.unwrap_or((1.0, 1.0));
-                scale = Some((px * factor(s), py));
+            T::Scale(a, b) => {
+                scale = (scale.0 * factor(a), scale.1 * factor(b));
             }
-            T::ScaleY(s) => {
-                let (px, py) = scale.unwrap_or((1.0, 1.0));
-                scale = Some((px, py * factor(s)));
-            }
+            T::ScaleX(s) => scale.0 *= factor(s),
+            T::ScaleY(s) => scale.1 *= factor(s),
             T::ScaleZ(_) | T::Scale3d(..) => dropped.push("scale3d()/scaleZ()"),
             T::Skew(..) | T::SkewX(_) | T::SkewY(_) => dropped.push("skew()"),
             T::Matrix(_) | T::Matrix3d(_) => dropped.push("matrix()"),
@@ -1749,25 +1694,23 @@ fn apply_transform(
             T::TranslateZ(_) => dropped.push("the Z axis of a 3D translate"),
         }
     }
-    if moved {
-        x.translate = Some((tx, ty));
-    }
-    // The identity arms above already swallowed `rotate(0)` / `scale(1)`, so
-    // anything left here is a real transformation. It is carried on the
-    // computed value for EVERY element (that is what a browser computes); only
-    // the renderer knows whether the node is an `<svg>` leaf that can honour it,
-    // so the "a laid out box cannot rotate" advisory lives there.
-    x.rotate = rotate;
-    x.scale = scale;
+    // Written UNCONDITIONALLY, including when it is the identity: `transform`
+    // is a shorthand for the whole list, so a later declaration whose list
+    // reduces to nothing has to cancel an earlier one. That is what
+    // `Option<TransformSpec>` buys over a bare `TransformSpec` -- `None` is
+    // "never declared", `Some(IDENTITY)` is `transform: none`.
+    r.vn_transform = Some(TransformSpec {
+        translate: (tx, ty),
+        rotate: rotate.to_radians(),
+        scale,
+    });
     if !dropped.is_empty() {
         dropped.sort_unstable();
         dropped.dedup();
         once(
             diagnostics,
             format!(
-                "`transform` supports translate(), rotate() and scale() (v1) — dropped {}. \
-                 translate is applied as a LAYOUT offset (so an in-flow element's siblings move \
-                 with it); rotate/scale reach the sprite matrix, which only an `<svg>` leaf has",
+                "`transform` supports translate(), rotate() and scale() -- dropped {}.                  The three that are supported are applied at PAINT time, to this element and                  its subtree, and change no layout, which is what a browser does",
                 dropped.join(", ")
             ),
         );
@@ -2221,6 +2164,15 @@ mod tests {
         (inline.extras, d)
     }
 
+    /// The computed `transform`, which lives on the REFINEMENT now — it is a
+    /// paint property with `:hover`, transitions and `@keyframes`, not an
+    /// `Extras` side channel (m13 item 2).
+    fn transform(body: &str) -> (Option<TransformSpec>, Vec<String>) {
+        let mut d = Vec::new();
+        let inline = parse_inline_style(body, &mut d);
+        (inline.refinement.and_then(|r| r.vn_transform), d)
+    }
+
     #[test]
     fn absolute_and_inset_map_straight_through() {
         let r = clean("position: absolute; inset: 0; left: 50%; top: 8px");
@@ -2264,56 +2216,117 @@ mod tests {
         assert!(d.iter().any(|m| m.contains("pointer-events")), "{d:?}");
     }
 
+    /// A percentage translate stays a percentage all the way to paint: it
+    /// resolves against the element's OWN border box, which only the renderer
+    /// knows. (It used to resolve against LAST frame's box, because translate
+    /// was a margin offset and the mapper had no box at all.)
     #[test]
     fn translate_is_kept_in_its_authored_unit() {
-        let (x, d) = extras("transform: translate(-50%, -50%)");
+        let (r, d) = transform("transform: translate(-50%, -50%)");
         assert!(d.is_empty(), "{d:?}");
+        let t = r.expect("declared");
         assert_eq!(
-            x.translate,
-            Some((TranslateLen::Percent(-0.5), TranslateLen::Percent(-0.5)))
+            t.translate,
+            (TransformLength::Fraction(-0.5), TransformLength::Fraction(-0.5))
         );
-        assert_eq!(TranslateLen::Percent(-0.5).to_px(400.0), -200.0);
+        assert_eq!(TransformLength::Fraction(-0.5).resolve(400.0), -200.0);
 
-        let (x, _) = extras("transform: translateX(1.25rem)");
-        assert_eq!(x.translate, Some((TranslateLen::Px(20.0), TranslateLen::Px(0.0))));
+        let t = transform("transform: translateX(1.25rem)").0.expect("declared");
+        assert_eq!(
+            t.translate,
+            (TransformLength::Pixels(20.0), TransformLength::Pixels(0.0))
+        );
     }
 
     /// Tailwind's `-translate-x-1/2` emits the whole identity chain, and an
-    /// identity component is genuinely nothing — no computed value, no
-    /// advisory.
+    /// identity component is genuinely nothing — no advisory, and a computed
+    /// value that carries only the translate.
     #[test]
     fn tailwinds_identity_transform_chain_is_silent() {
-        let (x, d) = extras(
+        let (r, d) = transform(
             "transform: translate(-50%, -50%) rotate(0) skewX(0) skewY(0) scaleX(1) scaleY(1)",
         );
         assert!(d.is_empty(), "{d:?}");
+        let t = r.expect("declared");
         assert_eq!(
-            x.translate,
-            Some((TranslateLen::Percent(-0.5), TranslateLen::Percent(-0.5)))
+            t.translate,
+            (TransformLength::Fraction(-0.5), TransformLength::Fraction(-0.5))
         );
-        assert_eq!(x.rotate, None);
-        assert_eq!(x.scale, None);
+        assert_eq!(t.rotate, 0.0);
+        assert_eq!(t.scale, (1.0, 1.0));
     }
 
-    /// A real `rotate()`/`scale()` COMPUTES (it is the sprite matrix an `<svg>`
-    /// leaf can carry — m12 item 4); whether the node can honour it is a
-    /// renderer question, so there is no advisory here.
+    /// `transform` is a shorthand for the whole function list, so a
+    /// declaration that reduces to the identity has to CANCEL an earlier one —
+    /// which is why the computed value is `Some(IDENTITY)` and not `None`.
+    #[test]
+    fn transform_none_is_a_value_not_an_absence() {
+        let (r, d) = transform("transform: rotate(0deg)");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(r, Some(TransformSpec::IDENTITY));
+        assert!(r.unwrap().is_identity());
+        // A declaration that was never written stays absent, which is what
+        // lets an earlier rule's transform survive the cascade.
+        assert_eq!(transform("color: red").0, None);
+    }
+
+    /// A real `rotate()`/`scale()` computes for EVERY element now — the
+    /// "only an `<svg>` leaf can honour it" advisory is retired, because a
+    /// laid out box carries a transformation matrix (m13 item 2).
     #[test]
     fn rotate_and_scale_reach_the_computed_value() {
-        let (x, d) = extras("transform: translateY(4px) rotate(45deg) scale(1.5)");
-        assert_eq!(x.translate, Some((TranslateLen::Px(0.0), TranslateLen::Px(4.0))));
-        assert_eq!(x.rotate, Some(45.0));
-        assert_eq!(x.scale, Some((1.5, 1.5)));
+        let (r, d) = transform("transform: translateY(4px) rotate(45deg) scale(1.5)");
         assert!(d.is_empty(), "{d:?}");
+        let t = r.expect("declared");
+        assert_eq!(
+            t.translate,
+            (TransformLength::Pixels(0.0), TransformLength::Pixels(4.0))
+        );
+        assert!((t.rotate - std::f32::consts::FRAC_PI_4).abs() < 1e-5, "{}", t.rotate);
+        assert_eq!(t.scale, (1.5, 1.5));
 
         // `animate-spin`'s keyframe value, and Tailwind's `scale-x-*`.
-        assert_eq!(extras("transform: rotate(360deg)").0.rotate, Some(360.0));
-        assert_eq!(extras("transform: scaleX(-1)").0.scale, Some((-1.0, 1.0)));
+        let spin = transform("transform: rotate(360deg)").0.expect("declared");
+        assert!((spin.rotate - std::f32::consts::TAU).abs() < 1e-4, "{}", spin.rotate);
+        assert_eq!(
+            transform("transform: scaleX(-1)").0.expect("declared").scale,
+            (-1.0, 1.0)
+        );
 
-        // A 3D rotation needs a projection nothing here has; still advised.
-        let (x, d) = extras("transform: rotateY(30deg) skewX(10deg)");
-        assert_eq!(x.rotate, None);
+        // A 3D rotation needs a projection nothing here has; still advised, and
+        // the parts that DO work still land.
+        let (r, d) = transform("transform: rotateY(30deg) skewX(10deg)");
+        assert_eq!(r.expect("declared").rotate, 0.0);
         assert!(d.iter().any(|m| m.contains("skew()")), "{d:?}");
+    }
+
+    /// The transform-origin is the element's centre (CSS's initial value), so
+    /// a pure rotation leaves the centre where it was and a pure scale grows
+    /// about it.
+    #[test]
+    fn the_matrix_turns_about_the_box_centre() {
+        use gpui::{Bounds, Point, Size};
+        let bounds = Bounds {
+            origin: Point { x: px(100.0), y: px(50.0) },
+            size: Size { width: px(200.0), height: px(100.0) },
+        };
+        let quarter = transform("transform: rotate(90deg)").0.expect("declared");
+        let m = quarter.to_matrix(bounds, 1.0);
+        let centre = m.apply(bounds.center());
+        assert!((f32::from(centre.x) - 200.0).abs() < 1e-3, "{centre:?}");
+        assert!((f32::from(centre.y) - 100.0).abs() < 1e-3, "{centre:?}");
+        // (-100, -50) from the centre becomes (+50, -100): a quarter turn
+        // clockwise on screen, where y grows downward.
+        let corner = m.apply(bounds.origin);
+        assert!((f32::from(corner.x) - 250.0).abs() < 1e-3, "{corner:?}");
+        assert!(f32::from(corner.y).abs() < 1e-3, "{corner:?}");
+
+        // A percentage translate resolves against the element's own box.
+        let half = transform("transform: translate(-50%, -50%)").0.expect("declared");
+        let m = half.to_matrix(bounds, 1.0);
+        let moved = m.apply(bounds.origin);
+        assert!((f32::from(moved.x) - 0.0).abs() < 1e-3, "{moved:?}");
+        assert!((f32::from(moved.y) - 0.0).abs() < 1e-3, "{moved:?}");
     }
 
     #[test]

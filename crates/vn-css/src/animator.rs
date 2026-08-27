@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AbsoluteLength, DefiniteLength, EffectSpec, Fill, Hsla, Interpolate, Length, Pixels, Rems,
-    StyleRefinement,
+    StyleRefinement, TransformSpec,
 };
 
 use crate::keyframes::{AnimationSpec, FillMode, Keyframes, Phase, PlayState};
@@ -41,6 +41,10 @@ enum Animatable {
     /// `params` interpolate — the id, the flags and the schema metadata must
     /// MATCH for a transition to exist at all (see [`unify`]).
     Effect(EffectSpec),
+    /// `transform`. The whole spec travels together for the same reason CSS
+    /// interpolates matched function lists componentwise rather than through
+    /// the matrix: lerping the matrix entries of two rotations shears.
+    Transform(TransformSpec),
 }
 
 /// Why a slot cannot be interpolated (kept comparable so an *unchanged*
@@ -144,6 +148,9 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         Shading => r
             .vn_effect
             .map_or(Slot::Missing, |e| Slot::Value(Animatable::Effect(e))),
+        Transform => r
+            .vn_transform
+            .map_or(Slot::Missing, |t| Slot::Value(Animatable::Transform(t))),
         All | Other(_) => Slot::Missing,
     }
 }
@@ -194,6 +201,11 @@ fn install(r: &mut StyleRefinement, p: &TransitionProperty, v: Animatable) {
                 r.vn_effect = Some(spec);
             }
         }
+        Transform => {
+            if let Animatable::Transform(spec) = v {
+                r.vn_transform = Some(spec);
+            }
+        }
         All | Other(_) => {}
     }
 }
@@ -216,6 +228,10 @@ fn initial(p: &TransitionProperty) -> Option<Animatable> {
         | BorderBottomRightRadius | BorderBottomLeftRadius | RowGap | ColumnGap => {
             Some(Animatable::Pixels(Pixels::from(0.0)))
         }
+        // `transform: none`, which is a real, interpolable value — and the
+        // reason `@keyframes spin { to { transform: rotate(360deg) } }` sweeps
+        // the whole turn on an element that declares no transform of its own.
+        Transform => Some(Animatable::Transform(TransformSpec::IDENTITY)),
         // `auto` / `none` (sizes) and the inherited or currentColor-derived
         // properties (color, border-color, font-size) have no resolvable
         // initial here — those endpoints snap instead.
@@ -237,6 +253,10 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         // different parameter meaning per slot, and lerping between them would
         // paint nonsense. Different ids snap, with an advisory naming both.
         (Effect(x), Effect(y)) if x.id == y.id => Some((a, b)),
+        // Two transforms always interpolate: the spec is a fixed
+        // translate/rotate/scale triple, so there is no "different function
+        // list" case to reject — an absent component is its identity.
+        (Transform(_), Transform(_)) => Some((a, b)),
         (Pixels(p), Rems(r)) if r.0 == 0.0 => Some((Pixels(p), Pixels(gpui::Pixels::from(0.0)))),
         (Pixels(p), Rems(r)) if p.as_f32() == 0.0 => Some((Rems(gpui::Rems(0.0)), Rems(r))),
         (Rems(r), Pixels(p)) if p.as_f32() == 0.0 => Some((Rems(r), Rems(gpui::Rems(0.0)))),
@@ -268,6 +288,7 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
             spec.animated = a.animated || b.animated;
             Effect(spec)
         }
+        (Transform(a), Transform(b)) => Transform(a.interpolate(b, t)),
         // Unreachable: tracks are only created from unified endpoints.
         _ => to,
     }
@@ -938,13 +959,13 @@ mod tests {
     fn unsupported_property_warns_once() {
         let mut a = Animator::new();
         let now = t0();
-        let old = states(with_opacity(0.0), "transition: transform 1s");
-        let new = states(with_opacity(1.0), "transition: transform 1s");
+        let old = states(with_opacity(0.0), "transition: filter 1s");
+        let new = states(with_opacity(1.0), "transition: filter 1s");
         a.on_computed(1, Some(&old), &new, now);
         a.on_computed(2, Some(&old), &new, now);
         let diags = a.take_diagnostics();
         assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(diags[0].contains("transform"), "{diags:?}");
+        assert!(diags[0].contains("filter"), "{diags:?}");
         // …and nothing animates.
         assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
     }
@@ -1497,51 +1518,6 @@ impl Animator {
             // is frozen and the frame that froze it already painted.
             Phase::Delayed | Phase::Running { .. } => run.paused_at.is_none(),
         })
-    }
-
-    /// The `rotate()` / `scale()` this node's animations are showing right
-    /// now, or the element's own when nothing animates them.
-    ///
-    /// A separate call from [`Animator::overlay`] because these live in
-    /// `Extras` rather than in a `StyleRefinement` — gpui carries a
-    /// transformation matrix on a SPRITE, and the renderer reads it straight
-    /// into `gpui::Transformation` for the one element that is one: an inline
-    /// `<svg>` leaf (m12 item 4).
-    pub fn transform(
-        &self,
-        node: u32,
-        base: &crate::Extras,
-        now: Instant,
-    ) -> (Option<f32>, Option<(f32, f32)>) {
-        let Some(runs) = self.anims.get(&node) else {
-            return (base.rotate, base.scale);
-        };
-        let (mut rotate, mut scale) = (base.rotate, base.scale);
-        for run in runs {
-            let progress = match run.phase(now) {
-                Phase::Running { progress, .. } => progress,
-                Phase::Delayed => {
-                    if !matches!(run.spec.fill, FillMode::Backwards | FillMode::Both) {
-                        continue;
-                    }
-                    run.spec.phase(run.spec.delay).progress_or(0.0)
-                }
-                Phase::Finished { progress } => {
-                    if !matches!(run.spec.fill, FillMode::Forwards | FillMode::Both) {
-                        continue;
-                    }
-                    progress
-                }
-            };
-            let (r, s) = run.frames.transform_at(base, &run.spec, progress);
-            if r.is_some() {
-                rotate = r;
-            }
-            if s.is_some() {
-                scale = s;
-            }
-        }
-        (rotate, scale)
     }
 
     /// The interpolated animation values for `node` this frame.

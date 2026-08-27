@@ -81,6 +81,11 @@ pub enum TransitionProperty {
     ColumnGap,
     /// `font-size`
     FontSize,
+    /// `transform` — the whole function list travels as one value, because
+    /// that is how CSS interpolates it: matched lists interpolate
+    /// componentwise (`rotate(0deg)` → `rotate(90deg)` sweeps through 45°),
+    /// never entry-by-entry through the matrix, which would shear.
+    Transform,
     /// `--shading` — the effect parameter vector.
     ///
     /// Deliberately NOT part of [`Self::animatable`], so `transition: all` does
@@ -101,7 +106,7 @@ pub enum TransitionProperty {
 /// The number of concrete properties `all` expands to. `--shading`
 /// ([`TransitionProperty::Shading`]) is transitionable but deliberately outside
 /// this set — see that variant.
-pub const ANIMATABLE_COUNT: usize = 25;
+pub const ANIMATABLE_COUNT: usize = 26;
 
 impl TransitionProperty {
     /// Every property vn-css can actually interpolate — the expansion of `all`.
@@ -136,6 +141,7 @@ impl TransitionProperty {
             RowGap,
             ColumnGap,
             FontSize,
+            Transform,
         ]
     }
 
@@ -168,6 +174,7 @@ impl TransitionProperty {
             RowGap => "row-gap",
             ColumnGap => "column-gap",
             FontSize => "font-size",
+            Transform => "transform",
             Shading => "--shading",
             All => "all",
             Other(name) => name,
@@ -570,6 +577,8 @@ fn expand(id: &PropertyId) -> Expansion {
         "row-gap" => one(RowGap),
         "column-gap" => one(ColumnGap),
         "font-size" => one(FontSize),
+        // Tailwind's `transition-transform`, and shadcn's accordion chevron.
+        "transform" => one(Transform),
         // lightningcss parses an unknown property id — including a custom
         // property — into `PropertyId::Custom`, whose `name()` keeps the
         // leading dashes. `--shading` is the one custom property vue-native
@@ -772,10 +781,23 @@ mod tests {
 
     #[test]
     fn unsupported_property_becomes_other() {
+        let s = specs("transition: filter 200ms");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].property, TransitionProperty::Other(Rc::from("filter")));
+        assert_eq!(s[0].property.name(), "filter");
+    }
+
+    /// `transform` was the canonical *unsupported* property here until m13
+    /// gave a laid out box a transformation matrix. It is a first-class
+    /// animatable now — which is what makes shadcn's accordion chevron and
+    /// `transition-transform` on a hover work.
+    #[test]
+    fn transform_is_a_first_class_animatable() {
         let s = specs("transition: transform 200ms");
         assert_eq!(s.len(), 1);
-        assert_eq!(s[0].property, TransitionProperty::Other(Rc::from("transform")));
+        assert_eq!(s[0].property, TransitionProperty::Transform);
         assert_eq!(s[0].property.name(), "transform");
+        assert!(TransitionProperty::animatable().contains(&TransitionProperty::Transform));
     }
 
     #[test]
@@ -823,8 +845,10 @@ mod tests {
     fn covered_expands_all_and_skips_unsupported() {
         let s = specs("transition: all 1s, transform 1s");
         assert_eq!(covered(&s).len(), ANIMATABLE_COUNT);
-        let s = specs("transition: transform 1s");
+        let s = specs("transition: filter 1s");
         assert!(covered(&s).is_empty());
+        let s = specs("transition: transform 1s");
+        assert_eq!(covered(&s), vec![TransitionProperty::Transform]);
         let s = specs("transition: opacity 1s, opacity 2s");
         assert_eq!(covered(&s), vec![TransitionProperty::Opacity]);
     }

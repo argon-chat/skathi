@@ -869,15 +869,6 @@ pub fn advance_animations() {
     });
 }
 
-/// The `rotate`/`scale` a node is showing this frame, animations included.
-pub fn animation_transform(
-    id: u32,
-    base: &vn_css::Extras,
-    now: std::time::Instant,
-) -> (Option<f32>, Option<(f32, f32)>) {
-    ANIMATOR.with(|a| a.borrow().transform(id, base, now))
-}
-
 /// Drains the `transitionend` / `animation*` events the animator queued.
 pub fn take_anim_events() -> Vec<vn_css::AnimEvent> {
     ANIMATOR.with(|a| a.borrow_mut().take_events())
