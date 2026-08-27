@@ -420,7 +420,10 @@ pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
         return;
     }
     // gpui first — this is what stops keystrokes reaching the detached node.
-    window.blur();
+    // Since zed#63271 `blur` also drops any half-entered key chord and notifies
+    // pending-input observers, which is what we want here: the node that owned
+    // the chord is gone.
+    window.blur(cx);
     FOCUSED_NODE.with(|f| f.set(0));
     js_dispatch_app(pending, tree::EV_BLUR, &EventPayload::default(), window, cx);
     // `:focus` rungs read the handle live, so the repaint cannot wait for a

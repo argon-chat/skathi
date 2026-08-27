@@ -30,7 +30,16 @@ default = ["audio"]
 audio = ["vn-runtime/audio", "vn-voice/audio"]
 
 [dependencies]
-gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
+# `stacker` (zed#63187) made `stacksafe` opt-in; before that PR it was an
+# unconditional gpui dependency. We render an arbitrary-depth user DOM, so
+# `Div::{request_layout,prepaint,paint}` recursion depth is whatever the app's
+# template nests to — exactly the case StackSafe exists for. Every other
+# `gpui` dep here is `default-features = false`, and features are additive
+# across the graph, so this one line restores the pre-merge behavior for the
+# whole binary. Zed enables it for the same reason (crates/zed/Cargo.toml).
+gpui = { path = "../../vendor/zed/crates/gpui", default-features = false, features = [
+    "stacker",
+] }
 # vn-devtools' screenshot path (dev only, but Cargo has no per-feature
 # exclusion for a dependency a `prod` build simply never calls).
 # `image` and `windows` are pinned to the versions gpui already resolves, so
