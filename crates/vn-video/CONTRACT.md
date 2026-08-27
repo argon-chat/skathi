@@ -40,10 +40,10 @@ report §3 and §8.
 | `ready_state` / `network_state` | `GetReadyState` / `GetNetworkState` (same 0–4 / 0–3 enums) | `AVPlayerItem.status` + `isPlaybackLikelyToKeepUp` |
 | `buffered` / `seekable` | `GetBuffered` / `GetSeekable` | `loadedTimeRanges` / `seekableTimeRanges` |
 | `native_size` | `GetNativeVideoSize` | `AVAssetTrack.naturalSize` |
-| `can_play_type` | `CanPlayType` (same `""`/`maybe`/`probably`) | `AVURLAsset.isPlayableExtendedMIMEType` |
+| `can_play_type` | `MFTEnumEx` over the decoder registry — **not** `CanPlayType`, see §8 | `AVURLAsset.isPlayableExtendedMIMEType` |
 | `present` | `OnVideoStreamTick` + `TransferVideoFrame` | `hasNewPixelBuffer` + `copyPixelBuffer` |
 | `drain_events` | `IMFMediaEngineNotify` queue | KVO + `AVPlayerItemDidPlayToEndTime` + periodic observer |
-| `suspend` | `SetSource("")` — tears the pipeline down | `replaceCurrentItem(with: nil)` |
+| `suspend` / `resume` | pause + release our own textures (see §5) | pause + release the `AVPlayerItemVideoOutput` |
 
 **No platform type appears in `backend.rs`, `state.rs` or `element.rs`.** That is
 the invariant that keeps the port honest; if a future backend needs the trait to
@@ -172,12 +172,27 @@ gpui's existing `PaintSurface` / `CVPixelBuffer` path.
 
 ### Lifetime
 
-* A `<video>` node that stops being built — detached, `display: none`, parked in
-  a `<KeepAlive>` cache container — is **suspended**: `pause()` plus
-  `SetSource("")`, which releases the decoder, the DPB and the video-processor
-  pool. That is ~28 MiB of RAM and ~68 MiB of VRAM per 1080p stream, so unlike
-  `<lottie>` (whose parked clock costs arithmetic) it is not something to leave
-  running. A browser does not keep decoding a detached video either.
+* A `<video>` node that leaves the painted tree — unmounted, or parked in a
+  `<KeepAlive>` cache container — is **suspended**: paused, and our own textures
+  (the transfer target plus two staging surfaces) given back. `display: none`
+  deliberately does NOT suspend, because a browser keeps decoding a hidden
+  video.
+
+  Liveness is answered by **reachability from the tree root**, not by "was the
+  element built last frame". gpui rebuilds only when the host notifies, so a
+  paused or still-loading `<video>` legitimately goes many frames unbuilt, and
+  the first version suspended it before it had ever produced a frame.
+
+* **Suspend deliberately keeps the decoder.** Tearing the Media Foundation
+  pipeline down (`SetSource("")`) and rebuilding it on resume does release ~20
+  of the ~28 MiB a 1080p pipeline holds — [measured] — but it also grows the
+  process by ~5 MiB per park/unpark cycle and kills it after about ten. (And
+  `BSTR::new()` is a NULL BSTR: handing that to `mfmediaengine.dll` takes the
+  process down with no message at all. Use `BSTR::from("")`.) A bounded resident
+  cost beats an unbounded one, so v1 keeps it and 40 park/unpark cycles plateau
+  at 189–213 MiB. Reinstating the teardown needs the leak diagnosed first —
+  most likely a media source or byte stream the engine does not release when a
+  new `SetSource` replaces it.
 * Retired `RenderImage`s go back through `Window::drop_image`. See §3.
 
 ---
@@ -249,7 +264,17 @@ OEM may or may not have provisioned.
 
 So:
 
-* `can_play_type` is a **live probe of this machine**, never a table.
+* `can_play_type` is a **live probe of this machine**, never a table — and
+  specifically **not** `IMFMediaEngine::CanPlayType`. [measured] that method
+  answers `"probably"` for essentially any `video/*` MIME string put to it,
+  including containers this machine cannot open, so it can never produce the
+  reliable NEGATIVE that is the whole point. `mf/codecs.rs` asks `MFTEnumEx` —
+  the decoder registry — instead.
+* The **container** half has no equivalent registry query, so it is a written-
+  down list of what is known readable, and an unrecognised `video/*` type
+  answers `"maybe"` rather than `""`. That asymmetry was earned: this machine
+  plays Ogg/Theora and MPEG-4 Part 2 in AVI, neither of which is in Microsoft's
+  documented inbox list. Only the registry produces a negative.
 * A failed load produces an advisory that *names the missing decoder and the
   fix* — built by probing HEVC/AV1/VP9 at the moment of failure and reporting
   which of them this machine actually lacks, plus the `ffmpeg` one-liner that
