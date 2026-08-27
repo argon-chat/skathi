@@ -199,9 +199,42 @@ pub fn window_config() -> Option<String> {
     Some(v.get("window")?.to_json())
 }
 
+/// Serves `fetch("assets/x.wav")` out of the app directory in a dev build.
+///
+/// A browser resolves `fetch()` and `<img src>` against the SAME document URL.
+/// Here they were resolved against two different things: `<img>`/`<video>` go
+/// through `vn_tree`'s asset base (the app directory), while `fetch()` fell
+/// through redjs to the process working directory, because the dev host never
+/// installed a content provider and passed empty roots to `redjs_webshim_install`.
+/// So `<img src="assets/a.png">` worked and `fetch("assets/a.png")` 404'd from
+/// the same component — a divergence with no upside.
+///
+/// This is the same seam `prod.rs` uses to serve assets baked into the exe;
+/// pointing it at the app directory is what makes the dev loop agree with both
+/// the browser and the shipped build. A miss still falls through to redjs's own
+/// on-disk resolution, so nothing that worked before stops working.
+fn install_asset_provider(rt: &JsRuntime) {
+    // `boot` runs again on a cold restart, and the provider is process-wide and
+    // set-once; re-registering would only print an advisory.
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let Some(base) = vn_tree::asset_base() else { return };
+    ONCE.call_once(move || {
+        rt.set_content_provider(move |key| {
+            // `clean_relative` already stripped `./` and any leading `/`, but
+            // not `..` — and a content key must not climb out of the app.
+            if key.split('/').any(|seg| seg == "..") {
+                return None;
+            }
+            std::fs::read(base.join(key)).ok()
+        });
+    });
+}
+
 pub fn boot(rt: &JsRuntime) {
     let Some(manifest) = read_manifest() else { return };
     publish_asset_base(&manifest.entry);
+    // After the base exists, before any app code can `fetch()`.
+    install_asset_provider(rt);
     if !eval_path(rt, &dist("vendor.js"), "vn://vendor.js") {
         return;
     }

@@ -18,6 +18,13 @@ publish = false
 # `bun prod.ts` MUST have run first: prod.rs `include_str!`s its output.
 prod = []
 
+# Web Audio (`AudioContext` & co) via vn-runtime → redjs → Firewheel. ON by
+# default; `cargo build -p vn-app --no-default-features` builds a host with no
+# audio at all, which is ~40 fewer crates to compile. The reasoning for the
+# default living on rather than off is in crates/vn-runtime/Cargo.toml.
+default = ["audio"]
+audio = ["vn-runtime/audio"]
+
 [dependencies]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 # vn-devtools' screenshot path (dev only, but Cargo has no per-feature
