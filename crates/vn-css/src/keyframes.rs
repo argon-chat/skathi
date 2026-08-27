@@ -45,10 +45,6 @@ pub struct Keyframe {
     pub easing: Option<Easing>,
     /// The declarations, already mapped.
     pub style: Rc<StyleRefinement>,
-    /// The computed values a `StyleRefinement` cannot carry. Only `rotate` and
-    /// `scale` are read from here (the SVG sprite matrix — m12 item 4);
-    /// `object-fit`, `z-index` and friends are not animatable and are ignored.
-    pub extras: crate::Extras,
 }
 
 /// One compiled `@keyframes` rule: its steps, sorted by offset.
@@ -226,81 +222,6 @@ impl Keyframes {
         }
     }
 
-    /// The `rotate()` / `scale()` this animation is showing at `progress`,
-    /// interpolated the same way a refinement property is — the SVG sprite
-    /// matrix is the one transform a real CSS matrix can reach here (item 4).
-    ///
-    /// `base` is the element's own computed transform, which stands in wherever
-    /// a keyframe does not name one; `None` means the animation does not touch
-    /// that half at all and the element's own value should be used unchanged.
-    pub fn transform_at(
-        &self,
-        base: &crate::Extras,
-        spec: &AnimationSpec,
-        progress: f32,
-    ) -> (Option<f32>, Option<(f32, f32)>) {
-        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-        let rotate = self
-            .segment_by(&|k: &Keyframe| k.extras.rotate.is_some(), progress)
-            .map(|seg| {
-                // The implicit end is the element's own rotation, or 0deg — the
-                // initial value — where it declares none. That is what makes
-                // `@keyframes spin { to { transform: rotate(360deg) } }` sweep
-                // the whole turn rather than sit at 360.
-                let from = seg.from.and_then(|k| k.extras.rotate).or(base.rotate).unwrap_or(0.0);
-                let to = seg.to.and_then(|k| k.extras.rotate).or(base.rotate).unwrap_or(0.0);
-                let t = seg.easing.unwrap_or(spec.easing).eval(seg.t.clamp(0.0, 1.0));
-                lerp(from, to, t)
-            });
-        let scale = self
-            .segment_by(&|k: &Keyframe| k.extras.scale.is_some(), progress)
-            .map(|seg| {
-                let base_scale = base.scale.unwrap_or((1.0, 1.0));
-                let from = seg.from.and_then(|k| k.extras.scale).unwrap_or(base_scale);
-                let to = seg.to.and_then(|k| k.extras.scale).unwrap_or(base_scale);
-                let t = seg.easing.unwrap_or(spec.easing).eval(seg.t.clamp(0.0, 1.0));
-                (lerp(from.0, to.0, t), lerp(from.1, to.1, t))
-            });
-        (rotate, scale)
-    }
-
-    /// [`Keyframes::segment`] over a predicate on the whole keyframe rather
-    /// than on its refinement — the `Extras` half needs the same per-property
-    /// timeline.
-    fn segment_by(&self, declares: &dyn Fn(&Keyframe) -> bool, progress: f32) -> Option<Segment<'_>> {
-        let mut before: Option<&Keyframe> = None;
-        let mut after: Option<&Keyframe> = None;
-        for step in self.steps.iter().filter(|s| declares(s)) {
-            if step.offset <= progress {
-                before = Some(step);
-            } else {
-                after = Some(step);
-                break;
-            }
-        }
-        let span = |a: f32, b: f32| {
-            let width = b - a;
-            if width > 0.0 { ((progress - a) / width).clamp(0.0, 1.0) } else { 1.0 }
-        };
-        match (before, after) {
-            (None, None) => None,
-            (None, Some(to)) => {
-                Some(Segment { from: None, to: Some(to), t: span(0.0, to.offset), easing: None })
-            }
-            (Some(from), None) => Some(Segment {
-                from: Some(from),
-                to: None,
-                t: span(from.offset, 1.0),
-                easing: from.easing,
-            }),
-            (Some(from), Some(to)) => Some(Segment {
-                from: Some(from),
-                to: Some(to),
-                t: span(from.offset, to.offset),
-                easing: from.easing,
-            }),
-        }
-    }
 }
 
 /// The `animation-*` LONGHANDS a block declares without naming an animation.
@@ -720,9 +641,9 @@ mod tests {
 
         let frames = Keyframes {
             steps: vec![
-                Keyframe { offset: 0.0, easing: None, style: Rc::new(zero), extras: crate::Extras::default() },
-                Keyframe { offset: 0.5, easing: None, style: Rc::new(mid), extras: crate::Extras::default() },
-                Keyframe { offset: 1.0, easing: None, style: Rc::new(one), extras: crate::Extras::default() },
+                Keyframe { offset: 0.0, easing: None, style: Rc::new(zero) },
+                Keyframe { offset: 0.5, easing: None, style: Rc::new(mid) },
+                Keyframe { offset: 1.0, easing: None, style: Rc::new(one) },
             ],
         };
         let declares_opacity: &dyn Fn(&StyleRefinement) -> bool = &|r| r.opacity.is_some();

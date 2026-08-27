@@ -260,6 +260,10 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // are dispatched), and a node that was focused when it got detached loses
     // gpui focus. Before the draw, so the picture a media element paints is the
     // one this tick produced.
+    // Two atomic loads: has the renderer recreated its D3D11 device since the
+    // last frame? If so, every `<video>` is decoding onto a dead one and has to
+    // be rebuilt before it is ticked.
+    publish_video_device();
     let media_moved = vn_tree::frame_tick(window, cx);
     // One notify per JS wave that touched the tree — the draw right after
     // this callback picks it up (same frame). While CSS transitions run or a
@@ -471,30 +475,87 @@ fn publish_app_root() {
     }
 }
 
-/// Hands `<video>` the renderer's D3D11 device.
+/// Hands `<video>` the renderer's D3D11 device — and re-hands it every time
+/// the renderer recreates one.
 ///
 /// The pointer is BORROWED from `DirectXDevices`, which lives as long as the
-/// renderer does; `vn_video` clones the COM interface if it keeps it. A
-/// device-lost recreation bumps the generation, which is what a future
-/// rebuild-on-lost would key off.
+/// renderer does; `vn_video` clones the COM interface if it keeps it.
+///
+/// **This runs once per frame, and the generation is the whole point.** A
+/// device-lost recovery (`DirectXDevices::new` after a TDR, a driver update or
+/// a GPU reset) builds a *new* `ID3D11Device` and bumps the generation. Every
+/// Media Foundation engine we created is still decoding onto the dead one, and
+/// every texture it hands us belongs to a device the atlas now refuses to copy
+/// from — which is exactly what the atlas's device-identity check catches. So a
+/// generation change republishes the device and forces each `<video>` to
+/// rebuild on it, keeping its position and transport state.
+///
+/// Two atomic loads and a compare on the frames where nothing happened.
 #[cfg(target_os = "windows")]
 fn publish_video_device() {
+    use std::cell::Cell;
+    thread_local! {
+        /// 0 is never a live generation — `publish_device` pre-increments.
+        static PUBLISHED: Cell<u64> = const { Cell::new(0) };
+    }
     let (ptr, generation) = gpui_windows::renderer_d3d11_device();
-    if ptr.is_null() {
+    if ptr.is_null() || PUBLISHED.with(Cell::get) == generation {
         return;
     }
+    let first = PUBLISHED.with(Cell::get) == 0;
+    PUBLISHED.with(|p| p.set(generation));
     // SAFETY: the pointer comes straight from the live `DirectXDevices`.
     unsafe { vn_tree::set_video_device(ptr, generation) };
+    if first {
+        return;
+    }
+    let rebuilt = vn_tree::video_device_changed();
+    let msg = format!(
+        "[video] the renderer recreated its D3D11 device (generation {generation}) — rebuilt \
+         {rebuilt} <video> element(s) on it, resuming where they were"
+    );
+    eprintln!("{msg}");
+    vn_tree::log::record("window", msg);
 }
 
 #[cfg(not(target_os = "windows"))]
 fn publish_video_device() {}
 
+/// The HTTP client gpui fetches `Resource::Uri` assets through.
+///
+/// Without one, `App::http_client()` is gpui's `NullHttpClient`, which fails
+/// every request with "No HttpClient available" a frame after the element asked
+/// — the silent failure the m10 images report chose an advisory over rather
+/// than shipping.
+///
+/// The user agent is the app's, not a browser's. Nothing here pretends to be
+/// Chrome: a server that serves us different bytes because of the UA string is
+/// a server whose answer we would rather see honestly.
+///
+/// A failure to build one is not fatal — it leaves gpui's null client in place,
+/// which is exactly the behaviour every build had before this. It is logged, so
+/// "my images do not load" has an answer in `VN_LOG=warn`.
+fn install_http_client(app: gpui::Application) -> gpui::Application {
+    match reqwest_client::ReqwestClient::user_agent(concat!(
+        "vue-native/",
+        env!("CARGO_PKG_VERSION")
+    )) {
+        Ok(client) => app.with_http_client(std::sync::Arc::new(client)),
+        Err(e) => {
+            log::warn!(
+                "could not build an HTTP client ({e}); http(s) <img> and <video> sources will \
+                 fail to load. Local paths and data: URIs are unaffected."
+            );
+            app
+        }
+    }
+}
+
 fn main() {
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
     perf::boot();
-    application().run(|cx: &mut App| {
+    install_http_client(application()).run(|cx: &mut App| {
         vn_elements::init(cx); // key bindings for the native <input> widget
         publish_app_root();
         // Before the runtime exists, so the log ring is already recording when

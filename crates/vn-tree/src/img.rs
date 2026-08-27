@@ -5,7 +5,7 @@
 //! | form | example | becomes |
 //! |---|---|---|
 //! | data URL | `data:image/png;base64,iVBOR…` | `ImageSource::Image` (bytes decoded once, cached per node) |
-//! | http(s) URL | `https://host/a.png` | `Resource::Uri` — **advisory**: no HTTP client is wired into this build |
+//! | http(s) URL | `https://host/a.png` | `Resource::Uri` — fetched by gpui's asset loader through the `ReqwestClient` `vn-app` installs |
 //! | `file://` URL | `file:///C:/x/a.png` | `Resource::Path` |
 //! | absolute path | `C:\x\a.png`, `C:/x/a.png` | `Resource::Path` |
 //! | root-relative | `/assets/a.png` | `Resource::Path` under the **app root** |
@@ -131,14 +131,12 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
     }
     match scheme_of(src).as_str() {
         "data" => Err(format!(
-            "<{tag} src=\"data:…\">: data: URIs are not supported for this element yet — it hands \
-             the file to the OS media stack by path. Use a file path; see \
-             crates/vn-video/CONTRACT.md §7 for the byte-stream path that will lift this."
+            "<{tag} src=\"data:…\">: this element loads by PATH, and a data: URI has none. \
+             (`<video>` takes them — see `resolve_media`.)"
         )),
         "http" | "https" => Err(format!(
-            "<{tag} src=\"{src}\">: http(s) sources are not supported yet — this build wires \
-             no HTTP client into gpui (`Application::with_http_client`). Use a local file path \
-             or a data: URI."
+            "<{tag} src=\"{src}\">: this element loads by PATH, and an http(s) URL is not one. \
+             (`<img>` and `<video>` take them — see `resolve` and `resolve_media`.)"
         )),
         "file" => {
             file_url(src).ok_or_else(|| format!("<{tag} src=\"{src}\">: malformed file: URL"))
@@ -150,6 +148,55 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
             "<{tag} src=\"{src}\">: the `{other}:` URL scheme is not supported — use a file \
              path or a data: URI."
         )),
+    }
+}
+
+/// The [`vn_video::MediaSource`] behind a `<video src>` — the same grammar as
+/// `<img>`, resolved to what a media pipeline can take rather than to an image.
+///
+/// Three shapes, because the platform genuinely wants three different things
+/// and flattening them would cost something real each time:
+///
+/// * **a path**, so the OS owns the read-ahead buffer and a 30-minute clip
+///   never becomes a `Vec<u8>`;
+/// * **an http(s) URL verbatim**, so the platform's own network source streams
+///   it. Downloading first would turn "starts in 200 ms" into "starts when the
+///   whole file has arrived", which is not what a browser does either;
+/// * **bytes**, for `data:`, which has neither a path nor a server.
+///
+/// `Err` carries the advisory text the caller routes through its compat
+/// channel — nothing is printed here, because the caller knows the element name.
+pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<vn_video::MediaSource, String> {
+    let src = src.trim();
+    if src.is_empty() {
+        return Err(format!("<{tag} src=\"\">: the src is empty — nothing to load"));
+    }
+    match scheme_of(src).as_str() {
+        "data" => {
+            // The media type is the only hint the platform gets about what the
+            // bytes are: a `data:` URI has no filename and no `Content-Type`.
+            let mime = src
+                .get(5..)
+                .unwrap_or_default()
+                .split_once(',')
+                .map(|(meta, _)| {
+                    meta.split(';').next().unwrap_or("").trim().to_ascii_lowercase()
+                })
+                .unwrap_or_default();
+            let data = data_bytes(tag, src)?;
+            if data.is_empty() {
+                return Err(format!(
+                    "<{tag} src=\"{}…\">: the data: URI decoded to zero bytes",
+                    head(src)
+                ));
+            }
+            Ok(vn_video::MediaSource::Bytes {
+                mime,
+                data: std::sync::Arc::new(data),
+            })
+        }
+        "http" | "https" => Ok(vn_video::MediaSource::Uri(src.to_string())),
+        _ => resolve_path(tag, src).map(vn_video::MediaSource::Path),
     }
 }
 
@@ -208,18 +255,16 @@ fn resolve(src: &str) -> Option<ImageSource> {
 
     match lower_scheme.as_str() {
         "data" => data_url(src),
-        "http" | "https" => {
-            // The gpui asset loader DOES fetch a `Resource::Uri` — through
-            // `cx.http_client()`, which is gpui's `NullHttpClient` unless the
-            // host installs a real one. Handing the URL through anyway would
-            // fail silently one frame later, so say it here, once per URL.
-            warn(format!(
-                "<img src=\"{src}\">: http(s) images are not supported yet — this build wires no \
-                 HTTP client into gpui (`Application::with_http_client`). Use a local file path \
-                 or a data: URI."
-            ));
-            None
-        }
+        // gpui's asset loader fetches a `Resource::Uri` through
+        // `cx.http_client()`, which `vn-app` now installs as a real
+        // `ReqwestClient`. The fetch is ASYNCHRONOUS: the first build gets
+        // `None` back from `use_asset`, gpui spawns the request and notifies
+        // the view when the bytes land, so the element shows its `alt` for a
+        // frame or two and then the picture — which is what a browser does.
+        //
+        // NOT `ImageSource::from(&str)`: gpui's `is_uri` classifies a bare
+        // relative path as `Embedded`, so the scheme is decided here.
+        "http" | "https" => Some(ImageSource::Resource(Resource::Uri(src.to_string().into()))),
         "file" => file_url(src).map(path_source),
         // A single-letter "scheme" is a Windows drive (`C:\x\a.png`), never a
         // URL scheme — no registered scheme is one character long.
@@ -488,9 +533,55 @@ mod tests {
     }
 
     #[test]
-    fn http_is_refused_rather_than_silently_broken() {
-        assert!(resolve("https://example.com/a.png").is_none());
-        assert!(resolve("http://example.com/a.png").is_none());
+    fn http_becomes_a_uri_resource_for_gpuis_asset_loader() {
+        // Was `is_none()` + an advisory until m13 wired a real HTTP client into
+        // gpui. `Resource::Uri` is what makes gpui fetch it.
+        assert!(matches!(
+            resolve("https://example.com/a.png"),
+            Some(ImageSource::Resource(Resource::Uri(_)))
+        ));
+        assert!(matches!(
+            resolve("http://example.com/a.png"),
+            Some(ImageSource::Resource(Resource::Uri(_)))
+        ));
+        // …and a bare relative path still resolves against the app root rather
+        // than being mistaken for a URL, which is the trap `ImageSource::from`
+        // walks into.
+        assert!(matches!(
+            resolve("assets/a.png"),
+            Some(ImageSource::Resource(Resource::Path(_)))
+        ));
+    }
+
+    /// `<video>`'s grammar is `<img>`'s, resolved to a media source. The three
+    /// shapes are not interchangeable: a path lets the OS own the read-ahead,
+    /// a URL lets its network source stream, and bytes are for `data:`, which
+    /// has neither.
+    #[test]
+    fn video_sources_resolve_to_the_shape_the_platform_wants() {
+        use vn_video::MediaSource;
+        assert!(matches!(
+            resolve_media("video", "https://example.com/a.mp4"),
+            Ok(MediaSource::Uri(u)) if u == "https://example.com/a.mp4"
+        ));
+        // base64, with the media type carried through — it is the only hint
+        // the platform gets about what the bytes are.
+        match resolve_media("video", "data:video/mp4;base64,AAAA") {
+            Ok(MediaSource::Bytes { mime, data }) => {
+                assert_eq!(mime, "video/mp4");
+                assert_eq!(&*data, &[0u8, 0, 0]);
+            }
+            other => panic!("{other:?}"),
+        }
+        // A URI that decodes to nothing is an error, not a zero-byte load that
+        // fails four layers down inside Media Foundation.
+        assert!(resolve_media("video", "data:video/mp4;base64,").is_err());
+        assert!(resolve_media("video", "").is_err());
+        // Everything else is still a path.
+        assert!(matches!(
+            resolve_media("video", "assets/clip.mp4"),
+            Ok(MediaSource::Path(_))
+        ));
     }
 
     #[test]

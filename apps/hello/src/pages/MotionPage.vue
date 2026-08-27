@@ -16,6 +16,10 @@ const onTransitionEnd = (e) => {
   lastEnd.value = `${e.propertyName} after ${e.elapsedTime}s`;
 };
 const spinning = ref(true);
+// m13 item 2: a transform on a laid out box. `tilted` drives a transitioned
+// `transform` through an ordinary class toggle, which is the case that proves
+// `transition: transform` interpolates rather than snapping.
+const tilted = ref(false);
 const animStarts = ref(0);
 const animEnds = ref(0);
 const animCancels = ref(0);
@@ -105,6 +109,43 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
       click the spinner to toggle animation-play-state ({{ spinning ? "running" : "paused" }})
     </div>
 
+    <!-- ===== transform on a LAID OUT BOX (m13 item 2) ==================== -->
+    <!-- Everything below is a plain <div>. Before m13 a rotate/scale on one of
+         these was advised and dropped: gpui carried a transformation matrix on
+         a sprite and none at all on a quad. Now `Style::vn_transform` pushes a
+         matrix around the element's whole painted output — background, border,
+         shadow, text and subtree — and changes no layout, which is the browser's
+         rule. -->
+    <div class="tx-row">
+      <div class="tx-card">
+        rotate(15deg)
+        <div class="tx-sub">text · border · shadow</div>
+      </div>
+      <div class="tx-spin-box">spin</div>
+      <div class="tx-scale">scale on :hover</div>
+      <div class="tx-hover" @click="tilted = !tilted" :class="{ tilted }">
+        click to tilt<br />(transition)
+      </div>
+    </div>
+    <div class="hint">
+      1: transform: rotate(15deg) on a &lt;div&gt; — text, border and shadow turn with it. 2:
+      @keyframes spin on a &lt;div&gt; rather than an &lt;svg&gt;. 3: scale(1.25) on :hover, with
+      transition: transform. 4: click to transition rotate+scale+translate. Layout does not move —
+      the row keeps its four upright slots, which is the browser's rule.
+    </div>
+
+    <!-- ===== negative z-index (m13 item 4) =============================== -->
+    <!-- The green panel is `position: absolute; inset: 0; z-index: -1` INSIDE
+         the blue card, and it is painted first — behind the card's text and its
+         sibling badge, in front of the card's own background. That is CSS 2.1
+         Appendix E's rule, and it costs no layout because an absolutely
+         positioned box does not care where it sits among its siblings. -->
+    <div class="z-card">
+      <div class="z-under">z-index: -1 — behind the text, in front of the card's background</div>
+      <div class="z-text">in-flow content</div>
+      <div class="z-badge">sibling</div>
+    </div>
+
     <!-- ===== <lottie> ==================================================== -->
     <div class="lottie-row">
       <lottie
@@ -161,8 +202,9 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
    - `pulse` interpolates one property back and forth, forever;
    - `cycle` has a MID keyframe with its own timing function, which is what
      makes the per-segment easing observable;
-   - `spin` rotates, and rotation only reaches an inline <svg> — gpui carries a
-     transformation matrix on a sprite and none at all on a laid out box. */
+   - `spin` rotates; since m13 it reaches ANY element, not only an inline <svg>,
+     because gpui's Quad/Shadow/PolychromeSprite carry a transformation matrix
+     and `Style::vn_transform` pushes one around the whole painted subtree. */
 @keyframes pulse {
   50% {
     opacity: 0.25;
@@ -220,6 +262,91 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
   width: 20px;
   height: 20px;
   animation: spin 1s linear infinite;
+}
+/* ===== transform on a laid out box ===================================== */
+.tx-row {
+  display: flex;
+  flex-direction: row;
+  gap: 22px;
+  align-items: center;
+  padding: 14px 4px;
+}
+.tx-card,
+.tx-spin-box,
+.tx-scale,
+.tx-hover {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 120px;
+  height: 56px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #ffffff;
+  background: #4f8cff59;
+  border: 1px solid #9dc0ff;
+  box-shadow: 0 6px 14px #0009;
+}
+.tx-card {
+  transform: rotate(15deg);
+}
+.tx-sub {
+  font-size: 9px;
+  color: #cfe0ff;
+}
+.tx-spin-box {
+  width: 56px;
+  animation: spin 2s linear infinite;
+}
+.tx-scale {
+  transition: transform 250ms ease;
+}
+.tx-scale:hover {
+  transform: scale(1.25);
+}
+.tx-hover {
+  cursor: pointer;
+  transition: transform 600ms ease;
+}
+.tx-hover.tilted {
+  transform: rotate(-12deg) scale(1.1) translate(10px, 0);
+}
+/* ===== negative z-index ================================================ */
+.z-card {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  height: 54px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: #1d4ed8;
+  border: 1px solid #93c5fd;
+}
+.z-under {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: #16a34a;
+  font-size: 10px;
+  color: #dcfce7;
+}
+.z-text {
+  font-size: 12px;
+  color: #ffffff;
+}
+.z-badge {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #f59e0b;
+  font-size: 10px;
+  color: #1c1917;
 }
 .anim {
   transition: width 350ms ease, background-color 350ms ease, border-radius 350ms ease;

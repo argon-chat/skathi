@@ -205,12 +205,49 @@ impl MediaEvent {
 
 /// Where the media comes from. Resolved by the caller (the element layer runs
 /// the `<img src>` URL grammar), so a backend never parses a URL.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum MediaSource {
     /// A local file. The backend turns it into whatever its platform wants —
     /// a `file://` URL for Media Foundation, an `AVURLAsset` on macOS.
     Path(PathBuf),
+    /// An absolute `http(s)://` URL, handed to the platform verbatim.
+    ///
+    /// Both target platforms have a network source of their own that reads
+    /// ahead, seeks by range request and never materialises the whole clip:
+    /// Media Foundation's scheme handler and `AVURLAsset`. Downloading first
+    /// would be strictly worse — it would turn a 30-minute stream into a
+    /// 30-minute wait and a file the size of the clip.
+    Uri(String),
+    /// Bytes the caller already has — a `data:` URI.
+    ///
+    /// `mime` is the URI's media type, which is the only hint the platform gets
+    /// about what the bytes are (there is no filename and no `Content-Type`).
+    /// An empty string means the URI declared none, and the platform sniffs.
+    Bytes {
+        mime: String,
+        data: Arc<Vec<u8>>,
+    },
 }
+
+/// Compared to answer one question — "is this the source that is already
+/// loaded?" — so [`MediaSource::Bytes`] compares by IDENTITY, not by content.
+///
+/// The element layer memoises the decode per `src` string, so two `Bytes` from
+/// the same `data:` URI ARE the same `Arc`; two from different URIs are not,
+/// whatever their contents. Comparing megabytes of payload to answer a question
+/// the pointer already answers would be a per-load memcmp for nothing.
+impl PartialEq for MediaSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Path(a), Self::Path(b)) => a == b,
+            (Self::Uri(a), Self::Uri(b)) => a == b,
+            (Self::Bytes { data: a, .. }, Self::Bytes { data: b, .. }) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MediaSource {}
 
 /// What the element wants of the next frame.
 ///
@@ -232,10 +269,14 @@ pub struct FrameRequest {
 
 /// One decoded, presentable frame.
 ///
-/// `image` is BGRA in a `RenderImage`, which is what gpui's atlas uploads and
-/// what `<img>`/`<lottie>` already hand it. CONTRACT.md §5 records why this is
-/// the v1 currency and what replaces it (a `PaintSurface`-shaped primitive that
-/// keeps the frame in VRAM) once the renderer grows one.
+/// Two shapes, one type:
+///
+/// * **zero-copy** (`gpu: Some`) — the pixels are in VRAM and `image` is a
+///   stable, zero-filled placeholder that exists only to give gpui's atlas a
+///   key and a size. This is the Windows path.
+/// * **CPU** (`gpu: None`) — `image` carries real BGRA bytes, which is what
+///   `<img>`/`<lottie>` hand gpui. The fallback, the `stub` backend, and any
+///   platform that has no GPU route yet.
 pub struct VideoFrame {
     pub image: Arc<RenderImage>,
     /// Presentation timestamp in seconds, from the media clock — NOT the wall
@@ -243,6 +284,32 @@ pub struct VideoFrame {
     /// OS owns the A/V master clock, so wall-clock extrapolation (which is
     /// right for `<lottie>`) would drift against the audio.
     pub pts: f64,
+    pub size: (u32, u32),
+    /// **Set when the pixels are NOT in `image`** — see the type docs. The
+    /// host must hand it to `Window::upload_image_from_gpu` before the draw
+    /// that paints `image`, or the element paints transparent.
+    pub gpu: Option<GpuFrame>,
+}
+
+/// A decoded frame that is still in the renderer's own GPU memory.
+///
+/// The one place in this crate where the "name no platform type" rule bends,
+/// and it bends the way gpui's own does: gpui carries a `CVPixelBuffer` in
+/// `PaintSurface` under `#[cfg(target_os = "macos")]` for exactly this reason.
+/// The handle is **opaque** here — a raw COM/Metal pointer, never a typed
+/// platform object — so `backend.rs` still names no platform type, still
+/// compiles with no platform crate in scope, and `AVPlayerItemVideoOutput`'s
+/// `CVPixelBufferRef` fits the same field on macOS.
+///
+/// The texture is **borrowed**: it belongs to the backend, which reuses it in
+/// place for the next frame. It is valid until the next
+/// [`VideoBackend::present`] on the same backend, which is why the host has to
+/// upload it in the tick it was produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuFrame {
+    /// An `ID3D11Texture2D*` on Windows. Opaque; see the type docs.
+    pub texture: *mut std::ffi::c_void,
+    /// The populated region, measured from the texture's origin.
     pub size: (u32, u32),
 }
 
@@ -339,4 +406,18 @@ pub trait VideoBackend {
     /// Unpark. The position and the loaded source survive [`suspend`], so the
     /// default — resume playing if the element wants to — is usually right.
     fn resume(&mut self) {}
+
+    /// The host could not get the last [`VideoFrame::gpu`] texture into the
+    /// renderer's atlas — wrong device, wrong format, or a renderer with no
+    /// GPU upload path at all.
+    ///
+    /// A backend that produces [`GpuFrame`]s should stop producing them and
+    /// fall back to filling `VideoFrame::image` with real bytes; one that never
+    /// produced any ignores this, which is the default.
+    ///
+    /// It is a one-way door on purpose. The three reasons the atlas refuses are
+    /// all properties of the machine or of a device generation, not of the
+    /// frame, so retrying every frame would just log the same rejection 165
+    /// times a second.
+    fn gpu_upload_failed(&mut self) {}
 }

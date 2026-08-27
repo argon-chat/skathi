@@ -71,6 +71,15 @@ struct Entry {
     recent: Vec<&'static str>,
     /// Has this element's error already been turned into an advisory?
     warned_error: bool,
+    /// Where to pick up after a forced rebuild: `(src, currentTime, playing)`.
+    ///
+    /// Set only by [`device_changed`] — the renderer recreating its D3D11
+    /// device is the one event that invalidates a `VideoState` for a reason
+    /// that has nothing to do with the element. Carried across the rebuild and
+    /// applied at `loadedmetadata`, which is the first moment a seek means
+    /// anything. The `src` is part of it so an app that also changes `src` in
+    /// the same frame gets the browser's answer (start at 0) rather than ours.
+    resume: Option<(String, f64, bool)>,
 }
 
 thread_local! {
@@ -184,7 +193,9 @@ pub(crate) fn sync(t: &Tree, id: u32) -> Option<(u32, u32)> {
             None => true,
         };
         if fresh {
+            let mut resume = None;
             if let Some(mut old) = map.remove(&id) {
+                resume = old.resume.take().filter(|(want, _, _)| *want == src);
                 if let Some(state) = old.state.as_mut() {
                     PENDING_DROPS.with(|p| p.borrow_mut().extend(state.take_all_images()));
                 }
@@ -200,6 +211,7 @@ pub(crate) fn sync(t: &Tree, id: u32) -> Option<(u32, u32)> {
                     frame_box: (0, 0),
                     recent: Vec::new(),
                     warned_error: false,
+                    resume,
                 },
             );
         }
@@ -276,14 +288,19 @@ fn load(src: &str) -> Option<VideoState> {
         // not-yet-resolved binding hits this on its first frame).
         return None;
     }
-    let path = match crate::img::resolve_path("video", src) {
-        Ok(path) => path,
+    let source = match crate::img::resolve_media("video", src) {
+        Ok(source) => source,
         Err(msg) => {
             crate::render::warn_compat(&format!("video-src:{src}"), &msg);
             return None;
         }
     };
-    if !path.exists() {
+    // A missing FILE is worth its own message, because the platform's answer to
+    // it ("the source is not supported") names neither the resolved path nor the
+    // base it was resolved against. A missing URL is not: the server's status is
+    // the useful half there, and only the network source knows it.
+    if matches!(&source, MediaSource::Path(p) if !p.exists()) {
+        let MediaSource::Path(path) = &source else { unreachable!() };
         crate::render::warn_compat(
             &format!("video-src:{src}"),
             &format!(
@@ -303,7 +320,7 @@ fn load(src: &str) -> Option<VideoState> {
         }
     };
     let mut state = VideoState::new(backend);
-    match state.set_source(MediaSource::Path(path)) {
+    match state.set_source(source) {
         Ok(()) => Some(state),
         Err(error) => {
             report(src, &error);
@@ -360,6 +377,43 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 // the frame pump
 // ---------------------------------------------------------------------------
 
+/// The renderer recreated its D3D11 device (device-lost recovery), so every
+/// `<video>` is decoding onto a device that no longer exists. Returns how many
+/// elements were rebuilt.
+///
+/// Called from the host's frame pump when
+/// `gpui_windows::renderer_d3d11_device()` reports a new generation. The
+/// element does NOT restart: the position and the transport state are carried
+/// across and re-applied at `loadedmetadata` (see [`Entry::resume`]), so a
+/// TDR while a video plays costs a stutter rather than a rewind.
+///
+/// The old frames are dropped WITHOUT `Window::drop_image`. That looks like a
+/// leak and is the opposite: `DirectXAtlas::handle_device_lost` has already
+/// cleared `tiles_by_key`, so the tiles are gone and asking the atlas to free
+/// them again would only remove keys that a rebuilt element may already have
+/// re-inserted.
+pub fn device_changed() -> usize {
+    VIDEO_STATES.with(|m| {
+        let mut map = m.borrow_mut();
+        let mut rebuilt = 0;
+        for entry in map.values_mut() {
+            let Some(state) = entry.state.as_mut() else { continue };
+            entry.resume = Some((
+                entry.src.clone(),
+                state.current_time(),
+                state.wants_playing(),
+            ));
+            let _dead_on_the_old_device = state.take_all_images();
+            entry.state = None;
+            // `sync` reloads when the src it built from differs from the live
+            // prop; clearing it is what makes the next build rebuild.
+            entry.src.clear();
+            rebuilt += 1;
+        }
+        rebuilt
+    })
+}
+
 /// True while any `<video>` still needs frames — folded into the host's
 /// `animating()` OR-chain next to `<lottie>`'s.
 pub fn any_playing() -> bool {
@@ -386,6 +440,12 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     // `flush_changes` re-enters `gc`), so the map must not be borrowed while
     // any of this reaches JavaScript.
     let mut moved = false;
+    // The zero-copy present path leaves the decoded frame in VRAM and hands us
+    // a BORROWED texture; this is where it becomes an atlas tile. Collected
+    // inside the map borrow and uploaded outside it, for the same reason the
+    // events are collected and dispatched after — `upload_image_from_gpu` takes
+    // `&mut Window`, and the map must not be borrowed while it is held.
+    let mut uploads: Vec<(u32, Arc<RenderImage>, vn_video::GpuFrame)> = Vec::new();
     let ticks: Vec<(u32, Vec<MediaEvent>)> = VIDEO_STATES.with(|m| {
         let mut map = m.borrow_mut();
         let mut out = Vec::new();
@@ -418,6 +478,22 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
             if advance.new_frame {
                 moved = true;
             }
+            if let Some((image, gpu)) = state.take_gpu_upload() {
+                uploads.push((id, image, gpu));
+            }
+            // A rebuild forced by device-lost picks up where it left off. The
+            // seek can only land once the new pipeline knows the duration, so
+            // it waits for `loadedmetadata` — the same moment a browser's own
+            // `currentTime` becomes settable.
+            if entry.resume.is_some()
+                && advance.events.contains(&MediaEvent::LoadedMetadata)
+            {
+                if let Some((_, at, playing)) = entry.resume.take() {
+                    state.seek(at);
+                    state.set_playing(playing);
+                    moved = true;
+                }
+            }
             if !advance.events.is_empty() {
                 for event in &advance.events {
                     if entry.recent.len() >= RING {
@@ -430,6 +506,31 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
         }
         out
     });
+
+    // Before the events, because a JS handler could unmount the node and take
+    // its `VideoState` — and therefore the texture — with it.
+    for (id, image, gpu) in uploads {
+        let ok = window
+            .upload_image_from_gpu(&image, 0, gpui::GpuTextureHandle(gpu.texture))
+            .unwrap_or(false);
+        if !ok {
+            // The atlas refused it: a decode on a private device
+            // (`VN_VIDEO_DEVICE=private`), a device generation that moved under
+            // us, or a renderer with no GPU path. Fall back to the readback,
+            // which always works, rather than painting a transparent box.
+            crate::render::warn_compat(
+                "video-gpu-upload",
+                "<video>: the renderer refused the zero-copy GPU blit for a decoded frame — \
+                 falling back to the CPU readback path, which costs ~1.2 ms per 800x450 frame. \
+                 VN_LOG=info names the reason; VN_VIDEO_DEVICE=private is the usual one.",
+            );
+            VIDEO_STATES.with(|m| {
+                if let Some(state) = m.borrow_mut().get_mut(&id).and_then(|e| e.state.as_mut()) {
+                    state.gpu_upload_failed();
+                }
+            });
+        }
+    }
 
     for (id, events) in ticks {
         dispatch_events(id, &events, window, cx);

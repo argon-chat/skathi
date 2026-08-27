@@ -55,6 +55,15 @@ vn-voice = { path = "../vn-voice" }
 # Cargo has no per-feature exclusion for a dependency a prod build never calls,
 # same as `image` above.
 livekit-api = { version = "0.6", default-features = false, features = ["access-token"] }
+# The HTTP client gpui asks for when an `<img src="https://…">` or a
+# `<video src="https://…">` needs bytes. Without one, `App::http_client()` is
+# gpui's `NullHttpClient`, which fails every request with "No HttpClient
+# available" a frame after the element asked — the silent failure the m10
+# images report chose an advisory over.
+#
+# This is the fork's own client (vendor/zed/crates/reqwest_client), so it is
+# the one Zed ships and the one gpui's asset loader was written against.
+reqwest_client = { path = "../../vendor/zed/crates/reqwest_client" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # `<video>` decodes onto the renderer's own D3D11 device, and this is the only

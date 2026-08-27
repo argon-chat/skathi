@@ -219,17 +219,17 @@ pub fn computed_style(id: u32) -> Option<String> {
             "pointer-events",
             if cs.extras.pointer_events_none == Some(true) { "none" } else { "auto" }.into(),
         );
-        put(
-            "transform",
-            match cs.extras.translate {
-                Some((x, y)) => format!("translate({}, {})", css_len(x), css_len(y)),
-                None => "none".into(),
-            },
-        );
-        // The containing-block probe every floating-ui build runs. None of these
-        // is applied by the renderer, so their initial value IS what happens —
-        // reporting it is more honest than reporting nothing, and it lets
-        // `isContainingBlock` answer correctly instead of by accident.
+        // The FULL transform now — translate, rotate and scale all reach the
+        // paint (m13 item 2), so all three are reported. The serialisation is
+        // the function list rather than the `matrix()` a browser resolves to,
+        // because that is what the cascade actually holds; floating-ui's
+        // `isContainingBlock` only tests it against `"none"`.
+        put("transform", transform_text(cs.base.vn_transform));
+        // The containing-block probe every floating-ui build runs. These are
+        // the INDIVIDUAL transform properties, which vue-native does not map —
+        // `transform` above is the shorthand and the only one that applies —
+        // plus three that are genuinely not implemented. Reporting the initial
+        // value is honest: it IS what happens.
         for name in ["translate", "rotate", "scale", "perspective", "filter"] {
             put(name, "none".into());
         }
@@ -306,9 +306,35 @@ fn secs(d: std::time::Duration) -> String {
     format!("{}s", d.as_secs_f32())
 }
 
-fn css_len(v: vn_css::TranslateLen) -> String {
+fn css_len(v: gpui::TransformLength) -> String {
     match v {
-        vn_css::TranslateLen::Px(p) => format!("{p}px"),
-        vn_css::TranslateLen::Percent(f) => format!("{}%", f * 100.0),
+        gpui::TransformLength::Pixels(p) => format!("{p}px"),
+        gpui::TransformLength::Fraction(f) => format!("{}%", f * 100.0),
     }
+}
+
+/// `getComputedStyle().transform`, as the function list the cascade computed.
+///
+/// A browser resolves the shorthand to a `matrix(...)`; we serialise the parts,
+/// which is strictly more informative and matches what every consumer in the
+/// reused-component set actually does with it (compare against `"none"`).
+fn transform_text(t: Option<gpui::TransformSpec>) -> String {
+    let Some(t) = t.filter(|t| !t.is_identity()) else {
+        return "none".into();
+    };
+    let mut parts: Vec<String> = Vec::new();
+    if !t.translate.0.is_zero() || !t.translate.1.is_zero() {
+        parts.push(format!(
+            "translate({}, {})",
+            css_len(t.translate.0),
+            css_len(t.translate.1)
+        ));
+    }
+    if t.rotate != 0.0 {
+        parts.push(format!("rotate({}deg)", t.rotate.to_degrees()));
+    }
+    if t.scale != (1.0, 1.0) {
+        parts.push(format!("scale({}, {})", t.scale.0, t.scale.1));
+    }
+    parts.join(" ")
 }

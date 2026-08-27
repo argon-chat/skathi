@@ -274,7 +274,7 @@ impl Tree {
         self.nodes.get(id as usize).and_then(Option::as_ref)
     }
 
-    fn node_mut(&mut self, id: u32) -> Option<&mut Node> {
+    pub(crate) fn node_mut(&mut self, id: u32) -> Option<&mut Node> {
         self.nodes.get_mut(id as usize).and_then(Option::as_mut)
     }
 
@@ -867,15 +867,6 @@ pub fn advance_animations() {
         a.tick(now);
         a.finish_settled(now);
     });
-}
-
-/// The `rotate`/`scale` a node is showing this frame, animations included.
-pub fn animation_transform(
-    id: u32,
-    base: &vn_css::Extras,
-    now: std::time::Instant,
-) -> (Option<f32>, Option<(f32, f32)>) {
-    ANIMATOR.with(|a| a.borrow().transform(id, base, now))
 }
 
 /// Drains the `transitionend` / `animation*` events the animator queued.
