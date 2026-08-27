@@ -90,11 +90,40 @@ thread_local! {
 // Off unless `VN_LOG` is set, because these are not app-developer messages: the
 // app-facing channels are the compat advisories and the devtools log ring.
 // `VN_LOG=info` (or `error`/`warn`/`debug`/`trace`) writes them to stderr.
-struct StderrLogger;
+//
+// `VN_LOG` takes either a bare level (`VN_LOG=debug`) or `RUST_LOG`-shaped
+// per-target directives (`VN_LOG=off,livekit=debug,libwebrtc=debug`). The
+// second form is not a convenience: at a bare `debug` this process emits
+// thousands of `parcel_selectors::matching` lines per restyle, so the one
+// setting that makes a chatty subsystem readable also makes the host slow
+// enough to move the timing of whatever is being debugged. A directive list
+// keeps the cost where the interest is.
+struct StderrLogger {
+    /// `(target prefix, level)`, longest prefix first, so `livekit::room` beats
+    /// `livekit`.
+    directives: Vec<(String, log::LevelFilter)>,
+    default: log::LevelFilter,
+}
+
+impl StderrLogger {
+    fn level_for(&self, target: &str) -> log::LevelFilter {
+        for (prefix, level) in &self.directives {
+            if target == prefix || target.starts_with(prefix.as_str()) {
+                // `livekit_api` must not match a `livekit` directive; only a
+                // module separator (or an exact match) counts as a boundary.
+                let rest = &target[prefix.len()..];
+                if rest.is_empty() || rest.starts_with("::") {
+                    return *level;
+                }
+            }
+        }
+        self.default
+    }
+}
 
 impl log::Log for StderrLogger {
-    fn enabled(&self, _: &log::Metadata) -> bool {
-        true
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= self.level_for(metadata.target())
     }
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
@@ -109,23 +138,65 @@ impl log::Log for StderrLogger {
     fn flush(&self) {}
 }
 
+fn parse_level(word: &str) -> Option<log::LevelFilter> {
+    match word.trim().to_ascii_lowercase().as_str() {
+        "" | "info" | "1" | "true" => Some(log::LevelFilter::Info),
+        "off" | "0" | "false" => Some(log::LevelFilter::Off),
+        "error" => Some(log::LevelFilter::Error),
+        "warn" => Some(log::LevelFilter::Warn),
+        "debug" => Some(log::LevelFilter::Debug),
+        "trace" => Some(log::LevelFilter::Trace),
+        _ => None,
+    }
+}
+
 fn install_logger() {
-    let Ok(level) = std::env::var("VN_LOG") else { return };
-    let filter = match level.trim().to_ascii_lowercase().as_str() {
-        "" | "info" | "1" | "true" => log::LevelFilter::Info,
-        "error" => log::LevelFilter::Error,
-        "warn" => log::LevelFilter::Warn,
-        "debug" => log::LevelFilter::Debug,
-        "trace" => log::LevelFilter::Trace,
-        "off" => return,
-        other => {
-            eprintln!("[vn] VN_LOG={other:?} is not a level — using info");
-            log::LevelFilter::Info
+    let Ok(spec) = std::env::var("VN_LOG") else { return };
+    let mut default = log::LevelFilter::Off;
+    let mut directives: Vec<(String, log::LevelFilter)> = Vec::new();
+    let mut saw_bare = false;
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
         }
-    };
-    static LOGGER: StderrLogger = StderrLogger;
-    if log::set_logger(&LOGGER).is_ok() {
-        log::set_max_level(filter);
+        match part.split_once('=') {
+            Some((target, level)) => match parse_level(level) {
+                Some(l) => directives.push((target.trim().to_string(), l)),
+                None => eprintln!("[vn] VN_LOG: {level:?} is not a level — ignoring {part:?}"),
+            },
+            None => match parse_level(part) {
+                Some(l) => {
+                    default = l;
+                    saw_bare = true;
+                }
+                None => eprintln!("[vn] VN_LOG={part:?} is not a level — using info"),
+            },
+        }
+    }
+    // `VN_LOG=livekit=debug` alone means "that target, nothing else" rather
+    // than "that target plus everything at info".
+    if !saw_bare && directives.is_empty() {
+        default = log::LevelFilter::Info;
+    }
+    if default == log::LevelFilter::Off && directives.is_empty() {
+        return;
+    }
+    // Longest prefix wins, so a specific directive is never shadowed by a
+    // shorter one that happens to be listed first.
+    directives.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    let max = directives
+        .iter()
+        .map(|(_, l)| *l)
+        .chain(std::iter::once(default))
+        .max()
+        .unwrap_or(log::LevelFilter::Off);
+    let logger: &'static StderrLogger =
+        Box::leak(Box::new(StderrLogger { directives, default }));
+    if log::set_logger(logger).is_ok() {
+        // The facade's global gate must be the *loosest* of the directives, or
+        // records are dropped before `enabled` ever sees their target.
+        log::set_max_level(max);
     }
 }
 
