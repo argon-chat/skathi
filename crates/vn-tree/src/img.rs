@@ -100,38 +100,63 @@ pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
     if src.is_empty() {
         return Err(format!("<{tag} src=\"\">: the src is empty — nothing to load"));
     }
-    let lower_scheme = src
-        .split_once(':')
-        .map(|(s, _)| s.to_ascii_lowercase())
-        .unwrap_or_default();
-
-    let path = match lower_scheme.as_str() {
-        "data" => return data_bytes(tag, src),
-        "http" | "https" => {
-            return Err(format!(
-                "<{tag} src=\"{src}\">: http(s) sources are not supported yet — this build wires \
-                 no HTTP client into gpui (`Application::with_http_client`). Use a local file path \
-                 or a data: URI."
-            ))
-        }
-        "file" => file_url(src)
-            .ok_or_else(|| format!("<{tag} src=\"{src}\">: malformed file: URL"))?,
-        // A single-letter "scheme" is a Windows drive, never a URL scheme.
-        s if s.len() == 1 && s.chars().all(|c| c.is_ascii_alphabetic()) => PathBuf::from(src),
-        "" => relative_to_base(src),
-        other => {
-            return Err(format!(
-                "<{tag} src=\"{src}\">: the `{other}:` URL scheme is not supported — use a file \
-                 path or a data: URI."
-            ))
-        }
-    };
+    if scheme_of(src) == "data" {
+        return data_bytes(tag, src);
+    }
+    let path = resolve_path(tag, src)?;
     std::fs::read(&path).map_err(|e| {
         format!(
             "<{tag} src=\"{src}\">: could not read {} — {e}",
             path.display()
         )
     })
+}
+
+/// The FILE PATH behind a `src`, for elements that hand the *file* to something
+/// else rather than reading it — `<video>` gives Media Foundation a URL and lets
+/// the OS own the read-ahead buffer, which is the whole point (a 30-minute clip
+/// must not become a 2 GB `Vec<u8>`).
+///
+/// The grammar is [`resolve`]'s minus `data:`, verbatim: `file://` URLs,
+/// absolute Windows paths and relative/root-relative paths against the app root
+/// all mean here exactly what they mean for `<img src>`, so the three elements
+/// can never drift apart.
+///
+/// `Err` carries the advisory text the caller should route through its compat
+/// channel — nothing is printed here, because the caller knows the element name.
+pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
+    let src = src.trim();
+    if src.is_empty() {
+        return Err(format!("<{tag} src=\"\">: the src is empty — nothing to load"));
+    }
+    match scheme_of(src).as_str() {
+        "data" => Err(format!(
+            "<{tag} src=\"data:…\">: data: URIs are not supported for this element yet — it hands \
+             the file to the OS media stack by path. Use a file path; see \
+             crates/vn-video/CONTRACT.md §7 for the byte-stream path that will lift this."
+        )),
+        "http" | "https" => Err(format!(
+            "<{tag} src=\"{src}\">: http(s) sources are not supported yet — this build wires \
+             no HTTP client into gpui (`Application::with_http_client`). Use a local file path \
+             or a data: URI."
+        )),
+        "file" => {
+            file_url(src).ok_or_else(|| format!("<{tag} src=\"{src}\">: malformed file: URL"))
+        }
+        // A single-letter "scheme" is a Windows drive, never a URL scheme.
+        s if s.len() == 1 && s.chars().all(|c| c.is_ascii_alphabetic()) => Ok(PathBuf::from(src)),
+        "" => Ok(relative_to_base(src)),
+        other => Err(format!(
+            "<{tag} src=\"{src}\">: the `{other}:` URL scheme is not supported — use a file \
+             path or a data: URI."
+        )),
+    }
+}
+
+fn scheme_of(src: &str) -> String {
+    src.split_once(':')
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 /// `data:` URI → payload bytes. The media type is *not* checked: unlike `<img>`,

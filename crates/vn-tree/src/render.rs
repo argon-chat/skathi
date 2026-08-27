@@ -264,6 +264,7 @@ pub(crate) fn gc_node_state() {
     PREV_BOUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     img_src::gc(live);
     crate::lottie::gc(live);
+    crate::video::gc(live);
     let focused = FOCUSED_NODE.with(|f| f.get());
     if focused == 0 {
         return;
@@ -794,6 +795,10 @@ fn build_node<V: 'static>(
         Kind::Element if t.name(node.tag) == "lottie" => stack(
             &extras,
             probe(id, build_lottie(t, id, node, window, cx, now, control_area)),
+        ),
+        Kind::Element if t.name(node.tag) == "video" => stack(
+            &extras,
+            probe(id, build_video(t, id, node, window, cx, now, control_area)),
         ),
         Kind::Element => stack(&extras, probe_at(id, id == t.root, {
             // Every mirrored node gets a stable ElementId — hover/active/
@@ -1659,6 +1664,158 @@ fn build_lottie<V: 'static>(
     let mask = pointer_mask(node);
     let bit = |ev: u32| mask & (1u64 << ev) != 0;
     // Like `<img>`: not focusable in HTML without `tabindex`.
+    let tab_index = tab_index_of(t, id);
+    let focusable = tab_index.is_some()
+        || bit(tree::EV_KEYDOWN)
+        || bit(tree::EV_KEYUP)
+        || bit(tree::EV_FOCUS)
+        || bit(tree::EV_BLUR);
+    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
+    if let Some(h) = &handle {
+        d = d.track_focus(h);
+        if focusable {
+            watch_focus(id, h, window, cx);
+        }
+    }
+    let click_focus = handle.filter(|_| focusable);
+    bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// <video>
+// ---------------------------------------------------------------------------
+
+fn video_fit(fit: vn_css::ObjectFit) -> vn_video::VideoFit {
+    match fit {
+        vn_css::ObjectFit::Fill => vn_video::VideoFit::Fill,
+        vn_css::ObjectFit::Contain => vn_video::VideoFit::Contain,
+        vn_css::ObjectFit::Cover => vn_video::VideoFit::Cover,
+        vn_css::ObjectFit::ScaleDown => vn_video::VideoFit::ScaleDown,
+        vn_css::ObjectFit::None => vn_video::VideoFit::None,
+    }
+}
+
+/// `<video src="assets/clip.mp4" autoplay loop muted @timeupdate="…" />` — a
+/// replaced element whose content is the frame the pump last pulled out of the
+/// OS media pipeline.
+///
+/// Structurally it is a styled box (so the cascade, `background`, borders,
+/// `border-radius`, `overflow: hidden` and the event listeners all work exactly
+/// as on a `<div>`) wrapping the crate's `size_full()` image. Keeping it INSIDE
+/// the scene graph like this is why we use Media Foundation's frame-server mode
+/// rather than handing it a DirectComposition visual of its own: a video on a
+/// sibling visual cannot be clipped, rounded, faded or z-interleaved with CSS
+/// content.
+///
+/// The box follows the `<lottie>` / `<img>` rule exactly: CSS `width`/`height`
+/// win outright; with neither, the box takes the video's intrinsic size; with
+/// one, the other follows from the intrinsic aspect ratio.
+///
+/// **`poster` is what paints before the first frame** — and it is a real
+/// `<img>`, resolved through the same `src` grammar, so a poster and an `<img>`
+/// with the same path share gpui's decoded-image cache.
+fn build_video<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+    control_area: Option<WindowControlArea>,
+) -> AnyElement {
+    // Load (once per `src`) and push this frame's props into the transport.
+    let intrinsic = crate::video::sync(t, id);
+
+    let mut d = with_control_area(div().id(id as usize), id, control_area);
+    if let Some(cs) = &node.computed {
+        d = apply_computed_style(d, cs, id, now);
+    }
+    presentational_size(t, id, d.style());
+
+    let object_fit = node
+        .computed
+        .as_ref()
+        .and_then(|cs| cs.extras.object_fit)
+        .map(video_fit)
+        // NOT the CSS initial value (`fill`): HTML says a video is "shown
+        // centred in the playback area at the largest possible size that fits
+        // completely within it, with the aspect ratio preserved".
+        .unwrap_or(vn_video::VideoFit::Contain);
+
+    // The box, and with it the size the next tick decodes at.
+    let (iw, ih) = intrinsic.unwrap_or((0, 0));
+    let mut painted_box = prev_size_of(id);
+    if iw > 0 && ih > 0 {
+        let (iw, ih) = (iw.max(1) as f32, ih.max(1) as f32);
+        let rem = window.rem_size();
+        let (style_w, style_h) = {
+            let size = &d.style().size;
+            (size.width, size.height)
+        };
+        let (sized_w, sized_h) = (is_sized(style_w), is_sized(style_h));
+        let painted = prev_size_of(id);
+        let known_w = definite_px(style_w, rem).or(painted.filter(|_| sized_w).map(|p| p.0));
+        let known_h = definite_px(style_h, rem).or(painted.filter(|_| sized_h).map(|p| p.1));
+
+        let (fill_w, fill_h) = match (sized_w, sized_h) {
+            (true, true) => (None, None),
+            (true, false) => (None, known_w.map(|w| w * ih / iw).or(Some(ih))),
+            (false, true) => (known_h.map(|h| h * iw / ih).or(Some(iw)), None),
+            (false, false) => (Some(iw), Some(ih)),
+        };
+        if let Some(w) = fill_w {
+            d.style().size.width = Some(gpui::Length::Definite(gpui::px(w).into()));
+        }
+        if let Some(h) = fill_h {
+            d.style().size.height = Some(gpui::Length::Definite(gpui::px(h).into()));
+        }
+        painted_box = painted.or(Some((
+            known_w.or(fill_w).unwrap_or(iw),
+            known_h.or(fill_h).unwrap_or(ih),
+        )));
+    }
+
+    // Publish the box the next tick decodes at. This is why the present path is
+    // affordable at all: a 1080p clip in an 800x450 box reads back 1.4 MB a
+    // frame instead of 8.3 (crates/vn-video/src/mf/present.rs).
+    let options = vn_video::VideoOptions {
+        size: painted_box.unwrap_or((0.0, 0.0)),
+        scale: window.scale_factor(),
+        object_fit,
+    };
+    crate::video::note_frame_box(id, &options);
+
+    let has_frame = crate::video::with_state(id, |s| s.frame().is_some()).unwrap_or(false);
+    if has_frame {
+        if let Some(child) =
+            crate::video::with_state(id, |s| vn_video::video(s, &options, window, &mut **cx))
+        {
+            d = d.child(child);
+        }
+    } else if let Some(poster) = t.prop(id, "poster").filter(|p| !p.trim().is_empty()) {
+        // Before `loadeddata` — and forever, for a `src` that failed — the
+        // poster is what a browser paints.
+        if let Some(source) = img_src::source_for(id, poster.trim()) {
+            d = d.child(
+                gpui::img(source)
+                    .object_fit(gpui_object_fit(
+                        node.computed
+                            .as_ref()
+                            .and_then(|cs| cs.extras.object_fit)
+                            .unwrap_or(vn_css::ObjectFit::Contain),
+                    ))
+                    .size_full()
+                    .into_any_element(),
+            );
+        }
+    }
+
+    let mask = pointer_mask(node);
+    let bit = |ev: u32| mask & (1u64 << ev) != 0;
+    // Like `<img>` and `<lottie>`: not focusable in HTML without `tabindex`.
+    // (A browser's `<video controls>` IS focusable, but we render no controls —
+    // the app's own buttons are the focusable things.)
     let tab_index = tab_index_of(t, id);
     let focusable = tab_index.is_some()
         || bit(tree::EV_KEYDOWN)

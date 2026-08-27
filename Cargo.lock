@@ -5668,6 +5668,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "gpui_windows",
  "image",
  "log",
  "raw-window-handle",
@@ -5741,6 +5742,17 @@ dependencies = [
  "vn-elements",
  "vn-lottie",
  "vn-runtime",
+ "vn-video",
+]
+
+[[package]]
+name = "vn-video"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "image",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]

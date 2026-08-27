@@ -10,4 +10,6 @@ vn-css = { path = "../vn-css" }
 vn-elements = { path = "../vn-elements" }
 # The `<lottie>` element's playback engine — see crates/vn-lottie/CONTRACT.md.
 vn-lottie = { path = "../vn-lottie" }
+# The `<video>` element playback engine - see crates/vn-video/CONTRACT.md.
+vn-video = { path = "../vn-video" }
 vn-runtime = { path = "../vn-runtime" }

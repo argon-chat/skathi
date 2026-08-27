@@ -39,6 +39,10 @@ vn-runtime = { path = "../vn-runtime" }
 vn-tree = { path = "../vn-tree" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# `<video>` decodes onto the renderer's own D3D11 device, and this is the only
+# crate that can see both halves: gpui_windows publishes the device, vn-tree
+# hands it to the Media Foundation backend. Nothing else here uses gpui_windows.
+gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features = false }
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",

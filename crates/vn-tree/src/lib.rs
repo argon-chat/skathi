@@ -22,15 +22,19 @@ mod lottie;
 pub mod perf;
 mod render;
 mod tree;
+mod video;
 
 pub mod devtools;
 
 pub use img::{asset_base, set_asset_base};
 pub use render::{build_root, control_hitboxes, flush_pending_mouse_move, painted_drag_region};
 pub use tree::{
-    with_tree, EV_BLUR, EV_CLICK, EV_COMPLETE, EV_ENTERFRAME, EV_FOCUS, EV_INPUT, EV_KEYDOWN,
-    EV_KEYUP, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEENTER, EV_MOUSELEAVE, EV_MOUSEMOVE,
-    EV_MOUSEUP, EV_SCROLL, EV_WHEEL,
+    with_tree, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH, EV_CLICK, EV_COMPLETE, EV_DURATIONCHANGE,
+    EV_EMPTIED, EV_ENDED, EV_ENTERFRAME, EV_ERROR, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP,
+    EV_LOADEDDATA, EV_LOADEDMETADATA, EV_LOADSTART, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEENTER,
+    EV_MOUSELEAVE, EV_MOUSEMOVE, EV_MOUSEUP, EV_PAUSE, EV_PLAY, EV_PLAYING, EV_RATECHANGE,
+    EV_SCROLL, EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE, EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL,
+    EVENT_NAMES,
 };
 
 /// The numeric payload a native input event carries into JS. Meaning by event:
@@ -216,6 +220,47 @@ host_fn!(fn vn_computed_style(_g, args) {
     ret_string(&dom::computed_style(id).unwrap_or_default())
 });
 
+// ---------------------------------------------------------------------------
+// the `<video>` media surface (crates/vn-video/CONTRACT.md §6)
+// ---------------------------------------------------------------------------
+//
+// `HTMLMediaElement` is the one element whose interesting state lives in the
+// HOST rather than in the mirror: `currentTime` moves sixty times a second
+// inside the OS pipeline and no prop write puts it there. So the surface is a
+// property read and a method call, the same split `__vn_bounds` /
+// `__vn_computed_style` already established, and the JS runtime's job is only
+// to spell them `el.currentTime` and `el.play()`.
+
+// `name=value` lines, empty for a node that is not a loaded `<video>`.
+host_fn!(fn vn_media_state(_g, args) {
+    let id = arg_id(args.arg(0));
+    ret_string(&video::media_state(id).unwrap_or_default())
+});
+
+// `play` / `pause` / `currentTime =` / `volume =` / `muted =` / `playbackRate =`
+// / `loop =`, by verb. Returns whether the node was a live `<video>` at all.
+host_fn!(fn vn_media_call(_g, args) {
+    let id = arg_id(args.arg(0));
+    let verb = arg_id(args.arg(1));
+    let arg = args.arg(2).as_number().unwrap_or(0.0);
+    Value::boolean(video::media_call(id, verb, arg)).0
+});
+
+// `canPlayType(type)` -> "" | "maybe" | "probably", probed live on this
+// machine — never a static table (the owner constraint in vn_video's docs).
+host_fn!(fn vn_media_can_play(g, args) {
+    let id = arg_id(args.arg(0));
+    let mime = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    ret_string(&video::can_play_type(id, &mime))
+});
+
+// Drains the node's recent media events, comma-joined. A bridge and a test
+// surface — the events themselves go out on the ordinary EV_* channel.
+host_fn!(fn vn_media_events(_g, args) {
+    let id = arg_id(args.arg(0));
+    ret_string(&video::drain_recent(id))
+});
+
 /// Registers the whole `__vn_*` protocol surface on the JS global.
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
@@ -238,6 +283,10 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_query", 3, vn_query as *const _),
         ("__vn_bounds", 1, vn_bounds as *const _),
         ("__vn_computed_style", 1, vn_computed_style as *const _),
+        ("__vn_media_state", 1, vn_media_state as *const _),
+        ("__vn_media_call", 3, vn_media_call as *const _),
+        ("__vn_media_can_play", 2, vn_media_can_play as *const _),
+        ("__vn_media_events", 1, vn_media_events as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
@@ -268,6 +317,27 @@ pub fn lotties_animating() -> bool {
     lottie::any_playing()
 }
 
+/// True while any `<video>` still needs frames (playing, seeking, or waiting
+/// for its first frame). Folded into the host's `animating()` OR-chain next to
+/// [`lotties_animating`], so a playing video keeps the pump awake and a paused
+/// one lets it sleep.
+pub fn videos_playing() -> bool {
+    video::any_playing()
+}
+
+/// Publishes the renderer's D3D11 device to the `<video>` backend, so Media
+/// Foundation decodes onto the texture pool gpui already owns instead of a
+/// second one. The host calls this once at boot with what
+/// `gpui_windows::renderer_d3d11_device()` returns; without it `<video>` still
+/// works, on a private device (see `vn_video::mf`).
+///
+/// # Safety
+/// `ptr` must be a live `ID3D11Device` COM pointer owned by the caller.
+#[cfg(windows)]
+pub unsafe fn set_video_device(ptr: *mut c_void, generation: u64) {
+    vn_video::mf::set_shared_device(ptr, generation);
+}
+
 /// The per-frame work that needs a `Window` and cannot be done from a host fn.
 /// Call it once per frame from the pump, BEFORE the draw; returns `true` when
 /// something moved and the window must repaint.
@@ -282,7 +352,11 @@ pub fn lotties_animating() -> bool {
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     render::apply_pending_blur(window, cx);
     render::ensure_root_focus(window, cx);
-    lottie::tick(window, cx)
+    // Both, unconditionally: `|` rather than `||`, because a `<video>` frame
+    // must be pulled even on a tick where a `<lottie>` also moved.
+    let lottie_moved = lottie::tick(window, cx);
+    let video_moved = video::tick(window, cx);
+    lottie_moved | video_moved
 }
 
 /// Mirrors the OS reduced-motion preference into the transition animator.

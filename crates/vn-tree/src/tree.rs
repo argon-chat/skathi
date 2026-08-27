@@ -32,6 +32,36 @@ pub const EV_MOUSEMOVE: u32 = 14;
 pub const EV_MOUSEENTER: u32 = 15;
 pub const EV_MOUSELEAVE: u32 = 16;
 
+// `<video>` — the HTML media event set (crates/vn-video/CONTRACT.md §4). Every
+// one of these is also an `MF_MEDIA_ENGINE_EVENT` below 1000, which Microsoft
+// documents as the HTML 5 media events, so the names are the spec's on both
+// sides of the boundary and a component ports from the browser unchanged.
+//
+// This is the block the `u32 -> u64` widening existed for: it takes the highest
+// used code from 16 to 34.
+pub const EV_LOADSTART: u32 = 17;
+pub const EV_LOADEDMETADATA: u32 = 18;
+pub const EV_LOADEDDATA: u32 = 19;
+pub const EV_CANPLAY: u32 = 20;
+pub const EV_CANPLAYTHROUGH: u32 = 21;
+pub const EV_PLAY: u32 = 22;
+pub const EV_PLAYING: u32 = 23;
+pub const EV_PAUSE: u32 = 24;
+pub const EV_SEEKING: u32 = 25;
+pub const EV_SEEKED: u32 = 26;
+/// Throttled to the spec's "no more often than every 250 ms" — see
+/// `vn_video::VideoState`. High frequency by media standards, so like
+/// `enterFrame` it is gated on the listener bit before the payload is built.
+pub const EV_TIMEUPDATE: u32 = 27;
+pub const EV_DURATIONCHANGE: u32 = 28;
+pub const EV_RATECHANGE: u32 = 29;
+pub const EV_VOLUMECHANGE: u32 = 30;
+pub const EV_WAITING: u32 = 31;
+pub const EV_ENDED: u32 = 32;
+/// Carries `MediaError.code` in `a` and the advisory text in `key`.
+pub const EV_ERROR: u32 = 33;
+pub const EV_EMPTIED: u32 = 34;
+
 /// Every host event code with the name JS knows it by — the ONE table, so a
 /// listing (devtools) can never lag the codes again. It did: `event_names` in
 /// `devtools.rs` stopped at code 10 and never learned the three `<lottie>`
@@ -57,6 +87,24 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_MOUSEMOVE, "mousemove"),
     (EV_MOUSEENTER, "mouseenter"),
     (EV_MOUSELEAVE, "mouseleave"),
+    (EV_LOADSTART, "loadstart"),
+    (EV_LOADEDMETADATA, "loadedmetadata"),
+    (EV_LOADEDDATA, "loadeddata"),
+    (EV_CANPLAY, "canplay"),
+    (EV_CANPLAYTHROUGH, "canplaythrough"),
+    (EV_PLAY, "play"),
+    (EV_PLAYING, "playing"),
+    (EV_PAUSE, "pause"),
+    (EV_SEEKING, "seeking"),
+    (EV_SEEKED, "seeked"),
+    (EV_TIMEUPDATE, "timeupdate"),
+    (EV_DURATIONCHANGE, "durationchange"),
+    (EV_RATECHANGE, "ratechange"),
+    (EV_VOLUMECHANGE, "volumechange"),
+    (EV_WAITING, "waiting"),
+    (EV_ENDED, "ended"),
+    (EV_ERROR, "error"),
+    (EV_EMPTIED, "emptied"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

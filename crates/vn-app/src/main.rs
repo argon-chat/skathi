@@ -245,16 +245,22 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // an answer (docs/WINDOWING.md §4.2 mode 2).
     window::note_painted_frame();
     // Everything that needs a `Window` and could not run from a host fn: the
-    // `<lottie>` transport is advanced by this frame's wall-clock delta (and
-    // its `complete`/`loopComplete`/`enterFrame` events dispatched), and a node
-    // that was focused when it got detached loses gpui focus. Before the draw,
-    // so the raster a `<lottie>` paints is the one this tick moved to.
-    let lottie_moved = vn_tree::frame_tick(window, cx);
+    // `<lottie>` transport is advanced by this frame's wall-clock delta (and its
+    // `complete`/`loopComplete`/`enterFrame` events dispatched), every `<video>`
+    // pulls the frame the OS media pipeline has ready (and its HTML media events
+    // are dispatched), and a node that was focused when it got detached loses
+    // gpui focus. Before the draw, so the picture a media element paints is the
+    // one this tick produced.
+    let media_moved = vn_tree::frame_tick(window, cx);
     // One notify per JS wave that touched the tree — the draw right after
     // this callback picks it up (same frame). While CSS transitions run or a
     // Lottie plays, keep repainting: `on_next_frame` alone re-arms but does not
     // redraw.
-    if vn_tree::flush_changes() || vn_tree::animating() || lottie_moved || vn_tree::lotties_animating()
+    if vn_tree::flush_changes()
+        || vn_tree::animating()
+        || media_moved
+        || vn_tree::lotties_animating()
+        || vn_tree::videos_playing()
     {
         SHELL.with(|s| {
             if let Some(shell) = s.borrow().as_ref().and_then(|w| w.upgrade()) {
@@ -371,6 +377,25 @@ fn publish_app_root() {
     }
 }
 
+/// Hands `<video>` the renderer's D3D11 device.
+///
+/// The pointer is BORROWED from `DirectXDevices`, which lives as long as the
+/// renderer does; `vn_video` clones the COM interface if it keeps it. A
+/// device-lost recreation bumps the generation, which is what a future
+/// rebuild-on-lost would key off.
+#[cfg(target_os = "windows")]
+fn publish_video_device() {
+    let (ptr, generation) = gpui_windows::renderer_d3d11_device();
+    if ptr.is_null() {
+        return;
+    }
+    // SAFETY: the pointer comes straight from the live `DirectXDevices`.
+    unsafe { vn_tree::set_video_device(ptr, generation) };
+}
+
+#[cfg(not(target_os = "windows"))]
+fn publish_video_device() {}
+
 fn main() {
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
@@ -426,6 +451,12 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
+                // The renderer's device now exists (the window created it), so
+                // this is the first moment `<video>` can be told to decode onto
+                // it rather than onto a second, private one. Before it, and on
+                // a platform with no such accessor, the Media Foundation
+                // backend falls back — it never fails for want of this.
+                publish_video_device();
                 let shell = cx.new(|_| Shell {
                     status: "booting JS…".into(),
                     log: Vec::new(),
