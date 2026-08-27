@@ -11,3 +11,9 @@ vn-elements = { path = "../vn-elements" }
 # The `<lottie>` element's playback engine — see crates/vn-lottie/CONTRACT.md.
 vn-lottie = { path = "../vn-lottie" }
 vn-runtime = { path = "../vn-runtime" }
+
+[dev-dependencies]
+# The parser gpui feeds our serialized `<svg>` documents to. Pinned to the same
+# version gpui resolves (vendor/zed/Cargo.toml), so the test asserts against the
+# EXACT parser that will see the bytes at runtime and nothing new is compiled.
+usvg = { version = "0.46.0", default-features = false }

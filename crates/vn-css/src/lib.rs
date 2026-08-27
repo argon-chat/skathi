@@ -43,7 +43,7 @@ pub use animator::Animator;
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, Decls,
-    Extras, InlineStyle, ObjectFit, TranslateLen, WindowControl, WindowDrag,
+    Extras, InlineStyle, ObjectFit, SvgPaint, TranslateLen, WindowControl, WindowDrag,
 };
 pub use media::{match_media, DisplayMode, Env};
 pub use vars::Vars;

@@ -21,6 +21,7 @@ pub mod log;
 mod lottie;
 pub mod perf;
 mod render;
+mod svg;
 mod tree;
 
 pub mod devtools;

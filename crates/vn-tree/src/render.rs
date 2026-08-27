@@ -264,6 +264,7 @@ pub(crate) fn gc_node_state() {
     PREV_BOUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     img_src::gc(live);
     crate::lottie::gc(live);
+    crate::svg::gc(live);
     let focused = FOCUSED_NODE.with(|f| f.get());
     if focused == 0 {
         return;
@@ -758,6 +759,7 @@ fn build_node<V: 'static>(
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
+    advise_untransformable(t, node, &extras);
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
         // element out as a full line box — and Vue anchors every Fragment
@@ -793,6 +795,13 @@ fn build_node<V: 'static>(
         Kind::Element if t.name(node.tag) == "lottie" => stack(
             &extras,
             probe(id, build_lottie(t, id, node, window, cx, now, control_area)),
+        ),
+        // Inline `<svg>` is a LEAF: the subtree is serialized into a document
+        // resvg rasterises, so its children must not also become taffy nodes
+        // (see crate::svg).
+        Kind::Element if t.name(node.tag) == "svg" => stack(
+            &extras,
+            probe(id, build_svg(t, id, node, window, cx, now, control_area)),
         ),
         Kind::Element => stack(&extras, probe_at(id, id == t.root, {
             // Every mirrored node gets a stable ElementId — hover/active/
@@ -1504,6 +1513,210 @@ fn build_img<V: 'static>(
     }
     let click_focus = handle.filter(|_| focusable);
     bind_events(e, id, mask, click_focus, focusable, true, cx).into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// inline <svg>
+// ---------------------------------------------------------------------------
+
+/// A `gpui::Svg` that paints in the **inherited** text colour.
+///
+/// gpui renders an SVG as a monochrome alpha mask tinted by the element's own
+/// `style.text.color`, and `Style::default()` leaves that `None` — an SVG with
+/// no colour of its own paints nothing at all. In CSS, though, `color` is
+/// inherited, and `stroke="currentColor"` (what every icon set ships) means
+/// exactly "whatever `color` computed to here".
+///
+/// vn-css folds no inherited properties, but gpui itself carries a text style
+/// down the PAINT walk (`Div::paint` wraps its children in
+/// `window.with_text_style(style.text_style())` using the style it computed,
+/// hover rungs and all). Reading `window.text_style()` at paint time therefore
+/// gives the browser's answer, live: a `:hover` on an ancestor that changes
+/// `text-*` re-tints the icon on the frame the hover starts, with no restyle,
+/// no re-serialization and no re-rasterization — the sprite in the atlas is
+/// colour-independent.
+///
+/// The element's OWN `color` still wins when it declares one, because that
+/// arrives through `apply_computed_style` and is only defaulted here.
+struct SvgTint<E> {
+    inner: E,
+    /// False when the cascade already gave this node a `color` of its own.
+    inherit: bool,
+}
+
+impl<E: gpui::Element + gpui::Styled> gpui::IntoElement for SvgTint<E> {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl<E: gpui::Element + gpui::Styled> gpui::Element for SvgTint<E> {
+    type RequestLayoutState = E::RequestLayoutState;
+    type PrepaintState = E::PrepaintState;
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        self.inner.id()
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.inner.source_location()
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        self.inner.request_layout(id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.inner
+            .prepaint(id, inspector_id, bounds, request_layout, window, cx)
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if self.inherit {
+            // Only fills the BASE rung, so a `:hover` colour declared on the
+            // svg itself still overrides it inside gpui's own ladder.
+            self.inner.style().text.color = Some(window.text_style().color);
+        }
+        self.inner
+            .paint(id, inspector_id, bounds, request_layout, prepaint, window, cx)
+    }
+}
+
+/// `rotate()` / `scale()` as a sprite transformation.
+///
+/// This is the ONE place in the framework where a real CSS transform matrix
+/// applies: gpui's `MonochromeSprite` carries a `TransformationMatrix`, and an
+/// SVG leaf is a monochrome sprite. A laid out box is not, which is why
+/// [`advise_untransformable`] exists.
+///
+/// `Transformation::into_matrix` rotates and scales about the element's own
+/// centre, which is CSS's initial `transform-origin: 50% 50%`.
+fn svg_transformation(extras: &vn_css::Extras) -> Option<gpui::Transformation> {
+    let rotate = extras.rotate;
+    let scale = extras.scale;
+    if rotate.is_none() && scale.is_none() {
+        return None;
+    }
+    let mut t = gpui::Transformation::default();
+    if let Some(deg) = rotate {
+        t = t.with_rotation(gpui::radians(deg.to_radians()));
+    }
+    if let Some((sx, sy)) = scale {
+        t = t.with_scaling(gpui::size(sx, sy));
+    }
+    Some(t)
+}
+
+/// A `rotate()`/`scale()` on anything that is not an `<svg>` leaf.
+fn advise_untransformable(t: &Tree, node: &crate::tree::Node, extras: &vn_css::Extras) {
+    if extras.rotate.is_none() && extras.scale.is_none() {
+        return;
+    }
+    if t.name(node.tag) == "svg" {
+        return;
+    }
+    warn_compat(
+        "transform-rotate-scale",
+        "`transform: rotate()/scale()` applies only to an inline <svg> (v1) — gpui carries a \
+         transformation matrix on a SPRITE (which is what an <svg> leaf paints as) and none at \
+         all on a laid out box, so the declaration was dropped on this element. `translate()` \
+         works everywhere; `animate-spin` on an icon works",
+    );
+}
+
+/// Inline `<svg>` — a replaced element whose content is the serialized subtree.
+///
+/// * The children are NOT lowered (`crate::svg` explains why).
+/// * `width`/`height` attributes are presentational hints exactly as on `<img>`,
+///   so a lucide icon with no CSS size still lays out at its natural 24×24.
+/// * A document usvg cannot parse paints nothing and leaves one advisory naming
+///   the node, rather than a silent hole where an icon should be.
+fn build_svg<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+    control_area: Option<WindowControlArea>,
+) -> AnyElement {
+    let extras = extras_of(node);
+    let doc = crate::svg::document(t, id, extras.fill, extras.stroke);
+    if crate::svg::last_had_explicit_color() {
+        warn_compat(
+            "svg-multicolor",
+            "an inline <svg> declares a concrete `fill`/`stroke` colour — gpui rasterises an SVG \
+             into a single-colour alpha MASK and tints the whole sprite with the element's \
+             computed `color`, so every painted part of the icon comes out that one colour. \
+             Monochrome icon sets (`stroke=\"currentColor\"`) are unaffected",
+        );
+    }
+
+    let mut leaf = gpui::svg().data(&doc);
+    if let Some(transformation) = svg_transformation(&extras) {
+        leaf = leaf.with_transformation(transformation);
+    }
+    let mut e = with_control_area(leaf.id(id as usize), id, control_area);
+    let mut inherit = true;
+    if let Some(cs) = &node.computed {
+        inherit = cs.base.text.color.is_none();
+        e = apply_computed_style(e, cs, id, now);
+    }
+    presentational_size(t, id, e.style());
+
+    let mask = pointer_mask(node);
+    let bit = |ev: u32| mask & (1 << ev) != 0;
+    // Not focusable in HTML without `tabindex` (an inline <svg> is not a
+    // control), same as <img>.
+    let tab_index = tab_index_of(t, id);
+    let focusable = tab_index.is_some()
+        || bit(tree::EV_KEYDOWN)
+        || bit(tree::EV_KEYUP)
+        || bit(tree::EV_FOCUS)
+        || bit(tree::EV_BLUR);
+    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
+    if let Some(h) = &handle {
+        e = e.track_focus(h);
+        if focusable {
+            watch_focus(id, h, window, cx);
+        }
+        if let Some(cs) = &node.computed {
+            if let Some(f) = cs.focus.clone() {
+                e = e.focus(move |_| (*f).clone());
+            }
+            if let Some(f) = cs.focus_visible.clone() {
+                e = e.focus_visible(move |_| (*f).clone());
+            }
+        }
+    }
+    let click_focus = handle.filter(|_| focusable);
+    let e = bind_events(e, id, mask, click_focus, focusable, true, cx);
+    SvgTint { inner: e, inherit }.into_any_element()
 }
 
 // ---------------------------------------------------------------------------
