@@ -34,6 +34,7 @@ const excluded = ["LabPage"];
         <RouterLink class="tab" to="/">Forms</RouterLink>
         <RouterLink class="tab" to="/list">List</RouterLink>
         <RouterLink class="tab" to="/motion">Motion</RouterLink>
+        <RouterLink class="tab" to="/media">Media</RouterLink>
         <RouterLink class="tab" to="/styles">Styles</RouterLink>
         <RouterLink class="tab" to="/window">Window</RouterLink>
         <RouterLink class="tab" to="/lab">Lab</RouterLink>

@@ -6,26 +6,48 @@ import { createRouter, createMemoryHistory } from "vue-router";
 
 import FormsPage from "./pages/FormsPage.vue";
 import ListPage from "./pages/ListPage.vue";
+import MediaPage from "./pages/MediaPage.vue";
 import MotionPage from "./pages/MotionPage.vue";
 import StylesPage from "./pages/StylesPage.vue";
 import WindowPage from "./pages/WindowPage.vue";
 import LabPage from "./App.vue";
 
-export const router = createRouter({
-  history: createMemoryHistory(),
-  routes: [
-    { path: "/", name: "forms", component: FormsPage },
-    { path: "/list", name: "list", component: ListPage },
-    { path: "/motion", name: "motion", component: MotionPage },
-    { path: "/styles", name: "styles", component: StylesPage },
-    { path: "/window", name: "window", component: WindowPage },
-    { path: "/lab", name: "lab", component: LabPage },
-  ],
-});
+const routes = [
+  { path: "/", name: "forms", component: FormsPage },
+  { path: "/list", name: "list", component: ListPage },
+  { path: "/motion", name: "motion", component: MotionPage },
+  { path: "/media", name: "media", component: MediaPage },
+  { path: "/styles", name: "styles", component: StylesPage },
+  { path: "/window", name: "window", component: WindowPage },
+  { path: "/lab", name: "lab", component: LabPage },
+];
 
-// vue-router only auto-runs the initial navigation behind its isBrowser
-// heuristic; with memory history the app kicks it explicitly (same as SSR).
-router.replace("/");
+// `VN_SCENARIO=<route name>` pins the app to one page at boot, so a soak or a
+// frame-time measurement is ONE process, ONE screen and no input — which is
+// what makes a crash reproducible and a number comparable. The host publishes
+// it as a plain global; an app that does not look for it never notices.
+const scenario = globalThis.__VN_SCENARIO__;
+const pinned = routes.find((r) => r.name === scenario)?.path ?? "/";
+
+// The start route is set on the HISTORY, not by a `replace()` afterwards.
+//
+// The comment that used to live here said vue-router "only auto-runs the
+// initial navigation behind its isBrowser heuristic, so the app kicks it
+// explicitly". That was true when it was written and is not true now: vue-router's
+// `isBrowser` is `typeof document !== "undefined"`, and this runtime grew a real
+// `document`. So `app.use(router)` DOES run its own initial navigation — to
+// `routerHistory.location`, i.e. "/" — and it runs it AFTER this module has
+// evaluated, quietly undoing any `router.replace()` here. (VN_SCENARIO=media
+// logged "pinned=/media" and then "ready at /".)
+//
+// Seeding the history is the fix that works with the install instead of racing
+// it: `routerHistory.location` IS the pinned path, so the navigation vue-router
+// runs by itself goes to the right place.
+const history = createMemoryHistory();
+if (pinned !== "/") history.replace(pinned);
+
+export const router = createRouter({ history, routes });
+
 router
   .isReady()
   .then(() => console.log("[router] ready at " + router.currentRoute.value.fullPath))
