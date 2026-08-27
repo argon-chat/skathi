@@ -1051,7 +1051,33 @@ enum Op {
     StartDragging,
 }
 
-fn apply(op: Op, window: &mut Window, _cx: &mut gpui::App) {
+/// Re-reads the window into gpui's own caches after a SYNCHRONOUS `SetWindowPos`.
+///
+/// This is the fix for the "`setBounds({width, height})` resizes without a
+/// relayout" bug. `SetWindowPos` **sends** `WM_SIZE`/`WM_MOVE` rather than
+/// posting them, so the fork's `handle_size_msg` runs re-entrantly, inside this
+/// frame's `Phase::Commit` — i.e. while `App` is already mutably borrowed.
+/// gpui's `on_resize` callback is
+/// `handle.update(&mut cx, |_, window, cx| window.bounds_changed(cx)).log_err()`:
+/// that `update` cannot take the borrow, fails, and **`log_err` swallows it**.
+/// The platform layer's `logical_size` is updated (so `Window::bounds()` and
+/// `GetWindowRect` both look right), but `Window::viewport_size` — what
+/// `innerWidth`, the cascade env and taffy's root box all read — keeps last
+/// frame's number forever.
+///
+/// `maximize()` is unaffected because `Window::zoom_window` goes through
+/// `ShowWindowAsync`, and `setContentBounds` because `PlatformWindow::resize`
+/// spawns its `SetWindowPos` on the executor: in both cases `WM_SIZE` arrives
+/// later, on the message loop, with nothing borrowed.
+///
+/// So we do by hand exactly what the swallowed callback would have done. The
+/// platform state is already correct by the time `SetWindowPos` returns, which
+/// is what makes this a re-read rather than a guess.
+fn resync_bounds(window: &mut Window, cx: &mut gpui::App) {
+    window.bounds_changed(cx);
+}
+
+fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
     match op {
         Op::Title(t) => {
             window.set_window_title(&t);
@@ -1085,12 +1111,13 @@ fn apply(op: Op, window: &mut Window, _cx: &mut gpui::App) {
                 window.request_attention();
             }
         }
-        Op::Bounds { x, y, w, h, content } => apply_bounds(window, x, y, w, h, content),
+        Op::Bounds { x, y, w, h, content } => apply_bounds(window, cx, x, y, w, h, content),
         Op::Center => {
             let s = SNAPSHOT.with(|s| s.borrow().clone());
             let (_, _, ow, oh) = s.outer;
             let (_, _, aw, ah, al, at) = s.screen;
             win::set_position(al + (aw - ow) / 2.0, at + (ah - oh) / 2.0);
+            resync_bounds(window, cx);
         }
         Op::AlwaysOnTop(on) => {
             win::set_always_on_top(on);
@@ -1112,12 +1139,14 @@ fn apply(op: Op, window: &mut Window, _cx: &mut gpui::App) {
 /// no-op, as in every UA.
 fn apply_bounds(
     window: &mut Window,
+    cx: &mut gpui::App,
     x: Option<f32>,
     y: Option<f32>,
     w: Option<f32>,
     h: Option<f32>,
     content: bool,
 ) {
+    let mut moved_synchronously = false;
     let s = SNAPSHOT.with(|s| s.borrow().clone());
     let (_, _, aw, ah, al, at) = s.screen;
     let cur = if content { s.content } else { s.outer };
@@ -1136,6 +1165,7 @@ fn apply_bounds(
             window.resize(gpui::size(gpui::px(nw), gpui::px(nh)));
         } else {
             win::set_outer_size(nw * s.scale, nh * s.scale);
+            moved_synchronously = true;
         }
     }
     if x.is_some() || y.is_some() {
@@ -1154,6 +1184,14 @@ fn apply_bounds(
             ny = ny.clamp(at, (at + ah - oh).max(at));
         }
         win::set_position(nx * s.scale, ny * s.scale);
+        moved_synchronously = true;
+    }
+    // `Window::resize` (the `content` branch above) spawns its `SetWindowPos`
+    // on the executor, so its `WM_SIZE` lands outside this borrow and gpui
+    // refreshes itself; the two Win32 escape hatches send theirs re-entrantly
+    // and need the re-read done by hand. See [`resync_bounds`].
+    if moved_synchronously {
+        resync_bounds(window, cx);
     }
 }
 
