@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use gpui::RenderImage;
 
 use crate::backend::{
-    CanPlay, FrameRequest, MediaError, MediaEvent, MediaSource, NetworkState, ReadyState,
+    CanPlay, FrameRequest, GpuFrame, MediaError, MediaEvent, MediaSource, NetworkState, ReadyState,
     VideoBackend, VideoFrame,
 };
 
@@ -78,8 +78,15 @@ pub struct VideoState {
     /// The frame before the current one. Retired a generation late: the scene
     /// that painted it has been presented by then, so its atlas tile is safe to
     /// release.
+    ///
+    /// On the zero-copy path this is almost always `None`: the image handle is
+    /// stable for the life of a size, so there is no previous generation to
+    /// retire until the box resizes.
     previous: Option<Arc<RenderImage>>,
     retired: Vec<Arc<RenderImage>>,
+    /// The GPU texture the last [`Self::advance`] produced, waiting for the
+    /// host to blit it into the atlas. Drained by [`Self::take_gpu_upload`].
+    pending_gpu: Option<(Arc<RenderImage>, GpuFrame)>,
 
     last_timeupdate: Option<Instant>,
     /// `currentTime` at the last emitted `timeupdate`, so a paused video does
@@ -101,6 +108,7 @@ impl VideoState {
             cached: None,
             previous: None,
             retired: Vec::new(),
+            pending_gpu: None,
             last_timeupdate: None,
             last_reported_time: f64::NAN,
             metadata: false,
@@ -398,11 +406,44 @@ impl VideoState {
     }
 
     fn accept_frame(&mut self, frame: VideoFrame) {
-        if let Some(previous) = self.previous.take() {
-            self.retired.push(previous);
+        if let Some(gpu) = frame.gpu {
+            self.pending_gpu = Some((frame.image.clone(), gpu));
         }
-        self.previous = self.cached.take().map(|c| c.image);
+        // The zero-copy path hands back the SAME image every frame, on purpose:
+        // one atlas key means one tile, updated in place. Running the retire
+        // dance on it would `drop_image` the tile we are painting from, which
+        // is a black video rather than a leak — so identity, not "there was a
+        // previous frame", is what gates it.
+        let same_image = self
+            .cached
+            .as_ref()
+            .is_some_and(|c| Arc::ptr_eq(&c.image, &frame.image));
+        if !same_image {
+            if let Some(previous) = self.previous.take() {
+                self.retired.push(previous);
+            }
+            self.previous = self.cached.take().map(|c| c.image);
+        }
         self.cached = Some(Cached { image: frame.image, size: frame.size, pts: frame.pts });
+    }
+
+    /// The GPU texture this tick produced and the image whose atlas tile it
+    /// must be blitted into, if the backend took the zero-copy path.
+    ///
+    /// **The host must drain this every tick and pass it to
+    /// `Window::upload_image_from_gpu` before the draw**, or the element paints
+    /// the transparent placeholder. The texture is borrowed and is reused by
+    /// the next `present`, so it must not be held across ticks.
+    #[must_use = "the video paints transparent unless this reaches Window::upload_image_from_gpu"]
+    pub fn take_gpu_upload(&mut self) -> Option<(Arc<RenderImage>, GpuFrame)> {
+        self.pending_gpu.take()
+    }
+
+    /// Tell the backend the host could not upload the texture, so it stops
+    /// producing GPU frames and fills the image with real bytes instead.
+    pub fn gpu_upload_failed(&mut self) {
+        self.pending_gpu = None;
+        self.backend.gpu_upload_failed();
     }
 
     fn retire_all_frames(&mut self) {

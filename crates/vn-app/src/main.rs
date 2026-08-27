@@ -251,6 +251,10 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // are dispatched), and a node that was focused when it got detached loses
     // gpui focus. Before the draw, so the picture a media element paints is the
     // one this tick produced.
+    // Two atomic loads: has the renderer recreated its D3D11 device since the
+    // last frame? If so, every `<video>` is decoding onto a dead one and has to
+    // be rebuilt before it is ticked.
+    publish_video_device();
     let media_moved = vn_tree::frame_tick(window, cx);
     // One notify per JS wave that touched the tree — the draw right after
     // this callback picks it up (same frame). While CSS transitions run or a
@@ -462,20 +466,47 @@ fn publish_app_root() {
     }
 }
 
-/// Hands `<video>` the renderer's D3D11 device.
+/// Hands `<video>` the renderer's D3D11 device — and re-hands it every time
+/// the renderer recreates one.
 ///
 /// The pointer is BORROWED from `DirectXDevices`, which lives as long as the
-/// renderer does; `vn_video` clones the COM interface if it keeps it. A
-/// device-lost recreation bumps the generation, which is what a future
-/// rebuild-on-lost would key off.
+/// renderer does; `vn_video` clones the COM interface if it keeps it.
+///
+/// **This runs once per frame, and the generation is the whole point.** A
+/// device-lost recovery (`DirectXDevices::new` after a TDR, a driver update or
+/// a GPU reset) builds a *new* `ID3D11Device` and bumps the generation. Every
+/// Media Foundation engine we created is still decoding onto the dead one, and
+/// every texture it hands us belongs to a device the atlas now refuses to copy
+/// from — which is exactly what the atlas's device-identity check catches. So a
+/// generation change republishes the device and forces each `<video>` to
+/// rebuild on it, keeping its position and transport state.
+///
+/// Two atomic loads and a compare on the frames where nothing happened.
 #[cfg(target_os = "windows")]
 fn publish_video_device() {
+    use std::cell::Cell;
+    thread_local! {
+        /// 0 is never a live generation — `publish_device` pre-increments.
+        static PUBLISHED: Cell<u64> = const { Cell::new(0) };
+    }
     let (ptr, generation) = gpui_windows::renderer_d3d11_device();
-    if ptr.is_null() {
+    if ptr.is_null() || PUBLISHED.with(Cell::get) == generation {
         return;
     }
+    let first = PUBLISHED.with(Cell::get) == 0;
+    PUBLISHED.with(|p| p.set(generation));
     // SAFETY: the pointer comes straight from the live `DirectXDevices`.
     unsafe { vn_tree::set_video_device(ptr, generation) };
+    if first {
+        return;
+    }
+    let rebuilt = vn_tree::video_device_changed();
+    let msg = format!(
+        "[video] the renderer recreated its D3D11 device (generation {generation}) — rebuilt \
+         {rebuilt} <video> element(s) on it, resuming where they were"
+    );
+    eprintln!("{msg}");
+    vn_tree::log::record("window", msg);
 }
 
 #[cfg(not(target_os = "windows"))]

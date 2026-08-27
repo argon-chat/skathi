@@ -331,15 +331,26 @@ pub fn videos_playing() -> bool {
 
 /// Publishes the renderer's D3D11 device to the `<video>` backend, so Media
 /// Foundation decodes onto the texture pool gpui already owns instead of a
-/// second one. The host calls this once at boot with what
-/// `gpui_windows::renderer_d3d11_device()` returns; without it `<video>` still
-/// works, on a private device (see `vn_video::mf`).
+/// second one — which is what makes the zero-copy present path legal at all.
+/// Without it `<video>` still works, on a private device, through the CPU
+/// readback fallback (see `vn_video::mf`).
+///
+/// The host calls this **every frame**, cheaply, and reacts to the generation:
+/// see [`video_device_changed`].
 ///
 /// # Safety
 /// `ptr` must be a live `ID3D11Device` COM pointer owned by the caller.
 #[cfg(windows)]
 pub unsafe fn set_video_device(ptr: *mut c_void, generation: u64) {
     vn_video::mf::set_shared_device(ptr, generation);
+}
+
+/// The renderer recreated its D3D11 device; rebuild every `<video>` on the new
+/// one, keeping position and transport state. Returns how many were rebuilt.
+///
+/// Call it right after [`set_video_device`] on the frame the generation moved.
+pub fn video_device_changed() -> usize {
+    video::device_changed()
 }
 
 /// The per-frame work that needs a `Window` and cannot be done from a host fn.

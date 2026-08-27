@@ -563,6 +563,17 @@ impl VideoBackend for MediaEngineBackend {
         }
         self.last_pts = pts;
 
+        if self.presenter.is_gpu() {
+            let (image, frame_pts, gpu) = self.presenter.transfer_gpu(&self.engine, size, pts)?;
+            return Some(VideoFrame {
+                image,
+                // MF reports the presentation time in 100 ns units.
+                pts: frame_pts as f64 / 10_000_000.0,
+                size,
+                gpu: Some(gpu),
+            });
+        }
+
         // Pipeline only while PLAYING. A paused element produces one frame per
         // seek with nothing behind it, so a frame of latency there is not
         // latency at all — it is the wrong picture, permanently. See
@@ -571,10 +582,19 @@ impl VideoBackend for MediaEngineBackend {
         let (image, frame_pts) = self.presenter.transfer(&self.engine, size, pts, pipeline)?;
         Some(VideoFrame {
             image,
-            // MF reports the presentation time in 100 ns units.
             pts: frame_pts as f64 / 10_000_000.0,
             size,
+            gpu: None,
         })
+    }
+
+    /// The renderer's atlas refused the zero-copy blit; fall back permanently.
+    fn gpu_upload_failed(&mut self) {
+        self.presenter.demote_to_readback();
+        // The next `present` must produce a frame even though the PTS has not
+        // moved, or a paused element would sit on the transparent placeholder
+        // for ever.
+        self.last_pts = i64::MIN;
     }
 
     fn drain_events(&mut self, sink: &mut dyn FnMut(MediaEvent)) {

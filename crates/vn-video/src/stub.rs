@@ -210,6 +210,9 @@ impl VideoBackend for StubBackend {
             image: Arc::new(RenderImage::new(vec![Frame::new(buffer)])),
             pts: self.time,
             size,
+            // No OS and no GPU: the synthetic backend is the CPU path by
+            // definition, which is also what keeps it testable in CI.
+            gpu: None,
         })
     }
 
