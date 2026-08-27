@@ -4,6 +4,7 @@
 // available (the builder would flag them anyway).
 import { createRouter, createMemoryHistory } from "vue-router";
 
+import AudioPage from "./pages/AudioPage.vue";
 import FormsPage from "./pages/FormsPage.vue";
 import ListPage from "./pages/ListPage.vue";
 import MediaPage from "./pages/MediaPage.vue";
@@ -17,6 +18,7 @@ const routes = [
   { path: "/list", name: "list", component: ListPage },
   { path: "/motion", name: "motion", component: MotionPage },
   { path: "/media", name: "media", component: MediaPage },
+  { path: "/audio", name: "audio", component: AudioPage },
   { path: "/styles", name: "styles", component: StylesPage },
   { path: "/window", name: "window", component: WindowPage },
   { path: "/lab", name: "lab", component: LabPage },

@@ -4,8 +4,30 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+# Web Audio is ON by default: `AudioContext` is part of the web platform an app
+# written against a browser expects to find, and a renderer that silently lacks
+# it is exactly the "diverge without saying so" failure this project refuses.
+#
+# It is a feature rather than a hard dependency because it is the single most
+# expensive thing in our build graph after gpui — firewheel + cpal + symphonia
+# (~40 crates) — and a host that will never make a sound (a test harness, a
+# headless screenshot runner) should be able to opt out:
+#
+#   cargo build -p vn-app --no-default-features
+#
+# Opting out does not stub `AudioContext`; it removes it, so feature detection
+# (`typeof AudioContext !== 'undefined'`) tells the truth either way.
+default = ["audio"]
+# `audio-codecs-extra` rides along: an app runtime's `decodeAudioData` input is
+# "whatever file the user has", not a curated asset pipeline, so AAC-LC/M4A,
+# ALAC, AIFF, CAF and MKV belong in the box. A game shipping its own .ogg does
+# not pay for them (redjs keeps that flag off by default).
+audio = ["redjs/audio", "redjs/audio-codecs-extra"]
+
 [dependencies]
-# Lean redjs: no game-engine host classes (audio/physics/mesh/css-host/yoga-host
-# are all off) — JSC, the web platform layer, timers/rAF/microtask pump.
+# Lean redjs: no game-engine host classes (physics/mesh/css-host/yoga-host are
+# all off) — JSC, the web platform layer, timers/rAF/microtask pump, and (with
+# the `audio` feature above) Web Audio over Firewheel.
 redjs = { path = "../../vendor/redjs/redjs", default-features = false }
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
