@@ -70,6 +70,11 @@ impl Vars {
 pub(crate) enum VarError {
     /// `var(--x)` where `--x` is not set and there is no fallback.
     Unresolved(String),
+    /// `env(name)` where `name` is not one this host publishes and there is no
+    /// fallback. Its own variant because the fix is a different sentence: an
+    /// author cannot *set* an environment variable, so "declare it" is not
+    /// advice.
+    UnknownEnv(String),
     /// A reference cycle (`--a: var(--b); --b: var(--a)`).
     Cycle(String),
     /// The substituted text blew past [`MAX_EXPANSION`].
@@ -82,6 +87,11 @@ impl VarError {
             VarError::Unresolved(name) => format!(
                 "`var({name})` is not set on this element or any ancestor and the reference has no \
                  fallback"
+            ),
+            VarError::UnknownEnv(name) => format!(
+                "`env({name})` is not an environment variable this host publishes — supported: \
+                 titlebar-area-x | -y | -width | -height, safe-area-inset-top | -right | -bottom \
+                 | -left. Give it a fallback (`env({name}, 0px)`) if it is optional"
             ),
             VarError::Cycle(name) => {
                 format!("`{name}` takes part in a var() reference cycle")
@@ -117,30 +127,89 @@ fn skip_string(bytes: &[u8], i: usize) -> usize {
     bytes.len()
 }
 
-/// The first `var(` at or after `from` that is a real function token — i.e. not
-/// inside a string and not the tail of a longer identifier (`--my-var(`).
-fn find_var(bytes: &[u8], from: usize) -> Option<usize> {
+/// Which substitution function a scan landed on.
+///
+/// `var()` and `env()` are the same machinery with different lookup tables:
+/// same "first top-level comma splits off the fallback" grammar, same
+/// "unresolvable with no fallback invalidates the declaration" rule, same
+/// recursion into fallbacks. The ONLY differences are where the name is looked
+/// up and whether the page can write it — so they share one scanner and one
+/// substituter rather than growing a second copy of both.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Subst {
+    Var,
+    Env,
+}
+
+/// Case-insensitive match of `name(` at `i`, rejecting the tail of a longer
+/// identifier (`--my-var(`, `text-env(`).
+fn is_fn_at(bytes: &[u8], i: usize, name: &[u8]) -> bool {
+    let end = i + name.len();
+    if end >= bytes.len() || bytes[end] != b'(' {
+        return false;
+    }
+    if i > 0 && is_ident_byte(bytes[i - 1]) {
+        return false;
+    }
+    bytes[i..end]
+        .iter()
+        .zip(name)
+        .all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
+
+/// The first `var(` or `env(` at or after `from` that is a real function token
+/// — i.e. not inside a string and not the tail of a longer identifier.
+fn find_subst(bytes: &[u8], from: usize) -> Option<(usize, Subst)> {
     let mut i = from;
     while i < bytes.len() {
-        match bytes[i] {
-            b'"' | b'\'' => {
-                i = skip_string(bytes, i);
-                continue;
-            }
-            _ => {}
+        if matches!(bytes[i], b'"' | b'\'') {
+            i = skip_string(bytes, i);
+            continue;
         }
-        if i + 4 <= bytes.len()
-            && bytes[i].eq_ignore_ascii_case(&b'v')
-            && bytes[i + 1].eq_ignore_ascii_case(&b'a')
-            && bytes[i + 2].eq_ignore_ascii_case(&b'r')
-            && bytes[i + 3] == b'('
-            && (i == 0 || !is_ident_byte(bytes[i - 1]))
-        {
-            return Some(i);
+        if is_fn_at(bytes, i, b"var") {
+            return Some((i, Subst::Var));
+        }
+        if is_fn_at(bytes, i, b"env") {
+            return Some((i, Subst::Env));
         }
         i += 1;
     }
     None
+}
+
+/// The value of one environment variable, or `None` for "this host does not
+/// publish that name".
+///
+/// `env()` names are plain identifiers, not `--`-prefixed, and are ASCII
+/// case-sensitive in CSS. Numbers are emitted as `<n>px` — every variable on
+/// this list is a length, and printing the unit is what lets the substituted
+/// text re-parse through the ordinary property grammar.
+///
+/// The indexed form (`env(name, 1, 2)`) has no members here, so it is not
+/// accepted: a name with an index is simply unknown, which is the honest answer
+/// rather than silently dropping the index.
+fn env_value(name: &str, env: &crate::Env) -> Option<String> {
+    let px = |v: f32| {
+        // `1` rather than `1.0`, `0.5` kept — the shortest text that round-trips.
+        if v == v.trunc() && v.is_finite() {
+            format!("{}px", v as i64)
+        } else {
+            format!("{v}px")
+        }
+    };
+    let t = env.titlebar_area;
+    let s = env.safe_area_insets;
+    Some(match name {
+        "titlebar-area-x" => px(t[0]),
+        "titlebar-area-y" => px(t[1]),
+        "titlebar-area-width" => px(t[2]),
+        "titlebar-area-height" => px(t[3]),
+        "safe-area-inset-top" => px(s[0]),
+        "safe-area-inset-right" => px(s[1]),
+        "safe-area-inset-bottom" => px(s[2]),
+        "safe-area-inset-left" => px(s[3]),
+        _ => return None,
+    })
 }
 
 /// Index of the `)` that closes the `(` at `open`, honouring nesting and
@@ -203,15 +272,16 @@ fn split_var_args(inner: &str) -> (&str, Option<&str>) {
 /// apply, and what makes a fallback-less reference invalidate the declaration.
 pub(crate) fn substitute(
     text: &str,
+    env: &crate::Env,
     lookup: &mut dyn FnMut(&str) -> Result<Option<String>, VarError>,
 ) -> Result<String, VarError> {
-    if find_var(text.as_bytes(), 0).is_none() {
+    if find_subst(text.as_bytes(), 0).is_none() {
         return Ok(text.to_string());
     }
     let mut out = String::with_capacity(text.len());
     let mut cursor = 0usize;
     let bytes = text.as_bytes();
-    while let Some(open) = find_var(bytes, cursor) {
+    while let Some((open, kind)) = find_subst(bytes, cursor) {
         let paren = open + 3;
         let Some(close) = matching_paren(bytes, paren) else {
             // Unbalanced — copy the rest verbatim and let the re-parse fail
@@ -220,11 +290,20 @@ pub(crate) fn substitute(
         };
         out.push_str(&text[cursor..open]);
         let (name, fallback) = split_var_args(&text[paren + 1..close]);
-        match lookup(name)? {
+        let resolved = match kind {
+            Subst::Var => lookup(name)?,
+            Subst::Env => env_value(name, env),
+        };
+        match resolved {
             Some(value) => out.push_str(&value),
             None => match fallback {
-                Some(f) => out.push_str(&substitute(f, lookup)?),
-                None => return Err(VarError::Unresolved(name.to_string())),
+                Some(f) => out.push_str(&substitute(f, env, lookup)?),
+                None => {
+                    return Err(match kind {
+                        Subst::Var => VarError::Unresolved(name.to_string()),
+                        Subst::Env => VarError::UnknownEnv(name.to_string()),
+                    })
+                }
             },
         }
         if out.len() > MAX_EXPANSION {
@@ -238,8 +317,8 @@ pub(crate) fn substitute(
 
 /// Substitutes against an already-resolved [`Vars`] map — the form every
 /// non-custom declaration uses.
-pub(crate) fn substitute_with(text: &str, vars: &Vars) -> Result<String, VarError> {
-    substitute(text, &mut |name| Ok(vars.get(name).map(str::to_string)))
+pub(crate) fn substitute_with(text: &str, vars: &Vars, env: &crate::Env) -> Result<String, VarError> {
+    substitute(text, env, &mut |name| Ok(vars.get(name).map(str::to_string)))
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +346,7 @@ enum Slot<'a> {
 fn force<'a>(
     slots: &mut HashMap<&'a str, Slot<'a>>,
     parent: &Vars,
+    env: &crate::Env,
     name: &str,
     diagnostics: &mut Vec<String>,
 ) -> Result<Option<String>, VarError> {
@@ -283,7 +363,8 @@ fn force<'a>(
                 _ => unreachable!("checked Raw above"),
             };
             slots.insert(key, Slot::Busy);
-            let resolved = substitute(raw, &mut |inner| force(slots, parent, inner, diagnostics));
+            let resolved =
+                substitute(raw, env, &mut |inner| force(slots, parent, env, inner, diagnostics));
             match resolved {
                 Ok(value) => {
                     slots.insert(key, Slot::Done(value.clone()));
@@ -327,12 +408,13 @@ fn force<'a>(
 /// itself, so one whose text already equals the inherited value is a no-op —
 /// which is what Tailwind's universal block is on every element but the first.
 fn inert(raw: &str, name: &str, parent: &Vars) -> bool {
-    find_var(raw.as_bytes(), 0).is_none() && parent.get(name) == Some(raw)
+    find_subst(raw.as_bytes(), 0).is_none() && parent.get(name) == Some(raw)
 }
 
 pub(crate) fn resolve(
     parent: &Rc<Vars>,
     own: &[&(String, String)],
+    env: &crate::Env,
     diagnostics: &mut Vec<String>,
 ) -> Rc<Vars> {
     if own.is_empty() {
@@ -374,7 +456,7 @@ pub(crate) fn resolve(
         // own value into "unset" + an advisory. A cycle detected while resolving
         // a DIFFERENT name propagates out as Err, and means this name is invalid
         // too — same treatment.
-        if let Err(e) = force(&mut slots, parent, name, diagnostics) {
+        if let Err(e) = force(&mut slots, parent, env, name, diagnostics) {
             diagnostics.push(format!(
                 "`{name}` is invalid at computed-value time — {}",
                 e.describe()
@@ -442,7 +524,7 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         let mut d = Vec::new();
-        resolve(&Rc::new(Vars::default()), &refs(&own), &mut d)
+        resolve(&Rc::new(Vars::default()), &refs(&own), &crate::Env::default(), &mut d)
     }
 
     /// `resolve` takes borrowed declarations (the cascade never copies them);
@@ -482,7 +564,7 @@ mod tests {
     fn a_fallbackless_missing_reference_invalidates_the_declaration() {
         let own = vec![("--x".to_string(), "var(--nope)".to_string())];
         let mut d = Vec::new();
-        let v = resolve(&Rc::new(Vars::default()), &refs(&own), &mut d);
+        let v = resolve(&Rc::new(Vars::default()), &refs(&own), &crate::Env::default(), &mut d);
         assert_eq!(v.get("--x"), None);
         assert!(d.iter().any(|m| m.contains("invalid at computed-value time")), "{d:?}");
     }
@@ -494,7 +576,7 @@ mod tests {
             ("--b".to_string(), "var(--a)".to_string()),
         ];
         let mut d = Vec::new();
-        let v = resolve(&Rc::new(Vars::default()), &refs(&own), &mut d);
+        let v = resolve(&Rc::new(Vars::default()), &refs(&own), &crate::Env::default(), &mut d);
         assert!(v.get("--a").is_none() && v.get("--b").is_none(), "{v:?}");
         assert!(d.iter().any(|m| m.contains("cycle")), "{d:?}");
     }
@@ -503,11 +585,11 @@ mod tests {
     fn inheritance_overrides_by_name_and_shares_the_rc_when_nothing_is_declared() {
         let parent = vars(&[("--a", "1"), ("--b", "2")]);
         let mut d = Vec::new();
-        let same = resolve(&parent, &[], &mut d);
+        let same = resolve(&parent, &[], &crate::Env::default(), &mut d);
         assert!(Rc::ptr_eq(&parent, &same));
 
         let own = vec![("--b".to_string(), "9".to_string())];
-        let child = resolve(&parent, &refs(&own), &mut d);
+        let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut d);
         assert_eq!(child.get("--a"), Some("1"));
         assert_eq!(child.get("--b"), Some("9"));
         // …and the parent is untouched.
@@ -525,7 +607,7 @@ mod tests {
             ("--a".to_string(), "1".to_string()),
             ("--b".to_string(), "0 0 #0000".to_string()),
         ];
-        let child = resolve(&parent, &refs(&same), &mut d);
+        let child = resolve(&parent, &refs(&same), &crate::Env::default(), &mut d);
         assert!(Rc::ptr_eq(&parent, &child), "identical declarations must not rebuild the map");
 
         // …and one differing value is enough to take the general path.
@@ -533,7 +615,7 @@ mod tests {
             ("--a".to_string(), "1".to_string()),
             ("--b".to_string(), "2".to_string()),
         ];
-        let child = resolve(&parent, &refs(&differs), &mut d);
+        let child = resolve(&parent, &refs(&differs), &crate::Env::default(), &mut d);
         assert!(!Rc::ptr_eq(&parent, &child));
         assert_eq!(child.get("--a"), Some("1"));
         assert_eq!(child.get("--b"), Some("2"));
@@ -552,14 +634,14 @@ mod tests {
             ("--a".to_string(), "1".to_string()),
             ("--a".to_string(), "2".to_string()),
         ];
-        assert_eq!(resolve(&parent, &refs(&later_differs), &mut d).get("--a"), Some("2"));
+        assert_eq!(resolve(&parent, &refs(&later_differs), &crate::Env::default(), &mut d).get("--a"), Some("2"));
 
         // …, --a: 2, --a: 1  →  1 wins, which IS the inherited value.
         let later_matches = vec![
             ("--a".to_string(), "2".to_string()),
             ("--a".to_string(), "1".to_string()),
         ];
-        let child = resolve(&parent, &refs(&later_matches), &mut d);
+        let child = resolve(&parent, &refs(&later_matches), &crate::Env::default(), &mut d);
         assert_eq!(child.get("--a"), Some("1"));
         assert!(Rc::ptr_eq(&parent, &child), "the winning declaration is inert");
     }
@@ -575,7 +657,7 @@ mod tests {
         // reached by resolving, not by assuming.
         let mut d = Vec::new();
         let own = vec![("--a".to_string(), "var(--b)".to_string())];
-        let child = resolve(&parent, &refs(&own), &mut d);
+        let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut d);
         assert_eq!(child.get("--a"), Some("red"));
     }
 
@@ -587,7 +669,7 @@ mod tests {
         let parent = vars(&[("--keep", "k"), ("--x", "inherited")]);
         let mut d = Vec::new();
         let own = vec![("--x".to_string(), "var(--nope)".to_string())];
-        let child = resolve(&parent, &refs(&own), &mut d);
+        let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut d);
         assert_eq!(child.get("--x"), None, "the parent's value must not come back");
         assert_eq!(child.get("--keep"), Some("k"));
     }
@@ -603,7 +685,7 @@ mod tests {
             ("--a".to_string(), "1".to_string()),
             ("--m".to_string(), "2".to_string()),
         ];
-        let child = resolve(&parent, &refs(&own), &mut d);
+        let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut d);
         let names: Vec<&str> = child.iter().map(|(k, _)| k).collect();
         assert_eq!(names, vec!["--a", "--m", "--z", "--zz"]);
         assert_eq!(child.get("--a"), Some("1"));
@@ -621,23 +703,23 @@ mod tests {
             ("--hue".to_string(), "200".to_string()),
             ("--color".to_string(), "hsl(var(--hue) 50% 50%)".to_string()),
         ];
-        let child = resolve(&parent, &refs(&own), &mut d);
+        let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut d);
         assert_eq!(child.get("--color"), Some("hsl(200 50% 50%)"));
     }
 
     #[test]
     fn substitution_skips_strings_and_identifier_tails() {
         let v = vars(&[("--a", "X")]);
-        assert_eq!(substitute_with(r#"content: "var(--a)""#, &v).unwrap(), r#"content: "var(--a)""#);
-        assert_eq!(substitute_with("my-var(--a)", &v).unwrap(), "my-var(--a)");
-        assert_eq!(substitute_with("VAR(--a)", &v).unwrap(), "X");
+        assert_eq!(substitute_with(r#"content: "var(--a)""#, &v, &crate::Env::default()).unwrap(), r#"content: "var(--a)""#);
+        assert_eq!(substitute_with("my-var(--a)", &v, &crate::Env::default()).unwrap(), "my-var(--a)");
+        assert_eq!(substitute_with("VAR(--a)", &v, &crate::Env::default()).unwrap(), "X");
     }
 
     #[test]
     fn nested_fallbacks_resolve() {
         let v = vars(&[("--b", "blue")]);
-        assert_eq!(substitute_with("var(--a, var(--b, red))", &v).unwrap(), "blue");
-        assert_eq!(substitute_with("var(--a, var(--z, red))", &v).unwrap(), "red");
+        assert_eq!(substitute_with("var(--a, var(--b, red))", &v, &crate::Env::default()).unwrap(), "blue");
+        assert_eq!(substitute_with("var(--a, var(--z, red))", &v, &crate::Env::default()).unwrap(), "red");
     }
 
     /// A comma inside a nested function is not the fallback separator.
@@ -645,7 +727,7 @@ mod tests {
     fn the_fallback_split_is_top_level_only() {
         let v = vars(&[]);
         assert_eq!(
-            substitute_with("var(--a, rgb(1, 2, 3))", &v).unwrap(),
+            substitute_with("var(--a, rgb(1, 2, 3))", &v, &crate::Env::default()).unwrap(),
             "rgb(1, 2, 3)"
         );
     }
@@ -653,9 +735,9 @@ mod tests {
     #[test]
     fn an_empty_fallback_is_not_the_same_as_no_fallback() {
         let v = vars(&[]);
-        assert_eq!(substitute_with("var(--a,)", &v).unwrap(), "");
+        assert_eq!(substitute_with("var(--a,)", &v, &crate::Env::default()).unwrap(), "");
         assert!(matches!(
-            substitute_with("var(--a)", &v),
+            substitute_with("var(--a)", &v, &crate::Env::default()),
             Err(VarError::Unresolved(_))
         ));
     }
@@ -681,6 +763,7 @@ mod tests {
         let shadow = substitute_with(
             "var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000)",
             &v,
+            &crate::Env::default(),
         )
         .unwrap();
         assert_eq!(

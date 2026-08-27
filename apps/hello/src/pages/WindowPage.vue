@@ -90,6 +90,25 @@ const setBackdrop = (m) => {
   backdrop.value = appWindow.backdrop;
 };
 
+// ---- titleBarOverlay ------------------------------------------------------
+// The HOST draws the min/max/close cluster instead of the app. Electron's
+// shape, and Electron's honesty about it: a frameless window has no
+// `WS_CAPTION`, so on Windows the only way to have caption buttons is to draw
+// them. What makes these the OS's rather than three hand-rolled buttons is that
+// each carries a `WindowControlArea` — `WM_NCHITTEST` answers HTMINBUTTON /
+// HTMAXBUTTON / HTCLOSE, the OS performs the action, and HTMAXBUTTON is what
+// arms the Windows 11 snap-layouts flyout.
+//
+// Turning it on narrows `getTitlebarAreaRect().width` (and therefore
+// `env(titlebar-area-width)`) by the cluster's width and fires
+// `geometrychange`; Titlebar.vue drops its own buttons because the rect said so.
+const hostControls = ref(appWindow.chrome.hostControls);
+const setHostControls = (on) => {
+  appWindow.setTitleBarOverlay(on ? { symbolColor: "#ffffffe0" } : false);
+  hostControls.value = appWindow.chrome.hostControls;
+  readAll();
+};
+
 // ---- media queries --------------------------------------------------------
 // `matchMedia` runs the SAME vn-css evaluator the cascade does, against the
 // same env — before this, `@media (max-width: 600px)` worked while
@@ -139,13 +158,23 @@ const toggleFullscreen = () =>
         <div class="kv"><span class="k">host fallback titlebar</span><span class="v">{{ chrome.fallbackTitleBar ? "on" : "retired" }}</span></div>
         <div class="kv"><span class="k">WCO visible</span><span class="v">{{ chrome.overlayVisible }}</span></div>
         <div class="kv"><span class="k">titlebar area rect</span><span class="v">{{ bar.x }}, {{ bar.y }} — {{ bar.width }} x {{ bar.height }}</span></div>
+        <div class="kv"><span class="k">client area</span><span class="v">{{ chrome.client.width }} x {{ chrome.client.height }}</span></div>
+        <div class="kv"><span class="k">content inset</span><span class="v">{{ chrome.contentInset.left }}, {{ chrome.contentInset.top }}, {{ chrome.contentInset.right }}, {{ chrome.contentInset.bottom }}</span></div>
+      </div>
+      <div class="row">
+        <div class="chip" :class="{ on: !hostControls }" @click="setHostControls(false)">app controls</div>
+        <div class="chip" :class="{ on: hostControls }" @click="setHostControls(true)">host controls (titleBarOverlay)</div>
       </div>
       <div class="note">
         The strip at the top of this window is the app's own &lt;header&gt;,
-        marked `window-drag: move`; its three buttons carry `--window-control`,
+        marked `window-drag: move`; its height and left inset come from
+        `env(titlebar-area-height)` / `env(titlebar-area-x)`, the same rect the
+        JS getter above reports. Its three buttons carry `--window-control`,
         which is what makes Windows 11 offer snap layouts when you hover the
         maximize one. The host's built-in titlebar retired on the first frame
-        this app painted a drag region.
+        this app painted a drag region — which is also why `content inset` is
+        zero on all four sides: the app owns the whole client area, so
+        `innerWidth`/`innerHeight` and the client area are the same rectangle.
       </div>
     </section>
 

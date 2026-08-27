@@ -27,7 +27,10 @@ mod video;
 pub mod devtools;
 
 pub use img::{asset_base, set_asset_base};
-pub use render::{build_root, control_hitboxes, flush_pending_mouse_move, painted_drag_region};
+pub use render::{
+    build_root, control_hitboxes, flush_pending_mouse_move, painted_drag_region, root_bounds,
+    set_os_chrome,
+};
 pub use tree::{
     with_tree, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH, EV_CLICK, EV_COMPLETE, EV_DURATIONCHANGE,
     EV_EMPTIED, EV_ENDED, EV_ENTERFRAME, EV_ERROR, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP,

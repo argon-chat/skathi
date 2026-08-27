@@ -139,6 +139,19 @@ pub fn bounds_of(id: u32) -> Option<(f32, f32, f32, f32)> {
     BOUNDS.with(|m| m.borrow().get(&id).copied())
 }
 
+/// Where the app root was painted in the window's client area, in CSS px —
+/// `None` before the first painted frame.
+///
+/// This is **the app's viewport**: everything the host draws around it (§4.2
+/// mode 2's fallback titlebar, its padding, its status panel) is UA chrome, and
+/// a browser's `innerWidth`/`innerHeight` exclude UA chrome by definition. The
+/// window host reads it to publish `window.inner*`, the cascade's `@media`
+/// viewport and the `contentInset` metric from ONE number, so JS, CSS and
+/// `getBoundingClientRect()` cannot disagree about how big the viewport is.
+pub fn root_bounds() -> Option<(f32, f32, f32, f32)> {
+    bounds_of(crate::tree::read_tree(|t| t.root))
+}
+
 /// The rectangle this node was painted at in the frame BEFORE the one being
 /// built. Only builders need this — `bounds_of` is the answer to "where is it
 /// now", which is what devtools and a future `getBoundingClientRect()` want.
@@ -580,6 +593,16 @@ thread_local! {
     /// eval-reachable debug hook the acceptance transcript needs instead
     /// (docs/WINDOWING.md §13 "Acceptance").
     static CONTROL_HITBOXES: RefCell<Vec<(u32, WindowControlArea)>> = const { RefCell::new(Vec::new()) };
+    /// `titleBarStyle: "default"` — the OS draws the caption and owns its
+    /// buttons, so the whole CSS chrome surface is inert (§4.2 mode 3).
+    static OS_CHROME: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Declares whether this window has OS-drawn chrome. Set once by `vn-app`'s
+/// `window::init`, before the first frame is built — `titleBarStyle` cannot
+/// change at runtime (D-25), so this never flips mid-session.
+pub fn set_os_chrome(on: bool) {
+    OS_CHROME.with(|c| c.set(on));
 }
 
 /// `true` if the last painted frame contained a `window-drag: move` region.
@@ -707,6 +730,21 @@ fn with_control_area<E: gpui::InteractiveElement>(
     area: Option<WindowControlArea>,
 ) -> E {
     let Some(area) = area else { return e };
+    // Mode 3: the OS owns the caption. A hitbox here would hand `DefWindowProc`
+    // an `HTCAPTION`/`HTMAXBUTTON` answer for a piece of the CLIENT area — the
+    // content under it would stop receiving clicks and start dragging the
+    // window, which is not what "the OS draws the titlebar" means anywhere
+    // else. Inert, once, out loud (A-25).
+    if OS_CHROME.with(|c| c.get()) {
+        warn_compat(
+            "window-drag/os-chrome",
+            "`window-drag` / `--window-control` do nothing under `titleBarStyle: \"default\"` — \
+             the OS draws the caption and owns its buttons. Drop the custom titlebar under \
+             `@media (display-mode: standalone)`, or switch to `titleBarStyle: \"hidden\"` in \
+             vn.config.json — see docs/WINDOWING.md §4.2 mode 3.",
+        );
+        return e;
+    }
     if area == WindowControlArea::Drag {
         ANY_DRAG_REGION.with(|c| c.set(true));
     }

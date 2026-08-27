@@ -291,6 +291,7 @@ impl Shell {
         // and then retires, with one `[window]` log line. Never silently
         // removing a behaviour an app relied on.
         let shell = div()
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -300,7 +301,9 @@ impl Shell {
             // Custom chrome, mode 1: the app owns the WHOLE window — its own
             // titlebar included. No host padding, no host status panel; the
             // shell is a bare mount point.
-            return shell.child(vn_tree::build_root(window, cx));
+            return shell
+                .child(vn_tree::build_root(window, cx))
+                .children(window_controls_overlay());
         }
         shell
             .child(
@@ -359,7 +362,72 @@ impl Shell {
                             })),
                     ),
             )
+            .children(window_controls_overlay())
     }
+}
+
+/// The host-drawn caption-button cluster — `titleBarOverlay` (docs/WINDOWING.md
+/// §2.3, §4.3).
+///
+/// A custom-chrome window has no `WS_CAPTION`, so there is no OS cluster to
+/// host: on Windows the only way to get caption buttons in a frameless window
+/// is to draw them, which is exactly what Electron and Chromium do for their
+/// own overlay. What makes these OS-*behaved* rather than three hand-rolled
+/// buttons is `window_control_area`: `WM_NCHITTEST` answers `HTMINBUTTON` /
+/// `HTMAXBUTTON` / `HTCLOSE`, so the OS performs the action, and `HTMAXBUTTON`
+/// is what arms the **Windows 11 snap-layouts flyout** — which no click handler
+/// can produce.
+///
+/// Positioned absolutely at the top-RIGHT because that is where Windows puts
+/// them; the rect an app reads back (`getTitlebarAreaRect()`,
+/// `env(titlebar-area-width)`) loses exactly this width, so app content is
+/// never underneath it.
+fn window_controls_overlay() -> Option<gpui::Div> {
+    let (height, overlay) = window::overlay()?;
+    // Segoe Fluent Icons is the Win11 caption glyph font (Segoe MDL2 Assets on
+    // Win10 carries the same code points), and these four are the OS's own
+    // glyphs — chevron-free, hairline, correctly optically centred.
+    const MIN: &str = "\u{e921}";
+    const MAX: &str = "\u{e922}";
+    const CLOSE: &str = "\u{e8bb}";
+    let symbol = overlay
+        .symbol_color
+        .map(rgba)
+        .unwrap_or_else(|| rgba(0xffffffe0));
+    let button = |id: &'static str, glyph: &'static str, area: WindowControlArea, hover: u32| {
+        div()
+            .id(id)
+            .w(px(window::OVERLAY_BUTTON_WIDTH))
+            .h(px(height))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(10.))
+            .text_color(symbol)
+            .font_family("Segoe Fluent Icons")
+            .window_control_area(area)
+            .hover(|s| s.bg(rgba(hover)))
+            .child(glyph)
+    };
+    let mut strip = div()
+        .absolute()
+        .top_0()
+        .right_0()
+        .h(px(height))
+        .flex()
+        .flex_row();
+    if let Some(bg) = overlay.color {
+        strip = strip.bg(rgba(bg));
+    }
+    Some(
+        strip
+            .child(button("wco-min", MIN, WindowControlArea::Min, 0xffffff1a))
+            .child(button("wco-max", MAX, WindowControlArea::Max, 0xffffff1a))
+            // Win11's close button turns #C42B1C on hover; every other one gets
+            // a neutral wash. Matching the OS matters more here than matching
+            // the app's palette — this IS the window's chrome.
+            .child(button("wco-close", CLOSE, WindowControlArea::Close, 0xc42b1cff)),
+    )
 }
 
 /// The directory a relative `<img src>` resolves against — vue-native's
@@ -432,11 +500,13 @@ fn main() {
                 window_background: cfg.backdrop.to_gpui(),
                 titlebar: Some(TitlebarOptions {
                     title: Some(cfg.title.clone().into()),
-                    // `titleBarStyle: "hidden"` — the v1 default and the only
-                    // mode gpui can actually produce today (getting real OS
-                    // chrome is fork item F-03; asking for it advises A-17 and
-                    // lands here).
-                    appears_transparent: true,
+                    // `appears_transparent` IS the chrome-mode switch: gpui maps
+                    // it to `hide_title_bar`, and fork item F-03 makes
+                    // `!hide_title_bar` add `WS_CAPTION` — a real OS caption,
+                    // not the captionless thick frame it used to give.
+                    // `titleBarStyle` is creation-time only for exactly this
+                    // reason (D-25).
+                    appears_transparent: cfg.title_bar_style == window::TitleBarStyle::Hidden,
                     ..Default::default()
                 }),
                 is_resizable: cfg.resizable,

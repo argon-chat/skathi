@@ -18,14 +18,24 @@
 // the tree, so a handler would make the window act twice. (Doing both is a real
 // mistake, so it fires advisory A-14 rather than silently picking a winner.)
 //
-// The host draws no button cluster of its own, so the whole strip belongs to
-// content and the WCO rect is the full window width. Reading it — rather than
-// assuming a side — is what would keep this component correct on macOS, where
-// the traffic lights sit LEFT, and under RTL.
+// The GEOMETRY is CSS too, now that `env()` is implemented: the strip's height
+// and its left inset come from `env(titlebar-area-height)` / `env(titlebar-area-x)`
+// in the <style> block below — the same host-side rect
+// `navigator.windowControlsOverlay.getTitlebarAreaRect()` reports, so the two
+// halves cannot disagree and there is no inline style binding to keep in sync.
+// (Before `env()` landed this component bound `:style` from the JS getter and
+// ate advisory A-15; §2.4 promised the shape would not have to change, and it
+// did not — only the fallbacks in `env(…, 36px)` stopped being used.)
+//
+// The `.controls` cluster is the APP's. Turning on `titleBarOverlay` (see the
+// Window page) makes the HOST draw one instead, in which case the WCO rect
+// loses its width and this strip's own buttons must go — which is what the
+// `v-if` does. Reading the rect rather than assuming a side is also what would
+// keep this correct on macOS, where the traffic lights sit LEFT, and under RTL.
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { appWindow } from "vue-native";
 
-const bar = ref({ x: 0, width: 0, height: 36 });
+const hostControls = ref(appWindow.chrome.hostControls);
 const maximized = ref(appWindow.isMaximized());
 const title = ref(document.title);
 
@@ -37,8 +47,7 @@ const CLOSE = "✕";
 const maxGlyph = computed(() => (maximized.value ? "❐" : "□"));
 
 const readGeometry = () => {
-  const r = navigator.windowControlsOverlay.getTitlebarAreaRect();
-  bar.value = { x: r.x, width: r.width, height: r.height };
+  hostControls.value = appWindow.chrome.hostControls;
 };
 const readState = () => {
   maximized.value = appWindow.isMaximized();
@@ -65,13 +74,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <header
-    class="titlebar"
-    :style="{ height: bar.height + 'px', paddingLeft: 12 + bar.x + 'px' }"
-  >
+  <header class="titlebar">
     <span class="mark">◆</span>
     <span class="title">{{ title }}</span>
-    <div class="controls">
+    <div v-if="!hostControls" class="controls">
       <div class="ctl min" title="Minimize">{{ MIN }}</div>
       <div class="ctl max" :title="maximized ? 'Restore' : 'Maximize'">{{ maxGlyph }}</div>
       <div class="ctl close" title="Close">{{ CLOSE }}</div>
@@ -85,6 +91,15 @@ onUnmounted(() => {
   flex-direction: row;
   align-items: center;
   gap: 10px;
+  /* The CSS half of Window Controls Overlay (§2.4). Same host-side rect the JS
+     getter reads; the fallbacks are what a browser without WCO would use. When
+     the host draws its own cluster the rect narrows and this strip's own
+     buttons step aside — `titlebar-area-width` is what says so. */
+  height: env(titlebar-area-height, 36px);
+  width: env(titlebar-area-width, 100%);
+  /* Zero on Windows (buttons right); non-zero on macOS, where the traffic
+     lights sit left. Assuming a side is the bug this reads its way out of. */
+  padding-left: env(titlebar-area-x, 0px);
   /* The whole strip drags the window. Inherited, so every descendant is
      draggable until one says otherwise. */
   window-drag: move;
@@ -97,6 +112,7 @@ onUnmounted(() => {
   border-color: #ffffff1f;
 }
 .mark {
+  margin-left: 12px;
   font-size: 12px;
   color: #7aa2ff;
 }
