@@ -344,14 +344,32 @@
   appWindow.getContentBounds = () => ({ ...S.content });
   appWindow.setBounds = (r) => setBounds(r, false);
   appWindow.setContentBounds = (r) => setBounds(r, true);
+  // Electron's shape. `false` retires the cluster, an object installs it; the
+  // host draws min/max/close in the top-right corner and gives each one a
+  // `WindowControlArea`, so the OS performs the action and `HTMAXBUTTON` arms
+  // the Windows 11 snap-layouts flyout. `getTitlebarAreaRect().width` loses the
+  // cluster's width, and `geometrychange` fires.
+  //
+  // The two mode-3 cases are refused rather than faked: under
+  // `titleBarStyle: "default"` the OS already drew real buttons.
+  // -1 = "leave the cluster as it is, only the height moved"; 0 = off; 1 = on.
+  const setOverlay = (height, mode, color, symbolColor) => {
+    __vn_window_set_overlay(
+      typeof height === "number" ? height : NaN,
+      mode,
+      String(color || ""),
+      String(symbolColor || ""),
+    );
+    refresh();
+  };
   appWindow.setTitleBarOverlay = (o) => {
-    if (o && (o.color || o.symbolColor))
-      warn(
-        "titleBarOverlay.color",
-        "`setTitleBarOverlay({ color, symbolColor })` is accepted but has no effect: v1 draws no " +
-          "host button cluster, so there is nothing to tint. `height` is honoured.",
-      );
-    if (o && typeof o.height === "number") __vn_window_set_titlebar_height(o.height);
+    if (o === false || o === null) return setOverlay(NaN, 0);
+    if (o === true) return setOverlay(NaN, 1);
+    if (!o || typeof o !== "object") return;
+    // Electron's rule: passing an object means "I want the overlay". A caller
+    // that only wants the strip taller uses `titleBarHeight`, which never
+    // installs a cluster.
+    setOverlay(o.height, 1, o.color, o.symbolColor);
   };
   appWindow.startResizeDragging = () =>
     warn(
@@ -392,6 +410,18 @@
     titleBarHeight: S.titleBarArea.height,
     fallbackTitleBar: S.fallbackTitleBar,
     overlayVisible: S.titleBarOverlayVisible,
+    // Whether the HOST draws the min/max/close cluster (`titleBarOverlay`).
+    hostControls: S.hostControls,
+    // The window's client area, and how far the app's viewport is inset inside
+    // it by host-drawn chrome. `inner* === client* - inset` by construction —
+    // and in custom-chrome mode the inset is zero on all four sides.
+    //
+    // This is the metric the merge report's known issue asked for: before it,
+    // `innerHeight` was the client area while every `getBoundingClientRect()`
+    // and `documentElement.clientHeight` were root-relative, so anything that
+    // sized itself against the viewport was optimistic by the chrome's height.
+    client: { width: S.clientWidth, height: S.clientHeight },
+    contentInset: { ...S.contentInset },
   }));
 
   // Creation-time-only keys: gpui fixes these when the window is created, so a
@@ -413,7 +443,7 @@
       if (key === "title") { document.title = opts.title; continue; }
       if (key === "backdrop") { appWindow.backdrop = opts.backdrop; continue; }
       if (key === "alwaysOnTop") { appWindow.alwaysOnTop = opts.alwaysOnTop; continue; }
-      if (key === "titleBarHeight") { __vn_window_set_titlebar_height(opts.titleBarHeight); continue; }
+      if (key === "titleBarHeight") { setOverlay(opts.titleBarHeight, -1); continue; }
       if (key === "titleBarOverlay") { appWindow.setTitleBarOverlay(opts.titleBarOverlay); continue; }
       if (STYLE_ONLY.includes(key)) {
         warn(

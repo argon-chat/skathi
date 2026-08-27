@@ -608,7 +608,7 @@ impl Engine {
         if let Some(inline) = inline {
             own_custom.extend(inline.custom.iter());
         }
-        let vars = vars::resolve(parent_vars, &own_custom, diagnostics);
+        let vars = vars::resolve(parent_vars, &own_custom, env, diagnostics);
         let t2 = probe.then(std::time::Instant::now);
 
         // ---- 2. the refinements.
@@ -677,7 +677,7 @@ impl Engine {
                 }
                 if let Some(list) = dynamic {
                     for (name, raw) in list.iter() {
-                        mapper::apply_dynamic(name, raw, &vars, bucket, &mut extras, diagnostics);
+                        mapper::apply_dynamic(name, raw, &vars, env, bucket, &mut extras, diagnostics);
                     }
                 }
             }
@@ -687,7 +687,7 @@ impl Engine {
                 base.refine(r);
             }
             for (name, raw) in &inline.dynamic {
-                mapper::apply_dynamic(name, raw, &vars, &mut base, &mut extras, diagnostics);
+                mapper::apply_dynamic(name, raw, &vars, env, &mut base, &mut extras, diagnostics);
             }
             if let Some(t) = &inline.transitions {
                 transitions = Some(t.clone());
@@ -2126,44 +2126,135 @@ mod tests {
         );
     }
 
-    /// `env(titlebar-area-*)` gets a SPECIFIC advisory naming the property and
-    /// printing the working alternative, not the generic "value is unresolved"
-    /// line an author would have to decode (A-15, D-18).
+    /// `env()` is `var()` with a scope the page cannot write. An `env()`-composed
+    /// declaration already arrives as `Property::Unparsed` and therefore already
+    /// rides the DYNAMIC channel, which is why the whole feature is one lookup
+    /// table plus one arm in the scanner (docs/WINDOWING.md §2.4; A-15 was the
+    /// placeholder these tests replace).
     ///
-    /// An unresolved `env()` arrives as `Property::Unparsed`, which compat
-    /// round 6 routed onto the DYNAMIC (`var()`-substitution) channel — so the
-    /// advisory is now raised per element at computed-value time rather than
-    /// once at sheet-compile time. `vn-tree`'s restyle pass logs and dedupes
-    /// that channel exactly like the compile-time one, so the author sees the
-    /// same single line; only the observation point in this test moved.
-    fn computed_value_diagnostics(css: &str) -> Vec<String> {
+    /// `(computed base refinement, diagnostics)` for `.box` under `env`.
+    fn computed_with_env(css: &str, env: &Env) -> (Rc<StyleRefinement>, Vec<String>) {
         let engine = Engine::compile(css);
         let mut diags = engine.diagnostics.clone();
-        engine.compute_node(
-            box_node(),
-            None,
-            &Rc::new(Vars::default()),
-            &Env::default(),
-            &mut diags,
-        );
-        diags
+        let states =
+            engine.compute_node(box_node(), None, &Rc::new(Vars::default()), env, &mut diags);
+        (states.base, diags)
     }
 
+    fn titlebar_env(x: f32, y: f32, w: f32, h: f32) -> Env {
+        Env { titlebar_area: [x, y, w, h], ..Env::default() }
+    }
+
+    /// The whole point of A-15 becoming real: the number the host publishes is
+    /// the number the cascade uses, with no advisory at all.
     #[test]
-    fn env_titlebar_area_names_itself_and_the_alternative() {
-        let diags = computed_value_diagnostics(".box { margin-left: env(titlebar-area-x, 0px) }");
+    fn env_titlebar_area_resolves_from_the_window_state() {
+        let (base, diags) = computed_with_env(
+            ".box { height: env(titlebar-area-height, 32px); width: env(titlebar-area-width) }",
+            &titlebar_env(0.0, 0.0, 940.0, 36.0),
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(base.size.height, Some(gpui::px(36.0).into()));
+        assert_eq!(base.size.width, Some(gpui::px(940.0).into()));
+
+        // …and it MOVES with the window: same sheet, different env.
+        let (base, _) = computed_with_env(
+            ".box { height: env(titlebar-area-height) }",
+            &titlebar_env(0.0, 0.0, 940.0, 48.0),
+        );
+        assert_eq!(base.size.height, Some(gpui::px(48.0).into()));
+    }
+
+    /// macOS puts the traffic lights on the LEFT, so `titlebar-area-x` is
+    /// non-zero there — the reason the spec insists correct code reads the rect
+    /// instead of assuming a side (§2.3).
+    #[test]
+    fn env_titlebar_area_x_is_a_real_offset_not_always_zero() {
+        let (base, diags) = computed_with_env(
+            ".box { margin-left: env(titlebar-area-x) }",
+            &titlebar_env(78.0, 0.0, 862.0, 28.0),
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(base.margin.left, Some(gpui::px(78.0).into()));
+    }
+
+    /// The overlay is not visible in OS chrome / fullscreen, and the host
+    /// publishes the zero rect there — exactly what a PWA in a tab reports. The
+    /// declaration must still RESOLVE (to 0px), not be dropped.
+    #[test]
+    fn env_titlebar_area_is_zero_when_the_overlay_is_hidden() {
+        let (base, diags) = computed_with_env(
+            ".box { height: env(titlebar-area-height) }",
+            &titlebar_env(0.0, 0.0, 0.0, 0.0),
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(base.size.height, Some(gpui::px(0.0).into()));
+    }
+
+    /// `safe-area-inset-*` resolve to zero on desktop rather than invalidating
+    /// their declarations. A ported PWA stylesheet is full of them, and a
+    /// fallback-less `env()` with no value drops the whole declaration.
+    #[test]
+    fn env_safe_area_insets_resolve_to_zero() {
+        let (base, diags) = computed_with_env(
+            ".box { padding-left: env(safe-area-inset-left); \
+             padding-bottom: env(safe-area-inset-bottom) }",
+            &Env::default(),
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(base.padding.left, Some(gpui::px(0.0).into()));
+        assert_eq!(base.padding.bottom, Some(gpui::px(0.0).into()));
+    }
+
+    /// An unknown name behaves exactly as CSS says: the fallback applies, and
+    /// without one the declaration is invalid at computed-value time — with an
+    /// advisory that lists the names that DO exist, because an author cannot set
+    /// an environment variable and "declare it" would be useless advice.
+    #[test]
+    fn an_unknown_env_uses_its_fallback_and_otherwise_drops_the_declaration() {
+        let (base, diags) =
+            computed_with_env(".box { height: env(keyboard-inset-height, 12px) }", &Env::default());
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(base.size.height, Some(gpui::px(12.0).into()));
+
+        let (base, diags) =
+            computed_with_env(".box { height: env(keyboard-inset-height) }", &Env::default());
+        assert_eq!(base.size.height, None);
         assert!(
-            diags
-                .iter()
-                .any(|d| d.contains("titlebar-area") && d.contains("getTitlebarAreaRect")),
+            diags.iter().any(|d| d.contains("keyboard-inset-height")
+                && d.contains("titlebar-area-x")
+                && d.contains("invalid at computed-value time")),
             "{diags:?}"
         );
-        // …while another `env()` keeps the generic line.
-        let diags = computed_value_diagnostics(".box { padding-left: env(safe-area-inset-left) }");
-        assert!(!diags.iter().any(|d| d.contains("titlebar-area")), "{diags:?}");
+    }
+
+    /// `env()` and `var()` nest in each other's fallbacks and in custom
+    /// properties — they are ONE substitution pass, so this is a property of the
+    /// design rather than a case that had to be handled.
+    #[test]
+    fn env_and_var_nest_in_each_others_fallbacks_and_in_custom_properties() {
+        let (base, diags) = computed_with_env(
+            ".box { --bar: env(titlebar-area-height); height: var(--bar); \
+             padding-top: var(--nope, env(titlebar-area-height)); \
+             margin-top: env(nope, var(--bar)) }",
+            &titlebar_env(0.0, 0.0, 800.0, 40.0),
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(base.size.height, Some(gpui::px(40.0).into()));
+        assert_eq!(base.padding.top, Some(gpui::px(40.0).into()));
+        assert_eq!(base.margin.top, Some(gpui::px(40.0).into()));
+    }
+
+    /// The scanner must not fire on the tail of a longer identifier — the same
+    /// rule `var()` already obeyed for `--my-var(`.
+    #[test]
+    fn the_env_scanner_skips_identifier_tails() {
+        let (base, diags) =
+            computed_with_env(".box { height: my-env(titlebar-area-height) }", &Env::default());
+        assert_eq!(base.size.height, None, "`my-env(` is not `env(`");
         assert!(
-            diags.iter().any(|d| d.contains("unresolved")),
-            "the generic line must still fire: {diags:?}"
+            !diags.iter().any(|d| d.contains("is not an environment variable")),
+            "{diags:?}"
         );
     }
 

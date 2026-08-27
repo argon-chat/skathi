@@ -48,11 +48,16 @@ const UNDEF: u64 = 0xa;
 /// vs `hiddenInset`, so the axis has to exist from day one (D-22).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TitleBarStyle {
-    /// OS-drawn chrome. Needs fork item F-03 (`WS_CAPTION` for
-    /// `!hide_title_bar`); until that lands, asking for it advises (A-17) and
-    /// falls back to `Hidden` — never silently, which is why nothing
-    /// constructs this variant yet.
-    #[allow(dead_code)]
+    /// OS-drawn chrome: a real `WS_CAPTION`, the OS's own min/max/close, the
+    /// OS's double-click-to-zoom and system menu. Needs fork item F-03
+    /// (`dwstyle |= WS_CAPTION` when `!hide_title_bar`), which landed — so this
+    /// variant is now reachable and `titleBarStyle: "default"` no longer falls
+    /// back.
+    ///
+    /// In this mode `window-drag` / `--window-control` are INERT (A-25): the OS
+    /// owns the caption, `windowControlsOverlay.visible` is `false` and
+    /// `display-mode` is `standalone`, which is exactly what a PWA in a
+    /// standalone window reports.
     Default,
     /// Custom chrome: the app draws the titlebar, marks it `window-drag: move`
     /// and marks its buttons `--window-control: …`. The v1 default.
@@ -123,6 +128,76 @@ const A20C: &str = "`acrylic` has known compositor cost while resizing and dragg
                     1903+ and Windows 11 22000. `mica` is cheaper if you do not need the \
                     per-window tint.";
 
+/// `titleBarOverlay` — the HOST-drawn caption-button cluster for custom-chrome
+/// apps (§2.3, §4.3, D-decisions on the overlay).
+///
+/// Electron's shape, and Electron's honesty about what it is: the buttons are
+/// drawn by the app framework, not by the OS. On Windows a real OS caption
+/// cluster requires a real `WS_CAPTION`, which is `titleBarStyle: "default"` —
+/// a different mode entirely. What makes these buttons OS-*behaved* rather than
+/// hand-rolled is that each carries a `WindowControlArea`, so `WM_NCHITTEST`
+/// answers `HTMINBUTTON`/`HTMAXBUTTON`/`HTCLOSE`: the OS performs the action,
+/// paints its own hover highlight where it wants to, and — the part no app can
+/// fake — `HTMAXBUTTON` is what arms the **Windows 11 snap-layouts flyout**.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Overlay {
+    /// Background of the cluster strip. `None` = transparent, i.e. whatever the
+    /// app painted underneath shows through.
+    pub color: Option<u32>,
+    /// Glyph colour. `None` = follow the window appearance.
+    pub symbol_color: Option<u32>,
+}
+
+/// The Win11 caption-button metrics: 46 × 32 epx each, three of them.
+/// Hardcoded because they ARE the OS's numbers — an app that wants a different
+/// cluster width wants its own buttons, which is mode 1 with no overlay.
+pub const OVERLAY_BUTTON_WIDTH: f32 = 46.0;
+pub const OVERLAY_BUTTONS: f32 = 3.0;
+
+impl Default for Overlay {
+    fn default() -> Self {
+        Overlay { color: None, symbol_color: None }
+    }
+}
+
+impl Overlay {
+    /// Total width of the cluster, in CSS px — the amount
+    /// `getTitlebarAreaRect()` and `env(titlebar-area-width)` must subtract.
+    pub fn width() -> f32 {
+        OVERLAY_BUTTON_WIDTH * OVERLAY_BUTTONS
+    }
+}
+
+/// `#rgb` / `#rrggbb` / `#rrggbbaa` → `0xAARRGGBB`, the shape `gpui::rgba`
+/// wants. Electron accepts CSS colour strings here; hex is the only form worth
+/// carrying without a colour parser, so anything else says so rather than
+/// silently painting black.
+fn parse_color(s: &str) -> Option<u32> {
+    let h = s.trim().strip_prefix('#')?;
+    let n = |i: usize, len: usize| u32::from_str_radix(&h[i..i + len], 16).ok();
+    let dup = |v: u32| v * 17; // `f` -> `ff`
+    Some(match h.len() {
+        3 => 0xff00_0000 | (dup(n(0, 1)?) << 16) | (dup(n(1, 1)?) << 8) | dup(n(2, 1)?),
+        6 => 0xff00_0000 | n(0, 6)?,
+        8 => (n(6, 2)? << 24) | n(0, 6)?,
+        _ => return None,
+    })
+}
+
+fn color_of(v: &Json, key: &str, advisories: &mut Vec<String>) -> Option<u32> {
+    let s = v.get(key).and_then(Json::as_str)?;
+    match parse_color(s) {
+        Some(c) => Some(c),
+        None => {
+            advisories.push(format!(
+                "`titleBarOverlay.{key}: {s:?}` is not a hex colour — expected `#rgb`, `#rrggbb` \
+                 or `#rrggbbaa`. Ignored."
+            ));
+            None
+        }
+    }
+}
+
 /// Everything `apps/<app>/vn.config.json`'s `window` block can say.
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -137,6 +212,9 @@ pub struct Config {
     /// The built-in Shell titlebar (§4.2 mode 2). `true` = keep it until the
     /// app paints a drag region of its own.
     pub title_bar_fallback: bool,
+    /// The host-drawn caption-button cluster. `None` = the app draws its own
+    /// (`--window-control`), which is the v1 default.
+    pub title_bar_overlay: Option<Overlay>,
     pub backdrop: Backdrop,
     pub resizable: bool,
     pub minimizable: bool,
@@ -162,6 +240,7 @@ impl Default for Config {
             // sprinkled through the layout (§7.2).
             title_bar_height: 32.0,
             title_bar_fallback: true,
+            title_bar_overlay: None,
             backdrop: Backdrop::Mica,
             resizable: true,
             minimizable: true,
@@ -200,6 +279,7 @@ fn bool_of(v: &Json, key: &str) -> Option<bool> {
 pub fn load_config(raw: Option<String>) -> Config {
     let mut cfg = Config::default();
     let mut advisories: Vec<String> = Vec::new();
+    let mut asked_for_fallback = false;
 
     if let Some(v) = raw.as_deref().and_then(json::parse) {
         if let Some(t) = v.get("title").and_then(Json::as_str) {
@@ -220,14 +300,11 @@ pub fn load_config(raw: Option<String>) -> Config {
             }
         }
         match v.get("titleBarStyle").and_then(Json::as_str) {
-            Some("default") => {
-                // Fork item F-03 is not in this build: gpui never sets
-                // `WS_CAPTION` for `WindowKind::Normal`, and
-                // `appears_transparent: false` gives a thick resize frame with
-                // NO titlebar at all — which is worse than either mode.
-                advisories.push(A17.to_string());
-                cfg.title_bar_style = TitleBarStyle::Hidden;
-            }
+            // Fork item F-03 landed (`dwstyle |= WS_CAPTION` when
+            // `!hide_title_bar`), so this is a real mode now: the window is
+            // NOT frameless, the OS draws the caption and its buttons, and the
+            // host's own fallback strip must never appear underneath it.
+            Some("default") => cfg.title_bar_style = TitleBarStyle::Default,
             Some("hidden") | None => cfg.title_bar_style = TitleBarStyle::Hidden,
             Some("hiddenInset") => {
                 advisories.push(
@@ -247,6 +324,25 @@ pub fn load_config(raw: Option<String>) -> Config {
         }
         if let Some(b) = bool_of(&v, "titleBarFallback") {
             cfg.title_bar_fallback = b;
+            asked_for_fallback = b;
+        }
+        match v.get("titleBarOverlay") {
+            None | Some(Json::Bool(false)) | Some(Json::Null) => {}
+            Some(Json::Bool(true)) => cfg.title_bar_overlay = Some(Overlay::default()),
+            Some(o @ Json::Obj(_)) => {
+                if let Some(n) = f32_of(o, "height") {
+                    cfg.title_bar_height = n.max(0.0);
+                }
+                cfg.title_bar_overlay = Some(Overlay {
+                    color: color_of(o, "color", &mut advisories),
+                    symbol_color: color_of(o, "symbolColor", &mut advisories),
+                });
+            }
+            Some(_) => advisories.push(
+                "`titleBarOverlay` expects `false` or an object `{ height?, color?, symbolColor? }` \
+                 — see docs/WINDOWING.md §4.1."
+                    .into(),
+            ),
         }
         if let Some(s) = v.get("backdrop").and_then(Json::as_str) {
             match Backdrop::from_str(s) {
@@ -288,6 +384,16 @@ pub fn load_config(raw: Option<String>) -> Config {
         cfg.focus_raise = true;
     }
 
+    // OS-drawn chrome owns the top strip, so the host's fallback titlebar must
+    // never be stacked underneath it — not even when the config asks for it.
+    // Said out loud rather than silently ignored (A-26).
+    if cfg.title_bar_style == TitleBarStyle::Default {
+        if asked_for_fallback {
+            advisories.push(A26.to_string());
+        }
+        cfg.title_bar_fallback = false;
+    }
+
     let (backdrop, note) = cfg.backdrop.resolve_for_os();
     cfg.backdrop = backdrop;
     advisories.extend(note.map(str::to_string));
@@ -310,12 +416,12 @@ pub fn load_config(raw: Option<String>) -> Config {
     cfg
 }
 
-const A17: &str = "`titleBarStyle: \"default\"` (OS-drawn chrome) needs the `WS_CAPTION` patch in \
-                   vendor/zed (fork item F-03, docs/WINDOWING.md §9); falling back to \
-                   `titleBarStyle: \"hidden\"` (custom chrome).";
 const A18: &str = "`frame: false` is treated as `titleBarStyle: \"hidden\"` in v1. A true frameless \
                    window would drop WS_THICKFRAME, which also removes the drop shadow, window \
                    animations and edge resizing.";
+const A26: &str = "`titleBarFallback: true` is ignored under `titleBarStyle: \"default\"` — the OS \
+                   draws the caption, so a second host-drawn strip underneath it would just eat \
+                   32 px of the app. Remove one of the two.";
 
 // ---------------------------------------------------------------------------
 // advisories
@@ -467,6 +573,34 @@ mod win {
         ok.is_ok() && cloaked != 0
     }
 
+    /// Reads `DWMWA_SYSTEMBACKDROP_TYPE` back out of DWM — what the compositor
+    /// currently believes, not what we last asked for.
+    ///
+    /// Worth having as a first-class read: `set_background_appearance` drives
+    /// TWO independent mechanisms (the DWM system backdrop and the older accent
+    /// policy), and the `acrylic → mica` bug was exactly one of them being left
+    /// armed. It is also the only machine-checkable answer to "does Mica
+    /// survive a real `WS_CAPTION`" — `DWMSBT_MAINWINDOW` reading back on a
+    /// captioned window means DWM accepted it.
+    ///
+    /// `0 = DWMSBT_AUTO`, `1 = NONE`, `2 = MAINWINDOW` (mica),
+    /// `3 = TRANSIENTWINDOW`, `4 = TABBEDWINDOW` (mica-alt).
+    pub fn system_backdrop() -> Option<u32> {
+        use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE};
+        let h = hwnd()?;
+        let mut v: u32 = 0;
+        unsafe {
+            DwmGetWindowAttribute(
+                h,
+                DWMWA_SYSTEMBACKDROP_TYPE,
+                &mut v as *mut u32 as *mut _,
+                std::mem::size_of::<u32>() as u32,
+            )
+        }
+        .ok()?;
+        Some(v)
+    }
+
     pub fn cursor_pos() -> Option<(f32, f32)> {
         let mut p = POINT::default();
         unsafe { GetCursorPos(&mut p) }.ok()?;
@@ -485,6 +619,7 @@ mod win {
     pub fn set_always_on_top(_on: bool) {}
     pub fn start_dragging() {}
     pub fn is_cloaked() -> bool { false }
+    pub fn system_backdrop() -> Option<u32> { None }
     pub fn cursor_pos() -> Option<(f32, f32)> { None }
 }
 
@@ -563,6 +698,13 @@ pub struct Snapshot {
     pub always_on_top: bool,
     pub title_bar_height: f32,
     pub fallback_titlebar: bool,
+    pub overlay: Option<Overlay>,
+    /// The window CLIENT area, CSS px. `inner_width`/`inner_height` are the app
+    /// ROOT's box inside it, which is what a browser calls the viewport.
+    pub client: (f32, f32),
+    /// `(left, top, right, bottom)` — how far the app root is inset inside the
+    /// client area by host-drawn chrome. All zero in custom-chrome mode.
+    pub content_inset: (f32, f32, f32, f32),
 }
 
 impl Default for Snapshot {
@@ -585,6 +727,9 @@ impl Default for Snapshot {
             always_on_top: false,
             title_bar_height: 32.0,
             fallback_titlebar: true,
+            overlay: None,
+            client: (0.0, 0.0),
+            content_inset: (0.0, 0.0, 0.0, 0.0),
         }
     }
 }
@@ -614,6 +759,7 @@ struct Live {
     backdrop: Backdrop,
     always_on_top: bool,
     title_bar_height: f32,
+    overlay: Option<Overlay>,
     /// `false` once the app has painted a `window-drag: move` region of its own
     /// (§4.2 mode 2) — or from the start if the config said so.
     fallback_titlebar: bool,
@@ -626,6 +772,7 @@ impl Default for Live {
             backdrop: Backdrop::Mica,
             always_on_top: false,
             title_bar_height: 32.0,
+            overlay: None,
             fallback_titlebar: true,
         }
     }
@@ -645,10 +792,21 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
             backdrop: cfg.backdrop,
             always_on_top: cfg.always_on_top,
             title_bar_height: cfg.title_bar_height,
+            // OS chrome draws the real thing; a host cluster on top of it would
+            // be a second set of buttons.
+            overlay: (cfg.title_bar_style == TitleBarStyle::Hidden)
+                .then_some(cfg.title_bar_overlay)
+                .flatten(),
             fallback_titlebar: cfg.title_bar_fallback,
         }
     });
     capture_hwnd(window);
+    // In OS-chrome mode the caption belongs to the OS, so `window-drag` and
+    // `--window-control` must stop emitting hitboxes entirely — otherwise a
+    // stray `move` region in the content would hand the OS `HTCAPTION` for a
+    // piece of the client area and swallow its clicks. Inert, and said out loud
+    // the first time one is painted (A-25).
+    vn_tree::set_os_chrome(cfg.title_bar_style == TitleBarStyle::Default);
     if cfg.always_on_top {
         win::set_always_on_top(true);
     }
@@ -661,14 +819,7 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
         gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
     );
     let s = SNAPSHOT.with(|c| c.borrow().clone());
-    vn_tree::set_env(vn_css::Env {
-        viewport_width: s.inner_width,
-        viewport_height: s.inner_height,
-        dark,
-        reduce_motion: cx.reduce_motion(),
-        scale_factor: s.scale,
-        display_mode: display_mode(s.fullscreen),
-    });
+    vn_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
 }
 
 /// Whether the host still draws its own titlebar strip.
@@ -732,9 +883,35 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
             f32::from(bounds.size.width),
             f32::from(bounds.size.height),
         ));
+    // `innerWidth`/`innerHeight` are the APP's viewport, which is the app root's
+    // painted box — not the window's client area.
+    //
+    // In custom-chrome mode the two are the same rectangle and nothing changes.
+    // In mode 2 the host draws a titlebar, 24 px of padding and a status panel
+    // around the root, and all of that is UA CHROME: a browser's `innerHeight`
+    // excludes the browser's own toolbars by definition, so reporting the client
+    // area here made `window.innerHeight` disagree with
+    // `document.documentElement.clientHeight` and with every
+    // `getBoundingClientRect()` (which are root-relative) by the height of the
+    // chrome — 167 px on `apps/shadcn`. Anything that sizes itself against the
+    // viewport (reka's `Select` computes `window.innerHeight - 2*margin`) was
+    // that much too optimistic.
+    //
+    // Before the first painted frame the root has no box yet, so the client area
+    // is the honest answer — and it is also the right one, since no chrome has
+    // been drawn either.
+    let client = (f32::from(viewport.width), f32::from(viewport.height));
+    let (inner, inset) = match vn_tree::root_bounds() {
+        Some((x, y, w, h)) if w > 0.0 && h > 0.0 => {
+            ((w, h), (x, y, client.0 - x - w, client.1 - y - h))
+        }
+        _ => (client, (0.0, 0.0, 0.0, 0.0)),
+    };
     Snapshot {
-        inner_width: f32::from(viewport.width),
-        inner_height: f32::from(viewport.height),
+        inner_width: inner.0,
+        inner_height: inner.1,
+        client,
+        content_inset: inset,
         outer,
         content: (
             f32::from(bounds.origin.x),
@@ -755,6 +932,47 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         always_on_top: live.always_on_top,
         title_bar_height: live.title_bar_height,
         fallback_titlebar: live.fallback_titlebar,
+        overlay: live.overlay,
+    }
+}
+
+/// The Window Controls Overlay rect (§2.3) — the area of the titlebar strip
+/// available to APP CONTENT, and the same numbers `env(titlebar-area-*)`
+/// resolves to.
+///
+/// Zero, with `visible: false`, whenever the strip does not belong to content:
+/// OS chrome, fullscreen, minimised — and while the host's own fallback
+/// titlebar is still up, which is the honest answer the merge report's known
+/// issue was about. A host-drawn button cluster takes its width off the right.
+fn titlebar_area(s: &Snapshot) -> (bool, (f32, f32, f32, f32)) {
+    let visible = display_mode(s.fullscreen) == vn_css::DisplayMode::WindowControlsOverlay
+        && !s.fullscreen
+        && !s.minimized
+        && !s.fallback_titlebar;
+    if !visible {
+        return (false, (0.0, 0.0, 0.0, 0.0));
+    }
+    let cluster = if s.overlay.is_some() { Overlay::width() } else { 0.0 };
+    // Windows puts the caption buttons on the RIGHT, so the content area keeps
+    // `x = 0` and loses width. macOS would keep the width and move `x`, which
+    // is why the app-facing rule is "read the rect, never assume a side".
+    (true, (0.0, 0.0, (s.inner_width - cluster).max(0.0), s.title_bar_height))
+}
+
+/// The `@media` + `env()` environment, derived from one snapshot.
+fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> vn_css::Env {
+    let (_, t) = titlebar_area(s);
+    vn_css::Env {
+        viewport_width: s.inner_width,
+        viewport_height: s.inner_height,
+        dark,
+        reduce_motion,
+        scale_factor: s.scale,
+        display_mode: display_mode(s.fullscreen),
+        titlebar_area: [t.0, t.1, t.2, t.3],
+        // Desktop Windows reports none. `PlatformWindow::insets()` is the hook
+        // if a platform ever does.
+        safe_area_insets: [0.0; 4],
     }
 }
 
@@ -771,18 +989,7 @@ fn rect(t: (f32, f32, f32, f32)) -> Json {
 /// `navigator.windowControlsOverlay`, `appWindow.*` and friends.
 fn snapshot_json(s: &Snapshot) -> String {
     let mode = display_mode(s.fullscreen);
-    // The WCO rect describes the area available to APP CONTENT. In default
-    // chrome (the OS owns the caption) and in fullscreen (where drag regions
-    // are inert anyway) it is the zero rect and `visible` is false — exactly
-    // what a PWA in a tab reports, so a component written for a real PWA takes
-    // the right branch unmodified.
-    let wco_visible =
-        mode == vn_css::DisplayMode::WindowControlsOverlay && !s.fullscreen && !s.minimized;
-    let titlebar = if wco_visible {
-        (0.0, 0.0, s.inner_width, s.title_bar_height)
-    } else {
-        (0.0, 0.0, 0.0, 0.0)
-    };
+    let (wco_visible, titlebar) = titlebar_area(s);
     let cfg = config();
     Json::obj(vec![
         ("innerWidth", Json::n(s.inner_width)),
@@ -797,6 +1004,15 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("cloaked", Json::Bool(s.cloaked)),
         ("title", Json::s(s.title.clone())),
         ("backdrop", Json::s(s.backdrop.as_str())),
+        // What DWM believes, read back rather than remembered — the two
+        // mechanisms `set_background_appearance` drives can disagree.
+        (
+            "systemBackdrop",
+            match win::system_backdrop() {
+                Some(v) => Json::n(v as f64),
+                None => Json::Null,
+            },
+        ),
         ("alwaysOnTop", Json::Bool(s.always_on_top)),
         ("displayMode", Json::s(mode.as_str())),
         (
@@ -809,6 +1025,22 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("titleBarOverlayVisible", Json::Bool(wco_visible)),
         ("titleBarArea", rect(titlebar)),
         ("fallbackTitleBar", Json::Bool(s.fallback_titlebar)),
+        ("hostControls", Json::Bool(s.overlay.is_some())),
+        // The window CLIENT area, and how far the app root sits inside it.
+        // `innerWidth`/`innerHeight` are the ROOT's box (see `snapshot`), so
+        // these two are what an app needs to reason about the host's own chrome
+        // — and `client - inset` is `inner` by construction.
+        ("clientWidth", Json::n(s.client.0)),
+        ("clientHeight", Json::n(s.client.1)),
+        (
+            "contentInset",
+            Json::obj(vec![
+                ("left", Json::n(s.content_inset.0)),
+                ("top", Json::n(s.content_inset.1)),
+                ("right", Json::n(s.content_inset.2)),
+                ("bottom", Json::n(s.content_inset.3)),
+            ]),
+        ),
         ("focusPolicy", Json::s(if cfg.focus_raise { "raise" } else { "attention" })),
         (
             "screen",
@@ -922,6 +1154,9 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
                 // Retiring the fallback titlebar hands the app the top strip:
                 // the titlebar area is genuinely new geometry.
                 || p.fallback_titlebar != s.fallback_titlebar
+                // Showing/hiding the host cluster changes the rect's WIDTH,
+                // which is the whole reason `geometrychange` exists.
+                || p.overlay.is_some() != s.overlay.is_some()
             {
                 kinds.push("geometrychange");
             }
@@ -944,14 +1179,7 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         window.appearance(),
         gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
     );
-    let env_changed = vn_tree::set_env(vn_css::Env {
-        viewport_width: s.inner_width,
-        viewport_height: s.inner_height,
-        dark,
-        reduce_motion: cx.reduce_motion(),
-        scale_factor: s.scale,
-        display_mode: display_mode(s.fullscreen),
-    });
+    let env_changed = vn_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
     if env_changed && BOOTED.with(|b| b.get()) {
         IN_DISPATCH.with(|f| f.set(true));
         notify("mediachange", &json);
@@ -1359,15 +1587,68 @@ host_fn!(fn vn_window_set_backdrop(g, args) {
     UNDEF
 });
 
-host_fn!(fn vn_window_set_titlebar_height(_g, args) {
-    // The JS half of `setTitleBarOverlay({ height })`. `color`/`symbolColor`
-    // are accepted and advised about on the JS side: v1 draws no button
-    // cluster, so there is nothing to tint.
+host_fn!(fn vn_window_set_overlay(g, args) {
+    // The host half of `setTitleBarOverlay({ height, color, symbolColor })`.
+    //
+    // `height` alone (arg 1 absent) keeps whatever cluster state is live, which
+    // is what `defineWindow({ titleBarHeight })` means. Passing an explicit
+    // `false` retires the cluster; passing an object installs or updates it.
+    // Colours arrive as `#rrggbb` strings, so the parser is shared with the
+    // config path rather than duplicated in JS.
     if let Some(h) = arg_f32(args.arg(0)) {
         LIVE.with(|l| l.borrow_mut().title_bar_height = h.max(0.0));
     }
+    let mode = args.arg(1).as_number().unwrap_or(-1.0);
+    let read = |i: u32| unsafe { read_string(g, args.arg(i).0) }.unwrap_or_default();
+    match mode {
+        // 0 = `titleBarOverlay: false`.
+        m if m == 0.0 => LIVE.with(|l| l.borrow_mut().overlay = None),
+        // 1 = an object; colours are empty strings when not given.
+        m if m == 1.0 => {
+            if config().title_bar_style == TitleBarStyle::Default {
+                advise(A27);
+                return UNDEF;
+            }
+            let mut adv = Vec::new();
+            let mut parse = |s: String, key: &str| -> Option<u32> {
+                if s.is_empty() {
+                    return None;
+                }
+                let c = parse_color(&s);
+                if c.is_none() {
+                    adv.push(format!(
+                        "`setTitleBarOverlay({{ {key}: {s:?} }})` is not a hex colour — expected \
+                         `#rgb`, `#rrggbb` or `#rrggbbaa`. Ignored."
+                    ));
+                }
+                c
+            };
+            let color = parse(read(2), "color");
+            let symbol_color = parse(read(3), "symbolColor");
+            for a in adv {
+                advise(&a);
+            }
+            LIVE.with(|l| l.borrow_mut().overlay = Some(Overlay { color, symbol_color }));
+        }
+        _ => {}
+    }
     UNDEF
 });
+
+const A27: &str = "`setTitleBarOverlay()` does nothing under `titleBarStyle: \"default\"` — the OS \
+                   draws the caption buttons and owns their colours. The overlay is for \
+                   custom-chrome windows (docs/WINDOWING.md §4.2 mode 1).";
+
+/// The host-drawn cluster the Shell paints, or `None`. Read once per frame by
+/// `Shell::render_body` — never drawn in fullscreen (drag regions and caption
+/// buttons are both inert there) or while the window is minimised.
+pub fn overlay() -> Option<(f32, Overlay)> {
+    let s = SNAPSHOT.with(|s| s.borrow().clone());
+    if s.fullscreen || s.minimized {
+        return None;
+    }
+    s.overlay.map(|o| (s.title_bar_height, o))
+}
 
 host_fn!(fn vn_window_match_media(g, args) {
     // The SAME evaluator the cascade runs, against the SAME env — which is the
@@ -1439,7 +1720,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_window_set_bounds", 5, vn_window_set_bounds as *const _),
         ("__vn_window_set_always_on_top", 1, vn_window_set_always_on_top as *const _),
         ("__vn_window_set_backdrop", 1, vn_window_set_backdrop as *const _),
-        ("__vn_window_set_titlebar_height", 1, vn_window_set_titlebar_height as *const _),
+        ("__vn_window_set_overlay", 4, vn_window_set_overlay as *const _),
         ("__vn_window_match_media", 1, vn_window_match_media as *const _),
         ("__vn_window_hitboxes", 0, vn_window_hitboxes as *const _),
         ("__vn_window_cursor", 0, vn_window_cursor as *const _),
@@ -1447,5 +1728,103 @@ pub fn install(rt: &JsRuntime) {
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `titleBarOverlay.color` takes CSS hex, which is what Electron's option
+    /// takes. `0xAARRGGBB` is what `gpui::rgba` reads.
+    #[test]
+    fn hex_colours_parse_in_all_three_lengths() {
+        assert_eq!(parse_color("#fff"), Some(0xffff_ffff));
+        assert_eq!(parse_color("#202020"), Some(0xff20_2020));
+        assert_eq!(parse_color("#20202080"), Some(0x8020_2020));
+        assert_eq!(parse_color("  #c42b1c  "), Some(0xffc4_2b1c));
+        // Not hex, not a colour: refused rather than silently painted black.
+        assert_eq!(parse_color("rgb(1,2,3)"), None);
+        assert_eq!(parse_color("#12345"), None);
+        assert_eq!(parse_color("#zzz"), None);
+    }
+
+    /// The WCO rect is zero — and `visible` false — in every mode where the
+    /// titlebar strip does NOT belong to app content. The last of those cases
+    /// is the one the merge report filed: while the host's own fallback
+    /// titlebar is still up, the strip is the host's.
+    #[test]
+    fn the_titlebar_rect_is_only_non_zero_when_the_strip_belongs_to_content() {
+        let base = Snapshot {
+            inner_width: 1000.0,
+            title_bar_height: 32.0,
+            fallback_titlebar: false,
+            ..Snapshot::default()
+        };
+        assert_eq!(titlebar_area(&base), (true, (0.0, 0.0, 1000.0, 32.0)));
+
+        let hosted = Snapshot { fallback_titlebar: true, ..base.clone() };
+        assert_eq!(titlebar_area(&hosted), (false, (0.0, 0.0, 0.0, 0.0)));
+
+        let full = Snapshot { fullscreen: true, ..base.clone() };
+        assert_eq!(titlebar_area(&full), (false, (0.0, 0.0, 0.0, 0.0)));
+
+        let min = Snapshot { minimized: true, ..base.clone() };
+        assert_eq!(titlebar_area(&min), (false, (0.0, 0.0, 0.0, 0.0)));
+
+        // A host-drawn cluster takes its width off the RIGHT on Windows, so the
+        // content area keeps x = 0 and loses width (3 x 46 px).
+        let overlaid = Snapshot { overlay: Some(Overlay::default()), ..base.clone() };
+        assert_eq!(titlebar_area(&overlaid), (true, (0.0, 0.0, 862.0, 32.0)));
+    }
+
+    /// The rect the CSS side resolves `env(titlebar-area-*)` from is the SAME
+    /// one the JS getter reports — one function, two consumers, so they cannot
+    /// drift apart.
+    #[test]
+    fn the_css_env_carries_the_same_titlebar_rect() {
+        let s = Snapshot {
+            inner_width: 800.0,
+            inner_height: 600.0,
+            title_bar_height: 36.0,
+            fallback_titlebar: false,
+            ..Snapshot::default()
+        };
+        let env = css_env(&s, false, false);
+        assert_eq!(env.titlebar_area, [0.0, 0.0, 800.0, 36.0]);
+        assert_eq!(env.viewport_width, 800.0);
+        assert_eq!(env.viewport_height, 600.0);
+        assert_eq!(env.safe_area_insets, [0.0; 4]);
+    }
+
+    /// `titleBarStyle: "default"` no longer advises and falls back (fork item
+    /// F-03 landed), and it forces the host's own fallback strip off — two
+    /// titlebars stacked is not a mode.
+    #[test]
+    fn os_chrome_is_a_real_mode_and_refuses_a_second_titlebar() {
+        let cfg = load_config(Some(
+            r#"{"titleBarStyle":"default","titleBarFallback":true}"#.to_string(),
+        ));
+        assert_eq!(cfg.title_bar_style, TitleBarStyle::Default);
+        assert!(!cfg.title_bar_fallback);
+    }
+
+    #[test]
+    fn title_bar_overlay_parses_electrons_shape() {
+        let cfg = load_config(Some(
+            r##"{"titleBarOverlay":{"height":40,"color":"#202020","symbolColor":"#fff"}}"##
+                .to_string(),
+        ));
+        assert_eq!(cfg.title_bar_height, 40.0);
+        assert_eq!(
+            cfg.title_bar_overlay,
+            Some(Overlay { color: Some(0xff20_2020), symbol_color: Some(0xffff_ffff) })
+        );
+
+        // `false` (and absent) means the app draws its own — the v1 default.
+        let cfg = load_config(Some(r#"{"titleBarOverlay":false}"#.to_string()));
+        assert_eq!(cfg.title_bar_overlay, None);
+        let cfg = load_config(Some(r#"{}"#.to_string()));
+        assert_eq!(cfg.title_bar_overlay, None);
     }
 }

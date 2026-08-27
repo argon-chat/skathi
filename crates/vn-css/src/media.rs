@@ -39,6 +39,24 @@ pub struct Env {
     pub scale_factor: f32,
     /// `display-mode` — which chrome mode the window is in.
     pub display_mode: DisplayMode,
+    /// The Window Controls Overlay titlebar area, `[x, y, width, height]` in
+    /// CSS px — what `env(titlebar-area-x | -y | -width | -height)` resolves
+    /// to, and the SAME numbers
+    /// `navigator.windowControlsOverlay.getTitlebarAreaRect()` reports
+    /// (docs/WINDOWING.md §2.4). All zero when the overlay is not visible
+    /// (OS chrome, fullscreen, minimised) — exactly what a PWA in a tab
+    /// reports, so a component written for a real PWA takes the right branch.
+    pub titlebar_area: [f32; 4],
+    /// `env(safe-area-inset-top | -right | -bottom | -left)`, CSS px, in that
+    /// order.
+    ///
+    /// Zero on desktop Windows, and expected to stay zero. The names exist so a
+    /// stylesheet ported from a PWA RESOLVES instead of having every
+    /// `padding-bottom: env(safe-area-inset-bottom)` dropped as invalid at
+    /// computed-value time — a fallback-less `env()` invalidates its
+    /// declaration, so "we do not know that name" is not a neutral answer.
+    /// `PlatformWindow::insets()` is the hook if a platform ever reports one.
+    pub safe_area_insets: [f32; 4],
 }
 
 /// The `display-mode` media feature. Never `browser`: we are permanently an
@@ -77,6 +95,11 @@ impl Default for Env {
             reduce_motion: false,
             scale_factor: 1.0,
             display_mode: DisplayMode::WindowControlsOverlay,
+            // 32 px is the Win11 standard caption height and this crate's
+            // documented default (§2.3); a sheet compiled with no host yet
+            // therefore gets the same number the host will publish.
+            titlebar_area: [0.0, 0.0, 1024.0, 32.0],
+            safe_area_insets: [0.0; 4],
         }
     }
 }
