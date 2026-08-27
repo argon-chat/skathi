@@ -64,6 +64,12 @@ export function createRuntime() {
     boundsById: new Map(),
     /** `__vn_computed_style` answers: node id -> "k=v\n…". */
     computedById: new Map(),
+    /** `__vn_media_state` answers: node id -> "name=value\n…". */
+    mediaById: new Map(),
+    /** `__vn_media_call` log: { id, verb, arg }. */
+    mediaCalls: [],
+    /** `__vn_media_can_play` answers: mime type -> "" | "maybe" | "probably". */
+    canPlayByType: new Map(),
   };
   const intern = (name) => {
     let i = host.names.indexOf(name);
@@ -128,6 +134,10 @@ export function createRuntime() {
     "__vn_query",
     "__vn_bounds",
     "__vn_computed_style",
+    "__vn_media_state",
+    "__vn_media_call",
+    "__vn_media_can_play",
+    "__vn_media_events",
   ];
   let nextId = 1;
   const args = [
@@ -176,6 +186,13 @@ export function createRuntime() {
     },
     (id) => host.boundsById.get(id) ?? "",
     (id) => host.computedById.get(id) ?? "",
+    (id) => host.mediaById.get(id) ?? "",
+    (id, verb, arg) => {
+      host.mediaCalls.push({ id, verb, arg });
+      return true;
+    },
+    (_id, type) => host.canPlayByType.get(type) ?? "",
+    () => "",
   ];
 
   // eslint-disable-next-line no-new-func

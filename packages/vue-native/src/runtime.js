@@ -56,6 +56,32 @@ const EV_CODES = {
   mousemove: 14,
   mouseenter: 15,
   mouseleave: 16,
+  // <video> — the HTML media event set (crates/vn-video/CONTRACT.md §4). Every
+  // one of these is also an MF_MEDIA_ENGINE_EVENT below 1000, the range
+  // Microsoft documents as "the events defined in HTML 5 for media elements",
+  // so the names are the spec's on both sides of the boundary and a component
+  // ports from a browser unchanged.
+  loadstart: 17,
+  loadedmetadata: 18,
+  loadeddata: 19,
+  canplay: 20,
+  canplaythrough: 21,
+  play: 22,
+  playing: 23,
+  pause: 24,
+  seeking: 25,
+  seeked: 26,
+  // Re-cadenced by the host to the spec's "no more often than every 250 ms" —
+  // MF raises it at the decoder's rate, which is the display's.
+  timeupdate: 27,
+  durationchange: 28,
+  ratechange: 29,
+  volumechange: 30,
+  waiting: 31,
+  ended: 32,
+  // `a` is MediaError.code (1-4), `key` the advisory naming the missing codec.
+  error: 33,
+  emptied: 34,
   // CSS animation/transition events. Unlike everything above, the SOURCE is
   // vn-css's own animator rather than gpui: it queues one per finished
   // transition track and per animation start/end/cancel, and the host drains
@@ -141,6 +167,48 @@ const NO_BUBBLE = new Set([
   "mouseleave",
   "pointerenter",
   "pointerleave",
+  // Every media event fires AT THE TARGET only — HTML says so for all of them,
+  // and it matters: a `@error` on a page wrapper would otherwise catch a
+  // `<video>`'s failed load as if the wrapper had failed.
+  "loadstart",
+  "loadedmetadata",
+  "loadeddata",
+  "canplay",
+  "canplaythrough",
+  "play",
+  "playing",
+  "pause",
+  "seeking",
+  "seeked",
+  "timeupdate",
+  "durationchange",
+  "ratechange",
+  "volumechange",
+  "waiting",
+  "ended",
+  "error",
+  "emptied",
+]);
+/** The EV_CODES names that come off a media element, in code order. */
+const MEDIA_EVENTS = new Set([
+  "loadstart",
+  "loadedmetadata",
+  "loadeddata",
+  "canplay",
+  "canplaythrough",
+  "play",
+  "playing",
+  "pause",
+  "seeking",
+  "seeked",
+  "timeupdate",
+  "durationchange",
+  "ratechange",
+  "volumechange",
+  "waiting",
+  "ended",
+  "error",
+  "emptied",
 ]);
 const nodesById = new Map();
 
@@ -1046,6 +1114,141 @@ defineDom("cloneNode", function () {
   return null;
 });
 
+// -- HTMLMediaElement (crates/vn-video/CONTRACT.md §6).
+//
+//    `<video>` is the one element whose interesting state lives in the HOST and
+//    not in the mirror: `currentTime` moves inside the OS media pipeline sixty
+//    times a second and no prop write puts it there. So the surface splits the
+//    same way `getBoundingClientRect` and `getComputedStyle` already do — the
+//    accessors below read `__vn_media_state` live, per call, uncached, exactly
+//    as `rectOf` reads `__vn_bounds`. A browser's `el.currentTime` is a live
+//    property too; caching it would be the divergence.
+//
+//    The verbs go the other way, through `__vn_media_call`. They are the same
+//    seven the element layer implements (`vn_tree::video::media_call`), and
+//    nothing in Rust changed to make this work: the host has dispatched all
+//    eighteen events on the ordinary EV_* channel since the day `<video>`
+//    landed, and this file simply learned their names.
+const MEDIA_CALL = {
+  play: 0,
+  pause: 1,
+  currentTime: 2,
+  volume: 3,
+  muted: 4,
+  playbackRate: 5,
+  loop: 6,
+};
+const MEDIA_TAGS = new Set(["VIDEO", "AUDIO"]);
+const isMediaEl = (n) => !!n && MEDIA_TAGS.has(n.tagName);
+/** `name=value` lines -> object; `{}` for a node the host knows nothing about. */
+function mediaState(node) {
+  if (!isMediaEl(node) || !node.id) return null;
+  const raw = __vn_media_state(node.id);
+  if (!raw) return null;
+  const out = {};
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    const eq = line.indexOf("=");
+    if (eq > 0) out[line.slice(0, eq)] = line.slice(eq + 1);
+  }
+  return out;
+}
+const mediaCall = (node, verb, arg = 0) =>
+  isMediaEl(node) && node.id ? __vn_media_call(node.id, verb, arg) : false;
+/** `"1.5:3,8:9"` -> the TimeRanges shape everything in the wild indexes. */
+function timeRanges(raw) {
+  const list = raw
+    ? raw.split(",").filter(Boolean).map((pair) => {
+        const [start, end] = pair.split(":").map(Number);
+        return { start, end };
+      })
+    : [];
+  return {
+    length: list.length,
+    start: (i) => list[i]?.start ?? NaN,
+    end: (i) => list[i]?.end ?? NaN,
+    // Not in the DOM, and deliberately: a TimeRanges is painful to read in a
+    // template and every transport component ends up writing this loop itself.
+    ranges: list,
+  };
+}
+/** A read-only media property, off the one state string. */
+function defineMediaGet(name, read, write) {
+  defineDomGet(
+    name,
+    function () {
+      const s = mediaState(this);
+      // A non-media element has no such property in a browser either.
+      return s ? read(s) : isMediaEl(this) ? read({}) : undefined;
+    },
+    write,
+  );
+}
+const num = (s, k, fallback) => (s[k] === undefined ? fallback : Number(s[k]));
+const bool = (s, k, fallback) => (s[k] === undefined ? fallback : s[k] === "true");
+
+defineMediaGet("currentTime", (s) => num(s, "currentTime", 0), function (v) {
+  mediaCall(this, MEDIA_CALL.currentTime, Number(v));
+});
+defineMediaGet("duration", (s) => num(s, "duration", NaN));
+defineMediaGet("paused", (s) => bool(s, "paused", true));
+defineMediaGet("ended", (s) => bool(s, "ended", false));
+defineMediaGet("seeking", (s) => bool(s, "seeking", false));
+defineMediaGet("readyState", (s) => num(s, "readyState", 0));
+defineMediaGet("networkState", (s) => num(s, "networkState", 0));
+defineMediaGet("volume", (s) => num(s, "volume", 1), function (v) {
+  mediaCall(this, MEDIA_CALL.volume, Number(v));
+});
+defineMediaGet("muted", (s) => bool(s, "muted", false), function (v) {
+  mediaCall(this, MEDIA_CALL.muted, v ? 1 : 0);
+});
+defineMediaGet("playbackRate", (s) => num(s, "playbackRate", 1), function (v) {
+  mediaCall(this, MEDIA_CALL.playbackRate, Number(v));
+});
+defineMediaGet("loop", (s) => bool(s, "loop", false), function (v) {
+  mediaCall(this, MEDIA_CALL.loop, v ? 1 : 0);
+});
+defineMediaGet("videoWidth", (s) => num(s, "videoWidth", 0));
+defineMediaGet("videoHeight", (s) => num(s, "videoHeight", 0));
+defineMediaGet("buffered", (s) => timeRanges(s.buffered));
+defineMediaGet("seekable", (s) => timeRanges(s.seekable));
+// `MediaError`: `null` when there is none, which is the check every handler
+// makes (`if (el.error)`). `message` carries the advisory naming this machine's
+// missing decoder and the ffmpeg one-liner that fixes the file.
+defineMediaGet("error", (s) => {
+  const code = num(s, "error", 0);
+  return code ? { code, message: s.errorMessage ?? "" } : null;
+});
+
+defineDom("play", function () {
+  mediaCall(this, MEDIA_CALL.play);
+  // HTML returns a promise that resolves when playback actually begins. The
+  // host's `play` is synchronous and the `playing` event is what says it
+  // started, so resolving immediately is the honest approximation — and it is
+  // what makes `el.play().catch(…)` (the autoplay-rejection idiom) not throw.
+  return Promise.resolve();
+});
+defineDom("pause", function () {
+  mediaCall(this, MEDIA_CALL.pause);
+});
+defineDom("load", function () {
+  // The host runs the load algorithm off the `src` prop, edge-triggered, so a
+  // re-load is `src = ""` then `src = url`. There is no separate verb for it.
+  if (isMediaEl(this)) {
+    warnCompat(
+      "media-load",
+      "video.load() is a no-op — the host loads from the `src` prop, edge-triggered; " +
+        "to force a reload, clear `src` and set it again",
+    );
+  }
+});
+defineDom("canPlayType", function (type) {
+  if (!isMediaEl(this) || !this.id) return "";
+  // A live probe of THIS machine's decoder registry, not a table — a Store
+  // codec package installed after we shipped is picked up on the next launch.
+  return __vn_media_can_play(this.id, String(type));
+});
+
 // ---- W3C event synthesis + propagation ------------------------------------
 // The host sends ONE compact payload per input event targeted at the deepest
 // hit node; the mirror tree provides the ancestor path. Events are real redjs
@@ -1141,6 +1344,16 @@ function synthesize(name, a, b, c, d, key) {
         return withProps(new CustomEvent(name, { ...common, detail: lottieDetail(name, a, b, c, d) }),
                          lottieDetail(name, a, b, c, d));
     }
+    if (MEDIA_EVENTS.has(name)) {
+      // In a browser these are plain `Event`s and everything interesting is
+      // read off `e.target` — which works here too, because the accessors
+      // below answer from the host. The numbers ride along anyway (on the
+      // event AND on `detail`) so a handler can read `e.currentTime` without a
+      // second host call per frame, which is what makes a 4 Hz `@timeupdate`
+      // readout cost nothing.
+      const detail = mediaDetail(a, b, c, d);
+      return withProps(new CustomEvent(name, { ...common, detail }), detail);
+    }
   } catch (e) {
     /* fall through to the generic event */
   }
@@ -1160,6 +1373,8 @@ function synthesize(name, a, b, c, d, key) {
             ? {}
             : name === "complete" || name === "loopComplete" || name === "enterFrame"
               ? lottieDetail(name, a, b, c, d)
+              : MEDIA_EVENTS.has(name)
+              ? mediaDetail(a, b, c, d)
               : POINTER_EVENTS.has(name)
                 ? { clientX: a, clientY: b, button: c, ...POINTER_INIT, ...M }
                 : { clientX: a, clientY: b, button: c, ...M };
@@ -1170,6 +1385,15 @@ function synthesize(name, a, b, c, d, key) {
 function withProps(ev, props) {
   for (const k in props) Object.defineProperty(ev, k, { value: props[k], configurable: true });
   return ev;
+}
+
+// The payload crates/vn-video/src/state.rs sends with every media event
+// (CONTRACT.md §4): a = currentTime, b = duration, c = readyState,
+// d = playbackRate. For `error`, a is MediaError.code and b is currentTime —
+// `e.target.error` is the shape a browser handler reads, and that one is served
+// live off `__vn_media_state` by the accessor below rather than frozen here.
+function mediaDetail(a, b, c, d) {
+  return { currentTime: a, duration: b, readyState: c, playbackRate: d };
 }
 
 // The payload crates/vn-tree/src/lottie.rs sends, named the way lottie-web

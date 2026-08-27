@@ -12,28 +12,64 @@
 //   does apply — that is the payoff for decoding into our own scene graph
 //   (Media Foundation frame-server mode) instead of onto a sibling
 //   DirectComposition visual, where none of it would work.
-// * `:autoplay` is EDGE-TRIGGERED, exactly as it is on `<lottie>`, so binding
-//   it to a ref makes it the play/pause switch. A browser reads `autoplay`
-//   once and expects `play()`/`pause()`; we have both — `media.play()` below
-//   goes through the host's media surface — and the binding is the documented
-//   superset (crates/vn-tree/src/video.rs, decision 1).
-// * `useMediaElement` is TEMPORARY. It reads the host's media surface directly
-//   because the JS runtime does not yet spell it `el.currentTime` /
-//   `@timeupdate`; see the file's header and CONTRACT.md §6.
+// * The transport is `videoEl.play()` / `videoEl.currentTime = 8` /
+//   `@timeupdate`, i.e. plain HTMLMediaElement — nothing app-specific and
+//   nothing host-specific. That is new: until m12's integration the JS runtime
+//   did not know the media event codes, so this page carried a
+//   `useMediaElement` composable that talked to `__vn_media_state` /
+//   `__vn_media_call` itself. `crates/vn-video/CONTRACT.md` §6 said that file
+//   dies the day runtime.js learns the codes. It has, and it did.
+// * The properties are LIVE reads off the host (`el.currentTime` is one host
+//   call, like `getBoundingClientRect()`), so nothing about them is reactive.
+//   The events are what drive the UI — exactly as in a browser, where you also
+//   copy `e.target.currentTime` into state on `@timeupdate` rather than
+//   watching the element.
 
-import { computed, onMounted, ref } from "vue";
-import { formatTime, useMediaElement } from "../useMediaElement.js";
+import { computed, onMounted, reactive, ref } from "vue";
 
 const videoEl = ref(null);
 const brokenEl = ref(null);
 
-const media = useMediaElement(videoEl);
-const broken = useMediaElement(brokenEl);
+// What the last event left on the element. `timeupdate` arrives on the spec's
+// 4 Hz cadence, so this rerenders four times a second, not 165.
+const media = reactive({
+  currentTime: 0,
+  duration: NaN,
+  paused: true,
+  ended: false,
+  seeking: false,
+  readyState: 0,
+  videoWidth: 0,
+  videoHeight: 0,
+});
+const log = ref([]);
+const brokenError = ref(null);
 
-// The transport switch. `paused` comes back from the host, so the button
-// label follows what is ACTUALLY happening — including the pause the element
-// performs itself when a non-looping clip ends.
-const playing = ref(false);
+function readBack(el) {
+  if (!el) return;
+  media.currentTime = el.currentTime;
+  media.duration = el.duration;
+  media.paused = el.paused;
+  media.ended = el.ended;
+  media.seeking = el.seeking;
+  media.readyState = el.readyState;
+  media.videoWidth = el.videoWidth;
+  media.videoHeight = el.videoHeight;
+}
+
+/** One handler for every media event: log it, then re-read the element. */
+function onMedia(e) {
+  log.value.push(e.type);
+  if (log.value.length > 40) log.value.shift();
+  readBack(e.target ?? videoEl.value);
+}
+
+function onBrokenError(e) {
+  // `e.target.error` is a real MediaError: `{ code, message }`, where the
+  // message is the advisory naming what THIS machine cannot decode.
+  brokenError.value = e.target?.error ?? null;
+}
+
 const muted = ref(true); // browsers require it for autoplay; be a good neighbour
 const looping = ref(false);
 const rate = ref(1);
@@ -41,27 +77,46 @@ const rate = ref(1);
 // `paused` and `ended` are separate in HTML: reaching the end sets `ended` and
 // leaves `paused` alone (the spec only changes `paused` in play()/pause()), so
 // a transport button has to read BOTH or it says "pause" over a stopped video.
-const stopped = computed(() => media.state.paused || media.state.ended);
+const stopped = computed(() => media.paused || media.ended);
 
 function toggle() {
-  playing.value = stopped.value;
-  if (playing.value) media.play();
-  else media.pause();
+  const el = videoEl.value;
+  if (!el) return;
+  if (stopped.value) el.play();
+  else el.pause();
+  readBack(el);
+}
+
+function seek(seconds) {
+  const el = videoEl.value;
+  if (!el) return;
+  el.currentTime = Math.max(0, seconds);
+  // The seek lands on the host immediately; mirror it so a dragged scrub bar
+  // does not snap back for the ~250 ms until `seeked` arrives.
+  media.currentTime = Math.max(0, seconds);
 }
 
 function setRate(r) {
   rate.value = r;
-  media.setRate(r);
+  if (videoEl.value) videoEl.value.playbackRate = r;
 }
 
 function toggleMute() {
   muted.value = !muted.value;
-  media.setMuted(muted.value);
+  if (videoEl.value) videoEl.value.muted = muted.value;
 }
 
 function toggleLoop() {
   looping.value = !looping.value;
-  media.setLoop(looping.value);
+  if (videoEl.value) videoEl.value.loop = looping.value;
+}
+
+/** `mm:ss.d`, the shape a transport readout wants. */
+function formatTime(seconds) {
+  if (!Number.isFinite(seconds)) return "--:--";
+  const m = Math.floor(seconds / 60);
+  const s = seconds - m * 60;
+  return `${String(m).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`;
 }
 
 // --- the scrub bar ----------------------------------------------------------
@@ -72,15 +127,15 @@ const scrubbing = ref(false);
 
 function seekFromEvent(e) {
   const track = e.currentTarget;
-  if (!track || !Number.isFinite(media.state.duration)) return;
+  if (!track || !Number.isFinite(media.duration)) return;
   const rect = track.getBoundingClientRect();
   if (!rect.width) return;
   const fraction = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-  media.seek(fraction * media.state.duration);
+  seek(fraction * media.duration);
 }
 
 const progress = computed(() => {
-  const { currentTime, duration } = media.state;
+  const { currentTime, duration } = media;
   if (!Number.isFinite(duration) || duration <= 0) return 0;
   return Math.min(100, Math.max(0, (currentTime / duration) * 100));
 });
@@ -105,23 +160,27 @@ onMounted(() => {
   // soak or a frame-time measurement is one process and one screen.
   if (globalThis.__VN_SCENARIO__ === "media") {
     setTimeout(() => {
-      media.setLoop(true);
-      media.play();
-      playing.value = true;
+      const el = videoEl.value;
+      if (!el) return;
+      el.loop = true;
+      el.play();
       looping.value = true;
+      readBack(el);
     }, 500);
   }
   // After the element exists — `canPlayType` is asked OF the media engine.
   setTimeout(() => {
+    const el = videoEl.value;
     probe.value = CODECS.map(([label, type]) => ({
       label,
-      answer: media.canPlayType(type) || "no",
+      answer: (el && el.canPlayType(type)) || "no",
     }));
+    readBack(el);
   }, 250);
 });
 
 // The event log, newest last — the proof that `ended` and `error` really fire.
-const recent = computed(() => media.state.log.slice(-8).join(" · "));
+const recent = computed(() => log.value.slice(-8).join(" · "));
 </script>
 
 <template>
@@ -135,28 +194,43 @@ const recent = computed(() => media.state.log.slice(-8).join(" · "));
              the point: a video that escaped the scene graph could not have
              either. -->
         <div class="frame">
+          <!-- The event set is HTML's, bound with plain `@` handlers. The
+               listener bit is what makes the host build and send the payload
+               at all, so an unbound `@timeupdate` costs nothing. -->
           <video
             ref="videoEl"
             class="video"
             src="assets/clip-1080p.mp4"
             poster="assets/clip-1080p.poster.png"
-            :autoplay="playing"
             muted
+            @loadedmetadata="onMedia"
+            @loadeddata="onMedia"
+            @canplay="onMedia"
+            @play="onMedia"
+            @playing="onMedia"
+            @pause="onMedia"
+            @timeupdate="onMedia"
+            @durationchange="onMedia"
+            @ratechange="onMedia"
+            @volumechange="onMedia"
+            @seeking="onMedia"
+            @seeked="onMedia"
+            @waiting="onMedia"
+            @ended="onMedia"
+            @error="onMedia"
           />
         </div>
 
         <div class="side">
           <div class="meta">
-            {{ media.state.videoWidth }}×{{ media.state.videoHeight }} · H.264 High + AAC ·
-            readyState {{ media.state.readyState }}
+            {{ media.videoWidth }}×{{ media.videoHeight }} · H.264 High + AAC ·
+            readyState {{ media.readyState }}
           </div>
 
           <div class="row">
             <div class="btn" @click="toggle">{{ stopped ? "play" : "pause" }}</div>
-            <div class="btn ghost" @click="media.seek(Math.max(0, media.state.currentTime - 5))">
-              −5s
-            </div>
-            <div class="btn ghost" @click="media.seek(media.state.currentTime + 5)">+5s</div>
+            <div class="btn ghost" @click="seek(media.currentTime - 5)">−5s</div>
+            <div class="btn ghost" @click="seek(media.currentTime + 5)">+5s</div>
             <div class="btn ghost" :class="{ on: muted }" @click="toggleMute">
               {{ muted ? "muted" : "sound" }}
             </div>
@@ -167,8 +241,8 @@ const recent = computed(() => media.state.log.slice(-8).join(" · "));
             <div class="btn ghost" :class="{ on: rate === 0.5 }" @click="setRate(0.5)">0.5×</div>
             <div class="btn ghost" :class="{ on: rate === 1 }" @click="setRate(1)">1×</div>
             <div class="btn ghost" :class="{ on: rate === 2 }" @click="setRate(2)">2×</div>
-            <div class="btn ghost" @click="media.seek(2)">seek 2s</div>
-            <div class="btn ghost" @click="media.seek(8)">seek 8s</div>
+            <div class="btn ghost" @click="seek(2)">seek 2s</div>
+            <div class="btn ghost" @click="seek(8)">seek 8s</div>
           </div>
 
           <!-- The scrub bar. `currentTime` updates at the spec's 4 Hz, so this
@@ -184,10 +258,10 @@ const recent = computed(() => media.state.log.slice(-8).join(" · "));
           </div>
 
           <div class="readout">
-            {{ formatTime(media.state.currentTime) }} / {{ formatTime(media.state.duration) }}
+            {{ formatTime(media.currentTime) }} / {{ formatTime(media.duration) }}
             · {{ stopped ? "paused" : "playing" }}
-            <span v-if="media.state.ended"> · ended</span>
-            <span v-if="media.state.seeking"> · seeking</span>
+            <span v-if="media.ended"> · ended</span>
+            <span v-if="media.seeking"> · seeking</span>
           </div>
           <div class="hint">events: {{ recent || "…" }}</div>
         </div>
@@ -199,15 +273,19 @@ const recent = computed(() => media.state.log.slice(-8).join(" · "));
       <div class="title">The error path — a source this machine cannot decode</div>
       <div class="stage">
         <div class="frame small">
-          <video ref="brokenEl" class="video" src="assets/unsupported-codec.mkv" />
+          <!-- One `@error` handler, and `e.target.error` is a real MediaError. -->
+          <video
+            ref="brokenEl"
+            class="video"
+            src="assets/unsupported-codec.mkv"
+            @error="onBrokenError"
+          />
         </div>
         <div class="side">
-          <div class="meta bad" v-if="broken.state.error">
-            MediaError code {{ broken.state.error }}
-          </div>
+          <div class="meta bad" v-if="brokenError">MediaError code {{ brokenError.code }}</div>
           <div class="meta" v-else>loading…</div>
           <div class="advisory">
-            {{ broken.state.errorMessage || "no error yet" }}
+            {{ brokenError ? brokenError.message : "no error yet" }}
           </div>
           <div class="hint">
             FFV1 (a lossless archival codec) in a Matroska container: MF reads the container fine

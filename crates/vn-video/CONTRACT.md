@@ -211,28 +211,38 @@ puts it there. So the surface splits, the same way `getBoundingClientRect` and
 | `__vn_media_can_play(id, type)` | `""` / `"maybe"` / `"probably"`, probed live |
 | `__vn_media_events(id)` | drains the node's recent event names — a bridge and a test surface, not the event channel |
 
-**What is still missing, and it is one file.** The JS runtime
-(`packages/vue-native/src/runtime.js`) is owned by another track this round and
-was deliberately not touched, so it does not yet know the media event codes or
-the media properties. Until it does, `@timeupdate` in a template warns
-("this event type is not delivered by the native host yet") and the events, which
-the host dispatches correctly on the `EV_*` channel, land nowhere.
+**This landed at the m12 integration merge** (`research/reports/m12/integration.md`).
+It was four additive edits to `packages/vue-native/src/runtime.js` and, as
+promised, **nothing in Rust changed**:
 
-The change is additive and lives in four places:
-
-1. `EV_CODES` — add the eighteen names from §4 with their codes.
-2. `NO_BUBBLE` — add all eighteen. Media events fire at the target only.
+1. `EV_CODES` — the eighteen names from §4 with their codes, 17–34. (The
+   compat track's `transitionend`/`animation*` had independently claimed 17–20
+   and were renumbered to 35–38 at the same merge; `Node::listeners` is a u64.)
+2. `NO_BUBBLE` — all eighteen. Media events fire at the target only.
 3. `synthesize` — a `mediaDetail(a, b, c, d)` case, so `e.currentTime` and
-   `e.detail.currentTime` both read; `error` gets `e.target.error = { code: a,
-   message: key }`.
+   `e.detail.currentTime` both read.
 4. `ElementProto` — `play()`/`pause()`/`load()`/`canPlayType()` and the
-   `currentTime`/`duration`/`paused`/`ended`/`volume`/`muted`/`playbackRate`/
-   `videoWidth`/`videoHeight`/`readyState`/`buffered`/`seekable`/`error`
-   accessors, over the four host functions above.
+   `currentTime`/`duration`/`paused`/`ended`/`seeking`/`volume`/`muted`/
+   `playbackRate`/`loop`/`videoWidth`/`videoHeight`/`readyState`/
+   `networkState`/`buffered`/`seekable`/`error` accessors, over the four host
+   functions above.
 
-Nothing in Rust changes when it lands. `apps/hello`'s MediaPage carries a small
-`useMediaElement` composable that does (4) in userland today and is deleted the
-day (1)–(4) exist.
+The accessors read `__vn_media_state` **live, per call, uncached** — the same
+discipline `getBoundingClientRect()` follows against `__vn_bounds`, and the same
+one a browser follows for `el.currentTime`. Nothing about them is reactive; the
+events are what drive a UI, exactly as in a browser.
+
+Two deliberate divergences in the JS half:
+
+* `play()` returns an already-resolved promise. HTML resolves it when playback
+  actually begins, which here is the `playing` event; resolving immediately is
+  what keeps `el.play().catch(…)` from throwing without pretending to know more
+  than the host told us.
+* `load()` is a no-op with an advisory. The host runs the load algorithm off the
+  `src` prop, edge-triggered, so a forced reload is `src = ""` then `src = url`.
+
+`apps/hello`'s `useMediaElement` composable, which did (4) in userland, is
+**deleted**; the Media page is plain `@timeupdate` / `el.currentTime` now.
 
 ---
 

@@ -118,3 +118,117 @@ describe("<lottie> event names", () => {
     expect(rt.flagsFor(rt.EV_CODES.enterFrame).at(-1).on).toBe(false);
   });
 });
+
+// crates/vn-video/CONTRACT.md §4 and §6. The Rust side has dispatched these
+// eighteen since <video> landed; until this file knew their names they arrived
+// nowhere and `@timeupdate` warned.
+describe("<video> media events and the HTMLMediaElement surface", () => {
+  const STATE = [
+    "currentTime=3.5",
+    "duration=12",
+    "paused=false",
+    "ended=false",
+    "seeking=false",
+    "readyState=4",
+    "networkState=1",
+    "volume=0.5",
+    "muted=true",
+    "playbackRate=2",
+    "loop=true",
+    "videoWidth=1920",
+    "videoHeight=1080",
+    "buffered=0:6.25",
+    "seekable=0:12",
+    "error=0",
+    "errorMessage=",
+  ].join("\n");
+
+  const video = (rt) => {
+    const node = rt.nodeOps.createElement("video");
+    rt.host.mediaById.set(node.id, STATE);
+    return node;
+  };
+
+  test("the media codes are in lockstep with crates/vn-tree/src/tree.rs", () => {
+    const rt = createRuntime();
+    expect(rt.EV_CODES.loadstart).toBe(17);
+    expect(rt.EV_CODES.timeupdate).toBe(27);
+    expect(rt.EV_CODES.ended).toBe(32);
+    expect(rt.EV_CODES.emptied).toBe(34);
+    // …and the animator's four sit AFTER the media block, not on top of it.
+    expect(rt.EV_CODES.transitionend).toBe(35);
+    expect(rt.EV_CODES.animationcancel).toBe(38);
+  });
+
+  test("@timeupdate registers a real host listener instead of advising", () => {
+    const rt = createRuntime();
+    rt.patchProp(rt.el(9), "onTimeupdate", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.timeupdate)).toEqual([{ id: 9, code: 27, on: true }]);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("a dispatched timeupdate carries the payload and does not bubble", () => {
+    const rt = createRuntime();
+    const node = video(rt);
+    const seen = [];
+    node.addEventListener("timeupdate", (e) => seen.push(e));
+    rt.host.dispatcher(node.id, rt.EV_CODES.timeupdate, 3.5, 12, 4, 2, "");
+    expect(seen.length).toBe(1);
+    expect(seen[0].currentTime).toBe(3.5);
+    expect(seen[0].detail.duration).toBe(12);
+    expect(seen[0].bubbles).toBe(false);
+  });
+
+  test("the properties read live off the host, per call", () => {
+    const rt = createRuntime();
+    const node = video(rt);
+    expect(node.currentTime).toBe(3.5);
+    expect(node.duration).toBe(12);
+    expect(node.paused).toBe(false);
+    expect(node.muted).toBe(true);
+    expect(node.playbackRate).toBe(2);
+    expect(node.videoWidth).toBe(1920);
+    expect(node.buffered.length).toBe(1);
+    expect(node.buffered.end(0)).toBe(6.25);
+    expect(node.error).toBe(null);
+    // Live: the host moved, and so does the property. No cache to invalidate.
+    rt.host.mediaById.set(node.id, STATE.replace("currentTime=3.5", "currentTime=9"));
+    expect(node.currentTime).toBe(9);
+  });
+
+  test("the transport verbs reach __vn_media_call", () => {
+    const rt = createRuntime();
+    const node = video(rt);
+    node.play();
+    node.currentTime = 8;
+    node.muted = false;
+    node.pause();
+    expect(rt.host.mediaCalls).toEqual([
+      { id: node.id, verb: 0, arg: 0 },
+      { id: node.id, verb: 2, arg: 8 },
+      { id: node.id, verb: 4, arg: 0 },
+      { id: node.id, verb: 1, arg: 0 },
+    ]);
+  });
+
+  test("an errored element reports a MediaError with the advisory text", () => {
+    const rt = createRuntime();
+    const node = video(rt);
+    rt.host.mediaById.set(
+      node.id,
+      "error=4\nerrorMessage=this machine has no HEVC decoder; re-encode to H.264",
+    );
+    expect(node.error.code).toBe(4);
+    expect(node.error.message).toContain("H.264");
+  });
+
+  test("canPlayType is a live probe, and a non-media element has no surface", () => {
+    const rt = createRuntime();
+    const node = video(rt);
+    rt.host.canPlayByType.set('video/mp4; codecs="avc1.640028"', "probably");
+    expect(node.canPlayType('video/mp4; codecs="avc1.640028"')).toBe("probably");
+    expect(node.canPlayType("application/x-nonsense")).toBe("");
+    // A <div> is not an HTMLMediaElement in a browser either.
+    expect(rt.nodeOps.createElement("div").currentTime).toBe(undefined);
+  });
+});
