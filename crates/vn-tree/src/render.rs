@@ -278,6 +278,7 @@ pub(crate) fn gc_node_state() {
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
+    crate::svg::gc(live);
     let focused = FOCUSED_NODE.with(|f| f.get());
     if focused == 0 {
         return;
@@ -354,6 +355,57 @@ pub(crate) fn ensure_root_focus(window: &mut Window, cx: &mut App) {
         return;
     };
     window.focus(&handle, cx);
+}
+
+/// Dispatches the `transitionend` / `animation*` events vn-css's animator
+/// queued, once per frame.
+///
+/// It has to happen here rather than inside the animator because dispatching
+/// into JS needs a `Window` (the runtime's capture/bubble walk can run app code
+/// that mutates the tree, which then has to repaint), and the animator runs from
+/// the restyle pass and from the paint clock, neither of which has one.
+///
+/// Returns `true` when a handler changed something and the window must redraw.
+pub(crate) fn dispatch_anim_events(window: &mut Window, cx: &mut App) -> bool {
+    let events = tree::take_anim_events();
+    if events.is_empty() {
+        return false;
+    }
+    let mut moved = false;
+    for event in events {
+        let code = match event.kind {
+            vn_css::AnimEventKind::TransitionEnd => tree::EV_TRANSITIONEND,
+            vn_css::AnimEventKind::AnimationStart => tree::EV_ANIMATIONSTART,
+            vn_css::AnimEventKind::AnimationEnd => tree::EV_ANIMATIONEND,
+            vn_css::AnimEventKind::AnimationCancel => tree::EV_ANIMATIONCANCEL,
+        };
+        // No listener anywhere on the path means nothing to deliver to. The
+        // bit is the node's own; the runtime's walk handles ancestors, so this
+        // is only a cheap "nobody on this element" filter — the full check is
+        // the listener mask the JS side maintains for the whole path.
+        let listening = tree::read_tree(|t| {
+            let mut cursor = event.node;
+            for _ in 0..1024 {
+                match t.node(cursor) {
+                    Some(n) if n.listeners & (1 << code) != 0 => return true,
+                    Some(n) if n.parent != 0 => cursor = n.parent,
+                    _ => return false,
+                }
+            }
+            false
+        });
+        if !listening {
+            continue;
+        }
+        let payload = EventPayload {
+            a: event.elapsed as f64,
+            key: Some(&event.name),
+            ..Default::default()
+        };
+        js_dispatch_app(event.node, code, &payload, window, cx);
+        moved = true;
+    }
+    moved
 }
 
 pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
@@ -798,6 +850,7 @@ fn build_node<V: 'static>(
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
+    advise_untransformable(t, node, &extras);
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
         // element out as a full line box — and Vue anchors every Fragment
@@ -837,6 +890,13 @@ fn build_node<V: 'static>(
         Kind::Element if t.name(node.tag) == "video" => stack(
             &extras,
             probe(id, build_video(t, id, node, window, cx, now, control_area)),
+        ),
+        // Inline `<svg>` is a LEAF: the subtree is serialized into a document
+        // resvg rasterises, so its children must not also become taffy nodes
+        // (see crate::svg).
+        Kind::Element if t.name(node.tag) == "svg" => stack(
+            &extras,
+            probe(id, build_svg(t, id, node, window, cx, now, control_area)),
         ),
         Kind::Element => stack(&extras, probe_at(id, id == t.root, {
             // Every mirrored node gets a stable ElementId — hover/active/
@@ -896,8 +956,11 @@ fn build_node<V: 'static>(
 
             let mask = pointer_mask(node);
             let bit = move |ev: u32| mask & (1u64 << ev) != 0;
-            let is_input = t.name(node.tag) == "input";
-            // `<input>` is tabbable by default in HTML; a plain <div> is not.
+            // `<input>` and `<textarea>` are the SAME native widget — only
+            // `TextInputOptions::multiline` differs (see `build_input`), so
+            // everything the wrapper does for one it does for the other.
+            let is_input = matches!(t.name(node.tag), "input" | "textarea");
+            // Both are tabbable by default in HTML; a plain <div> is not.
             let tab_index = tab_index_of(t, id).or(is_input.then_some(0));
 
             // Keyboard/focus events and tab navigation need a persistent
@@ -1005,14 +1068,59 @@ fn build_node<V: 'static>(
                 d.child(node.text.clone()).into_any_element()
             } else {
                 d.children(
-                    node.children
-                        .iter()
-                        .map(|&c| build_node(t, c, window, cx, now, drag)),
+                    laid_out_children(t, node)
+                        .map(|c| build_node(t, c, window, cx, now, drag)),
                 )
                 .into_any_element()
             }
         })),
     }
+}
+
+/// Does this node produce a box the parent's layout has to make room for?
+///
+/// **Fragment anchors and empty text nodes do not, and that is a compat fix.**
+/// Vue anchors every `Fragment` — every `v-for`, every multi-root component,
+/// every `<Teleport>` — with `createComment()` or `createText("")`, and reka-ui
+/// components are almost all multi-root, so on `apps/shadcn` **325 of 548 tree
+/// nodes** are one of the two. In a browser a comment node and an empty text
+/// node are not boxes at all: they generate no CSS box, they are not flex
+/// items, and `gap` does not put a gap around them. Lowering them into
+/// `gpui::Empty` made every one of them a REAL taffy node AND a REAL flex item,
+/// so a `flex gap-2` container with three components in it laid out with five
+/// gaps instead of two.
+///
+/// Skipping them here fixes that spacing *and* cuts taffy's input by ~60 %
+/// (research/reports/m11/perf-restyle-rebuild.md §7 measured it and deliberately
+/// left it for a compat round, because it is visible).
+///
+/// The anchors keep their protocol role in full: they are still real nodes in
+/// the retained tree, still returned by `nextSibling`, still valid `anchor`
+/// arguments to `insert`. Only the LAYOUT lowering skips them — which is
+/// exactly the browser's split between the node tree and the box tree.
+///
+/// An empty `<div>` is NOT in this set: a browser lays that out (it is an
+/// element, it generates a box), and so do we.
+fn generates_a_box(t: &Tree, id: u32) -> bool {
+    match t.node(id) {
+        None => false,
+        Some(n) => match n.kind {
+            Kind::Anchor => false,
+            Kind::Text => !n.text.is_empty(),
+            Kind::Element => true,
+        },
+    }
+}
+
+/// The children of `node` that become layout nodes, in document order.
+fn laid_out_children<'t>(
+    t: &'t Tree,
+    node: &'t crate::tree::Node,
+) -> impl Iterator<Item = u32> + 't {
+    node.children
+        .iter()
+        .copied()
+        .filter(move |&c| generates_a_box(t, c))
 }
 
 /// HTML metadata content: elements that carry instructions, not a box. A
@@ -1068,7 +1176,7 @@ where
     E: gpui::Styled + gpui::StatefulInteractiveElement + 'static,
 {
     *e.style() = (*cs.base).clone();
-    if let Some(overlay) = tree::animation_overlay(id, now) {
+    if let Some(overlay) = tree::animation_overlay(id, &cs.base, now) {
         use gpui::Refineable as _;
         e.style().refine(&overlay);
     }
@@ -1342,6 +1450,17 @@ pub(crate) fn scroll_node(
     cx: &mut App,
 ) -> Result<(f32, f32), String> {
     let Some(handle) = SCROLL_HANDLES.with(|m| m.borrow().get(&id).cloned()) else {
+        // A `<textarea>` scrolls its own overflow inside the native widget
+        // rather than through a gpui `ScrollHandle`, so it has no entry here.
+        // Route to the editor instead — otherwise devtools would report "not a
+        // scroll container" about the one element on the page that visibly is.
+        if let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) {
+            let top = state.update(cx, |s, cx| {
+                s.scroll_by(gpui::px(dy), window, cx);
+                f32::from(s.scroll_top())
+            });
+            return Ok((0.0, top));
+        }
         return Err(format!(
             "node {id} is not a scroll container — nothing in the cascade gave it \
              `overflow: scroll` or `overflow: auto`, so there is no scroll offset to move"
@@ -1548,6 +1667,215 @@ fn build_img<V: 'static>(
     }
     let click_focus = handle.filter(|_| focusable);
     bind_events(e, id, mask, click_focus, focusable, true, cx).into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// inline <svg>
+// ---------------------------------------------------------------------------
+
+/// A `gpui::Svg` that paints in the **inherited** text colour.
+///
+/// gpui renders an SVG as a monochrome alpha mask tinted by the element's own
+/// `style.text.color`, and `Style::default()` leaves that `None` — an SVG with
+/// no colour of its own paints nothing at all. In CSS, though, `color` is
+/// inherited, and `stroke="currentColor"` (what every icon set ships) means
+/// exactly "whatever `color` computed to here".
+///
+/// vn-css folds no inherited properties, but gpui itself carries a text style
+/// down the PAINT walk (`Div::paint` wraps its children in
+/// `window.with_text_style(style.text_style())` using the style it computed,
+/// hover rungs and all). Reading `window.text_style()` at paint time therefore
+/// gives the browser's answer, live: a `:hover` on an ancestor that changes
+/// `text-*` re-tints the icon on the frame the hover starts, with no restyle,
+/// no re-serialization and no re-rasterization — the sprite in the atlas is
+/// colour-independent.
+///
+/// The element's OWN `color` still wins when it declares one, because that
+/// arrives through `apply_computed_style` and is only defaulted here.
+struct SvgTint<E> {
+    inner: E,
+    /// False when the cascade already gave this node a `color` of its own.
+    inherit: bool,
+}
+
+impl<E: gpui::Element + gpui::Styled> gpui::IntoElement for SvgTint<E> {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl<E: gpui::Element + gpui::Styled> gpui::Element for SvgTint<E> {
+    type RequestLayoutState = E::RequestLayoutState;
+    type PrepaintState = E::PrepaintState;
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        self.inner.id()
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.inner.source_location()
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        self.inner.request_layout(id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.inner
+            .prepaint(id, inspector_id, bounds, request_layout, window, cx)
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if self.inherit {
+            // Only fills the BASE rung, so a `:hover` colour declared on the
+            // svg itself still overrides it inside gpui's own ladder.
+            self.inner.style().text.color = Some(window.text_style().color);
+        }
+        self.inner
+            .paint(id, inspector_id, bounds, request_layout, prepaint, window, cx)
+    }
+}
+
+/// `rotate()` / `scale()` as a sprite transformation.
+///
+/// This is the ONE place in the framework where a real CSS transform matrix
+/// applies: gpui's `MonochromeSprite` carries a `TransformationMatrix`, and an
+/// SVG leaf is a monochrome sprite. A laid out box is not, which is why
+/// [`advise_untransformable`] exists.
+///
+/// `Transformation::into_matrix` rotates and scales about the element's own
+/// centre, which is CSS's initial `transform-origin: 50% 50%`.
+fn svg_transformation(
+    id: u32,
+    extras: &vn_css::Extras,
+    now: std::time::Instant,
+) -> Option<gpui::Transformation> {
+    // The animated value when a `@keyframes` is driving it (`animate-spin`),
+    // the element's own otherwise.
+    let (rotate, scale) = tree::animation_transform(id, extras, now);
+    if rotate.is_none() && scale.is_none() {
+        return None;
+    }
+    let mut t = gpui::Transformation::default();
+    if let Some(deg) = rotate {
+        t = t.with_rotation(gpui::radians(deg.to_radians()));
+    }
+    if let Some((sx, sy)) = scale {
+        t = t.with_scaling(gpui::size(sx, sy));
+    }
+    Some(t)
+}
+
+/// A `rotate()`/`scale()` on anything that is not an `<svg>` leaf.
+fn advise_untransformable(t: &Tree, node: &crate::tree::Node, extras: &vn_css::Extras) {
+    if extras.rotate.is_none() && extras.scale.is_none() {
+        return;
+    }
+    if t.name(node.tag) == "svg" {
+        return;
+    }
+    warn_compat(
+        "transform-rotate-scale",
+        "`transform: rotate()/scale()` applies only to an inline <svg> (v1) — gpui carries a \
+         transformation matrix on a SPRITE (which is what an <svg> leaf paints as) and none at \
+         all on a laid out box, so the declaration was dropped on this element. `translate()` \
+         works everywhere; `animate-spin` on an icon works",
+    );
+}
+
+/// Inline `<svg>` — a replaced element whose content is the serialized subtree.
+///
+/// * The children are NOT lowered (`crate::svg` explains why).
+/// * `width`/`height` attributes are presentational hints exactly as on `<img>`,
+///   so a lucide icon with no CSS size still lays out at its natural 24×24.
+/// * A document usvg cannot parse paints nothing and leaves one advisory naming
+///   the node, rather than a silent hole where an icon should be.
+fn build_svg<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+    control_area: Option<WindowControlArea>,
+) -> AnyElement {
+    let extras = extras_of(node);
+    let doc = crate::svg::document(t, id, extras.fill, extras.stroke);
+    if crate::svg::last_had_explicit_color() {
+        warn_compat(
+            "svg-multicolor",
+            "an inline <svg> declares a concrete `fill`/`stroke` colour — gpui rasterises an SVG \
+             into a single-colour alpha MASK and tints the whole sprite with the element's \
+             computed `color`, so every painted part of the icon comes out that one colour. \
+             Monochrome icon sets (`stroke=\"currentColor\"`) are unaffected",
+        );
+    }
+
+    let mut leaf = gpui::svg().data(&doc);
+    if let Some(transformation) = svg_transformation(id, &extras, now) {
+        leaf = leaf.with_transformation(transformation);
+    }
+    let mut e = with_control_area(leaf.id(id as usize), id, control_area);
+    let mut inherit = true;
+    if let Some(cs) = &node.computed {
+        inherit = cs.base.text.color.is_none();
+        e = apply_computed_style(e, cs, id, now);
+    }
+    presentational_size(t, id, e.style());
+
+    let mask = pointer_mask(node);
+    let bit = |ev: u32| mask & (1 << ev) != 0;
+    // Not focusable in HTML without `tabindex` (an inline <svg> is not a
+    // control), same as <img>.
+    let tab_index = tab_index_of(t, id);
+    let focusable = tab_index.is_some()
+        || bit(tree::EV_KEYDOWN)
+        || bit(tree::EV_KEYUP)
+        || bit(tree::EV_FOCUS)
+        || bit(tree::EV_BLUR);
+    let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
+    let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
+    if let Some(h) = &handle {
+        e = e.track_focus(h);
+        if focusable {
+            watch_focus(id, h, window, cx);
+        }
+        if let Some(cs) = &node.computed {
+            if let Some(f) = cs.focus.clone() {
+                e = e.focus(move |_| (*f).clone());
+            }
+            if let Some(f) = cs.focus_visible.clone() {
+                e = e.focus_visible(move |_| (*f).clone());
+            }
+        }
+    }
+    let click_focus = handle.filter(|_| focusable);
+    let e = bind_events(e, id, mask, click_focus, focusable, true, cx);
+    SvgTint { inner: e, inherit }.into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -1872,11 +2200,18 @@ fn build_video<V: 'static>(
     bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
-/// The native `<input>` widget: persistent `TextInputState` entity per node,
-/// controlled through the DOM-compat prop channel (`value`, `placeholder`,
-/// `disabled`, `tabindex`), styled from the node's computed text style,
-/// reporting edits as `input` events (with `e.target.value` populated on the JS
-/// side) and keystrokes as cancellable `keydown`/`keyup`.
+/// The native `<input>` / `<textarea>` widget: persistent `TextInputState`
+/// entity per node, controlled through the DOM-compat prop channel (`value`,
+/// `placeholder`, `disabled`, `readonly`, `rows`, `tabindex`), styled from the
+/// node's computed text style, reporting edits as `input` events (with
+/// `e.target.value` populated on the JS side) and keystrokes as cancellable
+/// `keydown`/`keyup`.
+///
+/// `<textarea>` is the same widget with `multiline` set: the content wraps and
+/// keeps its line breaks, Return inserts one instead of being dropped, and the
+/// box scrolls vertically. Everything else — IME, selection, clipboard, undo,
+/// the `v-model` echo ring, the KeepAlive-surviving state map — is shared, and
+/// that is the point: a second editor would have been a second set of bugs.
 fn build_input<V: 'static>(
     t: &Tree,
     id: u32,
@@ -1892,15 +2227,28 @@ fn build_input<V: 'static>(
             .clone()
     });
 
+    let multiline = t.name(node.tag) == "textarea";
+
     // Controlled value: the write counter, not the string, is what tells the
     // widget an assignment happened (`v-model` re-forcing "" after the user
     // typed again writes the same string the previous clear did).
     if let Some((value, write)) = t.prop_write(id, "value") {
         let value = value.to_string();
         state.update(cx, |s, cx| s.sync_value(&value, write, cx));
+    } else if multiline && !node.text.is_empty() {
+        // A `<textarea>`'s initial value is its TEXT CONTENT, not an attribute
+        // — `<textarea>hello</textarea>`. Vue writes that through
+        // `setElementText`, so it arrives on `Node::text`, and the wrapper's
+        // `d.child(node.text)` arm is never reached for a text field. Applied
+        // once (write counter 0), so a later `value` assignment still wins.
+        let value = node.text.clone();
+        state.update(cx, |s, cx| s.sync_value(&value, 0, cx));
     }
 
     let text_style = node.computed.as_ref().map(|cs| cs.base.text.clone());
+    // No `color` of its own means the widget inherits one at paint time; the
+    // value here is only the fallback for the frame before it paints.
+    let inherit_color = text_style.as_ref().and_then(|ts| ts.color).is_none();
     let text_color = text_style
         .as_ref()
         .and_then(|ts| ts.color)
@@ -1918,8 +2266,20 @@ fn build_input<V: 'static>(
         selection_color: gpui::Hsla { h: 0.6, s: 0.8, l: 0.6, a: 0.35 },
         caret_color: text_color,
         font_size,
-        disabled: t.prop(id, "disabled").is_some_and(|v| v != "false"),
+        // `readonly` and `disabled` differ in HTML (a disabled control is not
+        // submitted and not focusable); for the EDITOR they mean the same
+        // thing — no typing, no caret, selection and copy still work — so both
+        // map onto the widget's one flag.
+        disabled: t.prop(id, "disabled").is_some_and(|v| v != "false")
+            || t.prop(id, "readonly").is_some_and(|v| v != "false"),
         tab_index,
+        multiline,
+        inherit_color,
+        rows: t
+            .prop(id, "rows")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(vn_elements::DEFAULT_ROWS),
     };
 
     let mask = pointer_mask(node);
@@ -1969,4 +2329,91 @@ fn build_input<V: 'static>(
 
     let focus_target = state.read(cx).focus_handle();
     (text_input(&state, options, handlers, cx), focus_target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tree::with_tree;
+
+    /// `<div class="flex gap-2">` with three components in it. Vue anchors each
+    /// one, so the child list is element/anchor/element/anchor/element plus the
+    /// empty text nodes a Fragment leaves behind.
+    ///
+    /// A browser puts TWO gaps in that row, because a comment and an empty text
+    /// node generate no box. Emitting a `gpui::Empty` for each of them made
+    /// them flex items and the row laid out with five.
+    #[test]
+    fn fragment_anchors_are_not_flex_items() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let row = t.create_element(div);
+            let mut boxes = Vec::new();
+            for _ in 0..3 {
+                let anchor = t.create_anchor();
+                t.insert(anchor, row, 0);
+                let blank = t.create_text();
+                t.insert(blank, row, 0); // createText("") — a Fragment anchor
+                let item = t.create_element(div);
+                t.insert(item, row, 0);
+                boxes.push(item);
+            }
+            let node = t.node(row).unwrap();
+            assert_eq!(node.children.len(), 9, "the retained tree keeps all nine");
+            let laid_out: Vec<u32> = laid_out_children(t, node).collect();
+            assert_eq!(laid_out, boxes, "only the three elements are flex items");
+        });
+    }
+
+    /// The anchors keep their protocol role: still real nodes, still valid
+    /// insertion points. Skipping them is a LAYOUT decision, not a tree one.
+    #[test]
+    fn a_skipped_anchor_is_still_an_insertion_point() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            let anchor = t.create_anchor();
+            t.insert(anchor, parent, 0);
+            let later = t.create_element(div);
+            t.insert(later, parent, 0);
+            // Vue's `insert(child, parent, anchor)` — before the comment.
+            let first = t.create_element(div);
+            t.insert(first, parent, anchor);
+
+            let node = t.node(parent).unwrap();
+            assert_eq!(node.children, vec![first, anchor, later]);
+            assert_eq!(
+                laid_out_children(t, node).collect::<Vec<_>>(),
+                vec![first, later],
+                "the anchor still orders the boxes without being one"
+            );
+        });
+    }
+
+    /// The boundary cases an over-eager filter would get wrong: an EMPTY
+    /// element is a box (a browser lays `<div></div>` out), and a text node
+    /// with content is one too (an anonymous flex item).
+    #[test]
+    fn an_empty_element_is_still_a_box() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            let empty_div = t.create_element(div);
+            t.insert(empty_div, parent, 0);
+            let text = t.create_text();
+            t.set_text(text, "hello".to_string());
+            t.insert(text, parent, 0);
+            let blank = t.create_text();
+            t.insert(blank, parent, 0);
+
+            let node = t.node(parent).unwrap();
+            assert_eq!(
+                laid_out_children(t, node).collect::<Vec<_>>(),
+                vec![empty_div, text]
+            );
+            assert!(!generates_a_box(t, blank));
+            // A node that no longer exists never generates a box.
+            assert!(!generates_a_box(t, 99_999));
+        });
+    }
 }

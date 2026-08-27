@@ -400,9 +400,9 @@ impl Collector {
                         Expansion::None => {}
                         Expansion::Props(props) => properties.push(props),
                     }
-                    durations.push(duration(&entry.duration, "transition-duration", diagnostics));
-                    delays.push(duration(&entry.delay, "transition-delay", diagnostics));
-                    easings.push(easing(&entry.timing_function, diagnostics));
+                    durations.push(duration_of(&entry.duration, "transition-duration", diagnostics));
+                    delays.push(duration_of(&entry.delay, "transition-delay", diagnostics));
+                    easings.push(easing_of(&entry.timing_function, diagnostics));
                 }
                 // The shorthand resets all four longhands.
                 self.properties = Some(properties);
@@ -427,7 +427,7 @@ impl Collector {
                 self.seen = true;
                 self.durations = Some(
                     list.iter()
-                        .map(|t| duration(t, "transition-duration", diagnostics))
+                        .map(|t| duration_of(t, "transition-duration", diagnostics))
                         .collect(),
                 );
                 true
@@ -436,14 +436,14 @@ impl Collector {
                 self.seen = true;
                 self.delays = Some(
                     list.iter()
-                        .map(|t| duration(t, "transition-delay", diagnostics))
+                        .map(|t| duration_of(t, "transition-delay", diagnostics))
                         .collect(),
                 );
                 true
             }
             Property::TransitionTimingFunction(list, _) => {
                 self.seen = true;
-                self.easings = Some(list.iter().map(|e| easing(e, diagnostics)).collect());
+                self.easings = Some(list.iter().map(|e| easing_of(e, diagnostics)).collect());
                 true
             }
             Property::Unparsed(u) if is_transition_id(&u.property_id) => {
@@ -579,7 +579,9 @@ fn expand(id: &PropertyId) -> Expansion {
     }
 }
 
-fn duration(t: &Time, what: &str, diagnostics: &mut Vec<String>) -> Duration {
+/// One `<time>` value. Shared with `keyframes.rs` — `animation-duration` and
+/// `transition-duration` parse identically.
+pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -> Duration {
     let ms = t.to_ms();
     if !ms.is_finite() {
         diagnostics.push(format!("non-finite {what} treated as 0s"));
@@ -595,7 +597,8 @@ fn duration(t: &Time, what: &str, diagnostics: &mut Vec<String>) -> Duration {
     Duration::from_secs_f64(ms as f64 / 1000.0)
 }
 
-fn easing(e: &EasingFunction, diagnostics: &mut Vec<String>) -> Easing {
+/// One `<easing-function>`. Shared with `keyframes.rs`.
+pub(crate) fn easing_of(e: &EasingFunction, diagnostics: &mut Vec<String>) -> Easing {
     match e {
         EasingFunction::Linear => Easing::Linear,
         EasingFunction::Ease => Easing::Ease,

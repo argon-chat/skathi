@@ -34,8 +34,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Context, CursorStyle, Entity, Hsla, InteractiveElement, IntoElement,
-    KeyBinding, KeyDownEvent, KeyUpEvent, MouseButton, ParentElement, Pixels, SharedString, Styled,
-    Window, actions, div, hsla, px,
+    KeyBinding, KeyDownEvent, KeyUpEvent, MouseButton, ParentElement, Pixels, SharedString,
+    Styled, Window, actions, div, hsla, px,
 };
 
 pub use state::TextInputState;
@@ -71,12 +71,30 @@ actions!(
         Undo,
         WordLeft,
         WordRight,
+        // Multi-line only (`<textarea>`). `Newline` is bound to `enter` in the
+        // TEXTAREA key context alone, so a single-line `<input>` still leaves
+        // Return to the surrounding app (form submit, reka's typeahead).
+        Down,
+        Newline,
+        SelectDown,
+        SelectUp,
+        Up,
     ]
 );
 
 /// The `key_context` the input's key bindings are scoped to. Exposed so an
 /// embedder can write its own bindings against the same context.
 pub const KEY_CONTEXT: &str = "VnTextInput";
+
+/// The extra `key_context` a MULTI-LINE field carries. gpui parses a context
+/// string as a SET of identifiers, so a textarea sets both and thereby
+/// inherits every editing binding while adding the ones that only mean
+/// something with more than one line: `enter`, `up`, `down`.
+pub const TEXTAREA_KEY_CONTEXT: &str = "VnTextArea";
+const BOTH_KEY_CONTEXTS: &str = "VnTextInput VnTextArea";
+
+/// HTML's default `<textarea rows>`.
+pub const DEFAULT_ROWS: usize = 2;
 
 /// Called by [`TextInputState`] whenever the user's editing changed the
 /// content; the framework forwards it to JS as an `input`/`change` event.
@@ -144,6 +162,24 @@ pub struct TextInputOptions {
     /// DOM `tabindex`: `Some(n)` makes the input a tab stop at index `n`,
     /// `None` takes it out of the tab order.
     pub tab_index: Option<isize>,
+    /// `<textarea>`: the content soft-wraps, Return inserts a newline instead
+    /// of being dropped, `up`/`down` move by visual line, and the box scrolls
+    /// vertically rather than horizontally.
+    pub multiline: bool,
+    /// The cascade gave this element no `color` of its own, so the editor
+    /// should paint in the INHERITED one.
+    ///
+    /// `color` is an inherited property in CSS and vn-css folds no inherited
+    /// properties, but gpui carries a text style down the PAINT walk — so the
+    /// widget reads `window.text_style()` at prepaint instead of being handed a
+    /// guess. Without it an `<input>` that styles only its border paints its
+    /// text in the framework's fallback colour, which is white-on-white in a
+    /// light theme.
+    pub inherit_color: bool,
+    /// `<textarea rows>` — the INTRINSIC height, in lines. As in HTML it is
+    /// only a minimum: a CSS `height`/`min-height` still wins and content past
+    /// it scrolls. Ignored unless `multiline`.
+    pub rows: usize,
 }
 
 impl Default for TextInputOptions {
@@ -157,6 +193,9 @@ impl Default for TextInputOptions {
             font_size: px(14.0),
             disabled: false,
             tab_index: None,
+            multiline: false,
+            rows: DEFAULT_ROWS,
+            inherit_color: false,
         }
     }
 }
@@ -177,33 +216,42 @@ pub fn text_input(
     cx: &mut App,
 ) -> AnyElement {
     let disabled = options.disabled;
+    let multiline = options.multiline;
     let on_key_up = handlers.on_key_up.clone();
     // The focus handle carries the tab order (gpui reads `tab_index`/`tab_stop`
     // straight off the handle when the element is painted), so it has to be
     // updated before `track_focus` clones it below.
     let focus_handle = state.update(cx, |this, _| {
         this.set_tab_index(options.tab_index);
-        this.set_frame_params(handlers, disabled);
+        this.set_frame_params(handlers, disabled, multiline);
         this.focus_handle()
     });
 
     let mut element = div()
-        .key_context(KEY_CONTEXT)
+        .key_context(if multiline { BOTH_KEY_CONTEXTS } else { KEY_CONTEXT })
         .track_focus(&focus_handle)
         .cursor(if disabled {
             CursorStyle::Arrow
         } else {
             CursorStyle::IBeam
         })
+        .flex()
+        .w_full()
+        .min_w_0()
+        .overflow_hidden();
+    if multiline {
+        // A textarea's box height comes from CSS (`min-h-20`) or, failing that,
+        // from `rows` via the editor's own min-height. Leaving the wrapper's
+        // height AUTO is what lets flexbox stretch it to whichever of those
+        // won, and `min-h-full` covers the non-flex parent with a definite
+        // height. Text starts at the TOP, as in HTML.
+        element = element.min_h_full();
+    } else {
         // Fill whatever content box the framework's CSS gave us and centre the
         // line in it, so the whole box is clickable and a tall input does not
         // pin its text to the top.
-        .flex()
-        .items_center()
-        .w_full()
-        .h_full()
-        .min_w_0()
-        .overflow_hidden();
+        element = element.items_center().h_full();
+    }
 
     element = on_state_action(element, state, TextInputState::backspace);
     element = on_state_action(element, state, TextInputState::delete);
@@ -231,6 +279,24 @@ pub fn text_input(
     element = on_state_action(element, state, TextInputState::redo);
     element = on_state_action(element, state, TextInputState::clear_selection);
     element = on_state_action(element, state, TextInputState::show_character_palette);
+    element = on_state_action(element, state, TextInputState::up);
+    element = on_state_action(element, state, TextInputState::down);
+    element = on_state_action(element, state, TextInputState::select_up);
+    element = on_state_action(element, state, TextInputState::select_down);
+    element = on_state_action(element, state, TextInputState::newline);
+
+    // A textarea scrolls its own overflow. The wheel listener has to sit on the
+    // wrapper (gpui delivers wheel events to a hitbox, and the wrapper is the
+    // one with the box); the caret-following clamp in `set_layout` then keeps
+    // whatever the wheel set, because it only moves the offset when the caret
+    // leaves the viewport.
+    if multiline {
+        let scroll_state = state.clone();
+        element = element.on_scroll_wheel(move |event, window, cx| {
+            let delta = event.delta.pixel_delta(px(20.0)).y;
+            scroll_state.update(cx, |this, cx| this.scroll_by(-delta, window, cx));
+        });
+    }
 
     // `keyup` has no default to cancel, so the plain (post-binding) element
     // listener is enough — unlike `keydown`, which the state entity intercepts
@@ -324,7 +390,25 @@ fn bindings() -> Vec<KeyBinding> {
         ]);
     }
 
-    // Deliberately unbound: `enter`. A single-line input ignores it, and
-    // leaving it unbound lets the surrounding app use it (form submit, ...).
+    // `up`/`down` are shared: in a single-line input a browser moves the caret
+    // to the start / end of the value, which is what `TextInputState::up`/
+    // `down` do when `multiline` is off.
+    bindings.extend([
+        KeyBinding::new("up", Up, context),
+        KeyBinding::new("down", Down, context),
+        KeyBinding::new("shift-up", SelectUp, context),
+        KeyBinding::new("shift-down", SelectDown, context),
+    ]);
+
+    // `enter` is bound in the TEXTAREA context only. A single-line input
+    // deliberately leaves Return unbound so the surrounding app can use it
+    // (form submit, reka-ui's typeahead), which is also the browser's split:
+    // Return in a `<textarea>` inserts a newline and never submits.
+    bindings.push(KeyBinding::new(
+        "enter",
+        Newline,
+        Some(TEXTAREA_KEY_CONTEXT),
+    ));
+
     bindings
 }

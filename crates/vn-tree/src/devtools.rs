@@ -42,7 +42,9 @@ pub struct NodeInfo {
 }
 
 /// The listener bits as names, off [`tree::EVENT_NAMES`] — the single table, so
-/// this listing cannot drift behind the codes the way it did before.
+/// this listing cannot drift behind the codes the way it did before. (It did:
+/// a hand-kept copy here is how the missing `@animationstart` registration was
+/// found on the compat track.)
 fn event_names(mask: u64) -> Vec<&'static str> {
     tree::EVENT_NAMES
         .iter()
@@ -165,6 +167,9 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
         }
         if !cs.transitions.is_empty() {
             out.push(("transitions", format!("{:#?}", cs.transitions)));
+        }
+        if !cs.animations.is_empty() {
+            out.push(("animations", format!("{:#?}", cs.animations)));
         }
         if cs.extras != vn_css::Extras::default() {
             out.push(("extras", format!("{:#?}", cs.extras)));

@@ -22,6 +22,7 @@ use lightningcss::values::color::CssColor;
 use lightningcss::values::length::{Length as CssLength, LengthPercentage, LengthPercentageOrAuto, LengthValue};
 use lightningcss::values::percentage::DimensionPercentage;
 
+use crate::keyframes::{AnimationCollector, AnimationPatch, AnimationSpec};
 use crate::transition::{Collector, TransitionSpec};
 use crate::vars::{self, Vars};
 
@@ -147,6 +148,52 @@ pub struct Extras {
     pub pointer_events_none: Option<bool>,
     /// The `translate()` part of a `transform`, in CSS order (x, y).
     pub translate: Option<(TranslateLen, TranslateLen)>,
+    /// The `rotate()` part of a `transform`, in DEGREES about the Z axis.
+    /// Only an `<svg>` leaf can honour it — gpui's `MonochromeSprite` carries a
+    /// `TransformationMatrix` and a laid out box does not — so on any other
+    /// element the renderer advises and drops it (m12 item 4).
+    pub rotate: Option<f32>,
+    /// The `scale()` part of a `transform`, as (x, y) factors. Same story as
+    /// [`Extras::rotate`].
+    pub scale: Option<(f32, f32)>,
+    /// SVG `fill` — see [`SvgPaint`].
+    pub fill: Option<SvgPaint>,
+    /// SVG `stroke` — see [`SvgPaint`].
+    pub stroke: Option<SvgPaint>,
+}
+
+/// An SVG paint, reduced to the only distinction gpui can express.
+///
+/// gpui rasterises an SVG into a **single-colour alpha mask** and tints the
+/// whole sprite with one `Hsla` (`MonochromeSprite`), so the only thing a
+/// `fill` / `stroke` declaration can change about the result is whether that
+/// half of the geometry contributes coverage at all. The colour itself always
+/// comes from the cascade's `color` — which is also what `currentColor`, the
+/// value every icon set actually ships, means.
+///
+/// `fill: red` and `fill: currentColor` therefore compute to the same painted
+/// pixels here; [`SvgPaint::Color`] is kept distinct only so the renderer can
+/// say so once instead of diverging in silence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SvgPaint {
+    /// `none` — this half of the geometry is not painted.
+    None,
+    /// `currentColor` — painted in the cascade's `color`.
+    Current,
+    /// A concrete colour or a paint server, flattened to the cascade's `color`.
+    Color,
+}
+
+impl SvgPaint {
+    /// How this paint is spelled in the serialized SVG the renderer feeds
+    /// resvg. A concrete colour becomes `currentColor` because the tint is
+    /// applied to the sprite, not to the geometry.
+    pub fn as_attr(self) -> &'static str {
+        match self {
+            SvgPaint::None => "none",
+            SvgPaint::Current | SvgPaint::Color => "currentColor",
+        }
+    }
 }
 
 impl Extras {
@@ -177,6 +224,18 @@ impl Extras {
         if other.translate.is_some() {
             self.translate = other.translate;
         }
+        if other.rotate.is_some() {
+            self.rotate = other.rotate;
+        }
+        if other.scale.is_some() {
+            self.scale = other.scale;
+        }
+        if other.fill.is_some() {
+            self.fill = other.fill;
+        }
+        if other.stroke.is_some() {
+            self.stroke = other.stroke;
+        }
     }
 
     /// True when this node has to be painted in gpui's deferred layer for its
@@ -202,6 +261,14 @@ pub(crate) struct Converted {
     pub important: Option<Rc<StyleRefinement>>,
     pub normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
     pub important_transitions: Option<Rc<Vec<TransitionSpec>>>,
+    /// The folded `animation` list each half declares (`None` = none declared,
+    /// which is what lets a later rule's `animation` override an earlier one
+    /// without an empty list being mistaken for `animation: none`).
+    pub normal_animations: Option<Rc<Vec<AnimationSpec>>>,
+    pub important_animations: Option<Rc<Vec<AnimationSpec>>>,
+    /// Longhand-only `animation-*` declarations — see [`AnimationPatch`].
+    pub normal_animation_patch: Option<AnimationPatch>,
+    pub important_animation_patch: Option<AnimationPatch>,
     pub normal_extras: Extras,
     pub important_extras: Extras,
     /// `--x` declarations, in source order (`None` = the half declared none).
@@ -217,6 +284,8 @@ pub(crate) struct Converted {
 struct Half {
     refinement: Option<Rc<StyleRefinement>>,
     transitions: Option<Rc<Vec<TransitionSpec>>>,
+    animations: Option<Rc<Vec<AnimationSpec>>>,
+    animation_patch: Option<AnimationPatch>,
     extras: Extras,
     custom: Option<Rc<Decls>>,
     dynamic: Option<Rc<Decls>>,
@@ -298,6 +367,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
         let mut r = StyleRefinement::default();
         let mut extras = Extras::default();
         let mut transitions = Collector::default();
+        let mut animations = AnimationCollector::default();
         let mut custom: Decls = Vec::new();
         let mut dynamic: Decls = Vec::new();
         let mut styled = false;
@@ -307,6 +377,9 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
                 Channel::Dynamic(name, value) => dynamic.push((name, value)),
                 Channel::Static => {
                     if transitions.take(p, diagnostics) {
+                        continue;
+                    }
+                    if animations.take(p, diagnostics) {
                         continue;
                     }
                     // Within one block the mapped declarations are folded now
@@ -330,9 +403,12 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
                 }
             }
         }
+        let (animation_list, animation_patch) = animations.finish();
         Half {
             refinement: styled.then(|| Rc::new(r)),
             transitions: transitions.finish().map(Rc::new),
+            animations: animation_list.map(Rc::new),
+            animation_patch,
             extras,
             custom: (!custom.is_empty()).then(|| Rc::new(custom)),
             dynamic: (!dynamic.is_empty()).then(|| Rc::new(dynamic)),
@@ -345,6 +421,10 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
         important: important.refinement,
         normal_transitions: normal.transitions,
         important_transitions: important.transitions,
+        normal_animations: normal.animations,
+        important_animations: important.animations,
+        normal_animation_patch: normal.animation_patch,
+        important_animation_patch: important.animation_patch,
         normal_extras: normal.extras,
         important_extras: important.extras,
         normal_custom: normal.custom,
@@ -483,6 +563,16 @@ pub struct InlineStyle {
     /// `None` = the body declared no `transition` at all (which is what lets a
     /// matched rule's list survive); `Some([])` is `transition: none`.
     pub transitions: Option<Rc<Vec<TransitionSpec>>>,
+    /// Same rule for `animation`. This is not decoration: reka-ui's `Presence`
+    /// writes `style.animationName = "none"` to CANCEL a running exit
+    /// animation, and `style.animationFillMode = "forwards"` to pin the last
+    /// frame while it unmounts. Dropping either leaves an element animating
+    /// after the component decided it should stop.
+    pub animations: Option<Rc<Vec<AnimationSpec>>>,
+    /// Longhand-only `animation-*` — see [`AnimationPatch`]. reka-ui writes
+    /// `style.animationFillMode = "forwards"` on its own, and folding that as a
+    /// LIST would delete the very animation it means to freeze.
+    pub animation_patch: Option<AnimationPatch>,
     pub extras: Extras,
     /// `--x` declarations. This is the channel `element.style.setProperty("--x")`
     /// lands on — reka-ui writes its `--reka-popper-*` sizing vars that way.
@@ -495,6 +585,8 @@ impl InlineStyle {
     pub fn is_empty(&self) -> bool {
         self.refinement.is_none()
             && self.transitions.is_none()
+            && self.animations.is_none()
+            && self.animation_patch.is_none()
             && self.extras == Extras::default()
             && self.custom.is_empty()
             && self.dynamic.is_empty()
@@ -506,6 +598,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     let mut r = StyleRefinement::default();
     let mut extras = Extras::default();
     let mut transitions = Collector::default();
+    let mut animations = AnimationCollector::default();
     let mut custom: Decls = Vec::new();
     let mut dynamic: Decls = Vec::new();
     let mut styled = false;
@@ -519,6 +612,9 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
                         if transitions.take(p, diagnostics) {
                             continue;
                         }
+                        if animations.take(p, diagnostics) {
+                            continue;
+                        }
                         apply(p, &mut r, &mut extras, diagnostics);
                         styled = true;
                     }
@@ -527,9 +623,12 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
         }
         Err(e) => diagnostics.push(format!("inline style parse error: {e} in {body:?}")),
     }
+    let (animation_list, animation_patch) = animations.finish();
     InlineStyle {
         refinement: styled.then(|| Rc::new(r)),
         transitions: transitions.finish().map(Rc::new),
+        animations: animation_list.map(Rc::new),
+        animation_patch,
         extras,
         custom,
         dynamic,
@@ -873,14 +972,37 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
     use Property::*;
     match p {
         Display(d) => {
-            use lightningcss::properties::display::Display as D;
+            use lightningcss::properties::display::{Display as D, DisplayOutside};
             r.display = Some(match d {
                 D::Keyword(DisplayKeyword::None) => gpui::Display::None,
-                D::Pair(pair) => match pair.inside {
-                    DisplayInside::Flex(_) => gpui::Display::Flex,
-                    DisplayInside::Grid => gpui::Display::Grid,
-                    _ => gpui::Display::Block,
-                },
+                D::Pair(pair) => {
+                    // `inline-flex` / `inline-grid` / `inline-block` DO map:
+                    // taffy models the INNER display type, and that is what
+                    // decides how the children lay out. What it has no notion
+                    // of is the OUTER one — every box here is block-level, so
+                    // an inline-flex box still takes a line of its own instead
+                    // of sitting in a line box beside its siblings, and it
+                    // fills the available width instead of shrinking to fit.
+                    //
+                    // shadcn's Badge and Button are `inline-flex` and look
+                    // right regardless, because they sit inside flex rows where
+                    // block-level vs inline-level never arises.
+                    if matches!(pair.outside, DisplayOutside::Inline) {
+                        warn_once(
+                            diagnostics,
+                            "`display: inline-*` maps to its BLOCK-level equivalent (v1) — taffy \
+                             models the inner display type (flex/grid/flow) but has no inline \
+                             formatting context, so the box still takes a line of its own and \
+                             fills the available width rather than shrinking to fit it. Put it in \
+                             a flex row, or give it an explicit width, for the same result",
+                        );
+                    }
+                    match pair.inside {
+                        DisplayInside::Flex(_) => gpui::Display::Flex,
+                        DisplayInside::Grid => gpui::Display::Grid,
+                        _ => gpui::Display::Block,
+                    }
+                }
                 _ => gpui::Display::Block,
             });
         }
@@ -1091,6 +1213,11 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             }
         }
         Transform(list, _) => apply_transform(list, x, diagnostics),
+        // SVG paint. Only meaningful on an `<svg>` leaf (see `SvgPaint`), but —
+        // like `object-fit` on a non-replaced element — it is parsed and folded
+        // for every node, because that is what a browser computes.
+        Fill(p) => x.fill = Some(svg_paint(p)),
+        Stroke(p) => x.stroke = Some(svg_paint(p)),
         // taffy is border-box and only border-box, so `border-box` is not a
         // divergence — it is the model. `content-box` is one, and says so.
         BoxSizing(v, _) => {
@@ -1480,7 +1607,25 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
     }
 }
 
-/// `transform` — the `translate()` half only.
+/// One SVG paint declaration, reduced to what gpui's monochrome sprite can
+/// express. See [`SvgPaint`].
+fn svg_paint(p: &lightningcss::properties::svg::SVGPaint<'_>) -> SvgPaint {
+    use lightningcss::properties::svg::SVGPaint as P;
+    match p {
+        P::None => SvgPaint::None,
+        // `context-fill`/`context-stroke` only mean anything inside a `<use>`
+        // of a marker; treated as "painted", which is what they degrade to.
+        P::Color(c) if is_current_color(c) => SvgPaint::Current,
+        P::Color(_) | P::Url { .. } | P::ContextFill | P::ContextStroke => SvgPaint::Color,
+    }
+}
+
+fn is_current_color(c: &lightningcss::values::color::CssColor) -> bool {
+    matches!(c, lightningcss::values::color::CssColor::CurrentColor)
+}
+
+/// `transform` — translate as a layout offset, rotate/scale onto the SVG
+/// sprite matrix.
 ///
 /// gpui applies transformation matrices to sprites (SVG paths), never to laid
 /// out element trees, so there is no way to rotate, scale or skew a box. What
@@ -1519,10 +1664,18 @@ fn apply_transform(
             NumberOrPercentage::Percentage(p) => p.0 == 1.0,
         }
     }
+    fn factor(v: &NumberOrPercentage) -> f32 {
+        match v {
+            NumberOrPercentage::Number(n) => *n,
+            NumberOrPercentage::Percentage(p) => p.0,
+        }
+    }
 
     let zero = TranslateLen::Px(0.0);
     let (mut tx, mut ty) = (zero, zero);
     let mut moved = false;
+    let mut rotate: Option<f32> = None;
+    let mut scale: Option<(f32, f32)> = None;
     let mut dropped: Vec<&str> = Vec::new();
     for t in &list.0 {
         match t {
@@ -1568,12 +1721,28 @@ fn apply_transform(
             T::Skew(a, b) if a.to_degrees() == 0.0 && b.to_degrees() == 0.0 => {}
             T::ScaleX(s) | T::ScaleY(s) | T::ScaleZ(s) if is_one(s) => {}
             T::Scale(a, b) if is_one(a) && is_one(b) => {}
-            T::Rotate(_) | T::RotateX(_) | T::RotateY(_) | T::RotateZ(_) | T::Rotate3d(..) => {
-                dropped.push("rotate()")
+            // Z-axis rotation is the one rotate a 2D sprite matrix can carry,
+            // and it is the case that matters (`animate-spin` on an icon).
+            // `rotateX`/`rotateY` need a 3D projection and are dropped.
+            T::Rotate(a) | T::RotateZ(a) => {
+                rotate = Some(rotate.unwrap_or(0.0) + a.to_degrees());
             }
-            T::Scale(..) | T::ScaleX(_) | T::ScaleY(_) | T::ScaleZ(_) | T::Scale3d(..) => {
-                dropped.push("scale()")
+            T::RotateX(_) | T::RotateY(_) | T::Rotate3d(..) => dropped.push("rotate3d()/rotateX()/rotateY()"),
+            T::Scale(a, b) => match (factor(a), factor(b)) {
+                (sx, sy) => {
+                    let (px, py) = scale.unwrap_or((1.0, 1.0));
+                    scale = Some((px * sx, py * sy));
+                }
+            },
+            T::ScaleX(s) => {
+                let (px, py) = scale.unwrap_or((1.0, 1.0));
+                scale = Some((px * factor(s), py));
             }
+            T::ScaleY(s) => {
+                let (px, py) = scale.unwrap_or((1.0, 1.0));
+                scale = Some((px, py * factor(s)));
+            }
+            T::ScaleZ(_) | T::Scale3d(..) => dropped.push("scale3d()/scaleZ()"),
             T::Skew(..) | T::SkewX(_) | T::SkewY(_) => dropped.push("skew()"),
             T::Matrix(_) | T::Matrix3d(_) => dropped.push("matrix()"),
             T::Perspective(_) => dropped.push("perspective()"),
@@ -1583,15 +1752,22 @@ fn apply_transform(
     if moved {
         x.translate = Some((tx, ty));
     }
+    // The identity arms above already swallowed `rotate(0)` / `scale(1)`, so
+    // anything left here is a real transformation. It is carried on the
+    // computed value for EVERY element (that is what a browser computes); only
+    // the renderer knows whether the node is an `<svg>` leaf that can honour it,
+    // so the "a laid out box cannot rotate" advisory lives there.
+    x.rotate = rotate;
+    x.scale = scale;
     if !dropped.is_empty() {
         dropped.sort_unstable();
         dropped.dedup();
         once(
             diagnostics,
             format!(
-                "`transform` supports translate() only (v1) — dropped {}. gpui applies no matrix \
-                 to a laid out box; the translate itself is applied as a LAYOUT offset, so an \
-                 in-flow element's siblings move with it",
+                "`transform` supports translate(), rotate() and scale() (v1) — dropped {}. \
+                 translate is applied as a LAYOUT offset (so an in-flow element's siblings move \
+                 with it); rotate/scale reach the sprite matrix, which only an `<svg>` leaf has",
                 dropped.join(", ")
             ),
         );
@@ -2102,8 +2278,9 @@ mod tests {
         assert_eq!(x.translate, Some((TranslateLen::Px(20.0), TranslateLen::Px(0.0))));
     }
 
-    /// Tailwind's `-translate-x-1/2` emits the whole identity chain; only a
-    /// REAL rotate/scale/skew is worth an advisory.
+    /// Tailwind's `-translate-x-1/2` emits the whole identity chain, and an
+    /// identity component is genuinely nothing — no computed value, no
+    /// advisory.
     #[test]
     fn tailwinds_identity_transform_chain_is_silent() {
         let (x, d) = extras(
@@ -2114,13 +2291,44 @@ mod tests {
             x.translate,
             Some((TranslateLen::Percent(-0.5), TranslateLen::Percent(-0.5)))
         );
+        assert_eq!(x.rotate, None);
+        assert_eq!(x.scale, None);
+    }
 
+    /// A real `rotate()`/`scale()` COMPUTES (it is the sprite matrix an `<svg>`
+    /// leaf can carry — m12 item 4); whether the node can honour it is a
+    /// renderer question, so there is no advisory here.
+    #[test]
+    fn rotate_and_scale_reach_the_computed_value() {
         let (x, d) = extras("transform: translateY(4px) rotate(45deg) scale(1.5)");
         assert_eq!(x.translate, Some((TranslateLen::Px(0.0), TranslateLen::Px(4.0))));
-        assert!(
-            d.iter().any(|m| m.contains("rotate()") && m.contains("scale()")),
-            "{d:?}"
-        );
+        assert_eq!(x.rotate, Some(45.0));
+        assert_eq!(x.scale, Some((1.5, 1.5)));
+        assert!(d.is_empty(), "{d:?}");
+
+        // `animate-spin`'s keyframe value, and Tailwind's `scale-x-*`.
+        assert_eq!(extras("transform: rotate(360deg)").0.rotate, Some(360.0));
+        assert_eq!(extras("transform: scaleX(-1)").0.scale, Some((-1.0, 1.0)));
+
+        // A 3D rotation needs a projection nothing here has; still advised.
+        let (x, d) = extras("transform: rotateY(30deg) skewX(10deg)");
+        assert_eq!(x.rotate, None);
+        assert!(d.iter().any(|m| m.contains("skew()")), "{d:?}");
+    }
+
+    #[test]
+    fn svg_paint_keeps_only_what_a_monochrome_mask_can_express() {
+        assert_eq!(extras("fill: none").0.fill, Some(SvgPaint::None));
+        assert_eq!(extras("fill: currentColor").0.fill, Some(SvgPaint::Current));
+        // A concrete colour is kept distinct ONLY so the renderer can say the
+        // sprite is flattened to the cascade's `color`; it still paints.
+        assert_eq!(extras("fill: #ff0000").0.fill, Some(SvgPaint::Color));
+        assert_eq!(extras("stroke: currentColor").0.stroke, Some(SvgPaint::Current));
+        assert_eq!(SvgPaint::None.as_attr(), "none");
+        assert_eq!(SvgPaint::Color.as_attr(), "currentColor");
+        // Nothing declared stays None, which is what lets a presentation
+        // attribute in the markup survive.
+        assert_eq!(extras("color: red").0.fill, None);
     }
 
     // ---- the end-to-end Tailwind card ------------------------------------

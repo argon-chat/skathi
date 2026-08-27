@@ -23,6 +23,7 @@
 
 mod animator;
 mod element;
+mod keyframes;
 mod mapper;
 mod media;
 pub mod perf;
@@ -39,13 +40,17 @@ use parcel_selectors::context::{MatchingContext, MatchingMode, QuirksMode};
 use parcel_selectors::matching::matches_selector;
 use parcel_selectors::parser::Component;
 
-pub use animator::Animator;
+pub use animator::{AnimEvent, AnimEventKind, Animator};
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, Decls,
-    Extras, InlineStyle, ObjectFit, TranslateLen, WindowControl, WindowDrag,
+    Extras, InlineStyle, ObjectFit, SvgPaint, TranslateLen, WindowControl, WindowDrag,
 };
 pub use media::{match_media, DisplayMode, Env};
+pub use keyframes::{
+    AnimationPatch, AnimationSpec, Direction as AnimationDirection, FillMode, Keyframe, Keyframes,
+    PlayState,
+};
 pub use vars::Vars;
 pub use transition::{
     covered, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec, ANIMATABLE_COUNT,
@@ -79,6 +84,11 @@ pub struct ComputedStates {
     pub focus_visible: Option<Rc<StyleRefinement>>,
     /// The folded `transition` list. Empty means "no transitions".
     pub transitions: Rc<Vec<TransitionSpec>>,
+    /// The folded `animation` list. Empty means "no animations". Unlike a
+    /// transition (which is a diff of THIS struct against the previous one), an
+    /// animation reads its values out of the engine's `@keyframes` — so this
+    /// carries only the clock, and the animator joins the two.
+    pub animations: Rc<Vec<AnimationSpec>>,
     /// Computed properties a `StyleRefinement` cannot carry (`object-fit`).
     /// Folded from the BASE state only — see [`Extras`].
     pub extras: Extras,
@@ -105,6 +115,10 @@ struct RuleEntry {
     important: Option<Rc<StyleRefinement>>,
     normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
     important_transitions: Option<Rc<Vec<TransitionSpec>>>,
+    normal_animations: Option<Rc<Vec<AnimationSpec>>>,
+    important_animations: Option<Rc<Vec<AnimationSpec>>>,
+    normal_animation_patch: Option<keyframes::AnimationPatch>,
+    important_animation_patch: Option<keyframes::AnimationPatch>,
     normal_extras: Extras,
     important_extras: Extras,
     /// `--x` declarations and `var()`-composed ones: both are resolved per
@@ -137,6 +151,11 @@ pub struct Engine {
     /// Any `+` / `~` anywhere in the sheet — see
     /// [`Engine::uses_sibling_combinators`].
     sibling_combinators: bool,
+    /// `@keyframes` blocks by name. Document-scoped rather than per element:
+    /// an element's `animation-name` is a REFERENCE into this map, resolved by
+    /// the animator when a track starts. A later block with the same name wins,
+    /// as in CSS.
+    keyframes: std::collections::HashMap<Box<str>, Rc<keyframes::Keyframes>>,
     pub diagnostics: Vec<String>,
 }
 
@@ -294,6 +313,7 @@ impl Engine {
             index: RuleIndex { enabled: rule_index_enabled(), ..RuleIndex::default() },
             conditions: Vec::new(),
             sibling_combinators: false,
+            keyframes: std::collections::HashMap::new(),
             diagnostics: Vec::new(),
         };
         let src: &'static str = Box::leak(css.to_string().into_boxed_str());
@@ -321,6 +341,21 @@ impl Engine {
     /// document (docs/ARCHITECTURE.md §11).
     pub fn uses_sibling_combinators(&self) -> bool {
         self.sibling_combinators
+    }
+
+    /// The `@keyframes` block `name` refers to, if the sheet has one.
+    ///
+    /// Shared by `Rc` because a running animation holds the block it started
+    /// with (see `Animator`'s `AnimRun`): the render walk has a node id and a
+    /// clock, and no stylesheet to look the name up in again.
+    pub fn keyframes(&self, name: &str) -> Option<Rc<keyframes::Keyframes>> {
+        self.keyframes.get(name).cloned()
+    }
+
+    /// Does the sheet define any animation at all? The animator can skip its
+    /// whole pass when not — the common case for a hand-written sheet.
+    pub fn has_keyframes(&self) -> bool {
+        !self.keyframes.is_empty()
     }
 
     /// Hands `f` every rule this element could match, once each. With the index
@@ -392,6 +427,10 @@ impl Engine {
                     }
                     continue;
                 }
+                CssRule::Keyframes(kf) => {
+                    self.collect_keyframes(kf);
+                    continue;
+                }
                 other => {
                     at_rule_ignored(other, &mut self.diagnostics);
                     continue;
@@ -454,6 +493,10 @@ impl Engine {
                     important: converted.important.clone(),
                     normal_transitions: converted.normal_transitions.clone(),
                     important_transitions: converted.important_transitions.clone(),
+                    normal_animations: converted.normal_animations.clone(),
+                    important_animations: converted.important_animations.clone(),
+                    normal_animation_patch: converted.normal_animation_patch,
+                    important_animation_patch: converted.important_animation_patch,
                     normal_extras: converted.normal_extras,
                     important_extras: converted.important_extras,
                     normal_custom: converted.normal_custom.clone(),
@@ -623,6 +666,12 @@ impl Engine {
         // `transition` replaces the whole list (`transition: none` therefore
         // clears it). State-rule transitions are rejected at compile time.
         let mut transitions: Option<Rc<Vec<TransitionSpec>>> = None;
+        // Same rule for `animation`: the last base-state rule that declares any
+        // `animation-*` replaces the whole list.
+        let mut animations: Option<Rc<Vec<AnimationSpec>>> = None;
+        // Longhand-only `animation-*` declarations, folded in cascade order and
+        // applied over whichever list wins.
+        let mut animation_patch = keyframes::AnimationPatch::default();
         // `object-fit` has no state ladder to install into (compile time already
         // advised about that), so every matched rule folds into one value in
         // cascade order — the last, most specific declaration wins.
@@ -642,6 +691,22 @@ impl Engine {
                     };
                     if let Some(t) = declared {
                         transitions = Some(t.clone());
+                    }
+                    let declared = if important_pass {
+                        &r.important_animations
+                    } else {
+                        &r.normal_animations
+                    };
+                    if let Some(a) = declared {
+                        animations = Some(a.clone());
+                    }
+                    let patch = if important_pass {
+                        &r.important_animation_patch
+                    } else {
+                        &r.normal_animation_patch
+                    };
+                    if let Some(p) = patch {
+                        p.apply_over(&mut animation_patch);
                     }
                 }
                 let refinement = if important_pass { &r.important } else { &r.normal };
@@ -692,6 +757,12 @@ impl Engine {
             if let Some(t) = &inline.transitions {
                 transitions = Some(t.clone());
             }
+            if let Some(a) = &inline.animations {
+                animations = Some(a.clone());
+            }
+            if let Some(p) = &inline.animation_patch {
+                p.apply_over(&mut animation_patch);
+            }
             extras.refine(&inline.extras);
         }
         if let (Some(t0), Some(t1), Some(t2)) = (t0, t1, t2) {
@@ -707,9 +778,105 @@ impl Engine {
             focus: any_focus.then(|| Rc::new(focus)),
             focus_visible: any_focus_visible.then(|| Rc::new(focus_visible)),
             transitions: transitions.unwrap_or_default(),
+            animations: {
+                let list = animations.unwrap_or_default();
+                if animation_patch.is_empty() || list.is_empty() {
+                    list
+                } else {
+                    // A longhand set without a name patches the list rather
+                    // than replacing it (see `AnimationPatch`).
+                    let mut patched = (*list).clone();
+                    for spec in patched.iter_mut() {
+                        animation_patch.apply(spec);
+                    }
+                    Rc::new(patched)
+                }
+            },
             extras,
             vars,
         }
+    }
+}
+
+impl Engine {
+    /// Compiles one `@keyframes` block.
+    ///
+    /// The steps are flattened (`0%, 100% { … }` is two steps sharing one
+    /// declaration block), sorted by offset, and each one keeps the
+    /// `animation-timing-function` it declares — which in CSS governs the
+    /// SEGMENT STARTING at that keyframe, not the animation as a whole.
+    fn collect_keyframes(
+        &mut self,
+        rule: &'static lightningcss::rules::keyframes::KeyframesRule<'static>,
+    ) {
+        use lightningcss::rules::keyframes::{KeyframeSelector, KeyframesName};
+        let name: Box<str> = match &rule.name {
+            KeyframesName::Ident(i) => i.0.as_ref().into(),
+            KeyframesName::Custom(c) => c.as_ref().into(),
+        };
+        let mut steps: Vec<keyframes::Keyframe> = Vec::new();
+        for frame in &rule.keyframes {
+            // A keyframe block is an ordinary declaration block, so it goes
+            // through the SAME mapper every rule does — which is what makes the
+            // animatable property set identical to `transition`'s by
+            // construction rather than by a second list that could drift.
+            let converted = mapper::convert_block(&frame.declarations, &mut self.diagnostics);
+            let mut style = StyleRefinement::default();
+            let mut any = false;
+            if let Some(r) = &converted.normal {
+                style.refine(r);
+                any = true;
+            }
+            if let Some(r) = &converted.important {
+                // `!important` inside a keyframe is ignored by CSS Animations
+                // §3; folding it is closer to intent than dropping the
+                // declaration, and the difference is unobservable here.
+                style.refine(r);
+                any = true;
+            }
+            // `animation-timing-function` inside a keyframe is the segment's
+            // easing; the collector picked it up as a one-entry list.
+            // `animation-timing-function` inside a keyframe arrives as a
+            // longhand-only PATCH (no name), which is exactly what it is.
+            let easing = converted
+                .normal_animation_patch
+                .or(converted.important_animation_patch)
+                .and_then(|p| p.easing);
+            // `transform: rotate()/scale()` computes into `Extras`, not into the
+            // refinement — and that is the ONE transform an SVG leaf can honour
+            // (m12 item 4), so the keyframe has to carry it.
+            let mut extras = converted.normal_extras;
+            extras.refine(&converted.important_extras);
+            if !any && easing.is_none() && extras.rotate.is_none() && extras.scale.is_none() {
+                continue;
+            }
+            let style = Rc::new(style);
+            for selector in &frame.selectors {
+                let offset = match selector {
+                    KeyframeSelector::From => 0.0,
+                    KeyframeSelector::To => 1.0,
+                    KeyframeSelector::Percentage(p) => p.0,
+                    KeyframeSelector::TimelineRangePercentage(_) => {
+                        mapper::once(
+                            &mut self.diagnostics,
+                            format!(
+                                "a named timeline range in @keyframes {name} is not supported                                  (v1) — that keyframe was dropped"
+                            ),
+                        );
+                        continue;
+                    }
+                };
+                steps.push(keyframes::Keyframe {
+                    offset: offset.clamp(0.0, 1.0),
+                    easing,
+                    style: style.clone(),
+                    extras,
+                });
+            }
+        }
+        steps.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+        // A later block with the same name replaces the earlier one, as in CSS.
+        self.keyframes.insert(name, Rc::new(keyframes::Keyframes { steps }));
     }
 }
 
@@ -723,9 +890,6 @@ fn at_rule_ignored(rule: &CssRule<'_>, diagnostics: &mut Vec<String>) {
         CssRule::Supports(_) => {
             "@supports rules are dropped (v1) — the whole block never applies".to_string()
         }
-        CssRule::Keyframes(_) => "@keyframes are dropped (v1) — CSS animations are not implemented; \
-                                  `transition` is"
-            .to_string(),
         CssRule::FontFace(_) => "@font-face is dropped (v1) — only system fonts resolve".to_string(),
         other => format!("at-rule ignored (v1): {other:?}")
             .chars()
@@ -2624,5 +2788,254 @@ mod tests {
             "{:?}",
             r.warnings
         );
+    }
+
+    // ---- @keyframes / animation (m12 item 3) -----------------------------
+
+    use crate::animator::{AnimEventKind, Animator};
+    use std::time::Instant;
+
+    fn animated(css: &str) -> ComputedStates {
+        Engine::compile(css).compute(box_node(), None, &Env::default())
+    }
+
+    fn opacity(r: &StyleRefinement) -> f32 {
+        r.opacity.expect("opacity was not animated")
+    }
+
+    const SPIN: &str = "@keyframes spin { from { opacity: 0 } to { opacity: 1 } } \
+                        .box { animation: spin 1000ms linear }";
+
+    /// The end-to-end path: a sheet compiles `@keyframes`, the element's
+    /// `animation` shorthand folds, the animator resolves the name by reference
+    /// and interpolates.
+    #[test]
+    fn an_animation_runs_from_the_sheets_keyframes() {
+        let engine = Engine::compile(SPIN);
+        let cs = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(cs.animations.len(), 1);
+        assert_eq!(&*cs.animations[0].name, "spin");
+        assert_eq!(cs.animations[0].duration, Duration::from_millis(1000));
+
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+
+        let base = StyleRefinement::default();
+        let at = |ms: u64| a.overlay(1, &base, now + Duration::from_millis(ms)).unwrap();
+        assert!((opacity(&at(0)) - 0.0).abs() < 1e-6);
+        assert!((opacity(&at(500)) - 0.5).abs() < 1e-3);
+        assert!((opacity(&at(999)) - 1.0).abs() < 1e-2);
+    }
+
+    /// `fill-mode` is what decides whether the ends are painted at all — the
+    /// difference between an element that snaps back and one that stays put.
+    #[test]
+    fn fill_mode_decides_what_the_ends_paint() {
+        let engine = Engine::compile(SPIN);
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        let base = StyleRefinement::default();
+        // `animation-fill-mode` defaults to `none`, so past the end nothing is
+        // applied and the element's own style shows through again.
+        assert!(a.overlay(1, &base, now + Duration::from_millis(2000)).is_none());
+
+        let forwards = Engine::compile(
+            "@keyframes spin { from { opacity: 0 } to { opacity: 1 } } \
+             .box { animation: spin 1000ms linear forwards }",
+        );
+        let cs = forwards.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        a.on_computed_animations(1, &cs, now, &|name| forwards.keyframes(name));
+        let held = a.overlay(1, &base, now + Duration::from_millis(2000)).unwrap();
+        assert!((opacity(&held) - 1.0).abs() < 1e-6);
+
+        // `backwards` freezes the START value during the delay; without it the
+        // delay paints nothing at all.
+        let backwards = Engine::compile(
+            "@keyframes spin { from { opacity: 0.25 } to { opacity: 1 } } \
+             .box { animation: spin 1000ms linear 500ms backwards }",
+        );
+        let cs = backwards.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        a.on_computed_animations(1, &cs, now, &|name| backwards.keyframes(name));
+        let during_delay = a.overlay(1, &base, now + Duration::from_millis(100)).unwrap();
+        assert!((opacity(&during_delay) - 0.25).abs() < 1e-6);
+    }
+
+    /// A property no keyframe names at one end falls back to the element's own
+    /// computed value — the implicit 0 % / 100 % of CSS Animations §4.
+    #[test]
+    fn a_missing_keyframe_end_is_the_elements_own_value() {
+        let engine = Engine::compile(
+            "@keyframes fade { to { opacity: 1 } } .box { animation: fade 1000ms linear }",
+        );
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        // There is no `from`, so 0 % is whatever the element computes to.
+        let mut base = StyleRefinement::default();
+        base.opacity = Some(0.2);
+        let half = a.overlay(1, &base, now + Duration::from_millis(500)).unwrap();
+        assert!((opacity(&half) - 0.6).abs() < 1e-2, "{:?}", half.opacity);
+    }
+
+    /// `infinite` is what `animate-spin` and `animate-pulse` are made of.
+    #[test]
+    fn infinite_animations_keep_the_pump_awake() {
+        let engine = Engine::compile(
+            "@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } } \
+             .box { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite }",
+        );
+        let cs = engine.compute(box_node(), None, &Env::default());
+        assert!(!cs.animations[0].iterations.is_finite());
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        assert!(a.any_animation(now + Duration::from_secs(3600)));
+        let base = StyleRefinement::default();
+        let mid = a.overlay(1, &base, now + Duration::from_millis(1000)).unwrap();
+        assert!((opacity(&mid) - 0.5).abs() < 1e-3);
+        // …and it comes back up, which is what makes a Skeleton PULSE rather
+        // than fade out once.
+        let back = a.overlay(1, &base, now + Duration::from_millis(1999)).unwrap();
+        assert!(opacity(&back) > 0.9, "{:?}", back.opacity);
+    }
+
+    #[test]
+    fn animation_start_and_end_are_reported() {
+        let engine = Engine::compile(
+            "@keyframes fade { from { opacity: 0 } to { opacity: 1 } } \
+             .box { animation: fade 100ms linear 50ms }",
+        );
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+
+        // Still inside the delay: nothing yet.
+        a.tick(now + Duration::from_millis(10));
+        assert!(a.take_events().is_empty());
+
+        a.tick(now + Duration::from_millis(60));
+        let started = a.take_events();
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].kind, AnimEventKind::AnimationStart);
+        assert_eq!(started[0].name, "fade");
+
+        a.tick(now + Duration::from_millis(500));
+        let ended = a.take_events();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].kind, AnimEventKind::AnimationEnd);
+        // `elapsedTime` excludes the delay: 100 ms of animation, not 150.
+        assert!((ended[0].elapsed - 0.1).abs() < 1e-6, "{}", ended[0].elapsed);
+
+        // Once ended, removing the animation is NOT a cancel — the DOM fires
+        // exactly one of `animationend` / `animationcancel`.
+        let none = animated(".box { color: red }");
+        a.on_computed_animations(1, &none, now + Duration::from_millis(600), &|_| None);
+        assert!(a.take_events().is_empty());
+    }
+
+    #[test]
+    fn removing_a_running_animation_cancels_it() {
+        let engine = Engine::compile(SPIN);
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        a.tick(now);
+        a.take_events();
+
+        let none = animated(".box { color: red }");
+        a.on_computed_animations(1, &none, now + Duration::from_millis(300), &|_| None);
+        let events = a.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AnimEventKind::AnimationCancel);
+        assert!((events[0].elapsed - 0.3).abs() < 1e-2);
+        assert!(a.is_idle());
+    }
+
+    /// `prefers-reduced-motion` suppresses animations exactly as it suppresses
+    /// transitions.
+    #[test]
+    fn reduced_motion_suppresses_animations() {
+        let engine = Engine::compile(SPIN);
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        a.set_reduce_motion(true);
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        assert!(a.is_idle());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
+    }
+
+    /// The transition half of the same event channel (m12 item 6).
+    #[test]
+    fn a_finished_transition_reports_transitionend() {
+        let old = animated(".box { opacity: 0; transition: opacity 200ms linear }");
+        let new = animated(".box { opacity: 1; transition: opacity 200ms linear }");
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed(1, Some(&old), &new, now);
+
+        // Mid-flight: nothing reported yet.
+        a.finish_settled(now + Duration::from_millis(100));
+        assert!(a.take_events().is_empty());
+
+        a.finish_settled(now + Duration::from_millis(250));
+        let events = a.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, AnimEventKind::TransitionEnd);
+        assert_eq!(events[0].name, "opacity");
+        // `elapsedTime` is the DURATION, not the wall clock since the start.
+        assert!((events[0].elapsed - 0.2).abs() < 1e-6);
+        assert_eq!(events[0].node, 1);
+    }
+
+    /// A `@keyframes` name the sheet does not define animates nothing, which is
+    /// what a browser does too — so it is an author advisory, not a divergence.
+    #[test]
+    fn an_unknown_animation_name_is_advised_not_faked() {
+        let cs = animated(".box { animation: nope 1s linear }");
+        let mut a = Animator::new();
+        a.on_computed_animations(1, &cs, Instant::now(), &|_| None);
+        assert!(a.is_idle());
+        let diagnostics = a.take_diagnostics();
+        assert!(
+            diagnostics.iter().any(|d| d.contains("nope") && d.contains("@keyframes")),
+            "{diagnostics:?}"
+        );
+    }
+
+    /// `@keyframes` no longer produce the "dropped" advisory, and the
+    /// `animation-*` longhands are no longer "not mapped".
+    #[test]
+    fn keyframes_and_animation_stopped_being_advisories() {
+        let engine = Engine::compile(
+            "@keyframes spin { to { transform: rotate(360deg) } } \
+             .box { animation-name: spin; animation-duration: 1s; \
+                    animation-iteration-count: infinite; animation-timing-function: linear }",
+        );
+        assert!(
+            !engine.diagnostics.iter().any(|d| d.contains("@keyframes are dropped")
+                || d.contains("not mapped (v1): Animation")),
+            "{:?}",
+            engine.diagnostics
+        );
+        assert!(engine.has_keyframes());
+        let cs = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(cs.animations.len(), 1);
+        assert!(!cs.animations[0].iterations.is_finite());
+        // The longhands zip the same way the shorthand does.
+        assert_eq!(cs.animations[0].duration, Duration::from_secs(1));
+        assert_eq!(cs.animations[0].easing, crate::Easing::Linear);
+        // …and `rotate()` reaches the keyframe as a computed value (item 4).
+        let frames = engine.keyframes("spin").unwrap();
+        assert_eq!(frames.steps.len(), 1);
+        assert_eq!(frames.steps[0].offset, 1.0);
     }
 }

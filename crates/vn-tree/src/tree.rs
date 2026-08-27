@@ -31,7 +31,6 @@ pub const EV_MOUSEMOVE: u32 = 14;
 /// Non-bubbling, per the UI Events spec: fires only on the element entered.
 pub const EV_MOUSEENTER: u32 = 15;
 pub const EV_MOUSELEAVE: u32 = 16;
-
 // `<video>` — the HTML media event set (crates/vn-video/CONTRACT.md §4). Every
 // one of these is also an `MF_MEDIA_ENGINE_EVENT` below 1000, which Microsoft
 // documents as the HTML 5 media events, so the names are the spec's on both
@@ -61,6 +60,19 @@ pub const EV_ENDED: u32 = 32;
 /// Carries `MediaError.code` in `a` and the advisory text in `key`.
 pub const EV_ERROR: u32 = 33;
 pub const EV_EMPTIED: u32 = 34;
+
+// The CSS animation/transition events, sourced by vn-css's animator rather than
+// by gpui. `EventPayload::a` carries `elapsedTime` (seconds) and `key` carries
+// `propertyName` / `animationName`.
+//
+// These four were 17-20 on the compat track and were RENUMBERED to 35-38 at the
+// m12 integration merge, because the `<video>` track had independently taken
+// 17-34 for the media block. `Node::listeners` is a `u64`, so the space is
+// there; bits 39-63 remain free.
+pub const EV_TRANSITIONEND: u32 = 35;
+pub const EV_ANIMATIONSTART: u32 = 36;
+pub const EV_ANIMATIONEND: u32 = 37;
+pub const EV_ANIMATIONCANCEL: u32 = 38;
 
 /// Every host event code with the name JS knows it by — the ONE table, so a
 /// listing (devtools) can never lag the codes again. It did: `event_names` in
@@ -105,6 +117,10 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_ENDED, "ended"),
     (EV_ERROR, "error"),
     (EV_EMPTIED, "emptied"),
+    (EV_TRANSITIONEND, "transitionend"),
+    (EV_ANIMATIONSTART, "animationstart"),
+    (EV_ANIMATIONEND, "animationend"),
+    (EV_ANIMATIONCANCEL, "animationcancel"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -735,16 +751,25 @@ impl Tree {
         for d in diagnostics {
             warn_css(&format!("[css] {d}"));
         }
-        // 3. Store + feed the transition animator. ONE Instant for the whole
-        // pass (tracks started together must not drift), change-gated via
+        // 3. Store + feed the animator. ONE Instant for the whole pass (tracks
+        // started together must not drift), change-gated via
         // ComputedStates: PartialEq.
         let now = std::time::Instant::now();
+        let has_keyframes = engine.has_keyframes();
         ANIMATOR.with(|a| {
             let mut animator = a.borrow_mut();
             for (id, states) in computed {
                 if let Some(n) = self.node_mut(id) {
                     if n.computed.as_ref() != Some(&states) {
                         animator.on_computed(id, n.computed.as_ref(), &states, now);
+                        // `@keyframes` are document-scoped, so the animation
+                        // half needs the sheet; a sheet without any pays
+                        // nothing for the check.
+                        if has_keyframes || !states.animations.is_empty() {
+                            animator.on_computed_animations(id, &states, now, &|name| {
+                                engine.keyframes(name)
+                            });
+                        }
                         n.computed = Some(states);
                     }
                 }
@@ -805,9 +830,15 @@ pub fn env() -> vn_css::Env {
     ENV.with(|e| e.get())
 }
 
-/// The per-frame interpolated overlay for a node (None = idle).
-pub fn animation_overlay(id: u32, now: std::time::Instant) -> Option<gpui::StyleRefinement> {
-    ANIMATOR.with(|a| a.borrow().overlay(id, now))
+/// The per-frame interpolated overlay for a node (None = idle). `base` is the
+/// node's computed style — a `@keyframes` animation reads it for the implicit
+/// 0 % / 100 % of any property its keyframes do not declare.
+pub fn animation_overlay(
+    id: u32,
+    base: &gpui::StyleRefinement,
+    now: std::time::Instant,
+) -> Option<gpui::StyleRefinement> {
+    ANIMATOR.with(|a| a.borrow().overlay(id, base, now))
 }
 
 /// True while any transition runs — the host keeps repainting. Also drops
@@ -815,10 +846,41 @@ pub fn animation_overlay(id: u32, now: std::time::Instant) -> Option<gpui::Style
 pub fn animating() -> bool {
     let now = std::time::Instant::now();
     ANIMATOR.with(|a| {
-        let mut a = a.borrow_mut();
-        a.finish_settled(now);
-        a.any_active(now)
+        let a = a.borrow();
+        a.any_active(now) || a.any_animation(now)
     })
+}
+
+/// Advances the animator's clock and queues whatever events crossing a boundary
+/// produced. Must run EVERY frame, from [`crate::frame_tick`] — it used to live
+/// inside [`animating`], which the host calls behind a `||` short-circuit, so a
+/// frame that already had a reason to repaint skipped the clock entirely and no
+/// `animationstart` was ever queued.
+pub fn advance_animations() {
+    let now = std::time::Instant::now();
+    ANIMATOR.with(|a| {
+        let mut a = a.borrow_mut();
+        // `tick` turns a run crossing its delay or its last iteration into an
+        // `animationstart`/`animationend`; it runs before `finish_settled`
+        // drops the settled transition tracks (which is where `transitionend`
+        // comes from).
+        a.tick(now);
+        a.finish_settled(now);
+    });
+}
+
+/// The `rotate`/`scale` a node is showing this frame, animations included.
+pub fn animation_transform(
+    id: u32,
+    base: &vn_css::Extras,
+    now: std::time::Instant,
+) -> (Option<f32>, Option<(f32, f32)>) {
+    ANIMATOR.with(|a| a.borrow().transform(id, base, now))
+}
+
+/// Drains the `transitionend` / `animation*` events the animator queued.
+pub fn take_anim_events() -> Vec<vn_css::AnimEvent> {
+    ANIMATOR.with(|a| a.borrow_mut().take_events())
 }
 
 pub fn animator_gc() {
@@ -833,6 +895,9 @@ pub fn set_reduce_motion(on: bool) {
 }
 
 pub fn set_engine(engine: vn_css::Engine) {
+    // Every running `@keyframes` run holds the block it started with, and a new
+    // sheet can redefine or delete any of them.
+    ANIMATOR.with(|a| a.borrow_mut().clear());
     // A new sheet is a new set of gaps: an advisory suppressed against the old
     // one must be free to speak again (this is the HMR path).
     CSS_WARNED.with(|w| w.borrow_mut().clear());

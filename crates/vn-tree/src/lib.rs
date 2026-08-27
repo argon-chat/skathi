@@ -21,6 +21,7 @@ pub mod log;
 mod lottie;
 pub mod perf;
 mod render;
+mod svg;
 mod tree;
 mod video;
 
@@ -345,21 +346,31 @@ pub unsafe fn set_video_device(ptr: *mut c_void, generation: u64) {
 /// Call it once per frame from the pump, BEFORE the draw; returns `true` when
 /// something moved and the window must repaint.
 ///
-/// Two jobs today:
+/// Four jobs today:
 /// * every `<lottie>` is advanced by the wall-clock delta and its events are
 ///   dispatched (CONTRACT.md §4) — this is also where retired atlas tiles go
 ///   back to gpui, since `flush_changes` has no `Window` to hand them to;
+/// * every `<video>` is pulled for a frame and its media events are dispatched
+///   (`crates/vn-video/CONTRACT.md` §3);
+/// * the CSS animation clock is advanced and `transitionend` /
+///   `animationstart` / `animationend` / `animationcancel` are dispatched;
 /// * a node that was focused when it got detached from the painted tree loses
 ///   gpui focus, which is the browser's rule and what makes a `<KeepAlive>`
 ///   page stop swallowing keystrokes after it deactivates.
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     render::apply_pending_blur(window, cx);
     render::ensure_root_focus(window, cx);
-    // Both, unconditionally: `|` rather than `||`, because a `<video>` frame
-    // must be pulled even on a tick where a `<lottie>` also moved.
+    // `transitionend` / `animationstart` / `animationend` / `animationcancel`:
+    // the animator queues them from the restyle pass and the paint clock, and
+    // this is the one per-frame hook that has a `Window` to dispatch with.
+    tree::advance_animations();
+    // All of them, unconditionally: `|` rather than `||`, because a `<video>`
+    // frame must be pulled even on a tick where a `<lottie>` also moved, and an
+    // animation event must be dispatched even on a tick where both did.
+    let anim = render::dispatch_anim_events(window, cx);
     let lottie_moved = lottie::tick(window, cx);
     let video_moved = video::tick(window, cx);
-    lottie_moved | video_moved
+    anim | lottie_moved | video_moved
 }
 
 /// Mirrors the OS reduced-motion preference into the transition animator.

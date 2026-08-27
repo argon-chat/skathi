@@ -5738,6 +5738,7 @@ name = "vn-tree"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "usvg",
  "vn-css",
  "vn-elements",
  "vn-lottie",

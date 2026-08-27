@@ -56,6 +56,19 @@ const EV_CODES = {
   mousemove: 14,
   mouseenter: 15,
   mouseleave: 16,
+  // CSS animation/transition events. Unlike everything above, the SOURCE is
+  // vn-css's own animator rather than gpui: it queues one per finished
+  // transition track and per animation start/end/cancel, and the host drains
+  // the queue once a frame (crates/vn-tree/src/render.rs::dispatch_anim_events).
+  // The payload carries `elapsedTime` in `a` and the property / @keyframes
+  // name in `key`.
+  //
+  // 35-38, not 17-20: the `<video>` track took 17-34 for the media block below
+  // and the two landed in the same milestone. `Node::listeners` is a u64.
+  transitionend: 35,
+  animationstart: 36,
+  animationend: 37,
+  animationcancel: 38,
 };
 // Events the host does not deliver under their own code, synthesized in JS from
 // one that it does. `pre: true` means the derived event fires BEFORE its source,
@@ -1109,6 +1122,16 @@ function synthesize(name, a, b, c, d, key) {
         // A plain Event in every browser; the position is read off e.target.
         if (typeof Event === "function") return new Event(name, common);
         break;
+      case "transitionend":
+        if (typeof TransitionEvent === "function")
+          return new TransitionEvent(name, { ...common, propertyName: key ?? "", elapsedTime: a });
+        break;
+      case "animationstart":
+      case "animationend":
+      case "animationcancel":
+        if (typeof AnimationEvent === "function")
+          return new AnimationEvent(name, { ...common, animationName: key ?? "", elapsedTime: a });
+        break;
       case "complete":
       case "loopComplete":
       case "enterFrame":
@@ -1129,6 +1152,10 @@ function synthesize(name, a, b, c, d, key) {
         ? { key: key ?? "", ...M }
         : name === "input"
           ? { data: key ?? null }
+          : name === "transitionend"
+            ? { propertyName: key ?? "", elapsedTime: a, pseudoElement: "" }
+          : name === "animationstart" || name === "animationend" || name === "animationcancel"
+            ? { animationName: key ?? "", elapsedTime: a, pseudoElement: "" }
           : name === "focus" || name === "blur" || name === "focusin" || name === "focusout" || name === "scroll"
             ? {}
             : name === "complete" || name === "loopComplete" || name === "enterFrame"
@@ -1329,6 +1356,89 @@ const defineGlobal = (name, value) => {
     Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
   }
 };
+
+// -- the `CSS` namespace object.
+//
+// reka-ui's `Presence` matches the `animationend` it just received against the
+// element's `animationName` with `CSS.escape(...)`. `CSS is not defined` there
+// is a ReferenceError *inside an event handler*: the exit animation never
+// completes and the element never unmounts. It only became reachable when
+// `animationend` started firing at all (m12 item 3).
+//
+// `escape` is CSSOM §4.2's algorithm implemented rather than approximated — it
+// feeds a string comparison, and an under-escaped identifier silently stops
+// matching.
+defineGlobal("CSS", {
+  escape(value) {
+    const s = String(value);
+    let out = "";
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      const ch = s[i];
+      if (c === 0) {
+        out += "�";
+      } else if (
+        (c >= 0x1 && c <= 0x1f) ||
+        c === 0x7f ||
+        (i === 0 && c >= 0x30 && c <= 0x39) ||
+        (i === 1 && c >= 0x30 && c <= 0x39 && s.charCodeAt(0) === 0x2d)
+      ) {
+        out += "\\" + c.toString(16) + " ";
+      } else if (i === 0 && c === 0x2d && s.length === 1) {
+        out += "\\" + ch;
+      } else if (
+        c >= 0x80 ||
+        c === 0x2d ||
+        c === 0x5f ||
+        (c >= 0x30 && c <= 0x39) ||
+        (c >= 0x41 && c <= 0x5a) ||
+        (c >= 0x61 && c <= 0x7a)
+      ) {
+        out += ch;
+      } else {
+        out += "\\" + ch;
+      }
+    }
+    return out;
+  },
+  // A feature PROBE. Answering `false` for everything would be a lie in the
+  // other direction (it is how `@supports`-guarded fallbacks get chosen), so
+  // this says what vue-native can express: the properties the cascade maps.
+  supports(a, b) {
+    const body = b === undefined ? String(a) : `${String(a)}:${String(b)}`;
+    const name = (body.split(":")[0] || "").trim().toLowerCase();
+    if (!name) return false;
+    if (name.startsWith("--")) return true;
+    return CSS_SUPPORTED.has(name);
+  },
+  registerProperty() {
+    warnCompat(
+      "CSS.registerProperty",
+      "CSS.registerProperty() is a no-op — vue-native's custom properties are untyped strings, " +
+        "so a registered syntax/inherits/initialValue has nothing to enforce",
+    );
+  },
+});
+
+/// The property names `CSS.supports` answers `true` for: the ones vn-css maps
+/// onto a real computed value. Deliberately conservative — a probe that says
+/// yes and then does nothing is worse than one that says no.
+const CSS_SUPPORTED = new Set([
+  "animation", "animation-delay", "animation-direction", "animation-duration",
+  "animation-fill-mode", "animation-iteration-count", "animation-name",
+  "animation-play-state", "animation-timing-function",
+  "transition", "transition-delay", "transition-duration", "transition-property",
+  "transition-timing-function",
+  "align-items", "align-self", "background", "background-color", "border", "border-color",
+  "border-radius", "border-width", "bottom", "box-shadow", "color", "column-gap", "display",
+  "flex", "flex-basis", "flex-direction", "flex-grow", "flex-shrink", "flex-wrap", "font-size",
+  "font-style", "font-weight", "gap", "height", "inset", "justify-content", "left",
+  "line-height", "margin", "margin-bottom", "margin-left", "margin-right", "margin-top",
+  "max-height", "max-width", "min-height", "min-width", "opacity", "overflow", "overflow-x",
+  "overflow-y", "padding", "padding-bottom", "padding-left", "padding-right", "padding-top",
+  "pointer-events", "position", "right", "row-gap", "text-align", "top", "transform",
+  "visibility", "white-space", "width", "z-index",
+]);
 
 // -- MutationObserver, wired to the REAL mirror-tree mutations.
 // Records are queued at the nodeOps/patchProp call sites and delivered on a
@@ -2034,10 +2144,33 @@ function transitionTimeout(el) {
 }
 
 let endId = 0;
+/// End a `<Transition>` phase on the REAL `transitionend`, with the computed
+/// timeout as the safety net — which is exactly runtime-dom's own strategy, and
+/// is now possible because vn-css's animator sources the event (m12 item 6).
+///
+/// The event matters rather than merely being tidier: the timer reports the
+/// declared duration whatever actually happened, so a transition the engine cut
+/// short (reduced motion, a competing write to the same property, the element
+/// being restyled mid-flight) left the phase class on for its full nominal
+/// length. The event fires when the track actually settles.
+///
+/// The net is still armed, and for the same two reasons runtime-dom arms it: an
+/// element whose transition never starts (the property did not actually change)
+/// fires nothing at all, and a property that is not animatable here settles
+/// without an event.
 function whenTransitionEnds(el, explicitTimeout, resolve) {
   const id = (el._endId = ++endId);
+  let done = false;
   const resolveIfNotStale = () => {
-    if (id === el._endId) resolve();
+    if (done || id !== el._endId) return;
+    done = true;
+    el.removeEventListener?.("transitionend", onEnd);
+    resolve();
+  };
+  const onEnd = (e) => {
+    // Only this element's own transitions end this phase — a descendant's
+    // bubbles through, and runtime-dom filters it the same way.
+    if (e.target === el) resolveIfNotStale();
   };
   if (explicitTimeout != null) {
     setTimeout(resolveIfNotStale, explicitTimeout);
@@ -2048,13 +2181,7 @@ function whenTransitionEnds(el, explicitTimeout, resolve) {
     resolve();
     return;
   }
-  warnCompat(
-    "transition:end",
-    "<Transition> ends its phases on a TIMER read from the element's computed transition-duration/" +
-      "-delay — vue-native delivers no `transitionend` event, so a transition interrupted by the " +
-      "engine (reduced motion, a competing property write) still reports its full duration. " +
-      "runtime-dom uses the same timer as its own fallback, so the timing matches",
-  );
+  el.addEventListener?.("transitionend", onEnd);
   setTimeout(resolveIfNotStale, timeout + 1);
 }
 

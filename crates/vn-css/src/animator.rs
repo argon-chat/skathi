@@ -14,6 +14,7 @@
 //! the shortest hue arc) — the same toolkit gpui's own springs use.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -21,6 +22,7 @@ use gpui::{
     StyleRefinement,
 };
 
+use crate::keyframes::{AnimationSpec, FillMode, Keyframes, Phase, PlayState};
 use crate::transition::{covered, spec_for, Easing, TransitionProperty};
 use crate::ComputedStates;
 
@@ -335,6 +337,13 @@ impl Track {
 #[derive(Default)]
 pub struct Animator {
     nodes: HashMap<u32, Vec<Track>>,
+    /// Running `@keyframes` animations, per node. A separate map from the
+    /// transition tracks because the two have different endpoints, different
+    /// clocks and different lifetimes — see [`AnimRun`].
+    anims: HashMap<u32, Vec<AnimRun>>,
+    /// Queued `transitionend` / `animation*` events, drained once per frame by
+    /// the host (which is the only place that has a `Window` to dispatch with).
+    events: Vec<AnimEvent>,
     warned: HashSet<String>,
     diagnostics: Vec<String>,
     reduce_motion: bool,
@@ -352,6 +361,14 @@ impl Animator {
     pub fn set_reduce_motion(&mut self, reduce_motion: bool) {
         if reduce_motion && !self.reduce_motion {
             self.nodes.clear();
+            // A cancelled animation still reports `animationcancel`, which is
+            // what lets a component that waits for the event stop waiting.
+            let now = Instant::now();
+            for (node, runs) in std::mem::take(&mut self.anims) {
+                for run in runs {
+                    self.cancel_event(node, &run, now);
+                }
+            }
         }
         self.reduce_motion = reduce_motion;
     }
@@ -456,16 +473,17 @@ impl Animator {
 
     /// The interpolated values for `node` this frame, to be refined ON TOP of
     /// its computed base. `None` when the node has nothing running.
-    pub fn overlay(&self, node: u32, now: Instant) -> Option<StyleRefinement> {
-        let tracks = self.nodes.get(&node)?;
-        if tracks.is_empty() {
-            return None;
+    pub fn overlay(&self, node: u32, base: &StyleRefinement, now: Instant) -> Option<StyleRefinement> {
+        // Animations first, transitions on top: CSS Cascade §6.2 orders
+        // transition declarations ABOVE animation declarations.
+        let mut r = self.animation_overlay(node, base, now);
+        if let Some(tracks) = self.nodes.get(&node).filter(|t| !t.is_empty()) {
+            let out = r.get_or_insert_with(StyleRefinement::default);
+            for track in tracks {
+                install(out, &track.property, track.value(now));
+            }
         }
-        let mut r = StyleRefinement::default();
-        for track in tracks {
-            install(&mut r, &track.property, track.value(now));
-        }
-        Some(r)
+        r
     }
 
     /// Whether any node still has an unfinished transition — the host keeps
@@ -489,26 +507,54 @@ impl Animator {
     /// Drops tracks that have reached their target. Safe to call every frame
     /// after painting: a finished track's value equals the computed base, so
     /// removing it is visually a no-op.
+    /// Drops tracks that have reached their target, queueing one
+    /// `transitionend` for each. Safe to call every frame after painting: a
+    /// finished track's value equals the computed base, so removing it is
+    /// visually a no-op — and the event is exactly what a browser fires at that
+    /// moment (per PROPERTY, with `elapsedTime` excluding the delay).
     pub fn finish_settled(&mut self, now: Instant) {
-        self.nodes.retain(|_, tracks| {
-            tracks.retain(|t| !t.finished(now));
+        let mut events = Vec::new();
+        self.nodes.retain(|&node, tracks| {
+            tracks.retain(|t| {
+                if !t.finished(now) {
+                    return true;
+                }
+                events.push(AnimEvent {
+                    node,
+                    kind: AnimEventKind::TransitionEnd,
+                    name: t.property.name().to_string(),
+                    elapsed: t.duration.as_secs_f32(),
+                });
+                false
+            });
             !tracks.is_empty()
         });
+        self.events.append(&mut events);
     }
 
     /// Drops state for nodes that no longer exist.
     pub fn gc(&mut self, alive: &dyn Fn(u32) -> bool) {
         self.nodes.retain(|&id, _| alive(id));
+        // A node that stopped existing cannot receive an `animationcancel`
+        // (there is nothing to dispatch it to), so its runs are simply dropped.
+        self.anims.retain(|&id, _| alive(id));
+        self.events.retain(|e| alive(e.node));
     }
 
     /// Forgets everything (e.g. on a stylesheet swap that resets the tree).
     pub fn clear(&mut self) {
         self.nodes.clear();
+        // A stylesheet swap can redefine or delete any `@keyframes` block, and
+        // a run holds the block it started with — so every run is dropped
+        // rather than left sampling a rule the sheet no longer has. This is the
+        // HMR path; a browser restarts CSS animations on a sheet swap too.
+        self.anims.clear();
+        self.events.clear();
     }
 
     /// Whether any node has transition state at all.
     pub fn is_idle(&self) -> bool {
-        self.nodes.is_empty()
+        self.nodes.is_empty() && self.anims.is_empty()
     }
 
     /// Drains the advisories accumulated since the last call. Each distinct
@@ -601,6 +647,17 @@ enum Endpoints {
     Snap,
 }
 
+impl Animator {
+    /// Test convenience: [`Animator::overlay`] against an empty base. The
+    /// transition tests all predate `@keyframes`, and none of them needs the
+    /// element's own values — only the implicit 0 % / 100 % of an ANIMATION
+    /// reads those.
+    #[cfg(test)]
+    fn overlay_test(&self, node: u32, now: Instant) -> Option<StyleRefinement> {
+        self.overlay(node, &StyleRefinement::default(), now)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,7 +718,7 @@ mod tests {
         let now = t0();
         let new = states(with_opacity(0.0), "transition: opacity 1s linear");
         a.on_computed(1, None, &new, now);
-        assert!(a.overlay(1, now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
         assert!(!a.any_active(now));
     }
 
@@ -674,17 +731,17 @@ mod tests {
 
         a.on_computed(1, Some(&old), &new, now);
         assert!(a.any_active(now));
-        assert!((opacity_of(&a.overlay(1, now).unwrap()) - 0.0).abs() < 1e-6);
+        assert!((opacity_of(&a.overlay(1, &StyleRefinement::default(), now).unwrap()) - 0.0).abs() < 1e-6);
 
         let half = now + Duration::from_millis(500);
-        assert!((opacity_of(&a.overlay(1, half).unwrap()) - 0.5).abs() < 1e-3);
+        assert!((opacity_of(&a.overlay(1, &StyleRefinement::default(), half).unwrap()) - 0.5).abs() < 1e-3);
 
         let end = now + Duration::from_millis(1000);
-        assert!((opacity_of(&a.overlay(1, end).unwrap()) - 1.0).abs() < 1e-6);
+        assert!((opacity_of(&a.overlay(1, &StyleRefinement::default(), end).unwrap()) - 1.0).abs() < 1e-6);
         assert!(!a.any_active(end));
 
         a.finish_settled(end);
-        assert!(a.overlay(1, end).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), end).is_none());
         assert!(a.is_idle());
     }
 
@@ -697,10 +754,10 @@ mod tests {
         a.on_computed(1, Some(&old), &new, now);
 
         for at in [0, 200, 499] {
-            let v = opacity_of(&a.overlay(1, now + Duration::from_millis(at)).unwrap());
+            let v = opacity_of(&a.overlay_test(1, now + Duration::from_millis(at)).unwrap());
             assert!(v.abs() < 1e-6, "value moved during the delay at {at}ms: {v}");
         }
-        let v = opacity_of(&a.overlay(1, now + Duration::from_millis(1000)).unwrap());
+        let v = opacity_of(&a.overlay_test(1, now + Duration::from_millis(1000)).unwrap());
         assert!((v - 0.5).abs() < 1e-3, "{v}");
         assert!(a.any_active(now + Duration::from_millis(1000)));
         assert!(!a.any_active(now + Duration::from_millis(1500)));
@@ -713,7 +770,7 @@ mod tests {
         let old = states(with_opacity(0.0), "transition: opacity 0s");
         let new = states(with_opacity(1.0), "transition: opacity 0s");
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
     }
 
     #[test]
@@ -723,9 +780,9 @@ mod tests {
         let old = states(with_opacity(0.0), "transition: opacity 0s 300ms");
         let new = states(with_opacity(1.0), "transition: opacity 0s 300ms");
         a.on_computed(1, Some(&old), &new, now);
-        assert!(opacity_of(&a.overlay(1, now + Duration::from_millis(100)).unwrap()) < 1e-6);
+        assert!(opacity_of(&a.overlay_test(1, now + Duration::from_millis(100)).unwrap()) < 1e-6);
         assert!(
-            (opacity_of(&a.overlay(1, now + Duration::from_millis(400)).unwrap()) - 1.0).abs()
+            (opacity_of(&a.overlay_test(1, now + Duration::from_millis(400)).unwrap()) - 1.0).abs()
                 < 1e-6
         );
     }
@@ -740,12 +797,12 @@ mod tests {
 
         a.on_computed(1, Some(&zero), &one, now);
         let mid = now + Duration::from_millis(400);
-        let at_interrupt = opacity_of(&a.overlay(1, mid).unwrap());
+        let at_interrupt = opacity_of(&a.overlay(1, &StyleRefinement::default(), mid).unwrap());
         assert!((at_interrupt - 0.4).abs() < 1e-3, "{at_interrupt}");
 
         // Reverse mid-flight: the very next sample must equal what was shown.
         a.on_computed(1, Some(&one), &zero, mid);
-        let resumed = opacity_of(&a.overlay(1, mid).unwrap());
+        let resumed = opacity_of(&a.overlay(1, &StyleRefinement::default(), mid).unwrap());
         assert!(
             (resumed - at_interrupt).abs() < 1e-4,
             "jumped on retarget: {at_interrupt} -> {resumed}"
@@ -753,11 +810,11 @@ mod tests {
 
         // …and then it travels toward the new target, not the old one.
         let later = mid + Duration::from_millis(200);
-        let v = opacity_of(&a.overlay(1, later).unwrap());
+        let v = opacity_of(&a.overlay(1, &StyleRefinement::default(), later).unwrap());
         assert!(v < at_interrupt, "{v} should be below {at_interrupt}");
         assert!((v - 0.32).abs() < 1e-2, "{v}");
         let done = mid + Duration::from_millis(1000);
-        assert!(opacity_of(&a.overlay(1, done).unwrap()).abs() < 1e-6);
+        assert!(opacity_of(&a.overlay(1, &StyleRefinement::default(), done).unwrap()).abs() < 1e-6);
     }
 
     #[test]
@@ -772,7 +829,7 @@ mod tests {
         let mid = now + Duration::from_millis(500);
         // vn-tree recomputes every node on every restyle: old == new here.
         a.on_computed(1, Some(&one), &one, mid);
-        let v = opacity_of(&a.overlay(1, mid).unwrap());
+        let v = opacity_of(&a.overlay(1, &StyleRefinement::default(), mid).unwrap());
         assert!((v - 0.5).abs() < 1e-3, "restarted: {v}");
         assert!(!a.any_active(now + Duration::from_millis(1000)));
     }
@@ -804,7 +861,7 @@ mod tests {
         let new = states(mk(blue), "transition: background-color 1s linear");
         a.on_computed(1, Some(&old), &new, now);
 
-        let half = a.overlay(1, now + Duration::from_millis(500)).unwrap();
+        let half = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
         let c = half.background.unwrap().color().unwrap().as_solid().unwrap();
         // Red is hue 0, blue is hue 2/3: the shortest arc runs backwards
         // through magenta, landing on 5/6.
@@ -820,7 +877,7 @@ mod tests {
         let old = states(with_width(px(100.0).into()), "transition: width 1s linear");
         let new = states(with_width(px(200.0).into()), "transition: width 1s linear");
         a.on_computed(1, Some(&old), &new, now);
-        let overlay = a.overlay(1, now + Duration::from_millis(250)).unwrap();
+        let overlay = a.overlay_test(1, now + Duration::from_millis(250)).unwrap();
         assert_eq!(overlay.size.width, Some(px(125.0).into()));
     }
 
@@ -833,7 +890,7 @@ mod tests {
         let old = states(StyleRefinement::default(), "transition: padding 1s linear");
         let new = states(to, "transition: padding 1s linear");
         a.on_computed(1, Some(&old), &new, now);
-        let overlay = a.overlay(1, now + Duration::from_millis(500)).unwrap();
+        let overlay = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
         assert_eq!(overlay.padding.top, Some(px(10.0).into()));
         assert!(a.take_diagnostics().is_empty());
     }
@@ -847,7 +904,7 @@ mod tests {
         let old = states(from, "transition: width 1s linear");
         let new = states(to, "transition: width 1s linear");
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
         let diags = a.take_diagnostics();
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].contains("width"), "{diags:?}");
@@ -864,7 +921,7 @@ mod tests {
         let old = states(with_width(Length::Auto), "transition: width 1s linear");
         let new = states(with_width(px(200.0).into()), "transition: width 1s linear");
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
         assert_eq!(a.take_diagnostics().len(), 1);
     }
 
@@ -889,7 +946,7 @@ mod tests {
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(diags[0].contains("transform"), "{diags:?}");
         // …and nothing animates.
-        assert!(a.overlay(1, now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
     }
 
     #[test]
@@ -899,7 +956,7 @@ mod tests {
         let old = states(with_opacity_and_radius(0.0, 0.0), "transition: all 1s linear");
         let new = states(with_opacity_and_radius(1.0, 8.0), "transition: all 1s linear");
         a.on_computed(1, Some(&old), &new, now);
-        let overlay = a.overlay(1, now + Duration::from_millis(500)).unwrap();
+        let overlay = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
         assert!((overlay.opacity.unwrap() - 0.5).abs() < 1e-3);
         assert_eq!(overlay.corner_radii.top_left, Some(px(4.0).into()));
     }
@@ -917,7 +974,7 @@ mod tests {
         let mid = now + Duration::from_millis(300);
         let bare = states(with_opacity(1.0), "");
         a.on_computed(1, Some(&new), &bare, mid);
-        assert!(a.overlay(1, mid).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), mid).is_none());
         assert!(!a.any_active(mid));
     }
 
@@ -929,14 +986,14 @@ mod tests {
         let new = states(with_opacity_and_radius(1.0, 8.0), "transition: all 1s linear");
         a.on_computed(1, Some(&old), &new, now);
         let mid = now + Duration::from_millis(200);
-        assert!(a.overlay(1, mid).unwrap().corner_radii.top_left.is_some());
+        assert!(a.overlay(1, &StyleRefinement::default(), mid).unwrap().corner_radii.top_left.is_some());
 
         let narrowed = states(
             with_opacity_and_radius(1.0, 8.0),
             "transition: opacity 1s linear",
         );
         a.on_computed(1, Some(&new), &narrowed, mid);
-        let overlay = a.overlay(1, mid).unwrap();
+        let overlay = a.overlay(1, &StyleRefinement::default(), mid).unwrap();
         assert!(overlay.corner_radii.top_left.is_none());
         assert!(overlay.opacity.is_some());
     }
@@ -950,11 +1007,11 @@ mod tests {
         let new = states(with_opacity(1.0), css);
         a.on_computed(1, Some(&old), &new, now);
         a.on_computed(2, Some(&old), &new, now);
-        assert!(a.overlay(2, now).is_some());
+        assert!(a.overlay(2, &StyleRefinement::default(), now).is_some());
 
         a.gc(&|id| id == 1);
-        assert!(a.overlay(2, now).is_none());
-        assert!(a.overlay(1, now).is_some());
+        assert!(a.overlay(2, &StyleRefinement::default(), now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_some());
 
         a.clear();
         assert!(a.is_idle());
@@ -973,11 +1030,11 @@ mod tests {
         a.set_reduce_motion(true);
         assert!(a.is_idle());
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
 
         a.set_reduce_motion(false);
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, now).is_some());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_some());
     }
 
     #[test]
@@ -1005,7 +1062,7 @@ mod tests {
             "transition: border-radius 1s linear",
         );
         a.on_computed(1, Some(&old), &new, now);
-        let overlay = a.overlay(1, now + Duration::from_millis(500)).unwrap();
+        let overlay = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
         assert_eq!(overlay.corner_radii.top_left, Some(px(5.0).into()));
         assert!(a.take_diagnostics().is_empty());
     }
@@ -1023,7 +1080,7 @@ mod tests {
             "transition: border-radius 1s linear",
         );
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
         assert_eq!(a.take_diagnostics().len(), 1);
     }
 
@@ -1037,7 +1094,7 @@ mod tests {
         a.on_computed(1, Some(&old), &new, now);
 
         let mut painted = (*new.base).clone();
-        painted.refine(&a.overlay(1, now + Duration::from_millis(250)).unwrap());
+        painted.refine(&a.overlay_test(1, now + Duration::from_millis(250)).unwrap());
         assert!((painted.opacity.unwrap() - 0.25).abs() < 1e-3);
     }
 
@@ -1051,7 +1108,7 @@ mod tests {
         a.on_computed(1, Some(&old), &new, now);
 
         let at = now + Duration::from_millis(1000);
-        let overlay = a.overlay(1, at).unwrap();
+        let overlay = a.overlay(1, &StyleRefinement::default(), at).unwrap();
         assert!((overlay.opacity.unwrap() - 1.0).abs() < 1e-6);
         assert_eq!(overlay.corner_radii.top_left, Some(px(50.0).into()));
         assert!(a.any_active(at));
@@ -1065,7 +1122,7 @@ mod tests {
         let old = states(with_opacity(0.0), "transition: opacity 1s ease-in");
         let new = states(with_opacity(1.0), "transition: opacity 1s ease-in");
         a.on_computed(1, Some(&old), &new, now);
-        let v = opacity_of(&a.overlay(1, now + Duration::from_millis(500)).unwrap());
+        let v = opacity_of(&a.overlay_test(1, now + Duration::from_millis(500)).unwrap());
         assert!((v - 0.3154).abs() < 2e-3, "{v}");
     }
 
@@ -1079,7 +1136,7 @@ mod tests {
         a.on_computed(1, Some(&old), &new, now);
         for step in 0..=20 {
             let v = opacity_of(
-                &a.overlay(1, now + Duration::from_millis(step * 50))
+                &a.overlay_test(1, now + Duration::from_millis(step * 50))
                     .unwrap(),
             );
             assert!((0.0..=1.0).contains(&v), "opacity left 0..1: {v}");
@@ -1112,7 +1169,7 @@ mod tests {
         let new = states(with_shading("frost(0.8, 20px)"), css);
         a.on_computed(1, Some(&old), &new, now);
 
-        let half = shading_of(&a.overlay(1, now + Duration::from_millis(500)).unwrap());
+        let half = shading_of(&a.overlay_test(1, now + Duration::from_millis(500)).unwrap());
         assert_eq!(half.id, gpui::effect_id::FROST);
         assert!((half.params[0] - 0.5).abs() < 1e-3, "{}", half.params[0]);
         assert!((half.params[1] - 14.0).abs() < 1e-3, "{}", half.params[1]);
@@ -1121,7 +1178,7 @@ mod tests {
         assert_eq!(half.backdrop_blur_radius(), half.params[1]);
         assert!(a.take_diagnostics().is_empty());
 
-        let end = shading_of(&a.overlay(1, now + Duration::from_millis(1000)).unwrap());
+        let end = shading_of(&a.overlay_test(1, now + Duration::from_millis(1000)).unwrap());
         assert_eq!(end.params[0], 0.8);
         assert_eq!(end.params[1], 20.0);
     }
@@ -1134,7 +1191,7 @@ mod tests {
         let old = states(with_shading("glow(#000000, 10px, 0)"), css);
         let new = states(with_shading("glow(#ffffff, 30px, 1)"), css);
         a.on_computed(1, Some(&old), &new, now);
-        let half = shading_of(&a.overlay(1, now + Duration::from_millis(500)).unwrap());
+        let half = shading_of(&a.overlay_test(1, now + Duration::from_millis(500)).unwrap());
         assert!((half.params[0] - 20.0).abs() < 1e-3);
         assert!((half.params[1] - 0.5).abs() < 1e-3);
         for channel in 4..7 {
@@ -1153,7 +1210,7 @@ mod tests {
         let old = states(with_shading("frost(0.5)"), css);
         let new = states(with_shading("glow(10px, 0.5)"), css);
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
 
         let diags = a.take_diagnostics();
         assert_eq!(diags.len(), 1, "{diags:?}");
@@ -1176,14 +1233,14 @@ mod tests {
         let old = states(with_shading("frost(0.2)"), all);
         let new = states(with_shading("frost(0.8)"), all);
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, now).is_none(), "`all` must not cover --shading");
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none(), "`all` must not cover --shading");
         assert!(a.take_diagnostics().is_empty());
 
         let named = "transition: all 1s linear, --shading 1s linear";
         let old = states(with_shading("frost(0.2)"), named);
         let new = states(with_shading("frost(0.8)"), named);
         a.on_computed(2, Some(&old), &new, now);
-        assert!(a.overlay(2, now).is_some());
+        assert!(a.overlay(2, &StyleRefinement::default(), now).is_some());
     }
 
     /// `--shading: none` is a VALUE, so a transition into it has two present
@@ -1197,7 +1254,7 @@ mod tests {
         let old = states(with_shading("frost(0.5)"), css);
         let new = states(with_shading("none"), css);
         a.on_computed(1, Some(&old), &new, now);
-        assert!(a.overlay(1, now).is_none());
+        assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
         assert_eq!(a.take_diagnostics().len(), 1);
     }
 
@@ -1209,9 +1266,382 @@ mod tests {
         let old = states(with_shading("noise(0.1, 2px, 0)"), css);
         let new = states(with_shading("noise(0.6, 2px, 24)"), css);
         a.on_computed(1, Some(&old), &new, now);
-        let half = shading_of(&a.overlay(1, now + Duration::from_millis(500)).unwrap());
+        let half = shading_of(&a.overlay_test(1, now + Duration::from_millis(500)).unwrap());
         assert!(half.animated, "grain must not freeze mid-transition");
         assert!((half.params[0] - 0.35).abs() < 1e-3);
         assert!((half.params[2] - 12.0).abs() < 1e-3);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CSS animations (@keyframes)
+// ---------------------------------------------------------------------------
+
+/// One running `@keyframes` animation on one node.
+///
+/// It holds its own `Rc<Keyframes>` rather than a name, because `overlay()` is
+/// called from the render walk — which has a node id and a clock and no engine.
+/// Resolving the name ONCE, when the run starts, is also what CSS says: an
+/// animation samples the `@keyframes` rule that was in effect when it began.
+struct AnimRun {
+    spec: AnimationSpec,
+    frames: Rc<Keyframes>,
+    /// When the run's clock started (i.e. when `animation-delay` began).
+    start: Instant,
+    /// `animationstart` has been reported.
+    started: bool,
+    /// `animationend` has been reported.
+    ended: bool,
+    /// How long the run has already spent paused, so `animation-play-state`
+    /// resumes where it stopped instead of jumping forward.
+    paused_for: Duration,
+    /// When the current pause began, if it is paused right now.
+    paused_at: Option<Instant>,
+}
+
+impl AnimRun {
+    /// The run's own elapsed time — wall clock minus whatever it spent paused.
+    fn elapsed(&self, now: Instant) -> Duration {
+        let raw = now.saturating_duration_since(self.start);
+        let paused = self.paused_for
+            + self
+                .paused_at
+                .map(|at| now.saturating_duration_since(at))
+                .unwrap_or_default();
+        raw.saturating_sub(paused)
+    }
+
+    fn phase(&self, now: Instant) -> Phase {
+        self.spec.phase(self.elapsed(now))
+    }
+
+    /// Seconds of animation actually run, for an event's `elapsedTime`.
+    fn elapsed_seconds(&self, now: Instant) -> f32 {
+        self.elapsed(now)
+            .saturating_sub(self.spec.delay)
+            .as_secs_f32()
+    }
+}
+
+/// What the animator has to tell JS about. The host drains these once per frame
+/// and dispatches them through the ordinary event path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimEventKind {
+    TransitionEnd,
+    AnimationStart,
+    AnimationEnd,
+    AnimationCancel,
+}
+
+/// One event to deliver. `name` is the CSS property name for a transition and
+/// the `@keyframes` name for an animation — exactly what
+/// `TransitionEvent.propertyName` and `AnimationEvent.animationName` carry.
+#[derive(Clone, Debug)]
+pub struct AnimEvent {
+    pub node: u32,
+    pub kind: AnimEventKind,
+    pub name: String,
+    /// `elapsedTime` in SECONDS, excluding the delay — the DOM's definition.
+    pub elapsed: f32,
+}
+
+impl Animator {
+    /// Starts, retargets and cancels this node's `@keyframes` animations.
+    ///
+    /// Called from the same place `on_computed` is, so it sees the same cascade
+    /// output the transitions do. `resolve` turns an `animation-name` into the
+    /// sheet's keyframes; it is a callback rather than an `&Engine` so the
+    /// animator stays free of a stylesheet dependency and testable without one.
+    pub fn on_computed_animations(
+        &mut self,
+        node: u32,
+        new: &ComputedStates,
+        now: Instant,
+        resolve: &dyn Fn(&str) -> Option<Rc<Keyframes>>,
+    ) {
+        // `prefers-reduced-motion` suppresses animations exactly as it
+        // suppresses transitions: they do not run at all.
+        let wanted: Vec<AnimationSpec> = if self.reduce_motion {
+            Vec::new()
+        } else {
+            new.animations.iter().filter(|s| !s.is_inert()).cloned().collect()
+        };
+
+        if wanted.is_empty() {
+            if let Some(runs) = self.anims.remove(&node) {
+                for run in runs {
+                    self.cancel_event(node, &run, now);
+                }
+            }
+            return;
+        }
+
+        let mut previous = self.anims.remove(&node).unwrap_or_default();
+        let mut runs: Vec<AnimRun> = Vec::with_capacity(wanted.len());
+        for spec in wanted {
+            // CSS restarts an animation when its NAME changes at that position
+            // in the list, and only then: changing the duration or the easing
+            // retargets a RUNNING animation rather than replaying it. Matching
+            // by name (the first unused run carrying it) is what gives that.
+            let existing = previous.iter().position(|r| r.spec.name == spec.name);
+            match existing {
+                Some(i) => {
+                    let mut run = previous.remove(i);
+                    // `animation-play-state` is a clock edit, not a restart: the
+                    // pause debt keeps the phase where it was.
+                    match (run.paused_at, spec.play_state) {
+                        (None, PlayState::Paused) => run.paused_at = Some(now),
+                        (Some(at), PlayState::Running) => {
+                            run.paused_for += now.saturating_duration_since(at);
+                            run.paused_at = None;
+                        }
+                        _ => {}
+                    }
+                    run.spec = spec;
+                    runs.push(run);
+                }
+                None => {
+                    let Some(frames) = resolve(&spec.name) else {
+                        // A name with no `@keyframes` block animates nothing —
+                        // which is what a browser does too, so this is a likely
+                        // author error rather than a divergence.
+                        self.warn_once(format!(
+                            "`animation-name: {}` names no @keyframes block in the stylesheet — \
+                             nothing animates (a browser behaves the same way)",
+                            spec.name
+                        ));
+                        continue;
+                    };
+                    runs.push(AnimRun {
+                        paused_at: (spec.play_state == PlayState::Paused).then_some(now),
+                        spec,
+                        frames,
+                        start: now,
+                        started: false,
+                        ended: false,
+                        paused_for: Duration::ZERO,
+                    });
+                }
+            }
+        }
+        // Anything left in `previous` lost its slot in the list.
+        let leftovers: Vec<AnimRun> = previous;
+        for run in leftovers {
+            self.cancel_event(node, &run, now);
+        }
+        if runs.is_empty() {
+            self.anims.remove(&node);
+        } else {
+            self.anims.insert(node, runs);
+        }
+    }
+
+    fn cancel_event(&mut self, node: u32, run: &AnimRun, now: Instant) {
+        // A run that already reported `animationend` finished; it was not
+        // cancelled, and the DOM fires only one of the two.
+        if run.ended {
+            return;
+        }
+        self.events.push(AnimEvent {
+            node,
+            kind: AnimEventKind::AnimationCancel,
+            name: run.spec.name.to_string(),
+            elapsed: run.elapsed_seconds(now).max(0.0),
+        });
+    }
+
+    /// Advances the animation clocks and queues `animationstart`/`animationend`.
+    /// Call once per frame, before `overlay`.
+    pub fn tick(&mut self, now: Instant) {
+        let mut events = Vec::new();
+        for (&node, runs) in self.anims.iter_mut() {
+            for run in runs.iter_mut() {
+                let phase = run.phase(now);
+                if !run.started && !matches!(phase, Phase::Delayed) {
+                    run.started = true;
+                    events.push(AnimEvent {
+                        node,
+                        kind: AnimEventKind::AnimationStart,
+                        name: run.spec.name.to_string(),
+                        elapsed: 0.0,
+                    });
+                }
+                if !run.ended && matches!(phase, Phase::Finished { .. }) {
+                    run.ended = true;
+                    events.push(AnimEvent {
+                        node,
+                        kind: AnimEventKind::AnimationEnd,
+                        name: run.spec.name.to_string(),
+                        elapsed: run
+                            .spec
+                            .total()
+                            .map(|t| t.saturating_sub(run.spec.delay).as_secs_f32())
+                            .unwrap_or(0.0),
+                    });
+                }
+            }
+        }
+        self.events.append(&mut events);
+    }
+
+    /// Drains the queued transition/animation events.
+    pub fn take_events(&mut self) -> Vec<AnimEvent> {
+        std::mem::take(&mut self.events)
+    }
+
+    /// Is any animation still running (or holding a `forwards` fill)?
+    pub fn any_animation(&self, now: Instant) -> bool {
+        self.anims.values().flatten().any(|run| match run.phase(now) {
+            Phase::Finished { .. } => false,
+            // A paused animation is not a reason to keep repainting; its value
+            // is frozen and the frame that froze it already painted.
+            Phase::Delayed | Phase::Running { .. } => run.paused_at.is_none(),
+        })
+    }
+
+    /// The `rotate()` / `scale()` this node's animations are showing right
+    /// now, or the element's own when nothing animates them.
+    ///
+    /// A separate call from [`Animator::overlay`] because these live in
+    /// `Extras` rather than in a `StyleRefinement` — gpui carries a
+    /// transformation matrix on a SPRITE, and the renderer reads it straight
+    /// into `gpui::Transformation` for the one element that is one: an inline
+    /// `<svg>` leaf (m12 item 4).
+    pub fn transform(
+        &self,
+        node: u32,
+        base: &crate::Extras,
+        now: Instant,
+    ) -> (Option<f32>, Option<(f32, f32)>) {
+        let Some(runs) = self.anims.get(&node) else {
+            return (base.rotate, base.scale);
+        };
+        let (mut rotate, mut scale) = (base.rotate, base.scale);
+        for run in runs {
+            let progress = match run.phase(now) {
+                Phase::Running { progress, .. } => progress,
+                Phase::Delayed => {
+                    if !matches!(run.spec.fill, FillMode::Backwards | FillMode::Both) {
+                        continue;
+                    }
+                    run.spec.phase(run.spec.delay).progress_or(0.0)
+                }
+                Phase::Finished { progress } => {
+                    if !matches!(run.spec.fill, FillMode::Forwards | FillMode::Both) {
+                        continue;
+                    }
+                    progress
+                }
+            };
+            let (r, s) = run.frames.transform_at(base, &run.spec, progress);
+            if r.is_some() {
+                rotate = r;
+            }
+            if s.is_some() {
+                scale = s;
+            }
+        }
+        (rotate, scale)
+    }
+
+    /// The interpolated animation values for `node` this frame.
+    ///
+    /// The endpoints are the KEYFRAMES rather than the element's previous
+    /// computed value, so this is composed with — not merged into — the
+    /// transition tracks. CSS Cascade §6.2 puts transitions ABOVE animations,
+    /// which is the order [`Animator::overlay`] applies them in.
+    fn animation_overlay(
+        &self,
+        node: u32,
+        base: &StyleRefinement,
+        now: Instant,
+    ) -> Option<StyleRefinement> {
+        let runs = self.anims.get(&node)?;
+        let mut out: Option<StyleRefinement> = None;
+        for run in runs {
+            let progress = match run.phase(now) {
+                Phase::Running { progress, .. } => progress,
+                // `fill-mode` decides whether the ends are painted at all.
+                Phase::Delayed => {
+                    if !matches!(run.spec.fill, FillMode::Backwards | FillMode::Both) {
+                        continue;
+                    }
+                    // The value the FIRST iteration starts at, direction and
+                    // all — that is what `backwards` freezes.
+                    run.spec.phase(run.spec.delay).progress_or(0.0)
+                }
+                Phase::Finished { progress } => {
+                    if !matches!(run.spec.fill, FillMode::Forwards | FillMode::Both) {
+                        continue;
+                    }
+                    progress
+                }
+            };
+            let r = out.get_or_insert_with(StyleRefinement::default);
+            apply_keyframes(r, base, &run.frames, &run.spec, progress);
+        }
+        out
+    }
+}
+
+impl Phase {
+    fn progress_or(self, default: f32) -> f32 {
+        match self {
+            Phase::Running { progress, .. } | Phase::Finished { progress } => progress,
+            Phase::Delayed => default,
+        }
+    }
+}
+
+/// Samples every animatable property any keyframe declares, at `progress`.
+fn apply_keyframes(
+    out: &mut StyleRefinement,
+    base: &StyleRefinement,
+    frames: &Keyframes,
+    spec: &AnimationSpec,
+    progress: f32,
+) {
+    for property in TransitionProperty::animatable() {
+        let declares: &dyn Fn(&StyleRefinement) -> bool =
+            &|r: &StyleRefinement| slot_of(r, &property) != Slot::Missing;
+        let Some(segment) = frames.segment(declares, progress) else {
+            continue;
+        };
+        // An implicit end (no `from`/`to` for this property) is the element's
+        // own computed value — CSS Animations §4 — and where the element
+        // declares nothing either, the property's INITIAL value. That last
+        // fallback is not a nicety: Tailwind's `pulse` is `@keyframes pulse {
+        // 50% { opacity: .5 } }` and nothing else, so without it both ends of
+        // every segment are unset and the Skeleton sits at 0.5 instead of
+        // breathing between 1 and 0.5.
+        let implicit = || match slot_of(base, &property) {
+            Slot::Missing => initial(&property).map_or(Slot::Missing, Slot::Value),
+            slot => slot,
+        };
+        let from = segment
+            .from
+            .map(|k| slot_of(&k.style, &property))
+            .unwrap_or_else(implicit);
+        let to = segment
+            .to
+            .map(|k| slot_of(&k.style, &property))
+            .unwrap_or_else(implicit);
+        let (Slot::Value(a), Slot::Value(b)) = (from, to) else {
+            // One end is `auto`, a percentage or unset. CSS cannot interpolate
+            // those either; the discrete behaviour is to hold whichever end
+            // does have a value.
+            if let Slot::Value(v) = from {
+                install(out, &property, v);
+            } else if let Slot::Value(v) = to {
+                install(out, &property, v);
+            }
+            continue;
+        };
+        let Some((a, b)) = unify(a, b) else {
+            install(out, &property, if segment.t < 0.5 { a } else { b });
+            continue;
+        };
+        let easing = segment.easing.unwrap_or(spec.easing);
+        install(out, &property, lerp(a, b, easing.eval(segment.t.clamp(0.0, 1.0))));
     }
 }
