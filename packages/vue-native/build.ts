@@ -209,7 +209,13 @@ const TS_AVAILABLE = (() => {
 // Provided by vendor.js and pre-seeded in the loader's registry: they must stay
 // external everywhere (a second copy of Vue would be a second reactivity
 // system), and they are never emitted as modules.
-const PRESEEDED = ["vue", "vue-native", "vue-router", "pinia"];
+//
+// "livekit-client" is not a convenience entry. Without it, an app author who
+// runs `bun add livekit-client` for the TypeScript typings — a LIKELY thing to
+// do — gets the real browser SDK silently bundled into dist/modules/ by the
+// npm path below, and the failure is `WebSocket is not defined` deep inside
+// minified code. This entry is what makes that substitution impossible.
+const PRESEEDED = ["vue", "vue-native", "vue-router", "pinia", "livekit-client"];
 const isPreseeded = (spec: string) => PRESEEDED.includes(spec);
 
 // Vue's esm-bundler build reads these as bare identifiers.
