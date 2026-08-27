@@ -9,6 +9,7 @@ import ListPage from "./pages/ListPage.vue";
 import MediaPage from "./pages/MediaPage.vue";
 import MotionPage from "./pages/MotionPage.vue";
 import StylesPage from "./pages/StylesPage.vue";
+import VoicePage from "./pages/VoicePage.vue";
 import WindowPage from "./pages/WindowPage.vue";
 import LabPage from "./App.vue";
 
@@ -18,6 +19,7 @@ const routes = [
   { path: "/motion", name: "motion", component: MotionPage },
   { path: "/media", name: "media", component: MediaPage },
   { path: "/styles", name: "styles", component: StylesPage },
+  { path: "/voice", name: "voice", component: VoicePage },
   { path: "/window", name: "window", component: WindowPage },
   { path: "/lab", name: "lab", component: LabPage },
 ];
