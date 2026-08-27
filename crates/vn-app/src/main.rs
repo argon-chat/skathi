@@ -384,12 +384,29 @@ impl Shell {
 /// never underneath it.
 fn window_controls_overlay() -> Option<gpui::Div> {
     let (height, overlay) = window::overlay()?;
-    // Segoe Fluent Icons is the Win11 caption glyph font (Segoe MDL2 Assets on
-    // Win10 carries the same code points), and these four are the OS's own
-    // glyphs — chevron-free, hairline, correctly optically centred.
+    // Segoe Fluent Icons is the Win11 caption glyph font and these three are the
+    // OS's own glyphs — chevron-free, hairline, correctly optically centred.
+    //
+    // It is NOT present on Windows 10, where the same private-use code points
+    // live in Segoe MDL2 Assets, so naming only the Win11 font would have shown
+    // three tofu boxes there. `Font::fallbacks` is DirectWrite's own fallback
+    // chain (`IDWriteTextFormat::SetFontFallback`), so the lookup is per
+    // code point and per machine rather than a compile-time guess: Win11 finds
+    // the glyph in the first family, Win10 in the second, and Segoe UI Symbol
+    // is the last stop before DirectWrite's system fallback.
     const MIN: &str = "\u{e921}";
     const MAX: &str = "\u{e922}";
     const CLOSE: &str = "\u{e8bb}";
+    let glyph_font = gpui::Font {
+        family: "Segoe Fluent Icons".into(),
+        fallbacks: Some(gpui::FontFallbacks::from_fonts(vec![
+            "Segoe MDL2 Assets".to_string(), // Windows 10 — the same code points
+            "Segoe UI Symbol".to_string(),
+        ])),
+        features: Default::default(),
+        weight: Default::default(),
+        style: Default::default(),
+    };
     let symbol = overlay
         .symbol_color
         .map(rgba)
@@ -404,7 +421,7 @@ fn window_controls_overlay() -> Option<gpui::Div> {
             .justify_center()
             .text_size(px(10.))
             .text_color(symbol)
-            .font_family("Segoe Fluent Icons")
+            .font(glyph_font.clone())
             .window_control_area(area)
             .hover(|s| s.bg(rgba(hover)))
             .child(glyph)
