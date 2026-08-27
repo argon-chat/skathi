@@ -8,6 +8,8 @@ import { useSession } from "../stores/session.js";
 const session = useSession();
 
 const name = ref("");
+const notes = ref("");
+const noteLines = computed(() => notes.value.split("\n").length);
 const focused = ref("nothing");
 
 const submitted = ref([]);
@@ -61,6 +63,21 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
       @blur="focused = 'nothing'"
     />
     <div class="hint">v-model echo: "{{ name }}" ({{ name.length }} chars)</div>
+    <!-- The SAME native editor with `multiline` on: Return inserts a newline
+         instead of submitting, the text soft-wraps, and `rows` is the
+         intrinsic height a CSS `height` can still override. -->
+    <textarea
+      class="field notes"
+      v-model="notes"
+      rows="3"
+      tabindex="2"
+      placeholder="multi-line — Enter inserts a newline, it does not submit"
+      @focus="focused = 'textarea'"
+      @blur="focused = 'nothing'"
+    />
+    <div class="hint">
+      textarea v-model: {{ noteLines }} line(s), {{ notes.length }} chars — survives a tab switch
+    </div>
     <div class="hint">Enter-submitted: {{ submittedText }}</div>
     <div class="hint">last e.key: {{ lastKey }} — digits blocked by preventDefault: {{ blocked }}</div>
     <div class="hint">focus → {{ focused }}</div>
@@ -113,6 +130,11 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
 }
 .field:focus {
   border-color: #7fd4ff;
+}
+.notes {
+  height: auto;
+  width: 320px;
+  line-height: 18px;
 }
 .hint {
   font-size: 11px;

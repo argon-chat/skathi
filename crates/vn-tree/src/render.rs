@@ -861,8 +861,11 @@ fn build_node<V: 'static>(
 
             let mask = pointer_mask(node);
             let bit = move |ev: u32| mask & (1 << ev) != 0;
-            let is_input = t.name(node.tag) == "input";
-            // `<input>` is tabbable by default in HTML; a plain <div> is not.
+            // `<input>` and `<textarea>` are the SAME native widget — only
+            // `TextInputOptions::multiline` differs (see `build_input`), so
+            // everything the wrapper does for one it does for the other.
+            let is_input = matches!(t.name(node.tag), "input" | "textarea");
+            // Both are tabbable by default in HTML; a plain <div> is not.
             let tab_index = tab_index_of(t, id).or(is_input.then_some(0));
 
             // Keyboard/focus events and tab navigation need a persistent
@@ -1352,6 +1355,17 @@ pub(crate) fn scroll_node(
     cx: &mut App,
 ) -> Result<(f32, f32), String> {
     let Some(handle) = SCROLL_HANDLES.with(|m| m.borrow().get(&id).cloned()) else {
+        // A `<textarea>` scrolls its own overflow inside the native widget
+        // rather than through a gpui `ScrollHandle`, so it has no entry here.
+        // Route to the editor instead — otherwise devtools would report "not a
+        // scroll container" about the one element on the page that visibly is.
+        if let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) {
+            let top = state.update(cx, |s, cx| {
+                s.scroll_by(gpui::px(dy), window, cx);
+                f32::from(s.scroll_top())
+            });
+            return Ok((0.0, top));
+        }
         return Err(format!(
             "node {id} is not a scroll container — nothing in the cascade gave it \
              `overflow: scroll` or `overflow: auto`, so there is no scroll offset to move"
@@ -1934,11 +1948,18 @@ fn build_lottie<V: 'static>(
     bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
-/// The native `<input>` widget: persistent `TextInputState` entity per node,
-/// controlled through the DOM-compat prop channel (`value`, `placeholder`,
-/// `disabled`, `tabindex`), styled from the node's computed text style,
-/// reporting edits as `input` events (with `e.target.value` populated on the JS
-/// side) and keystrokes as cancellable `keydown`/`keyup`.
+/// The native `<input>` / `<textarea>` widget: persistent `TextInputState`
+/// entity per node, controlled through the DOM-compat prop channel (`value`,
+/// `placeholder`, `disabled`, `readonly`, `rows`, `tabindex`), styled from the
+/// node's computed text style, reporting edits as `input` events (with
+/// `e.target.value` populated on the JS side) and keystrokes as cancellable
+/// `keydown`/`keyup`.
+///
+/// `<textarea>` is the same widget with `multiline` set: the content wraps and
+/// keeps its line breaks, Return inserts one instead of being dropped, and the
+/// box scrolls vertically. Everything else — IME, selection, clipboard, undo,
+/// the `v-model` echo ring, the KeepAlive-surviving state map — is shared, and
+/// that is the point: a second editor would have been a second set of bugs.
 fn build_input<V: 'static>(
     t: &Tree,
     id: u32,
@@ -1954,12 +1975,22 @@ fn build_input<V: 'static>(
             .clone()
     });
 
+    let multiline = t.name(node.tag) == "textarea";
+
     // Controlled value: the write counter, not the string, is what tells the
     // widget an assignment happened (`v-model` re-forcing "" after the user
     // typed again writes the same string the previous clear did).
     if let Some((value, write)) = t.prop_write(id, "value") {
         let value = value.to_string();
         state.update(cx, |s, cx| s.sync_value(&value, write, cx));
+    } else if multiline && !node.text.is_empty() {
+        // A `<textarea>`'s initial value is its TEXT CONTENT, not an attribute
+        // — `<textarea>hello</textarea>`. Vue writes that through
+        // `setElementText`, so it arrives on `Node::text`, and the wrapper's
+        // `d.child(node.text)` arm is never reached for a text field. Applied
+        // once (write counter 0), so a later `value` assignment still wins.
+        let value = node.text.clone();
+        state.update(cx, |s, cx| s.sync_value(&value, 0, cx));
     }
 
     let text_style = node.computed.as_ref().map(|cs| cs.base.text.clone());
@@ -1980,8 +2011,19 @@ fn build_input<V: 'static>(
         selection_color: gpui::Hsla { h: 0.6, s: 0.8, l: 0.6, a: 0.35 },
         caret_color: text_color,
         font_size,
-        disabled: t.prop(id, "disabled").is_some_and(|v| v != "false"),
+        // `readonly` and `disabled` differ in HTML (a disabled control is not
+        // submitted and not focusable); for the EDITOR they mean the same
+        // thing — no typing, no caret, selection and copy still work — so both
+        // map onto the widget's one flag.
+        disabled: t.prop(id, "disabled").is_some_and(|v| v != "false")
+            || t.prop(id, "readonly").is_some_and(|v| v != "false"),
         tab_index,
+        multiline,
+        rows: t
+            .prop(id, "rows")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(vn_elements::DEFAULT_ROWS),
     };
 
     let mask = pointer_mask(node);

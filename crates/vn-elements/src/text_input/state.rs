@@ -19,16 +19,16 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, KeyDownEvent,
-    KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ShapedLine,
-    Subscription, Task, UTF16Selection, Window, px,
+    KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Task,
+    UTF16Selection, Window, WrappedLine, px,
 };
 
 use super::boundaries;
 use super::{
     Backspace, ClearSelection, Copy, Cut, Delete, DeleteToEnd, DeleteToStart, DeleteWordLeft,
-    DeleteWordRight, End, Home, Left, OnChange, OnKeyDown, Paste, Redo, Right, SelectAll, SelectEnd,
-    SelectHome, SelectLeft, SelectRight, SelectWordLeft, SelectWordRight, ShowCharacterPalette,
-    TextInputHandlers, Undo, WordLeft, WordRight,
+    DeleteWordRight, Down, End, Home, Left, Newline, OnChange, OnKeyDown, Paste, Redo, Right,
+    SelectAll, SelectDown, SelectEnd, SelectHome, SelectLeft, SelectRight, SelectUp, SelectWordLeft,
+    SelectWordRight, ShowCharacterPalette, TextInputHandlers, Undo, Up, WordLeft, WordRight,
 };
 
 /// How many self-reported values are remembered so the framework echoing them
@@ -89,6 +89,38 @@ fn single_line_text(text: &str) -> String {
                 out.push(' ');
             }
             '\n' => out.push(' '),
+            character if character.is_control() => {}
+            character => out.push(character),
+        }
+    }
+    out
+}
+
+/// Fold text into something a `<textarea>` can hold.
+///
+/// Line breaks SURVIVE — that is the whole difference from
+/// [`single_line_text`] — normalised to `\n` the way a browser normalises a
+/// textarea's value (the HTML "API value" uses LF, never CRLF, whatever the
+/// platform sent). Tabs survive too. Every other control character is stripped,
+/// because none of them can be shaped and one stray `\0` in a run of text makes
+/// the whole line unshapeable.
+///
+/// A LONE `\r`/`\n` maps to `\n` rather than being dropped: on a platform that
+/// routes Return through the IME text-input path instead of through the key
+/// binding, that lone control character is the Return, and a textarea must
+/// insert a newline for it.
+fn multi_line_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '\r' => {
+                if characters.peek() == Some(&'\n') {
+                    characters.next();
+                }
+                out.push('\n');
+            }
+            '\n' | '\t' => out.push(character),
             character if character.is_control() => {}
             character => out.push(character),
         }
@@ -173,16 +205,47 @@ pub struct TextInputState {
 
     is_selecting: bool,
 
-    // Written by the element during layout/prepaint, read by hit testing.
-    last_line: Option<ShapedLine>,
+    /// `<textarea>` rather than `<input>` — see [`super::TextInputOptions`].
+    multiline: bool,
+
+    // Written by the element during prepaint, read by hit testing, the caret
+    // and the IME. One entry per HARD line (`shape_text` splits on `\n`); a
+    // single-line input always has exactly one. The shaped lines LIVE here —
+    // `WrappedLine` is not `Clone`, so the element hands them over and borrows
+    // them back to paint.
+    lines: Vec<LineBox>,
     last_bounds: Option<Bounds<Pixels>>,
     line_height: Pixels,
     content_width: Pixels,
+    /// `line_height * total visual rows` — what the vertical scroll clamps to.
+    content_height: Pixels,
     display_is_placeholder: bool,
     scroll_left: Pixels,
+    /// Vertical scroll offset, always zero for a single-line input.
+    scroll_top: Pixels,
 
     blink_anchor: Instant,
     blink_task: Option<Task<()>>,
+}
+
+/// One HARD line (a `\n`-delimited run) and where it sits.
+///
+/// Soft wrapping happens INSIDE a `WrappedLine`: one hard line can occupy
+/// several visual rows, and `rows` is how many. `row0` is the visual row this
+/// hard line starts on, counting from the top of the content.
+pub(crate) struct LineBox {
+    /// Byte offset of this line's first character in `content`.
+    pub(crate) start: usize,
+    pub(crate) row0: usize,
+    pub(crate) rows: usize,
+    pub(crate) line: WrappedLine,
+}
+
+impl LineBox {
+    /// Byte offset one past this line's last character (excluding the `\n`).
+    fn end(&self) -> usize {
+        self.start + self.line.len()
+    }
 }
 
 impl TextInputState {
@@ -217,12 +280,15 @@ impl TextInputState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             is_selecting: false,
-            last_line: None,
+            multiline: false,
+            lines: Vec::new(),
             last_bounds: None,
             line_height: px(20.0),
             content_width: px(0.0),
+            content_height: px(0.0),
             display_is_placeholder: true,
             scroll_left: px(0.0),
+            scroll_top: px(0.0),
             blink_anchor: cx.background_executor().now(),
             blink_task: None,
         }
@@ -284,10 +350,26 @@ impl TextInputState {
     }
 
     /// Per-frame parameters pushed in by [`super::text_input`].
-    pub(crate) fn set_frame_params(&mut self, handlers: TextInputHandlers, read_only: bool) {
+    pub(crate) fn set_frame_params(
+        &mut self,
+        handlers: TextInputHandlers,
+        read_only: bool,
+        multiline: bool,
+    ) {
         self.on_change = handlers.on_change;
         self.on_key_down = handlers.on_key_down;
         self.read_only = read_only;
+        self.multiline = multiline;
+    }
+
+    /// Fold incoming text into something this field can hold: `single_line_text`
+    /// for an `<input>`, newline normalisation for a `<textarea>`.
+    fn sanitize(&self, text: &str) -> String {
+        if self.multiline {
+            multi_line_text(text)
+        } else {
+            single_line_text(text)
+        }
     }
 
     /// DOM `tabindex`: `Some(n >= 0)` puts this input in the tab order at index
@@ -352,7 +434,7 @@ impl TextInputState {
     }
 
     fn set_external_text(&mut self, value: &str, cx: &mut Context<Self>) {
-        let value = single_line_text(value);
+        let value = self.sanitize(value);
         if self.content == value {
             return;
         }
@@ -362,6 +444,7 @@ impl TextInputState {
         self.selection_reversed = false;
         self.marked_range = None;
         self.scroll_left = px(0.0);
+        self.scroll_top = px(0.0);
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.reset_blink(cx);
@@ -405,7 +488,7 @@ impl TextInputState {
         let end = boundaries::snap(&self.content, range.end).max(start);
         let range = start..end;
 
-        let replacement = single_line_text(new_text);
+        let replacement = self.sanitize(new_text);
         if replacement.is_empty() && range.is_empty() {
             // Nothing to do — e.g. Return, which reaches a single-line input
             // as a control character and is dropped. Leave the selection alone.
@@ -551,20 +634,60 @@ impl TextInputState {
         self.set_selection(0..self.content.len(), cx);
     }
 
+    /// `Home` — the start of the VISUAL row in a textarea (what a browser
+    /// does), the start of the value in a single-line input (where the two
+    /// coincide anyway, since it has exactly one row).
     pub(crate) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
+        let offset = self.row_bound(self.cursor_offset(), false);
+        self.move_to(offset, cx);
     }
 
     pub(crate) fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.content.len(), cx);
+        let offset = self.row_bound(self.cursor_offset(), true);
+        self.move_to(offset, cx);
     }
 
     pub(crate) fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(0, cx);
+        let offset = self.row_bound(self.cursor_offset(), false);
+        self.select_to(offset, cx);
     }
 
     pub(crate) fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.content.len(), cx);
+        let offset = self.row_bound(self.cursor_offset(), true);
+        self.select_to(offset, cx);
+    }
+
+    /// `ArrowUp`. In a textarea this moves one visual row up, keeping the
+    /// caret's x; in a single-line input a browser jumps to the start of the
+    /// value, which is what falling through to row -1 does here.
+    pub(crate) fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.offset_one_row(self.cursor_offset(), -1);
+        self.move_to(offset, cx);
+    }
+
+    pub(crate) fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.offset_one_row(self.cursor_offset(), 1);
+        self.move_to(offset, cx);
+    }
+
+    pub(crate) fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.offset_one_row(self.cursor_offset(), -1);
+        self.select_to(offset, cx);
+    }
+
+    pub(crate) fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        let offset = self.offset_one_row(self.cursor_offset(), 1);
+        self.select_to(offset, cx);
+    }
+
+    /// Return in a `<textarea>`: insert a line break, never submit. Bound only
+    /// in the textarea key context, so this is unreachable for an `<input>`;
+    /// the guard is belt and braces.
+    pub(crate) fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only || !self.multiline {
+            return;
+        }
+        self.replace_selection("\n", window, cx);
     }
 
     pub(crate) fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -782,46 +905,135 @@ impl TextInputState {
 
     // ----------------------------------------------------------- layout hooks
 
-    /// Called by the element every frame once the line has been shaped.
+    /// Called by the element every frame once the text has been shaped. The
+    /// lines are MOVED in: `WrappedLine` is not `Clone`, so this is where they
+    /// live for the rest of the frame and the element borrows them back to
+    /// paint.
     pub(crate) fn set_layout(
         &mut self,
         bounds: Bounds<Pixels>,
-        line: ShapedLine,
+        lines: Vec<LineBox>,
         line_height: Pixels,
         display_is_placeholder: bool,
     ) {
-        self.content_width = line.width();
-        self.last_line = Some(line);
+        self.content_width = lines
+            .iter()
+            .map(|l| l.line.width())
+            .fold(px(0.0), Pixels::max);
+        let rows: usize = lines.iter().map(|l| l.rows).sum();
+        self.content_height = line_height * rows.max(1) as f32;
+        self.lines = lines;
         self.last_bounds = Some(bounds);
         self.line_height = line_height;
         self.display_is_placeholder = display_is_placeholder;
-        self.clamp_scroll(bounds.size.width);
+        self.clamp_scroll(bounds.size);
     }
 
     /// Keep the caret inside the viewport, and the viewport inside the content.
-    fn clamp_scroll(&mut self, viewport_width: Pixels) {
-        let caret = self.x_for_index(self.cursor_offset());
-        if caret < self.scroll_left {
-            self.scroll_left = caret;
-        } else if caret + CARET_WIDTH > self.scroll_left + viewport_width {
-            self.scroll_left = caret + CARET_WIDTH - viewport_width;
+    ///
+    /// A textarea soft-wraps, so its content is never wider than the box and
+    /// only the vertical axis moves; a single-line input is the mirror image.
+    fn clamp_scroll(&mut self, viewport: gpui::Size<Pixels>) {
+        let caret = self.position_for_index(self.cursor_offset());
+        if self.multiline {
+            self.scroll_left = px(0.0);
+            if caret.y < self.scroll_top {
+                self.scroll_top = caret.y;
+            } else if caret.y + self.line_height > self.scroll_top + viewport.height {
+                self.scroll_top = caret.y + self.line_height - viewport.height;
+            }
+            let max_scroll = (self.content_height - viewport.height).max(px(0.0));
+            self.scroll_top = self.scroll_top.clamp(px(0.0), max_scroll);
+            return;
         }
-        let max_scroll = (self.content_width + CARET_WIDTH - viewport_width).max(px(0.0));
+        self.scroll_top = px(0.0);
+        if caret.x < self.scroll_left {
+            self.scroll_left = caret.x;
+        } else if caret.x + CARET_WIDTH > self.scroll_left + viewport.width {
+            self.scroll_left = caret.x + CARET_WIDTH - viewport.width;
+        }
+        let max_scroll = (self.content_width + CARET_WIDTH - viewport.width).max(px(0.0));
         self.scroll_left = self.scroll_left.clamp(px(0.0), max_scroll);
+    }
+
+    /// Wheel scrolling for a textarea, in CSS pixels (positive = down).
+    pub fn scroll_by(&mut self, dy: Pixels, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.multiline {
+            return;
+        }
+        let viewport = self.last_bounds.map(|b| b.size.height).unwrap_or(px(0.0));
+        let max_scroll = (self.content_height - viewport).max(px(0.0));
+        let next = (self.scroll_top + dy).clamp(px(0.0), max_scroll);
+        if next != self.scroll_top {
+            self.scroll_top = next;
+            cx.notify();
+        }
     }
 
     pub(crate) fn scroll_left(&self) -> Pixels {
         self.scroll_left
     }
 
-    pub(crate) fn x_for_index(&self, index: usize) -> Pixels {
+    pub fn scroll_top(&self) -> Pixels {
+        self.scroll_top
+    }
+
+    pub(crate) fn content_height(&self) -> Pixels {
+        self.content_height
+    }
+
+    pub(crate) fn lines(&self) -> &[LineBox] {
+        &self.lines
+    }
+
+    /// Round a byte offset to the nearest grapheme boundary in the content, so
+    /// a bisection over indices can never land inside a character.
+    pub(crate) fn snap_index(&self, index: usize) -> usize {
+        boundaries::snap(&self.content, index.min(self.content.len()))
+    }
+
+    pub(crate) fn line_height(&self) -> Pixels {
+        self.line_height
+    }
+
+    /// The hard line containing `index`, and the index within it.
+    fn line_at(&self, index: usize) -> Option<(&LineBox, usize)> {
+        let boxes = &self.lines;
+        // A `\n` sits BETWEEN two lines and belongs to neither, so an offset
+        // pointing at one reports the end of the line before it — which is
+        // where a browser draws the caret after pressing End.
+        let found = boxes
+            .iter()
+            .rev()
+            .find(|l| index >= l.start)
+            .or_else(|| boxes.first())?;
+        Some((found, (index - found.start.min(index)).min(found.line.len())))
+    }
+
+    /// Where the caret goes for a byte offset, relative to the top-left of the
+    /// CONTENT (before scrolling). `(0, 0)` when nothing has been shaped yet.
+    pub(crate) fn position_for_index(&self, index: usize) -> Point<Pixels> {
         if self.display_is_placeholder {
-            return px(0.0);
+            return Point::default();
         }
-        match self.last_line.as_ref() {
-            Some(line) => line.x_for_index(index.min(line.len())),
-            None => px(0.0),
-        }
+        let Some((line_box, local)) = self.line_at(index) else {
+            return Point::default();
+        };
+        let within = line_box
+            .line
+            .position_for_index(local, self.line_height)
+            // `position_for_index` answers `None` past the last glyph; the end
+            // of the last row is the right answer there.
+            .unwrap_or_else(|| {
+                Point::new(
+                    line_box.line.width(),
+                    self.line_height * (line_box.rows.saturating_sub(1)) as f32,
+                )
+            });
+        Point::new(
+            within.x,
+            within.y + self.line_height * line_box.row0 as f32,
+        )
     }
 
     /// Map a window-space position to a byte offset in the content.
@@ -829,12 +1041,84 @@ impl TextInputState {
         if self.display_is_placeholder || self.content.is_empty() {
             return 0;
         }
-        let (Some(bounds), Some(line)) = (self.last_bounds, self.last_line.as_ref()) else {
+        let Some(bounds) = self.last_bounds else {
             return 0;
         };
-        let x = position.x - bounds.left() + self.scroll_left;
-        let index = line.closest_index_for_x(x);
-        boundaries::snap(&self.content, index)
+        let local = Point::new(
+            position.x - bounds.left() + self.scroll_left,
+            position.y - bounds.top() + self.scroll_top,
+        );
+        let row = if self.line_height > px(0.0) {
+            (f32::from(local.y) / f32::from(self.line_height)).floor()
+        } else {
+            0.0
+        };
+        // Clicking above the first row or below the last one selects the near
+        // end of the content, exactly as a browser does.
+        if row < 0.0 {
+            return 0;
+        }
+        let row = row as usize;
+        let Some(line_box) = self
+            .lines
+            .iter()
+            .rev()
+            .find(|l| row >= l.row0)
+            .or_else(|| self.lines.first())
+        else {
+            return 0;
+        };
+        if row >= line_box.row0 + line_box.rows && line_box.end() >= self.content.len() {
+            return self.content.len();
+        }
+        let within = Point::new(
+            local.x,
+            local.y - self.line_height * line_box.row0 as f32,
+        );
+        let index = match line_box
+            .line
+            .closest_index_for_position(within, self.line_height)
+        {
+            Ok(i) | Err(i) => i,
+        };
+        boundaries::snap(&self.content, line_box.start + index.min(line_box.line.len()))
+    }
+
+    /// The start (`forward = false`) or end of the VISUAL row `index` is on.
+    fn row_bound(&self, index: usize, forward: bool) -> usize {
+        if self.lines.is_empty() {
+            return if forward { self.content.len() } else { 0 };
+        }
+        let y = self.position_for_index(index).y;
+        let x = if forward { px(1.0e6) } else { px(-1.0e6) };
+        self.index_for_content_point(Point::new(x, y))
+    }
+
+    /// One visual row up (`delta = -1`) or down, keeping the caret's x. Off
+    /// either end this saturates to the start / end of the content, which is
+    /// both what a browser does in a textarea and what it does in a
+    /// single-line input (where there is only ever one row).
+    fn offset_one_row(&self, index: usize, delta: i32) -> usize {
+        let caret = self.position_for_index(index);
+        let y = caret.y + self.line_height * delta as f32;
+        if y < px(0.0) {
+            return 0;
+        }
+        if y >= self.content_height {
+            return self.content.len();
+        }
+        self.index_for_content_point(Point::new(caret.x, y))
+    }
+
+    /// [`Self::index_for_position`] in CONTENT space (no bounds, no scroll).
+    fn index_for_content_point(&self, point: Point<Pixels>) -> usize {
+        let Some(bounds) = self.last_bounds else {
+            return 0;
+        };
+        self.index_for_position(Point::new(
+            point.x + bounds.left() - self.scroll_left,
+            point.y + bounds.top() - self.scroll_top,
+        ))
     }
 
     // ------------------------------------------------------------------ blink
@@ -1012,14 +1296,21 @@ impl EntityInputHandler for TextInputState {
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
-        let start = self.x_for_index(range.start) - self.scroll_left;
-        let end = self.x_for_index(range.end) - self.scroll_left;
+        let start = self.position_for_index(range.start);
+        let end = self.position_for_index(range.end);
+        // The candidate window hangs off the row the pre-edit ENDS on. When a
+        // composition wraps or spans lines the two rows differ, and reporting
+        // the start's row would put the IME popup a line too high.
+        let top = element_bounds.top() + end.y - self.scroll_top;
+        let left = element_bounds.left() - self.scroll_left;
+        let (x0, x1) = if start.y == end.y {
+            (start.x, end.x.max(start.x + CARET_WIDTH))
+        } else {
+            (px(0.0), end.x.max(CARET_WIDTH))
+        };
         Some(Bounds::from_corners(
-            gpui::point(element_bounds.left() + start, element_bounds.top()),
-            gpui::point(
-                element_bounds.left() + end.max(start + CARET_WIDTH),
-                element_bounds.top() + self.line_height,
-            ),
+            gpui::point(left + x0, top),
+            gpui::point(left + x1, top + self.line_height),
         ))
     }
 
@@ -1066,6 +1357,27 @@ mod tests {
     fn pasted_line_breaks_become_single_spaces() {
         assert_eq!(single_line_text("a\r\nb\nc\rd"), "a b c d");
         assert_eq!(single_line_text("plain"), "plain");
+    }
+
+    /// The whole difference between `<input>` and `<textarea>`, in one place.
+    #[test]
+    fn a_textarea_keeps_its_line_breaks() {
+        // Every spelling normalises to LF — the HTML "API value" a browser
+        // reports from `textarea.value`, whatever the platform sent.
+        assert_eq!(multi_line_text("a\r\nb\nc\rd"), "a\nb\nc\nd");
+        // …where the same paste into a single-line input folds into spaces.
+        assert_eq!(single_line_text("a\r\nb\nc\rd"), "a b c d");
+
+        // A LONE Return is a newline here and nothing at all there. That case
+        // is the Return keypress on a platform that routes it through the text
+        // input handler instead of through the key binding.
+        assert_eq!(multi_line_text("\r"), "\n");
+        assert_eq!(multi_line_text("\n"), "\n");
+        assert_eq!(single_line_text("\r"), "");
+
+        // Tabs survive; nothing else unshapeable does.
+        assert_eq!(multi_line_text("a\tb\u{0}c\u{7}"), "a\tbc");
+        assert_eq!(multi_line_text("plain"), "plain");
     }
 
     #[test]
