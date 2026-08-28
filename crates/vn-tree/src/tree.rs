@@ -799,6 +799,9 @@ thread_local! {
     static CSS_WARNED: RefCell<std::collections::HashSet<String>> =
         RefCell::new(std::collections::HashSet::new());
     static ENGINE: RefCell<Option<vn_css::Engine>> = const { RefCell::new(None) };
+    /// The text the current engine was compiled from, kept so the sheet can be
+    /// compiled AGAIN against a different `rem` basis — see [`restyle_all`].
+    static SHEET_SOURCE: RefCell<String> = const { RefCell::new(String::new()) };
     static ANIMATOR: RefCell<vn_css::Animator> = RefCell::new(vn_css::Animator::new());
     /// The `@media` environment the cascade is currently evaluated against —
     /// the native stand-in for a browser's viewport + OS preferences. The host
@@ -885,7 +888,17 @@ pub fn set_reduce_motion(on: bool) {
     ANIMATOR.with(|a| a.borrow_mut().set_reduce_motion(on));
 }
 
-pub fn set_engine(engine: vn_css::Engine) {
+/// Installs a compiled stylesheet, keeping its source for
+/// [`recompile_for_rem_basis`].
+pub fn set_stylesheet(css: String) {
+    set_engine(vn_css::Engine::compile(&css));
+    SHEET_SOURCE.with(|s| *s.borrow_mut() = css);
+}
+
+/// Installs a compiled engine WITHOUT recording a source to recompile from.
+/// [`set_stylesheet`] is the path the host uses; this one is for tests and for
+/// the recompile inside [`restyle_all`], which already has the source.
+pub(crate) fn set_engine(engine: vn_css::Engine) {
     // Every running `@keyframes` run holds the block it started with, and a new
     // sheet can redefine or delete any of them.
     ANIMATOR.with(|a| a.borrow_mut().clear());
@@ -899,13 +912,66 @@ pub fn set_engine(engine: vn_css::Engine) {
     ENGINE.with(|c| *c.borrow_mut() = Some(engine));
 }
 
-/// Restyles under the current engine (or inline-only when none is set).
+/// Restyles under the current engine (or inline-only when none is set), then
+/// re-runs the whole thing if the ROOT element turned out to define a different
+/// `rem`.
+///
+/// `rem` is the root element's `font-size`, and vn-css flattens it to px at
+/// SHEET COMPILE time (gpui's style fields are `Pixels`; carrying `Rems`
+/// through every one of them is a different project — see
+/// [`vn_css::set_rem_basis`]). So a root font-size the app sets from JS cannot
+/// move the sheet that is already compiled; the sheet has to be compiled again.
+///
+/// Which is what this does, and the loop is the whole subtlety: the root's own
+/// `font-size` may itself be written in `rem` or `em`, so recompiling can
+/// change the very value that triggered the recompile. CSS resolves that by
+/// defining the root's own `rem` against the INITIAL font size; we get the same
+/// answer by iterating to a fixed point and capping it, which also terminates
+/// on the pathological `html { font-size: 2rem }`.
+///
+/// In practice this fires at most once in an app's life — `@argon/theme` sets
+/// `documentElement.style.fontSize` once at boot — and never at all for an app
+/// that leaves the root font-size alone, which is the case the `changed` test
+/// keeps free.
 pub fn restyle_all() {
     let env = env();
-    ENGINE.with(|eng| {
-        let eng = eng.borrow();
-        with_tree(|t| t.restyle(eng.as_ref(), &env));
-    });
+    for _ in 0..REM_BASIS_PASSES {
+        ENGINE.with(|eng| {
+            let eng = eng.borrow();
+            with_tree(|t| t.restyle(eng.as_ref(), &env));
+        });
+        let Some(root_font_size) = read_tree(root_font_size) else { return };
+        if !vn_css::set_rem_basis(root_font_size) {
+            return;
+        }
+        crate::log::record(
+            "css",
+            format!("[css] rem basis is now {root_font_size}px (the root element's font-size) — recompiling the stylesheet"),
+        );
+        let css = SHEET_SOURCE.with(|s| s.borrow().clone());
+        if css.is_empty() {
+            return;
+        }
+        set_engine(vn_css::Engine::compile(&css));
+        with_tree(|t| t.mark_dirty());
+    }
+}
+
+/// One recompile to adopt the root's font-size, and one more in case that
+/// font-size was itself relative. A third would be a cycle.
+const REM_BASIS_PASSES: usize = 3;
+
+/// The root element's computed `font-size` in px, when it has one that is an
+/// absolute length.
+fn root_font_size(t: &Tree) -> Option<f32> {
+    let computed = t.node(t.root)?.computed.as_ref()?;
+    match computed.base.text.font_size? {
+        gpui::AbsoluteLength::Pixels(p) => Some(f32::from(p)),
+        // `Rems` cannot reach here (the mapper flattens), but if it ever does,
+        // resolving it against the current basis would be a fixed point that
+        // never moves — take the value at face value instead.
+        gpui::AbsoluteLength::Rems(r) => Some(r.0 * vn_css::rem_basis()),
+    }
 }
 
 /// The matcher's view of one element node.

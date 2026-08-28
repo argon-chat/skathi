@@ -43,8 +43,9 @@ use parcel_selectors::parser::Component;
 pub use animator::{AnimEvent, AnimEventKind, Animator};
 pub use element::MatchDom;
 pub use mapper::{
-    parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, Decls,
-    Extras, InlineStyle, ObjectFit, SvgPaint, TextTransform, WindowControl, WindowDrag,
+    parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
+    set_rem_basis, Decls, Extras, InlineStyle, ObjectFit, SvgPaint, TextTransform, WindowControl,
+    WindowDrag, INITIAL_REM_BASIS,
 };
 pub use media::{match_media, DisplayMode, Env};
 pub use keyframes::{
@@ -63,6 +64,26 @@ const STATE_FOCUS: u8 = 1;
 const STATE_FOCUS_VISIBLE: u8 = 2;
 const STATE_HOVER: u8 = 4;
 const STATE_ACTIVE: u8 = 8;
+
+/// How many rungs the ladder has above the base state — the width of the
+/// per-rung custom-property maps in [`Engine::compute_node`].
+const STATE_RUNGS: usize = 4;
+
+/// Which rung a rule's `states` mask lands on, or `None` for the base state.
+///
+/// The order mirrors the bucket selection in `compute_node` exactly (a compound
+/// naming several states lands on the strongest one it names), because the two
+/// have to agree: a rung's custom properties must be the ones its own
+/// declarations read.
+fn rung_of(states: u8) -> Option<usize> {
+    match states {
+        0 => None,
+        s if s & STATE_ACTIVE != 0 => Some(0),
+        s if s & STATE_HOVER != 0 => Some(1),
+        s if s & STATE_FOCUS_VISIBLE != 0 => Some(2),
+        _ => Some(3),
+    }
+}
 
 /// The folded cascade result for one node — exactly the shape gpui's
 /// interactivity ladder consumes, plus the `transition` list the animator
@@ -720,12 +741,38 @@ impl Engine {
         // declarations, and cloning two `String`s each per element is 16 K
         // allocations per restyle on a 200-element page for values nobody
         // mutates.
+        //
+        // A custom property declared inside a STATE rule (`:hover`, `:focus`,
+        // `:focus-visible`, `:active`) belongs to that state and to no other.
+        // Folding all four rungs into one flat map — which is what this did
+        // before m18 — is not a rounding error, it is visibly wrong on any
+        // Tailwind page, because Tailwind builds `ring` and `shadow` out of
+        // custom properties and reads them back from a BASE-state declaration:
+        //
+        //     .focus-visible\:ring-2:focus-visible { --tw-ring-shadow: <a red ring>; … }
+        //     .shadow-none                         { box-shadow: var(--tw-ring-offset-shadow),
+        //                                                        var(--tw-ring-shadow),
+        //                                                        var(--tw-shadow) }
+        //
+        // With one flat map the focus ring is permanently lit: every
+        // shadcn tab, button and input paints its focus ring at rest. (On
+        // apps/meet-probe that was a solid red rectangle behind the active tab
+        // — gpui paints a shadow as a filled quad behind a transparent element,
+        // so a 4px-spread ring reads as a fill.)
+        //
+        // So: `own_custom` is the BASE map, and each rung that declares custom
+        // properties of its own gets a map resolved on top of it, used only
+        // when that rung's `var()`-composed declarations are applied.
         let mut own_custom: Vec<&(String, String)> = Vec::new();
+        let mut state_custom: [Vec<&(String, String)>; STATE_RUNGS] = Default::default();
         for important_pass in [false, true] {
             for r in &matched {
                 let declared = if important_pass { &r.important_custom } else { &r.normal_custom };
                 if let Some(list) = declared {
-                    own_custom.extend(list.iter());
+                    match rung_of(r.states) {
+                        None => own_custom.extend(list.iter()),
+                        Some(rung) => state_custom[rung].extend(list.iter()),
+                    }
                 }
             }
         }
@@ -733,6 +780,17 @@ impl Engine {
             own_custom.extend(inline.custom.iter());
         }
         let vars = vars::resolve(parent_vars, &own_custom, env, diagnostics);
+        // Lazily, and only for the rungs that actually declare something: the
+        // resolve is the expensive half of the cascade, and the overwhelming
+        // majority of elements declare nothing on any rung.
+        let state_vars: [Option<Rc<Vars>>; STATE_RUNGS] = std::array::from_fn(|rung| {
+            if state_custom[rung].is_empty() {
+                return None;
+            }
+            let mut combined = own_custom.clone();
+            combined.extend(state_custom[rung].iter().copied());
+            Some(vars::resolve(parent_vars, &combined, env, diagnostics))
+        });
         let t2 = probe.then(std::time::Instant::now);
 
         // ---- 2. the refinements.
@@ -834,17 +892,18 @@ impl Engine {
                 // states (`:hover:focus`) cannot be expressed as a conjunction
                 // in gpui's ladder, so it lands on the strongest rung it names
                 // — `classify_states` already warned about the approximation.
-                let bucket = match r.states {
-                    0 => &mut base,
-                    s if s & STATE_ACTIVE != 0 => {
+                let rung = rung_of(r.states);
+                let bucket = match rung {
+                    None => &mut base,
+                    Some(0) => {
                         any_active = true;
                         &mut active
                     }
-                    s if s & STATE_HOVER != 0 => {
+                    Some(1) => {
                         any_hover = true;
                         &mut hover
                     }
-                    s if s & STATE_FOCUS_VISIBLE != 0 => {
+                    Some(2) => {
                         any_focus_visible = true;
                         &mut focus_visible
                     }
@@ -857,8 +916,17 @@ impl Engine {
                     bucket.refine(refinement);
                 }
                 if let Some(list) = dynamic {
+                    // A rung's `var()`-composed declarations read that rung's
+                    // custom properties (base map + whatever the rung declares
+                    // on top), never another rung's. `hover:shadow-lg` sets
+                    // `--tw-shadow` and reads it back in the same `:hover`
+                    // rule; `focus-visible:ring-2` does the same one rung over,
+                    // and the two must not see each other.
+                    let scope = rung
+                        .and_then(|i| state_vars[i].as_ref())
+                        .unwrap_or(&vars);
                     for (name, raw) in list.iter() {
-                        mapper::apply_dynamic(name, raw, &vars, env, bucket, &mut extras, diagnostics);
+                        mapper::apply_dynamic(name, raw, scope, env, bucket, &mut extras, diagnostics);
                     }
                 }
             }

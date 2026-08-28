@@ -151,7 +151,7 @@ host_fn!(fn vn_add_scope(g, args) {
 
 host_fn!(fn vn_set_stylesheet(g, args) {
     let css = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    tree::set_engine(vn_css::Engine::compile(&css));
+    tree::set_stylesheet(css);
     // Every node needs a fresh cascade under the new sheet.
     tree::with_tree(|t| t.mark_dirty());
     UNDEF

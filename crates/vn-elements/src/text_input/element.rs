@@ -156,11 +156,16 @@ impl Element for TextElement {
             window,
         );
 
-        let (scroll_left, scroll_top, selection_range, cursor, content_height) =
+        let (scroll_top, selection_range, cursor, content_height) =
             self.state.update(cx, |state, _| {
-                state.set_layout(bounds, lines, line_height, is_placeholder);
+                state.set_layout(
+                    bounds,
+                    lines,
+                    line_height,
+                    is_placeholder,
+                    self.options.text_align,
+                );
                 (
-                    state.scroll_left(),
                     state.scroll_top(),
                     state.selected_range(),
                     state.cursor_offset(),
@@ -168,8 +173,10 @@ impl Element for TextElement {
                 )
             });
 
-        let origin = point(bounds.left() - scroll_left, bounds.top() - scroll_top);
         let state = self.state.read(cx);
+        // `text-align` and the horizontal scroll are one offset — see
+        // `TextInputState::content_left`.
+        let origin = point(state.content_left(bounds.left()), bounds.top() - scroll_top);
         let (selection, caret) = if selection_range.is_empty() || is_placeholder {
             let at = state.position_for_index(cursor);
             let caret = fill(

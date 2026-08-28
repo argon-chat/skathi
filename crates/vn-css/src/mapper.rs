@@ -143,6 +143,49 @@ pub struct Extras {
     /// `Rc<str>` is why [`Extras`] is `Clone` rather than `Copy`; the clone is
     /// a refcount bump and the field is `None` on all but a handful of rules.
     pub content: Option<Rc<str>>,
+    /// `background-clip: text` (or its `-webkit-` spelling).
+    ///
+    /// Not paintable as CSS defines it — gpui rasterises a glyph run in one
+    /// solid colour, so there is nothing to clip a gradient *to*. But leaving
+    /// it unimplemented is worse than a stand-in, because the two utilities
+    /// always travel together:
+    ///
+    /// ```text
+    /// bg-gradient-to-r from-amber-400 … bg-clip-text text-transparent
+    /// ```
+    ///
+    /// and honouring only half of that pair paints the gradient as a filled BOX
+    /// with invisible text on it. On apps/meet-probe's header the β superscript
+    /// came out as a solid yellow bar under the wordmark.
+    ///
+    /// So `crate::render` takes the pair as one gesture: the background is
+    /// dropped and its representative colour ([`Extras::background_key_color`])
+    /// becomes the text colour. The glyphs are a flat colour rather than a
+    /// gradient — which is the honest version of the divergence, and reads
+    /// correctly at the size anyone uses this at.
+    pub background_clip_text: Option<bool>,
+    /// The one colour that stands in for this element's background when it has
+    /// to be collapsed to a single value — see [`Extras::background_clip_text`],
+    /// its only consumer. A solid background contributes itself; a gradient
+    /// contributes the midpoint of the two stops gpui kept.
+    pub background_key_color: Option<gpui::Hsla>,
+    /// `filter: blur(<radius>)` — the radius, in px.
+    ///
+    /// gpui still has no post-processing pass over an element's own painted
+    /// output, so this is NOT a general `filter` implementation and the
+    /// advisory for every other filter function stands. It exists because ONE
+    /// shape of blurred element is both extremely common and exactly
+    /// expressible with what gpui already has: a leaf box with a solid
+    /// background and no content — the decorative "glow blob" every modern
+    /// landing page builds its ambient lighting out of
+    /// (`bg-primary/5 rounded-full blur-3xl`).
+    ///
+    /// A Gaussian-blurred solid rounded rect is *precisely* what gpui's drop
+    /// shadow primitive rasterises, down to the corner radii, so for that shape
+    /// the renderer repaints the element as its own shadow and the result is
+    /// not an approximation at all. `crate::render` decides; anything with
+    /// children, text or a gradient keeps the advisory and stays sharp.
+    pub blur: Option<f32>,
 }
 
 /// CSS `text-transform`, applied to the string before it reaches the shaper.
@@ -254,6 +297,15 @@ impl Extras {
         }
         if other.content.is_some() {
             self.content = other.content.clone();
+        }
+        if other.blur.is_some() {
+            self.blur = other.blur;
+        }
+        if other.background_clip_text.is_some() {
+            self.background_clip_text = other.background_clip_text;
+        }
+        if other.background_key_color.is_some() {
+            self.background_key_color = other.background_key_color;
         }
     }
 
@@ -684,11 +736,61 @@ fn color(c: &CssColor) -> Option<Hsla> {
     }
 }
 
+thread_local! {
+    /// See [`set_rem_basis`].
+    static REM_BASIS: std::cell::Cell<f32> = const { std::cell::Cell::new(INITIAL_REM_BASIS) };
+}
+
+/// A browser's initial root font size, and the basis every sheet compiles
+/// against until an app says otherwise.
+pub const INITIAL_REM_BASIS: f32 = 16.0;
+
+/// The px value of `1rem`.
+pub fn rem_basis() -> f32 {
+    REM_BASIS.with(|c| c.get())
+}
+
+/// Sets the px value of `1rem`, returning whether it actually changed.
+///
+/// **A sheet already compiled against the old basis does not move**: `rem` is
+/// flattened to px HERE, at parse time, because gpui's style fields are mostly
+/// `Pixels` and threading a `Rems` through every one of them is a different
+/// project. So the caller's contract is that a `true` return means "recompile
+/// the stylesheet" — `vn_tree::tree::restyle_all` is the only caller and does
+/// exactly that.
+///
+/// The basis is the ROOT element's computed `font-size`, which is what CSS says
+/// `rem` means. It is not a curiosity: `@argon/theme` sets
+/// `documentElement.style.fontSize = "14px"`, so every Tailwind spacing,
+/// width and type step on apps/meet-probe is 12.5 % smaller in a browser than
+/// a 16px basis produces — the page laid out 14 % too large end to end and its
+/// footer fell off the bottom of the window.
+///
+/// Values outside a sane range are refused rather than clamped: a bad basis
+/// would silently rescale the whole app, and "the root has no font-size yet"
+/// (0.0) is a normal state during boot.
+pub fn set_rem_basis(px: f32) -> bool {
+    if !(px.is_finite() && (1.0..=200.0).contains(&px)) {
+        return false;
+    }
+    REM_BASIS.with(|c| {
+        if (c.get() - px).abs() < f32::EPSILON {
+            false
+        } else {
+            c.set(px);
+            true
+        }
+    })
+}
+
 fn length_value_px(v: &LengthValue) -> Option<f32> {
     match v {
         LengthValue::Px(v) => Some(*v),
-        LengthValue::Rem(v) => Some(v * 16.0),
-        LengthValue::Em(v) => Some(v * 16.0), // v1: no parent font-size context
+        LengthValue::Rem(v) => Some(v * rem_basis()),
+        // v1: no parent font-size context, so `em` reads as `rem`. Wrong
+        // wherever a font-size is nested, right at the top level — and closer
+        // than a hardcoded 16 was the moment an app sets a root font size.
+        LengthValue::Em(v) => Some(v * rem_basis()),
         _ => None,
     }
 }
@@ -950,14 +1052,16 @@ fn outline_mut(r: &mut StyleRefinement) -> &mut gpui::Outline {
     })
 }
 
-/// `linear-gradient()` → gpui's two-stop `Background`.
+/// `linear-gradient()` → gpui's two-stop `Background`, plus the single colour
+/// that stands in for it when only one is available
+/// ([`Extras::background_key_color`]).
 ///
 /// Everything else in the CSS image grammar is refused HERE rather than being
 /// approximated, and the caller names the alternative in the advisory.
 fn gradient_background(
     img: &lightningcss::values::image::Image<'_>,
     diagnostics: &mut Vec<String>,
-) -> Option<gpui::Background> {
+) -> Option<(gpui::Background, Hsla)> {
     use lightningcss::values::gradient::{Gradient, GradientItem, LineDirection};
     use lightningcss::values::image::Image;
     use lightningcss::values::position::{HorizontalPositionKeyword as H, VerticalPositionKeyword as V};
@@ -1088,10 +1192,28 @@ fn gradient_background(
         unresolved_color(diagnostics, "linear-gradient() colour stop");
         return None;
     };
-    Some(gpui::linear_gradient(
-        angle,
-        gpui::linear_color_stop(from, position(first, 0.0)),
-        gpui::linear_color_stop(to, position(last, 1.0)),
+    // The midpoint, in the same straight-alpha HSL the rest of the mapper works
+    // in. Hue is averaged the short way round so amber→yellow→amber does not
+    // come back cyan.
+    let mut hue_delta = to.h - from.h;
+    if hue_delta > 0.5 {
+        hue_delta -= 1.0;
+    } else if hue_delta < -0.5 {
+        hue_delta += 1.0;
+    }
+    let key = Hsla {
+        h: (from.h + hue_delta * 0.5).rem_euclid(1.0),
+        s: (from.s + to.s) * 0.5,
+        l: (from.l + to.l) * 0.5,
+        a: (from.a + to.a) * 0.5,
+    };
+    Some((
+        gpui::linear_gradient(
+            angle,
+            gpui::linear_color_stop(from, position(first, 0.0)),
+            gpui::linear_color_stop(to, position(last, 1.0)),
+        ),
+        key,
     ))
 }
 
@@ -1210,7 +1332,7 @@ fn single_length_px(value: &lightningcss::properties::custom::TokenList<'_>) -> 
                 }
                 found = match unit.as_ref() {
                     "px" => Some(*value),
-                    "rem" | "em" => Some(*value * 16.0),
+                    "rem" | "em" => Some(*value * rem_basis()),
                     _ => return None,
                 };
             }
@@ -1811,7 +1933,10 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             None => unresolved_color(diagnostics, "color"),
         },
         BackgroundColor(c) => match color(c) {
-            Some(c) => r.background = Some(gpui::Fill::Color(c.into())),
+            Some(c) => {
+                r.background = Some(gpui::Fill::Color(c.into()));
+                x.background_key_color = Some(c);
+            }
             None => unresolved_color(diagnostics, "background-color"),
         },
         Background(layers) => {
@@ -1822,6 +1947,7 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             if let Some(last) = layers.last() {
                 if let Some(c) = color(&last.color) {
                     r.background = Some(gpui::Fill::Color(c.into()));
+                    x.background_key_color = Some(c);
                 }
             }
             // Topmost image layer first — CSS paints layer 0 on top.
@@ -1838,12 +1964,13 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                      one fill, so a stack of layers collapses to the first",
                 );
             }
-            if let Some(bg) = layers
+            if let Some((bg, key)) = layers
                 .iter()
                 .find(|l| !matches!(l.image, lightningcss::values::image::Image::None))
                 .and_then(|l| gradient_background(&l.image, diagnostics))
             {
                 r.background = Some(gpui::Fill::Color(bg));
+                x.background_key_color = Some(key);
             }
         }
         BackgroundImage(images) => {
@@ -1854,8 +1981,11 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                      one fill, so a stack of layers collapses to the first",
                 );
             }
-            if let Some(bg) = images.first().and_then(|i| gradient_background(i, diagnostics)) {
+            if let Some((bg, key)) =
+                images.first().and_then(|i| gradient_background(i, diagnostics))
+            {
                 r.background = Some(gpui::Fill::Color(bg));
+                x.background_key_color = Some(key);
             }
         }
         // The geometry properties of a background image. Nothing here has an
@@ -1873,11 +2003,15 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         BackgroundClip(v, _) => {
             use lightningcss::properties::background::BackgroundClip as BC;
             if matches!(v.first(), Some(BC::Text)) {
+                x.background_clip_text = Some(true);
                 warn_once(
                     diagnostics,
-                    "`background-clip: text` is not painted (v1) — gpui rasterises glyphs with a \
-                     solid colour, so a gradient cannot be clipped to them. The element keeps its \
-                     background; set `color` as well so the text stays legible",
+                    "`background-clip: text` paints the text in ONE colour (v1) — gpui rasterises \
+                     a glyph run in a solid colour, so a gradient cannot be clipped to the \
+                     glyphs. Rather than paint the gradient as a filled box behind invisible \
+                     text (which is what `bg-clip-text text-transparent` would otherwise \
+                     produce), the background is dropped and its representative colour — a \
+                     gradient's midpoint — becomes the text colour",
                 );
             } else {
                 warn_once(
@@ -2361,10 +2495,7 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 r.mouse_cursor = Some(m);
             }
         }
-        Filter(..) => warn_once(
-            diagnostics,
-            "`filter` is not applied (v1) — gpui filters the BACKDROP \n             (`backdrop-filter: blur()` is live) but has no post-processing pass over an \n             element's own painted output. `opacity` renders, and a `drop-shadow()` is \n             expressible as a `box-shadow`",
-        ),
+        Filter(list, _) => apply_filter(list, x, diagnostics),
         // `backdrop-filter` — `blur()` is the one filter function the renderer
         // implements (gpui `BackdropBlurRect`, D3D11 Dual-Kawase pyramid).
         // Everything else in the list is advised rather than silently dropped.
@@ -2681,6 +2812,27 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 r.box_shadow = Some(Vec::new());
                 return;
             }
+            // …and one that is not a failure either: `inherit` is a CSS-wide
+            // keyword, and lightningcss only gives it a typed value for
+            // `PropertyId::All` — every other `x: inherit` parses as Unparsed
+            // and lands here, `var()` or no `var()`.
+            //
+            // In vue-native it is also a NO-OP, which is the part worth stating.
+            // vn-css folds no inherited property: the inherited ones are all
+            // text properties, and gpui's `TextStyleRefinement` already cascades
+            // down the element tree at paint time. So "take the parent's value"
+            // is what NOT writing the property does — the declaration is
+            // honoured exactly by ignoring it.
+            //
+            // Tailwind's preflight alone ships nine of these
+            // (`button, input, … { font-family: inherit; font-weight: inherit;
+            // letter-spacing: inherit; color: inherit; … }`), so without this
+            // every app reports five or six "still unresolved after var()"
+            // advisories that name a property nothing is wrong with — noise
+            // that buries the real ones.
+            if matches!(single_ident_raw(&u.value), Some("inherit")) {
+                return;
+            }
             once(
                 diagnostics,
                 format!(
@@ -2932,6 +3084,73 @@ fn apply_backdrop_filter(
             diagnostics,
             format!(
                 "backdrop-filter: only blur() is implemented (v1) — dropped {}",
+                others.join(", ")
+            ),
+        );
+    }
+}
+
+/// `filter` → [`Extras::blur`], for the one filter function that has a shape
+/// gpui can draw exactly.
+///
+/// gpui has no post-processing pass over an element's own painted output, so
+/// `filter` as a general property remains unimplemented and every function
+/// other than `blur()` is still advised away. `blur()` alone is recorded,
+/// because a Gaussian-blurred solid rounded rect is exactly gpui's drop-shadow
+/// primitive — see [`Extras::blur`] and `vn_tree::render` for the shape test
+/// that decides whether the recording is honoured or advised.
+///
+/// `filter: none` records `Some(0.0)` rather than `None`, for the same reason
+/// `backdrop-filter: none` maps to a 0px radius: "declared, and it is nothing"
+/// has to beat an earlier rule in the cascade, which `None` ("undeclared")
+/// would not.
+fn apply_filter(
+    list: &lightningcss::properties::effects::FilterList,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
+    use lightningcss::properties::effects::{Filter, FilterList};
+
+    let filters = match list {
+        FilterList::None => {
+            x.blur = Some(0.0);
+            return;
+        }
+        FilterList::Filters(filters) => filters,
+    };
+
+    let mut blur_radius = None;
+    let mut others = Vec::new();
+    for filter in filters.iter() {
+        match filter {
+            Filter::Blur(length) => match css_length_px(length) {
+                Some(radius) if blur_radius.is_none() => blur_radius = Some(radius.max(0.0)),
+                Some(_) => others.push("a second blur()"),
+                None => others.push("blur() with a non-absolute length"),
+            },
+            Filter::Brightness(_) => others.push("brightness()"),
+            Filter::Contrast(_) => others.push("contrast()"),
+            Filter::Grayscale(_) => others.push("grayscale()"),
+            Filter::HueRotate(_) => others.push("hue-rotate()"),
+            Filter::Invert(_) => others.push("invert()"),
+            Filter::Opacity(_) => others.push("opacity()"),
+            Filter::Saturate(_) => others.push("saturate()"),
+            Filter::Sepia(_) => others.push("sepia()"),
+            Filter::DropShadow(_) => others.push("drop-shadow()"),
+            Filter::Url(_) => others.push("url() SVG filters"),
+        }
+    }
+
+    x.blur = Some(blur_radius.unwrap_or(0.0));
+
+    if !others.is_empty() {
+        once(
+            diagnostics,
+            format!(
+                "`filter`: gpui has no post-processing pass over an element's own painted \
+                 output, so only blur() is implemented (and only on a leaf box with a solid \
+                 background — see the render-side advisory) — dropped {}. `opacity` renders \
+                 on its own, and a drop-shadow() is expressible as a `box-shadow`",
                 others.join(", ")
             ),
         );
@@ -3687,6 +3906,83 @@ mod tests {
         assert_eq!(TT::None.apply("Sign in"), None);
     }
 
+    // ---- filter: blur() / background-clip: text / the rem basis ----------
+
+    #[test]
+    fn a_lone_blur_is_recorded_and_the_other_filters_are_still_advised() {
+        let (x, d) = extras("filter: blur(64px)");
+        assert_eq!(x.blur, Some(64.0));
+        assert!(d.is_empty(), "a lone blur() is implemented, not advised: {d:?}");
+
+        // `filter: none` is a VALUE, not "undeclared" — it has to beat an
+        // earlier rule's blur in the cascade.
+        assert_eq!(extras("filter: none").0.blur, Some(0.0));
+
+        // Tailwind emits the whole chain; every slot but `--tw-blur` substitutes
+        // to nothing, so this is what actually reaches the mapper.
+        assert_eq!(extras("filter: blur(8px)  ").0.blur, Some(8.0));
+
+        let (x, d) = extras("filter: blur(4px) grayscale(1)");
+        assert_eq!(x.blur, Some(4.0), "the blur still lands");
+        assert!(
+            d.iter().any(|m| m.contains("grayscale()")),
+            "and the companion that cannot be drawn is named: {d:?}"
+        );
+    }
+
+    #[test]
+    fn background_clip_text_records_the_colour_to_paint_the_glyphs_in() {
+        let (x, _) = extras(
+            "background-image: linear-gradient(to right, #fbbf24, #eab308); \
+             background-clip: text; color: transparent",
+        );
+        assert_eq!(x.background_clip_text, Some(true));
+        // The midpoint of the two stops, which is what the renderer paints the
+        // text in. Both are saturated ambers, so the midpoint is one too.
+        let key = x.background_key_color.expect("a gradient contributes a key colour");
+        assert!(key.s > 0.8 && key.l > 0.4 && key.l < 0.7, "{key:?}");
+        assert!(key.h < 0.15, "an amber ramp must not average to a cold hue: {key:?}");
+
+        // A solid background contributes itself.
+        let (x, _) = extras("background-color: #ff0000; -webkit-background-clip: text");
+        assert_eq!(x.background_clip_text, Some(true));
+        assert_eq!(x.background_key_color.map(|c| c.h), Some(0.0));
+    }
+
+    #[test]
+    fn rem_resolves_against_the_root_font_size() {
+        assert_eq!(rem_basis(), INITIAL_REM_BASIS);
+        assert_eq!(clean("width: 32rem").size.width, Some(Length::Definite(px(512.0).into())));
+
+        assert!(set_rem_basis(14.0), "a new basis is a change");
+        assert!(!set_rem_basis(14.0), "the same basis is not");
+        assert_eq!(clean("width: 32rem").size.width, Some(Length::Definite(px(448.0).into())));
+
+        // A basis that would silently rescale the whole app is refused, and
+        // "the root has no font-size yet" is a normal state, not a change.
+        assert!(!set_rem_basis(0.0));
+        assert!(!set_rem_basis(f32::NAN));
+        assert_eq!(rem_basis(), 14.0);
+
+        set_rem_basis(INITIAL_REM_BASIS);
+    }
+
+    /// Tailwind's preflight gives `button`/`input`/`h1`-`h6` nine of these, and
+    /// each used to print an advisory naming a property nothing is wrong with.
+    #[test]
+    fn the_css_wide_inherit_keyword_is_a_no_op_rather_than_an_advisory() {
+        for body in [
+            "letter-spacing: inherit",
+            "font-weight: inherit",
+            "color: inherit",
+            "font-size: inherit",
+            "line-height: inherit",
+        ] {
+            let (_, d) = map(body);
+            assert!(d.is_empty(), "{body:?} should be silent, said {d:?}");
+        }
+    }
+
     // ---- line-clamp ------------------------------------------------------
 
     #[test]
@@ -3713,7 +4009,9 @@ mod tests {
             ("tab-size: 4", "tab-size"),
             ("overflow-wrap: break-word", "overflow-wrap"),
             ("scroll-margin-top: 4rem", "scroll-margin"),
-            ("filter: blur(4px)", "`filter` is not applied"),
+            // `blur()` alone is recorded rather than advised (see `apply_filter`),
+            // so the advisory this sweep is about needs a filter that is not it.
+            ("filter: grayscale(1)", "only blur() is implemented"),
             ("touch-action: none", "touch/overscroll"),
             ("border-collapse: collapse", "table properties"),
             ("clip: rect(0,0,0,0)", "legacy `clip`"),

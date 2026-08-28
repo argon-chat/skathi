@@ -65,6 +65,10 @@ thread_local! {
     static SCROLL_REPORTED: RefCell<HashMap<u32, (f32, f32)>> = RefCell::new(HashMap::new());
     /// One-shot compat advisories already emitted (keyed by message).
     static WARNED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// Every font family the host can actually resolve. Enumerating them is a
+    /// platform call over every installed font, so it happens once — see
+    /// [`advise_missing_font`].
+    static FONT_NAMES: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
     /// Absolute (window-space) layout bounds of every node that was actually
     /// PAINTED in the last frame gpui drew — see [`record_bounds`].
     static BOUNDS: RefCell<HashMap<u32, (f32, f32, f32, f32)>> = RefCell::new(HashMap::new());
@@ -826,7 +830,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         } else {
             // The root inherits nothing: `window-drag`'s initial value is
             // `none`, spelled here as "nobody declared anything".
-            build_node(t, t.root, window, cx, now, None, None)
+            build_node(t, t.root, window, cx, now, None, None, None)
         }
     });
     crate::perf::note_build(span.ms(), BUILT.with(|c| c.get()));
@@ -841,6 +845,7 @@ fn build_node<V: 'static>(
     now: std::time::Instant,
     parent_drag: Option<WindowDrag>,
     parent_case: Option<vn_css::TextTransform>,
+    parent_align: Option<gpui::TextAlign>,
 ) -> AnyElement {
     let Some(node) = t.node(id) else {
         return Empty.into_any_element();
@@ -856,6 +861,15 @@ fn build_node<V: 'static>(
     // A text node has no declarations of its own, so the parent's value is the
     // only one it can have.
     let case = extras.text_transform.or(parent_case);
+    // `text-align` inherits too, and it has to be threaded for the same reason
+    // `text-transform` does — except that this one is needed by LAYOUT, not by
+    // painting: `apply_inline_row` turns a block of mixed inline content into a
+    // flex row, and a flex row is justified, not text-aligned. See there.
+    let align = node
+        .computed
+        .as_ref()
+        .and_then(|cs| cs.base.text.text_align)
+        .or(parent_align);
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
@@ -914,6 +928,10 @@ fn build_node<V: 'static>(
             if let Some(cs) = &node.computed {
                 d = apply_computed_style(d, cs, id, now);
             }
+            advise_missing_font(d.style(), cx);
+            apply_background_clip_text(d.style(), &extras);
+            apply_self_blur(d.style(), t, node, &extras);
+            apply_inline_row(d.style(), t, node, align);
             // "The window IS the root" (see `createApp().mount()`): the root
             // element is vue-native's viewport, so it fills the box the host
             // gives it unless a rule says otherwise. Without this it sizes to
@@ -1092,7 +1110,7 @@ fn build_node<V: 'static>(
                     kids.extend(
                         laid_out_children(t, node)
                             .into_iter()
-                            .map(|c| build_node(t, c, window, cx, now, drag, case)),
+                            .map(|c| build_node(t, c, window, cx, now, drag, case, align)),
                     );
                 }
                 if let Some(pb) = after {
@@ -1101,6 +1119,256 @@ fn build_node<V: 'static>(
                 d.children(kids).into_any_element()
             }
         })),
+    }
+}
+
+/// Says so when a `font-family` names a font the host does not have.
+///
+/// The substitution itself is correct and unavoidable — gpui falls back the way
+/// a browser does — but the SILENCE was not, and this is the one gap on
+/// apps/meet-probe that changed how much text fitted on a line: the app asks
+/// for Inter, ships Inter as a `@font-face` in a stylesheet vue-native never
+/// loads (there is no `@font-face` and no `<link rel=stylesheet>`; the sheet is
+/// the SFC `<style>` blocks plus Tailwind), and gets the platform UI font,
+/// which is wider. The hero subtitle wraps to two lines where a browser fits it
+/// on one, and nothing anywhere said why.
+///
+/// The system font list is enumerated once — it is a platform call over every
+/// installed family — and the advisory is one-shot per family name, so a page
+/// asking for a missing font on 300 nodes reports it once.
+fn advise_missing_font(style: &gpui::StyleRefinement, cx: &mut App) {
+    let Some(family) = style.text.font_family.as_ref() else {
+        return;
+    };
+    let known = FONT_NAMES.with(|c| {
+        let mut cache = c.borrow_mut();
+        cache
+            .get_or_insert_with(|| cx.text_system().all_font_names().into_iter().collect())
+            .contains(family.as_ref())
+    });
+    if known {
+        return;
+    }
+    warn_compat(
+        &format!("missing-font:{family}"),
+        &format!(
+            "no font installed for `font-family: {family}` — gpui is falling back to the \
+             platform default, which has different metrics, so text measures and wraps \
+             differently than in a browser. vue-native loads no `@font-face` and no \
+             `<link rel=stylesheet>`: the stylesheet is the SFC <style> blocks plus Tailwind, \
+             so a webfont the app ships is never fetched. Install the family on the host, or \
+             pick one that is"
+        ),
+    );
+}
+
+/// `background-clip: text` — paint the TEXT, not a box.
+///
+/// The property cannot be implemented as CSS defines it (gpui rasterises a
+/// glyph run in one solid colour, so there is no per-glyph mask to clip a
+/// gradient to), but it also cannot be *ignored*, because it never appears
+/// alone. The Tailwind idiom is three utilities that only make sense together:
+///
+/// ```text
+/// bg-gradient-to-r from-amber-400 via-yellow-500 to-amber-400
+/// bg-clip-text text-transparent
+/// ```
+///
+/// Honouring the gradient and the transparent text while dropping the clip —
+/// which is what "ignore it" means — paints a filled gradient RECTANGLE with
+/// nothing legible on it. That is how apps/meet-probe's tiny β superscript
+/// became a solid yellow bar under the header wordmark, and it is strictly
+/// worse than either doing it properly or not doing it at all.
+///
+/// Taking the three as one gesture instead: drop the background, and give the
+/// text the colour that background stands for
+/// (`vn_css::Extras::background_key_color` — a gradient's midpoint). Flat
+/// instead of ramped, which at the size this idiom is used at is a difference
+/// nobody can see, and the advisory in `vn_css::mapper` says so out loud.
+///
+/// The text colour is overwritten rather than defaulted: `text-transparent` is
+/// an explicit `color: transparent` and would otherwise win.
+fn apply_background_clip_text(style: &mut gpui::StyleRefinement, extras: &vn_css::Extras) {
+    if extras.background_clip_text != Some(true) {
+        return;
+    }
+    if let Some(key) = extras.background_key_color {
+        style.background = Some(gpui::Fill::Color(gpui::transparent_black().into()));
+        style.text.color = Some(key);
+    }
+}
+
+/// The HTML elements whose UA `display` is inline-level.
+///
+/// vue-native has no UA stylesheet — a tag carries no default style, everything
+/// comes from the author's sheet — so the one place the default matters,
+/// [`apply_inline_row`], carries the list itself. It is deliberately the
+/// *text-level semantics* set plus the replaced/inline-block elements that
+/// appear inside a sentence, and deliberately NOT `div`, `p`, `h1`-`h6`, `ul`,
+/// `li`, `section`, … : a block child of a block genuinely does start a new
+/// line, and that is the case this must not touch.
+const INLINE_LEVEL_TAGS: &[&str] = &[
+    "a", "abbr", "b", "bdi", "bdo", "br", "button", "cite", "code", "data", "dfn", "em", "i",
+    "img", "input", "kbd", "label", "mark", "output", "q", "rp", "rt", "ruby", "s", "samp",
+    "select", "small", "span", "strong", "sub", "sup", "svg", "textarea", "time", "u", "var",
+    "wbr",
+];
+
+/// Mixed inline content — a text node next to a `<span>` — laid out as one line
+/// instead of a stack.
+///
+/// **This is the closest thing vue-native has to an inline formatting context,
+/// and it is worth being precise about what it is not.** taffy models block,
+/// flex and grid; it has no line box, so `display: inline` maps to its
+/// block-level equivalent (`vn_css::mapper` says so, with an advisory) and a
+/// block container lays every child out on its own row. For a container whose
+/// children are ALL elements that is usually invisible, because the author
+/// wrote `flex` themselves. For a container that mixes a text node with an
+/// inline element it is not invisible at all — it is a line break in the middle
+/// of a sentence:
+///
+/// ```text
+/// <h1>Argon <span class="text-primary">Meet</span></h1>
+/// <span>Argon Meet <sup>β</sup></span>
+/// ```
+///
+/// rendered as "Argon" over "Meet", and as a β on a line of its own under the
+/// wordmark. Both are on apps/meet-probe's landing page; both are the first
+/// thing anyone notices next to a browser.
+///
+/// So: when a block container's children are exactly that shape — at least one
+/// text node, at least one element, and every element inline-level — it becomes
+/// a wrapping, baseline-aligned flex row, which is what an inline formatting
+/// context degrades to when the line box is the one thing you do not have.
+/// Text that overflows still wraps *inside* its own run rather than across the
+/// element boundary, so a long paragraph with a `<strong>` in the middle breaks
+/// in the wrong place; that divergence is real, and much smaller than the one
+/// it replaces.
+///
+/// `text-align` has to be re-expressed as `justify-content`, because a flex row
+/// is justified and a flex item is sized to its content — without it every
+/// centred heading on the page would go flush left. It is the inherited value
+/// that matters (`text-center` is almost always on an ancestor, not on the
+/// element itself), which is why `build_node` threads it down.
+fn apply_inline_row(
+    style: &mut gpui::StyleRefinement,
+    t: &Tree,
+    node: &crate::tree::Node,
+    align: Option<gpui::TextAlign>,
+) {
+    // An author-declared display is authority: `display: flex` on a paragraph
+    // means flex, and `display: grid` means grid.
+    if !matches!(style.display, None | Some(gpui::Display::Block)) {
+        return;
+    }
+    let kids = laid_out_children(t, node);
+    if kids.len() < 2 {
+        return;
+    }
+    let mut has_text = false;
+    let mut has_element = false;
+    for &child in &kids {
+        let Some(kid) = t.node(child) else { return };
+        match kid.kind {
+            Kind::Text => has_text = true,
+            Kind::Element => {
+                if !INLINE_LEVEL_TAGS.contains(&t.name(kid.tag)) {
+                    return;
+                }
+                // …and the author can still opt a `<span>` out of the run.
+                let declared = kid.computed.as_ref().and_then(|cs| cs.base.display);
+                if matches!(declared, Some(gpui::Display::Block) | Some(gpui::Display::Grid)) {
+                    return;
+                }
+                has_element = true;
+            }
+            Kind::Anchor => {}
+        }
+    }
+    if !(has_text && has_element) {
+        return;
+    }
+    style.display = Some(gpui::Display::Flex);
+    style.flex_direction = Some(gpui::FlexDirection::Row);
+    style.flex_wrap = Some(gpui::FlexWrap::Wrap);
+    style.align_items.get_or_insert(gpui::AlignItems::Baseline);
+    if style.justify_content.is_none() {
+        style.justify_content = match align {
+            Some(gpui::TextAlign::Center) => Some(gpui::JustifyContent::Center),
+            Some(gpui::TextAlign::Right) => Some(gpui::JustifyContent::End),
+            _ => None,
+        };
+    }
+}
+
+/// `filter: blur(<r>)` on a leaf box with a solid background: repaint the box
+/// as its own drop shadow.
+///
+/// gpui has no post-processing pass over an element's painted output, so
+/// `filter` in general is still unimplemented (`vn_css::mapper::apply_filter`
+/// advises for every other function). This one shape is different, and it is
+/// worth the special case twice over:
+///
+/// * it is the whole visual budget of a modern landing page's background — the
+///   ambient "glow blob" (`absolute w-[40rem] h-[40rem] bg-primary/5
+///   rounded-full blur-3xl`), which without a blur paints as a hard-edged disc
+///   several hundred pixels across. On apps/meet-probe that single missing
+///   filter was the loudest difference from the browser by a wide margin: three
+///   flat red discs where the browser has a soft vignette;
+/// * and it is not an approximation. gpui's drop shadow primitive rasterises a
+///   Gaussian-blurred rounded rect with the element's own corner radii, which
+///   is *exactly* what blurring a solid rounded rect produces. The radii carry
+///   over, so `rounded-full` blurs as a circle.
+///
+/// Two details that are easy to get wrong:
+///
+/// * gpui's `blur_radius` is the Gaussian's **sigma** (`shaders.hlsl`:
+///   `gaussian(y, shadow.blur_radius)`), and CSS's `blur(<r>)` is *also*
+///   defined as a sigma, so the radius transfers 1:1 with no conversion.
+/// * a drop shadow is painted with the border box knocked out per CSS, but
+///   gpui's shadow shader only masks for `inset` shadows — a drop shadow is a
+///   filled blurred rect all the way through. That is a divergence everywhere
+///   else; here it is precisely the behaviour we need, and it is why the
+///   element's own background has to be cleared rather than left underneath.
+///
+/// Anything else keeps its sharp edges and gets told why: a blurred box with
+/// children would need the subtree rasterised, and a blurred gradient would
+/// need the gradient rasterised, and neither is expressible without the
+/// post-processing pass that does not exist.
+fn apply_self_blur(
+    style: &mut gpui::StyleRefinement,
+    t: &Tree,
+    node: &crate::tree::Node,
+    extras: &vn_css::Extras,
+) {
+    let Some(radius) = extras.blur.filter(|r| *r > 0.0) else {
+        return;
+    };
+    let is_leaf = node.text.is_empty() && laid_out_children(t, node).is_empty();
+    let solid = style
+        .background
+        .as_ref()
+        .and_then(|fill| fill.color())
+        .and_then(|bg| bg.as_solid());
+    match (is_leaf, solid) {
+        (true, Some(color)) if !color.is_transparent() => {
+            style.background = Some(gpui::Fill::Color(gpui::transparent_black().into()));
+            style.box_shadow = Some(vec![gpui::BoxShadow {
+                color,
+                offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                blur_radius: gpui::px(radius),
+                spread_radius: gpui::px(0.0),
+                inset: false,
+            }]);
+        }
+        _ => warn_compat(
+            "filter-blur-shape",
+            "`filter: blur()` is honoured only on a LEAF box with a solid background colour \
+             (v1) — gpui has no post-processing pass over an element's own painted output, so \
+             the blur is drawn by repainting that box as its own Gaussian drop shadow, which \
+             is exact for a solid rounded rect and impossible for anything with children, text \
+             or a gradient. This element kept its sharp edges",
+        ),
     }
 }
 
@@ -2303,6 +2571,18 @@ fn build_input<V: 'static>(
             || t.prop(id, "readonly").is_some_and(|v| v != "false"),
         tab_index,
         multiline,
+        // `text-align` is an INHERITED property, so an `<input class="text-center">`
+        // carries it on the element itself while an input inside a centred
+        // wrapper gets it from the paint-time text style gpui threads down —
+        // which the widget cannot see at prepaint, when the offset is computed.
+        // Reading the element's own folded value covers the case authors
+        // actually write (the OTP / meeting-code field), and the inherited case
+        // stays left-aligned, as it was before.
+        text_align: node
+            .computed
+            .as_ref()
+            .and_then(|cs| cs.base.text.text_align)
+            .unwrap_or(gpui::TextAlign::Left),
         inherit_color,
         rows: t
             .prop(id, "rows")

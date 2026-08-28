@@ -178,6 +178,11 @@ pub struct TextInputOptions {
     /// text in the framework's fallback colour, which is white-on-white in a
     /// light theme.
     pub inherit_color: bool,
+    /// CSS `text-align`. Applied as a content offset inside the box rather than
+    /// at paint time, so the caret, the selection, click-to-position and the
+    /// IME candidate window all move with the glyphs — see
+    /// `TextInputState::align_offset`.
+    pub text_align: gpui::TextAlign,
     /// `<textarea rows>` — the INTRINSIC height, in lines. As in HTML it is
     /// only a minimum: a CSS `height`/`min-height` still wins and content past
     /// it scrolls. Ignored unless `multiline`.
@@ -205,6 +210,7 @@ impl Default for TextInputOptions {
             disabled: false,
             tab_index: None,
             multiline: false,
+            text_align: gpui::TextAlign::Left,
             rows: DEFAULT_ROWS,
             inherit_color: false,
             input_config: TextInputConfiguration::default(),

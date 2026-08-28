@@ -240,6 +240,19 @@ pub struct TextInputState {
     scroll_left: Pixels,
     /// Vertical scroll offset, always zero for a single-line input.
     scroll_top: Pixels,
+    /// How far right the content sits inside the box because of `text-align`.
+    ///
+    /// Alignment is deliberately NOT applied where the text is painted, but
+    /// here, in the one number that maps content space to window space
+    /// ([`Self::content_left`]). Painting the glyphs somewhere the caret, the
+    /// selection quads, the IME candidate window and click-to-position do not
+    /// know about is how a centred field ends up with a caret that lands two
+    /// characters away from where the user clicked.
+    ///
+    /// Zero unless the content is narrower than the box: once it overflows, the
+    /// box scrolls and alignment has nothing left to distribute — which is also
+    /// what a browser does.
+    align_offset: Pixels,
 
     blink_anchor: Instant,
     blink_task: Option<Task<()>>,
@@ -308,6 +321,7 @@ impl TextInputState {
             content_width: px(0.0),
             content_height: px(0.0),
             display_is_placeholder: true,
+            align_offset: px(0.0),
             scroll_left: px(0.0),
             scroll_top: px(0.0),
             blink_anchor: cx.background_executor().now(),
@@ -957,6 +971,7 @@ impl TextInputState {
         lines: Vec<LineBox>,
         line_height: Pixels,
         display_is_placeholder: bool,
+        text_align: gpui::TextAlign,
     ) {
         self.content_width = lines
             .iter()
@@ -968,7 +983,24 @@ impl TextInputState {
         self.last_bounds = Some(bounds);
         self.line_height = line_height;
         self.display_is_placeholder = display_is_placeholder;
+        // Room to distribute, measured on the WIDEST line so a multi-line
+        // textarea's block stays coherent. `CARET_WIDTH` is reserved for the
+        // same reason `clamp_scroll` reserves it: a caret at the end of a
+        // right-aligned field must still have somewhere to sit.
+        let slack = (bounds.size.width - self.content_width - CARET_WIDTH).max(px(0.0));
+        self.align_offset = match text_align {
+            gpui::TextAlign::Left => px(0.0),
+            gpui::TextAlign::Center => slack / 2.0,
+            gpui::TextAlign::Right => slack,
+        };
         self.clamp_scroll(bounds.size);
+    }
+
+    /// Window-space x of content-space x = 0 — the single place `text-align`
+    /// and the horizontal scroll are turned into a position. Everything that
+    /// crosses between the two spaces goes through it.
+    pub(crate) fn content_left(&self, bounds_left: Pixels) -> Pixels {
+        bounds_left - self.scroll_left + self.align_offset
     }
 
     /// Keep the caret inside the viewport, and the viewport inside the content.
@@ -1087,7 +1119,7 @@ impl TextInputState {
             return 0;
         };
         let local = Point::new(
-            position.x - bounds.left() + self.scroll_left,
+            position.x - self.content_left(bounds.left()),
             position.y - bounds.top() + self.scroll_top,
         );
         let row = if self.line_height > px(0.0) {
@@ -1158,7 +1190,7 @@ impl TextInputState {
             return 0;
         };
         self.index_for_position(Point::new(
-            point.x + bounds.left() - self.scroll_left,
+            point.x + self.content_left(bounds.left()),
             point.y + bounds.top() - self.scroll_top,
         ))
     }
@@ -1344,7 +1376,7 @@ impl EntityInputHandler for TextInputState {
         // composition wraps or spans lines the two rows differ, and reporting
         // the start's row would put the IME popup a line too high.
         let top = element_bounds.top() + end.y - self.scroll_top;
-        let left = element_bounds.left() - self.scroll_left;
+        let left = self.content_left(element_bounds.left());
         let (x0, x1) = if start.y == end.y {
             (start.x, end.x.max(start.x + CARET_WIDTH))
         } else {
