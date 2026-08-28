@@ -23,6 +23,7 @@
 
 mod animator;
 mod element;
+mod has;
 mod keyframes;
 mod mapper;
 mod media;
@@ -33,6 +34,7 @@ mod vars;
 use std::rc::Rc;
 
 use gpui::{Refineable, StyleRefinement};
+use lightningcss::declaration::DeclarationBlock;
 use lightningcss::rules::CssRule;
 use lightningcss::selector::{PseudoClass, Selector};
 use lightningcss::stylesheet::{ParserOptions, StyleSheet};
@@ -44,8 +46,9 @@ pub use animator::{AnimEvent, AnimEventKind, Animator};
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
-    set_rem_basis, set_viewport_basis, uses_viewport_units, viewport_basis, Decls, Extras,
-    InlineStyle, ObjectFit, SvgPaint, TextTransform, WindowControl, WindowDrag,
+    set_rem_basis, set_viewport_basis, uses_viewport_units, viewport_basis, BackgroundLayer,
+    CurrentColorTargets, Decls, Extras, InlineStyle, ListMarker, ObjectFit, SvgPaint, TextTransform,
+    TileLength, WindowControl, WindowDrag,
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use media::{match_media, DisplayMode, Env};
@@ -65,10 +68,14 @@ const STATE_FOCUS: u8 = 1;
 const STATE_FOCUS_VISIBLE: u8 = 2;
 const STATE_HOVER: u8 = 4;
 const STATE_ACTIVE: u8 = 8;
+/// `:focus-within` — gpui's `.in_focus()` rung, which is focus anywhere in the
+/// element's own focus subtree. Weakest of the focus states, as in gpui's
+/// application order.
+const STATE_FOCUS_WITHIN: u8 = 16;
 
 /// How many rungs the ladder has above the base state — the width of the
 /// per-rung custom-property maps in [`Engine::compute_node`].
-const STATE_RUNGS: usize = 4;
+const STATE_RUNGS: usize = 5;
 
 /// Which rung a rule's `states` mask lands on, or `None` for the base state.
 ///
@@ -82,7 +89,8 @@ fn rung_of(states: u8) -> Option<usize> {
         s if s & STATE_ACTIVE != 0 => Some(0),
         s if s & STATE_HOVER != 0 => Some(1),
         s if s & STATE_FOCUS_VISIBLE != 0 => Some(2),
-        _ => Some(3),
+        s if s & STATE_FOCUS != 0 => Some(3),
+        _ => Some(4),
     }
 }
 
@@ -104,6 +112,11 @@ pub struct ComputedStates {
     /// `:focus-visible` — gpui's `.focus_visible()` rung (focused *and* the
     /// last input was a keystroke), the real browser semantics.
     pub focus_visible: Option<Rc<StyleRefinement>>,
+    /// `:focus-within` — gpui's `.in_focus()` rung: focus anywhere inside this
+    /// element's focus subtree, which is what the CSS pseudo-class means. Like
+    /// `:focus`, an element that has one MUST be given a tracked focus handle
+    /// by the renderer for gpui to have anything to key it on.
+    pub focus_within: Option<Rc<StyleRefinement>>,
     /// `.group:hover .this` — what this element looks like while an ANCESTOR is
     /// hovered, and which ancestor that is (its [`MatchDom::key`]).
     ///
@@ -135,6 +148,11 @@ pub struct ComputedStates {
     /// placeholder string with. Only `color` and the font properties can reach
     /// the widget; a box property declared here has nothing to apply to.
     pub placeholder: Option<Rc<StyleRefinement>>,
+    /// `::selection` — the highlight the text-input widget paints behind a
+    /// selected range. Only `background-color` reaches the widget: gpui's
+    /// selection is a quad behind the glyphs, and the glyphs keep the colour
+    /// the field draws them in.
+    pub selection: Option<Rc<StyleRefinement>>,
     /// The element's resolved custom properties: what it inherited from its
     /// parent, overridden by what it declared. Children read this one, which is
     /// why the restyle pass must walk in document order.
@@ -142,6 +160,16 @@ pub struct ComputedStates {
     /// Shared with the parent by `Rc` when the element declares none of its own
     /// — so the `PartialEq` above stays O(1) for almost every node.
     pub vars: Rc<Vars>,
+    /// The element's effective `color`: its own declaration, or the value
+    /// threaded down from its parent.
+    ///
+    /// vn-css folds no inherited text property — gpui's `TextStyleRefinement`
+    /// cascades at paint time and "take the parent's value" is what not writing
+    /// the field means — so this exists for exactly one job: `currentColor`,
+    /// which is a computed value the cascade has to produce even though nothing
+    /// else needs the fold. `vn_tree::tree::restyle_with` threads it down the
+    /// document-order walk, the same way it threads `pointer-events`.
+    pub color: Option<gpui::Hsla>,
 }
 
 /// Which generated box a rule targets.
@@ -153,6 +181,11 @@ pub enum PseudoElement {
     /// the native text-input widget paints, so it folds into its own
     /// refinement and the renderer reads `text.color` off it.
     Placeholder,
+    /// `::selection`. Also not a generated box — it styles the highlight the
+    /// native text-input widget paints behind a selected range, which is the
+    /// one selection that exists here (gpui paints ordinary text; only the
+    /// field has a selection model). The renderer reads `background` off it.
+    Selection,
 }
 
 /// A `::before` / `::after` generated box, folded out of the cascade.
@@ -181,7 +214,7 @@ impl ComputedStates {
     /// True when the renderer has to give this node a focus handle for gpui to
     /// have anything to hang the focus rungs on.
     pub fn needs_focus_handle(&self) -> bool {
-        self.focus.is_some() || self.focus_visible.is_some()
+        self.focus.is_some() || self.focus_visible.is_some() || self.focus_within.is_some()
     }
 }
 
@@ -215,6 +248,10 @@ struct RuleEntry {
     /// Index into [`Engine::conditions`] — the `@media` block this rule came
     /// from, if any.
     condition: Option<u32>,
+    /// The advisories this rule's declarations produced, emitted the first time
+    /// the rule actually MATCHES an element rather than when the sheet was
+    /// compiled — see [`mapper::Converted::diagnostics`].
+    diagnostics: Option<Rc<Vec<String>>>,
 }
 
 /// A compiled stylesheet: rules with matchable selectors, pre-converted
@@ -544,12 +581,24 @@ impl Engine {
                     self.collect_keyframes(kf);
                     continue;
                 }
+                // `@supports` is a feature TEST, and the honest answer to it is
+                // whatever vn-css actually does with the declaration in the
+                // prelude. A block guarded on something unimplemented is
+                // supposed to be skipped — a browser skips it too when the
+                // feature is missing — so evaluating the condition is both the
+                // implementation and the reason there is nothing to advise.
+                CssRule::Supports(sup) => {
+                    if supports_condition(&sup.condition) {
+                        self.collect(&sup.rules.0, condition, order);
+                    }
+                    continue;
+                }
                 other => {
                     at_rule_ignored(other, &mut self.diagnostics);
                     continue;
                 }
             };
-            let converted = mapper::convert_block(&style.declarations, &mut self.diagnostics);
+            let converted = mapper::convert_block(&style.declarations);
             let declares_transition =
                 converted.normal_transitions.is_some() || converted.important_transitions.is_some();
             let declares_extras = {
@@ -558,6 +607,33 @@ impl Engine {
                 e
             };
             for sel in &style.selectors.0 {
+                // `:has()` is REWRITTEN before anything else looks at the
+                // selector: parcel's matcher panics on `Component::Has`, so the
+                // relational question is moved onto a custom pseudo-class the
+                // matcher does route to the element (see `crate::has`). The
+                // rewrite re-parses, so from here down this is an ordinary
+                // selector with an ordinary pseudo-class in it.
+                let rewritten;
+                let sel = if has::present(&sel_text(sel)) {
+                    match has::rewrite(&sel_text(sel)).and_then(|text| reparse_selector(&text)) {
+                        Some(s) => {
+                            rewritten = s;
+                            rewritten
+                        }
+                        None => {
+                            mapper::once(
+                                &mut self.diagnostics,
+                                format!(
+                                    "`:has()` with an argument that cannot be compiled — rules                                      using it were dropped (first seen in `{}`)",
+                                    sel_text(sel)
+                                ),
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    sel
+                };
                 let Some((states, ancestor)) = classify_states(sel, &mut self.diagnostics) else {
                     continue;
                 };
@@ -582,31 +658,45 @@ impl Engine {
                     ));
                     continue;
                 }
-                // The `Extras` have no state ladder to install into — gpui's
-                // `img()` carries ONE `ObjectFit` for the element, and the
-                // window hit test reads an already-PAINTED frame, so a
-                // state-dependent drag region would be a hit-test/paint race
-                // (docs/WINDOWING.md D-16). So a state rule's extras apply all
-                // the time; say so rather than let them look conditional.
-                if (states != 0 || ancestor.is_some()) && !declares_extras.is_empty() {
-                    self.diagnostics.push(format!(
-                        "{} on a state selector applies unconditionally (v1) — these values are \
-                         read from the base state only, not from gpui's state ladder: {}",
-                        extras_names(&declares_extras),
-                        sel_text(sel)
-                    ));
-                }
-                if (states != 0 || ancestor.is_some()) && declares_transition {
-                    // State refinements are installed into gpui's own state
-                    // ladder and never pass through our animator, so a
-                    // `transition` declared on a state rule cannot run. Declare
-                    // it on the base rule instead (that is also what authors
-                    // mean 99% of the time).
-                    self.diagnostics.push(format!(
-                        "transition declared on a state selector is ignored (v1) — move it to the \
-                         base rule: {}",
-                        sel_text(sel)
-                    ));
+                // Both of the advisories below are about this rule's
+                // DECLARATIONS, so they ride with them and are said when the
+                // rule MATCHES an element — a Tailwind sheet carries a
+                // `focus:z-10` utility whether or not anything is focusable.
+                let mut rule_diagnostics: Vec<String> =
+                    converted.diagnostics.as_deref().cloned().unwrap_or_default();
+                if states != 0 || ancestor.is_some() {
+                    // The `Extras` have no state ladder to install into — gpui's
+                    // `img()` carries ONE `ObjectFit` for the element, and the
+                    // window hit test reads an already-PAINTED frame, so a
+                    // state-dependent drag region would be a hit-test/paint race
+                    // (docs/WINDOWING.md D-16). So a state rule's extras apply
+                    // all the time; say so rather than let them look conditional.
+                    //
+                    // Only the fields an author actually WROTE count. Several
+                    // `Extras` are derived rather than declared —
+                    // `background_key_color` is computed from whatever
+                    // `background` a rule sets — so guarding on "any extra at
+                    // all" reported every `hover:bg-*` utility in the sheet,
+                    // with an empty list of names because there was nothing to
+                    // name.
+                    let names = extras_names(&declares_extras);
+                    if !names.is_empty() {
+                        rule_diagnostics.push(format!(
+                            "{names} on a state selector applies unconditionally (v1) — these                              values are read from the base state only, not from gpui's state                              ladder: {}",
+                            sel_text(sel)
+                        ));
+                    }
+                    if declares_transition {
+                        // State refinements are installed into gpui's own state
+                        // ladder and never pass through our animator, so a
+                        // `transition` declared on a state rule cannot run.
+                        // Declare it on the base rule instead (that is also what
+                        // authors mean 99% of the time).
+                        rule_diagnostics.push(format!(
+                            "transition declared on a state selector is ignored (v1) — move it                              to the base rule: {}",
+                            sel_text(sel)
+                        ));
+                    }
                 }
                 self.sibling_combinators |= has_sibling_combinator(sel);
                 self.group_states |= ancestor.is_some();
@@ -634,6 +724,8 @@ impl Engine {
                     ancestor,
                     pseudo,
                     condition,
+                    diagnostics: (!rule_diagnostics.is_empty())
+                        .then(|| Rc::new(std::mem::take(&mut rule_diagnostics))),
                 });
                 *order += 1;
             }
@@ -707,6 +799,7 @@ impl Engine {
             node,
             Some(&style),
             &Rc::new(Vars::default()),
+            None,
             env,
             &mut diagnostics,
         )
@@ -724,11 +817,15 @@ impl Engine {
     /// than at sheet-compile time: a `var()` that resolves to nothing, a
     /// reference cycle, a substituted value that does not parse. They are
     /// per-element, so the caller is expected to dedupe before logging.
+    /// `parent_color` is the parent's [`ComputedStates::color`], threaded the
+    /// same way and for the same reason: `currentColor` resolves against the
+    /// element's computed `color`, which is inherited when it declares none.
     pub fn compute_node<D: MatchDom>(
         &self,
         node: D,
         inline: Option<&InlineStyle>,
         parent_vars: &Rc<Vars>,
+        parent_color: Option<gpui::Hsla>,
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
@@ -827,14 +924,27 @@ impl Engine {
         });
         let t2 = probe.then(std::time::Instant::now);
 
+        // A matched rule's declaration advisories are the ones that describe
+        // THIS element, so this is where they are said. `matched` is the set
+        // that survived the media query and the selector, which is exactly the
+        // set whose declarations reach a box.
+        for r in &matched {
+            if let Some(list) = &r.diagnostics {
+                for d in list.iter() {
+                    mapper::once(diagnostics, d.clone());
+                }
+            }
+        }
+
         // ---- 2. the refinements.
         let mut base = StyleRefinement::default();
         let mut hover = StyleRefinement::default();
         let mut active = StyleRefinement::default();
         let mut focus = StyleRefinement::default();
         let mut focus_visible = StyleRefinement::default();
+        let mut focus_within = StyleRefinement::default();
         let (mut any_hover, mut any_active) = (false, false);
-        let (mut any_focus, mut any_focus_visible) = (false, false);
+        let (mut any_focus, mut any_focus_visible, mut any_focus_within) = (false, false, false);
         // `.group:hover .this` — one group per state, because gpui carries one
         // `group_hover` / one `group_active` per element. The key is resolved
         // once per (rule, element) pair and memoised for the pass: a Tailwind
@@ -862,7 +972,9 @@ impl Engine {
         let mut before = (StyleRefinement::default(), Extras::default());
         let mut after = (StyleRefinement::default(), Extras::default());
         let mut placeholder = (StyleRefinement::default(), Extras::default());
+        let mut selection = (StyleRefinement::default(), Extras::default());
         let (mut any_before, mut any_after, mut any_placeholder) = (false, false, false);
+        let mut any_selection = false;
         for important_pass in [false, true] {
             for r in &matched {
                 if let Some(which) = r.pseudo {
@@ -870,6 +982,7 @@ impl Engine {
                         PseudoElement::Before => (&mut before, &mut any_before),
                         PseudoElement::After => (&mut after, &mut any_after),
                         PseudoElement::Placeholder => (&mut placeholder, &mut any_placeholder),
+                        PseudoElement::Selection => (&mut selection, &mut any_selection),
                     };
                     *seen = true;
                     slot.1.refine(if important_pass {
@@ -972,9 +1085,13 @@ impl Engine {
                         any_focus_visible = true;
                         &mut focus_visible
                     }
-                    _ => {
+                    Some(3) => {
                         any_focus = true;
                         &mut focus
+                    }
+                    _ => {
+                        any_focus_within = true;
+                        &mut focus_within
                     }
                 };
                 if let Some(refinement) = refinement {
@@ -1029,12 +1146,57 @@ impl Engine {
             };
             perf::note_node(tested, ms(t0, t1), ms(t1, t2), ms(t2, std::time::Instant::now()));
         }
+        // `currentColor` is the element's computed `color`, so it can only be
+        // substituted now — after the whole cascade has run. Every rung gets
+        // the same value: `color` itself is not in gpui's state ladder, so a
+        // `:hover` rule cannot change what `currentColor` means.
+        let effective_color = base.text.color.or(parent_color);
+        if extras.current_color != mapper::CurrentColorTargets::default() {
+            let value = effective_color.unwrap_or_else(gpui::black);
+            let targets = extras.current_color;
+            for refinement in [
+                Some(&mut base),
+                any_hover.then_some(&mut hover),
+                any_active.then_some(&mut active),
+                any_focus.then_some(&mut focus),
+                any_focus_visible.then_some(&mut focus_visible),
+                any_focus_within.then_some(&mut focus_within),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                mapper::apply_current_color(refinement, targets, value);
+            }
+        }
+        // `text-underline-offset` and `text-decoration-line` are two properties
+        // and, in Tailwind, two classes — `.underline .underline-offset-4` —
+        // so the offset is applied to whatever underline the WHOLE cascade
+        // produced rather than to whatever one rule happened to declare.
+        if let Some(offset) = extras.underline_offset {
+            for refinement in [
+                Some(&mut base),
+                any_hover.then_some(&mut hover),
+                any_active.then_some(&mut active),
+                any_focus.then_some(&mut focus),
+                any_focus_visible.then_some(&mut focus_visible),
+                any_focus_within.then_some(&mut focus_within),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if let Some(underline) = refinement.text.underline.as_mut() {
+                    underline.offset = gpui::px(offset);
+                }
+            }
+        }
+
         ComputedStates {
             base: Rc::new(base),
             hover: any_hover.then(|| Rc::new(hover)),
             active: any_active.then(|| Rc::new(active)),
             focus: any_focus.then(|| Rc::new(focus)),
             focus_visible: any_focus_visible.then(|| Rc::new(focus_visible)),
+            focus_within: any_focus_within.then(|| Rc::new(focus_within)),
             group_hover: group.hover.map(|(key, r)| (key, Rc::new(r))),
             group_active: group.active.map(|(key, r)| (key, Rc::new(r))),
             transitions: transitions.unwrap_or_default(),
@@ -1077,7 +1239,9 @@ impl Engine {
                     })
                 }),
             placeholder: any_placeholder.then(|| Rc::new(placeholder.0)),
+            selection: any_selection.then(|| Rc::new(selection.0)),
             vars,
+            color: effective_color,
         }
     }
 }
@@ -1104,7 +1268,14 @@ impl Engine {
             // through the SAME mapper every rule does — which is what makes the
             // animatable property set identical to `transition`'s by
             // construction rather than by a second list that could drift.
-            let converted = mapper::convert_block(&frame.declarations, &mut self.diagnostics);
+            let converted = mapper::convert_block(&frame.declarations);
+            // A keyframe block has no selector to match, so its declarations
+            // can only be reported here.
+            if let Some(list) = &converted.diagnostics {
+                for d in list.iter() {
+                    mapper::once(&mut self.diagnostics, d.clone());
+                }
+            }
             let mut style = StyleRefinement::default();
             let mut any = false;
             if let Some(r) = &converted.normal {
@@ -1170,9 +1341,6 @@ impl Engine {
 /// an author an afternoon.
 fn at_rule_ignored(rule: &CssRule<'_>, diagnostics: &mut Vec<String>) {
     let msg = match rule {
-        CssRule::Supports(_) => {
-            "@supports rules are dropped (v1) — the whole block never applies".to_string()
-        }
         CssRule::FontFace(_) => "@font-face is dropped (v1) — only system fonts resolve".to_string(),
         other => format!("at-rule ignored (v1): {other:?}")
             .chars()
@@ -1180,6 +1348,80 @@ fn at_rule_ignored(rule: &CssRule<'_>, diagnostics: &mut Vec<String>) {
             .collect(),
     };
     mapper::once(diagnostics, msg);
+}
+
+/// Evaluates an `@supports` condition against what vn-css can actually do.
+///
+/// `@supports (display: grid)` is a question about the ENGINE, so the truthful
+/// answer is the one the mapper gives: a declaration supports-tests true when
+/// parsing it produces a real value and mapping it produces no advisory. That
+/// makes a guarded block behave the way it does in a browser missing the same
+/// feature — skipped — rather than being dropped wholesale whether or not the
+/// feature is there.
+///
+/// `selector()` is answered by the same audit the cascade uses, so
+/// `@supports selector(:has(a))` tracks the matcher.
+fn supports_condition(condition: &lightningcss::rules::supports::SupportsCondition<'_>) -> bool {
+    use lightningcss::rules::supports::SupportsCondition as C;
+    match condition {
+        C::Not(inner) => !supports_condition(inner),
+        C::And(list) => list.iter().all(supports_condition),
+        C::Or(list) => list.iter().any(supports_condition),
+        C::Declaration { property_id, value } => {
+            let text = format!("{}:{}", property_id.name(), value);
+            let Ok(block) = DeclarationBlock::parse_string(&text, ParserOptions::default()) else {
+                return false;
+            };
+            let converted = mapper::convert_block(&block);
+            // A declaration vn-css maps produces a refinement, an extra or a
+            // custom property, and no advisory. Anything else — an unknown
+            // property, a value shape with no model here — is unsupported, and
+            // saying so is the correct answer rather than a gap.
+            converted.diagnostics.is_none()
+                && (converted.normal.is_some()
+                    || converted.normal_custom.is_some()
+                    || converted.normal_dynamic.is_some()
+                    || converted.normal_extras != Extras::default())
+        }
+        C::Selector(text) => {
+            // Spliced into a one-rule sheet to reach the same parser the
+            // cascade uses, exactly as `query_all` does.
+            if text.contains(['{', '}']) {
+                return false;
+            }
+            // Leaked, like every other sheet the compiler holds: a `Selector`
+            // borrowed out of it has to outlive the rewrite below.
+            let src: &'static str = Box::leak(format!("{text}{{color:red}}").into_boxed_str());
+            let Ok(sheet) = StyleSheet::parse(src, ParserOptions::default()) else {
+                return false;
+            };
+            let mut probe = Vec::new();
+            sheet.rules.0.iter().all(|rule| match rule {
+                CssRule::Style(style) => style.selectors.0.iter().all(|sel| {
+                    // Same rewrite the cascade does, and for the same reason:
+                    // asking parcel about a raw `Component::Has` aborts the
+                    // process rather than answering.
+                    let rewritten;
+                    let sel = if has::present(&sel_text(sel)) {
+                        match has::rewrite(&sel_text(sel)).and_then(|t| reparse_selector(&t)) {
+                            Some(s) => {
+                                rewritten = s;
+                                rewritten
+                            }
+                            None => return false,
+                        }
+                    } else {
+                        sel
+                    };
+                    classify_states(sel, &mut probe).is_some()
+                        && probe_runnable(sel)
+                        && audit_selector(sel, &mut probe)
+                }),
+                _ => false,
+            })
+        }
+        C::Unknown(_) => false,
+    }
 }
 
 /// The ladder bucket a pseudo-class belongs to (`0` = not a ladder state).
@@ -1193,6 +1435,7 @@ fn ladder_state(pc: &PseudoClass<'_>) -> u8 {
         PseudoClass::Active => STATE_ACTIVE,
         PseudoClass::Focus => STATE_FOCUS,
         PseudoClass::FocusVisible => STATE_FOCUS_VISIBLE,
+        PseudoClass::FocusWithin => STATE_FOCUS_WITHIN,
         _ => 0,
     }
 }
@@ -1284,7 +1527,7 @@ impl GroupFold {
 /// Classifies a selector's interaction-state bucket from its RIGHTMOST
 /// compound, plus the ancestor-state descriptor when a state pseudo sits on a
 /// compound further left (`.group:hover .child`).
-fn classify_states(
+pub(crate) fn classify_states(
     sel: &Selector<'_>,
     diagnostics: &mut Vec<String>,
 ) -> Option<(u8, Option<AncestorState>)> {
@@ -1421,11 +1664,45 @@ fn pseudo_box(
         // `::-webkit-input-placeholder` and `::-moz-placeholder` are the same
         // thing; lightningcss folds every spelling into one variant.
         PE::Placeholder(_) => Some(PseudoElement::Placeholder),
+        PE::Selection(_) => Some(PseudoElement::Selection),
         _ => None,
     }
 }
 
-fn audit_selector(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> bool {
+/// Pseudo-elements with no box to style here, for a reason that is not a CSS
+/// gap — so dropping their rules is exact rather than approximate.
+///
+/// Two families:
+///
+/// * `::backdrop` styles the layer behind an OPEN `<dialog>` or a fullscreen
+///   element. vue-native has neither, and Tailwind's preflight writes a
+///   `::backdrop` rule into every sheet, so this would fire on every app.
+/// * The native form-control parts (`::file-selector-button`,
+///   `::-webkit-inner-spin-button`, `::-webkit-scrollbar`, …). vue-native
+///   paints NO native control skin — that is the same fact `appearance` rests
+///   on — so there is no spin button, no file-picker button and no UA scrollbar
+///   to style. The divergence is the absence of those widgets, which is a
+///   forms/scrolling question, not a selector the cascade got wrong.
+///
+/// `::first-line`, `::first-letter`, `::marker` and `::selection` deliberately
+/// stay OUT of this list: each names something a browser really does paint over
+/// content vue-native also has, so a rule using one is a real gap and still
+/// says so.
+fn never_matches_anywhere(
+    pe: &<element::Impl as parcel_selectors::parser::SelectorImpl<'_>>::PseudoElement,
+) -> bool {
+    use lightningcss::selector::PseudoElement as PE;
+    match pe {
+        PE::Backdrop(_) | PE::FileSelectorButton(_) | PE::WebKitScrollbar(_) => true,
+        PE::Custom { name } => {
+            let name = name.as_ref();
+            name.starts_with("-webkit-") || name.starts_with("-moz-") || name.starts_with("-ms-")
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn audit_selector(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> bool {
     audit_components(sel, sel.iter_raw_match_order(), false, diagnostics)
 }
 
@@ -1450,7 +1727,17 @@ where
                     // inverts `:not(:hover)`.
                     Some(format!("`:{}` inside :not()/:is()/:where()", pseudo_name(pc)))
                 } else if ladder_state(pc) == 0 && !matches_from_props(pc) {
-                    Some(format!("the pseudo-class `:{}`", pseudo_name(pc)))
+                    // A `-moz-`/`-webkit-`-prefixed pseudo-class is a browser's
+                    // own; Tailwind's preflight carries `:-moz-focusring` and
+                    // `:-moz-ui-invalid` in every sheet. Neither matches in the
+                    // Chromium these apps are compared against, so dropping
+                    // them here diverges from nothing.
+                    let name = pseudo_name(pc);
+                    if name.starts_with("-moz-") || name.starts_with("-webkit-") {
+                        None
+                    } else {
+                        Some(format!("the pseudo-class `:{name}`"))
+                    }
                 } else {
                     None
                 }
@@ -1459,6 +1746,12 @@ where
             // renderer builds as a child of the originating element. Every
             // other pseudo-element still styles something that does not exist.
             Component::PseudoElement(pe) if !nested && pseudo_box(pe).is_some() => None,
+            // `::backdrop` styles the layer behind an OPEN `<dialog>` or a
+            // fullscreen element. vue-native has neither — no `<dialog>`
+            // element and no element fullscreen — so the rule matches nothing
+            // here AND nothing in the browser build of the same app. Dropping
+            // it is not a divergence, so it is silent.
+            Component::PseudoElement(pe) if !nested && never_matches_anywhere(pe) => None,
             // One advisory for the whole family, not one per spelling: a
             // Tailwind preflight sheet names eight of them and eight lines
             // would bury everything else. The example selector rides along.
@@ -1466,9 +1759,13 @@ where
                 "a pseudo-element other than `::before` / `::after` / `::placeholder` (nothing here paints part of a box separately from the box)"
                     .into(),
             ),
-            Component::Slotted(_) | Component::Part(_) | Component::Host(_) => {
-                Some("a shadow-DOM selector (`::slotted()`, `::part()`, `:host`)".into())
-            }
+            // Shadow-DOM selectors need a shadow ROOT to match through, and
+            // there is none in vue-native's tree — nor in the browser build,
+            // where a Vue SFC creates no shadow root either. Tailwind's
+            // preflight writes `html, :host { … }` in every sheet, and in a
+            // browser that `:host` matches nothing too, so dropping it is exact
+            // rather than approximate.
+            Component::Slotted(_) | Component::Part(_) | Component::Host(_) => None,
             Component::Scope => Some("`:scope`".into()),
             Component::Nesting => Some("an unflattened `&` nesting selector".into()),
             Component::Namespace(..) | Component::DefaultNamespace(_) => {
@@ -1526,10 +1823,15 @@ where
 /// Pseudo-classes answered from the element's property map (see
 /// [`element::El::match_non_ts_pseudo_class`]).
 fn matches_from_props(pc: &PseudoClass<'_>) -> bool {
-    matches!(
-        pc,
-        PseudoClass::Disabled | PseudoClass::Enabled | PseudoClass::Checked
-    )
+    match pc {
+        PseudoClass::Disabled | PseudoClass::Enabled | PseudoClass::Checked => true,
+        // The custom pseudo-class `crate::has`'s rewrite produces. It is
+        // answered against the element's subtree by `El::match_non_ts_pseudo_class`,
+        // so the audit must let it through — an unrecognised custom
+        // pseudo-class from a stylesheet still cannot match and still says so.
+        PseudoClass::Custom { name } => crate::has::is_marker(name.as_ref()),
+        _ => false,
+    }
 }
 
 /// A pseudo-class's CSS name, for advisories. Deliberately exhaustive-ish so a
@@ -1603,7 +1905,7 @@ fn pseudo_name(pc: &PseudoClass<'_>) -> String {
 /// parcel_selectors' matcher `panic!`s on components its parser accepts
 /// (`:has()`, `&` nesting, `:nth-child(of S)`). Probe once at compile time
 /// against a dummy element so a bad selector costs a diagnostic, not the app.
-fn probe_runnable(sel: &Selector<'_>) -> bool {
+pub(crate) fn probe_runnable(sel: &Selector<'_>) -> bool {
     #[derive(Clone, Copy)]
     struct Probe;
     impl MatchDom for Probe {
@@ -1669,6 +1971,22 @@ fn extras_names(e: &Extras) -> String {
         names.push("`--window-control`");
     }
     names.join(" / ")
+}
+
+/// Re-parses one rewritten selector back into the `'static` form the rule
+/// table holds. Leaks, like the sheet it stands in for: a compiled sheet lives
+/// for the life of the process and there are a handful of them.
+fn reparse_selector(text: &str) -> Option<&'static Selector<'static>> {
+    if text.contains(['{', '}']) {
+        return None;
+    }
+    let source: &'static str = Box::leak(format!("{text}{{color:red}}").into_boxed_str());
+    let sheet: &'static StyleSheet<'static> =
+        Box::leak(Box::new(StyleSheet::parse(source, ParserOptions::default()).ok()?));
+    match sheet.rules.0.first() {
+        Some(CssRule::Style(style)) => style.selectors.0.first(),
+        _ => None,
+    }
 }
 
 fn sel_text(sel: &Selector<'_>) -> String {
@@ -1909,13 +2227,10 @@ mod tests {
     #[test]
     fn state_rule_transitions_are_rejected_with_a_diagnostic() {
         let engine = Engine::compile(".box:hover { transition: opacity 1s; opacity: 0.5 }");
+        let said = advisories(".box:hover { transition: opacity 1s; opacity: 0.5 }");
         assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("transition declared on a state selector")),
-            "{:?}",
-            engine.diagnostics
+            said.iter().any(|d| d.contains("transition declared on a state selector")),
+            "{said:?}"
         );
         let states = engine.compute(box_node(), None, &Env::default());
         assert!(states.transitions.is_empty());
@@ -2523,7 +2838,6 @@ mod tests {
     fn unanswerable_pseudo_classes_are_reported_and_dropped() {
         for (selector, needle) in [
             (".box:visited", "visited"),
-            (".box:focus-within", "focus-within"),
             (".box:required", "required"),
             (".box:placeholder-shown", "placeholder-shown"),
             (".box:target", "target"),
@@ -2607,14 +2921,18 @@ mod tests {
         );
     }
 
-    /// `:has()` and `:nth-child(… of S)` make parcel's matcher `unreachable!()`
-    /// — a process abort, not a failed match. `probe_runnable` only catches
-    /// that when its dummy element happens to REACH the component (matching
-    /// stops at the first failing one, and the dummy fails `.box` immediately),
-    /// so the audit is what actually keeps them out.
+    /// `:nth-child(… of S)` makes parcel's matcher `unreachable!()` — a
+    /// process abort, not a failed match. `probe_runnable` only catches that
+    /// when its dummy element happens to REACH the component (matching stops at
+    /// the first failing one, and the dummy fails `.box` immediately), so the
+    /// audit is what actually keeps it out.
+    ///
+    /// `:has()` used to be in this list and is not any more: the compiler
+    /// rewrites it into a custom pseudo-class the matcher DOES route to the
+    /// element, so the relational question is asked for real (`crate::has`).
     #[test]
     fn selectors_that_would_crash_the_matcher_are_rejected() {
-        for selector in [".box:has(.child)", ".box:nth-child(1 of .other)"] {
+        for selector in [".box:nth-child(1 of .other)"] {
             let engine = audited(selector);
             assert!(
                 engine
@@ -2706,15 +3024,34 @@ mod tests {
         assert_eq!(computed.extras.object_fit, Some(ObjectFit::Contain));
     }
 
+
+    /// The advisories a sheet produces for `.box`, from the two places they can
+    /// now come from: the sheet compile (selector-level) and the cascade
+    /// (declaration-level, said when a rule matches).
+    ///
+    /// The split is m19's: a declaration advisory rides with its rule and is
+    /// emitted by `compute_node`, so a generated sheet's unused utilities stay
+    /// quiet. A test that wants to see one therefore has to MATCH the rule.
+    fn advisories(css: &str) -> Vec<String> {
+        let engine = Engine::compile(css);
+        let mut out = engine.diagnostics.clone();
+        engine.compute_node(
+            box_node(),
+            None,
+            &Rc::new(Vars::default()),
+            None,
+            &Env::default(),
+            &mut out,
+        );
+        out
+    }
+
     /// A bad keyword must leave an advisory, never silently do nothing.
     #[test]
     fn bad_object_fit_value_is_advised() {
         let engine = Engine::compile(".box { object-fit: squish }");
-        assert!(
-            engine.diagnostics.iter().any(|d| d.contains("object-fit")),
-            "{:?}",
-            engine.diagnostics
-        );
+        let said = advisories(".box { object-fit: squish }");
+        assert!(said.iter().any(|d| d.contains("object-fit")), "{said:?}");
         assert_eq!(
             engine.compute(box_node(), None, &Env::default()).extras.object_fit,
             None
@@ -2726,13 +3063,10 @@ mod tests {
     #[test]
     fn object_fit_on_a_state_selector_is_advised() {
         let engine = Engine::compile(".box:hover { object-fit: cover }");
+        let said = advisories(".box:hover { object-fit: cover }");
         assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("object-fit") && d.contains("unconditionally")),
-            "{:?}",
-            engine.diagnostics
+            said.iter().any(|d| d.contains("object-fit") && d.contains("unconditionally")),
+            "{said:?}"
         );
         // And it does apply — unconditionally, as advertised.
         assert_eq!(
@@ -2811,13 +3145,10 @@ mod tests {
     #[test]
     fn bad_window_drag_value_is_advised_and_dropped() {
         let engine = Engine::compile(".box { window-drag: sideways }");
+        let said = advisories(".box { window-drag: sideways }");
         assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("window-drag") && d.contains("sideways")),
-            "{:?}",
-            engine.diagnostics
+            said.iter().any(|d| d.contains("window-drag") && d.contains("sideways")),
+            "{said:?}"
         );
         assert_eq!(
             engine.compute(box_node(), None, &Env::default()).extras.window_drag,
@@ -2860,6 +3191,7 @@ mod tests {
             box_node(),
             None,
             &Rc::new(Vars::default()),
+            None,
             &Env::default(),
             &mut diags,
         );
@@ -2873,14 +3205,10 @@ mod tests {
 
     #[test]
     fn bad_window_control_value_is_advised() {
-        let engine = Engine::compile(".box { --window-control: restore }");
+        let said = advisories(".box { --window-control: restore }");
         assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("--window-control") && d.contains("restore")),
-            "{:?}",
-            engine.diagnostics
+            said.iter().any(|d| d.contains("--window-control") && d.contains("restore")),
+            "{said:?}"
         );
     }
 
@@ -2890,13 +3218,10 @@ mod tests {
     #[test]
     fn window_drag_on_a_state_selector_is_advised_by_name() {
         let engine = Engine::compile(".box:hover { window-drag: none }");
+        let said = advisories(".box:hover { window-drag: none }");
         assert!(
-            engine
-                .diagnostics
-                .iter()
-                .any(|d| d.contains("`window-drag`") && d.contains("unconditionally")),
-            "{:?}",
-            engine.diagnostics
+            said.iter().any(|d| d.contains("`window-drag`") && d.contains("unconditionally")),
+            "{said:?}"
         );
         assert!(
             !engine.diagnostics.iter().any(|d| d.contains("object-fit")),
@@ -2916,7 +3241,7 @@ mod tests {
         let engine = Engine::compile(css);
         let mut diags = engine.diagnostics.clone();
         let states =
-            engine.compute_node(box_node(), None, &Rc::new(Vars::default()), env, &mut diags);
+            engine.compute_node(box_node(), None, &Rc::new(Vars::default()), None, env, &mut diags);
         (states.base, diags)
     }
 
@@ -3125,6 +3450,13 @@ mod tests {
         }
         fn is_root(&self) -> bool {
             self.doc.nodes[self.i].2 == 0
+        }
+        fn each_child(&self, f: &mut dyn FnMut(Self)) {
+            for j in 1..self.doc.nodes.len() {
+                if self.doc.nodes[j].2 == self.i {
+                    f(DocRef { doc: self.doc, i: j });
+                }
+            }
         }
     }
 
@@ -3350,6 +3682,7 @@ mod tests {
                 DocRef { doc, i },
                 None,
                 &parent_vars,
+                None,
                 env,
                 &mut diagnostics,
             ));
@@ -3433,7 +3766,7 @@ mod tests {
 
     /// An unresolvable reference drops ONLY that declaration, and says so.
     #[test]
-    fn an_unresolvable_var_drops_one_declaration_with_an_advisory() {
+    fn an_unresolvable_var_drops_one_declaration_silently() {
         let engine = Engine::compile(".btn { opacity: 0.5; color: var(--nope) }");
         let d = themed_doc();
         let mut diagnostics = Vec::new();
@@ -3441,15 +3774,17 @@ mod tests {
             DocRef { doc: &d, i: 3 },
             None,
             &Rc::new(Vars::default()),
+            None,
             &Env::default(),
             &mut diagnostics,
         );
         assert_eq!(s.base.opacity, Some(0.5), "the sibling declaration survives");
         assert_eq!(s.base.text.color, None);
-        assert!(
-            diagnostics.iter().any(|m| m.contains("--nope")),
-            "{diagnostics:?}"
-        );
+        // Silently, and correctly so: CSS says a declaration that is invalid at
+        // computed-value time is thrown away, which is what happened, and
+        // Tailwind ships the shape by design (`--tw-shadow-colored` reads a
+        // `--tw-shadow-color` only a `shadow-<color>` utility ever sets).
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     /// …and a fallback makes it resolve instead.
@@ -3469,7 +3804,7 @@ mod tests {
         let mut vars = Rc::new(Vars::default());
         let mut opacity = None;
         for i in 1..d.nodes.len() {
-            let s = engine.compute_node(DocRef { doc: &d, i }, None, &vars, &Env::default(), &mut diagnostics);
+            let s = engine.compute_node(DocRef { doc: &d, i }, None, &vars, None, &Env::default(), &mut diagnostics);
             vars = s.vars.clone();
             opacity = s.base.opacity;
         }
@@ -3548,6 +3883,190 @@ mod tests {
             "{:?}",
             r.warnings
         );
+    }
+
+
+    // ---- m19: :has(), :focus-within, @supports ---------------------------
+
+    /// `:has()` is answered for real. The rule is rewritten into a custom
+    /// pseudo-class before the matcher sees it (parcel's own `Component::Has`
+    /// is an `unreachable!()`), and the relational question is then asked
+    /// against the element's subtree.
+    #[test]
+    fn has_matches_a_descendant_for_real() {
+        // doc: 0 = root, 1 = `.card` with a `.badge` under it, 2 = the badge,
+        // 3 = a second `.card` with nothing under it.
+        let doc = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "card", 0, vec![]),
+                ("span", "badge", 1, vec![]),
+                ("div", "card", 0, vec![]),
+            ],
+        };
+        let engine = Engine::compile(".card:has(.badge) { opacity: 0.5 }");
+        assert!(
+            engine.diagnostics.is_empty(),
+            "no advisory: it renders now — {:?}",
+            engine.diagnostics
+        );
+        let opacity = |i: usize| {
+            let mut d = Vec::new();
+            engine
+                .compute_node(
+                    DocRef { doc: &doc, i },
+                    None,
+                    &Rc::new(Vars::default()),
+                    None,
+                    &Env::default(),
+                    &mut d,
+                )
+                .base
+                .opacity
+        };
+        assert_eq!(opacity(1), Some(0.5), "the card that HAS a badge");
+        assert_eq!(opacity(3), None, "the card that does not");
+        assert_eq!(opacity(2), None, "the badge itself is not the subject");
+    }
+
+    /// The child form only looks one level down, which is the whole point of
+    /// writing it.
+    #[test]
+    fn has_with_a_child_combinator_does_not_reach_a_grandchild() {
+        let doc = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "card", 0, vec![]),
+                ("div", "wrap", 1, vec![]),
+                ("span", "badge", 2, vec![]),
+            ],
+        };
+        let direct = Engine::compile(".card:has(> .badge) { opacity: 0.5 }");
+        let nested = Engine::compile(".card:has(.badge) { opacity: 0.5 }");
+        let opacity = |engine: &Engine| {
+            let mut d = Vec::new();
+            engine
+                .compute_node(
+                    DocRef { doc: &doc, i: 1 },
+                    None,
+                    &Rc::new(Vars::default()),
+                    None,
+                    &Env::default(),
+                    &mut d,
+                )
+                .base
+                .opacity
+        };
+        assert_eq!(opacity(&direct), None, "the badge is a GRANDchild");
+        assert_eq!(opacity(&nested), Some(0.5), "…but it is a descendant");
+    }
+
+    /// `:focus-within` is gpui's `.in_focus()` rung — focus anywhere in the
+    /// element's focus subtree — so it folds into its own bucket rather than
+    /// being dropped.
+    #[test]
+    fn focus_within_folds_into_its_own_rung() {
+        let engine = Engine::compile(".box:focus-within { opacity: 0.5 }");
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let states = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(states.base.opacity, None, "not in the base state");
+        assert_eq!(
+            states.focus_within.as_ref().and_then(|f| f.opacity),
+            Some(0.5)
+        );
+        assert!(states.needs_focus_handle(), "gpui needs a handle to key it on");
+    }
+
+    /// `@supports` is a question about the ENGINE, and the truthful answer is
+    /// whatever the mapper does with the declaration in the prelude. A guarded
+    /// block is then skipped or applied the way a browser missing the same
+    /// feature would treat it — which is also why there is nothing to advise.
+    #[test]
+    fn supports_conditions_are_evaluated_rather_than_dropped() {
+        let applies = |css: &str| {
+            let engine = Engine::compile(css);
+            assert!(engine.diagnostics.is_empty(), "{css}: {:?}", engine.diagnostics);
+            engine.compute(box_node(), None, &Env::default()).base.opacity
+        };
+        assert_eq!(
+            applies("@supports (display: flex) { .box { opacity: 0.5 } }"),
+            Some(0.5),
+            "a property vn-css maps"
+        );
+        assert_eq!(
+            applies("@supports (view-transition-name: none) { .box { opacity: 0.5 } }"),
+            None,
+            "a property it does not"
+        );
+        assert_eq!(
+            applies("@supports not (view-transition-name: none) { .box { opacity: 0.5 } }"),
+            Some(0.5)
+        );
+        assert_eq!(
+            applies(
+                "@supports (display: flex) and (view-transition-name: none) \
+                 { .box { opacity: 0.5 } }"
+            ),
+            None
+        );
+        assert_eq!(
+            applies(
+                "@supports (display: flex) or (view-transition-name: none) \
+                 { .box { opacity: 0.5 } }"
+            ),
+            Some(0.5)
+        );
+        // `selector()` tracks the matcher, which now answers `:has()`.
+        assert_eq!(
+            applies("@supports selector(:has(a)) { .box { opacity: 0.5 } }"),
+            Some(0.5)
+        );
+        assert_eq!(
+            applies("@supports selector(::first-line) { .box { opacity: 0.5 } }"),
+            None
+        );
+    }
+
+    /// `currentColor` is a COMPUTED value — this element's `color` — so it is
+    /// recorded during the fold and substituted after it, including when the
+    /// colour is inherited from an ancestor rather than declared here.
+    #[test]
+    fn current_color_resolves_against_the_computed_color() {
+        let engine = Engine::compile(
+            ".parent { color: #ff0000 } .child { border-color: currentColor } \
+             .own { color: #0000ff; border-color: currentColor }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let doc = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "parent", 0, vec![]),
+                ("div", "child", 0, vec![]),
+                ("div", "own", 0, vec![]),
+            ],
+        };
+        let compute = |i: usize, parent_color: Option<gpui::Hsla>| {
+            let mut d = Vec::new();
+            let states = engine.compute_node(
+                DocRef { doc: &doc, i },
+                None,
+                &Rc::new(Vars::default()),
+                parent_color,
+                &Env::default(),
+                &mut d,
+            );
+            assert!(d.is_empty(), "{d:?}");
+            states
+        };
+        let red = compute(1, None).color.expect("declared");
+        // Inherited: the child declares no colour of its own.
+        let inherited = compute(2, Some(red));
+        assert_eq!(inherited.base.border_color, Some(red));
+        assert_eq!(inherited.color, Some(red), "and it passes the same colour on");
+        // Declared: its own `color` wins over the inherited one.
+        let own = compute(3, Some(red));
+        assert_ne!(own.base.border_color, Some(red));
+        assert_eq!(own.base.border_color, own.color);
     }
 
     // ---- @keyframes / animation (m12 item 3) -----------------------------

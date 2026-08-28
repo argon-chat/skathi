@@ -727,7 +727,10 @@ impl Tree {
             // still live and — being painted later — on top. That is what made
             // the meet app's two `Your name` fields fight over the same click
             // (research/reports/m18/live-test-round2.md §4).
-            let mut stack: Vec<(u32, std::rc::Rc<vn_css::Vars>, bool)> = Vec::new();
+            // `(node, inherited custom properties, inherited `pointer-events:
+            // none`?, inherited `color`)`.
+            let mut stack: Vec<(u32, std::rc::Rc<vn_css::Vars>, bool, Option<gpui::Hsla>)> =
+                Vec::new();
             for r in roots {
                 // A scoped root inherits from its parent's already-computed map;
                 // `restyle_roots` guarantees the parent has one (it promotes the
@@ -741,23 +744,29 @@ impl Tree {
                     .and_then(|p| p.computed.as_ref())
                     .map(|c| c.vars.clone())
                     .unwrap_or_else(|| root_vars.clone());
-                let inherited_inert = this
+                let parent_computed = this
                     .node(r)
                     .map(|n| n.parent)
                     .filter(|&p| p != 0)
                     .and_then(|p| this.node(p))
-                    .and_then(|p| p.computed.as_ref())
-                    .is_some_and(|c| c.extras.pointer_events_none == Some(true));
-                stack.push((r, inherited, inherited_inert));
-                while let Some((id, parent_vars, parent_inert)) = stack.pop() {
+                    .and_then(|p| p.computed.as_ref());
+                let inherited_inert =
+                    parent_computed.is_some_and(|c| c.extras.pointer_events_none == Some(true));
+                // `currentColor` resolves against the element's computed
+                // `color`, which is inherited when it declares none — so the
+                // effective colour rides down the walk beside the vars map.
+                let inherited_color = parent_computed.and_then(|c| c.color);
+                stack.push((r, inherited, inherited_inert, inherited_color));
+                while let Some((id, parent_vars, parent_inert, parent_color)) = stack.pop() {
                     let Some(n) = this.node(id) else { continue };
                     // Text and anchor nodes have no cascade of their own; they
                     // simply pass the map down to whatever hangs under them.
-                    let (child_vars, child_inert) = if n.kind == Kind::Element {
+                    let (child_vars, child_inert, child_color) = if n.kind == Kind::Element {
                         let mut states = engine.compute_node(
                             NodeRef { tree: this, id },
                             n.inline.as_deref(),
                             &parent_vars,
+                            parent_color,
                             env,
                             &mut diagnostics,
                         );
@@ -769,13 +778,14 @@ impl Tree {
                         let inert = states.extras.pointer_events_none.unwrap_or(parent_inert);
                         states.extras.pointer_events_none = Some(inert);
                         let vars = states.vars.clone();
+                        let color = states.color;
                         out.push((id, states));
-                        (vars, inert)
+                        (vars, inert, color)
                     } else {
-                        (parent_vars, parent_inert)
+                        (parent_vars, parent_inert, parent_color)
                     };
                     for &c in n.children.iter().rev() {
-                        stack.push((c, child_vars.clone(), child_inert));
+                        stack.push((c, child_vars.clone(), child_inert, child_color));
                     }
                 }
             }
@@ -1096,6 +1106,25 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
     }
     fn next_sibling(&self) -> Option<Self> {
         self.element_sibling(true)
+    }
+    /// Every ELEMENT child, for `:has()`.
+    ///
+    /// Anchor nodes are Vue fragments: not elements, but they DO carry element
+    /// children, so the walk flattens through them (and through text nodes,
+    /// which have none) rather than stopping. Without that a `:has()` would
+    /// miss everything under a `v-if` or a `<template>`.
+    fn each_child(&self, f: &mut dyn FnMut(Self)) {
+        fn walk<'t>(tree: &'t Tree, id: u32, f: &mut dyn FnMut(NodeRef<'t>)) {
+            let Some(node) = tree.node(id) else { return };
+            for &child in &node.children {
+                match tree.node(child).map(|n| n.kind) {
+                    Some(Kind::Element) => f(NodeRef { tree, id: child }),
+                    Some(_) => walk(tree, child, f),
+                    None => {}
+                }
+            }
+        }
+        walk(self.tree, self.id, f);
     }
     fn has_tag(&self, name: &str) -> bool {
         // The `html` / `body` aliasing for the document root lives in vn-css

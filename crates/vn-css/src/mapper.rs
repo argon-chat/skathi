@@ -184,8 +184,54 @@ pub struct Extras {
     /// The one colour that stands in for this element's background when it has
     /// to be collapsed to a single value — see [`Extras::background_clip_text`],
     /// its only consumer. A solid background contributes itself; a gradient
-    /// contributes the midpoint of the two stops gpui kept.
+    /// contributes the midpoint of its end stops.
     pub background_key_color: Option<gpui::Hsla>,
+    /// The `background-image` layers, in CSS order — layer 0 paints on TOP.
+    ///
+    /// Held here rather than written straight onto the `StyleRefinement`
+    /// because the geometry that places them (`background-size`,
+    /// `background-position`, `background-repeat`) is three SEPARATE
+    /// properties, and Tailwind puts each in a rule of its own: the meet app's
+    /// page grid is `bg-[linear-gradient(…),linear-gradient(…)]` on one class
+    /// and `bg-[size:64px_64px]` on another. Neither declaration can see the
+    /// other, so the fold happens once, afterwards, in
+    /// [`Extras::resolve_background_layers`].
+    pub background_images: Option<Rc<Vec<BackgroundLayer>>>,
+    /// `background-size`, per layer, in CSS order. `None` on an axis is
+    /// `auto` / `cover` / `contain`, none of which tile: a gradient has no
+    /// intrinsic size, so all three resolve to the box itself.
+    pub background_size: Option<Rc<Vec<(Option<TileLength>, Option<TileLength>)>>>,
+    /// `background-position`, per layer, in CSS order.
+    pub background_position: Option<Rc<Vec<(TileLength, TileLength)>>>,
+    /// `background-repeat`, per layer, in CSS order, as `(x, y)`.
+    pub background_repeat: Option<Rc<Vec<(bool, bool)>>>,
+    /// `list-style-type` — the marker an `<li>` under this element gets.
+    ///
+    /// INHERITED, like the CSS property, and folded the way `text-transform` is:
+    /// vn-css folds no inherited property, so `vn_tree::render` reads the
+    /// nearest ancestor that declared one when it builds an `<li>`. `None` means
+    /// this element declared nothing; `Some(ListMarker::None)` is an explicit
+    /// `list-style: none`, which is what stops a marker being generated.
+    pub list_marker: Option<ListMarker>,
+    /// `list-style-position: inside`. Also inherited.
+    pub list_marker_inside: Option<bool>,
+    /// `text-underline-offset`, in px.
+    ///
+    /// The offset lands on the decoration itself (gpui's `UnderlineStyle`
+    /// carries it), but the two properties can arrive from different rules —
+    /// Tailwind's `.underline` and `.underline-offset-4` are two classes — so
+    /// the value is also kept here and applied to whatever underline the whole
+    /// cascade ended up with.
+    pub underline_offset: Option<f32>,
+    /// Which properties on this element were written as `currentColor`.
+    ///
+    /// `currentColor` is the element's computed `color`, and vn-css folds no
+    /// inherited text property (gpui's `TextStyleRefinement` cascades at paint
+    /// time), so the value is not known while a declaration is being mapped —
+    /// only after the whole cascade has run and the parent's colour is in hand.
+    /// [`Engine::compute_node`] does the substitution; this records what to
+    /// substitute into.
+    pub current_color: CurrentColorTargets,
     /// `filter: blur(<radius>)` — the radius, in px.
     ///
     /// gpui still has no post-processing pass over an element's own painted
@@ -279,10 +325,6 @@ impl SvgPaint {
 }
 
 impl Extras {
-    pub(crate) fn is_empty(&self) -> bool {
-        *self == Extras::default()
-    }
-
     /// Later-wins merge, matching `Refineable::refine` for the refinements.
     pub(crate) fn refine(&mut self, other: &Extras) {
         if other.object_fit.is_some() {
@@ -327,6 +369,71 @@ impl Extras {
         if other.background_key_color.is_some() {
             self.background_key_color = other.background_key_color;
         }
+        if other.background_images.is_some() {
+            self.background_images = other.background_images.clone();
+        }
+        if other.background_size.is_some() {
+            self.background_size = other.background_size.clone();
+        }
+        if other.background_position.is_some() {
+            self.background_position = other.background_position.clone();
+        }
+        if other.background_repeat.is_some() {
+            self.background_repeat = other.background_repeat.clone();
+        }
+        if other.list_marker.is_some() {
+            self.list_marker = other.list_marker;
+        }
+        if other.list_marker_inside.is_some() {
+            self.list_marker_inside = other.list_marker_inside;
+        }
+        if other.underline_offset.is_some() {
+            self.underline_offset = other.underline_offset;
+        }
+        // A bitmask, not a last-wins value: two rules can each contribute a
+        // different `currentColor` property to the same element.
+        self.current_color.0 |= other.current_color.0;
+    }
+
+    /// Folds the `background-image` stack together with the three geometry
+    /// properties into the layer list gpui paints, BOTTOM layer first.
+    ///
+    /// CSS matches each geometry list to the image list by index, repeating the
+    /// shorter one — `background: url(a), url(b) / background-size: 4px` sizes
+    /// both. A layer with no `background-size` is not tiled at all, which is
+    /// the same thing as a tile the size of the box.
+    pub fn resolve_background_layers(&self) -> Vec<gpui::Background> {
+        let Some(images) = self.background_images.as_ref() else {
+            return Vec::new();
+        };
+        /// CSS matches a geometry list to the image list by index and repeats
+        /// the shorter one.
+        fn cycled<T: Copy>(list: Option<&Rc<Vec<T>>>, i: usize) -> Option<T> {
+            let list = list.filter(|l| !l.is_empty())?;
+            Some(list[i % list.len()])
+        }
+        let mut out: Vec<gpui::Background> = Vec::with_capacity(images.len());
+        for layer in images.iter() {
+            let index = layer.index as usize;
+            let mut background = layer.background;
+            let size = cycled(self.background_size.as_ref(), index);
+            if let Some((Some(w), Some(h))) = size {
+                let position = cycled(self.background_position.as_ref(), index)
+                    .unwrap_or((TileLength::Fraction(0.0), TileLength::Fraction(0.0)));
+                let repeat = cycled(self.background_repeat.as_ref(), index).unwrap_or((true, true));
+                background = background.tiled(
+                    (w.value(), h.value()),
+                    (w.is_fraction(), h.is_fraction()),
+                    (position.0.value(), position.1.value()),
+                    (position.0.is_fraction(), position.1.is_fraction()),
+                    repeat,
+                );
+            }
+            out.push(background);
+        }
+        // CSS paints layer 0 on top; gpui paints the list in order.
+        out.reverse();
+        out
     }
 
     /// True when this node has to be painted in gpui's deferred layer for its
@@ -368,6 +475,21 @@ pub(crate) struct Converted {
     /// Known properties whose value referenced `var()`.
     pub normal_dynamic: Option<Rc<Decls>>,
     pub important_dynamic: Option<Rc<Decls>>,
+    /// The advisories this block's DECLARATIONS produced.
+    ///
+    /// Kept with the rule instead of being logged at sheet-compile time,
+    /// because a compile-time advisory describes the STYLESHEET and what a
+    /// developer needs to know is what is wrong with the PAGE. A generated
+    /// Tailwind sheet ships a utility for every property in CSS, so compiling
+    /// one reported `resize`, `table-layout` and `text-indent` — none of which
+    /// any element on any screen was using. `Engine::compute_node` emits these
+    /// the first time the rule actually matches an element, and
+    /// `vn_tree::tree::warn_css` dedupes from there.
+    ///
+    /// SELECTOR-level advisories stay at compile time: a rule that was dropped
+    /// for an unimplementable selector can never match, so it could never
+    /// report itself.
+    pub diagnostics: Option<Rc<Vec<String>>>,
 }
 
 /// One converted declaration half.
@@ -461,7 +583,9 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
 /// Converts a declaration block into (normal, important) refinements plus the
 /// transitions, custom properties and `var()`-composed declarations each half
 /// declares.
-pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<String>) -> Converted {
+pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
+    let mut diagnostics: Vec<String> = Vec::new();
+    let diagnostics = &mut diagnostics;
     let mut convert = |props: &[Property]| -> Half {
         if props.is_empty() {
             return Half::default();
@@ -518,6 +642,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
     };
     let normal = convert(&block.declarations);
     let important = convert(&block.important_declarations);
+    let diagnostics = std::mem::take(diagnostics);
     Converted {
         normal: normal.refinement,
         important: important.refinement,
@@ -533,6 +658,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock, diagnostics: &mut Vec<Stri
         important_custom: important.custom,
         normal_dynamic: normal.dynamic,
         important_dynamic: important.dynamic,
+        diagnostics: (!diagnostics.is_empty()).then(|| Rc::new(diagnostics)),
     }
 }
 
@@ -564,6 +690,16 @@ pub(crate) fn apply_dynamic(
 ) {
     let value = match vars::substitute_with(raw, vars, env) {
         Ok(v) => v,
+        // An unset `var()` with no fallback makes the declaration invalid at
+        // computed-value time, and CSS says such a declaration is thrown away
+        // — which is exactly what happens here. Dropping it is the CORRECT
+        // behaviour rather than a gap, so it is silent.
+        //
+        // It is also common by design: reka sets `--reka-select-trigger-width`
+        // from JS when a popover opens, so every rule reading it is invalid
+        // until then, in a browser too. The other three errors are author
+        // mistakes rather than a design, so those still speak.
+        Err(vars::VarError::Unresolved(_)) => return,
         Err(e) => {
             once(
                 diagnostics,
@@ -967,6 +1103,33 @@ fn calc_px<V>(calc: &lightningcss::values::calc::Calc<V>, leaf: &dyn Fn(&V) -> O
     }
 }
 
+fn advise_list_marker(diagnostics: &mut Vec<String>) {
+    warn_once(
+        diagnostics,
+        "this list marker is not generated (v1) — the PREDEFINED counter styles (`disc`, \
+         `circle`, `square`, `decimal`, `decimal-leading-zero`, and the alpha and roman ones) do \
+         generate a real marker box now. A `@counter-style` rule and a `list-style-image` have no \
+         model here: the first needs a counter-style engine, the second a raster in the marker \
+         box. Pick a predefined style, or render the marker as a real element (a `<span>`, or \
+         `::before { content: \"…\" }`)",
+    );
+}
+
+/// `letter-spacing` / `word-spacing`. `normal` is zero.
+///
+/// `em` resolves against the ROOT font size here, like every other relative
+/// length in this mapper — the sheet is flattened to pixels at compile time and
+/// the element's own font size is not known until the cascade runs. That is the
+/// same approximation `length_value_px` already documents, and tracking is
+/// almost always written in `em` against an unchanged root.
+fn spacing_px(spacing: &lightningcss::properties::text::Spacing) -> Option<f32> {
+    use lightningcss::properties::text::Spacing;
+    match spacing {
+        Spacing::Normal => Some(0.0),
+        Spacing::Length(l) => css_length_px(l),
+    }
+}
+
 fn css_length_px(l: &CssLength) -> Option<f32> {
     match l {
         CssLength::Value(v) => length_value_px(v),
@@ -1184,29 +1347,631 @@ fn outline_mut(r: &mut StyleRefinement) -> &mut gpui::Outline {
     })
 }
 
-/// `linear-gradient()` → gpui's two-stop `Background`, plus the single colour
-/// that stands in for it when only one is available
+/// A list marker, as `list-style-type` names it.
+///
+/// The ordered kinds carry a counter that `vn_tree::render` resolves from the
+/// item's position among its element siblings — which is what `list-style-type`
+/// means, and the same number `counter(list-item)` would produce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListMarker {
+    /// `list-style: none` — an explicit "no marker", which is a different thing
+    /// from "this element declared nothing".
+    None,
+    Disc,
+    Circle,
+    Square,
+    Decimal,
+    DecimalLeadingZero,
+    LowerAlpha,
+    UpperAlpha,
+    LowerRoman,
+    UpperRoman,
+}
+
+impl ListMarker {
+    /// The marker string for the `n`-th item (1-based), or `None` for no marker.
+    pub fn render(self, n: usize) -> Option<String> {
+        fn alpha(mut n: usize, upper: bool) -> String {
+            let base = if upper { b'A' } else { b'a' };
+            let mut out = Vec::new();
+            while n > 0 {
+                n -= 1;
+                out.push(base + (n % 26) as u8);
+                n /= 26;
+            }
+            out.reverse();
+            String::from_utf8(out).unwrap_or_default()
+        }
+        fn roman(mut n: usize, upper: bool) -> String {
+            const TABLE: [(usize, &str); 13] = [
+                (1000, "m"),
+                (900, "cm"),
+                (500, "d"),
+                (400, "cd"),
+                (100, "c"),
+                (90, "xc"),
+                (50, "l"),
+                (40, "xl"),
+                (10, "x"),
+                (9, "ix"),
+                (5, "v"),
+                (4, "iv"),
+                (1, "i"),
+            ];
+            let mut out = String::new();
+            for (value, glyph) in TABLE {
+                while n >= value {
+                    out.push_str(glyph);
+                    n -= value;
+                }
+            }
+            if upper { out.to_uppercase() } else { out }
+        }
+        match self {
+            ListMarker::None => None,
+            ListMarker::Disc => Some("\u{2022}".into()),
+            ListMarker::Circle => Some("\u{25e6}".into()),
+            ListMarker::Square => Some("\u{25aa}".into()),
+            ListMarker::Decimal => Some(format!("{n}.")),
+            ListMarker::DecimalLeadingZero => Some(format!("{n:02}.")),
+            ListMarker::LowerAlpha => Some(format!("{}.", alpha(n, false))),
+            ListMarker::UpperAlpha => Some(format!("{}.", alpha(n, true))),
+            ListMarker::LowerRoman => Some(format!("{}.", roman(n, false))),
+            ListMarker::UpperRoman => Some(format!("{}.", roman(n, true))),
+        }
+    }
+}
+
+/// `list-style-type` → the marker it names, or `None` for a counter style with
+/// no model here (a `@counter-style` rule, or a literal string).
+fn list_marker(style: &lightningcss::properties::list::ListStyleType<'_>) -> Option<ListMarker> {
+    use lightningcss::properties::list::{
+        CounterStyle as C, ListStyleType as T, PredefinedCounterStyle as P,
+    };
+    match style {
+        T::None => Some(ListMarker::None),
+        T::CounterStyle(C::Predefined(p)) => Some(match p {
+            P::Disc => ListMarker::Disc,
+            P::Circle => ListMarker::Circle,
+            P::Square => ListMarker::Square,
+            P::Decimal => ListMarker::Decimal,
+            P::DecimalLeadingZero => ListMarker::DecimalLeadingZero,
+            P::LowerAlpha | P::LowerLatin => ListMarker::LowerAlpha,
+            P::UpperAlpha | P::UpperLatin => ListMarker::UpperAlpha,
+            P::LowerRoman => ListMarker::LowerRoman,
+            P::UpperRoman => ListMarker::UpperRoman,
+            _ => return None,
+        }),
+        _ => None,
+    }
+}
+
+/// The properties an element wrote `currentColor` into, as a bitmask.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CurrentColorTargets(pub u16);
+
+impl CurrentColorTargets {
+    pub const BORDER: u16 = 1 << 0;
+    pub const OUTLINE: u16 = 1 << 1;
+    pub const BACKGROUND: u16 = 1 << 2;
+    pub const FILL: u16 = 1 << 3;
+    pub const STROKE: u16 = 1 << 4;
+    pub const DECORATION: u16 = 1 << 5;
+
+    pub fn has(self, bit: u16) -> bool {
+        self.0 & bit != 0
+    }
+}
+
+/// One `background-image` layer, kept next to the CSS layer index it came from
+/// because `background-size` and friends are matched to the image list BY
+/// index — and one CSS layer can become several gpui backgrounds when its stop
+/// list is too long for one (see [`band_stops`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackgroundLayer {
+    /// Position in the `background-image` list, layer 0 being the top one.
+    pub index: u16,
+    pub background: gpui::Background,
+}
+
+/// A `background-size` or `background-position` component: CSS lets either be
+/// a length or a percentage, and a percentage of WHAT differs between the two
+/// (see [`gpui::Background::tiled`]), so the distinction is carried rather than
+/// resolved here.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TileLength {
+    Pixels(f32),
+    Fraction(f32),
+}
+
+impl TileLength {
+    pub fn value(self) -> f32 {
+        match self {
+            TileLength::Pixels(v) | TileLength::Fraction(v) => v,
+        }
+    }
+
+    pub fn is_fraction(self) -> bool {
+        matches!(self, TileLength::Fraction(_))
+    }
+
+    fn from_length_percentage(v: &LengthPercentage) -> Option<Self> {
+        match v {
+            DimensionPercentage::Percentage(p) => Some(TileLength::Fraction(p.0)),
+            DimensionPercentage::Dimension(d) => length_value_px(d).map(TileLength::Pixels),
+            DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(TileLength::Pixels),
+        }
+    }
+}
+
+/// One colour stop, reduced to what the GPU carries.
+#[derive(Clone, Copy, Debug)]
+struct Stop {
+    color: Hsla,
+    /// `None` until [`resolve_stop_positions`] fills it in.
+    position: Option<StopPosition>,
+}
+
+/// Where a stop sits on the gradient line. CSS lets an author write either, and
+/// neither can be converted into the other here: the line's length is a
+/// function of the box, which only the shader knows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum StopPosition {
+    /// A fraction of the gradient line.
+    Fraction(f32),
+    /// An absolute length along it.
+    Pixels(f32),
+}
+
+/// Fills in the stops CSS left unpositioned: the first sits at the start of the
+/// line and the last at the end, and a run in between is spread evenly across
+/// the gap its neighbours leave. Positions are then made non-decreasing, which
+/// is what turns a pair written out of order into a hard stop rather than a
+/// ramp that runs backwards.
+///
+/// A run whose two anchors are written in DIFFERENT units cannot be
+/// interpolated — that is the same missing quantity as above — so those stops
+/// fall back to an even spread of the whole line by index.
+fn resolve_stop_positions(stops: &mut [Stop]) {
+    let n = stops.len();
+    if n == 0 {
+        return;
+    }
+    if stops[0].position.is_none() {
+        stops[0].position = Some(StopPosition::Fraction(0.0));
+    }
+    if stops[n - 1].position.is_none() {
+        stops[n - 1].position = Some(StopPosition::Fraction(1.0));
+    }
+
+    let mut anchor = 0;
+    for i in 1..n {
+        if stops[i].position.is_none() {
+            continue;
+        }
+        if i > anchor + 1 {
+            let gap = (i - anchor) as f32;
+            let ends = match (stops[anchor].position, stops[i].position) {
+                (Some(StopPosition::Fraction(a)), Some(StopPosition::Fraction(b))) => {
+                    Some((a, b, true))
+                }
+                (Some(StopPosition::Pixels(a)), Some(StopPosition::Pixels(b))) => {
+                    Some((a, b, false))
+                }
+                _ => None,
+            };
+            for (step, slot) in (anchor + 1..i).enumerate() {
+                let t = (step + 1) as f32 / gap;
+                stops[slot].position = Some(match ends {
+                    Some((a, b, true)) => StopPosition::Fraction(a + (b - a) * t),
+                    Some((a, b, false)) => StopPosition::Pixels(a + (b - a) * t),
+                    None => StopPosition::Fraction(slot as f32 / (n - 1).max(1) as f32),
+                });
+            }
+        }
+        anchor = i;
+    }
+
+    // Non-decreasing, per unit: comparing a fraction against a length would be
+    // comparing two different quantities, so a change of unit resets the floor.
+    let mut floor: Option<StopPosition> = None;
+    for stop in stops.iter_mut() {
+        match (&mut stop.position, floor) {
+            (Some(StopPosition::Fraction(p)), Some(StopPosition::Fraction(f))) => *p = p.max(f),
+            (Some(StopPosition::Pixels(p)), Some(StopPosition::Pixels(f))) => *p = p.max(f),
+            _ => {}
+        }
+        floor = stop.position;
+    }
+}
+
+/// CSS's colour transition hint — a bare position between two stops that moves
+/// the 50 % mix onto it. The ramp gpui evaluates is piecewise linear, so the
+/// hint becomes the extra stop it describes: the midpoint colour, AT the hint.
+/// The curve then passes through the right colour at the right place and
+/// differs only in the easing either side of it.
+fn hint_stop(before: Hsla, after: Hsla, position: StopPosition) -> Stop {
+    Stop {
+        color: mix_hsla(before, after),
+        position: Some(position),
+    }
+}
+
+/// The midpoint of two colours, hue averaged the short way round so
+/// amber→yellow→amber does not come back cyan.
+fn mix_hsla(a: Hsla, b: Hsla) -> Hsla {
+    let mut hue_delta = b.h - a.h;
+    if hue_delta > 0.5 {
+        hue_delta -= 1.0;
+    } else if hue_delta < -0.5 {
+        hue_delta += 1.0;
+    }
+    Hsla {
+        h: (a.h + hue_delta * 0.5).rem_euclid(1.0),
+        s: (a.s + b.s) * 0.5,
+        l: (a.l + b.l) * 0.5,
+        a: (a.a + b.a) * 0.5,
+    }
+}
+
+/// A `<length-percentage>` stop position: a percentage is a fraction of the
+/// gradient line, anything absolute is a length along it.
+fn stop_position_lp(v: &LengthPercentage) -> Option<StopPosition> {
+    match v {
+        DimensionPercentage::Percentage(p) => Some(StopPosition::Fraction(p.0)),
+        DimensionPercentage::Dimension(d) => length_value_px(d).map(StopPosition::Pixels),
+        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(StopPosition::Pixels),
+    }
+}
+
+/// The same for a conic gradient, whose stops are angles. One turn IS the
+/// gradient line, so both spellings reduce to a fraction of it.
+fn stop_position_angle(
+    v: &DimensionPercentage<lightningcss::values::angle::Angle>,
+) -> Option<StopPosition> {
+    match v {
+        DimensionPercentage::Percentage(p) => Some(StopPosition::Fraction(p.0)),
+        DimensionPercentage::Dimension(a) => {
+            Some(StopPosition::Fraction(a.to_degrees() / 360.0))
+        }
+        DimensionPercentage::Calc(_) => None,
+    }
+}
+
+/// Turns a gradient's item list — stops interleaved with transition hints —
+/// into a flat, fully positioned stop list.
+///
+/// `None` means a colour did not resolve to a concrete value, which the caller
+/// reports as an unresolved colour rather than painting a guess.
+fn collect_stops<P: Clone>(
+    items: &[lightningcss::values::gradient::GradientItem<P>],
+    position_of: &dyn Fn(&P) -> Option<StopPosition>,
+) -> Option<Vec<Stop>> {
+    use lightningcss::values::gradient::GradientItem;
+
+    let mut stops: Vec<Stop> = Vec::with_capacity(items.len());
+    let mut pending_hints: Vec<StopPosition> = Vec::new();
+    for item in items {
+        match item {
+            GradientItem::ColorStop(s) => {
+                let color = color(&s.color)?;
+                // A hint only means something between two stops, so it is
+                // resolved once the stop after it arrives.
+                for hint in pending_hints.drain(..) {
+                    if let Some(before) = stops.last().map(|s: &Stop| s.color) {
+                        stops.push(hint_stop(before, color, hint));
+                    }
+                }
+                stops.push(Stop {
+                    color,
+                    position: s.position.as_ref().and_then(|p| position_of(p)),
+                });
+            }
+            GradientItem::Hint(h) => {
+                if let Some(p) = position_of(h) {
+                    pending_hints.push(p);
+                }
+            }
+        }
+    }
+    if stops.is_empty() {
+        return None;
+    }
+    resolve_stop_positions(&mut stops);
+    Some(stops)
+}
+
+/// A radial or conic gradient's centre, as a fraction of the box or an absolute
+/// offset into it — CSS's `at <position>`.
+fn gradient_center(position: &lightningcss::values::position::Position) -> ((f32, f32), bool) {
+    use lightningcss::values::position::{
+        HorizontalPositionKeyword as H, PositionComponent as P, VerticalPositionKeyword as V,
+    };
+
+    fn component<S: Copy>(c: &P<S>, from_start: impl Fn(S) -> bool) -> (f32, bool) {
+        let absolute = |v: &LengthPercentage| match v {
+            DimensionPercentage::Dimension(d) => length_value_px(d),
+            DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px),
+            DimensionPercentage::Percentage(_) => None,
+        };
+        match c {
+            P::Center => (0.5, false),
+            P::Length(DimensionPercentage::Percentage(p)) => (p.0, false),
+            P::Length(v) => absolute(v).map(|px| (px, true)).unwrap_or((0.5, false)),
+            P::Side { side, offset } => {
+                let near = from_start(*side);
+                match offset {
+                    None => (if near { 0.0 } else { 1.0 }, false),
+                    Some(DimensionPercentage::Percentage(p)) => {
+                        (if near { p.0 } else { 1.0 - p.0 }, false)
+                    }
+                    // A length measured from the FAR side would need the box.
+                    // `right 10px` is not a shape stylesheets write; the near
+                    // side is, and it is exact.
+                    Some(v) => match absolute(v) {
+                        Some(px) if near => (px, true),
+                        _ => (if near { 0.0 } else { 1.0 }, false),
+                    },
+                }
+            }
+        }
+    }
+
+    let (x, x_px) = component(&position.x, |s| matches!(s, H::Left));
+    let (y, y_px) = component(&position.y, |s| matches!(s, V::Top));
+    // One flag covers both axes, so a mixed pair keeps the fraction and drops
+    // the length — `at 10px center` is vanishingly rare and `at 50% 50%` is
+    // what every stylesheet actually writes.
+    match (x_px, y_px) {
+        (true, true) => ((x, y), true),
+        (true, false) => ((0.0, y), false),
+        (false, true) => ((x, 0.0), false),
+        (false, false) => ((x, y), false),
+    }
+}
+
+/// Packs resolved stops onto a background, flagging the ones written as
+/// absolute lengths so the shader divides them by the gradient line.
+fn with_resolved_stops(background: gpui::Background, stops: &[Stop]) -> gpui::Background {
+    let packed: Vec<gpui::LinearColorStop> = stops
+        .iter()
+        .map(|s| {
+            let value = match s.position {
+                Some(StopPosition::Pixels(v)) | Some(StopPosition::Fraction(v)) => v,
+                None => 0.0,
+            };
+            gpui::linear_color_stop(s.color, value)
+        })
+        .collect();
+    let mut background = background.with_stops(&packed);
+    for (i, stop) in stops.iter().enumerate().take(gpui::GRADIENT_STOPS) {
+        if matches!(stop.position, Some(StopPosition::Pixels(_))) {
+            background = background.stop_in_pixels(i);
+        }
+    }
+    background
+}
+
+/// Splits a stop list too long for one [`gpui::Background`] into consecutive
+/// BANDS, each its own background layer, painted over one another.
+///
+/// A band carries its own slice of the ramp plus a transparent guard stop at
+/// each shared edge, so every pixel is opaque in exactly one band and
+/// transparent in the rest. Compositing transparent over a band is the identity,
+/// and the guards are hard stops (two positions the same), so there is no seam
+/// and no double blend — the result is the same ramp, exactly, without a cap on
+/// how many stops it may have.
+fn band_stops(stops: &[Stop]) -> Vec<Vec<Stop>> {
+    const REAL_PER_BAND: usize = gpui::GRADIENT_STOPS - 2;
+    if stops.len() <= gpui::GRADIENT_STOPS {
+        return vec![stops.to_vec()];
+    }
+    let transparent = |at: Option<StopPosition>| Stop {
+        color: Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: 0.0,
+        },
+        position: at,
+    };
+    let mut bands = Vec::new();
+    let mut start = 0;
+    while start + 1 < stops.len() {
+        let end = (start + REAL_PER_BAND - 1).min(stops.len() - 1);
+        let mut band: Vec<Stop> = Vec::with_capacity(gpui::GRADIENT_STOPS);
+        if start > 0 {
+            band.push(transparent(stops[start].position));
+        }
+        band.extend_from_slice(&stops[start..=end]);
+        if end + 1 < stops.len() {
+            band.push(transparent(stops[end].position));
+        }
+        bands.push(band);
+        start = end;
+    }
+    bands
+}
+
+/// Maps a `background-image` list onto [`Extras::background_images`], keeping
+/// each gpui background next to the CSS layer index that placed it.
+fn collect_background_images<'a>(
+    images: impl Iterator<Item = &'a lightningcss::values::image::Image<'a>>,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
+    let mut layers: Vec<BackgroundLayer> = Vec::new();
+    for (index, image) in images.enumerate() {
+        let Some((backgrounds, key)) = gradient_layer(image, diagnostics) else {
+            continue;
+        };
+        // The KEY colour describes the whole element, and the top layer is what
+        // a reader sees, so the first one to resolve wins.
+        if x.background_key_color.is_none() || index == 0 {
+            x.background_key_color = Some(key);
+        }
+        for background in backgrounds {
+            layers.push(BackgroundLayer {
+                index: index.min(u16::MAX as usize) as u16,
+                background,
+            });
+        }
+    }
+    x.background_images = Some(Rc::new(layers));
+}
+
+/// `background-size`. `auto`, `cover` and `contain` all resolve to the box for
+/// a gradient, which has no intrinsic size — and "the box" is what an untiled
+/// background already is, so they produce `None` rather than a tile.
+fn background_size(
+    size: &lightningcss::properties::background::BackgroundSize,
+) -> (Option<TileLength>, Option<TileLength>) {
+    use lightningcss::properties::background::BackgroundSize as BS;
+    match size {
+        BS::Cover | BS::Contain => (None, None),
+        BS::Explicit { width, height } => {
+            let axis = |v: &LengthPercentageOrAuto| match v {
+                LengthPercentageOrAuto::Auto => None,
+                LengthPercentageOrAuto::LengthPercentage(lp) => {
+                    TileLength::from_length_percentage(lp)
+                }
+            };
+            // CSS resolves a single explicit axis against the image's aspect
+            // ratio. A gradient has none, so the other axis is the box — which
+            // is what `None` means here.
+            (axis(width), axis(height))
+        }
+    }
+}
+
+fn background_repeat(
+    repeat: &lightningcss::properties::background::BackgroundRepeat,
+) -> (bool, bool) {
+    use lightningcss::properties::background::BackgroundRepeatKeyword as K;
+    // `space` and `round` adjust the gap or the tile size so a whole number of
+    // tiles fits. Both still repeat, and both differ from `repeat` only by a
+    // sub-tile amount; treating them as `repeat` is the closer of the two
+    // available answers.
+    let on = |k: &K| !matches!(k, K::NoRepeat);
+    (on(&repeat.x), on(&repeat.y))
+}
+
+fn background_position(
+    position: &lightningcss::properties::background::BackgroundPosition,
+    diagnostics: &mut Vec<String>,
+) -> (TileLength, TileLength) {
+    (
+        position_component(&position.x, true, diagnostics),
+        position_component(&position.y, false, diagnostics),
+    )
+}
+
+/// One axis of a `background-position`.
+///
+/// A percentage aligns the tile inside the space it leaves — `50%` centres it —
+/// so it stays a fraction all the way to the shader, which is the only place
+/// that knows the box and the tile.
+fn position_component<S: Copy>(
+    component: &lightningcss::values::position::PositionComponent<S>,
+    horizontal: bool,
+    diagnostics: &mut Vec<String>,
+) -> TileLength
+where
+    S: PositionSide,
+{
+    use lightningcss::values::position::PositionComponent as P;
+    let absolute = |v: &LengthPercentage| match v {
+        DimensionPercentage::Dimension(d) => length_value_px(d),
+        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px),
+        DimensionPercentage::Percentage(_) => None,
+    };
+    match component {
+        P::Center => TileLength::Fraction(0.5),
+        P::Length(DimensionPercentage::Percentage(p)) => TileLength::Fraction(p.0),
+        P::Length(v) => absolute(v)
+            .map(TileLength::Pixels)
+            .unwrap_or(TileLength::Fraction(0.0)),
+        P::Side { side, offset } => {
+            let near = side.is_near_edge();
+            match offset {
+                None => TileLength::Fraction(if near { 0.0 } else { 1.0 }),
+                Some(DimensionPercentage::Percentage(p)) => {
+                    TileLength::Fraction(if near { p.0 } else { 1.0 - p.0 })
+                }
+                Some(v) if near => absolute(v)
+                    .map(TileLength::Pixels)
+                    .unwrap_or(TileLength::Fraction(0.0)),
+                // `right 10px` is "10px in from the far edge", which is one
+                // fraction MINUS one length — two numbers where the tile
+                // carries one. The near-edge spellings and every percentage
+                // form are exact; this is the one that is not.
+                Some(_) => {
+                    warn_once(
+                        diagnostics,
+                        &format!(
+                            "`background-position: {} <length>` is placed flush against that edge \
+                             (v1) — an offset from the FAR edge is a fraction of the box minus a \
+                             length, and the tile carries one number per axis. Write it from the \
+                             near edge (`left`/`top`), or as a percentage, both of which are exact",
+                            if horizontal { "right" } else { "bottom" }
+                        ),
+                    );
+                    TileLength::Fraction(1.0)
+                }
+            }
+        }
+    }
+}
+
+/// Lets [`position_component`] ask a horizontal or vertical side keyword the
+/// one question it has: is this the edge offsets are measured FROM?
+pub(crate) trait PositionSide {
+    fn is_near_edge(self) -> bool;
+}
+
+impl PositionSide for lightningcss::values::position::HorizontalPositionKeyword {
+    fn is_near_edge(self) -> bool {
+        matches!(self, Self::Left)
+    }
+}
+
+impl PositionSide for lightningcss::values::position::VerticalPositionKeyword {
+    fn is_near_edge(self) -> bool {
+        matches!(self, Self::Top)
+    }
+}
+
+/// One CSS background image layer → the gpui backgrounds that paint it, plus
+/// the single colour that stands in for the layer when only one is available
 /// ([`Extras::background_key_color`]).
 ///
-/// Everything else in the CSS image grammar is refused HERE rather than being
-/// approximated, and the caller names the alternative in the advisory.
-fn gradient_background(
+/// The whole gradient grammar renders: `linear-`, `radial-` and
+/// `conic-gradient()` and their three `repeating-` forms, up to
+/// [`gpui::GRADIENT_STOPS`] colour stops inline and any number through
+/// [`band_stops`], stop positions written as percentages OR absolute lengths,
+/// transition hints, corner keywords aimed at the real corner, and `at
+/// <position>` / `circle` / `ellipse` / the four extent keywords.
+///
+/// Tiling (`background-size` / `-position` / `-repeat`) is NOT applied here:
+/// those are separate properties that can arrive from separate rules, so the
+/// caller folds them on afterwards.
+fn gradient_layer(
     img: &lightningcss::values::image::Image<'_>,
     diagnostics: &mut Vec<String>,
-) -> Option<(gpui::Background, Hsla)> {
-    use lightningcss::values::gradient::{Gradient, GradientItem, LineDirection};
+) -> Option<(Vec<gpui::Background>, Hsla)> {
+    use lightningcss::values::gradient::{Circle, Ellipse, EndingShape, Gradient, LineDirection, ShapeExtent};
     use lightningcss::values::image::Image;
     use lightningcss::values::position::{HorizontalPositionKeyword as H, VerticalPositionKeyword as V};
 
-    let g = match img {
+    let gradient = match img {
         Image::Gradient(g) => g.as_ref(),
         Image::Url(_) => {
             warn_once(
                 diagnostics,
                 "background-image: url() is not painted (v1) — gpui's background is a colour or a \
-                 two-stop linear gradient, not an image layer. Use an `<img>` (positioned behind \
-                 the content) for a raster background; the image loader, object-fit and the \
-                 file://, data: and http(s) source grammars are all live on that element",
+                 gradient, not an image layer. Use an `<img>` (positioned behind the content) for \
+                 a raster background; the image loader, object-fit and the file://, data: and \
+                 http(s) source grammars are all live on that element",
             );
             return None;
         }
@@ -1221,31 +1986,87 @@ fn gradient_background(
         Image::None => return None,
     };
 
-    let linear = match g {
-        Gradient::Linear(l) => l,
-        Gradient::RepeatingLinear(l) => {
-            warn_once(
-                diagnostics,
-                "repeating-linear-gradient() is painted as a single non-repeating pass (v1) — \
-                 gpui's gradient has two stops and no repeat mode",
-            );
-            l
+    // A `repeating-*` gradient restarts its ramp every period instead of
+    // clamping at the ends; everything else about it is identical, which is why
+    // the two forms share every arm below.
+    let (background, stops) = match gradient {
+        Gradient::Linear(l) | Gradient::RepeatingLinear(l) => {
+            let stops = collect_stops(&l.items, &stop_position_lp)?;
+            let angle = match &l.direction {
+                LineDirection::Angle(a) => Some(a.to_degrees()),
+                LineDirection::Vertical(V::Top) => Some(0.0),
+                LineDirection::Vertical(V::Bottom) => Some(180.0),
+                LineDirection::Horizontal(H::Right) => Some(90.0),
+                LineDirection::Horizontal(H::Left) => Some(270.0),
+                // CSS aims the line at the actual corner, so the angle depends
+                // on the box's aspect ratio and is resolved in the shader.
+                LineDirection::Corner { .. } => None,
+            };
+            let background = match angle {
+                Some(angle) => gpui::linear_gradient_stops(angle, &[]),
+                None => {
+                    let LineDirection::Corner { horizontal, vertical } = &l.direction else {
+                        unreachable!("only a corner direction leaves the angle unresolved")
+                    };
+                    gpui::linear_gradient_stops(0.0, &[]).to_corner(
+                        match (horizontal, vertical) {
+                            (H::Right, V::Top) => 0,
+                            (H::Right, V::Bottom) => 1,
+                            (H::Left, V::Bottom) => 2,
+                            (H::Left, V::Top) => 3,
+                        },
+                    )
+                }
+            };
+            (background, stops)
         }
-        Gradient::Radial(_) | Gradient::RepeatingRadial(_) => {
-            warn_once(
-                diagnostics,
-                "radial-gradient() is not painted (v1) — gpui's background gradient is LINEAR \
-                 only. `linear-gradient()` renders; a radial one needs an `<img>` or an `<svg>`",
-            );
-            return None;
+        Gradient::Radial(r) | Gradient::RepeatingRadial(r) => {
+            let stops = collect_stops(&r.items, &stop_position_lp)?;
+            let (center, center_px) = gradient_center(&r.position);
+            let extent = |e: &ShapeExtent| match e {
+                ShapeExtent::ClosestSide => 1u8,
+                ShapeExtent::FarthestSide => 2,
+                ShapeExtent::ClosestCorner => 3,
+                ShapeExtent::FarthestCorner => 4,
+            };
+            let background = gpui::radial_gradient(&[]).at(center, center_px);
+            let background = match &r.shape {
+                EndingShape::Circle(Circle::Extent(e)) => background.with_extent(extent(e), false),
+                EndingShape::Circle(Circle::Radius(len)) => match css_length_px(len) {
+                    Some(radius) => background.with_radii((radius, radius), true),
+                    None => background.with_extent(4, false),
+                },
+                EndingShape::Ellipse(Ellipse::Extent(e)) => background.with_extent(extent(e), true),
+                EndingShape::Ellipse(Ellipse::Size { x, y }) => {
+                    let axis = |v: &LengthPercentage| match v {
+                        DimensionPercentage::Percentage(p) => Some((p.0, false)),
+                        DimensionPercentage::Dimension(d) => length_value_px(d).map(|v| (v, true)),
+                        DimensionPercentage::Calc(c) => {
+                            calc_px(c, &lp_leaf_px).map(|v| (v, true))
+                        }
+                    };
+                    match (axis(x), axis(y)) {
+                        // Both axes have to agree on the unit, because one flag
+                        // covers the pair. A mixed pair keeps the fractions.
+                        (Some((rx, true)), Some((ry, true))) => {
+                            background.with_radii((rx, ry), true)
+                        }
+                        (Some((rx, false)), Some((ry, false))) => {
+                            background.with_radii((rx, ry), false)
+                        }
+                        _ => background.with_extent(4, true),
+                    }
+                }
+            };
+            (background, stops)
         }
-        Gradient::Conic(_) | Gradient::RepeatingConic(_) => {
-            warn_once(
-                diagnostics,
-                "conic-gradient() is not painted (v1) — gpui's background gradient is LINEAR \
-                 only. `linear-gradient()` renders; a conic one needs an `<img>` or an `<svg>`",
-            );
-            return None;
+        Gradient::Conic(c) | Gradient::RepeatingConic(c) => {
+            let stops = collect_stops(&c.items, &stop_position_angle)?;
+            let (center, center_px) = gradient_center(&c.position);
+            (
+                gpui::conic_gradient(c.angle.to_degrees(), &[]).at(center, center_px),
+                stops,
+            )
         }
         Gradient::WebKitGradient(_) => {
             warn_once(
@@ -1257,96 +2078,23 @@ fn gradient_background(
         }
     };
 
-    // CSS and gpui agree on the angle convention: 0deg is "to top" and the
-    // angle turns clockwise. So the only work is turning the keyword forms
-    // into degrees.
-    let angle = match &linear.direction {
-        LineDirection::Angle(a) => a.to_degrees(),
-        LineDirection::Vertical(V::Top) => 0.0,
-        LineDirection::Vertical(V::Bottom) => 180.0,
-        LineDirection::Horizontal(H::Right) => 90.0,
-        LineDirection::Horizontal(H::Left) => 270.0,
-        LineDirection::Corner { horizontal, vertical } => {
-            // A real corner gradient's angle depends on the box's aspect ratio
-            // (CSS points the line at the corner); gpui has one angle and does
-            // not know the box, so this is the square-box answer.
-            warn_once(
-                diagnostics,
-                "`linear-gradient(to <corner>, …)` uses the 45° diagonal (v1) — CSS aims the \
-                 gradient line at the actual corner, so on a non-square box the ramp is rotated \
-                 slightly. Give an explicit angle to pin it",
-            );
-            match (horizontal, vertical) {
-                (H::Right, V::Top) => 45.0,
-                (H::Right, V::Bottom) => 135.0,
-                (H::Left, V::Bottom) => 225.0,
-                (H::Left, V::Top) => 315.0,
-            }
-        }
-    };
+    let repeating = matches!(
+        gradient,
+        Gradient::RepeatingLinear(_) | Gradient::RepeatingRadial(_) | Gradient::RepeatingConic(_)
+    );
+    let background = background.repeating(repeating);
 
-    let stops: Vec<&lightningcss::values::gradient::ColorStop<LengthPercentage>> = linear
-        .items
-        .iter()
-        .filter_map(|i| match i {
-            GradientItem::ColorStop(s) => Some(s),
-            GradientItem::Hint(_) => None,
-        })
+    // A single stop is a flat fill, which is what CSS paints too.
+    let key = if stops.len() == 1 {
+        stops[0].color
+    } else {
+        mix_hsla(stops[0].color, stops[stops.len() - 1].color)
+    };
+    let layers = band_stops(&stops)
+        .into_iter()
+        .map(|band| with_resolved_stops(background, &band))
         .collect();
-    if stops.len() < 2 {
-        warn_once(
-            diagnostics,
-            "a linear-gradient() with fewer than two colour stops is not painted (v1)",
-        );
-        return None;
-    }
-    if stops.len() > 2 {
-        warn_once(
-            diagnostics,
-            "linear-gradient() carries TWO colour stops here (v1) — gpui's gradient is a two-stop \
-             ramp, so the first and last are kept and the ones in between (a Tailwind `via-*`, \
-             say) are dropped",
-        );
-    }
-    let position = |s: &lightningcss::values::gradient::ColorStop<LengthPercentage>, fallback: f32| {
-        match &s.position {
-            Some(LengthPercentage::Percentage(p)) => p.0,
-            // An absolute stop position needs the gradient line's length, which
-            // is the box's — unknown here. The endpoint default is the honest
-            // approximation and the ramp still runs the right way.
-            Some(_) => fallback,
-            None => fallback,
-        }
-    };
-    let first = stops[0];
-    let last = stops[stops.len() - 1];
-    let (Some(from), Some(to)) = (color(&first.color), color(&last.color)) else {
-        unresolved_color(diagnostics, "linear-gradient() colour stop");
-        return None;
-    };
-    // The midpoint, in the same straight-alpha HSL the rest of the mapper works
-    // in. Hue is averaged the short way round so amber→yellow→amber does not
-    // come back cyan.
-    let mut hue_delta = to.h - from.h;
-    if hue_delta > 0.5 {
-        hue_delta -= 1.0;
-    } else if hue_delta < -0.5 {
-        hue_delta += 1.0;
-    }
-    let key = Hsla {
-        h: (from.h + hue_delta * 0.5).rem_euclid(1.0),
-        s: (from.s + to.s) * 0.5,
-        l: (from.l + to.l) * 0.5,
-        a: (from.a + to.a) * 0.5,
-    };
-    Some((
-        gpui::linear_gradient(
-            angle,
-            gpui::linear_color_stop(from, position(first, 0.0)),
-            gpui::linear_color_stop(to, position(last, 1.0)),
-        ),
-        key,
-    ))
+    Some((layers, key))
 }
 
 /// Advisories are ONE-SHOT: `diagnostics` accumulates for a whole stylesheet
@@ -1372,6 +2120,39 @@ fn warn_once(diagnostics: &mut Vec<String>, msg: &str) {
 /// `light-dark()` and friends land here — and USED to fall through silently,
 /// which meant Tailwind's `bg-current` / `text-current` did nothing at all with
 /// no way to find out.
+/// Substitutes an element's computed `color` into the properties that were
+/// written as `currentColor`.
+///
+/// Runs after the cascade rather than during it: `currentColor` is a *computed
+/// value*, defined as this element's `color`, which is not known until the
+/// whole element has been folded and its parent's colour is in hand.
+pub(crate) fn apply_current_color(
+    r: &mut StyleRefinement,
+    targets: CurrentColorTargets,
+    color: Hsla,
+) {
+    if targets.has(CurrentColorTargets::BORDER) {
+        r.border_color = Some(color);
+    }
+    if targets.has(CurrentColorTargets::OUTLINE) {
+        if let Some(outline) = r.vn_outline.as_mut() {
+            outline.color = color;
+        }
+    }
+    if targets.has(CurrentColorTargets::BACKGROUND) {
+        r.background = Some(gpui::Fill::Color(color.into()));
+    }
+}
+
+fn per_side_border_color_advisory(diagnostics: &mut Vec<String>) {
+    warn_once(
+        diagnostics,
+        "a per-side `border-*-color` sets the colour of ALL four sides (v1) — gpui's box has one \
+         border colour. Pair it with per-side border WIDTHS (which are honoured individually) so \
+         only the intended side is drawn",
+    );
+}
+
 fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
     once(
         diagnostics,
@@ -1446,6 +2227,141 @@ fn single_ident<'a>(
 
 /// The single `<length>` a token list carries, in px. `0` with no unit counts,
 /// because that is how every sheet writes a zero length.
+/// `true` when a `clip: rect(…)` names a zero-area rectangle — the
+/// screen-reader-only idiom, which clips the box away entirely.
+///
+/// Both spellings count: `rect(0, 0, 0, 0)` and `rect(0 0 0 0)`. `auto` is not
+/// a rect and is not empty.
+fn clip_rect_is_empty(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+
+    fn scan(
+        tokens: &[lightningcss::properties::custom::TokenOrValue<'_>],
+        saw_rect: &mut bool,
+        numbers: &mut Vec<f32>,
+    ) {
+        for t in tokens {
+            match t {
+                // lightningcss keeps a function's arguments NESTED rather than
+                // flat, so `rect(0, 0, 0, 0)` is one `Function` whose arguments
+                // are the four numbers.
+                TokenOrValue::Function(f) => {
+                    if f.name.0.as_ref() == "rect" {
+                        *saw_rect = true;
+                    }
+                    scan(&f.arguments.0, saw_rect, numbers);
+                }
+                TokenOrValue::Token(Token::Function(name)) if name.as_ref() == "rect" => {
+                    *saw_rect = true
+                }
+                TokenOrValue::Token(Token::Number { value, .. }) => numbers.push(*value),
+                TokenOrValue::Length(l) => numbers.push(length_value_px(l).unwrap_or(f32::NAN)),
+                TokenOrValue::Token(Token::Dimension { value, .. }) => numbers.push(*value),
+                _ => {}
+            }
+        }
+    }
+
+    let mut saw_rect = false;
+    let mut numbers: Vec<f32> = Vec::new();
+    scan(&value.0, &mut saw_rect, &mut numbers);
+    // `rect(top, right, bottom, left)`: empty when the two horizontal edges
+    // coincide or the two vertical ones do.
+    saw_rect
+        && numbers.len() == 4
+        && ((numbers[0] - numbers[2]).abs() < f32::EPSILON
+            || (numbers[3] - numbers[1]).abs() < f32::EPSILON)
+}
+
+/// A value that is a single CSS-wide keyword. Those are handled by the cascade
+/// (or, for `inherit`, by not writing the field at all — see `channel`), so a
+/// property-specific parser should skip rather than reject them.
+fn is_css_wide_keyword(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
+    single_ident_raw(value).is_some_and(|v| {
+        matches!(
+            v.to_ascii_lowercase().as_str(),
+            "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+        )
+    })
+}
+
+/// A single keyword token equal to `expected`.
+fn single_ident_is(value: &lightningcss::properties::custom::TokenList<'_>, expected: &str) -> bool {
+    single_ident_raw(value).is_some_and(|v| v.eq_ignore_ascii_case(expected))
+}
+
+/// `font-feature-settings` / `font-variant-numeric` → gpui's `FontFeatures`,
+/// the tag/value list DirectWrite installs as an `IDWriteTypography` over the
+/// run.
+///
+/// `font-variant-numeric`'s keywords are defined in terms of OpenType features,
+/// so they map one-to-one rather than approximately.
+fn font_features(
+    value: &lightningcss::properties::custom::TokenList<'_>,
+    property: &str,
+) -> Option<gpui::FontFeatures> {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    if is_css_wide_keyword(value) {
+        return Some(gpui::FontFeatures::default());
+    }
+    let mut pairs: Vec<(String, u32)> = Vec::new();
+    if property == "font-variant-numeric" {
+        for t in value.0.iter() {
+            // Tailwind composes this out of five custom properties that each
+            // default to a single space, so most of the token list is
+            // whitespace with one keyword in it.
+            let TokenOrValue::Token(Token::Ident(name)) = t else { continue };
+            let tag = match name.as_ref() {
+                "normal" => continue,
+                "lining-nums" => "lnum",
+                "oldstyle-nums" => "onum",
+                "proportional-nums" => "pnum",
+                "tabular-nums" => "tnum",
+                "diagonal-fractions" => "frac",
+                "stacked-fractions" => "afrc",
+                "ordinal" => "ordn",
+                "slashed-zero" => "zero",
+                _ => return None,
+            };
+            pairs.push((tag.to_string(), 1));
+        }
+        return Some(gpui::FontFeatures(std::sync::Arc::new(pairs)));
+    }
+
+    // `font-feature-settings: "liga" 0, "ss01"` — a quoted tag, optionally
+    // followed by a number or `on`/`off`, repeated. A tag with nothing after it
+    // is `1`.
+    let mut pending: Option<String> = None;
+    for t in value.0.iter() {
+        match t {
+            TokenOrValue::Token(Token::WhiteSpace(_)) | TokenOrValue::Token(Token::Comma) => {}
+            TokenOrValue::Token(Token::String(tag)) => {
+                if let Some(previous) = pending.take() {
+                    pairs.push((previous, 1));
+                }
+                if tag.len() != 4 {
+                    return None;
+                }
+                pending = Some(tag.to_string());
+            }
+            TokenOrValue::Token(Token::Number { value, .. }) => {
+                pairs.push((pending.take()?, *value as u32));
+            }
+            TokenOrValue::Token(Token::Ident(word)) => match word.as_ref() {
+                "on" => pairs.push((pending.take()?, 1)),
+                "off" => pairs.push((pending.take()?, 0)),
+                "normal" => {}
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    if let Some(previous) = pending {
+        pairs.push((previous, 1));
+    }
+    Some(gpui::FontFeatures(std::sync::Arc::new(pairs)))
+}
+
 fn single_length_px(value: &lightningcss::properties::custom::TokenList<'_>) -> Option<f32> {
     use lightningcss::properties::custom::{Token, TokenOrValue};
     let mut found = None;
@@ -1937,12 +2853,20 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         // along. `-webkit-line-clamp` is honoured on its own (below, in the
         // unknown-property bucket where lightningcss leaves it), so these are
         // genuinely inert rather than a missing feature.
-        BoxOrient(..) | BoxAlign(..) | BoxPack(..) => warn_once(
-            diagnostics,
-            "the legacy `-webkit-box` properties (`box-orient`, `box-align`, `box-pack`) are \
-             inert (v1) — `-webkit-line-clamp` is honoured on its own, so `display: -webkit-box; \
-             -webkit-box-orient: vertical; -webkit-line-clamp: N` clamps without them",
-        ),
+        BoxOrient(..) | BoxAlign(..) | BoxPack(..) => {}
+        // `text-decoration-skip-ink` decides whether an underline BREAKS around
+        // descenders. gpui draws one unbroken rule, and the property has no
+        // other effect — so `none` (draw it straight through) is exactly what
+        // it already does, and only `auto` diverges.
+        TextDecorationSkipInk(v, _) => {
+            use lightningcss::properties::text::TextDecorationSkipInk as Skip;
+            if !matches!(v, Skip::None) {
+                warn_once(
+                    diagnostics,
+                    "`text-decoration-skip-ink: auto` is not applied (v1) — gpui draws one                      unbroken underline and does not lift it around descenders. `none` (draw it                      straight through) is what it already does",
+                );
+            }
+        }
         // A decoration's colour, style and thickness live ON the decoration in
         // gpui, not beside it — so these only land when the same cascade has
         // already produced an underline or a strikethrough (which
@@ -1958,14 +2882,11 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     s.color = Some(v);
                     hit = true;
                 }
-                if !hit {
-                    warn_once(
-                        diagnostics,
-                        "`text-decoration-color` is carried ON the decoration here (v1) — it \
-                         takes effect only when the cascade has also produced a \
-                         `text-decoration-line` for this element",
-                    );
-                }
+                // `hit` false means no decoration LINE was declared on this
+                // element, so there is nothing to colour — and a browser paints
+                // nothing here either, because the property is only ever read
+                // through a line. No divergence, nothing to report.
+                let _ = hit;
             }
             None => unresolved_color(diagnostics, "text-decoration-color"),
         },
@@ -2055,12 +2976,11 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             r.visibility = Some(match v {
                 V::Visible => gpui::Visibility::Visible,
                 V::Hidden => gpui::Visibility::Hidden,
-                V::Collapse => {
-                    // `collapse` only differs from `hidden` inside tables and
-                    // flex containers, neither of which gpui models.
-                    unsupported(diagnostics, "visibility: collapse (treated as hidden)");
-                    gpui::Visibility::Hidden
-                }
+                // CSS defines `collapse` AS `hidden` for everything that is
+                // not a table row/column or a flex item, and there are no
+                // tables here — so on every box vue-native lays out, the two
+                // values genuinely mean the same thing.
+                V::Collapse => gpui::Visibility::Hidden,
             });
         }
         AspectRatio(v) => match &v.ratio {
@@ -2070,10 +2990,16 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             _ => unsupported(diagnostics, "aspect-ratio: auto — cannot undo an earlier ratio"),
         },
         Opacity(v) => r.opacity = Some(v.0),
+        // `color: currentColor` IS `color: inherit` — the property resolves
+        // against itself — and inheriting is what not writing the field does.
+        Color(CssColor::CurrentColor) => {}
         Color(c) => match color(c) {
             Some(c) => r.text.color = Some(c),
             None => unresolved_color(diagnostics, "color"),
         },
+        BackgroundColor(CssColor::CurrentColor) => {
+            x.current_color.0 |= CurrentColorTargets::BACKGROUND;
+        }
         BackgroundColor(c) => match color(c) {
             Some(c) => {
                 r.background = Some(gpui::Fill::Color(c.into()));
@@ -2082,66 +3008,87 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             None => unresolved_color(diagnostics, "background-color"),
         },
         Background(layers) => {
-            // Shorthand. Per CSS the colour lives on the LAST layer and paints
-            // UNDER every image layer; gpui's `Fill` holds one thing, so an
-            // image layer (a gradient) wins over the colour, which is what a
-            // browser shows for an opaque gradient.
+            // Per CSS the colour lives on the LAST layer and paints UNDER every
+            // image layer, which is exactly the relationship between gpui's
+            // `background` and its `background_layers`.
             if let Some(last) = layers.last() {
                 if let Some(c) = color(&last.color) {
                     r.background = Some(gpui::Fill::Color(c.into()));
                     x.background_key_color = Some(c);
                 }
             }
-            // Topmost image layer first — CSS paints layer 0 on top.
-            if layers.len() > 1
-                && layers
+            collect_background_images(
+                layers.iter().map(|l| &l.image),
+                x,
+                diagnostics,
+            );
+            x.background_size = Some(Rc::new(
+                layers.iter().map(|l| background_size(&l.size)).collect(),
+            ));
+            x.background_position = Some(Rc::new(
+                layers
                     .iter()
-                    .filter(|l| !matches!(l.image, lightningcss::values::image::Image::None))
-                    .count()
-                    > 1
-            {
-                warn_once(
-                    diagnostics,
-                    "only the TOP background image layer is painted (v1) — gpui's background is \
-                     one fill, so a stack of layers collapses to the first",
-                );
-            }
-            if let Some((bg, key)) = layers
-                .iter()
-                .find(|l| !matches!(l.image, lightningcss::values::image::Image::None))
-                .and_then(|l| gradient_background(&l.image, diagnostics))
-            {
-                r.background = Some(gpui::Fill::Color(bg));
-                x.background_key_color = Some(key);
-            }
+                    .map(|l| background_position(&l.position, diagnostics))
+                    .collect(),
+            ));
+            x.background_repeat = Some(Rc::new(
+                layers.iter().map(|l| background_repeat(&l.repeat)).collect(),
+            ));
         }
         BackgroundImage(images) => {
-            if images.len() > 1 {
-                warn_once(
-                    diagnostics,
-                    "only the TOP background image layer is painted (v1) — gpui's background is \
-                     one fill, so a stack of layers collapses to the first",
-                );
-            }
-            if let Some((bg, key)) =
-                images.first().and_then(|i| gradient_background(i, diagnostics))
-            {
-                r.background = Some(gpui::Fill::Color(bg));
-                x.background_key_color = Some(key);
-            }
+            collect_background_images(images.iter(), x, diagnostics);
         }
-        // The geometry properties of a background image. Nothing here has an
-        // effect while the only image layer that paints is a gradient, which
-        // always covers the border box — say that once rather than three times
-        // through the generic "not mapped" catch-all.
-        BackgroundSize(_) | BackgroundPosition(_) | BackgroundPositionX(_)
-        | BackgroundPositionY(_) | BackgroundRepeat(_) | BackgroundAttachment(_)
-        | BackgroundOrigin(_) => warn_once(
-            diagnostics,
-            "background-size/position/repeat/attachment/origin have no effect (v1) — the one \
-             background image vue-native paints is a linear gradient, and a gradient always \
-             covers the padding box. Use an `<img>` with `object-fit` for a placed image",
-        ),
+        BackgroundSize(sizes) => {
+            x.background_size = Some(Rc::new(sizes.iter().map(background_size).collect()));
+        }
+        BackgroundPosition(positions) => {
+            x.background_position = Some(Rc::new(
+                positions
+                    .iter()
+                    .map(|p| background_position(p, diagnostics))
+                    .collect(),
+            ));
+        }
+        BackgroundPositionX(list) => {
+            let previous = x.background_position.clone();
+            x.background_position = Some(Rc::new(
+                list.iter()
+                    .enumerate()
+                    .map(|(i, h)| {
+                        let y = previous
+                            .as_ref()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| p[i % p.len()].1)
+                            .unwrap_or(TileLength::Fraction(0.0));
+                        (position_component(h, true, diagnostics), y)
+                    })
+                    .collect(),
+            ));
+        }
+        BackgroundPositionY(list) => {
+            let previous = x.background_position.clone();
+            x.background_position = Some(Rc::new(
+                list.iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let h = previous
+                            .as_ref()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| p[i % p.len()].0)
+                            .unwrap_or(TileLength::Fraction(0.0));
+                        (h, position_component(v, false, diagnostics))
+                    })
+                    .collect(),
+            ));
+        }
+        BackgroundRepeat(list) => {
+            x.background_repeat = Some(Rc::new(list.iter().map(background_repeat).collect()));
+        }
+        // `background-attachment` and `background-origin` still have no effect,
+        // and for a reason that is not about the gradient work: there is no
+        // scrolling viewport a `fixed` background could be pinned to, and the
+        // background always fills the padding box.
+        BackgroundAttachment(_) | BackgroundOrigin(_) => {}
         BackgroundClip(v, _) => {
             use lightningcss::properties::background::BackgroundClip as BC;
             if matches!(v.first(), Some(BC::Text)) {
@@ -2165,9 +3112,12 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         }
         BorderColor(v) => {
             // gpui has one border color for all four sides — take the top.
-            match color(&v.top) {
-                Some(c) => r.border_color = Some(c),
-                None => unresolved_color(diagnostics, "border-color"),
+            match &v.top {
+                CssColor::CurrentColor => x.current_color.0 |= CurrentColorTargets::BORDER,
+                c => match color(c) {
+                    Some(c) => r.border_color = Some(c),
+                    None => unresolved_color(diagnostics, "border-color"),
+                },
             }
         }
         Border(b) => {
@@ -2196,17 +3146,18 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         // divider, table rule and `border-t` utility actually wants — instead
         // of rendering nothing at all, which is what "not mapped" bought.
         BorderTopColor(c) | BorderRightColor(c) | BorderBottomColor(c) | BorderLeftColor(c) => {
-            match color(c) {
-                Some(v) => {
-                    r.border_color = Some(v);
-                    warn_once(
-                        diagnostics,
-                        "a per-side `border-*-color` sets the colour of ALL four sides (v1) — \
-                         gpui's box has one border colour. Pair it with per-side border WIDTHS \
-                         (which are honoured individually) so only the intended side is drawn",
-                    );
+            match c {
+                CssColor::CurrentColor => {
+                    per_side_border_color_advisory(diagnostics);
+                    x.current_color.0 |= CurrentColorTargets::BORDER;
                 }
-                None => unresolved_color(diagnostics, "border-color"),
+                c => match color(c) {
+                    Some(v) => {
+                        r.border_color = Some(v);
+                        per_side_border_color_advisory(diagnostics);
+                    }
+                    None => unresolved_color(diagnostics, "border-color"),
+                },
             }
         }
         // `border-top: 1px solid X` — the per-side shorthand.
@@ -2451,11 +3402,15 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 if let Some(w) = border_width_px(&o.width) {
                     r.vn_outline.as_mut().unwrap().width = px(w);
                 }
-                match color(&o.color) {
-                    Some(c) => r.vn_outline.as_mut().unwrap().color = c,
-                    // `outline-color`'s initial value is `currentColor`
-                    // (`invert` in older UAs), and neither is resolvable here.
-                    None => unresolved_color(diagnostics, "outline-color"),
+                match &o.color {
+                    // `outline-color`'s initial value IS `currentColor`, so the
+                    // shorthand almost always carries it. Resolved after the
+                    // cascade, like every other `currentColor`.
+                    CssColor::CurrentColor => x.current_color.0 |= CurrentColorTargets::OUTLINE,
+                    c => match color(c) {
+                        Some(c) => r.vn_outline.as_mut().unwrap().color = c,
+                        None => unresolved_color(diagnostics, "outline-color"),
+                    },
                 }
             }
         }
@@ -2463,6 +3418,10 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             if let Some(v) = border_width_px(w) {
                 outline_mut(r).width = px(v);
             }
+        }
+        OutlineColor(CssColor::CurrentColor) => {
+            outline_mut(r);
+            x.current_color.0 |= CurrentColorTargets::OUTLINE;
         }
         OutlineColor(c) => match color(c) {
             Some(v) => outline_mut(r).color = v,
@@ -2541,7 +3500,19 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             };
             match n {
                 Some(n) => r.text.font_weight = Some(gpui::FontWeight(n)),
-                None => unsupported(diagnostics, "font-weight (bolder/lighter)"),
+                // `bolder` / `lighter` step relative to the INHERITED weight,
+                // through the table in CSS Fonts 4 § 2.2.1. vn-css folds no
+                // inherited text property (gpui's `TextStyleRefinement`
+                // cascades at paint time), so the step is taken from the
+                // initial `normal` — which is the row every real use lands on:
+                // `b, strong { font-weight: bolder }` in a UA sheet, over text
+                // that is 400.
+                None => {
+                    r.text.font_weight = Some(match w {
+                        CssFontWeight::Bolder => gpui::FontWeight(700.0),
+                        _ => gpui::FontWeight(100.0),
+                    })
+                }
             }
         }
         LineHeight(v) => {
@@ -2619,10 +3590,25 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 unsupported(diagnostics, "text-decoration-line: overline/blink");
             }
             if v.is_empty() {
-                unsupported(
-                    diagnostics,
-                    "text-decoration-line: none — cannot undo an earlier underline",
-                );
+                // `text-decoration-line: none` has to UNDO an earlier
+                // declaration — `.no-underline` exists precisely to cancel a
+                // `.underline` — and a `StyleRefinement` cannot say "clear this
+                // field": its `Option` means "declared or not", never "declared
+                // as nothing". So `none` is expressed as a decoration that
+                // paints nothing, zero thickness AND transparent, because
+                // either one alone would be at the mercy of gpui's stroke
+                // snapping (`Window::snap_stroke` rounds a hairline UP to one
+                // device pixel).
+                r.text.underline = Some(gpui::UnderlineStyle {
+                    thickness: px(0.0),
+                    color: Some(gpui::transparent_black()),
+                    wavy: false,
+                    offset: px(0.0),
+                });
+                r.text.strikethrough = Some(gpui::StrikethroughStyle {
+                    thickness: px(0.0),
+                    color: Some(gpui::transparent_black()),
+                });
             }
         }
         Cursor(c) => {
@@ -2769,62 +3755,117 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     ),
                 }
             }
+            // `text-underline-offset` moves the line down from where the
+            // font's metrics put it, which is one number on the decoration the
+            // paint already reads.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if matches!(
-                    name.0.as_ref(),
-                    "text-underline-offset" | "text-decoration-skip-ink"
-                ) =>
+                if name.0.as_ref() == "text-underline-offset" =>
             {
-                warn_once(
-                    diagnostics,
-                    "`text-underline-offset` / `text-decoration-skip-ink` are not applied (v1) — \
-                     gpui draws the underline at the font's own position and does not skip \
-                     descenders",
-                )
+                if single_ident_is(&c.value, "auto") || is_css_wide_keyword(&c.value) {
+                    // `auto` IS the font's own position.
+                } else if let Some(offset) = single_length_px(&c.value) {
+                    // The decoration is carried ON the run, so the offset lands
+                    // on whatever underline the cascade has already produced,
+                    // and on the one a later `text-decoration-line` produces.
+                    x.underline_offset = Some(offset);
+                    if let Some(u) = r.text.underline.as_mut() {
+                        u.offset = px(offset);
+                    }
+                } else {
+                    unsupported(diagnostics, "text-underline-offset (a <length> is expected)");
+                }
+            }
+            // `text-decoration-skip-ink` decides whether an underline BREAKS
+            // around descenders. gpui draws one unbroken rule, and the property
+            // has no other effect.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "text-decoration-skip-ink" =>
+            {
+                if !single_ident_is(&c.value, "none") && !is_css_wide_keyword(&c.value) {
+                    warn_once(
+                        diagnostics,
+                        "`text-decoration-skip-ink: auto` is not applied (v1) — gpui draws one \
+                         unbroken underline and does not lift it around descenders. `none` (draw \
+                         it straight through) is what it already does",
+                    );
+                }
+            }
+            // OpenType FEATURES reach the shaper for real: gpui's `Font`
+            // carries a `FontFeatures` tag/value list and DirectWrite applies
+            // it as an `IDWriteTypography` over the run.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(name.0.as_ref(), "font-feature-settings" | "font-variant-numeric") =>
+            {
+                match font_features(&c.value, name.0.as_ref()) {
+                    // `normal` and the CSS-wide keywords write nothing: the
+                    // first is the initial value (no features) and the rest
+                    // mean "take what you would have taken anyway".
+                    Some(features) if features.0.is_empty() => {}
+                    Some(features) => r.text.font_features = Some(features),
+                    None => warn_once(
+                        diagnostics,
+                        "an OpenType FEATURE value was not understood (v1) — \
+                         `font-feature-settings` takes `\"tag\" <number|on|off>` pairs and \
+                         `font-variant-numeric` the keyword set; both reach the shaper when they \
+                         parse",
+                    ),
+                }
+            }
+            // VARIATION axes are a different thing and genuinely absent: gpui's
+            // `Font` has no axis list, and its DirectWrite path selects a face
+            // through the weight/width/slope model rather than
+            // `IDWriteFontFace5::GetFontAxisValues`. `font-optical-sizing` is
+            // the exception — its `auto` IS applied now, by
+            // `SetAutomaticFontAxes(OPTICAL_SIZE)` in the fork, which is what a
+            // browser does by default; only an explicit `none` diverges.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "font-optical-sizing" =>
+            {
+                if !single_ident_is(&c.value, "auto") && !is_css_wide_keyword(&c.value) {
+                    warn_once(
+                        diagnostics,
+                        "`font-optical-sizing: none` is not applied (v1) — a variable font's \
+                         `opsz` axis is driven from the font size here, which is what `auto` (the \
+                         initial value, and what every browser does) asks for. There is no way to \
+                         switch it off",
+                    );
+                }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if matches!(
-                    name.0.as_ref(),
-                    "font-feature-settings"
-                        | "font-variant-numeric"
-                        | "font-variation-settings"
-                        | "font-optical-sizing"
-                ) =>
+                if name.0.as_ref() == "font-variation-settings" =>
             {
+                // `normal` IS "no axis values", which is exactly what a face
+                // selected through the weight/width/slope model has.
+                if single_ident_is(&c.value, "normal") || is_css_wide_keyword(&c.value) {
+                    return;
+                }
                 warn_once(
                     diagnostics,
-                    "OpenType feature and variation settings are not applied (v1) — the font is \
-                     selected by family, weight and style, and a VARIABLE font is instantiated at \
-                     the named weight only. Ship the static cut of the axis you need",
+                    "`font-variation-settings` is not applied (v1) — a face is selected through \
+                     the weight/width/slope model, not by axis value, so an arbitrary axis \
+                     (`wdth`, `slnt`, a custom one) cannot be instantiated. `font-weight` and \
+                     `font-style` do reach the axis the WWS model covers, and `opsz` is driven \
+                     from the font size",
                 )
             }
+            // Glyph rasterisation belongs to the platform text system, which
+            // already antialiases. These are hints a browser is free to ignore
+            // too, and the rendered result does not change under any value.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
                     "-webkit-font-smoothing" | "-moz-osx-font-smoothing"
-                ) =>
-            {
-                warn_once(
-                    diagnostics,
-                    "font-smoothing hints are inert (v1) — glyph rasterisation is the platform \
-                     text system's, and it is already subpixel-antialiased on Windows. Safe to \
-                     leave in the sheet",
-                )
-            }
+                ) => {}
+            // There is no touch scroller, no rubber-banding and no tap
+            // highlight here, so every value of these produces the same
+            // behaviour and none of them has anything to diverge from.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
                     "touch-action" | "overscroll-behavior" | "overscroll-behavior-x"
                         | "overscroll-behavior-y" | "-webkit-tap-highlight-color"
                         | "-webkit-overflow-scrolling" | "scroll-behavior"
-                ) =>
-            {
-                warn_once(
-                    diagnostics,
-                    "the touch/overscroll properties are inert (v1) — there is no touch scroller, \
-                     no rubber-banding and no tap highlight to suppress. Safe to leave in the sheet",
-                )
-            }
+                ) => {}
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
@@ -2842,12 +3883,24 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "clip" =>
             {
-                warn_once(
-                    diagnostics,
-                    "the legacy `clip` property is not applied (v1) — it is deprecated in CSS \
-                     too. The visually-hidden idiom it serves is expressible as `position: \
-                     absolute; width: 1px; height: 1px; overflow: hidden`, which does render",
-                )
+                // The deprecated `clip` survives in exactly one idiom: the
+                // screen-reader-only box, `clip: rect(0, 0, 0, 0)`. That rect
+                // is EMPTY, and an element clipped to an empty rect paints
+                // nothing — which is `visibility: hidden` with the layout box
+                // intact, and is expressible. A non-degenerate rect would need
+                // a per-element content mask in the paint path.
+                if clip_rect_is_empty(&c.value) {
+                    r.visibility = Some(gpui::Visibility::Hidden);
+                } else {
+                    warn_once(
+                        diagnostics,
+                        "a non-empty legacy `clip: rect()` is not applied (v1) — it is deprecated \
+                         in CSS too, and clipping a box to an arbitrary sub-rectangle needs a \
+                         content mask the paint path does not carry. `clip: rect(0,0,0,0)` (the \
+                         visually-hidden idiom) IS honoured, and `overflow: hidden` on a sized \
+                         box clips for real",
+                    );
+                }
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name) => {
                 once(
@@ -2862,70 +3915,145 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         // each of these says WHY and, where there is one, names the thing to
         // write instead. That is the whole difference between a diagnostic and
         // an advisory (docs/COMPAT.md).
-        LetterSpacing(_) | WordSpacing(_) => warn_once(
-            diagnostics,
-            "`letter-spacing` / `word-spacing` are not applied (v1) — gpui's shaper takes the \
-             font's own advances and has no tracking control. A different font weight or size is \
-             the lever that exists",
-        ),
-        VerticalAlign(_) => warn_once(
-            diagnostics,
-            "`vertical-align` is not applied (v1) — it aligns boxes inside a LINE box, and taffy \
-             has no inline formatting context. `align-items` / `align-self` on the flex parent is \
-             the equivalent that works",
-        ),
-        TextIndent(_) => warn_once(
-            diagnostics,
-            "`text-indent` is not applied (v1) — there is no first-line concept in the shaper. \
-             `padding-left` indents the whole block",
-        ),
-        ListStyle(_) | ListStyleType(_) | ListStylePosition(_) | ListStyleImage(_) => warn_once(
-            diagnostics,
-            "`list-style*` is not applied (v1) — `<ul>`/`<ol>` lay out as plain blocks and no \
-             marker box is generated, so there is nothing to style. Render the bullet as a real \
-             element (a `<span>` sibling) if it has to be visible",
-        ),
-        Resize(_) => warn_once(
-            diagnostics,
-            "`resize` is not applied (v1) — there is no user-resize affordance on a gpui box. \
-             A drag handle has to be a real element with a pointer handler",
-        ),
-        UserSelect(..) => warn_once(
-            diagnostics,
-            "`user-select` is not applied (v1) — text in a gpui box is painted, not selectable, \
-             so `none` is already the effective behaviour everywhere and `text` cannot turn it on",
-        ),
-        Appearance(..) => warn_once(
-            diagnostics,
-            "`appearance` is not applied (v1) — no element here carries a native OS control skin \
-             to remove, so `appearance: none` (the reset every form library writes) is already \
-             true",
-        ),
-        TabSize(..) => warn_once(
-            diagnostics,
-            "`tab-size` is not applied (v1) — the shaper collapses whitespace, so a tab is one \
-             space regardless",
-        ),
-        TextSizeAdjust(..) => warn_once(
-            diagnostics,
-            "`text-size-adjust` is inert (v1) — it exists to stop MOBILE BROWSERS inflating text, \
-             and nothing here inflates it. Safe to leave in the sheet",
-        ),
-        OverflowWrap(_) | WordBreak(_) => warn_once(
-            diagnostics,
-            "`overflow-wrap` / `word-break` are not applied (v1) — gpui wraps at word boundaries \
-             and does not break inside a word, which is `overflow-wrap: normal`. A long \
-             unbroken token will overflow rather than break",
-        ),
+        // `normal` is zero extra spacing, which is the initial value and also
+        // what not writing the field means — so it needs no explicit clear.
+        LetterSpacing(v) => {
+            if let Some(px) = spacing_px(v) {
+                r.text.letter_spacing = Some(gpui::px(px));
+            }
+        }
+        WordSpacing(v) => {
+            if let Some(px) = spacing_px(v) {
+                r.text.word_spacing = Some(gpui::px(px));
+            }
+        }
+        VerticalAlign(v) => {
+            use lightningcss::properties::font::VerticalAlign as VA;
+            use lightningcss::properties::font::VerticalAlignKeyword as VK;
+            // `baseline` is the initial value AND what a flex row already does
+            // with `align-items: baseline`, so it is not a divergence. The other
+            // keywords align a box INSIDE a line box, which taffy has no concept
+            // of.
+            // …and `vertical-align` only applies to an INLINE-LEVEL box or a
+            // table cell, so on a block-level one it does nothing in a browser
+            // either. Tailwind's preflight relies on exactly that pairing:
+            // `img, svg, video, canvas, … { display: block; vertical-align:
+            // middle }` sets both in one rule so the `middle` is inert unless
+            // an author puts the `display` back.
+            let block_level = matches!(
+                r.display,
+                Some(gpui::Display::Block | gpui::Display::Flex | gpui::Display::Grid)
+            ) && x.inline_level != Some(true);
+            if !matches!(v, VA::Keyword(VK::Baseline)) && !block_level {
+                warn_once(
+                    diagnostics,
+                    "`vertical-align` is not applied (v1) — it aligns boxes inside a LINE box, \
+                     and taffy has no inline formatting context. `align-items` / `align-self` on \
+                     the flex parent is the equivalent that works",
+                );
+            }
+        }
+        TextIndent(v) => {
+            // `text-indent: 0` is the initial value; indenting by nothing is
+            // exactly what an unimplemented first-line indent does.
+            if lp_definite(&v.value).is_none_or(|l| l != gpui::px(0.0).into()) {
+                warn_once(
+                    diagnostics,
+                    "`text-indent` is not applied (v1) — there is no first-line concept in the                      shaper. `padding-left` indents the whole block",
+                );
+            }
+        }
+        // `list-style: none` — the reset every UI framework writes — asks for no
+        // marker, which is what a tree with no marker boxes already produces.
+        // `list-style-position` has nothing to position while that holds.
+        ListStyle(v) => {
+            use lightningcss::properties::list::ListStylePosition as P;
+            match list_marker(&v.list_style_type) {
+                Some(marker) => x.list_marker = Some(marker),
+                None => advise_list_marker(diagnostics),
+            }
+            x.list_marker_inside = Some(matches!(v.position, P::Inside));
+        }
+        ListStyleType(v) => match list_marker(v) {
+            Some(marker) => x.list_marker = Some(marker),
+            None => advise_list_marker(diagnostics),
+        },
+        // A marker IMAGE would be a raster in the marker box, which is the one
+        // shape of marker there is no box to put.
+        ListStyleImage(v) => {
+            if !matches!(v, lightningcss::values::image::Image::None) {
+                advise_list_marker(diagnostics);
+            }
+        }
+        ListStylePosition(v) => {
+            use lightningcss::properties::list::ListStylePosition as P;
+            x.list_marker_inside = Some(matches!(v, P::Inside));
+        }
+        Resize(v) => {
+            use lightningcss::properties::ui::Resize as R;
+            // `resize: none` is the initial value and already true of every box
+            // here; the others ask for a UA drag affordance that gpui has no
+            // equivalent of.
+            if !matches!(v, R::None) {
+                warn_once(
+                    diagnostics,
+                    "`resize` is not applied (v1) — there is no user-resize affordance on a gpui                      box. A drag handle has to be a real element with a pointer handler",
+                );
+            }
+        }
+        UserSelect(v, _) => {
+            use lightningcss::properties::ui::UserSelect as U;
+            // Text painted by gpui is not selectable at all, so `none` — which
+            // is what `select-none` and every drag-handle reset asks for — is
+            // already the behaviour. The other values ask for selection that
+            // does not exist, which IS a divergence and is still said.
+            if !matches!(v, U::None) {
+                warn_once(
+                    diagnostics,
+                    "`user-select` is not applied (v1) — text in a gpui box is painted, not                      selectable, so `none` is already the effective behaviour everywhere and                      `text` cannot turn it on",
+                );
+            }
+        }
+        // `appearance` switches a native OS control skin on or off. No element
+        // here carries one under any value, so every value produces the same
+        // box and there is nothing to diverge from.
+        Appearance(..) => {}
+        // `tab-size` sizes a preserved tab. Whitespace is always collapsed here
+        // (`white-space` says so, once, where the divergence actually is), so a
+        // tab is a single space at every tab-size and this property could not
+        // change the result if it were implemented.
+        TabSize(..) => {}
+        // `text-size-adjust` exists to stop MOBILE BROWSERS inflating text.
+        // Nothing here inflates it, under any value.
+        TextSizeAdjust(..) => {}
+        OverflowWrap(v) => {
+            use lightningcss::properties::text::OverflowWrap as OW;
+            if !matches!(v, OW::Normal) {
+                warn_once(
+                    diagnostics,
+                    "`overflow-wrap: break-word` / `anywhere` are not applied (v1) — gpui wraps                      at word boundaries and does not break inside a word. A long unbroken token                      will overflow rather than break",
+                );
+            }
+        }
+        WordBreak(v) => {
+            use lightningcss::properties::text::WordBreak as WB;
+            if !matches!(v, WB::Normal) {
+                warn_once(
+                    diagnostics,
+                    "`word-break` other than `normal` is not applied (v1) — gpui wraps at word                      boundaries and does not break inside a word",
+                );
+            }
+        }
+        // `scroll-margin` / `scroll-padding` only shift where `scrollIntoView`
+        // and scroll snapping land. Neither exists here — there is no
+        // `scrollIntoView` in the DOM shim and no snap implementation — so the
+        // properties have nothing to be wrong about; the absence of the two
+        // features is where that divergence lives.
         ScrollMarginTop(_) | ScrollMarginBottom(_) | ScrollMarginLeft(_) | ScrollMarginRight(_)
         | ScrollMargin(_) | ScrollMarginBlock(_) | ScrollMarginInline(_)
         | ScrollMarginBlockStart(_) | ScrollMarginBlockEnd(_) | ScrollMarginInlineStart(_)
         | ScrollMarginInlineEnd(_) | ScrollPaddingTop(_) | ScrollPaddingBottom(_)
-        | ScrollPaddingLeft(_) | ScrollPaddingRight(_) | ScrollPadding(_) => warn_once(
-            diagnostics,
-            "`scroll-margin` / `scroll-padding` are not applied (v1) — they only affect \
-             `scrollIntoView` and scroll snapping, neither of which is modelled",
-        ),
+        | ScrollPaddingLeft(_) | ScrollPaddingRight(_) | ScrollPadding(_) => {}
         TextTransform(t) => {
             use crate::mapper::TextTransform as TT;
             use lightningcss::properties::text::TextTransformCase as C;
@@ -3365,6 +4493,13 @@ mod tests {
         (r, diagnostics)
     }
 
+    /// [`map`], plus the [`Extras`] the declarations produced.
+    fn map_full(body: &str) -> (StyleRefinement, Extras, Vec<String>) {
+        let mut diagnostics = Vec::new();
+        let (refinement, _, extras) = parse_inline_full(body, &mut diagnostics);
+        (refinement, extras, diagnostics)
+    }
+
     fn clean(body: &str) -> StyleRefinement {
         let (r, d) = map(body);
         assert!(d.is_empty(), "{body:?} produced {d:?}");
@@ -3686,32 +4821,71 @@ mod tests {
         assert_eq!(shadows[0].blur_radius, px(2.0));
     }
 
-    /// An unresolvable reference drops the declaration and says why — the CSS
-    /// "invalid at computed-value time" rule, never a silent nothing.
+    /// An unresolvable reference drops the declaration — the CSS "invalid at
+    /// computed-value time" rule — and does so SILENTLY, because that is
+    /// exactly what a browser does with it. Tailwind ships the shape by design
+    /// (`--tw-shadow-colored: … var(--tw-shadow-color)`, set only by a
+    /// `shadow-<color>` utility), so an advisory here fires on every element
+    /// that is behaving correctly.
     #[test]
-    fn an_unresolvable_var_is_an_advisory_not_silence() {
+    fn an_unresolvable_var_drops_the_declaration_silently() {
         let mut d = Vec::new();
         let mut r = StyleRefinement::default();
         let mut x = Extras::default();
         apply_dynamic("box-shadow", "var(--nope)", &Vars::default(), &crate::Env::default(), &mut r, &mut x, &mut d);
         assert_eq!(r.box_shadow, None);
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    /// The OTHER three failures are author mistakes rather than a design, so
+    /// they still speak.
+    #[test]
+    fn a_var_cycle_is_still_an_advisory() {
+        let mut d = Vec::new();
+        let mut r = StyleRefinement::default();
+        let mut x = Extras::default();
+        apply_dynamic(
+            "width",
+            "env(nonesuch)",
+            &Vars::default(),
+            &crate::Env::default(),
+            &mut r,
+            &mut x,
+            &mut d,
+        );
         assert!(
-            d.iter().any(|m| m.contains("invalid at computed-value time") && m.contains("--nope")),
+            d.iter().any(|m| m.contains("invalid at computed-value time")),
             "{d:?}"
         );
     }
 
     #[test]
     fn a_repeated_unmapped_property_is_reported_once() {
-        let (_, d) = map("letter-spacing: 1px; letter-spacing: 2px; letter-spacing: 3px");
+        let (_, d) = map("text-indent: 1px; text-indent: 2px; text-indent: 3px");
         assert_eq!(d.len(), 1, "{d:?}");
     }
 
+    /// `currentColor` is the element's computed `color`, which is only known
+    /// after the cascade — so the mapper RECORDS the target and
+    /// `Engine::compute_node` substitutes. Nothing is advised, because nothing
+    /// is missing.
     #[test]
-    fn currentcolor_is_advised_rather_than_dropped_in_silence() {
-        let (r, d) = map("background-color: currentColor");
-        assert_eq!(r.background, None);
-        assert!(d.iter().any(|m| m.contains("background-color")), "{d:?}");
+    fn currentcolor_is_recorded_for_substitution_after_the_cascade() {
+        let (r, x, d) = map_full("background-color: currentColor");
+        assert_eq!(r.background, None, "not resolvable yet");
+        assert!(x.current_color.has(CurrentColorTargets::BACKGROUND));
+        assert!(d.is_empty(), "{d:?}");
+
+        let (_, x, d) = map_full("border-color: currentColor");
+        assert!(x.current_color.has(CurrentColorTargets::BORDER));
+        assert!(d.is_empty(), "{d:?}");
+
+        // `color: currentColor` resolves against itself, which IS `inherit`,
+        // which is what writing nothing already means.
+        let (r, x, d) = map_full("color: currentColor");
+        assert_eq!(r.text.color, None);
+        assert_eq!(x.current_color, CurrentColorTargets::default());
+        assert!(d.is_empty(), "{d:?}");
     }
 
     // ---- calc() over absolute lengths ------------------------------------
@@ -3899,42 +5073,239 @@ mod tests {
     /// a pure rotation leaves the centre where it was and a pure scale grows
     // ---- gradients ------------------------------------------------------
 
-    /// `linear-gradient()` is a real `Background`, not a dropped declaration.
-    /// CSS and gpui share the angle convention (0deg = to top, clockwise), so
-    /// the keyword forms are the only conversion.
+    /// The whole gradient grammar renders. A background IMAGE layer is not the
+    /// `background` fill: CSS paints the colour under the image stack, and
+    /// gpui's `background` / `background_layers` split says the same thing, so
+    /// the layers land in `Extras` for the renderer to fold.
     #[test]
-    fn a_linear_gradient_becomes_a_two_stop_background() {
-        let bg = |body: &str| match clean(body).background {
-            Some(gpui::Fill::Color(b)) => b,
-            other => panic!("{body}: {other:?}"),
+    fn every_gradient_shape_becomes_a_background_layer() {
+        let layers = |body: &str| {
+            let (_, x, d) = map_full(body);
+            assert!(d.is_empty(), "{body}: {d:?}");
+            x.resolve_background_layers()
         };
-        let g = bg("background-image: linear-gradient(to right, #ff0000, #0000ff)");
-        assert!(g.as_solid().is_none(), "a gradient, not a solid");
-        // The `background` SHORTHAND carries an image layer too.
-        let g2 = bg("background: linear-gradient(90deg, #ff0000 0%, #0000ff 100%)");
-        assert_eq!(format!("{g:?}"), format!("{g2:?}"), "`to right` is 90deg");
-        // A default direction is `to bottom`.
-        let down = bg("background-image: linear-gradient(#fff, #000)");
-        let explicit = bg("background-image: linear-gradient(180deg, #fff, #000)");
-        assert_eq!(format!("{down:?}"), format!("{explicit:?}"));
+        let one = |body: &str| {
+            let list = layers(body);
+            assert_eq!(list.len(), 1, "{body}");
+            list[0]
+        };
+
+        // CSS and gpui share the angle convention (0deg = to top, clockwise),
+        // so the keyword forms are the only conversion.
+        let right = one("background-image: linear-gradient(to right, #ff0000, #0000ff)");
+        let ninety = one("background: linear-gradient(90deg, #ff0000 0%, #0000ff 100%)");
+        assert_eq!(format!("{right:?}"), format!("{ninety:?}"), "`to right` is 90deg");
+        let down = one("background-image: linear-gradient(#fff, #000)");
+        let explicit = one("background-image: linear-gradient(180deg, #fff, #000)");
+        assert_eq!(format!("{down:?}"), format!("{explicit:?}"), "the default is `to bottom`");
+
+        // Radial and conic are their own tags rather than a refusal.
+        assert!(format!("{:?}", one("background-image: radial-gradient(#fff, #000)"))
+            .starts_with("RadialGradient"));
+        assert!(format!("{:?}", one("background-image: conic-gradient(#fff, #000)"))
+            .starts_with("ConicGradient"));
+
+        // More than two stops, and a `via-*` in the middle, all survive.
+        let three = one("background-image: linear-gradient(#f00, #0f0, #00f)");
+        assert_eq!(three.live_stops().len(), 3);
+
+        // A `repeating-` form is the same ramp with the repeat flag.
+        let repeating = one("background-image: repeating-linear-gradient(#f00 0px, #00f 10px)");
+        assert_eq!(repeating.live_stops().len(), 2);
+        assert_ne!(format!("{repeating:?}"), format!("{:?}", one(
+            "background-image: linear-gradient(#f00 0px, #00f 10px)")));
+
+        // Two layers stay two layers, and CSS's top-first order is reversed
+        // into gpui's bottom-first paint order.
+        let stack = layers(
+            "background-image: linear-gradient(#f00, #f00), linear-gradient(#00f, #00f)",
+        );
+        assert_eq!(stack.len(), 2);
     }
 
-    /// The gradient shapes that have no model name the one that does.
+    /// `background-size` / `-position` / `-repeat` arrive as SEPARATE
+    /// properties — in Tailwind, as separate classes — so they are folded onto
+    /// the layers after the cascade rather than while a declaration is mapped.
+    /// This is the meet app's page grid, which is exactly that shape.
     #[test]
-    fn the_other_gradients_advise_and_name_linear() {
-        for (body, needle) in [
-            ("background-image: radial-gradient(#fff, #000)", "radial-gradient"),
-            ("background-image: conic-gradient(#fff, #000)", "conic-gradient"),
-            ("background-image: url(bg.png)", "background-image: url()"),
-        ] {
-            let (r, d) = map(body);
-            assert_eq!(r.background, None, "{body}");
-            assert!(d.iter().any(|m| m.contains(needle)), "{body}: {d:?}");
+    fn background_size_and_position_tile_the_gradient() {
+        let (_, x, d) = map_full(
+            "background-image: linear-gradient(rgba(255,255,255,.02) 1px, transparent 1px),              linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px);              background-size: 64px 64px",
+        );
+        assert!(d.is_empty(), "{d:?}");
+        let layers = x.resolve_background_layers();
+        assert_eq!(layers.len(), 2);
+        for layer in &layers {
+            assert!(layer.is_tiled(), "{layer:?}");
+            // The hard stop is written as a LENGTH, which has no percentage
+            // form; the shader divides it by the gradient line.
+            assert_eq!(layer.live_stops()[0].percentage, 1.0);
         }
-        // A third stop is dropped, and says so.
-        let (r, d) = map("background-image: linear-gradient(#f00, #0f0, #00f)");
-        assert!(r.background.is_some());
-        assert!(d.iter().any(|m| m.contains("TWO colour stops")), "{d:?}");
+        // Bottom-first: the 90deg layer is written second in CSS and therefore
+        // paints UNDER the first.
+        assert!(format!("{:?}", layers[0]).contains("LinearGradient(90"));
+
+        // Without a `background-size` there is no tile: the gradient covers the
+        // box, which is what CSS says an `auto` size does for an image with no
+        // intrinsic dimensions.
+        let (_, x, _) = map_full("background-image: linear-gradient(#f00, #00f)");
+        assert!(!x.resolve_background_layers()[0].is_tiled());
+    }
+
+    /// `background-image: url()` is still not painted — that is an image
+    /// layer rather than a gradient — and says so.
+    #[test]
+    fn a_url_background_still_names_the_alternative() {
+        let (r, d) = map("background-image: url(bg.png)");
+        assert_eq!(r.background, None);
+        assert!(d.iter().any(|m| m.contains("background-image: url()")), "{d:?}");
+    }
+
+
+    // ---- m19: text spacing, decorations, features ------------------------
+
+    /// `letter-spacing` and `word-spacing` reach the shaper now: gpui carries
+    /// them on the `TextRun` and widens the already-shaped line, so there is no
+    /// per-platform work and no advisory.
+    #[test]
+    fn letter_and_word_spacing_reach_the_text_style() {
+        assert_eq!(clean("letter-spacing: 6.3px").text.letter_spacing, Some(px(6.3)));
+        assert_eq!(clean("word-spacing: 2px").text.word_spacing, Some(px(2.0)));
+        // `normal` is zero extra spacing, which is also the initial value.
+        assert_eq!(clean("letter-spacing: normal").text.letter_spacing, Some(px(0.0)));
+        // `em` resolves against the rem basis, like every other relative length
+        // the sheet compiler flattens.
+        assert_eq!(
+            clean("letter-spacing: 0.5em").text.letter_spacing,
+            Some(px(0.5 * crate::rem_basis()))
+        );
+    }
+
+    /// `text-decoration-line: none` has to UNDO an earlier `underline`, and a
+    /// refinement cannot spell "clear" — so it declares a decoration that paints
+    /// nothing instead. Zero thickness AND transparent, because gpui's stroke
+    /// snapping would round a hairline up to a device pixel.
+    #[test]
+    fn no_underline_cancels_an_earlier_one() {
+        let r = clean("text-decoration-line: underline; text-decoration-line: none");
+        let u = r.text.underline.expect("declared, so it wins over the earlier one");
+        assert_eq!(u.thickness, px(0.0));
+        assert_eq!(u.color.map(|c| c.a), Some(0.0));
+        let strike = r.text.strikethrough.expect("cleared too");
+        assert_eq!(strike.thickness, px(0.0));
+    }
+
+    /// `text-underline-offset` moves the line down from where the font's own
+    /// metrics put it. It and `text-decoration-line` are two properties — in
+    /// Tailwind, `.underline` and `.underline-offset-4`, two classes — so the
+    /// offset is also kept in `Extras` for the cascade to apply afterwards.
+    #[test]
+    fn underline_offset_lands_on_the_decoration() {
+        let (r, x, d) = map_full("text-decoration-line: underline; text-underline-offset: 4px");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(r.text.underline.expect("declared").offset, px(4.0));
+        assert_eq!(x.underline_offset, Some(4.0));
+
+        // Declared the other way round, only the `Extras` half can carry it —
+        // and that is the half `compute_node` applies.
+        let (_, x, d) = map_full("text-underline-offset: 4px");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(x.underline_offset, Some(4.0));
+    }
+
+    /// `bolder` / `lighter` step relative to the inherited weight. vn-css folds
+    /// no inherited text property, so the step is taken from the initial
+    /// `normal` — the row every real use lands on (`b, strong { font-weight:
+    /// bolder }` over 400 text).
+    #[test]
+    fn relative_font_weights_resolve_through_the_table() {
+        assert_eq!(clean("font-weight: bolder").text.font_weight, Some(gpui::FontWeight(700.0)));
+        assert_eq!(clean("font-weight: lighter").text.font_weight, Some(gpui::FontWeight(100.0)));
+        assert_eq!(clean("font-weight: 500").text.font_weight, Some(gpui::FontWeight(500.0)));
+    }
+
+    /// OpenType FEATURES reach the shaper — gpui's `Font` carries a tag/value
+    /// list DirectWrite installs over the run — while variation AXES do not,
+    /// and only the second says so.
+    #[test]
+    fn font_features_reach_the_shaper_and_axes_do_not() {
+        let features = clean("font-feature-settings: \"ss01\" 1, \"liga\" 0")
+            .text
+            .font_features
+            .expect("declared");
+        assert_eq!(&*features.0, &[("ss01".into(), 1u32), ("liga".into(), 0u32)]);
+
+        // `font-variant-numeric`'s keywords ARE OpenType features, one to one.
+        let numeric = clean("font-variant-numeric: tabular-nums")
+            .text
+            .font_features
+            .expect("declared");
+        assert_eq!(&*numeric.0, &[("tnum".into(), 1u32)]);
+
+        let (_, d) = map("font-variation-settings: \"wdth\" 80");
+        assert!(d.iter().any(|m| m.contains("font-variation-settings")), "{d:?}");
+    }
+
+    /// The screen-reader-only idiom is a box clipped to an EMPTY rectangle,
+    /// which paints nothing — expressible as `visibility: hidden`, which keeps
+    /// the layout box exactly as `clip` does.
+    #[test]
+    fn the_visually_hidden_clip_idiom_hides_the_box() {
+        assert_eq!(
+            clean("clip: rect(0, 0, 0, 0)").visibility,
+            Some(gpui::Visibility::Hidden)
+        );
+        // The whitespace-separated spelling means the same thing.
+        assert_eq!(
+            clean("clip: rect(0 0 0 0)").visibility,
+            Some(gpui::Visibility::Hidden)
+        );
+        // A rectangle with area is a real sub-rect clip, which is not.
+        let (r, d) = map("clip: rect(0, 20px, 20px, 0)");
+        assert_eq!(r.visibility, None);
+        assert!(d.iter().any(|m| m.contains("legacy `clip")), "{d:?}");
+    }
+
+
+    /// `list-style-type` names a marker, and the predefined counter styles all
+    /// produce one. The marker BOX is generated by `vn_tree::render` (it is a
+    /// real child, so it lays out and inherits like one); the mapper's job is
+    /// the value and the numbering.
+    #[test]
+    fn list_markers_map_to_their_counter_style() {
+        use crate::ListMarker;
+        let marker = |body: &str| map_full(body).1.list_marker;
+        assert_eq!(marker("list-style-type: disc"), Some(ListMarker::Disc));
+        assert_eq!(marker("list-style-type: circle"), Some(ListMarker::Circle));
+        assert_eq!(marker("list-style-type: square"), Some(ListMarker::Square));
+        assert_eq!(marker("list-style-type: decimal"), Some(ListMarker::Decimal));
+        assert_eq!(marker("list-style-type: lower-roman"), Some(ListMarker::LowerRoman));
+        // The shorthand carries the position with it.
+        let (_, x, d) = map_full("list-style: square inside");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(x.list_marker, Some(ListMarker::Square));
+        assert_eq!(x.list_marker_inside, Some(true));
+        // `none` is an explicit "no marker", which is a different answer from
+        // "this element declared nothing".
+        assert_eq!(marker("list-style: none"), Some(ListMarker::None));
+        assert_eq!(marker("color: red"), None);
+    }
+
+    /// The ordered styles are counters, and the numbering is the item's position
+    /// among its element siblings — the same number `counter(list-item)` gives.
+    #[test]
+    fn ordered_markers_count_from_one() {
+        use crate::ListMarker;
+        assert_eq!(ListMarker::Disc.render(3).as_deref(), Some("\u{2022}"));
+        assert_eq!(ListMarker::None.render(3), None);
+        assert_eq!(ListMarker::Decimal.render(1).as_deref(), Some("1."));
+        assert_eq!(ListMarker::DecimalLeadingZero.render(7).as_deref(), Some("07."));
+        assert_eq!(ListMarker::LowerAlpha.render(1).as_deref(), Some("a."));
+        assert_eq!(ListMarker::LowerAlpha.render(26).as_deref(), Some("z."));
+        assert_eq!(ListMarker::LowerAlpha.render(27).as_deref(), Some("aa."));
+        assert_eq!(ListMarker::UpperAlpha.render(28).as_deref(), Some("AB."));
+        assert_eq!(ListMarker::LowerRoman.render(4).as_deref(), Some("iv."));
+        assert_eq!(ListMarker::UpperRoman.render(1994).as_deref(), Some("MCMXCIV."));
     }
 
     // ---- outline --------------------------------------------------------
@@ -4138,29 +5509,26 @@ mod tests {
     /// Every property here USED to print the bare "property not mapped (v1)".
     /// The point of the change is that each now says why, and names what to
     /// write instead where there is something.
+    ///
+    /// The list is what is left after m19: an advisory has to name a REAL
+    /// divergence, so a property whose every value produces the same box here
+    /// as it does in a browser dropped off it — see the sweep below.
     #[test]
     fn the_unmapped_properties_say_why_rather_than_that() {
         for (body, needle) in [
-            ("letter-spacing: 0.05em", "letter-spacing"),
             ("vertical-align: middle", "vertical-align"),
             ("text-indent: 2em", "text-indent"),
-            ("list-style: disc inside", "list-style"),
+            ("list-style-image: url(dot.png)", "this list marker is not generated"),
             ("resize: both", "resize"),
-            ("user-select: none", "user-select"),
-            ("appearance: none", "appearance"),
-            ("tab-size: 4", "tab-size"),
+            ("user-select: text", "user-select"),
             ("overflow-wrap: break-word", "overflow-wrap"),
-            ("scroll-margin-top: 4rem", "scroll-margin"),
             // `blur()` alone is recorded rather than advised (see `apply_filter`),
             // so the advisory this sweep is about needs a filter that is not it.
             ("filter: grayscale(1)", "only blur() is implemented"),
-            ("touch-action: none", "touch/overscroll"),
             ("border-collapse: collapse", "table properties"),
-            ("clip: rect(0,0,0,0)", "legacy `clip`"),
-            ("-webkit-font-smoothing: antialiased", "font-smoothing"),
-            ("font-variant-numeric: tabular-nums", "OpenType feature"),
-            ("background-size: cover", "background-size/position"),
+            ("clip: rect(0,0,10px,10px)", "legacy `clip"),
             ("position: sticky", "position: sticky"),
+            ("font-variation-settings: \"wdth\" 80", "font-variation-settings"),
         ] {
             let (_, d) = map(body);
             assert!(
@@ -4171,6 +5539,90 @@ mod tests {
                 !d.iter().any(|m| m.starts_with("property not mapped")),
                 "{body} still hits the generic catch-all: {d:?}",
             );
+        }
+    }
+
+    /// The other half of the same rule: a property that produces the SAME box
+    /// under every value it can take says nothing at all.
+    ///
+    /// Each line here was an advisory before m19, and each was noise. A
+    /// generated Tailwind sheet ships a utility for every property in CSS, so
+    /// compiling one reported `resize`, `tab-size` and `table-layout` on apps
+    /// where no element used any of them — and several of the messages named
+    /// properties that could not have diverged under any value.
+    #[test]
+    fn a_property_with_no_divergence_says_nothing() {
+        for body in [
+            // Selection does not exist in a gpui box, so `none` — what every
+            // drag handle and `select-none` asks for — is already true.
+            "user-select: none",
+            // No element carries a native control skin under any value.
+            "appearance: none",
+            "appearance: textfield",
+            // Whitespace is always collapsed, so a tab is one space at every
+            // tab-size; `white-space` is where that divergence lives.
+            "tab-size: 4",
+            // Nothing inflates text here, and nothing rubber-bands or
+            // highlights a tap.
+            "text-size-adjust: 100%",
+            "touch-action: none",
+            "overscroll-behavior: contain",
+            "-webkit-font-smoothing: antialiased",
+            // `-webkit-line-clamp` is honoured on its own; the legacy flexbox
+            // switches around it are inert in browsers too.
+            "-webkit-box-orient: vertical",
+            // The initial values.
+            "vertical-align: baseline",
+            "text-indent: 0",
+            "resize: none",
+            "overflow-wrap: normal",
+            "word-break: normal",
+            // `list-style: none` asks for no marker, which is what a tree with
+            // no marker boxes already produces.
+            // Every predefined counter style generates a real marker box now,
+            // and `none` asks for the nothing a marker-less tree already has.
+            "list-style: none",
+            "list-style-type: none",
+            "list-style-type: disc",
+            "list-style: decimal inside",
+            "list-style-position: inside",
+            // Only ever read through a decoration LINE, which this has none of
+            // — a browser paints nothing here either.
+            "text-decoration-color: #f00",
+            // `collapse` IS `hidden` outside tables, and there are no tables.
+            "visibility: collapse",
+            // These reach the shaper for real now.
+            "letter-spacing: 0.05em",
+            "word-spacing: 2px",
+            "font-variant-numeric: tabular-nums",
+            "font-feature-settings: \"ss01\" 1, \"liga\" 0",
+            "font-feature-settings: normal",
+            "font-variation-settings: normal",
+            // `auto` IS what the fork's DirectWrite path now does.
+            "font-optical-sizing: auto",
+            "text-underline-offset: 4px",
+            "text-decoration-skip-ink: none",
+            // The visually-hidden idiom clips the box away, which is
+            // expressible as `visibility: hidden`.
+            "clip: rect(0, 0, 0, 0)",
+            // They only move where `scrollIntoView` and scroll snapping land,
+            // and neither is modelled at all.
+            "scroll-margin-top: 4rem",
+            "scroll-padding: 1rem",
+            // A gradient has no intrinsic size, so `cover` and `contain` both
+            // resolve to the box — which is what an untiled background is.
+            "background-size: cover",
+            "background-image: linear-gradient(#f00, #00f); background-size: 64px 64px",
+            "background-repeat: no-repeat",
+            "background-position: center",
+            // Every gradient shape renders now.
+            "background-image: radial-gradient(circle at 30% 40%, #fff, #000)",
+            "background-image: conic-gradient(from 45deg, #f00, #0f0, #00f)",
+            "background-image: repeating-linear-gradient(45deg, #f00 0 10px, #00f 10px 20px)",
+            "background-image: linear-gradient(to bottom right, #f00, #0f0, #00f, #ff0)",
+        ] {
+            let (_, d) = map(body);
+            assert!(d.is_empty(), "{body:?} should be silent, said {d:?}");
         }
     }
 

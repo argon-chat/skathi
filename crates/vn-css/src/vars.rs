@@ -370,6 +370,21 @@ fn force<'a>(
                     slots.insert(key, Slot::Done(value.clone()));
                     Ok(Some(value))
                 }
+                // A `var()` that is not set anywhere and has no fallback makes
+                // the value invalid at computed-value time, and CSS says such a
+                // declaration is thrown away — which is what happens here, so
+                // it is not a divergence to report. It is also routine by
+                // design: Tailwind's `--tw-shadow-colored` reads
+                // `var(--tw-shadow-color)`, which only a `shadow-<color>`
+                // utility ever sets, and in a browser the same declaration is
+                // dropped on every element that does not carry one.
+                //
+                // A cycle, an unknown `env()` or a runaway expansion are author
+                // mistakes rather than a design, so those still speak.
+                Err(VarError::Unresolved(_)) => {
+                    slots.insert(key, Slot::Dropped);
+                    Ok(None)
+                }
                 Err(e) => {
                     diagnostics.push(format!(
                         "`{name}` is invalid at computed-value time — {} (the custom property is \
@@ -560,13 +575,18 @@ mod tests {
         assert_eq!(v.get("--y"), Some("9"));
     }
 
+    /// The custom property is dropped — CSS's "invalid at computed-value time"
+    /// — and SILENTLY, because that is exactly what a browser does with it. A
+    /// cycle still speaks (below): that is an author mistake rather than a
+    /// design, and Tailwind's `--tw-shadow-colored` reading an unset
+    /// `--tw-shadow-color` is very much a design.
     #[test]
     fn a_fallbackless_missing_reference_invalidates_the_declaration() {
         let own = vec![("--x".to_string(), "var(--nope)".to_string())];
         let mut d = Vec::new();
         let v = resolve(&Rc::new(Vars::default()), &refs(&own), &crate::Env::default(), &mut d);
         assert_eq!(v.get("--x"), None);
-        assert!(d.iter().any(|m| m.contains("invalid at computed-value time")), "{d:?}");
+        assert!(d.is_empty(), "{d:?}");
     }
 
     #[test]

@@ -381,7 +381,12 @@ fn shape(
     wrap_width: Option<Pixels>,
     window: &mut Window,
 ) -> Vec<LineBox> {
-    let font = window.text_style().font();
+    let text_style = window.text_style();
+    let font = text_style.font();
+    // The field shapes its own runs rather than going through `StyledText`, so
+    // CSS `letter-spacing` has to be carried across explicitly — and it is the
+    // meeting-code field, tracked to 6.3px, that made this visible.
+    let (tracking, word_spacing) = (text_style.letter_spacing, text_style.word_spacing);
     let run = |len: usize, underline: bool| TextRun {
         len,
         font: font.clone(),
@@ -391,8 +396,11 @@ fn shape(
             color: Some(color),
             thickness: px(1.0),
             wavy: false,
+            offset: px(0.0),
         }),
         strikethrough: None,
+        tracking,
+        word_spacing,
     };
     let runs: Vec<TextRun> = match marked_range {
         Some(marked) if marked.end <= display.len() => vec![

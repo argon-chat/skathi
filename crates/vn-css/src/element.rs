@@ -56,6 +56,15 @@ pub trait MatchDom: Copy {
     fn attr(&self, name: &str) -> Option<&str>;
     fn is_empty(&self) -> bool;
     fn is_root(&self) -> bool;
+    /// Calls `f` once per ELEMENT child, for `:has()`.
+    ///
+    /// The matcher never walks downwards on its own — a selector is matched
+    /// right-to-left from its subject — so this exists for exactly one
+    /// question: does anything under here match the relative selector inside a
+    /// `:has()`. Implementations with no tree (the compile-time probe, the
+    /// unit-test doubles) yield nothing, which makes `:has()` false rather
+    /// than wrong.
+    fn each_child(&self, _f: &mut dyn FnMut(Self)) {}
 }
 
 /// The HTML rule for a boolean attribute (`disabled`, `checked`): present is
@@ -180,7 +189,8 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
             PseudoClass::Hover
             | PseudoClass::Active
             | PseudoClass::Focus
-            | PseudoClass::FocusVisible => true,
+            | PseudoClass::FocusVisible
+            | PseudoClass::FocusWithin => true,
             // Property states: the element property IS the state, so these are
             // matched for real and their rules fold into the base bucket. A
             // property write already marks the tree dirty, so the next restyle
@@ -188,6 +198,12 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
             PseudoClass::Disabled => boolean_attr(&self.0, "disabled"),
             PseudoClass::Enabled => !boolean_attr(&self.0, "disabled"),
             PseudoClass::Checked => boolean_attr(&self.0, "checked"),
+            // `:has()`. parcel's matcher hits an `unreachable!()` on
+            // `Component::Has`, so the sheet compiler rewrites every `:has(S)`
+            // into a custom pseudo-class naming a stored copy of `S` and the
+            // question lands HERE, where the tree is reachable. See
+            // `crate::has`.
+            PseudoClass::Custom { name } => crate::has::matches(name.as_ref(), &self.0),
             // Everything else is rejected by the compile-time audit, so a rule
             // carrying it never reaches the matcher.
             _ => false,

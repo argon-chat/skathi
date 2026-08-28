@@ -944,6 +944,7 @@ fn build_node<V: 'static>(
                 d = d.group(group_name(id));
             }
             advise_missing_font(d.style(), cx);
+            apply_background_layers(d.style(), &extras);
             apply_background_clip_text(d.style(), &extras);
             apply_self_blur(d.style(), t, node, &extras);
             apply_inline_row(d.style(), t, node, align);
@@ -1035,6 +1036,13 @@ fn build_node<V: 'static>(
                     if let Some(f) = cs.focus_visible.clone() {
                         d = d.focus_visible(move |_| (*f).clone());
                     }
+                    // `:focus-within` is gpui's `.in_focus()` rung — focus
+                    // anywhere in this element's focus subtree, which is what
+                    // the pseudo-class means. It needs the same tracked handle
+                    // the other two do, which `needs_focus_handle` accounts for.
+                    if let Some(f) = cs.focus_within.clone() {
+                        d = d.in_focus(move |_| (*f).clone());
+                    }
                 }
             }
             // Only a browser-focusable node takes focus from a press.
@@ -1125,6 +1133,9 @@ fn build_node<V: 'static>(
                     None => (None, None),
                 };
                 let mut kids: Vec<AnyElement> = Vec::new();
+                if let Some(marker) = list_marker_for(t, id, node, &extras) {
+                    kids.push(marker);
+                }
                 if let Some(pb) = before {
                     kids.push(pseudo_element(&pb, case, stacking));
                 }
@@ -1220,7 +1231,28 @@ fn apply_background_clip_text(style: &mut gpui::StyleRefinement, extras: &vn_css
     }
     if let Some(key) = extras.background_key_color {
         style.background = Some(gpui::Fill::Color(gpui::transparent_black().into()));
+        style.background_layers = Some(Vec::new());
         style.text.color = Some(key);
+    }
+}
+
+/// The `background-image` stack, folded together with `background-size`,
+/// `background-position` and `background-repeat` and handed to gpui bottom
+/// layer first.
+///
+/// This runs HERE rather than in the mapper because the four properties are
+/// independent and Tailwind puts each in a class of its own — the meet app's
+/// page grid is two gradients from `bg-[linear-gradient(…),linear-gradient(…)]`
+/// and a tile size from `bg-[size:64px_64px]`, which are two different rules
+/// that never see each other. The cascade is what brings them together, so the
+/// fold belongs after it.
+fn apply_background_layers(style: &mut gpui::StyleRefinement, extras: &vn_css::Extras) {
+    if extras.background_images.is_none() {
+        return;
+    }
+    let layers = extras.resolve_background_layers();
+    if !layers.is_empty() {
+        style.background_layers = Some(layers);
     }
 }
 
@@ -1461,6 +1493,82 @@ fn pseudo_element(
         d.child(transformed_text(&pb.content, case)).into_any_element()
     };
     stack(stacking.enter(&pb.extras).0, &pb.extras, e)
+}
+
+/// The marker box an `<li>` gets from the `list-style-type` in force.
+///
+/// `list-style-type` INHERITS and vn-css folds no inherited property, so the
+/// effective value is the nearest ancestor that declared one — which is what
+/// the walk below finds, and which is where an author writes it anyway
+/// (`<ul class="list-disc">`). Returning `None` covers all three quiet cases:
+/// not a list item, nothing declared anywhere, and an explicit
+/// `list-style: none` (the reset every UI framework ships).
+///
+/// The marker is a real child rather than a painted decoration, for the same
+/// reason `::before` is: it then takes part in layout, inherits the item's text
+/// style and needs nothing new from gpui. `outside` (the initial value) hangs
+/// it into the padding with a negative margin, which is what a browser's marker
+/// box does; `inside` leaves it in flow as the item's first inline content.
+fn list_marker_for(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    extras: &vn_css::Extras,
+) -> Option<AnyElement> {
+    if t.name(node.tag) != "li" {
+        return None;
+    }
+    let (marker, inside) = {
+        let mut marker = extras.list_marker;
+        let mut inside = extras.list_marker_inside;
+        let mut cursor = node.parent;
+        while marker.is_none() || inside.is_none() {
+            let Some(ancestor) = t.node(cursor) else { break };
+            if let Some(cs) = &ancestor.computed {
+                marker = marker.or(cs.extras.list_marker);
+                inside = inside.or(cs.extras.list_marker_inside);
+            }
+            if ancestor.parent == cursor {
+                break;
+            }
+            cursor = ancestor.parent;
+            if cursor == 0 {
+                break;
+            }
+        }
+        (marker?, inside.unwrap_or(false))
+    };
+    // The item's ordinal is its position among its ELEMENT siblings, which is
+    // the number `counter(list-item)` produces and the number a browser's
+    // `decimal` marker shows.
+    let ordinal = t
+        .node(node.parent)
+        .map(|parent| {
+            parent
+                .children
+                .iter()
+                .filter(|&&c| t.node(c).is_some_and(|n| n.kind == crate::tree::Kind::Element))
+                .position(|&c| c == id)
+                .unwrap_or(0)
+                + 1
+        })
+        .unwrap_or(1);
+    let text = marker.render(ordinal)?;
+
+    let mut d = div();
+    let style = d.style();
+    style.flex_shrink = Some(0.0);
+    // A browser sizes the marker box to the marker plus a gap; one and a quarter
+    // ems is the width every UA sheet lands on for the bullet styles.
+    style.size.width = Some(gpui::Length::Definite(gpui::rems(1.25).into()));
+    style.text.text_align = Some(gpui::TextAlign::Right);
+    style.padding.right = Some(gpui::rems(0.35).into());
+    if !inside {
+        // `outside`: the marker sits in the item's padding area rather than
+        // taking width from the content.
+        style.margin.left = Some(gpui::rems(-1.25).into());
+    }
+    Some(d.child(SharedString::from(text)).into_any_element())
 }
 
 /// A text leaf with `text-transform` applied.
@@ -2758,11 +2866,25 @@ fn build_input<V: 'static>(
         .and_then(|cs| cs.placeholder.as_ref())
         .and_then(|ph| ph.text.color)
         .unwrap_or(gpui::Hsla { a: text_color.a * 0.45, ..text_color });
+    // `::selection { background: … }`. The field's selection is the ONE
+    // selection that exists in vue-native — gpui paints ordinary text and has
+    // no selection model for it — so this is where the pseudo-element lands.
+    // Its `color` cannot: gpui's selection is a quad painted BEHIND an already
+    // shaped run, and re-colouring the glyphs inside the range would mean
+    // splitting the run at the selection boundary on every caret move.
+    let selection_color = t
+        .node(id)
+        .and_then(|n| n.computed.as_ref())
+        .and_then(|cs| cs.selection.as_ref())
+        .and_then(|s| s.background.as_ref())
+        .and_then(gpui::Fill::color)
+        .and_then(|b| b.as_solid())
+        .unwrap_or(gpui::Hsla { h: 0.6, s: 0.8, l: 0.6, a: 0.35 });
     let options = TextInputOptions {
         placeholder: t.prop(id, "placeholder").unwrap_or("").to_string().into(),
         text_color,
         placeholder_color,
-        selection_color: gpui::Hsla { h: 0.6, s: 0.8, l: 0.6, a: 0.35 },
+        selection_color,
         caret_color: text_color,
         font_size,
         // `readonly` and `disabled` differ in HTML (a disabled control is not
