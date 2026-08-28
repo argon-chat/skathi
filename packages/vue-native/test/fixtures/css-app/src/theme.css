@@ -1,0 +1,7 @@
+/* Fixture stylesheet — see test/build-graph.test.js. Not part of any app. */
+:root {
+  --fixture-fg: 210 40% 98%;
+}
+.fixture-card {
+  color: hsl(var(--fixture-fg));
+}

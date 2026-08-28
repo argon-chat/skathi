@@ -117,10 +117,35 @@ export function findConfig(startDir: string, stopDir: string): string | null {
 /// utilities sheet. Re-reads the content files on every call (Tailwind's own
 /// mtime tracking decides whether to rebuild its context), so watch mode can
 /// simply call this again after any template edit.
-export async function generate(configPath: string): Promise<string> {
+export async function generate(configPath: string, source?: CssSource): Promise<string> {
   const result = await postcss([tailwindcss(configPath) as any]).process(
-    "@tailwind base;\n@tailwind utilities;\n",
-    { from: undefined },
+    source?.text ?? "@tailwind base;\n@tailwind utilities;\n",
+    { from: source?.from },
   );
   return result.css;
+}
+
+/// A stylesheet the APP owns, handed to Tailwind as its own entry.
+///
+/// This is what makes `import "./index.css"` behave the way it does in a Vite
+/// project: the app's stylesheet IS the Tailwind entry, so its `@tailwind`
+/// directives expand in place, its `@layer base { :root { --…: … } }` block
+/// lands in the base layer (which is where the whole shadcn palette lives), and
+/// its `@apply` rules resolve against the app's own config.
+export type CssSource = { text: string; from: string };
+
+/// Does this stylesheet contain `@tailwind` / `@layer` / `@apply` — i.e. does it
+/// have to go through Tailwind's PostCSS pass to mean anything?
+///
+/// A plain stylesheet does not, and is emitted verbatim, so an app with no
+/// Tailwind config still gets its CSS.
+export function needsTailwindPass(css: string): boolean {
+  return /@tailwind\b|@layer\b|@apply\b|@screen\b/.test(css);
+}
+
+/// Does this stylesheet declare the utilities layer itself? When it does, the
+/// synthetic `.vn/tailwind.css` module is redundant and is not emitted — the
+/// app's own sheet carries the utilities, exactly as in its browser build.
+export function declaresUtilities(css: string): boolean {
+  return /@tailwind\s+utilities\s*;/.test(css);
 }

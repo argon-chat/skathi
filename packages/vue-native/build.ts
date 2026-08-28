@@ -94,7 +94,13 @@ import {
   rmSync,
 } from "fs";
 
-import { TW_ID, findConfig, generate as generateTailwind } from "./tailwind";
+import {
+  TW_ID,
+  declaresUtilities,
+  findConfig,
+  generate as generateTailwind,
+  needsTailwindPass,
+} from "./tailwind";
 
 // ---- paths ----------------------------------------------------------------
 
@@ -160,6 +166,57 @@ function findAppRoot(startDir: string, stopDir: string): string {
 }
 const APP_ROOT = findAppRoot(APP_SRC_DIR, WS_ROOT);
 const appRequire = createRequire(join(APP_ROOT, "package.json"));
+
+/**
+ * Resolves a bare specifier from the APP root with BROWSER/ESM conditions —
+ * what a bundler would pick. `createRequire().resolve` walks Node's CJS
+ * conditions and cannot see an `exports` entry that only declares `import`,
+ * which is every modern ESM-only workspace package and every `"./styles":
+ * "./styles/index.css"` asset entry.
+ */
+function resolveFromApp(spec: string): string {
+  try {
+    return Bun.resolveSync(spec, APP_ROOT);
+  } catch {
+    return appRequire.resolve(spec);
+  }
+}
+
+/**
+ * The entry files to TRY for an npm package, best first.
+ *
+ * There is no single right resolver here, and the two ways of being wrong are
+ * both real and both silent-ish:
+ *
+ * * Node's CJS conditions pick a package's **node** build when it ships one —
+ *   `axios` resolves to `dist/node/axios.cjs`, which `require("http2")` and
+ *   fails the bundle outright — and cannot see an ESM-only `exports` map at
+ *   all, which is every `@argon/*`-shaped workspace package.
+ * * The ESM entry is not always safe either: Bun's `format: "cjs"` output for a
+ *   package with a CIRCULAR ESM graph hoists a binding it then reads before
+ *   assignment. `reka-ui` bundles clean from `dist/index.cjs` and throws
+ *   `ReferenceError: import_Primitive is not defined` from `dist/index.js`.
+ *
+ * So: prefer the CJS entry, which is the one whose *output* is known-good, and
+ * fall back to the ESM/browser one when the CJS build actually FAILS. The
+ * failure is a Bun.build error, not a guess — an unresolvable Node builtin is
+ * exactly how the axios case announces itself.
+ */
+function entryCandidates(spec: string): string[] {
+  const out: string[] = [];
+  try {
+    out.push(appRequire.resolve(spec));
+  } catch {
+    /* ESM-only, or no `main` — Bun's resolver is the answer */
+  }
+  try {
+    const esm = Bun.resolveSync(spec, APP_ROOT);
+    if (!out.includes(esm)) out.push(esm);
+  } catch {
+    /* nothing more to try */
+  }
+  return out;
+}
 
 // ---- <script lang="ts"> across files ---------------------------------------
 // `defineProps<TabsRootProps>()` where the type is IMPORTED (the dominant style
@@ -231,6 +288,30 @@ const DEFINES: Record<string, string> = {
   __SSR__: "false",
   __TEST__: "false",
   __VERSION__: '"3.5"',
+  // `import.meta` in a CLASSIC SCRIPT is a hard SyntaxError, and the module
+  // scripts this builder emits are classic scripts. It is not an exotic thing
+  // for an app to write either: `import.meta.env.MODE` is how every Vite app
+  // asks what build it is, and one occurrence kills the whole module at eval —
+  // which on a real app was five modules, entry included.
+  //
+  // Substituting the values Vite would have inlined is exactly what Vite does,
+  // so this is parity rather than a shim. The dotted forms come first (Bun
+  // matches the longest key), and the bare `import.meta` catches destructuring
+  // (`const { MODE } = import.meta.env`) and anything else.
+  "import.meta.env.MODE": '"development"',
+  "import.meta.env.DEV": "true",
+  "import.meta.env.PROD": "false",
+  "import.meta.env.SSR": "false",
+  "import.meta.env.BASE_URL": '"/"',
+  "import.meta.env":
+    '({MODE:"development",DEV:true,PROD:false,SSR:false,BASE_URL:"/"})',
+  // A dev server's HMR client hook. Vue SFCs compiled by `@vue/compiler-sfc`
+  // do not emit it (our HMR rides `__VUE_HMR_RUNTIME__`), but library code
+  // guards on it, and `undefined` is the "not a dev server" answer.
+  "import.meta.hot": "undefined",
+  "import.meta.url": '"vn://module"',
+  "import.meta":
+    '({env:{MODE:"development",DEV:true,PROD:false,SSR:false,BASE_URL:"/"},url:"vn://module",hot:undefined})',
 };
 
 function writeAtomic(path: string, text: string) {
@@ -432,7 +513,7 @@ function unquote(raw: string): string | null {
 }
 
 /** Resolved, deduped, in-graph ids that `id`'s emitted body requires. */
-function depsOf(id: string, body: string, ids: Set<string>): string[] {
+function depsOf(id: string, body: string, ids: Set<string>, skip: Set<string>): string[] {
   const slash = id.lastIndexOf("/");
   const dir = slash < 0 ? "" : id.slice(0, slash);
   const found: string[] = [];
@@ -440,6 +521,7 @@ function depsOf(id: string, body: string, ids: Set<string>): string[] {
   for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
     const spec = unquote(m[1]);
     if (spec === null || spec.charCodeAt(0) !== 46 /* . */) continue; // bare -> vendor
+    if (skip.has(spec)) continue; // a stylesheet: its own synthetic module
     const base = normalizeId((dir ? dir + "/" : "") + spec);
     const hit = CANDIDATE_EXTS.map((ext) => base + ext).find((cand) => ids.has(cand));
     if (!hit) {
@@ -457,7 +539,7 @@ function depsOf(id: string, body: string, ids: Set<string>): string[] {
 }
 
 /** Non-preseeded bare specifiers `body` requires — i.e. the npm packages. */
-function bareOf(body: string): string[] {
+function bareOf(body: string, skip: Set<string>): string[] {
   const found: string[] = [];
   REQUIRE_RE.lastIndex = 0;
   for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
@@ -465,7 +547,7 @@ function bareOf(body: string): string[] {
     if (spec === null) continue;
     const c = spec.charCodeAt(0);
     if (c === 46 /* . */ || c === 47 /* / */) continue; // relative/absolute -> graph
-    if (isPreseeded(spec) || found.includes(spec)) continue;
+    if (isPreseeded(spec) || found.includes(spec) || skip.has(spec)) continue;
     found.push(spec);
   }
   return found;
@@ -473,6 +555,132 @@ function bareOf(body: string): string[] {
 
 const moduleDeps = new Map<string, string[]>(); // id -> dep ids
 const moduleBare = new Map<string, string[]>(); // id -> npm specifiers it requires
+
+// ---- CSS entries: `import "./index.css"` from a JS/TS module ---------------
+// A Vite app's global stylesheet is imported from its entry module, not linked
+// from the HTML — and for a shadcn app that stylesheet is where the ENTIRE
+// palette lives (`@layer base { :root { --background: … } .dark { … } }`). Left
+// unhandled the `.css` file was emitted verbatim into a JS module body and died
+// at eval with `SyntaxError: Invalid character: '@'`.
+//
+// The transport is the one Tailwind already rides: a CSS-ONLY SYNTHETIC MODULE
+// — a real module script that calls setCss/setDeps/define with an empty factory.
+// Nothing new in the protocol.
+
+/** module id -> absolute path, for every stylesheet the app imports. */
+const cssModules = new Map<string, string>();
+/** id -> last emitted CSS, the change detector for watch mode. */
+const cssEmitted = new Map<string, string>();
+
+/**
+ * Registers the stylesheets `body` imports and returns their ids.
+ *
+ * The id follows the loader's own resolution: a RELATIVE import is a
+ * workspace-relative path (what `resolveId` builds), a BARE one is the
+ * specifier verbatim (what the registry is keyed by). `cssSpecs` collects the
+ * raw specifiers so `depsOf`/`bareOf` skip them — a stylesheet is neither a
+ * graph edge nor an npm package.
+ */
+function cssImportsOf(absPath: string, body: string, cssSpecs: Set<string>): string[] {
+  const dir = dirname(absPath);
+  const found: string[] = [];
+  REQUIRE_RE.lastIndex = 0;
+  for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
+    const spec = unquote(m[1]);
+    if (spec === null) continue;
+    const relative_ = spec.charCodeAt(0) === 46 /* . */;
+    // A bare specifier can name a stylesheet through its `exports` map
+    // (`@argon/assets/styles`), so the extension test is on the RESOLVED path.
+    let abs: string;
+    if (relative_) {
+      if (!spec.endsWith(".css")) continue;
+      abs = resolve(dir, spec);
+    } else {
+      if (isPreseeded(spec)) continue;
+      try {
+        abs = resolveFromApp(spec);
+      } catch {
+        continue;
+      }
+      if (!abs.endsWith(".css")) continue;
+    }
+    if (!existsSync(abs)) {
+      console.warn(`${stamp()} ${toId(absPath)}: import ${J(spec)} names no file — skipped`);
+      continue;
+    }
+    cssSpecs.add(spec);
+    const id = relative_ ? toId(abs) : spec;
+    cssModules.set(id, abs);
+    if (!found.includes(id)) found.push(id);
+  }
+  return found;
+}
+
+/** Emitted CSS module ids, in first-import order — see `writeManifest`. */
+const cssIds = () => Array.from(cssModules.keys());
+
+/**
+ * Writes one CSS-only module script. Returns true when the sheet moved.
+ *
+ * When the app has a Tailwind config the stylesheet goes through Tailwind's own
+ * PostCSS pass with ITSELF as the entry — which is exactly what the app's Vite
+ * build does, and the only way `@tailwind`, `@layer` and `@apply` can mean
+ * anything. Without a config (or without any of those directives) it is emitted
+ * byte-for-byte.
+ */
+async function buildCssModule(id: string): Promise<boolean> {
+  const abs = cssModules.get(id)!;
+  let css = readFileSync(abs, "utf-8");
+  if (TW_CONFIG && needsTailwindPass(css)) {
+    const t0 = Date.now();
+    try {
+      css = await generateTailwind(TW_CONFIG, { text: css, from: abs });
+      console.log(
+        `${stamp()} css ${id}: ${(css.length / 1024).toFixed(1)} KB through tailwind in ${Date.now() - t0} ms`,
+      );
+    } catch (e) {
+      console.error(`${stamp()} css ${id}: tailwind pass failed — emitting the source verbatim`, e);
+    }
+  } else {
+    console.log(`${stamp()} css ${id}: ${(css.length / 1024).toFixed(1)} KB`);
+  }
+  moduleDeps.set(id, []);
+  if (cssEmitted.get(id) === css) return false;
+  cssEmitted.set(id, css);
+  writeAtomic(
+    join(MODULES_DIR, encId(id)),
+    [
+      `// vue-native module: ${id} (synthetic — CSS entry)`,
+      `// source: ${toId(abs)}; do not edit`,
+      `__VN__.setCss(${J(id)}, ${J(css)});`,
+      `__VN__.setDeps && __VN__.setDeps(${J(id)}, []);`,
+      // Empty factory: `import "./index.css"` is a side effect, and the
+      // constant body hash keeps a CSS-only edit from invalidating anything.
+      `__VN__.define(${J(id)}, function (require, module, exports) {`,
+      `}, ${J(TW_HASH)});`,
+    ].join("\n"),
+  );
+  return true;
+}
+
+/** Rebuilds every registered stylesheet; returns the ids whose CSS moved. */
+async function syncCssModules(): Promise<string[]> {
+  const changed: string[] = [];
+  for (const id of cssIds()) {
+    if (await buildCssModule(id)) changed.push(id);
+  }
+  return changed;
+}
+
+/**
+ * True when one of the app's own stylesheets already carries `@tailwind
+ * utilities` — then the synthetic utilities module would be a duplicate.
+ */
+const appOwnsUtilities = () =>
+  Array.from(cssEmitted.keys()).some((id) => {
+    const abs = cssModules.get(id);
+    return !!abs && declaresUtilities(readFileSync(abs, "utf-8"));
+  });
 
 /** ESM -> CJS for one file, everything else external, wrapped in __VN__.define. */
 async function buildModule(absPath: string, ids: Set<string>) {
@@ -495,9 +703,14 @@ async function buildModule(absPath: string, ids: Set<string>) {
     throw new Error(`${id}: emitted createStaticVNode — hoistStatic leaked back on (F7)`);
   }
 
-  const deps = depsOf(id, body, ids);
+  // Stylesheets first: their specifiers must be known before `depsOf`/`bareOf`
+  // classify the rest, or a `.css` import looks like a missing module (relative)
+  // or an npm package (bare).
+  const cssSpecs = new Set<string>();
+  const css = cssImportsOf(absPath, body, cssSpecs);
+  const deps = depsOf(id, body, ids, cssSpecs).concat(css);
   moduleDeps.set(id, deps);
-  moduleBare.set(id, bareOf(body));
+  moduleBare.set(id, bareOf(body, cssSpecs));
 
   const out: string[] = [`// vue-native module: ${id}`];
   if (capturedCss !== null) out.push(`__VN__.setCss(${J(id)}, ${J(capturedCss)});`);
@@ -523,11 +736,9 @@ const npmFailed = new Set<string>();
 
 /** Bundles one npm package into a classic module script. False = unresolvable. */
 async function buildNpmModule(spec: string): Promise<boolean> {
-  let entry: string;
-  try {
-    // Resolved from the APP root, not ours: the app owns its dependencies.
-    entry = appRequire.resolve(spec);
-  } catch (e) {
+  // Resolved from the APP root, not ours: the app owns its dependencies.
+  const candidates = entryCandidates(spec);
+  if (!candidates.length) {
     if (!npmFailed.has(spec)) {
       npmFailed.add(spec);
       console.warn(
@@ -537,17 +748,37 @@ async function buildNpmModule(spec: string): Promise<boolean> {
     }
     return false;
   }
-  const result = await Bun.build({
-    entrypoints: [entry],
-    format: "cjs" as any,
-    target: "browser", // picks the browser/ESM conditions, not node builtins
-    // The ONLY externals: everything else (the package's own transitive npm
-    // graph) is inlined, because nothing outside this bundle can require it.
-    external: PRESEEDED,
-    define: DEFINES,
-  });
-  if (!result.success) {
-    for (const log of result.logs) console.error(log);
+  let result: Awaited<ReturnType<typeof Bun.build>> | null = null;
+  let entry = candidates[0];
+  for (const [i, candidate] of candidates.entries()) {
+    entry = candidate;
+    result = await Bun.build({
+      entrypoints: [candidate],
+      format: "cjs" as any,
+      target: "browser", // picks the browser/ESM conditions, not node builtins
+      // The ONLY externals: everything else (the package's own transitive npm
+      // graph) is inlined, because nothing outside this bundle can require it.
+      external: PRESEEDED,
+      // A dependency can ship RAW `.vue` SOURCE — a vendored component library
+      // (`@argon/ui`: 208 SFCs) is the normal case, not an exotic one. Without
+      // the SFC plugin here Bun treats the file as an asset and the import
+      // becomes a FILE-PATH STRING: `var Alert_default = "./Alert-7e55.vue"`.
+      // That is a silent corruption — no error, the component renders as
+      // nothing — which is the worst failure mode a compat-first builder can
+      // have.
+      plugins: [vuePlugin],
+      define: DEFINES,
+    }).catch(() => null);
+    if (result?.success) break;
+    if (i + 1 < candidates.length) {
+      console.warn(
+        `${stamp()} npm ${spec}: ${toId(candidate)} did not build — retrying with ` +
+          `${toId(candidates[i + 1])}`,
+      );
+    }
+  }
+  if (!result?.success) {
+    for (const log of result?.logs ?? []) console.error(log);
     throw new Error(`npm module build failed: ${spec}`);
   }
   const body = await result.outputs[0].text();
@@ -705,7 +936,13 @@ function writeManifest(files: string[]) {
   // must be REGISTERED before the entry runs (the host evals `modules` in
   // order, then boots), and they contribute no CSS, so their position relative
   // to the Tailwind layer is irrelevant.
-  const ids = (TW_CONFIG ? [TW_ID] : []).concat(npmIds(), files.map(toId));
+  // The app's own stylesheets come straight after the utilities layer and
+  // before every component `<style>` — the position `import "./index.css"` at
+  // the top of an entry module has in a browser build. When one of them
+  // declares `@tailwind utilities` itself (the normal Vite+Tailwind shape) the
+  // synthetic utilities module is redundant and is left out entirely.
+  const wantTw = TW_CONFIG && !appOwnsUtilities();
+  const ids = (wantTw ? [TW_ID] : []).concat(cssIds(), npmIds(), files.map(toId));
   const seen = new Set<string>();
   for (const id of ids) {
     const enc = encId(id);
@@ -750,6 +987,8 @@ async function fullBuild(reason: string) {
   moduleDeps.clear();
   moduleBare.clear();
   npmBuilt.clear(); // force a rewrite: the module files may not exist yet
+  cssModules.clear();
+  cssEmitted.clear();
   twCss = null; // ditto
   await buildTailwind();
   for (const abs of files) {
@@ -758,6 +997,7 @@ async function fullBuild(reason: string) {
     prevBlocks.set(abs, blocksOf(abs, src));
   }
   await syncNpmModules(); // needs every module's `require`s to be known first
+  await syncCssModules(); // ditto: discovered while scanning each module's body
   rev++;
   writeManifest(files);
   // Empty change list: if vendorRev actually moved the host cold-restarts,
@@ -828,6 +1068,10 @@ async function incrementalBuild() {
   // A new utility therefore arrives as its OWN css-only entry, next to (not
   // instead of) whatever the edited component needs.
   if (await buildTailwind()) changed.push({ id: TW_ID, kind: "css-only" });
+  // A stylesheet that went through the Tailwind pass changes with the templates
+  // too (its `@apply` rules and its utilities layer are JIT-generated), so it is
+  // re-emitted on the same signal.
+  for (const id of await syncCssModules()) changed.push({ id, kind: "css-only" });
 
   if (!changed.length && !structural) return;
   rev++;

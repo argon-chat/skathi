@@ -153,3 +153,44 @@ describe("style-only edits", () => {
     expect(hashOf(after)).not.toBe(hashOf(before));
   });
 });
+
+// ---------------------------------------------------------------------------
+// CSS entries: `import "./theme.css"` from a JS module
+// ---------------------------------------------------------------------------
+// A Vite app's global stylesheet is imported from its entry module. Before this
+// the .css file was emitted verbatim into a JS module body and died at eval
+// with `SyntaxError: Invalid character: '@'` — and for a shadcn-shaped app that
+// stylesheet is where the whole palette lives.
+
+describe("css entry modules", () => {
+  const CSS_ID = id("css-app", "theme.css");
+  const MAIN = id("css-app", "main.js");
+
+  test("the stylesheet becomes a css-only synthetic module", () => {
+    const b = build("css-app");
+    expect(b.manifest.modules).toContain(CSS_ID);
+    const script = b.script(CSS_ID);
+    // Real CSS on the setCss transport…
+    expect(script).toContain("__VN__.setCss");
+    expect(script).toContain("--fixture-fg");
+    // …and an EMPTY factory: importing a stylesheet is a side effect, not a
+    // module with exports.
+    expect(script).toMatch(/__VN__\.define\([^,]+, function \(require, module, exports\) \{\s*\}/);
+  });
+
+  test("it is a graph edge of the module that imported it, not an npm package", () => {
+    const b = build("css-app");
+    expect(b.manifest.deps[MAIN]).toContain(CSS_ID);
+    // It must NOT have been mistaken for a bare specifier and bundled.
+    expect(b.stderr).not.toContain("cannot resolve");
+    expect(b.stderr).not.toContain("resolves to no built module");
+  });
+
+  test("stylesheets sort ahead of the app's own modules", () => {
+    const b = build("css-app");
+    const modules = b.manifest.modules;
+    // The loader aggregates CSS in first-setCss order, which is manifest order,
+    // so a global stylesheet has to be registered before any component <style>.
+    expect(modules.indexOf(CSS_ID)).toBeLessThan(modules.indexOf(id("css-app", "App.vue")));
+  });
+});
