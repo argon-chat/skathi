@@ -85,10 +85,23 @@ const TOOLS = [
   {
     name: "vn_screenshot",
     description:
-      "Capture the app window to a PNG via PrintWindow(PW_RENDERFULLCONTENT). Works while the " +
-      "window is unfocused or occluded; never raises or activates it.",
-    inputSchema: { type: "object", properties: { path: str("output PNG path (default: <dist>/screenshots/<n>.png)") } },
-    build: (a: any) => ({ cmd: "screenshot", ...(a.path ? { path: a.path } : {}) }),
+      "Capture the app window to a PNG. Default backend is gpui's render_to_image readback: the " +
+      "CLIENT area exactly (clientX/clientY come back 0), works unfocused, occluded, off-screen " +
+      "and minimized, and never raises or activates the window — but it cannot see a mica/acrylic " +
+      "backdrop, which DWM composites under the app. Pass backend=print_window for the composed " +
+      "image (PrintWindow(PW_RENDERFULLCONTENT), whole window rect, stale when minimized).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: str("output PNG path (default: <dist>/screenshots/<n>.png)"),
+        backend: str('"auto" (default), "render_to_image" or "print_window"'),
+      },
+    },
+    build: (a: any) => ({
+      cmd: "screenshot",
+      ...(a.path ? { path: a.path } : {}),
+      ...(a.backend ? { backend: a.backend } : {}),
+    }),
   },
   {
     name: "vn_query",

@@ -1,16 +1,50 @@
-//! `PrintWindow(PW_RENDERFULLCONTENT)` → BGRA DIB → PNG.
+//! Two screenshot backends, and the rule for choosing between them.
 //!
-//! Why not `BitBlt` from the window DC: gpui paints through a DirectX
-//! swapchain, and a swapchain's back buffer is not in the window's GDI surface
-//! — a `BitBlt` returns the (usually black) GDI layer. `PrintWindow` with
-//! `PW_RENDERFULLCONTENT` (Win 8.1+) asks DWM for the composed content
-//! instead, which is exactly the pixels on screen, and works while the window
-//! is unfocused or fully occluded. That property is the whole point of this
-//! track: an agent must never have to raise or focus the user's window.
+//! # `render_to_image` — the default
 //!
-//! Minimized windows are the documented hole: DWM has nothing live to compose,
-//! so the call returns whatever it last held. We report `iconic: true` rather
-//! than pretend the frame is current.
+//! gpui re-renders the last frame's scene into the D3D11 render target, copies
+//! it into a `D3D11_USAGE_STAGING` texture and reads it back (zed#63012; the
+//! fork ungates it, see the `gpui: make render_to_image available outside test
+//! builds` patch). What comes back is the **client area, exactly** — no window
+//! frame, no invisible resize border — so `clientX`/`clientY` are `0` and a
+//! `query` rectangle crops with nothing but the scale factor. It needs no
+//! compositor: occluded, unfocused and off-screen windows all read back the
+//! scene the app last painted, byte for byte.
+//!
+//! Minimized is a special case that neither backend can actually be *asked*
+//! about: gpui parks the window's `request_frame` callback on
+//! `SIZE_MINIMIZED`, and devtools commands execute one per frame, so the whole
+//! transport stops until the window is restored (measured: `ping` times out
+//! while iconic and answers in 64 ms the moment it is restored). The render
+//! target survives untouched, so if a capture *does* land while `IsIconic` is
+//! true — the narrow race around the transition — the readback is the last real
+//! scene rather than the stale composition `PrintWindow` would hand back.
+//!
+//! What it does **not** capture is anything the app did not draw itself. On a
+//! `mica`/`acrylic` window the render target is cleared to transparent and the
+//! system backdrop is composited *underneath* by DWM, so those pixels come back
+//! with alpha < 255 and no backdrop behind them. That is the honest answer to
+//! "what did the app paint", and it is the wrong answer to "what does the user
+//! see".
+//!
+//! # `PrintWindow(PW_RENDERFULLCONTENT)` — kept, not retired
+//!
+//! Asks DWM for the *composed* content, which is exactly the pixels on screen —
+//! system backdrop included — and works while the window is unfocused or fully
+//! occluded. Why not `BitBlt` from the window DC: gpui paints through a DirectX
+//! swapchain, and a swapchain's back buffer is not in the window's GDI surface,
+//! so a `BitBlt` returns the (usually black) GDI layer.
+//!
+//! It captures the whole WINDOW rect, which on Windows 10/11 includes the
+//! invisible resize border, hence `client_origin`. And DWM having nothing live
+//! to compose for a minimized window is its documented hole: the call returns
+//! whatever it last held.
+//!
+//! It stays for two reasons. It is the only backend that shows the mica/acrylic
+//! backdrop, and it is the parachute for the day an upstream release breaks
+//! `render_to_image` — tooling that can only see through one hole goes blind
+//! when that hole closes. `backend` picks explicitly; `auto` (the default)
+//! tries the readback and falls back with the reason recorded in the reply.
 
 use std::path::{Path, PathBuf};
 
@@ -29,6 +63,31 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PW_RENDERFULLCONTENT,
 };
 
+/// Which capture path to use. `Auto` is what the `screenshot` command sends
+/// when the caller says nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Backend {
+    /// `render_to_image`, falling back to `PrintWindow` on any failure.
+    #[default]
+    Auto,
+    /// `render_to_image` only — a failure is an error, not a fallback.
+    RenderToImage,
+    /// `PrintWindow(PW_RENDERFULLCONTENT)` only.
+    PrintWindow,
+}
+
+impl Backend {
+    /// `None` for a spelling this command does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "" | "auto" => Some(Self::Auto),
+            "render_to_image" | "render-to-image" | "gpu" => Some(Self::RenderToImage),
+            "print_window" | "print-window" | "printwindow" | "dwm" => Some(Self::PrintWindow),
+            _ => None,
+        }
+    }
+}
+
 pub struct Shot {
     pub path: PathBuf,
     pub width: u32,
@@ -41,10 +100,27 @@ pub struct Shot {
     /// the left, right and bottom) — while `query`/`tree` report bounds in CSS
     /// pixels relative to the client area. Without this offset the two cannot
     /// be lined up, so cropping a screenshot to one element is guesswork.
+    ///
+    /// `render_to_image` reads the client area back directly, so it reports
+    /// `(0, 0)`. The FIELD stays in the reply either way: the crop formula is
+    /// the same one, and a client that subtracts a constant zero keeps working
+    /// against both backends and against whatever a future one reports.
     pub client_origin: (i32, i32),
     /// Bitmap pixels per CSS pixel, i.e. the window's scale factor. Completes
-    /// the mapping: `bitmap_x = css_x * scale + client_origin.0`.
+    /// the mapping: `bitmap_x = css_x * scale + client_origin.0`. Both backends
+    /// capture in PHYSICAL pixels, so this is the real scale factor for both —
+    /// it does not become 1 just because the offsets became 0.
     pub scale: f32,
+    /// Which path actually produced the file: `"render_to_image"` or
+    /// `"print_window"`.
+    pub backend: &'static str,
+    /// Why `Auto` did not use `render_to_image`, when it did not.
+    pub fallback: Option<String>,
+    /// `true` when the pixels carry real transparency, i.e. the app's own
+    /// drawing does not fill the client area. Only `render_to_image` can
+    /// produce it, and it means the window's mica/acrylic backdrop (which DWM
+    /// composites underneath, not the app) is absent from this capture.
+    pub has_alpha: bool,
 }
 
 /// `<dist>/screenshots/<n>.png` — next to the bundle the host is running, so
@@ -128,7 +204,79 @@ impl Drop for Gdi {
     }
 }
 
-pub fn capture(path: &Path) -> Result<Shot, String> {
+/// Capture through `backend`, writing a PNG to `path`.
+pub fn capture(path: &Path, backend: Backend) -> Result<Shot, String> {
+    match backend {
+        Backend::RenderToImage => capture_render_to_image(path),
+        Backend::PrintWindow => capture_print_window(path),
+        Backend::Auto => match capture_render_to_image(path) {
+            Ok(shot) => Ok(shot),
+            // The readback is the better capture but it is one upstream release
+            // away from breaking, so `auto` never lets that take the tooling
+            // down with it — it degrades to the compositor and says so.
+            Err(why) => capture_print_window(path).map(|mut shot| {
+                shot.fallback = Some(why);
+                shot
+            }),
+        },
+    }
+}
+
+/// gpui's D3D11 staging readback of the last rendered scene.
+fn capture_render_to_image(path: &Path) -> Result<Shot, String> {
+    // Not `?`: the handle is reply metadata (and the `iconic` flag), not
+    // something this path needs in order to work — the readback never touches
+    // the HWND.
+    let hwnd_raw = hwnd_of_window();
+    let iconic = hwnd_raw.is_some_and(|raw| {
+        unsafe { IsIconic(HWND(raw as *mut core::ffi::c_void)) }.as_bool()
+    });
+
+    let captured = vn_runtime::with_commit(|window, _| {
+        (window.render_to_image(), window.scale_factor())
+    })
+    .ok_or_else(|| "no live gpui window (not inside a committed frame)".to_string())?;
+    let (image, scale) = captured;
+    let image = image.map_err(|e| format!("render_to_image failed: {e}"))?;
+
+    let (width, height) = (image.width(), image.height());
+    if width == 0 || height == 0 {
+        return Err("render_to_image returned a zero-sized image".into());
+    }
+    // Deliberately NO minimized special-case. gpui parks the window's
+    // `request_frame` callback on `WM_SIZE`/`SIZE_MINIMIZED` and does not
+    // resize the renderer, so an iconic window keeps a full-size render target
+    // holding the last scene it painted: the readback is correct, while the
+    // `PrintWindow` this would otherwise fall back to is exactly the case that
+    // returns something stale or blank. (In practice the flag is nearly
+    // unreachable here — with `request_frame` parked, the devtools pump stops
+    // too, so commands queue until the window is restored. See
+    // docs/DEVTOOLS.md.)
+    let has_alpha = image.pixels().any(|p| p.0[3] != 255);
+
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    image
+        .save(path)
+        .map_err(|e| format!("writing {}: {e}", path.display()))?;
+
+    Ok(Shot {
+        path: path.to_path_buf(),
+        width,
+        height,
+        hwnd: hwnd_raw.unwrap_or(0),
+        iconic,
+        // The readback IS the client area.
+        client_origin: (0, 0),
+        scale,
+        backend: "render_to_image",
+        fallback: None,
+        has_alpha,
+    })
+}
+
+fn capture_print_window(path: &Path) -> Result<Shot, String> {
     let hwnd_raw = hwnd_of_window()
         .ok_or_else(|| "could not find this process' window handle".to_string())?;
     let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
@@ -217,6 +365,10 @@ pub fn capture(path: &Path) -> Result<Shot, String> {
         iconic,
         client_origin,
         scale,
+        backend: "print_window",
+        fallback: None,
+        // The DIB conversion forces alpha to 255 (DWM does not always fill it).
+        has_alpha: false,
     })
 }
 

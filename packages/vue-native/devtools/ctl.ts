@@ -42,7 +42,7 @@ commands
   scroll   <selector> <dy> [--dx N] [--index N]
   eval     <js source>
   logs     [--since N]
-  screenshot [path]
+  screenshot [path] [--backend auto|render_to_image|print_window]
 
 options
   --dist <slot>    the dist directory the target host was launched with
@@ -164,7 +164,11 @@ function buildRequest(argv: string[], f: Flags): Record<string, unknown> {
     case "logs":
       return { cmd, ...(num(f.since) !== undefined ? { since: num(f.since) } : {}) };
     case "screenshot":
-      return { cmd, ...(rest[0] ? { path: resolve(rest[0]) } : {}) };
+      return {
+        cmd,
+        ...(rest[0] ? { path: resolve(rest[0]) } : {}),
+        ...(f.backend ? { backend: String(f.backend) } : {}),
+      };
     default:
       die(`unknown command \`${cmd}\`\n\n${USAGE}`);
   }

@@ -399,7 +399,7 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             Some(js) => cmd_eval(&js),
         },
         "logs" => cmd_logs(num("since")),
-        "screenshot" => cmd_screenshot(arg("path").as_deref()),
+        "screenshot" => cmd_screenshot(arg("path").as_deref(), arg("backend").as_deref()),
         "type" | "key" => return start_input_command(cmd, req, reply),
         "" => err("no `cmd` in the request"),
         other => err(format!("unknown command `{other}` — see docs/DEVTOOLS.md")),
@@ -935,12 +935,24 @@ fn parse_keystroke(spec: &str) -> Result<gpui::Keystroke, String> {
 // screenshot
 // ---------------------------------------------------------------------------
 
-fn cmd_screenshot(path: Option<&str>) -> String {
+fn cmd_screenshot(path: Option<&str>, backend: Option<&str>) -> String {
     let target = match path {
         Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
         _ => screenshot::next_default_path(),
     };
-    match screenshot::capture(&target) {
+    let backend = match backend {
+        None => screenshot::Backend::default(),
+        Some(name) => match screenshot::Backend::parse(name) {
+            Some(b) => b,
+            None => {
+                return err(format!(
+                    "unknown backend {name:?} — use \"auto\", \"render_to_image\" or \
+                     \"print_window\""
+                ));
+            }
+        },
+    };
+    match screenshot::capture(&target, backend) {
         Err(e) => err(e),
         Ok(shot) => {
             let mut entries = vec![
@@ -948,22 +960,50 @@ fn cmd_screenshot(path: Option<&str>) -> String {
                 ("width", Json::n(f64::from(shot.width))),
                 ("height", Json::n(f64::from(shot.height))),
                 ("hwnd", Json::s(format!("{:#x}", shot.hwnd))),
+                ("backend", Json::s(shot.backend.to_string())),
                 // How to line a `query`/`tree` rectangle up with these pixels:
-                // the capture is the whole WINDOW rect (invisible resize border
-                // included), while bounds are CSS px inside the CLIENT area.
                 //   bitmap_x = css_x * scale + clientX
+                // `render_to_image` reads the CLIENT area back, so its offsets
+                // are 0; `print_window` captures the whole WINDOW rect
+                // (invisible resize border included) and reports a real one.
+                // Both capture in physical pixels, so `scale` is the window's
+                // scale factor either way.
                 ("clientX", Json::n(f64::from(shot.client_origin.0))),
                 ("clientY", Json::n(f64::from(shot.client_origin.1))),
                 ("scale", Json::n(f64::from(shot.scale))),
             ];
+            if let Some(why) = shot.fallback {
+                entries.push((
+                    "fallback",
+                    Json::s(format!("render_to_image unavailable ({why}) — used PrintWindow")),
+                ));
+            }
+            if shot.has_alpha {
+                entries.push((
+                    "hasAlpha",
+                    Json::Bool(true),
+                ));
+                entries.push((
+                    "note",
+                    Json::s(
+                        "the capture has transparent pixels: this window uses a mica/acrylic \
+                         backdrop, which DWM composites UNDER the app and render_to_image \
+                         therefore cannot see — pass backend=\"print_window\" for the composed \
+                         image",
+                    ),
+                ));
+            }
             if shot.iconic {
                 entries.push(("iconic", Json::Bool(true)));
                 entries.push((
                     "warning",
-                    Json::s(
+                    Json::s(if shot.backend == "render_to_image" {
+                        "the window is minimized — gpui keeps the render target, so this is a \
+                         re-render of the last scene the app painted before it was minimized"
+                    } else {
                         "the window is minimized — PrintWindow can only return whatever the \
-                         compositor last held, which may be stale or blank",
-                    ),
+                         compositor last held, which may be stale or blank"
+                    }),
                 ));
             }
             ok(Json::obj(entries))
