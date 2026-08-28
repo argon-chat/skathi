@@ -1,5 +1,5 @@
 <script setup>
-import { onActivated, onMounted, onUnmounted, ref } from "vue";
+import { onActivated, onMounted, onUnmounted, ref, shallowRef } from "vue";
 import { useSession } from "./stores/session.js";
 
 // `name` is what <KeepAlive>'s include/exclude matches on — the shell excludes
@@ -32,6 +32,113 @@ const mountId = Math.random().toString(36).slice(2, 7);
 const locked = ref(false);
 const checked = ref(false);
 const open = ref(false);
+
+// --- WebSocket ---------------------------------------------------------------
+// `WebSocket` here is redjs's own RFC 6455 client (vendor/redjs, webapi/websocket.rs):
+// a real EventTarget, real MessageEvent/CloseEvent, real binary frames. The peer
+// is the dev echo server:
+//
+//     bun packages/vue-native/devtools/ws-echo.ts
+//
+// Nothing about this page is native-specific — it is the same code a browser
+// would run, which is the whole claim being demonstrated.
+const WS_URL = "ws://127.0.0.1:8787/";
+const STATES = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
+
+// shallowRef, not ref: a WebSocket is a host object and wrapping it in Vue's
+// deep reactive proxy would put a Proxy between us and its native getters.
+const sock = shallowRef(null);
+const wsState = ref("CLOSED");
+const wsProtocol = ref("");
+const wsBuffered = ref(0);
+const wsBinaryType = ref("blob");
+const txText = ref(0);
+const txBin = ref(0);
+const rxText = ref("—");
+const rxBin = ref("—");
+const wsLog = ref("idle — start the echo server, then press connect");
+
+function syncWs() {
+  const s = sock.value;
+  wsState.value = s ? STATES[s.readyState] : "CLOSED";
+  wsBuffered.value = s ? s.bufferedAmount : 0;
+  wsProtocol.value = s ? s.protocol : "";
+  wsBinaryType.value = s ? s.binaryType : "blob";
+}
+
+function wsConnect() {
+  wsClose();
+  const s = new WebSocket(WS_URL);
+  sock.value = s;
+  wsLog.value = "connecting to " + WS_URL;
+  syncWs();
+  s.onopen = () => {
+    wsLog.value = "open — readyState " + s.readyState;
+    syncWs();
+  };
+  s.onerror = () => {
+    wsLog.value = "error — is `bun packages/vue-native/devtools/ws-echo.ts` running?";
+    syncWs();
+  };
+  s.onclose = (e) => {
+    wsLog.value = `close code=${e.code} reason="${e.reason}" wasClean=${e.wasClean}`;
+    syncWs();
+  };
+  s.onmessage = async (e) => {
+    if (typeof e.data === "string") {
+      rxText.value = e.data;
+    } else {
+      // binaryType "blob" (the browser default) gives a Blob; "arraybuffer"
+      // gives an ArrayBuffer. Both are shown as the same byte list.
+      const kind = e.data instanceof Blob ? "Blob" : "ArrayBuffer";
+      const buf = e.data instanceof Blob ? await e.data.arrayBuffer() : e.data;
+      const bytes = Array.from(new Uint8Array(buf));
+      rxBin.value = `${kind}(${bytes.length}) [${bytes.join(", ")}]`;
+    }
+    syncWs();
+  };
+}
+
+function wsSendText() {
+  const s = sock.value;
+  if (!s || s.readyState !== WebSocket.OPEN) {
+    wsLog.value = "send refused — the socket is " + (s ? STATES[s.readyState] : "absent");
+    return;
+  }
+  txText.value += 1;
+  s.send("text counter " + txText.value);
+  syncWs();
+}
+
+function wsSendBinary() {
+  const s = sock.value;
+  if (!s || s.readyState !== WebSocket.OPEN) {
+    wsLog.value = "send refused — the socket is " + (s ? STATES[s.readyState] : "absent");
+    return;
+  }
+  txBin.value += 1;
+  const n = txBin.value;
+  // A recognisable pattern: 0xA5, the counter little-endian, 0x5A.
+  s.send(new Uint8Array([0xa5, n & 255, (n >> 8) & 255, 0x5a]).buffer);
+  syncWs();
+}
+
+function wsToggleBinaryType() {
+  const s = sock.value;
+  if (!s) return;
+  s.binaryType = s.binaryType === "blob" ? "arraybuffer" : "blob";
+  syncWs();
+}
+
+function wsClose() {
+  const s = sock.value;
+  if (s && s.readyState < WebSocket.CLOSING) s.close(1000, "lab");
+  syncWs();
+}
+
+// The Lab tab really unmounts on every visit, so a socket left open here would
+// keep receiving into a dead component.
+onUnmounted(wsClose);
 </script>
 
 <template>
@@ -60,6 +167,28 @@ const open = ref(false);
       <div class="ka-row">
         <div class="btn" @click="session.bump()">visits++ from Lab</div>
       </div>
+    </div>
+
+    <!-- ===================================================================
+         WebSocket — redjs's native RFC 6455 client. Peer:
+           bun packages/vue-native/devtools/ws-echo.ts
+         =================================================================== -->
+    <div class="ws">
+      <div class="ws-title">WebSocket — text and binary against a local echo</div>
+      <div class="ka-row">
+        <div class="btn ws-connect" @click="wsConnect">connect</div>
+        <div class="btn ws-send-text" @click="wsSendText">send text</div>
+        <div class="btn ws-send-bin" @click="wsSendBinary">send binary</div>
+        <div class="btn ws-binary-type" @click="wsToggleBinaryType">binaryType: {{ wsBinaryType }}</div>
+        <div class="btn ws-close" @click="wsClose">close(1000)</div>
+      </div>
+      <div class="hint ws-state">
+        readyState <span class="good">{{ wsState }}</span> · protocol "{{ wsProtocol }}" · bufferedAmount
+        {{ wsBuffered }} · sent {{ txText }} text / {{ txBin }} binary
+      </div>
+      <div class="hint ws-rx-text">text ← {{ rxText }}</div>
+      <div class="hint ws-rx-bin">binary ← {{ rxBin }}</div>
+      <div class="hint ws-log">{{ wsLog }}</div>
     </div>
 
     <!-- ===================================================================
@@ -179,6 +308,21 @@ const open = ref(false);
 }
 .btn:hover {
   background: #4f8cffcc;
+}
+
+/* ===== WebSocket panel ================================================== */
+.ws {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #ffffff0f;
+  border: 1px solid #ffffff1f;
+}
+.ws-title {
+  font-size: 12px;
+  color: #ffffffcc;
 }
 </style>
 
