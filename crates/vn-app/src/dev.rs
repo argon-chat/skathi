@@ -44,6 +44,49 @@ const DEV_URL: &str = "ws://127.0.0.1:7880";
 const DEV_API_KEY: &str = "devkey";
 const DEV_API_SECRET: &str = "secret-secret-secret-secret-1234";
 
+// ---------------------------------------------------------------------------
+// pointing the dev host at a server that is not the loopback one
+// ---------------------------------------------------------------------------
+//
+// Two environment overrides, both generic and neither carrying a credential:
+//
+//   VN_VOICE_URL              the server to hand JS, instead of DEV_URL
+//   VN_VOICE_TOKEN_<IDENTITY> a ready-made JWT for that identity
+//   VN_VOICE_TOKEN            a ready-made JWT for any identity (fallback)
+//
+// `<IDENTITY>` is the `identity` argument upper-cased with every character
+// outside `[A-Z0-9]` folded to `_`, so the two-window rig's `alice`/`bob` read
+// `VN_VOICE_TOKEN_ALICE` / `VN_VOICE_TOKEN_BOB`, and slots named `a`/`b` read
+// `VN_VOICE_TOKEN_A` / `VN_VOICE_TOKEN_B`. Per-identity is the only shape that
+// generalises: a token names the participant it was minted for, so N
+// participants need N tokens.
+//
+// **A supplied token is used verbatim and nothing is minted** — which is the
+// point. An API key/secret for somebody's real server must never have to be
+// handed to this process (or written into this file) merely to point a dev
+// build at it; a token minted elsewhere, out of band, is enough. `VN_VOICE_URL`
+// on its own still mints with the loopback dev key, which is what you want when
+// the thing that moved is the address of *our* dev SFU.
+//
+// This is not staging-specific and not test-specific: it is the one seam that
+// makes "which server does the Voice page join?" answerable without a rebuild.
+
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
+/// `alice` -> `VN_VOICE_TOKEN_ALICE`
+fn token_var_for(identity: &str) -> String {
+    let mut name = String::from("VN_VOICE_TOKEN_");
+    for c in identity.chars() {
+        name.push(match c.to_ascii_uppercase() {
+            c @ ('A'..='Z' | '0'..='9') => c,
+            _ => '_',
+        });
+    }
+    name
+}
+
 // `__vn_dev_voice_token(identity, room)` -> {"serverUrl":…,"participantToken":…}
 //
 // The shape `TokenSource.endpoint()` resolves to, so an app can swap between
@@ -63,21 +106,34 @@ vn_runtime::host_fn!(fn vn_dev_voice_token(g, args) {
         );
     }
 
-    // `VideoGrants` defaults can_publish / can_subscribe / can_publish_data to
-    // TRUE, so naming the room and `room_join` is the whole grant.
-    let grants = VideoGrants { room_join: true, room: room.clone(), ..Default::default() };
-    let token = AccessToken::with_api_key(DEV_API_KEY, DEV_API_SECRET)
-        .with_identity(&identity)
-        .with_name(&identity)
-        .with_ttl(std::time::Duration::from_secs(3600))
-        .with_grants(grants)
-        .to_jwt();
+    let url = env_nonempty("VN_VOICE_URL").unwrap_or_else(|| DEV_URL.to_string());
+
+    // An override is used AS IS: no minting, so no key or secret is needed for
+    // a server whose credentials we do not have.
+    let supplied =
+        env_nonempty(&token_var_for(&identity)).or_else(|| env_nonempty("VN_VOICE_TOKEN"));
+
+    let token = match supplied {
+        Some(jwt) => Ok(jwt),
+        None => {
+            // `VideoGrants` defaults can_publish / can_subscribe /
+            // can_publish_data to TRUE, so naming the room and `room_join` is
+            // the whole grant.
+            let grants = VideoGrants { room_join: true, room: room.clone(), ..Default::default() };
+            AccessToken::with_api_key(DEV_API_KEY, DEV_API_SECRET)
+                .with_identity(&identity)
+                .with_name(&identity)
+                .with_ttl(std::time::Duration::from_secs(3600))
+                .with_grants(grants)
+                .to_jwt()
+        }
+    };
 
     match token {
         Ok(jwt) => {
             let payload = format!(
                 "{{\"serverUrl\":{},\"participantToken\":{}}}",
-                json::quote(DEV_URL),
+                json::quote(&url),
                 json::quote(&jwt)
             );
             JsRuntime::with(|rt| rt.ctx().string(&payload).0)
@@ -85,6 +141,17 @@ vn_runtime::host_fn!(fn vn_dev_voice_token(g, args) {
         Err(e) => vn_runtime::bridge::throw_error(g, 0, &format!("could not mint a dev token: {e}")),
     }
 });
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn token_var_names_are_derived_from_the_identity() {
+        assert_eq!(super::token_var_for("alice"), "VN_VOICE_TOKEN_ALICE");
+        assert_eq!(super::token_var_for("a"), "VN_VOICE_TOKEN_A");
+        // Anything an identity may legally contain that an env var may not.
+        assert_eq!(super::token_var_for("user-1.x"), "VN_VOICE_TOKEN_USER_1_X");
+    }
+}
 
 /// Registers the dev-only host fns. Called from `main` next to
 /// `devtools::install`, inside the same `#[cfg(not(feature = "prod"))]`.
