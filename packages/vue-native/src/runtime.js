@@ -669,6 +669,9 @@ function removeExtraListener(node, rawName, fn, opts) {
 //   __vn_computed_style the folded computed values + custom properties
 
 let appRoot = null; // set by createApp().mount()
+// Replays the pre-mount `documentElement` writes onto the real root. Installed by
+// the document surface below; called by mount().
+let flushDocumentElement = null;
 
 function defineDom(name, value, protos = [ElementProto]) {
   for (const proto of protos) {
@@ -1538,6 +1541,10 @@ export function createApp(rootComponent, rootProps = null) {
     // to="body">`, `document.querySelectorAll`, `document.body.contains`) all
     // mean this node.
     appRoot = root;
+    // Anything module-scope theme code wrote to `document.documentElement`
+    // before there was a root — the `dark` class, the `--radius` overrides —
+    // lands now, BEFORE the first render, so the first paint is themed.
+    if (flushDocumentElement) flushDocumentElement(root);
     const vm = mount(root);
     // Dev hot-restart: the host calls this before re-evaling a new bundle.
     globalThis.__VN_TEARDOWN__ = () => {
@@ -2069,54 +2076,103 @@ if (doc) {
       /* ditto */
     }
   }
-  // `document.body` / `documentElement` are plain objects in redjs, and three
-  // libraries (aria-hidden, reka's scroll lock, floating-ui) reach straight for
-  // `.style` / `.contains` on them. Point them at the app root once it exists,
-  // so those calls act on the real tree instead of on nothing.
-  for (const name of ["body", "documentElement", "head"]) {
-    const el = doc[name];
-    if (!el || typeof el !== "object") continue;
-    // `document.body.style.pointerEvents = "none"` (reka's scroll lock) and
-    // `documentElement.style.removeProperty("--scrollbar-width")` are the two
-    // shapes that actually turn up. redjs already gives these objects a plain
-    // `style` bag with NO methods on it, so the methods are what must be filled
-    // in — a missing `removeProperty` throws inside an unmount hook and leaves
-    // the component half-torn-down.
-    //
-    // The writes are a property bag, not a style: `document.body` is not a node
-    // in the retained tree, so there is nothing to apply them to.
-    if (!el.style || typeof el.style !== "object") el.style = {};
-    const s = el.style;
-    if (typeof s.setProperty !== "function") {
-      s.setProperty = (k, v) => {
-        s[String(k)] = v == null ? "" : String(v);
-      };
-    }
-    if (typeof s.removeProperty !== "function") {
-      s.removeProperty = (k) => {
-        const prev = s[String(k)] ?? "";
-        delete s[String(k)];
-        return prev;
-      };
-    }
-    if (typeof s.getPropertyValue !== "function") s.getPropertyValue = (k) => s[String(k)] ?? "";
-    if (!el.querySelector) el.querySelector = (s) => queryOne(s, appRoot ? appRoot.id : 0);
-    if (!el.querySelectorAll) el.querySelectorAll = (s) => hostQuery(s, appRoot ? appRoot.id : 0, 0);
-    if (!el.contains) el.contains = (n) => !!appRoot && (n === appRoot || isAncestor(appRoot, n));
-    if (!el.getAttribute) el.getAttribute = () => null;
-    if (!el.setAttribute) el.setAttribute = () => {};
-    if (!el.hasAttribute) el.hasAttribute = () => false;
-    if (!el.removeAttribute) el.removeAttribute = () => {};
-    if (!el.appendChild) el.appendChild = (n) => n;
-    if (!el.removeChild) el.removeChild = (n) => n;
-    if (!el.insertAdjacentElement) el.insertAdjacentElement = (_w, n) => n;
-    el.getBoundingClientRect = () => ({ ...viewportRect(), toJSON() { return this; } });
-    if (!el.addEventListener) el.addEventListener = () => {};
-    if (!el.removeEventListener) el.removeEventListener = () => {};
-    // The viewport dimensions, ALL of them. @floating-ui computes the document
-    // rect as `Math.max(html.scrollWidth, html.clientWidth, body.scrollWidth,
-    // body.clientWidth)` — one missing member makes that NaN, and the NaN then
-    // travels silently through every offset until nothing is positioned at all.
+  // `document.documentElement` and `document.body` are REAL STYLE HOSTS: both
+  // ARE the app root element, the one node `:root`, `html` and `body` all match
+  // (crates/vn-tree/src/tree.rs). So `documentElement.classList.add("dark")`
+  // reaches the cascade root and every `hsl(var(--foreground))` under it
+  // recomputes, and `documentElement.style.setProperty("--radius", "1rem")`
+  // declares a root-level custom property the whole tree inherits — which is
+  // how every shadcn/Tailwind theme in existence is switched.
+  //
+  // They are the SAME object, and that is the honest shape rather than a
+  // shortcut: the retained tree has one root, there is no separate `<html>` and
+  // `<body>` box to distinguish, and handing out two objects would only make
+  // `el.parentNode === document.body` lie. `document.head` stays a property bag
+  // — it is not a box at all.
+  //
+  // Before `mount()` the root does not exist, and module-scope theme code
+  // (which runs first, by construction) writes to these. So the pre-mount
+  // object BUFFERS, and `mount()` replays it onto the real root.
+  {
+    const pending = { classes: [], style: Object.create(null), attrs: Object.create(null) };
+    const preRoot = {
+      nodeType: 1,
+      tagName: "HTML",
+      get className() {
+        return pending.classes.join(" ");
+      },
+      set className(v) {
+        pending.classes = String(v ?? "").split(/\s+/).filter(Boolean);
+      },
+      classList: {
+        add(...names) {
+          for (const n of names) if (n && !pending.classes.includes(n)) pending.classes.push(n);
+        },
+        remove(...names) {
+          pending.classes = pending.classes.filter((c) => !names.includes(c));
+        },
+        toggle(name, force) {
+          const on = force === undefined ? !pending.classes.includes(name) : !!force;
+          if (on) preRoot.classList.add(name);
+          else preRoot.classList.remove(name);
+          return on;
+        },
+        contains: (name) => pending.classes.includes(name),
+        get length() {
+          return pending.classes.length;
+        },
+        item: (i) => pending.classes[i] ?? null,
+        toString: () => pending.classes.join(" "),
+      },
+      style: new Proxy(
+        {
+          setProperty(k, v) {
+            pending.style[String(k)] = v == null ? "" : String(v);
+          },
+          removeProperty(k) {
+            const prev = pending.style[String(k)] ?? "";
+            delete pending.style[String(k)];
+            return prev;
+          },
+          getPropertyValue: (k) => pending.style[String(k)] ?? "",
+          getPropertyPriority: () => "",
+        },
+        {
+          set(t, k, v) {
+            if (k in t) return Reflect.set(t, k, v);
+            pending.style[String(k)] = v == null ? "" : String(v);
+            return true;
+          },
+          get: (t, k) => (k in t ? t[k] : pending.style[String(k)] ?? ""),
+        },
+      ),
+      getAttribute: (k) => pending.attrs[String(k)] ?? null,
+      setAttribute(k, v) {
+        pending.attrs[String(k)] = String(v);
+      },
+      hasAttribute: (k) => String(k) in pending.attrs,
+      removeAttribute(k) {
+        delete pending.attrs[String(k)];
+      },
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      contains: () => false,
+      appendChild: (n) => n,
+      removeChild: (n) => n,
+      insertAdjacentElement: (_w, n) => n,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      getBoundingClientRect: () => ({ ...viewportRect(), toJSON() { return this; } }),
+      children: [],
+      ownerDocument: doc,
+      parentNode: null,
+      scrollLeft: 0,
+      scrollTop: 0,
+      scrollX: 0,
+      scrollY: 0,
+      clientTop: 0,
+      clientLeft: 0,
+    };
     for (const [name, axis] of [
       ["clientWidth", "width"],
       ["clientHeight", "height"],
@@ -2125,24 +2181,55 @@ if (doc) {
       ["scrollWidth", "width"],
       ["scrollHeight", "height"],
     ]) {
-      Object.defineProperty(el, name, { get: () => viewportRect()[axis], configurable: true });
+      Object.defineProperty(preRoot, name, { get: () => viewportRect()[axis], configurable: true });
     }
-    for (const name of ["clientTop", "clientLeft"]) {
-      Object.defineProperty(el, name, { get: () => 0, configurable: true });
+    // Called by mount(), once the root node exists.
+    flushDocumentElement = (root) => {
+      for (const c of pending.classes) root.classList.add(c);
+      for (const k of Object.keys(pending.style)) root.style.setProperty(k, pending.style[k]);
+      for (const k of Object.keys(pending.attrs)) root.setAttribute(k, pending.attrs[k]);
+    };
+    for (const name of ["body", "documentElement"]) {
+      try {
+        Object.defineProperty(doc, name, {
+          get: () => appRoot ?? preRoot,
+          configurable: true,
+        });
+      } catch {
+        /* a non-configurable engine property — leave it alone */
+      }
     }
-    // …and the scroll offsets under BOTH names. @floating-ui reads
-    // `element.scrollLeft` when `element instanceof Element` and
-    // `element.scrollX` when it is not — and `document.documentElement` here is
-    // a plain redjs object, not an Element, so it takes the second branch. A
-    // missing `scrollX` made every horizontal offset NaN while the vertical
-    // ones stayed correct, which is a genuinely baffling way for positioning to
-    // fail.
-    for (const name of ["scrollLeft", "scrollTop", "scrollX", "scrollY"]) {
-      if (typeof el[name] !== "number") el[name] = 0;
+    // `<head>` is not a box: a `<style>` or `<link>` appended to it must not
+    // become a child of the root. It stays the property bag redjs ships, with
+    // the members a library reaches for filled in.
+    const head = doc.head;
+    if (head && typeof head === "object") {
+      if (!head.style || typeof head.style !== "object") head.style = {};
+      const hs = head.style;
+      if (typeof hs.setProperty !== "function") {
+        hs.setProperty = (k, v) => {
+          hs[String(k)] = v == null ? "" : String(v);
+        };
+      }
+      if (typeof hs.removeProperty !== "function") {
+        hs.removeProperty = (k) => {
+          const prev = hs[String(k)] ?? "";
+          delete hs[String(k)];
+          return prev;
+        };
+      }
+      if (typeof hs.getPropertyValue !== "function") hs.getPropertyValue = (k) => hs[String(k)] ?? "";
+      if (!head.querySelector) head.querySelector = () => null;
+      if (!head.querySelectorAll) head.querySelectorAll = () => [];
+      if (!head.contains) head.contains = () => false;
+      if (!head.getAttribute) head.getAttribute = () => null;
+      if (!head.setAttribute) head.setAttribute = () => {};
+      if (!head.appendChild) head.appendChild = (n) => n;
+      if (!head.removeChild) head.removeChild = (n) => n;
+      if (!("ownerDocument" in head)) {
+        Object.defineProperty(head, "ownerDocument", { get: () => doc, configurable: true });
+      }
     }
-    if (!("children" in el)) Object.defineProperty(el, "children", { get: () => (appRoot ? appRoot.children : []), configurable: true });
-    if (!("ownerDocument" in el)) Object.defineProperty(el, "ownerDocument", { get: () => doc, configurable: true });
-    if (!("parentNode" in el)) Object.defineProperty(el, "parentNode", { get: () => null, configurable: true });
   }
 }
 
