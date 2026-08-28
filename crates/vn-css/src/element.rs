@@ -108,7 +108,19 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
     }
 
     fn has_local_name(&self, local_name: &<Self::Impl as SelectorImpl<'i>>::BorrowedLocalName) -> bool {
-        self.0.has_tag(local_name.0.as_ref())
+        let name = local_name.0.as_ref();
+        self.0.has_tag(name)
+            // The document ROOT answers to `html` and `body` as well as to its
+            // own tag. A retained tree has one root box, `document
+            // .documentElement` and `document.body` both point at it (see
+            // `packages/vue-native/src/runtime.js`), and a real app styles its
+            // palette through `html.dark { … }` while Tailwind's preflight
+            // resets `body { margin: 0 }`. Both have to land somewhere, and
+            // there is exactly one somewhere.
+            //
+            // `Engine::candidates` offers the root those rules for the same
+            // reason; the two must stay in step.
+            || (self.0.is_root() && matches!(name, "html" | "body"))
     }
     fn has_namespace(&self, _ns: &<Self::Impl as SelectorImpl<'i>>::BorrowedNamespaceUrl) -> bool {
         true

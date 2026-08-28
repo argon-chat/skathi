@@ -44,7 +44,7 @@ pub use animator::{AnimEvent, AnimEventKind, Animator};
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, Decls,
-    Extras, InlineStyle, ObjectFit, SvgPaint, WindowControl, WindowDrag,
+    Extras, InlineStyle, ObjectFit, SvgPaint, TextTransform, WindowControl, WindowDrag,
 };
 pub use media::{match_media, DisplayMode, Env};
 pub use keyframes::{
@@ -92,6 +92,16 @@ pub struct ComputedStates {
     /// Computed properties a `StyleRefinement` cannot carry (`object-fit`).
     /// Folded from the BASE state only — see [`Extras`].
     pub extras: Extras,
+    /// The `::before` generated box, when the cascade gave this element one.
+    /// `None` means no `::before` rule matched, or the ones that did declared
+    /// no `content` — which in CSS means no box is generated at all.
+    pub before: Option<Rc<PseudoBox>>,
+    /// The `::after` generated box. See [`ComputedStates::before`].
+    pub after: Option<Rc<PseudoBox>>,
+    /// `::placeholder` — the declarations the text-input widget paints its
+    /// placeholder string with. Only `color` and the font properties can reach
+    /// the widget; a box property declared here has nothing to apply to.
+    pub placeholder: Option<Rc<StyleRefinement>>,
     /// The element's resolved custom properties: what it inherited from its
     /// parent, overridden by what it declared. Children read this one, which is
     /// why the restyle pass must walk in document order.
@@ -99,6 +109,39 @@ pub struct ComputedStates {
     /// Shared with the parent by `Rc` when the element declares none of its own
     /// — so the `PartialEq` above stays O(1) for almost every node.
     pub vars: Rc<Vars>,
+}
+
+/// Which generated box a rule targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PseudoElement {
+    Before,
+    After,
+    /// `::placeholder`. Not a generated box: it styles the placeholder STRING
+    /// the native text-input widget paints, so it folds into its own
+    /// refinement and the renderer reads `text.color` off it.
+    Placeholder,
+}
+
+/// A `::before` / `::after` generated box, folded out of the cascade.
+///
+/// It is a real box in the layout — the renderer builds it as a first (or last)
+/// child of the originating element — because that is what CSS says it is: a
+/// child of the element, before or after its content, laid out by the same
+/// rules as any sibling.
+///
+/// It carries its own `content` because CSS generates NO box at all when
+/// `content` is absent, so the string is what decides whether this struct
+/// exists rather than a property of a box that would exist anyway.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PseudoBox {
+    /// The `content` string. Empty is legal and generates an empty box, which
+    /// is what every decorative `content: ""` indicator relies on.
+    pub content: Rc<str>,
+    /// The folded declarations, base state only.
+    pub style: Rc<StyleRefinement>,
+    /// `object-fit` and friends off the same rules — chiefly `position`,
+    /// `z-index` and `pointer-events`, which decorative pseudo boxes use.
+    pub extras: Extras,
 }
 
 impl ComputedStates {
@@ -130,6 +173,9 @@ struct RuleEntry {
     specificity: u32,
     order: u32,
     states: u8,
+    /// `::before` / `::after`. A rule that carries one styles a GENERATED box,
+    /// not the element it matched, so it is folded separately.
+    pseudo: Option<PseudoElement>,
     /// Index into [`Engine::conditions`] — the `@media` block this rule came
     /// from, if any.
     condition: Option<u32>,
@@ -376,6 +422,20 @@ impl Engine {
                     f(i);
                 }
             }
+            // The document root answers to `html` and `body` as well as to its
+            // own tag (`MatchDom::has_tag`), so the index has to offer it those
+            // rules too or a `body { … }` rule would never be a candidate and
+            // could never match. The root's own tag is never one of the two, so
+            // this cannot hand the same rule back twice.
+            if node.is_root() {
+                for name in ["html", "body"] {
+                    if let Some(v) = self.index.by_tag.get(name) {
+                        for &i in v {
+                            f(i);
+                        }
+                    }
+                }
+            }
         }
         if !self.index.by_class.is_empty() {
             node.each_class(&mut |c| {
@@ -440,7 +500,7 @@ impl Engine {
             let declares_transition =
                 converted.normal_transitions.is_some() || converted.important_transitions.is_some();
             let declares_extras = {
-                let mut e = converted.normal_extras;
+                let mut e = converted.normal_extras.clone();
                 e.refine(&converted.important_extras);
                 e
             };
@@ -448,6 +508,7 @@ impl Engine {
                 let Some(states) = classify_states(sel, &mut self.diagnostics) else {
                     continue;
                 };
+                let pseudo = sel.pseudo_element().and_then(pseudo_box);
                 if !probe_runnable(sel) {
                     self.diagnostics.push(format!(
                         "selector rejected (matcher cannot run it — :has()/nesting?): {}",
@@ -456,6 +517,16 @@ impl Engine {
                     continue;
                 }
                 if !audit_selector(sel, &mut self.diagnostics) {
+                    continue;
+                }
+                // A generated box is not in gpui's interactivity ladder — it is
+                // a plain child div with no hitbox of its own — so a
+                // `:hover::after` rule has nothing to install into.
+                if pseudo.is_some() && states != 0 {
+                    self.diagnostics.push(format!(
+                        "a state-qualified pseudo-element rule is dropped (v1) — the generated                          box is not in the pointer-state ladder. Drive it from an ATTRIBUTE on                          the originating element instead (`[data-state=open]::after`), which does                          match: {}",
+                        sel_text(sel)
+                    ));
                     continue;
                 }
                 // The `Extras` have no state ladder to install into — gpui's
@@ -497,8 +568,8 @@ impl Engine {
                     important_animations: converted.important_animations.clone(),
                     normal_animation_patch: converted.normal_animation_patch,
                     important_animation_patch: converted.important_animation_patch,
-                    normal_extras: converted.normal_extras,
-                    important_extras: converted.important_extras,
+                    normal_extras: converted.normal_extras.clone(),
+                    important_extras: converted.important_extras.clone(),
                     normal_custom: converted.normal_custom.clone(),
                     important_custom: converted.important_custom.clone(),
                     normal_dynamic: converted.normal_dynamic.clone(),
@@ -506,6 +577,7 @@ impl Engine {
                     specificity: sel.specificity(),
                     order: *order,
                     states,
+                    pseudo,
                     condition,
                 });
                 *order += 1;
@@ -620,8 +692,17 @@ impl Engine {
                 }
             }
             tested += 1;
+            // A `::before` selector only matches under
+            // `ForStatelessPseudoElement`, which consumes the pseudo component
+            // and runs the REST of the selector against the originating
+            // element — exactly the question being asked here.
+            let mode = if rule.pseudo.is_some() {
+                MatchingMode::ForStatelessPseudoElement
+            } else {
+                MatchingMode::Normal
+            };
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
-                MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
+                MatchingContext::new(mode, None, None, QuirksMode::NoQuirks);
             if matches_selector(rule.selector, 0, None, &el, &mut ctx, &mut |_, _| {}) {
                 matched.push(rule);
             }
@@ -676,8 +757,43 @@ impl Engine {
         // advised about that), so every matched rule folds into one value in
         // cascade order — the last, most specific declaration wins.
         let mut extras = Extras::default();
+        // The two generated boxes fold in parallel with the element's own
+        // declarations, out of the rules that carry a `::before` / `::after`.
+        // They stay OUT of `base`: a `::after { content: "" }` must not give
+        // the originating element itself an empty content string.
+        let mut before = (StyleRefinement::default(), Extras::default());
+        let mut after = (StyleRefinement::default(), Extras::default());
+        let mut placeholder = (StyleRefinement::default(), Extras::default());
+        let (mut any_before, mut any_after, mut any_placeholder) = (false, false, false);
         for important_pass in [false, true] {
             for r in &matched {
+                if let Some(which) = r.pseudo {
+                    let (slot, seen) = match which {
+                        PseudoElement::Before => (&mut before, &mut any_before),
+                        PseudoElement::After => (&mut after, &mut any_after),
+                        PseudoElement::Placeholder => (&mut placeholder, &mut any_placeholder),
+                    };
+                    *seen = true;
+                    slot.1.refine(if important_pass {
+                        &r.important_extras
+                    } else {
+                        &r.normal_extras
+                    });
+                    let refinement = if important_pass { &r.important } else { &r.normal };
+                    if let Some(refinement) = refinement {
+                        slot.0.refine(refinement);
+                    }
+                    let dynamic =
+                        if important_pass { &r.important_dynamic } else { &r.normal_dynamic };
+                    if let Some(list) = dynamic {
+                        for (name, raw) in list.iter() {
+                            mapper::apply_dynamic(
+                                name, raw, &vars, env, &mut slot.0, &mut slot.1, diagnostics,
+                            );
+                        }
+                    }
+                    continue;
+                }
                 extras.refine(if important_pass {
                     &r.important_extras
                 } else {
@@ -793,6 +909,30 @@ impl Engine {
                 }
             },
             extras,
+            // CSS generates NO box when `content` is absent, which is what
+            // makes `content` the gate here rather than a property of a box
+            // that would exist anyway.
+            before: any_before
+                .then(|| before.1.content.clone())
+                .flatten()
+                .map(|content| {
+                    Rc::new(PseudoBox {
+                        content,
+                        style: Rc::new(before.0),
+                        extras: before.1,
+                    })
+                }),
+            after: any_after
+                .then(|| after.1.content.clone())
+                .flatten()
+                .map(|content| {
+                    Rc::new(PseudoBox {
+                        content,
+                        style: Rc::new(after.0),
+                        extras: after.1,
+                    })
+                }),
+            placeholder: any_placeholder.then(|| Rc::new(placeholder.0)),
             vars,
         }
     }
@@ -938,11 +1078,28 @@ fn classify_states(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> Option<
             ),
         );
     }
-    // Remaining compounds: any state pseudo there is an ancestor-state rule.
-    while iter.next_sequence().is_some() {
+    // Remaining compounds: any state pseudo there is an ancestor-state rule…
+    //
+    // …EXCEPT across a pseudo-element boundary. parcel models `::after` as its
+    // own sequence joined by `Combinator::PseudoElement`, so in
+    // `.nav:hover::after` the `:hover` sits in the "next" sequence while still
+    // being on the SAME element. Reading it as an ancestor state produced a
+    // wrong advisory for what is an ordinary — if unhonourable — state rule.
+    let mut same_element = true;
+    while let Some(combinator) = iter.next_sequence() {
+        same_element &= matches!(
+            combinator,
+            parcel_selectors::parser::Combinator::PseudoElement
+                | parcel_selectors::parser::Combinator::SlotAssignment
+                | parcel_selectors::parser::Combinator::Part
+        );
         for component in &mut iter {
             if let Component::NonTSPseudoClass(pc) = component {
                 if ladder_state(pc) != 0 {
+                    if same_element {
+                        states |= ladder_state(pc);
+                        continue;
+                    }
                     diagnostics.push(format!(
                         "ancestor-state selector unsupported (v1): {}",
                         sel_text(sel)
@@ -968,6 +1125,23 @@ fn classify_states(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> Option<
 /// a perfectly valid `RuleEntry` that simply never matches, and an author has
 /// no way to find out. Everything the matcher *can* answer
 /// ([`element::El`]) passes through untouched.
+/// `::before` / `::after` -> the generated box they target. Everything else is
+/// `None`: it styles part of a box (`::first-line`, `::marker`, `::selection`)
+/// rather than generating one, and there is nothing to build.
+fn pseudo_box(
+    pe: &<element::Impl as parcel_selectors::parser::SelectorImpl<'_>>::PseudoElement,
+) -> Option<PseudoElement> {
+    use lightningcss::selector::PseudoElement as PE;
+    match pe {
+        PE::Before => Some(PseudoElement::Before),
+        PE::After => Some(PseudoElement::After),
+        // `::-webkit-input-placeholder` and `::-moz-placeholder` are the same
+        // thing; lightningcss folds every spelling into one variant.
+        PE::Placeholder(_) => Some(PseudoElement::Placeholder),
+        _ => None,
+    }
+}
+
 fn audit_selector(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> bool {
     audit_components(sel, sel.iter_raw_match_order(), false, diagnostics)
 }
@@ -998,9 +1172,17 @@ where
                     None
                 }
             }
-            Component::PseudoElement(_) => {
-                Some("a pseudo-element (`::before`, `::after`, …)".into())
-            }
+            // `::before` / `::after` are REAL here: they generate a box the
+            // renderer builds as a child of the originating element. Every
+            // other pseudo-element still styles something that does not exist.
+            Component::PseudoElement(pe) if !nested && pseudo_box(pe).is_some() => None,
+            // One advisory for the whole family, not one per spelling: a
+            // Tailwind preflight sheet names eight of them and eight lines
+            // would bury everything else. The example selector rides along.
+            Component::PseudoElement(_) => Some(
+                "a pseudo-element other than `::before` / `::after` / `::placeholder` (nothing here paints part of a box separately from the box)"
+                    .into(),
+            ),
             Component::Slotted(_) | Component::Part(_) | Component::Host(_) => {
                 Some("a shadow-DOM selector (`::slotted()`, `::part()`, `:host`)".into())
             }
@@ -1915,7 +2097,9 @@ mod tests {
             (".box:target", "target"),
             (".box:lang(en)", "lang()"),
             (".box:indeterminate", "indeterminate"),
-            (".box::before", "pseudo-element"),
+            // `::before` / `::after` / `::placeholder` DO compile now; the rest
+            // of the family still cannot match anything.
+            (".box::first-line", "pseudo-element"),
             (".box:scope", "scope"),
         ] {
             let engine = audited(selector);
@@ -2526,6 +2710,145 @@ mod tests {
         (1..d.nodes.len()).map(|i| DocRef { doc: d, i }).collect()
     }
 
+    // -----------------------------------------------------------------------
+    // ::before / ::after / ::placeholder
+    // -----------------------------------------------------------------------
+
+    /// A `::before` rule styles a GENERATED BOX, not the element it matched —
+    /// so its declarations must land on `ComputedStates::before` and nowhere
+    /// near `base`. (Before this, the rule was dropped at compile time.)
+    #[test]
+    fn a_pseudo_element_rule_becomes_its_own_box() {
+        let engine = Engine::compile(
+            r#".nav::before { content: "|"; width: 2px; background-color: rgb(255 0 0) }"#,
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = doc();
+        let states = cascade(&engine, &d, &Env::default());
+        let nav = &states[0];
+        // The generated box exists, carries its content and its declarations…
+        let before = nav.before.as_ref().expect("a ::before box");
+        assert_eq!(&*before.content, "|");
+        assert_eq!(before.style.size.width, Some(gpui::px(2.0).into()));
+        assert!(before.style.background.is_some());
+        // …and the ORIGINATING element got none of it.
+        assert_eq!(nav.base.size.width, None);
+        assert_eq!(nav.base.background, None);
+        assert!(nav.after.is_none());
+    }
+
+    /// CSS generates no box at all when `content` is absent, and that is the
+    /// gate here too — otherwise every Tailwind preflight sheet (which styles
+    /// `*, ::before, ::after` to seed `--tw-*`) would give every element two
+    /// empty boxes.
+    #[test]
+    fn a_pseudo_element_without_content_generates_nothing() {
+        let engine = Engine::compile(".nav::after { width: 2px }");
+        let d = doc();
+        let states = cascade(&engine, &d, &Env::default());
+        assert!(states[0].after.is_none(), "no content, no box");
+    }
+
+    /// The two boxes are independent, they cascade among themselves by
+    /// (specificity, order), and an ATTRIBUTE-qualified rule works — which is
+    /// how reka/shadcn drive an indicator (`[data-state=open]::after`).
+    #[test]
+    fn pseudo_boxes_cascade_and_follow_attributes() {
+        let engine = Engine::compile(
+            r#"a::before { content: "-"; width: 1px }
+               a.tab::before { width: 4px }
+               a::after { content: "+" }
+               a[href="/list"]::after { content: "!" }"#,
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = doc();
+        let states = cascade(&engine, &d, &Env::default());
+        // nodes[2] is `a.tab[href="/"]`, nodes[3] is `a.tab[href="/list"]`.
+        let first = &states[1];
+        assert_eq!(first.before.as_ref().unwrap().style.size.width, Some(gpui::px(4.0).into()));
+        assert_eq!(&*first.after.as_ref().unwrap().content, "+");
+        let second = &states[2];
+        assert_eq!(&*second.after.as_ref().unwrap().content, "!");
+    }
+
+    /// A generated box is not in gpui's pointer-state ladder, so a
+    /// `:hover::after` rule cannot be honoured. It must SAY so and name the
+    /// alternative rather than compile into a rule that never fires.
+    #[test]
+    fn a_state_qualified_pseudo_element_rule_advises() {
+        let engine = Engine::compile(r#".nav:hover::after { content: "x" }"#);
+        assert!(
+            engine
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("state-qualified pseudo-element")),
+            "{:?}",
+            engine.diagnostics
+        );
+        let d = doc();
+        assert!(cascade(&engine, &d, &Env::default())[0].after.is_none());
+    }
+
+    /// `::placeholder` is not a box — it styles the string the text-input
+    /// widget paints — so it folds into its own refinement.
+    #[test]
+    fn placeholder_folds_into_its_own_refinement() {
+        let engine = Engine::compile("input::placeholder { color: rgb(1 2 3) }");
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = doc();
+        let states = cascade(&engine, &d, &Env::default());
+        // nodes[4] is the `<input>`.
+        let input = &states[3];
+        assert!(input.placeholder.as_ref().unwrap().text.color.is_some());
+        assert_eq!(input.base.text.color, None, "the input itself is untouched");
+    }
+
+    /// Every OTHER pseudo-element still cannot match, and the whole family
+    /// shares ONE advisory — a preflight sheet names eight of them.
+    #[test]
+    fn the_non_generating_pseudo_elements_share_one_advisory() {
+        let engine = Engine::compile(
+            "::first-line { color: red } ::selection { color: red } ::marker { color: red }",
+        );
+        let hits: Vec<_> = engine
+            .diagnostics
+            .iter()
+            .filter(|d| d.contains("pseudo-element"))
+            .collect();
+        assert_eq!(hits.len(), 1, "{:?}", engine.diagnostics);
+    }
+
+    // -----------------------------------------------------------------------
+    // the document root
+    // -----------------------------------------------------------------------
+
+    /// The app root IS `document.documentElement` and `document.body`, so
+    /// `html`, `body` and `:root` all have to reach it — that is what makes a
+    /// real app's `.dark` palette and Tailwind preflight's `body { … }` apply.
+    #[test]
+    fn html_and_body_rules_reach_the_document_root() {
+        let engine = Engine::compile(
+            "html { --fg: rgb(1 2 3) } \
+             body { opacity: 0.5 } \
+             :root { flex-grow: 3 } \
+             html.dark { --fg: rgb(9 9 9) } \
+             .tab { color: var(--fg) }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let mut d = doc();
+        // Make the root a real element the way the tree does: tag "root",
+        // parent 0 — the two facts `MatchDom` answers `html`/`body`/`:root` on.
+        d.nodes[1] = ("root", "dark", 0, vec![]);
+        let states = cascade(&engine, &d, &Env::default());
+        let root = &states[0];
+        assert_eq!(root.base.opacity, Some(0.5), "a `body` rule matched");
+        assert_eq!(root.base.flex_grow, Some(3.0), "a `:root` rule matched");
+        // …and the root's custom properties inherit, with `.dark` winning.
+        assert_eq!(root.vars.get("--fg").as_deref(), Some("#090909"), "the .dark override won");
+        let tab = &states[1];
+        assert!(tab.base.text.color.is_some(), "the palette reached a descendant");
+    }
+
     #[test]
     fn query_all_uses_the_real_matcher() {
         let d = doc();
@@ -2548,8 +2871,11 @@ mod tests {
         let c = refs(&d);
         let err = query_all(".nav:has(.tab)", &c).unwrap_err();
         assert!(err.contains(":has()"), "{err}");
-        let err = query_all("a::before", &c).unwrap_err();
+        let err = query_all("a::first-line", &c).unwrap_err();
         assert!(err.contains("pseudo-element"), "{err}");
+        // …but a `::before` selector is answerable: it matches its ORIGINATING
+        // element, which is what a caller asking "who has a ::before?" means.
+        assert!(query_all("a::before", &c).is_ok());
         let err = query_all("a:visited", &c).unwrap_err();
         assert!(err.contains("visited"), "{err}");
         // Injection guard: a selector may not carry a declaration block.

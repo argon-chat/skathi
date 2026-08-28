@@ -953,6 +953,9 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
         self.element_sibling(true)
     }
     fn has_tag(&self, name: &str) -> bool {
+        // The `html` / `body` aliasing for the document root lives in vn-css
+        // (`element.rs`), so every `MatchDom` gets it — the query matcher and
+        // the engine's own tests included.
         self.tree.name(self.node().tag) == name
     }
     fn tag_eq(&self, other: &Self) -> bool {

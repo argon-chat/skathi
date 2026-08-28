@@ -826,7 +826,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         } else {
             // The root inherits nothing: `window-drag`'s initial value is
             // `none`, spelled here as "nobody declared anything".
-            build_node(t, t.root, window, cx, now, None)
+            build_node(t, t.root, window, cx, now, None, None)
         }
     });
     crate::perf::note_build(span.ms(), BUILT.with(|c| c.get()));
@@ -840,6 +840,7 @@ fn build_node<V: 'static>(
     cx: &mut Context<V>,
     now: std::time::Instant,
     parent_drag: Option<WindowDrag>,
+    parent_case: Option<vn_css::TextTransform>,
 ) -> AnyElement {
     let Some(node) = t.node(id) else {
         return Empty.into_any_element();
@@ -850,6 +851,11 @@ fn build_node<V: 'static>(
     // the way down. A browser allows the property on a replaced element too,
     // hence `<img>` and `<lottie>` get the same treatment.
     let extras = extras_of(node);
+    // `text-transform` INHERITS, and vn-css folds no inherited property — so
+    // the effective value is threaded down here, the same way `window-drag` is.
+    // A text node has no declarations of its own, so the parent's value is the
+    // only one it can have.
+    let case = extras.text_transform.or(parent_case);
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
@@ -860,7 +866,7 @@ fn build_node<V: 'static>(
         // (`v-for`, multi-root components) with `createText("")`, so leaving it
         // in adds a blank line per fragment.
         Kind::Text if node.text.is_empty() => Empty.into_any_element(),
-        Kind::Text => SharedString::from(node.text.clone()).into_any_element(),
+        Kind::Text => transformed_text(&node.text, case).into_any_element(),
         Kind::Anchor => Empty.into_any_element(),
         // Metadata content renders NOTHING in a browser — it is not a box, it
         // is instructions. reka-ui injects a `<style>` element at runtime to
@@ -1067,17 +1073,70 @@ fn build_node<V: 'static>(
                     window.focus(&focus_target, cx);
                 }));
                 d.child(input).into_any_element()
-            } else if !node.text.is_empty() {
-                d.child(node.text.clone()).into_any_element()
             } else {
-                d.children(
-                    laid_out_children(t, node)
-                        .into_iter()
-                        .map(|c| build_node(t, c, window, cx, now, drag)),
-                )
-                .into_any_element()
+                // `::before` / `::after` are children, first and last — that is
+                // what CSS says a generated box IS, and it is why they take
+                // part in flex/grid layout, `gap` and text flow exactly like a
+                // hand-written `<span>` would.
+                let (before, after) = match &node.computed {
+                    Some(cs) => (cs.before.clone(), cs.after.clone()),
+                    None => (None, None),
+                };
+                let mut kids: Vec<AnyElement> = Vec::new();
+                if let Some(pb) = before {
+                    kids.push(pseudo_element(&pb, case));
+                }
+                if !node.text.is_empty() {
+                    kids.push(transformed_text(&node.text, case).into_any_element());
+                } else {
+                    kids.extend(
+                        laid_out_children(t, node)
+                            .into_iter()
+                            .map(|c| build_node(t, c, window, cx, now, drag, case)),
+                    );
+                }
+                if let Some(pb) = after {
+                    kids.push(pseudo_element(&pb, case));
+                }
+                d.children(kids).into_any_element()
             }
         })),
+    }
+}
+
+/// One `::before` / `::after` generated box.
+///
+/// A plain `div` carrying the pseudo's folded declarations and its `content`
+/// string, built at the position CSS puts it: first or last child of the
+/// originating element. It gets no id, no hitbox and no listeners — it is not a
+/// node in the retained tree, `querySelector` cannot find it and events do not
+/// target it, which is exactly a browser's rule for generated content.
+///
+/// One deliberate divergence, stated because it is invisible otherwise: gpui's
+/// text shaper needs a leaf, so an EMPTY `content: ""` box (the decorative
+/// case: a rule, a dot, a chevron drawn entirely out of size + background +
+/// border) carries no child at all and is sized purely by its own style.
+fn pseudo_element(pb: &vn_css::PseudoBox, parent_case: Option<vn_css::TextTransform>) -> AnyElement {
+    let mut d = div();
+    *d.style() = (*pb.style).clone();
+    let case = pb.extras.text_transform.or(parent_case);
+    let e = if pb.content.is_empty() {
+        d.into_any_element()
+    } else {
+        d.child(transformed_text(&pb.content, case)).into_any_element()
+    };
+    stack(&pb.extras, e)
+}
+
+/// A text leaf with `text-transform` applied.
+///
+/// gpui's `TextStyle` has no case field — the shaper is handed a string — so
+/// the transform is applied to the string, which is also the only place it
+/// could be applied without a second shaping pass.
+fn transformed_text(text: &str, case: Option<vn_css::TextTransform>) -> SharedString {
+    match case.and_then(|c| c.apply(text)) {
+        Some(changed) => SharedString::from(changed),
+        None => SharedString::from(text.to_string()),
     }
 }
 
@@ -1182,7 +1241,7 @@ fn is_metadata(tag: &str) -> bool {
 /// The computed [`vn_css::Extras`] of a node (the default before the first
 /// cascade, which is also what an unstyled node computes to).
 fn extras_of(node: &crate::tree::Node) -> vn_css::Extras {
-    node.computed.as_ref().map(|cs| cs.extras).unwrap_or_default()
+    node.computed.as_ref().map(|cs| cs.extras.clone()).unwrap_or_default()
 }
 
 /// The bits `pointer-events: none` turns off — the pointer half of the event
@@ -1201,6 +1260,15 @@ const POINTER_BITS: u64 = (1 << tree::EV_CLICK)
 /// the hover/active rungs being skipped in [`apply_computed_style`], this is
 /// what stops gpui giving the node a hitbox at all.
 fn pointer_mask(node: &crate::tree::Node) -> u64 {
+    // …except on the ROOT. `document.body` is the root here, and the whole
+    // dismissable-layer idiom (reka, radix) sets `body.style.pointerEvents =
+    // "none"` while a modal is open — which in a browser costs nothing, because
+    // the body still dispatches keydown. Here the root IS the keystroke path
+    // (see `build_node`'s root arm), so honouring it would silently kill
+    // Escape-to-dismiss for exactly the layer that asked for it.
+    if node.parent == 0 {
+        return node.listeners;
+    }
     let inert = node
         .computed
         .as_ref()
@@ -2210,7 +2278,16 @@ fn build_input<V: 'static>(
         .and_then(|ts| ts.font_size)
         .map(|al| al.to_pixels(window.rem_size()))
         .unwrap_or(gpui::px(14.0));
-    let placeholder_color = gpui::Hsla { a: text_color.a * 0.45, ..text_color };
+    // `::placeholder { color: … }` if the cascade gave the input one, else the
+    // faded text colour every browser's UA sheet approximates. The pseudo can
+    // also change the placeholder's SIZE and WEIGHT in a browser; the widget
+    // paints one run with one font, so only the colour reaches it.
+    let placeholder_color = t
+        .node(id)
+        .and_then(|n| n.computed.as_ref())
+        .and_then(|cs| cs.placeholder.as_ref())
+        .and_then(|ph| ph.text.color)
+        .unwrap_or(gpui::Hsla { a: text_color.a * 0.45, ..text_color });
     let options = TextInputOptions {
         placeholder: t.prop(id, "placeholder").unwrap_or("").to_string().into(),
         text_color,

@@ -103,7 +103,7 @@ pub enum WindowControl {
 /// The refinement is the cascade's whole payload for every other property, so
 /// this is deliberately tiny and `Copy`: one folded value per node, refined in
 /// the same (specificity, order) sweep as the refinements themselves.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Extras {
     /// `object-fit` — only meaningful on a replaced element (`<img>`); parsed
     /// and folded for every element, exactly as a browser does.
@@ -131,6 +131,57 @@ pub struct Extras {
     pub fill: Option<SvgPaint>,
     /// SVG `stroke` — see [`SvgPaint`].
     pub stroke: Option<SvgPaint>,
+    /// `text-transform`. gpui has no such text-style field: the shaper is
+    /// handed a string, so the case change is applied to that string by the
+    /// renderer. INHERITED, like the CSS property — the renderer threads the
+    /// effective value down the same way it threads `window-drag`.
+    pub text_transform: Option<TextTransform>,
+    /// `content`, the string a `::before` / `::after` rule generates its box
+    /// with. Meaningful ONLY on a pseudo-element rule: on an ordinary element
+    /// CSS ignores the property outright, and so does the renderer.
+    ///
+    /// `Rc<str>` is why [`Extras`] is `Clone` rather than `Copy`; the clone is
+    /// a refcount bump and the field is `None` on all but a handful of rules.
+    pub content: Option<Rc<str>>,
+}
+
+/// CSS `text-transform`, applied to the string before it reaches the shaper.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextTransform {
+    None,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+}
+
+impl TextTransform {
+    /// Applies the case change. Returns `None` when the text is already in the
+    /// right shape, so the renderer can keep borrowing the original.
+    pub fn apply(self, text: &str) -> Option<String> {
+        match self {
+            TextTransform::None => None,
+            TextTransform::Uppercase => Some(text.to_uppercase()),
+            TextTransform::Lowercase => Some(text.to_lowercase()),
+            // CSS capitalises the first letter of each WORD and leaves the rest
+            // of the word exactly as authored (it does not lowercase it).
+            TextTransform::Capitalize => {
+                let mut out = String::with_capacity(text.len());
+                let mut at_word_start = true;
+                for ch in text.chars() {
+                    if at_word_start && ch.is_alphabetic() {
+                        out.extend(ch.to_uppercase());
+                        at_word_start = false;
+                    } else {
+                        out.push(ch);
+                        if ch.is_whitespace() {
+                            at_word_start = true;
+                        }
+                    }
+                }
+                Some(out)
+            }
+        }
+    }
 }
 
 /// An SVG paint, reduced to the only distinction gpui can express.
@@ -197,6 +248,12 @@ impl Extras {
         }
         if other.stroke.is_some() {
             self.stroke = other.stroke;
+        }
+        if other.text_transform.is_some() {
+            self.text_transform = other.text_transform;
+        }
+        if other.content.is_some() {
+            self.content = other.content.clone();
         }
     }
 
@@ -307,7 +364,18 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
             },
             // An unknown/vendor-prefixed property (`-webkit-line-clamp`), or a
             // real CSS property lightningcss has no typed representation for
-            // (`object-fit`). Both are handled by `apply`.
+            // (`object-fit`, `content`, `outline-offset`). `apply` handles
+            // them — but only once any `var()` in the value is resolved, and
+            // that is exactly what the dynamic channel does. Tailwind's
+            // `content-*` utilities are `content: var(--tw-content)`, so
+            // without this the one property that decides whether a `::before`
+            // box exists could never see its own value.
+            CustomPropertyName::Unknown(name) if has_substitution(&c.value) => {
+                match value_text(p) {
+                    Some(v) => Channel::Dynamic(name.0.as_ref().to_string(), v),
+                    None => Channel::Static,
+                }
+            }
             CustomPropertyName::Unknown(_) => Channel::Static,
         },
         Property::Unparsed(u) => match value_text(p) {
@@ -782,6 +850,251 @@ fn grid_template(v: &lightningcss::properties::grid::TrackSizing) -> Option<gpui
     })
 }
 
+/// One track of a `grid-template-columns` / `grid-template-rows` list, in the
+/// `minmax()` normal form gpui stores. `None` = a breadth this engine cannot
+/// express, which is the caller's cue to advise and drop the whole list (a
+/// half-understood track list lays out worse than none at all).
+fn track_breadth(b: &lightningcss::properties::grid::TrackBreadth) -> Option<gpui::GridTrackSize> {
+    use lightningcss::properties::grid::TrackBreadth as B;
+    use gpui::GridTrackSize as G;
+    Some(match b {
+        B::Auto => G::Auto,
+        B::MinContent => G::MinContent,
+        B::MaxContent => G::MaxContent,
+        B::Flex(f) => G::Fr(*f),
+        B::Length(DimensionPercentage::Dimension(l)) => G::Px(length_value_px(l)?),
+        // taffy's percentages are fractions, CSS's are 0..100.
+        B::Length(DimensionPercentage::Percentage(p)) => G::Percent(p.0),
+        // `calc()` mixing the two has no box to resolve against here.
+        B::Length(DimensionPercentage::Calc(_)) => return None,
+    })
+}
+
+/// One `<track-size>` — a bare breadth, or `minmax()`. CSS says a bare breadth
+/// `X` is `minmax(X, X)` and a bare `<flex>` is `minmax(auto, <flex>)`, which is
+/// what makes `1fr` shrink to content when the container has none to spare.
+fn track_size(s: &lightningcss::properties::grid::TrackSize) -> Option<gpui::GridTrack> {
+    use lightningcss::properties::grid::{TrackBreadth as B, TrackSize as S};
+    match s {
+        S::TrackBreadth(B::Flex(f)) => Some(gpui::GridTrack::fr(*f)),
+        S::TrackBreadth(b) => Some(gpui::GridTrack::fixed(track_breadth(b)?)),
+        S::MinMax { min, max } => Some(gpui::GridTrack {
+            min: track_breadth(min)?,
+            max: track_breadth(max)?,
+        }),
+        // `fit-content(<len>)`: taffy has the primitive, gpui's GridTrackSize
+        // does not carry it. Approximating it with `auto` would silently change
+        // the layout, so the whole list is refused instead.
+        S::FitContent(_) => None,
+    }
+}
+
+/// A full `grid-template-*` track list, with integer `repeat()` expanded.
+///
+/// `repeat(auto-fill|auto-fit, …)` returns `None`: the count depends on the
+/// container's resolved size, which is not known at cascade time and which
+/// taffy would need a different code path to answer.
+fn grid_tracks(v: &lightningcss::properties::grid::TrackSizing) -> Option<Vec<gpui::GridTrack>> {
+    use lightningcss::properties::grid::{RepeatCount, TrackListItem, TrackSizing};
+    let TrackSizing::TrackList(list) = v else {
+        return None; // `none`
+    };
+    let mut out: Vec<gpui::GridTrack> = Vec::new();
+    for item in &list.items {
+        match item {
+            TrackListItem::TrackSize(s) => out.push(track_size(s)?),
+            TrackListItem::TrackRepeat(rep) => {
+                let RepeatCount::Number(count) = rep.count else {
+                    return None; // auto-fill / auto-fit
+                };
+                if count < 0 || count > 1024 {
+                    return None;
+                }
+                let one: Vec<gpui::GridTrack> =
+                    rep.track_sizes.iter().map(track_size).collect::<Option<_>>()?;
+                for _ in 0..count {
+                    out.extend(one.iter().copied());
+                }
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// `grid-row-start` &c. `None` = a NAMED line or area, which needs the named
+/// grid taffy does not model here.
+fn grid_line(l: &lightningcss::properties::grid::GridLine<'_>) -> Option<gpui::GridPlacement> {
+    use lightningcss::properties::grid::GridLine as L;
+    match l {
+        L::Auto => Some(gpui::GridPlacement::Auto),
+        L::Line { index, name: None } => Some(gpui::GridPlacement::Line(*index as i16)),
+        L::Span { index, name: None } if *index > 0 => {
+            Some(gpui::GridPlacement::Span(*index as u16))
+        }
+        _ => None,
+    }
+}
+
+/// `outline` and its longhands accumulate into ONE [`gpui::Outline`], so a
+/// sheet that writes `outline: 2px solid transparent; outline-offset: 2px`
+/// (which is exactly what Tailwind's `outline-none` is) lands as a single ring.
+///
+/// The seed is a ZERO-width transparent ring, so a longhand on its own paints
+/// nothing — which is what a browser does with `outline-style`'s initial `none`.
+fn outline_mut(r: &mut StyleRefinement) -> &mut gpui::Outline {
+    r.vn_outline.get_or_insert(gpui::Outline {
+        width: px(0.0),
+        offset: px(0.0),
+        color: Hsla::default(),
+        style: gpui::BorderStyle::Solid,
+    })
+}
+
+/// `linear-gradient()` → gpui's two-stop `Background`.
+///
+/// Everything else in the CSS image grammar is refused HERE rather than being
+/// approximated, and the caller names the alternative in the advisory.
+fn gradient_background(
+    img: &lightningcss::values::image::Image<'_>,
+    diagnostics: &mut Vec<String>,
+) -> Option<gpui::Background> {
+    use lightningcss::values::gradient::{Gradient, GradientItem, LineDirection};
+    use lightningcss::values::image::Image;
+    use lightningcss::values::position::{HorizontalPositionKeyword as H, VerticalPositionKeyword as V};
+
+    let g = match img {
+        Image::Gradient(g) => g.as_ref(),
+        Image::Url(_) => {
+            warn_once(
+                diagnostics,
+                "background-image: url() is not painted (v1) — gpui's background is a colour or a \
+                 two-stop linear gradient, not an image layer. Use an `<img>` (positioned behind \
+                 the content) for a raster background; the image loader, object-fit and the \
+                 file://, data: and http(s) source grammars are all live on that element",
+            );
+            return None;
+        }
+        Image::ImageSet(_) => {
+            warn_once(
+                diagnostics,
+                "background-image: image-set() is not painted (v1) — pick one source and use an \
+                 `<img>`; there is no resolution negotiation here",
+            );
+            return None;
+        }
+        Image::None => return None,
+    };
+
+    let linear = match g {
+        Gradient::Linear(l) => l,
+        Gradient::RepeatingLinear(l) => {
+            warn_once(
+                diagnostics,
+                "repeating-linear-gradient() is painted as a single non-repeating pass (v1) — \
+                 gpui's gradient has two stops and no repeat mode",
+            );
+            l
+        }
+        Gradient::Radial(_) | Gradient::RepeatingRadial(_) => {
+            warn_once(
+                diagnostics,
+                "radial-gradient() is not painted (v1) — gpui's background gradient is LINEAR \
+                 only. `linear-gradient()` renders; a radial one needs an `<img>` or an `<svg>`",
+            );
+            return None;
+        }
+        Gradient::Conic(_) | Gradient::RepeatingConic(_) => {
+            warn_once(
+                diagnostics,
+                "conic-gradient() is not painted (v1) — gpui's background gradient is LINEAR \
+                 only. `linear-gradient()` renders; a conic one needs an `<img>` or an `<svg>`",
+            );
+            return None;
+        }
+        Gradient::WebKitGradient(_) => {
+            warn_once(
+                diagnostics,
+                "the legacy `-webkit-gradient()` is not painted (v1) — write the standard \
+                 `linear-gradient()`, which does",
+            );
+            return None;
+        }
+    };
+
+    // CSS and gpui agree on the angle convention: 0deg is "to top" and the
+    // angle turns clockwise. So the only work is turning the keyword forms
+    // into degrees.
+    let angle = match &linear.direction {
+        LineDirection::Angle(a) => a.to_degrees(),
+        LineDirection::Vertical(V::Top) => 0.0,
+        LineDirection::Vertical(V::Bottom) => 180.0,
+        LineDirection::Horizontal(H::Right) => 90.0,
+        LineDirection::Horizontal(H::Left) => 270.0,
+        LineDirection::Corner { horizontal, vertical } => {
+            // A real corner gradient's angle depends on the box's aspect ratio
+            // (CSS points the line at the corner); gpui has one angle and does
+            // not know the box, so this is the square-box answer.
+            warn_once(
+                diagnostics,
+                "`linear-gradient(to <corner>, …)` uses the 45° diagonal (v1) — CSS aims the \
+                 gradient line at the actual corner, so on a non-square box the ramp is rotated \
+                 slightly. Give an explicit angle to pin it",
+            );
+            match (horizontal, vertical) {
+                (H::Right, V::Top) => 45.0,
+                (H::Right, V::Bottom) => 135.0,
+                (H::Left, V::Bottom) => 225.0,
+                (H::Left, V::Top) => 315.0,
+            }
+        }
+    };
+
+    let stops: Vec<&lightningcss::values::gradient::ColorStop<LengthPercentage>> = linear
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            GradientItem::ColorStop(s) => Some(s),
+            GradientItem::Hint(_) => None,
+        })
+        .collect();
+    if stops.len() < 2 {
+        warn_once(
+            diagnostics,
+            "a linear-gradient() with fewer than two colour stops is not painted (v1)",
+        );
+        return None;
+    }
+    if stops.len() > 2 {
+        warn_once(
+            diagnostics,
+            "linear-gradient() carries TWO colour stops here (v1) — gpui's gradient is a two-stop \
+             ramp, so the first and last are kept and the ones in between (a Tailwind `via-*`, \
+             say) are dropped",
+        );
+    }
+    let position = |s: &lightningcss::values::gradient::ColorStop<LengthPercentage>, fallback: f32| {
+        match &s.position {
+            Some(LengthPercentage::Percentage(p)) => p.0,
+            // An absolute stop position needs the gradient line's length, which
+            // is the box's — unknown here. The endpoint default is the honest
+            // approximation and the ramp still runs the right way.
+            Some(_) => fallback,
+            None => fallback,
+        }
+    };
+    let first = stops[0];
+    let last = stops[stops.len() - 1];
+    let (Some(from), Some(to)) = (color(&first.color), color(&last.color)) else {
+        unresolved_color(diagnostics, "linear-gradient() colour stop");
+        return None;
+    };
+    Some(gpui::linear_gradient(
+        angle,
+        gpui::linear_color_stop(from, position(first, 0.0)),
+        gpui::linear_color_stop(to, position(last, 1.0)),
+    ))
+}
+
 /// Advisories are ONE-SHOT: `diagnostics` accumulates for a whole stylesheet
 /// compile, and a generated sheet hits the same gap over and over (a broad
 /// Tailwind sweep produced 123 `--tw-*` declarations and 63 `var()`-composed
@@ -875,6 +1188,133 @@ fn single_ident<'a>(
         return None;
     }
     first
+}
+
+/// The single `<length>` a token list carries, in px. `0` with no unit counts,
+/// because that is how every sheet writes a zero length.
+fn single_length_px(value: &lightningcss::properties::custom::TokenList<'_>) -> Option<f32> {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let mut found = None;
+    for t in value.0.iter() {
+        match t {
+            TokenOrValue::Token(Token::WhiteSpace(_)) => {}
+            TokenOrValue::Length(l) => {
+                if found.is_some() {
+                    return None;
+                }
+                found = length_value_px(l);
+            }
+            TokenOrValue::Token(Token::Dimension { value, unit, .. }) => {
+                if found.is_some() {
+                    return None;
+                }
+                found = match unit.as_ref() {
+                    "px" => Some(*value),
+                    "rem" | "em" => Some(*value * 16.0),
+                    _ => return None,
+                };
+            }
+            TokenOrValue::Token(Token::Number { value, .. }) if *value == 0.0 => {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(0.0);
+            }
+            _ => return None,
+        }
+    }
+    found
+}
+
+/// Does this token list reference `var()` or `env()` anywhere?
+fn has_substitution(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
+    use lightningcss::properties::custom::TokenOrValue;
+    value
+        .0
+        .iter()
+        .any(|t| matches!(t, TokenOrValue::Var(_) | TokenOrValue::Env(_)))
+}
+
+/// What a `content` declaration resolved to.
+enum ContentValue {
+    /// A literal string (possibly several, concatenated — CSS allows that).
+    Text(Rc<str>),
+    /// `none` / `normal` — no generated box.
+    None,
+    /// Something real that has no model here; the text is for the advisory.
+    Unsupported(String),
+}
+
+/// `content: "…"` — the only form that generates a box here.
+fn content_string(value: &lightningcss::properties::custom::TokenList<'_>) -> ContentValue {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let mut out = String::new();
+    let mut saw_string = false;
+    for t in value.0.iter() {
+        match t {
+            TokenOrValue::Token(Token::WhiteSpace(_)) => {}
+            TokenOrValue::Token(Token::String(sv)) => {
+                out.push_str(sv.as_ref());
+                saw_string = true;
+            }
+            TokenOrValue::Token(Token::Ident(id)) if matches!(id.as_ref(), "none" | "normal") => {
+                return ContentValue::None;
+            }
+            TokenOrValue::Token(Token::Function(f)) => {
+                return ContentValue::Unsupported(format!("{}()", f.as_ref()));
+            }
+            TokenOrValue::Url(_) => return ContentValue::Unsupported("url()".into()),
+            TokenOrValue::Token(Token::Ident(id)) => {
+                return ContentValue::Unsupported(id.as_ref().to_string());
+            }
+            TokenOrValue::Var(_) => return ContentValue::Unsupported("var()".into()),
+            _ => return ContentValue::Unsupported("that value".into()),
+        }
+    }
+    if saw_string {
+        ContentValue::Text(Rc::from(out.as_str()))
+    } else {
+        ContentValue::None
+    }
+}
+
+/// The single keyword a token list carries, with no advisory when there is
+/// none — the quiet half of [`single_ident`].
+fn single_ident_raw<'a>(value: &'a lightningcss::properties::custom::TokenList<'_>) -> Option<&'a str> {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let mut found = None;
+    for t in value.0.iter() {
+        match t {
+            TokenOrValue::Token(Token::WhiteSpace(_)) => {}
+            TokenOrValue::Token(Token::Ident(id)) => {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(id.as_ref());
+            }
+            _ => return None,
+        }
+    }
+    found
+}
+
+/// The single bare `<number>` a token list carries.
+fn single_number(value: &lightningcss::properties::custom::TokenList<'_>) -> Option<f32> {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let mut found = None;
+    for t in value.0.iter() {
+        match t {
+            TokenOrValue::Token(Token::WhiteSpace(_)) => {}
+            TokenOrValue::Token(Token::Number { value, .. }) => {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(*value);
+            }
+            _ => return None,
+        }
+    }
+    found
 }
 
 /// `window-drag: move | none` and its two legacy spellings
@@ -1148,7 +1588,10 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 }
                 P::Static | P::Relative => gpui::Position::Relative,
                 _ => {
-                    unsupported(diagnostics, "position: sticky");
+                    warn_once(
+                    diagnostics,
+                    "`position: sticky` is laid out as `relative` (v1) — it needs the scroll                      offset of the nearest scroll container at LAYOUT time, and taffy has no                      such input. A header that must stay put belongs OUTSIDE the scroll                      container, as a flex sibling of it",
+                );
                     gpui::Position::Relative
                 }
             });
@@ -1174,6 +1617,140 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         // into `Extras` — which is what gives it `:hover`, transitions and
         // `@keyframes` through the ordinary machinery.
         Transform(list, _) => apply_transform(list, r, diagnostics),
+        // `transform-origin` — the point rotate()/scale() turn about. Written
+        // onto the same spec `transform` writes, seeded with CSS's initial
+        // `50% 50%` so declaring the origin ALONE (which changes nothing, as in
+        // a browser) does not accidentally spell `transform: none`.
+        TransformOrigin(pos, _) => {
+            use lightningcss::values::position::{
+                HorizontalPositionKeyword as H, PositionComponent as P, VerticalPositionKeyword as V,
+            };
+            fn axis<S: Copy>(
+                c: &P<S>,
+                keyword: impl Fn(&S) -> Option<f32>,
+            ) -> Option<TransformLength> {
+                match c {
+                    P::Center => Some(TransformLength::Fraction(0.5)),
+                    P::Length(DimensionPercentage::Dimension(l)) => {
+                        length_value_px(l).map(TransformLength::Pixels)
+                    }
+                    P::Length(DimensionPercentage::Percentage(p)) => {
+                        Some(TransformLength::Fraction(p.0))
+                    }
+                    P::Length(DimensionPercentage::Calc(_)) => None,
+                    P::Side { side, offset: None } => keyword(side).map(TransformLength::Fraction),
+                    // `right 10px` — a keyword plus an offset, which needs the
+                    // box to resolve into one number.
+                    P::Side { .. } => None,
+                }
+            }
+            let x = axis(&pos.x, |s: &H| {
+                Some(match s {
+                    H::Left => 0.0,
+                    H::Right => 1.0,
+                })
+            });
+            let y = axis(&pos.y, |s: &V| {
+                Some(match s {
+                    V::Top => 0.0,
+                    V::Bottom => 1.0,
+                })
+            });
+            match (x, y) {
+                (Some(x), Some(y)) => {
+                    let spec = r.vn_transform.get_or_insert(TransformSpec::IDENTITY);
+                    spec.origin = (x, y);
+                }
+                _ => unsupported(
+                    diagnostics,
+                    "transform-origin with a calc() or keyword-plus-offset component — lengths, \
+                     percentages and the bare `left/right/top/bottom/center` keywords are modelled",
+                ),
+            }
+        }
+        // ---- text -----------------------------------------------------------
+        // The legacy `-webkit-box` machinery a `line-clamp` utility drags
+        // along. `-webkit-line-clamp` is honoured on its own (below, in the
+        // unknown-property bucket where lightningcss leaves it), so these are
+        // genuinely inert rather than a missing feature.
+        BoxOrient(..) | BoxAlign(..) | BoxPack(..) => warn_once(
+            diagnostics,
+            "the legacy `-webkit-box` properties (`box-orient`, `box-align`, `box-pack`) are \
+             inert (v1) — `-webkit-line-clamp` is honoured on its own, so `display: -webkit-box; \
+             -webkit-box-orient: vertical; -webkit-line-clamp: N` clamps without them",
+        ),
+        // A decoration's colour, style and thickness live ON the decoration in
+        // gpui, not beside it — so these only land when the same cascade has
+        // already produced an underline or a strikethrough (which
+        // `text-decoration-line`, or the `text-decoration` shorthand, does).
+        TextDecorationColor(c, _) => match color(c) {
+            Some(v) => {
+                let mut hit = false;
+                if let Some(u) = r.text.underline.as_mut() {
+                    u.color = Some(v);
+                    hit = true;
+                }
+                if let Some(s) = r.text.strikethrough.as_mut() {
+                    s.color = Some(v);
+                    hit = true;
+                }
+                if !hit {
+                    warn_once(
+                        diagnostics,
+                        "`text-decoration-color` is carried ON the decoration here (v1) — it \
+                         takes effect only when the cascade has also produced a \
+                         `text-decoration-line` for this element",
+                    );
+                }
+            }
+            None => unresolved_color(diagnostics, "text-decoration-color"),
+        },
+        TextDecorationStyle(s, _) => {
+            use lightningcss::properties::text::TextDecorationStyle as S;
+            if let Some(u) = r.text.underline.as_mut() {
+                u.wavy = matches!(s, S::Wavy);
+            }
+            if !matches!(s, S::Solid | S::Wavy) {
+                unsupported(
+                    diagnostics,
+                    "text-decoration-style — gpui draws a solid or a wavy line, so `double`, \
+                     `dotted` and `dashed` fall back to solid",
+                );
+            }
+        }
+        TextDecorationThickness(t) => {
+            use lightningcss::properties::text::TextDecorationThickness as T;
+            if let T::LengthPercentage(DimensionPercentage::Dimension(l)) = t {
+                if let (Some(w), Some(u)) = (length_value_px(l), r.text.underline.as_mut()) {
+                    u.thickness = px(w);
+                }
+            }
+        }
+        // `text-decoration` shorthand: the line half is the part that renders,
+        // and it must run BEFORE colour/style so they have something to land on.
+        TextDecoration(d, _) => {
+            use lightningcss::properties::text::TextDecorationLine as TDL;
+            if d.line.contains(TDL::Underline) {
+                r.text.underline = Some(gpui::UnderlineStyle::default());
+            }
+            if d.line.contains(TDL::LineThrough) {
+                r.text.strikethrough = Some(gpui::StrikethroughStyle::default());
+            }
+            if let Some(c) = color(&d.color) {
+                if let Some(u) = r.text.underline.as_mut() {
+                    u.color = Some(c);
+                }
+                if let Some(s) = r.text.strikethrough.as_mut() {
+                    s.color = Some(c);
+                }
+            }
+            if d.line.is_empty() {
+                unsupported(
+                    diagnostics,
+                    "text-decoration: none — cannot undo an earlier underline",
+                );
+            }
+        }
         // SVG paint. Only meaningful on an `<svg>` leaf (see `SvgPaint`), but —
         // like `object-fit` on a non-replaced element — it is parsed and folded
         // for every node, because that is what a browser computes.
@@ -1238,12 +1815,76 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             None => unresolved_color(diagnostics, "background-color"),
         },
         Background(layers) => {
-            // Shorthand: per CSS the color lives on the LAST layer. v1 takes
-            // the color only; gradients/images are a later mapper stage.
+            // Shorthand. Per CSS the colour lives on the LAST layer and paints
+            // UNDER every image layer; gpui's `Fill` holds one thing, so an
+            // image layer (a gradient) wins over the colour, which is what a
+            // browser shows for an opaque gradient.
             if let Some(last) = layers.last() {
                 if let Some(c) = color(&last.color) {
                     r.background = Some(gpui::Fill::Color(c.into()));
                 }
+            }
+            // Topmost image layer first — CSS paints layer 0 on top.
+            if layers.len() > 1
+                && layers
+                    .iter()
+                    .filter(|l| !matches!(l.image, lightningcss::values::image::Image::None))
+                    .count()
+                    > 1
+            {
+                warn_once(
+                    diagnostics,
+                    "only the TOP background image layer is painted (v1) — gpui's background is \
+                     one fill, so a stack of layers collapses to the first",
+                );
+            }
+            if let Some(bg) = layers
+                .iter()
+                .find(|l| !matches!(l.image, lightningcss::values::image::Image::None))
+                .and_then(|l| gradient_background(&l.image, diagnostics))
+            {
+                r.background = Some(gpui::Fill::Color(bg));
+            }
+        }
+        BackgroundImage(images) => {
+            if images.len() > 1 {
+                warn_once(
+                    diagnostics,
+                    "only the TOP background image layer is painted (v1) — gpui's background is \
+                     one fill, so a stack of layers collapses to the first",
+                );
+            }
+            if let Some(bg) = images.first().and_then(|i| gradient_background(i, diagnostics)) {
+                r.background = Some(gpui::Fill::Color(bg));
+            }
+        }
+        // The geometry properties of a background image. Nothing here has an
+        // effect while the only image layer that paints is a gradient, which
+        // always covers the border box — say that once rather than three times
+        // through the generic "not mapped" catch-all.
+        BackgroundSize(_) | BackgroundPosition(_) | BackgroundPositionX(_)
+        | BackgroundPositionY(_) | BackgroundRepeat(_) | BackgroundAttachment(_)
+        | BackgroundOrigin(_) => warn_once(
+            diagnostics,
+            "background-size/position/repeat/attachment/origin have no effect (v1) — the one \
+             background image vue-native paints is a linear gradient, and a gradient always \
+             covers the padding box. Use an `<img>` with `object-fit` for a placed image",
+        ),
+        BackgroundClip(v, _) => {
+            use lightningcss::properties::background::BackgroundClip as BC;
+            if matches!(v.first(), Some(BC::Text)) {
+                warn_once(
+                    diagnostics,
+                    "`background-clip: text` is not painted (v1) — gpui rasterises glyphs with a \
+                     solid colour, so a gradient cannot be clipped to them. The element keeps its \
+                     background; set `color` as well so the text stays legible",
+                );
+            } else {
+                warn_once(
+                    diagnostics,
+                    "`background-clip` is ignored (v1) — the background always fills the padding \
+                     box (`padding-box`, the value a rounded box wants anyway)",
+                );
             }
         }
         BorderColor(v) => {
@@ -1274,6 +1915,53 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             r.border_widths.bottom = border_width_px(&v.bottom).map(|w| px(w).into());
             r.border_widths.left = border_width_px(&v.left).map(|w| px(w).into());
         }
+        // gpui has ONE border colour for the whole box. Mapping the longhands
+        // onto it (last wins) renders a single-side border — the shape every
+        // divider, table rule and `border-t` utility actually wants — instead
+        // of rendering nothing at all, which is what "not mapped" bought.
+        BorderTopColor(c) | BorderRightColor(c) | BorderBottomColor(c) | BorderLeftColor(c) => {
+            match color(c) {
+                Some(v) => {
+                    r.border_color = Some(v);
+                    warn_once(
+                        diagnostics,
+                        "a per-side `border-*-color` sets the colour of ALL four sides (v1) — \
+                         gpui's box has one border colour. Pair it with per-side border WIDTHS \
+                         (which are honoured individually) so only the intended side is drawn",
+                    );
+                }
+                None => unresolved_color(diagnostics, "border-color"),
+            }
+        }
+        // `border-top: 1px solid X` — the per-side shorthand.
+        BorderTop(b) => {
+            r.border_widths.top = border_width_px(&b.width).map(|w| px(w).into());
+            if let Some(c) = color(&b.color) {
+                r.border_color = Some(c);
+            }
+            set_border_style(r, b.style, diagnostics);
+        }
+        BorderRight(b) => {
+            r.border_widths.right = border_width_px(&b.width).map(|w| px(w).into());
+            if let Some(c) = color(&b.color) {
+                r.border_color = Some(c);
+            }
+            set_border_style(r, b.style, diagnostics);
+        }
+        BorderBottom(b) => {
+            r.border_widths.bottom = border_width_px(&b.width).map(|w| px(w).into());
+            if let Some(c) = color(&b.color) {
+                r.border_color = Some(c);
+            }
+            set_border_style(r, b.style, diagnostics);
+        }
+        BorderLeft(b) => {
+            r.border_widths.left = border_width_px(&b.width).map(|w| px(w).into());
+            if let Some(c) = color(&b.color) {
+                r.border_color = Some(c);
+            }
+            set_border_style(r, b.style, diagnostics);
+        }
         BorderTopWidth(v) => r.border_widths.top = border_width_px(v).map(|w| px(w).into()),
         BorderRightWidth(v) => r.border_widths.right = border_width_px(v).map(|w| px(w).into()),
         BorderBottomWidth(v) => r.border_widths.bottom = border_width_px(v).map(|w| px(w).into()),
@@ -1297,26 +1985,247 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         BorderBottomLeftRadius(v, _) => r.corner_radii.bottom_left = lp_absolute(&v.0),
         // `grid-cols-N` / `grid-rows-N` -> `repeat(N, minmax(0, 1fr))`, which is
         // exactly (and only) what gpui's GridTemplate models.
+        // Two shapes, cheapest first: `repeat(N, minmax(0, 1fr))` is what every
+        // Tailwind `grid-cols-N` emits and gpui carries it as a single
+        // `GridTemplate`, so it stays on that path. Anything else — `1fr auto`,
+        // `200px 1fr`, `repeat(2, auto) 1fr` — becomes an explicit track list.
         GridTemplateColumns(v) => match grid_template(v) {
             Some(t) => r.grid_cols = Some(t),
-            None => unsupported(
-                diagnostics,
-                "grid-template-columns (only `repeat(N, minmax(0|min-content|max-content, 1fr))`)",
-            ),
+            None => match grid_tracks(v) {
+                Some(tracks) => r.vn_grid_cols = Some(tracks),
+                None => unsupported(
+                    diagnostics,
+                    "grid-template-columns — `repeat(auto-fill|auto-fit, …)`, `fit-content()`, \
+                     named lines and `calc()` breadths are not modelled; every explicit track \
+                     list of lengths, percentages, `auto`, `min-content`, `max-content`, `<flex>` \
+                     and `minmax()` is",
+                ),
+            },
         },
         GridTemplateRows(v) => match grid_template(v) {
             Some(t) => r.grid_rows = Some(t),
-            None => unsupported(
-                diagnostics,
-                "grid-template-rows (only `repeat(N, minmax(0|min-content|max-content, 1fr))`)",
-            ),
+            None => match grid_tracks(v) {
+                Some(tracks) => r.vn_grid_rows = Some(tracks),
+                None => unsupported(
+                    diagnostics,
+                    "grid-template-rows — `repeat(auto-fill|auto-fit, …)`, `fit-content()`, named \
+                     lines and `calc()` breadths are not modelled; every explicit track list of \
+                     lengths, percentages, `auto`, `min-content`, `max-content`, `<flex>` and \
+                     `minmax()` is",
+                ),
+            },
         },
+        // Placement. gpui carries a `GridLocation` (a start..end pair per axis)
+        // and taffy resolves it; only NAMED lines and areas are out of reach.
+        GridColumnStart(l) | GridColumnEnd(l) | GridRowStart(l) | GridRowEnd(l) => {
+            let Some(placement) = grid_line(l) else {
+                unsupported(
+                    diagnostics,
+                    "grid-row/grid-column with a NAMED line or area — the named grid is not \
+                     modelled; use line numbers or `span N`",
+                );
+                return;
+            };
+            let loc = r.grid_location.get_or_insert_default();
+            match p {
+                GridColumnStart(_) => loc.column.start = placement,
+                GridColumnEnd(_) => loc.column.end = placement,
+                GridRowStart(_) => loc.row.start = placement,
+                _ => loc.row.end = placement,
+            }
+        }
+        GridColumn(v) => {
+            match (grid_line(&v.start), grid_line(&v.end)) {
+                (Some(s), Some(e)) => {
+                    let loc = r.grid_location.get_or_insert_default();
+                    loc.column = s..e;
+                }
+                _ => unsupported(
+                    diagnostics,
+                    "grid-column with a NAMED line or area — use line numbers or `span N`",
+                ),
+            }
+        }
+        GridRow(v) => {
+            match (grid_line(&v.start), grid_line(&v.end)) {
+                (Some(s), Some(e)) => {
+                    let loc = r.grid_location.get_or_insert_default();
+                    loc.row = s..e;
+                }
+                _ => unsupported(
+                    diagnostics,
+                    "grid-row with a NAMED line or area — use line numbers or `span N`",
+                ),
+            }
+        }
+        GridArea(v) => {
+            match (
+                grid_line(&v.row_start),
+                grid_line(&v.row_end),
+                grid_line(&v.column_start),
+                grid_line(&v.column_end),
+            ) {
+                (Some(rs), Some(re), Some(cs), Some(ce)) => {
+                    let loc = r.grid_location.get_or_insert_default();
+                    loc.row = rs..re;
+                    loc.column = cs..ce;
+                }
+                _ => unsupported(
+                    diagnostics,
+                    "grid-area naming a template AREA — `grid-template-areas` is not modelled; \
+                     the four-line form (`grid-area: 1 / 1 / 3 / 2`) is",
+                ),
+            }
+        }
+        GridAutoFlow(v) => {
+            use lightningcss::properties::grid::GridAutoFlow as F;
+            let dense = v.contains(F::Dense);
+            r.vn_grid_auto_flow = Some(if v.contains(F::Column) {
+                if dense {
+                    gpui::GridAutoFlow::ColumnDense
+                } else {
+                    gpui::GridAutoFlow::Column
+                }
+            } else if dense {
+                gpui::GridAutoFlow::RowDense
+            } else {
+                gpui::GridAutoFlow::Row
+            });
+        }
+        GridTemplateAreas(_) | GridTemplate(_) | Grid(_) => unsupported(
+            diagnostics,
+            "grid-template-areas (and the `grid` / `grid-template` shorthands that carry it) — \
+             the named grid is not modelled. Declare `grid-template-columns`/`-rows` and place \
+             items with `grid-column`/`grid-row` line numbers",
+        ),
+        GridAutoColumns(_) | GridAutoRows(_) => unsupported(
+            diagnostics,
+            "grid-auto-columns / grid-auto-rows — implicit tracks size as `auto`; give the \
+             explicit track list on `grid-template-columns`/`-rows` instead",
+        ),
+        // taffy honours the inline axis too; gpui had only ever exposed the
+        // block one (`align-items`).
+        JustifyItems(v) => {
+            use lightningcss::properties::align::JustifyItems as J;
+            match v {
+                J::Normal => r.vn_justify_items = Some(gpui::AlignItems::Stretch),
+                J::Stretch => r.vn_justify_items = Some(gpui::AlignItems::Stretch),
+                J::BaselinePosition(_) => r.vn_justify_items = Some(gpui::AlignItems::Baseline),
+                J::SelfPosition { value, .. } => {
+                    r.vn_justify_items = Some(self_position(value));
+                }
+                J::Legacy(_) => unsupported(diagnostics, "justify-items: legacy"),
+                // `justify-items: left | right` are the physical spellings of
+                // start/end in a left-to-right writing mode, which is the only
+                // one taffy lays out.
+                J::Left { .. } => r.vn_justify_items = Some(gpui::AlignItems::FlexStart),
+                J::Right { .. } => r.vn_justify_items = Some(gpui::AlignItems::FlexEnd),
+            }
+        }
+        JustifySelf(v) => {
+            use lightningcss::properties::align::JustifySelf as J;
+            match v {
+                J::Auto | J::Normal | J::Stretch => {
+                    r.vn_justify_self = Some(gpui::AlignSelf::Stretch)
+                }
+                J::BaselinePosition(_) => r.vn_justify_self = Some(gpui::AlignSelf::Baseline),
+                J::SelfPosition { value, .. } => r.vn_justify_self = Some(self_position(value)),
+                J::Left { .. } => r.vn_justify_self = Some(gpui::AlignSelf::FlexStart),
+                J::Right { .. } => r.vn_justify_self = Some(gpui::AlignSelf::FlexEnd),
+            }
+        }
+        PlaceItems(v) => {
+            // `place-items: <align> <justify>`, both axes at once.
+            use lightningcss::properties::align::{AlignItems as A, JustifyItems as J};
+            match &v.align {
+                A::Stretch | A::Normal => r.align_items = Some(gpui::AlignItems::Stretch),
+                A::BaselinePosition(_) => r.align_items = Some(gpui::AlignItems::Baseline),
+                A::SelfPosition { value, .. } => r.align_items = Some(self_position(value)),
+            }
+            match &v.justify {
+                J::Normal | J::Stretch => r.vn_justify_items = Some(gpui::AlignItems::Stretch),
+                J::BaselinePosition(_) => r.vn_justify_items = Some(gpui::AlignItems::Baseline),
+                J::SelfPosition { value, .. } => r.vn_justify_items = Some(self_position(value)),
+                J::Legacy(_) => unsupported(diagnostics, "place-items: legacy justify"),
+                J::Left { .. } => r.vn_justify_items = Some(gpui::AlignItems::FlexStart),
+                J::Right { .. } => r.vn_justify_items = Some(gpui::AlignItems::FlexEnd),
+            }
+        }
+        // ---- outline: a ring outside the border box, taking no layout space --
+        Outline(o) => {
+            use lightningcss::properties::outline::OutlineStyle as OS;
+            let out = outline_mut(r);
+            match &o.style {
+                OS::Auto => out.style = gpui::BorderStyle::Solid,
+                OS::LineStyle(LineStyle::None) | OS::LineStyle(LineStyle::Hidden) => {
+                    out.width = px(0.0)
+                }
+                OS::LineStyle(ls) => {
+                    out.style = if matches!(ls, LineStyle::Dashed | LineStyle::Dotted) {
+                        gpui::BorderStyle::Dashed
+                    } else {
+                        gpui::BorderStyle::Solid
+                    }
+                }
+            }
+            // `outline: none` is the whole declaration: there is no width to
+            // read and no colour to resolve (the shorthand's is the initial
+            // `currentColor`, which would advise for nothing).
+            if !matches!(&o.style, OS::LineStyle(LineStyle::None | LineStyle::Hidden)) {
+                if let Some(w) = border_width_px(&o.width) {
+                    r.vn_outline.as_mut().unwrap().width = px(w);
+                }
+                match color(&o.color) {
+                    Some(c) => r.vn_outline.as_mut().unwrap().color = c,
+                    // `outline-color`'s initial value is `currentColor`
+                    // (`invert` in older UAs), and neither is resolvable here.
+                    None => unresolved_color(diagnostics, "outline-color"),
+                }
+            }
+        }
+        OutlineWidth(w) => {
+            if let Some(v) = border_width_px(w) {
+                outline_mut(r).width = px(v);
+            }
+        }
+        OutlineColor(c) => match color(c) {
+            Some(v) => outline_mut(r).color = v,
+            None => unresolved_color(diagnostics, "outline-color"),
+        },
+        OutlineStyle(s) => {
+            use lightningcss::properties::outline::OutlineStyle as OS;
+            let out = outline_mut(r);
+            match s {
+                OS::LineStyle(LineStyle::None) | OS::LineStyle(LineStyle::Hidden) => {
+                    out.width = px(0.0)
+                }
+                other => {
+                    out.style = if matches!(
+                        other,
+                        OS::LineStyle(LineStyle::Dashed) | OS::LineStyle(LineStyle::Dotted)
+                    ) {
+                        gpui::BorderStyle::Dashed
+                    } else {
+                        gpui::BorderStyle::Solid
+                    };
+                    // CSS's initial `outline-width` is `medium` (3px); a style
+                    // on its own has to become visible.
+                    if out.width == px(0.0) {
+                        out.width = px(3.0);
+                    }
+                }
+            }
+        }
         BoxShadow(shadows, _) => {
             let mut out = Vec::new();
             for s in shadows.iter() {
                 let (Some(c), Some(x), Some(y)) =
                     (color(&s.color), css_length_px(&s.x_offset), css_length_px(&s.y_offset))
                 else {
+                    // One unresolvable shadow drops ITSELF, not the list — but
+                    // it does not drop in silence, because a missing ring in a
+                    // stack of three is invisible to read back.
+                    unresolved_color(diagnostics, "box-shadow");
                     continue;
                 };
                 out.push(gpui::BoxShadow {
@@ -1452,6 +2361,10 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 r.mouse_cursor = Some(m);
             }
         }
+        Filter(..) => warn_once(
+            diagnostics,
+            "`filter` is not applied (v1) — gpui filters the BACKDROP (`backdrop-filter: blur()`              is live) but has no post-processing pass over an element's own painted output.              `opacity` renders, and a `drop-shadow()` is expressible as a `box-shadow`",
+        ),
         // `backdrop-filter` — `blur()` is the one filter function the renderer
         // implements (gpui `BackdropBlurRect`, D3D11 Dual-Kawase pyramid).
         // Everything else in the list is advised rather than silently dropped.
@@ -1538,6 +2451,131 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     ),
                 }
             }
+            // `outline-offset` and `-webkit-line-clamp` are REAL properties
+            // that lightningcss has no typed representation for; both are
+            // honoured, so they are parsed by hand out of the token list the
+            // same way `object-fit` is.
+            // `content` — the property that decides whether a `::before` /
+            // `::after` box exists at all. Only the literal-string forms
+            // generate one here; counters and `attr()` need machinery
+            // (a counter tree, a live attribute subscription) that does not
+            // exist, and `none`/`normal` mean "no box", which is the default.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "content" =>
+            {
+                match content_string(&c.value) {
+                    ContentValue::Text(t) => x.content = Some(t),
+                    ContentValue::None => x.content = None,
+                    ContentValue::Unsupported(what) => once(
+                        diagnostics,
+                        format!(
+                            "`content: {what}` does not generate a box (v1) — only a literal \
+                             string does. Counters, `attr()`, `url()` and the `open-quote` \
+                             family have no model here; render the value as a real element"
+                        ),
+                    ),
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "outline-offset" =>
+            {
+                match single_length_px(&c.value) {
+                    Some(v) => outline_mut(r).offset = px(v),
+                    None => unsupported(diagnostics, "outline-offset (a <length> is expected)"),
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "-webkit-line-clamp" || name.0.as_ref() == "line-clamp" =>
+            {
+                match single_number(&c.value) {
+                    Some(n) if n >= 1.0 => r.text.line_clamp = Some(n as usize),
+                    // `line-clamp: none` — a refinement cannot spell "clear".
+                    _ => unsupported(
+                        diagnostics,
+                        "line-clamp: none — cannot undo an earlier clamp",
+                    ),
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(
+                    name.0.as_ref(),
+                    "text-underline-offset" | "text-decoration-skip-ink"
+                ) =>
+            {
+                warn_once(
+                    diagnostics,
+                    "`text-underline-offset` / `text-decoration-skip-ink` are not applied (v1) — \
+                     gpui draws the underline at the font's own position and does not skip \
+                     descenders",
+                )
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(
+                    name.0.as_ref(),
+                    "font-feature-settings"
+                        | "font-variant-numeric"
+                        | "font-variation-settings"
+                        | "font-optical-sizing"
+                ) =>
+            {
+                warn_once(
+                    diagnostics,
+                    "OpenType feature and variation settings are not applied (v1) — the font is \
+                     selected by family, weight and style, and a VARIABLE font is instantiated at \
+                     the named weight only. Ship the static cut of the axis you need",
+                )
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(
+                    name.0.as_ref(),
+                    "-webkit-font-smoothing" | "-moz-osx-font-smoothing"
+                ) =>
+            {
+                warn_once(
+                    diagnostics,
+                    "font-smoothing hints are inert (v1) — glyph rasterisation is the platform \
+                     text system's, and it is already subpixel-antialiased on Windows. Safe to \
+                     leave in the sheet",
+                )
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(
+                    name.0.as_ref(),
+                    "touch-action" | "overscroll-behavior" | "overscroll-behavior-x"
+                        | "overscroll-behavior-y" | "-webkit-tap-highlight-color"
+                        | "-webkit-overflow-scrolling" | "scroll-behavior"
+                ) =>
+            {
+                warn_once(
+                    diagnostics,
+                    "the touch/overscroll properties are inert (v1) — there is no touch scroller, \
+                     no rubber-banding and no tap highlight to suppress. Safe to leave in the sheet",
+                )
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(
+                    name.0.as_ref(),
+                    "border-collapse" | "border-spacing" | "caption-side" | "table-layout"
+                        | "empty-cells"
+                ) =>
+            {
+                warn_once(
+                    diagnostics,
+                    "the table properties are not applied (v1) — `<table>` and friends lay out as \
+                     plain blocks; build tables out of flex rows or a grid track list, which both \
+                     render",
+                )
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "clip" =>
+            {
+                warn_once(
+                    diagnostics,
+                    "the legacy `clip` property is not applied (v1) — it is deprecated in CSS \
+                     too. The visually-hidden idiom it serves is expressible as `position: \
+                     absolute; width: 1px; height: 1px; overflow: hidden`, which does render",
+                )
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name) => {
                 once(
                     diagnostics,
@@ -1545,12 +2583,104 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 );
             }
         },
+        // ---- named, not mapped ----------------------------------------------
+        // Everything below reaches the renderer as a real declaration and does
+        // nothing. The generic "property not mapped (v1)" is true but useless;
+        // each of these says WHY and, where there is one, names the thing to
+        // write instead. That is the whole difference between a diagnostic and
+        // an advisory (docs/COMPAT.md).
+        LetterSpacing(_) | WordSpacing(_) => warn_once(
+            diagnostics,
+            "`letter-spacing` / `word-spacing` are not applied (v1) — gpui's shaper takes the \
+             font's own advances and has no tracking control. A different font weight or size is \
+             the lever that exists",
+        ),
+        VerticalAlign(_) => warn_once(
+            diagnostics,
+            "`vertical-align` is not applied (v1) — it aligns boxes inside a LINE box, and taffy \
+             has no inline formatting context. `align-items` / `align-self` on the flex parent is \
+             the equivalent that works",
+        ),
+        TextIndent(_) => warn_once(
+            diagnostics,
+            "`text-indent` is not applied (v1) — there is no first-line concept in the shaper. \
+             `padding-left` indents the whole block",
+        ),
+        ListStyle(_) | ListStyleType(_) | ListStylePosition(_) | ListStyleImage(_) => warn_once(
+            diagnostics,
+            "`list-style*` is not applied (v1) — `<ul>`/`<ol>` lay out as plain blocks and no \
+             marker box is generated, so there is nothing to style. Render the bullet as a real \
+             element (a `<span>` sibling) if it has to be visible",
+        ),
+        Resize(_) => warn_once(
+            diagnostics,
+            "`resize` is not applied (v1) — there is no user-resize affordance on a gpui box. \
+             A drag handle has to be a real element with a pointer handler",
+        ),
+        UserSelect(..) => warn_once(
+            diagnostics,
+            "`user-select` is not applied (v1) — text in a gpui box is painted, not selectable, \
+             so `none` is already the effective behaviour everywhere and `text` cannot turn it on",
+        ),
+        Appearance(..) => warn_once(
+            diagnostics,
+            "`appearance` is not applied (v1) — no element here carries a native OS control skin \
+             to remove, so `appearance: none` (the reset every form library writes) is already \
+             true",
+        ),
+        TabSize(..) => warn_once(
+            diagnostics,
+            "`tab-size` is not applied (v1) — the shaper collapses whitespace, so a tab is one \
+             space regardless",
+        ),
+        TextSizeAdjust(..) => warn_once(
+            diagnostics,
+            "`text-size-adjust` is inert (v1) — it exists to stop MOBILE BROWSERS inflating text, \
+             and nothing here inflates it. Safe to leave in the sheet",
+        ),
+        OverflowWrap(_) | WordBreak(_) => warn_once(
+            diagnostics,
+            "`overflow-wrap` / `word-break` are not applied (v1) — gpui wraps at word boundaries \
+             and does not break inside a word, which is `overflow-wrap: normal`. A long \
+             unbroken token will overflow rather than break",
+        ),
+        ScrollMarginTop(_) | ScrollMarginBottom(_) | ScrollMarginLeft(_) | ScrollMarginRight(_)
+        | ScrollMargin(_) | ScrollMarginBlock(_) | ScrollMarginInline(_)
+        | ScrollMarginBlockStart(_) | ScrollMarginBlockEnd(_) | ScrollMarginInlineStart(_)
+        | ScrollMarginInlineEnd(_) | ScrollPaddingTop(_) | ScrollPaddingBottom(_)
+        | ScrollPaddingLeft(_) | ScrollPaddingRight(_) | ScrollPadding(_) => warn_once(
+            diagnostics,
+            "`scroll-margin` / `scroll-padding` are not applied (v1) — they only affect \
+             `scrollIntoView` and scroll snapping, neither of which is modelled",
+        ),
+        TextTransform(t) => {
+            use crate::mapper::TextTransform as TT;
+            use lightningcss::properties::text::TextTransformCase as C;
+            x.text_transform = Some(match t.case {
+                C::None => TT::None,
+                C::Uppercase => TT::Uppercase,
+                C::Lowercase => TT::Lowercase,
+                C::Capitalize => TT::Capitalize,
+            });
+        }
         // A KNOWN property whose value did not parse into a typed value. These
         // are `var()`-composed and travel the dynamic channel, so reaching the
         // mapper means the value was STILL unparsed after substitution — an
         // unbalanced `var(` or a token stream that is not valid for the
         // property. Kept as a defensive advisory rather than silence.
         Unparsed(u) => {
+            // …with one exception that is not a failure: lightningcss has no
+            // typed value for a list property's `none`, so `box-shadow: none`
+            // (Tailwind's `shadow-none`, the commonest shadow declaration
+            // there is) always lands here. An EMPTY list is exactly what it
+            // means, and writing it is what lets a later rule cancel an
+            // earlier one's shadow.
+            if matches!(u.property_id, PropertyId::BoxShadow(_))
+                && matches!(single_ident_raw(&u.value), Some("none"))
+            {
+                r.box_shadow = Some(Vec::new());
+                return;
+            }
             once(
                 diagnostics,
                 format!(
@@ -1684,7 +2814,29 @@ fn apply_transform(
             T::ScaleY(s) => scale.1 *= factor(s),
             T::ScaleZ(_) | T::Scale3d(..) => dropped.push("scale3d()/scaleZ()"),
             T::Skew(..) | T::SkewX(_) | T::SkewY(_) => dropped.push("skew()"),
-            T::Matrix(_) | T::Matrix3d(_) => dropped.push("matrix()"),
+            // `matrix(a, b, c, d, e, f)` DECOMPOSES: the CSS
+            // translate/rotate/scale triple is recoverable from the 2x2 plus
+            // the offset, and it is what @vueuse/motion and GSAP write when
+            // they compose a transform themselves. Only the SKEW component has
+            // nowhere to go, so only that is dropped.
+            T::Matrix(m) => {
+                let scale_x = (m.a * m.a + m.b * m.b).sqrt();
+                let det = m.a * m.d - m.b * m.c;
+                let scale_y = if scale_x == 0.0 { 0.0 } else { det / scale_x };
+                let shear = if scale_x == 0.0 {
+                    0.0
+                } else {
+                    (m.a * m.c + m.b * m.d) / (scale_x * scale_x)
+                };
+                if shear.abs() > 1e-4 {
+                    dropped.push("the skew component of a matrix()");
+                }
+                tx = TransformLength::Pixels(m.e);
+                ty = TransformLength::Pixels(m.f);
+                rotate += m.b.atan2(m.a).to_degrees();
+                scale = (scale.0 * scale_x, scale.1 * scale_y);
+            }
+            T::Matrix3d(_) => dropped.push("matrix3d()"),
             T::Perspective(_) => dropped.push("perspective()"),
             T::TranslateZ(_) => dropped.push("the Z axis of a 3D translate"),
         }
@@ -1694,10 +2846,18 @@ fn apply_transform(
     // reduces to nothing has to cancel an earlier one. That is what
     // `Option<TransformSpec>` buys over a bare `TransformSpec` -- `None` is
     // "never declared", `Some(IDENTITY)` is `transform: none`.
+    //
+    // `transform-origin` is a SEPARATE property and must survive: a rule that
+    // declares both in either order has to end up with both.
+    let origin = r
+        .vn_transform
+        .map(|t| t.origin)
+        .unwrap_or(TransformSpec::CENTRE_ORIGIN);
     r.vn_transform = Some(TransformSpec {
         translate: (tx, ty),
         rotate: rotate.to_radians(),
         scale,
+        origin,
     });
     if !dropped.is_empty() {
         dropped.sort_unstable();
@@ -1705,7 +2865,10 @@ fn apply_transform(
         once(
             diagnostics,
             format!(
-                "`transform` supports translate(), rotate() and scale() -- dropped {}.                  The three that are supported are applied at PAINT time, to this element and                  its subtree, and change no layout, which is what a browser does",
+                "`transform` supports translate(), rotate(), scale(), a decomposed matrix() and \
+                 `transform-origin` — dropped {}. What is supported is applied at PAINT time, to \
+                 this element and its whole subtree, and changes no layout, which is what a \
+                 browser does",
                 dropped.join(", ")
             ),
         );
@@ -1990,11 +3153,84 @@ mod tests {
         assert_eq!(r.grid_rows.map(|t| t.repeat), Some(2));
     }
 
+    /// An ARBITRARY track list — the shape `grid-cols-[1fr_auto]` compiles to,
+    /// and the one gpui's `repeat(N, …)` shorthand cannot express.
+    #[test]
+    fn an_arbitrary_track_list_becomes_an_explicit_track_list() {
+        use gpui::{GridTrack, GridTrackSize as G};
+        let r = clean("grid-template-columns: 200px 1fr");
+        // The cheap `repeat` field stays untouched — the explicit list wins.
+        assert_eq!(r.grid_cols, None);
+        assert_eq!(
+            r.vn_grid_cols,
+            Some(vec![GridTrack::fixed(G::Px(200.0)), GridTrack::fr(1.0)])
+        );
+        // `1fr auto`, the meet app's `grid-cols-[1fr_auto]`.
+        assert_eq!(
+            clean("grid-template-columns: 1fr auto").vn_grid_cols,
+            Some(vec![GridTrack::fr(1.0), GridTrack::fixed(G::Auto)])
+        );
+        // `minmax()` survives as itself, and an integer `repeat()` expands.
+        assert_eq!(
+            clean("grid-template-rows: repeat(2, minmax(min-content, 1fr)) 40px").vn_grid_rows,
+            Some(vec![
+                GridTrack { min: G::MinContent, max: G::Fr(1.0) },
+                GridTrack { min: G::MinContent, max: G::Fr(1.0) },
+                GridTrack::fixed(G::Px(40.0)),
+            ])
+        );
+        // A percentage is a FRACTION on the taffy side.
+        assert_eq!(
+            clean("grid-template-columns: 25% 75%").vn_grid_cols,
+            Some(vec![
+                GridTrack::fixed(G::Percent(0.25)),
+                GridTrack::fixed(G::Percent(0.75)),
+            ])
+        );
+    }
+
+    /// The track lists that genuinely have no model still advise rather than
+    /// laying out wrongly: the count of an `auto-fill` repeat depends on the
+    /// resolved container size, and `fit-content()` has no `GridTrackSize`.
     #[test]
     fn an_unmodelable_track_list_is_an_advisory_not_a_wrong_grid() {
-        let (r, d) = map("grid-template-columns: 200px 1fr");
-        assert_eq!(r.grid_cols, None);
-        assert!(d.iter().any(|m| m.contains("grid-template-columns")), "{d:?}");
+        for body in [
+            "grid-template-columns: repeat(auto-fill, minmax(120px, 1fr))",
+            "grid-template-columns: fit-content(200px) 1fr",
+        ] {
+            let (r, d) = map(body);
+            assert_eq!(r.grid_cols, None, "{body}");
+            assert_eq!(r.vn_grid_cols, None, "{body}");
+            assert!(d.iter().any(|m| m.contains("grid-template-columns")), "{body}: {d:?}");
+        }
+    }
+
+    /// Placement: line numbers and `span N` reach taffy; a NAMED line does not.
+    #[test]
+    fn grid_placement_maps_lines_and_spans() {
+        use gpui::GridPlacement as P;
+        let r = clean("grid-column: 2 / 4");
+        let loc = r.grid_location.clone().expect("a grid location");
+        assert_eq!(loc.column, P::Line(2)..P::Line(4));
+        let r = clean("grid-row: span 2");
+        let loc = r.grid_location.clone().expect("a grid location");
+        assert_eq!(loc.row.start, P::Span(2));
+        let r = clean("grid-column-start: 3");
+        assert_eq!(r.grid_location.unwrap().column.start, P::Line(3));
+        let (_, d) = map("grid-column: sidebar / main");
+        assert!(d.iter().any(|m| m.contains("NAMED line")), "{d:?}");
+    }
+
+    #[test]
+    fn grid_auto_flow_maps_all_four_combinations() {
+        for (body, want) in [
+            ("grid-auto-flow: row", gpui::GridAutoFlow::Row),
+            ("grid-auto-flow: column", gpui::GridAutoFlow::Column),
+            ("grid-auto-flow: row dense", gpui::GridAutoFlow::RowDense),
+            ("grid-auto-flow: column dense", gpui::GridAutoFlow::ColumnDense),
+        ] {
+            assert_eq!(clean(body).vn_grid_auto_flow, Some(want), "{body}");
+        }
     }
 
     // ---- typography / visibility / aspect-ratio --------------------------
@@ -2300,6 +3536,294 @@ mod tests {
 
     /// The transform-origin is the element's centre (CSS's initial value), so
     /// a pure rotation leaves the centre where it was and a pure scale grows
+    // ---- gradients ------------------------------------------------------
+
+    /// `linear-gradient()` is a real `Background`, not a dropped declaration.
+    /// CSS and gpui share the angle convention (0deg = to top, clockwise), so
+    /// the keyword forms are the only conversion.
+    #[test]
+    fn a_linear_gradient_becomes_a_two_stop_background() {
+        let bg = |body: &str| match clean(body).background {
+            Some(gpui::Fill::Color(b)) => b,
+            other => panic!("{body}: {other:?}"),
+        };
+        let g = bg("background-image: linear-gradient(to right, #ff0000, #0000ff)");
+        assert!(g.as_solid().is_none(), "a gradient, not a solid");
+        // The `background` SHORTHAND carries an image layer too.
+        let g2 = bg("background: linear-gradient(90deg, #ff0000 0%, #0000ff 100%)");
+        assert_eq!(format!("{g:?}"), format!("{g2:?}"), "`to right` is 90deg");
+        // A default direction is `to bottom`.
+        let down = bg("background-image: linear-gradient(#fff, #000)");
+        let explicit = bg("background-image: linear-gradient(180deg, #fff, #000)");
+        assert_eq!(format!("{down:?}"), format!("{explicit:?}"));
+    }
+
+    /// The gradient shapes that have no model name the one that does.
+    #[test]
+    fn the_other_gradients_advise_and_name_linear() {
+        for (body, needle) in [
+            ("background-image: radial-gradient(#fff, #000)", "radial-gradient"),
+            ("background-image: conic-gradient(#fff, #000)", "conic-gradient"),
+            ("background-image: url(bg.png)", "background-image: url()"),
+        ] {
+            let (r, d) = map(body);
+            assert_eq!(r.background, None, "{body}");
+            assert!(d.iter().any(|m| m.contains(needle)), "{body}: {d:?}");
+        }
+        // A third stop is dropped, and says so.
+        let (r, d) = map("background-image: linear-gradient(#f00, #0f0, #00f)");
+        assert!(r.background.is_some());
+        assert!(d.iter().any(|m| m.contains("TWO colour stops")), "{d:?}");
+    }
+
+    // ---- outline --------------------------------------------------------
+
+    /// `outline` and its longhands fold into ONE ring, which is what lets
+    /// Tailwind's `outline-none` (`outline: 2px solid transparent` +
+    /// `outline-offset: 2px`) and a real focus ring both land intact.
+    #[test]
+    fn outline_folds_the_shorthand_and_the_longhands_into_one_ring() {
+        let r = clean("outline: 2px solid #ff0000; outline-offset: 3px");
+        let o = r.vn_outline.expect("an outline");
+        assert_eq!(o.width, px(2.0));
+        assert_eq!(o.offset, px(3.0));
+        assert_eq!(o.style, gpui::BorderStyle::Solid);
+        assert!((o.color.a - 1.0).abs() < 1e-3, "{o:?}");
+
+        // `outline: none` is a zero-width ring: nothing paints, and the value
+        // still cancels an outline an earlier rule declared.
+        let r = clean("outline: 2px solid #ff0000; outline: none");
+        assert_eq!(r.vn_outline.unwrap().width, px(0.0));
+
+        // Tailwind's `outline-none`.
+        let r = clean("outline: 2px solid transparent; outline-offset: 2px");
+        let o = r.vn_outline.unwrap();
+        assert_eq!(o.width, px(2.0));
+        assert_eq!(o.color.a, 0.0, "transparent paints nothing");
+
+        // A longhand ALONE seeds a zero-width ring — CSS's initial
+        // `outline-style: none` means a bare `outline-color` paints nothing.
+        assert_eq!(clean("outline-color: #ff0000").vn_outline.unwrap().width, px(0.0));
+        // …and a bare `outline-style` becomes visible at the initial `medium`.
+        assert_eq!(clean("outline-style: solid").vn_outline.unwrap().width, px(3.0));
+        assert_eq!(
+            clean("outline-style: dashed").vn_outline.unwrap().style,
+            gpui::BorderStyle::Dashed
+        );
+    }
+
+    // ---- box-shadow -----------------------------------------------------
+
+    /// Multiple shadows, spread, colour and `inset` all survive — which is
+    /// what makes Tailwind's `--tw-ring-offset-shadow, --tw-ring-shadow`
+    /// stack render as a focus ring.
+    #[test]
+    fn box_shadow_carries_every_shadow_with_spread_and_inset() {
+        let r = clean(
+            "box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #3b82f6, inset 0 1px 2px 0 rgb(0 0 0 / 0.4)",
+        );
+        let shadows = r.box_shadow.expect("shadows");
+        assert_eq!(shadows.len(), 3);
+        assert_eq!(shadows[0].spread_radius, px(2.0));
+        assert_eq!(shadows[1].spread_radius, px(4.0));
+        assert!(!shadows[0].inset && !shadows[1].inset);
+        assert!(shadows[2].inset, "the third is an inset shadow");
+        assert_eq!(shadows[2].blur_radius, px(2.0));
+        assert_eq!(shadows[2].offset.y, px(1.0));
+        // `box-shadow: none` — lightningcss parses it to an empty list, which
+        // is written through as an empty `Vec` and therefore genuinely CLEARS
+        // a shadow an earlier rule declared.
+        // `box-shadow: none` arrives UNPARSED (lightningcss has no empty-list
+        // value), and it has to CLEAR the list rather than advise — a
+        // `shadow-none` utility overriding a `shadow-lg` one is the single most
+        // common shadow declaration in a Tailwind sheet.
+        let mut d = Vec::new();
+        let mut r = StyleRefinement::default();
+        r.box_shadow = Some(vec![gpui::BoxShadow {
+            color: Hsla::default(),
+            offset: gpui::point(px(0.0), px(1.0)),
+            blur_radius: px(2.0),
+            spread_radius: px(0.0),
+            inset: false,
+        }]);
+        apply_dynamic("box-shadow", "none", &Vars::default(), &crate::Env::default(), &mut r, &mut Extras::default(), &mut d);
+        assert_eq!(r.box_shadow, Some(Vec::new()), "{d:?}");
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // ---- content / generated boxes --------------------------------------
+
+    /// `content` is the property that decides whether a `::before` box EXISTS,
+    /// so it is parsed even though lightningcss has no typed representation.
+    #[test]
+    fn content_keeps_literal_strings_and_advises_the_rest() {
+        let (x, d) = extras(r#"content: "->""#);
+        assert_eq!(x.content.as_deref(), Some("->"));
+        assert!(d.is_empty(), "{d:?}");
+        // The decorative case: an empty string still generates a box.
+        assert_eq!(extras(r#"content: """#).0.content.as_deref(), Some(""));
+        // `none` / `normal` generate nothing, silently — that is the default.
+        assert_eq!(extras("content: none").0.content, None);
+        for body in ["content: counter(x)", "content: attr(data-x)", "content: url(a.png)"] {
+            let (x, d) = extras(body);
+            assert_eq!(x.content, None, "{body}");
+            assert!(d.iter().any(|m| m.contains("does not generate a box")), "{body}: {d:?}");
+        }
+    }
+
+    // ---- text-transform --------------------------------------------------
+
+    #[test]
+    fn text_transform_folds_onto_the_extras() {
+        use crate::mapper::TextTransform as TT;
+        assert_eq!(extras("text-transform: uppercase").0.text_transform, Some(TT::Uppercase));
+        assert_eq!(extras("text-transform: lowercase").0.text_transform, Some(TT::Lowercase));
+        assert_eq!(extras("text-transform: capitalize").0.text_transform, Some(TT::Capitalize));
+        assert_eq!(extras("text-transform: none").0.text_transform, Some(TT::None));
+        assert_eq!(TT::Uppercase.apply("Sign in").as_deref(), Some("SIGN IN"));
+        assert_eq!(TT::Lowercase.apply("Sign In").as_deref(), Some("sign in"));
+        // CSS capitalises the first letter of each word and leaves the rest.
+        assert_eq!(TT::Capitalize.apply("sign iN now").as_deref(), Some("Sign IN Now"));
+        assert_eq!(TT::None.apply("Sign in"), None);
+    }
+
+    // ---- line-clamp ------------------------------------------------------
+
+    #[test]
+    fn webkit_line_clamp_reaches_the_shaper() {
+        assert_eq!(clean("-webkit-line-clamp: 3").text.line_clamp, Some(3));
+        assert_eq!(clean("line-clamp: 2").text.line_clamp, Some(2));
+    }
+
+    // ---- the advisory sweep ---------------------------------------------
+
+    /// Every property here USED to print the bare "property not mapped (v1)".
+    /// The point of the change is that each now says why, and names what to
+    /// write instead where there is something.
+    #[test]
+    fn the_unmapped_properties_say_why_rather_than_that() {
+        for (body, needle) in [
+            ("letter-spacing: 0.05em", "letter-spacing"),
+            ("vertical-align: middle", "vertical-align"),
+            ("text-indent: 2em", "text-indent"),
+            ("list-style: disc inside", "list-style"),
+            ("resize: both", "resize"),
+            ("user-select: none", "user-select"),
+            ("appearance: none", "appearance"),
+            ("tab-size: 4", "tab-size"),
+            ("overflow-wrap: break-word", "overflow-wrap"),
+            ("scroll-margin-top: 4rem", "scroll-margin"),
+            ("filter: blur(4px)", "`filter` is not applied"),
+            ("touch-action: none", "touch/overscroll"),
+            ("border-collapse: collapse", "table properties"),
+            ("clip: rect(0,0,0,0)", "legacy `clip`"),
+            ("-webkit-font-smoothing: antialiased", "font-smoothing"),
+            ("font-variant-numeric: tabular-nums", "OpenType feature"),
+            ("background-size: cover", "background-size/position"),
+            ("position: sticky", "position: sticky"),
+        ] {
+            let (_, d) = map(body);
+            assert!(
+                d.iter().any(|m| m.contains(needle)),
+                "{body} should advise about {needle}: {d:?}",
+            );
+            assert!(
+                !d.iter().any(|m| m.starts_with("property not mapped")),
+                "{body} still hits the generic catch-all: {d:?}",
+            );
+        }
+    }
+
+    /// A per-side border colour renders a one-sided border instead of nothing,
+    /// and says which half of that is a divergence.
+    #[test]
+    fn per_side_border_colour_paints_and_advises() {
+        let (r, d) = map("border-top: 1px solid #ff0000");
+        assert_eq!(r.border_widths.top, Some(px(1.0).into()));
+        assert_eq!(r.border_widths.bottom, None);
+        assert!(r.border_color.is_some());
+        assert!(d.is_empty(), "the per-side SHORTHAND is exact: {d:?}");
+        let (r, d) = map("border-left-color: #00ff00");
+        assert!(r.border_color.is_some());
+        assert!(d.iter().any(|m| m.contains("ALL four sides")), "{d:?}");
+    }
+
+    // ---- transform-origin -----------------------------------------------
+
+    /// `transform-origin` on its own changes nothing (as in CSS) but must not
+    /// be lost when `transform` is declared beside it, in either order.
+    #[test]
+    fn transform_origin_survives_beside_the_transform() {
+        let spec = transform("transform-origin: left top; transform: rotate(45deg)")
+            .0
+            .expect("declared");
+        assert_eq!(
+            spec.origin,
+            (TransformLength::Fraction(0.0), TransformLength::Fraction(0.0))
+        );
+        // …and the other way round.
+        let spec = transform("transform: rotate(45deg); transform-origin: 100% 0")
+            .0
+            .expect("declared");
+        assert_eq!(
+            spec.origin,
+            (TransformLength::Fraction(1.0), TransformLength::Pixels(0.0))
+        );
+        // The initial value is the box centre.
+        assert_eq!(
+            transform("transform: scale(2)").0.unwrap().origin,
+            TransformSpec::CENTRE_ORIGIN
+        );
+        // Declared ALONE it is still the identity — nothing to apply.
+        let alone = transform("transform-origin: left top").0.expect("declared");
+        assert!(alone.is_identity(), "an origin alone transforms nothing");
+    }
+
+    /// The origin is what rotate/scale turn about, so a corner origin pins
+    /// that corner.
+    #[test]
+    fn a_corner_transform_origin_pins_that_corner() {
+        use gpui::{Bounds, Point, Size};
+        let bounds = Bounds {
+            origin: Point { x: px(100.0), y: px(50.0) },
+            size: Size { width: px(200.0), height: px(100.0) },
+        };
+        let spec = transform("transform-origin: left top; transform: scale(2)")
+            .0
+            .expect("declared");
+        let m = spec.to_matrix(bounds, 1.0);
+        let pinned = m.apply(bounds.origin);
+        assert!((f32::from(pinned.x) - 100.0).abs() < 1e-3, "{pinned:?}");
+        assert!((f32::from(pinned.y) - 50.0).abs() < 1e-3, "{pinned:?}");
+        // …and doubles the far corner's distance from it.
+        let far = m.apply(Point { x: px(300.0), y: px(150.0) });
+        assert!((f32::from(far.x) - 500.0).abs() < 1e-3, "{far:?}");
+        assert!((f32::from(far.y) - 250.0).abs() < 1e-3, "{far:?}");
+    }
+
+    /// `matrix(a,b,c,d,e,f)` decomposes into the translate/rotate/scale triple
+    /// gpui carries — which is what an animation library that composes its own
+    /// transform emits.
+    #[test]
+    fn a_matrix_decomposes_into_translate_rotate_scale() {
+        // scale(2) then translate(10, 20): matrix(2, 0, 0, 2, 10, 20)
+        let spec = transform("transform: matrix(2, 0, 0, 2, 10, 20)").0.expect("declared");
+        assert_eq!(spec.translate, (TransformLength::Pixels(10.0), TransformLength::Pixels(20.0)));
+        assert!((spec.scale.0 - 2.0).abs() < 1e-4, "{spec:?}");
+        assert!((spec.scale.1 - 2.0).abs() < 1e-4, "{spec:?}");
+        assert!(spec.rotate.abs() < 1e-4, "{spec:?}");
+        // A quarter turn: matrix(0, 1, -1, 0, 0, 0)
+        let spec = transform("transform: matrix(0, 1, -1, 0, 0, 0)").0.expect("declared");
+        assert!(
+            (spec.rotate - std::f32::consts::FRAC_PI_2).abs() < 1e-4,
+            "{spec:?}"
+        );
+        assert!((spec.scale.0 - 1.0).abs() < 1e-4 && (spec.scale.1 - 1.0).abs() < 1e-4);
+        // Only the SKEW half is still dropped, and it says so.
+        let (_, d) = map("transform: matrix(1, 0, 0.5, 1, 0, 0)");
+        assert!(d.iter().any(|m| m.contains("skew component")), "{d:?}");
+    }
+
     /// about it.
     #[test]
     fn the_matrix_turns_about_the_box_centre() {
