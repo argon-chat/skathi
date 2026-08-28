@@ -8,8 +8,15 @@
 #   before RangeError; 8 MiB gives ~45k. Vue's patch/unmount recursion needs the headroom.
 #   The reserve is address space, not RAM.
 #
-# Always build with an explicit `--target x86_64-pc-windows-msvc` so build scripts and
-# proc macros are compiled for the host WITHOUT these rustflags.
+# Build scripts and proc macros must be compiled for the host WITHOUT these
+# rustflags — which only happens when the target is EXPLICIT. `build.target`
+# below makes every plain `cargo build` explicit automatically, so artifacts
+# land in target/x86_64-pc-windows-msvc/ (one tree, correct flags isolation)
+# instead of a second, subtly-different tree under target/debug. Before this
+# was set, the repo carried BOTH trees — ~100 GB of duplicated artifacts.
+[build]
+target = "x86_64-pc-windows-msvc"
+
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608,1048576"]
 

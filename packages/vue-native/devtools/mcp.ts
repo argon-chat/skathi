@@ -236,7 +236,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           text:
             `${(e as Error).message}\n` +
             `(dist slot: ${DIST} — is a dev host running with this dist? ` +
-            `start one with VN_DIST=${DIST} target/debug/vn-app.exe)`,
+            `start one with VN_DIST=${DIST} target/x86_64-pc-windows-msvc/debug/vn-app.exe)`,
         },
       ],
     };

@@ -102,7 +102,7 @@ function readHandshake(dir: string): Handshake {
   } catch {
     die(
       `no devtools.json at ${path} — is a dev host running with this dist?\n` +
-        `  start one:  VN_DIST=${dir} target/debug/vn-app.exe\n` +
+        `  start one:  VN_DIST=${dir} target/x86_64-pc-windows-msvc/debug/vn-app.exe\n` +
         `  or point at another slot:  --dist <dir>`,
     );
   }
