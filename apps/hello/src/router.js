@@ -9,6 +9,7 @@ import FormsPage from "./pages/FormsPage.vue";
 import ListPage from "./pages/ListPage.vue";
 import MediaPage from "./pages/MediaPage.vue";
 import MotionPage from "./pages/MotionPage.vue";
+import PermissionsPage from "./pages/PermissionsPage.vue";
 import StylesPage from "./pages/StylesPage.vue";
 import VoicePage from "./pages/VoicePage.vue";
 import WindowPage from "./pages/WindowPage.vue";
@@ -23,6 +24,7 @@ const routes = [
   { path: "/styles", name: "styles", component: StylesPage },
   { path: "/voice", name: "voice", component: VoicePage },
   { path: "/window", name: "window", component: WindowPage },
+  { path: "/permissions", name: "permissions", component: PermissionsPage },
   { path: "/lab", name: "lab", component: LabPage },
 ];
 

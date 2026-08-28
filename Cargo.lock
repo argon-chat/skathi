@@ -8071,6 +8071,7 @@ dependencies = [
  "reqwest_client",
  "vn-css",
  "vn-elements",
+ "vn-permissions",
  "vn-runtime",
  "vn-tree",
  "vn-voice",
@@ -8114,6 +8115,14 @@ dependencies = [
  "rasterlottie",
  "serde_json",
  "vn-thorvg-sys",
+]
+
+[[package]]
+name = "vn-permissions"
+version = "0.1.0"
+dependencies = [
+ "vn-runtime",
+ "windows 0.62.2",
 ]
 
 [[package]]

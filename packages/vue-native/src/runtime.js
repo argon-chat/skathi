@@ -2299,6 +2299,163 @@ const inertWindow = new Proxy(
 export const appWindow = windowHost ? windowHost.appWindow : inertWindow;
 export const defineWindow = windowHost ? windowHost.defineWindow : missing;
 export const getCurrentWindow = () => appWindow;
+
+// ---- permissions (docs/PERMISSIONS.md tier 2) ------------------------------
+//
+// The STANDARD surface is `navigator.permissions.query({ name })`, installed by
+// redjs, and an app that only needs to read a state should use it — it is the
+// same code a browser build runs. `appPermissions` is the deliberately
+// namespaced extension for the two things the web has no words for:
+//
+//   1. REQUESTING outside a capture call. A browser asks for the microphone as
+//      a side effect of `getUserMedia()` and for notifications through
+//      `Notification.requestPermission()`; there is no standalone request, and a
+//      desktop settings screen with a "Grant access" button needs one.
+//   2. The FOURTH state, `"unsupported"` — "this platform has no such concept",
+//      which `navigator.permissions` has to report as `"denied"` because the web
+//      only has three words.
+//
+// Named after `appWindow` for the same reason: an extension must not be able to
+// pass for a web API.
+const permHost =
+  typeof __vn_permissions_query === "function"
+    ? {
+        query: __vn_permissions_query,
+        list: __vn_permissions_list,
+        request: __vn_permissions_request,
+        platform: __vn_permissions_platform,
+        setDispatcher: __vn_permissions_set_dispatcher,
+      }
+    : null;
+
+const PERMISSION_NAMES = [
+  "microphone",
+  "camera",
+  "display-capture",
+  "notifications",
+  "clipboard-read",
+  "clipboard-write",
+  "geolocation",
+];
+
+function createPermissions(host) {
+  const target = new EventTarget();
+  // reqId -> resolve. Settled by the host's per-frame pump, exactly as the
+  // LiveKit shim settles `__vn_voice_call` (packages/vue-native/src/livekit.js).
+  const pending = new Map();
+  host.setDispatcher((token, state) => {
+    const resolve = pending.get(token);
+    if (!resolve) return;
+    pending.delete(token);
+    resolve(state);
+  });
+
+  // One `change` stream for the whole surface, re-broadcast from the STANDARD
+  // objects rather than from a second native subscription: `navigator.
+  // permissions` is the source of truth for change delivery, and two drains of
+  // one queue would race. Subscribing is best-effort — a runtime without
+  // `navigator.permissions` still gets working `query`/`request`.
+  const statuses = new Map();
+  if (typeof navigator === "object" && navigator && navigator.permissions) {
+    for (const name of PERMISSION_NAMES) {
+      navigator.permissions.query({ name }).then(
+        (status) => {
+          statuses.set(name, status);
+          status.addEventListener("change", () => {
+            target.dispatchEvent(
+              Object.assign(new Event("change"), { name, state: host.query(name) }),
+            );
+          });
+        },
+        () => {},
+      );
+    }
+  }
+
+  const advised = new Set();
+  const adviseUnsupported = (name) => {
+    if (advised.has(name)) return;
+    advised.add(name);
+    warnCompat(
+      `appPermissions:${name}`,
+      `the '${name}' permission has no equivalent on ${host.platform()} — ` +
+        `appPermissions.query('${name}') is 'unsupported' and request() is a no-op. ` +
+        `See docs/PERMISSIONS.md.`,
+    );
+  };
+
+  return Object.assign(target, {
+    /** The platform name an advisory would use: "Windows", "macOS". */
+    get platform() {
+      return host.platform();
+    },
+    /** Every known permission name. */
+    get names() {
+      return PERMISSION_NAMES.slice();
+    },
+    /**
+     * SYNCHRONOUS four-state read: "granted" | "denied" | "prompt" |
+     * "unsupported". Deliberately not a promise — the standard, promise-shaped
+     * read is `navigator.permissions.query()`, and having the extension differ
+     * in shape as well as in name makes it obvious which one a call site used.
+     */
+    query(name) {
+      const state = host.query(name);
+      if (!state) throw new TypeError(`'${name}' is not a permission name`);
+      if (state === "unsupported") adviseUnsupported(name);
+      return state;
+    },
+    /** All of them at once, as `{ name, state, canRequest }[]`. */
+    list() {
+      const rows = JSON.parse(host.list());
+      for (const r of rows) if (r.state === "unsupported") adviseUnsupported(r.name);
+      return rows;
+    },
+    /**
+     * Ask for a permission. Resolves with the resulting four-state string.
+     *
+     * THE DIVERGENCE, stated plainly: no browser has this call. What it does is
+     * platform-shaped — on Windows it opens the relevant Settings page and
+     * resolves when the toggle actually moves (or after a timeout, with the
+     * unchanged state, so an `await` can never hang); on macOS it will raise the
+     * real system dialog. It never resolves optimistically: the value is always
+     * a fresh read of what the OS now says.
+     */
+    request(name) {
+      const out = JSON.parse(host.request(name));
+      if (out.error) return Promise.reject(new TypeError(out.error));
+      if (out.state !== undefined) {
+        if (out.state === "unsupported") adviseUnsupported(name);
+        return Promise.resolve(out.state);
+      }
+      return new Promise((resolve) => pending.set(out.token, resolve));
+    },
+  });
+}
+
+const inertPermissions = new Proxy(
+  {},
+  {
+    get(_t, key) {
+      warnCompat(
+        "appPermissions",
+        "the permissions host is missing (vn_permissions::install did not run) — " +
+          "`appPermissions` is inert and every capability reads as 'unsupported'. " +
+          "See docs/PERMISSIONS.md.",
+      );
+      if (key === "platform") return "this platform";
+      if (key === "names") return PERMISSION_NAMES.slice();
+      if (key === "query") return () => "unsupported";
+      if (key === "list")
+        return () =>
+          PERMISSION_NAMES.map((name) => ({ name, state: "unsupported", canRequest: false }));
+      if (key === "request") return () => Promise.resolve("unsupported");
+      return () => undefined;
+    },
+  },
+);
+
+export const appPermissions = permHost ? createPermissions(permHost) : inertPermissions;
 // ---- <Transition> / <TransitionGroup> (compat roadmap G9) ------------------
 // runtime-core exports BaseTransition (the state machine) but NOT these two —
 // they live in runtime-dom, because the CSS half is DOM-specific. Libraries

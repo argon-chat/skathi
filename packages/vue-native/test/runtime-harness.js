@@ -31,6 +31,17 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.js");
 
+/** The W3C names `vn-permissions` knows — kept in step with `Capability::ALL`. */
+export const PERMISSION_NAMES = [
+  "microphone",
+  "camera",
+  "display-capture",
+  "notifications",
+  "clipboard-read",
+  "clipboard-write",
+  "geolocation",
+];
+
 const IMPORT_LINE = /^\s*import\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 
@@ -70,6 +81,28 @@ export function createRuntime() {
     mediaCalls: [],
     /** `__vn_media_can_play` answers: mime type -> "" | "maybe" | "probably". */
     canPlayByType: new Map(),
+    /**
+     * The permission backend (`vn-permissions`), faked. `states` is what
+     * `__vn_permissions_query` answers; set `pendingToken` to make `request()`
+     * return a token instead of settling, then call `settle()` to deliver it —
+     * that is the vn-app pump, in one line.
+     */
+    permissions: {
+      platform: "TestOS",
+      states: new Map(),
+      requests: [],
+      pendingToken: null,
+      dispatcher: null,
+      /** The fake `navigator.permissions` PermissionStatus objects, by name. */
+      statuses: new Map(),
+    },
+  };
+  /** Deliver a settled request as the host's per-frame pump would. */
+  host.permissions.settle = (token, state) => host.permissions.dispatcher?.(token, state);
+  /** Move a capability and fire the standard-tier `change`, as the OS would. */
+  host.permissions.move = (name, state) => {
+    host.permissions.states.set(name, state);
+    host.permissions.statuses.get(name)?.dispatchEvent(new Event("change"));
   };
   const intern = (name) => {
     let i = host.names.indexOf(name);
@@ -95,6 +128,32 @@ export function createRuntime() {
     // stay compatible: the world is private so that each test gets its own DOM
     // globals, not so that it is sealed off from the host.
     __VN_WINDOW__: globalThis.__VN_WINDOW__,
+  };
+
+  const permState = (name) => host.permissions.states.get(name) ?? "unsupported";
+  // The STANDARD tier, faked: `PermissionStatus` is an EventTarget whose
+  // `state` is the three-word web projection of the four-state answer, which is
+  // exactly what redjs's `PermissionState::web_state` does.
+  const fakeNavigator = {
+    permissions: {
+      query({ name }) {
+        if (!PERMISSION_NAMES.includes(name)) {
+          return Promise.reject(new TypeError(`'${name}' is not a valid enum value`));
+        }
+        let status = host.permissions.statuses.get(name);
+        if (!status) {
+          status = Object.assign(new EventTarget(), {
+            name,
+            get state() {
+              const s = permState(name);
+              return s === "unsupported" ? "denied" : s;
+            },
+          });
+          host.permissions.statuses.set(name, status);
+        }
+        return Promise.resolve(status);
+      },
+    },
   };
 
   const params = [
@@ -138,6 +197,15 @@ export function createRuntime() {
     "__vn_media_call",
     "__vn_media_can_play",
     "__vn_media_events",
+    "__vn_permissions_platform",
+    "__vn_permissions_query",
+    "__vn_permissions_list",
+    "__vn_permissions_request",
+    "__vn_permissions_set_dispatcher",
+    // Bound as a parameter rather than left ambient so a test can hand
+    // `appPermissions` a `navigator.permissions` to re-broadcast `change` from
+    // — bun has a `navigator`, but not that.
+    "navigator",
   ];
   let nextId = 1;
   const args = [
@@ -193,6 +261,31 @@ export function createRuntime() {
     },
     (_id, type) => host.canPlayByType.get(type) ?? "",
     () => "",
+    // ---- __vn_permissions_* ------------------------------------------------
+    () => host.permissions.platform,
+    (name) => (PERMISSION_NAMES.includes(name) ? permState(name) : ""),
+    () =>
+      JSON.stringify(
+        PERMISSION_NAMES.map((name) => ({
+          name,
+          state: permState(name),
+          canRequest: permState(name) === "denied" || permState(name) === "prompt",
+        })),
+      ),
+    (name) => {
+      host.permissions.requests.push(name);
+      if (!PERMISSION_NAMES.includes(name)) {
+        return JSON.stringify({ error: `${name} is not a permission name` });
+      }
+      if (host.permissions.pendingToken !== null) {
+        return JSON.stringify({ token: host.permissions.pendingToken });
+      }
+      return JSON.stringify({ state: permState(name) });
+    },
+    (fn) => {
+      host.permissions.dispatcher = fn;
+    },
+    fakeNavigator,
   ];
 
   // eslint-disable-next-line no-new-func
@@ -200,7 +293,7 @@ export function createRuntime() {
     ...params,
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
-       writeClass, appWindow, defineWindow, getCurrentWindow };`,
+       writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions };`,
   )(...args);
 
   return {

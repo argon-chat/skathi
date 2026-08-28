@@ -57,6 +57,11 @@ vn-css = { path = "../vn-css" }
 vn-elements = { path = "../vn-elements" }
 vn-runtime = { path = "../vn-runtime" }
 vn-tree = { path = "../vn-tree" }
+# The platform backends behind redjs's `navigator.permissions`, plus the
+# `appPermissions` extension surface. NOT dev-gated, for the same reason
+# vn-voice is not: an app asking whether it may use the microphone is doing
+# application work, not automation.
+vn-permissions = { path = "../vn-permissions" }
 # LiveKit voice. NOT dev-gated: `vn_voice::pump()` runs in every build, because
 # voice is an application capability rather than an automation surface.
 vn-voice = { path = "../vn-voice" }

@@ -501,6 +501,11 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         // event is at most ONE frame late — 6 ms at 165 Hz — and no new wake
         // seam was needed. See crates/vn-voice/CONTRACT.md §3.
         vn_voice::pump();
+        // Settled `appPermissions.request()` promises, same publication, same
+        // reasoning. The `change` half is not here: `PermissionStatus` events
+        // are dispatched from inside `rt.pump()` above, by redjs, because that
+        // is where the status objects live.
+        vn_permissions::pump();
     });
     // The `@media` environment (viewport, colour scheme, reduced motion, DPI
     // scale, chrome mode) is published inside `window::pump` above, next to the
@@ -832,6 +837,12 @@ fn main() {
             // vendor bundle either way, and an app that never constructs a
             // Room costs one idle registration.
             vn_voice::install(rt);
+            // Installs the platform backend behind redjs's
+            // `navigator.permissions` AND registers `__vn_permissions_*` for
+            // the `appPermissions` extension. Must happen before any app code
+            // runs; the hook is read per call, so nothing else depends on the
+            // order within this block. See docs/PERMISSIONS.md.
+            vn_permissions::install(rt);
             #[cfg(not(feature = "prod"))]
             devtools::install(rt);
             // `__vn_dev_voice_token` — the LiveKit dev token minter. Dev only,

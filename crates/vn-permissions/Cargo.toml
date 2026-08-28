@@ -1,0 +1,33 @@
+[package]
+name = "vn-permissions"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The JS host seam AND the trait this crate implements. `PermissionHost`,
+# `Capability` and `PermissionState` are defined in redjs
+# (`redjs::webapi::permissions`) rather than here, for the same reason
+# `RedStreamSourceNode` is: the browser-shaped surface has to be able to answer
+# a `navigator.permissions.query()` without knowing which OS is underneath, so
+# the abstraction belongs on the redjs side of the seam and only the *backends*
+# live here. Exactly the layering `vn-voice` has with `redjs::webapi::pcm`.
+vn-runtime = { path = "../vn-runtime" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# 0.62 rather than gpui's 0.61, matching `vn-video`: this crate shares no types
+# with gpui, so the two versions never have to agree.
+#
+# The feature list is small on purpose. Everything here is a STATE READ or a
+# shell open; nothing in it can raise a consent dialog. In particular
+# `Security_Authorization_AppCapabilityAccess` is deliberately absent — see
+# `win.rs` for the probe that showed `AppCapability::CheckAccess` returns
+# `Allowed` for capabilities that do not exist when the caller is unpackaged.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
