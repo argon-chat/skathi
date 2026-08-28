@@ -98,6 +98,46 @@ thread_local! {
 // setting that makes a chatty subsystem readable also makes the host slow
 // enough to move the timing of whatever is being debugged. A directive list
 // keeps the cost where the interest is.
+//
+// ---------------------------------------------------------------------------
+// THE FLOOR — why a logger is installed even when `VN_LOG` is unset
+// ---------------------------------------------------------------------------
+//
+// libwebrtc reports its own **fatal** conditions (`RTC_CHECK`, `RTC_DCHECK`)
+// through the same sink it uses for ordinary logging, and then calls `abort()`.
+// Until m14 this process installed no `log` sink unless `VN_LOG` was set, so an
+// `RTC_CHECK` failure inside the prebuilt `webrtc.lib` wrote its diagnosis into
+// a sink that did not exist and the host died with no message at all
+// (research/reports/m13/voice-flake.md §5 — the shape `voice-impl.md` reported
+// as "an abort, no panic message, nothing in the log ring").
+//
+// So [`FLOOR`] is applied unconditionally and is a **floor, not a default**:
+// `level_for` takes the MAX of the matching directive and the matching floor
+// entry, which means no `VN_LOG` setting — including `VN_LOG=off` — can put an
+// abort back into the void. Warn is cheap: these targets are silent in a
+// healthy run, and `log::set_max_level` stays at Warn when `VN_LOG` is unset,
+// so every `debug!`/`trace!` call site in the process still short-circuits
+// inside the macro.
+//
+// The message is teed into `vn_tree::log`'s ring as well as stderr, so
+// `ctl.ts logs` sees it too. That ring is thread-local and everything libwebrtc
+// logs arrives on a webrtc thread, hence [`OFF_THREAD`] and [`drain_log_tee`].
+const FLOOR: &[(&str, log::LevelFilter)] = &[
+    // Everything the voice stack can die inside. `libwebrtc` is the one that
+    // matters — see `vn_voice::rtclog`, which is what gives these records a
+    // severity at all.
+    ("libwebrtc", log::LevelFilter::Warn),
+    ("webrtc_sys", log::LevelFilter::Warn),
+    ("livekit", log::LevelFilter::Warn),
+    ("livekit_api", log::LevelFilter::Warn),
+    ("livekit_protocol", log::LevelFilter::Warn),
+    ("vn_voice", log::LevelFilter::Warn),
+];
+
+/// The loosest level any [`FLOOR`] entry asks for — the global gate can never
+/// be tighter than this, or the facade drops the record before `enabled` runs.
+const FLOOR_MAX: log::LevelFilter = log::LevelFilter::Warn;
+
 struct StderrLogger {
     /// `(target prefix, level)`, longest prefix first, so `livekit::room` beats
     /// `livekit`.
@@ -105,19 +145,31 @@ struct StderrLogger {
     default: log::LevelFilter,
 }
 
+/// `::`-boundary-aware prefix match: `livekit_api` must not match a `livekit`
+/// directive, but `livekit::room` must.
+fn target_matches(target: &str, prefix: &str) -> bool {
+    target.len() >= prefix.len()
+        && target.starts_with(prefix)
+        && (target.len() == prefix.len() || target[prefix.len()..].starts_with("::"))
+}
+
 impl StderrLogger {
     fn level_for(&self, target: &str) -> log::LevelFilter {
-        for (prefix, level) in &self.directives {
-            if target == prefix || target.starts_with(prefix.as_str()) {
-                // `livekit_api` must not match a `livekit` directive; only a
-                // module separator (or an exact match) counts as a boundary.
-                let rest = &target[prefix.len()..];
-                if rest.is_empty() || rest.starts_with("::") {
-                    return *level;
-                }
+        let mut level = self.default;
+        for (prefix, l) in &self.directives {
+            if target_matches(target, prefix) {
+                level = *l;
+                break; // longest prefix first, so the first hit is the best one
             }
         }
-        self.default
+        // The floor is a MAX, not a fallback: an explicit `VN_LOG` directive
+        // can make a target louder, never quiet enough to lose a fatal.
+        for (prefix, l) in FLOOR {
+            if target_matches(target, prefix) {
+                return level.max(*l);
+            }
+        }
+        level
     }
 }
 
@@ -126,16 +178,68 @@ impl log::Log for StderrLogger {
         metadata.level() <= self.level_for(metadata.target())
     }
     fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            eprintln!(
-                "[{} {}] {}",
-                record.level(),
-                record.target(),
-                record.args()
-            );
+        if !self.enabled(record.metadata()) {
+            return;
         }
+        let line = format!("[{} {}] {}", record.level(), record.target(), record.args());
+        // stderr first: it is unbuffered, so a message logged on the way to
+        // `abort()` is already out of the process before the ring is touched.
+        eprintln!("{line}");
+        tee(record.level(), line);
     }
     fn flush(&self) {}
+}
+
+// ---------------------------------------------------------------------------
+// teeing into the devtools log ring, from any thread
+// ---------------------------------------------------------------------------
+
+/// The thread `install_logger` ran on — the only one whose `vn_tree::log` ring
+/// `ctl.ts logs` reads.
+static MAIN_THREAD: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
+/// Records made on a webrtc/livekit worker thread, waiting for a frame.
+static OFF_THREAD: std::sync::Mutex<Vec<(&'static str, String)>> =
+    std::sync::Mutex::new(Vec::new());
+/// A wedged subsystem logging in a loop must not grow the process; the drain
+/// runs every frame, so this is never reached in practice.
+const OFF_THREAD_CAP: usize = 512;
+
+fn kind_of(level: log::Level) -> &'static str {
+    match level {
+        log::Level::Error => "error",
+        log::Level::Warn => "warn",
+        _ => "log",
+    }
+}
+
+fn tee(level: log::Level, line: String) {
+    if !vn_tree::log::is_enabled() {
+        return;
+    }
+    let kind = kind_of(level);
+    if MAIN_THREAD.get() == Some(&std::thread::current().id()) {
+        vn_tree::log::record(kind, line);
+        return;
+    }
+    if let Ok(mut queue) = OFF_THREAD.lock() {
+        if queue.len() >= OFF_THREAD_CAP {
+            queue.remove(0); // drop the OLDEST: a fatal is always the newest
+        }
+        queue.push((kind, line));
+    }
+}
+
+/// Moves whatever the worker threads logged into the main thread's ring.
+/// Called once per frame; `try_lock` because a frame must never block on a
+/// logging thread.
+fn drain_log_tee() {
+    if !vn_tree::log::is_enabled() {
+        return;
+    }
+    let Ok(mut queue) = OFF_THREAD.try_lock() else { return };
+    for (kind, line) in queue.drain(..) {
+        vn_tree::log::record(kind, line);
+    }
 }
 
 fn parse_level(word: &str) -> Option<log::LevelFilter> {
@@ -151,7 +255,10 @@ fn parse_level(word: &str) -> Option<log::LevelFilter> {
 }
 
 fn install_logger() {
-    let Ok(spec) = std::env::var("VN_LOG") else { return };
+    let _ = MAIN_THREAD.set(std::thread::current().id());
+    // NOT `else { return }` any more: an unset `VN_LOG` still installs the
+    // logger, it just has nothing but the FLOOR in it.
+    let spec = std::env::var("VN_LOG").unwrap_or_default();
     let mut default = log::LevelFilter::Off;
     let mut directives: Vec<(String, log::LevelFilter)> = Vec::new();
     let mut saw_bare = false;
@@ -175,12 +282,11 @@ fn install_logger() {
         }
     }
     // `VN_LOG=livekit=debug` alone means "that target, nothing else" rather
-    // than "that target plus everything at info".
-    if !saw_bare && directives.is_empty() {
+    // than "that target plus everything at info". An UNSET `VN_LOG` is a third
+    // case and must stay `Off` + FLOOR, so this only fires when the variable
+    // was actually present.
+    if !saw_bare && directives.is_empty() && !spec.is_empty() {
         default = log::LevelFilter::Info;
-    }
-    if default == log::LevelFilter::Off && directives.is_empty() {
-        return;
     }
     // Longest prefix wins, so a specific directive is never shadowed by a
     // shorter one that happens to be listed first.
@@ -188,9 +294,9 @@ fn install_logger() {
     let max = directives
         .iter()
         .map(|(_, l)| *l)
-        .chain(std::iter::once(default))
+        .chain([default, FLOOR_MAX])
         .max()
-        .unwrap_or(log::LevelFilter::Off);
+        .unwrap_or(FLOOR_MAX);
     let logger: &'static StderrLogger =
         Box::leak(Box::new(StderrLogger { directives, default }));
     if log::set_logger(logger).is_ok() {
@@ -265,6 +371,9 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // One `Instant` read per frame when VN_PERF is on, an atomic load when it
     // is off. `on_next_frame` re-arms every frame, so this IS the frame clock.
     perf::frame();
+    // Before the poison gate: what a libwebrtc/livekit worker logged is exactly
+    // what an agent wants to read when the JS side has already given up.
+    drain_log_tee();
     if vn_runtime::bridge::poisoned() {
         return; // I9: no JS after a caught native panic.
     }
