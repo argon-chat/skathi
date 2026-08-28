@@ -22,3 +22,8 @@ dist/
 # Third-party After Effects exports, pinned by commit, measured but not
 # redistributed — see the script for why.
 /crates/vn-lottie/tests/corpus/
+
+# Uncommitted build probe of a third-party app (m15 gap analysis).
+# Proprietary source — staged here only to run the builder against it.
+/apps/meet-probe/
+/packages/vue-native/dist-meet/
