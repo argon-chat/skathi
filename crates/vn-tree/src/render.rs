@@ -908,14 +908,17 @@ fn build_node<V: 'static>(
         // resolution (F-01) already wants.
         Kind::Element if t.name(node.tag) == "img" => stack(
             z_priority,
+            &extras,
             probe(id, build_img(t, id, node, window, cx, now, control_area)),
         ),
         Kind::Element if t.name(node.tag) == "lottie" => stack(
             z_priority,
+            &extras,
             probe(id, build_lottie(t, id, node, window, cx, now, control_area)),
         ),
         Kind::Element if t.name(node.tag) == "video" => stack(
             z_priority,
+            &extras,
             probe(id, build_video(t, id, node, window, cx, now, control_area)),
         ),
         // Inline `<svg>` is a LEAF: the subtree is serialized into a document
@@ -923,9 +926,10 @@ fn build_node<V: 'static>(
         // (see crate::svg).
         Kind::Element if t.name(node.tag) == "svg" => stack(
             z_priority,
+            &extras,
             probe(id, build_svg(t, id, node, window, cx, now, control_area)),
         ),
-        Kind::Element => stack(z_priority, probe_at(id, id == t.root, {
+        Kind::Element => stack(z_priority, &extras, probe_at(id, id == t.root, {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
             let mut d = with_control_area(div().id(id as usize), id, control_area);
@@ -1456,7 +1460,7 @@ fn pseudo_element(
     } else {
         d.child(transformed_text(&pb.content, case)).into_any_element()
     };
-    stack(stacking.enter(&pb.extras).0, e)
+    stack(stacking.enter(&pb.extras).0, &pb.extras, e)
 }
 
 /// A text leaf with `text-transform` applied.
@@ -1754,9 +1758,22 @@ impl Stacking {
 /// `LayoutId`) and only moves the PAINT to after every ancestor, ordered by
 /// priority; gpui sorts those stably, so two elements with the same `z-index`
 /// keep document order, exactly as CSS says they should.
-fn stack(priority: Option<usize>, el: AnyElement) -> AnyElement {
+fn stack(priority: Option<usize>, extras: &vn_css::Extras, el: AnyElement) -> AnyElement {
     match priority {
-        Some(priority) => gpui::deferred(el).with_priority(priority).into_any_element(),
+        Some(priority) => gpui::deferred(el)
+            .with_priority(priority)
+            // A `z-index`ed element escapes its siblings' PAINT ORDER, not its
+            // ancestors' `overflow` — CSS clips it to the scroll container it is
+            // laid out inside. `position: fixed` is the exception CSS makes, and
+            // it is also the one shape where our own divergence (laid out
+            // against the parent, not the viewport) would turn a clip into a
+            // disappearance, so it keeps the escape hatch.
+            //
+            // Without this the meet app's `<main class="relative z-10">` painted
+            // the part of a too-tall page that overflows the viewport OUTSIDE
+            // the viewport — over the host's own chrome.
+            .clip_to_ancestors(extras.fixed != Some(true))
+            .into_any_element(),
         None => el,
     }
 }
