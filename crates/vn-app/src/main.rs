@@ -113,11 +113,18 @@ thread_local! {
 //
 // So [`FLOOR`] is applied unconditionally and is a **floor, not a default**:
 // `level_for` takes the MAX of the matching directive and the matching floor
-// entry, which means no `VN_LOG` setting — including `VN_LOG=off` — can put an
-// abort back into the void. Warn is cheap: these targets are silent in a
-// healthy run, and `log::set_max_level` stays at Warn when `VN_LOG` is unset,
-// so every `debug!`/`trace!` call site in the process still short-circuits
-// inside the macro.
+// entry. `log::set_max_level` stays at Warn when `VN_LOG` is unset, so every
+// `debug!`/`trace!` call site in the process still short-circuits inside the
+// macro, and a run that never constructs a `Room` prints nothing at all.
+//
+// It is not silent when voice IS running: a full two-window scenario with a
+// server restart produces ~530 warn-or-worse records, 312 of them one benign
+// libwebrtc line (`webrtc_video_engine.cc: Factory produced duplicate codecs`)
+// that no configuration of ours affects. An operator has to be able to turn
+// that down, so the floor is escapable — but only so far. Naming a floored
+// target in `VN_LOG` explicitly (`VN_LOG=libwebrtc=error`) drops the floor to
+// [`HARD_FLOOR`], and nothing drops it below that. `VN_LOG=libwebrtc=off` still
+// prints errors, because an abort must not be silenceable by accident.
 //
 // The message is teed into `vn_tree::log`'s ring as well as stderr, so
 // `ctl.ts logs` sees it too. That ring is thread-local and everything libwebrtc
@@ -138,6 +145,11 @@ const FLOOR: &[(&str, log::LevelFilter)] = &[
 /// be tighter than this, or the facade drops the record before `enabled` runs.
 const FLOOR_MAX: log::LevelFilter = log::LevelFilter::Warn;
 
+/// What a floored target is held to even when `VN_LOG` names it explicitly.
+/// This is the line that makes "an abort never dies into a void" a property
+/// rather than a default.
+const HARD_FLOOR: log::LevelFilter = log::LevelFilter::Error;
+
 struct StderrLogger {
     /// `(target prefix, level)`, longest prefix first, so `livekit::room` beats
     /// `livekit`.
@@ -156,17 +168,21 @@ fn target_matches(target: &str, prefix: &str) -> bool {
 impl StderrLogger {
     fn level_for(&self, target: &str) -> log::LevelFilter {
         let mut level = self.default;
+        let mut named = false;
         for (prefix, l) in &self.directives {
             if target_matches(target, prefix) {
                 level = *l;
+                // The operator asked about THIS target by name, which is what
+                // buys them the reduced floor below.
+                named = true;
                 break; // longest prefix first, so the first hit is the best one
             }
         }
-        // The floor is a MAX, not a fallback: an explicit `VN_LOG` directive
-        // can make a target louder, never quiet enough to lose a fatal.
+        // The floor is a MAX, not a fallback: whatever `VN_LOG` says, a floored
+        // target keeps at least this much.
         for (prefix, l) in FLOOR {
             if target_matches(target, prefix) {
-                return level.max(*l);
+                return level.max(if named { HARD_FLOOR } else { *l });
             }
         }
         level
@@ -303,6 +319,68 @@ fn install_logger() {
         // The facade's global gate must be the *loosest* of the directives, or
         // records are dropped before `enabled` ever sees their target.
         log::set_max_level(max);
+    }
+}
+
+#[cfg(test)]
+mod logger_tests {
+    use super::*;
+    use log::LevelFilter as L;
+
+    fn logger(spec: &[(&str, L)], default: L) -> StderrLogger {
+        let mut directives: Vec<(String, L)> =
+            spec.iter().map(|(t, l)| ((*t).to_string(), *l)).collect();
+        directives.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        StderrLogger { directives, default }
+    }
+
+    #[test]
+    fn an_unset_vn_log_still_logs_the_voice_stack_at_warn() {
+        let l = logger(&[], L::Off);
+        assert_eq!(l.level_for("libwebrtc"), L::Warn);
+        assert_eq!(l.level_for("livekit::rtc_engine"), L::Warn);
+        assert_eq!(l.level_for("vn_voice::engine"), L::Warn);
+        // …and nothing else. This is what keeps the floor free.
+        assert_eq!(l.level_for("parcel_selectors::matching"), L::Off);
+        assert_eq!(l.level_for("gpui::platform"), L::Off);
+    }
+
+    #[test]
+    fn a_directive_can_turn_a_floored_target_up() {
+        let l = logger(&[("libwebrtc", L::Debug)], L::Off);
+        assert_eq!(l.level_for("libwebrtc"), L::Debug);
+    }
+
+    #[test]
+    fn naming_a_floored_target_lowers_the_floor_to_error_and_no_further() {
+        for asked in [L::Error, L::Warn, L::Off] {
+            let l = logger(&[("libwebrtc", asked)], L::Off);
+            let got = l.level_for("libwebrtc");
+            assert!(got >= L::Error, "asked {asked:?}, got {got:?}");
+        }
+        // Explicitly asking for `error` gets exactly error — the escape hatch
+        // that makes 300 benign warnings per call suppressible.
+        assert_eq!(logger(&[("libwebrtc", L::Error)], L::Off).level_for("libwebrtc"), L::Error);
+        // NOT naming it leaves the full warn floor in place.
+        assert_eq!(logger(&[("gpui", L::Error)], L::Off).level_for("libwebrtc"), L::Warn);
+    }
+
+    #[test]
+    fn a_bare_level_never_drops_a_floored_target_below_warn() {
+        // `VN_LOG=off` is the case the m13 hunt would have hit.
+        assert_eq!(logger(&[], L::Off).level_for("libwebrtc"), L::Warn);
+        assert_eq!(logger(&[], L::Error).level_for("libwebrtc"), L::Warn);
+        assert_eq!(logger(&[], L::Trace).level_for("libwebrtc"), L::Trace);
+    }
+
+    #[test]
+    fn target_boundaries_are_module_separators() {
+        // The trap `livekit_api` sets for a `livekit` directive.
+        assert!(target_matches("livekit::room", "livekit"));
+        assert!(target_matches("livekit", "livekit"));
+        assert!(!target_matches("livekit_api::signal_client", "livekit"));
+        // …and it has its own floor entry, so it is covered anyway.
+        assert_eq!(logger(&[], L::Off).level_for("livekit_api::signal_client"), L::Warn);
     }
 }
 

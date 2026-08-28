@@ -8163,6 +8163,7 @@ dependencies = [
  "livekit",
  "livekit-api",
  "log",
+ "rustls",
  "tokio",
  "tokio-stream",
  "vn-runtime",
