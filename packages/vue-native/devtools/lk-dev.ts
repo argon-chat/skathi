@@ -7,8 +7,15 @@
 //
 // Three rules it obeys, all of them the owner's (docs/VOICE.md §2.6, D-16):
 //
-//   1. LOOPBACK ONLY. `tools/livekit/livekit-dev.yaml` pins every bind to
-//      127.0.0.1, so Windows Firewall never raises a prompt.
+//   1. LOCAL ONLY. The signalling listener is pinned to 127.0.0.1
+//      (`bind_addresses` in `crates/vn-voice/tools/livekit-dev.yaml`), so the
+//      only address anything can reach this server's API on is loopback.
+//      **The media path is not loopback-pinned and never was** — livekit's UDP
+//      mux binds one socket per interface and its ICE/TCP listener sits on
+//      0.0.0.0, whatever `bind_addresses` says. This comment used to claim that
+//      "every listening socket is pinned to 127.0.0.1 so Windows Firewall never
+//      sees an inbound-capable bind"; `netstat` disagrees and so does
+//      `netsh advfirewall`. See research/reports/m14/voice-network.md §5.
 //   2. ON DEMAND. Started by a test or by a human, never by `vn-app`'s boot.
 //   3. NEVER LEFT RUNNING. The integration harness stops it in a `finally`,
 //      pass or fail.
@@ -22,6 +29,8 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createSocket } from "node:dgram";
+import { networkInterfaces } from "node:os";
 import {
   chmodSync,
   copyFileSync,
@@ -142,6 +151,83 @@ async function fetchServer(force: boolean, from: string | null) {
   }
 }
 
+// ---- the advertised node IP -----------------------------------------------
+//
+// THE FLAKE FIX (research/reports/m14/voice-network.md §3; designed as F-1 in
+// m13's voice-flake.md §4).
+//
+// This used to pass `--node-ip 127.0.0.1`, so every ICE candidate the SFU
+// signalled was `127.0.0.1:7882`. libwebrtc's port allocator drops the loopback
+// adapter from the client's network list unconditionally
+// (`ADAPTER_TYPE_LOOPBACK` is in `BasicNetworkManager`'s default
+// `network_ignore_mask`, and livekit 0.8.2 exposes no way to clear it), so the
+// client never had a loopback candidate to pair that with. The one pair it did
+// form — LAN address to 127.0.0.1 — cannot work: the reply leaves the SFU's
+// socket with a loopback source address on a route out of a LAN adapter and
+// Windows drops it.
+//
+// Every green run was therefore an accident: the SFU's own connectivity check
+// arrives from an address it never signalled, the client synthesises a
+// PEER-REFLEXIVE candidate for it, and that pair carries the call. When the
+// accident does not land inside the connect window, the run fails — which is
+// the whole flake.
+//
+// Advertising a real local IPv4 makes the working pair the SIGNALLED one. It
+// adds no exposure: byte-for-byte the same traffic every passing run already
+// carried, over sockets livekit had already bound on every interface.
+
+/** The source address the kernel would use for the default route, or null. */
+async function defaultRouteIPv4(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const sock = createSocket("udp4");
+    const done = (v: string | null) => {
+      try {
+        sock.close();
+      } catch {}
+      resolve(v);
+    };
+    sock.on("error", () => done(null));
+    // NOTHING IS SENT. `connect` on a UDP socket only fixes the peer, and that
+    // is exactly what makes the kernel pick — and then expose through
+    // `address()` — the source address of the route to it. 192.0.2.0/24 is
+    // TEST-NET-1 (RFC 5737): unroutable on purpose, so even a stray packet
+    // could not reach anything.
+    try {
+      sock.connect(53, "192.0.2.1", () => {
+        let addr: string | null = null;
+        try {
+          addr = sock.address().address;
+        } catch {}
+        done(addr && addr !== "0.0.0.0" ? addr : null);
+      });
+    } catch {
+      done(null);
+    }
+  });
+}
+
+/** Any non-internal IPv4 the OS admits to, as a second choice. */
+function anyLocalIPv4(): string | null {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === "IPv4" && !a.internal) return a.address;
+    }
+  }
+  return null;
+}
+
+async function nodeIp(): Promise<string> {
+  const explicit = process.env.VN_LK_NODE_IP;
+  if (explicit) return explicit;
+  const ip = (await defaultRouteIPv4()) ?? anyLocalIPv4();
+  if (ip) return ip;
+  console.warn(
+    "warning: no non-loopback IPv4 on this machine — advertising 127.0.0.1, which " +
+      "libwebrtc's port allocator cannot pair with. Expect intermittent connect failures.",
+  );
+  return "127.0.0.1";
+}
+
 // ---- lifecycle ------------------------------------------------------------
 
 async function healthy(): Promise<boolean> {
@@ -193,7 +279,8 @@ async function start() {
   mkdirSync(RUN, { recursive: true });
   const out = openSync(OUT_LOG, "a");
   const err = openSync(ERR_LOG, "a");
-  const child = spawn(exe, ["--config", CONFIG, "--node-ip", "127.0.0.1"], {
+  const ip = await nodeIp();
+  const child = spawn(exe, ["--config", CONFIG, "--node-ip", ip], {
     detached: true,
     windowsHide: true,
     stdio: ["ignore", out, err],
@@ -205,7 +292,9 @@ async function start() {
   const deadline = Date.now() + START_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (await healthy()) {
-      console.log(`livekit-server up on 127.0.0.1:7880 (pid ${child.pid})`);
+      console.log(
+        `livekit-server up on 127.0.0.1:7880 (pid ${child.pid}), advertising ICE candidates on ${ip}`,
+      );
       return;
     }
     if (child.pid && !alive(child.pid)) break;
@@ -245,6 +334,8 @@ async function status() {
         pid: pid && alive(pid) ? pid : null,
         listening: up,
         url: "ws://127.0.0.1:7880",
+        // What a running server WOULD advertise; `start` prints what it did.
+        nodeIp: await nodeIp(),
       },
       null,
       2,
