@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, KeyDownEvent,
     KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Task,
-    UTF16Selection, Window, WrappedLine, px,
+    TextInputConfiguration, UTF16Selection, Window, WrappedLine, px,
 };
 
 use super::boundaries;
@@ -208,6 +208,23 @@ pub struct TextInputState {
     /// `<textarea>` rather than `<input>` — see [`super::TextInputOptions`].
     multiline: bool,
 
+    /// What `text_input_configuration` hands gpui — see
+    /// [`super::TextInputOptions::input_config`].
+    input_config: TextInputConfiguration,
+    /// The configuration gpui last actually TOOK, and how many times it has
+    /// asked. gpui's own `Window::apply_text_input_configuration` is the only
+    /// caller of the trait method, so this is evidence the configuration left
+    /// this crate and reached the platform layer — not merely that it was
+    /// computed. Recording the queried value (rather than reading
+    /// `input_config` back later) keeps the two independent of where in the
+    /// frame the reader sits.
+    queried_config: Option<TextInputConfiguration>,
+    config_queries: u64,
+    /// The last configuration [`Self::newly_forwarded_configuration`] reported,
+    /// so a focused field logs once per distinct value instead of once per
+    /// frame.
+    reported_config: Option<TextInputConfiguration>,
+
     // Written by the element during prepaint, read by hit testing, the caret
     // and the IME. One entry per HARD line (`shape_text` splits on `\n`); a
     // single-line input always has exactly one. The shaped lines LIVE here —
@@ -281,6 +298,10 @@ impl TextInputState {
             redo_stack: Vec::new(),
             is_selecting: false,
             multiline: false,
+            input_config: TextInputConfiguration::default(),
+            queried_config: None,
+            config_queries: 0,
+            reported_config: None,
             lines: Vec::new(),
             last_bounds: None,
             line_height: px(20.0),
@@ -355,11 +376,32 @@ impl TextInputState {
         handlers: TextInputHandlers,
         read_only: bool,
         multiline: bool,
+        input_config: TextInputConfiguration,
     ) {
         self.on_change = handlers.on_change;
         self.on_key_down = handlers.on_key_down;
         self.read_only = read_only;
         self.multiline = multiline;
+        self.input_config = input_config;
+    }
+
+    /// `Some((configuration, queries))` the first time gpui has queried a
+    /// configuration this field has not reported yet — i.e. edge-triggered on
+    /// the VALUE, and only ever after gpui actually asked.
+    ///
+    /// The framework calls this once a frame and logs what it gets, which is
+    /// the observable end of the chain `attributes → TextInputOptions →
+    /// InputHandler → Window::apply_text_input_configuration → PlatformWindow`.
+    /// Nothing else can distinguish "we built a configuration" from "gpui took
+    /// it": on Windows the platform window's `set_text_input_configuration` is
+    /// the default no-op, so the forwarding leaves no other trace.
+    pub fn newly_forwarded_configuration(&mut self) -> Option<(TextInputConfiguration, u64)> {
+        let queried = self.queried_config.as_ref()?;
+        if self.reported_config.as_ref() == Some(queried) {
+            return None;
+        }
+        self.reported_config = Some(queried.clone());
+        Some((queried.clone(), self.config_queries))
     }
 
     /// Fold incoming text into something this field can hold: `single_line_text`
@@ -1339,6 +1381,21 @@ impl EntityInputHandler for TextInputState {
 
     fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
         !self.read_only
+    }
+
+    /// gpui asks the FOCUSED field for this once a frame and forwards it to the
+    /// platform window only when it changed (zed#63264). The value is whatever
+    /// the last frame's `<input>` attributes mapped to, so a reactive
+    /// `:spellcheck` takes effect on the frame after it changes — which is what
+    /// a browser does with the attribute too.
+    fn text_input_configuration(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> TextInputConfiguration {
+        self.config_queries = self.config_queries.saturating_add(1);
+        self.queried_config = Some(self.input_config.clone());
+        self.input_config.clone()
     }
 }
 

@@ -9,6 +9,9 @@ const session = useSession();
 
 const name = ref("");
 const notes = ref("");
+// The two fields that carry text-assistance attributes (see the template).
+const term = ref("");
+const prose = ref("");
 const noteLines = computed(() => notes.value.split("\n").length);
 const focused = ref("nothing");
 
@@ -78,6 +81,44 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
     <div class="hint">
       textarea v-model: {{ noteLines }} line(s), {{ notes.length }} chars — survives a tab switch
     </div>
+
+    <!-- ===== text-assistance attributes ================================== -->
+    <!-- `autocorrect` / `autocapitalize` / `spellcheck` / `enterkeyhint` are
+         plain attributes: they flow through Vue's patchProp to the host like
+         any other prop, and vn-elements maps them onto gpui's
+         TextInputConfiguration, which gpui re-queries every frame off the
+         FOCUSED field and pushes to the platform on change (zed#63264).
+         `type`/`inputmode` have no field of their own but contribute the hints
+         they carry — here `type="search"` is what makes the confirm key a
+         Search key without an `enterkeyhint` being written. -->
+    <input
+      class="field search"
+      v-model="term"
+      type="search"
+      tabindex="3"
+      autocapitalize="none"
+      autocorrect="off"
+      spellcheck="false"
+      placeholder="search — no autocorrect, Search confirm key"
+      @focus="focused = 'search'"
+      @blur="focused = 'nothing'"
+    />
+    <input
+      class="field prose"
+      v-model="prose"
+      tabindex="4"
+      autocapitalize="sentences"
+      autocorrect="on"
+      spellcheck="true"
+      enterkeyhint="send"
+      placeholder="prose — assistance on, Send confirm key"
+      @focus="focused = 'prose'"
+      @blur="focused = 'nothing'"
+    />
+    <div class="hint">
+      the two fields above declare different text assistance; `logs` shows the
+      TextInputConfiguration gpui was handed when each takes focus
+    </div>
     <div class="hint">Enter-submitted: {{ submittedText }}</div>
     <div class="hint">last e.key: {{ lastKey }} — digits blocked by preventDefault: {{ blocked }}</div>
     <div class="hint">focus → {{ focused }}</div>
@@ -135,6 +176,10 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
   height: auto;
   width: 320px;
   line-height: 18px;
+}
+.search,
+.prose {
+  width: 320px;
 }
 .hint {
   font-size: 11px;

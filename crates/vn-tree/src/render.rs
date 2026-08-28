@@ -2232,6 +2232,7 @@ fn build_input<V: 'static>(
             .and_then(|v| v.trim().parse::<usize>().ok())
             .filter(|n| *n > 0)
             .unwrap_or(vn_elements::DEFAULT_ROWS),
+        input_config: input_configuration(t, id, multiline),
     };
 
     let mask = pointer_mask(node);
@@ -2280,7 +2281,61 @@ fn build_input<V: 'static>(
     };
 
     let focus_target = state.read(cx).focus_handle();
+    // Edge-triggered: `None` on every frame until gpui has actually queried a
+    // configuration this node has not reported yet. See
+    // `TextInputState::newly_forwarded_configuration` for why that is the only
+    // point in the chain where "gpui took it" is distinguishable from "we built
+    // it".
+    if let Some((config, queries)) =
+        state.update(cx, |s, _| s.newly_forwarded_configuration())
+    {
+        crate::log::record(
+            "dev",
+            &format!(
+                "[input] #{id} text input configuration forwarded to gpui \
+                 (query {queries}): autocorrect={} autocapitalize={:?} suggestions={} \
+                 input_action={:?}",
+                config.autocorrect,
+                config.autocapitalize,
+                config.suggestions,
+                config.input_action,
+            ),
+        );
+    }
     (text_input(&state, options, handlers, cx), focus_target)
+}
+
+/// The `autocorrect` / `autocapitalize` / `spellcheck` / `enterkeyhint`
+/// attributes of one field, mapped onto what gpui forwards to the platform.
+///
+/// The attributes arrive through the ordinary DOM-compat prop channel
+/// (`patchProp` → `__vn_set_prop`), so nothing had to be added on the JS side;
+/// `type`/`inputmode` are read for the hints they carry, and a `<textarea>` has
+/// no `type` by definition. A value outside HTML's set is advised once, keyed
+/// on the value rather than on the node, so a bad attribute in a `v-for` costs
+/// one line rather than one per row.
+fn input_configuration(t: &Tree, id: u32, multiline: bool) -> gpui::TextInputConfiguration {
+    let attributes = vn_elements::InputAttributes {
+        autocorrect: t.prop(id, "autocorrect"),
+        autocapitalize: t.prop(id, "autocapitalize"),
+        spellcheck: t.prop(id, "spellcheck"),
+        enterkeyhint: t.prop(id, "enterkeyhint"),
+        inputmode: t.prop(id, "inputmode"),
+        input_type: (!multiline).then(|| t.prop(id, "type")).flatten(),
+    };
+    let mapped = vn_elements::configuration(attributes);
+    let element = if multiline { "textarea" } else { "input" };
+    for (attribute, value) in &mapped.unsupported {
+        warn_compat(
+            &format!("input-attr:{attribute}={value}"),
+            &format!(
+                "<{element} {attribute}=\"{value}\"> — not a value HTML defines for \
+                 `{attribute}`; the attribute was ignored and the field keeps the platform \
+                 default"
+            ),
+        );
+    }
+    mapped.config
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@
 //! * [`text_input`] — builds the element for one frame out of the three.
 
 mod boundaries;
+pub mod config;
 mod element;
 mod state;
 
@@ -35,9 +36,10 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, Context, CursorStyle, Entity, Hsla, InteractiveElement, IntoElement,
     KeyBinding, KeyDownEvent, KeyUpEvent, MouseButton, ParentElement, Pixels, SharedString,
-    Styled, Window, actions, div, hsla, px,
+    Styled, TextInputConfiguration, Window, actions, div, hsla, px,
 };
 
+pub use config::{InputAttributes, MappedConfiguration, configuration};
 pub use state::TextInputState;
 
 use element::TextElement;
@@ -180,6 +182,15 @@ pub struct TextInputOptions {
     /// only a minimum: a CSS `height`/`min-height` still wins and content past
     /// it scrolls. Ignored unless `multiline`.
     pub rows: usize,
+    /// What the platform should be told about this field's text assistance —
+    /// the `autocorrect` / `autocapitalize` / `spellcheck` / `enterkeyhint`
+    /// attributes, mapped by [`config::configuration`].
+    ///
+    /// gpui re-queries this every frame off the FOCUSED field's input handler
+    /// and forwards it only on change, so it belongs with the per-frame options
+    /// rather than with the persistent state: the attributes are reactive props
+    /// and a `:spellcheck="…"` that flips has to take effect on the next frame.
+    pub input_config: TextInputConfiguration,
 }
 
 impl Default for TextInputOptions {
@@ -196,6 +207,7 @@ impl Default for TextInputOptions {
             multiline: false,
             rows: DEFAULT_ROWS,
             inherit_color: false,
+            input_config: TextInputConfiguration::default(),
         }
     }
 }
@@ -217,13 +229,14 @@ pub fn text_input(
 ) -> AnyElement {
     let disabled = options.disabled;
     let multiline = options.multiline;
+    let input_config = options.input_config.clone();
     let on_key_up = handlers.on_key_up.clone();
     // The focus handle carries the tab order (gpui reads `tab_index`/`tab_stop`
     // straight off the handle when the element is painted), so it has to be
     // updated before `track_focus` clones it below.
     let focus_handle = state.update(cx, |this, _| {
         this.set_tab_index(options.tab_index);
-        this.set_frame_params(handlers, disabled, multiline);
+        this.set_frame_params(handlers, disabled, multiline, input_config);
         this.focus_handle()
     });
 

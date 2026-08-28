@@ -27,8 +27,9 @@ pub mod text_input;
 
 pub use tab_nav::{FocusNext, FocusPrev};
 pub use text_input::{
-    DEFAULT_ROWS, KEY_CONTEXT, OnChange, OnKeyDown, OnKeyUp, TEXTAREA_KEY_CONTEXT,
-    TextInputHandlers, TextInputOptions, TextInputState, text_input,
+    DEFAULT_ROWS, InputAttributes, KEY_CONTEXT, MappedConfiguration, OnChange, OnKeyDown, OnKeyUp,
+    TEXTAREA_KEY_CONTEXT, TextInputHandlers, TextInputOptions, TextInputState, configuration,
+    text_input,
 };
 
 /// One-time app setup for every widget in this crate (key bindings, actions),
