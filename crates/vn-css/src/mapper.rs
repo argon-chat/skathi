@@ -126,7 +126,24 @@ pub struct Extras {
     pub z_index: Option<i32>,
     /// `pointer-events: none` — the node takes no listeners and no hover/active
     /// rungs, which is how a hitbox stops existing in gpui.
+    ///
+    /// INHERITED, like the CSS property. The cascade folds only the element's
+    /// own declaration; `vn_tree::tree::restyle_with` threads the effective
+    /// value down the document-order walk and rewrites this to `Some(effective)`
+    /// before the states are stored, so everything downstream (the renderer, the
+    /// devtools' `getComputedStyle`) reads one answer.
     pub pointer_events_none: Option<bool>,
+    /// The element's `display` had an INLINE outer type (`inline`,
+    /// `inline-block`, `inline-flex`, `inline-grid`).
+    ///
+    /// taffy models the inner display type only, so the box is laid out as its
+    /// block-level equivalent — but a block-level box ignores the `text-align`
+    /// that would have centred it, which is exactly how the meet app's hero logo
+    /// (an `inline-flex` badge in a `text-center` column) ended up flush left
+    /// while its heading was centred. The renderer reads this flag together with
+    /// the inherited `text-align` and centres the box with auto margins, which
+    /// is the block-layout spelling of the same intent.
+    pub inline_level: Option<bool>,
     /// SVG `fill` — see [`SvgPaint`].
     pub fill: Option<SvgPaint>,
     /// SVG `stroke` — see [`SvgPaint`].
@@ -285,6 +302,9 @@ impl Extras {
         }
         if other.pointer_events_none.is_some() {
             self.pointer_events_none = other.pointer_events_none;
+        }
+        if other.inline_level.is_some() {
+            self.inline_level = other.inline_level;
         }
         if other.fill.is_some() {
             self.fill = other.fill;
@@ -739,6 +759,12 @@ fn color(c: &CssColor) -> Option<Hsla> {
 thread_local! {
     /// See [`set_rem_basis`].
     static REM_BASIS: std::cell::Cell<f32> = const { std::cell::Cell::new(INITIAL_REM_BASIS) };
+    /// See [`set_viewport_basis`]. `(width, height)` in CSS px.
+    static VIEWPORT_BASIS: std::cell::Cell<(f32, f32)> =
+        const { std::cell::Cell::new(INITIAL_VIEWPORT_BASIS) };
+    /// Set the first time a sheet resolves a viewport unit. Nothing else has to
+    /// recompile when the window resizes, and almost no sheet uses one.
+    static VIEWPORT_UNITS_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A browser's initial root font size, and the basis every sheet compiles
@@ -783,6 +809,112 @@ pub fn set_rem_basis(px: f32) -> bool {
     })
 }
 
+/// The viewport a sheet compiled before the host published a real one. Any
+/// non-zero pair works — 0 would make every `vh` collapse to nothing on the
+/// frames before the first `set_env`, which is visually indistinguishable from
+/// the property being dropped.
+pub const INITIAL_VIEWPORT_BASIS: (f32, f32) = (1280.0, 720.0);
+
+/// The px value of `100vw` / `100vh`.
+pub fn viewport_basis() -> (f32, f32) {
+    VIEWPORT_BASIS.with(|c| c.get())
+}
+
+/// Whether the sheet compiled so far resolved any viewport-relative unit.
+///
+/// This is what keeps [`set_viewport_basis`] free for the apps that do not use
+/// one: a resize only has to recompile the stylesheet when a length in it
+/// actually depends on the viewport.
+pub fn uses_viewport_units() -> bool {
+    VIEWPORT_UNITS_SEEN.with(|c| c.get())
+}
+
+/// Forgets that a viewport unit was seen — called when a new sheet is compiled,
+/// so the flag describes the CURRENT sheet rather than every sheet ever loaded.
+pub fn reset_viewport_units_seen() {
+    VIEWPORT_UNITS_SEEN.with(|c| c.set(false));
+}
+
+/// Sets the px size of the viewport, returning whether it actually changed.
+///
+/// Same contract as [`set_rem_basis`]: viewport units are flattened to px at
+/// SHEET COMPILE time, so a `true` return means "recompile the stylesheet" —
+/// but only if [`uses_viewport_units`] says the sheet cares.
+///
+/// The viewport here is vue-native's viewport, which is the ROOT element's box
+/// (`window.innerWidth`/`innerHeight` report the same numbers — m12's inset
+/// fix), not the OS window: a host that wraps the app in chrome must not make
+/// `100vh` taller than the area the app actually has.
+pub fn set_viewport_basis(width: f32, height: f32) -> bool {
+    if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
+        return false;
+    }
+    VIEWPORT_BASIS.with(|c| {
+        let (w, h) = c.get();
+        if (w - width).abs() < f32::EPSILON && (h - height).abs() < f32::EPSILON {
+            false
+        } else {
+            c.set((width, height));
+            true
+        }
+    })
+}
+
+/// `vw` / `vh` / `vmin` / `vmax` and the dynamic-viewport spellings, in px.
+///
+/// The small/large/dynamic families (`svh`, `lvh`, `dvh`, …) are all the same
+/// number on a desktop window: they differ only where a browser's UI chrome
+/// grows and shrinks, and there is none here. Resolving them rather than
+/// dropping them is the whole point — `max-h-[85vh]` on a dialog is not a
+/// decoration, it is the only thing keeping the box inside the window.
+fn viewport_value_px(v: &LengthValue) -> Option<f32> {
+    let (w, h) = viewport_basis();
+    let px = match v {
+        // `vi` / `vb` are the inline / block axis; in `horizontal-tb` — the only
+        // writing mode there is here — those are the horizontal and vertical
+        // ones.
+        LengthValue::Vw(p)
+        | LengthValue::Svw(p)
+        | LengthValue::Lvw(p)
+        | LengthValue::Dvw(p)
+        | LengthValue::Vi(p)
+        | LengthValue::Svi(p)
+        | LengthValue::Lvi(p)
+        | LengthValue::Dvi(p) => p / 100.0 * w,
+        LengthValue::Vh(p)
+        | LengthValue::Svh(p)
+        | LengthValue::Lvh(p)
+        | LengthValue::Dvh(p)
+        | LengthValue::Vb(p)
+        | LengthValue::Svb(p)
+        | LengthValue::Lvb(p)
+        | LengthValue::Dvb(p) => p / 100.0 * h,
+        LengthValue::Vmin(p) | LengthValue::Svmin(p) | LengthValue::Lvmin(p)
+        | LengthValue::Dvmin(p) => p / 100.0 * w.min(h),
+        LengthValue::Vmax(p) | LengthValue::Svmax(p) | LengthValue::Lvmax(p)
+        | LengthValue::Dvmax(p) => p / 100.0 * w.max(h),
+        _ => return None,
+    };
+    VIEWPORT_UNITS_SEEN.with(|c| c.set(true));
+    Some(px)
+}
+
+/// The same resolution as [`viewport_value_px`], reached from a raw token
+/// (`Token::Dimension { unit, .. }`) rather than a parsed `LengthValue` — the
+/// path a `var()`-composed declaration takes.
+fn viewport_unit_px(unit: &str, value: f32) -> Option<f32> {
+    let (w, h) = viewport_basis();
+    let basis = match unit {
+        "vw" | "svw" | "lvw" | "dvw" | "vi" | "svi" | "lvi" | "dvi" => w,
+        "vh" | "svh" | "lvh" | "dvh" | "vb" | "svb" | "lvb" | "dvb" => h,
+        "vmin" | "svmin" | "lvmin" | "dvmin" => w.min(h),
+        "vmax" | "svmax" | "lvmax" | "dvmax" => w.max(h),
+        _ => return None,
+    };
+    VIEWPORT_UNITS_SEEN.with(|c| c.set(true));
+    Some(value / 100.0 * basis)
+}
+
 fn length_value_px(v: &LengthValue) -> Option<f32> {
     match v {
         LengthValue::Px(v) => Some(*v),
@@ -791,7 +923,7 @@ fn length_value_px(v: &LengthValue) -> Option<f32> {
         // wherever a font-size is nested, right at the top level — and closer
         // than a hardcoded 16 was the moment an app sets a root font size.
         LengthValue::Em(v) => Some(v * rem_basis()),
-        _ => None,
+        other => viewport_value_px(other),
     }
 }
 
@@ -1333,7 +1465,10 @@ fn single_length_px(value: &lightningcss::properties::custom::TokenList<'_>) -> 
                 found = match unit.as_ref() {
                     "px" => Some(*value),
                     "rem" | "em" => Some(*value * rem_basis()),
-                    _ => return None,
+                    other => match viewport_unit_px(other, *value) {
+                        Some(px) => Some(px),
+                        None => return None,
+                    },
                 };
             }
             TokenOrValue::Token(Token::Number { value, .. }) if *value == 0.0 => {
@@ -1497,6 +1632,13 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
     match p {
         Display(d) => {
             use lightningcss::properties::display::{Display as D, DisplayOutside};
+            // Reset on every `display` declaration, so a later `display: flex`
+            // un-does an earlier `display: inline-flex` rather than leaving the
+            // flag behind (`refine` is later-wins per FIELD).
+            x.inline_level = Some(matches!(
+                d,
+                D::Pair(p) if matches!(p.outside, DisplayOutside::Inline)
+            ));
             r.display = Some(match d {
                 D::Keyword(DisplayKeyword::None) => gpui::Display::None,
                 D::Pair(pair) => {

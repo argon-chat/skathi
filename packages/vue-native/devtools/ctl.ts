@@ -39,6 +39,10 @@ commands
   focus    <selector> [--index N]
   type     <selector> <text> [--index N]
   key      <Key|Mod+Key> [selector] [--index N]
+  mouse    [selector] [--x N --y N] [--kind move|down|up|click] [--button N]
+                                     a REAL pointer event through gpui's hit
+                                     test (hover, z-order, pointer-events all
+                                     apply); reports which node has focus after
   scroll   <selector> <dy> [--dx N] [--index N]
   eval     <js source>
   logs     [--since N]
@@ -152,6 +156,20 @@ function buildRequest(argv: string[], f: Flags): Record<string, unknown> {
       if (!rest[0]) die('key needs a key name: ctl key Enter [selector]');
       // With no selector the keystroke goes to whatever already has focus.
       return withIndex({ cmd, key: rest[0], ...(rest[1] ? { selector: rest[1] } : {}) });
+    case "mouse": {
+      // A REAL pointer event through gpui's hit test: `ctl mouse ".field"` or
+      // `ctl mouse --x 640 --y 567 --kind click`. Unlike `click`, which
+      // synthesizes into the app's dispatcher from a node id, this one is
+      // decided by the hit test — so it is what proves an element is actually
+      // reachable, and it is how `:hover` is exercised.
+      const kind = f.kind ? String(f.kind) : "move";
+      const base: Record<string, unknown> = { cmd, kind };
+      if (num(f.button) !== undefined) base.button = num(f.button);
+      if (rest[0]) return withIndex({ ...base, selector: rest[0] });
+      const x = num(f.x), y = num(f.y);
+      if (x === undefined || y === undefined) die("mouse needs a selector, or both --x and --y");
+      return { ...base, x, y };
+    }
     case "scroll": {
       if (!rest[0]) die("scroll needs a selector");
       const dy = num(rest[1]) ?? num(f.dy) ?? 0;

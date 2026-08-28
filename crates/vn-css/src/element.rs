@@ -23,6 +23,14 @@ pub(crate) type Impl = <LcssSelector<'static> as ExtractImpl>::I;
 /// The minimal element view the matcher needs. Siblings are ELEMENT siblings
 /// (text/anchor nodes skipped). `Copy` because matching walks freely.
 pub trait MatchDom: Copy {
+    /// A stable identity for this node, unique within one document.
+    ///
+    /// The cascade needs it for exactly one thing: naming the ANCESTOR a
+    /// `group-hover:` rule points at, so the renderer can put gpui's
+    /// `.group(name)` on that element and `.group_hover(name, …)` on this one
+    /// (see `ComputedStates::group_hover`). Nothing else reads it, and it never
+    /// has to survive a reload.
+    fn key(&self) -> u64;
     fn parent(&self) -> Option<Self>;
     fn prev_sibling(&self) -> Option<Self>;
     fn next_sibling(&self) -> Option<Self>;

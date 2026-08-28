@@ -394,6 +394,14 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             None => err("focus needs a `selector`"),
             Some(sel) => cmd_focus(&sel, num("index")),
         },
+        "mouse" => cmd_mouse(
+            arg("selector").as_deref(),
+            num("index"),
+            num("x"),
+            num("y"),
+            arg("kind").as_deref(),
+            num("button"),
+        ),
         "eval" => match arg("js") {
             None => err("eval needs `js`"),
             Some(js) => cmd_eval(&js),
@@ -478,6 +486,11 @@ fn node_json(id: u32, with_text: bool) -> Json {
     }
     entries.push(("bounds", bounds_json(n.bounds)));
     entries.push(("scopes", Json::arr(n.scopes.into_iter().map(Json::Str).collect())));
+    // Only when true: an element that carries gpui's `.group(name)` also
+    // carries a hitbox it would not otherwise have, which is worth seeing.
+    if n.group_anchor {
+        entries.push(("groupAnchor", Json::Bool(true)));
+    }
     Json::obj(entries)
 }
 
@@ -672,6 +685,119 @@ fn cmd_focus(selector: &str, index: Option<f64>) -> String {
         None => err("not in a commit phase"),
         Some(Err(e)) => err(e),
         Some(Ok(())) => ok(Json::obj(vec![("id", Json::n(f64::from(id)))])),
+    }
+}
+
+/// A REAL pointer event, through gpui's own hit test.
+///
+/// This is the other half of [`cmd_click`], and the difference is the whole
+/// point of having both. `click` synthesizes into the app's JS dispatcher from
+/// a node id: it proves the handler chain, and it can never prove that the
+/// element is reachable. `mouse` hands gpui a `PlatformInput` at a window
+/// coordinate, so the hit test, the content masks, the deferred paint order,
+/// `pointer-events: none` and the hover ladder all decide what happens — which
+/// is exactly the set of things that was wrong when the meet app's two
+/// overlapping `Your name` fields fought over one click.
+///
+/// It is also the only way to exercise `:hover` from a test: a synthetic
+/// `WM_MOUSEMOVE` posted to the window works too (research/reports/m18/
+/// live-test-round2.md §7 re-tested m11's claim that it does not), but it needs
+/// a window handle and screen coordinates, and this needs neither.
+///
+/// No cursor moves and no window is activated: gpui's `mouse_position` is
+/// window state, not the platform's.
+fn cmd_mouse(
+    selector: Option<&str>,
+    index: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    kind: Option<&str>,
+    button: Option<f64>,
+) -> String {
+    let point = match (selector, x, y) {
+        (Some(sel), _, _) => {
+            let id = match resolve_one(sel, index) {
+                Ok(id) => id,
+                Err(e) => return err(e),
+            };
+            match vn_tree::devtools::node_info(id).and_then(|i| i.bounds) {
+                Some((bx, by, bw, bh)) => (bx + bw / 2.0, by + bh / 2.0),
+                None => {
+                    return err(format!(
+                        "node {id} has no bounds — it was not painted in the last frame, so there \
+                         is no point to aim at"
+                    ))
+                }
+            }
+        }
+        (None, Some(x), Some(y)) => (x as f32, y as f32),
+        _ => return err("mouse needs either a `selector` or both `x` and `y` (window coordinates)"),
+    };
+    let kind = kind.unwrap_or("move");
+    if !matches!(kind, "move" | "down" | "up" | "click") {
+        return err(format!("unknown mouse kind `{kind}` — move | down | up | click"));
+    }
+    let button = match button.unwrap_or(0.0) as i64 {
+        0 => gpui::MouseButton::Left,
+        1 => gpui::MouseButton::Middle,
+        2 => gpui::MouseButton::Right,
+        other => return err(format!("unknown mouse button {other} — 0 left, 1 middle, 2 right")),
+    };
+    let position = gpui::Point::new(gpui::px(point.0), gpui::px(point.1));
+    let done = with_commit(|window, app| {
+        // A move always comes first: gpui recomputes `mouse_hit_test` from the
+        // window's own `mouse_position`, and a press that arrives without one
+        // would be tested against wherever the pointer was last.
+        window.dispatch_event(
+            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                position,
+                pressed_button: None,
+                modifiers: gpui::Modifiers::default(),
+            }),
+            app,
+        );
+        if matches!(kind, "down" | "click") {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                    button,
+                    position,
+                    modifiers: gpui::Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                app,
+            );
+        }
+        if matches!(kind, "up" | "click") {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                    button,
+                    position,
+                    modifiers: gpui::Modifiers::default(),
+                    click_count: 1,
+                }),
+                app,
+            );
+        }
+        // The hover ladder is read at PAINT time, so the frame that shows the
+        // new state has to be asked for explicitly.
+        window.refresh();
+        vn_tree::devtools::focused_node(window, app)
+    });
+    match done {
+        None => err("not in a commit phase"),
+        Some(focused) => ok(Json::obj(vec![
+            ("x", Json::n(f64::from(point.0))),
+            ("y", Json::n(f64::from(point.1))),
+            ("kind", Json::s(kind.to_string())),
+            // Who owns focus AFTER the gesture — the direct answer to "did the
+            // press land on the field I aimed at", and the one thing JS cannot
+            // report while the window is inactive.
+            match focused {
+                Some(id) => ("focused", Json::n(f64::from(id))),
+                None => ("focused", Json::Null),
+            },
+        ])),
     }
 }
 

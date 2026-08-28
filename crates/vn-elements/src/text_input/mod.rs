@@ -196,6 +196,19 @@ pub struct TextInputOptions {
     /// rather than with the persistent state: the attributes are reactive props
     /// and a `:spellcheck="…"` that flips has to take effect on the next frame.
     pub input_config: TextInputConfiguration,
+    /// CSS `pointer-events: none` is in force here (the element's own, or an
+    /// ancestor's — the property inherits).
+    ///
+    /// The field takes no press: neither its own mouse handler nor the
+    /// automatic focus transfer gpui gives every element with a tracked focus
+    /// handle. Dropping the tracked handle is what removes the second one, and
+    /// it costs the field its TAB STOP — a divergence from a browser, where
+    /// `pointer-events` is about the pointer only. It buys the idiom this
+    /// exists for: a tab panel parked over the visible one as `absolute
+    /// inset-x-0 top-0 opacity-0 pointer-events-none`, whose fields sit pixel
+    /// for pixel on top of the live ones and would otherwise swallow every
+    /// click and every keystroke aimed at them.
+    pub inert: bool,
 }
 
 impl Default for TextInputOptions {
@@ -214,6 +227,7 @@ impl Default for TextInputOptions {
             rows: DEFAULT_ROWS,
             inherit_color: false,
             input_config: TextInputConfiguration::default(),
+            inert: false,
         }
     }
 }
@@ -246,9 +260,11 @@ pub fn text_input(
         this.focus_handle()
     });
 
-    let mut element = div()
-        .key_context(if multiline { BOTH_KEY_CONTEXTS } else { KEY_CONTEXT })
-        .track_focus(&focus_handle)
+    let mut element = div().key_context(if multiline { BOTH_KEY_CONTEXTS } else { KEY_CONTEXT });
+    if !options.inert {
+        element = element.track_focus(&focus_handle);
+    }
+    let mut element = element
         .cursor(if disabled {
             CursorStyle::Arrow
         } else {
@@ -325,10 +341,12 @@ pub fn text_input(
     }
 
     let mouse_state = state.clone();
-    element
-        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+    if !options.inert {
+        element = element.on_mouse_down(MouseButton::Left, move |event, window, cx| {
             mouse_state.update(cx, |this, cx| this.on_mouse_down(event, window, cx));
-        })
+        });
+    }
+    element
         .child(TextElement {
             state: state.clone(),
             options,

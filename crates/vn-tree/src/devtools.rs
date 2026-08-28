@@ -39,6 +39,9 @@ pub struct NodeInfo {
     /// the node was painted in. `None` = not painted (detached, or parked in a
     /// `<KeepAlive>` cache container).
     pub bounds: Option<(f32, f32, f32, f32)>,
+    /// Some descendant's `group-hover:` rule watches this element, so the
+    /// renderer gave it gpui's `.group(name)` (and therefore a hitbox).
+    pub group_anchor: bool,
 }
 
 /// The listener bits as names, off [`tree::EVENT_NAMES`] — the single table, so
@@ -118,6 +121,7 @@ pub fn node_info(id: u32) -> Option<NodeInfo> {
             children: n.children.clone(),
             listeners: event_names(n.listeners),
             bounds: crate::render::bounds_of(id),
+            group_anchor: t.is_group_anchor(id),
         })
     })
 }
@@ -163,6 +167,18 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
         ] {
             if let Some(r) = slot {
                 out.push((name, prune(&format!("{r:#?}"))));
+            }
+        }
+        // `.group:hover .this` — the ancestor is named, because "which element
+        // am I watching" is the half of a group rule that can be wrong.
+        for (name, slot) in
+            [("group-hover", &cs.group_hover), ("group-active", &cs.group_active)]
+        {
+            if let Some((anchor, r)) = slot {
+                out.push((
+                    name,
+                    format!("watching node {anchor}\n{}", prune(&format!("{r:#?}"))),
+                ));
             }
         }
         if !cs.transitions.is_empty() {
@@ -220,6 +236,18 @@ pub fn focus(id: u32, window: &mut Window, cx: &mut App) -> Result<(), String> {
 
 pub fn is_focused(id: u32, window: &Window, cx: &App) -> bool {
     crate::render::is_node_focused(id, window, cx)
+}
+
+/// The node that owns keyboard focus right now, asked of GPUI rather than of
+/// our own bookkeeping.
+///
+/// The distinction matters: `focus`/`blur` events (and therefore
+/// `FOCUSED_NODE`) come from gpui's focus observers, and those report EMPTY
+/// focus paths while the window is not the active one — so an inactive window
+/// can be perfectly focused internally and say nothing about it. Every
+/// keystroke still routes by `window.focus`, which is what this reads.
+pub fn focused_node(window: &Window, cx: &App) -> Option<u32> {
+    crate::render::focused_node(window, cx)
 }
 
 /// Scrolls a container by `(dx, dy)` CSS px and fires `scroll`. Returns the new

@@ -117,7 +117,8 @@ const TOOLS = [
     description:
       "Synthesize mousedown -> mouseup -> click at the node's centre, through the app's own " +
       "dispatch (capture/bubble, preventDefault honored). NOT a real pointer: :hover / :active " +
-      "visuals are not exercised. Errors on 0 or >1 matches unless `index` is given.",
+      "visuals are not exercised and nothing proves the node is reachable — use vn_mouse for " +
+      "that. Errors on 0 or >1 matches unless `index` is given.",
     inputSchema: {
       type: "object",
       properties: { selector: SELECTOR, index: INDEX, button: int("0 left, 1 middle, 2 right") },
@@ -149,6 +150,35 @@ const TOOLS = [
       required: ["key"],
     },
     build: (a: any) => ({ cmd: "key", key: a.key, selector: a.selector, index: a.index }),
+  },
+  {
+    name: "vn_mouse",
+    description:
+      "A REAL pointer event at a window coordinate, through gpui's own hit test — so z-order, " +
+      "content masks, `pointer-events` and the hover ladder all decide what happens. This is what " +
+      "proves an element is reachable (and the only way to exercise :hover); vn_click proves the " +
+      "handler chain instead. Aim it with a selector (the node's centre) or with x + y. Reports " +
+      "which node holds focus afterwards. No cursor moves and no window is activated.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        selector: SELECTOR,
+        index: INDEX,
+        x: int("window x, when no selector is given"),
+        y: int("window y, when no selector is given"),
+        kind: str("move (default) | down | up | click"),
+        button: int("0 left, 1 middle, 2 right"),
+      },
+    },
+    build: (a: any) => ({
+      cmd: "mouse",
+      selector: a.selector,
+      index: a.index,
+      x: a.x,
+      y: a.y,
+      kind: a.kind,
+      button: a.button,
+    }),
   },
   {
     name: "vn_scroll",

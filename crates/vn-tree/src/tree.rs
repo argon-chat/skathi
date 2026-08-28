@@ -200,6 +200,13 @@ pub struct Tree {
     /// Nodes whose inline `style` text changed and must be re-parsed. Tracked
     /// rather than rediscovered, so the pass never scans the whole slab.
     inline_dirty_nodes: Vec<u32>,
+    /// Elements some OTHER element's `group-hover:` rule watches — the ones the
+    /// renderer has to give gpui's `.group(name)` to. Recomputed at the end of
+    /// a restyle pass, and only for a sheet that has such a rule at all: a
+    /// scoped restyle can recompute the DESCENDANT without touching the
+    /// ancestor, so an incremental set would go stale in exactly the case the
+    /// scoped pass exists for.
+    group_anchors: std::collections::HashSet<u32>,
     names: Vec<String>,
     name_ids: HashMap<String, u32>,
 }
@@ -258,6 +265,12 @@ impl Tree {
 
     pub fn name(&self, id: u32) -> &str {
         self.names.get(id as usize).map(String::as_str).unwrap_or("")
+    }
+
+    /// Does some descendant's `group-hover:` rule watch this element? See
+    /// [`Tree::group_anchors`].
+    pub fn is_group_anchor(&self, id: u32) -> bool {
+        self.group_anchors.contains(&id)
     }
 
     fn alloc(&mut self, node: Node) -> u32 {
@@ -705,7 +718,16 @@ impl Tree {
             let this: &Tree = self;
             let root_vars = std::rc::Rc::new(vn_css::Vars::default());
             let mut out = Vec::new();
-            let mut stack: Vec<(u32, std::rc::Rc<vn_css::Vars>)> = Vec::new();
+            // `(node, inherited custom properties, is an ancestor `pointer-events:
+            // none`?)`. `pointer-events` is an INHERITED property in CSS, and it
+            // is the whole mechanism behind the "invisible panel on top" idiom:
+            // a tab panel that is `absolute inset-x-0 top-0 opacity-0
+            // pointer-events-none` sits exactly over the visible one, and if the
+            // inertness stops at the panel itself, every control INSIDE it is
+            // still live and — being painted later — on top. That is what made
+            // the meet app's two `Your name` fields fight over the same click
+            // (research/reports/m18/live-test-round2.md §4).
+            let mut stack: Vec<(u32, std::rc::Rc<vn_css::Vars>, bool)> = Vec::new();
             for r in roots {
                 // A scoped root inherits from its parent's already-computed map;
                 // `restyle_roots` guarantees the parent has one (it promotes the
@@ -719,27 +741,41 @@ impl Tree {
                     .and_then(|p| p.computed.as_ref())
                     .map(|c| c.vars.clone())
                     .unwrap_or_else(|| root_vars.clone());
-                stack.push((r, inherited));
-                while let Some((id, parent_vars)) = stack.pop() {
+                let inherited_inert = this
+                    .node(r)
+                    .map(|n| n.parent)
+                    .filter(|&p| p != 0)
+                    .and_then(|p| this.node(p))
+                    .and_then(|p| p.computed.as_ref())
+                    .is_some_and(|c| c.extras.pointer_events_none == Some(true));
+                stack.push((r, inherited, inherited_inert));
+                while let Some((id, parent_vars, parent_inert)) = stack.pop() {
                     let Some(n) = this.node(id) else { continue };
                     // Text and anchor nodes have no cascade of their own; they
                     // simply pass the map down to whatever hangs under them.
-                    let child_vars = if n.kind == Kind::Element {
-                        let states = engine.compute_node(
+                    let (child_vars, child_inert) = if n.kind == Kind::Element {
+                        let mut states = engine.compute_node(
                             NodeRef { tree: this, id },
                             n.inline.as_deref(),
                             &parent_vars,
                             env,
                             &mut diagnostics,
                         );
+                        // `None` = the element declared nothing, so it takes the
+                        // parent's value; an explicit `pointer-events: auto`
+                        // (`Some(false)`) is how a descendant opts back IN, which
+                        // is what reka's `data-[state=open]:pointer-events-auto`
+                        // overlay relies on.
+                        let inert = states.extras.pointer_events_none.unwrap_or(parent_inert);
+                        states.extras.pointer_events_none = Some(inert);
                         let vars = states.vars.clone();
                         out.push((id, states));
-                        vars
+                        (vars, inert)
                     } else {
-                        parent_vars
+                        (parent_vars, parent_inert)
                     };
                     for &c in n.children.iter().rev() {
-                        stack.push((c, child_vars.clone()));
+                        stack.push((c, child_vars.clone(), child_inert));
                     }
                 }
             }
@@ -779,6 +815,22 @@ impl Tree {
                 crate::log::record("css", format!("[css transition] {d}"));
             }
         });
+        // The set of elements that have to carry gpui's `.group(name)`. Costs
+        // one pass over the slab, and only for a sheet that has a
+        // `group-hover:` rule in it at all.
+        self.group_anchors.clear();
+        if engine.uses_group_states() {
+            for slot in self.nodes.iter().flatten() {
+                if let Some(cs) = &slot.computed {
+                    if let Some((key, _)) = &cs.group_hover {
+                        self.group_anchors.insert(*key as u32);
+                    }
+                    if let Some((key, _)) = &cs.group_active {
+                        self.group_anchors.insert(*key as u32);
+                    }
+                }
+            }
+        }
         crate::perf::note_restyle(pass.ms(), inline_ms, cascade_ms, phase.ms(), cascaded);
     }
 }
@@ -935,6 +987,19 @@ pub(crate) fn set_engine(engine: vn_css::Engine) {
 /// keeps free.
 pub fn restyle_all() {
     let env = env();
+    // Viewport units are flattened to px at sheet-compile time, exactly like
+    // `rem` — so a resize has to recompile, and only when the sheet actually
+    // contains a `vh`/`vw`. Almost none do; the ones that do cannot do without
+    // it (`max-h-[85vh]` is the only thing keeping reka's dialog inside the
+    // window, and dropping it turned the dialog into a full-window black slab).
+    if vn_css::set_viewport_basis(env.viewport_width, env.viewport_height)
+        && vn_css::uses_viewport_units()
+    {
+        recompile_sheet(&format!(
+            "viewport basis is now {}x{}px — recompiling the stylesheet (it uses vh/vw units)",
+            env.viewport_width, env.viewport_height
+        ));
+    }
     for _ in 0..REM_BASIS_PASSES {
         ENGINE.with(|eng| {
             let eng = eng.borrow();
@@ -944,17 +1009,28 @@ pub fn restyle_all() {
         if !vn_css::set_rem_basis(root_font_size) {
             return;
         }
-        crate::log::record(
-            "css",
-            format!("[css] rem basis is now {root_font_size}px (the root element's font-size) — recompiling the stylesheet"),
-        );
-        let css = SHEET_SOURCE.with(|s| s.borrow().clone());
-        if css.is_empty() {
+        if !recompile_sheet(&format!(
+            "rem basis is now {root_font_size}px (the root element's font-size) — recompiling \
+             the stylesheet"
+        )) {
             return;
         }
-        set_engine(vn_css::Engine::compile(&css));
-        with_tree(|t| t.mark_dirty());
     }
+}
+
+/// Recompiles the retained stylesheet source under whatever basis just changed,
+/// and marks the tree for a full restyle. `false` = there was no source to
+/// recompile (before the first `__vn_set_stylesheet`), so the caller should
+/// stop.
+fn recompile_sheet(why: &str) -> bool {
+    crate::log::record("css", format!("[css] {why}"));
+    let css = SHEET_SOURCE.with(|s| s.borrow().clone());
+    if css.is_empty() {
+        return false;
+    }
+    set_engine(vn_css::Engine::compile(&css));
+    with_tree(|t| t.mark_dirty());
+    true
 }
 
 /// One recompile to adopt the root's font-size, and one more in case that
@@ -1008,6 +1084,9 @@ impl<'t> NodeRef<'t> {
 }
 
 impl<'t> vn_css::MatchDom for NodeRef<'t> {
+    fn key(&self) -> u64 {
+        self.id as u64
+    }
     fn parent(&self) -> Option<Self> {
         let p = self.node().parent;
         (p != 0).then(|| NodeRef { tree: self.tree, id: p })

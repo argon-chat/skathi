@@ -729,6 +729,52 @@ mod tests {
         assert!(flush_changes());
         assert_eq!(opacity_of(child), Some(0.9));
     }
+
+    fn inert_of(id: u32) -> Option<bool> {
+        tree::read_tree(|t| {
+            t.node(id).and_then(|n| n.computed.as_ref()).map(|c| {
+                c.extras.pointer_events_none.expect("the cascade resolves this for every element")
+            })
+        })
+    }
+
+    /// `pointer-events` is an INHERITED property, and the whole "invisible
+    /// panel parked over the visible one" idiom depends on it: an
+    /// `opacity-0 pointer-events-none` tab panel is `absolute inset-x-0 top-0`,
+    /// so its controls sit pixel for pixel on the live ones and — being painted
+    /// later — take every click aimed at them. On apps/meet-probe that is why
+    /// typing into "Your name" did nothing.
+    ///
+    /// A descendant can still opt back IN, which is exactly what reka's
+    /// dismissable layer does: it sets `body { pointer-events: none }` and
+    /// `pointer-events: auto` on the open dialog.
+    #[test]
+    fn pointer_events_none_inherits_and_can_be_opted_out_of() {
+        let (panel, child, opted_in, deep) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let tag = t.intern("div");
+            let mut kid = |parent: u32, class: &str| {
+                let id = t.create_element(tag);
+                t.insert(id, parent, 0);
+                t.set_class(id, class);
+                id
+            };
+            let panel = kid(root, "inert");
+            let child = kid(panel, "plain");
+            let opted_in = kid(panel, "live");
+            let deep = kid(opted_in, "plain");
+            (panel, child, opted_in, deep)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".inert { pointer-events: none } .live { pointer-events: auto }",
+        ));
+        flush_changes();
+
+        assert_eq!(inert_of(panel), Some(true));
+        assert_eq!(inert_of(child), Some(true), "inertness inherits");
+        assert_eq!(inert_of(opted_in), Some(false), "`auto` opts back in");
+        assert_eq!(inert_of(deep), Some(false), "…and that inherits too");
+    }
 }
 
 /// Dispatches an input event into JS (through the registered dispatcher) and

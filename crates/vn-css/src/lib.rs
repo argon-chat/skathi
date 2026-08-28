@@ -44,8 +44,9 @@ pub use animator::{AnimEvent, AnimEventKind, Animator};
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
-    set_rem_basis, Decls, Extras, InlineStyle, ObjectFit, SvgPaint, TextTransform, WindowControl,
-    WindowDrag, INITIAL_REM_BASIS,
+    set_rem_basis, set_viewport_basis, uses_viewport_units, viewport_basis, Decls, Extras,
+    InlineStyle, ObjectFit, SvgPaint, TextTransform, WindowControl, WindowDrag,
+    INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use media::{match_media, DisplayMode, Env};
 pub use keyframes::{
@@ -103,6 +104,17 @@ pub struct ComputedStates {
     /// `:focus-visible` — gpui's `.focus_visible()` rung (focused *and* the
     /// last input was a keystroke), the real browser semantics.
     pub focus_visible: Option<Rc<StyleRefinement>>,
+    /// `.group:hover .this` — what this element looks like while an ANCESTOR is
+    /// hovered, and which ancestor that is (its [`MatchDom::key`]).
+    ///
+    /// The renderer turns the pair into gpui's own group mechanism: the
+    /// ancestor is given `.group("vn-g<key>")` and this element
+    /// `.group_hover("vn-g<key>", …)`, which gpui resolves from the group's
+    /// hitbox at PAINT time. Nothing here subscribes, and nothing restyles when
+    /// the ancestor's hover flips — the m11 perf invariants are untouched.
+    pub group_hover: Option<(u64, Rc<StyleRefinement>)>,
+    /// `.group:active .this`. Same mechanism, gpui's `.group_active()`.
+    pub group_active: Option<(u64, Rc<StyleRefinement>)>,
     /// The folded `transition` list. Empty means "no transitions".
     pub transitions: Rc<Vec<TransitionSpec>>,
     /// The folded `animation` list. Empty means "no animations". Unlike a
@@ -194,6 +206,9 @@ struct RuleEntry {
     specificity: u32,
     order: u32,
     states: u8,
+    /// `.group:hover .child` — the state belongs to an ANCESTOR. See
+    /// [`AncestorState`].
+    ancestor: Option<AncestorState>,
     /// `::before` / `::after`. A rule that carries one styles a GENERATED box,
     /// not the element it matched, so it is folded separately.
     pseudo: Option<PseudoElement>,
@@ -218,6 +233,9 @@ pub struct Engine {
     /// Any `+` / `~` anywhere in the sheet — see
     /// [`Engine::uses_sibling_combinators`].
     sibling_combinators: bool,
+    /// Any `.group:hover .child` anywhere in the sheet — see
+    /// [`Engine::uses_group_states`].
+    group_states: bool,
     /// `@keyframes` blocks by name. Document-scoped rather than per element:
     /// an element's `animation-name` is a REFERENCE into this map, resolved by
     /// the animator when a track starts. A later block with the same name wins,
@@ -380,9 +398,13 @@ impl Engine {
             index: RuleIndex { enabled: rule_index_enabled(), ..RuleIndex::default() },
             conditions: Vec::new(),
             sibling_combinators: false,
+            group_states: false,
             keyframes: std::collections::HashMap::new(),
             diagnostics: Vec::new(),
         };
+        // The flag describes THIS sheet: a resize only recompiles when the sheet
+        // currently installed actually resolves a viewport unit.
+        mapper::reset_viewport_units_seen();
         let src: &'static str = Box::leak(css.to_string().into_boxed_str());
         let sheet: &'static StyleSheet<'static> =
             match StyleSheet::parse(src, ParserOptions::default()) {
@@ -408,6 +430,16 @@ impl Engine {
     /// document (docs/ARCHITECTURE.md §11).
     pub fn uses_sibling_combinators(&self) -> bool {
         self.sibling_combinators
+    }
+
+    /// Does any rule in the sheet put an interaction state on an ANCESTOR
+    /// compound (`.group:hover .child`)?
+    ///
+    /// The renderer asks once per sheet: maintaining the set of elements that
+    /// need gpui's `.group(name)` costs a pass over the node slab, and a sheet
+    /// without a single `group-hover:` rule must not pay for it.
+    pub fn uses_group_states(&self) -> bool {
+        self.group_states
     }
 
     /// The `@keyframes` block `name` refers to, if the sheet has one.
@@ -526,7 +558,7 @@ impl Engine {
                 e
             };
             for sel in &style.selectors.0 {
-                let Some(states) = classify_states(sel, &mut self.diagnostics) else {
+                let Some((states, ancestor)) = classify_states(sel, &mut self.diagnostics) else {
                     continue;
                 };
                 let pseudo = sel.pseudo_element().and_then(pseudo_box);
@@ -543,7 +575,7 @@ impl Engine {
                 // A generated box is not in gpui's interactivity ladder — it is
                 // a plain child div with no hitbox of its own — so a
                 // `:hover::after` rule has nothing to install into.
-                if pseudo.is_some() && states != 0 {
+                if pseudo.is_some() && (states != 0 || ancestor.is_some()) {
                     self.diagnostics.push(format!(
                         "a state-qualified pseudo-element rule is dropped (v1) — the generated                          box is not in the pointer-state ladder. Drive it from an ATTRIBUTE on                          the originating element instead (`[data-state=open]::after`), which does                          match: {}",
                         sel_text(sel)
@@ -556,7 +588,7 @@ impl Engine {
                 // state-dependent drag region would be a hit-test/paint race
                 // (docs/WINDOWING.md D-16). So a state rule's extras apply all
                 // the time; say so rather than let them look conditional.
-                if states != 0 && !declares_extras.is_empty() {
+                if (states != 0 || ancestor.is_some()) && !declares_extras.is_empty() {
                     self.diagnostics.push(format!(
                         "{} on a state selector applies unconditionally (v1) — these values are \
                          read from the base state only, not from gpui's state ladder: {}",
@@ -564,7 +596,7 @@ impl Engine {
                         sel_text(sel)
                     ));
                 }
-                if states != 0 && declares_transition {
+                if (states != 0 || ancestor.is_some()) && declares_transition {
                     // State refinements are installed into gpui's own state
                     // ladder and never pass through our animator, so a
                     // `transition` declared on a state rule cannot run. Declare
@@ -577,6 +609,7 @@ impl Engine {
                     ));
                 }
                 self.sibling_combinators |= has_sibling_combinator(sel);
+                self.group_states |= ancestor.is_some();
                 self.index.file(sel, self.rules.len() as u32);
                 // `sheet` is a leaked &'static, so its selectors are 'static too.
                 self.rules.push(RuleEntry {
@@ -598,6 +631,7 @@ impl Engine {
                     specificity: sel.specificity(),
                     order: *order,
                     states,
+                    ancestor,
                     pseudo,
                     condition,
                 });
@@ -801,6 +835,12 @@ impl Engine {
         let mut focus_visible = StyleRefinement::default();
         let (mut any_hover, mut any_active) = (false, false);
         let (mut any_focus, mut any_focus_visible) = (false, false);
+        // `.group:hover .this` — one group per state, because gpui carries one
+        // `group_hover` / one `group_active` per element. The key is resolved
+        // once per (rule, element) pair and memoised for the pass: a Tailwind
+        // card typically matches three or four `group-hover:` rules pointing at
+        // the same ancestor.
+        let mut group = GroupFold::default();
         // Transitions do not merge: the last base-state rule that declares any
         // `transition` replaces the whole list (`transition: none` therefore
         // clears it). State-rule transitions are rejected at compile time.
@@ -888,6 +928,31 @@ impl Engine {
                 if refinement.is_none() && dynamic.is_none() {
                     continue;
                 }
+                // `.group:hover .this` goes to its own bucket, keyed by the
+                // ancestor it watches. Resolving the ancestor is a walk up from
+                // this element re-matching the selector's PREFIX, which the
+                // full match (run with `:hover` assumed true) already proved
+                // has a solution — so a `None` here means the tree moved under
+                // us and the rule simply does not apply.
+                if let Some(a) = r.ancestor {
+                    let Some(key) = nearest_group_ancestor(&node, r.selector, a.offset) else {
+                        continue;
+                    };
+                    let Some(bucket) = group.bucket(a.states, key) else {
+                        continue;
+                    };
+                    if let Some(refinement) = refinement {
+                        bucket.refine(refinement);
+                    }
+                    if let Some(list) = dynamic {
+                        for (name, raw) in list.iter() {
+                            mapper::apply_dynamic(
+                                name, raw, &vars, env, bucket, &mut extras, diagnostics,
+                            );
+                        }
+                    }
+                    continue;
+                }
                 // One rung per rule. A compound that names several ladder
                 // states (`:hover:focus`) cannot be expressed as a conjunction
                 // in gpui's ladder, so it lands on the strongest rung it names
@@ -949,6 +1014,15 @@ impl Engine {
             }
             extras.refine(&inline.extras);
         }
+        if group.conflict {
+            diagnostics.push(
+                "this element is styled by `group-hover:` rules watching TWO different \
+                 ancestors — gpui gives an element one group to watch, so only the first \
+                 (most specific) one applies. Give the outer group its own named variant \
+                 (`group//name` + `group-hover/name:`) on a different element"
+                    .to_string(),
+            );
+        }
         if let (Some(t0), Some(t1), Some(t2)) = (t0, t1, t2) {
             let ms = |a: std::time::Instant, b: std::time::Instant| {
                 b.saturating_duration_since(a).as_secs_f32() * 1000.0
@@ -961,6 +1035,8 @@ impl Engine {
             active: any_active.then(|| Rc::new(active)),
             focus: any_focus.then(|| Rc::new(focus)),
             focus_visible: any_focus_visible.then(|| Rc::new(focus_visible)),
+            group_hover: group.hover.map(|(key, r)| (key, Rc::new(r))),
+            group_active: group.active.map(|(key, r)| (key, Rc::new(r))),
             transitions: transitions.unwrap_or_default(),
             animations: {
                 let list = animations.unwrap_or_default();
@@ -1121,14 +1197,108 @@ fn ladder_state(pc: &PseudoClass<'_>) -> u8 {
     }
 }
 
+/// An interaction state named on a compound that is NOT the selector's subject
+/// — `.group:hover .child`, Tailwind's `group-hover:` variant.
+///
+/// The state belongs to an ANCESTOR, so it cannot ride the subject's own rung
+/// in gpui's per-element ladder. gpui has the matching primitive: an element
+/// declares `.group(name)` and a descendant `.group_hover(name, style)`, and
+/// the descendant's style is refined at PAINT time from the group's hitbox —
+/// no restyle, no cascade re-run, no subscription of our own (see
+/// `vn_tree::render`, and research/reports/m18/live-test-round2.md §2).
+///
+/// What the cascade has to supply is WHICH ancestor. `offset` is the index, in
+/// the selector's match-order storage, of the first component of the compound
+/// carrying the pseudo — exactly the `offset` argument
+/// [`parcel_selectors::matching::matches_selector`] takes, so "does this
+/// ancestor satisfy everything from the left edge up to and including
+/// `.group:hover`" is answered by the real matcher rather than by a
+/// re-implementation of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AncestorState {
+    offset: usize,
+    states: u8,
+}
+
+/// The nearest ancestor of `node` that satisfies everything in `selector` from
+/// its left edge up to and including the compound at `offset` — i.e. the
+/// element a `group-hover:` rule is watching.
+///
+/// NEAREST is the right answer and not an approximation: CSS says the rule
+/// applies while ANY matching ancestor is hovered, and gpui's `GroupHitboxes`
+/// is a stack whose `get` returns the innermost group of that name, so the two
+/// agree. It is also what an author means — a `.group` inside a `.group` styles
+/// its own card.
+fn nearest_group_ancestor<D: MatchDom>(
+    node: &D,
+    selector: &Selector<'static>,
+    offset: usize,
+) -> Option<u64> {
+    let mut cursor = node.parent();
+    // A corrupt parent chain must not hang the cascade (same bound the tree's
+    // own ancestor walk uses).
+    for _ in 0..1024 {
+        let anc = cursor?;
+        let el = element::El(anc);
+        let mut ctx: MatchingContext<'_, '_, element::Impl> =
+            MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
+        if matches_selector(selector, offset, None, &el, &mut ctx, &mut |_, _| {}) {
+            return Some(anc.key());
+        }
+        cursor = anc.parent();
+    }
+    None
+}
+
+/// The `.group:hover .this` half of one element's fold.
+///
+/// One slot per state, because gpui carries one `group_hover` and one
+/// `group_active` per element. A second, DIFFERENT ancestor claiming the same
+/// slot is a real limit rather than a rounding error, so it is advised rather
+/// than silently merged.
+#[derive(Default)]
+struct GroupFold {
+    hover: Option<(u64, StyleRefinement)>,
+    active: Option<(u64, StyleRefinement)>,
+    conflict: bool,
+}
+
+impl GroupFold {
+    /// The refinement bucket for `key`'s `states`, or `None` when a different
+    /// ancestor already owns that slot.
+    fn bucket(&mut self, states: u8, key: u64) -> Option<&mut StyleRefinement> {
+        let conflict = &mut self.conflict;
+        let slot = if states & STATE_ACTIVE != 0 { &mut self.active } else { &mut self.hover };
+        match slot.as_ref().map(|(owner, _)| *owner) {
+            Some(owner) if owner != key => {
+                *conflict = true;
+                return None;
+            }
+            Some(_) => {}
+            None => *slot = Some((key, StyleRefinement::default())),
+        }
+        slot.as_mut().map(|(_, r)| r)
+    }
+}
+
 /// Classifies a selector's interaction-state bucket from its RIGHTMOST
-/// compound. State pseudos further left (`.a:hover .b`) need gpui's group
-/// mechanism — unsupported in v1, rejected with a diagnostic (`None`).
-fn classify_states(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> Option<u8> {
+/// compound, plus the ancestor-state descriptor when a state pseudo sits on a
+/// compound further left (`.group:hover .child`).
+fn classify_states(
+    sel: &Selector<'_>,
+    diagnostics: &mut Vec<String>,
+) -> Option<(u8, Option<AncestorState>)> {
     let mut states = 0u8;
+    let mut ancestor: Option<AncestorState> = None;
     let mut iter = sel.iter();
-    // Rightmost compound.
+    // Rightmost compound. `compound_start` tracks where the compound currently
+    // being read begins in the match-order storage: a compound's components are
+    // contiguous and every sequence boundary is exactly one stored
+    // `Component::Combinator`.
+    let mut compound_start = 0usize;
+    let mut compound_len = 0usize;
     for component in &mut iter {
+        compound_len += 1;
         if let Component::NonTSPseudoClass(pc) = component {
             states |= ladder_state(pc);
         }
@@ -1155,29 +1325,74 @@ fn classify_states(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> Option<
     // wrong advisory for what is an ordinary — if unhonourable — state rule.
     let mut same_element = true;
     while let Some(combinator) = iter.next_sequence() {
+        compound_start += compound_len + 1; // the compound, then its combinator
+        compound_len = 0;
         same_element &= matches!(
             combinator,
             parcel_selectors::parser::Combinator::PseudoElement
                 | parcel_selectors::parser::Combinator::SlotAssignment
                 | parcel_selectors::parser::Combinator::Part
         );
+        let sibling = matches!(
+            combinator,
+            parcel_selectors::parser::Combinator::NextSibling
+                | parcel_selectors::parser::Combinator::LaterSibling
+        );
+        let mut here = 0u8;
         for component in &mut iter {
+            compound_len += 1;
             if let Component::NonTSPseudoClass(pc) = component {
-                if ladder_state(pc) != 0 {
-                    if same_element {
-                        states |= ladder_state(pc);
-                        continue;
-                    }
-                    diagnostics.push(format!(
-                        "ancestor-state selector unsupported (v1): {}",
-                        sel_text(sel)
-                    ));
-                    return None;
-                }
+                here |= ladder_state(pc);
             }
         }
+        if here == 0 {
+            continue;
+        }
+        if same_element {
+            states |= here;
+            continue;
+        }
+        // A SIBLING's state (`.a:hover + .b`) has no group primitive: gpui keys
+        // a group off an ancestor's hitbox, and a sibling is not one. Dropped
+        // with the same diagnostic ancestor states used to get.
+        if sibling {
+            diagnostics.push(format!(
+                "a sibling-state selector (`+` / `~` with `:hover` on the LEFT) has nothing to \
+                 hang on — gpui's group mechanism keys off an ANCESTOR's hitbox. The rule was \
+                 dropped: {}",
+                sel_text(sel)
+            ));
+            return None;
+        }
+        // Only hover and active have a group primitive.
+        if here & !(STATE_HOVER | STATE_ACTIVE) != 0 {
+            mapper::once(
+                diagnostics,
+                format!(
+                    "`:focus` / `:focus-visible` on an ANCESTOR compound (`group-focus:` and \
+                     friends) is not implemented — gpui has `group_hover` / `group_active` and no \
+                     group focus. The rule was dropped: {}",
+                    sel_text(sel)
+                ),
+            );
+            return None;
+        }
+        // Two ancestor states in one selector would need two groups on one
+        // element, and gpui carries one `group_hover` / one `group_active`.
+        if ancestor.is_some() {
+            mapper::once(
+                diagnostics,
+                format!(
+                    "two ancestor-state compounds in one selector — only the INNERMOST is \
+                     honoured, because gpui gives an element one group to watch: {}",
+                    sel_text(sel)
+                ),
+            );
+            continue;
+        }
+        ancestor = Some(AncestorState { offset: compound_start, states: here });
     }
-    Some(states)
+    Some((states, ancestor))
 }
 
 // ---------------------------------------------------------------------------
@@ -1392,6 +1607,9 @@ fn probe_runnable(sel: &Selector<'_>) -> bool {
     #[derive(Clone, Copy)]
     struct Probe;
     impl MatchDom for Probe {
+        fn key(&self) -> u64 {
+            0
+        }
         fn parent(&self) -> Option<Self> {
             None
         }
@@ -1506,8 +1724,8 @@ pub fn query_all<D: MatchDom>(selector: &str, candidates: &[D]) -> Result<QueryR
             return Err(format!("`{sel}` is not a selector"));
         };
         for s in &style.selectors.0 {
-            let states = match classify_states(s, &mut diagnostics) {
-                Some(states) => states,
+            let (states, ancestor) = match classify_states(s, &mut diagnostics) {
+                Some(pair) => pair,
                 None => return Err(join_diagnostics(&diagnostics)),
             };
             if !probe_runnable(s) {
@@ -1519,7 +1737,7 @@ pub fn query_all<D: MatchDom>(selector: &str, candidates: &[D]) -> Result<QueryR
             if !audit_selector(s, &mut diagnostics) {
                 return Err(join_diagnostics(&diagnostics));
             }
-            if states != 0 {
+            if states != 0 || ancestor.is_some() {
                 // Honest about the one place a query diverges from a browser's
                 // `querySelectorAll`: the cascade answers interaction pseudos
                 // with "would match when in that state" (gpui's ladder picks
@@ -1575,6 +1793,9 @@ mod tests {
     }
 
     impl MatchDom for Node {
+        fn key(&self) -> u64 {
+            0
+        }
         fn parent(&self) -> Option<Self> {
             None
         }
@@ -1851,14 +2072,157 @@ mod tests {
         assert!(s.focus.is_none());
     }
 
+    // -----------------------------------------------------------------------
+    // group-hover: an interaction state on an ANCESTOR compound
+    // -----------------------------------------------------------------------
+
+    /// A three-level document: `.card.group > .row > .icon`, plus a second card
+    /// so "nearest ancestor" has something to be wrong about.
+    fn group_doc() -> Doc {
+        Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "card group", 0, vec![]),   // 1
+                ("div", "row", 1, vec![]),          // 2
+                ("span", "icon", 2, vec![]),        // 3
+                ("div", "card group", 0, vec![]),   // 4
+                ("span", "icon", 4, vec![]),        // 5
+            ],
+        }
+    }
+
     #[test]
-    fn an_ancestor_focus_selector_is_rejected_like_an_ancestor_hover_one() {
+    fn group_hover_folds_onto_its_ancestor_and_not_onto_the_element() {
+        let engine = Engine::compile(
+            ".group:hover .icon { color: rgb(255 0 0) } .icon { color: rgb(0 0 0) }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        assert!(engine.uses_group_states());
+        let d = group_doc();
+        let states = cascade(&engine, &d, &Env::default());
+        let icon = &states[2]; // node 3
+        // The base state is untouched — the group rule is not a base rule…
+        assert_eq!(icon.base.text.color, Some(gpui::rgb(0x000000).into()));
+        // …the element's own `:hover` rung is untouched — this is not its state…
+        assert!(icon.hover.is_none());
+        // …and the group bucket names the ANCESTOR that carries `.group`.
+        let (anchor, style) = icon.group_hover.as_ref().expect("a group-hover bucket");
+        assert_eq!(*anchor, 1);
+        assert_eq!(style.text.color, Some(gpui::rgb(0xff0000).into()));
+    }
+
+    #[test]
+    fn group_hover_picks_the_nearest_matching_ancestor() {
+        // Both cards carry `.group`; each icon must watch its OWN card, which is
+        // also what gpui's `GroupHitboxes` stack resolves a name to.
+        let engine = Engine::compile(".group:hover .icon { opacity: 0.5 }");
+        let d = group_doc();
+        let states = cascade(&engine, &d, &Env::default());
+        assert_eq!(states[2].group_hover.as_ref().map(|(k, _)| *k), Some(1));
+        assert_eq!(states[4].group_hover.as_ref().map(|(k, _)| *k), Some(4));
+    }
+
+    #[test]
+    fn group_active_has_its_own_bucket() {
+        let engine = Engine::compile(".group:active .icon { opacity: 0.5 }");
+        let d = group_doc();
+        let states = cascade(&engine, &d, &Env::default());
+        assert!(states[2].group_hover.is_none());
+        assert_eq!(states[2].group_active.as_ref().map(|(k, _)| *k), Some(1));
+    }
+
+    /// The rule still has to MATCH: an element outside the group gets nothing.
+    #[test]
+    fn group_hover_does_not_reach_outside_the_group() {
+        let engine = Engine::compile(".group:hover .icon { opacity: 0.5 }");
+        let d = doc(); // no `.group` anywhere
+        let states = cascade(&engine, &d, &Env::default());
+        assert!(states.iter().all(|s| s.group_hover.is_none()));
+    }
+
+    #[test]
+    fn an_ancestor_focus_selector_is_dropped_with_a_diagnostic() {
+        // gpui has `group_hover` and `group_active` and no group focus, so
+        // `group-focus:` is refused rather than quietly applied at rest.
         let engine = Engine::compile(".box:focus .child { opacity: 0.4 }");
         assert!(
-            engine.diagnostics.iter().any(|d| d.contains("ancestor-state selector")),
+            engine.diagnostics.iter().any(|d| d.contains("on an ANCESTOR compound")),
             "{:?}",
             engine.diagnostics
         );
+        assert!(!engine.uses_group_states());
+    }
+
+    #[test]
+    fn a_sibling_state_selector_is_dropped_with_a_diagnostic() {
+        // A group is keyed off an ANCESTOR's hitbox; a sibling is not one.
+        let engine = Engine::compile(".a:hover + .b { opacity: 0.4 }");
+        assert!(
+            engine.diagnostics.iter().any(|d| d.contains("sibling-state selector")),
+            "{:?}",
+            engine.diagnostics
+        );
+    }
+
+    /// `.nav:hover::after` is NOT an ancestor state — parcel models a
+    /// pseudo-element as its own sequence, so the `:hover` sits one sequence
+    /// over while still being on the same element.
+    #[test]
+    fn a_state_before_a_pseudo_element_is_not_an_ancestor_state() {
+        let engine = Engine::compile(r#".nav:hover::after { content: "x" }"#);
+        assert!(!engine.uses_group_states(), "{:?}", engine.diagnostics);
+    }
+
+    // -----------------------------------------------------------------------
+    // viewport units
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn viewport_units_resolve_against_the_published_viewport() {
+        assert!(set_viewport_basis(1000.0, 800.0));
+        let engine = Engine::compile(
+            ".box { width: 90vw; max-height: 85vh; min-width: 50vmin; padding-top: 10vmax }",
+        );
+        assert!(uses_viewport_units());
+        let s = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(s.base.size.width, Some(gpui::px(900.0).into()));
+        assert_eq!(s.base.max_size.height, Some(gpui::px(680.0).into()));
+        assert_eq!(s.base.min_size.width, Some(gpui::px(400.0).into()));
+        assert_eq!(s.base.padding.top, Some(gpui::px(100.0).into()));
+        // Same basis twice is not a change — the caller must not recompile.
+        assert!(!set_viewport_basis(1000.0, 800.0));
+        assert!(set_viewport_basis(1280.0, 720.0));
+        set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
+    }
+
+    #[test]
+    fn a_sheet_without_viewport_units_does_not_ask_for_a_recompile() {
+        Engine::compile(".box { width: 10px }");
+        assert!(!uses_viewport_units());
+    }
+
+    #[test]
+    fn calc_over_viewport_units_resolves_too() {
+        assert!(set_viewport_basis(1000.0, 800.0));
+        // reka's dialog body: `h-[calc(85vh-80px)]`.
+        let engine = Engine::compile(".box { height: calc(85vh - 80px) }");
+        let s = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(s.base.size.height, Some(gpui::px(600.0).into()));
+        set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
+    }
+
+    #[test]
+    fn inline_level_display_is_recorded_for_the_renderer() {
+        let engine = Engine::compile(
+            ".a { display: inline-flex } .b { display: flex } .c { display: inline }",
+        );
+        let a = engine.compute(Node { tag: "div", class: "a", attrs: &[] }, None, &Env::default());
+        let b = engine.compute(Node { tag: "div", class: "b", attrs: &[] }, None, &Env::default());
+        let c = engine.compute(Node { tag: "div", class: "c", attrs: &[] }, None, &Env::default());
+        assert_eq!(a.extras.inline_level, Some(true));
+        assert_eq!(a.base.display, Some(gpui::Display::Flex));
+        assert_eq!(b.extras.inline_level, Some(false));
+        assert_eq!(c.extras.inline_level, Some(true));
     }
 
     // -----------------------------------------------------------------------
@@ -2716,6 +3080,9 @@ mod tests {
     }
 
     impl<'d> MatchDom for DocRef<'d> {
+        fn key(&self) -> u64 {
+            self.i as u64
+        }
         fn parent(&self) -> Option<Self> {
             let p = self.doc.nodes[self.i].2;
             (p != 0).then(|| DocRef { doc: self.doc, i: p })

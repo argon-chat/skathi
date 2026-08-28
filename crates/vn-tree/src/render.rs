@@ -830,7 +830,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         } else {
             // The root inherits nothing: `window-drag`'s initial value is
             // `none`, spelled here as "nobody declared anything".
-            build_node(t, t.root, window, cx, now, None, None, None)
+            build_node(t, t.root, window, cx, now, None, None, None, Stacking::default())
         }
     });
     crate::perf::note_build(span.ms(), BUILT.with(|c| c.get()));
@@ -846,6 +846,7 @@ fn build_node<V: 'static>(
     parent_drag: Option<WindowDrag>,
     parent_case: Option<vn_css::TextTransform>,
     parent_align: Option<gpui::TextAlign>,
+    parent_stack: Stacking,
 ) -> AnyElement {
     let Some(node) = t.node(id) else {
         return Empty.into_any_element();
@@ -870,6 +871,9 @@ fn build_node<V: 'static>(
         .as_ref()
         .and_then(|cs| cs.base.text.text_align)
         .or(parent_align);
+    // `position: fixed` / `z-index` open a stacking context; the children are
+    // built with it so their own z-indices sort INSIDE it (see `Stacking`).
+    let (z_priority, stacking) = parent_stack.enter(&extras);
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
@@ -903,35 +907,43 @@ fn build_node<V: 'static>(
         // content it escaped — which is the order the fork's topmost-first
         // resolution (F-01) already wants.
         Kind::Element if t.name(node.tag) == "img" => stack(
-            &extras,
+            z_priority,
             probe(id, build_img(t, id, node, window, cx, now, control_area)),
         ),
         Kind::Element if t.name(node.tag) == "lottie" => stack(
-            &extras,
+            z_priority,
             probe(id, build_lottie(t, id, node, window, cx, now, control_area)),
         ),
         Kind::Element if t.name(node.tag) == "video" => stack(
-            &extras,
+            z_priority,
             probe(id, build_video(t, id, node, window, cx, now, control_area)),
         ),
         // Inline `<svg>` is a LEAF: the subtree is serialized into a document
         // resvg rasterises, so its children must not also become taffy nodes
         // (see crate::svg).
         Kind::Element if t.name(node.tag) == "svg" => stack(
-            &extras,
+            z_priority,
             probe(id, build_svg(t, id, node, window, cx, now, control_area)),
         ),
-        Kind::Element => stack(&extras, probe_at(id, id == t.root, {
+        Kind::Element => stack(z_priority, probe_at(id, id == t.root, {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
             let mut d = with_control_area(div().id(id as usize), id, control_area);
             if let Some(cs) = &node.computed {
                 d = apply_computed_style(d, cs, id, now);
             }
+            // The other half of `group-hover:`: this element is what some
+            // descendant's rule watches, so gpui needs a hitbox for it and a
+            // named entry on the group stack while its subtree paints. `.group`
+            // is what supplies both.
+            if t.is_group_anchor(id) {
+                d = d.group(group_name(id));
+            }
             advise_missing_font(d.style(), cx);
             apply_background_clip_text(d.style(), &extras);
             apply_self_blur(d.style(), t, node, &extras);
             apply_inline_row(d.style(), t, node, align);
+            apply_inline_align(d.style(), &extras, align);
             // "The window IS the root" (see `createApp().mount()`): the root
             // element is vue-native's viewport, so it fills the box the host
             // gives it unless a rule says otherwise. Without this it sizes to
@@ -1060,6 +1072,7 @@ fn build_node<V: 'static>(
             }
 
             if is_input {
+                let inert = extras.pointer_events_none == Some(true);
                 let (input, focus_target) = build_input(t, id, node, tab_index, window, cx);
                 // The editor's own handle carries this node's focus identity
                 // (mouse, Tab and programmatic focus all land on it), so the
@@ -1086,10 +1099,17 @@ fn build_node<V: 'static>(
                     }
                 }
                 // Clicks on the wrapper's padding/border focus the editor —
-                // the HTML behavior.
-                d = d.on_any_mouse_down(cx.listener(move |_, _: &MouseDownEvent, window, cx| {
-                    window.focus(&focus_target, cx);
-                }));
+                // the HTML behavior. Not while the field is inert, though: an
+                // `opacity-0 pointer-events-none` panel parked over the visible
+                // one is the standard tab-switch idiom, and its fields must not
+                // take a press aimed at the ones underneath.
+                if !inert {
+                    d = d.on_any_mouse_down(cx.listener(
+                        move |_, _: &MouseDownEvent, window, cx| {
+                            claim_press_focus(id, &focus_target, window, &mut **cx);
+                        },
+                    ));
+                }
                 d.child(input).into_any_element()
             } else {
                 // `::before` / `::after` are children, first and last — that is
@@ -1102,7 +1122,7 @@ fn build_node<V: 'static>(
                 };
                 let mut kids: Vec<AnyElement> = Vec::new();
                 if let Some(pb) = before {
-                    kids.push(pseudo_element(&pb, case));
+                    kids.push(pseudo_element(&pb, case, stacking));
                 }
                 if !node.text.is_empty() {
                     kids.push(transformed_text(&node.text, case).into_any_element());
@@ -1110,11 +1130,13 @@ fn build_node<V: 'static>(
                     kids.extend(
                         laid_out_children(t, node)
                             .into_iter()
-                            .map(|c| build_node(t, c, window, cx, now, drag, case, align)),
+                            .map(|c| {
+                                build_node(t, c, window, cx, now, drag, case, align, stacking)
+                            }),
                     );
                 }
                 if let Some(pb) = after {
-                    kids.push(pseudo_element(&pb, case));
+                    kids.push(pseudo_element(&pb, case, stacking));
                 }
                 d.children(kids).into_any_element()
             }
@@ -1301,6 +1323,43 @@ fn apply_inline_row(
     }
 }
 
+/// `text-align` on a block container centres its INLINE-level children.
+///
+/// taffy has no inline formatting context, so `display: inline-flex` is laid
+/// out as `flex` and the box becomes block-level (`vn_css::mapper` says so,
+/// with an advisory). Everything about the box is then right except its
+/// position: a block-level box ignores `text-align`, so a centred column full
+/// of centred text puts its one `inline-flex` badge flush against the left
+/// edge. On apps/meet-probe that badge is the hero logo, sitting a third of the
+/// page away from the "Argon Meet" it is supposed to sit above.
+///
+/// Auto margins are the block-layout spelling of the same intent, and taffy
+/// implements them: a definite-width block child with `margin-left: auto;
+/// margin-right: auto` centres in its containing block, which is what
+/// `text-align: center` does to an inline-level box. `get_or_insert` keeps an
+/// author's own margin (`mx-4`, `ml-auto`) authoritative, and a box that is
+/// auto-width fills the line anyway, so there is no free space to distribute
+/// and the margins are a no-op — which is also what a browser does.
+fn apply_inline_align(
+    style: &mut gpui::StyleRefinement,
+    extras: &vn_css::Extras,
+    align: Option<gpui::TextAlign>,
+) {
+    if extras.inline_level != Some(true) {
+        return;
+    }
+    match align {
+        Some(gpui::TextAlign::Center) => {
+            style.margin.left.get_or_insert(gpui::Length::Auto);
+            style.margin.right.get_or_insert(gpui::Length::Auto);
+        }
+        Some(gpui::TextAlign::Right) => {
+            style.margin.left.get_or_insert(gpui::Length::Auto);
+        }
+        _ => {}
+    }
+}
+
 /// `filter: blur(<r>)` on a leaf box with a solid background: repaint the box
 /// as its own drop shadow.
 ///
@@ -1384,7 +1443,11 @@ fn apply_self_blur(
 /// text shaper needs a leaf, so an EMPTY `content: ""` box (the decorative
 /// case: a rule, a dot, a chevron drawn entirely out of size + background +
 /// border) carries no child at all and is sized purely by its own style.
-fn pseudo_element(pb: &vn_css::PseudoBox, parent_case: Option<vn_css::TextTransform>) -> AnyElement {
+fn pseudo_element(
+    pb: &vn_css::PseudoBox,
+    parent_case: Option<vn_css::TextTransform>,
+    stacking: Stacking,
+) -> AnyElement {
     let mut d = div();
     *d.style() = (*pb.style).clone();
     let case = pb.extras.text_transform.or(parent_case);
@@ -1393,7 +1456,7 @@ fn pseudo_element(pb: &vn_css::PseudoBox, parent_case: Option<vn_css::TextTransf
     } else {
         d.child(transformed_text(&pb.content, case)).into_any_element()
     };
-    stack(&pb.extras, e)
+    stack(stacking.enter(&pb.extras).0, e)
 }
 
 /// A text leaf with `text-transform` applied.
@@ -1576,8 +1639,112 @@ where
         if let Some(a) = cs.active.clone() {
             e = e.active(move |_| (*a).clone());
         }
+        // `.group:hover .this` — gpui's own group mechanism, keyed by the
+        // ancestor's node id so the name is unique by construction and the
+        // `GroupHitboxes` stack resolves to exactly the element the cascade
+        // picked. The style is refined at PAINT time from that hitbox: an
+        // ancestor's hover flip costs a repaint, never a restyle.
+        if let Some((anchor, style)) = cs.group_hover.clone() {
+            e = e.group_hover(group_name(anchor as u32), move |_| (*style).clone());
+        }
+        if let Some((anchor, style)) = cs.group_active.clone() {
+            e = e.group_active(group_name(anchor as u32), move |_| (*style).clone());
+        }
     }
     e
+}
+
+/// Focus this node on a press, and CLAIM the press so no ancestor re-focuses
+/// itself over the top of it.
+///
+/// The claim is the whole point. gpui gives every element with a tracked focus
+/// handle an automatic mouse-down listener that focuses it and then calls
+/// `prevent_default()`, precisely so a focusable ancestor backs off — and the
+/// document root is such an ancestor here: it tracks a focus handle so that
+/// `document.addEventListener("keydown")` (Escape-to-dismiss, every keyboard
+/// shortcut in the ecosystem) has something on the focus path. Our own
+/// focus-follows-press listeners did not make the same claim, so a press on an
+/// `<input>` focused the editor and then the root's automatic listener focused
+/// the root instead: the caret vanished and the keystrokes went to `document`.
+///
+/// One log line per real focus move, at `dev` kind — this is the exact failure
+/// the meet app's "typing does nothing" turned out to be, and it is invisible
+/// from JS (`focus` events do not fire while the window is inactive: gpui
+/// reports empty focus paths then).
+fn claim_press_focus(id: u32, handle: &FocusHandle, window: &mut Window, cx: &mut App) {
+    // Somebody nearer the pointer already took it. Mouse listeners run
+    // TOPMOST-FIRST, so this is the ancestor half of the same gesture — and
+    // without the check the outermost focusable wins every press, which on this
+    // tree is always the document root.
+    if window.default_prevented() {
+        return;
+    }
+    if !handle.is_focused(window) {
+        window.focus(handle, cx);
+        crate::log::record("dev", format!("[focus] press focused node {id}"));
+    }
+    window.prevent_default();
+}
+
+/// The gpui group name for an element: its node id, which is unique in the
+/// document and stable for as long as the node is. Two different `.group`
+/// ancestors can therefore never collide, and a nested one shadows its outer
+/// namesake for free — `GroupHitboxes` is a stack and `get` returns its top.
+fn group_name(id: u32) -> gpui::SharedString {
+    format!("vn-g{id}").into()
+}
+
+/// The enclosing STACKING CONTEXTS, packed into the one `usize` gpui sorts
+/// deferred draws by.
+///
+/// A `z-index` is not a document-wide rank: CSS says it orders an element among
+/// its siblings *inside its stacking context*, and the whole subtree of a
+/// context paints together, between the contexts on either side of it. gpui has
+/// one flat priority, so a naive `priority = z` inverts every nested case — and
+/// on apps/meet-probe it inverted the loudest one there is. reka's dialog is
+/// `fixed z-50`, and the header inside it is `sticky top-0 bg-background z-10`:
+/// 10 sorts before 50, so the dialog's own background painted OVER its title
+/// bar and the dialog came up as a black slab.
+///
+/// So the priority is a fixed-width digit string instead — one digit per
+/// nesting level, most significant first — which compares exactly the way CSS
+/// orders the tree: an element sorts after the context that contains it, and
+/// before anything that outranks that context.
+#[derive(Clone, Copy, Default)]
+struct Stacking {
+    prefix: usize,
+    depth: u32,
+}
+
+/// Bits per level. 0..=16383 covers every `z-index` a real sheet writes (the
+/// `z-9999` idiom included) and leaves room for four levels in a `usize`.
+const Z_BITS: u32 = 14;
+const Z_MAX: i32 = (1 << Z_BITS) - 1;
+/// How many nested stacking contexts stay distinguishable. A fifth would not
+/// fit; beyond it a descendant simply shares its context's priority, which
+/// still keeps it above everything the context outranks.
+const Z_LEVELS: u32 = 4;
+
+impl Stacking {
+    /// This node's own deferred priority (`None` = paints in flow), and the
+    /// context its children see.
+    fn enter(self, extras: &vn_css::Extras) -> (Option<usize>, Stacking) {
+        let Some(z) = extras.deferred_priority() else {
+            return (None, self);
+        };
+        if self.depth >= Z_LEVELS {
+            warn_compat(
+                "z-index-nesting-depth",
+                "more than four nested stacking contexts (`position: fixed` / `z-index`) — \
+                 beyond the fourth a descendant shares its context's paint priority instead of \
+                 sorting inside it. It still paints above everything that context outranks",
+            );
+            return (Some(self.prefix), self);
+        }
+        let shift = Z_BITS * (Z_LEVELS - 1 - self.depth);
+        let priority = self.prefix | ((z.min(Z_MAX as usize)) << shift);
+        (Some(priority), Stacking { prefix: priority, depth: self.depth + 1 })
+    }
 }
 
 /// Wraps a node that has to escape its siblings' paint order — `position:
@@ -1587,8 +1754,8 @@ where
 /// `LayoutId`) and only moves the PAINT to after every ancestor, ordered by
 /// priority; gpui sorts those stably, so two elements with the same `z-index`
 /// keep document order, exactly as CSS says they should.
-fn stack(extras: &vn_css::Extras, el: AnyElement) -> AnyElement {
-    match extras.deferred_priority() {
+fn stack(priority: Option<usize>, el: AnyElement) -> AnyElement {
+    match priority {
         Some(priority) => gpui::deferred(el).with_priority(priority).into_any_element(),
         None => el,
     }
@@ -1623,7 +1790,7 @@ where
             if let Some(h) = &handle {
                 // Focus follows the press, as in a browser; the focus/blur
                 // events come out of the subscription.
-                window.focus(h, cx);
+                claim_press_focus(id, h, window, &mut **cx);
             }
             if bit(tree::EV_MOUSEDOWN) {
                 let payload = mouse_payload(ev.position, button_code(ev.button), &ev.modifiers);
@@ -1763,6 +1930,24 @@ pub(crate) fn focus_node(id: u32, window: &mut Window, cx: &mut App) -> Result<(
 /// programmatic focus needs before the native input handler is installed.
 pub(crate) fn is_node_focused(id: u32, window: &Window, cx: &App) -> bool {
     focus_target_of(id, cx).is_some_and(|h| h.is_focused(window))
+}
+
+/// Which node owns keyboard focus, by asking gpui. See
+/// [`crate::devtools::focused_node`] for why this is not simply `FOCUSED_NODE`.
+pub(crate) fn focused_node(window: &Window, cx: &App) -> Option<u32> {
+    // The editor's handle first: an `<input>`'s focus identity lives inside the
+    // native widget, and its wrapper may ALSO have a handle (a `:focus` rule).
+    let from_inputs = INPUT_STATES.with(|m| {
+        m.borrow()
+            .iter()
+            .find(|(_, state)| state.read(cx).focus_handle().is_focused(window))
+            .map(|(id, _)| *id)
+    });
+    from_inputs.or_else(|| {
+        FOCUS_HANDLES.with(|m| {
+            m.borrow().iter().find(|(_, h)| h.is_focused(window)).map(|(id, _)| *id)
+        })
+    })
 }
 
 /// The live text of a native `<input>` — the widget's own buffer, not the
@@ -2590,6 +2775,13 @@ fn build_input<V: 'static>(
             .filter(|n| *n > 0)
             .unwrap_or(vn_elements::DEFAULT_ROWS),
         input_config: input_configuration(t, id, multiline),
+        // `pointer-events: none`, inherited (the cascade resolved it before the
+        // states were stored). An inert field takes no press at all — see
+        // `TextInputOptions::inert`.
+        inert: node
+            .computed
+            .as_ref()
+            .is_some_and(|cs| cs.extras.pointer_events_none == Some(true)),
     };
 
     let mask = pointer_mask(node);
@@ -2699,6 +2891,62 @@ fn input_configuration(t: &Tree, id: u32, multiline: bool) -> gpui::TextInputCon
 mod tests {
     use super::*;
     use crate::tree::with_tree;
+
+    fn z(z_index: i32) -> vn_css::Extras {
+        vn_css::Extras { z_index: Some(z_index), ..Default::default() }
+    }
+
+    fn fixed() -> vn_css::Extras {
+        vn_css::Extras { fixed: Some(true), ..Default::default() }
+    }
+
+    /// A `z-index` orders an element among its siblings INSIDE its stacking
+    /// context — a descendant of a `z-50` context paints above it whatever its
+    /// own z is, and below the next context that outranks 50.
+    ///
+    /// gpui sorts deferred draws by one flat priority, so the context chain is
+    /// packed into that integer, most significant level first. Without it
+    /// reka's `z-50` dialog painted its own background over its `z-10` sticky
+    /// header — 10 sorts before 50 — and the dialog came up as a black slab.
+    #[test]
+    fn a_nested_stacking_context_sorts_inside_its_parent() {
+        let root = Stacking::default();
+        let (dialog, inside_dialog) = root.enter(&z(50));
+        let (header, _) = inside_dialog.enter(&z(10));
+        let (overlay, _) = root.enter(&z(50));
+        let (toast, _) = root.enter(&z(60));
+
+        let dialog = dialog.unwrap();
+        let header = header.unwrap();
+        assert!(header > dialog, "a z-10 header paints above its z-50 dialog");
+        assert!(header < toast.unwrap(), "…and below a z-60 sibling of the dialog");
+        assert_eq!(overlay.unwrap(), dialog, "same z, same priority: document order decides");
+    }
+
+    /// `position: fixed` with no `z-index` still opens a level, so a z-indexed
+    /// descendant of a portalled overlay sorts inside it rather than against
+    /// the document.
+    #[test]
+    fn fixed_opens_a_level_even_at_z_zero() {
+        let root = Stacking::default();
+        let (outer, inside) = root.enter(&fixed());
+        let (inner, _) = inside.enter(&z(1));
+        assert_eq!(outer, Some(0));
+        assert!(inner.unwrap() > 0);
+        // …and still below anything the document ranks above the overlay.
+        assert!(inner.unwrap() < root.enter(&z(1)).0.unwrap());
+    }
+
+    /// An element that is not out of flow neither defers nor opens a level, so
+    /// an ordinary subtree costs nothing.
+    #[test]
+    fn an_in_flow_element_changes_nothing() {
+        let root = Stacking::default();
+        let (priority, child) = root.enter(&vn_css::Extras::default());
+        assert_eq!(priority, None);
+        assert_eq!(child.depth, root.depth);
+        assert_eq!(child.prefix, root.prefix);
+    }
 
     /// `<div class="flex gap-2">` with three components in it. Vue anchors each
     /// one, so the child list is element/anchor/element/anchor/element plus the
