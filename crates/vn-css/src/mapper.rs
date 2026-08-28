@@ -1590,7 +1590,7 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 _ => {
                     warn_once(
                     diagnostics,
-                    "`position: sticky` is laid out as `relative` (v1) — it needs the scroll                      offset of the nearest scroll container at LAYOUT time, and taffy has no                      such input. A header that must stay put belongs OUTSIDE the scroll                      container, as a flex sibling of it",
+                    "`position: sticky` is laid out as `relative` (v1) — it needs the scroll \n                     offset of the nearest scroll container at LAYOUT time, and taffy \n                     has no such input. A header that must stay put belongs OUTSIDE the \n                     scroll container, as a flex sibling of it",
                 );
                     gpui::Position::Relative
                 }
@@ -2363,7 +2363,7 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         }
         Filter(..) => warn_once(
             diagnostics,
-            "`filter` is not applied (v1) — gpui filters the BACKDROP (`backdrop-filter: blur()`              is live) but has no post-processing pass over an element's own painted output.              `opacity` renders, and a `drop-shadow()` is expressible as a `box-shadow`",
+            "`filter` is not applied (v1) — gpui filters the BACKDROP \n             (`backdrop-filter: blur()` is live) but has no post-processing pass over an \n             element's own painted output. `opacity` renders, and a `drop-shadow()` is \n             expressible as a `box-shadow`",
         ),
         // `backdrop-filter` — `blur()` is the one filter function the renderer
         // implements (gpui `BackdropBlurRect`, D3D11 Dual-Kawase pyramid).

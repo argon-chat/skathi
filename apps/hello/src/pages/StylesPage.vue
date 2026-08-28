@@ -96,6 +96,49 @@ const hot = ref(false);
         </div>
       </div>
     </div>
+
+    <!-- ===================================================================
+         m15: the CSS surface finished. Everything in this block used to be
+         an advisory line and nothing on screen.
+         =================================================================== -->
+    <div class="sub">m15 — gradients · shadows · outline · grid · ::after</div>
+    <div class="m15">
+      <!-- linear-gradient(): gpui's two-stop Background. `to right` is 90deg
+           in both CSS and gpui, so the ramp runs the same way. -->
+      <div class="g-row">
+        <div class="g g-a">to right</div>
+        <div class="g g-b">135deg</div>
+        <div class="g g-c">to bottom</div>
+      </div>
+
+      <!-- box-shadow: three shadows on one box, with spread and an inset —
+           the same stack Tailwind's `--tw-ring-*` builds a focus ring from.
+           And `outline` + `outline-offset`, a ring OUTSIDE the border box
+           that takes no layout space at all. -->
+      <div class="g-row">
+        <div class="sh">3 shadows + inset</div>
+        <div class="ring">ring (box-shadow)</div>
+        <div class="ol">outline + offset</div>
+      </div>
+
+      <!-- grid-template-columns: an ARBITRARY track list. `1fr auto` is the
+           shape `grid-cols-[1fr_auto]` compiles to; the second row places its
+           items with grid-column line numbers and spans. -->
+      <div class="gr">
+        <div class="cell">1fr</div>
+        <div class="cell">auto</div>
+        <div class="cell">120px</div>
+        <div class="cell span2">grid-column: span 2</div>
+        <div class="cell">3</div>
+      </div>
+
+      <!-- ::before / ::after: real boxes, first and last child of the
+           element, laid out by the same rules as a hand-written span.
+           TEXT-TRANSFORM on the label; the ::after is driven by an
+           ATTRIBUTE, which is the shape reka and shadcn actually use. -->
+      <div class="pseudo" data-state="open">badge</div>
+      <div class="pseudo" data-state="closed">badge</div>
+    </div>
   </div>
 </template>
 
@@ -115,6 +158,126 @@ const hot = ref(false);
 .sub {
   font-size: 12px;
   color: #ffffffcc;
+}
+
+/* ===== m15: gradients / shadows / outline / grid / generated content ==== */
+.m15 {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.g-row {
+  display: flex;
+  gap: 12px;
+}
+
+/* A gradient is a real `Background`, not a dropped declaration. */
+.g {
+  width: 118px;
+  height: 52px;
+  padding: 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #0b0b12;
+}
+.g-a { background-image: linear-gradient(to right, #7ee8fa, #eec0c6); }
+.g-b { background: linear-gradient(135deg, #fbc7a4, #ffe29f); }
+.g-c { background-image: linear-gradient(#a1ffce, #faffd1); }
+
+/* Three shadows on one box, spread and inset included. */
+.sh {
+  width: 118px;
+  height: 52px;
+  padding: 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #ffffff;
+  background: #1d2333;
+  box-shadow:
+    0 10px 20px -6px #000000aa,
+    0 2px 6px #00000066,
+    inset 0 1px 0 #ffffff30;
+}
+/* The `--tw-ring-*` shape: a zero-blur spread shadow IS a focus ring. */
+.ring {
+  width: 118px;
+  height: 52px;
+  padding: 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #ffffff;
+  background: #1d2333;
+  box-shadow: 0 0 0 2px #0b0b12, 0 0 0 5px #38bdf8;
+}
+/* …and a real `outline`, which takes no layout space — the two boxes above
+   and this one are the same size and sit on the same baseline. */
+.ol {
+  width: 118px;
+  height: 52px;
+  padding: 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #ffffff;
+  background: #1d2333;
+  outline: 2px solid #f472b6;
+  outline-offset: 3px;
+}
+
+/* An arbitrary track list, plus line-number placement. */
+.gr {
+  display: grid;
+  grid-template-columns: 1fr auto 120px;
+  gap: 8px;
+  width: 380px;
+}
+.cell {
+  padding: 8px;
+  border-radius: 8px;
+  background: #ffffff1a;
+  font-size: 11px;
+  color: #ffffffdd;
+}
+.span2 {
+  grid-column: span 2;
+  background: #ffffff2e;
+}
+
+/* ::before and ::after are children, first and last. `content` gates them:
+   no content, no box — exactly as in CSS. */
+.pseudo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 380px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #ffffff14;
+  font-size: 11px;
+  color: #ffffffdd;
+  text-transform: uppercase;
+}
+.pseudo::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 8px;
+  background: #34d399;
+}
+/* Driven by an ATTRIBUTE on the originating element — the shape reka-ui and
+   shadcn use for every open/closed indicator. */
+.pseudo[data-state="open"]::after {
+  content: "open";
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #34d39933;
+  color: #34d399;
+}
+.pseudo[data-state="closed"]::after {
+  content: "closed";
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #ffffff1a;
+  color: #ffffff88;
 }
 
 /* ===== backdrop-filter: blur() demo ==================================== */
