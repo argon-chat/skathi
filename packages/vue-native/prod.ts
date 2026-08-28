@@ -39,7 +39,13 @@ import { createRequire } from "module";
 import { resolve, dirname, join, relative, sep } from "path";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "fs";
 
-import { TW_ID, findConfig, generate as generateTailwind } from "./tailwind";
+import {
+  TW_ID,
+  declaresUtilities,
+  findConfig,
+  generate as generateTailwind,
+  needsTailwindPass,
+} from "./tailwind";
 
 // ---- paths ----------------------------------------------------------------
 
@@ -270,9 +276,42 @@ function compileVue(absPath: string, source: string): string {
   return code;
 }
 
+/**
+ * Stylesheets the app imported from JS (`import "./index.css"`), in first-seen
+ * order — the prod half of build.ts's CSS-entry support.
+ *
+ * They are keyed by module id into `cssById` like a component's `<style>`, so
+ * the one sorted aggregation below orders them, and both builders agree on the
+ * cascade. `.vn/` sorts first (utilities), then everything else by id.
+ */
+const cssEntryIds: string[] = [];
+/** True when one of them declares `@tailwind utilities` itself. */
+let appOwnsUtilities = false;
+
 const vuePlugin = {
   name: "vue-sfc-prod",
   setup(build: any) {
+    // `import "./index.css"` — the shape every Vite app's entry has, and the
+    // file a shadcn-shaped app keeps its whole palette in. Bun would treat a
+    // .css file as an asset; it becomes an empty module whose CONTENT went into
+    // the stylesheet instead. Same rule as build.ts: when the app has a
+    // Tailwind config the sheet goes through Tailwind's own PostCSS pass with
+    // ITSELF as the entry, which is what makes its `@tailwind`, `@layer` and
+    // `@apply` mean anything.
+    build.onLoad({ filter: /\.css$/ }, async (args: any) => {
+      const id = toId(args.path);
+      if (!cssById.has(id)) {
+        const source = await Bun.file(args.path).text();
+        if (declaresUtilities(source)) appOwnsUtilities = true;
+        let css = source;
+        if (TW_CONFIG && needsTailwindPass(source)) {
+          css = await generateTailwind(TW_CONFIG, { text: source, from: args.path });
+        }
+        cssById.set(id, css);
+        cssEntryIds.push(id);
+      }
+      return { contents: "", loader: "js" };
+    });
     // Without the dev loader's pre-seeded registry, "vue" (compiled render
     // helpers) and "vue-native" (app code) have to resolve somewhere: both are
     // our runtime module, exactly as the loader aliases them at runtime.
@@ -299,6 +338,8 @@ async function build() {
   let tailwindMs = 0;
   mkdirSync(dirname(OUT_FILE), { recursive: true });
   cssById.clear();
+  cssEntryIds.length = 0;
+  appOwnsUtilities = false;
 
   const result = await Bun.build({
     entrypoints: [ENTRY_ABS],
@@ -331,7 +372,11 @@ async function build() {
   // builder uses (".vn/tailwind.css"), whose leading "." sorts it first — so
   // dev and prod put the utilities layer in exactly the same place: ahead of
   // every component <style>. See tailwind.ts for why that ordering is right.
-  if (TW_CONFIG) {
+  //
+  // …unless one of the app's OWN stylesheets already declares `@tailwind
+  // utilities`, in which case it carries them and a second copy would be pure
+  // duplication. build.ts makes the same call for the same reason.
+  if (TW_CONFIG && !appOwnsUtilities) {
     const t = Date.now();
     cssById.set(TW_ID, await generateTailwind(TW_CONFIG));
     tailwindMs = Date.now() - t;
@@ -350,10 +395,11 @@ async function build() {
   writeAtomic(OUT_FILE, out);
   writeAtomic(WINDOW_JSON, windowConfig() + "\n");
 
-  const sfcs = cssById.size - (TW_CONFIG ? 1 : 0);
+  const sfcs = cssById.size - cssEntryIds.length - (cssById.has(TW_ID) ? 1 : 0);
   console.log(
     `prod build: ${(out.length / 1024) | 0} KB (${sfcs} styled SFC${sfcs === 1 ? "" : "s"}` +
-      (TW_CONFIG
+      (cssEntryIds.length ? ` + ${cssEntryIds.length} css entr${cssEntryIds.length === 1 ? "y" : "ies"}` : "") +
+      (cssById.has(TW_ID)
         ? ` + ${((cssById.get(TW_ID)?.length ?? 0) / 1024).toFixed(1)} KB tailwind in ${tailwindMs} ms`
         : "") +
       `) -> ${relative(WS_ROOT, OUT_FILE).split(sep).join("/")} in ${Date.now() - t0} ms`,

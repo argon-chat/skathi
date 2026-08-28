@@ -186,6 +186,27 @@ describe("css entry modules", () => {
     expect(b.stderr).not.toContain("resolves to no built module");
   });
 
+  test("prod.ts puts the same CSS in the same place", () => {
+    // The two builders must never disagree about what an app's stylesheet is:
+    // prod has no module transport, so the .css file goes through a Bun loader
+    // that empties the module and routes its CONTENT into the same `cssById`
+    // map a component `<style>` uses.
+    const out = join(mkdtempSync(join(tmpdir(), "vn-prod-")), "app.prod.js");
+    tmpDirs.push(dirname(out));
+    const entry = join(FIXTURES, "css-app/src/main.js");
+    const proc = Bun.spawnSync(["bun", "prod.ts", entry, out], { cwd: PKG_DIR });
+    if (proc.exitCode !== 0) {
+      throw new Error(`prod.ts exited ${proc.exitCode}
+${proc.stderr.toString()}`);
+    }
+    const bundle = readFileSync(out, "utf8");
+    expect(bundle).toContain("--fixture-fg");
+    // …and the stylesheet is a SIDE EFFECT: its module body is empty, so the
+    // `@` at the top of the file never reaches the JS parser.
+    expect(bundle).not.toContain('.fixture-card { color');
+    expect(proc.stdout.toString()).toContain("css entry");
+  });
+
   test("stylesheets sort ahead of the app's own modules", () => {
     const b = build("css-app");
     const modules = b.manifest.modules;
