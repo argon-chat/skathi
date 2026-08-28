@@ -1,0 +1,20 @@
+[package]
+name = "vn-clipboard"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The JS host seam AND the trait this crate implements — declared in redjs
+# (`redjs::webapi::clipboard`), implemented here. Same layering as
+# `vn-permissions`.
+vn-runtime = { path = "../vn-runtime", default-features = false, features = ["clipboard"] }
+# NOT a second clipboard implementation: gpui already owns the OS clipboard for
+# the native <input> widget's Ctrl+C/Ctrl+V (crates/vn-elements/src/text_input/
+# state.rs), and two owners of one `OpenClipboard` is a race with no upside.
+# This crate is `App::read_from_clipboard` / `write_to_clipboard` behind a
+# browser-shaped promise, and nothing else.
+#
+# `default-features = false` like every other gpui dependency in this
+# workspace except vn-app's (which enables `stacker` for the whole binary).
+gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }

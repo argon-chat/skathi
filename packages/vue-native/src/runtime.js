@@ -2543,6 +2543,151 @@ const inertPermissions = new Proxy(
 );
 
 export const appPermissions = permHost ? createPermissions(permHost) : inertPermissions;
+
+// ---- storage (docs/STORAGE.md tier 2) --------------------------------------
+//
+// The STANDARD surface is `localStorage` / `sessionStorage`, installed by redjs,
+// and an app that just wants to remember a preference should use it and nothing
+// else — it is the same code a browser build runs, down to the
+// `QuotaExceededError`. `appStorage` is the deliberately namespaced extension
+// for the two things a browser has no words for, because a browser decides them
+// for you:
+//
+//   1. WHERE the bytes go. A browser has one profile directory and no API to
+//      ask about it; a desktop app has %APPDATA% vs %LOCALAPPDATA% vs a
+//      portable folder next to the exe, and the choice is the app's to make.
+//   2. WHETHER they are encrypted at rest. There is no browser spelling for
+//      "and please use DPAPI".
+//
+// Named after `appWindow`/`appPermissions` for the same reason: an extension
+// must not be able to pass for a web API. It is NOT called `app` — which is
+// what the original sketch said — because `const app = createApp(...)` is the
+// first line of nearly every Vue entry module, and `import { app } from
+// "vue-native"` next to it is a redeclaration error in the same scope. The
+// verbs are exactly as sketched.
+//
+// Synchronous, like `appPermissions.query` and for the same reason: these are
+// boot-time calls that touch a path and a directory, and a promise would imply
+// a wait that does not exist.
+const storageHost =
+  typeof __vn_storage_info === "function"
+    ? {
+        userFolder: __vn_storage_user_folder,
+        setFolder: __vn_storage_set_folder,
+        info: __vn_storage_info,
+        flush: __vn_storage_flush,
+      }
+    : null;
+
+/** Every host fn here answers `{...}` or `{"error":"..."}`. One unwrapper. */
+function storageResult(json, what) {
+  const out = JSON.parse(json);
+  if (out.error) throw new TypeError(`appStorage.${what}: ${out.error}`);
+  return out;
+}
+
+function createStorage(host) {
+  return {
+    /** The folder kinds `getUserFolder` accepts. */
+    get kinds() {
+      return JSON.parse(host.info()).kinds;
+    },
+    /** Where `localStorage` is being kept right now. */
+    get folder() {
+      return JSON.parse(host.info()).folder;
+    },
+    /** Is it encrypted at rest? */
+    get encrypted() {
+      return JSON.parse(host.info()).encrypted;
+    },
+    /**
+     * `getUserFolder("APPDATA", "myAppFolder")` → an absolute path.
+     *
+     * Creates nothing — a path is not a directory, and an app that only wants
+     * to SHOW a user where its data would go should not leave a folder behind.
+     * Throws a TypeError for an unknown kind or a `subfolder` that tries to
+     * climb out of it, rather than returning a path nobody checked.
+     */
+    getUserFolder(kind, subfolder = "") {
+      return storageResult(host.userFolder(String(kind), String(subfolder)), "getUserFolder").path;
+    },
+    /**
+     * Points `localStorage` at `path`, creating it. Returns the canonical path.
+     *
+     * `{ encrypted: true }` encrypts the file at rest (Windows: DPAPI, tied to
+     * the Windows user — see docs/STORAGE.md for what that does and does not
+     * protect). Turning it on for a folder that already holds a plaintext area
+     * MIGRATES that area and removes the plaintext copy; turning it off does
+     * the reverse. On a platform with no encryption provider this THROWS rather
+     * than quietly writing plaintext.
+     *
+     * Best called before the first `localStorage` touch. Called later it still
+     * works: the area this process is holding is written to the new place.
+     */
+    setStorageFolder(path, options = {}) {
+      const encrypted = !!(options && options.encrypted);
+      return storageResult(host.setFolder(String(path), encrypted), "setStorageFolder").path;
+    },
+    /**
+     * Everything at once: `{ folder, file, encrypted, bytes, loaded, pending,
+     * provider, kinds, error }`. `error` is the last thing that went wrong
+     * (a folder that could not be written, a file that could not be decrypted)
+     * or null.
+     */
+    info() {
+      return JSON.parse(host.info());
+    },
+    /**
+     * Writes any pending change to disk NOW and reports whether there was one.
+     *
+     * Writes are normally coalesced to one per frame, so a hard kill can lose
+     * the last frame's. This is the escape hatch for the moment where that
+     * matters — and what the persistence test calls before restarting the host.
+     */
+    flush() {
+      return storageResult(host.flush(), "flush").wrote;
+    },
+  };
+}
+
+const inertStorage = new Proxy(
+  {},
+  {
+    get(_t, key) {
+      warnCompat(
+        "appStorage",
+        "the storage host is missing (vn_storage::install did not run, or the host was built " +
+          "without the `storages` feature) — `appStorage` is inert and localStorage does not " +
+          "persist. See docs/STORAGE.md.",
+      );
+      if (key === "kinds") return [];
+      if (key === "folder") return "";
+      if (key === "encrypted") return false;
+      if (key === "info")
+        return () => ({
+          folder: "",
+          file: "",
+          encrypted: false,
+          bytes: 0,
+          loaded: false,
+          pending: false,
+          provider: "",
+          kinds: [],
+          error: "no storage host",
+        });
+      if (key === "flush") return () => false;
+      // `getUserFolder` and `setStorageFolder` cannot answer with a plausible
+      // path — a wrong path is worse than no path, because the app would then
+      // write somewhere real.
+      return () => {
+        throw new TypeError(`appStorage.${String(key)} is unavailable: no storage host`);
+      };
+    },
+  },
+);
+
+export const appStorage = storageHost ? createStorage(storageHost) : inertStorage;
+
 // ---- <Transition> / <TransitionGroup> (compat roadmap G9) ------------------
 // runtime-core exports BaseTransition (the state machine) but NOT these two —
 // they live in runtime-dom, because the CSS half is DOM-specific. Libraries

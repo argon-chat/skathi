@@ -1,5 +1,9 @@
 {
   "$comment": "Window configuration — docs/WINDOWING.md §4.1. build.ts copies the `window` block verbatim into dist/manifest.json; the host reads it BEFORE cx.open_window, which is the only moment creation-time gpui options can be set without a visible flash. VN_WINDOW / VN_WINDOW_FOCUS still win on top.",
+
+  "$comment-name": "The app's IDENTITY, not its title: it names %LOCALAPPDATA%\\<name>\\storage, where localStorage lives (docs/STORAGE.md §3). Optional — without it the host derives `hello` from the entry module's app directory, which is the same answer. Spelled out here so that renaming the folder does not silently move a user's saved data.",
+  "name": "hello",
+
   "window": {
     "title": "vue-native — hello",
     "width": 980,

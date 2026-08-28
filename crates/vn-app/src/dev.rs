@@ -145,6 +145,23 @@ vn_runtime::host_fn!(fn vn_dev_voice_token(g, args) {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn the_app_name_is_the_app_directory_of_the_entry_module() {
+        // What names `%LOCALAPPDATA%\<app>\storage` in a dev host. Getting this
+        // wrong would let two apps share one localStorage.
+        assert_eq!(super::app_dir_of("apps/hello/src/main.js").as_deref(), Some("hello"));
+        assert_eq!(super::app_dir_of("apps/shadcn/src/main.ts").as_deref(), Some("shadcn"));
+        // No `src/` layer — the entry sits in the app directory itself.
+        assert_eq!(super::app_dir_of("apps/imgperf/main.js").as_deref(), Some("imgperf"));
+        // Windows separators, because a manifest is written by a builder that
+        // ran on Windows.
+        assert_eq!(super::app_dir_of("apps\\hello\\src\\main.js").as_deref(), Some("hello"));
+        // Nothing to derive: the caller falls through to the executable name.
+        assert_eq!(super::app_dir_of("main.js"), None);
+        assert_eq!(super::app_dir_of(""), None);
+        assert_eq!(super::app_dir_of("src/main.js"), None);
+    }
+
+    #[test]
     fn token_var_names_are_derived_from_the_identity() {
         assert_eq!(super::token_var_for("alice"), "VN_VOICE_TOKEN_ALICE");
         assert_eq!(super::token_var_for("a"), "VN_VOICE_TOKEN_A");
@@ -264,6 +281,39 @@ pub fn window_config() -> Option<String> {
     let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
     let v = json::parse(&text)?;
     Some(v.get("window")?.to_json())
+}
+
+/// The app's own name — what a per-app place on disk is named after
+/// (`%LOCALAPPDATA%\<app name>\storage`, see crates/vn-storage).
+///
+/// A DEV host cannot use its executable's name for this: one `vn-app.exe` runs
+/// `apps/hello`, `apps/shadcn` and whatever else `VN_DIST` points at, and they
+/// must not share a `localStorage`. So it comes from the build:
+/// `apps/<app>/vn.config.json`'s optional `"name"`, and failing that the app
+/// directory the entry module sits in — `apps/hello/src/main.js` → `hello`,
+/// the same derivation [`publish_asset_base`] uses for the asset base, for the
+/// same reason (it is the directory a Vite app would keep `index.html` in).
+///
+/// `None` only when there is no manifest at all, and then vn-storage falls
+/// through to the executable name.
+pub fn app_name() -> Option<String> {
+    let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
+    let v = json::parse(&text)?;
+    if let Some(n) = v.get("name").and_then(json::Json::as_str).filter(|n| !n.is_empty()) {
+        return Some(n.to_string());
+    }
+    app_dir_of(v.get("entry").and_then(json::Json::as_str)?)
+}
+
+/// `apps/hello/src/main.js` → `hello`. Split out so the derivation is testable
+/// without a manifest on disk.
+fn app_dir_of(entry: &str) -> Option<String> {
+    let mut segs: Vec<&str> = entry.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
+    segs.pop()?; // the entry file itself
+    if segs.last() == Some(&"src") {
+        segs.pop();
+    }
+    segs.pop().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 /// Serves `fetch("assets/x.wav")` out of the app directory in a dev build.

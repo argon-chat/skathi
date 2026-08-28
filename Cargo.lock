@@ -8069,13 +8069,23 @@ dependencies = [
  "log",
  "raw-window-handle",
  "reqwest_client",
+ "vn-clipboard",
  "vn-css",
  "vn-elements",
  "vn-permissions",
  "vn-runtime",
+ "vn-storage",
  "vn-tree",
  "vn-voice",
  "windows 0.61.3",
+]
+
+[[package]]
+name = "vn-clipboard"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "vn-runtime",
 ]
 
 [[package]]
@@ -8131,6 +8141,14 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "redjs",
+]
+
+[[package]]
+name = "vn-storage"
+version = "0.1.0"
+dependencies = [
+ "vn-runtime",
+ "windows 0.62.2",
 ]
 
 [[package]]

@@ -46,7 +46,15 @@ const IMPORT_LINE = /^\s*import\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/g
 const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 
 /** A fresh runtime world with a recording host. */
-export function createRuntime() {
+/**
+ * @param {{ storage?: boolean }} [options] — `storage: false` builds a world
+ *   with no `__vn_storage_*` at all, which is what a host compiled
+ *   `--no-default-features` (or an older one) looks like from JS. It is the
+ *   only way to reach `appStorage`'s inert branch, and that branch is the one
+ *   that must not invent a plausible path.
+ */
+export function createRuntime(options = {}) {
+  const withStorage = options.storage !== false;
   const raw = readFileSync(RUNTIME_PATH, "utf8");
   if (!IMPORT_LINE.test(raw)) {
     throw new Error("runtime.js no longer imports @vue/runtime-core — update this harness");
@@ -95,6 +103,32 @@ export function createRuntime() {
       dispatcher: null,
       /** The fake `navigator.permissions` PermissionStatus objects, by name. */
       statuses: new Map(),
+    },
+    /**
+     * The storage backend (`vn-storage`), faked. `folders` is the known-folder
+     * table `folders.rs` resolves; `refuse`/`flushError` make the two failing
+     * calls fail, which is the half of `appStorage` that has to throw rather
+     * than return a path nobody checked.
+     */
+    storage: {
+      folders: new Map([
+        ["APPDATA", "C:\\Users\\test\\AppData\\Roaming"],
+        ["LOCALAPPDATA", "C:\\Users\\test\\AppData\\Local"],
+        ["TEMP", "C:\\Users\\test\\AppData\\Local\\Temp"],
+        ["DOCUMENTS", "C:\\Users\\test\\Documents"],
+        ["HOME", "C:\\Users\\test"],
+      ]),
+      folder: "C:\\Users\\test\\AppData\\Local\\hello\\storage",
+      encrypted: false,
+      provider: "Windows DPAPI (per-user)",
+      bytes: 0,
+      pending: false,
+      flushes: 0,
+      error: null,
+      refuse: null,
+      flushError: null,
+      folderCalls: [],
+      setCalls: [],
     },
   };
   /** Deliver a settled request as the host's per-frame pump would. */
@@ -202,6 +236,10 @@ export function createRuntime() {
     "__vn_permissions_list",
     "__vn_permissions_request",
     "__vn_permissions_set_dispatcher",
+    "__vn_storage_user_folder",
+    "__vn_storage_set_folder",
+    "__vn_storage_info",
+    "__vn_storage_flush",
     // Bound as a parameter rather than left ambient so a test can hand
     // `appPermissions` a `navigator.permissions` to re-broadcast `change` from
     // — bun has a `navigator`, but not that.
@@ -285,15 +323,59 @@ export function createRuntime() {
     (fn) => {
       host.permissions.dispatcher = fn;
     },
+    // ---- __vn_storage_* ----------------------------------------------------
+    // The whole crate in four closures. `folders` is what
+    // `crates/vn-storage/src/folders.rs` resolves, `error` is what a rejected
+    // call answers with — the JS half's only job is to unwrap that and throw.
+    (kind, sub) => {
+      host.storage.folderCalls.push({ kind, sub });
+      const base = host.storage.folders.get(kind);
+      if (!base) return JSON.stringify({ error: `"${kind}" is not a user folder kind` });
+      if (sub.includes("..")) return JSON.stringify({ error: `subfolder "${sub}" must not …` });
+      return JSON.stringify({ path: sub ? `${base}\\${sub.replace(/\//g, "\\")}` : base });
+    },
+    (path, encrypted) => {
+      host.storage.setCalls.push({ path, encrypted });
+      if (host.storage.refuse) return JSON.stringify({ error: host.storage.refuse });
+      host.storage.folder = path;
+      host.storage.encrypted = !!encrypted;
+      return JSON.stringify({ path });
+    },
+    () =>
+      JSON.stringify({
+        folder: host.storage.folder,
+        file: `${host.storage.folder}\\localStorage.${host.storage.encrypted ? "sealed" : "json"}`,
+        encrypted: host.storage.encrypted,
+        bytes: host.storage.bytes,
+        loaded: true,
+        pending: host.storage.pending,
+        provider: host.storage.provider,
+        kinds: [...host.storage.folders.keys()],
+        error: host.storage.error,
+      }),
+    () => {
+      if (host.storage.flushError) return JSON.stringify({ error: host.storage.flushError });
+      const wrote = host.storage.pending;
+      host.storage.pending = false;
+      host.storage.flushes++;
+      return JSON.stringify({ wrote });
+    },
     fakeNavigator,
   ];
+
+  if (!withStorage) {
+    // Four `undefined`s in the storage slots: `typeof __vn_storage_info` is
+    // then "undefined" and runtime.js takes the inert branch.
+    const first = params.indexOf("__vn_storage_user_folder");
+    for (let i = first; i < first + 4; i++) args[i] = undefined;
+  }
 
   // eslint-disable-next-line no-new-func
   const exports = new Function(
     ...params,
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
-       writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions };`,
+       writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage };`,
   )(...args);
 
   return {

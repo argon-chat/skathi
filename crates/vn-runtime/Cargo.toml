@@ -18,12 +18,24 @@ publish = false
 #
 # Opting out does not stub `AudioContext`; it removes it, so feature detection
 # (`typeof AudioContext !== 'undefined'`) tells the truth either way.
-default = ["audio"]
+#
+# `storages` and `clipboard` are on for the same reason and cost even less:
+# neither pulls a dependency, both are APIs a browser build takes for granted,
+# and a renderer that silently lacks `localStorage` would break the first Vue
+# app that remembers a preference. They are still features because redjs also
+# ships to a game player that has its own answers for both, and because a host
+# with no `StorageHost`/`ClipboardHost` installed should be able to compile the
+# surface out rather than ship one that only ever fails.
+default = ["audio", "storages", "clipboard"]
 # `audio-codecs-extra` rides along: an app runtime's `decodeAudioData` input is
 # "whatever file the user has", not a curated asset pipeline, so AAC-LC/M4A,
 # ALAC, AIFF, CAF and MKV belong in the box. A game shipping its own .ogg does
 # not pay for them (redjs keeps that flag off by default).
 audio = ["redjs/audio", "redjs/audio-codecs-extra"]
+# `localStorage` / `sessionStorage` (crates/vn-storage is the backend).
+storages = ["redjs/storages"]
+# `navigator.clipboard` (crates/vn-clipboard is the backend, over gpui's).
+clipboard = ["redjs/clipboard"]
 
 [dependencies]
 # Lean redjs: no game-engine host classes (physics/mesh/css-host/yoga-host are

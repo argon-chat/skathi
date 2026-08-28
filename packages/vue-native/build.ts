@@ -131,17 +131,42 @@ const SOURCE_EXT = /\.(vue|js|ts|mjs)$/;
 const VN_CONFIG_DIR = APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR;
 const VN_CONFIG_PATH = join(VN_CONFIG_DIR, "vn.config.json");
 
-function readWindowConfig(): Record<string, unknown> | undefined {
+function readVnConfig(): Record<string, unknown> | undefined {
   if (!existsSync(VN_CONFIG_PATH)) return undefined;
   try {
     const cfg = JSON.parse(readFileSync(VN_CONFIG_PATH, "utf8"));
-    return cfg && typeof cfg.window === "object" && cfg.window ? cfg.window : undefined;
+    return cfg && typeof cfg === "object" ? cfg : undefined;
   } catch (e) {
     // A malformed config must not take the whole build down, but it must also
     // never be silently ignored - the window would just look wrong.
     console.error(`[build] ${VN_CONFIG_PATH}: ${e}`);
     return undefined;
   }
+}
+
+function readWindowConfig(): Record<string, unknown> | undefined {
+  const cfg = readVnConfig();
+  return cfg && typeof cfg.window === "object" && cfg.window
+    ? (cfg.window as Record<string, unknown>)
+    : undefined;
+}
+
+// The app's own name, copied into the manifest for the Rust host.
+//
+// It names the app's PLACE ON DISK (%LOCALAPPDATA%\<name>\storage - see
+// crates/vn-storage and docs/STORAGE.md), which is why it is derived here and
+// not from the window title: a title is prose that changes, a storage folder is
+// an identity that must not. A dev host runs many apps out of one vn-app.exe,
+// so the executable cannot be the name either.
+//
+// Optional. Without it the host falls back to the app directory of the entry
+// module ("apps/hello/src/main.js" -> "hello"), which is right for every app in
+// this repo; declaring `"name"` matters when the shipped app is called
+// something other than its folder.
+function readAppName(): string | undefined {
+  const cfg = readVnConfig();
+  const name = cfg?.name;
+  return typeof name === "string" && name.trim() ? name.trim() : undefined;
 }
 
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
@@ -957,7 +982,15 @@ function writeManifest(files: string[]) {
   writeAtomic(
     join(DIST, "manifest.json"),
     JSON.stringify(
-      { rev, vendorRev, entry: toId(ENTRY_ABS), modules: ids, deps, window: readWindowConfig() },
+      {
+        rev,
+        vendorRev,
+        entry: toId(ENTRY_ABS),
+        name: readAppName(),
+        modules: ids,
+        deps,
+        window: readWindowConfig(),
+      },
       null,
       2,
     ) + "\n",

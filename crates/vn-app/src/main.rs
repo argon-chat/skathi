@@ -506,6 +506,12 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         // are dispatched from inside `rt.pump()` above, by redjs, because that
         // is where the status objects live.
         vn_permissions::pump();
+        // At most ONE localStorage file write per frame, whatever the app did
+        // to the area during this wave. Inside the publication like everything
+        // else here, though nothing in it touches gpui — it is here because the
+        // frame clock is the coalescing clock (docs/STORAGE.md §6).
+        #[cfg(feature = "storages")]
+        vn_storage::pump();
     });
     // The `@media` environment (viewport, colour scheme, reduced motion, DPI
     // scale, chrome mode) is published inside `window::pump` above, next to the
@@ -837,12 +843,28 @@ fn main() {
             // vendor bundle either way, and an app that never constructs a
             // Room costs one idle registration.
             vn_voice::install(rt);
+            // `navigator.clipboard` over gpui's clipboard — the same one the
+            // native <input> uses for Ctrl+C, so there is never a second owner
+            // of `OpenClipboard`. No host fns and no pump: the clipboard is
+            // synchronous, so the promise is settled before `readText()`
+            // returns.
+            #[cfg(feature = "clipboard")]
+            vn_clipboard::install();
             // Installs the platform backend behind redjs's
             // `navigator.permissions` AND registers `__vn_permissions_*` for
             // the `appPermissions` extension. Must happen before any app code
             // runs; the hook is read per call, so nothing else depends on the
             // order within this block. See docs/PERMISSIONS.md.
             vn_permissions::install(rt);
+            // The backend behind redjs's `localStorage`, plus
+            // `__vn_storage_*` for the `appStorage` extension. Must happen
+            // before any app code runs: the area is loaded lazily on first
+            // touch, so a host that installed late would hand the app an empty
+            // `localStorage` and only then start honouring the disk.
+            // `boot_mode::app_name` is what names the default folder in a dev
+            // host, where one exe runs many apps. See docs/STORAGE.md.
+            #[cfg(feature = "storages")]
+            vn_storage::install(rt, boot_mode::app_name());
             #[cfg(not(feature = "prod"))]
             devtools::install(rt);
             // `__vn_dev_voice_token` — the LiveKit dev token minter. Dev only,

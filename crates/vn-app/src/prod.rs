@@ -100,6 +100,17 @@ pub fn window_config() -> Option<String> {
     Some(RAW.to_string())
 }
 
+/// The app's name — see [`crate::dev::app_name`] for what it is for.
+///
+/// `None`, on purpose, and NOT a fourth build artifact: a shipped build is ONE
+/// executable for ONE app, so the executable's own file name already is the
+/// app's name, and vn-storage falls through to it. Renaming `myapp.exe` renames
+/// its storage folder, which is the behaviour a portable-app user expects and
+/// the one a `dist/app.json` would have taken away.
+pub fn app_name() -> Option<String> {
+    None
+}
+
 fn warn_missing_asset(key: &str) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static WARNED: AtomicBool = AtomicBool::new(false);

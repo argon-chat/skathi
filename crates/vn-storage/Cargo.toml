@@ -1,0 +1,41 @@
+[package]
+name = "vn-storage"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The JS host seam AND the trait this crate implements. `StorageHost` is
+# declared in redjs (`redjs::webapi::storage`) rather than here, for the same
+# reason `PermissionHost` is: `localStorage` has to behave like `localStorage`
+# without knowing which OS is underneath, so the browser-shaped half belongs on
+# the redjs side of the seam and only the BYTES live here. Same layering as
+# `vn-permissions` and `vn-voice`.
+vn-runtime = { path = "../vn-runtime", default-features = false, features = ["storages"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# 0.62, matching `vn-permissions` (this crate shares no types with gpui, so it
+# does not have to agree with gpui's 0.61).
+#
+# Four families, and nothing else:
+#   UI_Shell             SHGetKnownFolderPath + the FOLDERID_* GUIDs. The known
+#                        folder API rather than %APPDATA%: the environment
+#                        variables are inherited and therefore forgeable, they
+#                        are absent in some service contexts, and they do not
+#                        exist at all for Documents or the profile root.
+#   Storage_FileSystem   GetTempPath2W — TEMP genuinely IS an environment
+#                        lookup on Windows, and this is the API that does it
+#                        (and the one that is correct for a SYSTEM process).
+#   System_Com           CoTaskMemFree, which is how SHGetKnownFolderPath's
+#                        result is released.
+#   Security_Cryptography  CryptProtectData / CryptUnprotectData — DPAPI, the
+#                        at-rest encryption provider. No key management, no key
+#                        file, no place for us to leak one.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }

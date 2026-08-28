@@ -22,12 +22,27 @@ prod = []
 # default; `cargo build -p vn-app --no-default-features` builds a host with no
 # audio at all, which is ~40 fewer crates to compile. The reasoning for the
 # default living on rather than off is in crates/vn-runtime/Cargo.toml.
-default = ["audio"]
+default = ["audio", "storages", "clipboard"]
 # `vn-voice/audio` rides along: it is the flag that lets the voice mixer see
 # `redjs::webapi::pcm` and route a room's playout into the app's graph. The two
 # must move together — a host with `AudioContext` but no way to reach it from
 # voice would be a silent room with no explanation.
 audio = ["vn-runtime/audio", "vn-voice/audio"]
+
+# `localStorage` / `sessionStorage`, plus the `appStorage` folder + encryption
+# extension. ON by default for the same reason `audio` is: an app written
+# against a browser expects to find them, and a renderer that silently lacks
+# them is exactly the "diverge without saying so" failure this project refuses.
+#
+# Off, the whole thing vanishes — the redjs surface, this crate, the pump call —
+# so `typeof localStorage === "undefined"` tells the truth rather than an
+# in-memory area pretending to persist. Neither flag costs a third-party
+# dependency; `--no-default-features` only drops `windows/…_Cryptography`.
+storages = ["vn-runtime/storages", "dep:vn-storage"]
+# `navigator.clipboard`. Off, `navigator.clipboard` is undefined and the native
+# <input>'s own Ctrl+C is unaffected — the two share gpui's clipboard, not this
+# crate.
+clipboard = ["vn-runtime/clipboard", "dep:vn-clipboard"]
 
 [dependencies]
 # `stacker` (zed#63187) made `stacksafe` opt-in; before that PR it was an
@@ -62,6 +77,13 @@ vn-tree = { path = "../vn-tree" }
 # vn-voice is not: an app asking whether it may use the microphone is doing
 # application work, not automation.
 vn-permissions = { path = "../vn-permissions" }
+# `localStorage`'s bytes: the storage folder, the atomic writes, DPAPI. Optional
+# because the `storages` feature has to be able to remove the API entirely
+# rather than leave one that cannot persist.
+vn-storage = { path = "../vn-storage", optional = true }
+# `navigator.clipboard` over gpui's clipboard — the same one vn-elements' text
+# input uses for Ctrl+C. Optional for the same reason.
+vn-clipboard = { path = "../vn-clipboard", optional = true }
 # LiveKit voice. NOT dev-gated: `vn_voice::pump()` runs in every build, because
 # voice is an application capability rather than an automation surface.
 vn-voice = { path = "../vn-voice" }

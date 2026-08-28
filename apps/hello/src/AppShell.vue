@@ -40,6 +40,7 @@ const excluded = ["LabPage"];
         <RouterLink class="tab" to="/voice">Voice</RouterLink>
         <RouterLink class="tab" to="/window">Window</RouterLink>
         <RouterLink class="tab" to="/permissions">Perms</RouterLink>
+        <RouterLink class="tab" to="/storage">Storage</RouterLink>
         <RouterLink class="tab" to="/lab">Lab</RouterLink>
       </div>
       <!-- Live store read, visible on EVERY tab. -->
