@@ -1536,7 +1536,36 @@ export function createApp(rootComponent, rootProps = null) {
     if (globalThis.__VN_CSS__?.length) {
       __vn_set_stylesheet(__VN_CSS__.join("\n"));
     }
-    const root = mk(__vn_create_root(), 1, "root");
+    // `HTML`, not `ROOT`. The retained tree has one root box and it answers to
+    // `document.documentElement` AND `document.body` (see the block that
+    // installs them), so whatever `nodeName` it reports is what every
+    // DOM-walking library sees at the top of the chain — and the walk has to
+    // TERMINATE there.
+    //
+    // @floating-ui/dom, which every reka-ui popper rides on, walks with
+    //
+    //     getParentNode(n) = n.assignedSlot || n.parentNode || getDocumentElement(n)
+    //     isLastTraversableNode(n) = ['html','body','#document'].includes(nodeName)
+    //
+    // and `getNearestOverflowAncestor` recurses on `getParentNode` until
+    // `isLastTraversableNode`. Our root has no `parentNode`, so `getParentNode`
+    // falls through to `getDocumentElement`, which IS the root — a self-loop.
+    // Called "ROOT" the loop never terminates, and `getOverflowAncestors(floating)`
+    // (the FIRST thing `autoUpdate` does, before it ever calls `update()`)
+    // blew the JS stack. `computePosition` then never ran: reka's PopperContent
+    // was left at its unplaced `translate(0, -200%)` with an inline
+    // `animation: none`, so every tooltip/popover/dropdown painted two of its
+    // own heights above the window origin, never animated, and — because the
+    // throw also ate the queued `useGraceArea` effect that installs the
+    // pointer-exit watcher — never closed. Naming the root `html` is the whole
+    // fix: `isLastTraversableNode` is true one step earlier, and floating-ui's
+    // own `if (getNodeName(node) === 'html') return node` guard exists for
+    // exactly this shape. See research/reports/m19/hover-anim-tooltips.md.
+    //
+    // The Rust tag stays "root" — `vn_css::element::has_local_name` already
+    // answers `html` and `body` off `is_root()`, so the cascade is unaffected
+    // and devtools still names the box for what it is.
+    const root = mk(__vn_create_root(), 1, "html");
     // The document roots a reused browser component reaches for (`<Teleport
     // to="body">`, `document.querySelectorAll`, `document.body.contains`) all
     // mean this node.
