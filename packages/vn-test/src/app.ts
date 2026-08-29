@@ -1,0 +1,406 @@
+// `launch()` and the `VnApp` handle — the browser-and-page half of the API.
+//
+// Playwright splits a run into browser / context / page. We have one window per
+// process and no contexts, so `VnApp` is all three at once: it owns the OS
+// process, the dist slot it was pointed at, and the devtools connection.
+//
+// The one rule this file exists to keep: A LEAKED HOST IS THE WORST FAILURE
+// MODE. It survives the test run, keeps a window on the user's screen, holds a
+// lock on the executable, and answers on a port that a later run may believe is
+// its own. So the kill happens from three places — `close()`, a `process.exit`
+// hook, and the signal handlers — and all three are idempotent.
+
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync, openSync, closeSync, rmSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { Locator, type LocatorOptions } from "./locator";
+import { Wire, readHandshake, pingOnce, VnCommandError } from "./wire";
+import {
+  allocateSlot,
+  cacheDistFor,
+  ensureBuild,
+  ensureWorkDir,
+  releaseStagedExe,
+  resolveEntry,
+  stagedExe,
+  REPO,
+  WORK_DIR,
+} from "./dist";
+import { artifactPath } from "./artifacts";
+
+export interface LaunchOptions {
+  /**
+   * The app under test: a name under `apps/` (`"hello"`, `"shadcn"`) or a path
+   * to an entry module relative to the workspace root.
+   */
+  app: string;
+  /** `[width, height]` in CSS px — becomes `VN_WINDOW`. Default: the app's own `vn.config.json`. */
+  window?: [number, number];
+  /** Extra environment for the host process. `VN_DIST` is always ours. */
+  env?: Record<string, string>;
+  /** Default timeout for auto-waiting locators and assertions (ms). Default 10 000. */
+  timeout?: number;
+  /** How long to wait for the host to boot and mount (ms). Default 60 000. */
+  launchTimeout?: number;
+  /** Skip the build and use whatever is in the cache dist. Default false. */
+  noBuild?: boolean;
+  /** Wait for JS to have mounted a tree before returning. Default true. */
+  waitForMount?: boolean;
+  /** Print build/launch progress to stdout. Default false. */
+  verbose?: boolean;
+  /** A name for slot directories and artifacts. Default: the app name. */
+  label?: string;
+  /** Use this executable instead of a staged copy of `target/.../vn-app.exe`. */
+  exe?: string;
+  /** Leave the process running at teardown — for debugging a red test by hand. */
+  keepAlive?: boolean;
+}
+
+export type LogEntry = { seq: number; at: number; kind: string; text: string };
+export type Bounds = { x: number; y: number; w: number; h: number };
+export type NodeInfo = {
+  id: number;
+  tag?: string;
+  classes?: string[];
+  text?: string;
+  bounds: Bounds | null;
+  scopes?: string[];
+  groupAnchor?: boolean;
+  gone?: boolean;
+};
+
+const live = new Set<VnApp>();
+let hooked = false;
+
+/** Kills every host this process started. Must stay synchronous — see `hookExit`. */
+function killAllSync() {
+  for (const app of [...live]) app.killSync();
+  releaseStagedExe();
+}
+
+function hookExit() {
+  if (hooked) return;
+  hooked = true;
+  // `exit` is the belt: it runs after bun:test has finished, pass or fail, and
+  // after an uncaught throw. It has to be synchronous, which is why the kill
+  // path is `spawnSync` all the way down.
+  process.on("exit", killAllSync);
+  // …and the braces, for the Ctrl-C that never reaches `exit`.
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(sig, () => {
+      killAllSync();
+      process.exit(130);
+    });
+  }
+}
+
+export class VnApp {
+  readonly locatorDefaults: LocatorOptions;
+  #closed = false;
+
+  constructor(
+    readonly wire: Wire,
+    readonly child: ChildProcess,
+    readonly pid: number,
+    /** The ephemeral port this host bound. Different for every instance. */
+    readonly port: number,
+    readonly slotDir: string,
+    readonly label: string,
+    readonly hostLog: string,
+    readonly timeout: number,
+    private readonly keepAlive: boolean,
+    private readonly logFd: number,
+  ) {
+    this.locatorDefaults = { timeout };
+  }
+
+  // -- selection ------------------------------------------------------------
+
+  /**
+   * A handle on whatever `selector` matches, resolved fresh on every use.
+   *
+   * Nothing is queried here — like Playwright's, a locator is a description,
+   * not a snapshot, so it survives the tree being rebuilt under it.
+   */
+  locator(selector: string, options: LocatorOptions = {}): Locator {
+    return new Locator(this, selector, { ...this.locatorDefaults, ...options });
+  }
+
+  // -- raw commands ---------------------------------------------------------
+
+  /** One devtools command, unwrapped to its `data`. The escape hatch under everything. */
+  send(cmd: string, args: Record<string, unknown> = {}, timeoutMs?: number): Promise<any> {
+    return this.wire.send(cmd, args, timeoutMs);
+  }
+
+  query(selector: string): Promise<{ count: number; nodes: NodeInfo[]; warnings?: string[] }> {
+    return this.send("query", { selector });
+  }
+
+  tree(selector?: string, depth?: number): Promise<any> {
+    return this.send("tree", { ...(selector ? { selector } : {}), ...(depth ? { depth } : {}) });
+  }
+
+  /**
+   * Evaluates `js` in the app's JSC, in global scope.
+   *
+   * A THROW inside the app is a successful round trip carrying a failure — the
+   * host reports it as `{ok:true, data:{exception}}`, exactly like a devtools
+   * console. We turn it back into a thrown Error, because a test that says
+   * `await app.eval(...)` means "do this", not "tell me how it went".
+   */
+  async eval(js: string): Promise<any> {
+    const data = await this.send("eval", { js });
+    if (data?.exception) {
+      const e = new Error(`app.eval threw: ${data.exception}`);
+      e.stack = `${e.message}\n${data.stack ?? ""}`;
+      throw e;
+    }
+    return data?.value;
+  }
+
+  /**
+   * The host's log ring since `since` (a cursor from a previous call).
+   * 500 entries deep; `next` is the cursor to pass next time.
+   */
+  logs(since = 0): Promise<{ entries: LogEntry[]; next: number; status: string | null; dropped?: number }> {
+    return this.send("logs", { since });
+  }
+
+  /** Client-area readback (never raises the window). Returns the path written. */
+  async screenshot(path?: string, backend?: "auto" | "render_to_image" | "print_window"): Promise<string> {
+    const target = path ? resolve(path) : artifactPath(`${this.label}-screenshot`, "png");
+    mkdirSync(dirname(target), { recursive: true });
+    const data = await this.send("screenshot", { path: target, ...(backend ? { backend } : {}) });
+    return data.path as string;
+  }
+
+  /** A real keystroke to whatever currently has focus. `"Enter"`, `"Shift+Tab"`, `"ArrowDown"`. */
+  press(key: string): Promise<any> {
+    return this.send("key", { key });
+  }
+
+  // -- diagnostics ----------------------------------------------------------
+
+  /**
+   * Fails if the app logged anything that is genuinely broken.
+   *
+   * `[js uncaught]` is always a failure. CSS advisories are NOT, by default:
+   * they are the compat-first design working as intended (an unsupported
+   * declaration says so instead of silently doing nothing), and a spec that
+   * treated every advisory as a failure would go red the day someone adds a
+   * `backdrop-filter`. Opt in with `{ advisories: true }` when the point of the
+   * test IS the advisory stream.
+   */
+  async expectNoErrors(options: { advisories?: boolean; ignore?: RegExp[] } = {}) {
+    const { entries } = await this.logs(0);
+    const ignore = options.ignore ?? [];
+    const bad = entries.filter((e) => {
+      if (ignore.some((re) => re.test(e.text))) return false;
+      if (e.kind === "error") return true;
+      if (e.text.includes("[js uncaught]")) return true;
+      if (options.advisories && (e.kind === "advisory" || e.kind === "css")) return true;
+      return false;
+    });
+    if (!bad.length) return;
+    const shot = await this.screenshot(artifactPath(`${this.label}-errors`, "png")).catch(() => "(no screenshot)");
+    const listing = bad.map((e) => `  [${e.kind}] ${e.text}`).join("\n");
+    throw new Error(
+      `${this.label}: the app logged ${bad.length} error(s)\n${listing}\n` +
+        `  screenshot: ${shot}\n  host log:   ${this.hostLog}`,
+    );
+  }
+
+  /** The tail of the log ring, for a failure message. Never throws. */
+  async tailLogs(n = 12): Promise<string> {
+    try {
+      const { entries } = await this.logs(0);
+      return entries
+        .slice(-n)
+        .map((e) => `  [${e.kind}] ${e.text}`)
+        .join("\n");
+    } catch (e) {
+      return `  (logs unavailable: ${(e as Error).message})`;
+    }
+  }
+
+  // -- lifecycle ------------------------------------------------------------
+
+  get closed() {
+    return this.#closed;
+  }
+
+  /** Kill the host and drop the connection. Idempotent; safe in `afterAll`. */
+  async close() {
+    if (this.#closed) return;
+    this.killSync();
+  }
+
+  /**
+   * The synchronous kill. `/T` takes the tree (a host that spawned helpers),
+   * `/F` skips the polite close a GUI process can decline. Called from
+   * `process.on("exit")`, where nothing asynchronous can run.
+   */
+  killSync() {
+    if (this.#closed) return;
+    this.#closed = true;
+    live.delete(this);
+    try {
+      this.wire.close();
+    } catch {}
+    if (!this.keepAlive) {
+      try {
+        spawnSync("taskkill", ["/PID", String(this.pid), "/T", "/F"], { stdio: "ignore" });
+      } catch {}
+    }
+    try {
+      closeSync(this.logFd);
+    } catch {}
+    if (!this.keepAlive) {
+      // The slot is a copy; nothing in it is source. Leaving it behind would
+      // grow without bound across runs.
+      try {
+        rmSync(this.slotDir, { recursive: true, force: true });
+      } catch {
+        // Windows can still hold the exe's view of the dist for a beat.
+      }
+    }
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Builds if stale, allocates a private slot, starts a host on it, and waits
+ * until it answers.
+ *
+ * NOTE: no `windowsHide`. It sets `STARTF_USESHOWWINDOW`/`SW_HIDE`, which for a
+ * GUI process hides the MAIN WINDOW — and gpui stops producing frames for a
+ * hidden window, so the devtools listener would accept the connection and then
+ * never answer. There is no headless mode; the window opens. Nothing here
+ * focuses it, moves a cursor, or sends global input: every gesture in this
+ * package is a devtools command.
+ */
+export async function launch(options: LaunchOptions): Promise<VnApp> {
+  ensureWorkDir();
+  hookExit();
+
+  const log = options.verbose ? (l: string) => console.log(l) : () => {};
+  const entry = resolveEntry(options.app);
+  const label = options.label ?? options.app.replace(/[\\/]/g, "-");
+  const timeout = options.timeout ?? 10_000;
+  const launchTimeout = options.launchTimeout ?? 60_000;
+
+  const cache = options.noBuild ? cacheDistFor(entry) : await ensureBuild(entry, log);
+  if (!existsSync(join(cache, "manifest.json"))) {
+    throw new Error(`${cache} has no manifest.json — drop \`noBuild\` or run the builder first`);
+  }
+
+  const slotDir = allocateSlot(cache, label);
+  const exe = options.exe ? resolve(options.exe) : stagedExe();
+
+  const logsDir = join(WORK_DIR, "logs");
+  mkdirSync(logsDir, { recursive: true });
+  const hostLog = join(logsDir, `${label}-${process.pid}-${Date.now()}.log`);
+  const logFd = openSync(hostLog, "w");
+
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), VN_DIST: slotDir };
+  if (options.window) env.VN_WINDOW = `${options.window[0]}x${options.window[1]}`;
+  Object.assign(env, options.env ?? {});
+
+  log(`[vn-test] ${label}: launching ${exe} on ${slotDir}`);
+  const child = spawn(exe, [], {
+    cwd: REPO,
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env,
+  });
+  child.unref();
+  const pid = child.pid;
+  if (!pid) {
+    closeSync(logFd);
+    throw new Error(`could not start ${exe}`);
+  }
+
+  let exited: number | null = null;
+  child.on("exit", (code) => {
+    exited = code ?? -1;
+  });
+
+  const handshakePath = join(slotDir, "devtools.json");
+  const deadline = Date.now() + launchTimeout;
+  const fail = (why: string) => {
+    try {
+      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+      closeSync(logFd);
+    } catch {}
+    return new Error(
+      `${label}: ${why}\n  exe:      ${exe}\n  dist:     ${slotDir}\n  host log: ${hostLog}`,
+    );
+  };
+
+  // Phase 1: the handshake file. It was deleted from the slot before the spawn
+  // (see `allocateSlot`), so its reappearance is a real edge, not a guess.
+  while (!existsSync(handshakePath)) {
+    if (exited !== null) throw fail(`the host exited with code ${exited} before writing devtools.json`);
+    if (Date.now() > deadline) throw fail(`no devtools.json after ${launchTimeout} ms`);
+    await sleep(25);
+  }
+
+  // Phase 2: a reply. The listener starts before the JS runtime, so this only
+  // proves the process is alive and pumping frames.
+  const handshake = readHandshake(slotDir);
+  let ping: any = null;
+  for (;;) {
+    try {
+      ping = await pingOnce(handshake.port, handshake.token, 5_000);
+      break;
+    } catch (e) {
+      if (exited !== null) throw fail(`the host exited with code ${exited} during startup`);
+      if (Date.now() > deadline) throw fail(`ping never answered: ${(e as Error).message}`);
+      await sleep(50);
+    }
+  }
+
+  const wire = new Wire(handshake, Math.max(timeout, 15_000));
+  const app = new VnApp(
+    wire,
+    child,
+    pid,
+    handshake.port,
+    slotDir,
+    label,
+    hostLog,
+    timeout,
+    options.keepAlive ?? false,
+    logFd,
+  );
+  live.add(app);
+
+  // Phase 3: a MOUNTED tree. `ping` answers `{root: 0}` from the moment the
+  // listener is up, which is well before vendor.js has been evaluated — a
+  // locator resolved in that window would report "matched no nodes" and look
+  // like a selector bug. Waiting here is what makes the first assertion in a
+  // spec mean what it says.
+  if (options.waitForMount !== false) {
+    for (;;) {
+      if (ping?.root) break;
+      if (exited !== null) throw fail(`the host exited with code ${exited} before mounting`);
+      if (Date.now() > deadline) {
+        const tail = await app.tailLogs(20);
+        app.killSync();
+        throw new Error(
+          `${label}: nothing mounted within ${launchTimeout} ms (ping still reports root 0)\n` +
+            `${tail}\n  host log: ${hostLog}`,
+        );
+      }
+      await sleep(50);
+      ping = await app.send("ping").catch(() => null);
+    }
+  }
+
+  log(`[vn-test] ${label}: ready (pid ${pid}, root ${ping?.root})`);
+  return app;
+}
+
+export { VnCommandError };
