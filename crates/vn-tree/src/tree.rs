@@ -200,6 +200,12 @@ pub struct Tree {
     /// Nodes whose inline `style` text changed and must be re-parsed. Tracked
     /// rather than rediscovered, so the pass never scans the whole slab.
     inline_dirty_nodes: Vec<u32>,
+    /// A FORCED style flush (`getComputedStyle`, see
+    /// [`flush_pending_style`]) already ran this wave's restyle. The wave's
+    /// `flush_changes` must still report a change so the root view repaints,
+    /// but it must not run the cascade a second time — and neither must the
+    /// next `getComputedStyle` in the same wave.
+    style_flushed: bool,
     /// Elements some OTHER element's `group-hover:` rule watches — the ones the
     /// renderer has to give gpui's `.group(name)` to. Recomputed at the end of
     /// a restyle pass, and only for a sheet that has such a rule at all: a
@@ -527,7 +533,10 @@ impl Tree {
     }
 
     pub fn take_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.dirty)
+        // A forced flush already did the cascade, but the frame still has to be
+        // told something changed, or the wave paints the old pixels.
+        let flushed = std::mem::take(&mut self.style_flushed);
+        std::mem::take(&mut self.dirty) || flushed
     }
 
     /// "Something changed that no subtree is safe from": a new stylesheet, or a
@@ -817,6 +826,10 @@ impl Tree {
         // ComputedStates: PartialEq.
         let now = std::time::Instant::now();
         let has_keyframes = engine.has_keyframes();
+        // `@keyframes` declarations composed with `var()` resolve against the
+        // ANIMATING element, so the advisories they produce belong to the
+        // element too — collected here and drained with the animator's own.
+        let keyframe_diagnostics = std::cell::RefCell::new(Vec::<String>::new());
         ANIMATOR.with(|a| {
             let mut animator = a.borrow_mut();
             for (id, states) in computed {
@@ -828,7 +841,12 @@ impl Tree {
                         // nothing for the check.
                         if has_keyframes || !states.animations.is_empty() {
                             animator.on_computed_animations(id, &states, now, &|name| {
-                                engine.keyframes(name)
+                                engine.keyframes_for(
+                                    name,
+                                    &states.vars,
+                                    env,
+                                    &mut keyframe_diagnostics.borrow_mut(),
+                                )
                             });
                         }
                         // A restyle under a stationary pointer: the flip already
@@ -852,6 +870,9 @@ impl Tree {
                 crate::log::record("css", format!("[css transition] {d}"));
             }
         });
+        for d in keyframe_diagnostics.into_inner() {
+            warn_css(&format!("[css] {d}"));
+        }
         // The set of elements that have to carry gpui's `.group(name)`. Costs
         // one pass over the slab, and only for a sheet that has a
         // `group-hover:` rule in it at all.
@@ -1148,6 +1169,46 @@ pub fn restyle_all() {
         )) {
             return;
         }
+    }
+}
+
+/// A FORCED STYLE FLUSH: run the pending restyle now, because JS is about to
+/// read a computed value.
+///
+/// In a browser, `getComputedStyle` is a flush point — CSSOM §5 makes it return
+/// the value the DOM currently in memory produces, so a component may mutate an
+/// attribute and read the result back on the very next line. Ours cascaded once
+/// per JS wave instead, so such a read answered with the PREVIOUS style.
+///
+/// That is not an academic difference. reka-ui's `<Presence>` is built on it:
+/// when an element stops being present it does
+///
+/// ```js
+/// await nextTick();                                    // data-state="closed"
+/// const name = getComputedStyle(node).animationName;   // must be "exit"
+/// if (name === "none" || name === prevAnimationName) unmount();
+/// ```
+///
+/// With a stale read the name was still `enter`, so `prevAnimationName ===
+/// currentAnimationName`, so every dialog, popover, drawer and tooltip in the
+/// library unmounted INSTANTLY instead of playing its exit animation.
+///
+/// Only the CASCADE is flushed, not layout: `getBoundingClientRect` still
+/// reports the last painted rectangle (m18), because a box's size is decided by
+/// gpui's layout pass and there is no way to run one outside a frame.
+pub fn flush_pending_style() {
+    let pending = with_tree(|t| {
+        if !t.dirty {
+            return false;
+        }
+        t.dirty = false;
+        t.style_flushed = true;
+        true
+    });
+    if pending {
+        restyle_all();
+        crate::render::gc_node_state();
+        animator_gc();
     }
 }
 

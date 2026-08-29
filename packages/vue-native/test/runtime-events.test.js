@@ -54,6 +54,24 @@ describe("patchProp: on* props", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
+  test("a window-only event on an ELEMENT is silent — a browser never fires it there either", () => {
+    // `el.addEventListener("resize", …)` is dead code in Chrome too: `resize`
+    // is a `window` event. Warning here would report a divergence that does not
+    // exist, and a component that hedges by attaching to both targets would
+    // cost a log line on every app. On `window` the listener is real — it falls
+    // through to redjs's own EventTarget, where the host's trusted `resize` is
+    // dispatched.
+    const rt = createRuntime();
+    const node = rt.nodeOps.createElement("div");
+    for (const name of ["resize", "load", "beforeunload", "hashchange", "storage"]) {
+      node.addEventListener(name, () => {});
+    }
+    expect(rt.advisories()).toEqual([]);
+    // An element event the host really cannot deliver still speaks.
+    node.addEventListener("contextmenu", () => {});
+    expect(rt.advisories().length).toBe(1);
+  });
+
   test("modifiers are stripped before the name is looked up", () => {
     const rt = createRuntime();
     rt.patchProp(rt.el(2), "onClickCaptureOnce", null, () => {});

@@ -47,6 +47,17 @@ pub struct Env {
     /// (OS chrome, fullscreen, minimised) — exactly what a PWA in a tab
     /// reports, so a component written for a real PWA takes the right branch.
     pub titlebar_area: [f32; 4],
+    /// Is a COARSE pointing device (a touch screen, a pen digitizer) attached?
+    ///
+    /// Decides `any-pointer: coarse` and `any-hover: none`. The PRIMARY pointer
+    /// of a desktop window is always the mouse — `pointer: fine`,
+    /// `hover: hover` — because that is the device gpui delivers
+    /// `PlatformInput` from, which is also what a browser reports in a desktop
+    /// window on a touch laptop.
+    ///
+    /// The host fills this from `GetSystemMetrics(SM_DIGITIZER)`; `false` (no
+    /// touch hardware) is the desktop default and what `Env::default()` gives.
+    pub coarse_pointer: bool,
     /// `env(safe-area-inset-top | -right | -bottom | -left)`, CSS px, in that
     /// order.
     ///
@@ -99,6 +110,7 @@ impl Default for Env {
             // documented default (§2.3); a sheet compiled with no host yet
             // therefore gets the same number the host will publish.
             titlebar_area: [0.0, 0.0, 1024.0, 32.0],
+            coarse_pointer: false,
             safe_area_insets: [0.0; 4],
         }
     }
@@ -165,6 +177,24 @@ pub(crate) enum Feature {
     Resolution(Cmp, f32),
     /// `display-mode: standalone | window-controls-overlay | fullscreen`.
     Display(DisplayMode),
+    /// `pointer` / `any-pointer`. `any` widens the question from "the primary
+    /// device" to "any device attached", which is the only thing the two
+    /// features differ in.
+    Pointer { any: bool, want: PointerKind },
+    /// `hover` / `any-hover`, same distinction.
+    Hover { any: bool, want: bool },
+}
+
+/// The `pointer` / `any-pointer` values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PointerKind {
+    /// No pointing device at all — never true for us; a gpui window always has
+    /// a mouse cursor to be pointed at.
+    None,
+    /// A touch screen or a pen: low accuracy.
+    Coarse,
+    /// A mouse or a trackpad.
+    Fine,
 }
 
 impl Feature {
@@ -176,6 +206,24 @@ impl Feature {
             Feature::ReducedMotion(reduce) => env.reduce_motion == reduce,
             Feature::Resolution(cmp, dppx) => cmp.eval(env.scale_factor, dppx),
             Feature::Display(mode) => env.display_mode == mode,
+            // The PRIMARY pointer of a desktop window is the mouse gpui
+            // delivers `PlatformInput` from, whatever else is plugged in — the
+            // same answer a browser gives in a desktop window on a touch
+            // laptop. Only the `any-` forms widen to the attached hardware.
+            Feature::Pointer { any, want } => match want {
+                PointerKind::None => false,
+                PointerKind::Fine => true,
+                PointerKind::Coarse => any && env.coarse_pointer,
+            },
+            Feature::Hover { any, want } => {
+                // `any-hover: none` asks whether NO attached device can hover,
+                // and the mouse always can — so it is false either way, and
+                // `any-hover: hover` is true either way. The touch flag only
+                // moves the answer for a device set that has no mouse in it,
+                // which a gpui window never has.
+                let _ = any;
+                want
+            }
         }
     }
 }
@@ -236,6 +284,7 @@ pub(crate) const SUPPORTED: &str = "supported: `screen`/`all`/`print` media type
      `width`/`min-width`/`max-width`, `height`/`min-height`/`max-height` (px lengths, \
      range and interval syntax), `prefers-color-scheme`, `prefers-reduced-motion`, \
      `resolution`/`min-resolution`/`max-resolution` (dppx/dpi/dpcm), `display-mode`, \
+     `pointer`/`any-pointer`, `hover`/`any-hover`, \
      combined with `and`/`or`/`not`/`,`";
 
 /// Parses a whole media list (the comma-separated prelude) into one condition.
@@ -358,16 +407,45 @@ fn sized(id: MediaFeatureId, cmp: Cmp, px: f32) -> Feature {
     }
 }
 
+/// `pointer` / `any-pointer: <ident>`.
+fn pointer(value: &MediaFeatureValue<'_>, any: bool) -> Result<Cond, Unsupported> {
+    Ok(Cond::Feature(Feature::Pointer {
+        any,
+        want: match ident(value)? {
+            "none" => PointerKind::None,
+            "coarse" => PointerKind::Coarse,
+            "fine" => PointerKind::Fine,
+            _ => return Err("an unknown `pointer` value"),
+        },
+    }))
+}
+
+/// `hover` / `any-hover: <ident>`.
+fn hover(value: &MediaFeatureValue<'_>, any: bool) -> Result<Cond, Unsupported> {
+    Ok(Cond::Feature(Feature::Hover {
+        any,
+        want: match ident(value)? {
+            "hover" => true,
+            "none" => false,
+            _ => return Err("an unknown `hover` value"),
+        },
+    }))
+}
+
 fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
     use MediaFeatureId::{
-        DisplayMode as DisplayModeId, Height, PrefersColorScheme, PrefersReducedMotion, Resolution,
-        Width,
+        AnyHover, AnyPointer, DisplayMode as DisplayModeId, Height, Hover as HoverId,
+        Pointer as PointerId, PrefersColorScheme, PrefersReducedMotion, Resolution, Width,
     };
     Ok(match f {
         QueryFeature::Plain { name, value } => match standard(name)? {
             id @ (Width | Height) => Cond::Feature(sized(id, Cmp::Eq, length_px(value)?)),
             Resolution => Cond::Feature(Feature::Resolution(Cmp::Eq, dppx(value)?)),
             DisplayModeId => display_mode(value)?,
+            PointerId => pointer(value, false)?,
+            AnyPointer => pointer(value, true)?,
+            HoverId => hover(value, false)?,
+            AnyHover => hover(value, true)?,
             PrefersColorScheme => match ident(value)? {
                 "dark" => Cond::Feature(Feature::ColorScheme(true)),
                 "light" => Cond::Feature(Feature::ColorScheme(false)),
@@ -388,6 +466,9 @@ fn parse_feature(f: &MediaFeature<'_>) -> Result<Cond, Unsupported> {
             // which on every platform we run on it does.
             PrefersColorScheme => Cond::Always,
             PrefersReducedMotion => Cond::Feature(Feature::ReducedMotion(true)),
+            // `(pointer)` / `(hover)` in boolean form ask "is it anything other
+            // than `none`", and the mouse answers yes to both.
+            PointerId | AnyPointer | HoverId | AnyHover => Cond::Always,
             // A screen always has a non-zero resolution, and we are always in
             // SOME display mode.
             Resolution | DisplayModeId => Cond::Always,
@@ -558,7 +639,7 @@ mod tests {
     #[test]
     fn unsupported_features_are_rejected_not_silently_compiled() {
         for prelude in [
-            "(hover: hover)",
+            "(hover: sometimes)",
             "(orientation: landscape)",
             "(prefers-contrast: more)",
             "tv",
@@ -567,6 +648,39 @@ mod tests {
         ] {
             assert!(cond(prelude).is_err(), "{prelude} should be rejected");
         }
+    }
+
+    /// The four interaction features. A gpui window is a desktop window driven
+    /// by a mouse, so the PRIMARY pointer is always fine and always hovers —
+    /// what a browser reports in the same window, on the same machine, even
+    /// when the machine has a touch screen. Only the `any-` forms widen to the
+    /// hardware, and only `any-pointer: coarse` can move.
+    #[test]
+    fn the_pointer_and_hover_features_answer_for_a_desktop_window() {
+        let mouse = Env::default();
+        let touch = Env { coarse_pointer: true, ..Env::default() };
+        let t = |q: &str, env: &Env| cond(q).unwrap().eval(env);
+
+        for env in [&mouse, &touch] {
+            assert!(t("(pointer: fine)", env), "the primary pointer is the mouse");
+            assert!(!t("(pointer: coarse)", env));
+            assert!(!t("(pointer: none)", env));
+            assert!(t("(hover: hover)", env));
+            assert!(!t("(hover: none)", env));
+            assert!(t("(any-hover: hover)", env), "the mouse can always hover");
+            assert!(!t("(any-hover: none)", env));
+            assert!(t("(any-pointer: fine)", env));
+            // The boolean form is "not `none`", which the mouse satisfies.
+            assert!(t("(pointer)", env) && t("(hover)", env));
+        }
+        // The one answer the hardware moves.
+        assert!(!t("(any-pointer: coarse)", &mouse));
+        assert!(t("(any-pointer: coarse)", &touch));
+
+        // Tailwind's own `pointer-coarse:` / `hover:` variants compile to
+        // exactly these, and `not` composes.
+        assert!(t("not (pointer: coarse)", &mouse));
+        assert!(t("(hover: hover) and (pointer: fine)", &mouse));
     }
 
     /// `resolution` is the ONLY way a stylesheet (or `matchMedia`) can observe

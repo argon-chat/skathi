@@ -503,6 +503,52 @@ mod tests {
         assert_eq!(opacity_of(child), Some(1.0));
     }
 
+    /// `getComputedStyle` is a FLUSH POINT: a component may change an attribute
+    /// and read the resulting style back on the next line, and CSSOM says it
+    /// gets the new value. reka-ui's `<Presence>` does exactly that to decide
+    /// whether an element has an exit animation to wait for, so a stale read
+    /// unmounted every dialog, popover and drawer without animating it.
+    #[test]
+    fn getcomputedstyle_flushes_the_pending_cascade() {
+        let child = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let child = t.create_element(div);
+            t.insert(child, root, 0);
+            let key = t.intern("data-state");
+            t.set_prop(child, key, Some("open".into()));
+            t.set_class(child, "box");
+            child
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".box { animation: none } \
+             .box[data-state=open] { animation: enter 150ms linear } \
+             .box[data-state=closed] { animation: exit 150ms linear } \
+             @keyframes enter { from { opacity: 0 } } @keyframes exit { to { opacity: 0 } }",
+        ));
+        tree::restyle_all();
+        let name_now = || {
+            dom::computed_style(child)
+                .unwrap_or_default()
+                .lines()
+                .find_map(|l| l.strip_prefix("animation-name=").map(str::to_string))
+                .unwrap_or_default()
+        };
+        assert_eq!(name_now(), "enter");
+
+        // The flip, WITHOUT a frame in between — this is the `await nextTick()`
+        // of the Presence watcher, not a repaint.
+        tree::with_tree(|t| {
+            let key = t.intern("data-state");
+            t.set_prop(child, key, Some("closed".into()));
+        });
+        assert_eq!(name_now(), "exit", "the read must see its own mutation");
+
+        // …and the wave still reports a change, so the frame still repaints:
+        // the flush must not swallow the dirty flag it consumed.
+        assert!(flush_changes(), "a forced flush still owes the frame a repaint");
+    }
+
     /// Custom properties inherit through the REAL tree, which is what obliges
     /// the restyle pass to walk in document order rather than by node id.
     #[test]

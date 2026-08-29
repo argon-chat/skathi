@@ -620,10 +620,24 @@ function interceptGlobalTarget(target) {
 /// through [`dispatchEvent`] and never touch the host at all.
 const looksNative = (name) => /^[a-z]+$/.test(name);
 
+/// Events a BROWSER only ever fires on `window` (or `document`), never on an
+/// element. `el.addEventListener("resize", …)` is dead code in Chrome too, so
+/// warning about it here would report a divergence that does not exist — and a
+/// component that hedges by attaching to both targets would cost a log line on
+/// every app. On `window` these do work: `interceptGlobalTarget` hands anything
+/// the host does not source to redjs's own EventTarget, which is where the
+/// trusted `resize` from `redjs_dom_resize` is delivered.
+const WINDOW_ONLY_EVENTS = new Set([
+  "resize", "load", "unload", "beforeunload", "pageshow", "pagehide",
+  "hashchange", "popstate", "online", "offline", "storage", "message",
+  "languagechange", "rejectionhandled", "unhandledrejection",
+]);
+
 function addExtraListener(node, rawName, fn, opts) {
   if (!fn) return;
   const name = canonicalEvent(rawName);
   const code = hostCode(name);
+  if (!code && WINDOW_ONLY_EVENTS.has(name)) return;
   if (!code && looksNative(name)) {
     warnCompat(
       `event:${name}`,
@@ -1767,11 +1781,23 @@ defineGlobal(
       this._records = [];
     }
     observe(node, options = {}) {
+      // `observe(document, {subtree: true})` is how a library says "watch
+      // everything" — reka's focus scope and floating-ui's auto-update both do
+      // it. A Document is not an element here, but its element subtree is
+      // exactly the root's, so watching the root answers the same question.
+      // `document.documentElement` / `document.body` ARE real elements since
+      // m19, and arrive as themselves.
+      // Duck-typed rather than compared against the `document` global, because
+      // the same code runs in the test harness's private world.
+      if (node && node.kind !== 1 && node.documentElement) {
+        node = node.documentElement.kind === 1 ? node.documentElement : (appRoot ?? node);
+      }
       if (!node || node.kind !== 1) {
         warnCompat(
           "MutationObserver:target",
           "MutationObserver.observe() was given something that is not a rendered element — " +
-            "document/body are not real nodes in vue-native, so nothing under them is observed",
+            "only elements (and `document`, which is mapped to the root element) have a " +
+            "subtree in vue-native, so nothing under it is observed",
         );
         return;
       }

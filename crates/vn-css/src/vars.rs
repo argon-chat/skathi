@@ -426,6 +426,53 @@ fn inert(raw: &str, name: &str, parent: &Vars) -> bool {
     find_subst(raw.as_bytes(), 0).is_none() && parent.get(name) == Some(raw)
 }
 
+/// What a CSS-WIDE KEYWORD means when it is the whole value of a custom
+/// property declaration.
+///
+/// Custom properties take the wide keywords like any other property (CSS
+/// Variables §2.1); they are not part of the `<declaration-value>` production
+/// and never reach `var()` substitution as text. `--x: initial` sets the
+/// property to its initial value, which for an unregistered custom property is
+/// the GUARANTEED-INVALID value — so `var(--x, fallback)` takes the fallback
+/// and `var(--x)` with none makes its declaration invalid. `inherit` is the
+/// parent's value; custom properties inherit, so `unset` and `revert` are the
+/// same thing here.
+///
+/// This is load-bearing rather than pedantic. `tailwindcss-animate` resets its
+/// channels exactly this way:
+///
+/// ```css
+/// .animate-in { animation-name: enter; --tw-enter-opacity: initial;
+///               --tw-enter-scale: initial; --tw-enter-translate-x: initial; … }
+/// ```
+///
+/// Substituting the literal text turned `translate3d(var(--tw-enter-translate-x, 0), …)`
+/// into `translate3d(initial, initial, 0)`, which does not parse, which threw
+/// away the whole `transform` declaration — and with it the `zoom-in-95` that
+/// shared it. The fade still worked, because `fade-in-0` overrides its own
+/// channel with a real value.
+enum Wide {
+    /// `initial` — the guaranteed-invalid value; SHADOWS what was inherited.
+    Initial,
+    /// `inherit` / `unset` / `revert` / `revert-layer` — the inherited value,
+    /// so the declaration contributes nothing.
+    Inherited,
+}
+
+fn wide_keyword(raw: &str) -> Option<Wide> {
+    let raw = raw.trim();
+    if raw.eq_ignore_ascii_case("initial") {
+        return Some(Wide::Initial);
+    }
+    if ["inherit", "unset", "revert", "revert-layer"]
+        .iter()
+        .any(|k| raw.eq_ignore_ascii_case(k))
+    {
+        return Some(Wide::Inherited);
+    }
+    None
+}
+
 pub(crate) fn resolve(
     parent: &Rc<Vars>,
     own: &[&(String, String)],
@@ -454,8 +501,22 @@ pub(crate) fn resolve(
     let mut seen: std::collections::HashSet<&str> =
         std::collections::HashSet::with_capacity(own.len());
     for (name, raw) in own.iter().rev() {
-        if seen.insert(name.as_str()) && !inert(raw, name, parent) {
-            folded.push((name.as_str(), raw.as_str()));
+        if !seen.insert(name.as_str()) {
+            continue;
+        }
+        match wide_keyword(raw) {
+            // `inherit` / `unset`: keep whatever came down, which is what
+            // contributing nothing already does.
+            Some(Wide::Inherited) => continue,
+            // `initial`: guaranteed-invalid, and it must still SHADOW the
+            // inherited value — a folded name with no resolved slot is exactly
+            // that (see the merge below).
+            Some(Wide::Initial) => folded.push((name.as_str(), raw.as_str())),
+            None => {
+                if !inert(raw, name, parent) {
+                    folded.push((name.as_str(), raw.as_str()));
+                }
+            }
         }
     }
     if folded.is_empty() {
@@ -464,7 +525,13 @@ pub(crate) fn resolve(
 
     let mut slots: HashMap<&str, Slot<'_>> = HashMap::with_capacity(folded.len());
     for (name, raw) in &folded {
-        slots.insert(name, Slot::Raw(raw));
+        slots.insert(
+            name,
+            match wide_keyword(raw) {
+                Some(Wide::Initial) => Slot::Dropped,
+                _ => Slot::Raw(raw),
+            },
+        );
     }
     for (name, _) in &folded {
         // The Err arm cannot escape here: `force` converts every failure of its
@@ -546,6 +613,37 @@ mod tests {
     /// the tests still want to write literals.
     fn refs(own: &[(String, String)]) -> Vec<&(String, String)> {
         own.iter().collect()
+    }
+
+    /// `tailwindcss-animate` resets its channels with `initial`, which is the
+    /// GUARANTEED-INVALID value, not the seven-letter string. Getting this
+    /// wrong substituted `translate3d(initial, initial, 0)` into every
+    /// `animate-in` element and threw the whole `transform` away.
+    #[test]
+    fn the_css_wide_keywords_are_keywords_for_a_custom_property_too() {
+        let v = vars(&[("--tw-enter-scale", "initial")]);
+        assert_eq!(v.get("--tw-enter-scale"), None, "`initial` is not a value");
+        assert_eq!(
+            substitute_with("scale3d(var(--tw-enter-scale, 1), 1, 1)", &v, &crate::Env::default())
+                .unwrap(),
+            "scale3d(1, 1, 1)",
+            "so `var()` takes the fallback"
+        );
+
+        // …and it SHADOWS, rather than falling back to what was inherited.
+        let parent = vars(&[("--x", "9")]);
+        let own = vec![("--x".to_string(), "initial".to_string())];
+        let mut d = Vec::new();
+        let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut d);
+        assert_eq!(child.get("--x"), None, "CSS Variables §3: no inheritance rescue");
+        assert!(d.is_empty(), "and it is not an error: {d:?}");
+
+        // `inherit` / `unset` / `revert` keep the parent's value instead.
+        for keyword in ["inherit", "unset", "revert", "REVERT-LAYER"] {
+            let own = vec![("--x".to_string(), keyword.to_string())];
+            let child = resolve(&parent, &refs(&own), &crate::Env::default(), &mut Vec::new());
+            assert_eq!(child.get("--x"), Some("9"), "{keyword}");
+        }
     }
 
     #[test]

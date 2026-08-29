@@ -155,6 +155,24 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
     }
 }
 
+/// [`slot_of`], with the INHERITED `color` standing in for an undeclared one.
+///
+/// `color` is the one animatable property in the set that inherits, so "this
+/// rung declares none" is not "unset": it is the parent's colour, a real value,
+/// and it is what a browser interpolates from. The cascade already threads it
+/// down (`ComputedStates::color`), so the animator only has to ask instead of
+/// giving up with "transition of color from an unset value is not animatable".
+///
+/// This is the common shape, not a corner: Tailwind's `transition-colors` sits
+/// on a wrapper whose children inherit their colour, and `group-hover:text-…`
+/// then changes it on exactly those children.
+fn slot_inherited(r: &StyleRefinement, p: &TransitionProperty, inherited: Option<Hsla>) -> Slot {
+    match (slot_of(r, p), p) {
+        (Slot::Missing, TransitionProperty::Color) => slot_color(inherited),
+        (slot, _) => slot,
+    }
+}
+
 /// Writes one interpolated value into an overlay refinement.
 fn install(r: &mut StyleRefinement, p: &TransitionProperty, v: Animatable) {
     use TransitionProperty::*;
@@ -567,9 +585,9 @@ impl Animator {
 
             let from_slot = match running {
                 Some(v) => Slot::Value(v),
-                None => slot_of(&old.base, property),
+                None => slot_inherited(&old.base, property, old.color),
             };
-            let to_slot = slot_of(&new.base, property);
+            let to_slot = slot_inherited(&new.base, property, new.color);
 
             match self.endpoints(from_slot, to_slot, property) {
                 Endpoints::Pair(from, to) => {
@@ -660,7 +678,7 @@ impl Animator {
                 }
                 // Same as the base? Then the base already says it and holding a
                 // copy would only make the overlay bigger.
-                if to == slot_of(base, p) {
+                if to == slot_inherited(base, p, computed.color) {
                     continue;
                 }
                 match to {
@@ -705,12 +723,12 @@ impl Animator {
             let from_slot = match running {
                 Some(v) => Slot::Value(v),
                 None => match previous.as_ref().map(|p| slot_of(p, property)) {
-                    Some(Slot::Missing) | None => slot_of(base, property),
+                    Some(Slot::Missing) | None => slot_inherited(base, property, computed.color),
                     Some(s) => s,
                 },
             };
             let to_slot = match slot_of(&hold, property) {
-                Slot::Missing => slot_of(base, property),
+                Slot::Missing => slot_inherited(base, property, computed.color),
                 s => s,
             };
 
@@ -1594,6 +1612,19 @@ struct AnimRun {
     frames: Rc<Keyframes>,
     /// When the run's clock started (i.e. when `animation-delay` began).
     start: Instant,
+    /// The clock has not been anchored to a FRAME yet.
+    ///
+    /// CSS Animations §4 starts an animation at the first frame that renders
+    /// it, not at the style resolution that created it — `Animation.startTime`
+    /// stays null while the animation is "pending" and is set when it becomes
+    /// ready. The difference used to be invisible here because the cascade only
+    /// ever ran from the frame pump; now that `getComputedStyle` forces a style
+    /// flush mid-wave (reka's `<Presence>` needs it), a run can be created a
+    /// full mount-and-layout before anything paints, and a 150 ms animation
+    /// that starts its clock there is most of the way through by the time it is
+    /// first drawn. So the first `tick` re-anchors it, which is unobservable —
+    /// nothing has painted and no event has fired yet.
+    pending: bool,
     /// `animationstart` has been reported.
     started: bool,
     /// `animationend` has been reported.
@@ -1723,6 +1754,7 @@ impl Animator {
                         spec,
                         frames,
                         start: now,
+                        pending: true,
                         started: false,
                         ended: false,
                         paused_for: Duration::ZERO,
@@ -1762,6 +1794,16 @@ impl Animator {
         let mut events = Vec::new();
         for (&node, runs) in self.anims.iter_mut() {
             for run in runs.iter_mut() {
+                // The first frame is what the clock is measured from — see
+                // `AnimRun::pending`. A paused run keeps its pause anchored to
+                // the same instant so no debt is invented.
+                if run.pending {
+                    run.pending = false;
+                    run.start = now;
+                    if run.paused_at.is_some() {
+                        run.paused_at = Some(now);
+                    }
+                }
                 let phase = run.phase(now);
                 if !run.started && !matches!(phase, Phase::Delayed) {
                     run.started = true;

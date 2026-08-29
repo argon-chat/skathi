@@ -45,11 +45,25 @@ pub struct Keyframe {
     pub easing: Option<Easing>,
     /// The declarations, already mapped.
     pub style: Rc<StyleRefinement>,
+    /// The declarations that referenced `var()` or `env()`, kept as raw text.
+    ///
+    /// A `@keyframes` block is DOCUMENT-scoped but a custom property is
+    /// PER-ELEMENT, so these cannot be mapped when the block is compiled — they
+    /// are substituted against the animating element's own variable map by
+    /// [`crate::Engine::keyframes_for`] when a run starts. This is not exotic:
+    /// the whole of `tailwindcss-animate` is written this way
+    /// (`@keyframes enter { from { opacity: var(--tw-enter-opacity, 1);
+    /// transform: … scale3d(var(--tw-enter-scale, 1), …) } }`), so dropping
+    /// them made every `animate-in` / `animate-out` a correctly-timed no-op.
+    pub dynamic: Option<Rc<crate::mapper::Decls>>,
 }
 
 /// One compiled `@keyframes` rule: its steps, sorted by offset.
 pub struct Keyframes {
     pub steps: Vec<Keyframe>,
+    /// Does any step carry [`Keyframe::dynamic`]? One bool so the common
+    /// var()-free block is shared by `Rc` with no per-element work at all.
+    pub dynamic: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -641,10 +655,11 @@ mod tests {
 
         let frames = Keyframes {
             steps: vec![
-                Keyframe { offset: 0.0, easing: None, style: Rc::new(zero) },
-                Keyframe { offset: 0.5, easing: None, style: Rc::new(mid) },
-                Keyframe { offset: 1.0, easing: None, style: Rc::new(one) },
+                Keyframe { offset: 0.0, easing: None, style: Rc::new(zero), dynamic: None },
+                Keyframe { offset: 0.5, easing: None, style: Rc::new(mid), dynamic: None },
+                Keyframe { offset: 1.0, easing: None, style: Rc::new(one), dynamic: None },
             ],
+            dynamic: false,
         };
         let declares_opacity: &dyn Fn(&StyleRefinement) -> bool = &|r| r.opacity.is_some();
         let seg = frames.segment(declares_opacity, 0.5).unwrap();

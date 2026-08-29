@@ -524,6 +524,66 @@ impl Engine {
         self.keyframes.get(name).cloned()
     }
 
+    /// The `@keyframes` block `name` refers to, with its `var()`-composed
+    /// declarations substituted against ONE ELEMENT's custom properties.
+    ///
+    /// A `@keyframes` block is document-scoped; a custom property is not. CSS
+    /// resolves the two at computed-value time on the animating element, which
+    /// is what makes `tailwindcss-animate` work at all: `enter` and `exit`
+    /// declare nothing but `var(--tw-enter-opacity, 1)` and
+    /// `scale3d(var(--tw-enter-scale, 1), …)`, and the utilities that go with
+    /// them (`fade-in-0`, `zoom-in-95`, `slide-in-from-top-2`) are pure
+    /// custom-property declarations on the element. Resolve them against the
+    /// document and every animation in the library is the identity.
+    ///
+    /// Called once when a run STARTS, not per frame — the resolved block is
+    /// what `AnimRun` then holds. A block with no `var()` in it takes the
+    /// `Rc::clone` fast path and costs nothing.
+    pub fn keyframes_for(
+        &self,
+        name: &str,
+        vars: &Vars,
+        env: &Env,
+        diagnostics: &mut Vec<String>,
+    ) -> Option<Rc<keyframes::Keyframes>> {
+        let block = self.keyframes.get(name)?;
+        if !block.dynamic {
+            return Some(block.clone());
+        }
+        let steps = block
+            .steps
+            .iter()
+            .map(|step| {
+                let mut style = (*step.style).clone();
+                // A keyframe cannot animate an `Extras` value (none of them is
+                // in `TransitionProperty`), but `apply_dynamic` needs somewhere
+                // to put one it maps — so it gets a scratch bucket that is
+                // dropped, rather than a silent panic path.
+                let mut extras = Extras::default();
+                if let Some(list) = &step.dynamic {
+                    for (property, raw) in list.iter() {
+                        mapper::apply_dynamic(
+                            property,
+                            raw,
+                            vars,
+                            env,
+                            &mut style,
+                            &mut extras,
+                            diagnostics,
+                        );
+                    }
+                }
+                keyframes::Keyframe {
+                    offset: step.offset,
+                    easing: step.easing,
+                    style: Rc::new(style),
+                    dynamic: None,
+                }
+            })
+            .collect();
+        Some(Rc::new(keyframes::Keyframes { steps, dynamic: false }))
+    }
+
     /// Does the sheet define any animation at all? The animator can skip its
     /// whole pass when not — the common case for a hand-written sheet.
     pub fn has_keyframes(&self) -> bool {
@@ -1062,6 +1122,18 @@ impl Engine {
                     };
                     if let Some(a) = declared {
                         animations = Some(a.clone());
+                        // A rule that supplies the LIST declares the longhands
+                        // in it, so it beats every patch that lost the cascade
+                        // to it. Without this reset, `.duration-200`
+                        // (specificity 0,1,0) overrode the `animation-duration:
+                        // 150ms` that shadcn's
+                        // `.data-[state=open]:animate-in[data-state=open]`
+                        // (0,2,0) declares beside its `animation-name`, and the
+                        // dialog animated for 200 ms where a browser gives it
+                        // 150. Patches from rules that come LATER in this
+                        // sorted walk — higher specificity, or an inline style
+                        // — still apply, which is the whole point of the patch.
+                        animation_patch = keyframes::AnimationPatch::default();
                     }
                     let patch = if important_pass {
                         &r.important_animation_patch
@@ -1333,12 +1405,31 @@ impl Engine {
                 .normal_animation_patch
                 .or(converted.important_animation_patch)
                 .and_then(|p| p.easing);
+            // A declaration whose value referenced `var()` or `env()` cannot be
+            // mapped HERE: a `@keyframes` block is document-scoped and a custom
+            // property belongs to an element. It travels with the step as raw
+            // text and is substituted per element by `keyframes_for`.
+            //
+            // The whole of `tailwindcss-animate` lives on this path — `enter`
+            // and `exit` declare nothing BUT var()-composed values — so before
+            // this the two blocks compiled to zero steps and every `animate-in`
+            // ran its clock, fired `animationstart`/`animationend` on time, and
+            // interpolated nothing.
+            let dynamic = match (converted.normal_dynamic, converted.important_dynamic) {
+                (None, None) => None,
+                (Some(only), None) | (None, Some(only)) => Some(only),
+                (Some(normal), Some(important)) => {
+                    let mut all = (*normal).clone();
+                    all.extend(important.iter().cloned());
+                    Some(Rc::new(all))
+                }
+            };
             // `transform` used to need a second channel here, because it
             // computed into `Extras` rather than into the refinement. It is a
             // real refinement property now (`Style::vn_transform`, m13 item 2),
             // so `any` above already sees it and a keyframe carries it like any
             // other animatable value.
-            if !any && easing.is_none() {
+            if !any && easing.is_none() && dynamic.is_none() {
                 continue;
             }
             let style = Rc::new(style);
@@ -1361,12 +1452,14 @@ impl Engine {
                     offset: offset.clamp(0.0, 1.0),
                     easing,
                     style: style.clone(),
+                    dynamic: dynamic.clone(),
                 });
             }
         }
         steps.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+        let dynamic = steps.iter().any(|s| s.dynamic.is_some());
         // A later block with the same name replaces the earlier one, as in CSS.
-        self.keyframes.insert(name, Rc::new(keyframes::Keyframes { steps }));
+        self.keyframes.insert(name, Rc::new(keyframes::Keyframes { steps, dynamic }));
     }
 }
 
@@ -2811,7 +2904,7 @@ mod tests {
 
     #[test]
     fn an_unsupported_media_feature_drops_the_block_with_an_advisory() {
-        let engine = Engine::compile("@media (hover: hover) { .box { opacity: 0.9 } }");
+        let engine = Engine::compile("@media (prefers-contrast: more) { .box { opacity: 0.9 } }");
         assert!(
             engine.diagnostics.iter().any(|d| d.contains("@media") && d.contains("dropped")),
             "{:?}",
@@ -4352,6 +4445,240 @@ mod tests {
         let frames = engine.keyframes("spin").unwrap();
         assert_eq!(frames.steps.len(), 1);
         assert_eq!(frames.steps[0].offset, 1.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // m19 round 4: `var()` inside `@keyframes`
+    //
+    // A `@keyframes` block is document-scoped and a custom property belongs to
+    // an element, so a var()-composed keyframe declaration can only resolve
+    // when a run starts, against the animating element. Compiling it away made
+    // the whole of `tailwindcss-animate` — `animate-in`, `animate-out`,
+    // `fade-*`, `zoom-*`, `slide-*` — a correctly-timed identity.
+    // -----------------------------------------------------------------------
+
+    /// `tailwindcss-animate`, reproduced to the character: `enter` declares
+    /// NOTHING but var()-composed values, and the utilities are pure custom
+    /// properties on the element.
+    const TW_ANIMATE: &str = "@keyframes enter { from { \
+            opacity: var(--tw-enter-opacity, 1); \
+            transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0) \
+                       scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), var(--tw-enter-scale, 1)) } } \
+        .box { animation-name: enter; animation-duration: 200ms; animation-timing-function: linear; \
+               --tw-enter-opacity: 0; --tw-enter-scale: 0.95 }";
+
+    #[test]
+    fn a_var_composed_keyframe_resolves_against_the_animating_element() {
+        let engine = Engine::compile(TW_ANIMATE);
+        // The block survives compilation instead of collapsing to zero steps.
+        let raw = engine.keyframes("enter").expect("@keyframes enter");
+        assert_eq!(raw.steps.len(), 1, "the `from` step is kept, unresolved");
+        assert!(raw.dynamic, "and it is flagged as needing per-element work");
+
+        let cs = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(cs.vars.get("--tw-enter-opacity"), Some("0"));
+        let mut diagnostics = Vec::new();
+        let frames = engine
+            .keyframes_for("enter", &cs.vars, &Env::default(), &mut diagnostics)
+            .expect("resolved");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let from = &frames.steps[0].style;
+        assert_eq!(from.opacity, Some(0.0), "var(--tw-enter-opacity) substituted");
+        let t = from.vn_transform.expect("scale3d reached the refinement");
+        assert!((t.scale.0 - 0.95).abs() < 1e-6, "{:?}", t.scale);
+        assert!((t.scale.1 - 0.95).abs() < 1e-6, "{:?}", t.scale);
+
+        // …and the animator interpolates it, which is the part the owner sees.
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| {
+            engine.keyframes_for(name, &cs.vars, &Env::default(), &mut Vec::new())
+        });
+        let base = StyleRefinement::default();
+        let at = |ms: u64| a.overlay(1, &base, now + Duration::from_millis(ms)).unwrap();
+        assert!((opacity(&at(0)) - 0.0).abs() < 1e-6);
+        assert!((opacity(&at(100)) - 0.5).abs() < 1e-2, "halfway through the fade");
+        let half = at(100).vn_transform.expect("the zoom is interpolated too");
+        assert!((half.scale.0 - 0.975).abs() < 1e-2, "{:?}", half.scale);
+    }
+
+    /// The element's own variables decide the endpoints, so two elements
+    /// sharing one `@keyframes` block animate differently — which is the whole
+    /// reason the resolution cannot happen at compile time.
+    #[test]
+    fn two_elements_resolve_the_same_keyframes_differently() {
+        let engine = Engine::compile(
+            "@keyframes enter { from { opacity: var(--tw-enter-opacity, 1) } } \
+             .box { animation: enter 200ms linear; --tw-enter-opacity: 0 } \
+             .half { --tw-enter-opacity: 0.5 }",
+        );
+        let env = Env::default();
+        let faint = engine.compute(box_node(), None, &env);
+        let half = engine.compute(Node { tag: "div", class: "box half", attrs: &[] }, None, &env);
+        let mut d = Vec::new();
+        let a = engine.keyframes_for("enter", &faint.vars, &env, &mut d).unwrap();
+        let b = engine.keyframes_for("enter", &half.vars, &env, &mut d).unwrap();
+        assert_eq!(a.steps[0].style.opacity, Some(0.0));
+        assert_eq!(b.steps[0].style.opacity, Some(0.5));
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    /// A block with no `var()` in it is SHARED, not rebuilt per element: the
+    /// resolver must cost nothing for the ordinary case.
+    #[test]
+    fn a_var_free_keyframes_block_takes_the_shared_fast_path() {
+        let engine = Engine::compile(SPIN);
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let shared = engine.keyframes("spin").unwrap();
+        assert!(!shared.dynamic);
+        let resolved = engine
+            .keyframes_for("spin", &cs.vars, &Env::default(), &mut Vec::new())
+            .unwrap();
+        assert!(Rc::ptr_eq(&shared, &resolved), "the same Rc, not a rebuild");
+    }
+
+    /// An unset variable with no fallback makes the DECLARATION invalid, as CSS
+    /// says — the keyframe keeps its other declarations and the animation runs.
+    #[test]
+    fn an_unresolvable_keyframe_declaration_drops_only_itself() {
+        let engine = Engine::compile(
+            "@keyframes enter { from { opacity: var(--missing); width: 10px } } \
+             .box { animation: enter 200ms linear }",
+        );
+        let env = Env::default();
+        let cs = engine.compute(box_node(), None, &env);
+        let mut d = Vec::new();
+        let frames = engine.keyframes_for("enter", &cs.vars, &env, &mut d).unwrap();
+        assert_eq!(frames.steps[0].style.opacity, None);
+        assert!(frames.steps[0].style.size.width.is_some(), "the sibling survives");
+        assert!(d.is_empty(), "an unset var() is silent — a browser drops it too");
+    }
+
+    /// The shape shadcn's dialog actually has: the keyframe RESETS `transform`
+    /// to `translate3d(0,0,0)`, and the implicit end of a one-keyframe
+    /// `@keyframes` is the element's own `translate(-50%,-50%)` centring. So
+    /// the browser slides the box by half its own size while it zooms, and the
+    /// two units — a pixel zero and a percentage — have to interpolate as one
+    /// track. (Also the exact `rotate(0)` tailwindcss-animate writes, which is
+    /// a unitless zero angle and has to parse.)
+    #[test]
+    fn the_shadcn_dialog_enter_slides_as_well_as_zooms() {
+        let engine = Engine::compile(
+            "@keyframes enter { from { \
+                opacity: var(--tw-enter-opacity, 1); \
+                transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0) \
+                           scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), var(--tw-enter-scale, 1)) \
+                           rotate(var(--tw-enter-rotate, 0)) } } \
+             .animate-in { animation: enter 200ms linear; \
+                    --tw-enter-opacity: initial; --tw-enter-scale: initial; \
+                    --tw-enter-rotate: initial; --tw-enter-translate-x: initial; \
+                    --tw-enter-translate-y: initial } \
+             .fade-in-0 { --tw-enter-opacity: 0 } .zoom-in-95 { --tw-enter-scale: 0.95 } \
+             .box { transform: translate(-50%, -50%) }",
+        );
+        let env = Env::default();
+        let node = Node { tag: "div", class: "box animate-in fade-in-0 zoom-in-95", attrs: &[] };
+        let cs = engine.compute(node, None, &env);
+        let mut d = Vec::new();
+        let frames = engine.keyframes_for("enter", &cs.vars, &env, &mut d).unwrap();
+        assert!(d.is_empty(), "`rotate(0)` and the rest must all parse: {d:?}");
+        let start = frames.steps[0].style.vn_transform.expect("the keyframe's transform");
+        assert_eq!(start.translate.0, gpui::TransformLength::Pixels(0.0));
+        assert!((start.scale.0 - 0.95).abs() < 1e-6, "{:?}", start.scale);
+        assert_eq!(frames.steps[0].style.opacity, Some(0.0));
+
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| {
+            engine.keyframes_for(name, &cs.vars, &env, &mut Vec::new())
+        });
+        a.tick(now);
+        let half = a
+            .overlay(1, &cs.base, now + Duration::from_millis(100))
+            .unwrap()
+            .vn_transform
+            .expect("an interpolated transform");
+        // Halfway: the centring offset is half applied, and so is the zoom.
+        assert_eq!(half.translate.0, gpui::TransformLength::Fraction(-0.25));
+        assert_eq!(half.translate.1, gpui::TransformLength::Fraction(-0.25));
+        assert!((half.scale.0 - 0.975).abs() < 1e-4, "{:?}", half.scale);
+    }
+
+    /// An `animation-*` longhand is an ordinary declaration and loses to a
+    /// MORE SPECIFIC rule that declares it, even when that rule reaches the
+    /// element as the "list" half rather than as a patch. shadcn's dialog is
+    /// exactly this collision: `duration-200` and
+    /// `data-[state=open]:animate-in` both say `animation-duration`, and the
+    /// second one wins in a browser.
+    #[test]
+    fn a_longhand_patch_loses_to_a_more_specific_rule_that_declares_the_list() {
+        let engine = Engine::compile(
+            "@keyframes enter { from { opacity: 0 } } \
+             .duration-200 { animation-duration: 200ms } \
+             .animate-in[data-state=open] { animation-name: enter; animation-duration: 150ms }",
+        );
+        let node = Node {
+            tag: "div",
+            class: "duration-200 animate-in",
+            attrs: &[("data-state", "open")],
+        };
+        let cs = engine.compute(node, None, &Env::default());
+        assert_eq!(cs.animations.len(), 1);
+        assert_eq!(cs.animations[0].duration, Duration::from_millis(150));
+
+        // The patch is not disabled, only ordered: a MORE specific longhand
+        // still overrides the list it lost to nothing.
+        let engine = Engine::compile(
+            "@keyframes enter { from { opacity: 0 } } \
+             .animate-in { animation-name: enter; animation-duration: 150ms } \
+             .duration-200[data-state=open] { animation-duration: 200ms }",
+        );
+        let cs = engine.compute(node, None, &Env::default());
+        assert_eq!(cs.animations[0].duration, Duration::from_millis(200));
+    }
+
+    /// A run's clock is anchored to the first FRAME, not to the cascade that
+    /// created it. `getComputedStyle` forces a cascade mid-wave, so a dialog's
+    /// keyframes can be resolved a whole mount before anything paints — and a
+    /// 150 ms animation whose clock started there would be nearly over by the
+    /// time it was first drawn.
+    #[test]
+    fn an_animations_clock_starts_at_the_first_frame() {
+        let engine = Engine::compile(SPIN);
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        let created = Instant::now();
+        a.on_computed_animations(1, &cs, created, &|name| engine.keyframes(name));
+
+        // 300 ms of mount work happen before the first frame renders.
+        let first_frame = created + Duration::from_millis(300);
+        a.tick(first_frame);
+        let base = StyleRefinement::default();
+        let halfway = first_frame + Duration::from_millis(500);
+        assert!(
+            (opacity(&a.overlay(1, &base, first_frame).unwrap()) - 0.0).abs() < 1e-6,
+            "the first painted frame is the animation's frame 0"
+        );
+        assert!((opacity(&a.overlay(1, &base, halfway).unwrap()) - 0.5).abs() < 1e-2);
+        // …and the re-anchor happens once: a later tick does not restart it.
+        a.tick(halfway);
+        assert!((opacity(&a.overlay(1, &base, halfway).unwrap()) - 0.5).abs() < 1e-2);
+    }
+
+    /// `scale3d(s, s, s)` is what every `zoom-in-*` / `zoom-out-*` compiles to.
+    /// It decomposes to the 2D scale instead of being dropped whole.
+    #[test]
+    fn scale3d_decomposes_to_the_two_axes_that_exist() {
+        let (r, d) = computed_with_env(".box { transform: scale3d(0.95, 0.8, 1) }", &Env::default());
+        let t = r.vn_transform.expect("a transform");
+        assert!((t.scale.0 - 0.95).abs() < 1e-6);
+        assert!((t.scale.1 - 0.8).abs() < 1e-6);
+        assert!(!d.iter().any(|m| m.contains("scale3d")), "{d:?}");
+        // The Z factor is invisible without a perspective projection, which is
+        // reported on its own line, so it is dropped in silence — a `zoom-in-95`
+        // must not cost a log line per screen.
+        let (_, d) = computed_with_env(".box { transform: scale3d(1, 1, 2) }", &Env::default());
+        assert!(!d.iter().any(|m| m.contains("transform")), "{d:?}");
     }
 
     // -----------------------------------------------------------------------

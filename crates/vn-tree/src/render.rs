@@ -3025,18 +3025,22 @@ fn build_input<V: 'static>(
     if let Some((config, queries)) =
         state.update(cx, |s, _| s.newly_forwarded_configuration())
     {
-        crate::log::record(
-            "dev",
-            &format!(
-                "[input] #{id} text input configuration forwarded to gpui \
-                 (query {queries}): autocorrect={} autocapitalize={:?} suggestions={} \
-                 input_action={:?}",
-                config.autocorrect,
-                config.autocapitalize,
-                config.suggestions,
-                config.input_action,
-            ),
+        // One line per distinct CONFIGURATION, not per field. The line proves
+        // the chain works, and a form of six identically-configured inputs
+        // proves it six times for no extra information — which is noise in a
+        // log whose other lines all name a real platform limit.
+        let line = format!(
+            "[input] text input configuration forwarded to gpui (query {queries}): \
+             autocorrect={} autocapitalize={:?} suggestions={} input_action={:?}",
+            config.autocorrect, config.autocapitalize, config.suggestions, config.input_action,
         );
+        thread_local! {
+            static SEEN: std::cell::RefCell<std::collections::HashSet<String>> =
+                std::cell::RefCell::new(std::collections::HashSet::new());
+        }
+        if SEEN.with(|s| s.borrow_mut().insert(line.clone())) {
+            crate::log::record("dev", &format!("{line} (first: #{id})"));
+        }
     }
     (text_input(&state, options, handlers, cx), focus_target)
 }

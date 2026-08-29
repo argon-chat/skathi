@@ -383,6 +383,23 @@ describe("missing globals (G5)", () => {
     expect(seen).toEqual([]);
   });
 
+  test("observe(document) means the root element — 'watch everything' is not a no-op", async () => {
+    const rt = createRuntime();
+    const { section, button } = tree(rt);
+    const seen = [];
+    const ob = new rt.global.MutationObserver((r) => seen.push(...r));
+    // What reka's focus scope and floating-ui's auto-update both write. A
+    // Document is not an element here, but its element subtree is the root's,
+    // so the observer has to land on the root rather than warn and drop.
+    ob.observe({ documentElement: section }, { childList: true, subtree: true });
+    const extra = rt.nodeOps.createElement("i");
+    rt.nodeOps.insert(extra, button, null);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen.map((r) => r.type)).toEqual(["childList"]);
+    ob.disconnect();
+  });
+
   test("DocumentFragment is a real (detached) node, so a Teleport into one works", () => {
     const rt = createRuntime();
     const frag = new rt.global.DocumentFragment();

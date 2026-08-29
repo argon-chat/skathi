@@ -147,6 +147,12 @@ pub fn bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
 /// for them and warns once, rather than inventing an initial value it would
 /// have to keep in sync with a browser's.
 pub fn computed_style(id: u32) -> Option<String> {
+    // A browser flushes pending style before answering; so do we, or a
+    // component that mutates an attribute and reads the result back on the next
+    // line gets the value from BEFORE its own mutation. See
+    // [`tree::flush_pending_style`] for the reka `<Presence>` case that makes
+    // this load-bearing rather than pedantic.
+    tree::flush_pending_style();
     tree::read_tree(|t| {
         // A node that exists but has not been cascaded yet (created earlier in
         // this same JS wave) computes to the initial values, not to nothing —
@@ -210,6 +216,12 @@ pub fn computed_style(id: u32) -> Option<String> {
             "overflow",
             format!("{} {}", overflow_name(cs.base.overflow.x), overflow_name(cs.base.overflow.y)),
         );
+        // `auto` is the CSS initial value AND an exact description of what we
+        // do: gpui's scrollbars are overlays, so no gutter is ever reserved and
+        // none can be. Reka's scroll lock reads this to decide whether it has
+        // to compensate for a disappearing scrollbar; `""` sent it down the
+        // "unknown" branch, `auto` sends it down the right one.
+        put("scrollbar-gutter", "auto".into());
         put("opacity", format!("{}", cs.base.opacity.unwrap_or(1.0)));
         put(
             "z-index",

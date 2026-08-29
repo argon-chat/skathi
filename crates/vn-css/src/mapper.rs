@@ -4234,7 +4234,21 @@ fn apply_transform(
             }
             T::ScaleX(s) => scale.0 *= factor(s),
             T::ScaleY(s) => scale.1 *= factor(s),
-            T::ScaleZ(_) | T::Scale3d(..) => dropped.push("scale3d()/scaleZ()"),
+            // `scale3d(s, s, s)` is what `tailwindcss-animate` writes for EVERY
+            // `zoom-in-*` / `zoom-out-*` (it opts into GPU compositing the same
+            // way `translate3d` does), so the X and Y factors are the whole
+            // point — the same decomposition `translate3d` already got.
+            //
+            // The Z factor is dropped SILENTLY, and that is not a divergence:
+            // a Z scale is only ever visible through a perspective projection,
+            // `perspective()` / `perspective-property` are not supported (and
+            // say so on their own line), and without one the rendering is
+            // pixel-identical with Z ignored. Advising here would put a line in
+            // every log that uses a zoom utility and tell the reader nothing.
+            T::Scale3d(a, b, _z) => {
+                scale = (scale.0 * factor(a), scale.1 * factor(b));
+            }
+            T::ScaleZ(_) => {}
             T::Skew(..) | T::SkewX(_) | T::SkewY(_) => dropped.push("skew()"),
             // `matrix(a, b, c, d, e, f)` DECOMPOSES: the CSS
             // translate/rotate/scale triple is recoverable from the 2x2 plus

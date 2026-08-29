@@ -970,10 +970,40 @@ fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> vn_css::Env {
         scale_factor: s.scale,
         display_mode: display_mode(s.fullscreen),
         titlebar_area: [t.0, t.1, t.2, t.3],
+        coarse_pointer: coarse_pointer(),
         // Desktop Windows reports none. `PlatformWindow::insets()` is the hook
         // if a platform ever does.
         safe_area_insets: [0.0; 4],
     }
+}
+
+/// Is a touch screen or a pen digitizer attached? — `any-pointer: coarse`.
+///
+/// `SM_DIGITIZER` is Windows' own answer and the one Chromium reads for the
+/// same media feature. It cannot change without a device being plugged in, and
+/// it is asked once per frame otherwise, so the answer is cached.
+fn coarse_pointer() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        #[cfg(target_os = "windows")]
+        {
+            // NID_INTEGRATED_TOUCH | NID_EXTERNAL_TOUCH | NID_INTEGRATED_PEN |
+            // NID_EXTERNAL_PEN — "some digitizer is present", which is exactly
+            // what `any-pointer: coarse` asks.
+            const SM_DIGITIZER: i32 = 94;
+            const ANY_DIGITIZER: i32 = 0x01 | 0x02 | 0x04 | 0x08;
+            // SAFETY: a pure read of a system metric; no pointers involved.
+            let value = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+                windows::Win32::UI::WindowsAndMessaging::SYSTEM_METRICS_INDEX(SM_DIGITIZER),
+            ) };
+            value & ANY_DIGITIZER != 0
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            false
+        }
+    })
 }
 
 fn rect(t: (f32, f32, f32, f32)) -> Json {
