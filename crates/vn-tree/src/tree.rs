@@ -738,6 +738,7 @@ impl Tree {
         // the frame they are re-attached in).
         let mut diagnostics: Vec<String> = Vec::new();
         let roots = self.restyle_roots(engine);
+        let cascaded_anything = !roots.is_empty();
         let computed: Vec<(u32, vn_css::ComputedStates)> = {
             let this: &Tree = self;
             let root_vars = std::rc::Rc::new(vn_css::Vars::default());
@@ -875,7 +876,16 @@ impl Tree {
         }
         // The set of elements that have to carry gpui's `.group(name)`. Costs
         // one pass over the slab, and only for a sheet that has a
-        // `group-hover:` rule in it at all.
+        // `group-hover:` rule in it at all — and only for a pass that actually
+        // recomputed something. The second half is what keeps
+        // `flush_pending_style` cheap: `getComputedStyle` is a flush point now,
+        // so a mount that reads it a dozen times runs a dozen passes, and all
+        // but the first find no dirty root. No node's `ComputedStates` changed,
+        // so neither set can have.
+        if !cascaded_anything {
+            crate::perf::note_restyle(pass.ms(), inline_ms, cascade_ms, phase.ms(), cascaded);
+            return;
+        }
         self.group_anchors.clear();
         self.group_hover_deps.clear();
         if engine.uses_group_states() {
