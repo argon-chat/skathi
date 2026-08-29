@@ -992,6 +992,56 @@ pub fn note_hover(id: u32, hovered: bool) {
     }
 }
 
+/// Is the pointer inside `id`'s hitbox right now?
+///
+/// Only ever TRUE for a node the renderer asked gpui to report hover edges for
+/// — see [`crate::render::wants_style_hover`]. A node with a `:hover` rule but
+/// no `transition` is styled entirely inside gpui's paint-time ladder and never
+/// reaches [`note_hover`], so this answers `false` for it. That is a real limit
+/// of reading the state back rather than a bug; `live_style` says the same
+/// thing and docs/TESTING.md writes it down.
+pub fn is_hovered(id: u32) -> bool {
+    HOVERED.with(|h| h.borrow().contains(&id))
+}
+
+/// The style that is IN EFFECT for `id` on this frame — what a browser would
+/// answer for `getComputedStyle(el)`.
+///
+/// It reassembles, for a reader, exactly the composition
+/// [`crate::render::apply_computed_style`] hands gpui:
+///
+///   base  →  the animator's in-flight overlay  →  the hover rung minus the
+///            properties the animator took over (only while hovered)
+///
+/// …which is why it is the one bucket an assertion can use to prove a `:hover`
+/// actually LANDED. The static `hover` bucket next to it says only "the cascade
+/// produced this rung", which is true whether or not a pointer is anywhere near.
+///
+/// Two honest gaps, both structural: `:active` and the untransitioned half of a
+/// hover rung are refined by gpui at paint time off a hitbox we cannot read
+/// back, so an element whose `:hover` declares no `transition` reports its base
+/// here. Introduced for `vn-test` (docs/TESTING.md); nothing on the paint path
+/// calls it.
+pub fn live_style(id: u32) -> Option<gpui::StyleRefinement> {
+    use gpui::Refineable as _;
+    let cs = read_tree(|t| t.node(id).and_then(|n| n.computed.clone()))?;
+    let mut live = (*cs.base).clone();
+    if let Some(overlay) = animation_overlay(id, &cs.base, std::time::Instant::now()) {
+        live.refine(&overlay);
+    }
+    // `pointer-events: none` keeps the rungs off the element entirely, so it
+    // keeps them out of here too — same condition, same place in the order.
+    if cs.extras.pointer_events_none != Some(true) {
+        if let Some(rung) = fold_hover_target(id, &cs) {
+            match vn_css::strip_transitioned(&rung, &cs.transitions) {
+                Some(stripped) => live.refine(&stripped),
+                None => live.refine(&rung),
+            }
+        }
+    }
+    Some(live)
+}
+
 /// The refinement `id`'s ladder produces for the pointer state it is in RIGHT
 /// NOW — `None` when it is in the plain base state. Reads [`HOVERED`] only, so
 /// it is safe to call with the tree already borrowed.

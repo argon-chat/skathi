@@ -610,6 +610,11 @@ fn cmd_styles(selector: &str, index: Option<f64>) -> String {
             // can skim. An array of lines pretty-prints one line per entry.
             Some(buckets) => ok(Json::obj(vec![
                 ("id", Json::n(f64::from(id))),
+                // The pointer state the `live` bucket was folded against —
+                // reported separately because "is it hovered" is a question an
+                // assertion asks on its own, and reading it out of a style dump
+                // would mean guessing which property the hover rule moved.
+                ("hovered", Json::Bool(vn_tree::devtools::is_hovered(id))),
                 (
                     "computed",
                     Json::Obj(

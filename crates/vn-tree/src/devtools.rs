@@ -151,14 +151,31 @@ pub fn input_value(id: u32, cx: &App) -> Option<String> {
     crate::render::input_value(id, cx)
 }
 
+/// Is the pointer inside this node's hitbox right now? See [`tree::is_hovered`]
+/// for the one case that answers `false` while a browser would say `true`.
+pub fn is_hovered(id: u32) -> bool {
+    tree::is_hovered(id)
+}
+
 /// The node's folded [`vn_css::ComputedStates`], rendered as `(bucket, dump)`
 /// pairs. The dump is `StyleRefinement`'s own `Debug`, minus every field that
 /// is `None` — a refinement has ~90 optional fields and the two or three a rule
 /// actually set are the entire answer.
+///
+/// The `live` bucket is the odd one out and the important one: every other
+/// bucket is a rung the CASCADE produced ("this is what a hover would look
+/// like"), while `live` is the style in effect on this frame ("this is what a
+/// hover IS doing"). See [`tree::live_style`].
 pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
+    // Hoisted out of the closure below: `live_style` reads the tree itself, and
+    // a reader that only works while nothing else is reading is a trap.
+    let live = tree::live_style(id);
     tree::read_tree(|t| {
         let cs = t.node(id)?.computed.as_ref()?;
         let mut out = vec![("base", prune(&format!("{:#?}", cs.base)))];
+        if let Some(live) = &live {
+            out.push(("live", prune(&format!("{live:#?}"))));
+        }
         for (name, slot) in [
             ("hover", &cs.hover),
             ("active", &cs.active),
