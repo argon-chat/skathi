@@ -23,7 +23,7 @@ use gpui::{
 };
 
 use crate::keyframes::{AnimationSpec, FillMode, Keyframes, Phase, PlayState};
-use crate::transition::{covered, spec_for, Easing, TransitionProperty};
+use crate::transition::{covered, spec_for, Easing, TransitionProperty, TransitionSpec};
 use crate::ComputedStates;
 
 // ---------------------------------------------------------------------------
@@ -210,6 +210,115 @@ fn install(r: &mut StyleRefinement, p: &TransitionProperty, v: Animatable) {
     }
 }
 
+/// Unsets one property in a refinement — the inverse of [`install`].
+///
+/// Used to take the transitioned properties OUT of a `:hover`/`group-hover`
+/// rung before it is handed to gpui. gpui's ladder refines the rung over the
+/// computed style at paint time, unconditionally: anything left in it snaps the
+/// instant the pointer crosses the hitbox, which is exactly the behaviour a
+/// `transition` declaration exists to replace. What stays in the rung is every
+/// property the author did NOT name in `transition` — those keep snapping,
+/// which is also what CSS says.
+fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
+    use TransitionProperty::*;
+    match p {
+        Opacity => r.opacity = None,
+        Color => r.text.color = None,
+        BackgroundColor => r.background = None,
+        BorderColor => r.border_color = None,
+        Width => r.size.width = None,
+        Height => r.size.height = None,
+        MinWidth => r.min_size.width = None,
+        MinHeight => r.min_size.height = None,
+        MaxWidth => r.max_size.width = None,
+        MaxHeight => r.max_size.height = None,
+        PaddingTop => r.padding.top = None,
+        PaddingRight => r.padding.right = None,
+        PaddingBottom => r.padding.bottom = None,
+        PaddingLeft => r.padding.left = None,
+        MarginTop => r.margin.top = None,
+        MarginRight => r.margin.right = None,
+        MarginBottom => r.margin.bottom = None,
+        MarginLeft => r.margin.left = None,
+        BorderTopLeftRadius => r.corner_radii.top_left = None,
+        BorderTopRightRadius => r.corner_radii.top_right = None,
+        BorderBottomRightRadius => r.corner_radii.bottom_right = None,
+        BorderBottomLeftRadius => r.corner_radii.bottom_left = None,
+        RowGap => r.gap.height = None,
+        ColumnGap => r.gap.width = None,
+        FontSize => r.text.font_size = None,
+        Shading => r.vn_effect = None,
+        Transform => r.vn_transform = None,
+        All | Other(_) => {}
+    }
+}
+
+/// Copies one property from `src` to `dst`, whatever shape its value has.
+///
+/// [`install`] can only write values the animator can interpolate; this moves
+/// the ones it cannot (a gradient `background`, `width: auto`, a percentage)
+/// so that a stripped rung's non-interpolable properties still reach the paint.
+fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &TransitionProperty) {
+    use TransitionProperty::*;
+    match p {
+        Opacity => dst.opacity = src.opacity,
+        Color => dst.text.color = src.text.color,
+        BackgroundColor => dst.background = src.background.clone(),
+        BorderColor => dst.border_color = src.border_color,
+        Width => dst.size.width = src.size.width,
+        Height => dst.size.height = src.size.height,
+        MinWidth => dst.min_size.width = src.min_size.width,
+        MinHeight => dst.min_size.height = src.min_size.height,
+        MaxWidth => dst.max_size.width = src.max_size.width,
+        MaxHeight => dst.max_size.height = src.max_size.height,
+        PaddingTop => dst.padding.top = src.padding.top,
+        PaddingRight => dst.padding.right = src.padding.right,
+        PaddingBottom => dst.padding.bottom = src.padding.bottom,
+        PaddingLeft => dst.padding.left = src.padding.left,
+        MarginTop => dst.margin.top = src.margin.top,
+        MarginRight => dst.margin.right = src.margin.right,
+        MarginBottom => dst.margin.bottom = src.margin.bottom,
+        MarginLeft => dst.margin.left = src.margin.left,
+        BorderTopLeftRadius => dst.corner_radii.top_left = src.corner_radii.top_left,
+        BorderTopRightRadius => dst.corner_radii.top_right = src.corner_radii.top_right,
+        BorderBottomRightRadius => dst.corner_radii.bottom_right = src.corner_radii.bottom_right,
+        BorderBottomLeftRadius => dst.corner_radii.bottom_left = src.corner_radii.bottom_left,
+        RowGap => dst.gap.height = src.gap.height,
+        ColumnGap => dst.gap.width = src.gap.width,
+        FontSize => dst.text.font_size = src.text.font_size,
+        Shading => dst.vn_effect = src.vn_effect,
+        Transform => dst.vn_transform = src.vn_transform,
+        All | Other(_) => {}
+    }
+}
+
+/// The rung with every property `transitions` covers taken out of it, or `None`
+/// when nothing had to be removed (so the caller can keep sharing the `Rc`).
+///
+/// This is the half of the state-transition design that lives on the paint
+/// side: what gpui's ladder still applies instantly, and what the animator now
+/// owns. Splitting it here rather than in the renderer keeps the two halves
+/// reading off ONE list — [`covered`] — so a property can never be both
+/// snapped by gpui and animated by us.
+pub fn strip_transitioned(
+    rung: &StyleRefinement,
+    transitions: &[TransitionSpec],
+) -> Option<StyleRefinement> {
+    if transitions.is_empty() {
+        return None;
+    }
+    let properties = covered(transitions);
+    let mut out = rung.clone();
+    let mut touched = false;
+    for p in &properties {
+        if !matches!(slot_of(rung, p), Slot::Missing) {
+            clear(&mut out, p);
+            touched = true;
+        }
+    }
+    touched.then_some(out)
+}
+
 /// The CSS initial value, when it is well defined *without* inheritance or
 /// layout. Used when one endpoint of a transition is simply absent.
 fn initial(p: &TransitionProperty) -> Option<Animatable> {
@@ -365,6 +474,18 @@ pub struct Animator {
     /// Queued `transitionend` / `animation*` events, drained once per frame by
     /// the host (which is the only place that has a `Window` to dispatch with).
     events: Vec<AnimEvent>,
+    /// The SETTLED value of an interaction-state transition, per node.
+    ///
+    /// A base-driven transition can drop its track the moment it finishes,
+    /// because the new base already carries the target — the track was only ever
+    /// covering the gap. A state-driven one cannot: its target lives in a
+    /// `:hover` rung that [`crate::ComputedStates`] keeps beside the base, and
+    /// the host STRIPS the transitioned properties out of the rung it hands
+    /// gpui (otherwise gpui's paint-time ladder would snap them and there would
+    /// be nothing left to animate). So once the track settles, this is the only
+    /// thing still holding the hovered value on screen. Cleared when the state
+    /// goes back to base, where the base itself is the answer again.
+    states: HashMap<u32, StyleRefinement>,
     warned: HashSet<String>,
     diagnostics: Vec<String>,
     reduce_motion: bool,
@@ -424,8 +545,11 @@ impl Animator {
 
         if new.transitions.is_empty() {
             // No `transition` declaration any more — running transitions are
-            // cancelled and the value snaps, as in CSS.
+            // cancelled and the value snaps, as in CSS. The state hold goes with
+            // them: with nothing left to strip, the whole rung is gpui's again
+            // and a leftover hold would double-apply it.
             self.nodes.remove(&node);
+            self.states.remove(&node);
             return;
         }
 
@@ -492,12 +616,171 @@ impl Animator {
         }
     }
 
+    /// An interaction-state flip — the pointer entered or left this element (or
+    /// the `.group` ancestor a `group-hover:` rule watches).
+    ///
+    /// `target` is the refinement the element's ladder produces in its NEW
+    /// state: base refined by every rung that is now on. `None` means "back to
+    /// the plain base state". Only the properties `transition` covers are
+    /// touched; everything else is still gpui's to snap.
+    ///
+    /// This is deliberately a separate entry point from [`Self::on_computed`]
+    /// rather than an extension of it. A base change arrives on the RESTYLE
+    /// path, once per pass over the nodes the cascade re-ran; a state flip
+    /// arrives on the PAINT path, for one element, from gpui's hover edge. m11's
+    /// invariant is that a hover costs no tree work, and folding the flip into
+    /// the restyle diff would have cost exactly that.
+    pub fn on_state(
+        &mut self,
+        node: u32,
+        computed: &ComputedStates,
+        target: Option<&StyleRefinement>,
+        now: Instant,
+    ) {
+        if computed.transitions.is_empty() {
+            // Nothing was stripped out of the rung, so gpui is still applying
+            // the whole thing and there is nothing for us to hold.
+            self.states.remove(&node);
+            self.nodes.remove(&node);
+            return;
+        }
+        let properties = covered(&computed.transitions);
+        let base = &*computed.base;
+
+        // The settled value, which outlives the tracks. Built first so that the
+        // reduce-motion path can take it and skip the animation entirely — the
+        // state style still has to APPLY, it just applies at once.
+        let mut hold = StyleRefinement::default();
+        let mut holds_anything = false;
+        if let Some(target) = target {
+            for p in &properties {
+                let to = slot_of(target, p);
+                if matches!(to, Slot::Missing) {
+                    continue;
+                }
+                // Same as the base? Then the base already says it and holding a
+                // copy would only make the overlay bigger.
+                if to == slot_of(base, p) {
+                    continue;
+                }
+                match to {
+                    Slot::Value(v) => {
+                        install(&mut hold, p, v);
+                        holds_anything = true;
+                    }
+                    // A value that cannot be interpolated (a gradient fill,
+                    // `auto`, a percentage) still has to be SHOWN — the rung no
+                    // longer carries it. It just snaps, which is what CSS does
+                    // with a non-interpolable endpoint too.
+                    _ => {
+                        copy_property(&mut hold, target, p);
+                        holds_anything = true;
+                    }
+                }
+            }
+        }
+
+        if self.reduce_motion {
+            self.nodes.remove(&node);
+            if holds_anything {
+                self.states.insert(node, hold);
+            } else {
+                self.states.remove(&node);
+            }
+            return;
+        }
+
+        let previous = self.states.get(&node).cloned();
+        let mut tracks = self.nodes.remove(&node).unwrap_or_default();
+        tracks.retain(|t| properties.contains(&t.property));
+
+        for property in &properties {
+            let Some(spec) = spec_for(&computed.transitions, property) else {
+                continue;
+            };
+            let index = tracks.iter().position(|t| t.property == *property);
+            let running = index.map(|i| tracks[i].value(now));
+            // Where the property is RIGHT NOW: mid-transition, or settled on
+            // the previous state's value, or on the base.
+            let from_slot = match running {
+                Some(v) => Slot::Value(v),
+                None => match previous.as_ref().map(|p| slot_of(p, property)) {
+                    Some(Slot::Missing) | None => slot_of(base, property),
+                    Some(s) => s,
+                },
+            };
+            let to_slot = match slot_of(&hold, property) {
+                Slot::Missing => slot_of(base, property),
+                s => s,
+            };
+
+            match self.endpoints(from_slot, to_slot, property) {
+                Endpoints::Pair(from, to) => {
+                    if let Some(i) = index {
+                        if tracks[i].to == to {
+                            // Already heading there: let it run undisturbed.
+                            continue;
+                        }
+                    }
+                    if from == to || (spec.duration.is_zero() && spec.delay.is_zero()) {
+                        if let Some(i) = index {
+                            tracks.remove(i);
+                        }
+                        continue;
+                    }
+                    let track = Track {
+                        property: property.clone(),
+                        from,
+                        to,
+                        start: now,
+                        delay: spec.delay,
+                        duration: spec.duration,
+                        easing: spec.easing,
+                    };
+                    match index {
+                        Some(i) => tracks[i] = track,
+                        None => tracks.push(track),
+                    }
+                }
+                Endpoints::Snap => {
+                    if let Some(i) = index {
+                        tracks.remove(i);
+                    }
+                }
+            }
+        }
+
+        if tracks.is_empty() {
+            self.nodes.remove(&node);
+        } else {
+            self.nodes.insert(node, tracks);
+        }
+        if holds_anything {
+            self.states.insert(node, hold);
+        } else {
+            self.states.remove(&node);
+        }
+    }
+
+    /// Whether `node` is currently holding an interaction-state value — the
+    /// host uses it to decide whether a restyle has to re-fold the target.
+    pub fn holds_state(&self, node: u32) -> bool {
+        self.states.contains_key(&node)
+    }
+
     /// The interpolated values for `node` this frame, to be refined ON TOP of
     /// its computed base. `None` when the node has nothing running.
     pub fn overlay(&self, node: u32, base: &StyleRefinement, now: Instant) -> Option<StyleRefinement> {
         // Animations first, transitions on top: CSS Cascade §6.2 orders
         // transition declarations ABOVE animation declarations.
         let mut r = self.animation_overlay(node, base, now);
+        // Then the SETTLED interaction-state values, then the running tracks on
+        // top of those: while a track runs it is the authority for its property,
+        // and when it finishes the hold is what the value settles onto.
+        if let Some(hold) = self.states.get(&node) {
+            use gpui::Refineable as _;
+            r.get_or_insert_with(StyleRefinement::default).refine(hold);
+        }
         if let Some(tracks) = self.nodes.get(&node).filter(|t| !t.is_empty()) {
             let out = r.get_or_insert_with(StyleRefinement::default);
             for track in tracks {
@@ -559,12 +842,14 @@ impl Animator {
         // A node that stopped existing cannot receive an `animationcancel`
         // (there is nothing to dispatch it to), so its runs are simply dropped.
         self.anims.retain(|&id, _| alive(id));
+        self.states.retain(|&id, _| alive(id));
         self.events.retain(|e| alive(e.node));
     }
 
     /// Forgets everything (e.g. on a stylesheet swap that resets the tree).
     pub fn clear(&mut self) {
         self.nodes.clear();
+        self.states.clear();
         // A stylesheet swap can redefine or delete any `@keyframes` block, and
         // a run holds the block it started with — so every run is dropped
         // rather than left sampling a rule the sheet no longer has. This is the

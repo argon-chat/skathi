@@ -42,7 +42,7 @@ use parcel_selectors::context::{MatchingContext, MatchingMode, QuirksMode};
 use parcel_selectors::matching::matches_selector;
 use parcel_selectors::parser::Component;
 
-pub use animator::{AnimEvent, AnimEventKind, Animator};
+pub use animator::{AnimEvent, AnimEventKind, Animator, strip_transitioned};
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
@@ -215,6 +215,42 @@ impl ComputedStates {
     /// have anything to hang the focus rungs on.
     pub fn needs_focus_handle(&self) -> bool {
         self.focus.is_some() || self.focus_visible.is_some() || self.focus_within.is_some()
+    }
+
+    /// True when a pointer flip on this element (or on the `.group` ancestor it
+    /// watches) has to be routed through the animator instead of gpui's
+    /// paint-time ladder — because the author declared a `transition` and at
+    /// least one hover rung to run it on.
+    pub fn hover_transitions(&self) -> bool {
+        !self.transitions.is_empty() && (self.hover.is_some() || self.group_hover.is_some())
+    }
+
+    /// The refinement this element's ladder produces with the pointer over it
+    /// (`own`) and/or over the `.group` ancestor a `group-hover:` rule watches
+    /// (`group`) — base first, then the rungs in gpui's own application order
+    /// (`compute_style_internal`: group-hover, then hover). `None` when neither
+    /// is on, which is the plain base state.
+    ///
+    /// This is what [`Animator::on_state`] transitions towards, so it has to
+    /// fold exactly the way gpui would: a property both rungs set must end on
+    /// the same value whether the animator or the ladder applied it.
+    pub fn hovered(&self, own: bool, group: bool) -> Option<StyleRefinement> {
+        use gpui::Refineable as _;
+        if !own && !group {
+            return None;
+        }
+        let mut out = (*self.base).clone();
+        if group {
+            if let Some((_, style)) = &self.group_hover {
+                out.refine(style);
+            }
+        }
+        if own {
+            if let Some(style) = &self.hover {
+                out.refine(style);
+            }
+        }
+        Some(out)
     }
 }
 
@@ -4316,5 +4352,126 @@ mod tests {
         let frames = engine.keyframes("spin").unwrap();
         assert_eq!(frames.steps.len(), 1);
         assert_eq!(frames.steps[0].offset, 1.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // m19: transitions driven by an INTERACTION-STATE flip
+    //
+    // In a browser a `transition` on the base rule animates whatever a `:hover`
+    // rule changes. Our hover rung rides gpui's paint-time ladder, which has no
+    // clock, so the value snapped. These cover the two halves of the fix: the
+    // rung is split (transitioned properties out, the rest left to snap), and
+    // the animator interpolates the half it took.
+    // -----------------------------------------------------------------------
+
+    /// The split itself: `transition-property` decides what leaves the rung.
+    #[test]
+    fn a_hover_rung_gives_up_exactly_its_transitioned_properties() {
+        let engine = Engine::compile(
+            ".box { transition: background-color 200ms linear; background: #000 } \
+             .box:hover { background: #fff; padding-left: 8px }",
+        );
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let rung = cs.hover.as_ref().expect("a hover rung");
+        assert!(rung.background.is_some());
+        assert!(rung.padding.left.is_some());
+
+        let split = crate::strip_transitioned(rung, &cs.transitions).expect("something to strip");
+        // Transitioned: the animator's now.
+        assert!(split.background.is_none());
+        // Not named in `transition`: still gpui's, still instant — CSS agrees.
+        assert!(split.padding.left.is_some());
+    }
+
+    /// Nothing is stripped when the author declared no transition, so an app
+    /// that never uses `transition` keeps the exact rung it had before.
+    #[test]
+    fn a_rung_without_a_transition_is_left_alone() {
+        let engine = Engine::compile(".box { background: #000 } .box:hover { background: #fff }");
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let rung = cs.hover.as_ref().unwrap();
+        assert!(crate::strip_transitioned(rung, &cs.transitions).is_none());
+    }
+
+    /// The fold the animator aims at has to match what gpui's ladder would
+    /// produce: base, then group-hover, then hover (`compute_style_internal`).
+    #[test]
+    fn the_hover_fold_follows_gpuis_own_rung_order() {
+        let engine = Engine::compile(
+            ".group:hover .icon { opacity: 0.5 } .icon:hover { opacity: 0.9 } \
+             .icon { opacity: 0.1 }",
+        );
+        let d = group_doc();
+        let states = cascade(&engine, &d, &Env::default());
+        let icon = &states[2];
+        assert!(icon.hovered(false, false).is_none(), "base state is not a fold");
+        assert_eq!(icon.hovered(false, true).unwrap().opacity, Some(0.5));
+        assert_eq!(icon.hovered(true, false).unwrap().opacity, Some(0.9));
+        // Hover wins over group-hover with both on: gpui refines hover LAST.
+        assert_eq!(icon.hovered(true, true).unwrap().opacity, Some(0.9));
+    }
+
+    /// The end-to-end behaviour the owner asked for: a hover flip INTERPOLATES,
+    /// and the settled value survives the track being dropped.
+    #[test]
+    fn a_hover_flip_interpolates_and_then_holds() {
+        use crate::animator::Animator;
+        let engine = Engine::compile(
+            ".box { transition: opacity 200ms linear; opacity: 0 } .box:hover { opacity: 1 }",
+        );
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let base = (*cs.base).clone();
+        let mut a = Animator::new();
+        let now = Instant::now();
+
+        // Pointer in.
+        let target = cs.hovered(true, false);
+        a.on_state(1, &cs, target.as_ref(), now);
+        let half = a.overlay(1, &base, now + Duration::from_millis(100)).unwrap();
+        assert!(
+            (half.opacity.unwrap() - 0.5).abs() < 1e-2,
+            "midway through, not snapped: {:?}",
+            half.opacity
+        );
+
+        // Settled, and the track is dropped — the HOLD is what keeps it there,
+        // because the rung no longer carries the value.
+        let late = now + Duration::from_millis(400);
+        a.finish_settled(late);
+        assert!(!a.any_active(late));
+        let held = a.overlay(1, &base, late).unwrap();
+        assert_eq!(held.opacity, Some(1.0));
+
+        // Pointer out: back down, from the held value.
+        a.on_state(1, &cs, None, late);
+        let back = a.overlay(1, &base, late + Duration::from_millis(100)).unwrap();
+        assert!(
+            (back.opacity.unwrap() - 0.5).abs() < 1e-2,
+            "reverses: {:?}",
+            back.opacity
+        );
+        // …and once it lands, nothing is held: the base is the answer again.
+        let done = late + Duration::from_millis(400);
+        a.finish_settled(done);
+        assert!(!a.holds_state(1));
+    }
+
+    /// `prefers-reduced-motion` still APPLIES the state style — it only refuses
+    /// to animate it. Without the hold the rung would have been stripped and
+    /// nothing would paint the hovered value at all.
+    #[test]
+    fn reduced_motion_snaps_a_state_flip_rather_than_dropping_it() {
+        use crate::animator::Animator;
+        let engine = Engine::compile(
+            ".box { transition: opacity 200ms linear; opacity: 0 } .box:hover { opacity: 1 }",
+        );
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let base = (*cs.base).clone();
+        let mut a = Animator::new();
+        a.set_reduce_motion(true);
+        let now = Instant::now();
+        a.on_state(1, &cs, cs.hovered(true, false).as_ref(), now);
+        assert!(!a.any_active(now));
+        assert_eq!(a.overlay(1, &base, now).unwrap().opacity, Some(1.0));
     }
 }

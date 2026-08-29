@@ -1051,7 +1051,8 @@ fn build_node<V: 'static>(
             // has to run before gpui resolves the editing key bindings), so the
             // wrapper must not also listen — the editor is its descendant and
             // would deliver every key twice.
-            d = bind_events(d, id, mask, click_focus, focusable, !is_input, cx);
+            let style_hover = wants_style_hover(t, id, node);
+            d = bind_events(d, id, mask, click_focus, focusable, !is_input, style_hover, cx);
 
             // `scroll` reports the position *after* the move. gpui installs its
             // own wheel listener that advances the offset during
@@ -1723,6 +1724,25 @@ fn pointer_mask(node: &crate::tree::Node) -> u64 {
     }
 }
 
+/// Does this node's pointer state have to reach the animator?
+///
+/// True exactly when [`apply_computed_style`] took something out of its hover
+/// rungs — the two MUST agree, or a stripped property would have no one left to
+/// paint it. `pointer-events: none` is the case where no rung is installed at
+/// all, so there is nothing to strip and nothing to observe.
+fn wants_style_hover(t: &Tree, id: u32, node: &crate::tree::Node) -> bool {
+    let own = node.computed.as_ref().is_some_and(|cs| {
+        cs.extras.pointer_events_none != Some(true) && cs.hover_transitions()
+    });
+    // …or because this element is the `.group` some DESCENDANT watches. The
+    // descendant has no hitbox of the ancestor and gpui gives it no edge of its
+    // own, so the anchor's flip is the only signal it will ever get — even
+    // though the anchor itself may have neither a hover rung nor a transition.
+    // Missing this is what left `group-hover:` elements stuck on their base
+    // values once the rung was stripped.
+    own || t.has_group_hover_deps(id)
+}
+
 /// The style half every element shares: the folded base refinement assigned
 /// wholesale, the running transition overlay refined over it, the `translate()`
 /// offset, then gpui's own hover/active ladder rungs (the FnOnce builders run
@@ -1745,7 +1765,19 @@ where
     // must not carry gpui's hover/active rungs either, which are exactly what
     // would make gpui insert a hitbox for it.
     if cs.extras.pointer_events_none != Some(true) {
-        if let Some(h) = cs.hover.clone() {
+        // The properties the author named in `transition` come OUT of the
+        // hover rungs: gpui's ladder has no clock and would refine them in
+        // whole the instant the pointer crosses the hitbox, leaving the
+        // animator nothing to interpolate. `tree::note_hover` feeds them to
+        // the animator instead, and its overlay (refined in above) is what
+        // paints them. Everything else stays in the rung and still snaps —
+        // which is exactly what CSS does with an untransitioned property.
+        let split = |rung: &std::rc::Rc<gpui::StyleRefinement>| {
+            vn_css::strip_transitioned(rung, &cs.transitions)
+                .map(std::rc::Rc::new)
+                .unwrap_or_else(|| rung.clone())
+        };
+        if let Some(h) = cs.hover.as_ref().map(split) {
             e = e.hover(move |_| (*h).clone());
         }
         if let Some(a) = cs.active.clone() {
@@ -1756,7 +1788,7 @@ where
         // `GroupHitboxes` stack resolves to exactly the element the cascade
         // picked. The style is refined at PAINT time from that hitbox: an
         // ancestor's hover flip costs a repaint, never a restyle.
-        if let Some((anchor, style)) = cs.group_hover.clone() {
+        if let Some((anchor, style)) = cs.group_hover.as_ref().map(|(a, s)| (*a, split(s))) {
             e = e.group_hover(group_name(anchor as u32), move |_| (*style).clone());
         }
         if let Some((anchor, style)) = cs.group_active.clone() {
@@ -1896,6 +1928,7 @@ fn bind_events<E, V>(
     click_focus: Option<FocusHandle>,
     focusable: bool,
     keys_here: bool,
+    style_hover: bool,
     cx: &mut Context<V>,
 ) -> E
 where
@@ -1966,8 +1999,19 @@ where
             });
         }));
     }
-    if bit(tree::EV_MOUSEENTER) || bit(tree::EV_MOUSELEAVE) {
+    // One `on_hover` per element — gpui's slot is single (`div.rs`'s
+    // `debug_assert!(self.hover_listener.is_none())`), so the JS events and the
+    // CSS state transitions have to share it. `style_hover` is set when the
+    // cascade gave this node a hover rung AND a `transition` to run it on; see
+    // [`tree::note_hover`].
+    if style_hover || bit(tree::EV_MOUSEENTER) || bit(tree::EV_MOUSELEAVE) {
         e = e.on_hover(cx.listener(move |_, hovered: &bool, window, cx| {
+            if style_hover {
+                // Before the JS handler: a `mouseenter` listener that restyles
+                // must see the transition already aimed at its target, or its
+                // restyle would re-aim it at the OLD fold.
+                tree::note_hover(id, *hovered);
+            }
             let event = if *hovered { tree::EV_MOUSEENTER } else { tree::EV_MOUSELEAVE };
             if !bit(event) {
                 return;
@@ -2311,7 +2355,8 @@ fn build_img<V: 'static>(
         }
     }
     let click_focus = handle.filter(|_| focusable);
-    bind_events(e, id, mask, click_focus, focusable, true, cx).into_any_element()
+    let style_hover = wants_style_hover(t, id, node);
+    bind_events(e, id, mask, click_focus, focusable, true, style_hover, cx).into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -2472,7 +2517,8 @@ fn build_svg<V: 'static>(
         }
     }
     let click_focus = handle.filter(|_| focusable);
-    let e = bind_events(e, id, mask, click_focus, focusable, true, cx);
+    let style_hover = wants_style_hover(t, id, node);
+    let e = bind_events(e, id, mask, click_focus, focusable, true, style_hover, cx);
     SvgTint { inner: e, inherit }.into_any_element()
 }
 
@@ -2643,7 +2689,8 @@ fn build_lottie<V: 'static>(
         }
     }
     let click_focus = handle.filter(|_| focusable);
-    bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
+    let style_hover = wants_style_hover(t, id, node);
+    bind_events(d, id, mask, click_focus, focusable, true, style_hover, cx).into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -2795,7 +2842,8 @@ fn build_video<V: 'static>(
         }
     }
     let click_focus = handle.filter(|_| focusable);
-    bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
+    let style_hover = wants_style_hover(t, id, node);
+    bind_events(d, id, mask, click_focus, focusable, true, style_hover, cx).into_any_element()
 }
 
 /// The native `<input>` / `<textarea>` widget: persistent `TextInputState`

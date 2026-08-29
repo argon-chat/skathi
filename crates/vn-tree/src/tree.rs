@@ -207,6 +207,15 @@ pub struct Tree {
     /// ancestor, so an incremental set would go stale in exactly the case the
     /// scoped pass exists for.
     group_anchors: std::collections::HashSet<u32>,
+    /// Anchor → the elements whose `group-hover:` rung has to be ANIMATED when
+    /// that anchor's pointer state flips (i.e. the ones that also declare a
+    /// `transition`). gpui resolves the rung itself at paint time and needs no
+    /// list; the animator needs one, because a flip on the anchor is the only
+    /// signal a descendant ever gets. Built in the same pass as
+    /// [`Tree::group_anchors`] and, like it, only for a sheet that uses the
+    /// variant at all — so the m11 invariant holds: a hover walks this list,
+    /// never the tree.
+    group_hover_deps: HashMap<u32, Vec<u32>>,
     names: Vec<String>,
     name_ids: HashMap<String, u32>,
 }
@@ -271,6 +280,12 @@ impl Tree {
     /// [`Tree::group_anchors`].
     pub fn is_group_anchor(&self, id: u32) -> bool {
         self.group_anchors.contains(&id)
+    }
+
+    /// …and does at least one of those descendants need the ANIMATOR told when
+    /// this element's pointer state flips? See [`Tree::group_hover_deps`].
+    pub fn has_group_hover_deps(&self, id: u32) -> bool {
+        self.group_hover_deps.contains_key(&id)
     }
 
     fn alloc(&mut self, node: Node) -> u32 {
@@ -816,6 +831,18 @@ impl Tree {
                                 engine.keyframes(name)
                             });
                         }
+                        // A restyle under a stationary pointer: the flip already
+                        // happened (or never will), so the animator would keep
+                        // aiming at the OLD fold. Re-aim it — but only for a
+                        // node that is actually in a hovered state, or that is
+                        // still holding one, so an ordinary restyle pays a set
+                        // lookup and nothing else.
+                        if states.hover_transitions() {
+                            let target = fold_hover_target(id, &states);
+                            if target.is_some() || animator.holds_state(id) {
+                                animator.on_state(id, &states, target.as_ref(), now);
+                            }
+                        }
                         n.computed = Some(states);
                     }
                 }
@@ -829,11 +856,22 @@ impl Tree {
         // one pass over the slab, and only for a sheet that has a
         // `group-hover:` rule in it at all.
         self.group_anchors.clear();
+        self.group_hover_deps.clear();
         if engine.uses_group_states() {
-            for slot in self.nodes.iter().flatten() {
+            for (i, slot) in self.nodes.iter().enumerate() {
+                let Some(slot) = slot else { continue };
                 if let Some(cs) = &slot.computed {
                     if let Some((key, _)) = &cs.group_hover {
                         self.group_anchors.insert(*key as u32);
+                        // Only the ones with a `transition` need the animator's
+                        // flip signal; the rest are pure paint-ladder and cost
+                        // nothing here.
+                        if cs.hover_transitions() {
+                            self.group_hover_deps
+                                .entry(*key as u32)
+                                .or_default()
+                                .push(i as u32);
+                        }
                     }
                     if let Some((key, _)) = &cs.group_active {
                         self.group_anchors.insert(*key as u32);
@@ -906,6 +944,81 @@ pub fn animation_overlay(
     ANIMATOR.with(|a| a.borrow().overlay(id, base, now))
 }
 
+thread_local! {
+    /// Which elements the pointer is currently inside, as gpui's own hover
+    /// edges report it. One set, not two: an element is "group-hovered" exactly
+    /// when the anchor its `group-hover:` rung names is in here.
+    ///
+    /// This exists ONLY so that a restyle landing while the pointer is already
+    /// over something can re-fold the target — the flip itself is an edge, and
+    /// an edge alone cannot answer "what state am I in now?".
+    static HOVERED: RefCell<std::collections::HashSet<u32>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// gpui saw the pointer cross this element's hitbox.
+///
+/// This is the whole state-transition story on the input side. In a browser a
+/// `transition` on the BASE rule animates the changes a `:hover` rule makes;
+/// here the hover rung is installed into gpui's paint-time ladder, which
+/// refines it over the computed style with no clock at all — so a hover SNAPPED
+/// (m7 recorded this as "state-rule transitions rejected by design", which was
+/// about a `transition` declared ON the state rule; the base-rule case is the
+/// one authors actually write and it was snapping too).
+///
+/// So: [`crate::render::apply_computed_style`] strips the transitioned
+/// properties out of the rung before gpui ever sees it, and this routes the
+/// flip into the animator instead. What the author did NOT name in `transition`
+/// stays in the rung and still snaps — which is also what CSS says.
+///
+/// Cost per flip is one map lookup plus one `on_state` per element that
+/// actually declares a transition, so m11's "no full-tree work per hover" holds
+/// (`group_hover_deps` is a precomputed list, not a walk).
+pub fn note_hover(id: u32, hovered: bool) {
+    let changed = HOVERED.with(|h| {
+        let mut h = h.borrow_mut();
+        if hovered { h.insert(id) } else { h.remove(&id) }
+    });
+    if !changed {
+        return;
+    }
+    let now = std::time::Instant::now();
+    retarget_state(id, now);
+    // The other half of `group-hover:`: this element may be the `.group` some
+    // descendants watch, and a flip on it is the only signal they get.
+    let deps = read_tree(|t| t.group_hover_deps.get(&id).cloned());
+    for dep in deps.into_iter().flatten() {
+        retarget_state(dep, now);
+    }
+}
+
+/// The refinement `id`'s ladder produces for the pointer state it is in RIGHT
+/// NOW — `None` when it is in the plain base state. Reads [`HOVERED`] only, so
+/// it is safe to call with the tree already borrowed.
+fn fold_hover_target(id: u32, cs: &vn_css::ComputedStates) -> Option<gpui::StyleRefinement> {
+    HOVERED.with(|h| {
+        let h = h.borrow();
+        let own = h.contains(&id);
+        let group = cs
+            .group_hover
+            .as_ref()
+            .is_some_and(|(key, _)| h.contains(&(*key as u32)));
+        cs.hovered(own, group)
+    })
+}
+
+/// Re-aims one node's state transition at whatever its ladder says right now.
+fn retarget_state(id: u32, now: std::time::Instant) {
+    let Some(cs) = read_tree(|t| t.node(id).and_then(|n| n.computed.clone())) else {
+        return;
+    };
+    if !cs.hover_transitions() {
+        return;
+    }
+    let target = fold_hover_target(id, &cs);
+    ANIMATOR.with(|a| a.borrow_mut().on_state(id, &cs, target.as_ref(), now));
+}
+
 /// True while any transition runs — the host keeps repainting. Also drops
 /// settled tracks (visually a no-op: a finished track equals the base).
 pub fn animating() -> bool {
@@ -943,6 +1056,16 @@ pub fn animator_gc() {
     ANIMATOR.with(|a| {
         a.borrow_mut()
             .gc(&|id| read_tree(|t| t.node(id).is_some()));
+    });
+    // A node unmounted while the pointer was over it never gets a leave edge
+    // (gpui drops the element and with it the listener), so the set has to be
+    // swept too — otherwise the id is "hovered" forever and a later node
+    // reusing it would come up pre-hovered.
+    HOVERED.with(|h| {
+        let mut h = h.borrow_mut();
+        if !h.is_empty() {
+            read_tree(|t| h.retain(|&id| t.node(id).is_some()));
+        }
     });
 }
 
