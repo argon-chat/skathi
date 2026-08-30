@@ -85,6 +85,55 @@ thread_local! {
     /// `Cell` increment per node, unconditionally: the branch a probe check
     /// would add costs as much as the add.
     static BUILT: Cell<u64> = const { Cell::new(0) };
+    /// Nodes that are being painted by SOME OTHER window (docs/MULTIWINDOW.md).
+    /// A popped-out node stays in the retained tree — it keeps its id, its
+    /// listeners, its computed style and its Vue reactivity — but it generates
+    /// no box in the tree it was declared in, exactly like the cache container
+    /// half of `<KeepAlive>`. The second window builds it as its own root
+    /// through [`build_subtree`].
+    static POPPED_OUT: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
+    /// [`BOUNDS`], but keyed by the popped-out root that owns them — one inner
+    /// map per pop-out window, because each is in a different window's client
+    /// space and rotates on a different draw schedule. The primary window's map
+    /// stays [`BOUNDS`] so nothing on the single-window path pays for this.
+    ///
+    /// This IS the "bounds become per-window" half of the phase-2 refactor
+    /// (docs/MULTIWINDOW.md §5.6), keyed by painted root rather than by
+    /// `WindowId` — which is the same key, since each painted root belongs to
+    /// exactly one window.
+    static SUB_BOUNDS: RefCell<HashMap<u32, HashMap<u32, (f32, f32, f32, f32)>>> =
+        RefCell::new(HashMap::new());
+    /// [`PREV_BOUNDS`] for the same maps.
+    static SUB_PREV_BOUNDS: RefCell<HashMap<u32, HashMap<u32, (f32, f32, f32, f32)>>> =
+        RefCell::new(HashMap::new());
+    /// The popped-out root whose PREPAINT recursion is currently running (0 =
+    /// the primary window's). Set by [`SubtreeScope`], which brackets exactly
+    /// that recursion — a build-time flag would not do, because `record_bounds`
+    /// is called at prepaint, long after the build returned.
+    static PAINTING_ROOT: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Marks (or unmarks) a node as painted by another window. Returns `true` when
+/// the flag actually moved, so the caller can skip a pointless repaint.
+pub fn set_popped_out(id: u32, on: bool) -> bool {
+    let moved = POPPED_OUT.with(|s| {
+        let mut s = s.borrow_mut();
+        if on { s.insert(id) } else { s.remove(&id) }
+    });
+    if moved && !on {
+        // Coming back: the rectangles this subtree had are in the CLOSED
+        // window's coordinate space and must not survive into the primary
+        // window's answers even for one frame — `bounds_of` falls back to these
+        // maps, and a stale pop-out rect is worse than `None`.
+        SUB_BOUNDS.with(|m| m.borrow_mut().remove(&id));
+        SUB_PREV_BOUNDS.with(|m| m.borrow_mut().remove(&id));
+    }
+    moved
+}
+
+/// Is this node currently painted by another window?
+pub fn popped_out(id: u32) -> bool {
+    POPPED_OUT.with(|s| s.borrow().contains(&id))
 }
 
 /// Browser-compat advisory: say what was dropped and what to do instead, once.
@@ -118,29 +167,47 @@ pub(crate) fn warn_compat(key: &str, msg: &str) {
 /// Called from `build_root`, i.e. once per `render()`: last frame's rectangles
 /// are about to be replaced by this frame's, and anything that stops being
 /// painted must stop having bounds.
+///
+/// **It rotates the PRIMARY root's map only.** A popped-out subtree
+/// (docs/MULTIWINDOW.md) is painted by another window, on that window's own
+/// draw schedule, and its rectangles are in that window's coordinate space —
+/// so they live in [`SUB_BOUNDS`], keyed by the painted root, and are rotated
+/// by that subtree's own build. Rotating them here instead is what made a
+/// popped-out node read back as "not painted (bounds null)" on every frame the
+/// primary window drew and the pop-out did not, which is most of them.
 fn reset_bounds() {
     let last = BOUNDS.with(|m| std::mem::take(&mut *m.borrow_mut()));
     PREV_BOUNDS.with(|m| *m.borrow_mut() = last);
 }
 
 fn record_bounds(id: u32, bounds: gpui::Bounds<gpui::Pixels>) {
-    BOUNDS.with(|m| {
-        m.borrow_mut().insert(
-            id,
-            (
-                f32::from(bounds.origin.x),
-                f32::from(bounds.origin.y),
-                f32::from(bounds.size.width),
-                f32::from(bounds.size.height),
-            ),
-        );
-    });
+    let rect = (
+        f32::from(bounds.origin.x),
+        f32::from(bounds.origin.y),
+        f32::from(bounds.size.width),
+        f32::from(bounds.size.height),
+    );
+    // Which painted root's prepaint recursion are we inside? 0 is the primary
+    // window's; anything else is a pop-out, and its rectangles are in THAT
+    // window's client space.
+    let root = PAINTING_ROOT.with(|c| c.get());
+    if root == 0 {
+        BOUNDS.with(|m| m.borrow_mut().insert(id, rect));
+    } else {
+        SUB_BOUNDS.with(|m| m.borrow_mut().entry(root).or_default().insert(id, rect));
+    }
 }
 
-/// `(x, y, width, height)` in CSS pixels, window-relative, from the last frame
-/// this node was painted in — `None` when it was not painted at all.
+/// `(x, y, width, height)` in CSS pixels, **relative to the window that painted
+/// it**, from the last frame this node was painted in — `None` when it was not
+/// painted at all.
 pub fn bounds_of(id: u32) -> Option<(f32, f32, f32, f32)> {
-    BOUNDS.with(|m| m.borrow().get(&id).copied())
+    if let Some(r) = BOUNDS.with(|m| m.borrow().get(&id).copied()) {
+        return Some(r);
+    }
+    // At most a handful of pop-outs, and only reached for a node the primary
+    // window did not paint.
+    SUB_BOUNDS.with(|m| m.borrow().values().find_map(|sub| sub.get(&id).copied()))
 }
 
 /// Where the app root was painted in the window's client area, in CSS px —
@@ -160,13 +227,15 @@ pub fn root_bounds() -> Option<(f32, f32, f32, f32)> {
 /// built. Only builders need this — `bounds_of` is the answer to "where is it
 /// now", which is what devtools and a future `getBoundingClientRect()` want.
 fn prev_size_of(id: u32) -> Option<(f32, f32)> {
-    PREV_BOUNDS.with(|m| {
-        m.borrow()
-            .get(&id)
-            .copied()
-            .filter(|(_, _, w, h)| *w > 0.0 && *h > 0.0)
-            .map(|(_, _, w, h)| (w, h))
-    })
+    let live = |r: Option<(f32, f32, f32, f32)>| {
+        r.filter(|(_, _, w, h)| *w > 0.0 && *h > 0.0).map(|(_, _, w, h)| (w, h))
+    };
+    if let Some(s) = live(PREV_BOUNDS.with(|m| m.borrow().get(&id).copied())) {
+        return Some(s);
+    }
+    SUB_PREV_BOUNDS
+        .with(|m| m.borrow().values().find_map(|sub| sub.get(&id).copied()))
+        .and_then(|r| live(Some(r)))
 }
 
 /// A transparent wrapper that records the bounds gpui laid its inner element
@@ -279,6 +348,19 @@ pub(crate) fn gc_node_state() {
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     BOUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     PREV_BOUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    // The pop-out maps too, and the maps themselves when their root has stopped
+    // being popped out (or stopped existing — Vue may unmount a subtree that is
+    // still in another window; `on_window_closed` handles the window, this
+    // handles the map).
+    for map in [&SUB_BOUNDS, &SUB_PREV_BOUNDS] {
+        map.with(|m| {
+            let mut m = m.borrow_mut();
+            m.retain(|&root, _| live(root) && popped_out(root));
+            for sub in m.values_mut() {
+                sub.retain(|&id, _| live(id));
+            }
+        });
+    }
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
@@ -540,8 +622,34 @@ pub(crate) fn js_dispatch_app(id: u32, event: u32, payload: &EventPayload, windo
     });
     if crate::flush_changes() {
         window.refresh();
+        repaint_other_windows(cx);
     }
     proceed
+}
+
+thread_local! {
+    /// Installed by the host when more than one window can paint this tree
+    /// (docs/MULTIWINDOW.md §4.3). See [`repaint_other_windows`].
+    static REPAINT_ALL: Cell<Option<fn(&mut App)>> = const { Cell::new(None) };
+}
+
+/// Registers "repaint every window that paints part of this tree".
+///
+/// The frame pump's own notify is not enough, and the reason is exact: a JS
+/// wave does not only start in the pump, it also starts inside an **input
+/// listener**, and `flush_changes()` consumes the dirty flag there. So when a
+/// click in window B mutates a `ref` that window A's text depends on, the pump
+/// that runs next finds nothing dirty and never asks window A to redraw — the
+/// tree is right, the pixels are a frame behind forever. This hook is what
+/// closes that: a wave that lands in ANY window repaints ALL of them.
+pub fn set_repaint_all(f: fn(&mut App)) {
+    REPAINT_ALL.with(|c| c.set(Some(f)));
+}
+
+fn repaint_other_windows(cx: &mut App) {
+    if let Some(f) = REPAINT_ALL.with(|c| c.get()) {
+        f(cx);
+    }
 }
 
 /// The `Context<V>` flavour: `cx.notify()` is the cheaper repaint request when
@@ -558,6 +666,7 @@ fn js_dispatch<V: 'static>(
     });
     if crate::flush_changes() {
         cx.notify();
+        repaint_other_windows(cx);
     }
     proceed
 }
@@ -835,6 +944,110 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     });
     crate::perf::note_build(span.ms(), BUILT.with(|c| c.get()));
     el
+}
+
+/// Builds ONE node's subtree as the root of a *second* window's element tree
+/// (docs/MULTIWINDOW.md §4). The node keeps its identity in the retained tree:
+/// same id, same listeners, same computed style, same Vue reactivity — only the
+/// gpui element tree it is lowered into is a different one.
+///
+/// Deliberately does **not** do build_root's per-frame resets:
+///
+/// * `reset_bounds()` rotates the bounds side map, which is keyed by node id
+///   and shared by every window. The primary root's build owns that rotation
+///   because it is the one that runs from the pump's own window; a second
+///   window's build ADDS its rectangles to the same frame's map. The spike's
+///   known cost is that a popped-out node's `getBoundingClientRect()` is stale
+///   by up to one frame group when the two windows draw out of step — see the
+///   report's honest-scoping section for the epoch-keyed fix.
+/// * `CONTROL_HITBOXES` / `ANY_DRAG_REGION` describe the PRIMARY window's
+///   chrome (the fallback-titlebar retire signal, `__vn_window_hitboxes`), so a
+///   second window must not clear them. A popped-out window gets OS chrome in
+///   the spike and therefore declares none of its own.
+pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<V>) -> AnyElement {
+    let now = std::time::Instant::now();
+    // This subtree's own bounds rotation, on this window's own draw schedule.
+    let last = SUB_BOUNDS.with(|m| m.borrow_mut().remove(&id).unwrap_or_default());
+    SUB_PREV_BOUNDS.with(|m| {
+        m.borrow_mut().insert(id, last);
+    });
+    let inner = tree::read_tree(|t| {
+        if t.node(id).is_none() {
+            return Empty.into_any_element();
+        }
+        // A popped-out root inherits nothing — it is a root, like `t.root`.
+        build_node(t, id, window, cx, now, None, None, None, Stacking::default())
+    });
+    SubtreeScope { root: id, inner }.into_any_element()
+}
+
+/// A transparent wrapper that brackets one popped-out subtree's prepaint
+/// recursion, so every `record_bounds` inside it lands in that subtree's own
+/// map instead of the primary window's. Contributes no layout of its own, the
+/// same way [`BoundsProbe`] does not.
+struct SubtreeScope {
+    root: u32,
+    inner: AnyElement,
+}
+
+impl gpui::IntoElement for SubtreeScope {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for SubtreeScope {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        (self.inner.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        // Saved and restored rather than zeroed: nesting is not legal today
+        // (A-M01 flattens a nested `VnWindow`), and a scope that assumed it
+        // would be the outermost one would be a landmine the day it is.
+        let prev = PAINTING_ROOT.with(|c| c.replace(self.root));
+        self.inner.prepaint(window, cx);
+        PAINTING_ROOT.with(|c| c.set(prev));
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut (),
+        _prepaint: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.inner.paint(window, cx);
+    }
 }
 
 fn build_node<V: 'static>(
@@ -1609,6 +1822,11 @@ fn transformed_text(text: &str, case: Option<vn_css::TextTransform>) -> SharedSt
 /// An empty `<div>` is NOT in this set: a browser lays that out (it is an
 /// element, it generates a box), and so do we.
 fn generates_a_box(t: &Tree, id: u32) -> bool {
+    // Popped out into another OS window: still in the tree, still reactive,
+    // simply not this window's box to lay out (docs/MULTIWINDOW.md §4).
+    if popped_out(id) {
+        return false;
+    }
     match t.node(id) {
         None => false,
         Some(n) => match n.kind {
