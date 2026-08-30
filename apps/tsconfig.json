@@ -1,6 +1,6 @@
 {
   // Type-checking for the demo apps — `hello`, `oschrome`, `imgperf`,
-  // `shaderlab`. Nothing here emits: bun/`build.ts` transpiles the `.ts` and
+  // `shaderlab`, `popout`, `devtools`. Nothing here emits: bun/`build.ts` transpiles the `.ts` and
   // `@vue/compiler-sfc` the `.vue`, so this file exists so that
   // `bun x vue-tsc --noEmit -p apps/tsconfig.json` and an editor agree with
   // what actually ships.
@@ -90,7 +90,18 @@
     "imgperf/src/**/*.ts",
     "imgperf/src/**/*.vue",
     "shaderlab/src/**/*.ts",
-    "shaderlab/src/**/*.vue"
+    "shaderlab/src/**/*.vue",
+    // The multi-window spike (docs/MULTIWINDOW.md). It calls the raw
+    // `__vn_window_*` host fns, which is exactly the code a checker should be
+    // looking at until `<VnWindow>` exists to wrap them.
+    "popout/src/**/*.ts",
+    "popout/src/**/*.vue",
+    // The inspector (docs/DEVTOOLS-UI.md). A vue-native app like any other, and
+    // the one whose data is entirely OTHER PEOPLE'S JSON: `src/protocol.ts`
+    // writes the wire's reply shapes down from the Rust that builds them, which
+    // is the only thing standing between a renamed field and a blank pane.
+    "devtools/src/**/*.ts",
+    "devtools/src/**/*.vue"
   ]
   // `hello/tailwind.config.ts` is deliberately OUT of scope. It is a
   // BUILD-TIME Node module (jiti loads it inside the Tailwind JIT, it reads

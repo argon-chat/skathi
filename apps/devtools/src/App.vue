@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // The inspector shell: titlebar + three panes, and the poll loops that keep
 // them live.
 //
@@ -19,12 +19,14 @@ import ElementsPane from "./components/ElementsPane.vue";
 import StylesPane from "./components/StylesPane.vue";
 import ConsolePane from "./components/ConsolePane.vue";
 import PreviewPane from "./components/PreviewPane.vue";
-import { state, attach, bestTarget, highlight, pickStep, pollLogs, refreshTargets, refreshTree } from "./store.js";
+import { state, attach, bestTarget, highlight, pickStep, pollLogs, refreshTargets, refreshTree } from "./store";
 
 const SELECT_REFRESH_MS = 4000;
 
-let timers = [];
-const every = (ms, fn) => timers.push(setInterval(fn, ms));
+// `setInterval`'s handle is redjs's own — a number, as in a browser — so the
+// list is what `onUnmounted` clears, and nothing else reads it.
+let timers: ReturnType<typeof setInterval>[] = [];
+const every = (ms: number, fn: () => void) => timers.push(setInterval(fn, ms));
 
 onMounted(async () => {
   const found = refreshTargets();

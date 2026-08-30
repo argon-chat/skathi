@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // The inspector's own titlebar + the target picker.
 //
 // Same two CSS facts as apps/hello's titlebar (docs/WINDOWING.md §12):
@@ -7,11 +7,12 @@
 // there — the target dropdown lives INSIDE the drag strip, so it has to opt
 // out with `window-drag: none` or clicking it would drag the window.
 import { computed } from "vue";
-import { state, attach, detach, refreshTargets, bestTarget } from "../store.js";
+import type { Target } from "../protocol";
+import { state, attach, detach, refreshTargets, bestTarget } from "../store";
 
 const emit = defineEmits(["reattach"]);
 
-const label = (t) => `${t.slot}${t.self ? " (this window)" : ""}${t.alive ? "" : " · dead"}`;
+const label = (t: Target) => `${t.slot}${t.self ? " (this window)" : ""}${t.alive ? "" : " · dead"}`;
 
 const statusText = computed(() => {
   if (state.status === "attached" && state.target) {

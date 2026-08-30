@@ -204,6 +204,18 @@ declare global {
   }
 
   interface VnElement extends VnEventTarget {
+    /**
+     * The RETAINED-TREE node id — `crates/vn-tree`'s arena index, which
+     * `runtime.ts` puts on every mirror node it makes (`mk()`), NOT the `id`
+     * ATTRIBUTE. That divergence is a known and reported one (m19 §5, m20
+     * polish §7); it is declared here because it is also the addressing seam
+     * the multi-window host fns are specified against — `__vn_window_open`
+     * takes exactly this number (docs/MULTIWINDOW.md §5.2 invariant 1), which
+     * is what lets `apps/popout` pop a subtree out with no runtime change.
+     * When `element.id` is fixed to answer the attribute, the id a host fn
+     * wants will need its own spelling and this line moves with it.
+     */
+    readonly id: VnNodeId;
     getBoundingClientRect(): VnDomRect;
     readonly scrollTop: number;
     readonly scrollLeft: number;
@@ -293,6 +305,28 @@ declare global {
      *  straight to `decodeAudioData`, which is the browser's own idiom. */
     arrayBuffer(): Promise<ArrayBuffer>;
   }
+
+  /**
+   * `AbortController` / `AbortSignal` — vendor/redjs/redjs/src/webapi/abort.rs,
+   * the real WHATWG pair, and `webapi::install` calls `abort::install`
+   * UNCONDITIONALLY (no cargo feature, no host opt-in). So unlike `fetch` and
+   * `AudioContext` next door this one is not `| undefined`: a redjs that lacks
+   * it does not exist, and apps/devtools' request timeout depends on it.
+   *
+   * `fetch` reads `init.signal` (fetch.rs `signal_is_aborted`) and rejects with
+   * an `AbortError`, which is what makes a wedged target a message rather than
+   * a pane that waits forever.
+   */
+  interface VnAbortSignal extends VnEventTarget {
+    readonly aborted: boolean;
+    readonly reason: unknown;
+    throwIfAborted(): void;
+  }
+  interface VnAbortController {
+    readonly signal: VnAbortSignal;
+    abort(reason?: unknown): void;
+  }
+  var AbortController: { new (): VnAbortController; prototype: VnAbortController };
 }
 
 // ---------------------------------------------------------------------------

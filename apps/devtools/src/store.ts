@@ -6,12 +6,29 @@
 //
 // The rule the polling follows: NEVER let a poll outlive its usefulness.
 // Every command costs the target a frame, so the loops are slow (logs ~0.7 s,
-// tree ~2.5 s), serialized by `wire.js`, and each one is skipped while the
+// tree ~2.5 s), serialized by `wire.ts`, and each one is skipped while the
 // previous one is still in flight.
 
 import { reactive } from "vue";
-import { listTargets, send } from "./wire.js";
-import { nodeLabel } from "./dump.js";
+import { listTargets, message, send } from "./wire";
+import { nodeLabel } from "./dump";
+import type {
+  ConsoleLine,
+  EvalReply,
+  LogsReply,
+  NodeId,
+  PickReply,
+  PingReply,
+  Row,
+  RulesReply,
+  ScreenshotReply,
+  Shot,
+  Status,
+  StylesReply,
+  Target,
+  TargetList,
+  TreeNode,
+} from "./protocol";
 
 /** How long the target keeps a picker highlight without being told again. */
 const PICK_TTL_MS = 1500;
@@ -19,11 +36,49 @@ const PICK_TTL_MS = 1500;
 const SELECT_TTL_MS = 6000;
 const LOG_LIMIT = 500;
 
-export const state = reactive({
+interface State {
+  // -- attachment
+  targets: Target[];
+  target: Target | null;
+  status: Status;
+  error: string;
+
+  // -- elements
+  tree: TreeNode | null;
+  rows: Row[];
+  byId: Record<NodeId, TreeNode>;
+  expanded: Record<NodeId, boolean>;
+  selected: NodeId | null;
+  treeError: string;
+  autoTree: boolean;
+
+  // -- styles
+  styles: StylesReply | null;
+  rules: RulesReply | null;
+  stylesTab: string;
+  stylesError: string;
+
+  // -- console
+  logs: ConsoleLine[];
+  logCursor: number;
+  logStatus: string;
+  dropped: number;
+  logFilter: string;
+
+  // -- picker
+  picking: boolean;
+  pickInfo: PickReply | null;
+
+  // -- preview
+  shot: Shot | null;
+  shotError: string;
+  shotBusy: boolean;
+}
+
+export const state = reactive<State>({
   // -- attachment
   targets: [],
   target: null,
-  /** "detached" | "attaching" | "attached" | "lost" */
   status: "detached",
   error: "",
 
@@ -63,7 +118,7 @@ export const state = reactive({
 // attachment
 // ---------------------------------------------------------------------------
 
-export function refreshTargets() {
+export function refreshTargets(): TargetList {
   const found = listTargets();
   state.targets = found.targets || [];
   state.error = found.error || "";
@@ -75,7 +130,7 @@ export function refreshTargets() {
  * process — the inspector attaching to ITSELF on startup would be a confusing
  * default, even though it is a perfectly legal thing to ask for by hand.
  */
-export function bestTarget(found) {
+export function bestTarget(found?: TargetList | null): Target | null {
   const live = state.targets.filter((t) => t.alive);
   if (found && found.preferred) {
     const named = live.find((t) => t.dir === found.preferred || t.slot === found.preferred);
@@ -84,14 +139,14 @@ export function bestTarget(found) {
   return live.find((t) => !t.self) || live[0] || null;
 }
 
-export async function attach(target) {
+export async function attach(target: Target | null): Promise<void> {
   state.target = target;
   state.status = target ? "attaching" : "detached";
   state.error = "";
   resetInspection();
   if (!target) return;
   try {
-    const pong = await send(target, "ping");
+    const pong = await send<PingReply>(target, "ping");
     state.status = "attached";
     state.logCursor = 0;
     push({ kind: "dev", text: `attached to ${target.slot} · pid ${pong.pid} · port ${target.port}` });
@@ -99,18 +154,18 @@ export async function attach(target) {
     await pollLogs();
   } catch (e) {
     state.status = "lost";
-    state.error = String(e.message || e);
+    state.error = message(e);
   }
 }
 
-export function detach() {
+export function detach(): void {
   if (state.target) clearHighlight();
   state.target = null;
   state.status = "detached";
   resetInspection();
 }
 
-function resetInspection() {
+function resetInspection(): void {
   state.tree = null;
   state.rows = [];
   state.byId = {};
@@ -126,11 +181,11 @@ function resetInspection() {
 }
 
 /** Every failure funnels through here, so a dead target is reported once. */
-function fail(e) {
-  const message = String((e && e.message) || e);
-  state.error = message;
-  if (/cannot reach/.test(message)) state.status = "lost";
-  return message;
+function fail(e: unknown): string {
+  const text = message(e);
+  state.error = text;
+  if (/cannot reach/.test(text)) state.status = "lost";
+  return text;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,13 +194,13 @@ function fail(e) {
 
 let treeBusy = false;
 
-export async function refreshTree() {
+export async function refreshTree(): Promise<void> {
   if (!state.target || treeBusy) return;
   treeBusy = true;
   try {
     // Depth 14 covers every app in this repo whole; anything deeper comes back
     // as a `truncated` count and is fetched on demand when the row is opened.
-    const tree = await send(state.target, "tree", { depth: 14 });
+    const tree = await send<TreeNode>(state.target, "tree", { depth: 14 });
     state.tree = tree;
     state.treeError = "";
     if (!Object.keys(state.expanded).length) expandInitial(tree, 0);
@@ -158,7 +213,7 @@ export async function refreshTree() {
 }
 
 /** Open the first few levels so an attach shows structure, not one root row. */
-function expandInitial(node, depth) {
+function expandInitial(node: TreeNode | null, depth: number): void {
   if (!node || depth > 2) return;
   state.expanded[node.id] = true;
   for (const child of node.children || []) expandInitial(child, depth + 1);
@@ -172,17 +227,17 @@ function expandInitial(node, depth) {
  * selects it before its ancestors are open), while `rows` is only what is on
  * screen.
  */
-export function reindex() {
-  const byId = {};
-  const index = (node) => {
+export function reindex(): void {
+  const byId: Record<NodeId, TreeNode> = {};
+  const index = (node: TreeNode | null): void => {
     if (!node || node.id === undefined) return;
     byId[node.id] = node;
     for (const child of node.children || []) index(child);
   };
   index(state.tree);
 
-  const rows = [];
-  const walk = (node, depth) => {
+  const rows: Row[] = [];
+  const walk = (node: TreeNode | null, depth: number): void => {
     if (!node || node.id === undefined) return;
     // An empty text node is Vue's fragment anchor, not content: it renders
     // nothing in the app and would be pure noise here (there is one per v-for).
@@ -204,19 +259,22 @@ export function reindex() {
   state.byId = byId;
 }
 
-export function toggle(id) {
+export function toggle(id: NodeId): void {
   state.expanded[id] = !state.expanded[id];
   reindex();
 }
 
 /** Opens every ancestor of `id` so a picked node is actually on screen. */
-export function revealPath(path) {
+export function revealPath(path: NodeId[] | undefined): void {
   if (!Array.isArray(path)) return;
   for (const id of path.slice(0, -1)) state.expanded[id] = true;
   reindex();
 }
 
-export async function select(id, options = {}) {
+export async function select(
+  id: NodeId | null,
+  options: { highlight?: boolean } = {},
+): Promise<void> {
   state.selected = id;
   state.styles = null;
   state.rules = null;
@@ -230,22 +288,22 @@ export async function select(id, options = {}) {
   await loadStyles(id);
 }
 
-async function loadStyles(id) {
+async function loadStyles(id: NodeId): Promise<void> {
   try {
-    state.styles = await send(state.target, "styles", { node: id });
+    state.styles = await send<StylesReply>(state.target, "styles", { node: id });
   } catch (e) {
     // A text node has no computed style — that is an answer, not a failure.
-    state.stylesError = String((e && e.message) || e);
+    state.stylesError = message(e);
   }
   try {
-    state.rules = await send(state.target, "rules", { node: id });
+    state.rules = await send<RulesReply>(state.target, "rules", { node: id });
   } catch {
     state.rules = null;
   }
 }
 
 /** Re-reads the selected node's styles — the "did my edit land" button. */
-export async function refreshStyles() {
+export async function refreshStyles(): Promise<void> {
   if (state.selected !== null) await loadStyles(state.selected);
 }
 
@@ -253,17 +311,23 @@ export async function refreshStyles() {
 // highlight + picker
 // ---------------------------------------------------------------------------
 
-export function highlight(id, ttlMs) {
+export function highlight(id: NodeId, ttlMs: number): Promise<void> {
   if (!state.target) return Promise.resolve();
-  return send(state.target, "highlight", { node: id, ttlMs }).catch(() => {});
+  return send<unknown>(state.target, "highlight", { node: id, ttlMs }).then(
+    () => {},
+    () => {},
+  );
 }
 
-export function clearHighlight() {
+export function clearHighlight(): Promise<void> {
   if (!state.target) return Promise.resolve();
-  return send(state.target, "highlight", { clear: true }).catch(() => {});
+  return send<unknown>(state.target, "highlight", { clear: true }).then(
+    () => {},
+    () => {},
+  );
 }
 
-export function togglePick() {
+export function togglePick(): void {
   state.picking = !state.picking;
   state.pickInfo = null;
   if (!state.picking) clearHighlight();
@@ -279,11 +343,11 @@ export function togglePick() {
  * selected. (A browser can intercept the click instead because the picker and
  * the page share a window; we do not.)
  */
-export async function pickStep() {
+export async function pickStep(): Promise<void> {
   if (!state.picking || !state.target) return;
-  let info;
+  let info: PickReply;
   try {
-    info = await send(state.target, "pick", {}, 3000);
+    info = await send<PickReply>(state.target, "pick", {}, 3000);
   } catch (e) {
     fail(e);
     state.picking = false;
@@ -300,8 +364,10 @@ export async function pickStep() {
     state.picking = false;
     state.pickInfo = null;
     revealPath(picked.path);
-    await select(picked.node.id);
-    push({ kind: "dev", text: `picked ${nodeLabel(picked.node)} (node ${picked.node.id})` });
+    // Narrowed above, and re-read here because `state.pickInfo` was cleared.
+    const node = picked.node!;
+    await select(node.id);
+    push({ kind: "dev", text: `picked ${nodeLabel(node)} (node ${node.id})` });
   }
 }
 
@@ -311,16 +377,16 @@ export async function pickStep() {
 
 let logsBusy = false;
 
-function push(entry) {
+function push(entry: { kind: string; text: string; seq?: number; at?: number }): void {
   state.logs.push({ seq: -1, at: Date.now(), ...entry });
   if (state.logs.length > LOG_LIMIT) state.logs.splice(0, state.logs.length - LOG_LIMIT);
 }
 
-export async function pollLogs() {
+export async function pollLogs(): Promise<void> {
   if (!state.target || logsBusy || state.status !== "attached") return;
   logsBusy = true;
   try {
-    const data = await send(state.target, "logs", { since: state.logCursor });
+    const data = await send<LogsReply>(state.target, "logs", { since: state.logCursor });
     state.logCursor = data.next;
     state.logStatus = data.status || "";
     if (data.dropped) state.dropped += data.dropped;
@@ -339,11 +405,11 @@ export async function pollLogs() {
  * round trip (a devtools console reports a failure, it does not fail), so it is
  * pushed as an `error` line rather than raised here.
  */
-export async function runEval(source) {
+export async function runEval(source: string): Promise<void> {
   if (!state.target || !source.trim()) return;
   push({ kind: "input", text: source });
   try {
-    const data = await send(state.target, "eval", { js: source });
+    const data = await send<EvalReply>(state.target, "eval", { js: source });
     if (data.exception) {
       push({ kind: "error", text: `${data.exception}${data.stack ? `\n${data.stack}` : ""}` });
     } else {
@@ -354,7 +420,7 @@ export async function runEval(source) {
   }
 }
 
-function format(value) {
+function format(value: unknown): string {
   if (typeof value === "string") return value;
   try {
     return JSON.stringify(value);
@@ -363,7 +429,7 @@ function format(value) {
   }
 }
 
-export function clearConsole() {
+export function clearConsole(): void {
   state.logs = [];
 }
 
@@ -380,13 +446,17 @@ export function clearConsole() {
  * Each capture lands on a new path (the host rotates them), which is also what
  * keeps gpui's image cache from handing back the previous one.
  */
-export async function capture() {
+export async function capture(): Promise<void> {
   if (!state.target || state.shotBusy) return;
   state.shotBusy = true;
   state.shotError = "";
   try {
-    const shot = await send(state.target, "screenshot", {}, 20000);
-    state.shot = { ...shot, at: Date.now(), url: `file:///${String(shot.path).replace(/\\/g, "/")}` };
+    const shot = await send<ScreenshotReply>(state.target, "screenshot", {}, 20000);
+    state.shot = {
+      ...shot,
+      at: Date.now(),
+      url: `file:///${String(shot.path).replace(/\\/g, "/")}`,
+    };
   } catch (e) {
     state.shotError = fail(e);
   } finally {

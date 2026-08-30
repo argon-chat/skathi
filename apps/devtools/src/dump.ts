@@ -11,7 +11,24 @@
 // dump, re-implemented here because an app bundle must not import the test
 // harness. Keep the two in step.
 
+import type { TreeNode } from "./protocol";
+
 const KEY_LINE = /^(\s*)([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/;
+
+/** One folded line of the dump: how deep it sat, its key, and its value. */
+export interface DumpEntry {
+  indent: number;
+  key: string;
+  value: string;
+}
+
+/** `Hsla { h, s, l, a }`, in the 0..1 units gpui stores it in. */
+export interface Hsla {
+  h: number;
+  s: number;
+  l: number;
+  a: number;
+}
 
 /**
  * Folds a bucket's lines into `{indent, key, value}` entries, joining a nested
@@ -23,8 +40,8 @@ const KEY_LINE = /^(\s*)([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/;
  *         ),
  *     ),
  */
-export function flattenDump(lines) {
-  const out = [];
+export function flattenDump(lines: string[] | undefined): DumpEntry[] {
+  const out: DumpEntry[] = [];
   if (!Array.isArray(lines)) return out;
   for (let i = 0; i < lines.length; i++) {
     const m = KEY_LINE.exec(lines[i]);
@@ -47,7 +64,7 @@ export function flattenDump(lines) {
 }
 
 /** Only the outermost level — an element's own `color`, not the one inside its `text` block. */
-export function topLevel(lines) {
+export function topLevel(lines: string[] | undefined): DumpEntry[] {
   const entries = flattenDump(lines);
   if (!entries.length) return [];
   const shallowest = Math.min(...entries.map((e) => e.indent));
@@ -55,7 +72,7 @@ export function topLevel(lines) {
 }
 
 /** `Hsla { h, s, l, a }` out of a flattened value — what paints the swatches. */
-export function parseHsla(value) {
+export function parseHsla(value: string | undefined): Hsla | null {
   const m = /Hsla\s*\{\s*h:\s*([-\d.eE]+),\s*s:\s*([-\d.eE]+),\s*l:\s*([-\d.eE]+),\s*a:\s*([-\d.eE]+)/.exec(
     value || "",
   );
@@ -64,14 +81,14 @@ export function parseHsla(value) {
 }
 
 /** An `Hsla` as a CSS colour this app's own stylesheet can render. */
-export function hslaCss(hsla) {
+export function hslaCss(hsla: Hsla): string {
   return `hsla(${(hsla.h * 360).toFixed(1)}, ${(hsla.s * 100).toFixed(1)}%, ${(hsla.l * 100).toFixed(
     1,
   )}%, ${hsla.a.toFixed(3)})`;
 }
 
 /** `<div class="a b">` — how a node is named in the tree and in headers. */
-export function nodeLabel(node) {
+export function nodeLabel(node: TreeNode | null | undefined): string {
   if (!node) return "—";
   if (node.kind === "text") return "#text";
   const classes = (node.classes || []).map((c) => `.${c}`).join("");

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // Two views of the same element, and the difference between them is the point.
 //
 //   Computed — the folded `ComputedStates` the cascade produced, bucket by
@@ -12,19 +12,22 @@
 //              does it, and the strike is computed from the SAME order the
 //              cascade folded in.
 import { computed, ref } from "vue";
-import { state, refreshStyles } from "../store.js";
-import { topLevel, parseHsla, hslaCss, nodeLabel } from "../dump.js";
+import { state, refreshStyles } from "../store";
+import type { Declaration, Rule } from "../protocol";
+import { topLevel, parseHsla, hslaCss, nodeLabel } from "../dump";
 
 /** Declarations shown per rule before it folds. A Tailwind preflight block is
     ~45 `--tw-*` seeds, and burying the app's own rules under them is how a
     styles panel becomes unreadable. */
 const FOLD_AT = 10;
-const unfolded = ref({});
-const showAll = (rule) => !!unfolded.value[rule.order];
-const unfold = (rule) => (unfolded.value = { ...unfolded.value, [rule.order]: true });
-const shownDecls = (rule) =>
+// Keyed by a rule's SOURCE ORDER, which is unique per sheet and is what the
+// wire already carries — a rule has no other stable identity here.
+const unfolded = ref<Record<number, boolean>>({});
+const showAll = (rule: Rule) => !!unfolded.value[rule.order];
+const unfold = (rule: Rule) => (unfolded.value = { ...unfolded.value, [rule.order]: true });
+const shownDecls = (rule: Rule) =>
   showAll(rule) ? rule.declarations : (rule.declarations || []).slice(0, FOLD_AT);
-const hiddenCount = (rule) =>
+const hiddenCount = (rule: Rule) =>
   showAll(rule) ? 0 : Math.max(0, (rule.declarations || []).length - FOLD_AT);
 
 /** Buckets in the order a reader wants them, not the order they arrive in. */
@@ -43,7 +46,7 @@ const buckets = computed(() => {
   return names.map((name) => ({ name, entries: topLevel(computedStyles[name]), raw: computedStyles[name] }));
 });
 
-const swatch = (value) => {
+const swatch = (value: string) => {
   const hsla = parseHsla(value);
   return hsla ? hslaCss(hsla) : null;
 };
@@ -55,7 +58,7 @@ const swatch = (value) => {
  * override a base one, it lives on a different rung.
  */
 const winners = computed(() => {
-  const map = {};
+  const map: Record<string, string> = {};
   for (const rule of (state.rules && state.rules.rules) || []) {
     const scope = `${rule.state}|${rule.pseudo || ""}|${rule.media || ""}`;
     for (const d of rule.declarations || []) {
@@ -65,7 +68,7 @@ const winners = computed(() => {
   return map;
 });
 
-const overridden = (rule, decl) => {
+const overridden = (rule: Rule, decl: Declaration) => {
   const scope = `${rule.state}|${rule.pseudo || ""}|${rule.media || ""}`;
   const winner = winners.value[`${scope}|${decl.property}`];
   return winner !== `${rule.order}|${decl.important ? 1 : 0}`;

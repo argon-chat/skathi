@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // The target's window, on demand.
 //
 // NOT a live preview: `screenshot` re-renders the target's last scene into its
@@ -12,7 +12,7 @@
 // what stops gpui's image cache — which never evicts — from handing back the
 // previous frame under the same key.
 import { computed } from "vue";
-import { state, capture } from "../store.js";
+import { state, capture } from "../store";
 
 const taken = computed(() => {
   if (!state.shot) return "";

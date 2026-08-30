@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = resolve(HERE, ".."); // packages/vue-native
 const REPO = resolve(PKG, "../..");
-const ENTRY = join(REPO, "apps/devtools/src/main.js");
+const ENTRY = join(REPO, "apps/devtools/src/main.ts");
 const UI_DIST = join(PKG, "dist-devtools");
 const EXE = join(REPO, "target/x86_64-pc-windows-msvc/debug/vn-app.exe");
 

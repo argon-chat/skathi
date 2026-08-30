@@ -268,6 +268,54 @@ declare function __vn_media_can_play(id: VnNodeId, mime: string): "" | "maybe" |
 declare function __vn_media_events(id: VnNodeId): string;
 
 // ---------------------------------------------------------------------------
+// multi-window — crates/vn-app/src/popout.rs (docs/MULTIWINDOW.md)
+// ---------------------------------------------------------------------------
+//
+// PHASE 0, and deliberately raw. These four move a subtree's PAINT into a
+// second OS window while the node stays in this tree, this component instance
+// and this reactive graph — so `nodeId` is a `VnNodeId`, i.e. `mirrorNode.id`
+// off a template ref, and nothing here needs a runtime change (MULTIWINDOW.md
+// §5.2 invariant 1). The app-facing spelling is `<VnWindow>` in phase 1 (§5.3);
+// until it exists, `apps/popout` calls these directly and this is where their
+// shapes are written down.
+//
+// Installed by `vn-app`, not by the engine — same category as `__vn_storage_*`,
+// so a host without them simply has no such global and a caller that cannot
+// assume vn-app must probe with `typeof __vn_window_open === "function"`.
+
+/**
+ * Moves the node's PAINT into a new OS window.
+ *
+ * `options` is JSON: `{ title?, x?, y?, width?, height? }`. `onClose` fires
+ * with the window, however it closed — the X button, `__vn_window_close`, or
+ * the primary window going away.
+ *
+ * Returns `undefined`, and the open is DEFERRED by one effect cycle:
+ * `App::open_window` draws the new window once before returning and this is
+ * called from inside the primary window's update, so it cannot be nested there
+ * (MULTIWINDOW.md §5.2 invariant 2). UN-painting, though, is immediate — the
+ * primary window's next draw is already without the subtree, because a node in
+ * two element trees for one frame aliases scroll state and hitboxes.
+ */
+declare function __vn_window_open(
+  nodeId: VnNodeId,
+  options: VnJson,
+  onClose?: () => void,
+): void;
+
+/** Closes the window painting `nodeId` — the same path as the user clicking X. */
+declare function __vn_window_close(nodeId: VnNodeId): void;
+
+/** `[{ node, windowId }]` as JSON. For tests and devtools. */
+declare function __vn_window_popouts(): VnJson;
+
+/**
+ * TEST SURFACE. Dispatches a real platform click into the window painting
+ * `nodeId`, at that window's own client coordinates; `true` if it landed.
+ */
+declare function __vn_window_click(nodeId: VnNodeId, x: number, y: number): boolean;
+
+// ---------------------------------------------------------------------------
 // host logging — crates/vn-app/src/main.rs
 // ---------------------------------------------------------------------------
 
@@ -281,6 +329,26 @@ declare function __vn_media_events(id: VnNodeId): string;
  * provide it; the unit-test harness does, by binding it as a parameter.
  */
 declare function __vn_log(message: string): void;
+
+// ---------------------------------------------------------------------------
+// devtools discovery — crates/vn-app/src/devtools/mod.rs (docs/DEVTOOLS-UI.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every attachable vue-native instance, as JSON:
+ * `{ preferred, self: { pid, dir }, targets: [{ slot, dir, port, pid, token,
+ * alive, self }] }`.
+ *
+ * The inspector app's ONE host dependency. Everything else it does goes over
+ * the ordinary devtools wire, which redjs's `fetch` can speak by itself — but
+ * discovery has to read a handshake file off disk, and `fetch` cannot.
+ *
+ * Registered by `devtools::install`, i.e. in every DEV host and in NO
+ * `--features prod` one, so a caller must probe with
+ * `typeof __vn_devtools_targets === "function"` and say what the absence means.
+ * `apps/devtools/src/wire.ts` is the one caller.
+ */
+declare function __vn_devtools_targets(): VnJson;
 
 // ---------------------------------------------------------------------------
 // permissions — crates/vn-permissions/src/lib.rs (docs/PERMISSIONS.md tier 2)

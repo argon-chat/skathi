@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // The multi-window SPIKE — docs/MULTIWINDOW.md.
 //
 // There is ONE Vue app here. `panel` is an ordinary `<section>` in an ordinary
@@ -19,7 +19,11 @@
 import { ref } from "vue";
 
 const count = ref(0);
-const panel = ref(null);
+// `ref="panel"` holds the MIRROR NODE for that `<section>`, and `.id` on it is
+// the retained-tree id the host addresses — MULTIWINDOW.md §5.2 invariant 1.
+// `VnElement` is apps/env.d.ts's name for what a template ref to a native
+// element is holding; `runtime.ts`'s own `MirrorElement` is not exported.
+const panel = ref<VnElement | null>(null);
 const out = ref(false);
 
 function popOut() {

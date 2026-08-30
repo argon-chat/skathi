@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // The console: the target's log ring, tailed, plus an `eval` prompt that runs
 // in the target's JSC in global scope.
 //
@@ -11,10 +11,10 @@
 // compat advisories are in it too (docs/DEVTOOLS.md), which is why the filter
 // row has a kind next to it.
 import { computed, ref } from "vue";
-import { state, runEval, clearConsole, capture } from "../store.js";
+import { state, runEval, clearConsole, capture } from "../store";
 
 const source = ref("");
-const history = ref([]);
+const history = ref<string[]>([]);
 const historyAt = ref(-1);
 
 // Assembled rather than written out, because the builder scans source text for
@@ -22,7 +22,11 @@ const historyAt = ref(-1);
 // string is a module it then cannot resolve, and the build says so.
 const PROMPT_HINT = `evaluate in the target — document.title, or __VN__.${"require"}("<module id>")`;
 
-const KINDS = {
+/** The one-character gutter mark per log kind. A kind the host adds later
+    that is not in here falls through to the empty string, which is the
+    honest rendering of "no mark for this one" — hence the index signature
+    rather than a closed union the host does not promise. */
+const KINDS: Record<string, string> = {
   input: "›",
   result: "‹",
   error: "!",
@@ -50,7 +54,7 @@ function submit() {
 }
 
 // Up/Down through what has been evaluated, like every console ever.
-function recall(step) {
+function recall(step: number) {
   if (!history.value.length) return;
   const next = Math.min(history.value.length, Math.max(0, historyAt.value + step));
   historyAt.value = next;
