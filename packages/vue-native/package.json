@@ -10,21 +10,28 @@
     "vue-router": "4"
   },
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "build": "bun build.ts",
     "watch": "bun build.ts --watch",
     "devtools:ui": "bun devtools/ui.ts",
     "build:prod": "bun prod.ts",
     "shaders": "bun shaders.ts",
     "shaders:check": "bun shaders.ts --check",
-    "shaders:fetch": "bun fetch-slang.ts"
+    "shaders:fetch": "bun fetch-slang.ts",
+    "preludes": "bun scripts/gen-preludes.ts",
+    "preludes:check": "bun scripts/gen-preludes.ts --check"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@types/bun": "^1.4.0",
     "postcss": "^8.4.31",
-    "tailwindcss": "3.4"
+    "tailwindcss": "3.4",
+    "typescript": "5",
+    "vue-tsc": "^3.3.11"
   },
   "comments": {
     "tailwindcss": "PINNED to 3.4.x, NOT a floating major. v3 core utilities emit literal declarations (padding: 1rem, rgb(255 255 255 / .1)) that crates/vn-css maps straight onto gpui; v4 routes everything through var(--tw-*) + calc() + @property, which the engine does not resolve yet, so a v4 bump would degrade nearly every utility to a diagnostic. See packages/vue-native/tailwind.ts.",
-    "@modelcontextprotocol/sdk": "devDependency, not a runtime one: it is used ONLY by devtools/mcp.ts (the vn-devtools MCP server, see docs/DEVTOOLS.md). Nothing in an app bundle imports it, and devtools/ctl.ts is deliberately dependency-free so an agent can drive the app through Bash without `bun install` having run."
+    "@modelcontextprotocol/sdk": "devDependency, not a runtime one: it is used ONLY by devtools/mcp.ts (the vn-devtools MCP server, see docs/DEVTOOLS.md). Nothing in an app bundle imports it, and devtools/ctl.ts is deliberately dependency-free so an agent can drive the app through Bash without `bun install` having run.",
+    "typescript": "TYPE-CHECKING ONLY — `bun run typecheck`. Nothing in the build or the test path invokes tsc: bun transpiles src/*.ts directly (Bun.build for dist/, Bun.Transpiler for the test harnesses), so a missing `bun install` degrades to 'no type check', never to 'no build'. tsconfig.json is the contract."
   }
 }

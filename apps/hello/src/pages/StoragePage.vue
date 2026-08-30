@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // Storage and clipboard, both tiers — docs/STORAGE.md.
 //
 //   tier 1  localStorage / sessionStorage      the Web Storage API, byte for
@@ -19,7 +19,15 @@ defineOptions({ name: "StoragePage" });
 const BOOTS = "vn.demo.boots";
 const NOTE = "vn.demo.note";
 
-const info = ref({});
+// `appStorage.info()`'s answer, taken FROM the function rather than restated:
+// runtime.ts's `StorageInfo` is not exported, and a hand-copied interface here
+// would be free to drift from the JSON `__vn_storage_info` actually returns.
+type StorageInfo = ReturnType<typeof appStorage.info>;
+
+// Starts empty on purpose — `refresh()` fills it in `onMounted`, and the
+// template reads through `info.folder` etc. `Partial` is what "not asked yet"
+// actually is; the alternative is inventing a fake row of zeroes.
+const info = ref<Partial<StorageInfo>>({});
 const localBoots = ref(0);
 const sessionBoots = ref(0);
 const note = ref("");
@@ -33,10 +41,16 @@ function refresh() {
 
 onMounted(() => {
   // Ordinary Web Storage. Nothing on this line is a vue-native API.
+  //
+  // The `String(...)` is new, and it is the one thing the type-checker caught
+  // on this page: both `setItem` calls used to hand a NUMBER to an API whose
+  // second argument is a string. It worked — a browser coerces, and so does
+  // this host — but it worked by accident, and an area whose values are
+  // sometimes numbers is a `getItem(...)!.length` away from a surprise.
   localBoots.value = Number(localStorage.getItem(BOOTS) || 0) + 1;
-  localStorage.setItem(BOOTS, localBoots.value);
+  localStorage.setItem(BOOTS, String(localBoots.value));
   sessionBoots.value = Number(sessionStorage.getItem(BOOTS) || 0) + 1;
-  sessionStorage.setItem(BOOTS, sessionBoots.value);
+  sessionStorage.setItem(BOOTS, String(sessionBoots.value));
   note.value = localStorage.getItem(NOTE) || "";
   refresh();
 });
@@ -61,7 +75,7 @@ function clearLocal() {
 
 // THE EXTENSION, and the owner's original sketch verbatim:
 //   app.setStorageFolder(app.getUserFolder("APPDATA", "myAppFolder"))
-function moveTo(kind, sub, encrypted) {
+function moveTo(kind: string, sub: string, encrypted: boolean) {
   try {
     const folder = appStorage.getUserFolder(kind, sub);
     const at = appStorage.setStorageFolder(folder, { encrypted });
@@ -70,7 +84,9 @@ function moveTo(kind, sub, encrypted) {
     // new format — the plaintext copy beside it is removed).
     status.value = `storage is now ${at}${encrypted ? " (encrypted)" : ""}`;
   } catch (e) {
-    status.value = e.message;
+    // `appStorage` throws a TypeError for an unknown kind, or for a subfolder
+    // that tries to climb out of it.
+    status.value = e instanceof Error ? e.message : String(e);
   }
   refresh();
 }
@@ -85,27 +101,36 @@ function listenForStorage() {
     "context that ANOTHER wrote a key, and there is only one here.";
 }
 
+/** Both clipboard buttons want the same "NotAllowedError: …" rendering, and a
+ *  rejection is only guaranteed to BE an Error by convention. */
+const describe = (e: unknown) =>
+  e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+
+// engine.d.ts types `navigator` as optional — it is installed by redjs when the
+// host registered a backend. Asserted once here, as `document` is above.
+const nav = navigator!;
+
 async function clipboardRoundTrip() {
   try {
-    await navigator.clipboard.writeText(clipText.value);
-    clipRead.value = await navigator.clipboard.readText();
+    await nav.clipboard.writeText(clipText.value);
+    clipRead.value = await nav.clipboard.readText();
   } catch (e) {
-    clipRead.value = `${e.name}: ${e.message}`;
+    clipRead.value = describe(e);
   }
 }
 
 async function clipboardImage() {
   try {
-    await navigator.clipboard.read();
+    await nav.clipboard.read();
     clipRead.value = "read() resolved?!";
   } catch (e) {
-    clipRead.value = `${e.name}: ${e.message}`;
+    clipRead.value = describe(e);
   }
 }
 
 const execCommandResult = ref("");
 function tryExecCommand() {
-  execCommandResult.value = String(document.execCommand("copy"));
+  execCommandResult.value = String(document!.execCommand("copy"));
 }
 </script>
 

@@ -7,7 +7,7 @@
 // the same order, riding vn-css's real transition engine.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness.js";
+import { createRuntime } from "./runtime-harness";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 

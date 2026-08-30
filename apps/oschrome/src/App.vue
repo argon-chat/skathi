@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // docs/WINDOWING.md §4.2 mode 3 — OS-drawn chrome, `titleBarStyle: "default"`.
 //
 // The window above this content has a real `WS_CAPTION` (fork item F-03), so
@@ -13,13 +13,21 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { appWindow } from "vue-native";
 
-const state = ref({});
+// engine.d.ts types `navigator` as optional; under vn-app it is installed
+// before this module evaluates. Asserted once, here.
+const wco = navigator!.windowControlsOverlay;
+
+// The template renders this with `String(v)` and `v-for`-over-the-object, so
+// the row values are deliberately heterogeneous — strings, booleans and the
+// `unknown`s that come off `appWindow.chrome`, which the prelude builds and
+// the runtime types as a bare `Record<string, unknown>`.
+const state = ref<Record<string, unknown>>({});
 const read = () => {
-  const r = navigator.windowControlsOverlay.getTitlebarAreaRect();
+  const r = wco.getTitlebarAreaRect();
   state.value = {
     titleBarStyle: appWindow.chrome.titleBarStyle,
     displayMode: appWindow.chrome.displayMode,
-    wcoVisible: navigator.windowControlsOverlay.visible,
+    wcoVisible: wco.visible,
     wcoRect: `${r.width} x ${r.height}`,
     standalone: matchMedia("(display-mode: standalone)").matches,
     backdrop: appWindow.backdrop,

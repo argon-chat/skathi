@@ -13,7 +13,9 @@ import { defineStore } from "pinia";
 export const useSession = defineStore("session", () => {
   const user = ref("guest");
   const visits = ref(0);
-  const notes = ref([]);
+  // Explicit element type: `ref([])` infers `never[]`, so every push into it
+  // would be an error rather than the string list this actually holds.
+  const notes = ref<string[]>([]);
 
   // A computed inside the store: recomputes for every subscriber at once.
   const badge = computed(() => `${user.value} · ${visits.value}`);
@@ -26,12 +28,15 @@ export const useSession = defineStore("session", () => {
     visits.value = 0;
     notes.value = [];
   }
-  function addNote(text) {
+  // `unknown`, not `string`: both of these already coerce with `String(...)`,
+  // which is the browser-Vue idiom for "whatever a template handed me". Saying
+  // `string` would delete the coercion's reason for existing.
+  function addNote(text: unknown) {
     const t = String(text).trim();
     if (!t) return;
     notes.value = [...notes.value.slice(-2), t];
   }
-  function setUser(name) {
+  function setUser(name: unknown) {
     user.value = String(name || "guest");
   }
 

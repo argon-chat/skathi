@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // The permissions surface, both tiers — docs/PERMISSIONS.md.
 //
 // Every row below is read TWICE on purpose, and the page shows both answers
@@ -17,37 +17,77 @@ import { appPermissions } from "vue-native";
 defineOptions({ name: "PermissionsPage" });
 
 const platform = ref(appPermissions.platform);
-// { name, state (4-state), webState (3-state), canRequest, requesting }
-const rows = ref([]);
-const changes = ref([]);
+
+/**
+ * One table row. `appPermissions.list()` supplies `name` / `state` /
+ * `canRequest`; the other two are this page's own — `webState` is the tier-1
+ * answer shown beside the tier-2 one, and that PAIR is the whole point of the
+ * screen.
+ */
+interface PermissionRow {
+  name: string;
+  /** The four-state read. `"unsupported"` is the word the web does not have. */
+  state: VnPermissionState;
+  canRequest: boolean;
+  /** The three-state web projection, or `"!<reason>"` if tier 1 refused the
+   *  name — a mismatch between the two tables, made visible rather than blank. */
+  webState: string;
+  requesting: boolean;
+}
+
+const rows = ref<PermissionRow[]>([]);
+const changes = ref<string[]>([]);
 const lastRequest = ref("");
 
 // The standard-tier `PermissionStatus` objects, kept so the page can show the
 // web-facing `state` next to the extension's. They are also the change source:
 // `appPermissions` re-broadcasts from these very objects rather than opening a
 // second native subscription.
-const statuses = new Map();
+//
+// The value is only ever read for its `state`, and the catch below stores a
+// stand-in that has one and is not a `PermissionStatus` — so that, not the
+// class, is what the map holds.
+const statuses = new Map<string, { readonly state: string }>();
+
+// Tier 1 is installed by redjs when the host registered a permissions backend;
+// `navigator` and `navigator.permissions` are both optional for that reason.
+// This page is the permissions page — if the surface is missing there is
+// nothing to show, and saying so beats rendering an empty table.
+const webPermissions = navigator?.permissions;
 
 async function readAll() {
   const list = appPermissions.list();
+  const out: PermissionRow[] = [];
   for (const r of list) {
     if (!statuses.has(r.name)) {
       // A name the standard tier rejects would be a bug in one of the two
       // tables; catch it rather than leaving the row blank with no reason.
       try {
-        statuses.set(r.name, await navigator.permissions.query({ name: r.name }));
+        if (!webPermissions) throw new Error("navigator.permissions is not installed");
+        statuses.set(r.name, await webPermissions.query({ name: r.name }));
       } catch (e) {
-        statuses.set(r.name, { state: `!${e.message}` });
+        statuses.set(r.name, { state: `!${e instanceof Error ? e.message : String(e)}` });
       }
     }
-    r.webState = statuses.get(r.name).state;
-    r.requesting = false;
+    out.push({
+      name: r.name,
+      state: r.state,
+      canRequest: r.canRequest,
+      webState: statuses.get(r.name)!.state,
+      requesting: false,
+    });
   }
-  rows.value = list;
+  rows.value = out;
 }
 
-const onChange = (e) => {
-  changes.value = [`${e.name} -> ${e.state}`, ...changes.value].slice(0, 6);
+const onChange = (e: VnEvent) => {
+  // `runtime.ts`'s `createPermissions` re-broadcasts the standard `change` as
+  // `Object.assign(new Event("change"), { name, state })` — the two fields are
+  // on the EVENT ITSELF, not on `e.target` (which is the plain `EventTarget`
+  // the surface is built on). `VnEvent` has no way to say that, so the shape
+  // is named here and asserted once.
+  const { name, state } = e as VnEvent & { name: string; state: VnPermissionState };
+  changes.value = [`${name} -> ${state}`, ...changes.value].slice(0, 6);
   readAll();
 };
 
@@ -63,21 +103,22 @@ onUnmounted(() => appPermissions.removeEventListener("change", onChange));
 // On Windows this opens the matching ms-settings: page and the promise settles
 // when the consent store actually moves — or after the backend's timeout, with
 // the unchanged state, so the `await` below can never hang forever.
-async function request(row) {
+async function request(row: PermissionRow) {
   row.requesting = true;
   lastRequest.value = `${row.name}: asking…`;
   try {
     const state = await appPermissions.request(row.name);
     lastRequest.value = `${row.name}: ${state}`;
   } catch (e) {
-    lastRequest.value = `${row.name}: ${e.message}`;
+    // `request()` rejects with a TypeError naming the bad permission name.
+    lastRequest.value = `${row.name}: ${e instanceof Error ? e.message : String(e)}`;
   } finally {
     row.requesting = false;
     readAll();
   }
 }
 
-const cls = (state) =>
+const cls = (state: string) =>
   state === "granted" ? "ok" : state === "denied" ? "no" : state === "prompt" ? "ask" : "unk";
 </script>
 

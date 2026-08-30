@@ -7,7 +7,7 @@
 // plumbing behind `request()`, the advisory, and the `change` re-broadcast.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime, PERMISSION_NAMES } from "./runtime-harness.js";
+import { createRuntime, PERMISSION_NAMES } from "./runtime-harness";
 
 /** A runtime whose backend answers from `states`. */
 function withStates(states) {

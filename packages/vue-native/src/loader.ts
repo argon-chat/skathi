@@ -27,7 +27,7 @@
 // when the walk reaches the entry (or finds no component to hand to Vue) do we
 // fall back to a state-losing hard restart.
 
-import * as runtimeNs from "./runtime.js";
+import * as runtimeNs from "./runtime";
 // Vendored libraries ride the vendor bundle so real library-based apps work
 // unchanged: there is no node_modules resolution at runtime (classic scripts
 // only), so anything an app may `import` from npm has to be baked in here and
@@ -41,23 +41,96 @@ import * as piniaNs from "pinia";
 //                   WebSocket / RTCPeerConnection / MediaStream / getUserMedia,
 //                   none of which redjs has; ours drives the native LiveKit
 //                   engine in crates/vn-voice instead (docs/VOICE.md).
-import * as livekitNs from "./livekit.js";
+import * as livekitNs from "./livekit";
 
-const factories = new Map(); // id -> function (require, module, exports)
-const cache = new Map(); // id -> { id, exports }
-const bodyHash = new Map(); // id -> hash of the factory body (3rd arg of define)
-const deps = new Map(); // id -> [imported id, ...]        (forward edges)
-const importers = new Map(); // id -> Set<importing id>    (reverse edges)
-const cssText = new Map(); // id -> css
-const cssOrder = []; // stable aggregation order
+/** A module id: a workspace-relative POSIX path, or a bare registry key. */
+type ModuleId = string;
+
+/** One module record, exactly CommonJS's `module`. */
+interface ModuleRecord {
+  id: ModuleId;
+  exports: Record<string, unknown>;
+}
+
+/** What `build.ts` emits as the second argument to `define`. */
+type ModuleFactory = (
+  require: (spec: string) => unknown,
+  module: ModuleRecord,
+  exports: Record<string, unknown>,
+) => void;
+
+/** `AppContext` plus the dev-only slot Vue's published type does not declare. */
+type VueDevContext = { reload?: () => void };
+
+/** A `.vue` module's default export, once Vue's HMR record owns it. */
+interface ComponentLike {
+  __hmrId: string;
+  render?: unknown;
+}
+
+/** One entry of `changes.json`. `kind` defaults to a full reload. */
+interface HmrChange {
+  id: ModuleId;
+  kind?: "reload" | "rerender" | "css-only";
+}
+/** `dist/changes.json`, as the host hands it to `hmrApply`. */
+interface HmrChanges {
+  rev?: number;
+  vendorRev?: number;
+  changed?: HmrChange[];
+}
+/** Per-`hmrApply` bookkeeping; see `reloadDependents`. */
+interface HmrBatch {
+  /** ids already re-executed by an earlier change in this batch. */
+  fresh: Set<ModuleId>;
+  /** components already handed to Vue in this batch. */
+  reloaded: Set<ModuleId>;
+}
+
+declare global {
+  /**
+   * The registry the Rust host drives. `dist/modules/*.js` call `setCss`,
+   * `setDeps` and `define` at eval time; the host calls `boot` once and
+   * `hmrApply` on every change batch. Everything else is observability, used by
+   * `devtools/ctl.ts` and by `test/hmr-graph.test.js`.
+   */
+  var __VN__: VnRegistry;
+}
+
+interface VnRegistry {
+  define(id: ModuleId, factory: ModuleFactory, hash?: string): void;
+  setDeps(id: ModuleId, list: ModuleId[] | null | undefined): void;
+  require(id: ModuleId): Record<string, unknown>;
+  resolve(spec: string, fromId: ModuleId | null | undefined): ModuleId;
+  setCss(id: ModuleId, css: string): void;
+  flushCss(force?: boolean): void;
+  boot(entry: ModuleId): void;
+  hmrApply(changes: HmrChanges | null | undefined): void;
+  rootReload(): void;
+  hardRestart(reason: string): void;
+  has(id: ModuleId): boolean;
+  ids(): ModuleId[];
+  loaded(id: ModuleId): boolean;
+  depsOf(id: ModuleId): ModuleId[];
+  importersOf(id: ModuleId): ModuleId[];
+  mountCount(): number;
+}
+
+const factories = new Map<ModuleId, ModuleFactory>(); // id -> function (require, module, exports)
+const cache = new Map<ModuleId, ModuleRecord>(); // id -> { id, exports }
+const bodyHash = new Map<ModuleId, string | undefined>(); // id -> hash of the factory body (3rd arg of define)
+const deps = new Map<ModuleId, ModuleId[]>(); // id -> [imported id, ...]        (forward edges)
+const importers = new Map<ModuleId, Set<ModuleId>>(); // id -> Set<importing id>    (reverse edges)
+const cssText = new Map<ModuleId, string>(); // id -> css
+const cssOrder: ModuleId[] = []; // stable aggregation order
 let cssDirty = false;
 let requireDepth = 0;
-let execLog = null; // Set collecting ids executed during one hmrApply
-let entryId = null;
+let execLog: Set<ModuleId> | null = null; // Set collecting ids executed during one hmrApply
+let entryId: ModuleId | null = null;
 let mountCount = 0;
 let degraded = false; // last boot / restart failed — the app is not running
 
-const log = (msg) => {
+const log = (msg: string) => {
   try {
     console.log("[vn-hmr] " + msg);
   } catch (_) {}
@@ -69,13 +142,13 @@ const log = (msg) => {
 
 const CANDIDATE_EXTS = ["", ".js", ".ts", ".mjs", ".vue", "/index.js", "/index.ts", "/index.vue"];
 
-function dirOf(id) {
+function dirOf(id: ModuleId): string {
   const i = id.lastIndexOf("/");
   return i < 0 ? "" : id.slice(0, i);
 }
 
-function normalize(path) {
-  const out = [];
+function normalize(path: string): string {
+  const out: string[] = [];
   for (const seg of path.split("/")) {
     if (seg === "" || seg === ".") continue;
     if (seg === "..") {
@@ -87,7 +160,7 @@ function normalize(path) {
   return out.join("/");
 }
 
-function resolveId(spec, fromId) {
+function resolveId(spec: string, fromId: ModuleId | null | undefined): ModuleId {
   if (spec.charCodeAt(0) !== 46 /* . */) return spec; // bare
   const base = normalize((fromId ? dirOf(fromId) + "/" : "") + spec);
   for (const ext of CANDIDATE_EXTS) {
@@ -98,7 +171,7 @@ function resolveId(spec, fromId) {
 
 // ---- registry -------------------------------------------------------------
 
-function define(id, factory, hash) {
+function define(id: ModuleId, factory: ModuleFactory, hash?: string): void {
   const known = factories.has(id);
   const prevHash = bodyHash.get(id);
   factories.set(id, factory);
@@ -114,7 +187,7 @@ function define(id, factory, hash) {
 
 /// Replaces `id`'s outgoing edges and keeps the reverse index in sync.
 /// Emitted by the builder next to define(), so the graph tracks the code.
-function setDeps(id, list) {
+function setDeps(id: ModuleId, list: ModuleId[] | null | undefined): void {
   const prev = deps.get(id);
   if (prev) {
     for (let i = 0; i < prev.length; i++) {
@@ -124,7 +197,7 @@ function setDeps(id, list) {
       if (!set.size) importers.delete(prev[i]);
     }
   }
-  const next = [];
+  const next: ModuleId[] = [];
   if (list) {
     for (let i = 0; i < list.length; i++) {
       const dep = list[i];
@@ -140,11 +213,11 @@ function setDeps(id, list) {
   }
 }
 
-function makeRequire(fromId) {
-  return (spec) => requireId(resolveId(spec, fromId), fromId);
+function makeRequire(fromId: ModuleId) {
+  return (spec: string) => requireId(resolveId(spec, fromId), fromId);
 }
 
-function requireId(id, fromId) {
+function requireId(id: ModuleId, fromId: ModuleId | null): Record<string, unknown> {
   const hit = cache.get(id);
   if (hit) return hit.exports;
   const factory = factories.get(id);
@@ -174,17 +247,17 @@ function requireId(id, fromId) {
 // style-only edit needs no module re-execution at all: the host evals the new
 // script, hmrApply re-aggregates, done.
 
-function setCss(id, css) {
+function setCss(id: ModuleId, css: string): void {
   if (!cssText.has(id)) cssOrder.push(id);
   if (cssText.get(id) === css) return;
   cssText.set(id, css);
   cssDirty = true;
 }
 
-function flushCss(force) {
+function flushCss(force?: boolean): void {
   if (!cssDirty && !force) return;
   cssDirty = false;
-  const parts = [];
+  const parts: string[] = [];
   for (const id of cssOrder) {
     const css = cssText.get(id);
     if (css) parts.push(css);
@@ -205,17 +278,24 @@ function flushCss(force) {
 // re-run of the entry module. So we only install our own as a fallback, and
 // only after mount, when Vue left the slot empty (e.g. a non-dev build).
 
-const vueExports = Object.assign({}, runtimeNs);
+// `Record<string, unknown>` rather than `typeof runtimeNs`: the whole point of
+// the copy is that `createApp` is REPLACED below with a wrapper of a different
+// (wider) shape, which a namespace type would refuse.
+const vueExports: Record<string, unknown> = Object.assign({}, runtimeNs);
 const origCreateApp = runtimeNs.createApp;
 
-vueExports.createApp = function (...args) {
+vueExports.createApp = function (...args: Parameters<typeof origCreateApp>) {
   const app = origCreateApp(...args);
   const mount = app.mount.bind(app);
-  app.mount = function (...mountArgs) {
+  app.mount = function (...mountArgs: Parameters<typeof mount>) {
     const vm = mount(...mountArgs);
     mountCount++;
     try {
-      if (!app._context.reload) app._context.reload = rootReload;
+      // `appContext.reload` is Vue's DEV-ONLY slot; it is absent from the
+      // published `AppContext` type, which is why this needs a cast rather than
+      // an `as any` — the property really is not part of the contract.
+      if (!(app._context as VueDevContext).reload)
+        (app._context as VueDevContext).reload = rootReload;
     } catch (e) {
       log("could not install appContext.reload: " + e);
     }
@@ -244,7 +324,7 @@ for (const [name, ns] of [
   ["vue-router", vueRouterNs],
   ["pinia", piniaNs],
   ["livekit-client", livekitNs],
-]) {
+] as [ModuleId, Record<string, unknown>][]) {
   factories.set(name, () => {});
   cache.set(name, { id: name, exports: ns });
   VENDOR_IDS.add(name);
@@ -252,7 +332,7 @@ for (const [name, ns] of [
 
 // ---- boot / restart -------------------------------------------------------
 
-function boot(entry) {
+function boot(entry: ModuleId): void {
   entryId = entry;
   degraded = true; // cleared once the entry actually ran
   flushCss(true); // module scripts already registered their CSS
@@ -274,11 +354,11 @@ function teardown() {
 
 /// Fallback `appContext.reload` (only installed when Vue's own dev one is
 /// absent): unmount + fresh mount from the already-invalidated entry module.
-function rootReload() {
+function rootReload(): void {
   log("root reload");
   teardown();
-  cache.delete(entryId);
-  requireId(entryId, null);
+  cache.delete(entryId!);
+  requireId(entryId!, null);
   flushCss(true);
 }
 
@@ -286,14 +366,14 @@ function rootReload() {
 /// a change whose importers reach the entry, a module with no component
 /// export): drop the whole require cache and re-run the app. State is lost —
 /// same as the old hot-restart loop.
-function hardRestart(reason) {
+function hardRestart(reason: string): void {
   log("hard restart (" + reason + ")");
   teardown();
   for (const id of Array.from(cache.keys())) {
     if (!VENDOR_IDS.has(id)) cache.delete(id);
   }
   degraded = true; // cleared once the entry actually ran again
-  requireId(entryId, null);
+  requireId(entryId!, null);
   degraded = false;
   flushCss(true);
 }
@@ -303,14 +383,16 @@ function hardRestart(reason) {
 // holds the new code and the cache entry for each changed id is gone, and
 // setCss has run). All that is left is deciding what to tell Vue.
 
-function componentOf(exports) {
+function componentOf(exports: Record<string, unknown> | undefined): ComponentLike | null {
   const c = exports && exports.default;
-  return c && (typeof c === "object" || typeof c === "function") && c.__hmrId ? c : null;
+  return c && (typeof c === "object" || typeof c === "function") && (c as ComponentLike).__hmrId
+    ? (c as ComponentLike)
+    : null;
 }
 
 /// Only .vue modules get a `createRecord` epilogue from the builder, so only
 /// they can be swapped in place by Vue. Everything else needs the graph walk.
-function isComponentId(id) {
+function isComponentId(id: ModuleId): boolean {
   return id.length > 4 && id.slice(-4) === ".vue";
 }
 
@@ -331,13 +413,13 @@ function isComponentId(id) {
 /// several changes in one batch reach it.
 ///
 /// Returns false when it bailed out to hardRestart.
-function reloadDependents(id, hmr, batch) {
-  const visited = new Set([id]);
-  const invalidate = [id];
-  const targets = []; // .vue modules to re-require + hand to Vue
-  const queue = [id];
+function reloadDependents(id: ModuleId, hmr: VnVueHmrRuntime, batch: HmrBatch): boolean {
+  const visited = new Set<ModuleId>([id]);
+  const invalidate: ModuleId[] = [id];
+  const targets: ModuleId[] = []; // .vue modules to re-require + hand to Vue
+  const queue: ModuleId[] = [id];
   while (queue.length) {
-    const cur = queue.shift();
+    const cur = queue.shift()!;
     const set = importers.get(cur);
     if (!set) continue;
     for (const imp of set) {
@@ -394,7 +476,7 @@ function reloadDependents(id, hmr, batch) {
   return true;
 }
 
-function hmrApply(changes) {
+function hmrApply(changes: HmrChanges | null | undefined): void {
   const list = (changes && changes.changed) || [];
   if (!list.length) {
     flushCss();
@@ -415,8 +497,8 @@ function hmrApply(changes) {
   // Split, because order matters within one batch: a plain module's walk
   // re-requires the components that import it, so doing those FIRST keeps a
   // component that changed in the same batch from executing twice.
-  const plain = [];
-  const components = [];
+  const plain: HmrChange[] = [];
+  const components: HmrChange[] = [];
   for (const change of list) {
     const id = change && change.id;
     if (!id) continue;
@@ -435,9 +517,9 @@ function hmrApply(changes) {
   // `fresh` is filled by requireId itself, so it is exactly the set of modules
   // that re-executed during this batch — including ones pulled in sideways by
   // someone else's factory chain.
-  const batch = { fresh: new Set(), reloaded: new Set() };
+  const batch: HmrBatch = { fresh: new Set(), reloaded: new Set() };
   execLog = batch.fresh;
-  let at = null;
+  let at: ModuleId | null = null;
   try {
     for (let i = 0; i < plain.length; i++) {
       at = plain[i].id;
@@ -471,7 +553,7 @@ function hmrApply(changes) {
       }
     }
   } catch (e) {
-    log("apply failed for " + at + ": " + (e && e.stack ? e.stack : e));
+    log("apply failed for " + at + ": " + (e && (e as Error).stack ? (e as Error).stack : e));
     hardRestart("exception while applying " + at);
     return;
   } finally {
@@ -485,7 +567,7 @@ function hmrApply(changes) {
 globalThis.__VN__ = {
   define,
   setDeps,
-  require: (id) => requireId(id, null),
+  require: (id: ModuleId) => requireId(id, null),
   resolve: resolveId,
   setCss,
   flushCss,
@@ -493,11 +575,11 @@ globalThis.__VN__ = {
   hmrApply,
   rootReload,
   hardRestart,
-  has: (id) => factories.has(id),
+  has: (id: ModuleId) => factories.has(id),
   ids: () => Array.from(factories.keys()),
-  loaded: (id) => cache.has(id),
-  depsOf: (id) => (deps.get(id) || []).slice(),
-  importersOf: (id) => Array.from(importers.get(id) || []),
+  loaded: (id: ModuleId) => cache.has(id),
+  depsOf: (id: ModuleId) => (deps.get(id) || []).slice(),
+  importersOf: (id: ModuleId) => Array.from(importers.get(id) || []),
   mountCount: () => mountCount,
 };
 

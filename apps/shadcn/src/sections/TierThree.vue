@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // TIER 3 — portal + floating components. These are the ones that reach deepest
 // into the DOM: Teleport targets, focus traps, dismissable layers, and
 // @floating-ui positioning driven by getBoundingClientRect.
@@ -10,6 +10,7 @@
 // the app root — which is also what makes the dialog's `fixed inset-0` cover
 // the window rather than one column of the page.
 import { ref } from "vue";
+import type { AcceptableValue } from "reka-ui";
 import Section from "./Section.vue";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
@@ -18,7 +19,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popove
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "../components/ui/select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 
-const fruit = ref("apple");
+// `AcceptableValue`, not `string`: reka's SelectRoot writes `null` back through
+// `v-model` when the selection is cleared, so a `Ref<string>` here was a lie the
+// template type-checker caught the first time it was pointed at this file. See
+// the same note in TierTwo.vue.
+const fruit = ref<AcceptableValue>("apple");
 </script>
 
 <template>

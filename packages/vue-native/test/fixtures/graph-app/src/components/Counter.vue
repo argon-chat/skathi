@@ -1,6 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import { ref } from "vue";
-import { greet } from "../util.js";
+import { greet } from "../util";
 
 const n = ref(0);
 </script>

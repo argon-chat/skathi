@@ -7,7 +7,7 @@
 // BUBBLING of what comes back out.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness.js";
+import { createRuntime } from "./runtime-harness";
 
 function tree(rt) {
   const root = rt.nodeOps.createElement("root");
@@ -132,5 +132,55 @@ describe("dispatch", () => {
     rt.patchProp(rt.el(), "onPointercancel", null, () => {});
     expect(rt.advisories().length).toBe(1);
     expect(rt.advisories()[0]).toContain("@pointercancel");
+  });
+});
+
+// Since m20 the dispatcher only SYNTHESIZES an event somebody is listening for:
+// the host arms one bit per code and several names share a code, so a delivery
+// says nothing about which name has a handler, and building a W3C event costs
+// more than everything else in a dispatch put together (scripts/boundary-cost
+// .ts). These are the cases a careless version of that check would break — each
+// one is a listener that is NOT on the target, which is the whole difficulty.
+describe("only what someone listens for is built", () => {
+  test("a listener on an ANCESTOR still receives the derived event", () => {
+    const rt = createRuntime();
+    const { outer, inner } = tree(rt);
+    const seen = [];
+    rt.patchProp(outer, "onPointerdown", null, (e) => seen.push(e.type));
+    // Nothing on `inner` listens for anything; the event is delivered there.
+    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    expect(seen).toEqual(["pointerdown"]);
+  });
+
+  test("a listener on an ancestor still receives the SOURCE event", () => {
+    const rt = createRuntime();
+    const { outer, inner } = tree(rt);
+    const seen = [];
+    rt.patchProp(outer, "onMousedown", null, (e) => seen.push(e.type));
+    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    expect(seen).toEqual(["mousedown"]);
+  });
+
+  test("a document-level listener still receives it", () => {
+    // Every dismissable layer in the ecosystem listens here and nowhere else,
+    // so a check that only walked the mirror tree would close nothing.
+    const rt = createRuntime();
+    const { root, inner } = tree(rt);
+    rt.createApp({ render: () => null }); // no mount: appRoot stays null…
+    const seen = [];
+    rt.global.document.addEventListener("pointerdown", (e) => seen.push(e.type));
+    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    expect(seen).toEqual(["pointerdown"]);
+    expect(root).toBeTruthy();
+  });
+
+  test("both names listening still produce both events, in order", () => {
+    const rt = createRuntime();
+    const { inner } = tree(rt);
+    const order = [];
+    rt.patchProp(inner, "onMousedown", null, (e) => order.push(e.type));
+    rt.patchProp(inner, "onPointerdown", null, (e) => order.push(e.type));
+    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    expect(order).toEqual(["pointerdown", "mousedown"]);
   });
 });

@@ -6,16 +6,29 @@
 // mapper renders directly. v4 routes almost everything through `var(--tw-*)`
 // + `calc()` + `@property`, none of which the engine resolves yet.
 //
-// This file is CommonJS on purpose: apps/hello has no package.json, so Node/jiti
-// treats .js here as CJS, and `__dirname` is what anchors the content globs.
+// ESM + TypeScript, loaded by Tailwind v3's own `loadConfig` — which tries
+// `require(path)` first (bun resolves and transpiles a `.ts` natively) and
+// falls back to jiti, and then takes `config.default ?? config`. Either route
+// gives CommonJS semantics, which is why `__dirname` below still resolves.
+// `packages/vue-native/tailwind.ts`'s `CONFIG_NAMES` already looks for
+// `tailwind.config.ts`, so nothing on the builder side changes.
+//
+// NOT type-checked by apps/tsconfig.json, and deliberately: this is a
+// BUILD-TIME Node module, not app code, and putting it in scope would mean
+// putting Node's globals in every component's scope. See the note at the foot
+// of that file.
 
-const { join } = require("node:path");
+import { join } from "node:path";
 
-module.exports = {
-  // Equivalent to `apps/hello/src/**/*.{vue,js}` from the workspace root, but
+export default {
+  // Equivalent to `apps/hello/src/**/*.{vue,ts}` from the workspace root, but
   // anchored to THIS file so it does not depend on the builder's cwd (the dev
   // builder runs from packages/vue-native, prod from wherever it is invoked).
-  content: [join(__dirname, "src/**/*.{vue,js}")],
+  //
+  // `.ts`, not `.js`: the app's own sources are TypeScript now. Same set of
+  // files as before the conversion — they were renamed, not added — so the
+  // utilities sheet Tailwind extracts from them is byte-for-byte unchanged.
+  content: [join(__dirname, "src/**/*.{vue,ts}")],
 
   corePlugins: {
     // The host has no user-agent stylesheet to reset: there is no <body>, no

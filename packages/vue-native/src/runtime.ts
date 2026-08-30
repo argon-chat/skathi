@@ -19,10 +19,265 @@ import {
   useTransitionState,
   version,
 } from "@vue/runtime-core";
+// Type-only, so it is erased before the bundler ever sees it. `RendererOptions`
+// is what makes `nodeOps` below self-typing: every hook's parameters come from
+// Vue's own declaration, so a signature that drifts from what the renderer
+// actually calls is a build error rather than an `undefined` at runtime.
+import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
+
+// ---- the shapes this file is built out of ---------------------------------
+// The host protocol itself is typed in ./protocol.d.ts; what follows is the JS
+// side — the mirror tree, the listener registry, and the DOM surface installed
+// on the two prototypes below. These interfaces are written as an INVENTORY of
+// what answers truthfully: a member that is not here does not exist on a mirror
+// node, and a reused browser component reaching for it gets the same TypeError
+// it would get in an engine that never had one.
+
+/** 1 element, 2 text, 3 comment. The mirror's own tag — not `nodeType`. */
+type MirrorKind = 1 | 2 | 3;
+
+/** What a listener registered through the renderer or `addEventListener` is. */
+type EventHandler = (ev: VnEvent) => void;
+/** …and what Vue passes for `@click="[a, b]"` — several, in order. */
+type EventHandlerOrList = EventHandler | EventHandler[];
+/** The third argument to add/removeEventListener, in both spellings. */
+type ListenerOptions = boolean | { capture?: boolean; once?: boolean } | undefined;
+
+/** One `addEventListener` registration; `once` is consumed on dispatch. */
+interface ExtraListener {
+  fn: EventHandler;
+  once: boolean;
+}
+
+/**
+ * Every listener for ONE event name on ONE target, split the way the DOM splits
+ * them. `bubble`/`capture` are the RENDERER's slots — one each, because Vue
+ * re-patches a prop rather than accumulating; `extraB`/`extraC` are the
+ * `addEventListener` ones, which do accumulate.
+ */
+interface Buckets {
+  bubble: EventHandlerOrList | null;
+  capture: EventHandlerOrList | null;
+  onceB: boolean;
+  onceC: boolean;
+  extraB: ExtraListener[];
+  extraC: ExtraListener[];
+}
+
+/** event name -> its buckets, for one node id (or one global target). */
+type HandlerMap = Record<string, Buckets | undefined>;
+
+/** `getBoundingClientRect()`'s answer. `toJSON` because the DOM's has one. */
+interface MirrorRect {
+  x: number;
+  y: number;
+  top: number;
+  left: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+  toJSON?(): MirrorRect;
+}
+
+/** `el.classList`, over the class Vue assigned (transition classes ride `_vtc`). */
+interface MirrorClassList {
+  add(...names: string[]): void;
+  remove(...names: string[]): void;
+  toggle(name: string, force?: boolean): boolean;
+  contains(name: string): boolean;
+  readonly length: number;
+  item(i: number): string | null;
+  toString(): string;
+  [Symbol.iterator](): IterableIterator<string>;
+}
+
+/**
+ * `el.style`. A Proxy: the named members are real methods, anything else is a
+ * property write that goes straight through `__vn_set_style` — CUSTOM
+ * PROPERTIES INCLUDED, which is how reka-ui's `--reka-popper-*` sizing
+ * variables reach the cascade.
+ */
+interface MirrorStyle {
+  setProperty(key: string, value: string | number | null | undefined): void;
+  removeProperty(key: string): string;
+  getPropertyValue(key: string): string;
+  cssText: string;
+  [property: string]: unknown;
+}
+
+/** The members every mirror node has — elements and text/comment alike. */
+interface MirrorNodeBase {
+  id: VnNodeId;
+  kind: MirrorKind;
+  tag: string;
+  /** A parent is always an element; the root's is null. */
+  parentNode: MirrorElement | null;
+  childNodes: MirrorNode[];
+  /** A text/comment node's content. Elements carry theirs in `ownText`. */
+  text?: string;
+  // -- installed on BOTH prototypes (`NODE_MEMBERS`)
+  contains(other: MirrorNode | null | undefined): boolean;
+  readonly ownerDocument: VnDocument | undefined;
+  readonly nodeType: 1 | 3 | 8 | 11;
+  readonly nodeName: string;
+  readonly isConnected: boolean;
+  dispatchEvent(ev: VnEvent): boolean;
+  /**
+   * The event codes whose `__vn_set_listener` bit is currently ON in the host,
+   * as far as this side knows. Absent = none. See `syncListenerFlag`.
+   *
+   * It lives on the NODE rather than in a side map keyed by id, and that is
+   * load-bearing: `__vn_remove` recycles ids, so a map would answer for the
+   * previous occupant of a slot. A fresh node is a fresh object with no set.
+   */
+  _listenerOn?: Set<VnEventCode>;
+  /**
+   * Vue writes symbol-keyed bookkeeping straight onto host nodes (the vModel
+   * assign fn, the transition hooks). In a browser those land on a real
+   * element; here they land here — and `__v_skip` on the prototype is what
+   * stops `reactive()` wrapping the node in a Proxy before they do.
+   */
+  [key: symbol]: unknown;
+}
+
+/** A text or comment mirror. NOT an element: no attributes, no layout. */
+interface MirrorText extends MirrorNodeBase {
+  kind: 2 | 3;
+  data: string;
+  nodeValue: string;
+  textContent: string;
+}
+
+/**
+ * An element mirror, and with it the whole DOM surface `defineDom` installs.
+ *
+ * Everything below either answers TRUTHFULLY (from the mirror tree, or from the
+ * host's real matcher / real layout bounds / real cascade), or answers a
+ * degraded constant AND leaves exactly one advisory. Nothing here is a stub
+ * that silently lies.
+ */
+interface MirrorElement extends MirrorNodeBase {
+  kind: 1;
+  tagName: string;
+  /** `<input>`'s value, mirrored so `e.target.value` reads like the browser. */
+  value: string;
+  /** Browser-visible attribute state; `patchProp` is the only writer. */
+  attrs: Record<string, string>;
+  /** The class VUE assigned, kept apart from `<Transition>`'s `_vtc`. */
+  className: string;
+  scrollLeft: number;
+  scrollTop: number;
+  /** The element's OWN text — exclusive with children, as in the host tree. */
+  ownText?: string;
+  addEventListener(name: string, fn: EventHandler, opts?: ListenerOptions): void;
+  removeEventListener(name: string, fn: EventHandler, opts?: ListenerOptions): void;
+
+  // -- the tree, truthfully (the mirror IS the tree)
+  readonly children: MirrorElement[];
+  readonly firstElementChild: MirrorElement | null;
+  readonly lastElementChild: MirrorElement | null;
+  readonly childElementCount: number;
+  readonly nextElementSibling: MirrorElement | null;
+  readonly previousElementSibling: MirrorElement | null;
+  textContent: string;
+
+  // -- selector matching, through the real cascade matcher
+  matches(selector: string): boolean;
+  closest(selector: string): MirrorElement | null;
+  querySelector(selector: string): MirrorElement | null;
+  querySelectorAll(selector: string): MirrorElement[];
+
+  // -- layout, off the bounds gpui recorded for the last painted frame
+  getBoundingClientRect(): MirrorRect;
+  getClientRects(): MirrorRect[];
+  readonly offsetWidth: number;
+  readonly offsetHeight: number;
+  readonly clientWidth: number;
+  readonly clientHeight: number;
+  readonly scrollWidth: number;
+  readonly scrollHeight: number;
+  readonly offsetTop: number;
+  readonly offsetLeft: number;
+  readonly offsetParent: null;
+  readonly clientTop: number;
+  readonly clientLeft: number;
+  scrollIntoView(): void;
+
+  // -- the attribute channel
+  getAttribute(name: string): string | null;
+  hasAttribute(name: string): boolean;
+  getAttributeNames(): string[];
+  setAttribute(name: string, value: unknown): void;
+  removeAttribute(name: string): void;
+  toggleAttribute(name: string, force?: boolean): boolean;
+  readonly dataset: Record<string, string | undefined>;
+  readonly classList: MirrorClassList;
+  readonly style: MirrorStyle;
+
+  // -- focus and pointer capture
+  focus(): void;
+  blur(): void;
+  setPointerCapture(pointerId: number): void;
+  hasPointerCapture(pointerId: number): boolean;
+  releasePointerCapture(pointerId: number): void;
+
+  // -- the retained tree has no copy, and no insert from outside the renderer
+  insertAdjacentElement(where: string, el: MirrorElement): MirrorElement;
+  append(...nodes: unknown[]): void;
+  remove(): void;
+  cloneNode(): null;
+
+  // -- HTMLMediaElement, read live off `__vn_media_state` (vn-video CONTRACT §6)
+  currentTime: number;
+  readonly duration: number;
+  readonly paused: boolean;
+  readonly ended: boolean;
+  readonly seeking: boolean;
+  readonly readyState: number;
+  readonly networkState: number;
+  volume: number;
+  muted: boolean;
+  playbackRate: number;
+  loop: boolean;
+  readonly videoWidth: number;
+  readonly videoHeight: number;
+  readonly buffered: MirrorTimeRanges;
+  readonly seekable: MirrorTimeRanges;
+  readonly error: { code: number; message: string } | null;
+  play(): Promise<void>;
+  pause(): void;
+  load(): void;
+  canPlayType(type: string): string;
+
+  // -- private bookkeeping, every field of it also present in runtime-dom
+  /** The transition classes layered on top of `className`. */
+  _vtc?: Set<string>;
+  _isLeaving?: boolean;
+  _endId?: number;
+  _pointerCaptures?: Set<number>;
+}
+
+type MirrorNode = MirrorElement | MirrorText;
+
+/** A mirror node mid-construction: both shapes' fields, before `kind` is fixed. */
+type MirrorNodeInit = Omit<MirrorElement, "kind"> &
+  Omit<MirrorText, "kind"> & { kind: MirrorKind };
+
+/** The `TimeRanges` shape everything in the wild indexes, plus `ranges`. */
+interface MirrorTimeRanges {
+  length: number;
+  start(i: number): number;
+  end(i: number): number;
+  ranges: { start: number; end: number }[];
+}
+
+/** Anything the propagation walk visits: a mirror node, `document`, `window`. */
+type PropagationTarget = MirrorNode | object;
 
 // ---- interning: names cross the boundary once, ids ever after -------------
-const interned = new Map();
-const I = (s) => {
+const interned = new Map<string, VnNameId>();
+const I = (s: string): VnNameId => {
   let v = interned.get(s);
   if (v === undefined) {
     v = __vn_intern(s);
@@ -95,7 +350,10 @@ const EV_CODES = {
   animationstart: 36,
   animationend: 37,
   animationcancel: 38,
-};
+} as const;
+
+/** Every event name the HOST delivers under a code of its own. */
+type HostEventName = keyof typeof EV_CODES;
 // Events the host does not deliver under their own code, synthesized in JS from
 // one that it does. `pre: true` means the derived event fires BEFORE its source,
 // which is the W3C order for the pointer family (`pointerdown` precedes
@@ -114,24 +372,32 @@ const DERIVED = {
   pointerleave: { from: "mouseleave", pre: true },
   focusin: { from: "focus", pre: false },
   focusout: { from: "blur", pre: false },
-};
+} as const satisfies Record<string, { from: HostEventName; pre: boolean }>;
+
+/** Every event name SYNTHESIZED in JS from one the host does deliver. */
+type DerivedEventName = keyof typeof DERIVED;
+
 /** What `__vn_set_listener` has to be told about for this event name. */
-const hostCode = (name) => EV_CODES[name] ?? EV_CODES[DERIVED[name]?.from];
+const hostCode = (name: string): VnEventCode | undefined =>
+  (EV_CODES as Record<string, VnEventCode | undefined>)[name] ??
+  (EV_CODES as Record<string, VnEventCode | undefined>)[
+    (DERIVED as Record<string, { from: HostEventName } | undefined>)[name]?.from as string
+  ];
 /** Every name that shares one host code — the flag is the OR over all of them. */
-const NAMES_BY_CODE = (() => {
-  const out = {};
-  const add = (code, name) => (out[code] ??= []).push(name);
-  for (const name in EV_CODES) add(EV_CODES[name], name);
-  for (const name in DERIVED) add(EV_CODES[DERIVED[name].from], name);
+const NAMES_BY_CODE: Record<number, string[]> = (() => {
+  const out: Record<number, string[]> = {};
+  const add = (code: VnEventCode, name: string) => (out[code] ??= []).push(name);
+  for (const name in EV_CODES) add(EV_CODES[name as HostEventName], name);
+  for (const name in DERIVED) add(EV_CODES[DERIVED[name as DerivedEventName].from], name);
   return out;
 })();
 /** The derived events one host event produces, in dispatch order. */
-const DERIVED_OF = (() => {
-  const out = {};
-  for (const name in DERIVED) (out[DERIVED[name].from] ??= []).push(name);
+const DERIVED_OF: Record<string, string[] | undefined> = (() => {
+  const out: Record<string, string[]> = {};
+  for (const name in DERIVED) (out[DERIVED[name as DerivedEventName].from] ??= []).push(name);
   return out;
 })();
-const POINTER_EVENTS = new Set([
+const POINTER_EVENTS = new Set<string>([
   "pointerdown",
   "pointerup",
   "pointermove",
@@ -143,17 +409,17 @@ const POINTER_EVENTS = new Set([
 // misses a web component's camelCase event in a browser. We accept BOTH
 // spellings and fold them onto the canonical camelCase name, so `@loopComplete`
 // works from a template and `addEventListener("loopComplete")` works from JS.
-const EVENT_ALIASES = {
+const EVENT_ALIASES: Record<string, string | undefined> = {
   "loop-complete": "loopComplete",
   loopcomplete: "loopComplete",
   "enter-frame": "enterFrame",
   enterframe: "enterFrame",
 };
-const canonicalEvent = (name) => EVENT_ALIASES[name] ?? name;
+const canonicalEvent = (name: string): string => EVENT_ALIASES[name] ?? name;
 // Per the UI Events spec these fire at the target only. (`scroll` bubbles from
 // the *document*, never from an element.) The Lottie events are CustomEvents
 // dispatched on the element by <lottie-player>, i.e. `bubbles: false`.
-const NO_BUBBLE = new Set([
+const NO_BUBBLE = new Set<string>([
   "focus",
   "blur",
   "scroll",
@@ -190,7 +456,7 @@ const NO_BUBBLE = new Set([
   "emptied",
 ]);
 /** The EV_CODES names that come off a media element, in code order. */
-const MEDIA_EVENTS = new Set([
+const MEDIA_EVENTS = new Set<string>([
   "loadstart",
   "loadedmetadata",
   "loadeddata",
@@ -210,15 +476,15 @@ const MEDIA_EVENTS = new Set([
   "error",
   "emptied",
 ]);
-const nodesById = new Map();
+const nodesById = new Map<VnNodeId, MirrorNode>();
 
 // ---- JS mirror nodes ------------------------------------------------------
 // Vue writes symbol props onto host nodes and needs parentNode/nextSibling
 // synchronously — both served from this mirror, zero host calls.
 // One-shot compat advisories: never silently drop behavior a browser has —
 // tell the developer what happened and what to use instead.
-const warned = new Set();
-function warnCompat(key, msg) {
+const warned = new Set<string>();
+function warnCompat(key: string, msg: string) {
   if (warned.has(key)) return;
   warned.add(key);
   console.warn(`[vue-native compat] ${msg}`);
@@ -231,13 +497,13 @@ function warnCompat(key, msg) {
 // (…and when the engine has no HTMLElement at all — the bun test harness — a
 // private prototype stands in, so the DOM surface below never lands on
 // Object.prototype.)
-const ElementProto =
+const ElementProto: object =
   typeof HTMLElement === "function" ? HTMLElement.prototype : Object.create(Object.prototype);
 // Text and comment mirrors are NOT elements — no selector matching, no layout,
 // no attributes — but they are Nodes, and reused components branch on
 // `nodeType === 3` all the time. They get their own prototype carrying only the
 // node-level surface (see `NODE_MEMBERS` below).
-const TextProto = Object.create(Object.prototype);
+const TextProto: object = Object.create(Object.prototype);
 
 // A mirror node must never become reactive state.
 //
@@ -257,8 +523,13 @@ for (const proto of [ElementProto, TextProto]) {
   Object.defineProperty(proto, "__v_skip", { value: true, configurable: true });
 }
 
-function mk(id, kind, tag) {
-  const n = Object.create(kind === 1 ? ElementProto : TextProto);
+function mk(id: VnNodeId, kind: 1, tag: string): MirrorElement;
+function mk(id: VnNodeId, kind: 2 | 3, tag: string): MirrorText;
+function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode;
+function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode {
+  // `MirrorNodeInit` is the one place the two shapes are held open at once: the
+  // node is neither an element nor a text node until `kind` is written.
+  const n = Object.create(kind === 1 ? ElementProto : TextProto) as MirrorNodeInit;
   n.id = id;
   n.kind = kind;
   n.tag = tag;
@@ -282,21 +553,25 @@ function mk(id, kind, tag) {
     n.scrollTop = 0;
     // Own-property methods shadow any prototype ones: these route into the
     // same registry the renderer's props use, so propagation sees both.
-    n.addEventListener = (name, fn, opts) => addExtraListener(n, name, fn, opts);
-    n.removeEventListener = (name, fn, opts) => removeExtraListener(n, name, fn, opts);
+    n.addEventListener = (name, fn, opts) => addExtraListener(n as MirrorElement, name, fn, opts);
+    n.removeEventListener = (name, fn, opts) =>
+      removeExtraListener(n as MirrorElement, name, fn, opts);
   }
-  nodesById.set(id, n);
-  return n;
+  nodesById.set(id, n as MirrorNode);
+  return n as MirrorNode;
 }
 
-function forEachDeep(n, f) {
+function forEachDeep(n: MirrorNode, f: (n: MirrorNode) => void) {
   f(n);
   for (const c of n.childNodes) forEachDeep(c, f);
 }
 
-const handlers = new Map(); // node id -> { click: fn }
+const handlers = new Map<VnNodeId, HandlerMap>(); // node id -> { click: fn }
 
-const nodeOps = {
+// Typed by Vue's own `RendererOptions`, minus the `patchProp` that is defined
+// separately below: every hook's parameter types come from the renderer that
+// calls them, so nothing here can drift out of step with what Vue passes.
+const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
   createElement: (type) => mk(__vn_create_element(I(type)), 1, type),
   createText: (text) => {
     const n = mk(__vn_create_text(), 2, "#text");
@@ -383,16 +658,22 @@ const nodeOps = {
 // lowercased, never prefixed. Style keys are camelCase either way, but
 // `withKeys` runs it over `KeyboardEvent.key` — "Enter" must become "enter",
 // not "-enter", or every `@keydown.enter` silently stops matching.
-const hyphenate = (s) => s.replace(/\B([A-Z])/g, "-$1").toLowerCase();
+const hyphenate = (s: string): string => s.replace(/\B([A-Z])/g, "-$1").toLowerCase();
 
 /// A `:style` key as CSS spells it. Custom properties are already CSS-cased and
 /// are CASE-SENSITIVE, so hyphenating `--rekaPopperWidth` would rename it.
-const styleKey = (k) => (k.startsWith("--") ? k : hyphenate(k));
+const styleKey = (k: string): string => (k.startsWith("--") ? k : hyphenate(k));
 
-function patchProp(el, key, prev, next) {
+/**
+ * The renderer's single prop hook, and also what `setAttribute` /
+ * `removeAttribute` route through — so `prev`/`next` really are `unknown`: a
+ * template can bind any value at all, and the five branches below are exactly
+ * the five things that can be done with one.
+ */
+function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown): void {
   if (key === "style") {
-    const p = prev || {};
-    const n = next || {};
+    const p = (prev || {}) as Record<string, unknown>;
+    const n = (next || {}) as Record<string, unknown>;
     for (const k in p) if (!(k in n)) __vn_set_style(el.id, I(styleKey(k)), "");
     for (const k in n) {
       if (p[k] === n[k]) continue;
@@ -457,10 +738,10 @@ function patchProp(el, key, prev, next) {
     }
     let buckets = ensureBuckets(m, name);
     if (capture) {
-      buckets.capture = next || null;
+      buckets.capture = (next as EventHandlerOrList) || null;
       buckets.onceC = once;
     } else {
-      buckets.bubble = next || null;
+      buckets.bubble = (next as EventHandlerOrList) || null;
       buckets.onceB = once;
     }
     syncListenerFlag(el.id, name);
@@ -496,14 +777,14 @@ function patchProp(el, key, prev, next) {
 /// has layered on top. runtime-dom does exactly this (its `patchClass` merges
 /// `el._vtc`); without it a re-render during a transition drops the phase class
 /// and the animation stops halfway.
-function writeClass(el) {
+function writeClass(el: MirrorElement): void {
   const base = el.className || "";
   const extra = el._vtc;
   const value = extra && extra.size ? [base, ...extra].filter(Boolean).join(" ") : base;
   __vn_set_class(el.id, value);
 }
 
-function ensureBuckets(m, name) {
+function ensureBuckets(m: HandlerMap, name: string): Buckets {
   let buckets = m[name];
   if (!buckets)
     buckets = m[name] = {
@@ -517,7 +798,7 @@ function ensureBuckets(m, name) {
   return buckets;
 }
 
-function bucketsAlive(b) {
+function bucketsAlive(b: Buckets): boolean {
   return !!(b.bubble || b.capture || b.extraB.length || b.extraC.length);
 }
 
@@ -526,18 +807,41 @@ function bucketsAlive(b) {
 /// switching a `pointerdown` listener off must not silence a `mousedown` one.
 /// A custom event name has no host code at all and needs no flag: it is
 /// dispatched from JS.
-function syncListenerFlag(id, name) {
+function syncListenerFlag(id: VnNodeId, name: string): void {
   const code = hostCode(name);
   if (!code) return;
   const m = handlers.get(id);
-  let on = NAMES_BY_CODE[code].some((n) => m?.[n] && bucketsAlive(m[n]));
+  let on = NAMES_BY_CODE[code].some((n) => m?.[n] && bucketsAlive(m[n]!));
   // Document- and window-level listeners ride the APP ROOT's bit: the host
   // delivers events to nodes, and the root is the node that stands in for the
   // document. See `globalHandlers` below.
   if (!on && appRoot && id === appRoot.id) {
     on = NAMES_BY_CODE[code].some((n) =>
-      [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n])),
+      [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)),
     );
+  }
+  // …and only tell the host when the ANSWER CHANGED.
+  //
+  // `set_listener` is idempotent — it sets or clears one bit of a u64 — so a
+  // write of the value already there is a boundary crossing that buys nothing.
+  // It was the single most repeated call in the whole protocol: every re-render
+  // that re-patches an `on*` prop (a fresh inline arrow, or any full-props
+  // diff) called it once per listening element, so a frame that changed ONE
+  // TEXT NODE in a hundred-row list crossed the boundary a hundred times to
+  // re-announce a `click` bit that was already set. See
+  // `scripts/host-calls.ts`, which is how that was found.
+  const node = nodesById.get(id);
+  if (node) {
+    const known = node._listenerOn;
+    if (on) {
+      if (known?.has(code)) return;
+      (node._listenerOn ??= new Set()).add(code);
+    } else {
+      // Nothing recorded means the bit was never set, and the host starts every
+      // node at zero — so there is nothing to clear.
+      if (!known?.has(code)) return;
+      known.delete(code);
+    }
   }
   __vn_set_listener(id, code, on);
 }
@@ -550,27 +854,49 @@ function syncListenerFlag(id, name) {
 // the app root — which is exactly where a browser's event path puts them.
 //
 // Without this, a Dialog opens and never closes, and a menu stays open forever.
-const globalHandlers = new Map(); // target object -> { [event name]: buckets }
-const isMirrorNode = (n) => !!n && typeof n.id === "number" && nodesById.get(n.id) === n;
+const globalHandlers = new Map<object, HandlerMap>(); // target object -> { [event name]: buckets }
+/**
+ * Is this one of OUR nodes? The propagation walk carries mirror nodes,
+ * `document` and `window` in the same array, and this is what tells them apart
+ * — so it is a type guard rather than a boolean, and the two registries that
+ * follow it are looked up without a cast.
+ */
+const isMirrorNode = (n: unknown): n is MirrorNode =>
+  !!n &&
+  typeof (n as MirrorNode).id === "number" &&
+  nodesById.get((n as MirrorNode).id) === (n as MirrorNode);
 
-function addGlobalListener(target, rawName, fn, opts) {
+/** The two option spellings, as an object. `true` means `{ capture: true }`. */
+type ListenerOptionsObject = { capture?: boolean; once?: boolean };
+
+function addGlobalListener(
+  target: object,
+  rawName: string,
+  fn: EventHandler | null | undefined,
+  opts: ListenerOptions,
+): boolean {
   if (!fn) return false;
   const name = canonicalEvent(rawName);
   if (!hostCode(name)) return false;
   let m = globalHandlers.get(target);
   if (!m) globalHandlers.set(target, (m = {}));
   const buckets = ensureBuckets(m, name);
-  const capture = opts === true || (opts && opts.capture);
-  (capture ? buckets.extraC : buckets.extraB).push({ fn, once: !!(opts && opts.once) });
+  const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
+  (capture ? buckets.extraC : buckets.extraB).push({ fn, once: !!(opts && (opts as ListenerOptionsObject).once) });
   if (appRoot) syncListenerFlag(appRoot.id, name);
   return true;
 }
 
-function removeGlobalListener(target, rawName, fn, opts) {
+function removeGlobalListener(
+  target: object,
+  rawName: string,
+  fn: EventHandler,
+  opts: ListenerOptions,
+): boolean {
   const name = canonicalEvent(rawName);
   const buckets = globalHandlers.get(target)?.[name];
   if (!buckets) return false;
-  const capture = opts === true || (opts && opts.capture);
+  const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
   const arr = capture ? buckets.extraC : buckets.extraB;
   const i = arr.findIndex((e) => e.fn === fn);
   if (i >= 0) arr.splice(i, 1);
@@ -581,21 +907,27 @@ function removeGlobalListener(target, rawName, fn, opts) {
 /// Installs the interception on one EventTarget-ish global. Events the host CAN
 /// deliver are taken over; everything else still reaches the engine's own
 /// EventTarget, so redjs' web APIs keep working.
-function interceptGlobalTarget(target) {
+/** What the interception needs off `document` / `globalThis`: two methods, maybe. */
+type GlobalTargetLike = {
+  addEventListener?: (name: string, fn: EventHandler, opts?: ListenerOptions) => void;
+  removeEventListener?: (name: string, fn: EventHandler, opts?: ListenerOptions) => void;
+};
+
+function interceptGlobalTarget(target: object | undefined): void {
   if (!target) return;
-  const nativeAdd = typeof target.addEventListener === "function" ? target.addEventListener.bind(target) : null;
+  const nativeAdd = typeof (target as GlobalTargetLike).addEventListener === "function" ? (target as GlobalTargetLike).addEventListener!.bind(target) : null;
   const nativeRemove =
-    typeof target.removeEventListener === "function" ? target.removeEventListener.bind(target) : null;
+    typeof (target as GlobalTargetLike).removeEventListener === "function" ? (target as GlobalTargetLike).removeEventListener!.bind(target) : null;
   try {
     Object.defineProperty(target, "addEventListener", {
-      value: (name, fn, opts) => {
+      value: (name: string, fn: EventHandler, opts: ListenerOptions) => {
         if (!addGlobalListener(target, name, fn, opts)) nativeAdd?.(name, fn, opts);
       },
       configurable: true,
       writable: true,
     });
     Object.defineProperty(target, "removeEventListener", {
-      value: (name, fn, opts) => {
+      value: (name: string, fn: EventHandler, opts: ListenerOptions) => {
         if (!removeGlobalListener(target, name, fn, opts)) nativeRemove?.(name, fn, opts);
       },
       configurable: true,
@@ -618,7 +950,7 @@ function interceptGlobalTarget(target) {
 /// custom event (`"select.select"`, `"focusScope.autoFocusOnMount"` — reka-ui
 /// dispatches a dozen of them), and those work fine: they are dispatched from JS
 /// through [`dispatchEvent`] and never touch the host at all.
-const looksNative = (name) => /^[a-z]+$/.test(name);
+const looksNative = (name: string): boolean => /^[a-z]+$/.test(name);
 
 /// Events a BROWSER only ever fires on `window` (or `document`), never on an
 /// element. `el.addEventListener("resize", …)` is dead code in Chrome too, so
@@ -627,13 +959,18 @@ const looksNative = (name) => /^[a-z]+$/.test(name);
 /// every app. On `window` these do work: `interceptGlobalTarget` hands anything
 /// the host does not source to redjs's own EventTarget, which is where the
 /// trusted `resize` from `redjs_dom_resize` is delivered.
-const WINDOW_ONLY_EVENTS = new Set([
+const WINDOW_ONLY_EVENTS = new Set<string>([
   "resize", "load", "unload", "beforeunload", "pageshow", "pagehide",
   "hashchange", "popstate", "online", "offline", "storage", "message",
   "languagechange", "rejectionhandled", "unhandledrejection",
 ]);
 
-function addExtraListener(node, rawName, fn, opts) {
+function addExtraListener(
+  node: MirrorElement,
+  rawName: string,
+  fn: EventHandler | null | undefined,
+  opts: ListenerOptions,
+): void {
   if (!fn) return;
   const name = canonicalEvent(rawName);
   const code = hostCode(name);
@@ -652,17 +989,22 @@ function addExtraListener(node, rawName, fn, opts) {
     handlers.set(node.id, m);
   }
   const buckets = ensureBuckets(m, name);
-  const capture = opts === true || (opts && opts.capture);
-  const entry = { fn, once: !!(opts && opts.once) };
+  const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
+  const entry = { fn, once: !!(opts && (opts as ListenerOptionsObject).once) };
   (capture ? buckets.extraC : buckets.extraB).push(entry);
   syncListenerFlag(node.id, name);
 }
 
-function removeExtraListener(node, rawName, fn, opts) {
+function removeExtraListener(
+  node: MirrorElement,
+  rawName: string,
+  fn: EventHandler,
+  opts: ListenerOptions,
+): void {
   const name = canonicalEvent(rawName);
   const buckets = handlers.get(node.id)?.[name];
   if (!buckets) return;
-  const capture = opts === true || (opts && opts.capture);
+  const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
   const arr = capture ? buckets.extraC : buckets.extraB;
   const i = arr.findIndex((e) => e.fn === fn);
   if (i >= 0) arr.splice(i, 1);
@@ -682,27 +1024,46 @@ function removeExtraListener(node, rawName, fn, opts) {
 //   __vn_bounds         the rectangle gpui laid the node out at last frame
 //   __vn_computed_style the folded computed values + custom properties
 
-let appRoot = null; // set by createApp().mount()
+let appRoot: MirrorElement | null = null; // set by createApp().mount()
 // Replays the pre-mount `documentElement` writes onto the real root. Installed by
 // the document surface below; called by mount().
-let flushDocumentElement = null;
+let flushDocumentElement: ((root: MirrorElement) => void) | null = null;
 
-function defineDom(name, value, protos = [ElementProto]) {
+/**
+ * Any function installed on a mirror prototype. The receiver is annotated at
+ * each call site (`function (this: MirrorElement) …`), which is what makes
+ * `noImplicitThis` catch a member installed on the wrong prototype — the whole
+ * reason `NODE_MEMBERS` and the element-only default are separate lists.
+ */
+type DomMember = (...args: never[]) => unknown;
+
+function defineDom(name: string, value: DomMember, protos: object[] = [ElementProto]): void {
   for (const proto of protos) {
     Object.defineProperty(proto, name, { value, configurable: true, writable: true });
   }
 }
-function defineDomGet(name, get, set, protos = [ElementProto]) {
+function defineDomGet(
+  name: string,
+  get: () => unknown,
+  set?: ((value: never) => void) | undefined,
+  protos: object[] = [ElementProto],
+): void {
   for (const proto of protos) Object.defineProperty(proto, name, { get, set, configurable: true });
 }
+/** `createTreeWalker`'s third argument, in both DOM spellings. */
+type TreeWalkerFilter =
+  | ((node: MirrorNode) => number)
+  | { acceptNode?: (node: MirrorNode) => number }
+  | null;
+
 /// The members every Node has, elements and text/comment mirrors alike.
-const NODE_MEMBERS = [ElementProto, TextProto];
+const NODE_MEMBERS: object[] = [ElementProto, TextProto];
 
 /// `__vn_query`, decoded. The host answers `"!<advisory>"` for a selector the
 /// engine cannot run (`:has()`, `::before`, `:visited`) — the same text a rule
 /// using it would print — so an unanswerable query explains itself instead of
 /// quietly reporting "no match".
-function hostQuery(selector, rootId, mode) {
+function hostQuery(selector: string, rootId: VnNodeId, mode: VnQueryMode): MirrorElement[] {
   if (rootId === 0) return [];
   const raw = __vn_query(String(selector), rootId, mode);
   if (raw === "") return [];
@@ -713,14 +1074,21 @@ function hostQuery(selector, rootId, mode) {
     );
     return [];
   }
-  const out = [];
+  const out: MirrorElement[] = [];
   for (const part of raw.split(",")) {
     const node = nodesById.get(Number(part));
-    if (node) out.push(node);
+    // The cascade's matcher only ever answers with ELEMENTS — text and comment
+    // nodes are not selectable — so the narrowing is the host's guarantee, not
+    // an assumption of ours.
+    if (node) out.push(node as MirrorElement);
   }
   return out;
 }
-const queryOne = (selector, rootId, mode = 0) => hostQuery(selector, rootId, mode)[0] ?? null;
+const queryOne = (
+  selector: string,
+  rootId: VnNodeId,
+  mode: VnQueryMode = 0,
+): MirrorElement | null => hostQuery(selector, rootId, mode)[0] ?? null;
 
 const ZERO_RECT = {
   x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0,
@@ -736,14 +1104,14 @@ const ZERO_RECT = {
 /// @floating-ui clipping against `(0,0,rootW,rootH)` while measuring elements in
 /// a space offset by the chrome, and every popover would be pushed against the
 /// left edge by the `shift` middleware.
-function viewportRect() {
+function viewportRect(): MirrorRect {
   if (!appRoot) return { ...ZERO_RECT };
   const r = rectOf(appRoot);
   const width = Math.round(r.x + r.width);
   const height = Math.round(r.y + r.height);
   return { x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height };
 }
-function rectOf(node) {
+function rectOf(node: MirrorNode): MirrorRect {
   const raw = node.id ? __vn_bounds(node.id) : "";
   // A node that was not painted (detached, `display: none`, parked in a
   // <KeepAlive> cache) reports nothing — and an all-zero rect is exactly what a
@@ -760,8 +1128,9 @@ function rectOf(node) {
 // -- truthful: the mirror IS the tree
 defineDom(
   "contains",
-  function (other) {
-    for (let n = other; n; n = n.parentNode) if (n === this) return true;
+  function (this: MirrorNode, other: MirrorNode | null | undefined) {
+    for (let n: MirrorNode | null | undefined = other; n; n = n.parentNode)
+      if (n === this) return true;
     return false;
   },
   NODE_MEMBERS,
@@ -769,7 +1138,7 @@ defineDom(
 defineDomGet("ownerDocument", () => globalThis.document, undefined, NODE_MEMBERS);
 defineDomGet(
   "nodeType",
-  function () {
+  function (this: MirrorNode) {
     return this.kind === 2 ? 3 : this.kind === 3 ? 8 : 1;
   },
   undefined,
@@ -777,16 +1146,19 @@ defineDomGet(
 );
 defineDomGet(
   "nodeName",
-  function () {
-    return this.tagName ?? (this.kind === 2 ? "#text" : "#comment");
+  function (this: MirrorNode) {
+    // `tagName` is an ELEMENT field; on a text/comment mirror it is genuinely
+    // absent, which is what the `??` is reading. The cast says so out loud
+    // rather than pretending the union has it.
+    return (this as Partial<MirrorElement>).tagName ?? (this.kind === 2 ? "#text" : "#comment");
   },
   undefined,
   NODE_MEMBERS,
 );
 defineDomGet(
   "isConnected",
-  function () {
-    for (let n = this; n; n = n.parentNode) if (n === appRoot) return true;
+  function (this: MirrorNode) {
+    for (let n: MirrorNode | null = this; n; n = n.parentNode) if (n === appRoot) return true;
     return false;
   },
   undefined,
@@ -796,10 +1168,10 @@ defineDomGet(
 for (const alias of ["data", "nodeValue"]) {
   defineDomGet(
     alias,
-    function () {
+    function (this: MirrorText) {
       return this.text ?? "";
     },
-    function (value) {
+    function (this: MirrorText, value: unknown) {
       nodeOps.setText(this, value == null ? "" : String(value));
     },
     [TextProto],
@@ -807,10 +1179,10 @@ for (const alias of ["data", "nodeValue"]) {
 }
 defineDomGet(
   "textContent",
-  function () {
+  function (this: MirrorText) {
     return this.text ?? "";
   },
-  function (value) {
+  function (this: MirrorText, value: unknown) {
     nodeOps.setText(this, value == null ? "" : String(value));
   },
   [TextProto],
@@ -820,39 +1192,40 @@ defineDomGet(
 // load-bearing — `aria-hidden` (which reka's Dialog uses to hide the rest of
 // the page) walks `parent.children` and calls `getAttribute` on each, so
 // handing it text and comment mirrors made it log one failure per node.
-const elementChildren = (n) => (n.childNodes || []).filter((c) => c.kind === 1);
-defineDomGet("children", function () {
+const elementChildren = (n: MirrorNode): MirrorElement[] =>
+  (n.childNodes || []).filter((c): c is MirrorElement => c.kind === 1);
+defineDomGet("children", function (this: MirrorElement) {
   return elementChildren(this);
 });
-defineDomGet("firstElementChild", function () {
+defineDomGet("firstElementChild", function (this: MirrorElement) {
   return elementChildren(this)[0] ?? null;
 });
-defineDomGet("lastElementChild", function () {
+defineDomGet("lastElementChild", function (this: MirrorElement) {
   const kids = elementChildren(this);
   return kids[kids.length - 1] ?? null;
 });
-defineDomGet("childElementCount", function () {
+defineDomGet("childElementCount", function (this: MirrorElement) {
   return elementChildren(this).length;
 });
-function elementSibling(node, step) {
+function elementSibling(node: MirrorNode, step: number): MirrorElement | null {
   const p = node.parentNode;
   if (!p) return null;
   for (let i = p.childNodes.indexOf(node) + step; i >= 0 && i < p.childNodes.length; i += step) {
-    if (p.childNodes[i].kind === 1) return p.childNodes[i];
+    if (p.childNodes[i].kind === 1) return p.childNodes[i] as MirrorElement;
   }
   return null;
 }
-defineDomGet("nextElementSibling", function () {
+defineDomGet("nextElementSibling", function (this: MirrorElement) {
   return elementSibling(this, 1);
 });
-defineDomGet("previousElementSibling", function () {
+defineDomGet("previousElementSibling", function (this: MirrorElement) {
   return elementSibling(this, -1);
 });
 defineDomGet(
   "textContent",
-  function () {
+  function (this: MirrorElement) {
     let out = "";
-    const walk = (n) => {
+    const walk = (n: MirrorNode) => {
       if (n.kind === 2) out += n.text ?? "";
       else if (n.kind === 1 && n.ownText) out += n.ownText;
       for (const c of n.childNodes || []) walk(c);
@@ -860,52 +1233,52 @@ defineDomGet(
     walk(this);
     return out;
   },
-  function (value) {
+  function (this: MirrorElement, value: unknown) {
     nodeOps.setElementText(this, value == null ? "" : String(value));
   },
 );
 
 // -- selector matching, through the real cascade matcher
-defineDom("matches", function (selector) {
+defineDom("matches", function (this: MirrorElement, selector: string) {
   return hostQuery(selector, this.id, 1).length > 0;
 });
-defineDom("closest", function (selector) {
+defineDom("closest", function (this: MirrorElement, selector: string) {
   return queryOne(selector, this.id, 2);
 });
-defineDom("querySelector", function (selector) {
+defineDom("querySelector", function (this: MirrorElement, selector: string) {
   return queryOne(selector, this.id, 0);
 });
-defineDom("querySelectorAll", function (selector) {
+defineDom("querySelectorAll", function (this: MirrorElement, selector: string) {
   return hostQuery(selector, this.id, 0);
 });
 
 // -- layout, off the bounds gpui recorded for the last painted frame
-defineDom("getBoundingClientRect", function () {
+defineDom("getBoundingClientRect", function (this: MirrorElement) {
   return rectOf(this);
 });
-defineDom("getClientRects", function () {
+defineDom("getClientRects", function (this: MirrorElement) {
   const r = rectOf(this);
   return r.width || r.height ? [r] : [];
 });
 for (const [name, pick] of [
-  ["offsetWidth", (r) => r.width],
-  ["offsetHeight", (r) => r.height],
-  ["clientWidth", (r) => r.width],
-  ["clientHeight", (r) => r.height],
-  ["scrollWidth", (r) => r.width],
-  ["scrollHeight", (r) => r.height],
-]) {
-  defineDomGet(name, function () {
+  ["offsetWidth", (r: MirrorRect) => r.width],
+  ["offsetHeight", (r: MirrorRect) => r.height],
+  ["clientWidth", (r: MirrorRect) => r.width],
+  ["clientHeight", (r: MirrorRect) => r.height],
+  ["scrollWidth", (r: MirrorRect) => r.width],
+  ["scrollHeight", (r: MirrorRect) => r.height],
+] as [string, (r: MirrorRect) => number][]) {
+  defineDomGet(name, function (this: MirrorElement) {
     return Math.round(pick(rectOf(this)));
   });
 }
 // `offset*` is measured from the offsetParent in the DOM; we have no positioned
 // -ancestor chain to measure from, so these are window-relative.
 for (const [name, pick] of [
-  ["offsetTop", (r) => r.top],
-  ["offsetLeft", (r) => r.left],
-]) {
-  defineDomGet(name, function () {
+  ["offsetTop", (r: MirrorRect) => r.top],
+  ["offsetLeft", (r: MirrorRect) => r.left],
+] as [string, (r: MirrorRect) => number][]) {
+  defineDomGet(name, function (this: MirrorElement) {
     warnCompat(
       "offsetParent",
       "offsetTop/offsetLeft are measured from the WINDOW, not from an offsetParent — " +
@@ -930,17 +1303,17 @@ defineDom("scrollIntoView", function () {
 });
 
 // -- the attribute channel (`patchProp` is the writer; see `mk`)
-defineDom("getAttribute", function (name) {
+defineDom("getAttribute", function (this: MirrorElement, name: unknown) {
   const v = this.attrs?.[String(name)];
   return v === undefined ? null : v;
 });
-defineDom("hasAttribute", function (name) {
+defineDom("hasAttribute", function (this: MirrorElement, name: unknown) {
   return this.attrs ? String(name) in this.attrs : false;
 });
-defineDom("getAttributeNames", function () {
+defineDom("getAttributeNames", function (this: MirrorElement) {
   return this.attrs ? Object.keys(this.attrs) : [];
 });
-defineDom("setAttribute", function (name, value) {
+defineDom("setAttribute", function (this: MirrorElement, name: unknown, value: unknown) {
   const key = String(name);
   // `style` is a declaration BODY as an attribute, not the object `patchProp`'s
   // `:style` path expects.
@@ -950,33 +1323,33 @@ defineDom("setAttribute", function (name, value) {
   }
   patchProp(this, key, undefined, value == null ? "" : String(value));
 });
-defineDom("removeAttribute", function (name) {
+defineDom("removeAttribute", function (this: MirrorElement, name: unknown) {
   patchProp(this, String(name), undefined, null);
 });
-defineDom("toggleAttribute", function (name, force) {
+defineDom("toggleAttribute", function (this: MirrorElement, name: string, force?: boolean) {
   const on = force === undefined ? !this.hasAttribute(name) : !!force;
   if (on) this.setAttribute(name, "");
   else this.removeAttribute(name);
   return on;
 });
-const camelToData = (k) => "data-" + hyphenate(k);
-defineDomGet("dataset", function () {
+const camelToData = (k: string): string => "data-" + hyphenate(k);
+defineDomGet("dataset", function (this: MirrorElement) {
   const node = this;
-  const proxy = new Proxy(Object.create(null), {
+  const proxy = new Proxy(Object.create(null) as Record<string, string | undefined>, {
     get: (_t, k) => (typeof k === "string" ? node.attrs?.[camelToData(k)] : undefined),
     has: (_t, k) => typeof k === "string" && camelToData(k) in (node.attrs ?? {}),
     set: (_t, k, v) => {
-      node.setAttribute(camelToData(k), v);
+      node.setAttribute(camelToData(k as string), v);
       return true;
     },
     deleteProperty: (_t, k) => {
-      node.removeAttribute(camelToData(k));
+      node.removeAttribute(camelToData(k as string));
       return true;
     },
     ownKeys: () =>
       Object.keys(node.attrs ?? {})
         .filter((k) => k.startsWith("data-"))
-        .map((k) => k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())),
+        .map((k) => k.slice(5).replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())),
     getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
   });
   Object.defineProperty(this, "dataset", { value: proxy, configurable: true });
@@ -984,33 +1357,33 @@ defineDomGet("dataset", function () {
 });
 
 // -- classList, over the class Vue assigned (transition classes ride `_vtc`)
-defineDomGet("classList", function () {
+defineDomGet("classList", function (this: MirrorElement) {
   const node = this;
   const parts = () => (node.className ? node.className.split(/\s+/).filter(Boolean) : []);
-  const commit = (list) => {
+  const commit = (list: string[]) => {
     node.className = list.join(" ");
     writeClass(node);
   };
-  const list = {
-    add(...names) {
+  const list: MirrorClassList = {
+    add(...names: string[]) {
       const cur = parts();
       for (const n of names) if (n && !cur.includes(n)) cur.push(n);
       commit(cur);
     },
-    remove(...names) {
+    remove(...names: string[]) {
       commit(parts().filter((c) => !names.includes(c)));
     },
-    toggle(name, force) {
+    toggle(name: string, force?: boolean) {
       const on = force === undefined ? !parts().includes(name) : !!force;
       if (on) list.add(name);
       else list.remove(name);
       return on;
     },
-    contains: (name) => parts().includes(name),
+    contains: (name: string) => parts().includes(name),
     get length() {
       return parts().length;
     },
-    item: (i) => parts()[i] ?? null,
+    item: (i: number) => parts()[i] ?? null,
     toString: () => node.className,
     [Symbol.iterator]: () => parts()[Symbol.iterator](),
   };
@@ -1021,42 +1394,46 @@ defineDomGet("classList", function () {
 // -- inline style: writes go through the same host call `:style` makes, so this
 //    is genuinely functional — CUSTOM PROPERTIES INCLUDED, which is how
 //    reka-ui's `--reka-popper-*` sizing variables reach the cascade.
-defineDomGet("style", function () {
+defineDomGet("style", function (this: MirrorElement) {
   const node = this;
-  const own = Object.create(null);
-  const write = (k, v) => {
+  const own: Record<string, string> = Object.create(null);
+  const write = (k: string | symbol, v: unknown) => {
     const key = String(k);
     const css = key.startsWith("--") ? key : hyphenate(key);
     own[key] = v == null ? "" : String(v);
     __vn_set_style(node.id, I(css), v == null ? "" : String(v));
   };
+  // The target carries the REAL members; the handler routes everything else
+  // into `write`. `as MirrorStyle` is the one place the two halves are joined:
+  // a Proxy's type is its target's, and the target deliberately does not carry
+  // the open-ended `[property: string]` half that the handler serves.
   const style = new Proxy(
     {
-      setProperty: (k, v) => write(k, v),
-      removeProperty: (k) => {
+      setProperty: (k: string, v: unknown) => write(k, v),
+      removeProperty: (k: string) => {
         const prev = own[String(k)] ?? "";
         write(k, "");
         return prev;
       },
-      getPropertyValue: (k) => own[String(k)] ?? "",
+      getPropertyValue: (k: string) => own[String(k)] ?? "",
       get cssText() {
         return Object.keys(own)
           .filter((k) => own[k] !== "")
           .map((k) => `${k.startsWith("--") ? k : hyphenate(k)}: ${own[k]}`)
           .join("; ");
       },
-      set cssText(v) {
+      set cssText(v: string) {
         for (const decl of String(v).split(";")) {
           const i = decl.indexOf(":");
           if (i > 0) write(decl.slice(0, i).trim(), decl.slice(i + 1).trim());
         }
       },
-    },
+    } as MirrorStyle,
     {
-      get: (t, k) => (k in t ? t[k] : (own[k] ?? "")),
+      get: (t, k) => (k in t ? t[k as string] : (own[k as string] ?? "")),
       set: (t, k, v) => {
         if (!(k in t)) write(k, v);
-        else t[k] = v;
+        else t[k as string] = v;
         return true;
       },
     },
@@ -1084,7 +1461,7 @@ defineDom("blur", function () {});
 //    so without this an option click reaches a handler that is never called.
 defineDom(
   "dispatchEvent",
-  function (ev) {
+  function (this: MirrorNode, ev: VnEvent) {
     if (!ev || typeof ev.type !== "string") return true;
     return propagate(this, canonicalEvent(ev.type), ev);
   },
@@ -1097,17 +1474,17 @@ defineDom(
 //    consistently. reka-ui's Select opens on `pointerdown` and immediately
 //    releases the capture it would otherwise hold; a missing
 //    `hasPointerCapture` is a TypeError that kills the open outright.
-defineDom("setPointerCapture", function (pointerId) {
+defineDom("setPointerCapture", function (this: MirrorElement, pointerId: number) {
   (this._pointerCaptures || (this._pointerCaptures = new Set())).add(pointerId);
 });
-defineDom("hasPointerCapture", function (pointerId) {
+defineDom("hasPointerCapture", function (this: MirrorElement, pointerId: number) {
   return !!this._pointerCaptures?.has(pointerId);
 });
-defineDom("releasePointerCapture", function (pointerId) {
+defineDom("releasePointerCapture", function (this: MirrorElement, pointerId: number) {
   this._pointerCaptures?.delete(pointerId);
 });
 
-defineDom("insertAdjacentElement", function (_where, el) {
+defineDom("insertAdjacentElement", function (_where: string, el: MirrorElement) {
   warnCompat(
     "insertAdjacentElement",
     "insertAdjacentElement() is a no-op — nodes injected outside the Vue renderer are not part of " +
@@ -1154,15 +1531,17 @@ const MEDIA_CALL = {
   muted: 4,
   playbackRate: 5,
   loop: 6,
-};
-const MEDIA_TAGS = new Set(["VIDEO", "AUDIO"]);
-const isMediaEl = (n) => !!n && MEDIA_TAGS.has(n.tagName);
+} as const satisfies Record<string, VnMediaVerb>;
+const MEDIA_TAGS = new Set<string>(["VIDEO", "AUDIO"]);
+/** A media element is an ELEMENT with a media tag — hence the type guard. */
+const isMediaEl = (n: MirrorNode | null | undefined): n is MirrorElement =>
+  !!n && MEDIA_TAGS.has((n as MirrorElement).tagName);
 /** `name=value` lines -> object; `{}` for a node the host knows nothing about. */
-function mediaState(node) {
+function mediaState(node: MirrorNode | null | undefined): Record<string, string> | null {
   if (!isMediaEl(node) || !node.id) return null;
   const raw = __vn_media_state(node.id);
   if (!raw) return null;
-  const out = {};
+  const out: Record<string, string> = {};
   for (const line of raw.split("\n")) {
     if (!line) continue;
     const eq = line.indexOf("=");
@@ -1170,10 +1549,10 @@ function mediaState(node) {
   }
   return out;
 }
-const mediaCall = (node, verb, arg = 0) =>
+const mediaCall = (node: MirrorNode, verb: VnMediaVerb, arg = 0): boolean =>
   isMediaEl(node) && node.id ? __vn_media_call(node.id, verb, arg) : false;
 /** `"1.5:3,8:9"` -> the TimeRanges shape everything in the wild indexes. */
-function timeRanges(raw) {
+function timeRanges(raw: string | undefined): MirrorTimeRanges {
   const list = raw
     ? raw.split(",").filter(Boolean).map((pair) => {
         const [start, end] = pair.split(":").map(Number);
@@ -1182,18 +1561,22 @@ function timeRanges(raw) {
     : [];
   return {
     length: list.length,
-    start: (i) => list[i]?.start ?? NaN,
-    end: (i) => list[i]?.end ?? NaN,
+    start: (i: number) => list[i]?.start ?? NaN,
+    end: (i: number) => list[i]?.end ?? NaN,
     // Not in the DOM, and deliberately: a TimeRanges is painful to read in a
     // template and every transport component ends up writing this loop itself.
     ranges: list,
   };
 }
 /** A read-only media property, off the one state string. */
-function defineMediaGet(name, read, write) {
+function defineMediaGet(
+  name: string,
+  read: (s: Record<string, string>) => unknown,
+  write?: (value: never) => void,
+): void {
   defineDomGet(
     name,
-    function () {
+    function (this: MirrorElement) {
       const s = mediaState(this);
       // A non-media element has no such property in a browser either.
       return s ? read(s) : isMediaEl(this) ? read({}) : undefined;
@@ -1201,10 +1584,12 @@ function defineMediaGet(name, read, write) {
     write,
   );
 }
-const num = (s, k, fallback) => (s[k] === undefined ? fallback : Number(s[k]));
-const bool = (s, k, fallback) => (s[k] === undefined ? fallback : s[k] === "true");
+const num = (s: Record<string, string>, k: string, fallback: number): number =>
+  s[k] === undefined ? fallback : Number(s[k]);
+const bool = (s: Record<string, string>, k: string, fallback: boolean): boolean =>
+  s[k] === undefined ? fallback : s[k] === "true";
 
-defineMediaGet("currentTime", (s) => num(s, "currentTime", 0), function (v) {
+defineMediaGet("currentTime", (s) => num(s, "currentTime", 0), function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.currentTime, Number(v));
 });
 defineMediaGet("duration", (s) => num(s, "duration", NaN));
@@ -1213,16 +1598,16 @@ defineMediaGet("ended", (s) => bool(s, "ended", false));
 defineMediaGet("seeking", (s) => bool(s, "seeking", false));
 defineMediaGet("readyState", (s) => num(s, "readyState", 0));
 defineMediaGet("networkState", (s) => num(s, "networkState", 0));
-defineMediaGet("volume", (s) => num(s, "volume", 1), function (v) {
+defineMediaGet("volume", (s) => num(s, "volume", 1), function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.volume, Number(v));
 });
-defineMediaGet("muted", (s) => bool(s, "muted", false), function (v) {
+defineMediaGet("muted", (s) => bool(s, "muted", false), function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.muted, v ? 1 : 0);
 });
-defineMediaGet("playbackRate", (s) => num(s, "playbackRate", 1), function (v) {
+defineMediaGet("playbackRate", (s) => num(s, "playbackRate", 1), function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.playbackRate, Number(v));
 });
-defineMediaGet("loop", (s) => bool(s, "loop", false), function (v) {
+defineMediaGet("loop", (s) => bool(s, "loop", false), function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.loop, v ? 1 : 0);
 });
 defineMediaGet("videoWidth", (s) => num(s, "videoWidth", 0));
@@ -1237,7 +1622,7 @@ defineMediaGet("error", (s) => {
   return code ? { code, message: s.errorMessage ?? "" } : null;
 });
 
-defineDom("play", function () {
+defineDom("play", function (this: MirrorElement) {
   mediaCall(this, MEDIA_CALL.play);
   // HTML returns a promise that resolves when playback actually begins. The
   // host's `play` is synchronous and the `playing` event is what says it
@@ -1245,10 +1630,10 @@ defineDom("play", function () {
   // what makes `el.play().catch(…)` (the autoplay-rejection idiom) not throw.
   return Promise.resolve();
 });
-defineDom("pause", function () {
+defineDom("pause", function (this: MirrorElement) {
   mediaCall(this, MEDIA_CALL.pause);
 });
-defineDom("load", function () {
+defineDom("load", function (this: MirrorElement) {
   // The host runs the load algorithm off the `src` prop, edge-triggered, so a
   // re-load is `src = ""` then `src = url`. There is no separate verb for it.
   if (isMediaEl(this)) {
@@ -1259,7 +1644,7 @@ defineDom("load", function () {
     );
   }
 });
-defineDom("canPlayType", function (type) {
+defineDom("canPlayType", function (this: MirrorElement, type: unknown) {
   if (!isMediaEl(this) || !this.id) return "";
   // A live probe of THIS machine's decoder registry, not a table — a Store
   // codec package installed after we shipped is picked up on the next launch.
@@ -1271,7 +1656,7 @@ defineDom("canPlayType", function (type) {
 // hit node; the mirror tree provides the ancestor path. Events are real redjs
 // native classes when available (KeyboardEvent & co), with a CustomEvent
 // fallback so nothing hard-depends on the engine revision.
-const mods = (d) => ({
+const mods = (d: number) => ({
   ctrlKey: !!(d & 1),
   shiftKey: !!(d & 2),
   altKey: !!(d & 4),
@@ -1289,7 +1674,14 @@ const POINTER_INIT = {
   height: 1,
 };
 
-function synthesize(name, a, b, c, d, key) {
+function synthesize(
+  name: string,
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  key: string | undefined,
+): VnEvent {
   const common = { bubbles: !NO_BUBBLE.has(name), cancelable: !NO_BUBBLE.has(name) };
   const M = mods(d);
   try {
@@ -1395,11 +1787,14 @@ function synthesize(name, a, b, c, d, key) {
               : POINTER_EVENTS.has(name)
                 ? { clientX: a, clientY: b, button: c, ...POINTER_INIT, ...M }
                 : { clientX: a, clientY: b, button: c, ...M };
-  for (const k in extra) Object.defineProperty(ev, k, { value: extra[k], configurable: true });
+  for (const k in extra) Object.defineProperty(ev, k, { value: (extra as ExtraProps)[k], configurable: true });
   return ev;
 }
 
-function withProps(ev, props) {
+/** The per-event-family extra fields `synthesize` stamps onto a fallback event. */
+type ExtraProps = Record<string, unknown>;
+
+function withProps(ev: VnEvent, props: Record<string, unknown>): VnEvent {
   for (const k in props) Object.defineProperty(ev, k, { value: props[k], configurable: true });
   return ev;
 }
@@ -1409,19 +1804,34 @@ function withProps(ev, props) {
 // d = playbackRate. For `error`, a is MediaError.code and b is currentTime —
 // `e.target.error` is the shape a browser handler reads, and that one is served
 // live off `__vn_media_state` by the accessor below rather than frozen here.
-function mediaDetail(a, b, c, d) {
+function mediaDetail(a: number, b: number, c: number, d: number) {
   return { currentTime: a, duration: b, readyState: c, playbackRate: d };
 }
 
 // The payload crates/vn-tree/src/lottie.rs sends, named the way lottie-web
 // names it (`currentTime` / `totalTime` are frame counts there too).
-function lottieDetail(name, a, b, c, d) {
+function lottieDetail(name: string, a: number, b: number, c: number, d: number) {
   if (name === "enterFrame") return { currentTime: a, totalTime: b, elapsed: c, progress: d };
   if (name === "loopComplete") return { currentTime: a, totalTime: b, currentLoop: c };
   return { currentTime: a, totalTime: b, loops: c };
 }
 
-function invoke(buckets, phase, ev, node, name, state) {
+/** Which half of the DOM's two-phase dispatch a listener was registered for. */
+type Phase = "capture" | "bubble";
+/** `stopPropagation` / `stopImmediatePropagation`, as the walk sees them. */
+interface PropagationState {
+  stopped: boolean;
+  immediate: boolean;
+}
+
+function invoke(
+  buckets: Buckets,
+  phase: Phase,
+  ev: VnEvent,
+  node: PropagationTarget,
+  name: string,
+  state: PropagationState,
+): void {
   Object.defineProperty(ev, "currentTarget", { value: node, configurable: true });
   const fn = phase === "capture" ? buckets.capture : buckets.bubble;
   if (fn) {
@@ -1450,9 +1860,9 @@ function invoke(buckets, phase, ev, node, name, state) {
   else if (appRoot) syncListenerFlag(appRoot.id, name);
 }
 
-function propagate(target, name, ev) {
-  const path = [];
-  for (let n = target; n; n = n.parentNode) path.push(n);
+function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
+  const path: PropagationTarget[] = [];
+  for (let n: MirrorNode | null = target; n; n = n.parentNode) path.push(n);
   // …and above the root, the document and the window — where a browser's event
   // path puts them, and where every dismissable-layer implementation listens.
   if (globalHandlers.size) {
@@ -1472,7 +1882,7 @@ function propagate(target, name, ev) {
     state.immediate = true;
     origStopIm?.();
   };
-  const at = (node, phase) => {
+  const at = (node: PropagationTarget, phase: Phase) => {
     const buckets = isMirrorNode(node)
       ? handlers.get(node.id)?.[name]
       : globalHandlers.get(node)?.[name];
@@ -1488,7 +1898,45 @@ function propagate(target, name, ev) {
   return !ev.defaultPrevented;
 }
 
-const CODE_TO_NAME = Object.fromEntries(Object.entries(EV_CODES).map(([k, v]) => [v, k]));
+const CODE_TO_NAME: Record<number, string | undefined> = Object.fromEntries(
+  Object.entries(EV_CODES).map(([k, v]) => [v, k]),
+);
+
+/**
+ * Is there anything on this event's path that would be CALLED for `name`?
+ *
+ * The host arms ONE BIT PER CODE, and several event names share a code — a
+ * `pointermove` listener arms `mousemove`, and a `mousedown` listener arms the
+ * bit `pointerdown` rides on. So the host delivering an event does not mean
+ * anyone is listening for the particular NAME about to be synthesized: the
+ * dispatcher below used to build, and walk, one full W3C event per derived name
+ * on every delivery, whether or not a single handler existed for it.
+ *
+ * That is worth avoiding rather than tidying: `scripts/boundary-cost.ts`
+ * measures redjs's `new MouseEvent(...)` at roughly two thirds of the entire
+ * cost of dispatching an event — far more than the propagation walk it feeds —
+ * and it is engine code, so no amount of work on our side makes one cheaper.
+ * The only saving available is not building it.
+ *
+ * The walk is the same ancestor chain `propagate` would take, minus the
+ * allocation: a handful of Map lookups against a 16 µs constructor. It is
+ * deliberately CONSERVATIVE — it ignores `bubbles`, so a listener above a
+ * non-bubbling event's target still counts as a reason to synthesize. Being
+ * wrong in that direction costs an event object; being wrong in the other
+ * direction would drop a handler.
+ */
+function hasListener(target: MirrorNode, name: string): boolean {
+  for (let n: MirrorNode | null = target; n; n = n.parentNode) {
+    const buckets = handlers.get(n.id)?.[name];
+    if (buckets && bucketsAlive(buckets)) return true;
+  }
+  // …and the document/window registry, which sits one level above the root.
+  for (const m of globalHandlers.values()) {
+    const buckets = m[name];
+    if (buckets && bucketsAlive(buckets)) return true;
+  }
+  return false;
+}
 
 __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   const name = CODE_TO_NAME[evCode];
@@ -1500,13 +1948,24 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // this hook for exactly that reason; without the call, `beforeunload` could
   // never veto a close because the window would never count as interacted with.
   if (name === "keydown" || name === "mousedown") globalThis.__vnStickyActivation?.();
-  // input/change: the payload string is the new value — mirror it onto the
-  // node BEFORE dispatch so `e.target.value` reads like the browser.
-  if ((name === "input" || name === "change") && key != null) target.value = key;
+  // input: the payload string is the new value — mirror it onto the node
+  // BEFORE dispatch so `e.target.value` reads like the browser.
+  // (`value`, `scrollLeft` and `scrollTop` are element fields; the host only
+  // ever targets an element with these three events, which is what the casts
+  // record — a text node reaching here would be a host bug, not a JS one.)
+  //
+  // `change` is listed with it deliberately, and is currently UNREACHABLE:
+  // `CODE_TO_NAME` is built from `EV_CODES`, which mirrors `tree.rs`, and
+  // `tree.rs` has no `EV_CHANGE`. It stays because the day the host sources one
+  // this is the line that has to already be right — and `test/protocol-codes
+  // .test.ts` is what will notice the code arriving. See `vModelText`, which is
+  // the directive that wanted it.
+  if ((name === "input" || name === "change") && key != null)
+    (target as MirrorElement).value = key;
   // scroll: same idea — the position lives on the element, not on the event.
   if (name === "scroll") {
-    target.scrollLeft = a;
-    target.scrollTop = b;
+    (target as MirrorElement).scrollLeft = a;
+    (target as MirrorElement).scrollTop = b;
   }
   // The derived family (`pointerdown` from `mousedown`, `focusin` from `focus`,
   // …): each one is a full W3C event of its own with its own propagation, in
@@ -1516,16 +1975,25 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   let proceed = true;
   if (derived) {
     for (const dn of derived) {
-      if (!DERIVED[dn].pre) continue;
+      if (!DERIVED[dn as DerivedEventName].pre) continue;
+      if (!hasListener(target, dn)) continue;
       if (!propagate(target, dn, synthesize(dn, a, b, c, d, key))) proceed = false;
     }
   }
-  const ev = synthesize(name, a, b, c, d, key);
-  if (!proceed && ev.preventDefault) ev.preventDefault();
-  proceed = propagate(target, name, ev) && proceed;
+  // Skipping the source event when nothing listens for it is exactly as safe:
+  // with no handler to run, `propagate` can only return `!ev.defaultPrevented`,
+  // and the sole thing that could have set that flag is the `preventDefault()`
+  // two lines below — whose whole job is to make `proceed` false, which it
+  // already is.
+  if (hasListener(target, name)) {
+    const ev = synthesize(name, a, b, c, d, key);
+    if (!proceed && ev.preventDefault) ev.preventDefault();
+    proceed = propagate(target, name, ev) && proceed;
+  }
   if (derived) {
     for (const dn of derived) {
-      if (DERIVED[dn].pre) continue;
+      if (DERIVED[dn as DerivedEventName].pre) continue;
+      if (!hasListener(target, dn)) continue;
       propagate(target, dn, synthesize(dn, a, b, c, d, key));
     }
   }
@@ -1534,11 +2002,35 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
 
 const renderer = createRenderer({ ...nodeOps, patchProp });
 
+/**
+ * What `createApp` hands back: Vue's own `App`, with ONE signature different.
+ *
+ * `mount()` takes NO container here — the window is the root — and Vue's
+ * `App["mount"]` requires one, so `createApp(App).mount()` did not type-check
+ * against the upstream type and every app in this repository had to cast around
+ * it. A container argument is still ACCEPTED, for browser parity, and ignored
+ * with an advisory; the optional parameter is what records that.
+ *
+ * It EXTENDS `App` rather than `Omit`-ing `mount` out of it, and that is not a
+ * style choice: `use`, `component`, `directive` and `provide` all return
+ * `this`, and a mapped type resolves `this` to the type it was mapped FROM — so
+ * an `Omit` version type-checks `createApp(App).mount()` and then fails on
+ * `createApp(App).use(router).mount()`, which is what every real entry module
+ * writes. Extending keeps `this` polymorphic, so the whole chain stays one
+ * expression.
+ */
+export interface VnApp extends App<MirrorElement> {
+  mount(container?: unknown): ComponentPublicInstance;
+}
+
 /// App entry point. No container argument — the window IS the root.
-export function createApp(rootComponent, rootProps = null) {
-  const app = renderer.createApp(rootComponent, rootProps);
+export function createApp(
+  rootComponent: unknown,
+  rootProps: Record<string, unknown> | null = null,
+): VnApp {
+  const app = renderer.createApp(rootComponent as never, rootProps);
   const mount = app.mount.bind(app);
-  app.mount = (container) => {
+  app.mount = (container?: unknown) => {
     if (container != null)
       warnCompat(
         "mount:container",
@@ -1548,7 +2040,7 @@ export function createApp(rootComponent, rootProps = null) {
     // SFC styles collected at module-eval time (see build.ts) become the
     // stylesheet, installed before first mount so the first paint is styled.
     if (globalThis.__VN_CSS__?.length) {
-      __vn_set_stylesheet(__VN_CSS__.join("\n"));
+      __vn_set_stylesheet(__VN_CSS__!.join("\n"));
     }
     // `HTML`, not `ROOT`. The retained tree has one root box and it answers to
     // `document.documentElement` AND `document.body` (see the block that
@@ -1615,7 +2107,7 @@ export function createApp(rootComponent, rootProps = null) {
     __vn_log(`Vue ${version} app mounted (vue-native runtime)`);
     return vm;
   };
-  return app;
+  return app as VnApp;
 }
 
 // ---- missing globals (compat roadmap G5) ----------------------------------
@@ -1625,8 +2117,8 @@ export function createApp(rootComponent, rootProps = null) {
 // before it renders. They are installed on the global unconditionally when the
 // engine does not already have them.
 
-const defineGlobal = (name, value) => {
-  if (typeof globalThis[name] === "undefined") {
+const defineGlobal = (name: string, value: unknown) => {
+  if (typeof (globalThis as Record<string, unknown>)[name] === "undefined") {
     Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
   }
 };
@@ -1643,7 +2135,7 @@ const defineGlobal = (name, value) => {
 // feeds a string comparison, and an under-escaped identifier silently stops
 // matching.
 defineGlobal("CSS", {
-  escape(value) {
+  escape(value: unknown) {
     const s = String(value);
     let out = "";
     for (let i = 0; i < s.length; i++) {
@@ -1678,7 +2170,7 @@ defineGlobal("CSS", {
   // A feature PROBE. Answering `false` for everything would be a lie in the
   // other direction (it is how `@supports`-guarded fallbacks get chosen), so
   // this says what vue-native can express: the properties the cascade maps.
-  supports(a, b) {
+  supports(a: unknown, b?: unknown) {
     const body = b === undefined ? String(a) : `${String(a)}:${String(b)}`;
     const name = (body.split(":")[0] || "").trim().toLowerCase();
     if (!name) return false;
@@ -1697,7 +2189,7 @@ defineGlobal("CSS", {
 /// The property names `CSS.supports` answers `true` for: the ones vn-css maps
 /// onto a real computed value. Deliberately conservative — a probe that says
 /// yes and then does nothing is worse than one that says no.
-const CSS_SUPPORTED = new Set([
+const CSS_SUPPORTED = new Set<string>([
   "animation", "animation-delay", "animation-direction", "animation-duration",
   "animation-fill-mode", "animation-iteration-count", "animation-name",
   "animation-play-state", "animation-timing-function",
@@ -1718,10 +2210,59 @@ const CSS_SUPPORTED = new Set([
 // Records are queued at the nodeOps/patchProp call sites and delivered on a
 // microtask, which is exactly a browser's timing (the observer callback runs at
 // the end of the current task, before rendering).
-const observers = new Set();
+/** One `MutationRecord`, with exactly the fields this runtime can fill in. */
+interface MutationRecordLike {
+  type: "childList" | "attributes";
+  target: MirrorNode;
+  addedNodes: MirrorNode[];
+  removedNodes: MirrorNode[];
+  attributeName: string | null;
+  attributeNamespace: null;
+  oldValue: string | null;
+  previousSibling: null;
+  nextSibling: null;
+}
+/** What `observe()` recorded for one target. */
+interface MutationTargetEntry {
+  node: MirrorElement;
+  subtree: boolean;
+  options: {
+    childList: boolean;
+    attributes: boolean;
+    attributeOldValue: boolean;
+    attributeFilter: string[] | null;
+  };
+}
+/** `MutationObserver`'s `observe()` options, as far as they are honoured. */
+interface MutationObserverInitLike {
+  subtree?: boolean;
+  childList?: boolean;
+  attributes?: boolean;
+  attributeOldValue?: boolean;
+  attributeFilter?: string[];
+  characterData?: boolean;
+}
+/** The instance shape `notifyMutation` and `flushMutations` drive. */
+interface MutationObserverLike {
+  _callback: (records: MutationRecordLike[], ob: MutationObserverLike) => void;
+  _targets: MutationTargetEntry[];
+  _records: MutationRecordLike[];
+  takeRecords(): MutationRecordLike[];
+}
+
+const observers = new Set<MutationObserverLike>();
 let mutationFlushQueued = false;
 
-function notifyMutation(target, type, extra) {
+function notifyMutation(
+  target: MirrorNode,
+  type: "childList" | "attributes",
+  extra?: {
+    addedNodes?: MirrorNode[];
+    removedNodes?: MirrorNode[];
+    attributeName?: string;
+    oldValue?: string | null;
+  },
+): void {
   if (observers.size === 0) return;
   for (const ob of observers) {
     for (const entry of ob._targets) {
@@ -1730,7 +2271,7 @@ function notifyMutation(target, type, extra) {
       if (type === "childList" && !entry.options.childList) continue;
       if (type === "attributes") {
         if (!entry.options.attributes) continue;
-        if (entry.options.attributeFilter && !entry.options.attributeFilter.includes(extra.attributeName)) {
+        if (entry.options.attributeFilter && !entry.options.attributeFilter.includes(extra!.attributeName!)) {
           continue;
         }
       }
@@ -1754,8 +2295,9 @@ function notifyMutation(target, type, extra) {
   }
 }
 
-function isAncestor(ancestor, node) {
-  for (let n = node?.parentNode; n; n = n.parentNode) if (n === ancestor) return true;
+function isAncestor(ancestor: MirrorNode, node: MirrorNode | null | undefined): boolean {
+  for (let n: MirrorElement | null | undefined = node?.parentNode; n; n = n.parentNode)
+    if (n === ancestor) return true;
   return false;
 }
 
@@ -1774,13 +2316,18 @@ function flushMutations() {
 
 defineGlobal(
   "MutationObserver",
-  class MutationObserver {
-    constructor(callback) {
+  class MutationObserver implements MutationObserverLike {
+    // `declare` so the fields are ERASED rather than emitted as a constructor
+    // prologue that would run before the assignments below.
+    declare _callback: MutationObserverLike["_callback"];
+    declare _targets: MutationTargetEntry[];
+    declare _records: MutationRecordLike[];
+    constructor(callback: MutationObserverLike["_callback"]) {
       this._callback = callback;
       this._targets = [];
       this._records = [];
     }
-    observe(node, options = {}) {
+    observe(node: unknown, options: MutationObserverInitLike = {}) {
       // `observe(document, {subtree: true})` is how a library says "watch
       // everything" — reka's focus scope and floating-ui's auto-update both do
       // it. A Document is not an element here, but its element subtree is
@@ -1789,10 +2336,13 @@ defineGlobal(
       // m19, and arrive as themselves.
       // Duck-typed rather than compared against the `document` global, because
       // the same code runs in the test harness's private world.
-      if (node && node.kind !== 1 && node.documentElement) {
-        node = node.documentElement.kind === 1 ? node.documentElement : (appRoot ?? node);
+      if (node && (node as MirrorNode).kind !== 1 && (node as VnDocument).documentElement) {
+        node =
+          ((node as VnDocument).documentElement as MirrorNode).kind === 1
+            ? (node as VnDocument).documentElement
+            : (appRoot ?? node);
       }
-      if (!node || node.kind !== 1) {
+      if (!node || (node as MirrorNode).kind !== 1) {
         warnCompat(
           "MutationObserver:target",
           "MutationObserver.observe() was given something that is not a rendered element — " +
@@ -1809,7 +2359,7 @@ defineGlobal(
         );
       }
       this._targets.push({
-        node,
+        node: node as MirrorElement,
         subtree: !!options.subtree,
         options: {
           childList: !!options.childList,
@@ -1845,7 +2395,22 @@ defineGlobal(
 // inert observer means every popover, tooltip, dropdown and select keeps the
 // position computed from its pre-layout 0×0 box — which is to say none of them
 // is ever placed at all.
-const resizeObservers = new Set();
+/** One `ResizeObserverEntry`, with the box fields every consumer reads. */
+interface ResizeEntryLike {
+  target: MirrorElement;
+  contentRect: MirrorRect;
+  borderBoxSize: { inlineSize: number; blockSize: number }[];
+  contentBoxSize: { inlineSize: number; blockSize: number }[];
+  devicePixelContentBoxSize: { inlineSize: number; blockSize: number }[];
+}
+/** The instance shape the poll below drives. */
+interface ResizeObserverLike {
+  _callback: (entries: ResizeEntryLike[], ob: ResizeObserverLike) => void;
+  /** node -> the size last REPORTED for it; `null` = nothing reported yet. */
+  _targets: Map<MirrorElement, { w: number; h: number } | null>;
+}
+
+const resizeObservers = new Set<ResizeObserverLike>();
 let resizePollQueued = false;
 
 function scheduleResizePoll() {
@@ -1862,7 +2427,7 @@ function pollResizeObservers() {
   for (const ob of [...resizeObservers]) {
     if (!ob._targets.size) continue;
     observing = true;
-    const entries = [];
+    const entries: ResizeEntryLike[] = [];
     for (const [node, last] of ob._targets) {
       const r = rectOf(node);
       if (last && last.w === r.width && last.h === r.height) continue;
@@ -1883,12 +2448,14 @@ function pollResizeObservers() {
 
 defineGlobal(
   "ResizeObserver",
-  class ResizeObserver {
-    constructor(callback) {
+  class ResizeObserver implements ResizeObserverLike {
+    declare _callback: ResizeObserverLike["_callback"];
+    declare _targets: ResizeObserverLike["_targets"];
+    constructor(callback: ResizeObserverLike["_callback"]) {
       this._callback = callback;
       this._targets = new Map(); // node -> last reported {w, h}
     }
-    observe(node) {
+    observe(node: MirrorElement) {
       if (!node || typeof node.id !== "number") return;
       // `null` = "no size reported yet", so the first poll always fires —
       // which is what a browser does on `observe()` too.
@@ -1896,7 +2463,7 @@ defineGlobal(
       resizeObservers.add(this);
       scheduleResizePoll();
     }
-    unobserve(node) {
+    unobserve(node: MirrorElement) {
       this._targets.delete(node);
     }
     disconnect() {
@@ -1917,7 +2484,10 @@ defineGlobal(
     constructor() {
       const node = mk(__vn_create_element(I("fragment")), 1, "fragment");
       Object.defineProperty(node, "nodeType", { value: 11, configurable: true });
-      return node;
+      // A constructor that hands back a DIFFERENT object — `new
+      // DocumentFragment()` really is a detached mirror element, which is the
+      // whole point. The double cast is what says so.
+      return node as unknown as DocumentFragment;
     }
   },
 );
@@ -1954,14 +2524,14 @@ const TAG_CLASSES = {
   HTMLIFrameElement: "IFRAME",
 };
 for (const [name, tag] of Object.entries(TAG_CLASSES)) {
-  if (typeof globalThis[name] !== "undefined") continue;
+  if (typeof (globalThis as Record<string, unknown>)[name] !== "undefined") continue;
   // Mirror nodes are all plain HTMLElement, so `instanceof` is answered by the
   // tag name instead of by the prototype chain — which is the ONLY way to make
   // `el instanceof HTMLInputElement` true for a real `<input>` here.
   const klass = class {};
   Object.defineProperty(klass, "name", { value: name });
   Object.defineProperty(klass, Symbol.hasInstance, {
-    value: (x) => !!x && typeof x === "object" && x.tagName === tag,
+    value: (x: unknown) => !!x && typeof x === "object" && (x as MirrorElement).tagName === tag,
   });
   defineGlobal(name, klass);
 }
@@ -1971,19 +2541,36 @@ for (const [name, tag] of Object.entries(TAG_CLASSES)) {
 //    read at runtime, the USED width/height off the painted rectangle, and
 //    every custom property. A property nothing declared reads `""`, exactly as
 //    an unsupported one would in a browser — with one advisory naming it.
-const computedCache = new WeakMap();
-function computedStyleFor(node) {
+const computedCache = new WeakMap<object, unknown>();
+function computedStyleFor(node: unknown) {
   // `document.body` / `documentElement` are not nodes in the retained tree;
   // they stand for the app root, so that is whose style they report.
-  const id = typeof node?.id === "number" ? node.id : appRoot?.id;
+  const id = typeof (node as MirrorNode)?.id === "number" ? (node as MirrorNode).id : appRoot?.id;
   const raw = id ? __vn_computed_style(id) : "";
-  const map = Object.create(null);
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    const i = line.indexOf("=");
-    if (i > 0) map[line.slice(0, i)] = line.slice(i + 1);
-  }
-  const read = (k) => {
+  /**
+   * One property, scanned out of the answer — NOT a parsed map.
+   *
+   * This function runs once per PROPERTY READ. The host call above has to: it
+   * is `dom::computed_style`, which flushes pending style before answering, so
+   * a cached answer would be the pre-mutation one — the exact bug reka-ui's
+   * `<Presence>` hit, and the reason that flush exists. Splitting the ~20
+   * `name=value` lines into an object to answer ONE of them does not have to:
+   * `scripts/boundary-cost.ts` measured that parse at roughly three quarters of
+   * what a property read cost, repeated for every property a component looked
+   * at. A `<Transition>` reads two, @floating-ui reads six.
+   *
+   * The `\n` in front of the key is what stops a SUFFIX from matching — a
+   * lookup of `width` must not find the `max-width=` line.
+   */
+  const lookup = (css: string): string | undefined => {
+    const head = css + "=";
+    const at = raw.startsWith(head) ? 0 : raw.indexOf("\n" + head);
+    if (at < 0) return undefined;
+    const from = at + head.length + (at === 0 ? 0 : 1);
+    const end = raw.indexOf("\n", from);
+    return end < 0 ? raw.slice(from) : raw.slice(from, end);
+  };
+  const read = (k: string | symbol): string | undefined => {
     const key = String(k);
     // Framework probes, not CSS: Vue's reactivity asks every object it touches
     // for `__v_isReadonly`/`__v_raw`, promise-detection asks for `then`. None
@@ -1991,7 +2578,8 @@ function computedStyleFor(node) {
     // `undefined` (not `""`) and never warn.
     if (!/^[a-zA-Z-]/.test(key) || key.startsWith("__") || key === "then") return undefined;
     const css = key.startsWith("--") ? key : hyphenate(key);
-    if (css in map) return map[css];
+    const value = lookup(css);
+    if (value !== undefined) return value;
     warnCompat(
       `getComputedStyle:${css}`,
       `getComputedStyle().${key} reads "" — vue-native's computed style publishes the properties ` +
@@ -2003,20 +2591,20 @@ function computedStyleFor(node) {
   return new Proxy(
     { getPropertyValue: read, getPropertyPriority: () => "", get length() { return 0; } },
     {
-      get: (t, k) => (k in t ? t[k] : typeof k === "string" ? read(k) : undefined),
+      get: (t, k) => (k in t ? t[k as keyof typeof t] : typeof k === "string" ? read(k) : undefined),
       has: () => true,
     },
   );
 }
-defineGlobal("getComputedStyle", (node) => {
-  let cached = computedCache.get(node);
+defineGlobal("getComputedStyle", (node: unknown) => {
+  let cached = computedCache.get(node as object);
   // One live object per element, as in a browser — but the VALUES are read at
   // access time, so it tracks the cascade instead of freezing it.
   if (!cached) {
     cached = new Proxy(
       {},
       {
-        get: (_t, k) => computedStyleFor(node)[k],
+        get: (_t, k) => (computedStyleFor(node) as Record<string | symbol, unknown>)[k],
         has: () => true,
       },
     );
@@ -2029,10 +2617,10 @@ defineGlobal("getComputedStyle", (node) => {
 //    it; these are the entry points a reused component reaches through.
 const doc = globalThis.document;
 if (doc) {
-  const defDoc = (name, value) => {
+  const defDoc = (name: string, value: unknown) => {
     if (!(name in doc)) Object.defineProperty(doc, name, { value, configurable: true, writable: true });
   };
-  const defDocGet = (name, get) => {
+  const defDocGet = (name: string, get: () => unknown) => {
     if (!(name in doc)) Object.defineProperty(doc, name, { get, configurable: true });
   };
   // These three are FORCE-installed, not filled in: redjs ships its own
@@ -2041,20 +2629,25 @@ if (doc) {
   // engine's in place is the difference between "finds the node" and "silently
   // finds nothing", which is what made every `DialogContent` log a false
   // "requires a DialogTitle" accessibility warning.
-  const forceDoc = (name, value) =>
+  const forceDoc = (name: string, value: unknown) =>
     Object.defineProperty(doc, name, { value, configurable: true, writable: true });
   const rootId = () => (appRoot ? appRoot.id : 0);
-  forceDoc("querySelector", (sel) => queryOne(sel, rootId()));
-  forceDoc("querySelectorAll", (sel) => hostQuery(sel, rootId(), 0));
-  forceDoc("getElementById", (id) =>
+  forceDoc("querySelector", (sel: string) => queryOne(sel, rootId()));
+  forceDoc("querySelectorAll", (sel: string) => hostQuery(sel, rootId(), 0));
+  forceDoc("getElementById", (id: unknown) =>
     queryOne(`[id=${JSON.stringify(String(id))}]`, rootId()),
   );
-  defDoc("createDocumentFragment", () => new globalThis.DocumentFragment());
-  defDoc("createTreeWalker", (root, whatToShow = 0xffffffff, filter = null) => {
+  // `DocumentFragment` is installed on the global by `defineGlobal` above, so
+  // it is not part of the engine's declared surface — hence the cast.
+  defDoc("createDocumentFragment", () =>
+    new (globalThis as unknown as { DocumentFragment: new () => MirrorElement })
+      .DocumentFragment(),
+  );
+  defDoc("createTreeWalker", (root: MirrorNode | null, whatToShow = 0xffffffff, filter: TreeWalkerFilter = null) => {
     // A real pre-order walker over the mirror tree — focus traps use it to
     // collect tabbable candidates, and an empty one silently traps nothing.
-    const flat = [];
-    const walk = (n) => {
+    const flat: MirrorNode[] = [];
+    const walk = (n: MirrorNode) => {
       for (const c of n.childNodes || []) {
         const show = c.kind === 1 ? 1 : c.kind === 2 ? 4 : 128;
         if (whatToShow & show) flat.push(c);
@@ -2063,7 +2656,7 @@ if (doc) {
     };
     if (root) walk(root);
     let i = -1;
-    const accepts = (n) => {
+    const accepts = (n: MirrorNode) => {
       if (!filter) return true;
       const fn = typeof filter === "function" ? filter : filter.acceptNode;
       return !fn || fn.call(filter, n) === 1;
@@ -2111,7 +2704,7 @@ if (doc) {
       ["innerHeight", "height"],
       ["outerWidth", "width"],
       ["outerHeight", "height"],
-    ]) {
+    ] as [string, "width" | "height"][]) {
       try {
         Object.defineProperty(globalThis, name, {
           get: () => viewportRect()[axis],
@@ -2124,7 +2717,7 @@ if (doc) {
   }
   for (const name of ["scrollX", "scrollY", "pageXOffset", "pageYOffset"]) {
     try {
-      if (typeof globalThis[name] !== "number") {
+      if (typeof (globalThis as Record<string, unknown>)[name] !== "number") {
         Object.defineProperty(globalThis, name, { value: 0, configurable: true, writable: true });
       }
     } catch {
@@ -2149,47 +2742,51 @@ if (doc) {
   // (which runs first, by construction) writes to these. So the pre-mount
   // object BUFFERS, and `mount()` replays it onto the real root.
   {
-    const pending = { classes: [], style: Object.create(null), attrs: Object.create(null) };
+    const pending: {
+      classes: string[];
+      style: Record<string, string>;
+      attrs: Record<string, string>;
+    } = { classes: [], style: Object.create(null), attrs: Object.create(null) };
     const preRoot = {
       nodeType: 1,
       tagName: "HTML",
       get className() {
         return pending.classes.join(" ");
       },
-      set className(v) {
+      set className(v: unknown) {
         pending.classes = String(v ?? "").split(/\s+/).filter(Boolean);
       },
       classList: {
-        add(...names) {
+        add(...names: string[]) {
           for (const n of names) if (n && !pending.classes.includes(n)) pending.classes.push(n);
         },
-        remove(...names) {
+        remove(...names: string[]) {
           pending.classes = pending.classes.filter((c) => !names.includes(c));
         },
-        toggle(name, force) {
+        toggle(name: string, force?: boolean) {
           const on = force === undefined ? !pending.classes.includes(name) : !!force;
           if (on) preRoot.classList.add(name);
           else preRoot.classList.remove(name);
           return on;
         },
-        contains: (name) => pending.classes.includes(name),
+        contains: (name: string) => pending.classes.includes(name),
         get length() {
           return pending.classes.length;
         },
-        item: (i) => pending.classes[i] ?? null,
+        item: (i: number) => pending.classes[i] ?? null,
         toString: () => pending.classes.join(" "),
       },
       style: new Proxy(
         {
-          setProperty(k, v) {
+          setProperty(k: unknown, v: unknown) {
             pending.style[String(k)] = v == null ? "" : String(v);
           },
-          removeProperty(k) {
+          removeProperty(k: unknown) {
             const prev = pending.style[String(k)] ?? "";
             delete pending.style[String(k)];
             return prev;
           },
-          getPropertyValue: (k) => pending.style[String(k)] ?? "",
+          getPropertyValue: (k: unknown) => pending.style[String(k)] ?? "",
           getPropertyPriority: () => "",
         },
         {
@@ -2198,23 +2795,23 @@ if (doc) {
             pending.style[String(k)] = v == null ? "" : String(v);
             return true;
           },
-          get: (t, k) => (k in t ? t[k] : pending.style[String(k)] ?? ""),
+          get: (t, k) => (k in t ? t[k as keyof typeof t] : pending.style[String(k)] ?? ""),
         },
       ),
-      getAttribute: (k) => pending.attrs[String(k)] ?? null,
-      setAttribute(k, v) {
+      getAttribute: (k: unknown) => pending.attrs[String(k)] ?? null,
+      setAttribute(k: unknown, v: unknown) {
         pending.attrs[String(k)] = String(v);
       },
-      hasAttribute: (k) => String(k) in pending.attrs,
-      removeAttribute(k) {
+      hasAttribute: (k: unknown) => String(k) in pending.attrs,
+      removeAttribute(k: unknown) {
         delete pending.attrs[String(k)];
       },
       querySelector: () => null,
       querySelectorAll: () => [],
       contains: () => false,
-      appendChild: (n) => n,
-      removeChild: (n) => n,
-      insertAdjacentElement: (_w, n) => n,
+      appendChild: (n: unknown) => n,
+      removeChild: (n: unknown) => n,
+      insertAdjacentElement: (_w: unknown, n: unknown) => n,
       addEventListener: () => {},
       removeEventListener: () => {},
       getBoundingClientRect: () => ({ ...viewportRect(), toJSON() { return this; } }),
@@ -2235,7 +2832,7 @@ if (doc) {
       ["offsetHeight", "height"],
       ["scrollWidth", "width"],
       ["scrollHeight", "height"],
-    ]) {
+    ] as [string, "width" | "height"][]) {
       Object.defineProperty(preRoot, name, { get: () => viewportRect()[axis], configurable: true });
     }
     // Called by mount(), once the root node exists.
@@ -2260,27 +2857,28 @@ if (doc) {
     const head = doc.head;
     if (head && typeof head === "object") {
       if (!head.style || typeof head.style !== "object") head.style = {};
-      const hs = head.style;
+      const hs = head.style as Record<string, unknown>;
       if (typeof hs.setProperty !== "function") {
-        hs.setProperty = (k, v) => {
+        hs.setProperty = (k: unknown, v: unknown) => {
           hs[String(k)] = v == null ? "" : String(v);
         };
       }
       if (typeof hs.removeProperty !== "function") {
-        hs.removeProperty = (k) => {
+        hs.removeProperty = (k: unknown) => {
           const prev = hs[String(k)] ?? "";
           delete hs[String(k)];
           return prev;
         };
       }
-      if (typeof hs.getPropertyValue !== "function") hs.getPropertyValue = (k) => hs[String(k)] ?? "";
+      if (typeof hs.getPropertyValue !== "function")
+        hs.getPropertyValue = (k: unknown) => hs[String(k)] ?? "";
       if (!head.querySelector) head.querySelector = () => null;
       if (!head.querySelectorAll) head.querySelectorAll = () => [];
       if (!head.contains) head.contains = () => false;
       if (!head.getAttribute) head.getAttribute = () => null;
       if (!head.setAttribute) head.setAttribute = () => {};
-      if (!head.appendChild) head.appendChild = (n) => n;
-      if (!head.removeChild) head.removeChild = (n) => n;
+      if (!head.appendChild) head.appendChild = (n: unknown) => n;
+      if (!head.removeChild) head.removeChild = (n: unknown) => n;
       if (!("ownerDocument" in head)) {
         Object.defineProperty(head, "ownerDocument", { get: () => doc, configurable: true });
       }
@@ -2294,7 +2892,18 @@ if (doc) {
 // compiler (compat-first policy).
 const assignKey = Symbol("vnModelAssign");
 
-function setElValue(el, value) {
+/** The binding object Vue hands a directive hook, as these four hooks read it. */
+interface DirectiveBindingLike {
+  value?: unknown;
+  oldValue?: unknown;
+  modifiers?: Record<string, boolean>;
+}
+/** The vnode fields the model directives read off their own element. */
+interface VNodeLike {
+  props?: Record<string, unknown> | null;
+}
+
+function setElValue(el: MirrorElement, value: unknown): void {
   const v = value == null ? "" : String(value);
   if (el.value === v) return;
   el.value = v;
@@ -2302,22 +2911,40 @@ function setElValue(el, value) {
 }
 
 export const vModelText = {
-  created(el, { modifiers = {} }, vnode) {
+  created(el: MirrorElement, { modifiers = {} }: DirectiveBindingLike, vnode: VNodeLike) {
     el[assignKey] = vnode.props && vnode.props["onUpdate:modelValue"];
-    el.addEventListener(modifiers.lazy ? "change" : "input", () => {
-      let v = el.value;
-      if (modifiers.trim) v = v.trim();
+    // `.lazy` asks to update on `change` instead of `input`. There is no
+    // `change` in `tree.rs` — the host sources no such event — so binding one
+    // registered a listener that could never fire, and `v-model.lazy` simply
+    // never updated the model. The only sign was one advisory about an unknown
+    // event NAME, which reads like a typo rather than like a broken directive.
+    //
+    // Falling back to `input` makes the binding work and says exactly how it
+    // differs. That is the compat-first order of preference: a named
+    // divergence beats a silent nothing.
+    if (modifiers.lazy) {
+      warnCompat(
+        "v-model:lazy",
+        "v-model.lazy updates on every keystroke here, not on `change` — the native host does " +
+          "not source a `change` event yet, so binding one would never fire at all",
+      );
+    }
+    el.addEventListener("input", () => {
+      // `.trim` runs before `.number`, so `v` is still a string at both string
+      // uses below — which is exactly what the two casts assert.
+      let v: string | number = el.value;
+      if (modifiers.trim) v = (v as string).trim();
       if (modifiers.number) {
-        const n = parseFloat(v);
+        const n = parseFloat(v as string);
         if (!Number.isNaN(n)) v = n;
       }
-      if (el[assignKey]) el[assignKey](v);
+      if (el[assignKey]) (el[assignKey] as (value: unknown) => void)(v);
     });
   },
-  mounted(el, { value }) {
+  mounted(el: MirrorElement, { value }: DirectiveBindingLike) {
     setElValue(el, value);
   },
-  beforeUpdate(el, { value }, vnode) {
+  beforeUpdate(el: MirrorElement, { value }: DirectiveBindingLike, vnode: VNodeLike) {
     el[assignKey] = vnode.props && vnode.props["onUpdate:modelValue"];
     setElValue(el, value);
   },
@@ -2325,9 +2952,9 @@ export const vModelText = {
 
 // v1: every input renders as a text field, so the dynamic/checkbox/radio/
 // select variants fall back to the text behavior with an advisory.
-function modelFallback(kind) {
+function modelFallback(kind: string) {
   return {
-    created(el, binding, vnode) {
+    created(el: MirrorElement, binding: DirectiveBindingLike, vnode: VNodeLike) {
       warnCompat(
         `v-model:${kind}`,
         `v-model on ${kind} inputs is not implemented natively yet — falling back to text ` +
@@ -2345,32 +2972,38 @@ export const vModelRadio = modelFallback("radio");
 export const vModelSelect = modelFallback("select");
 
 export const vShow = {
-  mounted(el, { value }) {
+  mounted(el: MirrorElement, { value }: DirectiveBindingLike) {
     __vn_set_style(el.id, I("display"), value ? "" : "none");
   },
-  updated(el, { value, oldValue }) {
+  updated(el: MirrorElement, { value, oldValue }: DirectiveBindingLike) {
     if (!value === !oldValue) return;
     __vn_set_style(el.id, I("display"), value ? "" : "none");
   },
 };
 
 // ---- template helpers (compiler-dom emits these for @event modifiers) -----
-const modifierGuards = {
+const modifierGuards: Record<string, ((e: VnEvent, m: string[]) => unknown) | undefined> = {
   stop: (e) => e.stopPropagation(),
   prevent: (e) => e.preventDefault(),
   self: (e) => e.target !== e.currentTarget,
-  ctrl: (e) => !e.ctrlKey,
-  shift: (e) => !e.shiftKey,
-  alt: (e) => !e.altKey,
-  meta: (e) => !e.metaKey,
-  left: (e) => "button" in e && e.button !== 0,
-  middle: (e) => "button" in e && e.button !== 1,
-  right: (e) => "button" in e && e.button !== 2,
-  exact: (e, m) => ["ctrl", "shift", "alt", "meta"].some((x) => e[x + "Key"] && !m.includes(x)),
+  ctrl: (e) => !(e as VnMouseEvent).ctrlKey,
+  shift: (e) => !(e as VnMouseEvent).shiftKey,
+  alt: (e) => !(e as VnMouseEvent).altKey,
+  meta: (e) => !(e as VnMouseEvent).metaKey,
+  left: (e) => "button" in e && (e as VnMouseEvent).button !== 0,
+  middle: (e) => "button" in e && (e as VnMouseEvent).button !== 1,
+  right: (e) => "button" in e && (e as VnMouseEvent).button !== 2,
+  exact: (e, m) =>
+    ["ctrl", "shift", "alt", "meta"].some(
+      (x) => (e as unknown as Record<string, unknown>)[x + "Key"] && !m.includes(x),
+    ),
 };
 
-export function withModifiers(fn, modifiers) {
-  return (event, ...args) => {
+export function withModifiers(
+  fn: (event: VnEvent, ...args: unknown[]) => unknown,
+  modifiers: string[],
+) {
+  return (event: VnEvent, ...args: unknown[]) => {
     for (const m of modifiers) {
       const guard = modifierGuards[m];
       if (guard && guard(event, modifiers)) return;
@@ -2379,7 +3012,7 @@ export function withModifiers(fn, modifiers) {
   };
 }
 
-const keyAliases = {
+const keyAliases: Record<string, string | undefined> = {
   esc: "escape",
   space: " ",
   up: "arrow-up",
@@ -2389,10 +3022,10 @@ const keyAliases = {
   delete: "backspace",
 };
 
-export function withKeys(fn, keys) {
-  return (event) => {
+export function withKeys(fn: (event: VnEvent) => unknown, keys: string[]) {
+  return (event: VnEvent) => {
     if (!("key" in event)) return;
-    const eventKey = hyphenate(String(event.key));
+    const eventKey = hyphenate(String((event as VnKeyboardEvent).key));
     if (keys.some((k) => k === eventKey || keyAliases[k] === eventKey)) return fn(event);
   };
 }
@@ -2422,6 +3055,8 @@ const missing = () =>
     "the windowing host is missing (crates/vn-app/src/window.prelude.js did not evaluate) — " +
       "`appWindow` is inert. See docs/WINDOWING.md.",
   );
+// The inert stand-in is a Proxy over `{}`, so only a cast can give it the
+// shape: it answers for members that do not exist, which is the point.
 const inertWindow = new Proxy(
   {},
   {
@@ -2438,9 +3073,13 @@ const inertWindow = new Proxy(
   },
 );
 
-export const appWindow = windowHost ? windowHost.appWindow : inertWindow;
-export const defineWindow = windowHost ? windowHost.defineWindow : missing;
-export const getCurrentWindow = () => appWindow;
+export const appWindow: VnAppWindow = windowHost
+  ? windowHost.appWindow
+  : (inertWindow as unknown as VnAppWindow);
+export const defineWindow: (options: Record<string, unknown>) => void = windowHost
+  ? windowHost.defineWindow
+  : missing;
+export const getCurrentWindow = (): VnAppWindow => appWindow;
 
 // ---- permissions (docs/PERMISSIONS.md tier 2) ------------------------------
 //
@@ -2459,7 +3098,32 @@ export const getCurrentWindow = () => appWindow;
 //
 // Named after `appWindow` for the same reason: an extension must not be able to
 // pass for a web API.
-const permHost =
+/** The five host fns, gathered so the inert branch is a single `null` check. */
+interface PermissionsHost {
+  query: typeof __vn_permissions_query;
+  list: typeof __vn_permissions_list;
+  request: typeof __vn_permissions_request;
+  platform: typeof __vn_permissions_platform;
+  setDispatcher: typeof __vn_permissions_set_dispatcher;
+}
+
+/** One row of `appPermissions.list()`. */
+interface PermissionRow {
+  name: string;
+  state: VnPermissionState;
+  canRequest: boolean;
+}
+
+/** The tier-2 surface, in both its live and its inert spelling. */
+interface AppPermissions extends VnEventTarget {
+  readonly platform: string;
+  readonly names: string[];
+  query(name: string): VnPermissionState;
+  list(): PermissionRow[];
+  request(name: string): Promise<VnPermissionState>;
+}
+
+const permHost: PermissionsHost | null =
   typeof __vn_permissions_query === "function"
     ? {
         query: __vn_permissions_query,
@@ -2470,7 +3134,7 @@ const permHost =
       }
     : null;
 
-const PERMISSION_NAMES = [
+const PERMISSION_NAMES: VnPermissionName[] = [
   "microphone",
   "camera",
   "display-capture",
@@ -2480,11 +3144,11 @@ const PERMISSION_NAMES = [
   "geolocation",
 ];
 
-function createPermissions(host) {
+function createPermissions(host: PermissionsHost): AppPermissions {
   const target = new EventTarget();
   // reqId -> resolve. Settled by the host's per-frame pump, exactly as the
-  // LiveKit shim settles `__vn_voice_call` (packages/vue-native/src/livekit.js).
-  const pending = new Map();
+  // LiveKit shim settles `__vn_voice_call` (packages/vue-native/src/livekit.ts).
+  const pending = new Map<number, (state: VnPermissionState) => void>();
   host.setDispatcher((token, state) => {
     const resolve = pending.get(token);
     if (!resolve) return;
@@ -2497,7 +3161,7 @@ function createPermissions(host) {
   // permissions` is the source of truth for change delivery, and two drains of
   // one queue would race. Subscribing is best-effort — a runtime without
   // `navigator.permissions` still gets working `query`/`request`.
-  const statuses = new Map();
+  const statuses = new Map<string, VnPermissionStatus>();
   if (typeof navigator === "object" && navigator && navigator.permissions) {
     for (const name of PERMISSION_NAMES) {
       navigator.permissions.query({ name }).then(
@@ -2514,8 +3178,8 @@ function createPermissions(host) {
     }
   }
 
-  const advised = new Set();
-  const adviseUnsupported = (name) => {
+  const advised = new Set<string>();
+  const adviseUnsupported = (name: string) => {
     if (advised.has(name)) return;
     advised.add(name);
     warnCompat(
@@ -2541,15 +3205,15 @@ function createPermissions(host) {
      * read is `navigator.permissions.query()`, and having the extension differ
      * in shape as well as in name makes it obvious which one a call site used.
      */
-    query(name) {
+    query(name: string) {
       const state = host.query(name);
       if (!state) throw new TypeError(`'${name}' is not a permission name`);
       if (state === "unsupported") adviseUnsupported(name);
       return state;
     },
     /** All of them at once, as `{ name, state, canRequest }[]`. */
-    list() {
-      const rows = JSON.parse(host.list());
+    list(): PermissionRow[] {
+      const rows = JSON.parse(host.list()) as PermissionRow[];
       for (const r of rows) if (r.state === "unsupported") adviseUnsupported(r.name);
       return rows;
     },
@@ -2563,14 +3227,18 @@ function createPermissions(host) {
      * real system dialog. It never resolves optimistically: the value is always
      * a fresh read of what the OS now says.
      */
-    request(name) {
-      const out = JSON.parse(host.request(name));
+    request(name: string): Promise<VnPermissionState> {
+      const out = JSON.parse(host.request(name)) as {
+        error?: string;
+        state?: VnPermissionState;
+        token?: number;
+      };
       if (out.error) return Promise.reject(new TypeError(out.error));
       if (out.state !== undefined) {
         if (out.state === "unsupported") adviseUnsupported(name);
         return Promise.resolve(out.state);
       }
-      return new Promise((resolve) => pending.set(out.token, resolve));
+      return new Promise((resolve) => pending.set(out.token!, resolve));
     },
   });
 }
@@ -2597,7 +3265,9 @@ const inertPermissions = new Proxy(
   },
 );
 
-export const appPermissions = permHost ? createPermissions(permHost) : inertPermissions;
+export const appPermissions: AppPermissions = permHost
+  ? createPermissions(permHost)
+  : (inertPermissions as unknown as AppPermissions);
 
 // ---- storage (docs/STORAGE.md tier 2) --------------------------------------
 //
@@ -2624,7 +3294,39 @@ export const appPermissions = permHost ? createPermissions(permHost) : inertPerm
 // Synchronous, like `appPermissions.query` and for the same reason: these are
 // boot-time calls that touch a path and a directory, and a promise would imply
 // a wait that does not exist.
-const storageHost =
+/** The four host fns, gathered so the inert branch is a single `null` check. */
+interface StorageHost {
+  userFolder: typeof __vn_storage_user_folder;
+  setFolder: typeof __vn_storage_set_folder;
+  info: typeof __vn_storage_info;
+  flush: typeof __vn_storage_flush;
+}
+
+/** Everything `appStorage.info()` reports. `error` is the LAST failure, or null. */
+interface StorageInfo {
+  folder: string;
+  file: string;
+  encrypted: boolean;
+  bytes: number;
+  loaded: boolean;
+  pending: boolean;
+  provider: string;
+  kinds: string[];
+  error: string | null;
+}
+
+/** The tier-2 surface, in both its live and its inert spelling. */
+interface AppStorage {
+  readonly kinds: string[];
+  readonly folder: string;
+  readonly encrypted: boolean;
+  getUserFolder(kind: string, subfolder?: string): string;
+  setStorageFolder(path: string, options?: { encrypted?: boolean }): string;
+  info(): StorageInfo;
+  flush(): boolean;
+}
+
+const storageHost: StorageHost | null =
   typeof __vn_storage_info === "function"
     ? {
         userFolder: __vn_storage_user_folder,
@@ -2635,25 +3337,25 @@ const storageHost =
     : null;
 
 /** Every host fn here answers `{...}` or `{"error":"..."}`. One unwrapper. */
-function storageResult(json, what) {
-  const out = JSON.parse(json);
+function storageResult<T extends object>(json: VnJson, what: string): T {
+  const out = JSON.parse(json) as T & { error?: string };
   if (out.error) throw new TypeError(`appStorage.${what}: ${out.error}`);
   return out;
 }
 
-function createStorage(host) {
+function createStorage(host: StorageHost): AppStorage {
   return {
     /** The folder kinds `getUserFolder` accepts. */
     get kinds() {
-      return JSON.parse(host.info()).kinds;
+      return (JSON.parse(host.info()) as StorageInfo).kinds;
     },
     /** Where `localStorage` is being kept right now. */
     get folder() {
-      return JSON.parse(host.info()).folder;
+      return (JSON.parse(host.info()) as StorageInfo).folder;
     },
     /** Is it encrypted at rest? */
     get encrypted() {
-      return JSON.parse(host.info()).encrypted;
+      return (JSON.parse(host.info()) as StorageInfo).encrypted;
     },
     /**
      * `getUserFolder("APPDATA", "myAppFolder")` → an absolute path.
@@ -2663,8 +3365,11 @@ function createStorage(host) {
      * Throws a TypeError for an unknown kind or a `subfolder` that tries to
      * climb out of it, rather than returning a path nobody checked.
      */
-    getUserFolder(kind, subfolder = "") {
-      return storageResult(host.userFolder(String(kind), String(subfolder)), "getUserFolder").path;
+    getUserFolder(kind: string, subfolder = "") {
+      return storageResult<{ path: string }>(
+        host.userFolder(String(kind), String(subfolder)),
+        "getUserFolder",
+      ).path;
     },
     /**
      * Points `localStorage` at `path`, creating it. Returns the canonical path.
@@ -2679,9 +3384,12 @@ function createStorage(host) {
      * Best called before the first `localStorage` touch. Called later it still
      * works: the area this process is holding is written to the new place.
      */
-    setStorageFolder(path, options = {}) {
+    setStorageFolder(path: string, options: { encrypted?: boolean } = {}) {
       const encrypted = !!(options && options.encrypted);
-      return storageResult(host.setFolder(String(path), encrypted), "setStorageFolder").path;
+      return storageResult<{ path: string }>(
+        host.setFolder(String(path), encrypted),
+        "setStorageFolder",
+      ).path;
     },
     /**
      * Everything at once: `{ folder, file, encrypted, bytes, loaded, pending,
@@ -2689,8 +3397,8 @@ function createStorage(host) {
      * (a folder that could not be written, a file that could not be decrypted)
      * or null.
      */
-    info() {
-      return JSON.parse(host.info());
+    info(): StorageInfo {
+      return JSON.parse(host.info()) as StorageInfo;
     },
     /**
      * Writes any pending change to disk NOW and reports whether there was one.
@@ -2700,7 +3408,7 @@ function createStorage(host) {
      * matters — and what the persistence test calls before restarting the host.
      */
     flush() {
-      return storageResult(host.flush(), "flush").wrote;
+      return storageResult<{ wrote: boolean }>(host.flush(), "flush").wrote;
     },
   };
 }
@@ -2741,7 +3449,9 @@ const inertStorage = new Proxy(
   },
 );
 
-export const appStorage = storageHost ? createStorage(storageHost) : inertStorage;
+export const appStorage: AppStorage = storageHost
+  ? createStorage(storageHost)
+  : (inertStorage as unknown as AppStorage);
 
 // ---- <Transition> / <TransitionGroup> (compat roadmap G9) ------------------
 // runtime-core exports BaseTransition (the state machine) but NOT these two —
@@ -2777,11 +3487,11 @@ const TRANSITION_PROPS = {
 // because in a browser those are two views of the same attribute. Here they are
 // two SOURCES for one attribute (`writeClass` joins them), so recording it once
 // is the whole job — adding it to `className` as well would emit it twice.
-function addTransitionClass(el, cls) {
+function addTransitionClass(el: MirrorElement, cls: string): void {
   (el._vtc || (el._vtc = new Set())).add(cls);
   writeClass(el);
 }
-function removeTransitionClass(el, cls) {
+function removeTransitionClass(el: MirrorElement, cls: string): void {
   if (el._vtc) {
     el._vtc.delete(cls);
     if (!el._vtc.size) el._vtc = undefined;
@@ -2791,23 +3501,29 @@ function removeTransitionClass(el, cls) {
 
 /// Two frames, as runtime-dom does it: one to let the *-from class be committed
 /// and cascaded, the next to swap in *-to so the engine sees a real change.
-function nextFrame(cb) {
+function nextFrame(cb: () => void): void {
   const raf = globalThis.requestAnimationFrame;
   if (typeof raf === "function") raf(() => raf(cb));
   else setTimeout(() => setTimeout(cb, 0), 0);
 }
 
-const toMs = (s) => (s === "auto" || !s ? 0 : Number(String(s).slice(0, -1).replace(",", ".")) * 1000);
-function listTimeout(delays, durations) {
+const toMs = (s: string): number =>
+  s === "auto" || !s ? 0 : Number(String(s).slice(0, -1).replace(",", ".")) * 1000;
+function listTimeout(delays: string[], durations: string[]): number {
   while (delays.length < durations.length) delays = delays.concat(delays);
-  return Math.max(0, ...durations.map((d, i) => toMs(d) + toMs(delays[i])));
+  return Math.max(0, ...durations.map((d: string, i: number) => toMs(d) + toMs(delays[i])));
 }
 
 /// How long the element's CSS says its transition takes. Same computation
 /// runtime-dom does, off the same two properties.
-function transitionTimeout(el) {
-  const styles = globalThis.getComputedStyle(el);
-  const split = (k) => String(styles[k] || "").split(", ");
+function transitionTimeout(el: MirrorElement): number {
+  // `getComputedStyle` is one of the globals THIS FILE installs (see
+  // `defineGlobal` above), so it is not on the engine's declared surface and
+  // the cast is what says where it came from.
+  const styles = (
+    globalThis as unknown as { getComputedStyle: (el: MirrorElement) => Record<string, string> }
+  ).getComputedStyle(el);
+  const split = (k: string) => String(styles[k] || "").split(", ");
   return listTimeout(split("transitionDelay"), split("transitionDuration"));
 }
 
@@ -2826,7 +3542,11 @@ let endId = 0;
 /// element whose transition never starts (the property did not actually change)
 /// fires nothing at all, and a property that is not animatable here settles
 /// without an event.
-function whenTransitionEnds(el, explicitTimeout, resolve) {
+function whenTransitionEnds(
+  el: MirrorElement,
+  explicitTimeout: number | null | undefined,
+  resolve: () => void,
+): void {
   const id = (el._endId = ++endId);
   let done = false;
   const resolveIfNotStale = () => {
@@ -2835,7 +3555,7 @@ function whenTransitionEnds(el, explicitTimeout, resolve) {
     el.removeEventListener?.("transitionend", onEnd);
     resolve();
   };
-  const onEnd = (e) => {
+  const onEnd = (e: VnEvent) => {
     // Only this element's own transitions end this phase — a descendant's
     // bubbles through, and runtime-dom filters it the same way.
     if (e.target === el) resolveIfNotStale();
@@ -2853,22 +3573,56 @@ function whenTransitionEnds(el, explicitTimeout, resolve) {
   setTimeout(resolveIfNotStale, timeout + 1);
 }
 
-const callHook = (hook, args = []) => {
-  if (Array.isArray(hook)) for (const h2 of hook) h2(...args);
-  else if (hook) hook(...args);
+// A `<Transition>` hook prop is whatever the app passed: one function, an array
+// of them, or nothing. Vue's own runtime-dom types it the same open way, so the
+// casts below are at the call, where the arity is known.
+const callHook = (hook: unknown, args: unknown[] = []) => {
+  if (Array.isArray(hook)) for (const h2 of hook) (h2 as (...a: unknown[]) => void)(...args);
+  else if (hook) (hook as (...a: unknown[]) => void)(...args);
 };
-const hasExplicitCallback = (hook) =>
-  hook ? (Array.isArray(hook) ? hook.some((h2) => h2.length > 1) : hook.length > 1) : false;
+/** Did the app's hook declare a `done` parameter? Then IT ends the phase. */
+const hasExplicitCallback = (hook: unknown): boolean =>
+  hook
+    ? Array.isArray(hook)
+      ? hook.some((h2) => (h2 as { length: number }).length > 1)
+      : (hook as { length: number }).length > 1
+    : false;
 
-function normalizeDuration(duration) {
+/** `:duration="{ enter, leave }"` — the object form of the prop. */
+type DurationPair = { enter: unknown; leave: unknown };
+
+function normalizeDuration(duration: unknown): [number, number] | null {
   if (duration == null) return null;
-  if (typeof duration === "object") return [Number(duration.enter), Number(duration.leave)];
+  if (typeof duration === "object")
+    return [Number((duration as DurationPair).enter), Number((duration as DurationPair).leave)];
   const n = Number(duration);
   return [n, n];
 }
 
-export function resolveTransitionProps(rawProps) {
-  const baseProps = {};
+/**
+ * `<Transition>`'s own props, plus whatever else the app put on the component —
+ * everything not in `TRANSITION_PROPS` is forwarded to `BaseTransition`, which
+ * is what the index signature stands for.
+ */
+interface TransitionRawProps {
+  name?: string;
+  type?: string;
+  css?: boolean;
+  duration?: number | string | { enter: number; leave: number };
+  enterFromClass?: string;
+  enterActiveClass?: string;
+  enterToClass?: string;
+  appearFromClass?: string;
+  appearActiveClass?: string;
+  appearToClass?: string;
+  leaveFromClass?: string;
+  leaveActiveClass?: string;
+  leaveToClass?: string;
+  [key: string]: unknown;
+}
+
+export function resolveTransitionProps(rawProps: TransitionRawProps) {
+  const baseProps: Record<string, unknown> = {};
   for (const key in rawProps) if (!(key in TRANSITION_PROPS)) baseProps[key] = rawProps[key];
   if (rawProps.css === false) return baseProps;
   const {
@@ -2898,19 +3652,19 @@ export function resolveTransitionProps(rawProps) {
     onAppearCancelled = onEnterCancelled,
   } = baseProps;
 
-  const finishEnter = (el, isAppear, done) => {
+  const finishEnter = (el: MirrorElement, isAppear: boolean, done: (() => void) | undefined) => {
     removeTransitionClass(el, isAppear ? appearToClass : enterToClass);
     removeTransitionClass(el, isAppear ? appearActiveClass : enterActiveClass);
     done && done();
   };
-  const finishLeave = (el, done) => {
+  const finishLeave = (el: MirrorElement, done?: () => void) => {
     el._isLeaving = false;
     removeTransitionClass(el, leaveFromClass);
     removeTransitionClass(el, leaveToClass);
     removeTransitionClass(el, leaveActiveClass);
     done && done();
   };
-  const makeEnterHook = (isAppear) => (el, done) => {
+  const makeEnterHook = (isAppear: boolean) => (el: MirrorElement, done: () => void) => {
     const hook = isAppear ? onAppear : onEnter;
     const resolve = () => finishEnter(el, isAppear, done);
     callHook(hook, [el, resolve]);
@@ -2922,19 +3676,19 @@ export function resolveTransitionProps(rawProps) {
   };
 
   return Object.assign(baseProps, {
-    onBeforeEnter(el) {
+    onBeforeEnter(el: MirrorElement) {
       callHook(onBeforeEnter, [el]);
       addTransitionClass(el, enterFromClass);
       addTransitionClass(el, enterActiveClass);
     },
-    onBeforeAppear(el) {
+    onBeforeAppear(el: MirrorElement) {
       callHook(onBeforeAppear, [el]);
       addTransitionClass(el, appearFromClass);
       addTransitionClass(el, appearActiveClass);
     },
     onEnter: makeEnterHook(false),
     onAppear: makeEnterHook(true),
-    onLeave(el, done) {
+    onLeave(el: MirrorElement, done: () => void) {
       el._isLeaving = true;
       const resolve = () => finishLeave(el, done);
       addTransitionClass(el, leaveFromClass);
@@ -2947,15 +3701,15 @@ export function resolveTransitionProps(rawProps) {
       });
       callHook(onLeave, [el, resolve]);
     },
-    onEnterCancelled(el) {
+    onEnterCancelled(el: MirrorElement) {
       finishEnter(el, false, undefined);
       callHook(onEnterCancelled, [el]);
     },
-    onAppearCancelled(el) {
+    onAppearCancelled(el: MirrorElement) {
       finishEnter(el, true, undefined);
       callHook(onAppearCancelled, [el]);
     },
-    onLeaveCancelled(el) {
+    onLeaveCancelled(el: MirrorElement) {
       finishLeave(el);
       callHook(onLeaveCancelled, [el]);
     },
@@ -2968,7 +3722,7 @@ export const Transition = /*@__PURE__*/ defineComponent({
   inheritAttrs: false,
   props: /*@__PURE__*/ Object.assign({}, BaseTransitionPropsValidators, TRANSITION_PROPS),
   setup(props, { slots }) {
-    return () => h(BaseTransition, resolveTransitionProps(props), slots);
+    return () => h(BaseTransition, resolveTransitionProps(props as TransitionRawProps), slots);
   },
 });
 
@@ -2981,9 +3735,9 @@ export const TransitionGroup = /*@__PURE__*/ defineComponent({
   setup(props, { slots }) {
     const instance = getCurrentInstance();
     const state = useTransitionState();
-    let children;
+    let children: unknown[] | undefined;
     return () => {
-      const rawProps = toRaw(props);
+      const rawProps = toRaw(props) as TransitionRawProps;
       const cssTransitionProps = resolveTransitionProps(rawProps);
       const tag = rawProps.tag || Fragment;
       if (rawProps.moveClass || (children && children.length)) {
@@ -2995,15 +3749,15 @@ export const TransitionGroup = /*@__PURE__*/ defineComponent({
         );
       }
       children = slots.default ? getTransitionRawChildren(slots.default()) : [];
-      for (const child of children) {
+      for (const child of children as VNode[]) {
         if (child.key != null) {
           setTransitionHooks(
             child,
-            resolveTransitionHooks(child, cssTransitionProps, state, instance),
+            resolveTransitionHooks(child, cssTransitionProps, state, instance!),
           );
         }
       }
-      return createVNode(tag, null, children);
+      return createVNode(tag as never, null, children as never);
     };
   },
 });

@@ -1,21 +1,22 @@
-// Runs src/loader.js in an isolated fake "engine" so the HMR logic can be
+// Runs src/loader.ts in an isolated fake "engine" so the HMR logic can be
 // tested without gpui, JavaScriptCore or a real Vue.
 //
-// loader.js is authored as an ES module purely so the bundler can inline
-// runtime.js into vendor.js; what the engine actually evaluates is a CLASSIC
+// loader.ts is authored as an ES module purely so the bundler can inline
+// runtime.ts into vendor.js; what the engine actually evaluates is a CLASSIC
 // SCRIPT that touches four ambient names: `globalThis`, `console`,
-// `__vn_set_stylesheet`, plus the runtime namespace it imports. We strip the
-// single import and evaluate the rest with those names bound as PARAMETERS —
-// inside a function body a parameter shadows the real global, so every
-// createLoader() call gets its own private world (own __VN__, own registry, own
-// __VUE_HMR_RUNTIME__) and tests cannot leak into one another.
+// `__vn_set_stylesheet`, plus the runtime namespace it imports. We transpile it
+// to plain JS (see ./ts-source.ts), strip the imports, and evaluate the rest
+// with those names bound as PARAMETERS — inside a function body a parameter
+// shadows the real global, so every createLoader() call gets its own private
+// world (own __VN__, own registry, own __VUE_HMR_RUNTIME__) and tests cannot
+// leak into one another.
 
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readTsSource } from "./ts-source";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-export const LOADER_PATH = join(HERE, "../src/loader.js");
+export const LOADER_PATH = join(HERE, "../src/loader.ts");
 
 // Every `import * as NS from "..."` at the top of loader.js: the runtime one
 // plus one per VENDORED LIBRARY (vue-router, pinia, …). All of them are
@@ -23,18 +24,18 @@ export const LOADER_PATH = join(HERE, "../src/loader.js");
 // vendored ones get an empty namespace, which is all the registry seeding
 // needs (the tests never call into those libraries).
 const NS_IMPORT = /^\s*import\s+\*\s+as\s+(\w+)\s+from\s+["']([^"']+)["'];?[^\S\n]*$/gm;
-const RUNTIME_SPEC = "./runtime.js";
+const RUNTIME_SPEC = "./runtime";
 
 /** A fresh loader world. */
 export function createLoader() {
-  const raw = readFileSync(LOADER_PATH, "utf8");
+  const raw = readTsSource(LOADER_PATH);
   const namespaces = []; // [localName, specifier]
   const src = raw.replace(NS_IMPORT, (_m, local, spec) => {
     namespaces.push([local, spec]);
     return "";
   });
   if (!namespaces.some(([local, spec]) => local === "runtimeNs" && spec === RUNTIME_SPEC)) {
-    throw new Error("loader.js no longer imports ./runtime.js the expected way — update this harness");
+    throw new Error("loader.ts no longer imports ./runtime the expected way — update this harness");
   }
 
   const logs = [];

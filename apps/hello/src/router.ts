@@ -2,7 +2,7 @@
 // is exactly our host's situation. Routes are STATIC imports — the runtime is
 // classic-scripts-only, so lazy `() => import(...)` route components are not
 // available (the builder would flag them anyway).
-import { createRouter, createMemoryHistory } from "vue-router";
+import { createRouter, createMemoryHistory, type RouteRecordRaw } from "vue-router";
 
 import AudioPage from "./pages/AudioPage.vue";
 import FormsPage from "./pages/FormsPage.vue";
@@ -16,6 +16,8 @@ import VoicePage from "./pages/VoicePage.vue";
 import WindowPage from "./pages/WindowPage.vue";
 import LabPage from "./App.vue";
 
+// `satisfies`, not `: RouteRecordRaw[]`. The annotation would widen `name` to
+// `RouteRecordName`, and the `routes.find(...)` below wants the literal names.
 const routes = [
   { path: "/", name: "forms", component: FormsPage },
   { path: "/list", name: "list", component: ListPage },
@@ -28,7 +30,7 @@ const routes = [
   { path: "/permissions", name: "permissions", component: PermissionsPage },
   { path: "/storage", name: "storage", component: StoragePage },
   { path: "/lab", name: "lab", component: LabPage },
-];
+] satisfies RouteRecordRaw[];
 
 // `VN_SCENARIO=<route name>` pins the app to one page at boot, so a soak or a
 // frame-time measurement is ONE process, ONE screen and no input — which is
@@ -59,4 +61,4 @@ export const router = createRouter({ history, routes });
 router
   .isReady()
   .then(() => console.log("[router] ready at " + router.currentRoute.value.fullPath))
-  .catch((e) => console.log("[router] init error: " + e));
+  .catch((e: unknown) => console.log("[router] init error: " + e));

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { onActivated, onDeactivated, ref } from "vue";
 import Counter from "../components/Counter.vue";
 
@@ -11,7 +11,7 @@ const wide = ref(false);
 // DOM events with `propertyName` / `animationName` / `elapsedTime`.
 const ends = ref(0);
 const lastEnd = ref("—");
-const onTransitionEnd = (e) => {
+const onTransitionEnd = (e: VnTransitionEvent) => {
   ends.value++;
   lastEnd.value = `${e.propertyName} after ${e.elapsedTime}s`;
 };
@@ -40,7 +40,7 @@ const lastLoopFrame = ref(0);
 // @loopComplete is lottie-web's event name, and it carries lottie-web's
 // payload: currentLoop (1-based), currentTime (the frame at the boundary) and
 // totalTime (frames in the animation).
-const onLoop = (e) => {
+const onLoop = (e: VnLottieLoopEvent) => {
   loops.value = e.currentLoop;
   lastLoopFrame.value = Math.round(e.totalTime);
 };

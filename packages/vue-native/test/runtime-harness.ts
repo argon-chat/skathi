@@ -1,14 +1,15 @@
-// Runs src/runtime.js in an isolated fake host so the renderer's prop/event
+// Runs src/runtime.ts in an isolated fake host so the renderer's prop/event
 // plumbing can be tested without gpui, JavaScriptCore or a window.
 //
-// Same trick as loader-harness.js: runtime.js is authored as an ES module for
+// Same trick as loader-harness.ts: runtime.ts is authored as an ES module for
 // the bundler's benefit, but its body only touches ambient names — the `__vn_*`
-// host functions and `console`. The import/export lines are stripped and every
-// ambient name is bound as a PARAMETER, so each createRuntime() call gets its
-// own private world (own intern table, own handler registry, own `warned` set,
-// which is what makes "advisory fires exactly once" testable at all).
+// host functions and `console`. The source is transpiled to plain JS (see
+// ./ts-source.ts — bun's own emitter, the one that produces dist/vendor.js),
+// the import/export lines are stripped, and every ambient name is bound as a
+// PARAMETER, so each createRuntime() call gets its own private world (own
+// intern table, own handler registry, own `warned` set, which is what makes
+// "advisory fires exactly once" testable at all).
 
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -27,9 +28,10 @@ import {
   useTransitionState,
   version,
 } from "@vue/runtime-core";
+import { readTsSource } from "./ts-source";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-export const RUNTIME_PATH = join(HERE, "../src/runtime.js");
+export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
 
 /** The W3C names `vn-permissions` knows — kept in step with `Capability::ALL`. */
 export const PERMISSION_NAMES = [
@@ -55,9 +57,9 @@ const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
  */
 export function createRuntime(options = {}) {
   const withStorage = options.storage !== false;
-  const raw = readFileSync(RUNTIME_PATH, "utf8");
+  const raw = readTsSource(RUNTIME_PATH);
   if (!IMPORT_LINE.test(raw)) {
-    throw new Error("runtime.js no longer imports @vue/runtime-core — update this harness");
+    throw new Error("runtime.ts no longer imports @vue/runtime-core — update this harness");
   }
   IMPORT_LINE.lastIndex = 0;
   const body = raw
@@ -375,7 +377,8 @@ export function createRuntime(options = {}) {
     ...params,
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
-       writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage };`,
+       writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
+       vModelText, vShow };`,
   )(...args);
 
   return {

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // The windowing surface, end to end — docs/WINDOWING.md.
 //
 // Everything on this page is either a BROWSER-STANDARD API (`document.title`,
@@ -14,11 +14,34 @@ defineOptions({ name: "WindowPage" });
 // Every number below is read straight from the window, not from a mirror we
 // keep in sync ourselves: the host publishes one snapshot per frame and every
 // getter reads it.
-const geom = ref({});
+
+// Every value here is rendered as text, and several are deliberately
+// pre-formatted strings ("980 x 720") rather than numbers — the table shows
+// what the window says, it does not compute with it.
+interface Geometry {
+  inner: string;
+  outer: string;
+  screenXY: string;
+  dpr: number;
+  screen: string;
+  avail: string;
+  extended: boolean;
+}
+
+// engine.d.ts types `document` and `navigator` as optional (the bun test
+// harness has neither). Under vn-app both exist before this module evaluates —
+// asserted once, here, rather than at twelve call sites.
+const doc = document!;
+const wco = navigator!.windowControlsOverlay;
+
+const geom = ref<Partial<Geometry>>({});
 const maximized = ref(false);
 const focused = ref(false);
-const bar = ref({ x: 0, y: 0, width: 0, height: 0 });
-const chrome = ref(appWindow.chrome);
+const bar = ref<VnWindowRect>({ x: 0, y: 0, width: 0, height: 0 });
+// `VnAppWindow.chrome` is a bare `Record<string, unknown>`, so `chrome.client
+// .width` in the template below is `unknown`. The prelude's shape is fixed and
+// small — see `VnWindowChrome` in apps/env.d.ts, and the note there.
+const chrome = ref(appWindow.chrome as unknown as VnWindowChrome);
 
 const readAll = () => {
   geom.value = {
@@ -32,8 +55,8 @@ const readAll = () => {
   };
   maximized.value = appWindow.isMaximized();
   focused.value = appWindow.isFocused();
-  bar.value = navigator.windowControlsOverlay.getTitlebarAreaRect();
-  chrome.value = appWindow.chrome;
+  bar.value = wco.getTitlebarAreaRect();
+  chrome.value = appWindow.chrome as unknown as VnWindowChrome;
   readMq();
 };
 
@@ -52,7 +75,7 @@ onMounted(() => {
   appWindow.addEventListener("maximize", onState);
   appWindow.addEventListener("unmaximize", onState);
   appWindow.addEventListener("move", onState);
-  navigator.windowControlsOverlay.addEventListener("geometrychange", onState);
+  wco.addEventListener("geometrychange", onState);
 });
 onUnmounted(() => {
   removeEventListener("resize", onResize);
@@ -61,22 +84,22 @@ onUnmounted(() => {
   appWindow.removeEventListener("maximize", onState);
   appWindow.removeEventListener("unmaximize", onState);
   appWindow.removeEventListener("move", onState);
-  navigator.windowControlsOverlay.removeEventListener("geometrychange", onState);
+  wco.removeEventListener("geometrychange", onState);
 });
 
 // ---- title ----------------------------------------------------------------
 // `document.title` is the OS window title (taskbar, Alt-Tab, window
 // enumeration). The PAINTED titlebar text comes from the app's own markup —
 // they are independent in a browser too, and Titlebar.vue happens to mirror it.
-const titleDraft = ref(document.title);
+const titleDraft = ref(doc.title);
 const applyTitle = () => {
-  document.title = titleDraft.value;
+  doc.title = titleDraft.value;
   // `document.title` has no change event in any spec, so the titlebar is poked
   // explicitly rather than polled.
   dispatchEvent(new Event("vn:title"));
   // Read back: the getter applies HTML's whitespace normalisation, exactly as
   // a browser does, so "  a\n b  " comes back as "a b".
-  titleDraft.value = document.title;
+  titleDraft.value = doc.title;
 };
 
 // ---- backdrop -------------------------------------------------------------
@@ -85,7 +108,7 @@ const applyTitle = () => {
 // 10 would fall back to `acrylic` and say so.
 const MATERIALS = ["mica", "mica-alt", "acrylic", "transparent", "none"];
 const backdrop = ref(appWindow.backdrop);
-const setBackdrop = (m) => {
+const setBackdrop = (m: string) => {
   appWindow.backdrop = m;
   backdrop.value = appWindow.backdrop;
 };
@@ -102,10 +125,10 @@ const setBackdrop = (m) => {
 // Turning it on narrows `getTitlebarAreaRect().width` (and therefore
 // `env(titlebar-area-width)`) by the cluster's width and fires
 // `geometrychange`; Titlebar.vue drops its own buttons because the rect said so.
-const hostControls = ref(appWindow.chrome.hostControls);
-const setHostControls = (on) => {
+const hostControls = ref(Boolean(appWindow.chrome.hostControls));
+const setHostControls = (on: boolean) => {
   appWindow.setTitleBarOverlay(on ? { symbolColor: "#ffffffe0" } : false);
-  hostControls.value = appWindow.chrome.hostControls;
+  hostControls.value = Boolean(appWindow.chrome.hostControls);
   readAll();
 };
 
@@ -122,7 +145,7 @@ const MQ = {
 // `MediaQueryList.matches` is a plain getter, not a Vue ref, so the values are
 // copied into reactive state — both by the standard `change` event and by
 // `readAll`, which every window event already calls.
-const mq = ref({});
+const mq = ref<Partial<Record<keyof typeof MQ, boolean>>>({});
 const readMq = () => (mq.value = Object.fromEntries(
   Object.entries(MQ).map(([k, v]) => [k, v.matches]),
 ));
@@ -133,13 +156,20 @@ onUnmounted(() => Object.values(MQ).forEach((m) => m.removeEventListener("change
 // All synchronous, all returning undefined: JS, gpui and the Win32 UI thread
 // are the same thread, so a Promise would lie about ordering. `await` still
 // works, so ported Tauri code runs unmodified.
-const nudge = (dx, dy) => appWindow.setBounds({ x: appWindow.getBounds().x + dx, y: appWindow.getBounds().y + dy });
-const grow = (d) => resizeBy(d, d);
+const nudge = (dx: number, dy: number) =>
+  appWindow.setBounds({ x: appWindow.getBounds().x + dx, y: appWindow.getBounds().y + dy });
+const grow = (d: number) => resizeBy(d, d);
 // The STANDARD Fullscreen API, not an `appWindow` verb: fullscreen state is
 // observed through `document.fullscreenchange`, which is why §3.4 deliberately
 // carries no `appWindow` event for it. Esc always exits.
+//
+// `documentElement` is `unknown` on `VnDocument` and cannot be narrowed by a
+// merge (apps/env.d.ts says why), so it is cast at this one use. The prelude
+// patches `requestFullscreen` onto it AND onto `Element.prototype`.
 const toggleFullscreen = () =>
-  document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  doc.fullscreenElement
+    ? doc.exitFullscreen()
+    : (doc.documentElement as VnElement).requestFullscreen();
 </script>
 
 <template>

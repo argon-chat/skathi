@@ -1,5 +1,5 @@
-<script setup>
-import { TINY_CLIP_DATA_URI } from "../tinyClip.js";
+<script setup lang="ts">
+import { TINY_CLIP_DATA_URI } from "../tinyClip";
 
 // <video> — the OS media pipeline inside a CSS box.
 //
@@ -29,8 +29,12 @@ import { TINY_CLIP_DATA_URI } from "../tinyClip.js";
 
 import { computed, onMounted, reactive, ref } from "vue";
 
-const videoEl = ref(null);
-const brokenEl = ref(null);
+// Template refs on native elements. `VnMediaElement` (apps/env.d.ts) is the
+// HTMLMediaElement surface runtime.ts really installs — its own `MirrorElement`
+// interface has all of it and is not exported, so an app has no name for what a
+// `ref="videoEl"` is holding.
+const videoEl = ref<VnMediaElement | null>(null);
+const brokenEl = ref<VnMediaElement | null>(null);
 
 // What the last event left on the element. `timeupdate` arrives on the spec's
 // 4 Hz cadence, so this rerenders four times a second, not 165.
@@ -44,10 +48,10 @@ const media = reactive({
   videoWidth: 0,
   videoHeight: 0,
 });
-const log = ref([]);
-const brokenError = ref(null);
+const log = ref<string[]>([]);
+const brokenError = ref<VnMediaError | null>(null);
 
-function readBack(el) {
+function readBack(el: VnMediaElement | null | undefined) {
   if (!el) return;
   media.currentTime = el.currentTime;
   media.duration = el.duration;
@@ -59,17 +63,22 @@ function readBack(el) {
   media.videoHeight = el.videoHeight;
 }
 
-/** One handler for every media event: log it, then re-read the element. */
-function onMedia(e) {
+/** One handler for every media event: log it, then re-read the element.
+ *
+ *  `VnEvent.target` is `unknown` — the protocol delivers a node id and the
+ *  runtime hands back the mirror node it names, which the type system has no
+ *  way to connect to `<video>`. This handler is only ever bound to the one
+ *  element above, so that is what the cast says. */
+function onMedia(e: VnEvent) {
   log.value.push(e.type);
   if (log.value.length > 40) log.value.shift();
-  readBack(e.target ?? videoEl.value);
+  readBack((e.target as VnMediaElement | null) ?? videoEl.value);
 }
 
-function onBrokenError(e) {
+function onBrokenError(e: VnEvent) {
   // `e.target.error` is a real MediaError: `{ code, message }`, where the
   // message is the advisory naming what THIS machine cannot decode.
-  brokenError.value = e.target?.error ?? null;
+  brokenError.value = (e.target as VnMediaElement | null)?.error ?? null;
 }
 
 const muted = ref(true); // browsers require it for autoplay; be a good neighbour
@@ -89,7 +98,7 @@ function toggle() {
   readBack(el);
 }
 
-function seek(seconds) {
+function seek(seconds: number) {
   const el = videoEl.value;
   if (!el) return;
   el.currentTime = Math.max(0, seconds);
@@ -98,7 +107,7 @@ function seek(seconds) {
   media.currentTime = Math.max(0, seconds);
 }
 
-function setRate(r) {
+function setRate(r: number) {
   rate.value = r;
   if (videoEl.value) videoEl.value.playbackRate = r;
 }
@@ -114,7 +123,7 @@ function toggleLoop() {
 }
 
 /** `mm:ss.d`, the shape a transport readout wants. */
-function formatTime(seconds) {
+function formatTime(seconds: number) {
   if (!Number.isFinite(seconds)) return "--:--";
   const m = Math.floor(seconds / 60);
   const s = seconds - m * 60;
@@ -127,8 +136,10 @@ function formatTime(seconds) {
 // answers it off the real painted rectangle.
 const scrubbing = ref(false);
 
-function seekFromEvent(e) {
-  const track = e.currentTarget;
+function seekFromEvent(e: VnMouseEvent) {
+  // `currentTarget` is rewritten at each step of the propagation walk, so it
+  // is the `.track` div this handler is bound to — not whatever was clicked.
+  const track = e.currentTarget as VnElement | null;
   if (!track || !Number.isFinite(media.duration)) return;
   const rect = track.getBoundingClientRect();
   if (!rect.width) return;
@@ -147,7 +158,7 @@ const progress = computed(() => {
 // combination guaranteed on a clean Windows install; HEVC, AV1, VP9 and the
 // WebM family all arrive as separately installable Store packages that an
 // enterprise image may have stripped. macOS will answer differently again.
-const CODECS = [
+const CODECS: [label: string, mime: string][] = [
   ['H.264 + AAC (MP4)', 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'],
   ['HEVC / H.265 (MP4)', 'video/mp4; codecs="hev1.1.6.L93.B0"'],
   ['AV1 (MP4)', 'video/mp4; codecs="av01.0.05M.08"'],
@@ -156,7 +167,9 @@ const CODECS = [
   ['Ogg Theora', 'video/ogg; codecs="theora"'],
   ['FFV1 in MKV (a codec the probe does not know)', 'video/x-matroska; codecs="ffv1"'],
 ];
-const probe = ref([]);
+/** `canPlayType` answers `"" | "maybe" | "probably"`; `""` is rendered as
+ *  "no", which is also the class name the stylesheet colours it by. */
+const probe = ref<{ label: string; answer: string }[]>([]);
 onMounted(() => {
   // `VN_SCENARIO=media` — start looping playback with no input at all, so a
   // soak or a frame-time measurement is one process and one screen.
@@ -175,6 +188,7 @@ onMounted(() => {
     const el = videoEl.value;
     probe.value = CODECS.map(([label, type]) => ({
       label,
+      // `""` (the spec's "no") and a missing element both render as "no".
       answer: (el && el.canPlayType(type)) || "no",
     }));
     readBack(el);

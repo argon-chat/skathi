@@ -3,7 +3,7 @@
 // cannot deliver says so instead of vanishing.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness.js";
+import { createRuntime } from "./runtime-harness";
 
 describe("patchProp: on* props", () => {
   test("a known event registers its listener flag under the host's code", () => {
@@ -248,5 +248,109 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     expect(node.canPlayType("application/x-nonsense")).toBe("");
     // A <div> is not an HTMLMediaElement in a browser either.
     expect(rt.nodeOps.createElement("div").currentTime).toBe(undefined);
+  });
+});
+
+// `__vn_set_listener` sets or clears ONE BIT of the node's `listeners` u64, so
+// writing the value that is already there is a boundary crossing that buys
+// nothing — and it used to be the most repeated call in the whole protocol,
+// once per listening element per re-render that re-patched an `on*` prop.
+// `scripts/host-calls.ts` is where that showed up; these are the cases that
+// keep it fixed.
+describe("the listener flag is only written when it changes", () => {
+  test("re-patching a handler does not re-announce the bit", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("div");
+    rt.patchProp(el, "onClick", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: el.id, code: 1, on: true }]);
+
+    // A fresh inline arrow every render is the ordinary case, not a pathology:
+    // it is what `@click="() => pick(i)"` inside a `v-for` compiles to.
+    for (let i = 0; i < 10; i++) rt.patchProp(el, "onClick", () => {}, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.click).length).toBe(1);
+  });
+
+  test("dropping the last handler clears the bit exactly once", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("div");
+    rt.patchProp(el, "onClick", null, () => {});
+    rt.patchProp(el, "onClick", () => {}, null);
+    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([
+      { id: el.id, code: 1, on: true },
+      { id: el.id, code: 1, on: false },
+    ]);
+    // Nothing is armed now, so clearing again has nothing to say.
+    rt.patchProp(el, "onClick", null, null);
+    expect(rt.flagsFor(rt.EV_CODES.click).length).toBe(2);
+  });
+
+  test("a second listener for the same code rides the first one's bit", () => {
+    // `pointerdown` has no code of its own — it is derived from `mousedown` —
+    // so both names OR into one bit, and the second registration must not
+    // re-announce it.
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("div");
+    rt.patchProp(el, "onMousedown", null, () => {});
+    rt.patchProp(el, "onPointerdown", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.mousedown)).toEqual([{ id: el.id, code: 2, on: true }]);
+  });
+
+  test("each node keeps its own record", () => {
+    const rt = createRuntime();
+    const a = rt.nodeOps.createElement("div");
+    const b = rt.nodeOps.createElement("div");
+    rt.patchProp(a, "onClick", null, () => {});
+    rt.patchProp(b, "onClick", null, () => {});
+    // The record lives on the node object, not in a map keyed by id — which is
+    // what makes it safe against the host recycling an id after `__vn_remove`.
+    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([
+      { id: a.id, code: 1, on: true },
+      { id: b.id, code: 1, on: true },
+    ]);
+  });
+});
+
+// `v-model` on a text input. The `.lazy` case is the interesting one: it asks
+// to update on `change`, and `tree.rs` has no `EV_CHANGE` — the host sources no
+// such event — so binding one used to register a listener that could never
+// fire. The model never updated, and the only sign was an advisory about an
+// unknown event NAME, which reads like a typo rather than a broken directive.
+describe("v-model", () => {
+  /** What Vue hands `created`: the element, the binding, the vnode. */
+  const bind = (rt, el, modifiers, onUpdate) =>
+    rt.vModelText.created(el, { modifiers }, { props: { "onUpdate:modelValue": onUpdate } });
+
+  test("updates the model on input", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("input");
+    let model = null;
+    bind(rt, el, {}, (v) => (model = v));
+    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
+    expect(model).toBe("typed");
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test(".lazy still updates the model, and says how it differs", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("input");
+    let model = null;
+    bind(rt, el, { lazy: true }, (v) => (model = v));
+    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
+    // Before m20 this was `null`: the listener was bound to `change`, which the
+    // host never delivers, so the model stayed untouched forever.
+    expect(model).toBe("typed");
+    const advisories = rt.advisories();
+    expect(advisories.length).toBe(1);
+    expect(advisories[0]).toContain("v-model.lazy updates on every keystroke");
+    expect(advisories[0]).toContain("does not source a `change` event");
+  });
+
+  test(".number and .trim still apply", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("input");
+    let model = null;
+    bind(rt, el, { number: true, trim: true }, (v) => (model = v));
+    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "  42  ");
+    expect(model).toBe(42);
   });
 });

@@ -1,0 +1,37 @@
+{
+  // Type-checking only — nothing here emits. Bun transpiles `src/*.ts` directly
+  // (build.ts / prod.ts feed them to `Bun.build`, the test harnesses feed them
+  // to `Bun.Transpiler`), so this file exists to make `bun run typecheck` and an
+  // editor agree with what actually ships.
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // NOT "DOM". redjs is not a browser: it ships a handful of the DOM classes
+    // and none of the rest, and `src/engine.d.ts` declares exactly the ones it
+    // does. Pulling in lib.dom would assert several thousand APIs the engine
+    // does not have — and would then type `globalThis.document` as a real
+    // `Document`, which is the single thing `runtime.ts` exists to replace.
+    "lib": ["ESNext"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    // The runtime's classes assign every field in the constructor, exactly as
+    // the JS did. `false` keeps a bare `x: T` declaration ERASED instead of
+    // emitting `Object.defineProperty(this, "x", { value: undefined })` in the
+    // constructor prologue — which would run AFTER `super()` and silently
+    // clobber a field a base constructor had already set. Bun reads this key,
+    // so the bundler and tsc agree. (Fields are declared `declare x: T` anyway,
+    // which is erased under either setting; this is the second lock.)
+    "useDefineForClassFields": false,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitOverride": true,
+    // The ambient .d.ts files below are the whole ambient surface: no @types
+    // package may sneak a browser or a Node global into scope, because a global
+    // that type-checks and does not exist at runtime is exactly the bug class
+    // this conversion is meant to find.
+    "types": []
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"]
+}

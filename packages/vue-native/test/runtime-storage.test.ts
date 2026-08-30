@@ -9,7 +9,7 @@
 // path, and the inert fallback.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness.js";
+import { createRuntime } from "./runtime-harness";
 
 describe("appStorage", () => {
   test("resolves a known folder and joins a subfolder", () => {

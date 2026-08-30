@@ -2,8 +2,8 @@
 //
 // Usage: bun build.ts [app-entry.js] [dist-dir] [--watch]
 //
-//   dist/vendor.js            IIFE — @vue/runtime-core + src/runtime.js +
-//                             src/loader.js. Installs globalThis.__VN__.
+//   dist/vendor.js            IIFE — @vue/runtime-core + src/runtime.ts +
+//                             src/loader.ts. Installs globalThis.__VN__.
 //                             Rebuilt only when packages/vue-native/src/* change.
 //   dist/modules/<enc>.js     one CLASSIC SCRIPT per app source file:
 //                               __VN__.setCss("<id>", "...")      (if it has <style>)
@@ -111,9 +111,9 @@ const WATCH = argv.includes("--watch");
 const PKG_DIR = import.meta.dir; // .../packages/vue-native
 const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relative to this
 const RUNTIME_SRC_DIR = join(PKG_DIR, "src");
-const LOADER_ENTRY = join(RUNTIME_SRC_DIR, "loader.js");
+const LOADER_ENTRY = join(RUNTIME_SRC_DIR, "loader.ts");
 
-const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.js"));
+const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.ts"));
 const APP_SRC_DIR = dirname(ENTRY_ABS);
 const DIST = resolve(positional[1] ?? join(PKG_DIR, "dist"));
 const MODULES_DIR = join(DIST, "modules");
@@ -160,7 +160,7 @@ function readWindowConfig(): Record<string, unknown> | undefined {
 // so the executable cannot be the name either.
 //
 // Optional. Without it the host falls back to the app directory of the entry
-// module ("apps/hello/src/main.js" -> "hello"), which is right for every app in
+// module ("apps/hello/src/main.ts" -> "hello"), which is right for every app in
 // this repo; declaring `"name"` matters when the shipped app is called
 // something other than its folder.
 function readAppName(): string | undefined {
@@ -364,7 +364,7 @@ async function buildVendor() {
         // filter only — bun 1.4 crashes on catch-all onResolve filters.
         name: "vendor-vue-alias",
         setup(b: any) {
-          b.onResolve({ filter: /^vue$/ }, () => ({ path: join(RUNTIME_SRC_DIR, "runtime.js") }));
+          b.onResolve({ filter: /^vue$/ }, () => ({ path: join(RUNTIME_SRC_DIR, "runtime.ts") }));
         },
       },
     ],
@@ -511,7 +511,7 @@ const vuePlugin = {
 
 const REQUIRE_RE = /\brequire\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
 
-/** Same candidate list as loader.js `resolveId` — keep the two in lockstep. */
+/** Same candidate list as loader.ts `resolveId` — keep the two in lockstep. */
 const CANDIDATE_EXTS = ["", ".js", ".ts", ".mjs", ".vue", "/index.js", "/index.ts", "/index.vue"];
 
 function normalizeId(path: string): string {

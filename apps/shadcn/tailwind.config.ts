@@ -5,15 +5,33 @@
 // as upstream writes them. vn-css resolves both at cascade time (compat round 6
 // G1), which is what makes the theme swappable at runtime.
 //
-// The one addition is `corePlugins`, copied from apps/hello/tailwind.config.js:
+// The one addition is `corePlugins`, copied from apps/hello/tailwind.config.ts:
 // preflight and the legacy *Opacity plugins are off — see that file for why.
+//
+// TypeScript, and ESM where upstream ships CommonJS. Tailwind's `loadConfig`
+// does `require(path)` and then takes `config.default ?? config`; bun's
+// `require` transpiles a `.ts` file and hands back its namespace, so
+// `export default` is the branch that gets read. `__dirname` is defined in bun's
+// ESM too, and anchoring the content glob to THIS file rather than to the
+// builder's cwd is what makes it correct from either builder (dev runs from
+// packages/vue-native, prod from wherever it is invoked).
+//
+// This file is NOT in tsconfig.json's program — see the note at the foot of it.
+//
+// ONE THING TO KNOW BEFORE EDITING src/: the `content` glob below feeds
+// Tailwind's extractor, and the extractor reads every file it matches as a bag
+// of words — COMMENTS AND ALL. A sentence in a `.ts` or `.vue` file that
+// happens to contain a bare utility name generates that utility's rule, which
+// is how a prose edit ends up changing the size of the stylesheet. Ordinary
+// Tailwind behaviour rather than anything of ours, but this app's byte count is
+// a measurement, so it is worth knowing which files are being read.
 
-const { join } = require("node:path");
-const animate = require("tailwindcss-animate");
+import { join } from "node:path";
+import animate from "tailwindcss-animate";
 
-module.exports = {
+export default {
   darkMode: ["class"],
-  content: [join(__dirname, "src/**/*.{vue,js,ts}")],
+  content: [join(__dirname, "src/**/*.{vue,ts}")],
 
   corePlugins: {
     preflight: false,

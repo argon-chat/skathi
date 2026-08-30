@@ -2,7 +2,7 @@
 //
 // Usage: bun prod.ts [app-entry.js] [out-file]
 //
-//   dist/app.prod.js   IIFE — @vue/runtime-core + src/runtime.js + every app
+//   dist/app.prod.js   IIFE — @vue/runtime-core + src/runtime.ts + every app
 //                      module + every SFC <style>, minified, __DEV__ = false.
 //                      The Rust host `include_str!`s this file (vn-app with
 //                      --features prod) so the shipped exe needs no dist/.
@@ -13,12 +13,12 @@
 //   ------------------------------    ---------------------------------------
 //   vendor.js + one script per file   ONE iife (nothing to hot-swap)
 //   __VN__ registry / require()       Bun bundles the graph; "vue" and
-//                                     "vue-native" are ALIASED to src/runtime.js
+//                                     "vue-native" are ALIASED to src/runtime.ts
 //   inlineTemplate: false (rerender   inlineTemplate: true — no HMR means the
 //     needs a separate _sfc_main.     render fn may live inside setup(), which
 //     render to swap)                 is faster and smaller
 //   __VN__.setCss(id, css)            (globalThis.__VN_CSS__ ??= []).push(css)
-//                                     emitted ahead of the bundle; runtime.js
+//                                     emitted ahead of the bundle; runtime.ts
 //                                     createApp installs the join on mount
 //   __DEV__ true, HMR epilogue        __DEV__ false, no createRecord/__hmrId
 //
@@ -54,9 +54,9 @@ const positional = argv.filter((a) => !a.startsWith("--"));
 
 const PKG_DIR = import.meta.dir; // .../packages/vue-native
 const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relative to this
-const RUNTIME_ENTRY = join(PKG_DIR, "src", "runtime.js");
+const RUNTIME_ENTRY = join(PKG_DIR, "src", "runtime.ts");
 
-const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.js"));
+const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.ts"));
 const APP_SRC_DIR = dirname(ENTRY_ABS);
 const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
 

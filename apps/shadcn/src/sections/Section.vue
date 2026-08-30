@@ -1,7 +1,13 @@
-<script setup>
+<script setup lang="ts">
 // Harness chrome, not a shadcn component: a labelled panel + a per-row caption
 // so a screenshot says which component it is showing.
-defineProps({ title: String, note: String });
+//
+// BOTH props stay OPTIONAL. The runtime declaration this replaces was
+// `{ title: String, note: String }` — neither `required`, so a missing `title`
+// was legal and rendered an empty heading. Spelling it `title: string` here
+// would compile to `required: true` and start warning, which is a behaviour
+// change wearing a type annotation. Every call site passes one anyway.
+defineProps<{ title?: string; note?: string }>();
 </script>
 
 <template>

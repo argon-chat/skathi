@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { ref } from "vue";
 
 // One toggle drives the `transition: --shading` demo. Class-driven on purpose:

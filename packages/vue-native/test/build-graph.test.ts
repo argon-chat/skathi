@@ -4,7 +4,7 @@
 //   bun test           (from packages/vue-native)
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +27,7 @@ afterAll(() => {
 function build(fixture) {
   const dist = mkdtempSync(join(tmpdir(), "vn-build-"));
   tmpDirs.push(dist);
-  const entry = join(FIXTURES, fixture, "src/main.js");
+  const entry = join(FIXTURES, fixture, "src/main.ts");
   const proc = Bun.spawnSync(["bun", "build.ts", entry, dist], { cwd: PKG_DIR });
   if (proc.exitCode !== 0) {
     throw new Error(
@@ -50,11 +50,11 @@ const id = (fixture, rel) =>
 
 describe("manifest", () => {
   const out = build("graph-app");
-  const ENTRY = id("graph-app", "main.js");
+  const ENTRY = id("graph-app", "main.ts");
   const APP = id("graph-app", "App.vue");
   const COUNTER = id("graph-app", "components/Counter.vue");
-  const UTIL = id("graph-app", "util.js");
-  const LIB = id("graph-app", "lib/index.js");
+  const UTIL = id("graph-app", "util.ts");
+  const LIB = id("graph-app", "lib/index.ts");
 
   test("keeps the fields the Rust host reads", () => {
     // crates/vn-app/src/main.rs read_manifest(): vendorRev, entry, modules
@@ -72,7 +72,7 @@ describe("manifest", () => {
     expect(out.manifest.deps[ENTRY]).toEqual([APP]);
     expect(out.manifest.deps[APP].slice().sort()).toEqual([COUNTER, UTIL].sort());
     expect(out.manifest.deps[COUNTER]).toEqual([UTIL]);
-    expect(out.manifest.deps[UTIL]).toEqual([LIB]); // "./lib" -> "lib/index.js"
+    expect(out.manifest.deps[UTIL]).toEqual([LIB]); // "./lib" -> "lib/index.ts"
     expect(out.manifest.deps[LIB]).toEqual([]);
   });
 
@@ -91,11 +91,55 @@ describe("manifest", () => {
   });
 });
 
+// This repo writes no JavaScript any more — the fixtures above are `.ts`, like
+// everything else. An APP is not bound by that rule: `SOURCE_EXT` and
+// `CANDIDATE_EXTS` both still list `.js`, `vn-test` resolves `apps/<x>/src/
+// main.js` by default, and someone porting a Vite app will hand us a tree full
+// of it. Converting the fixtures therefore took the only coverage that path
+// had, so it is rebuilt here — as a temporary tree rather than a checked-in
+// one, which is what keeps "no `.js` in this repository" literally true.
+describe("a JavaScript app still builds", () => {
+  const dir = mkdtempSync(join(FIXTURES, "js-app-"));
+  tmpDirs.push(dir);
+  const rel = "packages/vue-native/test/fixtures/" + dir.split(/[\\/]/).pop();
+
+  test("resolves an extensionless import to a .js file and graphs it", () => {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    // No `.vue` and no type annotations: plain ES2015, exactly what a ported
+    // Vite entry looks like before anyone touches it.
+    writeFileSync(
+      join(dir, "src/util.js"),
+      'export const greet = (who) => "hello " + who;\n',
+    );
+    writeFileSync(
+      join(dir, "src/main.js"),
+      'import { createApp, h } from "vue-native";\n' +
+        'import { greet } from "./util";\n' +
+        'createApp({ render: () => h("div", null, greet("js")) }).mount();\n',
+    );
+
+    const dist = mkdtempSync(join(tmpdir(), "vn-build-js-"));
+    tmpDirs.push(dist);
+    const proc = Bun.spawnSync(["bun", "build.ts", join(dir, "src/main.js"), dist], {
+      cwd: PKG_DIR,
+    });
+    expect(proc.stderr.toString()).not.toContain("resolves to no built module");
+    expect(proc.exitCode).toBe(0);
+
+    const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8"));
+    expect(manifest.entry).toBe(`${rel}/src/main.js`);
+    expect(manifest.modules).toContain(`${rel}/src/util.js`);
+    // `./util` -> `util.js`: the `.js` candidate is still ahead of `.ts` in
+    // `CANDIDATE_EXTS`, and both the builder and `loader.ts` must agree on it.
+    expect(manifest.deps[`${rel}/src/main.js`]).toEqual([`${rel}/src/util.js`]);
+  });
+});
+
 describe("module scripts", () => {
   const out = build("graph-app");
   const APP = id("graph-app", "App.vue");
   const COUNTER = id("graph-app", "components/Counter.vue");
-  const UTIL = id("graph-app", "util.js");
+  const UTIL = id("graph-app", "util.ts");
 
   test("carry the graph next to the factory, guarded for old vendors", () => {
     const script = out.script(APP);
@@ -164,7 +208,7 @@ describe("style-only edits", () => {
 
 describe("css entry modules", () => {
   const CSS_ID = id("css-app", "theme.css");
-  const MAIN = id("css-app", "main.js");
+  const MAIN = id("css-app", "main.ts");
 
   test("the stylesheet becomes a css-only synthetic module", () => {
     const b = build("css-app");
@@ -193,7 +237,7 @@ describe("css entry modules", () => {
     // map a component `<style>` uses.
     const out = join(mkdtempSync(join(tmpdir(), "vn-prod-")), "app.prod.js");
     tmpDirs.push(dirname(out));
-    const entry = join(FIXTURES, "css-app/src/main.js");
+    const entry = join(FIXTURES, "css-app/src/main.ts");
     const proc = Bun.spawnSync(["bun", "prod.ts", entry, out], { cwd: PKG_DIR });
     if (proc.exitCode !== 0) {
       throw new Error(`prod.ts exited ${proc.exitCode}
