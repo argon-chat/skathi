@@ -8,7 +8,7 @@
 // host without the prelude degrades loudly instead of silently.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness.js";
+import { createRuntime } from "./runtime-harness";
 
 afterEach(() => {
   delete globalThis.__VN_WINDOW__;

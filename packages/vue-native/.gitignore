@@ -7,3 +7,8 @@ dist*/
 # Single-file production bundle (prod.ts default output lives under dist/, but
 # an explicit out-file next to the builder should not be committed either).
 app.prod.js
+
+# `build-graph.test.ts` writes a throwaway JavaScript app here to prove the
+# builder still accepts one; it is removed in afterAll, but a crashed run must
+# not leave a stray `.js` tree looking like a checked-in one.
+test/fixtures/js-app-*/

@@ -5,7 +5,7 @@
 // runtime.ts into vendor.js; what the engine actually evaluates is a CLASSIC
 // SCRIPT that touches four ambient names: `globalThis`, `console`,
 // `__vn_set_stylesheet`, plus the runtime namespace it imports. We transpile it
-// to plain JS (see ./ts-source.js), strip the imports, and evaluate the rest
+// to plain JS (see ./ts-source.ts), strip the imports, and evaluate the rest
 // with those names bound as PARAMETERS — inside a function body a parameter
 // shadows the real global, so every createLoader() call gets its own private
 // world (own __VN__, own registry, own __VUE_HMR_RUNTIME__) and tests cannot
@@ -13,7 +13,7 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readTsSource } from "./ts-source.js";
+import { readTsSource } from "./ts-source";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const LOADER_PATH = join(HERE, "../src/loader.ts");

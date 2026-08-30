@@ -7,7 +7,7 @@
 // BUBBLING of what comes back out.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness.js";
+import { createRuntime } from "./runtime-harness";
 
 function tree(rt) {
   const root = rt.nodeOps.createElement("root");

@@ -24,8 +24,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { EV as HARNESS_EV, OP as HARNESS_OP } from "./livekit-harness.js";
-import { createRuntime } from "./runtime-harness.js";
+import { EV as HARNESS_EV, OP as HARNESS_OP } from "./livekit-harness";
+import { createRuntime } from "./runtime-harness";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "../../..");

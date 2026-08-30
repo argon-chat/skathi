@@ -15,7 +15,7 @@ import {
   defineComponent,
   definePlain,
   redefineCssOnly,
-} from "./loader-harness.js";
+} from "./loader-harness";
 
 const changed = (id, kind) => [{ id, kind: kind || "reload" }];
 

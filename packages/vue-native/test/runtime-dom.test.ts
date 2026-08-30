@@ -7,7 +7,7 @@
 // wrong answer.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness.js";
+import { createRuntime } from "./runtime-harness";
 
 /** A small mounted-ish tree: root > section > (button, span). */
 function tree(rt) {

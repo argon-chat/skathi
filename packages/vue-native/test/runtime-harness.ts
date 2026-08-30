@@ -1,10 +1,10 @@
 // Runs src/runtime.ts in an isolated fake host so the renderer's prop/event
 // plumbing can be tested without gpui, JavaScriptCore or a window.
 //
-// Same trick as loader-harness.js: runtime.ts is authored as an ES module for
+// Same trick as loader-harness.ts: runtime.ts is authored as an ES module for
 // the bundler's benefit, but its body only touches ambient names — the `__vn_*`
 // host functions and `console`. The source is transpiled to plain JS (see
-// ./ts-source.js — bun's own emitter, the one that produces dist/vendor.js),
+// ./ts-source.ts — bun's own emitter, the one that produces dist/vendor.js),
 // the import/export lines are stripped, and every ambient name is bound as a
 // PARAMETER, so each createRuntime() call gets its own private world (own
 // intern table, own handler registry, own `warned` set, which is what makes
@@ -28,7 +28,7 @@ import {
   useTransitionState,
   version,
 } from "@vue/runtime-core";
-import { readTsSource } from "./ts-source.js";
+import { readTsSource } from "./ts-source";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");

@@ -1,7 +1,7 @@
-<script setup>
+<script setup lang="ts">
 import { ref } from "vue";
 import Counter from "./components/Counter.vue";
-import { greet } from "./util.js";
+import { greet } from "./util";
 
 const who = ref("fixture");
 </script>

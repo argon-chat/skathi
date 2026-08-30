@@ -3,7 +3,7 @@
 // cannot deliver says so instead of vanishing.
 
 import { describe, expect, test } from "bun:test";
-import { createRuntime } from "./runtime-harness.js";
+import { createRuntime } from "./runtime-harness";
 
 describe("patchProp: on* props", () => {
   test("a known event registers its listener flag under the host's code", () => {
