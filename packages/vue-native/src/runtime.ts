@@ -124,6 +124,15 @@ interface MirrorNodeBase {
   readonly isConnected: boolean;
   dispatchEvent(ev: VnEvent): boolean;
   /**
+   * The event codes whose `__vn_set_listener` bit is currently ON in the host,
+   * as far as this side knows. Absent = none. See `syncListenerFlag`.
+   *
+   * It lives on the NODE rather than in a side map keyed by id, and that is
+   * load-bearing: `__vn_remove` recycles ids, so a map would answer for the
+   * previous occupant of a slot. A fresh node is a fresh object with no set.
+   */
+  _listenerOn?: Set<VnEventCode>;
+  /**
    * Vue writes symbol-keyed bookkeeping straight onto host nodes (the vModel
    * assign fn, the transition hooks). In a browser those land on a real
    * element; here they land here — and `__v_skip` on the prototype is what
@@ -810,6 +819,29 @@ function syncListenerFlag(id: VnNodeId, name: string): void {
     on = NAMES_BY_CODE[code].some((n) =>
       [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)),
     );
+  }
+  // …and only tell the host when the ANSWER CHANGED.
+  //
+  // `set_listener` is idempotent — it sets or clears one bit of a u64 — so a
+  // write of the value already there is a boundary crossing that buys nothing.
+  // It was the single most repeated call in the whole protocol: every re-render
+  // that re-patches an `on*` prop (a fresh inline arrow, or any full-props
+  // diff) called it once per listening element, so a frame that changed ONE
+  // TEXT NODE in a hundred-row list crossed the boundary a hundred times to
+  // re-announce a `click` bit that was already set. See
+  // `scripts/host-calls.ts`, which is how that was found.
+  const node = nodesById.get(id);
+  if (node) {
+    const known = node._listenerOn;
+    if (on) {
+      if (known?.has(code)) return;
+      (node._listenerOn ??= new Set()).add(code);
+    } else {
+      // Nothing recorded means the bit was never set, and the host starts every
+      // node at zero — so there is nothing to clear.
+      if (!known?.has(code)) return;
+      known.delete(code);
+    }
   }
   __vn_set_listener(id, code, on);
 }

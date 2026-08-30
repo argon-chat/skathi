@@ -250,3 +250,62 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     expect(rt.nodeOps.createElement("div").currentTime).toBe(undefined);
   });
 });
+
+// `__vn_set_listener` sets or clears ONE BIT of the node's `listeners` u64, so
+// writing the value that is already there is a boundary crossing that buys
+// nothing — and it used to be the most repeated call in the whole protocol,
+// once per listening element per re-render that re-patched an `on*` prop.
+// `scripts/host-calls.ts` is where that showed up; these are the cases that
+// keep it fixed.
+describe("the listener flag is only written when it changes", () => {
+  test("re-patching a handler does not re-announce the bit", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("div");
+    rt.patchProp(el, "onClick", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: el.id, code: 1, on: true }]);
+
+    // A fresh inline arrow every render is the ordinary case, not a pathology:
+    // it is what `@click="() => pick(i)"` inside a `v-for` compiles to.
+    for (let i = 0; i < 10; i++) rt.patchProp(el, "onClick", () => {}, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.click).length).toBe(1);
+  });
+
+  test("dropping the last handler clears the bit exactly once", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("div");
+    rt.patchProp(el, "onClick", null, () => {});
+    rt.patchProp(el, "onClick", () => {}, null);
+    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([
+      { id: el.id, code: 1, on: true },
+      { id: el.id, code: 1, on: false },
+    ]);
+    // Nothing is armed now, so clearing again has nothing to say.
+    rt.patchProp(el, "onClick", null, null);
+    expect(rt.flagsFor(rt.EV_CODES.click).length).toBe(2);
+  });
+
+  test("a second listener for the same code rides the first one's bit", () => {
+    // `pointerdown` has no code of its own — it is derived from `mousedown` —
+    // so both names OR into one bit, and the second registration must not
+    // re-announce it.
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("div");
+    rt.patchProp(el, "onMousedown", null, () => {});
+    rt.patchProp(el, "onPointerdown", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.mousedown)).toEqual([{ id: el.id, code: 2, on: true }]);
+  });
+
+  test("each node keeps its own record", () => {
+    const rt = createRuntime();
+    const a = rt.nodeOps.createElement("div");
+    const b = rt.nodeOps.createElement("div");
+    rt.patchProp(a, "onClick", null, () => {});
+    rt.patchProp(b, "onClick", null, () => {});
+    // The record lives on the node object, not in a map keyed by id — which is
+    // what makes it safe against the host recycling an id after `__vn_remove`.
+    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([
+      { id: a.id, code: 1, on: true },
+      { id: b.id, code: 1, on: true },
+    ]);
+  });
+});
