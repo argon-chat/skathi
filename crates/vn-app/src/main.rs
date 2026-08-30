@@ -46,30 +46,22 @@ use prod as boot_mode;
 /// would put the bundle's Vue code first otherwise). Identical in both modes:
 /// the dev/prod split is in the *bundle's* `define` block (build.ts vs
 /// prod.ts), not here.
-const PRELUDE_JS: &str = r#"
-    globalThis.__VUE_OPTIONS_API__ = true;
-    globalThis.__VUE_PROD_DEVTOOLS__ = false;
-    globalThis.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__ = false;
-    globalThis.__VN_CSS__ = [];
-    // Browser-compat: redjs ships no `history`; vue-router's dev build touches
-    // it at startup even with memory history (its isBrowser heuristic sees our
-    // window/document). Inert stub, like `location`. TODO: move into redjs
-    // webapi as a proper native class.
-    globalThis.history = {
-        state: null, length: 1, scrollRestoration: "auto",
-        pushState() {}, replaceState() {}, go() {}, back() {}, forward() {},
-    };
-    // (The milestone-1 500ms "tick" status heartbeat used to live here. Every
-    // update was a shell notify, i.e. a FULL element-tree rebuild — 40-100ms
-    // twice a second on a component-heavy app. Status now only moves on real
-    // events.)
-"#;
+///
+/// Both preludes are AUTHORED IN TYPESCRIPT — `prelude.ts` and
+/// `window.prelude.ts` beside this file — and the `.js` these two consts read
+/// is a checked-in artifact of the generator named in its header. Checked in
+/// because `cargo build` must not need a JS toolchain: an `include_str!` of a
+/// missing file is a compile error in a Rust crate, which is the worst possible
+/// place to discover bun is not installed. `packages/vue-native/test
+/// /prelude-generated.test.ts` is what keeps the two halves in step.
+const PRELUDE_JS: &str = include_str!("prelude.js");
 
-/// The windowing surface's JS half (docs/WINDOWING.md tiers 1 & 2) — its own
-/// file because it is real JavaScript, not a four-line stub. Evaluated right
-/// after [`PRELUDE_JS`] and before the app bundle, so `document.title`,
-/// `screen`, `matchMedia` and `navigator.windowControlsOverlay` are already
-/// their real selves when the first component's `<script setup>` runs.
+/// The windowing surface's JS half (docs/WINDOWING.md tiers 1 & 2) — the big
+/// one, ~560 lines of real API surface rather than a handful of flags.
+/// Evaluated right after [`PRELUDE_JS`] and before the app bundle, so
+/// `document.title`, `screen`, `matchMedia` and
+/// `navigator.windowControlsOverlay` are already their real selves when the
+/// first component's `<script setup>` runs.
 const WINDOW_PRELUDE_JS: &str = include_str!("window.prelude.js");
 
 thread_local! {
