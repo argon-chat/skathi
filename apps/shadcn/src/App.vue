@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // shadcn-vue compatibility trial — the demo page.
 //
 // Only the harness (this file, Theme.vue, sections/Section.vue, the tier
@@ -20,8 +20,16 @@ import TierThree from "./sections/TierThree.vue";
 //
 // "system" declares neither class, so the `@media (prefers-color-scheme: dark)`
 // block in Theme.vue decides — the OS path.
-const MODES = ["system", "light", "dark"];
-const mode = ref("system");
+//
+// `as const` rather than `string[]`: it makes MODES the SOURCE of the mode
+// type, so the ref, the class binding and the `theme: {{ mode }}` label can
+// only ever hold one of these three — and `indexOf` below can only be handed
+// one of them, which is what makes the cycle total. A stray `mode.value = "Dark"`
+// stops compiling instead of quietly rendering an unstyled page.
+const MODES = ["system", "light", "dark"] as const;
+type Mode = (typeof MODES)[number];
+
+const mode = ref<Mode>("system");
 const cycle = () => {
   mode.value = MODES[(MODES.indexOf(mode.value) + 1) % MODES.length];
 };

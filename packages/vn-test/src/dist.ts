@@ -33,10 +33,18 @@ export const WORK_DIR = join(REPO, "packages/vn-test/.vn-test");
 
 const SOURCE_EXT = /\.(vue|js|ts|mjs|css|json)$/;
 
-/** `hello` -> `apps/hello/src/main.js`; an explicit path is taken verbatim. */
+/**
+ * `hello` -> `apps/hello/src/main.ts`; an explicit path is taken verbatim.
+ *
+ * `.ts` by NAME LOOKUP only. The builder still resolves and bundles `.js`
+ * quite deliberately — `SOURCE_EXT` above lists it, and anyone porting a Vite
+ * app arrives with a tree full of it — so an explicit path in either spelling
+ * is still handed straight through. It is only `apps/` that has none left.
+ */
 export function resolveEntry(app: string): string {
-  if (app.includes("/") || app.includes("\\") || app.endsWith(".js")) return resolve(REPO, app);
-  const entry = join(REPO, "apps", app, "src", "main.js");
+  const explicit = app.includes("/") || app.includes("\\") || app.endsWith(".ts") || app.endsWith(".js");
+  if (explicit) return resolve(REPO, app);
+  const entry = join(REPO, "apps", app, "src", "main.ts");
   if (!existsSync(entry)) {
     const available = existsSync(join(REPO, "apps"))
       ? readdirSync(join(REPO, "apps")).join(", ")

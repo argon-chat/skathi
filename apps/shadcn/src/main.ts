@@ -9,7 +9,7 @@
 // (closest/matches/querySelector, getBoundingClientRect, getComputedStyle,
 // MutationObserver, DocumentFragment, the pointer events) is the RUNTIME'S now,
 // backed by the real cascade matcher and gpui's real layout bounds — see
-// packages/vue-native/src/runtime.js.
+// packages/vue-native/src/runtime.ts.
 
 import { createApp } from "vue-native";
 

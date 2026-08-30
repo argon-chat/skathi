@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // TIER 2 — form + state components. Every one of these is a reka-ui primitive
 // with real state, so this is where the DOM surface starts to matter:
 // useFormControl(`.closest("form")`), Presence, RovingFocus, Collection.

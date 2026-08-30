@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // TIER 3 — portal + floating components. These are the ones that reach deepest
 // into the DOM: Teleport targets, focus traps, dismissable layers, and
 // @floating-ui positioning driven by getBoundingClientRect.
