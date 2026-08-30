@@ -19,6 +19,13 @@
 //! own dist slot, and a client that finds a stale file gets a connection error
 //! rather than talking to somebody else's window.
 //!
+//! The same port also answers **HTTP/1.1** (`POST /` with the request object as
+//! the body) — one command per connection, same token, same replies. That is
+//! what makes the wire reachable from JS: `fetch()` is a first-class,
+//! off-thread, promise-shaped client in this runtime, and a raw TCP socket is
+//! not. It is what the devtools UI app (`apps/devtools`, docs/DEVTOOLS-UI.md)
+//! is built on, and it costs one request-line sniff — see [`serve`].
+//!
 //! The whole module is compiled out under `--features prod`.
 
 mod screenshot;
@@ -58,6 +65,13 @@ static TOKEN: Mutex<String> = Mutex::new(String::new());
 /// cannot open a devtools port must still run the app.
 pub fn start() {
     vn_tree::log::enable();
+    // Every sheet this host compiles keeps its declarations as TEXT, so the
+    // `rules` command can show a rule the way its author wrote it. Called
+    // unconditionally in a dev build rather than on demand: the inspector
+    // attaches to hosts that are ALREADY RUNNING, and "restart your app to see
+    // where that value came from" is not a devtools feature. A prod build never
+    // reaches this line, so it never allocates one of those strings.
+    vn_css::set_capture_rule_text(true);
     let listener = match TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))) {
         Ok(l) => l,
         Err(e) => {
@@ -154,10 +168,100 @@ vn_runtime::host_fn!(fn vn_devtools_emit(g, args) {
     vn_runtime::redjs::api::Value::undefined().0
 });
 
-/// Registers the two devtools host fns. Call before the app bundle boots.
+// `__vn_devtools_targets()` — which dev hosts are reachable right now, i.e.
+// the inspector's target list.
+//
+// DISCOVERY ONLY: it reads the `devtools.json` handshakes on disk and probes
+// each port, so a UI can offer "attach to…" without being told where to look.
+// The protocol itself is not here — the inspector talks to the target with
+// `fetch()` over the HTTP framing (see `serve`), which is the same wire, the
+// same token and the same one-command-per-frame execution `ctl.ts` gets.
+//
+// It hands the caller each target's TOKEN, which is the whole point (a client
+// cannot speak without one) and is also why the whole thing is dev-only: in a
+// dev build the JS already has `eval`-level trust over its own process.
+vn_runtime::host_fn!(fn vn_devtools_targets(_g, _args) {
+    let payload = targets_json();
+    JsRuntime::with(|rt| rt.ctx().string(&payload).0)
+});
+
+/// One handshake file, parsed and probed.
+fn read_target(dir: &std::path::Path) -> Option<Json> {
+    let text = std::fs::read_to_string(dir.join("devtools.json")).ok()?;
+    let doc = json::parse(&text)?;
+    let port = doc.get("port").and_then(Json::as_f64)? as u16;
+    let token = doc.get("token").and_then(Json::as_str)?.to_string();
+    let pid = doc.get("pid").and_then(Json::as_f64).unwrap_or(0.0);
+    // "Alive" is answered by the port, not by the pid: a stale handshake from a
+    // host that exited is exactly what this has to filter out, and a refused
+    // connect on loopback is instant.
+    let alive = TcpStream::connect_timeout(
+        &SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+        std::time::Duration::from_millis(150),
+    )
+    .is_ok();
+    Some(Json::obj(vec![
+        ("slot", Json::s(dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().to_string()))),
+        ("dir", Json::s(dir.display().to_string())),
+        ("port", Json::n(f64::from(port))),
+        ("pid", Json::n(pid)),
+        ("token", Json::s(token)),
+        ("alive", Json::Bool(alive)),
+        ("self", Json::Bool(pid as u32 == std::process::id())),
+    ]))
+}
+
+/// The dist slots to look in: everything beside our own dist (that is where
+/// `build.ts <entry> <dist>` puts a parallel app), the e2e harness's slot pool,
+/// and whatever `VN_DEVTOOLS_TARGET` names explicitly.
+fn scan_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    let own = crate::dev::dist("devtools.json");
+    if let Some(parent) = own.parent().and_then(|d| d.parent()) {
+        roots.push(parent.to_path_buf());
+        // …/packages/vue-native -> …/packages/vn-test/.vn-test/slots
+        if let Some(packages) = parent.parent() {
+            roots.push(packages.join("vn-test").join(".vn-test").join("slots"));
+        }
+    }
+    roots
+}
+
+fn targets_json() -> String {
+    let preferred = std::env::var("VN_DEVTOOLS_TARGET").unwrap_or_default();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if !preferred.is_empty() {
+        dirs.push(std::path::PathBuf::from(&preferred));
+    }
+    for root in scan_roots() {
+        let Ok(entries) = std::fs::read_dir(&root) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.join("devtools.json").is_file() && !dirs.contains(&path) {
+                dirs.push(path);
+            }
+        }
+    }
+    let targets: Vec<Json> = dirs.iter().filter_map(|d| read_target(d)).collect();
+    Json::obj(vec![
+        ("preferred", if preferred.is_empty() { Json::Null } else { Json::s(preferred) }),
+        ("self", Json::obj(vec![
+            ("pid", Json::n(std::process::id() as f64)),
+            ("dir", Json::s(crate::dev::dist("").display().to_string())),
+        ])),
+        ("targets", Json::arr(targets)),
+    ])
+    .to_json()
+}
+
+/// Registers the devtools host fns. Call before the app bundle boots.
 pub fn install(rt: &JsRuntime) {
     rt.register("__vn_devtools_console", 2, vn_devtools_console as *const _);
     rt.register("__vn_devtools_emit", 1, vn_devtools_emit as *const _);
+    // The inspector app's only host dependency (docs/DEVTOOLS-UI.md §3): the
+    // list of attachable instances. Registered in every dev host — the app that
+    // never calls it never notices.
+    rt.register("__vn_devtools_targets", 0, vn_devtools_targets as *const _);
     if let Err(e) = rt.eval(CONSOLE_TEE_JS, "vn://devtools-console.js") {
         eprintln!("[devtools] console tee failed: {}\n{}", e.header, e.stack);
     }
@@ -197,37 +301,175 @@ fn accept_loop(listener: TcpListener) {
     }
 }
 
-/// One connection: newline-delimited JSON in, newline-delimited JSON out. A
-/// client may pipeline several commands down one socket; each still costs one
-/// frame, in order.
+/// One connection, in whichever of the two framings the client opened with.
+///
+/// * **newline-delimited JSON** — the original wire (`ctl.ts`, `mcp.ts`,
+///   `vn-test`). A client may pipeline several commands down one socket; each
+///   still costs one frame, in order.
+/// * **HTTP/1.1** — one `POST /` per connection, the request object as the
+///   body. Same token, same command, same reply object, `Connection: close`
+///   (which is also all redjs' own `fetch` client ever asks for).
+///
+/// The two are told apart by the first line and nothing else: a JSON request
+/// starts with `{`, an HTTP request line ends with ` HTTP/1.x`. Neither can be
+/// mistaken for the other, so no probing, no magic byte, no second port.
 fn serve(stream: TcpStream) {
     let Ok(write_half) = stream.try_clone() else { return };
     let mut out = write_half;
-    let reader = BufReader::new(stream);
-    for line in reader.lines() {
-        let Ok(line) = line else { return };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let response = match json::parse(&line) {
-            None => err("request is not valid JSON"),
-            Some(req) => {
-                let ok_token = req
-                    .get("token")
-                    .and_then(Json::as_str)
-                    .is_some_and(|t| t == TOKEN.lock().unwrap().as_str());
-                if !ok_token {
-                    err("bad or missing token — read it from <dist>/devtools.json")
-                } else {
-                    submit(req)
-                }
-            }
-        };
-        if out.write_all(response.as_bytes()).is_err() || out.write_all(b"\n").is_err() {
-            return;
-        }
-        let _ = out.flush();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+        return;
     }
+    if http_request_line(&line).is_some() {
+        serve_http(&line, &mut reader, &mut out);
+        return;
+    }
+    loop {
+        if !line.trim().is_empty() {
+            let response = handle_request(&line);
+            if out.write_all(response.as_bytes()).is_err() || out.write_all(b"\n").is_err() {
+                return;
+            }
+            let _ = out.flush();
+        }
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+    }
+}
+
+/// One request line of JSON → one reply line of JSON. The token check lives
+/// here so both framings are guarded by exactly the same code.
+fn handle_request(line: &str) -> String {
+    match json::parse(line) {
+        None => err("request is not valid JSON"),
+        Some(req) => {
+            let ok_token = req
+                .get("token")
+                .and_then(Json::as_str)
+                .is_some_and(|t| t == TOKEN.lock().unwrap().as_str());
+            if !ok_token {
+                err("bad or missing token — read it from <dist>/devtools.json")
+            } else {
+                submit(req)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP framing
+// ---------------------------------------------------------------------------
+
+/// Bodies larger than this are refused before anything is read: the only client
+/// is a devtools UI sending a command object, and an unbounded read from a
+/// socket is how a listener thread becomes a memory leak.
+const MAX_HTTP_BODY: usize = 4 << 20;
+
+/// `POST / HTTP/1.1` → `("POST", "/")`. `None` for anything that is not an
+/// HTTP request line, which is how [`serve`] recognises the other framing.
+fn http_request_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim_end();
+    let rest = line.strip_suffix(" HTTP/1.1").or_else(|| line.strip_suffix(" HTTP/1.0"))?;
+    let (method, target) = rest.split_once(' ')?;
+    if !method.chars().all(|c| c.is_ascii_uppercase()) || method.is_empty() {
+        return None;
+    }
+    Some((method.to_string(), target.to_string()))
+}
+
+fn serve_http(request_line: &str, reader: &mut BufReader<TcpStream>, out: &mut TcpStream) {
+    let Some((method, target)) = http_request_line(request_line) else { return };
+    // Headers. Only `Content-Length` is load-bearing: `Transfer-Encoding:
+    // chunked` is refused by name rather than mis-framed silently — no client
+    // this exists for sends it (redjs' fetch always sets a Content-Length).
+    let mut length: Option<usize> = None;
+    let mut chunked = false;
+    // Bounded, so a client that never sends the blank line cannot keep this
+    // thread reading forever. 200 is far past what any real client sends.
+    for _ in 0..200 {
+        let mut header = String::new();
+        match reader.read_line(&mut header) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        let Some((name, value)) = header.split_once(':') else { continue };
+        let (name, value) = (name.trim().to_ascii_lowercase(), value.trim());
+        if name == "content-length" {
+            length = value.parse::<usize>().ok();
+        } else if name == "transfer-encoding" && value.eq_ignore_ascii_case("chunked") {
+            chunked = true;
+        }
+    }
+    let mut reply = |status: &str, body: String| http_reply(out, status, &body);
+    match method.as_str() {
+        // A browser-hosted client (the same UI served from a static file, or a
+        // future one) sends this before every POST. Answering it is four lines
+        // and is the difference between "reachable from a browser" and not.
+        "OPTIONS" => reply("204 No Content", String::new()),
+        "POST" => {
+            if chunked {
+                return reply(
+                    "411 Length Required",
+                    err("chunked request bodies are not read — send a Content-Length"),
+                );
+            }
+            let Some(n) = length else {
+                return reply("411 Length Required", err("POST needs a Content-Length"));
+            };
+            if n > MAX_HTTP_BODY {
+                return reply(
+                    "413 Payload Too Large",
+                    err(format!("request body is {n} bytes — the cap is {MAX_HTTP_BODY}")),
+                );
+            }
+            let mut body = vec![0u8; n];
+            if std::io::Read::read_exact(reader, &mut body).is_err() {
+                return reply("400 Bad Request", err("the request body arrived short"));
+            }
+            match String::from_utf8(body) {
+                Err(_) => reply("400 Bad Request", err("the request body is not UTF-8")),
+                Ok(text) => reply("200 OK", handle_request(&text)),
+            }
+        }
+        _ => reply(
+            "405 Method Not Allowed",
+            err(format!(
+                "{method} {target} — this port speaks one thing over HTTP: POST / with the \
+                 command object as the body (see docs/DEVTOOLS.md)"
+            )),
+        ),
+    }
+}
+
+/// Writes one HTTP response and lets the caller drop the socket.
+///
+/// `Access-Control-Allow-*` is here so the same protocol answers a browser
+/// page as readily as it answers the app: the token is what guards the port,
+/// and an origin check would only guard it against the one client that cannot
+/// forge an origin anyway.
+fn http_reply(out: &mut TcpStream, status: &str, body: &str) {
+    let head = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: application/json; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Headers: content-type\r\n\
+         Access-Control-Allow-Methods: POST, OPTIONS\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = out.write_all(head.as_bytes());
+    let _ = out.write_all(body.as_bytes());
+    let _ = out.flush();
 }
 
 /// Hands the request to the main thread and waits for the reply.
@@ -377,11 +619,18 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             None => err("text needs a `selector`"),
             Some(sel) => cmd_text(&sel, num("index")),
         },
-        "tree" => cmd_tree(arg("selector").as_deref(), num("depth")),
-        "styles" => match arg("selector") {
-            None => err("styles needs a `selector`"),
-            Some(sel) => cmd_styles(&sel, num("index")),
-        },
+        "tree" => cmd_tree(arg("selector").as_deref(), num("depth"), num("node")),
+        "styles" => cmd_styles(arg("selector").as_deref(), num("index"), num("node")),
+        "rules" => cmd_rules(arg("selector").as_deref(), num("index"), num("node")),
+        "highlight" => cmd_highlight(
+            arg("selector").as_deref(),
+            num("index"),
+            num("node"),
+            req.get("clear").and_then(Json::as_bool).unwrap_or(false),
+            num("ttlMs"),
+            arg("label"),
+        ),
+        "pick" => cmd_pick(),
         "click" => match arg("selector") {
             None => err("click needs a `selector`"),
             Some(sel) => cmd_click(&sel, num("index"), num("button")),
@@ -539,10 +788,13 @@ fn cmd_text(selector: &str, index: Option<f64>) -> String {
     }
 }
 
-fn cmd_tree(selector: Option<&str>, depth: Option<f64>) -> String {
-    let root = match selector {
-        None => vn_tree::devtools::root_id(),
-        Some(sel) => match resolve_one(sel, None) {
+fn cmd_tree(selector: Option<&str>, depth: Option<f64>, node: Option<f64>) -> String {
+    // A `node` id as well as a selector: an inspector expanding a subtree
+    // already has the id it walked to, and no selector is guaranteed to name it
+    // again (two identical siblings have the same one).
+    let root = match (selector, node) {
+        (None, None) => vn_tree::devtools::root_id(),
+        (sel, node) => match resolve_target(sel, None, node) {
             Ok(id) => id,
             Err(e) => return err(e),
         },
@@ -597,8 +849,8 @@ fn cmd_tree(selector: Option<&str>, depth: Option<f64>) -> String {
     ok(dump(root, max))
 }
 
-fn cmd_styles(selector: &str, index: Option<f64>) -> String {
-    match resolve_one(selector, index) {
+fn cmd_styles(selector: Option<&str>, index: Option<f64>, node: Option<f64>) -> String {
+    match resolve_target(selector, index, node) {
         Err(e) => err(e),
         Ok(id) => match vn_tree::devtools::computed_styles(id) {
             None => err(format!(
@@ -632,6 +884,279 @@ fn cmd_styles(selector: &str, index: Option<f64>) -> String {
             ])),
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// rule provenance
+// ---------------------------------------------------------------------------
+
+/// Which RULES produced the values `styles` reports, in cascade order.
+///
+/// A browser's styles panel is a list of rule blocks, not a fold — you fix CSS
+/// by finding the selector that won, not by reading the winning value. This is
+/// that list: selector, `@media` prelude, specificity, source order, the state
+/// bucket the rule folds into, and its declarations as the author wrote them.
+///
+/// Plus the thing a browser has no equivalent for: each rule carries the
+/// ADVISORIES vn-css produced for its declarations, so "why is this property
+/// doing nothing" is answered in the panel instead of in the log.
+fn cmd_rules(selector: Option<&str>, index: Option<f64>, node: Option<f64>) -> String {
+    let id = match resolve_target(selector, index, node) {
+        Ok(id) => id,
+        Err(e) => return err(e),
+    };
+    let Some(rules) = vn_tree::devtools::matched_rules(id) else {
+        return err(format!(
+            "node {id} has no matched rules to report — it is gone, or no stylesheet is installed"
+        ));
+    };
+    let mut captured = 0usize;
+    let items: Vec<Json> = rules
+        .iter()
+        .map(|r| {
+            captured += r.declarations.len();
+            let mut entries = vec![
+                ("selector", Json::s(r.selector.clone())),
+                ("specificity", Json::n(f64::from(r.specificity))),
+                ("order", Json::n(f64::from(r.order))),
+                ("state", Json::s(r.state)),
+                (
+                    "declarations",
+                    Json::arr(
+                        r.declarations
+                            .iter()
+                            .map(|(p, v, important)| {
+                                let mut d = vec![
+                                    ("property", Json::s(p.clone())),
+                                    ("value", Json::s(v.clone())),
+                                ];
+                                if *important {
+                                    d.push(("important", Json::Bool(true)));
+                                }
+                                Json::obj(d)
+                            })
+                            .collect(),
+                    ),
+                ),
+            ];
+            if let Some(m) = &r.media {
+                entries.push(("media", Json::s(m.clone())));
+            }
+            if r.ancestor_state {
+                entries.push(("ancestorState", Json::Bool(true)));
+            }
+            if let Some(p) = r.pseudo {
+                entries.push(("pseudo", Json::s(p)));
+            }
+            if !r.diagnostics.is_empty() {
+                entries.push((
+                    "diagnostics",
+                    Json::arr(r.diagnostics.iter().map(|d| Json::s(d.clone())).collect()),
+                ));
+            }
+            Json::obj(entries)
+        })
+        .collect();
+    let mut out = vec![
+        ("id", Json::n(f64::from(id))),
+        ("count", Json::n(items.len() as f64)),
+        ("rules", Json::arr(items)),
+    ];
+    // An empty declaration list on every rule means the sheet was compiled
+    // before rule-text capture was on (a host started by something that is not
+    // this one). Say so rather than let a panel render blank blocks.
+    if captured == 0 && !rules.is_empty() {
+        out.push((
+            "note",
+            Json::s(
+                "no declaration text: this host's stylesheet was compiled with rule-text capture \
+                 off — the selectors and their cascade order are still exact",
+            ),
+        ));
+    }
+    ok(Json::obj(out))
+}
+
+// ---------------------------------------------------------------------------
+// highlight + picker
+// ---------------------------------------------------------------------------
+
+struct Highlight {
+    node: u32,
+    /// When the overlay stops painting itself. `None` = until something clears
+    /// it. A client that polls (the picker) sets a short one so a crashed
+    /// inspector cannot leave a permanent rectangle on the app.
+    until: Option<std::time::Instant>,
+    label: Option<String>,
+}
+
+static HIGHLIGHT: Mutex<Option<Highlight>> = Mutex::new(None);
+
+/// The outline overlay for the highlighted node, or `None`.
+///
+/// Called by the shell's `render`, so the rectangle is re-read from the bounds
+/// map every frame and follows the element as it moves. It is a plain `div`
+/// with no interactivity: gpui only builds hitboxes for elements that ask for
+/// one, so the overlay cannot intercept a click, a hover or a drag region.
+pub fn highlight_overlay() -> Option<gpui::Div> {
+    use gpui::prelude::*;
+    use gpui::{div, px, rgba};
+    let mut slot = HIGHLIGHT.lock().unwrap();
+    let expired = slot
+        .as_ref()
+        .and_then(|h| h.until)
+        .is_some_and(|until| std::time::Instant::now() >= until);
+    if expired {
+        *slot = None;
+    }
+    let h = slot.as_ref()?;
+    // `overlay_bounds`, not `node_info().bounds`: this runs during the shell's
+    // own render, where `build_root` has already cleared the live bounds map
+    // and prepaint has not refilled it yet — the live map is empty for every
+    // node at exactly this moment.
+    let (x, y, w, height) = vn_tree::devtools::overlay_bounds(h.node)?;
+    let label = h.label.clone().unwrap_or_else(|| describe(h.node, w, height));
+    Some(
+        div()
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .w(px(w))
+            .h(px(height))
+            // Chrome's own inspect colours: a blue fill under a blue border is
+            // legible over both light and dark app content.
+            .bg(rgba(0x6cb6ff30))
+            .border_1()
+            .border_color(rgba(0x6cb6ffcc))
+            .child(
+                div()
+                    .absolute()
+                    // Above the box, unless the box is at the very top of the
+                    // window — then inside it, so the chip is never clipped off.
+                    .top(px(if y >= 20.0 { -19.0 } else { 1.0 }))
+                    .left(px(0.))
+                    .px(px(5.))
+                    .py(px(1.))
+                    .bg(rgba(0x1b2838f2))
+                    .border_1()
+                    .border_color(rgba(0x6cb6ffcc))
+                    .rounded(px(3.))
+                    .text_size(px(11.))
+                    .text_color(rgba(0xdceaffff))
+                    // The chip is as wide as its text: an absolutely positioned
+                    // box has no width of its own, and a wrapped `div.card ·
+                    // 320×48` over a narrow element reads as garbage.
+                    .whitespace_nowrap()
+                    .child(label),
+            ),
+    )
+}
+
+/// `div.card · 320×48` — what the chip over a highlighted node says.
+fn describe(id: u32, w: f32, h: f32) -> String {
+    let head = match vn_tree::devtools::node_info(id) {
+        None => format!("#{id}"),
+        Some(n) => {
+            let mut s = n.tag;
+            for c in n.classes.iter().take(3) {
+                s.push('.');
+                s.push_str(c);
+            }
+            s
+        }
+    };
+    format!("{head} · {}×{}", w.round(), h.round())
+}
+
+/// A selector, an explicit node id, or (for `highlight`) neither.
+fn resolve_target(selector: Option<&str>, index: Option<f64>, node: Option<f64>) -> Result<u32, String> {
+    match (selector, node) {
+        (Some(sel), _) => resolve_one(sel, index),
+        (None, Some(id)) => {
+            let id = id as u32;
+            match vn_tree::devtools::node_info(id) {
+                Some(_) => Ok(id),
+                None => Err(format!("no node {id} in the tree")),
+            }
+        }
+        (None, None) => Err("needs a `selector` or a `node` id".into()),
+    }
+}
+
+/// Draws (or clears) the inspector's outline over one node in the TARGET app.
+///
+/// A node id is accepted as well as a selector because the inspector already
+/// has ids — it walked the tree — and re-deriving a unique selector for an
+/// arbitrary node is a problem nobody needs to solve to draw a rectangle.
+fn cmd_highlight(
+    selector: Option<&str>,
+    index: Option<f64>,
+    node: Option<f64>,
+    clear: bool,
+    ttl_ms: Option<f64>,
+    label: Option<String>,
+) -> String {
+    if clear || (selector.is_none() && node.is_none()) {
+        *HIGHLIGHT.lock().unwrap() = None;
+        let _ = with_commit(|window, _| window.refresh());
+        return ok(Json::obj(vec![("cleared", Json::Bool(true))]));
+    }
+    let id = match resolve_target(selector, index, node) {
+        Ok(id) => id,
+        Err(e) => return err(e),
+    };
+    let ttl = ttl_ms.filter(|ms| *ms > 0.0).map(|ms| {
+        std::time::Instant::now() + std::time::Duration::from_millis(ms as u64)
+    });
+    *HIGHLIGHT.lock().unwrap() = Some(Highlight { node: id, until: ttl, label });
+    let _ = with_commit(|window, _| window.refresh());
+    let bounds = vn_tree::devtools::node_info(id).and_then(|n| n.bounds);
+    ok(Json::obj(vec![
+        ("id", Json::n(f64::from(id))),
+        ("bounds", bounds_json(bounds)),
+        // A node that is not painted has nowhere to draw an outline. That is
+        // not an error (a `<KeepAlive>`d page is a legitimate thing to select),
+        // but a silent no-op would look like a broken highlight.
+        ("painted", Json::Bool(bounds.is_some())),
+    ]))
+}
+
+/// Where the pointer is over the TARGET, and which node is under it.
+///
+/// The picker is a POLL, not a mode: the host keeps no state, so an inspector
+/// that dies mid-pick leaves nothing behind. `insideWindow` is gpui's own
+/// window-level hover flag — it is what tells the inspector the pointer has
+/// left for the devtools window, which is the gesture that latches a pick.
+fn cmd_pick() -> String {
+    let Some((x, y, inside, vw, vh)) = with_commit(|window, _| {
+        let p = window.mouse_position();
+        let size = window.viewport_size();
+        (
+            f32::from(p.x),
+            f32::from(p.y),
+            window.is_window_hovered(),
+            f32::from(size.width),
+            f32::from(size.height),
+        )
+    }) else {
+        return err("not in a commit phase");
+    };
+    let path = vn_tree::devtools::hit_test(x, y);
+    let node = path.last().copied();
+    let mut entries = vec![
+        ("x", Json::n(x)),
+        ("y", Json::n(y)),
+        ("insideWindow", Json::Bool(inside)),
+        ("viewport", Json::obj(vec![("w", Json::n(vw)), ("h", Json::n(vh))])),
+        ("path", Json::arr(path.iter().map(|&id| Json::n(f64::from(id))).collect())),
+    ];
+    match node {
+        None => entries.push(("node", Json::Null)),
+        Some(id) => {
+            entries.push(("node", node_json(id, false)));
+        }
+    }
+    ok(Json::obj(entries))
 }
 
 fn cmd_click(selector: &str, index: Option<f64>, button: Option<f64>) -> String {
@@ -1139,5 +1664,35 @@ fn cmd_screenshot(path: Option<&str>, backend: Option<&str>) -> String {
             }
             ok(Json::obj(entries))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::http_request_line;
+
+    /// The whole framing decision is this one function: a JSON request and an
+    /// HTTP request cannot be confused for each other, so one port serves both
+    /// (docs/DEVTOOLS-UI.md §1). Getting this wrong would mean an inspector's
+    /// POST being parsed as a command, or — worse — a `ctl.ts` line being
+    /// answered with HTTP headers.
+    #[test]
+    fn http_and_json_framings_are_told_apart_by_the_first_line() {
+        assert_eq!(
+            http_request_line("POST / HTTP/1.1\r\n"),
+            Some(("POST".into(), "/".into()))
+        );
+        assert_eq!(
+            http_request_line("OPTIONS /any/path HTTP/1.0\r\n"),
+            Some(("OPTIONS".into(), "/any/path".into()))
+        );
+        // Every shape the OTHER framing can take.
+        assert_eq!(http_request_line("{\"token\":\"x\",\"cmd\":\"ping\"}"), None);
+        assert_eq!(http_request_line("{\"cmd\":\"eval\",\"js\":\"'GET / HTTP/1.1'\"}"), None);
+        assert_eq!(http_request_line(""), None);
+        // …and near-misses that must not be taken for HTTP.
+        assert_eq!(http_request_line("POST /"), None);
+        assert_eq!(http_request_line("post / HTTP/1.1"), None);
+        assert_eq!(http_request_line("HTTP/1.1"), None);
     }
 }

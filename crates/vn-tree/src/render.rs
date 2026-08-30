@@ -156,6 +156,18 @@ pub fn root_bounds() -> Option<(f32, f32, f32, f32)> {
     bounds_of(crate::tree::read_tree(|t| t.root))
 }
 
+/// Where the node is, asked from INSIDE a build.
+///
+/// `build_root` clears the live map before it walks and prepaint refills it
+/// afterwards, so during a build the only rectangles that exist are the
+/// previous frame's. Anything the host draws BESIDE the app tree in the same
+/// render — the devtools highlight overlay is the only such thing — has to read
+/// them from here or it would see nothing at all. Exact for an element at rest,
+/// one frame behind one that is moving.
+pub fn painted_bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
+    bounds_of(id).or_else(|| PREV_BOUNDS.with(|m| m.borrow().get(&id).copied()))
+}
+
 /// The rectangle this node was painted at in the frame BEFORE the one being
 /// built. Only builders need this — `bounds_of` is the answer to "where is it
 /// now", which is what devtools and a future `getBoundingClientRect()` want.

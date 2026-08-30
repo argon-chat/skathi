@@ -211,6 +211,82 @@ pub fn computed_styles(id: u32) -> Option<Vec<(&'static str, String)>> {
     })
 }
 
+/// Every rule in the installed sheet that matches this node, in cascade order —
+/// the provenance behind [`computed_styles`].
+///
+/// `None` when the node is gone or no stylesheet is installed. An empty vec is
+/// a real answer ("the sheet has nothing to say about this element").
+///
+/// The `declarations` on each rule are only populated when the host turned
+/// `vn_css::set_capture_rule_text` on BEFORE the sheet was compiled — see
+/// docs/DEVTOOLS-UI.md §"Rule provenance".
+pub fn matched_rules(id: u32) -> Option<Vec<vn_css::MatchedRule>> {
+    let env = crate::env();
+    tree::read_tree(|t| {
+        t.node(id)?;
+        tree::with_engine(|engine| Some(engine?.matched_rules(NodeRef { tree: t, id }, &env)))
+    })
+}
+
+/// The node's rectangle as seen from inside a BUILD — what the inspector's
+/// outline overlay is positioned from. See [`crate::render::painted_bounds`]:
+/// during a build the live map is empty, so this falls back to the frame that
+/// was actually painted.
+pub fn overlay_bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
+    crate::render::painted_bounds(id)
+}
+
+/// The deepest ELEMENT whose painted rectangle contains `(x, y)`, as the path
+/// from the root down to it (empty when the point is over nothing).
+///
+/// This is the picker's hit test, and it is deliberately NOT gpui's: gpui
+/// decides hits from hitboxes, which only interactive elements have, and its
+/// answer cannot be read back off a frame. So this asks the prepaint bounds map
+/// instead — every painted node is in it — and takes the deepest containing
+/// rectangle, later siblings winning a tie because they paint on top.
+///
+/// The divergence that leaves: an element lifted out of document order by a
+/// deferred paint (`position: fixed`, positive `z-index`) is over the elements
+/// it covers on screen, but this only prefers it if it is also DEEPER or LATER.
+/// Good enough to point at a node; `mouse` is still what proves a control is
+/// reachable.
+pub fn hit_test(x: f32, y: f32) -> Vec<u32> {
+    tree::read_tree(|t| {
+        fn walk(t: &Tree, id: u32, depth: usize, x: f32, y: f32, best: &mut Option<(usize, u32)>) {
+            let Some(node) = t.node(id) else { return };
+            if node.kind == Kind::Element {
+                if let Some((bx, by, bw, bh)) = crate::render::bounds_of(id) {
+                    let inside = x >= bx && x < bx + bw && y >= by && y < by + bh;
+                    // `>=` on the depth: the LAST node found at the deepest
+                    // level wins, and document order is paint order.
+                    if inside && best.is_none_or(|(d, _)| depth >= d) {
+                        *best = Some((depth, id));
+                    }
+                }
+            }
+            for &c in &node.children {
+                walk(t, c, depth + 1, x, y, best);
+            }
+        }
+        let mut best = None;
+        if t.root != 0 {
+            walk(t, t.root, 0, x, y, &mut best);
+        }
+        let Some((_, mut id)) = best else { return Vec::new() };
+        let mut path = vec![id];
+        for _ in 0..1024 {
+            let Some(node) = t.node(id) else { break };
+            if node.parent == 0 {
+                break;
+            }
+            id = node.parent;
+            path.push(id);
+        }
+        path.reverse();
+        path
+    })
+}
+
 /// Drops `None` fields (and the blocks that become empty because of it) from a
 /// pretty `Debug` dump. Purely cosmetic; every value that survives is verbatim.
 fn prune(dump: &str) -> String {

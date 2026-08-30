@@ -527,6 +527,34 @@ fn value_text(p: &Property) -> Option<String> {
     Some(value.trim().to_string())
 }
 
+/// A block's declarations as the author wrote them: `(property, value,
+/// important)` in source order, normal declarations first (which is the order
+/// the cascade folds them in).
+///
+/// Printed back out of the parsed form rather than sliced out of the source —
+/// lightningcss keeps no source spans, and the printed form is the same text
+/// [`value_text`] already trusts for the `var()` channel. Only the devtools
+/// styles panel calls this, through `vn_css::set_capture_rule_text`.
+pub(crate) fn decl_pairs(block: &DeclarationBlock) -> Vec<(String, String, bool)> {
+    let mut out = Vec::new();
+    for (props, important) in [(&block.declarations, false), (&block.important_declarations, true)] {
+        for p in props.iter() {
+            let Some(css) = p.to_css_string(false, PrinterOptions::default()).ok() else {
+                continue;
+            };
+            match css.split_once(':') {
+                Some((name, value)) => {
+                    out.push((name.trim().to_string(), value.trim().to_string(), important))
+                }
+                // A property that prints without a colon cannot exist, but a
+                // dropped declaration would be a lie in a provenance panel.
+                None => out.push((css, String::new(), important)),
+            }
+        }
+    }
+    out
+}
+
 fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
     use lightningcss::properties::custom::CustomPropertyName;
     match p {

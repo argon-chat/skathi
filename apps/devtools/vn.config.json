@@ -1,0 +1,26 @@
+{
+  "$comment": "The vue-native inspector — docs/DEVTOOLS-UI.md. A vue-native app like any other: it is launched by `bun devtools:ui --target <slot>`, attaches to ANOTHER instance's devtools port over HTTP, and drives it with the protocol in docs/DEVTOOLS.md.",
+
+  "name": "devtools",
+
+  "window": {
+    "title": "vue-native devtools",
+    "width": 1180,
+    "height": 820,
+
+    "$comment-minWidth": "480, not the 720 this UI is comfortable at: Windows 11 snap layouts reject a window whose minimum width exceeds ~500 epx, and a devtools window is one you want to snap beside the app it is inspecting. The host advises when the ceiling is crossed — that advisory is how this number was chosen.",
+    "minWidth": 480,
+    "minHeight": 420,
+
+    "titleBarStyle": "hidden",
+    "titleBarHeight": 34,
+
+    "$comment-titleBarFallback": "false: the inspector paints its own titlebar on the first frame, and the host's fallback strip would appear for exactly one frame before retiring — a visible flash in the one app whose job is to look at other apps carefully.",
+    "titleBarFallback": false,
+
+    "backdrop": "mica",
+    "resizable": true,
+    "minimizable": true,
+    "maximizable": true
+  }
+}

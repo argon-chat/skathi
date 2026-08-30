@@ -33,8 +33,15 @@ commands
   ping                                is a host alive on this dist slot?
   query    <selector>                 match through the real vn-css cascade matcher
   text     <selector> [--index N]     textContent of the subtree (or an <input>'s buffer)
-  tree     [selector] [--depth N]     dump the retained tree
-  styles   <selector> [--index N]     the node's folded ComputedStates
+  tree     [selector] [--depth N] [--node ID]   dump the retained tree
+  styles   <selector|--node ID> [--index N]     the node's folded ComputedStates
+  rules    <selector|--node ID> [--index N]     the RULES that matched it, in
+                                     cascade order — selector, @media, source
+                                     order, declarations, per-rule advisories
+  highlight <selector|--node ID> [--index N] [--ttl MS] [--label TEXT]
+  highlight --clear                  the inspector outline, drawn over the app
+  pick                               where the pointer is over the app and which
+                                     node is under it (the picker's poll)
   click    <selector> [--index N] [--button N]
   focus    <selector> [--index N]
   type     <selector> <text> [--index N]
@@ -76,8 +83,8 @@ function splitArgs(argv: string[]): { positional: string[]; flags: Flags } {
       continue;
     }
     const name = a.slice(2);
-    // `--json` is the only boolean; everything else takes a value.
-    if (name === "json" || name === "help") flags[name] = true;
+    // Booleans; everything else takes a value.
+    if (name === "json" || name === "help" || name === "clear") flags[name] = true;
     else flags[name] = argv[++i] ?? "";
   }
   return { positional, flags };
@@ -140,12 +147,37 @@ function buildRequest(argv: string[], f: Flags): Record<string, unknown> {
       if (!rest[0]) die("query needs a selector");
       return { cmd, selector: rest[0] };
     case "text":
-    case "styles":
     case "focus":
       if (!rest[0]) die(`${cmd} needs a selector`);
       return withIndex({ cmd, selector: rest[0] });
+    // These three take a NODE ID as well as a selector: an inspector holding a
+    // node it walked to has no selector that is guaranteed to name it again.
+    case "styles":
+    case "rules": {
+      const node = num(f.node);
+      if (!rest[0] && node === undefined) die(`${cmd} needs a selector or --node <id>`);
+      return withIndex({ cmd, ...(rest[0] ? { selector: rest[0] } : {}), ...(node !== undefined ? { node } : {}) });
+    }
+    case "highlight": {
+      const node = num(f.node);
+      if (f.clear || (!rest[0] && node === undefined)) return { cmd, clear: true };
+      return withIndex({
+        cmd,
+        ...(rest[0] ? { selector: rest[0] } : {}),
+        ...(node !== undefined ? { node } : {}),
+        ...(num(f.ttl) !== undefined ? { ttlMs: num(f.ttl) } : {}),
+        ...(typeof f.label === "string" && f.label ? { label: f.label } : {}),
+      });
+    }
+    case "pick":
+      return { cmd };
     case "tree":
-      return { cmd, ...(rest[0] ? { selector: rest[0] } : {}), ...(num(f.depth) !== undefined ? { depth: num(f.depth) } : {}) };
+      return {
+        cmd,
+        ...(rest[0] ? { selector: rest[0] } : {}),
+        ...(num(f.node) !== undefined ? { node: num(f.node) } : {}),
+        ...(num(f.depth) !== undefined ? { depth: num(f.depth) } : {}),
+      };
     case "click":
       if (!rest[0]) die("click needs a selector");
       return withIndex({ cmd, selector: rest[0], ...(num(f.button) !== undefined ? { button: num(f.button) } : {}) });

@@ -12,6 +12,7 @@
   "scripts": {
     "build": "bun build.ts",
     "watch": "bun build.ts --watch",
+    "devtools:ui": "bun devtools/ui.ts",
     "build:prod": "bun prod.ts",
     "shaders": "bun shaders.ts",
     "shaders:check": "bun shaders.ts --check",

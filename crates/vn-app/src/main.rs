@@ -585,7 +585,8 @@ impl Shell {
             // shell is a bare mount point.
             return shell
                 .child(vn_tree::build_root(window, cx))
-                .children(window_controls_overlay());
+                .children(window_controls_overlay())
+                .children(inspector_overlay());
         }
         shell
             .child(
@@ -645,6 +646,27 @@ impl Shell {
                     ),
             )
             .children(window_controls_overlay())
+            .children(inspector_overlay())
+    }
+}
+
+/// The devtools inspector's element outline, drawn over everything the app
+/// painted (docs/DEVTOOLS-UI.md §5). Always `None` in a prod build — and in a
+/// dev build until something sends a `highlight` command.
+///
+/// It sits in the SHELL rather than in the app's own tree on purpose: the
+/// rectangle is in window coordinates (which is what `bounds` reports), the
+/// shell is the element at the window origin, and an overlay inside the app's
+/// tree would be a node the app can see — an inspector must not appear in the
+/// tree it is inspecting.
+fn inspector_overlay() -> Option<gpui::Div> {
+    #[cfg(not(feature = "prod"))]
+    {
+        devtools::highlight_overlay()
+    }
+    #[cfg(feature = "prod")]
+    {
+        None
     }
 }
 

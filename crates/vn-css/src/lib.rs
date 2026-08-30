@@ -288,6 +288,12 @@ struct RuleEntry {
     /// the rule actually MATCHES an element rather than when the sheet was
     /// compiled — see [`mapper::Converted::diagnostics`].
     diagnostics: Option<Rc<Vec<String>>>,
+    /// The rule's declarations as the AUTHOR wrote them, `(property, value,
+    /// important)` in source order — captured only when
+    /// [`set_capture_rule_text`] was on at compile time, because a devtools
+    /// styles panel is the only thing that wants them and a Tailwind sheet is
+    /// tens of thousands of strings. `None` = capture was off.
+    decls: Option<Rc<Vec<(String, String, bool)>>>,
 }
 
 /// A compiled stylesheet: rules with matchable selectors, pre-converted
@@ -303,6 +309,11 @@ pub struct Engine {
     /// One entry per distinct `@media` prelude in the sheet; rules point at
     /// theirs by index. Evaluated against the [`Env`] on every cascade.
     conditions: Vec<media::Cond>,
+    /// The prelude TEXT of each entry in `conditions`, `and`-ed the same way
+    /// nesting `and`s the conditions themselves. Devtools reports which
+    /// `@media` block a matched rule came from; the parsed condition cannot be
+    /// printed back and a reader needs the words, not the tree.
+    condition_text: Vec<String>,
     /// Any `+` / `~` anywhere in the sheet — see
     /// [`Engine::uses_sibling_combinators`].
     sibling_combinators: bool,
@@ -470,6 +481,7 @@ impl Engine {
             rules: Vec::new(),
             index: RuleIndex { enabled: rule_index_enabled(), ..RuleIndex::default() },
             conditions: Vec::new(),
+            condition_text: Vec::new(),
             sibling_combinators: false,
             group_states: false,
             keyframes: std::collections::HashMap::new(),
@@ -659,7 +671,7 @@ impl Engine {
                 CssRule::Media(m) => {
                     match media::parse_list(&m.query) {
                         Ok(cond) => {
-                            let idx = self.push_condition(cond, condition);
+                            let idx = self.push_condition(cond, condition, &media::list_text(&m.query));
                             self.collect(&m.rules.0, Some(idx), order);
                         }
                         Err(reason) => mapper::once(
@@ -695,6 +707,11 @@ impl Engine {
                 }
             };
             let converted = mapper::convert_block(&style.declarations);
+            // The author's own words, for the devtools styles panel. Off by
+            // default: it is one `String` pair per declaration in the sheet,
+            // and nothing in the RENDER path ever reads them.
+            let decls = capture_rule_text()
+                .then(|| Rc::new(mapper::decl_pairs(&style.declarations)));
             let declares_transition =
                 converted.normal_transitions.is_some() || converted.important_transitions.is_some();
             let declares_extras = {
@@ -822,6 +839,7 @@ impl Engine {
                     condition,
                     diagnostics: (!rule_diagnostics.is_empty())
                         .then(|| Rc::new(std::mem::take(&mut rule_diagnostics))),
+                    decls: decls.clone(),
                 });
                 *order += 1;
             }
@@ -831,15 +849,20 @@ impl Engine {
     /// Interns a condition, `and`-ing it with the enclosing block's when
     /// `@media` blocks nest. Identical conditions share one slot — a Tailwind
     /// sheet repeats `(min-width: 640px)` once per emitted block.
-    fn push_condition(&mut self, cond: media::Cond, parent: Option<u32>) -> u32 {
+    fn push_condition(&mut self, cond: media::Cond, parent: Option<u32>, text: &str) -> u32 {
         let cond = match parent {
             Some(p) => self.conditions[p as usize].clone().and(cond),
             None => cond,
+        };
+        let text = match parent {
+            Some(p) => format!("{} and {text}", self.condition_text[p as usize]),
+            None => text.to_string(),
         };
         if let Some(i) = self.conditions.iter().position(|c| *c == cond) {
             return i as u32;
         }
         self.conditions.push(cond);
+        self.condition_text.push(text);
         (self.conditions.len() - 1) as u32
     }
 
@@ -2122,6 +2145,130 @@ fn sel_text(sel: &Selector<'_>) -> String {
     use lightningcss::traits::ToCss;
     sel.to_css_string(lightningcss::printer::PrinterOptions::default())
         .unwrap_or_else(|_| "<selector>".into())
+}
+
+// ---------------------------------------------------------------------------
+// rule provenance (devtools styles panel)
+// ---------------------------------------------------------------------------
+
+/// Whether [`Engine::compile`] keeps each rule's declarations as TEXT.
+///
+/// Off by default and read once per rule at compile time. A devtools host turns
+/// it on at boot (before the app's sheet is installed) so the styles panel can
+/// show a rule the way its author wrote it; a prod build never calls it and
+/// therefore never allocates a single one of those strings.
+static CAPTURE_RULE_TEXT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Turns rule-text capture on (or off) for every sheet compiled AFTER this
+/// call — the sheet already installed keeps whatever it was compiled with.
+pub fn set_capture_rule_text(on: bool) {
+    CAPTURE_RULE_TEXT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn capture_rule_text() -> bool {
+    CAPTURE_RULE_TEXT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// One rule that MATCHED an element — the provenance a devtools styles panel
+/// shows above the folded values: which selector, from which `@media` block, at
+/// which rung of the state ladder, in cascade order.
+///
+/// The list [`Engine::matched_rules`] returns is sorted by
+/// `(specificity, order)` — the cascade's own order — so a reader can fold it
+/// front to back and the LAST declaration of a property is the one in effect,
+/// exactly as the cascade did it.
+#[derive(Debug, Clone)]
+pub struct MatchedRule {
+    /// The selector, printed back from the parsed form (so `:has()` shows the
+    /// rewritten spelling the matcher actually ran).
+    pub selector: String,
+    pub specificity: u32,
+    /// Position in the sheet — the cascade's tiebreak within one specificity.
+    pub order: u32,
+    /// The `@media` prelude this rule sits under, `and`-ed through nesting.
+    pub media: Option<String>,
+    /// `base` | `hover` | `active` | `focus` | `focus-visible` | `focus-within`
+    /// — the bucket this rule folds into, i.e. which of `styles`' buckets its
+    /// declarations landed in.
+    pub state: &'static str,
+    /// `.group:hover .this` — the state named by the selector belongs to an
+    /// ANCESTOR, so the rule folds into the `group-*` bucket instead.
+    pub ancestor_state: bool,
+    /// `::before` / `::after` / `::placeholder` / `::selection` — the rule
+    /// styles a generated box or a widget part, not the element itself.
+    pub pseudo: Option<&'static str>,
+    /// `(property, value, important)` in source order. Empty when the sheet was
+    /// compiled with [`set_capture_rule_text`] off.
+    pub declarations: Vec<(String, String, bool)>,
+    /// What vn-css has to say about THIS rule's declarations — the advisories
+    /// that normally reach the log the first time the rule matches something.
+    /// The one thing a browser's styles panel cannot show and ours can: which
+    /// of your declarations this engine does not implement.
+    pub diagnostics: Vec<String>,
+}
+
+fn state_name(states: u8) -> &'static str {
+    match states {
+        0 => "base",
+        s if s & STATE_ACTIVE != 0 => "active",
+        s if s & STATE_HOVER != 0 => "hover",
+        s if s & STATE_FOCUS_VISIBLE != 0 => "focus-visible",
+        s if s & STATE_FOCUS != 0 => "focus",
+        _ => "focus-within",
+    }
+}
+
+impl Engine {
+    /// Every rule in the sheet that matches `node` right now, in cascade order.
+    ///
+    /// This is [`Engine::compute_node`]'s matching half and nothing else: the
+    /// same candidate set, the same `@media` gate, the same
+    /// `matches_selector` call, the same `(specificity, order)` sort. It folds
+    /// nothing — the fold is what `styles` already reports, and the point here
+    /// is to show WHERE those values came from.
+    pub fn matched_rules<D: MatchDom>(&self, node: D, env: &Env) -> Vec<MatchedRule> {
+        let el = element::El(node);
+        let mut matched: Vec<&RuleEntry> = Vec::new();
+        self.candidates(&node, &mut |i| {
+            let rule = &self.rules[i as usize];
+            if let Some(c) = rule.condition {
+                if !self.conditions[c as usize].eval(env) {
+                    return;
+                }
+            }
+            let mode = if rule.pseudo.is_some() {
+                MatchingMode::ForStatelessPseudoElement
+            } else {
+                MatchingMode::Normal
+            };
+            let mut ctx: MatchingContext<'_, '_, element::Impl> =
+                MatchingContext::new(mode, None, None, QuirksMode::NoQuirks);
+            if matches_selector(rule.selector, 0, None, &el, &mut ctx, &mut |_, _| {}) {
+                matched.push(rule);
+            }
+        });
+        matched.sort_by_key(|r| (r.specificity, r.order));
+        matched
+            .into_iter()
+            .map(|r| MatchedRule {
+                selector: sel_text(r.selector),
+                specificity: r.specificity,
+                order: r.order,
+                media: r.condition.map(|c| self.condition_text[c as usize].clone()),
+                state: state_name(r.ancestor.map_or(r.states, |a| a.states)),
+                ancestor_state: r.ancestor.is_some(),
+                pseudo: r.pseudo.map(|p| match p {
+                    PseudoElement::Before => "::before",
+                    PseudoElement::After => "::after",
+                    PseudoElement::Placeholder => "::placeholder",
+                    PseudoElement::Selection => "::selection",
+                }),
+                declarations: r.decls.as_deref().cloned().unwrap_or_default(),
+                diagnostics: r.diagnostics.as_deref().cloned().unwrap_or_default(),
+            })
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4800,5 +4947,105 @@ mod tests {
         a.on_state(1, &cs, cs.hovered(true, false).as_ref(), now);
         assert!(!a.any_active(now));
         assert_eq!(a.overlay(1, &base, now).unwrap().opacity, Some(1.0));
+    }
+
+    // -----------------------------------------------------------------------
+    // rule provenance (devtools — docs/DEVTOOLS-UI.md §4)
+    // -----------------------------------------------------------------------
+
+    /// The devtools styles panel folds this list front-to-back to decide which
+    /// declarations were overridden, so the ORDER is load-bearing: it has to be
+    /// the cascade's own `(specificity, order)`, and each rule has to say which
+    /// bucket it folds into or a `:hover` declaration would look like it lost
+    /// to a base one.
+    #[test]
+    fn matched_rules_report_the_cascade_in_its_own_order() {
+        set_capture_rule_text(true);
+        let engine = Engine::compile(
+            r#"@media (min-width: 100px) { .tab { color: #f00 } }
+               a { color: #001 }
+               .tab { color: #002; padding: 4px }
+               .tab:hover { color: #003 }
+               .tab::after { content: "x" }"#,
+        );
+        set_capture_rule_text(false);
+        let d = doc();
+        // nodes[2] is `a.tab.router-link-active`.
+        let rules = engine.matched_rules(DocRef { doc: &d, i: 2 }, &Env::default());
+
+        let seen: Vec<(&str, &str)> = rules.iter().map(|r| (r.selector.as_str(), r.state)).collect();
+        assert_eq!(
+            seen,
+            vec![
+                // (0,0,1) — a tag.
+                ("a", "base"),
+                // (0,1,0), and the `@media` block was walked first, so it took
+                // the lower source order.
+                (".tab", "base"),
+                (".tab", "base"),
+                // (0,1,1) — a class plus a pseudo-ELEMENT, which counts as an
+                // element and therefore sorts under…
+                (".tab:after", "base"),
+                // …(0,2,0) — a pseudo-CLASS counts as a class.
+                (".tab:hover", "hover"),
+            ],
+            "ascending (specificity, order) — the cascade's own order"
+        );
+        // Sorted by (specificity, order), the way the cascade folds.
+        let keys: Vec<(u32, u32)> = rules.iter().map(|r| (r.specificity, r.order)).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+
+        // The `@media` prelude rides along, so a panel can say WHY a rule is
+        // (or is not) in the list.
+        let media: Vec<Option<&str>> = rules.iter().map(|r| r.media.as_deref()).collect();
+        // lightningcss prints a prelude back in RANGE syntax, which is the same
+        // query — the panel shows what the engine understood, not the bytes.
+        assert_eq!(media[1], Some("(width >= 100px)"));
+        assert_eq!(media[2], None);
+        // …and the pseudo-element rule is flagged rather than looking like a
+        // rule on the element itself.
+        assert_eq!(rules[3].pseudo, Some("::after"));
+
+        // Declarations are the author's own text, in source order.
+        let tab = &rules[2];
+        assert_eq!(
+            tab.declarations,
+            vec![
+                ("color".to_string(), "#002".to_string(), false),
+                ("padding".to_string(), "4px".to_string(), false),
+            ]
+        );
+    }
+
+    /// Declaration text is captured only when the host asks for it — a prod
+    /// build must not pay one `String` per declaration in the sheet for a panel
+    /// it does not have.
+    ///
+    /// Both halves live in ONE test because the flag is process-global and
+    /// `cargo test` runs these in parallel: two tests toggling it would race
+    /// each other rather than test it.
+    #[test]
+    fn rule_text_is_captured_only_when_asked_for() {
+        let d = doc();
+        let matched = |engine: &Engine| engine.matched_rules(DocRef { doc: &d, i: 2 }, &Env::default());
+
+        set_capture_rule_text(false);
+        let off = Engine::compile(".tab { color: #002 }");
+        let rules = matched(&off);
+        assert_eq!(rules.len(), 1);
+        assert!(rules[0].declarations.is_empty());
+        // The selector and its place in the cascade are exact either way — the
+        // panel degrades to "which rules matched", not to nothing.
+        assert_eq!(rules[0].selector, ".tab");
+
+        set_capture_rule_text(true);
+        let on = Engine::compile(".tab { color: #002 }");
+        set_capture_rule_text(false);
+        assert_eq!(matched(&on)[0].declarations.len(), 1);
+        // …and the sheet compiled BEFORE the flag flipped keeps what it was
+        // compiled with: capture is a property of the sheet, not of the reader.
+        assert!(matched(&off)[0].declarations.is_empty());
     }
 }

@@ -203,15 +203,76 @@ const TOOLS = [
     description: "Dump the retained tree (tag / classes / props / listeners / bounds / children).",
     inputSchema: {
       type: "object",
-      properties: { selector: str("subtree root (default: the mounted root)"), depth: int("levels to descend (default 6)") },
+      properties: {
+        selector: str("subtree root (default: the mounted root)"),
+        node: int("subtree root as a node id, when you already have one"),
+        depth: int("levels to descend (default 6)"),
+      },
     },
-    build: (a: any) => ({ cmd: "tree", selector: a.selector, depth: a.depth }),
+    build: (a: any) => ({ cmd: "tree", selector: a.selector, node: a.node, depth: a.depth }),
   },
   {
     name: "vn_styles",
-    description: "The node's folded ComputedStates: base + the hover/active/focus/focus-visible rungs, transitions and extras.",
-    inputSchema: { type: "object", properties: { selector: SELECTOR, index: INDEX }, required: ["selector"] },
-    build: (a: any) => ({ cmd: "styles", selector: a.selector, index: a.index }),
+    description:
+      "The node's folded ComputedStates: base + the hover/active/focus/focus-visible rungs, " +
+      "transitions and extras, plus `live` (the style in EFFECT this frame). Takes a node id " +
+      "instead of a selector when you already have one.",
+    inputSchema: {
+      type: "object",
+      properties: { selector: SELECTOR, index: INDEX, node: int("a node id from vn_tree/vn_query") },
+    },
+    build: (a: any) => ({ cmd: "styles", selector: a.selector, index: a.index, node: a.node }),
+  },
+  {
+    name: "vn_rules",
+    description:
+      "WHICH rules produced this node's styles, in cascade order ((specificity, order) ascending, " +
+      "so the last declaration of a property wins). Each rule carries its selector, @media " +
+      "prelude, state bucket (base/hover/active/focus/…), pseudo-element, declarations as the " +
+      "author wrote them, and the vn-css advisories about THAT rule — i.e. which of its " +
+      "declarations this engine does not implement.",
+    inputSchema: {
+      type: "object",
+      properties: { selector: SELECTOR, index: INDEX, node: int("a node id from vn_tree/vn_query") },
+    },
+    build: (a: any) => ({ cmd: "rules", selector: a.selector, index: a.index, node: a.node }),
+  },
+  {
+    name: "vn_highlight",
+    description:
+      "Draw the inspector's outline over a node in the app (a blue box plus a `tag.class · WxH` " +
+      "chip), or clear it. Painted by the host shell, so it never appears in the app's own tree " +
+      "and never takes a click. Pass ttlMs to make it expire by itself.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        selector: SELECTOR,
+        index: INDEX,
+        node: int("a node id from vn_tree/vn_query"),
+        ttlMs: int("expire after this many ms (default: until cleared)"),
+        label: str("chip text (default: tag.class · WxH)"),
+        clear: { type: "boolean", description: "remove the outline" },
+      },
+    },
+    build: (a: any) => ({
+      cmd: "highlight",
+      selector: a.selector,
+      index: a.index,
+      node: a.node,
+      ttlMs: a.ttlMs,
+      label: a.label,
+      clear: a.clear,
+    }),
+  },
+  {
+    name: "vn_pick",
+    description:
+      "Where the pointer is over the app and which node is under it: {x, y, insideWindow, " +
+      "viewport, path[], node}. The hit test is over the painted bounds (deepest rectangle wins), " +
+      "not gpui's hitboxes. `insideWindow` is gpui's window hover flag — a synthesized pointer " +
+      "event does not set it, only a real cursor does.",
+    inputSchema: { type: "object", properties: {} },
+    build: () => ({ cmd: "pick" }),
   },
   {
     name: "vn_eval",

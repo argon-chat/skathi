@@ -1178,6 +1178,15 @@ pub(crate) fn set_engine(engine: vn_css::Engine) {
     ENGINE.with(|c| *c.borrow_mut() = Some(engine));
 }
 
+/// Reads the installed stylesheet. `None` = no sheet (inline styles only).
+///
+/// The one reader outside the restyle pass is devtools' rule provenance
+/// (`crate::devtools::matched_rules`), which asks the engine which rules match
+/// a node — the same question the cascade asks, without folding the answer.
+pub(crate) fn with_engine<R>(f: impl FnOnce(Option<&vn_css::Engine>) -> R) -> R {
+    ENGINE.with(|e| f(e.borrow().as_ref()))
+}
+
 /// Restyles under the current engine (or inline-only when none is set), then
 /// re-runs the whole thing if the ROOT element turned out to define a different
 /// `rem`.
