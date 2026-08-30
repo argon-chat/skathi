@@ -16,7 +16,9 @@
     "build:prod": "bun prod.ts",
     "shaders": "bun shaders.ts",
     "shaders:check": "bun shaders.ts --check",
-    "shaders:fetch": "bun fetch-slang.ts"
+    "shaders:fetch": "bun fetch-slang.ts",
+    "preludes": "bun scripts/gen-preludes.ts",
+    "preludes:check": "bun scripts/gen-preludes.ts --check"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

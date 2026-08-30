@@ -87,7 +87,7 @@ interface World {
 function makeWorld(): World {
   const transpiler = new Bun.Transpiler({
     loader: "ts",
-    tsconfig: { compilerOptions: { target: "esnext", useDefineForClassFields: false } },
+    tsconfig: JSON.stringify({ compilerOptions: { target: "esnext", useDefineForClassFields: false } }),
   });
   const body = transpiler
     .transformSync(readFileSync(RUNTIME_PATH, "utf8"))

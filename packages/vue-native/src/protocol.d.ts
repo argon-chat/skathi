@@ -271,7 +271,15 @@ declare function __vn_media_events(id: VnNodeId): string;
 // host logging — crates/vn-app/src/main.rs
 // ---------------------------------------------------------------------------
 
-/** A line into the host log. Present in the app host; absent in bare engines. */
+/**
+ * A line into the host log.
+ *
+ * `vn-app` registers it UNCONDITIONALLY (`main.rs`, next to `__vn_set_status`
+ * and `__vn_perf_mark`) and `runtime.ts` calls it unguarded, which is why this
+ * is a `function` rather than an optional `var` — an app does not have to
+ * probe. An embedder that installed `vn-tree` without `vn-app` would have to
+ * provide it; the unit-test harness does, by binding it as a parameter.
+ */
 declare function __vn_log(message: string): void;
 
 // ---------------------------------------------------------------------------
@@ -530,6 +538,27 @@ interface VnWindowRect {
 }
 
 /**
+ * `appWindow.chrome` — the chrome-mode read, so an app can branch without a
+ * media query. `vn_app::window` builds it field by field, so the shape is fixed
+ * and small; it was a bag of `unknown` until an app tried to use it.
+ *
+ * `client` is the window's CLIENT AREA, and `contentInset` is how far the app's
+ * viewport is inset inside it by host-drawn chrome — `inner* === client* -
+ * inset` by construction, and in custom-chrome mode every inset is zero.
+ */
+interface VnWindowChrome {
+  titleBarStyle: string;
+  displayMode: string;
+  titleBarHeight: number;
+  fallbackTitleBar: boolean;
+  overlayVisible: boolean;
+  /** Whether the HOST draws the min/max/close cluster (`titleBarOverlay`). */
+  hostControls: boolean;
+  client: { width: number; height: number };
+  contentInset: { left: number; top: number; right: number; bottom: number };
+}
+
+/**
  * The window facade the prelude builds. An `EventTarget` first — apps listen
  * for `resize`/`move`/`focus` on it — with the Tauri/Electron-shaped verbs
  * bolted on. Every verb is SYNCHRONOUS and returns `undefined`: JS and the UI
@@ -561,7 +590,7 @@ interface VnAppWindow extends VnEventTarget {
   backdrop: string;
   alwaysOnTop: boolean;
   readonly scaleFactor: number;
-  readonly chrome: Record<string, unknown>;
+  readonly chrome: VnWindowChrome;
   /** Windows taskbar integration — present, advisory-only in v1. */
   setProgressBar(...args: unknown[]): void;
   setOverlayIcon(...args: unknown[]): void;

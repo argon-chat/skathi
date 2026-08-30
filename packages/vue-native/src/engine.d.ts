@@ -310,21 +310,42 @@ interface VnRedStreamSourceNode extends VnAudioNode {
   close?(): void;
 }
 
-/** 48 kHz mono, 80 ms: the mixer's own format. `Seam::attach` REFUSES any
- *  other channel count rather than play the room at half speed. */
+/**
+ * 48 kHz mono, 80 ms: the mixer's own format. `Seam::attach` REFUSES any other
+ * channel count rather than play the room at half speed.
+ *
+ * Every field is OPTIONAL, and the whole argument is: `redjs`'s
+ * `create_red_stream_source` defaults all four and has its own test for calling
+ * it bare. The voice shim passes all four because it needs the mixer's format
+ * exactly, which is a fact about the shim, not about the API.
+ */
 interface VnRedStreamSourceOptions {
-  sampleRate: number;
-  channelCount: number;
-  latencySeconds: number;
-  capacitySeconds: number;
+  sampleRate?: number;
+  channelCount?: number;
+  latencySeconds?: number;
+  capacitySeconds?: number;
+}
+
+/**
+ * One `AudioParam`. `value` is the immediate write; the five scheduling methods
+ * are the timeline, and redjs implements all of them — a demo that ramps a gain
+ * rather than stepping it is using the same API a browser gives it.
+ */
+interface VnAudioParam {
+  value: number;
+  setValueAtTime(value: number, startTime: number): VnAudioParam;
+  linearRampToValueAtTime(value: number, endTime: number): VnAudioParam;
+  exponentialRampToValueAtTime(value: number, endTime: number): VnAudioParam;
+  setTargetAtTime(target: number, startTime: number, timeConstant: number): VnAudioParam;
+  cancelScheduledValues(startTime: number): VnAudioParam;
 }
 
 interface VnGainNode extends VnAudioNode {
-  readonly gain: { value: number };
+  readonly gain: VnAudioParam;
 }
 
 interface VnAudioContext {
   readonly destination: VnAudioNode;
-  createRedStreamSource(options: VnRedStreamSourceOptions): VnRedStreamSourceNode;
+  createRedStreamSource(options?: VnRedStreamSourceOptions): VnRedStreamSourceNode;
   createGain(): VnGainNode;
 }

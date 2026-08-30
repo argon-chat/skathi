@@ -23,7 +23,7 @@ import {
 // is what makes `nodeOps` below self-typing: every hook's parameters come from
 // Vue's own declaration, so a signature that drifts from what the renderer
 // actually calls is a build error rather than an `undefined` at runtime.
-import type { RendererOptions, VNode } from "@vue/runtime-core";
+import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
 
 // ---- the shapes this file is built out of ---------------------------------
 // The host protocol itself is typed in ./protocol.d.ts; what follows is the JS
@@ -2002,8 +2002,32 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
 
 const renderer = createRenderer({ ...nodeOps, patchProp });
 
+/**
+ * What `createApp` hands back: Vue's own `App`, with ONE signature different.
+ *
+ * `mount()` takes NO container here — the window is the root — and Vue's
+ * `App["mount"]` requires one, so `createApp(App).mount()` did not type-check
+ * against the upstream type and every app in this repository had to cast around
+ * it. A container argument is still ACCEPTED, for browser parity, and ignored
+ * with an advisory; the optional parameter is what records that.
+ *
+ * It EXTENDS `App` rather than `Omit`-ing `mount` out of it, and that is not a
+ * style choice: `use`, `component`, `directive` and `provide` all return
+ * `this`, and a mapped type resolves `this` to the type it was mapped FROM — so
+ * an `Omit` version type-checks `createApp(App).mount()` and then fails on
+ * `createApp(App).use(router).mount()`, which is what every real entry module
+ * writes. Extending keeps `this` polymorphic, so the whole chain stays one
+ * expression.
+ */
+export interface VnApp extends App<MirrorElement> {
+  mount(container?: unknown): ComponentPublicInstance;
+}
+
 /// App entry point. No container argument — the window IS the root.
-export function createApp(rootComponent: unknown, rootProps: Record<string, unknown> | null = null) {
+export function createApp(
+  rootComponent: unknown,
+  rootProps: Record<string, unknown> | null = null,
+): VnApp {
   const app = renderer.createApp(rootComponent as never, rootProps);
   const mount = app.mount.bind(app);
   app.mount = (container?: unknown) => {
@@ -2083,7 +2107,7 @@ export function createApp(rootComponent: unknown, rootProps: Record<string, unkn
     __vn_log(`Vue ${version} app mounted (vue-native runtime)`);
     return vm;
   };
-  return app;
+  return app as VnApp;
 }
 
 // ---- missing globals (compat roadmap G5) ----------------------------------

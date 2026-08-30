@@ -108,7 +108,7 @@ export const TARGETS: Target[] = [
 const transpiler = new Bun.Transpiler({
   loader: "ts",
   target: "browser",
-  tsconfig: { compilerOptions: { target: "esnext", useDefineForClassFields: false } },
+  tsconfig: JSON.stringify({ compilerOptions: { target: "esnext", useDefineForClassFields: false } }),
 });
 
 function header(t: Target): string {

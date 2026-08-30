@@ -77,7 +77,10 @@ export class Wire {
         socket.removeListener("error", fail);
         socket.on("error", (e) => this.#drop(e));
         socket.on("close", () => this.#drop(new Error("the host closed the devtools connection")));
-        socket.on("data", (chunk) => this.#onData(chunk));
+        // `data` is `string | Buffer` in general — a socket with an encoding
+        // set hands back a string. This one never has one set, so the
+        // annotation names which half arrives instead of widening `#onData`.
+        socket.on("data", (chunk: Buffer) => this.#onData(chunk));
         this.#socket = socket;
         this.#connecting = null;
         resolve(socket);

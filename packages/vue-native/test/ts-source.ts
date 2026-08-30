@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 const transpiler = new Bun.Transpiler({
   loader: "ts",
   target: "browser",
-  tsconfig: { compilerOptions: { target: "esnext", useDefineForClassFields: false } },
+  tsconfig: JSON.stringify({ compilerOptions: { target: "esnext", useDefineForClassFields: false } }),
 });
 
 /** One src/*.ts file, as the JavaScript the bundler would emit for it. */

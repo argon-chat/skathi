@@ -29,29 +29,6 @@
 export {};
 
 // ---------------------------------------------------------------------------
-// createApp().mount() — the one shape every vue-native app needs and cannot say
-// ---------------------------------------------------------------------------
-
-declare global {
-  /**
-   * An app whose `mount()` takes NO CONTAINER, which is what vue-native's
-   * really does: the window is the root, so `runtime.ts`'s `createApp`
-   * replaces `app.mount` with `(container?: unknown) => …` and advises if a
-   * container is passed (browser parity, ignored). But the value it RETURNS is
-   * still `@vue/runtime-core`'s `App`, whose `mount` declares the container
-   * REQUIRED — so `createApp(App).mount()`, the call every app in the repo
-   * makes and every doc shows, does not type-check ("Expected 1-4 arguments,
-   * but got 0").
-   *
-   * That is a defect in `runtime.ts`'s exported type, not in app code, and the
-   * fix is there: have `createApp` return a type whose `mount` matches the
-   * function it actually installs. Until then the four apps cast through this
-   * alias, so there is one explanation instead of four. See the report.
-   */
-  type VnMountableApp = { mount(): unknown };
-}
-
-// ---------------------------------------------------------------------------
 // the window, as a global EventTarget — crates/vn-app/src/window.prelude.js
 // ---------------------------------------------------------------------------
 //
