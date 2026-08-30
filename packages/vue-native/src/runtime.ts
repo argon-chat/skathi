@@ -2516,12 +2516,29 @@ function computedStyleFor(node: unknown) {
   // they stand for the app root, so that is whose style they report.
   const id = typeof (node as MirrorNode)?.id === "number" ? (node as MirrorNode).id : appRoot?.id;
   const raw = id ? __vn_computed_style(id) : "";
-  const map: Record<string, string> = Object.create(null);
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    const i = line.indexOf("=");
-    if (i > 0) map[line.slice(0, i)] = line.slice(i + 1);
-  }
+  /**
+   * One property, scanned out of the answer — NOT a parsed map.
+   *
+   * This function runs once per PROPERTY READ. The host call above has to: it
+   * is `dom::computed_style`, which flushes pending style before answering, so
+   * a cached answer would be the pre-mutation one — the exact bug reka-ui's
+   * `<Presence>` hit, and the reason that flush exists. Splitting the ~20
+   * `name=value` lines into an object to answer ONE of them does not have to:
+   * `scripts/boundary-cost.ts` measured that parse at roughly three quarters of
+   * what a property read cost, repeated for every property a component looked
+   * at. A `<Transition>` reads two, @floating-ui reads six.
+   *
+   * The `\n` in front of the key is what stops a SUFFIX from matching — a
+   * lookup of `width` must not find the `max-width=` line.
+   */
+  const lookup = (css: string): string | undefined => {
+    const head = css + "=";
+    const at = raw.startsWith(head) ? 0 : raw.indexOf("\n" + head);
+    if (at < 0) return undefined;
+    const from = at + head.length + (at === 0 ? 0 : 1);
+    const end = raw.indexOf("\n", from);
+    return end < 0 ? raw.slice(from) : raw.slice(from, end);
+  };
   const read = (k: string | symbol): string | undefined => {
     const key = String(k);
     // Framework probes, not CSS: Vue's reactivity asks every object it touches
@@ -2530,7 +2547,8 @@ function computedStyleFor(node: unknown) {
     // `undefined` (not `""`) and never warn.
     if (!/^[a-zA-Z-]/.test(key) || key.startsWith("__") || key === "then") return undefined;
     const css = key.startsWith("--") ? key : hyphenate(key);
-    if (css in map) return map[css];
+    const value = lookup(css);
+    if (value !== undefined) return value;
     warnCompat(
       `getComputedStyle:${css}`,
       `getComputedStyle().${key} reads "" — vue-native's computed style publishes the properties ` +

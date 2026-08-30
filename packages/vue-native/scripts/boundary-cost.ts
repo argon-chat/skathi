@@ -34,6 +34,12 @@ const bench = (label: string, n: number, body: string, setup = "") => ({
 });
 
 const BENCHES = [
+  // -- the FLOOR: a host fn that takes one integer, looks up nothing (id 0 is
+  //    the reserved "none") and returns the empty string. Everything a real
+  //    call costs beyond this is argument marshalling and Rust work.
+  //    ARCHITECTURE.md's "~2.8 ns host calls" is the bare FFI edge measured in
+  //    research/reports/fill-0.md; this is what one costs from JavaScript.
+  bench("__vn_bounds(0) — the crossing floor", 200_000, `__vn_bounds(0);`),
   // -- the crossing itself, with as little Rust behind it as possible
   bench(
     "__vn_intern (hot: name already interned)",
