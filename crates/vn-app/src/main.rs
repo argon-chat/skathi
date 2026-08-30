@@ -32,6 +32,7 @@ mod dev;
 mod devtools; // the automation surface (docs/DEVTOOLS.md) — dev builds only
 mod json; // the dev transport, the devtools wire and vn.config.json share one codec
 mod perf;
+mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWINDOW.md)
 #[cfg(feature = "prod")]
 mod prod;
 mod window; // windowing & chrome (docs/WINDOWING.md)
@@ -383,6 +384,36 @@ struct Shell {
 
 thread_local! {
     static SHELL: RefCell<Option<WeakEntity<Shell>>> = const { RefCell::new(None) };
+    /// The primary window itself, as opposed to its root view. Needed because
+    /// the multi-window repaint fan-out runs from inside an input listener,
+    /// where the root view's entity may already be borrowed — see
+    /// [`refresh_main`].
+    static MAIN_WINDOW: std::cell::Cell<Option<gpui::AnyWindowHandle>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Marks the primary window dirty *without* borrowing its root view.
+///
+/// `notify_shell` goes through `Entity<Shell>::update`, which is correct from
+/// the pump but re-enters and panics when called from inside a `cx.listener`
+/// on that same view. Addressing the window borrows nothing, and
+/// `update_window` on a window that is mid-update simply fails — which is the
+/// right answer, since that window is being refreshed by the listener anyway.
+pub(crate) fn refresh_main(cx: &mut App) {
+    let Some(handle) = MAIN_WINDOW.with(|w| w.get()) else { return };
+    let _ = handle.update(cx, |_, window, _| window.refresh());
+}
+
+/// Repaint the primary window. The popped-out windows are notified next to it
+/// wherever the tree moved (`popout::notify_all`), but a pop-out OPENING or
+/// CLOSING moves no tree state at all — it only changes which window owns a
+/// subtree — so those two call this directly.
+pub(crate) fn notify_shell(cx: &mut App) {
+    SHELL.with(|s| {
+        if let Some(shell) = s.borrow().as_ref().and_then(|w| w.upgrade()) {
+            shell.update(cx, |_, cx| cx.notify());
+        }
+    });
 }
 
 fn update_shell(g: *mut core::ffi::c_void, f: impl FnOnce(&mut Shell)) -> u64 {
@@ -536,11 +567,11 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         || vn_tree::lotties_animating()
         || vn_tree::videos_playing()
     {
-        SHELL.with(|s| {
-            if let Some(shell) = s.borrow().as_ref().and_then(|w| w.upgrade()) {
-                shell.update(cx, |_, cx| cx.notify());
-            }
-        });
+        notify_shell(cx);
+        // …and every window painting a popped-out subtree, in the SAME frame
+        // group. This is the line that makes the spike's claim true: one JS
+        // wave, N windows repainting off it (docs/MULTIWINDOW.md §6).
+        popout::notify_all(cx);
     }
     window.on_next_frame(pump_frame);
     // Closes the `pump` bucket: everything after this is gpui's — its decision
@@ -852,6 +883,9 @@ fn main() {
             rt.register("__vn_perf_mark", 1, vn_perf_mark as *const _);
             vn_tree::install(rt);
             window::install(rt);
+            // SPIKE: `__vn_window_open` / `_close` / `_popouts` / `_click` —
+            // one Vue subtree painted by a second OS window (docs/MULTIWINDOW.md).
+            popout::install(rt);
             // `__vn_voice_*` — the five host fns behind "livekit-client".
             // Registered in every build; the JS shim is pre-seeded into the
             // vendor bundle either way, and an app that never constructs a
@@ -941,6 +975,7 @@ fn main() {
                 shell
             },
         )
+        .map(|handle| MAIN_WINDOW.with(|w| w.set(Some(handle.into()))))
         .unwrap();
 
         // Startup eval: host fns called at top level land in Phase::App.
