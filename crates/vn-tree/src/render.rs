@@ -896,7 +896,12 @@ fn build_node<V: 'static>(
         // (`v-for`, multi-root components) with `createText("")`, so leaving it
         // in adds a blank line per fragment.
         Kind::Text if node.text.is_empty() => Empty.into_any_element(),
-        Kind::Text => transformed_text(&node.text, case).into_any_element(),
+        Kind::Text => match line_trimmed(t, node, id) {
+            // A text node that is nothing but the white space at the end of a
+            // line renders nothing, exactly as it does in a browser.
+            "" => Empty.into_any_element(),
+            text => transformed_text(text, case).into_any_element(),
+        },
         Kind::Anchor => Empty.into_any_element(),
         // Metadata content renders NOTHING in a browser — it is not a box, it
         // is instructions. reka-ui injects a `<style>` element at runtime to
@@ -961,6 +966,7 @@ fn build_node<V: 'static>(
             apply_self_blur(d.style(), t, node, &extras);
             apply_inline_row(d.style(), t, node, align);
             apply_inline_align(d.style(), &extras, align);
+            apply_percentage_flex_basis(d.style(), t, node);
             // "The window IS the root" (see `createApp().mount()`): the root
             // element is vue-native's viewport, so it fills the box the host
             // gives it unless a rule says otherwise. Without this it sizes to
@@ -1153,7 +1159,14 @@ fn build_node<V: 'static>(
                     kids.push(pseudo_element(&pb, case, stacking));
                 }
                 if !node.text.is_empty() {
-                    kids.push(transformed_text(&node.text, case).into_any_element());
+                    // `setElementText` — what Vue calls for an element whose
+                    // only child is text, which is most of them. The text IS
+                    // the element's whole content, so both its ends are the
+                    // ends of a line (see `line_trimmed`).
+                    let text = own_text_line_trimmed(t, node);
+                    if !text.is_empty() {
+                        kids.push(transformed_text(text, case).into_any_element());
+                    }
                 } else {
                     kids.extend(
                         laid_out_children(t, node)
@@ -1369,6 +1382,53 @@ fn apply_inline_row(
             Some(gpui::TextAlign::Right) => Some(gpui::JustifyContent::End),
             _ => None,
         };
+    }
+}
+
+/// A percentage `flex-basis` REPLACES the main-axis size — and when it cannot
+/// be resolved, the size does not come back.
+///
+/// CSS Flexbox §9.2.3 step A takes the flex base size from a *definite* used
+/// flex basis. A percentage measured against a container with an indefinite
+/// main size is not definite, so the item falls through to step E and is sized
+/// by its CONTENT. taffy stops one step short — `flex_basis.or(main_size)` —
+/// and reads the item's own `height`/`width` instead, which is exactly the
+/// property a non-`auto` flex basis is defined to stand in for.
+///
+/// reka's Select viewport is precisely that shape: reka writes `flex: 1`
+/// inline (i.e. `flex-basis: 0%`) and shadcn adds
+/// `h-[--reka-select-trigger-height]`, inside reka's own `display: flex;
+/// flex-direction: column` listbox whose height is auto. Measured on the same
+/// markup in Edge: the viewport is 103px, its content's height. Ours was 40px,
+/// the trigger's — so the list showed its group label and clipped every item.
+///
+/// Dropping the main-axis size whenever a percentage basis is in force is
+/// confined to that case: where the percentage DOES resolve, taffy already took
+/// the basis and never looked at the size, so this is a no-op there.
+fn apply_percentage_flex_basis(
+    style: &mut gpui::StyleRefinement,
+    t: &Tree,
+    node: &crate::tree::Node,
+) {
+    if !matches!(
+        style.flex_basis,
+        Some(gpui::Length::Definite(gpui::DefiniteLength::Fraction(_)))
+    ) {
+        return;
+    }
+    // Only a FLEX ITEM has a flex basis; in any other container the property is
+    // inert and the size is the size.
+    let Some(parent) = t.node(node.parent) else { return };
+    let Some(parent_style) = parent.computed.as_ref().map(|cs| &cs.base) else { return };
+    if parent_style.display != Some(gpui::Display::Flex) {
+        return;
+    }
+    match parent_style.flex_direction {
+        Some(gpui::FlexDirection::Column) | Some(gpui::FlexDirection::ColumnReverse) => {
+            style.size.height = None;
+        }
+        // `None` is CSS's initial `row`.
+        _ => style.size.width = None,
     }
 }
 
@@ -1594,6 +1654,61 @@ fn transformed_text(text: &str, case: Option<vn_css::TextTransform>) -> SharedSt
         Some(changed) => SharedString::from(changed),
         None => SharedString::from(text.to_string()),
     }
+}
+
+/// White space at the START and END of a line is removed (CSS Text §4.1.1
+/// step 4) — the half of white-space processing that is visible in a width.
+///
+/// Vue's template compiler already condenses runs of white space, so what
+/// reaches the tree is a single leading and/or trailing space; what it does NOT
+/// do is remove them, because in a browser that is the renderer's job. Ours
+/// shaped them, and a space at each end of Inter at 15.75px is 9.3px — which on
+/// apps/meet-probe is the difference between the hero subtitle fitting its
+/// `max-w-sm` (336px) on one line, where the browser puts it, and wrapping onto
+/// two.
+///
+/// A text node's ends are a line's ends when nothing inline sits beside them,
+/// which here means: it is the first (or last) child that generates a box, and
+/// its parent is not itself an inline-level box. The second half is what keeps
+/// `a<span> </span>b` intact — the span's only child is a space a browser DOES
+/// render, because it is in the middle of the line rather than at its end.
+///
+/// Returned as a slice of the node's own text: nothing is allocated in the
+/// overwhelming majority of cases, where there is nothing to trim.
+fn line_trimmed<'a>(t: &Tree, node: &'a crate::tree::Node, id: u32) -> &'a str {
+    const COLLAPSIBLE: [char; 4] = [' ', '\t', '\n', '\r'];
+    let text = node.text.as_str();
+    let Some(parent) = t.node(node.parent) else { return text };
+    if parent.kind == Kind::Element && INLINE_LEVEL_TAGS.contains(&t.name(parent.tag)) {
+        return text;
+    }
+    let mut boxes = parent.children.iter().copied().filter(|&c| generates_a_box(t, c));
+    let first = boxes.next();
+    // `.last()` on what remains, so a lone child answers `first == last`.
+    let last = boxes.last().or(first);
+    let text = if first == Some(id) { text.trim_start_matches(COLLAPSIBLE) } else { text };
+    if last == Some(id) { text.trim_end_matches(COLLAPSIBLE) } else { text }
+}
+
+/// [`line_trimmed`] for the text an ELEMENT carries itself.
+///
+/// Vue calls `setElementText` for an element whose only child is text — which
+/// is most elements, and the shape the hero subtitle takes — so this, not the
+/// text-node path, is where the trim usually has to happen. The text is the
+/// element's entire content, so both ends are line ends; the exception is an
+/// inline-level element sharing a line with something else, where an edge space
+/// separates words rather than padding a line.
+fn own_text_line_trimmed<'a>(t: &Tree, node: &'a crate::tree::Node) -> &'a str {
+    const COLLAPSIBLE: [char; 4] = [' ', '\t', '\n', '\r'];
+    let text = node.text.as_str();
+    if INLINE_LEVEL_TAGS.contains(&t.name(node.tag))
+        && t.node(node.parent).is_some_and(|parent| {
+            parent.children.iter().filter(|&&c| generates_a_box(t, c)).count() > 1
+        })
+    {
+        return text;
+    }
+    text.trim_matches(COLLAPSIBLE)
 }
 
 /// Does this node produce a box the parent's layout has to make room for?
@@ -3286,6 +3401,155 @@ mod tests {
             assert!(!generates_a_box(t, blank));
             // A node that no longer exists never generates a box.
             assert!(!generates_a_box(t, 99_999));
+        });
+    }
+
+    /// White space at the ends of a LINE is removed (CSS Text §4.1.1). Vue's
+    /// compiler condenses `\n      ` to one space but does not remove it, and
+    /// two spaces of Inter at 15.75px are 9.3px — which is the difference
+    /// between apps/meet-probe's hero subtitle fitting its `max-w-sm` on one
+    /// line, where the browser puts it, and wrapping onto two.
+    #[test]
+    fn white_space_at_the_ends_of_a_line_is_removed() {
+        with_tree(|t| {
+            let p = t.intern("p");
+            let span = t.intern("span");
+
+            // `<p>` whose only child is a text node: both ends are line ends.
+            let block = t.create_element(p);
+            let only = t.create_text();
+            t.set_text(only, " Secure video meetings ".to_string());
+            t.insert(only, block, 0);
+            assert_eq!(
+                line_trimmed(t, t.node(only).unwrap(), only),
+                "Secure video meetings"
+            );
+
+            // `<p>a<span/> b </p>`: the last text node keeps its LEADING space,
+            // which is what separates it from the span, and loses its trailing
+            // one, which is at the end of the line.
+            let mixed = t.create_element(p);
+            let head = t.create_text();
+            t.set_text(head, " a ".to_string());
+            t.insert(head, mixed, 0);
+            let inline = t.create_element(span);
+            t.insert(inline, mixed, 0);
+            let tail = t.create_text();
+            t.set_text(tail, " b ".to_string());
+            t.insert(tail, mixed, 0);
+            assert_eq!(line_trimmed(t, t.node(head).unwrap(), head), "a ");
+            assert_eq!(line_trimmed(t, t.node(tail).unwrap(), tail), " b");
+
+            // `a<span> </span>b`: the span's only child is a space a browser
+            // DOES render — it is in the middle of the line, not at its end —
+            // so an inline-level parent with siblings suppresses the trim.
+            let line = t.create_element(p);
+            let before = t.create_text();
+            t.set_text(before, "a".to_string());
+            t.insert(before, line, 0);
+            let spacer = t.create_element(span);
+            t.insert(spacer, line, 0);
+            let after = t.create_text();
+            t.set_text(after, "b".to_string());
+            t.insert(after, line, 0);
+            let gap = t.create_text();
+            t.set_text(gap, " ".to_string());
+            t.insert(gap, spacer, 0);
+            assert_eq!(line_trimmed(t, t.node(gap).unwrap(), gap), " ");
+        });
+    }
+
+    /// The same rule for the text an ELEMENT carries itself, which is the path
+    /// Vue actually takes: `setElementText` for an element whose only child is
+    /// text, i.e. most elements — and the hero subtitle.
+    #[test]
+    fn an_elements_own_text_is_trimmed_at_the_ends_of_its_line() {
+        with_tree(|t| {
+            let p = t.intern("p");
+            let span = t.intern("span");
+
+            let block = t.create_element(p);
+            t.set_element_text(block, " Secure video meetings ".to_string());
+            assert_eq!(
+                own_text_line_trimmed(t, t.node(block).unwrap()),
+                "Secure video meetings"
+            );
+
+            // A lone inline element is still the whole line…
+            let lone = t.create_element(span);
+            t.set_element_text(lone, " x ".to_string());
+            assert_eq!(own_text_line_trimmed(t, t.node(lone).unwrap()), "x");
+
+            // …but one sharing a line with something else is not.
+            let row = t.create_element(p);
+            let word = t.create_text();
+            t.set_text(word, "a".to_string());
+            t.insert(word, row, 0);
+            let inline = t.create_element(span);
+            t.insert(inline, row, 0);
+            t.set_element_text(inline, " b ".to_string());
+            assert_eq!(own_text_line_trimmed(t, t.node(inline).unwrap()), " b ");
+        });
+    }
+
+    /// A percentage `flex-basis` stands in for the main-axis size (Flexbox
+    /// §9.2.3), and taffy falls back to that size when the percentage cannot be
+    /// resolved — which sized reka's Select viewport to the trigger's 40px
+    /// instead of to its items.
+    #[test]
+    fn a_percentage_flex_basis_drops_the_main_axis_size() {
+        fn flex(direction: Option<gpui::FlexDirection>) -> vn_css::ComputedStates {
+            let mut base = gpui::StyleRefinement::default();
+            base.display = Some(gpui::Display::Flex);
+            base.flex_direction = direction;
+            vn_css::ComputedStates { base: std::rc::Rc::new(base), ..Default::default() }
+        }
+        fn item() -> gpui::StyleRefinement {
+            let mut style = gpui::StyleRefinement::default();
+            style.flex_basis = Some(gpui::Length::Definite(gpui::relative(0.0)));
+            style.size.width = Some(gpui::Length::Definite(gpui::px(390.0).into()));
+            style.size.height = Some(gpui::Length::Definite(gpui::px(40.0).into()));
+            style
+        }
+
+        with_tree(|t| {
+            let div = t.intern("div");
+            let column = t.create_element(div);
+            t.node_mut(column).unwrap().computed = Some(flex(Some(gpui::FlexDirection::Column)));
+            let viewport = t.create_element(div);
+            t.insert(viewport, column, 0);
+
+            let mut style = item();
+            apply_percentage_flex_basis(&mut style, t, t.node(viewport).unwrap());
+            assert_eq!(style.size.height, None, "the main-axis size is the basis's job");
+            assert!(style.size.width.is_some(), "the cross axis is untouched");
+
+            // A ROW parent makes width the main axis instead.
+            let row = t.create_element(div);
+            t.node_mut(row).unwrap().computed = Some(flex(None)); // `row` is the initial value
+            let child = t.create_element(div);
+            t.insert(child, row, 0);
+            let mut style = item();
+            apply_percentage_flex_basis(&mut style, t, t.node(child).unwrap());
+            assert_eq!(style.size.width, None);
+            assert!(style.size.height.is_some());
+
+            // Outside a flex container the property is inert and the size is
+            // the size.
+            let block = t.create_element(div);
+            let inside = t.create_element(div);
+            t.insert(inside, block, 0);
+            let mut style = item();
+            apply_percentage_flex_basis(&mut style, t, t.node(inside).unwrap());
+            assert!(style.size.width.is_some() && style.size.height.is_some());
+
+            // …and so is an ABSOLUTE basis, which taffy resolves for itself.
+            let absolute = t.create_element(div);
+            t.insert(absolute, column, 0);
+            let mut style = item();
+            style.flex_basis = Some(gpui::Length::Definite(gpui::px(0.0).into()));
+            apply_percentage_flex_basis(&mut style, t, t.node(absolute).unwrap());
+            assert!(style.size.height.is_some());
         });
     }
 }
