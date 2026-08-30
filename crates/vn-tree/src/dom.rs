@@ -53,7 +53,13 @@ pub fn query(selector: &str, root: u32, mode: QueryMode) -> Result<Vec<u32>, Str
             QueryMode::Closest => ancestors_from(t, root),
         };
         let candidates: Vec<NodeRef<'_>> = ids.iter().map(|&id| NodeRef { tree: t, id }).collect();
-        let result = vn_css::query_all(selector, &candidates)?;
+        // `root` is the node the method was called on, which is exactly the
+        // DOM's *scoping root*: `el.querySelector(":scope > .x")` asks for a
+        // child of `el`, not of the document element. Passing it here is the
+        // whole of `:scope` support — parcel answers `Component::Scope` from
+        // this field.
+        let result =
+            vn_css::query_all_in(selector, &candidates, Some(NodeRef { tree: t, id: root }))?;
         for w in &result.warnings {
             crate::log::record("css", format!("[query] {w}"));
         }

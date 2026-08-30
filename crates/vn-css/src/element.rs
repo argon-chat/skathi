@@ -99,7 +99,26 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
     type Impl = Impl;
 
     fn opaque(&self) -> OpaqueElement {
-        OpaqueElement::new(self)
+        // `OpaqueElement` is parcel's identity token, and it is compared for
+        // EQUALITY — `:scope` is `element.opaque() == scope_element`. `El` is a
+        // `Copy` wrapper the matcher creates and drops freely, so
+        // `OpaqueElement::new(self)` would hand out the address of a temporary:
+        // two tokens for the same node whenever they were taken at different
+        // moments, and occasionally one token for two different nodes that
+        // happened to reuse a stack slot. The identity has to come from the
+        // NODE, and `MatchDom::key` is exactly that — stable, unique within a
+        // document, and already required by the group-anchor pass.
+        //
+        // `OpaqueElement::new` only stores the pointer, so a reference to a
+        // zero-sized type at the synthesized address is enough: a `&()` needs
+        // to be non-null and aligned (`()` has alignment 1) and never needs to
+        // point at readable memory, which is the same rule that makes
+        // `NonNull::<()>::dangling()` a valid reference. `+ 1` keeps it
+        // non-null for a node whose key is 0.
+        let address = (self.0.key() as usize).wrapping_add(1).max(1);
+        // SAFETY: see above — a dangling reference to a ZST at a non-null,
+        // trivially-aligned address, immediately turned back into a pointer.
+        OpaqueElement::new::<()>(unsafe { &*(address as *const ()) })
     }
 
     fn parent_element(&self) -> Option<Self> {

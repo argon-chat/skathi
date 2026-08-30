@@ -93,6 +93,29 @@ describe("selector matching goes to the host's real matcher", () => {
     expect(advisories[0]).toContain(":has()");
   });
 
+  test("`:scope` is anchored at the element the call was made on", () => {
+    const rt = createRuntime();
+    const { root, section, button } = tree(rt);
+    // `:scope` means the SCOPING ROOT — the node the method was invoked on,
+    // which the DOM defines per CALL and not per document. The JS side's whole
+    // share of that is passing the right root id; `vn_css::query_all_in`
+    // answers the rest. Two calls with the same selector and different subjects
+    // must therefore reach the host with different roots.
+    rt.host.queryAnswers.set(":scope > button|0", String(button.id));
+    expect(section.querySelector(":scope > button")).toBe(button);
+    expect(rt.host.queryCalls.at(-1)).toMatchObject({
+      selector: ":scope > button",
+      root: section.id,
+      mode: 0,
+    });
+
+    root.querySelectorAll(":scope > button");
+    expect(rt.host.queryCalls.at(-1).root).toBe(root.id);
+
+    // …and it is no longer a compat advisory: the engine runs it now.
+    expect(rt.advisories()).toEqual([]);
+  });
+
   test("an unmatched id in the answer is skipped rather than yielding undefined", () => {
     const rt = createRuntime();
     const { root } = tree(rt);

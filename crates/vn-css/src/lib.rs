@@ -1895,7 +1895,14 @@ where
             // browser that `:host` matches nothing too, so dropping it is exact
             // rather than approximate.
             Component::Slotted(_) | Component::Part(_) | Component::Host(_) => None,
-            Component::Scope => Some("`:scope`".into()),
+            // `:scope` is answered by parcel itself: it compares the candidate
+            // against `MatchingContext::scope_element`, and falls back to the
+            // ROOT element when there is none. Both halves are the spec's:
+            // Selectors-4 §3.5 makes `:scope` in a stylesheet — which has no
+            // scoping root — match the document element, and `query_all_in`
+            // sets the field for `el.querySelector(":scope > .x")`, where the
+            // scoping root is `el`. Nothing here has to be dropped.
+            Component::Scope => None,
             Component::Nesting => Some("an unflattened `&` nesting selector".into()),
             Component::Namespace(..) | Component::DefaultNamespace(_) => {
                 Some("a namespaced selector (`@namespace` is not implemented)".into())
@@ -2151,7 +2158,33 @@ pub struct QueryResult {
 /// Candidates rather than a root node because [`MatchDom`] deliberately has no
 /// child accessor (the matcher never walks downwards); the caller owns the tree
 /// and hands us its elements in document order.
+///
+/// `:scope` resolves to the ROOT element here — the same answer a stylesheet
+/// gets. A `querySelector` call has a scoping root and must use
+/// [`query_all_in`].
 pub fn query_all<D: MatchDom>(selector: &str, candidates: &[D]) -> Result<QueryResult, String> {
+    query_all_in(selector, candidates, None)
+}
+
+/// [`query_all`], with the element `:scope` names.
+///
+/// `el.querySelector(":scope > .x")` must anchor at `el`: the DOM gives every
+/// `querySelector` / `querySelectorAll` / `matches` / `closest` call a *scoping
+/// root*, which is the node the method was invoked on, and `:scope` is that
+/// node (Selectors-4 §3.5, DOM §4.2.6 "scope-matching a selectors string").
+/// Without it `:scope > div` asks whether the candidate is a child of the
+/// DOCUMENT ROOT, which is a different question with a different answer — the
+/// one leftover on the compat list that changed a result rather than describing
+/// a rendering limit.
+///
+/// `scope` is `Option` because the cascade has no scoping root: a `:scope` in a
+/// stylesheet matches the document element, which is what `parcel_selectors`
+/// does when the field is `None`.
+pub fn query_all_in<D: MatchDom>(
+    selector: &str,
+    candidates: &[D],
+    scope: Option<D>,
+) -> Result<QueryResult, String> {
     let sel = selector.trim();
     if sel.is_empty() {
         return Err("empty selector".into());
@@ -2202,12 +2235,20 @@ pub fn query_all<D: MatchDom>(selector: &str, candidates: &[D]) -> Result<QueryR
     if selectors.is_empty() {
         return Err(format!("`{sel}` matched no selector"));
     }
+    // The scoping root's identity token, taken once. `El::opaque` is derived
+    // from `MatchDom::key`, so it is the same token whichever `El` wrapper the
+    // matcher happens to be holding when it asks.
+    let scope_element = scope.map(|s| {
+        use parcel_selectors::Element as _;
+        element::El(s).opaque()
+    });
     let mut matched = Vec::new();
     for (i, candidate) in candidates.iter().enumerate() {
         let el = element::El(*candidate);
         let hit = selectors.iter().any(|s| {
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
                 MatchingContext::new(MatchingMode::Normal, None, None, QuirksMode::NoQuirks);
+            ctx.scope_element = scope_element;
             matches_selector(s, 0, None, &el, &mut ctx, &mut |_, _| {})
         });
         if hit {
@@ -2975,7 +3016,8 @@ mod tests {
             // `::before` / `::after` / `::placeholder` DO compile now; the rest
             // of the family still cannot match anything.
             (".box::first-line", "pseudo-element"),
-            (".box:scope", "scope"),
+            // (`.box:scope` used to be here. It is answerable now — see
+            // `scope_anchors_a_query_at_the_element_it_was_called_on`.)
         ] {
             let engine = audited(selector);
             assert!(
@@ -3776,6 +3818,77 @@ mod tests {
         assert!(err.contains("visited"), "{err}");
         // Injection guard: a selector may not carry a declaration block.
         assert!(query_all(".a { color: red } .b", &c).unwrap_err().contains('{'));
+    }
+
+    /// Two `.tab`s at different depths, so `:scope > .tab` has a different
+    /// answer from `.tab` and from a root-anchored `> .tab`.
+    fn nested_doc() -> Doc {
+        Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "page", 0, vec![]),  // 1 — the root
+                ("div", "nav", 1, vec![]),   // 2 — the scoping root below
+                ("a", "tab", 2, vec![]),     // 3 — a CHILD of .nav
+                ("div", "inner", 2, vec![]), // 4
+                ("a", "tab", 4, vec![]),     // 5 — a grandchild of .nav
+            ],
+        }
+    }
+
+    /// `el.querySelector(":scope > .x")` anchors at `el`, per Selectors-4 §3.5.
+    /// This is the case that made `:scope` worth implementing: the two answers
+    /// below differ, so dropping the selector was not "matches nothing", it was
+    /// the WRONG set.
+    #[test]
+    fn scope_anchors_a_query_at_the_element_it_was_called_on() {
+        let d = nested_doc();
+        let all = refs(&d);
+        // `.nav.querySelectorAll(...)` — candidates are .nav's descendants
+        // (ids 3, 4, 5 → indices 0, 1, 2 of this slice), scope is .nav itself.
+        let nav = all[1];
+        let under_nav: Vec<DocRef<'_>> = all[2..].to_vec();
+
+        // A CHILD combinator off the scope: only the direct child `.tab`.
+        let r = query_all_in(":scope > .tab", &under_nav, Some(nav)).unwrap();
+        assert_eq!(r.matched, vec![0], "only the .tab that is a child of .nav");
+
+        // A DESCENDANT combinator off the scope: both.
+        let r = query_all_in(":scope .tab", &under_nav, Some(nav)).unwrap();
+        assert_eq!(r.matched, vec![0, 2]);
+
+        // …and the answer really is different from the unscoped one, which
+        // resolves `:scope` to the document element (`.page`, id 1). Neither
+        // `.tab` is a child of `.page`.
+        let r = query_all(":scope > .tab", &under_nav).unwrap();
+        assert!(r.matched.is_empty(), "unscoped, `:scope` is the root");
+    }
+
+    /// The other two halves of the same field: a bare `:scope` is the scoping
+    /// root itself (which is how `el.matches(":scope")` answers true), and a
+    /// query with no scoping root falls back to the document element — which
+    /// is what a `:scope` written in a STYLESHEET means.
+    #[test]
+    fn scope_with_no_scoping_root_is_the_document_element() {
+        let d = nested_doc();
+        let all = refs(&d);
+        // `matches()` hands the matcher a one-element candidate list.
+        let nav = all[1];
+        assert_eq!(query_all_in(":scope", &[nav], Some(nav)).unwrap().matched, vec![0]);
+        assert!(query_all_in(":scope", &[all[2]], Some(nav)).unwrap().matched.is_empty());
+        // No scoping root: only `.page`, the root, answers to `:scope`.
+        assert_eq!(query_all(":scope", &all).unwrap().matched, vec![0]);
+    }
+
+    /// A `:scope` rule in a stylesheet is no longer dropped: it compiles, and
+    /// it lands on the root element, which is what a browser does with one.
+    #[test]
+    fn a_scope_rule_in_a_sheet_styles_the_root() {
+        let engine = Engine::compile(":scope { background-color: rgb(1 2 3) }");
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = themed_doc();
+        let states = cascade(&engine, &d, &Env::default());
+        assert!(states[0].base.background.is_some(), "the root is styled");
+        assert!(states[1].base.background.is_none(), "and nothing below it is");
     }
 
     // -----------------------------------------------------------------------
