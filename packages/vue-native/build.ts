@@ -2,8 +2,8 @@
 //
 // Usage: bun build.ts [app-entry.js] [dist-dir] [--watch]
 //
-//   dist/vendor.js            IIFE — @vue/runtime-core + src/runtime.js +
-//                             src/loader.js. Installs globalThis.__VN__.
+//   dist/vendor.js            IIFE — @vue/runtime-core + src/runtime.ts +
+//                             src/loader.ts. Installs globalThis.__VN__.
 //                             Rebuilt only when packages/vue-native/src/* change.
 //   dist/modules/<enc>.js     one CLASSIC SCRIPT per app source file:
 //                               __VN__.setCss("<id>", "...")      (if it has <style>)
@@ -111,7 +111,7 @@ const WATCH = argv.includes("--watch");
 const PKG_DIR = import.meta.dir; // .../packages/vue-native
 const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relative to this
 const RUNTIME_SRC_DIR = join(PKG_DIR, "src");
-const LOADER_ENTRY = join(RUNTIME_SRC_DIR, "loader.js");
+const LOADER_ENTRY = join(RUNTIME_SRC_DIR, "loader.ts");
 
 const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.js"));
 const APP_SRC_DIR = dirname(ENTRY_ABS);
@@ -364,7 +364,7 @@ async function buildVendor() {
         // filter only — bun 1.4 crashes on catch-all onResolve filters.
         name: "vendor-vue-alias",
         setup(b: any) {
-          b.onResolve({ filter: /^vue$/ }, () => ({ path: join(RUNTIME_SRC_DIR, "runtime.js") }));
+          b.onResolve({ filter: /^vue$/ }, () => ({ path: join(RUNTIME_SRC_DIR, "runtime.ts") }));
         },
       },
     ],
@@ -511,7 +511,7 @@ const vuePlugin = {
 
 const REQUIRE_RE = /\brequire\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
 
-/** Same candidate list as loader.js `resolveId` — keep the two in lockstep. */
+/** Same candidate list as loader.ts `resolveId` — keep the two in lockstep. */
 const CANDIDATE_EXTS = ["", ".js", ".ts", ".mjs", ".vue", "/index.js", "/index.ts", "/index.vue"];
 
 function normalizeId(path: string): string {
