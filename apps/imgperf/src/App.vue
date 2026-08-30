@@ -177,15 +177,22 @@ const stopDirector = () => {
 onMounted(() => {
   // VN_SCENARIO=<tab> pins one screen for the whole process — one scenario per
   // launch is what makes a working-set delta attributable to anything.
-  // `VN_SCENARIO` is an arbitrary string off the environment; the cast is what
-  // the JavaScript did implicitly.
-  const pinned = globalThis.__VN_SCENARIO__ as Tab | undefined;
+  // `VN_SCENARIO` is an arbitrary string off the environment, so it is CHECKED
+  // against the tab list rather than trusted. It used to be passed straight to
+  // `setTab`, and a typo ("gird400") silently left the harness on the compat
+  // pane — the `v-else` — and logged a scenario name that never ran.
+  const pinned = globalThis.__VN_SCENARIO__;
   if (pinned) {
     auto.value = false;
-    log(`pinned scenario: ${pinned}`);
+    if (!TABS.includes(pinned as Tab)) {
+      log(`pinned scenario "${pinned}" is not a scenario — staying idle. known: ${TABS.join(", ")}`);
+      return;
+    }
+    const scenario = pinned as Tab;
+    log(`pinned scenario: ${scenario}`);
     setTimeout(() => {
-      setTab(pinned);
-      if (pinned === "churn") startChurn();
+      setTab(scenario);
+      if (scenario === "churn") startChurn();
     }, 1500);
     return;
   }
