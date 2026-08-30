@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // The multi-page shell: RouterLink tabs + a KeepAlive'd RouterView.
 //
 // RouterLink renders an <a> (a generic host element here) and stamps
@@ -14,7 +14,7 @@
 // `:exclude` keeps ONE page out of the cache on purpose: the Lab tab remounts
 // every visit, which is what proves pinia state is independent of KeepAlive.
 import Titlebar from "./components/Titlebar.vue";
-import { useSession } from "./stores/session.js";
+import { useSession } from "./stores/session";
 
 const session = useSession();
 // Matched against the component NAME (`defineOptions({ name })`, or the

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // Web Audio — a real Firewheel graph behind the browser's AudioContext.
 //
 // Nothing on this page is host-specific except one clearly-marked node: it is
@@ -34,8 +34,11 @@ import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive,
 
 // --- context ----------------------------------------------------------------
 
+// `AudioContext` is ABSENT, not stubbed, when the host was built without the
+// `audio` feature — so this probe is the honest question and env.d.ts declares
+// the global `| undefined` to keep it meaningful.
 const supported = typeof AudioContext !== "undefined";
-const ctx = ref(null);
+const ctx = ref<VnAudioContext | null>(null);
 const state = reactive({
   ctxState: "—",
   sampleRate: 0,
@@ -45,25 +48,32 @@ const state = reactive({
 
 // Nodes, kept out of `reactive()` on purpose: they are host objects with live
 // getters, not data, and wrapping them in a Proxy buys nothing but confusion.
-let osc = null;
-let preAnalyser = null;
-let postAnalyser = null;
-let gainNode = null;
-let streamNode = null;
+let osc: VnOscillatorNode | null = null;
+let preAnalyser: VnAnalyserNode | null = null;
+let postAnalyser: VnAnalyserNode | null = null;
+// `VnGainNodeWithParam`, not `VnGainNode`: engine.d.ts types the latter's
+// `gain` as `{ value: number }` — the half the LiveKit shim writes — and
+// `rampGain()` below drives the AudioParam TIMELINE, which redjs implements in
+// full. See the note on the type in apps/env.d.ts.
+let gainNode: VnGainNodeWithParam | null = null;
+let streamNode: VnRedStreamSourceNode | null = null;
 
 const BARS = 48;
-const bars = ref(new Array(BARS).fill(0));
+const bars = ref<number[]>(new Array(BARS).fill(0));
 const meters = reactive({ pre: 0, post: 0 });
-const log = ref([]);
+const log = ref<string[]>([]);
 
-function note(line) {
+function note(line: string) {
   log.value.push(line);
   if (log.value.length > 60) log.value.shift();
 }
 
-function ensureContext() {
+function ensureContext(): VnAudioContext {
   if (ctx.value) return ctx.value;
-  const a = new AudioContext();
+  // Guarded by `supported` at every entry point (`onMounted` returns early,
+  // and the whole control surface is behind `v-else` of `v-if="!supported"`),
+  // so reaching here with no constructor is not a state this page can be in.
+  const a = new AudioContext!();
   ctx.value = a;
 
   preAnalyser = a.createAnalyser();
@@ -73,7 +83,7 @@ function ensureContext() {
   postAnalyser.fftSize = 2048;
   preAnalyser.smoothingTimeConstant = 0.7;
 
-  gainNode = a.createGain();
+  gainNode = a.createGain() as VnGainNodeWithParam;
   gainNode.gain.value = gain.value; // 0 at boot — see the header
 
   preAnalyser.connect(gainNode);
@@ -89,7 +99,7 @@ function ensureContext() {
 // --- oscillator -------------------------------------------------------------
 
 const WAVES = ["sine", "square", "sawtooth", "triangle"];
-const wave = ref("square");
+const wave = ref<string>("square");
 const freq = ref(440);
 const detune = ref(0);
 const playing = ref(false);
@@ -102,7 +112,8 @@ function startTone() {
   osc.frequency.value = freq.value;
   osc.detune.value = detune.value;
   osc.onended = () => note("oscillator: onended");
-  osc.connect(preAnalyser);
+  // `preAnalyser` is built by `ensureContext()` on the line above.
+  osc.connect(preAnalyser!);
   osc.start();
   playing.value = true;
   note(`oscillator start — ${wave.value} @ ${freq.value} Hz`);
@@ -117,19 +128,19 @@ function stopTone() {
   note("oscillator stop");
 }
 
-function setWave(w) {
+function setWave(w: string) {
   wave.value = w;
   // A live `type` write reaches the audio thread on the next block — no
   // rewiring, no click, exactly as in a browser.
   if (osc) osc.type = w;
 }
 
-function setFreq(hz) {
+function setFreq(hz: number) {
   freq.value = Math.round(hz);
   if (osc) osc.frequency.value = freq.value;
 }
 
-function setDetune(cents) {
+function setDetune(cents: number) {
   detune.value = Math.round(cents);
   if (osc) osc.detune.value = detune.value;
 }
@@ -142,8 +153,10 @@ function setDetune(cents) {
 // Media page's scrub bar.
 
 /** 0..1 across the clicked track. */
-function fraction(e) {
-  const track = e.currentTarget;
+function fraction(e: VnMouseEvent) {
+  // Rewritten at each step of the propagation walk, so it is the `.track` div
+  // this handler is bound to rather than whatever was clicked inside it.
+  const track = e.currentTarget as VnElement | null;
   if (!track) return 0;
   const rect = track.getBoundingClientRect();
   if (!rect.width) return 0;
@@ -156,13 +169,13 @@ function fraction(e) {
 // you actually want to hear the tone.
 const gain = ref(0);
 
-function setGain(v) {
+function setGain(v: number) {
   gain.value = Math.round(Math.min(1, Math.max(0, v)) * 100) / 100;
   if (gainNode) gainNode.gain.value = gain.value;
 }
 
 /** A scheduled fade, so the AudioParam timeline is exercised, not just `.value`. */
-function rampGain(target, seconds) {
+function rampGain(target: number, seconds: number) {
   const a = ensureContext();
   if (!gainNode) return;
   const t0 = a.currentTime;
@@ -178,7 +191,11 @@ function rampGain(target, seconds) {
 
 // --- generated AudioBuffer (a chirp made in JS) ------------------------------
 
-const chirp = reactive({ buffer: null, playing: false, peak: 0 });
+const chirp = reactive<{ buffer: VnAudioBuffer | null; playing: boolean; peak: number }>({
+  buffer: null,
+  playing: false,
+  peak: 0,
+});
 
 function buildChirp() {
   const a = ensureContext();
@@ -217,7 +234,7 @@ function playChirp() {
   if (!chirp.buffer) buildChirp();
   const src = a.createBufferSource();
   src.buffer = chirp.buffer;
-  src.connect(preAnalyser);
+  src.connect(preAnalyser!);
   src.onended = () => {
     chirp.playing = false;
     note("chirp: onended");
@@ -230,16 +247,18 @@ function playChirp() {
 // --- decodeAudioData --------------------------------------------------------
 
 const decoded = reactive({ status: "not loaded", channels: 0, frames: 0, rate: 0, seconds: 0, peak: 0 });
-let decodedBuffer = null;
+let decodedBuffer: VnAudioBuffer | null = null;
 
 async function loadFixture() {
   const a = ensureContext();
   decoded.status = "fetching…";
   try {
+    // engine.d.ts declares `fetch` optional — a bare engine may not have it.
+    // The app host does.
     // Ordinary `fetch` of an app asset, ordinary `arrayBuffer()`, ordinary
     // `decodeAudioData`. The decoder underneath is symphonia; WAV, FLAC, MP3,
     // OGG/Vorbis, AAC-LC/M4A, ALAC, AIFF, CAF and MKV all land here.
-    const res = await fetch("assets/chirp-mono-22k.wav");
+    const res = await fetch!("assets/chirp-mono-22k.wav");
     if (!res.ok) throw new Error(`fetch: HTTP ${res.status}`);
     const bytes = await res.arrayBuffer();
     decoded.status = `decoding ${bytes.byteLength} bytes…`;
@@ -247,7 +266,7 @@ async function loadFixture() {
     decodedBuffer = buf;
     const ch0 = buf.getChannelData(0);
     let peak = 0;
-    for (let i = 0; i < ch0.length; i++) peak = Math.max(peak, Math.abs(ch0[i]));
+    for (let i = 0; i < ch0.length; i++) peak = Math.max(peak, Math.abs(ch0[i]!));
     decoded.channels = buf.numberOfChannels;
     decoded.frames = buf.length;
     // NOTE the resample: the fixture is 22 050 Hz on disk and comes back at the
@@ -262,7 +281,7 @@ async function loadFixture() {
     // The advisory is the error message: a rejection here names the formats
     // that WOULD have worked and the ones that never will.
     decoded.status = "failed";
-    note(`decodeAudioData failed: ${e && e.message ? e.message : e}`);
+    note(`decodeAudioData failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -271,7 +290,7 @@ function playDecoded() {
   if (!decodedBuffer) return;
   const src = a.createBufferSource();
   src.buffer = decodedBuffer;
-  src.connect(preAnalyser);
+  src.connect(preAnalyser!);
   src.start();
   note("decoded fixture: start");
 }
@@ -289,7 +308,7 @@ function playDecoded() {
 
 const stream = reactive({ open: false, id: -1, pushed: 0, queued: 0, ready: false, under: false, over: false });
 let streamPhase = 0;
-let streamBlock = null;
+let streamBlock: Float32Array | null = null;
 
 function openStream() {
   const a = ensureContext();
@@ -299,7 +318,7 @@ function openStream() {
     channelCount: 1,
     latencySeconds: STREAM_TARGET_SECONDS,
   });
-  streamNode.connect(preAnalyser);
+  streamNode.connect(preAnalyser!);
   streamBlock = new Float32Array(STREAM_BLOCK);
   streamPhase = 0;
   stream.open = true;
@@ -316,7 +335,9 @@ function openStream() {
 
 function closeStream() {
   if (!streamNode) return;
-  streamNode.close();
+  // Probed rather than assumed: making a late native push report NotReady is
+  // the seam's lifetime rule, and not every engine revision has the method.
+  streamNode.close?.();
   streamNode.disconnect();
   streamNode = null;
   stream.open = false;
@@ -365,12 +386,12 @@ function feedStream() {
   let blocks = Math.min(4, Math.floor(streamDebt / STREAM_BLOCK));
   streamDebt -= blocks * STREAM_BLOCK;
   while (blocks-- > 0) {
-    for (let i = 0; i < streamBlock.length; i++) {
-      streamBlock[i] = Math.sin(streamPhase) * 0.8;
+    for (let i = 0; i < streamBlock!.length; i++) {
+      streamBlock![i] = Math.sin(streamPhase) * 0.8;
       streamPhase += (2 * Math.PI * 660) / 48000;
       if (streamPhase > 2 * Math.PI) streamPhase -= 2 * Math.PI;
     }
-    stream.pushed += streamNode.push(streamBlock);
+    stream.pushed += streamNode.push(streamBlock!);
   }
 
   stream.queued = Math.round((streamNode.queuedSeconds ?? 0) * 1000);
@@ -401,13 +422,13 @@ let raf = 0;
 let alive = false;
 // The byte view the analyser fills. Allocated once — a new Uint8Array per frame
 // at 165 fps is 27 MB/s of garbage.
-let freqBytes = null;
-let preTime = null;
-let postTime = null;
+let freqBytes: Uint8Array | null = null;
+let preTime: Float32Array | null = null;
+let postTime: Float32Array | null = null;
 
-function rms(view) {
+function rms(view: Float32Array) {
   let acc = 0;
-  for (let i = 0; i < view.length; i++) acc += view[i] * view[i];
+  for (let i = 0; i < view.length; i++) acc += view[i]! * view[i]!;
   return Math.sqrt(acc / view.length);
 }
 
@@ -422,42 +443,44 @@ function frame() {
     }
     if (stream.open) feedStream();
 
-    preAnalyser.getByteFrequencyData(freqBytes);
+    preAnalyser.getByteFrequencyData(freqBytes!);
     // Fold ~1024 linear bins into 48 bars. Logarithmic-ish widths, so the bass
     // does not get one bar and the top octave forty.
-    const out = new Array(BARS);
-    const n = freqBytes.length;
+    const out: number[] = new Array(BARS);
+    const n = freqBytes!.length;
     for (let b = 0; b < BARS; b++) {
       const lo = Math.floor(Math.pow(b / BARS, 2) * n);
       const hi = Math.max(lo + 1, Math.floor(Math.pow((b + 1) / BARS, 2) * n));
       let peak = 0;
-      for (let i = lo; i < hi && i < n; i++) if (freqBytes[i] > peak) peak = freqBytes[i];
+      for (let i = lo; i < hi && i < n; i++) if (freqBytes![i]! > peak) peak = freqBytes![i]!;
       out[b] = peak;
     }
     bars.value = out;
 
-    preAnalyser.getFloatTimeDomainData(preTime);
-    postAnalyser.getFloatTimeDomainData(postTime);
-    meters.pre = Math.round(rms(preTime) * 1000) / 1000;
-    meters.post = Math.round(rms(postTime) * 1000) / 1000;
+    preAnalyser.getFloatTimeDomainData(preTime!);
+    postAnalyser!.getFloatTimeDomainData(postTime!);
+    meters.pre = Math.round(rms(preTime!) * 1000) / 1000;
+    meters.post = Math.round(rms(postTime!) * 1000) / 1000;
 
     const now = Math.round(a.currentTime * 100) / 100;
     state.running = now > 0;
     state.currentTime = now;
     state.ctxState = a.state;
   }
-  raf = requestAnimationFrame(frame);
+  // engine.d.ts declares rAF optional — the unit-test harness has no frame
+  // pump. Under vn-app it is the host's, one callback per PAINTED frame.
+  raf = requestAnimationFrame!(frame);
 }
 
 function startLoop() {
   if (alive) return;
   alive = true;
-  raf = requestAnimationFrame(frame);
+  raf = requestAnimationFrame!(frame);
 }
 
 function stopLoop() {
   alive = false;
-  if (raf) cancelAnimationFrame(raf);
+  if (raf) cancelAnimationFrame!(raf);
   raf = 0;
 }
 
@@ -485,28 +508,33 @@ const recent = computed(() => log.value.slice(-9).reverse());
 
 // A capability matrix, read live off the objects rather than written down: a
 // row that says "no" because the method really is absent cannot go stale.
-const surface = computed(() => {
+const surface = computed<[string, string, string][]>(() => {
   if (!supported) return [];
   const a = ctx.value;
-  const has = (o, k) => (o && typeof o[k] === "function" ? "yes" : "—");
+  // The probe deliberately asks for keys the interface does not declare —
+  // several of these are ABSENT and the row saying so is the point. A
+  // `Record<string, unknown>` view is what "ask the object, do not trust the
+  // table" means in the type system.
+  const bag = a as unknown as Record<string, unknown> | null;
+  const has = (k: string) => (bag && typeof bag[k] === "function" ? "yes" : "—");
   return [
-    ["createOscillator", has(a, "createOscillator"), "sine/square/sawtooth/triangle, PolyBLEP band-limited"],
-    ["createGain", has(a, "createGain"), "AudioParam .value + setValueAtTime/linear/exponential/setTarget"],
-    ["createAnalyser", has(a, "createAnalyser"), "real FFT + time domain; fftSize caps at 4096 (spec: 32768)"],
-    ["createBufferSource", has(a, "createBufferSource"), "createBuffer / copyToChannel / getChannelData"],
-    ["createBiquadFilter", has(a, "createBiquadFilter"), "state-variable filter"],
-    ["createPanner", has(a, "createPanner"), "distance models + cones + REAL HRTF"],
-    ["createStereoPanner", has(a, "createStereoPanner"), "equal-power pan"],
-    ["decodeAudioData", has(a, "decodeAudioData"), "WAV, FLAC, MP3, OGG/Vorbis, AAC-LC/M4A, ALAC, AIFF, CAF, MKV"],
-    ["setSinkId", has(a, "setSinkId"), "output device selection with no <audio> element"],
-    ["createRedStreamSource", has(a, "createRedStreamSource"), "NOT a browser API — the streaming-PCM seam"],
-    ["createMediaElementSource", has(a, "createMediaElementSource"), "present but SILENT — see the advisory below"],
-    ["createDelay", has(a, "createDelay"), "absent, not stubbed"],
-    ["createConvolver", has(a, "createConvolver"), "absent, not stubbed"],
-    ["createDynamicsCompressor", has(a, "createDynamicsCompressor"), "absent, not stubbed"],
-    ["createChannelSplitter", has(a, "createChannelSplitter"), "absent — connect() has no port indices yet"],
-    ["createPeriodicWave", has(a, "createPeriodicWave"), "absent — oscillator.type = 'custom' throws by name"],
-    ["audioWorklet", a && a.audioWorklet ? "yes" : "—", "absent — no worklet thread, no WASM in the runtime"],
+    ["createOscillator", has("createOscillator"), "sine/square/sawtooth/triangle, PolyBLEP band-limited"],
+    ["createGain", has("createGain"), "AudioParam .value + setValueAtTime/linear/exponential/setTarget"],
+    ["createAnalyser", has("createAnalyser"), "real FFT + time domain; fftSize caps at 4096 (spec: 32768)"],
+    ["createBufferSource", has("createBufferSource"), "createBuffer / copyToChannel / getChannelData"],
+    ["createBiquadFilter", has("createBiquadFilter"), "state-variable filter"],
+    ["createPanner", has("createPanner"), "distance models + cones + REAL HRTF"],
+    ["createStereoPanner", has("createStereoPanner"), "equal-power pan"],
+    ["decodeAudioData", has("decodeAudioData"), "WAV, FLAC, MP3, OGG/Vorbis, AAC-LC/M4A, ALAC, AIFF, CAF, MKV"],
+    ["setSinkId", has("setSinkId"), "output device selection with no <audio> element"],
+    ["createRedStreamSource", has("createRedStreamSource"), "NOT a browser API — the streaming-PCM seam"],
+    ["createMediaElementSource", has("createMediaElementSource"), "present but SILENT — see the advisory below"],
+    ["createDelay", has("createDelay"), "absent, not stubbed"],
+    ["createConvolver", has("createConvolver"), "absent, not stubbed"],
+    ["createDynamicsCompressor", has("createDynamicsCompressor"), "absent, not stubbed"],
+    ["createChannelSplitter", has("createChannelSplitter"), "absent — connect() has no port indices yet"],
+    ["createPeriodicWave", has("createPeriodicWave"), "absent — oscillator.type = 'custom' throws by name"],
+    ["audioWorklet", bag && bag.audioWorklet ? "yes" : "—", "absent — no worklet thread, no WASM in the runtime"],
     ["OfflineAudioContext", typeof OfflineAudioContext !== "undefined" ? "yes" : "—", "absent — no offline rendering"],
   ];
 });
@@ -572,7 +600,7 @@ const surface = computed(() => {
 
         <div class="slider-row">
           <span class="lbl">frequency</span>
-          <div class="track" @click="(e) => setFreq(40 + fraction(e) * 4000)">
+          <div class="track" @click="(e: VnMouseEvent) => setFreq(40 + fraction(e) * 4000)">
             <div class="fill" :style="{ width: ((freq - 40) / 4000) * 100 + '%' }" />
           </div>
           <span class="val">{{ freq }} Hz</span>
@@ -580,7 +608,7 @@ const surface = computed(() => {
 
         <div class="slider-row">
           <span class="lbl">detune</span>
-          <div class="track" @click="(e) => setDetune(-1200 + fraction(e) * 2400)">
+          <div class="track" @click="(e: VnMouseEvent) => setDetune(-1200 + fraction(e) * 2400)">
             <div class="fill" :style="{ width: ((detune + 1200) / 2400) * 100 + '%' }" />
           </div>
           <span class="val">{{ detune }} cents</span>
@@ -588,7 +616,7 @@ const surface = computed(() => {
 
         <div class="slider-row">
           <span class="lbl">gain</span>
-          <div class="track" @click="(e) => setGain(fraction(e))">
+          <div class="track" @click="(e: VnMouseEvent) => setGain(fraction(e))">
             <div class="fill gainfill" :style="{ width: gain * 100 + '%' }" />
           </div>
           <span class="val">{{ gain.toFixed(2) }}</span>

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 
 const count = ref(0);
@@ -7,7 +7,8 @@ const count = ref(0);
 // (reload) must.
 console.log("[app] Counter setup ran");
 
-let timer = null;
+// `setInterval` answers a plain number here (engine.d.ts), not a Node Timeout.
+let timer: number | undefined;
 onMounted(() => {
   console.log("[app] Counter mounted");
   // Self-driving state, so component state can be observed surviving an edit

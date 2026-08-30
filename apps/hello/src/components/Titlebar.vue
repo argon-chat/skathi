@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // The app's own titlebar — docs/WINDOWING.md §12, the worked example.
 //
 // Two facts make it work, and both are CSS:
@@ -35,9 +35,17 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { appWindow } from "vue-native";
 
-const hostControls = ref(appWindow.chrome.hostControls);
+// `appWindow.chrome` is `Record<string, unknown>` — the prelude builds it, and
+// the runtime has no shape for it. `hostControls` is the "the host draws the
+// caption cluster" flag (docs/WINDOWING.md §2.3), which is a boolean.
+const hostControls = ref(Boolean(appWindow.chrome.hostControls));
 const maximized = ref(appWindow.isMaximized());
-const title = ref(document.title);
+// engine.d.ts types `document` as `VnDocument | undefined` because the bun
+// test harness has none. Under vn-app the runtime installs it before this
+// module evaluates, so it is always there — asserted once, here.
+const doc = document!;
+const wco = navigator!.windowControlsOverlay;
+const title = ref(doc.title);
 
 // Caption glyphs. Plain Unicode rather than the Segoe Fluent Icons private-use
 // codepoints the OS caption uses, so this renders with whatever font is
@@ -47,18 +55,18 @@ const CLOSE = "✕";
 const maxGlyph = computed(() => (maximized.value ? "❐" : "□"));
 
 const readGeometry = () => {
-  hostControls.value = appWindow.chrome.hostControls;
+  hostControls.value = Boolean(appWindow.chrome.hostControls);
 };
 const readState = () => {
   maximized.value = appWindow.isMaximized();
-  title.value = document.title;
+  title.value = doc.title;
 };
 
 onMounted(() => {
   readGeometry();
   // WICG's own note is that `geometrychange` fires "as frequently as a scroll
   // listener" — debounce it in anything heavier than this.
-  navigator.windowControlsOverlay.addEventListener("geometrychange", readGeometry);
+  wco.addEventListener("geometrychange", readGeometry);
   appWindow.addEventListener("maximize", readState);
   appWindow.addEventListener("unmaximize", readState);
   // `document.title` has no change event in any spec (it is a plain property),
@@ -66,7 +74,7 @@ onMounted(() => {
   globalThis.addEventListener("vn:title", readState);
 });
 onUnmounted(() => {
-  navigator.windowControlsOverlay.removeEventListener("geometrychange", readGeometry);
+  wco.removeEventListener("geometrychange", readGeometry);
   appWindow.removeEventListener("maximize", readState);
   appWindow.removeEventListener("unmaximize", readState);
   globalThis.removeEventListener("vn:title", readState);

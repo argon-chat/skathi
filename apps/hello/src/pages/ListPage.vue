@@ -1,12 +1,15 @@
-<script setup>
+<script setup lang="ts">
 import { onActivated, onDeactivated, ref } from "vue";
-import { useSession } from "../stores/session.js";
+import { useSession } from "../stores/session";
 
 const session = useSession();
 
 const rows = Array.from({ length: 25 }, (_, i) => `row ${i + 1}`);
 const scrollTop = ref(0);
-const onScroll = (e) => (scrollTop.value = e.target.scrollTop);
+// `VnEvent.target` is `unknown` — the host names the mirror node it dispatched
+// to, and the protocol has no way to say which element type that is. The cast
+// is to the surface being read, one property of it.
+const onScroll = (e: VnEvent) => (scrollTop.value = (e.target as VnElement).scrollTop);
 const wheelY = ref(0);
 
 // The scroll OFFSET is host state (a gpui ScrollHandle keyed by node id), not

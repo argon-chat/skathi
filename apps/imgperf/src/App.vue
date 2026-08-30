@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // imgperf — the <img> performance harness (milestone 10, track D).
 //
 // Every scenario is a tab; switching tabs calls __vn_perf_mark(), which flushes
@@ -11,12 +11,19 @@
 // render, which is the whole point of the compat policy.
 import { ref, computed, onMounted, onUnmounted } from "vue";
 
-const mark = (name) => globalThis.__vn_perf_mark && globalThis.__vn_perf_mark(name);
-const log = (msg) => globalThis.__vn_log && globalThis.__vn_log(msg);
+// `__vn_perf_mark` exists only under VN_PERF=1, so the guard is real.
+const mark = (name: string) => globalThis.__vn_perf_mark?.(name);
+// `__vn_log` is the app host's; a bare engine has no such global. protocol.d.ts
+// declares it as a plain `declare function`, i.e. always present, which
+// contradicts its own doc comment ("Present in the app host; absent in bare
+// engines") — so the optional call below has to reach for it off `globalThis`.
+// Reported; the fix is a `declare var … | undefined` there.
+const log = (msg: string) =>
+  (globalThis as { __vn_log?: (m: string) => void }).__vn_log?.(msg);
 
-const pad = (n) => String(n).padStart(2, "0");
-const thumb = (i) => `assets/thumbs/t${pad(i % 50)}.png`;
-const photo = (i) => `assets/photos/p${pad(i % 50)}.png`;
+const pad = (n: number) => String(n).padStart(2, "0");
+const thumb = (i: number) => `assets/thumbs/t${pad(i % 50)}.png`;
+const photo = (i: number) => `assets/photos/p${pad(i % 50)}.png`;
 
 // (a) 400 nodes drawn from 50 distinct files — every file after the first 50
 //     uses is a CACHE HIT, which is the gallery-scroll case.
@@ -36,16 +43,43 @@ const scrollRows = Array.from({ length: 120 }, (_, i) => ({
 // "images are expensive" apart from "400 nodes are expensive".
 const divs400 = Array.from({ length: 400 }, (_, i) => `hsl(${(i * 37) % 360} 60% 45%)`);
 
-const tab = ref("idle");
-const setTab = (t) => {
+/** Every scenario the harness can be on — also the key set of `counts` below,
+ *  which is what the tab strip's node-count readout indexes. */
+type Tab =
+  | "idle"
+  | "grid400"
+  | "divs400"
+  | "grid50"
+  | "scroll"
+  | "pan"
+  | "churn"
+  | "fit"
+  | "compat";
+const TABS: Tab[] = [
+  "idle",
+  "grid400",
+  "divs400",
+  "grid50",
+  "scroll",
+  "pan",
+  "churn",
+  "fit",
+  "compat",
+];
+
+const tab = ref<Tab>("idle");
+const setTab = (t: Tab) => {
+  // engine.d.ts declares `requestAnimationFrame`/`cancelAnimationFrame`
+  // optional — the unit-test harness has no frame pump. Under vn-app they are
+  // the host's, driven once per PAINTED frame, so they are always there.
   if (tab.value === "pan" && t !== "pan") {
-    cancelAnimationFrame(panRaf);
+    cancelAnimationFrame!(panRaf);
     panRaf = 0;
   }
   if (tab.value === "churn" && t !== "churn") stopChurn();
   tab.value = t;
   mark(t);
-  if (t === "pan" && !panRaf) panRaf = requestAnimationFrame(panTick);
+  if (t === "pan" && !panRaf) panRaf = requestAnimationFrame!(panTick);
 };
 
 // (d) v-for swap stress: replace the whole list every 500ms for 10s. Keyed by
@@ -53,7 +87,7 @@ const setTab = (t) => {
 //     node churn plus decode churn.
 const churnPool = [...Array(50).keys()].map(thumb).concat([...Array(50).keys()].map(photo));
 const churnList = ref(churnPool.slice(0, 60));
-let churnTimer = null;
+let churnTimer: number | undefined;
 let churnRounds = 0;
 const churning = ref(false);
 const startChurn = () => {
@@ -71,7 +105,7 @@ const startChurn = () => {
 const stopChurn = () => {
   if (!churnTimer) return;
   clearInterval(churnTimer);
-  churnTimer = null;
+  churnTimer = undefined;
   churning.value = false;
   log(`churn done: ${churnRounds} swaps`);
   mark("churn-done");
@@ -79,7 +113,7 @@ const stopChurn = () => {
 onUnmounted(() => {
   stopChurn();
   stopDirector();
-  if (panRaf) cancelAnimationFrame(panRaf);
+  if (panRaf) cancelAnimationFrame!(panRaf);
 });
 
 // (c2) "pan": a virtualised window sliding over 400 distinct images at frame
@@ -97,7 +131,7 @@ const panList = computed(() =>
 let panRaf = 0;
 const panTick = () => {
   panStart.value = (panStart.value + 1) % panPool.length;
-  panRaf = requestAnimationFrame(panTick);
+  panRaf = requestAnimationFrame!(panTick);
 };
 
 // (e) one 2048px source, five object-fit values, one box size.
@@ -109,7 +143,7 @@ const fits = ["fill", "contain", "cover", "scale-down", "none"];
 // ITSELF and the log is reproducible without any input at all. Buttons still
 // work; the first click stops the director.
 // ---------------------------------------------------------------------------
-const SEQUENCE = [
+const SEQUENCE: [Tab, number][] = [
   ["idle", 6000],
   ["divs400", 8000],
   ["grid400", 8000],
@@ -120,9 +154,9 @@ const SEQUENCE = [
   ["compat", 14000],
   ["idle", 4000],
 ];
-let directorTimer = null;
+let directorTimer: number | undefined;
 const auto = ref(true);
-const runSequence = (i) => {
+const runSequence = (i: number) => {
   if (!auto.value) return;
   if (i >= SEQUENCE.length) {
     // Loop: the visual scenarios have to stay on screen long enough to be
@@ -130,7 +164,7 @@ const runSequence = (i) => {
     log("director: sequence done, looping");
     i = 0;
   }
-  const [name, ms] = SEQUENCE[i];
+  const [name, ms] = SEQUENCE[i]!;
   setTab(name);
   if (name === "churn") startChurn();
   directorTimer = setTimeout(() => runSequence(i + 1), ms);
@@ -138,12 +172,14 @@ const runSequence = (i) => {
 const stopDirector = () => {
   auto.value = false;
   if (directorTimer) clearTimeout(directorTimer);
-  directorTimer = null;
+  directorTimer = undefined;
 };
 onMounted(() => {
   // VN_SCENARIO=<tab> pins one screen for the whole process — one scenario per
   // launch is what makes a working-set delta attributable to anything.
-  const pinned = globalThis.__VN_SCENARIO__;
+  // `VN_SCENARIO` is an arbitrary string off the environment; the cast is what
+  // the JavaScript did implicitly.
+  const pinned = globalThis.__VN_SCENARIO__ as Tab | undefined;
   if (pinned) {
     auto.value = false;
     log(`pinned scenario: ${pinned}`);
@@ -189,7 +225,7 @@ const counts = computed(() => ({
 <template>
   <div class="app">
     <div class="tabs">
-      <button v-for="t in ['idle','grid400','divs400','grid50','scroll','pan','churn','fit','compat']" :key="t"
+      <button v-for="t in TABS" :key="t"
               class="tab" :class="{ on: tab === t }" @click="stopDirector(); setTab(t)">{{ t }}</button>
       <span class="meta">{{ tab }} · {{ counts[tab] }} img nodes{{ auto ? " · auto" : "" }}</span>
     </div>

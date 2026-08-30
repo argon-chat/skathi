@@ -1,6 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import { onActivated, onMounted, onUnmounted, ref, shallowRef } from "vue";
-import { useSession } from "./stores/session.js";
+import { useSession } from "./stores/session";
 
 // `name` is what <KeepAlive>'s include/exclude matches on — the shell excludes
 // exactly this page, so it is the one tab that really unmounts and remounts on
@@ -43,11 +43,15 @@ const open = ref(false);
 // Nothing about this page is native-specific — it is the same code a browser
 // would run, which is the whole claim being demonstrated.
 const WS_URL = "ws://127.0.0.1:8787/";
+// Indexed by `readyState`, which is 0..3 — so the lookup can miss as far as the
+// compiler is concerned, and every use below falls back rather than rendering
+// "undefined".
 const STATES = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
+const stateName = (s: VnWebSocket) => STATES[s.readyState] ?? "UNKNOWN";
 
 // shallowRef, not ref: a WebSocket is a host object and wrapping it in Vue's
 // deep reactive proxy would put a Proxy between us and its native getters.
-const sock = shallowRef(null);
+const sock = shallowRef<VnWebSocket | null>(null);
 const wsState = ref("CLOSED");
 const wsProtocol = ref("");
 const wsBuffered = ref(0);
@@ -60,7 +64,7 @@ const wsLog = ref("idle — start the echo server, then press connect");
 
 function syncWs() {
   const s = sock.value;
-  wsState.value = s ? STATES[s.readyState] : "CLOSED";
+  wsState.value = s ? stateName(s) : "CLOSED";
   wsBuffered.value = s ? s.bufferedAmount : 0;
   wsProtocol.value = s ? s.protocol : "";
   wsBinaryType.value = s ? s.binaryType : "blob";
@@ -85,13 +89,15 @@ function wsConnect() {
     syncWs();
   };
   s.onmessage = async (e) => {
-    if (typeof e.data === "string") {
-      rxText.value = e.data;
+    const data = e.data;
+    if (typeof data === "string") {
+      rxText.value = data;
     } else {
       // binaryType "blob" (the browser default) gives a Blob; "arraybuffer"
       // gives an ArrayBuffer. Both are shown as the same byte list.
-      const kind = e.data instanceof Blob ? "Blob" : "ArrayBuffer";
-      const buf = e.data instanceof Blob ? await e.data.arrayBuffer() : e.data;
+      const isBlob = data instanceof Blob;
+      const kind = isBlob ? "Blob" : "ArrayBuffer";
+      const buf = isBlob ? await data.arrayBuffer() : data;
       const bytes = Array.from(new Uint8Array(buf));
       rxBin.value = `${kind}(${bytes.length}) [${bytes.join(", ")}]`;
     }
@@ -102,7 +108,7 @@ function wsConnect() {
 function wsSendText() {
   const s = sock.value;
   if (!s || s.readyState !== WebSocket.OPEN) {
-    wsLog.value = "send refused — the socket is " + (s ? STATES[s.readyState] : "absent");
+    wsLog.value = "send refused — the socket is " + (s ? stateName(s) : "absent");
     return;
   }
   txText.value += 1;
@@ -113,7 +119,7 @@ function wsSendText() {
 function wsSendBinary() {
   const s = sock.value;
   if (!s || s.readyState !== WebSocket.OPEN) {
-    wsLog.value = "send refused — the socket is " + (s ? STATES[s.readyState] : "absent");
+    wsLog.value = "send refused — the socket is " + (s ? stateName(s) : "absent");
     return;
   }
   txBin.value += 1;

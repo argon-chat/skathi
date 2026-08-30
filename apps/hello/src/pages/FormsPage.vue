@@ -1,6 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from "vue";
-import { useSession } from "../stores/session.js";
+import { useSession } from "../stores/session";
 
 // --- pinia -----------------------------------------------------------------
 // The store is created on first use and lives in the app's effect scope, so
@@ -15,7 +15,7 @@ const prose = ref("");
 const noteLines = computed(() => notes.value.split("\n").length);
 const focused = ref("nothing");
 
-const submitted = ref([]);
+const submitted = ref<string[]>([]);
 const submit = () => {
   const v = name.value.trim();
   if (!v) return;
@@ -23,13 +23,13 @@ const submit = () => {
   session.addNote(v); // …and into the SHARED store, read by every other tab
   name.value = "";
 };
-const ellipsis = (s) => (s.length > 14 ? s.slice(0, 14) + "…" : s);
+const ellipsis = (s: string) => (s.length > 14 ? s.slice(0, 14) + "…" : s);
 const submittedText = computed(() => submitted.value.map(ellipsis).join(" · ") || "—");
 
 // preventDefault() on keydown cancels the widget's editing, as in a browser.
 const blocked = ref(0);
 const lastKey = ref("—");
-const guardDigits = (e) => {
+const guardDigits = (e: VnKeyboardEvent) => {
   lastKey.value = JSON.stringify(e.key);
   if (e.key.length === 1 && e.key >= "0" && e.key <= "9") {
     e.preventDefault();

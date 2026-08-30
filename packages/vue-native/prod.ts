@@ -56,7 +56,7 @@ const PKG_DIR = import.meta.dir; // .../packages/vue-native
 const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relative to this
 const RUNTIME_ENTRY = join(PKG_DIR, "src", "runtime.ts");
 
-const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.js"));
+const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.ts"));
 const APP_SRC_DIR = dirname(ENTRY_ABS);
 const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
 

@@ -113,7 +113,7 @@ const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relat
 const RUNTIME_SRC_DIR = join(PKG_DIR, "src");
 const LOADER_ENTRY = join(RUNTIME_SRC_DIR, "loader.ts");
 
-const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.js"));
+const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.ts"));
 const APP_SRC_DIR = dirname(ENTRY_ABS);
 const DIST = resolve(positional[1] ?? join(PKG_DIR, "dist"));
 const MODULES_DIR = join(DIST, "modules");
@@ -160,7 +160,7 @@ function readWindowConfig(): Record<string, unknown> | undefined {
 // so the executable cannot be the name either.
 //
 // Optional. Without it the host falls back to the app directory of the entry
-// module ("apps/hello/src/main.js" -> "hello"), which is right for every app in
+// module ("apps/hello/src/main.ts" -> "hello"), which is right for every app in
 // this repo; declaring `"name"` matters when the shipped app is called
 // something other than its folder.
 function readAppName(): string | undefined {

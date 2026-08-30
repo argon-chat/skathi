@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 // Everything visual that is *not* layout/state lives here now: real Tailwind
 // utilities, GPU backdrop blur, and the `--shading` effect system. Moved off
 // the Lab page in milestone 10 so no single tab outgrows the window again.
