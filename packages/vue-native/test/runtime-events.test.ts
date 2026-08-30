@@ -309,3 +309,48 @@ describe("the listener flag is only written when it changes", () => {
     ]);
   });
 });
+
+// `v-model` on a text input. The `.lazy` case is the interesting one: it asks
+// to update on `change`, and `tree.rs` has no `EV_CHANGE` — the host sources no
+// such event — so binding one used to register a listener that could never
+// fire. The model never updated, and the only sign was an advisory about an
+// unknown event NAME, which reads like a typo rather than a broken directive.
+describe("v-model", () => {
+  /** What Vue hands `created`: the element, the binding, the vnode. */
+  const bind = (rt, el, modifiers, onUpdate) =>
+    rt.vModelText.created(el, { modifiers }, { props: { "onUpdate:modelValue": onUpdate } });
+
+  test("updates the model on input", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("input");
+    let model = null;
+    bind(rt, el, {}, (v) => (model = v));
+    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
+    expect(model).toBe("typed");
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test(".lazy still updates the model, and says how it differs", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("input");
+    let model = null;
+    bind(rt, el, { lazy: true }, (v) => (model = v));
+    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
+    // Before m20 this was `null`: the listener was bound to `change`, which the
+    // host never delivers, so the model stayed untouched forever.
+    expect(model).toBe("typed");
+    const advisories = rt.advisories();
+    expect(advisories.length).toBe(1);
+    expect(advisories[0]).toContain("v-model.lazy updates on every keystroke");
+    expect(advisories[0]).toContain("does not source a `change` event");
+  });
+
+  test(".number and .trim still apply", () => {
+    const rt = createRuntime();
+    const el = rt.nodeOps.createElement("input");
+    let model = null;
+    bind(rt, el, { number: true, trim: true }, (v) => (model = v));
+    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "  42  ");
+    expect(model).toBe(42);
+  });
+});

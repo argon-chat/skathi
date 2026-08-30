@@ -1948,11 +1948,18 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // this hook for exactly that reason; without the call, `beforeunload` could
   // never veto a close because the window would never count as interacted with.
   if (name === "keydown" || name === "mousedown") globalThis.__vnStickyActivation?.();
-  // input/change: the payload string is the new value — mirror it onto the
-  // node BEFORE dispatch so `e.target.value` reads like the browser.
+  // input: the payload string is the new value — mirror it onto the node
+  // BEFORE dispatch so `e.target.value` reads like the browser.
   // (`value`, `scrollLeft` and `scrollTop` are element fields; the host only
   // ever targets an element with these three events, which is what the casts
   // record — a text node reaching here would be a host bug, not a JS one.)
+  //
+  // `change` is listed with it deliberately, and is currently UNREACHABLE:
+  // `CODE_TO_NAME` is built from `EV_CODES`, which mirrors `tree.rs`, and
+  // `tree.rs` has no `EV_CHANGE`. It stays because the day the host sources one
+  // this is the line that has to already be right — and `test/protocol-codes
+  // .test.ts` is what will notice the code arriving. See `vModelText`, which is
+  // the directive that wanted it.
   if ((name === "input" || name === "change") && key != null)
     (target as MirrorElement).value = key;
   // scroll: same idea — the position lives on the element, not on the event.
@@ -2882,7 +2889,23 @@ function setElValue(el: MirrorElement, value: unknown): void {
 export const vModelText = {
   created(el: MirrorElement, { modifiers = {} }: DirectiveBindingLike, vnode: VNodeLike) {
     el[assignKey] = vnode.props && vnode.props["onUpdate:modelValue"];
-    el.addEventListener(modifiers.lazy ? "change" : "input", () => {
+    // `.lazy` asks to update on `change` instead of `input`. There is no
+    // `change` in `tree.rs` — the host sources no such event — so binding one
+    // registered a listener that could never fire, and `v-model.lazy` simply
+    // never updated the model. The only sign was one advisory about an unknown
+    // event NAME, which reads like a typo rather than like a broken directive.
+    //
+    // Falling back to `input` makes the binding work and says exactly how it
+    // differs. That is the compat-first order of preference: a named
+    // divergence beats a silent nothing.
+    if (modifiers.lazy) {
+      warnCompat(
+        "v-model:lazy",
+        "v-model.lazy updates on every keystroke here, not on `change` — the native host does " +
+          "not source a `change` event yet, so binding one would never fire at all",
+      );
+    }
+    el.addEventListener("input", () => {
       // `.trim` runs before `.number`, so `v` is still a string at both string
       // uses below — which is exactly what the two casts assert.
       let v: string | number = el.value;

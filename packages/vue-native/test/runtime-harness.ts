@@ -377,7 +377,8 @@ export function createRuntime(options = {}) {
     ...params,
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
-       writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage };`,
+       writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
+       vModelText, vShow };`,
   )(...args);
 
   return {
