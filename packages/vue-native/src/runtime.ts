@@ -1902,6 +1902,42 @@ const CODE_TO_NAME: Record<number, string | undefined> = Object.fromEntries(
   Object.entries(EV_CODES).map(([k, v]) => [v, k]),
 );
 
+/**
+ * Is there anything on this event's path that would be CALLED for `name`?
+ *
+ * The host arms ONE BIT PER CODE, and several event names share a code — a
+ * `pointermove` listener arms `mousemove`, and a `mousedown` listener arms the
+ * bit `pointerdown` rides on. So the host delivering an event does not mean
+ * anyone is listening for the particular NAME about to be synthesized: the
+ * dispatcher below used to build, and walk, one full W3C event per derived name
+ * on every delivery, whether or not a single handler existed for it.
+ *
+ * That is worth avoiding rather than tidying: `scripts/boundary-cost.ts`
+ * measures redjs's `new MouseEvent(...)` at roughly two thirds of the entire
+ * cost of dispatching an event — far more than the propagation walk it feeds —
+ * and it is engine code, so no amount of work on our side makes one cheaper.
+ * The only saving available is not building it.
+ *
+ * The walk is the same ancestor chain `propagate` would take, minus the
+ * allocation: a handful of Map lookups against a 16 µs constructor. It is
+ * deliberately CONSERVATIVE — it ignores `bubbles`, so a listener above a
+ * non-bubbling event's target still counts as a reason to synthesize. Being
+ * wrong in that direction costs an event object; being wrong in the other
+ * direction would drop a handler.
+ */
+function hasListener(target: MirrorNode, name: string): boolean {
+  for (let n: MirrorNode | null = target; n; n = n.parentNode) {
+    const buckets = handlers.get(n.id)?.[name];
+    if (buckets && bucketsAlive(buckets)) return true;
+  }
+  // …and the document/window registry, which sits one level above the root.
+  for (const m of globalHandlers.values()) {
+    const buckets = m[name];
+    if (buckets && bucketsAlive(buckets)) return true;
+  }
+  return false;
+}
+
 __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   const name = CODE_TO_NAME[evCode];
   const target = nodesById.get(nodeId);
@@ -1933,15 +1969,24 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   if (derived) {
     for (const dn of derived) {
       if (!DERIVED[dn as DerivedEventName].pre) continue;
+      if (!hasListener(target, dn)) continue;
       if (!propagate(target, dn, synthesize(dn, a, b, c, d, key))) proceed = false;
     }
   }
-  const ev = synthesize(name, a, b, c, d, key);
-  if (!proceed && ev.preventDefault) ev.preventDefault();
-  proceed = propagate(target, name, ev) && proceed;
+  // Skipping the source event when nothing listens for it is exactly as safe:
+  // with no handler to run, `propagate` can only return `!ev.defaultPrevented`,
+  // and the sole thing that could have set that flag is the `preventDefault()`
+  // two lines below — whose whole job is to make `proceed` false, which it
+  // already is.
+  if (hasListener(target, name)) {
+    const ev = synthesize(name, a, b, c, d, key);
+    if (!proceed && ev.preventDefault) ev.preventDefault();
+    proceed = propagate(target, name, ev) && proceed;
+  }
   if (derived) {
     for (const dn of derived) {
       if (DERIVED[dn as DerivedEventName].pre) continue;
+      if (!hasListener(target, dn)) continue;
       propagate(target, dn, synthesize(dn, a, b, c, d, key));
     }
   }
