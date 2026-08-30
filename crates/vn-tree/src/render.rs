@@ -949,6 +949,7 @@ fn build_node<V: 'static>(
             apply_self_blur(d.style(), t, node, &extras);
             apply_inline_row(d.style(), t, node, align);
             apply_inline_align(d.style(), &extras, align);
+            apply_percentage_flex_basis(d.style(), t, node);
             // "The window IS the root" (see `createApp().mount()`): the root
             // element is vue-native's viewport, so it fills the box the host
             // gives it unless a rule says otherwise. Without this it sizes to
@@ -1357,6 +1358,53 @@ fn apply_inline_row(
             Some(gpui::TextAlign::Right) => Some(gpui::JustifyContent::End),
             _ => None,
         };
+    }
+}
+
+/// A percentage `flex-basis` REPLACES the main-axis size — and when it cannot
+/// be resolved, the size does not come back.
+///
+/// CSS Flexbox §9.2.3 step A takes the flex base size from a *definite* used
+/// flex basis. A percentage measured against a container with an indefinite
+/// main size is not definite, so the item falls through to step E and is sized
+/// by its CONTENT. taffy stops one step short — `flex_basis.or(main_size)` —
+/// and reads the item's own `height`/`width` instead, which is exactly the
+/// property a non-`auto` flex basis is defined to stand in for.
+///
+/// reka's Select viewport is precisely that shape: reka writes `flex: 1`
+/// inline (i.e. `flex-basis: 0%`) and shadcn adds
+/// `h-[--reka-select-trigger-height]`, inside reka's own `display: flex;
+/// flex-direction: column` listbox whose height is auto. Measured on the same
+/// markup in Edge: the viewport is 103px, its content's height. Ours was 40px,
+/// the trigger's — so the list showed its group label and clipped every item.
+///
+/// Dropping the main-axis size whenever a percentage basis is in force is
+/// confined to that case: where the percentage DOES resolve, taffy already took
+/// the basis and never looked at the size, so this is a no-op there.
+fn apply_percentage_flex_basis(
+    style: &mut gpui::StyleRefinement,
+    t: &Tree,
+    node: &crate::tree::Node,
+) {
+    if !matches!(
+        style.flex_basis,
+        Some(gpui::Length::Definite(gpui::DefiniteLength::Fraction(_)))
+    ) {
+        return;
+    }
+    // Only a FLEX ITEM has a flex basis; in any other container the property is
+    // inert and the size is the size.
+    let Some(parent) = t.node(node.parent) else { return };
+    let Some(parent_style) = parent.computed.as_ref().map(|cs| &cs.base) else { return };
+    if parent_style.display != Some(gpui::Display::Flex) {
+        return;
+    }
+    match parent_style.flex_direction {
+        Some(gpui::FlexDirection::Column) | Some(gpui::FlexDirection::ColumnReverse) => {
+            style.size.height = None;
+        }
+        // `None` is CSS's initial `row`.
+        _ => style.size.width = None,
     }
 }
 

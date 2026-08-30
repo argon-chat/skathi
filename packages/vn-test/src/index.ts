@@ -25,5 +25,7 @@ export { expect, vnExpect, LocatorAssertions } from "./expect";
 export type { AssertOptions } from "./expect";
 export { flattenStyleDump, styleValue, styleKeys, parseHsla, resolveProperty } from "./styles";
 export type { StyleEntry } from "./styles";
+export { readPng, changedRegion, inset, Png } from "./pixels";
+export type { Rect } from "./pixels";
 export { ARTIFACTS_DIR, artifactPath } from "./artifacts";
 export { REPO, DEFAULT_EXE, WORK_DIR } from "./dist";

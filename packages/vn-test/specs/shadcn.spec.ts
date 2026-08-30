@@ -11,7 +11,17 @@
 // binds its own ephemeral port and writes its own devtools.json.
 
 import { afterAll, describe, test } from "bun:test";
-import { expect, launch, parseHsla, styleValue } from "../src/index";
+import {
+  artifactPath,
+  changedRegion,
+  expect,
+  inset,
+  launch,
+  parseHsla,
+  readPng,
+  styleValue,
+} from "../src/index";
+import type { Rect } from "../src/index";
 
 const app = await launch({ app: "shadcn", window: [1400, 900], label: "shadcn" });
 afterAll(() => app.close());
@@ -20,6 +30,17 @@ const T = 30_000;
 
 /** The themed root: the one element `.dark` / `.light` is stamped on. */
 const ROOT = ".h-full.bg-background";
+
+/**
+ * Waits out an overlay's enter/exit animation before a PIXEL assertion.
+ *
+ * A DOM assertion does not need this — the node and its `data-state` are there
+ * on the first frame — but a screenshot taken 20 ms after the click catches a
+ * half-transparent box mid-slide, which is not the picture the test is about.
+ * 150 ms is the whole of shadcn's `duration-200`-beaten-by-`animate-in`, plus
+ * room for a debug build's frame.
+ */
+const settle = () => new Promise((r) => setTimeout(r, 400));
 
 const rootBackground = async () => {
   const { computed } = await app.locator(ROOT).styles();
@@ -109,6 +130,136 @@ describe("shadcn", () => {
     // Back to where the file found it, so the tests stay order-independent.
     await toggle.click();
     await expect(toggle).toHaveText("theme: system");
+  }, T);
+
+  // --------------------------------------------------------------------------
+  // m20 — the three teleported-content paint defects.
+  //
+  // All three come from the same place: an overlay reaches its final position
+  // through a `transform`, and three separate rects had to be mapped through it
+  // before being compared with anything in window space. Two of them already
+  // were; `Window::paint_layer` was not, so a glyph run's LAYER was opened at
+  // the element's untransformed rect and the draw order it handed every glyph
+  // was computed against a region the text does not occupy. The label was
+  // painted, in the right place, in the right colour — underneath its own
+  // button. Nothing but a pixel can see that, which is what these three do.
+  // --------------------------------------------------------------------------
+
+  test("the dialog's Confirm label is painted, not buried under its own button", async () => {
+    await app.locator("[aria-haspopup=dialog]").first().click();
+    try {
+      await expect(app.locator("[role=dialog]")).toBeVisible();
+      // The dialog really enters now (m19): 150 ms of fade + zoom + slide. A
+      // screenshot taken while that runs catches a translucent box on its way
+      // in, which is a different picture from the one this test is about.
+      await settle();
+      const dialog = await app.locator("[role=dialog]").boundingBox();
+      const button = await app.locator("[role=dialog] button.bg-primary").boundingBox();
+      const shot = readPng(await app.screenshot(artifactPath("shadcn-dialog-confirm", "png")));
+
+      // shadcn centres the dialog with `-translate-x-1/2 -translate-y-1/2`, and
+      // `getBoundingClientRect` reports the box LAYOUT gave it (a transform is
+      // a paint-time offset here, m13) — so the pill is at one of two places.
+      // Take whichever one is actually white; allowing both keeps this honest
+      // if the rect ever starts reporting the transformed box.
+      const candidates: Rect[] = [
+        { x: button.x, y: button.y, w: button.w, h: button.h },
+        { x: button.x - dialog.w / 2, y: button.y - dialog.h / 2, w: button.w, h: button.h },
+      ];
+      const pill = candidates.find((rect) => {
+        const core = inset(rect, 8);
+        return shot.count(core, (luma) => luma > 200) > core.w * core.h * 0.5;
+      });
+      expect(pill, `no white pill at ${JSON.stringify(candidates)}`).toBeDefined();
+
+      // `bg-primary` is `l: 0.98` and `text-primary-foreground` is `l: 0.1`, so
+      // the label is the only thing inside the pill that can be dark. Before
+      // the fix this was 0: every pixel of the inner rect was the flat pill.
+      const glyphPixels = shot.count(inset(pill!, 8), (luma) => luma < 120);
+      expect(glyphPixels).toBeGreaterThan(30);
+    } finally {
+      // Closed on every path: a spec that leaves a modal open changes what the
+      // next one is looking at, and the failure it then reports is not its own.
+      await app.press("Escape");
+      await expect(app.locator("[role=dialog]")).toHaveCount(0);
+    }
+  }, T);
+
+  test("the popover paints its body text, not just its panel", async () => {
+    // Two things declare `aria-haspopup=dialog`; the popover's is the second.
+    const trigger = app.locator("[aria-haspopup=dialog]").nth(1);
+    const triggerBox = await trigger.boundingBox();
+    const before = readPng(await app.screenshot(artifactPath("shadcn-popover-before", "png")));
+    await trigger.click();
+    await expect(app.locator("[role=dialog][data-side]")).toBeVisible();
+    await settle();
+    const after = readPng(await app.screenshot(artifactPath("shadcn-popover-after", "png")));
+
+    // Below the trigger, opening the popover is the only thing that changed, so
+    // the changed region IS the panel — wherever @floating-ui put it. Finding
+    // it this way sidesteps the untransformed-rect problem entirely; the band
+    // keeps the trigger's own `data-state=open` restyle (and its bright label)
+    // out of the answer.
+    const band: Rect = {
+      x: 0,
+      y: triggerBox.y + triggerBox.h + 2,
+      w: after.width,
+      h: after.height,
+    };
+    const panel = changedRegion(after, before, 24, band);
+    expect(panel, "the popover changed no pixels below its trigger").not.toBeNull();
+    expect(panel!.w).toBeGreaterThan(100);
+
+    // Two things have to be true of an opaque panel with white text on it, and
+    // the defect broke both in the same stroke — the panel's quad and the
+    // page's glyphs ended up in the wrong order relative to each other, so the
+    // heading BEHIND the popover painted over it while the popover's own body
+    // painted under it.
+    //
+    //   fresh    — bright now, dark before: the popover's own words.
+    //   survived — bright before AND after: page text the panel did not cover.
+    //
+    // Inset past `shadow-md`, which is the one part of the changed region that
+    // is legitimately translucent.
+    const core = inset(panel!, 10);
+    let fresh = 0;
+    let survived = 0;
+    for (let y = core.y; y < core.y + core.h; y++) {
+      for (let x = core.x; x < core.x + core.w; x++) {
+        if (after.luma(x, y) <= 150) continue;
+        if (before.luma(x, y) > 150) survived++;
+        else fresh++;
+      }
+    }
+    expect(fresh, "the popover's body text was never painted").toBeGreaterThan(50);
+    expect(survived, "the page painted through an opaque panel").toBeLessThan(fresh / 4);
+
+    await app.press("Escape");
+    await expect(app.locator("[role=dialog][data-side]")).toHaveCount(0);
+  }, T);
+
+  test("the select viewport is as tall as its items, not as its trigger", async () => {
+    await app.locator("[role=combobox]").first().click();
+    await expect(app.locator("[role=option]")).toHaveCount(2);
+
+    // reka writes `flex: 1` on the viewport inline and shadcn adds
+    // `h-[--reka-select-trigger-height]`. A percentage flex basis REPLACES the
+    // main-axis size, and an unresolvable one falls through to content sizing
+    // (Flexbox §9.2.3 E) — so a browser sizes this to the items and ignores the
+    // 40px. Ours honoured the 40px and clipped the list to its group label.
+    const viewport = await app.locator("[data-reka-select-viewport]").boundingBox();
+    const items = await app.locator("[role=option]").all();
+    expect(items.length).toBe(2);
+    for (const item of items) {
+      expect(item.bounds!.y).toBeGreaterThanOrEqual(viewport.y - 1);
+      expect(item.bounds!.y + item.bounds!.h).toBeLessThanOrEqual(viewport.y + viewport.h + 1);
+    }
+    // …and the box really did grow past the trigger's height.
+    const trigger = await app.locator("[role=combobox]").first().boundingBox();
+    expect(viewport.h).toBeGreaterThan(trigger.h * 2);
+
+    await app.press("Escape");
+    await expect(app.locator("[role=option]")).toHaveCount(0);
   }, T);
 
   test("the app logged nothing broken", async () => {
