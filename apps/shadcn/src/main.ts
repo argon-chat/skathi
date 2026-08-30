@@ -15,4 +15,26 @@ import { createApp } from "vue-native";
 
 import App from "./App.vue";
 
-createApp(App).mount();
+/**
+ * What `createApp()` hands back HERE, in the one respect it differs from what
+ * browser Vue hands back.
+ *
+ * `mount()` IS NULLARY. Browser Vue mounts into a container you pick out of a
+ * document — `mount("#app")` — because a page can hold any number of roots.
+ * There is no document to pick out of here and exactly one root, the window's
+ * tree, so the runtime's own `mount()` takes nothing
+ * (packages/vue-native/src/runtime.ts).
+ *
+ * tsconfig.json types "vue-native" as the real `vue` package, which is right
+ * for every other symbol this app reaches through that name and wrong for this
+ * single signature — so the divergence is asserted here, in the open, on the
+ * one line it applies to, rather than buried in a module mapping that would
+ * then mistype the other two thousand. The assertion is narrow enough to be
+ * safe: `mount(…)` cannot be mistyped through a shape with no argument to
+ * mistype.
+ */
+interface NativeApp {
+  mount(): void;
+}
+
+(createApp(App) as unknown as NativeApp).mount();

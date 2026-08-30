@@ -12,11 +12,17 @@
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
+    "@tanstack/vue-table": "^9.2.4",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "5.8.3"
   },
   "scripts": {
     "registry": "bun tools/fetch-registry.ts",
-    "theme": "bun tools/gen-theme.ts"
+    "theme": "bun tools/gen-theme.ts",
+    "typecheck": "cd ../../packages/vue-native && bun x vue-tsc --noEmit -p ../../apps/shadcn/tsconfig.json"
+  },
+  "comments": {
+    "@tanstack/vue-table": "TYPES ONLY, and not a table this app draws. src/lib/utils.ts is upstream shadcn-vue's, kept byte-identical by tools/fetch-registry.ts, and it opens with `import type { Updater } from '@tanstack/vue-table'` for the `valueUpdater()` helper its data-table registry needs. The import is type-only so the bundler erases it and the build never noticed it was unresolvable — vue-tsc did, the first time this app had a tsconfig. Upstream's own apps/www depends on the package for the same file, so installing it is what keeps the copy verbatim; deleting the import would have been an edit to the thing being measured.",
+    "typescript": "The app has its own pin because tools/*.ts are bun scripts run from this directory. The type-check that matters uses packages/vue-native's vue-tsc, which needs a matching tsc of its own — hence the `typecheck` script above rather than a local `tsc`."
   }
 }
