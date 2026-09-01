@@ -264,6 +264,16 @@ impl Tree {
         Tree {
             // Slot 0 is the reserved "none" id.
             nodes: vec![None],
+            // NAME 0 is reserved the same way, and for a bug that shipped:
+            // `create_text` and `create_anchor` give their nodes `tag: 0`
+            // meaning "no tag", but the interner used to hand id 0 to the
+            // FIRST name anybody interned — which is `create_root`'s "root".
+            // So every text node and every Vue fragment anchor reported
+            // `tag: "root"` to the devtools, and the inspector's Elements tree
+            // drew runs of `<root>` rows between the real elements. Reserving
+            // the empty name makes `name(0)` mean what `tag: 0` says.
+            names: vec![String::new()],
+            name_ids: HashMap::from([(String::new(), 0)]),
             ..Default::default()
         }
     }

@@ -418,3 +418,45 @@ pub fn click(
     window.refresh();
     proceed
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `tag: 0` means "this node has no tag" — `create_text` and
+    /// `create_anchor` both set it. It must NOT resolve to whatever name the
+    /// interner happened to hand out first.
+    ///
+    /// It did: the interner started empty, `create_root` interned `"root"`
+    /// into slot 0, and from then on every text node and every Vue fragment
+    /// anchor reported `tag: "root"` on the wire — which the inspector's
+    /// Elements tree drew as runs of `<root>` rows between the real elements.
+    #[test]
+    fn text_and_anchor_nodes_have_no_tag_name() {
+        let (root, div, text, anchor) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div_tag = t.intern("div");
+            let div = t.create_element(div_tag);
+            let text = t.create_text();
+            let anchor = t.create_anchor();
+            t.insert(div, root, 0);
+            t.insert(text, div, 0);
+            t.insert(anchor, div, 0);
+            (root, div, text, anchor)
+        });
+
+        let info = |id: u32| node_info(id).expect("node exists");
+        // The name table's slot 0 is reserved, so no real name can land there.
+        assert_eq!(tree::read_tree(|t| t.name(0).to_string()), "");
+
+        assert_eq!(info(root).kind, "element");
+        assert_eq!(info(root).tag, "root");
+        assert_eq!(info(div).kind, "element");
+        assert_eq!(info(div).tag, "div");
+
+        assert_eq!(info(text).kind, "text");
+        assert_eq!(info(text).tag, "", "a text node has no tag name");
+        assert_eq!(info(anchor).kind, "anchor");
+        assert_eq!(info(anchor).tag, "", "a fragment anchor has no tag name");
+    }
+}

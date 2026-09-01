@@ -19,7 +19,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { Row } from "../protocol";
 import { onKeydown } from "../keys";
 import { CRUMBS_H, PANE_HEAD_H, ROW_H } from "../layout";
-import { nodeLabel } from "../dump";
+import { nodeLabel, rowKind } from "../dump";
 import {
   ancestors,
   highlight,
@@ -30,6 +30,7 @@ import {
   state,
   stepMatch,
   toggle,
+  toggleAnchors,
   ui,
 } from "../store";
 import { useVirtual } from "../virtual";
@@ -238,6 +239,14 @@ function scopeOf(row: Row): string {
         <div class="btn" title="Close  ·  Esc" @click="closeSearch()">✕</div>
       </div>
       <div v-else class="btn" title="Find  ·  Ctrl+F" @click="openSearch()">find</div>
+      <div
+        class="btn"
+        :class="{ on: state.showAnchors }"
+        title="Show Vue's fragment anchors (one per v-if / v-for; they paint nothing)"
+        @click="toggleAnchors()"
+      >
+        &lt;!----&gt;
+      </div>
       <div class="btn" title="Re-read the tree" @click="refreshTree()">↻</div>
     </header>
 
@@ -259,9 +268,16 @@ function scopeOf(row: Row): string {
             @click="twistyClick(row, $event)"
             >{{ row.children ? (row.open ? "▾" : "▸") : "" }}</span
           >
-          <template v-if="row.node.kind === 'text'">
+          <!-- Rows are drawn by KIND, never by tag: a text node and a fragment
+               anchor both carry `tag: ""`, and guessing from the tag is what
+               used to print a run of `<root>` rows. See `rowKind` in dump.ts. -->
+          <template v-if="rowKind(row.node) === 'text'">
             <span class="t-faint">"</span><span class="text">{{ textOf(row) }}</span
             ><span class="t-faint">"</span>
+          </template>
+          <template v-else-if="rowKind(row.node) === 'anchor'">
+            <span class="anchor">&lt;!----&gt;</span>
+            <span class="scope">fragment anchor</span>
           </template>
           <template v-else>
             <span class="t-faint">&lt;</span>
@@ -379,6 +395,9 @@ function scopeOf(row: Row): string {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+.anchor {
+  color: #6d7c90;
 }
 .more {
   color: #6d7c90;

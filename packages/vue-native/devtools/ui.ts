@@ -1,19 +1,34 @@
 #!/usr/bin/env bun
 /**
- * Launches the vue-native inspector (apps/devtools) against a running app.
+ * Opens the vue-native inspector on a running app, from a shell.
  *
- *   bun devtools/ui.ts [--target <slot|app>] [--window WxH] [--no-build] [--wait]
+ *   bun devtools/ui.ts [--target <slot|app>] [--window WxH] [--wait]
  *
- * What it does, in order:
- *   1. resolves the TARGET's dist slot — a directory, or the name of one beside
- *      `packages/vue-native` (`dist`, `dist-shadcn`, …), or an app name whose
- *      conventional slot is `dist` / `dist-<app>`;
- *   2. builds `apps/devtools` into `packages/vue-native/dist-devtools` (skipped
- *      when nothing moved, like every other build here);
- *   3. starts a dev host on that slot with `VN_DEVTOOLS_TARGET` set, which is
- *      what makes the inspector attach to that instance rather than guessing.
+ * It is a thin wrapper — deliberately. All it does is turn a friendly
+ * `--target` (a slot name, an app name, a path) into the one command the host
+ * already understands:
  *
- * The inspector does NOT need the target to be running at launch: the target
+ *   vn-app.exe --devtools --target <absolute slot>
+ *
+ * …which is EXACTLY what F12 spawns (`crates/vn-app/src/inspector.rs`,
+ * `open_for_window`). One code path, one inspector.
+ *
+ * It did not used to be. Until m21 this script built `apps/devtools` into
+ * `packages/vue-native/dist-devtools` and started an ordinary dev host on that
+ * slot, while F12 evaluated the bundle `build.rs` had baked into the binary. So
+ * there were two inspectors — with two build states, two ways to be stale, and
+ * two sets of boot arguments (a hand-launched one never got
+ * `__VN_DEVTOOLS_ARGS__` at all, which is why every reader of it guards). The
+ * dist-devtools half is gone; the bundle in the executable is the inspector.
+ *
+ * WHAT THAT COSTS, stated rather than discovered: the inspector's own sources
+ * no longer hot-reload while you edit them, because they are no longer served
+ * from a dist slot. Re-running `cargo build -p vn-app` rebuilds the bundle
+ * (build.rs re-runs when anything under `apps/devtools` moves), and
+ * `VN_DEVTOOLS_BUNDLE=<path to app.prod.js>` skips the bun invocation inside it
+ * when you want to iterate on the bundle alone.
+ *
+ * The inspector does NOT need the target to be running at launch: its target
  * list refreshes every few seconds and `--target` stays the preference. But if
  * one IS running the handshake is validated here, so a typo in the slot name is
  * a message rather than an empty window.
@@ -21,21 +36,22 @@
  * See docs/DEVTOOLS-UI.md.
  */
 
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = resolve(HERE, ".."); // packages/vue-native
 const REPO = resolve(PKG, "../..");
-const ENTRY = join(REPO, "apps/devtools/src/main.ts");
-const UI_DIST = join(PKG, "dist-devtools");
 const EXE = join(REPO, "target/x86_64-pc-windows-msvc/debug/vn-app.exe");
 
 const USAGE = `vue-native devtools UI
 
   bun packages/vue-native/devtools/ui.ts [options]
+
+Opens the inspector that is embedded in the host binary — the same one F12
+opens, launched the same way (\`vn-app --devtools --target <slot>\`).
 
 options
   --target <slot>   the dist slot of the app to inspect: a path, a slot name
@@ -43,7 +59,6 @@ options
                     app name (hello -> dist, shadcn -> dist-shadcn).
                     Default: dist
   --window WxH      the inspector's window size (default: its vn.config.json)
-  --no-build        use packages/vue-native/dist-devtools as it is
   --wait            stay in the foreground and forward the host's output
   --exe <path>      a different vn-app.exe
 `;
@@ -61,7 +76,7 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (!a.startsWith("--")) continue;
   const name = a.slice(2);
-  if (name === "no-build" || name === "wait" || name === "help") flags[name] = true;
+  if (name === "wait" || name === "help") flags[name] = true;
   else flags[name] = argv[++i] ?? "";
 }
 if (flags.help) {
@@ -102,54 +117,29 @@ if (existsSync(handshake)) {
   );
 }
 
-// ---- build -----------------------------------------------------------------
-
-/** Newest mtime of anything the inspector is built from. */
-function newestSource(dir: string, newest = 0): number {
-  let out = newest;
-  for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name.startsWith(".")) continue;
-    const abs = join(dir, name);
-    const st = statSync(abs);
-    if (st.isDirectory()) out = newestSource(abs, out);
-    else if (/\.(vue|js|ts|json|css)$/.test(name)) out = Math.max(out, st.mtimeMs);
-  }
-  return out;
-}
-
-if (!flags["no-build"]) {
-  const manifest = join(UI_DIST, "manifest.json");
-  const built = existsSync(manifest) ? statSync(manifest).mtimeMs : 0;
-  const newest = Math.max(
-    newestSource(join(REPO, "apps/devtools")),
-    newestSource(join(PKG, "src")),
-  );
-  if (!built || newest > built) {
-    console.log(`[devtools:ui] building apps/devtools -> ${UI_DIST} …`);
-    const r = spawnSync("bun", ["build.ts", ENTRY, UI_DIST], { cwd: PKG, stdio: "inherit" });
-    if (r.status !== 0) die("[devtools:ui] build failed");
-  } else {
-    console.log("[devtools:ui] dist-devtools is current");
-  }
-}
-
 // ---- launch ----------------------------------------------------------------
 
 const exe = typeof flags.exe === "string" && flags.exe ? resolve(flags.exe) : EXE;
-if (!existsSync(exe)) die(`${exe} is missing — build the host first:\n  cargo build -p vn-app`);
+if (!existsSync(exe)) {
+  die(
+    `${exe} is missing — build the host first:\n  cargo build -p vn-app\n` +
+      `(a \`--features prod\` build has no inspector at all; \`prod,devtools\` has one)`,
+  );
+}
 
-const env: Record<string, string> = {
-  ...(process.env as Record<string, string>),
-  VN_DIST: UI_DIST,
-  // Read by `__vn_devtools_targets()` in the host: which instance the inspector
-  // should prefer when it boots. Everything else on the machine is still
-  // listed — this is a preference, not a restriction.
-  VN_DEVTOOLS_TARGET: targetSlot,
-};
+const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+// VN_DIST names the slot a host SERVES. An inspector serves nothing — it
+// evaluates the bundle inside the executable — and `inspector::init` gives it a
+// private slot under %TEMP% to publish its own handshake into. Inheriting the
+// shell's VN_DIST would put that handshake on top of some app's, so drop it.
+delete env.VN_DIST;
+// Likewise `--target` is what sets VN_DEVTOOLS_TARGET in the child.
+delete env.VN_DEVTOOLS_TARGET;
 if (typeof flags.window === "string" && flags.window) env.VN_WINDOW = flags.window;
 
-console.log(`[devtools:ui] starting inspector on ${UI_DIST}`);
-const child = spawn(exe, [], {
+const args = ["--devtools", "--target", targetSlot];
+console.log(`[devtools:ui] ${exe} ${args.join(" ")}`);
+const child = spawn(exe, args, {
   env,
   stdio: flags.wait ? "inherit" : "ignore",
   detached: !flags.wait,

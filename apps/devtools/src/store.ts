@@ -24,7 +24,7 @@
 
 import { reactive } from "vue";
 import { Push, devtoolsArgs, listTargets, message, send } from "./wire";
-import { nodeLabel } from "./dump";
+import { nodeLabel, rowVisible } from "./dump";
 import type {
   ConsoleLine,
   EvalReply,
@@ -126,6 +126,9 @@ interface State {
   matches: NodeId[];
   matchIndex: number;
   treeScroll: number;
+  /** Draw Vue's fragment anchors as `<!---->` rows. Off: there is one per
+   *  `v-if` and one per `v-for`, and none of them paint anything. */
+  showAnchors: boolean;
 
   // -- styles
   styles: StylesReply | null;
@@ -201,6 +204,7 @@ export const state = reactive<State>({
   matches: [],
   matchIndex: 0,
   treeScroll: 0,
+  showAnchors: false,
 
   styles: null,
   rules: null,
@@ -547,9 +551,11 @@ export function reindex(): void {
   const rows: Row[] = [];
   const walk = (node: TreeNode | null, depth: number): void => {
     if (!node || node.id === undefined) return;
-    // An empty text node is Vue's fragment anchor, not content: it renders
-    // nothing in the app and would be pure noise here (there is one per v-for).
-    if (node.kind === "text" && !(node.text || "").trim()) return;
+    // Fragment anchors (hidden unless the panel's toggle is on) and
+    // whitespace-only text nodes get no row — see `rowVisible`. A hidden node's
+    // CHILDREN are hidden with it, which is right: an anchor has none, and a
+    // text node cannot have any.
+    if (!rowVisible(node, state.showAnchors)) return;
     const children = node.children || [];
     const hit = query ? rowText(node).includes(query) : false;
     if (hit) matches.push(node.id);
@@ -581,6 +587,12 @@ function rowText(node: TreeNode): string {
 
 export function toggle(id: NodeId): void {
   state.expanded[id] = !state.expanded[id];
+  reindex();
+}
+
+/** The Elements panel's `<!---->` toggle: show or hide the fragment anchors. */
+export function toggleAnchors(): void {
+  state.showAnchors = !state.showAnchors;
   reindex();
 }
 

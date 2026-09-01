@@ -360,8 +360,9 @@ declare function __vn_devtools_targets(): VnJson;
  * (docs/MULTIWINDOW.md), and the key that opened this inspector was pressed
  * in exactly one of them.
  *
- * Absent when the inspector was launched the other supported way
- * (`bun devtools/ui.ts --target <slot>`), so every reader must guard.
+ * Present for every inspector — `bun devtools/ui.ts --target <slot>` execs the
+ * same `vn-app --devtools` line F12 spawns. Still declared optional: it is a
+ * JSON global published by another process, so every reader guards.
  */
 declare var __VN_DEVTOOLS_ARGS__:
   | {

@@ -13,6 +13,13 @@
  * The tools are deliberately 1:1 with the wire commands — no convenience
  * layering, so anything `ctl.ts` can do is reachable here with the same
  * arguments and the same error text.
+ *
+ * That 1:1-ness is now MECHANICAL rather than aspirational: the tool list is
+ * GENERATED from `./commands.ts`, the table `ctl.ts` reads too, and the tool
+ * name is derived (`vn_<cmd>`). There is nothing to keep in step by hand, which
+ * is the point — this file exposed the milestone-10 command set for a whole
+ * milestone after the CLI grew `windows`, `perf`, `net`, `storage`, `wheel`,
+ * `raise` and the `window` argument, because the two tables were copies.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -22,6 +29,8 @@ import { connect } from "node:net";
 import { readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { mcpTools } from "./commands";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -72,225 +81,16 @@ async function call(request: Record<string, unknown>) {
 }
 
 // ---------------------------------------------------------------------------
-// tool table — 1:1 with the wire commands (docs/DEVTOOLS.md)
+// tool table — GENERATED from the shared command table (./commands.ts)
 // ---------------------------------------------------------------------------
+//
+// Every wire command becomes one tool named `vn_<cmd>`, with that command's
+// arguments plus `window` (which every command accepts — docs/DEVTOOLS.md,
+// "The `window` argument"). Adding a command to `commands.ts` registers it
+// here; there is no list to forget to edit, and
+// `test/devtools-commands.test.ts` fails if this file grows one.
 
-const str = (description: string) => ({ type: "string" as const, description });
-const int = (description: string) => ({ type: "number" as const, description });
-
-const SELECTOR = str("a CSS selector, matched by the same vn-css cascade matcher the app styles with");
-const INDEX = int("which match to use when the selector matches several (0-based)");
-
-const TOOLS = [
-  {
-    name: "vn_screenshot",
-    description:
-      "Capture the app window to a PNG. Default backend is gpui's render_to_image readback: the " +
-      "CLIENT area exactly (clientX/clientY come back 0), works unfocused, occluded, off-screen " +
-      "and minimized, and never raises or activates the window — but it cannot see a mica/acrylic " +
-      "backdrop, which DWM composites under the app. Pass backend=print_window for the composed " +
-      "image (PrintWindow(PW_RENDERFULLCONTENT), whole window rect, stale when minimized).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: str("output PNG path (default: <dist>/screenshots/<n>.png)"),
-        backend: str('"auto" (default), "render_to_image" or "print_window"'),
-      },
-    },
-    build: (a: any) => ({
-      cmd: "screenshot",
-      ...(a.path ? { path: a.path } : {}),
-      ...(a.backend ? { backend: a.backend } : {}),
-    }),
-  },
-  {
-    name: "vn_query",
-    description:
-      "querySelectorAll through the REAL cascade matcher. Returns [{id, tag, classes, text, " +
-      "bounds, scopes}]. An unsupported selector (`:has()`, `::before`, `:visited`, …) is an " +
-      "error carrying the same advisory the stylesheet compiler prints.",
-    inputSchema: { type: "object", properties: { selector: SELECTOR }, required: ["selector"] },
-    build: (a: any) => ({ cmd: "query", selector: a.selector }),
-  },
-  {
-    name: "vn_click",
-    description:
-      "Synthesize mousedown -> mouseup -> click at the node's centre, through the app's own " +
-      "dispatch (capture/bubble, preventDefault honored). NOT a real pointer: :hover / :active " +
-      "visuals are not exercised and nothing proves the node is reachable — use vn_mouse for " +
-      "that. Errors on 0 or >1 matches unless `index` is given.",
-    inputSchema: {
-      type: "object",
-      properties: { selector: SELECTOR, index: INDEX, button: int("0 left, 1 middle, 2 right") },
-      required: ["selector"],
-    },
-    build: (a: any) => ({ cmd: "click", selector: a.selector, index: a.index, button: a.button }),
-  },
-  {
-    name: "vn_type",
-    description:
-      "Focus the node and type `text` one keystroke at a time through gpui's real key path, so " +
-      "keydown / input / v-model all fire exactly as they do for a physical key — including the " +
-      "app's own preventDefault() guards.",
-    inputSchema: {
-      type: "object",
-      properties: { selector: SELECTOR, text: str("the text to type"), index: INDEX },
-      required: ["selector", "text"],
-    },
-    build: (a: any) => ({ cmd: "type", selector: a.selector, text: a.text, index: a.index }),
-  },
-  {
-    name: "vn_key",
-    description:
-      "Send one keystroke: `Enter`, `Escape`, `Shift+Tab`, `Ctrl+A`, `ArrowDown`, … With a " +
-      "selector the node is focused first; without one it goes to whatever already has focus.",
-    inputSchema: {
-      type: "object",
-      properties: { key: str("key name, optionally Mod+Key"), selector: SELECTOR, index: INDEX },
-      required: ["key"],
-    },
-    build: (a: any) => ({ cmd: "key", key: a.key, selector: a.selector, index: a.index }),
-  },
-  {
-    name: "vn_mouse",
-    description:
-      "A REAL pointer event at a window coordinate, through gpui's own hit test — so z-order, " +
-      "content masks, `pointer-events` and the hover ladder all decide what happens. This is what " +
-      "proves an element is reachable (and the only way to exercise :hover); vn_click proves the " +
-      "handler chain instead. Aim it with a selector (the node's centre) or with x + y. Reports " +
-      "which node holds focus afterwards. No cursor moves and no window is activated.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        selector: SELECTOR,
-        index: INDEX,
-        x: int("window x, when no selector is given"),
-        y: int("window y, when no selector is given"),
-        kind: str("move (default) | down | up | click"),
-        button: int("0 left, 1 middle, 2 right"),
-      },
-    },
-    build: (a: any) => ({
-      cmd: "mouse",
-      selector: a.selector,
-      index: a.index,
-      x: a.x,
-      y: a.y,
-      kind: a.kind,
-      button: a.button,
-    }),
-  },
-  {
-    name: "vn_scroll",
-    description:
-      "Scroll a container by (dx, dy) CSS pixels through its own gpui ScrollHandle and fire the " +
-      "`scroll` event. The node must have `overflow: scroll|auto` in the cascade.",
-    inputSchema: {
-      type: "object",
-      properties: { selector: SELECTOR, dy: int("vertical delta, positive = down"), dx: int("horizontal delta"), index: INDEX },
-      required: ["selector"],
-    },
-    build: (a: any) => ({ cmd: "scroll", selector: a.selector, dx: a.dx ?? 0, dy: a.dy ?? 0, index: a.index }),
-  },
-  {
-    name: "vn_text",
-    description: "textContent of the matched subtree (or a native <input>'s live buffer).",
-    inputSchema: { type: "object", properties: { selector: SELECTOR, index: INDEX }, required: ["selector"] },
-    build: (a: any) => ({ cmd: "text", selector: a.selector, index: a.index }),
-  },
-  {
-    name: "vn_tree",
-    description: "Dump the retained tree (tag / classes / props / listeners / bounds / children).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        selector: str("subtree root (default: the mounted root)"),
-        node: int("subtree root as a node id, when you already have one"),
-        depth: int("levels to descend (default 6)"),
-      },
-    },
-    build: (a: any) => ({ cmd: "tree", selector: a.selector, node: a.node, depth: a.depth }),
-  },
-  {
-    name: "vn_styles",
-    description:
-      "The node's folded ComputedStates: base + the hover/active/focus/focus-visible rungs, " +
-      "transitions and extras, plus `live` (the style in EFFECT this frame). Takes a node id " +
-      "instead of a selector when you already have one.",
-    inputSchema: {
-      type: "object",
-      properties: { selector: SELECTOR, index: INDEX, node: int("a node id from vn_tree/vn_query") },
-    },
-    build: (a: any) => ({ cmd: "styles", selector: a.selector, index: a.index, node: a.node }),
-  },
-  {
-    name: "vn_rules",
-    description:
-      "WHICH rules produced this node's styles, in cascade order ((specificity, order) ascending, " +
-      "so the last declaration of a property wins). Each rule carries its selector, @media " +
-      "prelude, state bucket (base/hover/active/focus/…), pseudo-element, declarations as the " +
-      "author wrote them, and the vn-css advisories about THAT rule — i.e. which of its " +
-      "declarations this engine does not implement.",
-    inputSchema: {
-      type: "object",
-      properties: { selector: SELECTOR, index: INDEX, node: int("a node id from vn_tree/vn_query") },
-    },
-    build: (a: any) => ({ cmd: "rules", selector: a.selector, index: a.index, node: a.node }),
-  },
-  {
-    name: "vn_highlight",
-    description:
-      "Draw the inspector's outline over a node in the app (a blue box plus a `tag.class · WxH` " +
-      "chip), or clear it. Painted by the host shell, so it never appears in the app's own tree " +
-      "and never takes a click. Pass ttlMs to make it expire by itself.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        selector: SELECTOR,
-        index: INDEX,
-        node: int("a node id from vn_tree/vn_query"),
-        ttlMs: int("expire after this many ms (default: until cleared)"),
-        label: str("chip text (default: tag.class · WxH)"),
-        clear: { type: "boolean", description: "remove the outline" },
-      },
-    },
-    build: (a: any) => ({
-      cmd: "highlight",
-      selector: a.selector,
-      index: a.index,
-      node: a.node,
-      ttlMs: a.ttlMs,
-      label: a.label,
-      clear: a.clear,
-    }),
-  },
-  {
-    name: "vn_pick",
-    description:
-      "Where the pointer is over the app and which node is under it: {x, y, insideWindow, " +
-      "viewport, path[], node}. The hit test is over the painted bounds (deepest rectangle wins), " +
-      "not gpui's hitboxes. `insideWindow` is gpui's window hover flag — a synthesized pointer " +
-      "event does not set it, only a real cursor does.",
-    inputSchema: { type: "object", properties: {} },
-    build: () => ({ cmd: "pick" }),
-  },
-  {
-    name: "vn_eval",
-    description:
-      "Evaluate JavaScript inside the app's JSC, in global scope. Returns {value, type} or " +
-      "{exception, stack}. The escape hatch for everything the other tools do not cover.",
-    inputSchema: { type: "object", properties: { js: str("JavaScript source") }, required: ["js"] },
-    build: (a: any) => ({ cmd: "eval", js: a.js }),
-  },
-  {
-    name: "vn_logs",
-    description:
-      "The host's log ring: console output, [js uncaught] errors, CSS diagnostics and compat " +
-      "advisories, plus the current status line. Page with `since` (the `next` from the last call).",
-    inputSchema: { type: "object", properties: { since: int("first sequence number to return") } },
-    build: (a: any) => ({ cmd: "logs", since: a.since }),
-  },
-];
+const TOOLS = mcpTools();
 
 // ---------------------------------------------------------------------------
 
@@ -310,10 +110,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   const args = (request.params.arguments ?? {}) as Record<string, unknown>;
   try {
-    const wire = tool.build(args);
-    // Drop undefined so the host never sees `"index": null`.
-    for (const k of Object.keys(wire)) if ((wire as any)[k] === undefined) delete (wire as any)[k];
-    const reply = await call(wire);
+    // `build` already drops the arguments the caller left out, so the host
+    // never sees `"index": null`.
+    const reply = await call(tool.build(args));
     if (!reply.ok) {
       return { isError: true, content: [{ type: "text", text: reply.error ?? "unknown error" }] };
     }

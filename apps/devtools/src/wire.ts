@@ -246,8 +246,11 @@ export class Push {
 /**
  * What the host published about how this inspector was started.
  *
- * Absent when the app was launched the v1 way (`bun devtools/ui.ts`), which is
- * still supported and is why every reader of this treats it as optional.
+ * Every launch is a `--devtools` launch now (F12 spawns one, and
+ * `bun devtools/ui.ts` execs one), so this is always present in practice. The
+ * optional shape stays: it is a JSON global from another process, and a reader
+ * that assumed its fields would be the one thing standing between a protocol
+ * change and a blank window.
  */
 export function devtoolsArgs(): { target: string | null; window: WindowId | null; embedded: boolean } {
   const raw = globalThis.__VN_DEVTOOLS_ARGS__;

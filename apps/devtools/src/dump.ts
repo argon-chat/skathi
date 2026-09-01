@@ -135,10 +135,62 @@ export function cssColor(value: string | undefined): string | null {
   return null;
 }
 
-/** `<div class="a b">` — how a node is named in the tree and in headers. */
+// ---------------------------------------------------------------------------
+// how a tree row is NAMED
+// ---------------------------------------------------------------------------
+//
+// The retained tree holds three kinds of node (`vn_tree::devtools::NodeInfo`):
+// elements, text, and Vue's FRAGMENT ANCHORS — the zero-size placeholder a
+// `v-if` / `v-for` / `<component>` leaves behind so a later patch knows where
+// to splice. Only an element has a tag; text and anchors carry `tag: 0`, which
+// the wire sends as `""`.
+//
+// This panel used to draw every non-text node as `<{tag}>`, which made a run of
+// anchors read as `<root> <root> <root>` — the host's name table handed id 0 to
+// the first name interned (`"root"`), so `tag: 0` came back as `"root"`. That
+// is fixed at the source (crates/vn-tree/src/tree.rs reserves name 0), but the
+// mapping below is written to be right against an OLD host too: it decides by
+// KIND and never by tag, so an inspector attached to a pre-fix binary still
+// labels an anchor as an anchor.
+
+/** The three row shapes the Elements tree draws. */
+export type RowKind = "element" | "text" | "anchor";
+
+/**
+ * A node's row shape. An unknown `kind` — a host newer than this inspector —
+ * is drawn as an element, which is the shape that shows the most and hides
+ * nothing.
+ */
+export function rowKind(node: TreeNode | null | undefined): RowKind {
+  if (node?.kind === "text") return "text";
+  if (node?.kind === "anchor") return "anchor";
+  return "element";
+}
+
+/**
+ * Does this node get a row at all?
+ *
+ * Anchors are hidden by default (there is one per `v-if` and one per `v-for`,
+ * and they paint nothing), behind the panel's "anchors" toggle — Chrome makes
+ * the same call for the comment nodes Vue's browser build uses instead.
+ * A whitespace-only text node is dropped outright: it renders nothing and no
+ * toggle would make it worth a row.
+ */
+export function rowVisible(node: TreeNode | null | undefined, showAnchors: boolean): boolean {
+  if (!node) return false;
+  const kind = rowKind(node);
+  if (kind === "anchor") return showAnchors;
+  if (kind === "text") return !!(node.text || "").trim();
+  return true;
+}
+
+/** `div.a.b` — how a node is named in the breadcrumbs and in panel headers. */
 export function nodeLabel(node: TreeNode | null | undefined): string {
   if (!node) return "—";
-  if (node.kind === "text") return "#text";
+  const kind = rowKind(node);
+  // What Chrome shows for the comment node Vue's browser build anchors with.
+  if (kind === "anchor") return "<!---->";
+  if (kind === "text") return "#text";
   const classes = (node.classes || []).map((c) => `.${c}`).join("");
   return `${node.tag || "?"}${classes}`;
 }
