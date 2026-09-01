@@ -350,6 +350,32 @@ declare function __vn_log(message: string): void;
  */
 declare function __vn_devtools_targets(): VnJson;
 
+/**
+ * How THIS process was started, when it was started as an inspector
+ * (`vn-app --devtools`, which is what F12 spawns —
+ * `crates/vn-app/src/inspector.rs`).
+ *
+ * `window` is the one fact no amount of scanning can recover: a target
+ * process can paint several OS windows off one retained tree
+ * (docs/MULTIWINDOW.md), and the key that opened this inspector was pressed
+ * in exactly one of them.
+ *
+ * Absent when the inspector was launched the other supported way
+ * (`bun devtools/ui.ts --target <slot>`), so every reader must guard.
+ */
+declare var __VN_DEVTOOLS_ARGS__:
+  | {
+      /** The target's slot directory. */
+      target: string | null;
+      /** The gpui window id F12 was pressed in. */
+      window: number | null;
+      /** The pid this inspector dies with. */
+      parent: number | null;
+      /** Always `true` — the bundle came out of the executable. */
+      embedded: boolean;
+    }
+  | undefined;
+
 // ---------------------------------------------------------------------------
 // permissions — crates/vn-permissions/src/lib.rs (docs/PERMISSIONS.md tier 2)
 // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
-// Reading the engine's computed-style dump.
+// Reading the engine's computed-style dump, and the two colour helpers the
+// Styles panel paints swatches with.
 //
 // `styles` answers with a pretty `Debug` of gpui's `StyleRefinement`, one JSON
 // string per source line. It is the ENGINE's vocabulary, not CSS's
@@ -87,10 +88,71 @@ export function hslaCss(hsla: Hsla): string {
   )}%, ${hsla.a.toFixed(3)})`;
 }
 
+/**
+ * A swatch colour for an AUTHORED declaration value (`#1f6feb`, `rgb(9 105 218
+ * / .4)`, `hsl(212 92% 45%)`, `white`).
+ *
+ * Deliberately conservative: it recognises the notations CSS actually writes
+ * colours in and returns `null` for everything else, including things that
+ * merely contain one (`1px solid #333`, `linear-gradient(...)`). A swatch beside
+ * a value that is not a colour is worse than no swatch — it invites you to read
+ * the number as the paint.
+ *
+ * The named list is the sixteen CSS 1 keywords plus the handful an app actually
+ * types. It is not `<named-color>`'s 148, because this is a rendering hint and
+ * a missing swatch costs nothing.
+ */
+const NAMED: Record<string, string> = {
+  black: "#000000",
+  white: "#ffffff",
+  red: "#ff0000",
+  green: "#008000",
+  blue: "#0000ff",
+  yellow: "#ffff00",
+  cyan: "#00ffff",
+  magenta: "#ff00ff",
+  gray: "#808080",
+  grey: "#808080",
+  silver: "#c0c0c0",
+  maroon: "#800000",
+  olive: "#808000",
+  lime: "#00ff00",
+  aqua: "#00ffff",
+  teal: "#008080",
+  navy: "#000080",
+  fuchsia: "#ff00ff",
+  purple: "#800080",
+  orange: "#ffa500",
+  transparent: "#00000000",
+};
+
+export function cssColor(value: string | undefined): string | null {
+  const v = (value || "").trim().toLowerCase();
+  if (!v) return null;
+  if (NAMED[v]) return NAMED[v];
+  if (/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(v)) return v;
+  if (/^(rgb|rgba|hsl|hsla)\([^()]*\)$/.test(v)) return v;
+  return null;
+}
+
 /** `<div class="a b">` — how a node is named in the tree and in headers. */
 export function nodeLabel(node: TreeNode | null | undefined): string {
   if (!node) return "—";
   if (node.kind === "text") return "#text";
   const classes = (node.classes || []).map((c) => `.${c}`).join("");
   return `${node.tag || "?"}${classes}`;
+}
+
+/**
+ * The engine's key names, as close to CSS as they honestly get.
+ *
+ * gpui's `StyleRefinement` is not CSS and this does not pretend it is — it
+ * un-camel-cases (`border_widths` -> `border-widths`) so the dump reads like a
+ * stylesheet, and stops there. Anything more (mapping `background` onto
+ * `background-color`, splitting `size` into `width`/`height`) would be the
+ * panel inventing a vocabulary the engine does not have, and the first time the
+ * two disagreed the panel would be the liar.
+ */
+export function cssish(key: string): string {
+  return key.replace(/_/g, "-");
 }

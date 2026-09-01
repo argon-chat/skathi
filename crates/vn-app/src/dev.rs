@@ -176,19 +176,18 @@ pub fn install(rt: &JsRuntime) {
     rt.register("__vn_dev_voice_token", 2, vn_dev_voice_token as *const _);
 }
 
-const DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/vue-native/dist");
-
 /// How often the frame pump calls [`poll`] — every 30th frame, ~2×/s at 60 fps.
 const POLL_EVERY_FRAMES: u32 = 30;
 
+/// A file in this host's dist slot.
+///
+/// `VN_DIST` points one exe at another app's build output (build.ts already
+/// takes [entry] [dist-dir] positionals), which is what lets several dev hosts
+/// run side by side without sharing packages/vue-native/dist. The rule moved to
+/// [`crate::slot`] when `--features prod,devtools` gained a slot of its own
+/// with no dist in it; this is the dev half's spelling of the same question.
 pub(crate) fn dist(rel: &str) -> std::path::PathBuf {
-    // VN_DIST points one exe at another app's build output (build.ts already
-    // takes [entry] [dist-dir] positionals). This is what lets several dev
-    // hosts run side by side without sharing packages/vue-native/dist.
-    match std::env::var_os("VN_DIST") {
-        Some(dir) if !dir.is_empty() => std::path::PathBuf::from(dir).join(rel),
-        _ => std::path::Path::new(DIST).join(rel),
-    }
+    crate::slot::path(rel)
 }
 
 /// `apps/hello/src/App.vue` -> `dist/modules/apps__hello__src__App.vue.js`

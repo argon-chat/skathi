@@ -18,13 +18,16 @@ export type NodeId = number;
 /** `(x, y, w, h)` in the target's CSS pixels; `null` when it was not painted. */
 export type Bounds = { x: number; y: number; w: number; h: number } | null;
 
+/** A gpui window id in the target process. `windows` lists them. */
+export type WindowId = number;
+
 // ---------------------------------------------------------------------------
 // discovery — `__vn_devtools_targets()`
 // ---------------------------------------------------------------------------
 
-/** One attachable instance: a `<dist>/devtools.json` whose port answered. */
+/** One attachable instance: a `<slot>/devtools.json` whose port answered. */
 export interface Target {
-  /** The dist slot's directory name — what the picker shows. */
+  /** The slot directory's name — what the picker shows. */
   slot: string;
   dir: string;
   port: number;
@@ -44,6 +47,22 @@ export interface TargetList {
   targets: Target[];
   /** Set by `wire.ts` when the host fn is missing or its answer did not parse. */
   error?: string;
+}
+
+/**
+ * `globalThis.__VN_DEVTOOLS_ARGS__` — published by the host when this process
+ * was started with `--devtools` (`crates/vn-app/src/inspector.rs`).
+ *
+ * It is how an inspector opened by **F12** knows which WINDOW of the target it
+ * was opened for, which is a fact no amount of scanning can recover: one
+ * process can paint several windows off one tree (docs/MULTIWINDOW.md), and the
+ * key that was pressed happened in exactly one of them.
+ */
+export interface DevtoolsArgs {
+  target: string | null;
+  window: WindowId | null;
+  parent: number | null;
+  embedded: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,19 +139,31 @@ export interface PickReply {
   /** gpui's own `Window::is_window_hovered`. A synthesized pointer does not
    *  set it — only a real cursor — which is what makes the latch reliable. */
   insideWindow: boolean;
+  /** Which window this answer is about. v2: `pick` with no `window` argument
+   *  asks every window and reports the one the pointer is actually in. */
+  window: WindowId;
   viewport: { w: number; h: number };
   /** Root-first ancestor chain of the node under the pointer. */
   path: NodeId[];
   node: TreeNode | null;
 }
 
+/** One `%c` run: the CSS the app passed, and where in `text` it starts. */
+export interface StyleRun {
+  at: number;
+  css: string;
+}
+
 /** One line of the target's log ring. `kind` is `log`/`warn`/`css`/… */
 export interface LogEntry {
   seq: number;
-  /** Milliseconds since the epoch, as the TARGET measured it. */
+  /** Milliseconds since the target's log ring was enabled. */
   at: number;
   kind: string;
   text: string;
+  /** `console.log("%cA%cB", cssA, cssB)`. `null` for every other line —
+   *  which is nearly all of them. */
+  styles?: StyleRun[] | null;
 }
 
 export interface LogsReply {
@@ -169,6 +200,122 @@ export interface ScreenshotReply {
 }
 
 // ---------------------------------------------------------------------------
+// v2 commands
+// ---------------------------------------------------------------------------
+
+/** One OS window of the target process. */
+export interface WindowInfo {
+  id: WindowId;
+  /** `"main"` or `"popout"`. */
+  kind: string;
+  title: string;
+  /** The node this window paints as its root; `0` = the whole document. */
+  root: NodeId;
+  viewport: { w: number; h: number };
+  scale: number;
+  focused: boolean;
+  hovered: boolean;
+}
+
+export interface WindowsReply {
+  windows: WindowInfo[];
+  pid: number;
+  /** The inspectors the TARGET has open on itself (F12). */
+  inspectors: { window: WindowId | null; pid: number }[];
+}
+
+export interface PerfReply {
+  frames: number;
+  uptimeMs: number;
+  /** `main` → first frame. `null` before the first frame happened. */
+  bootMs: number | null;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  maxMs: number;
+  fps: number;
+  /** The tail of the rolling frame-interval ring, oldest first. */
+  samples: number[];
+  /** Live nodes in the retained tree. */
+  nodes: number;
+  windows: number;
+  /** Is `VN_PERF` on in the target? It owns the per-phase counters. */
+  phases: boolean;
+}
+
+/** One exchange the network tee recorded (`crates/vn-app/src/devtools/net.rs`). */
+export interface NetEntry {
+  seq: number;
+  /** `"fetch"` or `"ws"`. */
+  kind: string;
+  url: string;
+  /** fetch only. */
+  method?: string;
+  /** Milliseconds since the epoch, as the TARGET measured it. */
+  at: number;
+  ms?: number;
+  status?: number;
+  ok?: boolean;
+  type?: string;
+  error?: string;
+  /** ws only: `open-requested` | `open` | `error` | `close`. */
+  phase?: string;
+  sent?: number;
+  received?: number;
+}
+
+export interface NetReply {
+  entries: NetEntry[];
+  next: number;
+  dropped: number;
+}
+
+export interface StorageReply {
+  area: string;
+  length?: number;
+  entries?: { key: string; value: string }[];
+  key?: string;
+  value?: string;
+  removed?: boolean;
+  cleared?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// the push channel — `crates/vn-app/src/devtools/ws.rs`
+// ---------------------------------------------------------------------------
+
+export interface PushHello {
+  t: "hello";
+  proto: number;
+  pid: number;
+  logCursor: number;
+  treeRev: number;
+}
+export interface PushLogs extends LogsReply {
+  t: "logs";
+}
+export interface PushTree {
+  t: "tree";
+  rev: number;
+}
+export interface PushStatus {
+  t: "status";
+  text: string;
+}
+export interface PushNet {
+  t: "net";
+  entries: NetEntry[];
+}
+export interface PushPerf extends PerfReply {
+  t: "perf";
+}
+
+export type PushMessage = PushHello | PushLogs | PushTree | PushStatus | PushNet | PushPerf;
+
+/** Which streams a socket wants. The host defaults to all of them. */
+export type PushStream = "logs" | "perf" | "tree" | "net" | "status";
+
+// ---------------------------------------------------------------------------
 // the store's own shapes
 // ---------------------------------------------------------------------------
 
@@ -180,6 +327,8 @@ export interface Row {
   children: number;
   truncated: number;
   open: boolean;
+  /** Set by a search: this row matched the query. */
+  hit?: boolean;
 }
 
 /** A console line. `seq` is `-1` for lines this inspector wrote itself. */
@@ -188,6 +337,7 @@ export interface ConsoleLine {
   at: number;
   kind: string;
   text: string;
+  styles?: StyleRun[] | null;
 }
 
 /** A capture, plus when it was taken and where the pane should load it from. */
@@ -198,3 +348,6 @@ export interface Shot extends ScreenshotReply {
 
 /** "detached" -> "attaching" -> "attached", or "lost" when the wire dies. */
 export type Status = "detached" | "attaching" | "attached" | "lost";
+
+/** Which panel is in the main area. */
+export type Tab = "elements" | "network" | "performance" | "storage" | "targets";

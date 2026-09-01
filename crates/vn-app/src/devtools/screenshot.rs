@@ -127,7 +127,7 @@ pub struct Shot {
 /// parallel `VN_DIST` slots never collide and an agent can find them without
 /// being told a path.
 pub fn next_default_path() -> PathBuf {
-    let dir = crate::dev::dist("screenshots");
+    let dir = crate::slot::path("screenshots");
     let _ = std::fs::create_dir_all(&dir);
     let next = std::fs::read_dir(&dir)
         .map(|entries| {
@@ -155,7 +155,7 @@ pub fn next_default_path() -> PathBuf {
 /// pid, and a screenshot is exactly the command you want to still work when
 /// something upstream moved.
 fn hwnd_of_window() -> Option<isize> {
-    vn_runtime::with_commit(|window, _| {
+    super::with_target(|window, _| {
         let handle = <gpui::Window as HasWindowHandle>::window_handle(window).ok()?;
         match handle.as_raw() {
             RawWindowHandle::Win32(w) => Some(w.hwnd.get()),
@@ -232,7 +232,7 @@ fn capture_render_to_image(path: &Path) -> Result<Shot, String> {
         unsafe { IsIconic(HWND(raw as *mut core::ffi::c_void)) }.as_bool()
     });
 
-    let captured = vn_runtime::with_commit(|window, _| {
+    let captured = super::with_target(|window, _| {
         (window.render_to_image(), window.scale_factor())
     })
     .ok_or_else(|| "no live gpui window (not inside a committed frame)".to_string())?;
@@ -291,7 +291,7 @@ fn capture_print_window(path: &Path) -> Result<Shot, String> {
     }
     let iconic = unsafe { IsIconic(hwnd) }.as_bool();
     let client_origin = client_origin(hwnd, &rect);
-    let scale = vn_runtime::with_commit(|window, _| window.scale_factor()).unwrap_or(1.0);
+    let scale = super::with_target(|window, _| window.scale_factor()).unwrap_or(1.0);
 
     // Top-down (negative height) 32-bit BGRA, so row 0 is the top row and the
     // buffer needs no vertical flip afterwards.

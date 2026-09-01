@@ -48,18 +48,43 @@ pub struct PopoutShell {
 
 impl Render for PopoutShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let id = window.window_handle().window_id().as_u64();
         gpui::div()
+            .relative()
             .size_full()
             .text_color(gpui::white())
             .font_family(".SystemUIFont")
             // The SAME node the primary window stopped painting.
             .child(vn_tree::build_subtree(self.node, window, cx))
+            // …and the inspector's outline, when it is THIS window's node
+            // that is selected. Shell furniture here exactly as it is in the
+            // primary window (docs/DEVTOOLS-UI.md §5): an inspector must not
+            // appear in the tree it is inspecting, and a pop-out's tree is
+            // the same tree.
+            .children(popout_inspector_overlay(id, self.node))
+    }
+}
+
+/// The devtools highlight overlay for a pop-out window. Always `None` in a
+/// build with no devtools in it.
+fn popout_inspector_overlay(window: u64, root: u32) -> Option<gpui::Div> {
+    #[cfg(vn_devtools)]
+    {
+        crate::devtools::popout_highlight_overlay(window, root)
+    }
+    #[cfg(not(vn_devtools))]
+    {
+        let _ = (window, root);
+        None
     }
 }
 
 struct Popout {
     node: u32,
     id: WindowId,
+    /// What the window's caption says — the only human-readable name a window
+    /// switcher can show for it.
+    title: String,
     handle: WindowHandle<PopoutShell>,
     /// A GC-protected JS function called with `(nodeId)` when the window closes
     /// — the spike's stand-in for the `close` event of §3's contract.
@@ -278,6 +303,36 @@ fn popout_of_node(node: u32) -> Option<usize> {
     POPOUTS.with(|p| p.borrow().iter().position(|w| w.node == node))
 }
 
+// ---------------------------------------------------------------------------
+// addressing a pop-out from the devtools (docs/DEVTOOLS.md, the `window` param)
+// ---------------------------------------------------------------------------
+
+/// `(window id, the node this window paints, its title)` for every pop-out.
+///
+/// The devtools' `windows` command puts the primary window at the head of this
+/// list; here there is nothing but the pop-outs, because the primary window's
+/// identity is `main.rs`'s to report.
+pub fn list() -> Vec<(u64, u32, String)> {
+    POPOUTS.with(|p| {
+        p.borrow().iter().map(|w| (w.id.as_u64(), w.node, w.title.clone())).collect()
+    })
+}
+
+/// Runs `f` against one pop-out window, addressed by its gpui window id.
+///
+/// `AnyWindowHandle::update`, NOT the typed handle's — for the reason spelled
+/// out at `vn_window_click`: the typed form wraps the body in
+/// `Entity<PopoutShell>::update`, and a devtools command that dispatches an
+/// event would re-enter that borrow the instant it reached a listener.
+pub fn with_window<R>(
+    id: u64,
+    cx: &mut App,
+    f: impl FnOnce(&mut Window, &mut App) -> R,
+) -> Option<R> {
+    let handle = POPOUTS.with(|p| p.borrow().iter().find(|w| w.id.as_u64() == id).map(|w| w.handle))?;
+    gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| f(window, cx)).ok()
+}
+
 fn open_now(node: u32, opts: Options, on_close: u64, cx: &mut App) {
     // The node could have been unmounted between the call and this defer — Vue
     // is free to do that, and opening a window onto a dead id would paint an
@@ -329,6 +384,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, cx: &mut App) {
         p.borrow_mut().push(Popout {
             node,
             id: handle.window_id(),
+            title: opts.title.clone(),
             handle,
             on_close,
         })

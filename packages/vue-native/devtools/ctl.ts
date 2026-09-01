@@ -51,13 +51,28 @@ commands
                                      test (hover, z-order, pointer-events all
                                      apply); reports which node has focus after
   scroll   <selector> <dy> [--dx N] [--index N]
+  wheel    [selector] [--x N --y N] --dy N [--dx N]
+                                     a REAL wheel event through gpui's hit
+                                     test — what an app's own @wheel handler
+                                     sees. DOM signs: --dy 200 scrolls DOWN.
+                                     (\`scroll\` drives a container's handle
+                                     directly and never involves the wheel)
   eval     <js source>
   logs     [--since N]
   screenshot [path] [--backend auto|render_to_image|print_window]
+  windows                            every OS window this process paints (and
+                                     every inspector it has open on itself)
+  perf                               the rolling frame window: fps, p50/p95,
+                                     node count, boot->first-frame
+  net      [--since N]               the fetch / WebSocket log
+  storage  [local|session] [list|set|remove|clear] [--key K] [--value V]
+  raise                              bring the window to the front
 
 options
   --dist <slot>    the dist directory the target host was launched with
                    (default: ${DEFAULT_DIST})
+  --window <id>    which of the target's OS windows the command is about
+                   (\`windows\` lists them; default: the primary one)
   --timeout <ms>   client-side reply timeout (default ${DEFAULT_TIMEOUT_MS})
   --json           print the raw wire response instead of just \`data\`
 `;
@@ -171,6 +186,20 @@ function buildRequest(argv: string[], f: Flags): Record<string, unknown> {
     }
     case "pick":
       return { cmd };
+    case "windows":
+    case "raise":
+    case "perf":
+      return { cmd };
+    case "net":
+      return { cmd, ...(num(f.since) !== undefined ? { since: num(f.since) } : {}) };
+    case "storage":
+      return {
+        cmd,
+        area: rest[0] || "local",
+        op: rest[1] || "list",
+        ...(typeof f.key === "string" ? { key: f.key } : {}),
+        ...(typeof f.value === "string" ? { value: f.value } : {}),
+      };
     case "tree":
       return {
         cmd,
@@ -207,6 +236,16 @@ function buildRequest(argv: string[], f: Flags): Record<string, unknown> {
       const dy = num(rest[1]) ?? num(f.dy) ?? 0;
       const dx = num(f.dx) ?? 0;
       return withIndex({ cmd, selector: rest[0], dx, dy });
+    }
+    case "wheel": {
+      const dy = num(f.dy) ?? 0;
+      const dx = num(f.dx) ?? 0;
+      if (!dy && !dx) die("wheel needs --dy (or --dx); DOM signs, so --dy 200 scrolls down");
+      const base: Record<string, unknown> = { cmd, dx, dy };
+      if (rest[0]) return withIndex({ ...base, selector: rest[0] });
+      const x = num(f.x), y = num(f.y);
+      if (x === undefined || y === undefined) die("wheel needs a selector, or both --x and --y");
+      return { ...base, x, y };
     }
     case "eval":
       if (!rest.length) die("eval needs a JS source string");
@@ -269,7 +308,16 @@ function send(port: number, payload: string, ms: number): Promise<string> {
 // ---------------------------------------------------------------------------
 
 const handshake = readHandshake(distDir);
-const request = { token: handshake.token, ...buildRequest(positional, flags) };
+const windowArg = Number(flags.window);
+// `--window` rides on EVERY request rather than being spelled out per
+// command: the host reads it uniformly (docs/DEVTOOLS.md, the `window`
+// argument), and a client that never passes it addresses the primary window
+// exactly as it always did.
+const request = {
+  token: handshake.token,
+  ...(Number.isFinite(windowArg) ? { window: windowArg } : {}),
+  ...buildRequest(positional, flags),
+};
 
 let line: string;
 try {

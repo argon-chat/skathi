@@ -1,40 +1,96 @@
 // All inspector state, and every command that changes it.
 //
 // One plain `reactive` module rather than pinia: there is exactly one inspector
-// per window, nothing to inject, and the four panes are views over one object.
+// per window, nothing to inject, and every panel is a view over one object.
 // (pinia works here — apps/hello proves it — it just buys nothing.)
 //
-// The rule the polling follows: NEVER let a poll outlive its usefulness.
-// Every command costs the target a frame, so the loops are slow (logs ~0.7 s,
-// tree ~2.5 s), serialized by `wire.ts`, and each one is skipped while the
-// previous one is still in flight.
+// ## The budget rule, restated for v2
+//
+// Every COMMAND costs the target a frame, so commands are rare, serialized
+// (`wire.ts`) and skipped while a previous one is in flight. Everything that
+// used to be a POLL is now a push (`Push`, `crates/vn-app/src/devtools/ws.rs`):
+// logs, the tree revision, frame stats and network entries arrive when they
+// happen. What is left on a timer is only what genuinely cannot be pushed —
+// the picker (it is a question about the pointer, asked while picking) and the
+// target scan (a local directory walk that involves no target at all).
+//
+//   | v1                        | v2                                        |
+//   |---------------------------|-------------------------------------------|
+//   | logs   700 ms poll        | pushed, same frame                        |
+//   | tree  2500 ms poll        | pushed REVISION; refetched only if the    |
+//   |                           | Elements panel is open and it moved       |
+//   | picker 150 ms poll        | unchanged — it is a pointer question       |
+//   | targets 3000 ms           | unchanged — no target is involved          |
 
 import { reactive } from "vue";
-import { listTargets, message, send } from "./wire";
+import { Push, devtoolsArgs, listTargets, message, send } from "./wire";
 import { nodeLabel } from "./dump";
 import type {
   ConsoleLine,
   EvalReply,
   LogsReply,
+  NetEntry,
+  NetReply,
   NodeId,
+  PerfReply,
   PickReply,
   PingReply,
+  PushMessage,
+  PushStream,
   Row,
   RulesReply,
   ScreenshotReply,
   Shot,
   Status,
+  StorageReply,
   StylesReply,
+  Tab,
   Target,
   TargetList,
   TreeNode,
+  WindowId,
+  WindowInfo,
+  WindowsReply,
 } from "./protocol";
 
 /** How long the target keeps a picker highlight without being told again. */
 const PICK_TTL_MS = 1500;
 /** …and how long a SELECTION highlight lives; refreshed while it stays selected. */
 const SELECT_TTL_MS = 6000;
-const LOG_LIMIT = 500;
+const LOG_LIMIT = 1000;
+const NET_LIMIT = 400;
+/** How many frame samples the Performance panel keeps for its chart. */
+const PERF_HISTORY = 240;
+
+/** The console's severity buckets, in the order the filter bar shows them. */
+export const LEVELS = ["error", "warn", "info", "debug"] as const;
+export type Level = (typeof LEVELS)[number];
+
+/**
+ * A ring `kind` -> a console level.
+ *
+ * The target's ring uses a coarse CHANNEL name rather than a severity ladder
+ * (`vn_tree::log::Entry`), which is the right shape for the ring and the wrong
+ * one for a filter bar — so the mapping is here, in the UI, where it belongs.
+ * `css` and `advisory` are `warn` because that is what they are: the engine
+ * telling you a declaration did not do what you wrote.
+ */
+export function levelOf(kind: string): Level {
+  switch (kind) {
+    case "error":
+      return "error";
+    case "warn":
+    case "css":
+    case "advisory":
+    case "window":
+      return "warn";
+    case "dev":
+    case "js":
+      return "debug";
+    default:
+      return "info";
+  }
+}
 
 interface State {
   // -- attachment
@@ -42,6 +98,20 @@ interface State {
   target: Target | null;
   status: Status;
   error: string;
+  pushLive: boolean;
+  pushNote: string;
+
+  // -- windows of the target
+  windows: WindowInfo[];
+  window: WindowId | null;
+  inspectors: { window: WindowId | null; pid: number }[];
+
+  // -- layout
+  tab: Tab;
+  consoleOpen: boolean;
+  treeWidth: number;
+  consoleHeight: number;
+  dragging: "tree" | "console" | null;
 
   // -- elements
   tree: TreeNode | null;
@@ -50,13 +120,19 @@ interface State {
   expanded: Record<NodeId, boolean>;
   selected: NodeId | null;
   treeError: string;
-  autoTree: boolean;
+  treeRev: number;
+  seenRev: number;
+  elementSearch: string;
+  matches: NodeId[];
+  matchIndex: number;
+  treeScroll: number;
 
   // -- styles
   styles: StylesReply | null;
   rules: RulesReply | null;
   stylesTab: string;
   stylesError: string;
+  copied: string;
 
   // -- console
   logs: ConsoleLine[];
@@ -64,10 +140,30 @@ interface State {
   logStatus: string;
   dropped: number;
   logFilter: string;
+  levels: Record<Level, boolean>;
+  preserve: boolean;
+  consoleScroll: number;
+  follow: boolean;
+  evalHistory: string[];
+  evalIndex: number;
 
   // -- picker
   picking: boolean;
   pickInfo: PickReply | null;
+
+  // -- performance
+  perf: PerfReply | null;
+  perfHistory: number[];
+
+  // -- network
+  net: NetEntry[];
+  netCursor: number;
+  netFilter: string;
+
+  // -- storage
+  storageArea: string;
+  storage: { key: string; value: string }[];
+  storageError: string;
 
   // -- preview
   shot: Shot | null;
@@ -76,43 +172,113 @@ interface State {
 }
 
 export const state = reactive<State>({
-  // -- attachment
   targets: [],
   target: null,
   status: "detached",
   error: "",
+  pushLive: false,
+  pushNote: "",
 
-  // -- elements
+  windows: [],
+  window: null,
+  inspectors: [],
+
+  tab: "elements",
+  consoleOpen: true,
+  treeWidth: 460,
+  consoleHeight: 240,
+  dragging: null,
+
   tree: null,
   rows: [],
   byId: {},
   expanded: {},
   selected: null,
   treeError: "",
-  autoTree: true,
+  treeRev: 0,
+  seenRev: -1,
+  elementSearch: "",
+  matches: [],
+  matchIndex: 0,
+  treeScroll: 0,
 
-  // -- styles
   styles: null,
   rules: null,
-  stylesTab: "styles",
+  stylesTab: "rules",
   stylesError: "",
+  copied: "",
 
-  // -- console
   logs: [],
   logCursor: 0,
   logStatus: "",
   dropped: 0,
   logFilter: "",
+  levels: { error: true, warn: true, info: true, debug: true },
+  preserve: false,
+  consoleScroll: 0,
+  follow: true,
+  evalHistory: [],
+  evalIndex: -1,
 
-  // -- picker
   picking: false,
   pickInfo: null,
 
-  // -- preview
+  perf: null,
+  perfHistory: [],
+
+  net: [],
+  netCursor: 0,
+  netFilter: "",
+
+  storageArea: "local",
+  storage: [],
+  storageError: "",
+
   shot: null,
   shotError: "",
   shotBusy: false,
 });
+
+/** How this inspector was started — F12 names the window it was opened for. */
+export const args = devtoolsArgs();
+
+/**
+ * Cross-panel UI facts that are not inspection state.
+ *
+ * `typing` is the one that earns its keep: this app is keyboard-first, and
+ * every panel's key handler has to know whether the keystroke belongs to a
+ * text field instead. A browser would ask `document.activeElement`; the host
+ * does not expose one (the focused NODE is known host-side — `mouse` reports
+ * it — but not to the app's own JS), so the inputs say so themselves on
+ * `@focus` / `@blur`. Two lines per input, and no guessing.
+ */
+export const ui = reactive({
+  typing: false,
+  /** Set by the Elements panel so Ctrl+F can reach it from the shell. */
+  openElementSearch: null as null | (() => void),
+  /** Is that search box open? Escape closes it before it reaches the drawer. */
+  elementSearchOpen: false,
+  closeElementSearch: null as null | (() => void),
+  /** Set by the Console so Ctrl+F and the prompt focus can reach it. */
+  focusPrompt: null as null | (() => void),
+});
+
+// ---------------------------------------------------------------------------
+// the wire, with the addressed window folded in
+// ---------------------------------------------------------------------------
+
+/**
+ * A command against the attached target's CURRENTLY SELECTED window.
+ *
+ * The `window` argument rides on every command rather than being spelled out at
+ * each call site: the host reads it uniformly (docs/DEVTOOLS.md), commands that
+ * do not care ignore it, and forgetting it at one call site is exactly how a
+ * window switcher ends up half-working.
+ */
+function cmd<T>(name: string, cmdArgs: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
+  const scoped = state.window === null ? cmdArgs : { window: state.window, ...cmdArgs };
+  return send<T>(state.target, name, scoped, timeoutMs);
+}
 
 // ---------------------------------------------------------------------------
 // attachment
@@ -132,14 +298,18 @@ export function refreshTargets(): TargetList {
  */
 export function bestTarget(found?: TargetList | null): Target | null {
   const live = state.targets.filter((t) => t.alive);
-  if (found && found.preferred) {
-    const named = live.find((t) => t.dir === found.preferred || t.slot === found.preferred);
+  const preferred = found?.preferred || args.target;
+  if (preferred) {
+    const named = live.find((t) => t.dir === preferred || t.slot === preferred);
     if (named) return named;
   }
   return live.find((t) => !t.self) || live[0] || null;
 }
 
+let channel: Push | null = null;
+
 export async function attach(target: Target | null): Promise<void> {
+  closePush();
   state.target = target;
   state.status = target ? "attaching" : "detached";
   state.error = "";
@@ -149,9 +319,17 @@ export async function attach(target: Target | null): Promise<void> {
     const pong = await send<PingReply>(target, "ping");
     state.status = "attached";
     state.logCursor = 0;
-    push({ kind: "dev", text: `attached to ${target.slot} · pid ${pong.pid} · port ${target.port}` });
+    note({ kind: "dev", text: `attached to ${target.slot} · pid ${pong.pid} · port ${target.port}` });
+    await refreshWindows();
+    // F12 opened this inspector for ONE window of the target. Honour that:
+    // everything below is then about the window the key was pressed in.
+    if (args.window !== null && state.windows.some((w) => w.id === args.window)) {
+      state.window = args.window;
+    }
+    openPush();
     await refreshTree();
     await pollLogs();
+    await refreshNet();
   } catch (e) {
     state.status = "lost";
     state.error = message(e);
@@ -160,6 +338,7 @@ export async function attach(target: Target | null): Promise<void> {
 
 export function detach(): void {
   if (state.target) clearHighlight();
+  closePush();
   state.target = null;
   state.status = "detached";
   resetInspection();
@@ -173,11 +352,19 @@ function resetInspection(): void {
   state.selected = null;
   state.styles = null;
   state.rules = null;
-  state.logs = [];
+  if (!state.preserve) state.logs = [];
   state.logCursor = 0;
   state.picking = false;
   state.pickInfo = null;
   state.shot = null;
+  state.windows = [];
+  state.window = null;
+  state.perf = null;
+  state.perfHistory = [];
+  state.net = [];
+  state.netCursor = 0;
+  state.treeRev = 0;
+  state.seenRev = -1;
 }
 
 /** Every failure funnels through here, so a dead target is reported once. */
@@ -186,6 +373,124 @@ function fail(e: unknown): string {
   state.error = text;
   if (/cannot reach/.test(text)) state.status = "lost";
   return text;
+}
+
+// ---------------------------------------------------------------------------
+// the push channel
+// ---------------------------------------------------------------------------
+
+/** Which streams the UI wants right now — the ones a visible panel reads. */
+function streams(): PushStream[] {
+  const want: PushStream[] = ["logs", "tree", "status", "net"];
+  // Frame stats are four messages a second. Asking for them while nobody is
+  // looking at the Performance panel is exactly the kind of idle cost this
+  // rewrite exists to remove.
+  if (state.tab === "performance") want.push("perf");
+  return want;
+}
+
+function openPush(): void {
+  if (!state.target) return;
+  channel = new Push(state.target, state.logCursor, streams(), {
+    onOpen: () => {
+      state.pushLive = true;
+      state.pushNote = "live";
+    },
+    onMessage: onPush,
+    onClose: (why) => {
+      state.pushLive = false;
+      state.pushNote = why;
+      channel = null;
+    },
+  });
+}
+
+function closePush(): void {
+  channel?.close();
+  channel = null;
+  state.pushLive = false;
+  state.pushNote = "";
+}
+
+/** Called when the visible panel changes what it needs. */
+export function resubscribe(): void {
+  channel?.subscribe(streams());
+}
+
+function onPush(msg: PushMessage): void {
+  switch (msg.t) {
+    case "hello":
+      // The cursor the socket will stream from. Anything older than this came
+      // out of the one `logs` command the attach path runs.
+      state.pushNote = `live · proto ${msg.proto}`;
+      state.treeRev = msg.treeRev;
+      break;
+    case "logs":
+      for (const entry of msg.entries || []) pushLine(entry);
+      state.logCursor = msg.next;
+      if (msg.dropped) state.dropped += msg.dropped;
+      break;
+    case "tree":
+      state.treeRev = msg.rev;
+      // The tree is REFETCHED only when somebody is looking at it. A revision
+      // number is free; a `tree` command is a frame of the target's budget.
+      if (state.tab === "elements") void refreshTree();
+      break;
+    case "status":
+      state.logStatus = msg.text;
+      break;
+    case "net":
+      for (const entry of msg.entries || []) pushNet(entry);
+      break;
+    case "perf":
+      applyPerf(msg);
+      break;
+  }
+}
+
+/** The polling fallback, for a host whose push channel could not be opened. */
+export function pollFallback(): void {
+  if (state.status !== "attached" || state.pushLive) return;
+  void pollLogs();
+  if (state.tab === "elements") void refreshTree();
+  if (state.tab === "performance") void refreshPerf();
+  if (state.tab === "network") void refreshNet();
+}
+
+// ---------------------------------------------------------------------------
+// windows
+// ---------------------------------------------------------------------------
+
+export async function refreshWindows(): Promise<void> {
+  if (!state.target) return;
+  try {
+    const data = await send<WindowsReply>(state.target, "windows");
+    state.windows = data.windows || [];
+    state.inspectors = data.inspectors || [];
+    if (state.window !== null && !state.windows.some((w) => w.id === state.window)) {
+      // The window we were pointed at closed. Fall back to the primary one
+      // rather than silently addressing nothing.
+      state.window = null;
+      note({ kind: "dev", text: "the window this inspector was opened for closed — back to the main window" });
+    }
+  } catch (e) {
+    fail(e);
+  }
+}
+
+export async function selectWindow(id: WindowId | null): Promise<void> {
+  state.window = id;
+  state.selected = null;
+  state.styles = null;
+  state.rules = null;
+  state.expanded = {};
+  await refreshTree();
+}
+
+/** The window commands are addressed to, resolved for display. */
+export function currentWindow(): WindowInfo | null {
+  if (state.window === null) return state.windows.find((w) => w.kind === "main") || null;
+  return state.windows.find((w) => w.id === state.window) || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,9 +505,10 @@ export async function refreshTree(): Promise<void> {
   try {
     // Depth 14 covers every app in this repo whole; anything deeper comes back
     // as a `truncated` count and is fetched on demand when the row is opened.
-    const tree = await send<TreeNode>(state.target, "tree", { depth: 14 });
+    const tree = await cmd<TreeNode>("tree", { depth: 14 });
     state.tree = tree;
     state.treeError = "";
+    state.seenRev = state.treeRev;
     if (!Object.keys(state.expanded).length) expandInitial(tree, 0);
     reindex();
   } catch (e) {
@@ -236,6 +542,8 @@ export function reindex(): void {
   };
   index(state.tree);
 
+  const query = state.elementSearch.trim().toLowerCase();
+  const matches: NodeId[] = [];
   const rows: Row[] = [];
   const walk = (node: TreeNode | null, depth: number): void => {
     if (!node || node.id === undefined) return;
@@ -243,6 +551,8 @@ export function reindex(): void {
     // nothing in the app and would be pure noise here (there is one per v-for).
     if (node.kind === "text" && !(node.text || "").trim()) return;
     const children = node.children || [];
+    const hit = query ? rowText(node).includes(query) : false;
+    if (hit) matches.push(node.id);
     rows.push({
       id: node.id,
       depth,
@@ -250,6 +560,7 @@ export function reindex(): void {
       children: children.length,
       truncated: node.truncated || 0,
       open: !!state.expanded[node.id],
+      hit,
     });
     if (state.expanded[node.id]) for (const child of children) walk(child, depth + 1);
   };
@@ -257,10 +568,24 @@ export function reindex(): void {
 
   state.rows = rows;
   state.byId = byId;
+  state.matches = matches;
+  if (state.matchIndex >= matches.length) state.matchIndex = 0;
+}
+
+/** What Ctrl+F searches: the tag, the classes, the id, and any text. */
+function rowText(node: TreeNode): string {
+  const classes = (node.classes || []).join(" ");
+  const id = node.props?.id || "";
+  return `${node.tag || ""} ${classes} ${id} ${node.text || ""}`.toLowerCase();
 }
 
 export function toggle(id: NodeId): void {
   state.expanded[id] = !state.expanded[id];
+  reindex();
+}
+
+export function setExpanded(id: NodeId, open: boolean): void {
+  state.expanded[id] = open;
   reindex();
 }
 
@@ -269,6 +594,23 @@ export function revealPath(path: NodeId[] | undefined): void {
   if (!Array.isArray(path)) return;
   for (const id of path.slice(0, -1)) state.expanded[id] = true;
   reindex();
+}
+
+/** The ancestor chain of the selected node, root first — the breadcrumbs. */
+export function ancestors(id: NodeId | null): TreeNode[] {
+  if (id === null || !state.tree) return [];
+  const path: TreeNode[] = [];
+  const walk = (node: TreeNode, trail: TreeNode[]): boolean => {
+    const here = [...trail, node];
+    if (node.id === id) {
+      path.push(...here);
+      return true;
+    }
+    for (const child of node.children || []) if (walk(child, here)) return true;
+    return false;
+  };
+  walk(state.tree, []);
+  return path;
 }
 
 export async function select(
@@ -281,8 +623,8 @@ export async function select(
   state.stylesError = "";
   if (!state.target || id === null || id === undefined) return;
   // A node the tree has never seen — picked out of the target before the next
-  // auto-refresh, or selected across a rebuild. Fetch the tree so the panels
-  // have something to name it with.
+  // refresh, or selected across a rebuild. Fetch the tree so the panels have
+  // something to name it with.
   if (!state.byId[id]) await refreshTree();
   if (options.highlight !== false) highlight(id, SELECT_TTL_MS);
   await loadStyles(id);
@@ -290,15 +632,15 @@ export async function select(
 
 async function loadStyles(id: NodeId): Promise<void> {
   try {
-    state.styles = await send<StylesReply>(state.target, "styles", { node: id });
+    state.rules = await cmd<RulesReply>("rules", { node: id });
+  } catch {
+    state.rules = null;
+  }
+  try {
+    state.styles = await cmd<StylesReply>("styles", { node: id });
   } catch (e) {
     // A text node has no computed style — that is an answer, not a failure.
     state.stylesError = message(e);
-  }
-  try {
-    state.rules = await send<RulesReply>(state.target, "rules", { node: id });
-  } catch {
-    state.rules = null;
   }
 }
 
@@ -308,12 +650,49 @@ export async function refreshStyles(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// search
+// ---------------------------------------------------------------------------
+
+export function searchElements(query: string): void {
+  state.elementSearch = query;
+  state.matchIndex = 0;
+  reindex();
+}
+
+/**
+ * Step to the next (or previous) match, opening whatever is collapsed over it.
+ *
+ * The search runs over the FLATTENED rows, which only contain what is expanded
+ * — so a match inside a collapsed subtree would be invisible. Rather than
+ * search the whole tree and then guess which ancestors to open, this expands
+ * everything the query hits on the way: `expandTo` walks the real tree.
+ */
+export function stepMatch(delta: number): void {
+  const query = state.elementSearch.trim().toLowerCase();
+  if (!query || !state.tree) return;
+  const all: NodeId[] = [];
+  const walk = (node: TreeNode, trail: NodeId[]): void => {
+    if (rowText(node).includes(query)) {
+      all.push(node.id);
+      for (const ancestor of trail) state.expanded[ancestor] = true;
+    }
+    for (const child of node.children || []) walk(child, [...trail, node.id]);
+  };
+  walk(state.tree, []);
+  reindex();
+  if (!all.length) return;
+  state.matchIndex = (state.matchIndex + delta + all.length) % all.length;
+  const id = all[state.matchIndex];
+  void select(id);
+}
+
+// ---------------------------------------------------------------------------
 // highlight + picker
 // ---------------------------------------------------------------------------
 
 export function highlight(id: NodeId, ttlMs: number): Promise<void> {
   if (!state.target) return Promise.resolve();
-  return send<unknown>(state.target, "highlight", { node: id, ttlMs }).then(
+  return cmd<unknown>("highlight", { node: id, ttlMs }).then(
     () => {},
     () => {},
   );
@@ -321,7 +700,7 @@ export function highlight(id: NodeId, ttlMs: number): Promise<void> {
 
 export function clearHighlight(): Promise<void> {
   if (!state.target) return Promise.resolve();
-  return send<unknown>(state.target, "highlight", { clear: true }).then(
+  return cmd<unknown>("highlight", { clear: true }).then(
     () => {},
     () => {},
   );
@@ -342,6 +721,10 @@ export function togglePick(): void {
  * "gone" is the gesture. Hover the element you want, come back here, and it is
  * selected. (A browser can intercept the click instead because the picker and
  * the page share a window; we do not.)
+ *
+ * v2: the poll asks with NO window argument, so the host answers for whichever
+ * of the target's windows the pointer is actually in — and the picker follows
+ * it there, switching the panel's window if you point at a pop-out.
  */
 export async function pickStep(): Promise<void> {
   if (!state.picking || !state.target) return;
@@ -355,7 +738,11 @@ export async function pickStep(): Promise<void> {
   }
   if (info.insideWindow && info.node) {
     state.pickInfo = info;
-    highlight(info.node.id, PICK_TTL_MS);
+    void send(state.target, "highlight", {
+      node: info.node.id,
+      window: info.window,
+      ttlMs: PICK_TTL_MS,
+    }).catch(() => {});
     return;
   }
   // Left the window with something under the pointer — that is the pick.
@@ -363,11 +750,19 @@ export async function pickStep(): Promise<void> {
     const picked = state.pickInfo;
     state.picking = false;
     state.pickInfo = null;
+    // The pointer may have been in a pop-out. Follow it: a picker that selects
+    // a node the panel cannot then show is worse than no picker.
+    if (picked.window !== undefined && picked.window !== state.window) {
+      const target = state.windows.find((w) => w.id === picked.window);
+      if (target) {
+        state.window = target.kind === "main" ? null : target.id;
+        await refreshTree();
+      }
+    }
     revealPath(picked.path);
-    // Narrowed above, and re-read here because `state.pickInfo` was cleared.
     const node = picked.node!;
     await select(node.id);
-    push({ kind: "dev", text: `picked ${nodeLabel(node)} (node ${node.id})` });
+    note({ kind: "dev", text: `picked ${nodeLabel(node)} (node ${node.id})` });
   }
 }
 
@@ -377,8 +772,13 @@ export async function pickStep(): Promise<void> {
 
 let logsBusy = false;
 
-function push(entry: { kind: string; text: string; seq?: number; at?: number }): void {
-  state.logs.push({ seq: -1, at: Date.now(), ...entry });
+/** A line this inspector wrote about itself. */
+function note(entry: { kind: string; text: string; seq?: number; at?: number }): void {
+  pushLine({ seq: -1, at: Date.now(), ...entry });
+}
+
+function pushLine(entry: ConsoleLine): void {
+  state.logs.push(entry);
   if (state.logs.length > LOG_LIMIT) state.logs.splice(0, state.logs.length - LOG_LIMIT);
 }
 
@@ -386,16 +786,29 @@ export async function pollLogs(): Promise<void> {
   if (!state.target || logsBusy || state.status !== "attached") return;
   logsBusy = true;
   try {
-    const data = await send<LogsReply>(state.target, "logs", { since: state.logCursor });
+    const data = await cmd<LogsReply>("logs", { since: state.logCursor });
     state.logCursor = data.next;
     state.logStatus = data.status || "";
     if (data.dropped) state.dropped += data.dropped;
-    for (const entry of data.entries || []) push(entry);
+    for (const entry of data.entries || []) pushLine(entry);
   } catch (e) {
     fail(e);
   } finally {
     logsBusy = false;
   }
+}
+
+/** The console rows that pass the level filter and the text filter. */
+export function visibleLogs(): ConsoleLine[] {
+  const needle = state.logFilter.trim().toLowerCase();
+  return state.logs.filter((line) => {
+    // Lines the inspector wrote about itself are never filtered out by level:
+    // "attached to …" and "picked div.card" are the transcript of what you did.
+    const own = line.seq < 0 && (line.kind === "input" || line.kind === "result" || line.kind === "dev");
+    if (!own && !state.levels[levelOf(line.kind)]) return false;
+    if (needle && !line.text.toLowerCase().includes(needle)) return false;
+    return true;
+  });
 }
 
 /**
@@ -407,16 +820,18 @@ export async function pollLogs(): Promise<void> {
  */
 export async function runEval(source: string): Promise<void> {
   if (!state.target || !source.trim()) return;
-  push({ kind: "input", text: source });
+  note({ kind: "input", text: source });
+  if (state.evalHistory[state.evalHistory.length - 1] !== source) state.evalHistory.push(source);
+  state.evalIndex = state.evalHistory.length;
   try {
-    const data = await send<EvalReply>(state.target, "eval", { js: source });
+    const data = await cmd<EvalReply>("eval", { js: source });
     if (data.exception) {
-      push({ kind: "error", text: `${data.exception}${data.stack ? `\n${data.stack}` : ""}` });
+      note({ kind: "error", text: `${data.exception}${data.stack ? `\n${data.stack}` : ""}` });
     } else {
-      push({ kind: "result", text: `${format(data.value)}  ·  ${data.type}` });
+      note({ kind: "result", text: `${format(data.value)}  ·  ${data.type}` });
     }
   } catch (e) {
-    push({ kind: "error", text: fail(e) });
+    note({ kind: "error", text: fail(e) });
   }
 }
 
@@ -431,6 +846,143 @@ function format(value: unknown): string {
 
 export function clearConsole(): void {
   state.logs = [];
+  state.dropped = 0;
+}
+
+/**
+ * Completions for the prompt: the target's own top-level globals.
+ *
+ * One `eval` per prefix change would be one target frame per keystroke, so the
+ * name list is fetched ONCE per attach and filtered locally. That makes it a
+ * snapshot rather than a live view — which is the honest trade for a
+ * convenience, and is why a name that appears later still evaluates fine.
+ */
+let globalNames: string[] = [];
+
+export async function loadCompletions(): Promise<void> {
+  if (!state.target || globalNames.length) return;
+  try {
+    const data = await cmd<EvalReply>("eval", {
+      js: "Object.getOwnPropertyNames(globalThis).filter(function(n){return /^[A-Za-z_$][\\w$]*$/.test(n)}).sort()",
+    });
+    if (Array.isArray(data.value)) globalNames = data.value as string[];
+  } catch {
+    globalNames = [];
+  }
+}
+
+export function complete(prefix: string): string[] {
+  const word = /[\w$.]*$/.exec(prefix)?.[0] || "";
+  if (!word || word.includes(".")) return [];
+  const lower = word.toLowerCase();
+  return globalNames.filter((n) => n.toLowerCase().startsWith(lower)).slice(0, 8);
+}
+
+// ---------------------------------------------------------------------------
+// performance
+// ---------------------------------------------------------------------------
+
+function applyPerf(data: PerfReply): void {
+  state.perf = data;
+  const samples = data.samples || [];
+  // The chart's own history: the newest sample of each push, appended. The
+  // reply's `samples` are the target's ring (which overlaps between pushes), so
+  // appending all of them would draw the same milliseconds several times.
+  if (samples.length) state.perfHistory.push(samples[samples.length - 1]);
+  if (state.perfHistory.length > PERF_HISTORY) {
+    state.perfHistory.splice(0, state.perfHistory.length - PERF_HISTORY);
+  }
+  // A cold chart (the panel was just opened) is seeded from the ring so it has
+  // a shape immediately instead of drawing itself in over a minute.
+  if (state.perfHistory.length < 8 && samples.length > 8) {
+    state.perfHistory = samples.slice(-PERF_HISTORY);
+  }
+}
+
+export async function refreshPerf(): Promise<void> {
+  if (!state.target) return;
+  try {
+    applyPerf(await cmd<PerfReply>("perf"));
+  } catch (e) {
+    fail(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// network
+// ---------------------------------------------------------------------------
+
+function pushNet(entry: NetEntry): void {
+  state.net.push(entry);
+  state.netCursor = Math.max(state.netCursor, entry.seq + 1);
+  if (state.net.length > NET_LIMIT) state.net.splice(0, state.net.length - NET_LIMIT);
+}
+
+export async function refreshNet(): Promise<void> {
+  if (!state.target) return;
+  try {
+    const data = await cmd<NetReply>("net", { since: state.netCursor });
+    for (const entry of data.entries || []) pushNet(entry);
+    state.netCursor = data.next;
+  } catch (e) {
+    fail(e);
+  }
+}
+
+export function clearNet(): void {
+  state.net = [];
+}
+
+export function visibleNet(): NetEntry[] {
+  const needle = state.netFilter.trim().toLowerCase();
+  if (!needle) return state.net;
+  return state.net.filter((e) => e.url.toLowerCase().includes(needle));
+}
+
+// ---------------------------------------------------------------------------
+// storage
+// ---------------------------------------------------------------------------
+
+export async function refreshStorage(): Promise<void> {
+  if (!state.target) return;
+  state.storageError = "";
+  try {
+    const data = await cmd<StorageReply>("storage", { area: state.storageArea, op: "list" });
+    state.storage = data.entries || [];
+  } catch (e) {
+    state.storage = [];
+    state.storageError = message(e);
+  }
+}
+
+export async function setStorage(key: string, value: string): Promise<void> {
+  if (!state.target || !key) return;
+  try {
+    await cmd<StorageReply>("storage", { area: state.storageArea, op: "set", key, value });
+    await refreshStorage();
+  } catch (e) {
+    state.storageError = message(e);
+  }
+}
+
+export async function removeStorage(key: string): Promise<void> {
+  if (!state.target) return;
+  try {
+    await cmd<StorageReply>("storage", { area: state.storageArea, op: "remove", key });
+    await refreshStorage();
+  } catch (e) {
+    state.storageError = message(e);
+  }
+}
+
+export async function clearStorage(): Promise<void> {
+  if (!state.target) return;
+  try {
+    await cmd<StorageReply>("storage", { area: state.storageArea, op: "clear" });
+    await refreshStorage();
+  } catch (e) {
+    state.storageError = message(e);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +1003,7 @@ export async function capture(): Promise<void> {
   state.shotBusy = true;
   state.shotError = "";
   try {
-    const shot = await send<ScreenshotReply>(state.target, "screenshot", {}, 20000);
+    const shot = await cmd<ScreenshotReply>("screenshot", {}, 20000);
     state.shot = {
       ...shot,
       at: Date.now(),
@@ -462,4 +1014,22 @@ export async function capture(): Promise<void> {
   } finally {
     state.shotBusy = false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// layout
+// ---------------------------------------------------------------------------
+
+export function setTab(tab: Tab): void {
+  state.tab = tab;
+  resubscribe();
+  if (tab === "storage") void refreshStorage();
+  if (tab === "performance") void refreshPerf();
+  if (tab === "network") void refreshNet();
+  if (tab === "targets") void refreshWindows();
+  if (tab === "elements" && state.treeRev !== state.seenRev) void refreshTree();
+}
+
+export function toggleConsole(): void {
+  state.consoleOpen = !state.consoleOpen;
 }

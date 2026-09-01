@@ -88,6 +88,12 @@ thread_local! {
 
 /// Starts the clock. Called once from `main`, before the window opens.
 pub fn boot() {
+    // The rolling ring's `boot` is seeded FIRST and unconditionally: it is a
+    // `thread_local` that would otherwise initialise itself lazily on the
+    // first frame, which would make `boot -> first frame` read as zero — the
+    // one number a startup regression shows up in.
+    #[cfg(vn_devtools)]
+    ROLL.with(|r| r.borrow_mut().boot = Instant::now());
     if !enabled() {
         return;
     }
@@ -115,9 +121,132 @@ pub fn boot() {
     eprintln!("[vn-perf] probe on (VN_PERF) — frame stats every {}s", HOW_OFTEN.as_secs());
 }
 
+// ---------------------------------------------------------------------------
+// the rolling window the devtools Performance panel reads
+// ---------------------------------------------------------------------------
+//
+// `VN_PERF` above is a REPORT: it prints a summary to stderr every second and
+// costs a `Vec` push plus four `Instant` reads per frame. The panel needs
+// something different — a window of the last few seconds, readable at any
+// moment, from a build nobody remembered to set an environment variable on —
+// so [`ROLL`] is a separate, unconditional, fixed-size ring.
+//
+// Its cost is one `Instant::now()` (which `frame()` was already going to take
+// when the probe is on, and which is a `QueryPerformanceCounter` read
+// otherwise: ~20 ns) and one store into a fixed array. No allocation, no
+// branch on an environment variable, no growth. That is what makes it honest to
+// leave wired in permanently: the profiler you have to restart the app to turn
+// on is the profiler that never answers the question you actually had.
+//
+// It is `cfg(vn_devtools)` all the same, because a shipped `--features prod`
+// build has nobody to read it.
+
+/// How many frame intervals the panel can look back over. 600 ≈ 10 s at 60 Hz
+/// and 3.6 s at 165 Hz — long enough to hold a whole interaction, short enough
+/// that the array is 2.4 KB.
+#[cfg(vn_devtools)]
+pub const ROLL_LEN: usize = 600;
+
+#[cfg(vn_devtools)]
+struct Roll {
+    /// Frame intervals in ms, newest at `head - 1`.
+    ms: [f32; ROLL_LEN],
+    head: usize,
+    filled: usize,
+    frames: u64,
+    last: Option<Instant>,
+    boot: Instant,
+    first_frame: Option<Instant>,
+}
+
+#[cfg(vn_devtools)]
+thread_local! {
+    static ROLL: RefCell<Roll> = RefCell::new(Roll {
+        ms: [0.0; ROLL_LEN],
+        head: 0,
+        filled: 0,
+        frames: 0,
+        last: None,
+        boot: Instant::now(),
+        first_frame: None,
+    });
+}
+
+/// A window of frame intervals, oldest first, plus what the panel wants to
+/// print beside the sparkline.
+#[cfg(vn_devtools)]
+pub struct Snapshot {
+    pub samples: Vec<f32>,
+    pub frames: u64,
+    /// Milliseconds from `main` to the first frame — the number a startup
+    /// regression shows up in first.
+    pub boot_to_first_frame_ms: Option<f32>,
+    pub uptime_ms: f32,
+}
+
+#[cfg(vn_devtools)]
+impl Snapshot {
+    /// `(avg, p50, p95, max, fps)` over the window. Empty windows report zeros
+    /// rather than NaN — a panel should show "no frames yet", not "NaN".
+    pub fn stats(&self) -> (f32, f32, f32, f32, f32) {
+        if self.samples.is_empty() {
+            return (0.0, 0.0, 0.0, 0.0, 0.0);
+        }
+        let mut sorted = self.samples.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let sum: f32 = sorted.iter().sum();
+        let avg = sum / sorted.len() as f32;
+        let at = |q: f32| sorted[((sorted.len() as f32 - 1.0) * q).round() as usize];
+        (avg, at(0.5), at(0.95), sorted[sorted.len() - 1], if avg > 0.0 { 1000.0 / avg } else { 0.0 })
+    }
+}
+
+/// The rolling window, oldest sample first.
+#[cfg(vn_devtools)]
+pub fn snapshot() -> Snapshot {
+    ROLL.with(|r| {
+        let r = r.borrow();
+        let mut samples = Vec::with_capacity(r.filled);
+        // `filled` entries ending at `head`, wrapped.
+        let start = (r.head + ROLL_LEN - r.filled) % ROLL_LEN;
+        for i in 0..r.filled {
+            samples.push(r.ms[(start + i) % ROLL_LEN]);
+        }
+        Snapshot {
+            samples,
+            frames: r.frames,
+            boot_to_first_frame_ms: r.first_frame.map(|f| ms_since(r.boot, f)),
+            uptime_ms: ms_since(r.boot, Instant::now()),
+        }
+    })
+}
+
+/// The rolling ring's half of [`frame`]. Split out so the always-on cost is one
+/// function with no environment lookup in it.
+#[cfg(vn_devtools)]
+#[inline]
+fn roll_frame(now: Instant) {
+    ROLL.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.first_frame.is_none() {
+            r.first_frame = Some(now);
+        }
+        if let Some(prev) = r.last {
+            let head = r.head;
+            r.ms[head] = (now - prev).as_secs_f32() * 1000.0;
+            r.head = (head + 1) % ROLL_LEN;
+            r.filled = (r.filled + 1).min(ROLL_LEN);
+            r.frames += 1;
+        }
+        r.last = Some(now);
+    });
+}
+
 /// One frame happened. Call from the per-frame pump.
 #[inline]
 pub fn frame() {
+    #[cfg(vn_devtools)]
+    roll_frame(Instant::now());
     if !enabled() {
         return;
     }

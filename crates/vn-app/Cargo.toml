@@ -3,6 +3,10 @@ name = "vn-app"
 version = "0.1.0"
 edition = "2021"
 publish = false
+# Compiles `apps/devtools` into the executable and emits `cfg(vn_devtools)`.
+# See the file header for why the inspector bundle is generated rather than
+# checked in like `src/prelude.js`.
+build = "build.rs"
 
 [features]
 # Self-contained release build: the Vue bundle and the app's assets are baked
@@ -17,6 +21,26 @@ publish = false
 #
 # `bun prod.ts` MUST have run first: prod.rs `include_str!`s its output.
 prod = []
+
+# The developer surface: the devtools protocol listener (docs/DEVTOOLS.md), the
+# EMBEDDED inspector (docs/DEVTOOLS-UI.md) and the F12 key that opens it.
+#
+# NOT in `default`, and it does not need to be: a dev build has carried the
+# devtools since milestone 10 and still does with no flag at all. `build.rs`
+# emits `cfg(vn_devtools)` for `not(prod) || devtools`, so:
+#
+#   cargo build -p vn-app                       dev host, inspector embedded
+#   cargo build -p vn-app --features prod       shipped app, no devtools at all
+#   cargo build -p vn-app --features prod,devtools
+#                                               shipped app that can open its
+#                                               own inspector on F12 (what
+#                                               Electron ships, opted into)
+#
+# The feature carries no dependencies: everything it turns on is already in the
+# graph for the dev build. What it costs a prod binary is the ~130 KB inspector
+# bundle and the listener thread — the size check is in
+# research/reports/m21/devtools-v2.md.
+devtools = []
 
 # Web Audio (`AudioContext` & co) via vn-runtime → redjs → Firewheel. ON by
 # default; `cargo build -p vn-app --no-default-features` builds a host with no

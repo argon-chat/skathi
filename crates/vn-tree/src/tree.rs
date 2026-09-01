@@ -541,6 +541,13 @@ impl Tree {
 
     /// "Something changed that no subtree is safe from": a new stylesheet, or a
     /// changed `@media` environment. Both can flip any rule in the sheet.
+    /// Live nodes — allocated slots that still hold a node. `nodes.len()`
+    /// counts freed slots too, which would make a tree that churned once
+    /// look permanently large.
+    pub fn live_count(&self) -> u32 {
+        self.nodes.iter().filter(|n| n.is_some()).count() as u32
+    }
+
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
         self.dirty_all = true;

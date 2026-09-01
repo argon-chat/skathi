@@ -1,122 +1,311 @@
 <script setup lang="ts">
-// The inspector shell: titlebar + three panes, and the poll loops that keep
-// them live.
+// The shell: the dock, the splitters, the global keyboard, and the clocks.
 //
-// Everything below the titlebar is a view over `store.js`. This component owns
-// only the CLOCKS, because the polling budget is a property of the whole app
-// rather than of any one pane: every command costs the TARGET a frame, so the
-// loops are slow, serialized (`wire.js`), and skipped while their previous run
-// is still in flight.
+// ## The dock
 //
-//   picker   150 ms   only while picking
-//   logs     700 ms   `logs since=<cursor>` — the cheapest command there is
-//   tree    2500 ms   optional (`auto` in the Elements header)
-//   styles   —        on selection, and on demand
-//   preview  —        on demand only (see PreviewPane)
-import { onMounted, onUnmounted } from "vue";
+// Chrome's shape, because it is the one every web developer already knows: a
+// tab strip across the top, one panel under it, and a console DRAWER that
+// toggles with Escape over whatever the panel is. Elements splits into tree +
+// styles with a draggable divider; the drawer has one of its own.
+//
+// The splitters are hand-rolled because they have to be: a drag needs pointer
+// events that keep arriving after the pointer has left the 5-pixel divider, and
+// the way to get those without a `setPointerCapture` is a full-window shield
+// that appears for the duration of the drag. That is also what stops the drag
+// from selecting text or hovering things underneath it.
+//
+// ## The clocks
+//
+// v1 had five. Three of them are gone — logs, the tree and the status line are
+// PUSHED now (`store.ts`, `crates/vn-app/src/devtools/ws.rs`). What is left is
+// the two that genuinely cannot be:
+//
+//   picker  150 ms  only while picking, and it is a question about where the
+//                   POINTER is — the host keeps no picker state to push from
+//   targets   3 s   a local directory scan; no target is involved at all
+//
+// …plus a 4 s re-arm of the selection outline (the target forgets a highlight
+// it has not been told about, so a crashed inspector cannot leave a rectangle
+// painted on somebody's app) and a 1 s fallback poll that only runs when the
+// push socket could not be opened.
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import Titlebar from "./components/Titlebar.vue";
-import ElementsPane from "./components/ElementsPane.vue";
-import StylesPane from "./components/StylesPane.vue";
-import ConsolePane from "./components/ConsolePane.vue";
-import PreviewPane from "./components/PreviewPane.vue";
-import { state, attach, bestTarget, highlight, pickStep, pollLogs, refreshTargets, refreshTree } from "./store";
+import Toolbar from "./components/Toolbar.vue";
+import ElementsPanel from "./components/ElementsPanel.vue";
+import StylesPanel from "./components/StylesPanel.vue";
+import ConsolePanel from "./components/ConsolePanel.vue";
+import NetworkPanel from "./components/NetworkPanel.vue";
+import PerfPanel from "./components/PerfPanel.vue";
+import StoragePanel from "./components/StoragePanel.vue";
+import TargetsPanel from "./components/TargetsPanel.vue";
+import { onKeydown } from "./keys";
+import { mainHeight, trackViewport, viewport } from "./layout";
+import {
+  attach,
+  bestTarget,
+  highlight,
+  pickStep,
+  pollFallback,
+  refreshTargets,
+  refreshWindows,
+  setTab,
+  state,
+  togglePick,
+  ui,
+} from "./store";
 
 const SELECT_REFRESH_MS = 4000;
 
-// `setInterval`'s handle is redjs's own — a number, as in a browser — so the
-// list is what `onUnmounted` clears, and nothing else reads it.
+const mainH = computed(() =>
+  mainHeight(state.consoleOpen, state.consoleHeight, !!state.error),
+);
+
+/** Drag state for the two splitters. */
+const dragFrom = ref(0);
+const dragBase = ref(0);
+
+function startDrag(which: "tree" | "console", event: VnMouseEvent): void {
+  state.dragging = which;
+  dragFrom.value = which === "tree" ? event.clientX : event.clientY;
+  dragBase.value = which === "tree" ? state.treeWidth : state.consoleHeight;
+}
+
+function onDrag(event: VnMouseEvent): void {
+  if (state.dragging === "tree") {
+    const next = dragBase.value + (event.clientX - dragFrom.value);
+    state.treeWidth = Math.max(220, Math.min(viewport.w - 280, next));
+  } else if (state.dragging === "console") {
+    // Dragging the drawer's top edge DOWN makes it shorter, hence the sign.
+    const next = dragBase.value - (event.clientY - dragFrom.value);
+    state.consoleHeight = Math.max(80, Math.min(viewport.h - 220, next));
+  }
+}
+
+function endDrag(): void {
+  state.dragging = null;
+}
+
+// ---- the keyboard ---------------------------------------------------------
+
+function onKey(event: VnKeyboardEvent): void {
+  const ctrl = event.ctrlKey || event.metaKey;
+  if (ctrl && event.shiftKey && event.key.toLowerCase() === "c") {
+    event.preventDefault();
+    togglePick();
+    return;
+  }
+  if (ctrl && event.key.toLowerCase() === "f") {
+    event.preventDefault();
+    if (state.tab === "elements") ui.openElementSearch?.();
+    return;
+  }
+  if (ctrl && event.key === "`") {
+    event.preventDefault();
+    state.consoleOpen = true;
+    ui.focusPrompt?.();
+    return;
+  }
+  if (ctrl && "12345".includes(event.key)) {
+    event.preventDefault();
+    setTab((["elements", "network", "performance", "storage", "targets"] as const)[
+      Number(event.key) - 1
+    ]);
+    return;
+  }
+  if (event.key === "Escape") {
+    // ONE owner for Escape. The Elements search is a layer over the drawer, so
+    // it closes first and the drawer keeps its state — but the panel does not
+    // handle the key itself: two listeners on one target cannot stop each
+    // other's propagation, and the child's runs first, so a panel that closed
+    // its own search would have this line toggle the drawer on the same press.
+    if (ui.elementSearchOpen) {
+      ui.closeElementSearch?.();
+      return;
+    }
+    state.consoleOpen = !state.consoleOpen;
+  }
+}
+
+// ---- clocks ---------------------------------------------------------------
+
 let timers: ReturnType<typeof setInterval>[] = [];
 const every = (ms: number, fn: () => void) => timers.push(setInterval(fn, ms));
+let stopViewport: (() => void) | null = null;
+let offKey: (() => void) | null = null;
 
 onMounted(async () => {
+  stopViewport = trackViewport();
+  offKey = onKeydown(onKey);
+
   const found = refreshTargets();
   const target = bestTarget(found);
   if (target) await attach(target);
 
   every(150, () => pickStep());
-  every(700, () => pollLogs());
-  every(2500, () => {
-    if (state.autoTree && state.status === "attached") refreshTree();
-  });
-  // The selection outline is deliberately mortal: the target forgets a
-  // highlight it has not been told about for a few seconds, so an inspector
-  // that crashes or is killed cannot leave a rectangle painted on somebody's
-  // app. Re-arming it here is what makes it look permanent while we are alive.
+  every(3000, () => refreshTargets());
   every(SELECT_REFRESH_MS, () => {
     if (state.selected !== null && state.status === "attached" && !state.picking) {
       highlight(state.selected, SELECT_REFRESH_MS + 2000);
     }
   });
-  // A target list that never refreshes goes stale the moment somebody restarts
-  // the app they are debugging — which is exactly when they look at it.
-  every(3000, () => refreshTargets());
+  // The window list only changes when an app opens or closes a pop-out, which
+  // is rare — so it is refreshed while the panel that shows it is open, and
+  // once per attach otherwise.
+  every(4000, () => {
+    if (state.status === "attached" && (state.tab === "targets" || state.windows.length > 1)) {
+      void refreshWindows();
+    }
+  });
+  // Only ever runs when the socket is not live; see `store.pollFallback`.
+  every(1000, () => pollFallback());
 });
 
 onUnmounted(() => {
   for (const t of timers) clearInterval(t);
   timers = [];
+  offKey?.();
+  offKey = null;
+  stopViewport?.();
 });
 </script>
 
 <template>
   <div class="app">
     <Titlebar />
+    <Toolbar />
 
     <div v-if="state.error" class="banner">{{ state.error }}</div>
 
-    <div class="split">
-      <ElementsPane class="elements" />
-      <StylesPane class="styles" />
-      <PreviewPane class="preview" />
+    <div class="main" :style="{ height: mainH + 'px' }">
+      <template v-if="state.tab === 'elements'">
+        <ElementsPanel :height="mainH" :style="{ width: state.treeWidth + 'px' }" />
+        <div
+          class="split-v"
+          :class="{ dragging: state.dragging === 'tree' }"
+          @mousedown="startDrag('tree', $event)"
+        ></div>
+        <StylesPanel :height="mainH" />
+      </template>
+      <NetworkPanel v-else-if="state.tab === 'network'" :height="mainH" />
+      <PerfPanel v-else-if="state.tab === 'performance'" :height="mainH" />
+      <StoragePanel v-else-if="state.tab === 'storage'" :height="mainH" />
+      <TargetsPanel v-else :height="mainH" />
     </div>
 
-    <ConsolePane class="console" />
+    <div
+      v-if="state.consoleOpen"
+      class="split-h"
+      :class="{ dragging: state.dragging === 'console' }"
+      @mousedown="startDrag('console', $event)"
+    ></div>
+    <ConsolePanel v-if="state.consoleOpen" :height="state.consoleHeight" />
+
+    <footer class="statusbar mono">
+      <span v-if="state.picking" class="mode">
+        ⌖ picking — hover the element in the app, then move back here
+      </span>
+      <span v-else class="hint">
+        Ctrl+Shift+C inspect · Ctrl+F find · Esc console · Ctrl+1…5 panels · Ctrl+` prompt
+      </span>
+      <span class="spacer"></span>
+      <span v-if="state.tab === 'elements' && state.selected !== null" class="fact"
+        >node {{ state.selected }}</span
+      >
+      <span class="fact">{{ state.rows.length }} rows</span>
+      <span class="fact" :class="{ live: state.pushLive }">{{
+        state.pushLive ? "push" : "poll"
+      }}</span>
+    </footer>
+
+    <!-- The drag shield. It exists only while a splitter is held, and it is what
+         makes the drag keep working after the pointer leaves the 5-px divider. -->
+    <div v-if="state.dragging" class="shield" @mousemove="onDrag" @mouseup="endDrag"></div>
   </div>
 </template>
 
 <style scoped>
 .app {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: #0a0f1acc;
-  color: #e6edf3;
+  background: #0a0e16d9;
+  color: #d7e0ea;
   font-family: "Segoe UI", sans-serif;
 }
 .banner {
-  padding: 5px;
+  height: 22px;
   padding-left: 12px;
+  display: flex;
+  align-items: center;
   font-size: 11px;
   color: #ff7b72;
-  background: #ff7b7217;
+  background: #ff7b7214;
   border-bottom-width: 1px;
   border-color: #ff7b7233;
 }
-/* The shell owns every pane's size; the panes themselves only say `min-height:
-   0` so their scroll boxes can shrink below their content. A pane that also
-   declared a height of its own would collide with these rules at the same
-   specificity and the winner would be whichever module the builder emitted
-   last. */
-.split {
+.main {
   display: flex;
   flex-direction: row;
-  flex: 1;
   min-height: 0;
 }
-.elements {
-  width: 38%;
-  min-width: 0;
+.split-v {
+  width: 5px;
+  background: #0a0e16;
+  border-left-width: 1px;
+  border-right-width: 1px;
+  border-color: #1e2733;
+  cursor: col-resize;
 }
-.styles {
+.split-v:hover,
+.split-v.dragging {
+  background: #2f6ea8;
+}
+.split-h {
+  height: 5px;
+  background: #0a0e16;
+  border-top-width: 1px;
+  border-bottom-width: 1px;
+  border-color: #1e2733;
+  cursor: row-resize;
+}
+.split-h:hover,
+.split-h.dragging {
+  background: #2f6ea8;
+}
+.statusbar {
+  height: 22px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding-left: 10px;
+  padding-right: 10px;
+  font-size: 10px;
+  color: #5c6b80;
+  background: #0a0e16;
+  border-top-width: 1px;
+  border-color: #1e2733;
+}
+.mode {
+  color: #6cb6ff;
+}
+.spacer {
   flex: 1;
-  min-width: 0;
 }
-.preview {
-  width: 250px;
+.fact {
+  color: #4e5b6d;
 }
-.console {
-  height: 260px;
-  min-height: 0;
+.fact.live {
+  color: #56d364;
+}
+.shield {
+  position: absolute;
+  left: 0px;
+  top: 0px;
+  width: 100%;
+  height: 100%;
+  background: #00000001;
 }
 </style>

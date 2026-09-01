@@ -153,6 +153,18 @@ pub struct Extras {
     /// renderer. INHERITED, like the CSS property — the renderer threads the
     /// effective value down the same way it threads `window-drag`.
     pub text_transform: Option<TextTransform>,
+    /// `white-space`, as CSS means it — the WHITESPACE PROCESSING half.
+    ///
+    /// `r.text.white_space` beside it is gpui's, and gpui's has exactly one
+    /// job: may a line WRAP. The other half of the property — which of the
+    /// source's spaces, tabs and newlines survive into the rendered text — is
+    /// not something gpui models at all: it shapes whatever string it is
+    /// handed, and it breaks a line at every `\n` in it regardless.
+    ///
+    /// So the collapsing is the renderer's, applied to the string, exactly
+    /// like [`Extras::text_transform`] — and this is the value it needs. It
+    /// INHERITS, like the CSS property.
+    pub white_space: Option<WhiteSpaceMode>,
     /// `content`, the string a `::before` / `::after` rule generates its box
     /// with. Meaningful ONLY on a pseudo-element rule: on an ordinary element
     /// CSS ignores the property outright, and so does the renderer.
@@ -260,6 +272,43 @@ pub enum TextTransform {
     Capitalize,
 }
 
+/// CSS `white-space`, at the level the renderer needs it.
+///
+/// The spec decomposes the property into `white-space-collapse` and
+/// `text-wrap`; these six are the legacy keywords everyone writes, and each
+/// answers the two questions the renderer asks: are runs of white space
+/// COLLAPSED to one space, and are source NEWLINES preserved as line breaks.
+///
+/// | keyword        | collapses spaces | keeps newlines | wraps |
+/// |----------------|------------------|----------------|-------|
+/// | `normal`       | yes              | no             | yes   |
+/// | `nowrap`       | yes              | no             | no    |
+/// | `pre`          | no               | yes            | no    |
+/// | `pre-wrap`     | no               | yes            | yes   |
+/// | `pre-line`     | yes              | yes            | yes   |
+/// | `break-spaces` | no               | yes            | yes   |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhiteSpaceMode {
+    Normal,
+    Nowrap,
+    Pre,
+    PreWrap,
+    PreLine,
+    BreakSpaces,
+}
+
+impl WhiteSpaceMode {
+    /// Is a RUN of white space collapsed to a single space?
+    pub fn collapses_spaces(self) -> bool {
+        matches!(self, WhiteSpaceMode::Normal | WhiteSpaceMode::Nowrap | WhiteSpaceMode::PreLine)
+    }
+
+    /// Is a source newline a line BREAK, or just more white space?
+    pub fn preserves_newlines(self) -> bool {
+        !matches!(self, WhiteSpaceMode::Normal | WhiteSpaceMode::Nowrap)
+    }
+}
+
 impl TextTransform {
     /// Applies the case change. Returns `None` when the text is already in the
     /// right shape, so the renderer can keep borrowing the original.
@@ -353,6 +402,9 @@ impl Extras {
         }
         if other.stroke.is_some() {
             self.stroke = other.stroke;
+        }
+        if other.white_space.is_some() {
+            self.white_space = other.white_space;
         }
         if other.text_transform.is_some() {
             self.text_transform = other.text_transform;
@@ -3576,22 +3628,36 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         }
         WhiteSpace(v) => {
             use lightningcss::properties::text::WhiteSpace as WS;
-            r.text.white_space = Some(match v {
-                WS::Normal => gpui::WhiteSpace::Normal,
-                WS::NoWrap => gpui::WhiteSpace::Nowrap,
-                WS::Pre => {
-                    // gpui collapses runs of whitespace unconditionally; only
-                    // the WRAP half of `pre` survives the trip.
-                    unsupported(diagnostics, "white-space: pre (whitespace is still collapsed)");
-                    gpui::WhiteSpace::Nowrap
-                }
-                WS::PreWrap | WS::PreLine | WS::BreakSpaces => {
-                    unsupported(
-                        diagnostics,
-                        "white-space: pre-wrap/pre-line/break-spaces (whitespace is still collapsed)",
-                    );
-                    gpui::WhiteSpace::Normal
-                }
+            // TWO halves, and they go to two different places. gpui's
+            // `WhiteSpace` decides whether a line may WRAP; the COLLAPSING —
+            // which of the source's spaces, tabs and newlines survive — is
+            // applied to the string by the renderer (`vn_tree`'s
+            // `processed_text`), for the same reason `text-transform` is: gpui
+            // shapes whatever string it is handed.
+            //
+            // Until m21 only the wrap half existed and every non-`normal`
+            // keyword produced an advisory saying whitespace was still
+            // collapsed. It was not — INTERIOR runs were passed through
+            // untouched, so a text node holding a `\n` rendered as two lines
+            // where a browser renders one. That is what garbled every
+            // multi-line `console.log` in the devtools console
+            // (research/reports/m21/devtools-v2.md).
+            let mode = match v {
+                WS::Normal => WhiteSpaceMode::Normal,
+                WS::NoWrap => WhiteSpaceMode::Nowrap,
+                WS::Pre => WhiteSpaceMode::Pre,
+                WS::PreWrap => WhiteSpaceMode::PreWrap,
+                WS::PreLine => WhiteSpaceMode::PreLine,
+                WS::BreakSpaces => WhiteSpaceMode::BreakSpaces,
+            };
+            x.white_space = Some(mode);
+            r.text.white_space = Some(match mode {
+                // The keywords that do not wrap. `break-spaces` wraps, and
+                // differs from `pre-wrap` only in how it breaks INSIDE a run
+                // of spaces — a distinction gpui's line breaker does not
+                // expose, so the two are the same box here.
+                WhiteSpaceMode::Nowrap | WhiteSpaceMode::Pre => gpui::WhiteSpace::Nowrap,
+                _ => gpui::WhiteSpace::Normal,
             });
         }
         TextOverflow(v, _) => {

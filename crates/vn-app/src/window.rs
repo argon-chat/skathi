@@ -223,6 +223,17 @@ pub struct Config {
     /// `window.focus()` policy: `false` = `request_attention` (the default —
     /// this host does not steal focus), `true` = `activate_window` (D-07).
     pub focus_raise: bool,
+    /// May F12 open the inspector on this app? `vn.config.json`'s TOP-LEVEL
+    /// `"devtools": false` turns it off; the builders copy that flag into the
+    /// window block, which is the JSON blob the host already reads before the
+    /// window exists.
+    ///
+    /// It gates the KEY, never the protocol: an app that opts out still has a
+    /// devtools port, because `ctl.ts`, the MCP server and `vn-test` are how
+    /// this project drives anything and an app must not be able to make itself
+    /// untestable. That is also what a browser does — a page cannot disable
+    /// F12, it can only ask not to be one — so the divergence is nil.
+    pub devtools: bool,
 }
 
 impl Default for Config {
@@ -247,6 +258,7 @@ impl Default for Config {
             maximizable: true,
             always_on_top: false,
             focus_raise: false,
+            devtools: true,
         }
     }
 }
@@ -257,6 +269,13 @@ thread_local! {
 
 pub fn config() -> Config {
     CONFIG.with(|c| c.borrow().clone())
+}
+
+/// May F12 open the inspector? Read from the loaded config, so it answers
+/// correctly from the keystroke interceptor without re-parsing anything.
+#[cfg(vn_devtools)]
+pub fn devtools_enabled() -> bool {
+    CONFIG.with(|c| c.borrow().devtools)
 }
 
 fn f32_of(v: &Json, key: &str) -> Option<f32> {
@@ -369,6 +388,9 @@ pub fn load_config(raw: Option<String>) -> Config {
         if let Some("raise") = v.get("focus").and_then(Json::as_str) {
             cfg.focus_raise = true;
         }
+        if let Some(b) = bool_of(&v, "devtools") {
+            cfg.devtools = b;
+        }
     }
 
     // Environment wins: a perf or screenshot harness has to be able to choose
@@ -382,6 +404,13 @@ pub fn load_config(raw: Option<String>) -> Config {
     }
     if std::env::var("VN_WINDOW_FOCUS").is_ok_and(|v| v == "raise") {
         cfg.focus_raise = true;
+    }
+    // Same precedence as every other override here: the environment wins, so a
+    // harness can turn F12 off (or back on) without editing the app under test.
+    match std::env::var("VN_DEVTOOLS_KEY").as_deref() {
+        Ok("off" | "none" | "0") => cfg.devtools = false,
+        Ok("f12" | "on" | "1") => cfg.devtools = true,
+        _ => {}
     }
 
     // OS-drawn chrome owns the top strip, so the host's fallback titlebar must

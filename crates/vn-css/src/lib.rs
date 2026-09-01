@@ -48,7 +48,7 @@ pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
     set_rem_basis, set_viewport_basis, uses_viewport_units, viewport_basis, BackgroundLayer,
     CurrentColorTargets, Decls, Extras, InlineStyle, ListMarker, ObjectFit, SvgPaint, TextTransform,
-    TileLength, WindowControl, WindowDrag,
+    TileLength, WhiteSpaceMode, WindowControl, WindowDrag,
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use media::{match_media, DisplayMode, Env};

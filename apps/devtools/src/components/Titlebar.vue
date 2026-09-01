@@ -1,58 +1,65 @@
 <script setup lang="ts">
-// The inspector's own titlebar + the target picker.
+// The inspector's own titlebar: what it is attached to, and the OS buttons.
 //
 // Same two CSS facts as apps/hello's titlebar (docs/WINDOWING.md §12):
 // `window-drag: move` makes the strip an HTCAPTION region, `--window-control`
 // makes the three buttons OS-behaved. The carve-out matters more here than
-// there — the target dropdown lives INSIDE the drag strip, so it has to opt
-// out with `window-drag: none` or clicking it would drag the window.
+// there — every control lives INSIDE the drag strip, so each has to opt out
+// with `window-drag: none` or clicking it would drag the window.
+//
+// v2 moved the TARGET LIST out of here and into the Targets panel: with
+// several instances and several windows per instance it is a table, not a row
+// of pills, and the titlebar is where you look for "what am I attached to",
+// not "what could I attach to".
 import { computed } from "vue";
-import type { Target } from "../protocol";
-import { state, attach, detach, refreshTargets, bestTarget } from "../store";
+import { state, currentWindow, setTab } from "../store";
 
-const emit = defineEmits(["reattach"]);
-
-const label = (t: Target) => `${t.slot}${t.self ? " (this window)" : ""}${t.alive ? "" : " · dead"}`;
-
-const statusText = computed(() => {
-  if (state.status === "attached" && state.target) {
-    return `attached · ${state.target.slot} · pid ${state.target.pid}`;
-  }
-  if (state.status === "attaching") return "attaching…";
-  if (state.status === "lost") return "lost the target";
-  return "not attached";
+const attachedTo = computed(() => {
+  if (state.status !== "attached" || !state.target) return null;
+  return state.target;
 });
 
-function rescan() {
-  const found = refreshTargets();
-  if (!state.target || state.status === "lost") {
-    const next = bestTarget(found);
-    if (next) attach(next);
-  }
-}
+const windowLabel = computed(() => {
+  const w = currentWindow();
+  if (!w) return "";
+  return w.kind === "main" ? "main window" : `pop-out · node ${w.root}`;
+});
+
+const statusText = computed(() => {
+  if (state.status === "attaching") return "attaching…";
+  if (state.status === "lost") return "lost the target";
+  if (state.status === "detached") return "not attached";
+  return "attached";
+});
 </script>
 
 <template>
   <header class="titlebar">
     <span class="mark">◈</span>
-    <span class="brand">vue-native devtools</span>
+    <span class="brand">devtools</span>
 
-    <div class="picker">
-      <div
-        v-for="t in state.targets"
-        :key="t.dir"
-        class="target"
-        :class="{ on: state.target && state.target.dir === t.dir, dead: !t.alive }"
-        @click="attach(t)"
-      >
-        {{ label(t) }}
-      </div>
-      <div v-if="!state.targets.length" class="target empty">no dev host is running</div>
-      <div class="btn" @click="rescan">rescan</div>
-      <div v-if="state.target" class="btn" @click="detach">detach</div>
+    <div class="what" @click="setTab('targets')">
+      <span class="dot" :class="state.status"></span>
+      <template v-if="attachedTo">
+        <span class="slot mono">{{ attachedTo.slot }}</span>
+        <span class="sep">·</span>
+        <span class="pid mono">pid {{ attachedTo.pid }}</span>
+        <span v-if="windowLabel" class="sep">·</span>
+        <span v-if="windowLabel" class="where">{{ windowLabel }}</span>
+      </template>
+      <span v-else class="status" :class="state.status">{{ statusText }}</span>
     </div>
 
-    <span class="status" :class="state.status">{{ statusText }}</span>
+    <div class="spacer"></div>
+
+    <!-- The push channel is the difference between v1 and v2, so it is a
+         first-class readout rather than a hidden detail: `live` means log lines
+         and tree revisions arrive in the frame they happen in; `polling` means
+         the socket could not be opened and the UI fell back. -->
+    <div class="feed" :class="{ live: state.pushLive }" :title="state.pushNote">
+      <span class="pulse"></span>
+      <span>{{ state.pushLive ? "live" : "polling" }}</span>
+    </div>
 
     <div class="controls">
       <div class="ctl min" title="Minimize">–</div>
@@ -67,92 +74,107 @@ function rescan() {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   height: env(titlebar-area-height, 34px);
   width: env(titlebar-area-width, 100%);
   padding-left: env(titlebar-area-x, 0px);
   window-drag: move;
   user-select: none;
-  background: #0b1220cc;
+  background: #0a0e16cc;
   border-bottom-width: 1px;
-  border-color: #ffffff1a;
+  border-color: #1e2733;
 }
 .mark {
-  margin-left: 12px;
+  margin-left: 11px;
   font-size: 12px;
   color: #6cb6ff;
 }
 .brand {
   font-size: 12px;
-  color: #ffffffb0;
+  color: #9fb0c4;
 }
-.picker {
+.what {
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 6px;
-  /* Interactive furniture inside a drag region has to opt out, or a click on a
-     target becomes a window drag. */
-  window-drag: none;
-}
-.target {
-  font-size: 11px;
-  color: #cfe1ff;
-  background: #ffffff14;
+  height: 22px;
   padding-left: 8px;
-  padding-right: 8px;
-  padding-top: 3px;
-  padding-bottom: 3px;
-  border-radius: 5px;
+  padding-right: 9px;
+  border-radius: 11px;
+  background: #141b26;
   border-width: 1px;
-  border-color: #ffffff00;
+  border-color: #232c3a;
+  window-drag: none;
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease;
 }
-.target:hover {
-  background: #ffffff26;
+.what:hover {
+  background: #1a2330;
+  border-color: #33415a;
 }
-.target.on {
-  background: #1e4c8a;
-  border-color: #6cb6ff;
-  color: #ffffff;
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: #5c6b80;
 }
-.target.dead {
-  color: #ffffff59;
+.dot.attached {
+  background: #56d364;
 }
-.target.empty {
-  background: #00000000;
-  color: #ffffff70;
-  cursor: default;
+.dot.attaching {
+  background: #e3b341;
 }
-.btn {
+.dot.lost {
+  background: #ff7b72;
+}
+.slot {
   font-size: 11px;
-  color: #ffffff99;
-  padding-left: 7px;
-  padding-right: 7px;
-  padding-top: 3px;
-  padding-bottom: 3px;
-  border-radius: 5px;
-  border-width: 1px;
-  border-color: #ffffff26;
-  cursor: pointer;
+  color: #d7e0ea;
 }
-.btn:hover {
-  background: #ffffff1a;
-  color: #ffffff;
+/* `.where`, not `.win`: the Toolbar's window PILLS are `.win`, and one class
+   name meaning two things is how a selector quietly matches the wrong element
+   — which it did, in this file's own screenshot run. */
+.pid,
+.where {
+  font-size: 11px;
+  color: #8494a8;
+}
+.sep {
+  font-size: 11px;
+  color: #3c4859;
 }
 .status {
-  flex: 1;
-  text-align: right;
-  padding-right: 10px;
   font-size: 11px;
-  color: #ffffff70;
-}
-.status.attached {
-  color: #7ee787;
+  color: #8494a8;
 }
 .status.lost {
   color: #ff7b72;
+}
+.spacer {
+  flex: 1;
+}
+.feed {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #6d7c90;
+  padding-right: 6px;
+  window-drag: none;
+}
+.feed.live {
+  color: #7ee08a;
+}
+.pulse {
+  width: 5px;
+  height: 5px;
+  border-radius: 3px;
+  background: #46556a;
+}
+.feed.live .pulse {
+  background: #56d364;
 }
 .controls {
   display: flex;
@@ -167,11 +189,12 @@ function rescan() {
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  color: #ffffffcc;
+  color: #b9c6d6;
   transition: background-color 120ms ease;
 }
 .ctl:hover {
-  background: #ffffff1a;
+  background: #ffffff14;
+  color: #ffffff;
 }
 .min {
   --window-control: minimize;

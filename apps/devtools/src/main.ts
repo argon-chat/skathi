@@ -6,7 +6,14 @@
 // panel welded into the host, not a second renderer — it is an app, which is
 // the whole reason it exists in this shape: every bug in the framework is a bug
 // in the devtools, and gets found on the day it lands.
+//
+// v2 changed WHERE THE BUNDLE COMES FROM and nothing about this file: the same
+// `bun prod.ts` output is now `include_str!`'d into `vn-app` by its build
+// script, so F12 opens an inspector with no dist folder anywhere in the
+// picture (crates/vn-app/src/inspector.rs). It still builds and runs the
+// ordinary way as well — `bun devtools/ui.ts --target <slot>`.
 import { createApp } from "vue-native";
+import "./theme.css";
 import App from "./App.vue";
 
 createApp(App).mount();

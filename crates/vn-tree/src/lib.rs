@@ -29,8 +29,9 @@ pub mod devtools;
 
 pub use img::{asset_base, set_asset_base};
 pub use render::{
-    build_root, build_subtree, control_hitboxes, flush_pending_mouse_move, painted_drag_region,
-    popped_out, root_bounds, set_os_chrome, set_popped_out, set_repaint_all,
+    bounds_in, build_root, build_subtree, control_hitboxes, flush_pending_mouse_move,
+    painted_bounds_in, painted_drag_region, popped_out, root_bounds, set_os_chrome, set_popped_out,
+    set_repaint_all,
 };
 pub use tree::{
     with_tree, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH, EV_CLICK, EV_COMPLETE, EV_DURATIONCHANGE,

@@ -210,6 +210,38 @@ pub fn bounds_of(id: u32) -> Option<(f32, f32, f32, f32)> {
     SUB_BOUNDS.with(|m| m.borrow().values().find_map(|sub| sub.get(&id).copied()))
 }
 
+/// The rectangle ONE window painted this node at.
+///
+/// [`bounds_of`] answers "where is it", which is the right question for a
+/// single-window app and for `query`/`tree`: it searches the primary window's
+/// map and then every pop-out's. But a rectangle is only meaningful in the
+/// client space of the window that painted it, and two windows' maps hold
+/// numbers that are not comparable — so a question about a POINT ("what is
+/// under the pointer in window B") has to name the window, or it will happily
+/// return a node from the other one whose x/y happen to overlap.
+///
+/// `root` is the popped-out node a window paints (`0` = the primary window),
+/// which is the same key [`SUB_BOUNDS`] uses because each painted root belongs
+/// to exactly one window.
+pub fn bounds_in(root: u32, id: u32) -> Option<(f32, f32, f32, f32)> {
+    if root == 0 {
+        return BOUNDS.with(|m| m.borrow().get(&id).copied());
+    }
+    SUB_BOUNDS.with(|m| m.borrow().get(&root).and_then(|sub| sub.get(&id).copied()))
+}
+
+/// [`painted_bounds`] for one window — what a per-window highlight overlay
+/// positions itself from.
+pub fn painted_bounds_in(root: u32, id: u32) -> Option<(f32, f32, f32, f32)> {
+    if root == 0 {
+        return bounds_in(0, id)
+            .or_else(|| PREV_BOUNDS.with(|m| m.borrow().get(&id).copied()));
+    }
+    bounds_in(root, id).or_else(|| {
+        SUB_PREV_BOUNDS.with(|m| m.borrow().get(&root).and_then(|sub| sub.get(&id).copied()))
+    })
+}
+
 /// Where the app root was painted in the window's client area, in CSS px —
 /// `None` before the first painted frame.
 ///
@@ -616,6 +648,26 @@ pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
     js_dispatch_app(p.id, tree::EV_MOUSEMOVE, &payload, window, cx);
 }
 
+/// gpui's scroll delta as the DOM's `WheelEvent.deltaX` / `deltaY`.
+///
+/// **The two conventions are opposite, and that is the whole function.** gpui
+/// follows the platform: on Windows `WM_MOUSEWHEEL`'s distance is POSITIVE when
+/// the wheel turns away from you (a scroll UP), and gpui carries that sign
+/// straight through — its own scroll containers add the delta to an offset that
+/// is `<= 0` when content has moved up. The DOM specifies the mirror image:
+/// `deltaY` is POSITIVE when scrolling DOWN, because it is "how far the content
+/// should move", not "which way the wheel turned".
+///
+/// Until m21 the raw gpui delta was handed to JS unchanged, so every
+/// `@wheel` handler in every app saw an inverted `deltaY` — a hand-rolled
+/// scroller built on it scrolled backwards, which is exactly how this was found
+/// (the devtools console, research/reports/m21/devtools-v2.md). Native
+/// `overflow: auto` containers were never affected: gpui scrolls those itself,
+/// with its own sign.
+fn dom_wheel_delta(delta: Point<gpui::Pixels>) -> (f64, f64) {
+    (-f64::from(delta.x), -f64::from(delta.y))
+}
+
 fn mouse_payload(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers) -> EventPayload<'static> {
     EventPayload {
         a: f64::from(position.x),
@@ -951,7 +1003,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         } else {
             // The root inherits nothing: `window-drag`'s initial value is
             // `none`, spelled here as "nobody declared anything".
-            build_node(t, t.root, window, cx, now, None, None, None, Stacking::default())
+            build_node(t, t.root, window, cx, now, None, None, None, None, Stacking::default())
         }
     });
     crate::perf::note_build(span.ms(), BUILT.with(|c| c.get()));
@@ -988,7 +1040,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
             return Empty.into_any_element();
         }
         // A popped-out root inherits nothing — it is a root, like `t.root`.
-        build_node(t, id, window, cx, now, None, None, None, Stacking::default())
+        build_node(t, id, window, cx, now, None, None, None, None, Stacking::default())
     });
     SubtreeScope { root: id, inner }.into_any_element()
 }
@@ -1070,6 +1122,7 @@ fn build_node<V: 'static>(
     now: std::time::Instant,
     parent_drag: Option<WindowDrag>,
     parent_case: Option<vn_css::TextTransform>,
+    parent_ws: Option<vn_css::WhiteSpaceMode>,
     parent_align: Option<gpui::TextAlign>,
     parent_stack: Stacking,
 ) -> AnyElement {
@@ -1087,6 +1140,10 @@ fn build_node<V: 'static>(
     // A text node has no declarations of its own, so the parent's value is the
     // only one it can have.
     let case = extras.text_transform.or(parent_case);
+    // `white-space` inherits too, and a TEXT NODE has no declarations of its
+    // own — so the parent's effective value is the only one it can have. Same
+    // threading, same reason, as `text-transform` above.
+    let ws = extras.white_space.or(parent_ws);
     // `text-align` inherits too, and it has to be threaded for the same reason
     // `text-transform` does — except that this one is needed by LAYOUT, not by
     // painting: `apply_inline_row` turns a block of mixed inline content into a
@@ -1109,12 +1166,17 @@ fn build_node<V: 'static>(
         // (`v-for`, multi-root components) with `createText("")`, so leaving it
         // in adds a blank line per fragment.
         Kind::Text if node.text.is_empty() => Empty.into_any_element(),
-        Kind::Text => match line_trimmed(t, node, id) {
-            // A text node that is nothing but the white space at the end of a
-            // line renders nothing, exactly as it does in a browser.
-            "" => Empty.into_any_element(),
-            text => transformed_text(text, case).into_any_element(),
-        },
+        Kind::Text => {
+            // COLLAPSE first, then trim the block's edges: the two halves of
+            // CSS's whitespace processing, in the order the spec applies them.
+            let collapsed = processed_text(&node.text, ws.unwrap_or(vn_css::WhiteSpaceMode::Normal));
+            match trim_edges(t, node, id, &collapsed, ws) {
+                // A text node that is nothing but the white space at the end
+                // of a line renders nothing, exactly as in a browser.
+                "" => Empty.into_any_element(),
+                text => transformed_text(text, case).into_any_element(),
+            }
+        }
         Kind::Anchor => Empty.into_any_element(),
         // Metadata content renders NOTHING in a browser — it is not a box, it
         // is instructions. reka-ui injects a `<style>` element at runtime to
@@ -1375,8 +1437,11 @@ fn build_node<V: 'static>(
                     // `setElementText` — what Vue calls for an element whose
                     // only child is text, which is most of them. The text IS
                     // the element's whole content, so both its ends are the
-                    // ends of a line (see `line_trimmed`).
-                    let text = own_text_line_trimmed(t, node);
+                    // ends of a line (see `trim_own_edges`). Collapse first,
+                    // then trim, exactly as the text-node arm does.
+                    let collapsed =
+                        processed_text(&node.text, ws.unwrap_or(vn_css::WhiteSpaceMode::Normal));
+                    let text = trim_own_edges(t, node, &collapsed, ws);
                     if !text.is_empty() {
                         kids.push(transformed_text(text, case).into_any_element());
                     }
@@ -1385,7 +1450,7 @@ fn build_node<V: 'static>(
                         laid_out_children(t, node)
                             .into_iter()
                             .map(|c| {
-                                build_node(t, c, window, cx, now, drag, case, align, stacking)
+                                build_node(t, c, window, cx, now, drag, case, ws, align, stacking)
                             }),
                     );
                 }
@@ -1572,9 +1637,25 @@ fn apply_inline_row(
                 if !INLINE_LEVEL_TAGS.contains(&t.name(kid.tag)) {
                     return;
                 }
-                // …and the author can still opt a `<span>` out of the run.
+                // …and the author can still opt a `<span>` out of the run
+                // with `display: block`.
+                //
+                // `display: inline` must NOT count as that, and this is the
+                // trap: the mapper folds every INLINE outer type onto its
+                // block-level equivalent, because taffy models the inner
+                // display type only (`Extras::inline_level` is where the
+                // outer type survives). So a `<span style="display:inline">`
+                // — the strongest possible statement that it belongs on this
+                // line — arrives here as `Some(Block)` and used to opt the
+                // whole row out, stacking the spans vertically.
                 let declared = kid.computed.as_ref().and_then(|cs| cs.base.display);
-                if matches!(declared, Some(gpui::Display::Block) | Some(gpui::Display::Grid)) {
+                let inline_level = kid
+                    .computed
+                    .as_ref()
+                    .is_some_and(|cs| cs.extras.inline_level == Some(true));
+                if !inline_level
+                    && matches!(declared, Some(gpui::Display::Block) | Some(gpui::Display::Grid))
+                {
                     return;
                 }
                 has_element = true;
@@ -1582,7 +1663,18 @@ fn apply_inline_row(
             Kind::Anchor => {}
         }
     }
-    if !(has_text && has_element) {
+    // At least one child that is inline content. The loop above already
+    // refused anything block-level, so reaching here means every laid-out
+    // child belongs on the same line.
+    //
+    // It used to require BOTH a text child and an element child, which left
+    // `<div><span>a</span><span>b</span></div>` — no bare text between the
+    // spans — as a block, and taffy stacks a block's children VERTICALLY. In
+    // a browser those two spans sit side by side; here the second was drawn
+    // under the first, which is why a console line built out of several
+    // styled runs came out as a column (research/reports/m21/devtools-v2.md).
+    // The same was true of two adjacent text nodes.
+    if !(has_text || has_element) {
         return;
     }
     style.display = Some(gpui::Display::Flex);
@@ -1888,9 +1980,91 @@ fn transformed_text(text: &str, case: Option<vn_css::TextTransform>) -> SharedSt
 ///
 /// Returned as a slice of the node's own text: nothing is allocated in the
 /// overwhelming majority of cases, where there is nothing to trim.
-fn line_trimmed<'a>(t: &Tree, node: &'a crate::tree::Node, id: u32) -> &'a str {
+/// CSS whitespace processing, applied to a text node's string.
+///
+/// ## Why this is here and not in the engine
+///
+/// gpui shapes whatever string it is handed and breaks a line at every `\n` in
+/// it, unconditionally. CSS does not work that way: under `white-space: normal`
+/// (the default) and `nowrap`, a run of spaces, tabs and newlines COLLAPSES to
+/// a single space, and a source newline is not a line break at all. Only the
+/// `pre*` family preserves them.
+///
+/// Until m21 nothing did this. `trim_edges` below trimmed the white space at
+/// the EDGES of a block — which is the other half of the rule and the visible
+/// one, so the gap went unnoticed — while interior runs went to gpui untouched.
+/// The result: any text node holding a newline rendered as several lines where
+/// a browser renders one, inside a box laid out for one. On a fixed-height row
+/// that is glyphs drawn on top of each other, which is how it was finally
+/// found — every `console.log("%cx", "…multi-line CSS…")` in the devtools
+/// console (research/reports/m21/devtools-v2.md).
+///
+/// ## What each mode does
+///
+/// * `normal` / `nowrap` — every run of `[ \t\n\r\x0c]` becomes one space.
+/// * `pre-line` — runs of spaces and tabs become one space; newlines survive,
+///   and white space around a newline is absorbed into it.
+/// * `pre` / `pre-wrap` / `break-spaces` — the string is passed through whole.
+///
+/// Returns a `Cow` so the overwhelmingly common case — text with no run of two
+/// collapsible characters in it — keeps borrowing the tree's own string.
+fn processed_text(raw: &str, mode: vn_css::WhiteSpaceMode) -> std::borrow::Cow<'_, str> {
+    const COLLAPSIBLE: [char; 5] = [' ', '\t', '\n', '\r', '\u{c}'];
+    let collapses = mode.collapses_spaces();
+    let keeps_newlines = mode.preserves_newlines();
+    if !collapses {
+        return std::borrow::Cow::Borrowed(raw);
+    }
+    // What would change? A run of two collapsible characters, or a lone
+    // collapsible character that is not already a space (a tab, or — unless
+    // they are preserved — a newline).
+    let needs_work = {
+        let mut prev_ws = false;
+        raw.chars().any(|c| {
+            let ws = COLLAPSIBLE.contains(&c);
+            let doubled = ws && prev_ws;
+            prev_ws = ws;
+            doubled || (ws && c != ' ' && !(keeps_newlines && c == '\n'))
+        })
+    };
+    if !needs_work {
+        return std::borrow::Cow::Borrowed(raw);
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut run: Option<bool> = None; // Some(saw_newline_in_this_run)
+    for c in raw.chars() {
+        if COLLAPSIBLE.contains(&c) {
+            let saw_newline = run.unwrap_or(false) || c == '\n';
+            run = Some(saw_newline);
+            continue;
+        }
+        if let Some(saw_newline) = run.take() {
+            out.push(if keeps_newlines && saw_newline { '\n' } else { ' ' });
+        }
+        out.push(c);
+    }
+    // A trailing run is still a space (or a break): the EDGE trimming that
+    // follows is what removes it when the node is last in its block, and a run
+    // between two inline siblings has to survive as the word gap it is.
+    if let Some(saw_newline) = run {
+        out.push(if keeps_newlines && saw_newline { '\n' } else { ' ' });
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+fn trim_edges<'a>(
+    t: &Tree,
+    node: &crate::tree::Node,
+    id: u32,
+    text: &'a str,
+    mode: Option<vn_css::WhiteSpaceMode>,
+) -> &'a str {
     const COLLAPSIBLE: [char; 4] = [' ', '\t', '\n', '\r'];
-    let text = node.text.as_str();
+    // `pre*` preserves the edges too — the trim is the second half of the
+    // same collapsing rule, so it applies exactly where the first half does.
+    if !mode.unwrap_or(vn_css::WhiteSpaceMode::Normal).collapses_spaces() {
+        return text;
+    }
     let Some(parent) = t.node(node.parent) else { return text };
     if parent.kind == Kind::Element && INLINE_LEVEL_TAGS.contains(&t.name(parent.tag)) {
         return text;
@@ -1903,7 +2077,7 @@ fn line_trimmed<'a>(t: &Tree, node: &'a crate::tree::Node, id: u32) -> &'a str {
     if last == Some(id) { text.trim_end_matches(COLLAPSIBLE) } else { text }
 }
 
-/// [`line_trimmed`] for the text an ELEMENT carries itself.
+/// [`trim_edges`] for the text an ELEMENT carries itself.
 ///
 /// Vue calls `setElementText` for an element whose only child is text — which
 /// is most elements, and the shape the hero subtitle takes — so this, not the
@@ -1911,9 +2085,16 @@ fn line_trimmed<'a>(t: &Tree, node: &'a crate::tree::Node, id: u32) -> &'a str {
 /// element's entire content, so both ends are line ends; the exception is an
 /// inline-level element sharing a line with something else, where an edge space
 /// separates words rather than padding a line.
-fn own_text_line_trimmed<'a>(t: &Tree, node: &'a crate::tree::Node) -> &'a str {
+fn trim_own_edges<'a>(
+    t: &Tree,
+    node: &crate::tree::Node,
+    text: &'a str,
+    mode: Option<vn_css::WhiteSpaceMode>,
+) -> &'a str {
     const COLLAPSIBLE: [char; 4] = [' ', '\t', '\n', '\r'];
-    let text = node.text.as_str();
+    if !mode.unwrap_or(vn_css::WhiteSpaceMode::Normal).collapses_spaces() {
+        return text;
+    }
     if INLINE_LEVEL_TAGS.contains(&t.name(node.tag))
         && t.node(node.parent).is_some_and(|parent| {
             parent.children.iter().filter(|&&c| generates_a_box(t, c)).count() > 1
@@ -2368,10 +2549,10 @@ where
     }
     if bit(tree::EV_WHEEL) {
         e = e.on_scroll_wheel(cx.listener(move |_, ev: &ScrollWheelEvent, window, cx| {
-            let delta = ev.delta.pixel_delta(gpui::px(16.0));
+            let (dx, dy) = dom_wheel_delta(ev.delta.pixel_delta(gpui::px(16.0)));
             let payload = EventPayload {
-                a: f64::from(delta.x),
-                b: f64::from(delta.y),
+                a: dx,
+                b: dy,
                 c: 0.0,
                 d: mods_bits(&ev.modifiers),
                 key: None,
@@ -3628,6 +3809,105 @@ mod tests {
     /// between apps/meet-probe's hero subtitle fitting its `max-w-sm` on one
     /// line, where the browser puts it, and wrapping onto two.
     #[test]
+    fn inline_children_share_a_line_even_with_no_bare_text() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let span = t.intern("span");
+
+            // `<div><span/><span/></div>` — the shape a console line built out
+            // of styled runs takes, and the shape that used to stack.
+            let block = t.create_element(div);
+            for i in 0..2u32 {
+                let s = t.create_element(span);
+                let text = t.create_text();
+                t.set_text(text, "x".to_string());
+                t.insert(text, s, 0);
+                t.insert(s, block, i);
+            }
+            let mut style = gpui::StyleRefinement::default();
+            apply_inline_row(&mut style, t, t.node(block).unwrap(), None);
+            assert_eq!(style.display, Some(gpui::Display::Flex));
+            assert_eq!(style.flex_direction, Some(gpui::FlexDirection::Row));
+
+            // …and a BLOCK child still opts the whole element out: a `<div>`
+            // among the spans is a line of its own in a browser too.
+            let mixed = t.create_element(div);
+            let inline = t.create_element(span);
+            let blocky = t.create_element(div);
+            t.insert(inline, mixed, 0);
+            t.insert(blocky, mixed, 1);
+            let mut style2 = gpui::StyleRefinement::default();
+            apply_inline_row(&mut style2, t, t.node(mixed).unwrap(), None);
+            assert_eq!(style2.display, None);
+
+            // `display: inline` on a child is the strongest statement that
+            // it belongs on this line — but the mapper folds every inline
+            // OUTER type onto `Block` (taffy models the inner type only), so
+            // without the `inline_level` check it read as an opt-out and
+            // stacked the row.
+            let declared = t.create_element(div);
+            for i in 0..2u32 {
+                let s = t.create_element(span);
+                t.insert(s, declared, i);
+                let mut base = gpui::StyleRefinement::default();
+                base.display = Some(gpui::Display::Block);
+                let mut cs = vn_css::ComputedStates::default();
+                cs.base = std::rc::Rc::new(base);
+                cs.extras.inline_level = Some(true);
+                if let Some(n) = t.node_mut(s) {
+                    n.computed = Some(cs);
+                }
+            }
+            let mut style3 = gpui::StyleRefinement::default();
+            apply_inline_row(&mut style3, t, t.node(declared).unwrap(), None);
+            assert_eq!(style3.display, Some(gpui::Display::Flex));
+        });
+    }
+
+    #[test]
+    fn a_wheel_delta_reaches_js_with_the_DOM_sign() {
+        use gpui::px;
+        // gpui: positive y = the wheel turned away from you = scrolling UP.
+        // DOM:  positive deltaY = scrolling DOWN. They are mirror images, and a
+        // handler that adds `deltaY` to an offset has to get the DOM's.
+        let (_, up) = dom_wheel_delta(Point::new(px(0.0), px(120.0)));
+        assert!(up < 0.0, "a scroll UP must reach JS as a negative deltaY, got {up}");
+        let (_, down) = dom_wheel_delta(Point::new(px(0.0), px(-120.0)));
+        assert!(down > 0.0, "a scroll DOWN must reach JS as a positive deltaY, got {down}");
+        // …and the same for the horizontal axis (shift+wheel).
+        let (left, _) = dom_wheel_delta(Point::new(px(80.0), px(0.0)));
+        assert!(left < 0.0);
+        assert_eq!(dom_wheel_delta(Point::new(px(0.0), px(0.0))), (0.0, 0.0));
+    }
+
+    #[test]
+    fn interior_white_space_collapses_the_way_css_says() {
+        use vn_css::WhiteSpaceMode as WS;
+        // The default. A newline is white space, not a line break — this is the
+        // one that was missing, and it is what garbled every multi-line
+        // console line in the inspector.
+        assert_eq!(processed_text("a\nb", WS::Normal), "a b");
+        assert_eq!(processed_text("a  \t\n  b", WS::Normal), "a b");
+        assert_eq!(processed_text("a\r\nb", WS::Normal), "a b");
+        // `nowrap` collapses identically — it only changes whether a LINE may
+        // wrap, which is gpui's half of the property.
+        assert_eq!(processed_text("a\nb", WS::Nowrap), "a b");
+        // `pre-line` keeps the break and collapses the spaces around it.
+        assert_eq!(processed_text("a   \n   b", WS::PreLine), "a\nb");
+        assert_eq!(processed_text("a  b", WS::PreLine), "a b");
+        // The preserving family is passed through whole.
+        for mode in [WS::Pre, WS::PreWrap, WS::BreakSpaces] {
+            assert_eq!(processed_text("a   \n   b", mode), "a   \n   b");
+        }
+        // Nothing to do: the string is borrowed rather than rebuilt.
+        assert!(matches!(processed_text("a b c", WS::Normal), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(processed_text("plain", WS::Normal), std::borrow::Cow::Borrowed(_)));
+        // A leading/trailing run survives collapsing as ONE space — removing it
+        // is `trim_edges`' job, and only at the ends of a line.
+        assert_eq!(processed_text("  a  ", WS::Normal), " a ");
+    }
+
+    #[test]
     fn white_space_at_the_ends_of_a_line_is_removed() {
         with_tree(|t| {
             let p = t.intern("p");
@@ -3639,7 +3919,7 @@ mod tests {
             t.set_text(only, " Secure video meetings ".to_string());
             t.insert(only, block, 0);
             assert_eq!(
-                line_trimmed(t, t.node(only).unwrap(), only),
+                trim_edges(t, t.node(only).unwrap(), only, &t.node(only).unwrap().text, None),
                 "Secure video meetings"
             );
 
@@ -3655,8 +3935,8 @@ mod tests {
             let tail = t.create_text();
             t.set_text(tail, " b ".to_string());
             t.insert(tail, mixed, 0);
-            assert_eq!(line_trimmed(t, t.node(head).unwrap(), head), "a ");
-            assert_eq!(line_trimmed(t, t.node(tail).unwrap(), tail), " b");
+            assert_eq!(trim_edges(t, t.node(head).unwrap(), head, &t.node(head).unwrap().text, None), "a ");
+            assert_eq!(trim_edges(t, t.node(tail).unwrap(), tail, &t.node(tail).unwrap().text, None), " b");
 
             // `a<span> </span>b`: the span's only child is a space a browser
             // DOES render — it is in the middle of the line, not at its end —
@@ -3673,7 +3953,7 @@ mod tests {
             let gap = t.create_text();
             t.set_text(gap, " ".to_string());
             t.insert(gap, spacer, 0);
-            assert_eq!(line_trimmed(t, t.node(gap).unwrap(), gap), " ");
+            assert_eq!(trim_edges(t, t.node(gap).unwrap(), gap, &t.node(gap).unwrap().text, None), " ");
         });
     }
 
@@ -3689,14 +3969,14 @@ mod tests {
             let block = t.create_element(p);
             t.set_element_text(block, " Secure video meetings ".to_string());
             assert_eq!(
-                own_text_line_trimmed(t, t.node(block).unwrap()),
+                trim_own_edges(t, t.node(block).unwrap(), &t.node(block).unwrap().text, None),
                 "Secure video meetings"
             );
 
             // A lone inline element is still the whole line…
             let lone = t.create_element(span);
             t.set_element_text(lone, " x ".to_string());
-            assert_eq!(own_text_line_trimmed(t, t.node(lone).unwrap()), "x");
+            assert_eq!(trim_own_edges(t, t.node(lone).unwrap(), &t.node(lone).unwrap().text, None), "x");
 
             // …but one sharing a line with something else is not.
             let row = t.create_element(p);
@@ -3706,7 +3986,7 @@ mod tests {
             let inline = t.create_element(span);
             t.insert(inline, row, 0);
             t.set_element_text(inline, " b ".to_string());
-            assert_eq!(own_text_line_trimmed(t, t.node(inline).unwrap()), " b ");
+            assert_eq!(trim_own_edges(t, t.node(inline).unwrap(), &t.node(inline).unwrap().text, None), " b ");
         });
     }
 

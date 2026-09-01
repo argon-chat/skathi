@@ -1,19 +1,24 @@
-// The inspector's transport: the devtools protocol over HTTP.
+// The inspector's two transports: commands over HTTP, events over WebSocket.
+//
+//   command  ──POST /────────────▶  one per connection, one per target frame
+//   events   ◀─GET / + Upgrade───   one socket, pushed as things happen
 //
 // docs/DEVTOOLS.md's wire is newline-delimited JSON over a localhost TCP port.
-// JS in this runtime cannot open a TCP socket — but it CAN `fetch()`, and
-// `fetch` here is a real, off-thread, promise-shaped HTTP client. So the host's
-// devtools listener learned to answer HTTP on the SAME port (`POST /` with the
-// request object as the body, one command per connection), and this file is the
-// whole client: ~40 lines, no new protocol, no relay process, and the exact
-// same commands `ctl.ts` and `vn-test` send.
+// JS in this runtime cannot open a TCP socket — but it CAN `fetch()`, and it
+// can open a `WebSocket`, and the host's listener answers both on that same
+// port (`crates/vn-app/src/devtools/{mod,ws}.rs`).
 //
-// Discovery is the one thing fetch cannot do — a handshake file has to be read
-// off disk — so it comes from `__vn_devtools_targets()`, a dev-only host fn
-// that lists every `<dist>/devtools.json` it can find and probes each port.
-// See docs/DEVTOOLS-UI.md §3.
+// v1 had only the first half and polled: logs every 700 ms, the tree every
+// 2.5 s. That is the difference between a console and a console you have to
+// wait for, and it is why the push channel exists. Commands stayed on HTTP: they
+// are already serialized, already one-per-frame, already proven, and a request
+// that expects a reply has no business being multiplexed by hand.
+//
+// Discovery is the one thing neither transport can do — a handshake file has to
+// be read off disk — so it comes from `__vn_devtools_targets()`, a dev-only
+// host fn. See docs/DEVTOOLS-UI.md §3.
 
-import type { Target, TargetList } from "./protocol";
+import type { PushMessage, PushStream, Target, TargetList, WindowId } from "./protocol";
 
 /** How long a single command may take before the UI stops waiting for it. */
 const TIMEOUT_MS = 8000;
@@ -28,16 +33,16 @@ const TIMEOUT_MS = 8000;
  */
 export function listTargets(): TargetList {
   const empty: TargetList = { preferred: null, self: null, targets: [] };
-  // `__vn_devtools_targets` is registered by every DEV host and by no prod one
-  // (`devtools::install`), so the probe is the honest question rather than a
-  // formality — which is why protocol.d.ts declares it a plain function and
-  // this is the guard.
+  // `__vn_devtools_targets` is registered by every host that HAS devtools and
+  // by no other (`devtools::install`), so the probe is the honest question
+  // rather than a formality — which is why protocol.d.ts declares it a plain
+  // function and this is the guard.
   if (typeof globalThis.__vn_devtools_targets !== "function") {
     return {
       ...empty,
       error:
-        "__vn_devtools_targets is not registered — this looks like a `--features prod` host, " +
-        "which has no devtools at all",
+        "__vn_devtools_targets is not registered — this looks like a host built without the " +
+        "devtools (`--features prod` and no `devtools` feature)",
     };
   }
   try {
@@ -49,13 +54,13 @@ export function listTargets(): TargetList {
 
 // One command at a time, in order. Every command costs the TARGET a frame
 // (docs/DEVTOOLS.md: the queue is drained one per `pump_frame`), so firing a
-// poll while another is in flight buys nothing and makes the failure mode
+// second while one is in flight buys nothing and makes the failure mode
 // ("which of these three timed out?") much harder to read.
 let tail: Promise<unknown> = Promise.resolve();
 
 function enqueue<T>(run: () => Promise<T>): Promise<T> {
   const result = tail.then(run, run);
-  // The chain must survive a rejection: one failed poll cannot be allowed to
+  // The chain must survive a rejection: one failed command cannot be allowed to
   // wedge every command after it.
   tail = result.then(
     () => {},
@@ -98,12 +103,12 @@ async function request<T>(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   // `engine.d.ts` types `fetch` as possibly absent, and it means it: an
   // embedder can build redjs without it. For THIS app that is not a degraded
-  // mode — HTTP on the devtools port is the entire transport (§3) — so it is
-  // one guard with the reason attached rather than a silent `undefined` call.
+  // mode — HTTP on the devtools port is half the transport — so it is one guard
+  // with the reason attached rather than a silent `undefined` call.
   const http = fetch;
   if (!http) {
     throw new Error(
-      `${cmd}: this host has no \`fetch\`, and the inspector's only transport is HTTP on the ` +
+      `${cmd}: this host has no \`fetch\`, and the inspector's command transport is HTTP on the ` +
         `target's devtools port (docs/DEVTOOLS-UI.md §3)`,
     );
   }
@@ -138,6 +143,121 @@ async function request<T>(
   }
   if (!reply.ok) throw new Error(reply.error || `${cmd}: the host refused the command`);
   return reply.data as T;
+}
+
+// ---------------------------------------------------------------------------
+// the push channel
+// ---------------------------------------------------------------------------
+
+export interface PushHandlers {
+  onMessage(msg: PushMessage): void;
+  onOpen?(): void;
+  onClose?(why: string): void;
+}
+
+/**
+ * A live subscription to a target: log lines, tree revisions, frame stats and
+ * network entries, pushed as they happen.
+ *
+ * It is deliberately a THIN object. Reconnection is the store's job (it knows
+ * whether the target is still supposed to be attached, and it is the thing that
+ * has to re-sync the log cursor afterwards); this only knows how to be one
+ * socket, and how to say when it stopped being one.
+ *
+ * The token rides in the query string because a `WebSocket` constructor cannot
+ * set a header — not in a browser and not here. Same token, same guard: it is
+ * checked before the 101 is written (`ws.rs`).
+ */
+export class Push {
+  private socket: VnWebSocket | null = null;
+  private closed = false;
+
+  constructor(target: Target, since: number, streams: PushStream[], private handlers: PushHandlers) {
+    const url = `ws://127.0.0.1:${target.port}/?token=${encodeURIComponent(
+      target.token,
+    )}&since=${since}`;
+    if (typeof WebSocket !== "function") {
+      // Not fatal: the store falls back to polling, and says so in the console
+      // rather than silently feeling slow — which is the exact failure v2
+      // exists to remove.
+      handlers.onClose?.("this host has no WebSocket");
+      return;
+    }
+    let socket: VnWebSocket;
+    try {
+      socket = new WebSocket(url);
+    } catch (e) {
+      handlers.onClose?.(message(e));
+      return;
+    }
+    this.socket = socket;
+    socket.onopen = () => {
+      this.send({ sub: streams });
+      handlers.onOpen?.();
+    };
+    socket.onmessage = (event: VnMessageEvent) => {
+      if (this.closed) return;
+      try {
+        handlers.onMessage(JSON.parse(String(event.data)) as PushMessage);
+      } catch {
+        // A malformed frame is the host's bug, not a reason to tear the socket
+        // down; the next one is probably fine.
+      }
+    };
+    socket.onerror = () => {
+      if (!this.closed) handlers.onClose?.("the push socket errored");
+    };
+    socket.onclose = (event: VnCloseEvent) => {
+      if (this.closed) return;
+      this.closed = true;
+      handlers.onClose?.(`the push socket closed (${event.code || 0})`);
+    };
+  }
+
+  /** Re-point the log cursor, or change the subscription. */
+  send(msg: Record<string, unknown>): void {
+    if (!this.socket || this.socket.readyState !== 1) return;
+    try {
+      this.socket.send(JSON.stringify(msg));
+    } catch {
+      // A send on a socket the peer already dropped; `onclose` is on its way.
+    }
+  }
+
+  subscribe(streams: PushStream[]): void {
+    this.send({ sub: streams });
+  }
+
+  close(): void {
+    this.closed = true;
+    try {
+      this.socket?.close();
+    } catch {
+      // Already gone.
+    }
+    this.socket = null;
+  }
+
+  get live(): boolean {
+    return !!this.socket && this.socket.readyState === 1;
+  }
+}
+
+/**
+ * What the host published about how this inspector was started.
+ *
+ * Absent when the app was launched the v1 way (`bun devtools/ui.ts`), which is
+ * still supported and is why every reader of this treats it as optional.
+ */
+export function devtoolsArgs(): { target: string | null; window: WindowId | null; embedded: boolean } {
+  const raw = globalThis.__VN_DEVTOOLS_ARGS__;
+  if (!raw || typeof raw !== "object") return { target: null, window: null, embedded: false };
+  const args = raw as { target?: unknown; window?: unknown; embedded?: unknown };
+  return {
+    target: typeof args.target === "string" ? args.target : null,
+    window: typeof args.window === "number" ? args.window : null,
+    embedded: args.embedded === true,
+  };
 }
 
 /**

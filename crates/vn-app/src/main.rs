@@ -28,13 +28,20 @@ use vn_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 
 #[cfg(not(feature = "prod"))]
 mod dev;
-#[cfg(not(feature = "prod"))]
-mod devtools; // the automation surface (docs/DEVTOOLS.md) — dev builds only
+// The automation surface (docs/DEVTOOLS.md) and the inspector it feeds
+// (docs/DEVTOOLS-UI.md). `vn_devtools` is emitted by build.rs for
+// `not(prod) || feature devtools` — i.e. every dev build, plus a release that
+// asked for its own inspector by name.
+#[cfg(vn_devtools)]
+mod devtools;
+#[cfg(vn_devtools)]
+mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child registry
 mod json; // the dev transport, the devtools wire and vn.config.json share one codec
 mod perf;
 mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWINDOW.md)
 #[cfg(feature = "prod")]
 mod prod;
+mod slot; // which dist slot this process is — the one thing dev, prod and devtools all ask
 mod window; // windowing & chrome (docs/WINDOWING.md)
 
 #[cfg(not(feature = "prod"))]
@@ -399,6 +406,13 @@ thread_local! {
 /// on that same view. Addressing the window borrows nothing, and
 /// `update_window` on a window that is mid-update simply fails — which is the
 /// right answer, since that window is being refreshed by the listener anyway.
+/// The primary window's gpui id — what the devtools `windows` command calls
+/// `main`, and what `--window` names when F12 was pressed there.
+#[cfg(vn_devtools)]
+pub(crate) fn main_window_id() -> Option<u64> {
+    MAIN_WINDOW.with(|w| w.get()).map(|h| h.window_id().as_u64())
+}
+
 pub(crate) fn refresh_main(cx: &mut App) {
     let Some(handle) = MAIN_WINDOW.with(|w| w.get()) else { return };
     let _ = handle.update(cx, |_, window, _| window.refresh());
@@ -482,6 +496,10 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // frame clock; see PendingMouseMove in vn-tree). Dispatched before the
     // pump block so whatever the handler schedules drains this same frame.
     vn_tree::flush_pending_mouse_move(window, cx);
+    // An inspector whose app has gone closes itself. OUTSIDE the publication
+    // below: `cx` is borrowed by it, and a quit has nothing to do with JS.
+    #[cfg(vn_devtools)]
+    inspector::poll_frame(cx);
     with_published(window, cx, Phase::Commit, || {
         // Dev loop: poll dist/changes.json and apply HMR BEFORE the pump, so
         // everything Vue schedules while patching (its post-flush queue, the
@@ -513,8 +531,10 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         // One queued devtools command per frame, in the SAME publication the
         // pump just used: a command can therefore never observe a half-applied
         // patch, and anything it schedules drains with the next frame's wave.
-        #[cfg(not(feature = "prod"))]
-        devtools::pump();
+        #[cfg(vn_devtools)]
+        {
+            devtools::pump();
+        }
         // Voice events, drained bounded, in this SAME publication — and NOT
         // dev-gated, because voice is an application capability rather than an
         // automation surface. A room event therefore can never observe a
@@ -561,7 +581,15 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // this callback picks it up (same frame). While CSS transitions run or a
     // Lottie plays, keep repainting: `on_next_frame` alone re-arms but does not
     // redraw.
-    if vn_tree::flush_changes()
+    let tree_moved = vn_tree::flush_changes();
+    // The push channel's tree revision. A number on a socket, not a tree: it
+    // lets an attached inspector refetch because something MOVED rather than
+    // because 2.5 s went by (docs/DEVTOOLS.md, the push channel).
+    #[cfg(vn_devtools)]
+    if tree_moved {
+        devtools::ws::note_tree_changed();
+    }
+    if tree_moved
         || vn_tree::animating()
         || media_moved
         || vn_tree::lotties_animating()
@@ -573,6 +601,12 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         // wave, N windows repainting off it (docs/MULTIWINDOW.md §6).
         popout::notify_all(cx);
     }
+    // Push, not poll: whatever moved this frame — log lines, the tree
+    // revision just computed above, a frame-time sample — goes out to every
+    // attached inspector here, AFTER the flush, so a socket is never told
+    // about a revision the tree has not reached.
+    #[cfg(vn_devtools)]
+    devtools::ws::broadcast_frame();
     window.on_next_frame(pump_frame);
     // Closes the `pump` bucket: everything after this is gpui's — its decision
     // to draw, the draw itself, the present, and the wait for the next vsync.
@@ -683,11 +717,11 @@ impl Shell {
 /// tree would be a node the app can see — an inspector must not appear in the
 /// tree it is inspecting.
 fn inspector_overlay() -> Option<gpui::Div> {
-    #[cfg(not(feature = "prod"))]
+    #[cfg(vn_devtools)]
     {
         devtools::highlight_overlay()
     }
-    #[cfg(feature = "prod")]
+    #[cfg(not(vn_devtools))]
     {
         None
     }
@@ -866,15 +900,43 @@ fn install_http_client(app: gpui::Application) -> gpui::Application {
 }
 
 fn main() {
+    // `--devtools` rewrites two environment variables (the dist slot this
+    // process publishes into, and which instance it prefers), so it has to run
+    // before anything reads either — which the logger and the profiler both
+    // do indirectly through `slot::dir`.
+    #[cfg(vn_devtools)]
+    inspector::init();
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
     perf::boot();
     install_http_client(application()).run(|cx: &mut App| {
+        // `--devtools` is a THIRD boot mode over this same shell: the app is
+        // the inspector, and it comes out of this executable rather than off
+        // disk. Everything below — the window, the pump, the preludes — is
+        // identical, which is the point of keeping it a mode rather than a
+        // second binary.
+        #[cfg(vn_devtools)]
+        let devtools_mode = inspector::is_devtools_host();
+        #[cfg(not(vn_devtools))]
+        let devtools_mode = false;
         vn_elements::init(cx); // key bindings for the native <input> widget
         publish_app_root();
+        #[cfg(vn_devtools)]
+        {
+            // F12, in EVERY window of this process, ahead of every element's
+            // own key listener. See `inspector::install_hotkey`.
+            inspector::install_hotkey(cx);
+            // A debugger that outlives its subject is a window nobody can
+            // explain. (The child watches us too, for the case where this
+            // never runs — a crash.)
+            std::mem::forget(cx.on_app_quit(|_| {
+                inspector::close_children();
+                std::future::ready(())
+            }));
+        }
         // Before the runtime exists, so the log ring is already recording when
         // the first advisory fires.
-        #[cfg(not(feature = "prod"))]
+        #[cfg(vn_devtools)]
         devtools::start();
         JsRuntime::init();
         JsRuntime::with(|rt| {
@@ -912,8 +974,11 @@ fn main() {
             // `boot_mode::app_name` is what names the default folder in a dev
             // host, where one exe runs many apps. See docs/STORAGE.md.
             #[cfg(feature = "storages")]
-            vn_storage::install(rt, boot_mode::app_name());
-            #[cfg(not(feature = "prod"))]
+            vn_storage::install(
+                rt,
+                if devtools_mode { Some("vn-devtools".to_string()) } else { boot_mode::app_name() },
+            );
+            #[cfg(vn_devtools)]
             devtools::install(rt);
             // `__vn_dev_voice_token` — the LiveKit dev token minter. Dev only,
             // on purpose: an API secret must not exist in a shipped binary.
@@ -927,7 +992,12 @@ fn main() {
         // `is_minimizable`, `titlebar`, `window_background`) with no visible
         // flash. Environment still wins on top (`VN_WINDOW`, `VN_WINDOW_FOCUS`)
         // — the perf and screenshot harnesses depend on it (D-21).
-        let cfg = window::load_config(boot_mode::window_config());
+        #[cfg(vn_devtools)]
+        let window_json =
+            if devtools_mode { inspector::window_config() } else { boot_mode::window_config() };
+        #[cfg(not(vn_devtools))]
+        let window_json = boot_mode::window_config();
+        let cfg = window::load_config(window_json);
         let bounds = Bounds::centered(None, size(px(cfg.width), px(cfg.height)), cx);
         cx.open_window(
             WindowOptions {
@@ -953,6 +1023,12 @@ fn main() {
                 // A permanently armed pump must not opt the window into the
                 // 33 ms unfocused throttle (JS timers would coarsen with it).
                 inactive_frame_interval: None,
+                // THE line that makes F12 not interrupt you: gpui maps this to
+                // `SW_SHOWNOACTIVATE`, so the inspector appears beside the app
+                // without taking the caret out of whatever you were typing.
+                // An ordinary app is unaffected (`focus: true` is gpui's own
+                // default and what every other host here has always used).
+                focus: !devtools_mode,
                 ..Default::default()
             },
             |window, cx| {
@@ -1020,6 +1096,13 @@ fn main() {
                         eprintln!("[js boot] {}\n{}", e.header, e.stack);
                     }
                 }
+                #[cfg(vn_devtools)]
+                if devtools_mode {
+                    inspector::boot(rt);
+                } else {
+                    boot_mode::boot(rt);
+                }
+                #[cfg(not(vn_devtools))]
                 boot_mode::boot(rt);
                 // `DOMContentLoaded` + `load`, once, after the app bundle has
                 // evaluated — several reused browser components wait on these,
@@ -1028,6 +1111,14 @@ fn main() {
                 window::content_loaded();
             });
         });
-        cx.activate(true);
+        // An inspector never comes to the front on its own — see
+        // `inspector::install_hotkey`. Everything else does, exactly as before.
+        if !devtools_mode {
+            cx.activate(true);
+        }
+        #[cfg(vn_devtools)]
+        if devtools_mode {
+            inspector::watch_parent();
+        }
     });
 }

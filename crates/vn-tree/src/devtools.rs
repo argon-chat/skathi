@@ -98,6 +98,13 @@ pub fn query(selector: &str) -> Result<(Vec<u32>, Vec<String>), String> {
     })
 }
 
+/// How many live nodes the retained tree holds — the one number that says
+/// whether a slow frame is a big tree or a slow cascade, and the cheapest
+/// thing the Performance panel can put beside its frame times.
+pub fn node_count() -> u32 {
+    tree::read_tree(|t| t.live_count())
+}
+
 pub fn node_info(id: u32) -> Option<NodeInfo> {
     tree::read_tree(|t| {
         let n = t.node(id)?;
@@ -251,11 +258,35 @@ pub fn overlay_bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
 /// Good enough to point at a node; `mouse` is still what proves a control is
 /// reachable.
 pub fn hit_test(x: f32, y: f32) -> Vec<u32> {
+    hit_test_in(0, x, y)
+}
+
+/// [`hit_test`], restricted to the window that paints `root`.
+///
+/// `root` is the popped-out node a second window paints (`0` = the primary
+/// window). Two windows' bounds maps hold numbers in two different client
+/// spaces, so a point is only answerable once a window is named: without this,
+/// hovering a pop-out at (40, 40) could pick the primary window's node at
+/// (40, 40), and the picker would confidently outline the wrong thing in the
+/// wrong window (docs/MULTIWINDOW.md §5.6).
+///
+/// The PATH is still root-first from the document root, not from `root` — the
+/// tree panel expands ancestors, and a node's ancestry does not stop at the
+/// window boundary. Only the search does.
+pub fn hit_test_in(root: u32, x: f32, y: f32) -> Vec<u32> {
     tree::read_tree(|t| {
-        fn walk(t: &Tree, id: u32, depth: usize, x: f32, y: f32, best: &mut Option<(usize, u32)>) {
+        fn walk(
+            t: &Tree,
+            window_root: u32,
+            id: u32,
+            depth: usize,
+            x: f32,
+            y: f32,
+            best: &mut Option<(usize, u32)>,
+        ) {
             let Some(node) = t.node(id) else { return };
             if node.kind == Kind::Element {
-                if let Some((bx, by, bw, bh)) = crate::render::bounds_of(id) {
+                if let Some((bx, by, bw, bh)) = crate::render::bounds_in(window_root, id) {
                     let inside = x >= bx && x < bx + bw && y >= by && y < by + bh;
                     // `>=` on the depth: the LAST node found at the deepest
                     // level wins, and document order is paint order.
@@ -265,12 +296,19 @@ pub fn hit_test(x: f32, y: f32) -> Vec<u32> {
                 }
             }
             for &c in &node.children {
-                walk(t, c, depth + 1, x, y, best);
+                // A popped-out subtree is painted by a DIFFERENT window; its
+                // rectangles are not in this window's map, so descending into
+                // it can only waste time (and, if the maps ever merged, lie).
+                if window_root == 0 && crate::render::popped_out(c) {
+                    continue;
+                }
+                walk(t, window_root, c, depth + 1, x, y, best);
             }
         }
         let mut best = None;
-        if t.root != 0 {
-            walk(t, t.root, 0, x, y, &mut best);
+        let start = if root == 0 { t.root } else { root };
+        if start != 0 && t.node(start).is_some() {
+            walk(t, root, start, 0, x, y, &mut best);
         }
         let Some((_, mut id)) = best else { return Vec::new() };
         let mut path = vec![id];

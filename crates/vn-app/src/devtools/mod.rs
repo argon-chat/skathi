@@ -14,7 +14,7 @@
 //! the HMR transport relies on.
 //!
 //! Discovery is `<dist>/devtools.json` (`{port, pid, token}`), written through
-//! the same `VN_DIST`-aware [`crate::dev::dist`] helper the rest of the dev
+//! the same `VN_DIST`-aware [`crate::slot`] helper the rest of the dev
 //! transport uses: every parallel host is independently addressable through its
 //! own dist slot, and a client that finds a stale file gets a connection error
 //! rather than talking to somebody else's window.
@@ -28,7 +28,9 @@
 //!
 //! The whole module is compiled out under `--features prod`.
 
+mod net; // the Network panel's feed: a JS-side fetch/WebSocket tee
 mod screenshot;
+pub mod ws; // the PUSH channel: a WebSocket server on this same port
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -89,7 +91,7 @@ pub fn start() {
     let token = fresh_token();
     *TOKEN.lock().unwrap() = token.clone();
 
-    let path = crate::dev::dist("devtools.json");
+    let path = crate::slot::path("devtools.json");
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -128,17 +130,86 @@ pub fn start() {
 const CONSOLE_TEE_JS: &str = r#"
 (function () {
   if (!globalThis.console) return;
-  var fmt = function (v) {
+
+  // One argument, printed the way a console prints a value that is not part of
+  // a format string.
+  var show = function (v) {
     if (typeof v === "string") return v;
     try { var s = JSON.stringify(v); return s === undefined ? String(v) : s; }
     catch (e) { return String(v); }
   };
+
+  // The WHATWG Console Standard's "Formatter" (§2.2). Without it a call like
+  //
+  //   console.log("%cinfo%c %s", "background:#0BC;\n  color:white", "", name)
+  //
+  // reached the ring as its own source text plus a multi-line CSS string —
+  // which is what put `%c` on screen literally and, because the CSS argument
+  // contains newlines, drew eight lines of text inside a one-line row.
+  //
+  // Substitutions: %s %d %i %f %o %O %j, %% for a literal percent, and %c,
+  // which consumes its argument as CSS and produces no text at all. Leftover
+  // arguments are appended space-separated, exactly as the spec says.
+  var SPEC = /%([sdifoOjc%])/g;
+  var format = function (args) {
+    if (typeof args[0] !== "string" || args.length < 2 || !/%[sdifoOjc%]/.test(args[0])) {
+      return { text: args.map(show).join(" "), runs: null };
+    }
+    var next = 1;
+    var runs = [];
+    var out = args[0].replace(SPEC, function (whole, kind) {
+      if (kind === "%") return "%";
+      if (next >= args.length) return whole; // no argument left: keep the text
+      var arg = args[next++];
+      switch (kind) {
+        case "c":
+          // A NUL placeholder, resolved in a second pass over the finished
+          // string (where it is removed again): `replace` cannot know how much
+          // text it has produced so far. NUL is safe as a marker because the
+          // Console Standard's formatter never produces one, and a log line
+          // that already contains one is broken by other means.
+          runs.push({ at: -1, css: String(arg == null ? "" : arg) });
+          return "\u0000";
+        case "d":
+        case "i":
+          return typeof arg === "symbol" || typeof arg === "bigint"
+            ? String(arg)
+            : String(parseInt(arg, 10));
+        case "f":
+          return typeof arg === "symbol" ? String(arg) : String(parseFloat(arg));
+        case "s":
+          return typeof arg === "string" ? arg : show(arg);
+        default:
+          return show(arg);
+      }
+    });
+    // Place the `%c` runs: each NUL is where one started, and it is removed.
+    if (runs.length) {
+      var placed = "";
+      var i = 0;
+      var r = 0;
+      for (; i < out.length; i++) {
+        if (out.charCodeAt(i) === 0) {
+          if (r < runs.length) runs[r++].at = placed.length;
+          continue;
+        }
+        placed += out[i];
+      }
+      out = placed;
+    }
+    for (; next < args.length; next++) out += " " + show(args[next]);
+    return { text: out, runs: runs.length ? runs : null };
+  };
+
   ["log", "info", "warn", "error", "debug"].forEach(function (name) {
     var orig = console[name];
     if (typeof orig !== "function") return;
     console[name] = function () {
       var args = Array.prototype.slice.call(arguments);
-      try { __vn_devtools_console(name, args.map(fmt).join(" ")); } catch (e) {}
+      try {
+        var f = format(args);
+        __vn_devtools_console(name, f.text, f.runs ? JSON.stringify(f.runs) : "");
+      } catch (e) {}
       return orig.apply(console, args);
     };
   });
@@ -157,7 +228,12 @@ vn_runtime::host_fn!(fn vn_devtools_console(g, args) {
         "info" => "info",
         _ => "log",
     };
-    vn_tree::log::record(kind, text);
+    // A third argument, present only when the call carried `%c`: the style
+    // runs the tee computed, as JSON. Absent for every other line, which is
+    // nearly all of them.
+    let styles = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(2).0) }
+        .filter(|s| !s.is_empty() && s != "undefined");
+    vn_tree::log::record_styled(kind, text, styles);
     vn_runtime::redjs::api::Value::undefined().0
 });
 
@@ -216,7 +292,7 @@ fn read_target(dir: &std::path::Path) -> Option<Json> {
 /// and whatever `VN_DEVTOOLS_TARGET` names explicitly.
 fn scan_roots() -> Vec<std::path::PathBuf> {
     let mut roots = Vec::new();
-    let own = crate::dev::dist("devtools.json");
+    let own = crate::slot::path("devtools.json");
     if let Some(parent) = own.parent().and_then(|d| d.parent()) {
         roots.push(parent.to_path_buf());
         // …/packages/vue-native -> …/packages/vn-test/.vn-test/slots
@@ -247,7 +323,7 @@ fn targets_json() -> String {
         ("preferred", if preferred.is_empty() { Json::Null } else { Json::s(preferred) }),
         ("self", Json::obj(vec![
             ("pid", Json::n(std::process::id() as f64)),
-            ("dir", Json::s(crate::dev::dist("").display().to_string())),
+            ("dir", Json::s(crate::slot::dir().display().to_string())),
         ])),
         ("targets", Json::arr(targets)),
     ])
@@ -256,12 +332,16 @@ fn targets_json() -> String {
 
 /// Registers the devtools host fns. Call before the app bundle boots.
 pub fn install(rt: &JsRuntime) {
-    rt.register("__vn_devtools_console", 2, vn_devtools_console as *const _);
+    rt.register("__vn_devtools_console", 3, vn_devtools_console as *const _);
     rt.register("__vn_devtools_emit", 1, vn_devtools_emit as *const _);
     // The inspector app's only host dependency (docs/DEVTOOLS-UI.md §3): the
     // list of attachable instances. Registered in every dev host — the app that
     // never calls it never notices.
     rt.register("__vn_devtools_targets", 0, vn_devtools_targets as *const _);
+    // The Network panel's feed, installed the same way as the console tee
+    // above and for the same reason: it ADDS a reader and changes nothing an
+    // app can observe.
+    net::install(rt);
     if let Err(e) = rt.eval(CONSOLE_TEE_JS, "vn://devtools-console.js") {
         eprintln!("[devtools] console tee failed: {}\n{}", e.header, e.stack);
     }
@@ -322,7 +402,7 @@ fn serve(stream: TcpStream) {
         return;
     }
     if http_request_line(&line).is_some() {
-        serve_http(&line, &mut reader, &mut out);
+        serve_http(&line, reader, out);
         return;
     }
     loop {
@@ -381,15 +461,16 @@ fn http_request_line(line: &str) -> Option<(String, String)> {
     Some((method.to_string(), target.to_string()))
 }
 
-fn serve_http(request_line: &str, reader: &mut BufReader<TcpStream>, out: &mut TcpStream) {
+fn serve_http(request_line: &str, mut reader: BufReader<TcpStream>, mut out: TcpStream) {
     let Some((method, target)) = http_request_line(request_line) else { return };
-    // Headers. Only `Content-Length` is load-bearing: `Transfer-Encoding:
-    // chunked` is refused by name rather than mis-framed silently — no client
-    // this exists for sends it (redjs' fetch always sets a Content-Length).
-    let mut length: Option<usize> = None;
-    let mut chunked = false;
+    // Headers, once, by name. `Content-Length` is load-bearing for a POST and
+    // the `Sec-WebSocket-*` set is load-bearing for an upgrade; `Transfer-
+    // Encoding: chunked` is refused by name rather than mis-framed silently (no
+    // client this exists for sends it — redjs' fetch always sets a length).
+    //
     // Bounded, so a client that never sends the blank line cannot keep this
     // thread reading forever. 200 is far past what any real client sends.
+    let mut headers: Vec<(String, String)> = Vec::new();
     for _ in 0..200 {
         let mut header = String::new();
         match reader.read_line(&mut header) {
@@ -401,14 +482,27 @@ fn serve_http(request_line: &str, reader: &mut BufReader<TcpStream>, out: &mut T
             break;
         }
         let Some((name, value)) = header.split_once(':') else { continue };
-        let (name, value) = (name.trim().to_ascii_lowercase(), value.trim());
-        if name == "content-length" {
-            length = value.parse::<usize>().ok();
-        } else if name == "transfer-encoding" && value.eq_ignore_ascii_case("chunked") {
-            chunked = true;
-        }
+        headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
     }
-    let mut reply = |status: &str, body: String| http_reply(out, status, &body);
+    let head = |name: &str| {
+        headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str()).unwrap_or("")
+    };
+    let length: Option<usize> = head("content-length").parse::<usize>().ok();
+    let chunked = head("transfer-encoding").eq_ignore_ascii_case("chunked");
+
+    // The THIRD framing on this port (the push channel, `ws.rs`): an RFC 6455
+    // opening handshake IS an ordinary HTTP GET, so it arrives here and is
+    // recognised by its `Upgrade` header — no second port, no second listener,
+    // no second handshake field in `devtools.json`.
+    if method == "GET"
+        && head("upgrade").eq_ignore_ascii_case("websocket")
+        && head("connection").to_ascii_lowercase().contains("upgrade")
+    {
+        ws::serve(&target, &headers, out, reader);
+        return;
+    }
+
+    let mut reply = |status: &str, body: String| http_reply(&mut out, status, &body);
     match method.as_str() {
         // A browser-hosted client (the same UI served from a static file, or a
         // future one) sends this before every POST. Answering it is four lines
@@ -431,7 +525,7 @@ fn serve_http(request_line: &str, reader: &mut BufReader<TcpStream>, out: &mut T
                 );
             }
             let mut body = vec![0u8; n];
-            if std::io::Read::read_exact(reader, &mut body).is_err() {
+            if std::io::Read::read_exact(&mut reader, &mut body).is_err() {
                 return reply("400 Bad Request", err("the request body arrived short"));
             }
             match String::from_utf8(body) {
@@ -442,8 +536,7 @@ fn serve_http(request_line: &str, reader: &mut BufReader<TcpStream>, out: &mut T
         _ => reply(
             "405 Method Not Allowed",
             err(format!(
-                "{method} {target} — this port speaks one thing over HTTP: POST / with the \
-                 command object as the body (see docs/DEVTOOLS.md)"
+                "{method} {target} — this port speaks two things over HTTP: POST / with the                  command object as the body, and GET / with `Upgrade: websocket` for the push                  channel (see docs/DEVTOOLS.md)"
             )),
         ),
     }
@@ -532,6 +625,10 @@ pub fn pump() {
     let Some(job) = QUEUE.lock().unwrap().pop_front() else { return };
     let Job { req, reply } = job;
     let response = run(&req, &reply);
+    // The window a command addressed is scoped to that command and nothing
+    // else: a parked `type` resumes against the published window, as it always
+    // has, and the next command starts from the default again.
+    TARGET_WINDOW.with(|c| c.set(None));
     match response {
         Outcome::Done(text) => {
             let _ = reply.send(text);
@@ -604,6 +701,11 @@ fn resume_pending(mut p: Pending) -> Option<Pending> {
 
 fn run(req: &Json, reply: &Sender<String>) -> Outcome {
     let cmd = req.get("cmd").and_then(Json::as_str).unwrap_or("");
+    // Which of THIS process's windows the command is about (docs/MULTIWINDOW.md).
+    // Absent = the primary window, which is what every pre-v2 client sends and
+    // what every single-window app means.
+    let window_arg = req.get("window").and_then(Json::as_f64).map(|w| w as u64);
+    TARGET_WINDOW.with(|c| c.set(window_arg));
     let arg = |name: &str| req.get(name).and_then(Json::as_str).map(str::to_string);
     let num = |name: &str| req.get(name).and_then(Json::as_f64);
     let text = match cmd {
@@ -619,7 +721,17 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             None => err("text needs a `selector`"),
             Some(sel) => cmd_text(&sel, num("index")),
         },
-        "tree" => cmd_tree(arg("selector").as_deref(), num("depth"), num("node")),
+        "tree" => cmd_tree(
+            arg("selector").as_deref(),
+            num("depth"),
+            // With a `window` and nothing else, the tree is rooted at what
+            // THAT window paints — the whole document for the primary one,
+            // the popped-out subtree for a pop-out. A client that names a
+            // node still gets that node.
+            num("node").or_else(|| {
+                window_arg.map(|id| f64::from(window_root(id))).filter(|r| *r > 0.0)
+            }),
+        ),
         "styles" => cmd_styles(arg("selector").as_deref(), num("index"), num("node")),
         "rules" => cmd_rules(arg("selector").as_deref(), num("index"), num("node")),
         "highlight" => cmd_highlight(
@@ -629,8 +741,17 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             req.get("clear").and_then(Json::as_bool).unwrap_or(false),
             num("ttlMs"),
             arg("label"),
+            window_arg,
         ),
-        "pick" => cmd_pick(),
+        "pick" => cmd_pick(window_arg),
+        "wheel" => cmd_wheel(
+            arg("selector").as_deref(),
+            num("index"),
+            num("x"),
+            num("y"),
+            num("dx"),
+            num("dy"),
+        ),
         "click" => match arg("selector") {
             None => err("click needs a `selector`"),
             Some(sel) => cmd_click(&sel, num("index"), num("button")),
@@ -656,12 +777,73 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             Some(js) => cmd_eval(&js),
         },
         "logs" => cmd_logs(num("since")),
+        "net" => cmd_net(num("since")),
+        "perf" => ok(perf_data()),
+        "windows" => cmd_windows(),
+        "raise" => cmd_raise(),
+        "storage" => cmd_storage(
+            arg("area").as_deref(),
+            arg("op").as_deref(),
+            arg("key").as_deref(),
+            arg("value").as_deref(),
+        ),
         "screenshot" => cmd_screenshot(arg("path").as_deref(), arg("backend").as_deref()),
         "type" | "key" => return start_input_command(cmd, req, reply),
         "" => err("no `cmd` in the request"),
         other => err(format!("unknown command `{other}` — see docs/DEVTOOLS.md")),
     };
     Outcome::Done(text)
+}
+
+// ---------------------------------------------------------------------------
+// which window a command is about
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// The `window` argument of the command currently executing. `None` = the
+    /// primary window, which is what a single-window app always means and what
+    /// every client written before v2 sends.
+    static TARGET_WINDOW: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` against the window the current command addressed.
+///
+/// This is the seam multi-window devtools needed and nothing more: the pump
+/// publishes the PRIMARY window, so `with_commit` has always meant "the main
+/// one", and a pop-out was simply unreachable. Addressing another window is an
+/// `AnyWindowHandle::update` — untyped, for the reason `popout::with_window`
+/// spells out — which is exactly what `popout::notify_all` already does from
+/// inside this same pump every frame.
+pub(crate) fn with_target<R>(f: impl FnOnce(&mut Window, &mut App) -> R) -> Option<R> {
+    match TARGET_WINDOW.with(|c| c.get()) {
+        None => with_commit(f),
+        Some(id) => with_window_id(id, f),
+    }
+}
+
+/// Runs `f` against one named window of this process.
+fn with_window_id<R>(id: u64, f: impl FnOnce(&mut Window, &mut App) -> R) -> Option<R> {
+    if crate::main_window_id() == Some(id) {
+        return with_commit(f);
+    }
+    with_commit(|_, cx| crate::popout::with_window(id, cx, f)).flatten()
+}
+
+/// The node a window paints as its root — `0` for the primary window, the
+/// popped-out node for a pop-out. It is the key every per-window bounds map is
+/// stored under (`vn_tree::bounds_in`).
+fn window_root(id: u64) -> u32 {
+    if crate::main_window_id() == Some(id) {
+        return 0;
+    }
+    crate::popout::list().into_iter().find(|(w, _, _)| *w == id).map_or(0, |(_, node, _)| node)
+}
+
+/// Every window of this process, primary first.
+fn window_ids() -> Vec<u64> {
+    let mut ids: Vec<u64> = crate::main_window_id().into_iter().collect();
+    ids.extend(crate::popout::list().into_iter().map(|(id, _, _)| id));
+    ids
 }
 
 // ---------------------------------------------------------------------------
@@ -983,6 +1165,9 @@ fn cmd_rules(selector: Option<&str>, index: Option<f64>, node: Option<f64>) -> S
 
 struct Highlight {
     node: u32,
+    /// Which window paints the outline. `None` = the primary one, which is
+    /// what a single-window app means and what every pre-v2 client sends.
+    window: Option<u64>,
     /// When the overlay stops painting itself. `None` = until something clears
     /// it. A client that polls (the picker) sets a short one so a crashed
     /// inspector cannot leave a permanent rectangle on the app.
@@ -999,6 +1184,22 @@ static HIGHLIGHT: Mutex<Option<Highlight>> = Mutex::new(None);
 /// with no interactivity: gpui only builds hitboxes for elements that ask for
 /// one, so the overlay cannot intercept a click, a hover or a drag region.
 pub fn highlight_overlay() -> Option<gpui::Div> {
+    overlay_for(crate::main_window_id(), 0)
+}
+
+/// The same outline, for a POP-OUT window (`docs/MULTIWINDOW.md`).
+///
+/// A pop-out paints a different node of the same tree into a different client
+/// space, so the rectangle has to come out of THAT window's bounds map
+/// (`root` is the popped-out node, which is the key those maps are under) and
+/// the outline has to be drawn by that window's own root view. Painting it in
+/// the primary window would put a blue box at the pop-out's coordinates over
+/// whatever the main window happens to have there.
+pub fn popout_highlight_overlay(window: u64, root: u32) -> Option<gpui::Div> {
+    overlay_for(Some(window), root)
+}
+
+fn overlay_for(window: Option<u64>, root: u32) -> Option<gpui::Div> {
     use gpui::prelude::*;
     use gpui::{div, px, rgba};
     let mut slot = HIGHLIGHT.lock().unwrap();
@@ -1010,11 +1211,17 @@ pub fn highlight_overlay() -> Option<gpui::Div> {
         *slot = None;
     }
     let h = slot.as_ref()?;
+    // Every window renders this; only the one that was asked draws it. An
+    // absent `window` means the primary one.
+    let wanted = h.window.or_else(crate::main_window_id);
+    if wanted != window {
+        return None;
+    }
     // `overlay_bounds`, not `node_info().bounds`: this runs during the shell's
     // own render, where `build_root` has already cleared the live bounds map
     // and prepaint has not refilled it yet — the live map is empty for every
     // node at exactly this moment.
-    let (x, y, w, height) = vn_tree::devtools::overlay_bounds(h.node)?;
+    let (x, y, w, height) = vn_tree::painted_bounds_in(root, h.node)?;
     let label = h.label.clone().unwrap_or_else(|| describe(h.node, w, height));
     Some(
         div()
@@ -1095,10 +1302,11 @@ fn cmd_highlight(
     clear: bool,
     ttl_ms: Option<f64>,
     label: Option<String>,
+    window: Option<u64>,
 ) -> String {
     if clear || (selector.is_none() && node.is_none()) {
         *HIGHLIGHT.lock().unwrap() = None;
-        let _ = with_commit(|window, _| window.refresh());
+        let _ = with_target(|window, _| window.refresh());
         return ok(Json::obj(vec![("cleared", Json::Bool(true))]));
     }
     let id = match resolve_target(selector, index, node) {
@@ -1108,8 +1316,10 @@ fn cmd_highlight(
     let ttl = ttl_ms.filter(|ms| *ms > 0.0).map(|ms| {
         std::time::Instant::now() + std::time::Duration::from_millis(ms as u64)
     });
-    *HIGHLIGHT.lock().unwrap() = Some(Highlight { node: id, until: ttl, label });
-    let _ = with_commit(|window, _| window.refresh());
+    *HIGHLIGHT.lock().unwrap() = Some(Highlight { node: id, window, until: ttl, label });
+    // The window that will PAINT it, not the published one — a pop-out never
+    // repaints off the primary window's refresh.
+    let _ = with_target(|window, _| window.refresh());
     let bounds = vn_tree::devtools::node_info(id).and_then(|n| n.bounds);
     ok(Json::obj(vec![
         ("id", Json::n(f64::from(id))),
@@ -1127,26 +1337,61 @@ fn cmd_highlight(
 /// that dies mid-pick leaves nothing behind. `insideWindow` is gpui's own
 /// window-level hover flag — it is what tells the inspector the pointer has
 /// left for the devtools window, which is the gesture that latches a pick.
-fn cmd_pick() -> String {
-    let Some((x, y, inside, vw, vh)) = with_commit(|window, _| {
-        let p = window.mouse_position();
-        let size = window.viewport_size();
-        (
-            f32::from(p.x),
-            f32::from(p.y),
-            window.is_window_hovered(),
-            f32::from(size.width),
-            f32::from(size.height),
-        )
-    }) else {
-        return err("not in a commit phase");
+///
+/// ## Which window
+///
+/// With `window`, that one. WITHOUT it, every window this process paints is
+/// asked and **the one the pointer is actually over wins** — because "which
+/// window is the pointer in" is the question a picker has to answer first, and
+/// a pop-out is a window the primary one knows nothing about. The reply always
+/// names the window it answered for, so a client is never guessing.
+///
+/// The hit test is then restricted to that window's own bounds map
+/// (`vn_tree::hit_test_in`): two windows' rectangles live in two different
+/// client spaces, so a point without a window would happily match a node in the
+/// other one at the same x/y (docs/MULTIWINDOW.md §5.6).
+fn cmd_pick(window_arg: Option<u64>) -> String {
+    let candidates: Vec<u64> = match window_arg {
+        Some(id) => vec![id],
+        None => window_ids(),
     };
-    let path = vn_tree::devtools::hit_test(x, y);
+    if candidates.is_empty() {
+        return err("this process has no window to pick in");
+    }
+    // (id, x, y, insideWindow, viewport w, viewport h)
+    let mut chosen: Option<(u64, f32, f32, bool, f32, f32)> = None;
+    for id in candidates {
+        let Some(facts) = with_window_id(id, |window, _| {
+            let p = window.mouse_position();
+            let size = window.viewport_size();
+            (
+                f32::from(p.x),
+                f32::from(p.y),
+                window.is_window_hovered(),
+                f32::from(size.width),
+                f32::from(size.height),
+            )
+        }) else {
+            continue;
+        };
+        let (x, y, inside, vw, vh) = facts;
+        if inside || chosen.is_none() {
+            chosen = Some((id, x, y, inside, vw, vh));
+        }
+        if inside {
+            break;
+        }
+    }
+    let Some((id, x, y, inside, vw, vh)) = chosen else {
+        return err("no such window");
+    };
+    let path = vn_tree::devtools::hit_test_in(window_root(id), x, y);
     let node = path.last().copied();
     let mut entries = vec![
         ("x", Json::n(x)),
         ("y", Json::n(y)),
         ("insideWindow", Json::Bool(inside)),
+        ("window", Json::n(id as f64)),
         ("viewport", Json::obj(vec![("w", Json::n(vw)), ("h", Json::n(vh))])),
         ("path", Json::arr(path.iter().map(|&id| Json::n(f64::from(id))).collect())),
     ];
@@ -1274,7 +1519,12 @@ fn cmd_mouse(
         other => return err(format!("unknown mouse button {other} — 0 left, 1 middle, 2 right")),
     };
     let position = gpui::Point::new(gpui::px(point.0), gpui::px(point.1));
-    let done = with_commit(|window, app| {
+    // `with_target`, not `with_commit`: a window coordinate is meaningless
+    // without the window it is in, and a pop-out paints a different subtree in
+    // a different client space (docs/MULTIWINDOW.md). This is what makes the
+    // spike's `__vn_window_click` unnecessary — `mouse` addresses any window
+    // this process paints, through the same real gpui hit test.
+    let done = with_target(|window, app| {
         // A move always comes first: gpui recomputes `mouse_hit_test` from the
         // window's own `mouse_position`, and a press that arrives without one
         // would be tested against wherever the pointer was last.
@@ -1423,6 +1673,13 @@ fn cmd_logs(since: Option<f64>) -> String {
                             ("at", Json::n(e.at_ms as f64)),
                             ("kind", Json::s(e.kind)),
                             ("text", Json::s(e.text.clone())),
+                            (
+                                "styles",
+                                match &e.styles {
+                                    Some(runs) => Json::from(Raw(runs.clone())),
+                                    None => Json::Null,
+                                },
+                            ),
                         ])
                     })
                     .collect(),
@@ -1585,6 +1842,312 @@ fn parse_keystroke(spec: &str) -> Result<gpui::Keystroke, String> {
         .then(|| raw.to_string())
         .or_else(|| (name == "space").then(|| " ".to_string()));
     Ok(gpui::Keystroke { modifiers, key: name, key_char })
+}
+
+/// A REAL wheel event, at a window coordinate, through gpui's own hit test.
+///
+/// `scroll` (the older command) drives an element's `ScrollHandle` directly:
+/// it proves a container CAN be scrolled and reports where it ended up, and it
+/// never involves the wheel at all. This is the other half — the gesture — and
+/// it is what an app's own `@wheel` handler sees. Anything built on that
+/// handler (a virtual list, a zoom control, a chart's pan) had no way to be
+/// driven, and no way to be tested; the devtools inspector's own console is
+/// one, and the inverted `deltaY` it exposed is exactly the kind of bug this
+/// closes the door on.
+///
+/// **The deltas are the DOM's**, not gpui's: `dy > 0` scrolls DOWN, which is
+/// what `WheelEvent.deltaY` means and what every client of this protocol is
+/// already thinking in. `vn_tree`'s `dom_wheel_delta` performs the same
+/// conversion in the other direction on the way out to JS.
+fn cmd_wheel(
+    selector: Option<&str>,
+    index: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    dx: Option<f64>,
+    dy: Option<f64>,
+) -> String {
+    let point = match (selector, x, y) {
+        (Some(sel), _, _) => match resolve_one(sel, index) {
+            Err(e) => return err(e),
+            Ok(id) => match vn_tree::devtools::node_info(id).and_then(|n| n.bounds) {
+                Some((bx, by, bw, bh)) => (bx + bw / 2.0, by + bh / 2.0),
+                None => return err(format!("`{sel}` is not painted, so it has no centre to aim at")),
+            },
+        },
+        (None, Some(x), Some(y)) => (x as f32, y as f32),
+        _ => return err("wheel needs either a `selector` or both `x` and `y` (window coordinates)"),
+    };
+    let (dx, dy) = (dx.unwrap_or(0.0) as f32, dy.unwrap_or(0.0) as f32);
+    if dx == 0.0 && dy == 0.0 {
+        return err("wheel needs a `dx` or a `dy` (DOM signs: dy > 0 scrolls down)");
+    }
+    let position = gpui::Point::new(gpui::px(point.0), gpui::px(point.1));
+    let done = with_target(|window, app| {
+        // A move first, for the same reason `mouse` sends one: gpui recomputes
+        // its hit test from the window's own pointer position, and a wheel that
+        // arrives without one is tested against wherever the pointer was last.
+        window.dispatch_event(
+            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                position,
+                pressed_button: None,
+                modifiers: gpui::Modifiers::default(),
+            }),
+            app,
+        );
+        window.dispatch_event(
+            gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                position,
+                // Negated: gpui's sign is the platform's (positive = the wheel
+                // turned away from you = a scroll UP), the DOM's is the
+                // opposite, and this command speaks the DOM's.
+                delta: gpui::ScrollDelta::Pixels(gpui::Point::new(gpui::px(-dx), gpui::px(-dy))),
+                modifiers: gpui::Modifiers::default(),
+                touch_phase: gpui::TouchPhase::Moved,
+            }),
+            app,
+        );
+        if vn_tree::flush_changes() {
+            window.refresh();
+        }
+        true
+    });
+    match done {
+        None => err("no such window"),
+        Some(_) => ok(Json::obj(vec![
+            ("x", Json::n(point.0)),
+            ("y", Json::n(point.1)),
+            ("dx", Json::n(dx)),
+            ("dy", Json::n(dy)),
+        ])),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// windows, raise, perf, storage, net  (v2 — docs/DEVTOOLS.md)
+// ---------------------------------------------------------------------------
+
+/// Every OS window this process paints, and every inspector it has open.
+///
+/// This is what a window switcher is built on, and it answers a question that
+/// had none before: with pop-outs, ONE process paints several windows off ONE
+/// retained tree (docs/MULTIWINDOW.md), so "screenshot the app" and "what is
+/// under the pointer" both stopped being well-posed without a window in them.
+fn cmd_windows() -> String {
+    let main = crate::main_window_id();
+    let popouts = crate::popout::list();
+    let mut out: Vec<Json> = Vec::new();
+    for id in window_ids() {
+        let root = window_root(id);
+        let title = if Some(id) == main {
+            crate::window::config().title
+        } else {
+            popouts.iter().find(|(w, _, _)| *w == id).map_or_else(String::new, |(_, _, t)| t.clone())
+        };
+        let facts = with_window_id(id, |window, _| {
+            let size = window.viewport_size();
+            (
+                f32::from(size.width),
+                f32::from(size.height),
+                window.is_window_active(),
+                window.is_window_hovered(),
+                window.scale_factor(),
+            )
+        });
+        let (w, h, active, hovered, scale) = facts.unwrap_or((0.0, 0.0, false, false, 1.0));
+        out.push(Json::obj(vec![
+            ("id", Json::n(id as f64)),
+            ("kind", Json::s(if Some(id) == main { "main" } else { "popout" })),
+            ("title", Json::s(title)),
+            // The node this window paints as its root. `0` is the document
+            // root, i.e. the whole app.
+            ("root", Json::n(f64::from(root))),
+            ("viewport", Json::obj(vec![("w", Json::n(w)), ("h", Json::n(h))])),
+            ("scale", Json::n(scale)),
+            ("focused", Json::Bool(active)),
+            ("hovered", Json::Bool(hovered)),
+        ]));
+    }
+    ok(Json::obj(vec![
+        ("windows", Json::arr(out)),
+        ("pid", Json::n(std::process::id() as f64)),
+        // The inspectors THIS process has open on itself (F12). An e2e spec
+        // proving "F12 twice opens one window" has no other way to look.
+        (
+            "inspectors",
+            Json::arr(
+                crate::inspector::children()
+                    .into_iter()
+                    .map(|(window, pid)| {
+                        Json::obj(vec![
+                            (
+                                "window",
+                                match window {
+                                    Some(w) => Json::n(w as f64),
+                                    None => Json::Null,
+                                },
+                            ),
+                            ("pid", Json::n(f64::from(pid))),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+    ]))
+}
+
+/// Bring this window to the front. What the SECOND F12 does to an inspector
+/// that is already open (`crate::inspector::raise_existing`), and the only
+/// command here that deliberately takes focus — because a person just asked for
+/// it by pressing a key.
+fn cmd_raise() -> String {
+    let done = with_target(|window, _| {
+        window.activate_window();
+        true
+    });
+    match done {
+        Some(_) => ok(Json::obj(vec![("raised", Json::Bool(true))])),
+        None => err("no such window"),
+    }
+}
+
+/// The samples a `perf` reply carries: the last of the rolling ring rather than
+/// all of it. The panel draws a sparkline, the push channel sends this four
+/// times a second, and 600 floats a message would be 40 KB/s to draw a line
+/// 200 px wide.
+const PERF_SAMPLES: usize = 120;
+
+/// The rolling frame window (`crate::perf::snapshot`), as the Performance panel
+/// reads it.
+fn perf_data() -> Json {
+    let snap = crate::perf::snapshot();
+    let (avg, p50, p95, max, fps) = snap.stats();
+    let round2 = |v: f32| f64::from((v * 100.0).round() / 100.0);
+    let tail: Vec<Json> = snap
+        .samples
+        .iter()
+        .rev()
+        .take(PERF_SAMPLES)
+        .rev()
+        .map(|ms| Json::n(round2(*ms)))
+        .collect();
+    Json::obj(vec![
+        ("frames", Json::n(snap.frames as f64)),
+        ("uptimeMs", Json::n(f64::from(snap.uptime_ms.round()))),
+        (
+            "bootMs",
+            match snap.boot_to_first_frame_ms {
+                Some(ms) => Json::n(f64::from((ms * 10.0).round() / 10.0)),
+                None => Json::Null,
+            },
+        ),
+        ("avgMs", Json::n(round2(avg))),
+        ("p50Ms", Json::n(round2(p50))),
+        ("p95Ms", Json::n(round2(p95))),
+        ("maxMs", Json::n(round2(max))),
+        ("fps", Json::n(f64::from((fps * 10.0).round() / 10.0))),
+        ("samples", Json::arr(tail)),
+        ("nodes", Json::n(f64::from(vn_tree::devtools::node_count()))),
+        ("windows", Json::n(window_ids().len() as f64)),
+        // The detailed phase breakdown belongs to `VN_PERF`, which OWNS those
+        // counters (it clears them when it reports). Saying whether it is on
+        // beats showing zeros that read as "nothing costs anything".
+        ("phases", Json::Bool(vn_tree::perf::enabled())),
+    ])
+}
+
+/// The push channel's framing of the same object.
+pub(crate) fn perf_json() -> String {
+    let Json::Obj(mut entries) = perf_data() else { return String::new() };
+    entries.insert(0, ("t".to_string(), Json::s("perf")));
+    Json::Obj(entries).to_json()
+}
+
+/// `localStorage` / `sessionStorage`, read and written in the app's own JS.
+///
+/// Deliberately NOT a call into `vn-storage`: the area an app sees is a JS
+/// object with a specified surface (docs/STORAGE.md), the host's disk layer is
+/// one implementation detail below it, and a panel that read the disk would
+/// show something subtly different from what `localStorage.getItem` answers — a
+/// pending write, or a session area that has no disk at all. So it goes through
+/// `eval`, which is the same machinery the console uses and the same trust
+/// level (dev-only, token-guarded, `eval`-capable by construction).
+fn cmd_storage(
+    area: Option<&str>,
+    op: Option<&str>,
+    key: Option<&str>,
+    value: Option<&str>,
+) -> String {
+    let area = area.unwrap_or("local");
+    let global = match area {
+        "local" | "localStorage" => "localStorage",
+        "session" | "sessionStorage" => "sessionStorage",
+        other => {
+            return err(format!("unknown storage area {other:?} — use \"local\" or \"session\""))
+        }
+    };
+    let quoted_area = json::quote(area);
+    let js = match op.unwrap_or("list") {
+        "list" => format!(
+            "(function(){{var a=globalThis.{global};if(!a)return null;var o=[];\
+             for(var i=0;i<a.length;i++){{var k=a.key(i);o.push({{key:k,value:a.getItem(k)}});}}\
+             return {{area:{quoted_area},length:a.length,entries:o}};}})()"
+        ),
+        "set" => {
+            let Some(k) = key else { return err("storage set needs a `key`") };
+            let k = json::quote(k);
+            let v = json::quote(value.unwrap_or(""));
+            format!(
+                "(function(){{var a=globalThis.{global};if(!a)return null;a.setItem({k},{v});\
+                 return {{area:{quoted_area},key:{k},value:a.getItem({k})}};}})()"
+            )
+        }
+        "remove" => {
+            let Some(k) = key else { return err("storage remove needs a `key`") };
+            let k = json::quote(k);
+            format!(
+                "(function(){{var a=globalThis.{global};if(!a)return null;a.removeItem({k});\
+                 return {{area:{quoted_area},key:{k},removed:true}};}})()"
+            )
+        }
+        "clear" => format!(
+            "(function(){{var a=globalThis.{global};if(!a)return null;a.clear();\
+             return {{area:{quoted_area},cleared:true,length:a.length}};}})()"
+        ),
+        other => {
+            return err(format!(
+                "unknown storage op {other:?} — use \"list\", \"set\", \"remove\" or \"clear\""
+            ))
+        }
+    };
+    // `cmd_eval`'s reply is `{ok:true,data:{value,type}}`; unwrap one level so a
+    // panel gets the object it asked for rather than an envelope. A `null`
+    // value means the area does not exist in this host — `--no-default-features`
+    // builds it out on purpose (docs/STORAGE.md), and "there is no localStorage
+    // here" is the honest answer rather than an empty table.
+    let reply = cmd_eval(&js);
+    let Some(parsed) = json::parse(&reply) else { return reply };
+    if parsed.get("ok").and_then(Json::as_bool) != Some(true) {
+        return reply;
+    }
+    match parsed.get("data").and_then(|d| d.get("value")) {
+        Some(Json::Null) | None => err(format!(
+            "this host has no `{global}` — it was built without the `storages` feature \
+             (docs/STORAGE.md)"
+        )),
+        Some(v) => ok(v.clone()),
+    }
+}
+
+/// The network log the JS tee recorded (`net.rs`).
+fn cmd_net(since: Option<f64>) -> String {
+    let since = since.unwrap_or(0.0).max(0.0) as u64;
+    let (entries, next, dropped) = net::since(since);
+    ok(Json::obj(vec![
+        ("entries", Json::arr(entries.into_iter().map(|t| Json::from(Raw(t))).collect())),
+        ("next", Json::n(next as f64)),
+        ("dropped", Json::n(dropped as f64)),
+    ]))
 }
 
 // ---------------------------------------------------------------------------

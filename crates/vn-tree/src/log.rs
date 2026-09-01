@@ -35,6 +35,19 @@ pub struct Entry {
     /// channel name, not a severity ladder.
     pub kind: &'static str,
     pub text: String,
+    /// `console.log("%cA%cB", cssA, cssB)`'s style runs, as the JSON the
+    /// console tee built: `[{"at":0,"css":"…"},{"at":1,"css":"…"}]`,
+    /// where `at` is an index into [`Entry::text`].
+    ///
+    /// `None` for everything else, which is nearly every line: an advisory, a
+    /// CSS diagnostic and a plain `console.log` have no style runs, and the
+    /// field costs them one `Option` each.
+    ///
+    /// It is kept as TEXT rather than parsed because the ring is not the
+    /// thing that renders it — the inspector is, and it re-parses the JSON it
+    /// is handed anyway. Parsing here would mean a second description of the
+    /// same shape, in a crate that has no reason to know what CSS is.
+    pub styles: Option<String>,
 }
 
 thread_local! {
@@ -79,12 +92,21 @@ pub fn is_enabled() -> bool {
 /// gpui main thread; the devtools listener thread never calls this (it only
 /// queues, and the command that reads the ring runs on the main thread).
 pub fn record(kind: &'static str, text: impl Into<String>) {
+    record_styled(kind, text, None)
+}
+
+/// [`record`], plus the `%c` style runs a `console.*` call carried.
+///
+/// Only the console tee calls this. Everything else in the process records a
+/// line that has no styling and never will — an advisory is the host talking,
+/// not the app.
+pub fn record_styled(kind: &'static str, text: impl Into<String>, styles: Option<String>) {
     if !is_enabled() {
         return;
     }
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let at_ms = START.with(|s| s.get()).map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
-    let entry = Entry { seq, at_ms, kind, text: text.into() };
+    let entry = Entry { seq, at_ms, kind, text: text.into(), styles };
     RING.with(|r| {
         let mut r = r.borrow_mut();
         if r.len() == CAPACITY {
