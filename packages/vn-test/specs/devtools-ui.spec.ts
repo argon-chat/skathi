@@ -64,9 +64,13 @@ describe("the inspector attaches to another instance", () => {
   }, T);
 
   test("selecting a row shows the RULES that produced it, winner first", async () => {
-    // Row 3 is `<header class="titlebar">` with the default expansion (root,
-    // .frame, its anchor, then the header).
-    await inspector.locator(".row").nth(3).click();
+    // Row 2 is `<header class="titlebar">` with the default expansion: root,
+    // .frame, then the header. It used to be row 3, because the fragment
+    // anchor between them was drawn as a `<root>` row — the tag-id-0 bug that
+    // the m21 addendum fixed (`Tree::new` now reserves interned name 0, and
+    // the inspector decides row kind from `kind` rather than `tag`), so the
+    // anchor is a `<!---->` row hidden behind a toggle and no longer counts.
+    await inspector.locator(".row").nth(2).click();
     await expect(inspector.locator(".who")).toContainText("titlebar");
     // hello's styles are `<style scoped>`, so every selector the cascade
     // matched carries the scope attribute the SFC compiler stamped.

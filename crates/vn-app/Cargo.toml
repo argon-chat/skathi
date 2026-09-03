@@ -134,7 +134,7 @@ reqwest_client = { path = "../../vendor/zed/crates/reqwest_client" }
 # crate that can see both halves: gpui_windows publishes the device, vn-tree
 # hands it to the Media Foundation backend. Nothing else here uses gpui_windows.
 gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features = false }
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
