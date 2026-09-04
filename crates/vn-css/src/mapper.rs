@@ -503,6 +503,18 @@ impl Extras {
         if other.underline_offset.is_some() {
             self.underline_offset = other.underline_offset;
         }
+        if other.scrollbar_width.is_some() {
+            self.scrollbar_width = other.scrollbar_width;
+        }
+        if other.scrollbar_color.is_some() {
+            self.scrollbar_color = other.scrollbar_color;
+        }
+        if other.overscroll_x.is_some() {
+            self.overscroll_x = other.overscroll_x;
+        }
+        if other.overscroll_y.is_some() {
+            self.overscroll_y = other.overscroll_y;
+        }
         // A bitmask, not a last-wins value: two rules can each contribute a
         // different `currentColor` property to the same element.
         self.current_color.0 |= other.current_color.0;
@@ -6081,5 +6093,47 @@ mod tests {
         assert_eq!(r.text.font_size, Some(px(14.0).into()));
         assert_eq!(r.text.font_weight, Some(gpui::FontWeight(600.0)));
         assert!(matches!(r.background, Some(gpui::Fill::Color(_))));
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_tests {
+    use super::*;
+
+    fn extras_of(body: &str) -> Extras {
+        let mut d = Vec::new();
+        parse_inline_style(body, &mut d).extras
+    }
+
+    #[test]
+    fn scrollbar_width_parses_from_an_inline_body() {
+        assert_eq!(extras_of("scrollbar-width: none").scrollbar_width, Some(ScrollbarWidth::None));
+        assert_eq!(extras_of("scrollbar-width: thin").scrollbar_width, Some(ScrollbarWidth::Thin));
+        assert_eq!(extras_of("scrollbar-width: auto").scrollbar_width, Some(ScrollbarWidth::Auto));
+        assert_eq!(extras_of("color: red").scrollbar_width, None);
+    }
+
+    #[test]
+    fn scrollbar_color_takes_two_colours_thumb_first() {
+        let x = extras_of("scrollbar-color: #ff0000 #0000ff");
+        let (thumb, track) = x.scrollbar_color.expect("a pair");
+        // Hue: red is 0, blue is 2/3 of the wheel.
+        assert!(thumb.h < 0.02, "thumb is the first colour (red), got {thumb:?}");
+        assert!((track.h - 0.6667).abs() < 0.02, "track is the second (blue), got {track:?}");
+        assert_eq!(extras_of("scrollbar-color: auto").scrollbar_color, None);
+        assert_eq!(extras_of("scrollbar-color: red").scrollbar_color, None, "one colour is not a pair");
+    }
+
+    #[test]
+    fn overscroll_behavior_sets_both_axes_or_one() {
+        let both = extras_of("overscroll-behavior: contain");
+        assert_eq!(both.overscroll_x, Some(OverscrollBehavior::Contain));
+        assert_eq!(both.overscroll_y, Some(OverscrollBehavior::Contain));
+        let y = extras_of("overscroll-behavior-y: none");
+        assert_eq!(y.overscroll_x, None);
+        assert_eq!(y.overscroll_y, Some(OverscrollBehavior::None));
+        assert!(OverscrollBehavior::Auto.chains());
+        assert!(!OverscrollBehavior::Contain.chains());
+        assert!(!OverscrollBehavior::None.chains());
     }
 }
