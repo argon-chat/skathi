@@ -46,6 +46,20 @@ export const PERMISSION_NAMES = [
 
 const IMPORT_LINE = /^\s*import\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
+/**
+ * `export { A, B } from "./mod";` — a NAMED re-export of another module.
+ *
+ * `<VnWindow>` gave runtime.ts its first one (the component lives in
+ * src/vnwindow.ts and is re-exported so an app imports one module), and this
+ * harness evaluates ONE file with `new Function`: the module a re-export names
+ * is not being loaded, and `export` is a syntax error inside a function body
+ * either way. Dropping the line is right rather than merely expedient — every
+ * name the harness hands back is bound as a parameter or listed in its own
+ * `return`, so nothing here was ever reached through a re-export, and
+ * `<VnWindow>` is a component the runtime's own tests never render
+ * (packages/vn-test drives it against a real host instead).
+ */
+const NAMED_REEXPORT = /^\s*export\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 
 /** A fresh runtime world with a recording host. */
 /**
@@ -71,6 +85,7 @@ export function createRuntime(options = {}) {
   const body = raw
     .replace(IMPORT_LINE, "")
     .replace(STAR_REEXPORT, "")
+    .replace(NAMED_REEXPORT, "")
     // `export function foo` / `export const foo` become plain declarations, so
     // the whole module body is valid inside a function.
     .replace(/^export\s+(function|const|let)\s/gm, "$1 ");
