@@ -1,0 +1,13 @@
+{
+  "$comment": "The 'a boot-time rem recompile must not start a transition' fixture — see ../README.md and packages/vn-test/specs/measure.spec.ts. `rem` is flattened when the sheet is COMPILED, so an app that sets its own root font-size makes the engine compile twice; the second cascade used to look like an author's style change and every `transition` animated across it. A layout read from `onMounted` then sampled t=0 of that animation.",
+
+  "name": "measure-rem-transition",
+
+  "window": {
+    "title": "vue-native — a rem recompile is not a style change (fixture)",
+    "width": 480,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

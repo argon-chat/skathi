@@ -28,6 +28,16 @@ const app = await launch({
 });
 afterAll(() => app.close());
 
+// The second half of the same defect, and the one the join card was still
+// getting wrong after the first was fixed: the read happened, and it read a
+// TRANSITION at t=0. See the describe block at the bottom of this file.
+const rem = await launch({
+  app: "packages/vn-test/fixtures/measure-rem-transition/src/main.ts",
+  window: [480, 360],
+  label: "measure-rem",
+});
+afterAll(() => rem.close());
+
 const T = 30_000;
 
 /** The fixture's content box: 20 px padding, twice, around two 60 px rows. */
@@ -95,5 +105,62 @@ describe("a layout read lays out", () => {
 
   test("no errors and no advisories on the way", async () => {
     await app.expectNoErrors();
+  }, T);
+});
+
+/**
+ * **A `rem` recompile is not an author's style change.**
+ *
+ * `rem` is flattened to px when the sheet is COMPILED (gpui's style fields are
+ * `Pixels`), so an app that sets its own root font-size — which is every
+ * Tailwind app with a 14 px base, `apps/meet-probe` included — makes the engine
+ * compile the sheet twice. `restyle_all` used to learn the basis by CASCADING
+ * the document, and a cascade COMMITS `node.computed`: the pass after the
+ * recompile therefore looked to the animator like a style change, and every
+ * element carrying a `transition` animated from the 16 px-basis geometry to the
+ * real one.
+ *
+ * No frame ran between the two passes, so nothing on screen showed it. A LAYOUT
+ * READ did: `onMounted` measures through `sync_layout`'s forced frame, which is
+ * t=0 of that transition. The join card measured its panel at **293 px** where
+ * the settled layout says 278 — the padding (1.5rem: 24 not 21), one
+ * `space-y-5` margin (20 not 17) and the button's height (3rem: 48 not 42),
+ * which is the whole of the residual —9 px `adopt-merge-and-joincard.md` §2.7
+ * left standing — and pinned it as its own height for the life of the process.
+ *
+ * The fixture is those three properties and nothing else. With the fix stashed
+ * it reports `mounted=180`, `nextTick=180`, `raf=179` (the transition is
+ * already running) and `late=165`; with it, 165 at every stage
+ * (research/reports/m23/tails.md §3).
+ */
+describe("a rem recompile is not a style change", () => {
+  /** 42 padding + 60 row + 21 margin + 42 button, all `rem`, at the app's 14 px. */
+  const REM_REAL = 165;
+
+  test(
+    "a measurement before the first frame is not sampling a transition",
+    async () => {
+      await expect(rem.locator("#stage-mounted")).toHaveText(`mounted=${REM_REAL}`);
+      await expect(rem.locator("#stage-nextTick")).toHaveText(`nextTick=${REM_REAL}`);
+      await expect(rem.locator("#stage-raf")).toHaveText(`raf=${REM_REAL}`);
+    },
+    T,
+  );
+
+  test(
+    "and it is the settled layout, not merely a consistent wrong number",
+    async () => {
+      // `late` runs 600 ms in, long after a 300 ms transition would have ended,
+      // so the early stages above are being compared against the layout that
+      // actually stands rather than against each other.
+      await expect(rem.locator("#stage-late")).toHaveText(`late=${REM_REAL}`);
+      const panel = await rem.locator("#probe-panel").resolve();
+      bunExpect(panel.node.bounds?.h).toBe(REM_REAL);
+    },
+    T,
+  );
+
+  test("no errors and no advisories on the way", async () => {
+    await rem.expectNoErrors();
   }, T);
 });
