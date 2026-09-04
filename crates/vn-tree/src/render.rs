@@ -1210,6 +1210,11 @@ fn build_node<V: 'static>(
             if t.is_group_anchor(id) {
                 d = d.group(group_name(id));
             }
+            // `role` / `aria-*` → AccessKit, so this node exists for Narrator
+            // and for UI Automation. Every mirrored element already carries the
+            // stable `ElementId` gpui keys an accessibility node on, which is
+            // the only precondition — see `crate::aria`.
+            d = crate::aria::apply(d, t, id, node);
             advise_missing_font(d.style(), cx);
             apply_background_layers(d.style(), &extras);
             apply_background_clip_text(d.style(), &extras);
@@ -2787,6 +2792,7 @@ fn build_img<V: 'static>(
         // A browser still lays the element out and paints the alt text, so the
         // node keeps its box and its styles.
         let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+        d = crate::aria::apply(d, t, id, node);
         if let Some(cs) = &node.computed {
             d = apply_computed_style(d, cs, id, now);
         }
@@ -2795,6 +2801,7 @@ fn build_img<V: 'static>(
     };
 
     let mut e = with_control_area(gpui::img(source).id(id as usize), id, control_area, win);
+    e = crate::aria::apply(e, t, id, node);
     if let Some(cs) = &node.computed {
         e = apply_computed_style(e, cs, id, now);
     }
@@ -2991,6 +2998,7 @@ fn build_svg<V: 'static>(
     // matrix for the whole element and `Window::paint_svg` composes it into the
     // sprite. Setting it here as well would apply it twice.
     let mut e = with_control_area(gpui::svg().data(&doc).id(id as usize), id, control_area, win);
+    e = crate::aria::apply(e, t, id, node);
     let mut inherit = true;
     if let Some(cs) = &node.computed {
         inherit = cs.base.text.color.is_none();
@@ -3094,6 +3102,7 @@ fn build_lottie<V: 'static>(
     let intrinsic = crate::lottie::sync(t, id, win);
 
     let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+    d = crate::aria::apply(d, t, id, node);
     if let Some(cs) = &node.computed {
         d = apply_computed_style(d, cs, id, now);
     }
@@ -3249,6 +3258,7 @@ fn build_video<V: 'static>(
     let intrinsic = crate::video::sync(t, id, win, window.scale_factor());
 
     let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+    d = crate::aria::apply(d, t, id, node);
     if let Some(cs) = &node.computed {
         d = apply_computed_style(d, cs, id, now);
     }
