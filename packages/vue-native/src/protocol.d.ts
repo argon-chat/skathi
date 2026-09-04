@@ -271,13 +271,12 @@ declare function __vn_media_events(id: VnNodeId): string;
 // multi-window — crates/vn-app/src/popout.rs (docs/MULTIWINDOW.md)
 // ---------------------------------------------------------------------------
 //
-// PHASE 0, and deliberately raw. These four move a subtree's PAINT into a
-// second OS window while the node stays in this tree, this component instance
-// and this reactive graph — so `nodeId` is a `VnNodeId`, i.e. `mirrorNode.id`
-// off a template ref, and nothing here needs a runtime change (MULTIWINDOW.md
-// §5.2 invariant 1). The app-facing spelling is `<VnWindow>` in phase 1 (§5.3);
-// until it exists, `apps/popout` calls these directly and this is where their
-// shapes are written down.
+// These move a subtree's PAINT into a second OS window while the node stays in
+// this tree, this component instance and this reactive graph — so `nodeId` is a
+// `VnNodeId`, i.e. `mirrorNode.id` off a template ref (MULTIWINDOW.md §3.2
+// invariant 1). **`<VnWindow>` (src/vnwindow.ts) is the app-facing spelling and
+// the only thing that should call these**; they are written down here because
+// they are the contract between the component and the host.
 //
 // Installed by `vn-app`, not by the engine — same category as `__vn_storage_*`,
 // so a host without them simply has no such global and a caller that cannot
@@ -286,14 +285,22 @@ declare function __vn_media_events(id: VnNodeId): string;
 /**
  * Moves the node's PAINT into a new OS window.
  *
- * `options` is JSON: `{ title?, x?, y?, width?, height? }`. `onClose` fires
- * with the window, however it closed — the X button, `__vn_window_close`, or
- * the primary window going away.
+ * `options` is JSON — `<VnWindow>`'s props, verbatim:
+ * `{ title?, x?, y?, width?, height?, chrome?, backdrop?, alwaysOnTop?,
+ *    resizable?, minWidth?, minHeight?, titleBarHeight?, activate? }`.
+ *
+ * `onClose` fires with the window, however it closed — the X button,
+ * `__vn_window_close`, or the primary window going away. `onEvent` is the push
+ * channel for everything else the window reports: `("open", '{"windowId":N}')`,
+ * `("focus", "{}")`, `("blur", "{}")`,
+ * `("resize", '{"width":W,"height":H,"scale":S}')`. It is how a pop-out's OWN
+ * metrics reach JS at all: there is one JS realm, so `window.innerWidth` keeps
+ * meaning the primary window's viewport (A-M04, §7.7).
  *
  * Returns `undefined`, and the open is DEFERRED by one effect cycle:
  * `App::open_window` draws the new window once before returning and this is
  * called from inside the primary window's update, so it cannot be nested there
- * (MULTIWINDOW.md §5.2 invariant 2). UN-painting, though, is immediate — the
+ * (MULTIWINDOW.md §3.2 invariant 2). UN-painting, though, is immediate — the
  * primary window's next draw is already without the subtree, because a node in
  * two element trees for one frame aliases scroll state and hitboxes.
  */
@@ -301,12 +308,24 @@ declare function __vn_window_open(
   nodeId: VnNodeId,
   options: VnJson,
   onClose?: () => void,
+  onEvent?: (kind: string, detailJson: VnJson) => void,
 ): void;
+
+/**
+ * The LIVE half of `<VnWindow>`'s props: `title` renames the window and
+ * `alwaysOnTop` re-stacks it. Everything else gpui fixes at creation, so a
+ * changed value ADVISES and does nothing — never a silent no-op
+ * (docs/WINDOWING.md D-25/D-30).
+ */
+declare function __vn_window_set_options(nodeId: VnNodeId, options: VnJson): void;
 
 /** Closes the window painting `nodeId` — the same path as the user clicking X. */
 declare function __vn_window_close(nodeId: VnNodeId): void;
 
-/** `[{ node, windowId }]` as JSON. For tests and devtools. */
+/**
+ * `[{ node, windowId, title, chrome, width, height, focused }]` as JSON. For
+ * tests and devtools; the devtools `windows` command is the richer surface.
+ */
 declare function __vn_window_popouts(): VnJson;
 
 /**

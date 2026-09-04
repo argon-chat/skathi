@@ -3992,6 +3992,15 @@ export const TransitionGroup = /*@__PURE__*/ defineComponent({
   },
 });
 
+// `<VnWindow>` — a second OS window painting part of this tree
+// (docs/MULTIWINDOW.md). Tier 3, so it is a NAMESPACED import an app opts into
+// by name: `import { VnWindow } from "vue-native"`. Nothing in the renderer
+// above knows about it — a pop-out is addressed by `mirrorNode.id`, which every
+// template ref already hands you, so the component is a leaf of this module
+// rather than a change to it.
+export { VnWindow, VN_WINDOW_CREATION_TIME_PROPS } from "./vnwindow";
+export type { VnWindowBounds, VnWindowMetrics, VnWindowTarget } from "./vnwindow";
+
 // Compiled SFC code and app code import everything Vue-ish from here
 // ("vue" / "vue-native" are aliased to this module). Local exports win over
 // the star re-export, so our createApp shadows runtime-core's.
