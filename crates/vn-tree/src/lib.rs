@@ -15,6 +15,7 @@
 //! few inline properties onto `gpui::Styled` calls. The real CSS layer
 //! (vn-css: stylesheets, cascade, per-state refinements) replaces it.
 
+mod aria;
 mod dom;
 mod img;
 pub mod log;

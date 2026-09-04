@@ -47,7 +47,8 @@ pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
     set_rem_basis, set_viewport_basis, uses_viewport_units, viewport_basis, BackgroundLayer,
-    CurrentColorTargets, Decls, Extras, InlineStyle, ListMarker, ObjectFit, SvgPaint, TextTransform,
+    CurrentColorTargets, Decls, Extras, InlineStyle, ListMarker, ObjectFit, OverscrollBehavior,
+    ScrollbarWidth, SvgPaint, TextTransform,
     TileLength, WhiteSpaceMode, WindowControl, WindowDrag,
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
@@ -1830,11 +1831,16 @@ fn pseudo_box(
 ///   element. vue-native has neither, and Tailwind's preflight writes a
 ///   `::backdrop` rule into every sheet, so this would fire on every app.
 /// * The native form-control parts (`::file-selector-button`,
-///   `::-webkit-inner-spin-button`, `::-webkit-scrollbar`, …). vue-native
-///   paints NO native control skin — that is the same fact `appearance` rests
-///   on — so there is no spin button, no file-picker button and no UA scrollbar
-///   to style. The divergence is the absence of those widgets, which is a
-///   forms/scrolling question, not a selector the cascade got wrong.
+///   `::-webkit-inner-spin-button`, …). vue-native paints NO native control
+///   skin — that is the same fact `appearance` rests on — so there is no spin
+///   button and no file-picker button to style. The divergence is the absence
+///   of those widgets, which is a forms question, not a selector the cascade
+///   got wrong.
+///
+/// `::-webkit-scrollbar` used to be in the second family and is not any more:
+/// there IS a scrollbar now (`vn_elements::scrollbar`), so a rule that restyles
+/// it is a real gap rather than a rule about nothing, and it gets an advisory
+/// naming the standard properties that do reach the painter.
 ///
 /// `::first-line`, `::first-letter`, `::marker` and `::selection` deliberately
 /// stay OUT of this list: each names something a browser really does paint over
@@ -1845,13 +1851,22 @@ fn never_matches_anywhere(
 ) -> bool {
     use lightningcss::selector::PseudoElement as PE;
     match pe {
-        PE::Backdrop(_) | PE::FileSelectorButton(_) | PE::WebKitScrollbar(_) => true,
+        PE::Backdrop(_) | PE::FileSelectorButton(_) => true,
+        PE::WebKitScrollbar(_) => false,
         PE::Custom { name } => {
             let name = name.as_ref();
             name.starts_with("-webkit-") || name.starts_with("-moz-") || name.starts_with("-ms-")
         }
         _ => false,
     }
+}
+
+/// `::-webkit-scrollbar` and its eight parts (`-thumb`, `-track`, `-corner`, …).
+fn is_webkit_scrollbar(
+    pe: &<element::Impl as parcel_selectors::parser::SelectorImpl<'_>>::PseudoElement,
+) -> bool {
+    use lightningcss::selector::PseudoElement as PE;
+    matches!(pe, PE::WebKitScrollbar(_))
 }
 
 pub(crate) fn audit_selector(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> bool {
@@ -1904,6 +1919,14 @@ where
             // here AND nothing in the browser build of the same app. Dropping
             // it is not a divergence, so it is silent.
             Component::PseudoElement(pe) if !nested && never_matches_anywhere(pe) => None,
+            // The scrollbar parts get an advisory of their own, because
+            // unlike the rest of the family they name something that now
+            // EXISTS — and the alternative is two standard properties rather
+            // than "nothing here paints that".
+            Component::PseudoElement(pe) if !nested && is_webkit_scrollbar(pe) => Some(
+                "a `::-webkit-scrollbar*` pseudo-element — vue-native draws overlay scrollbars                  but does not expose them as styleable boxes; use the standard                  `scrollbar-width: auto | thin | none` and `scrollbar-color: <thumb> <track>`,                  which both reach the painter"
+                    .into(),
+            ),
             // One advisory for the whole family, not one per spelling: a
             // Tailwind preflight sheet names eight of them and eight lines
             // would bury everything else. The example selector rides along.

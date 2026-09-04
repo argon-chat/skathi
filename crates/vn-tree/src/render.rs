@@ -862,6 +862,148 @@ fn watch_focus<V: 'static>(id: u32, handle: &FocusHandle, window: &mut Window, c
     windows::of(k, |w| w.focus_lost = Some(sub));
 }
 
+/// The overlay scrollbar for one `overflow: auto | scroll` box.
+///
+/// Everything CSS gets to say about it is folded here: `scrollbar-width` picks
+/// the track width (or suppresses the painting entirely), `scrollbar-color`
+/// replaces the thumb and track colours, `overscroll-behavior` decides whether
+/// a wheel this box cannot use reaches its ancestors, and — when the author
+/// said nothing — the thumb takes its colour from the element's own text, which
+/// is the one value that is guaranteed to read against the background the app
+/// painted.
+///
+/// The element is built even when `scrollbar-width: none` hides it: the
+/// property means "do not draw", not "do not scroll", and the wheel routing
+/// this element carries is what makes `overscroll-behavior` and the
+/// innermost-box-wins rule work at all.
+fn scrollbar_for<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    handle: &ScrollHandle,
+    window: &Window,
+    auto_hide: bool,
+    cx: &mut Context<V>,
+) -> vn_elements::Scrollbar {
+    use vn_css::{OverscrollBehavior, ScrollbarWidth};
+
+    let extras = node.computed.as_ref().map(|cs| &cs.extras);
+    let text_color = node
+        .computed
+        .as_ref()
+        .and_then(|cs| cs.color)
+        .unwrap_or_else(|| gpui::hsla(0., 0., 0.45, 1.0));
+    let mut style = vn_elements::ScrollbarStyle::from_text_color(text_color);
+    match extras.and_then(|x| x.scrollbar_width) {
+        Some(ScrollbarWidth::Thin) => style = style.thin(),
+        Some(ScrollbarWidth::None) => style = style.hidden(),
+        Some(ScrollbarWidth::Auto) | None => {}
+    }
+    if let Some((thumb, track)) = extras.and_then(|x| x.scrollbar_color) {
+        style = style.with_colors(thumb, track);
+    }
+    // The platform's own answer to "does a scrollbar fade away": Windows
+    // exposes it as `UISettings::AutoHideScrollBars`, and a user who turned it
+    // off wants the bar to stay.
+    style = style.always_visible(!auto_hide);
+
+    let chains = |b: Option<OverscrollBehavior>| b.map(|b| b.chains()).unwrap_or(true);
+    let overscroll = vn_elements::Overscroll {
+        x_chains: chains(extras.and_then(|x| x.overscroll_x)),
+        y_chains: chains(extras.and_then(|x| x.overscroll_y)),
+    };
+
+    // Which axes this box really scrolls, off the FINAL computed overflow —
+    // the same value that made `track_scroll` happen.
+    let overflow = node.computed.as_ref().map(|cs| cs.base.overflow.clone()).unwrap_or_default();
+    // The root is the viewport and always scrolls both ways, whatever the
+    // cascade said — the same rule `build_node` applies to its overflow.
+    let scrolls_x = overflow.x == Some(Overflow::Scroll) || id == t.root;
+    let scrolls_y = overflow.y == Some(Overflow::Scroll) || id == t.root;
+
+    // The DOM events this element has to fire itself.
+    //
+    // Two paths reach here that gpui's own listener never covers: a wheel the
+    // router TOOK OVER (it stops propagation, so the renderer's own
+    // `on_scroll_wheel` listeners do not run), and a thumb drag or track click,
+    // which moves the offset with no wheel event anywhere in sight — so before
+    // this, `@scroll` never fired for a scrollbar drag at all.
+    //
+    // The `wheel` hook dispatches from THIS node, and the JS runtime propagates
+    // the synthesized event over the mirror tree from there, so an ancestor's
+    // `@wheel` still fires. The divergence, and it is the honest one to name:
+    // the event's target is the scroll container rather than the deepest
+    // element under the pointer, so a `@wheel` on a descendant of a taken-over
+    // box does not see it.
+    let sb = vn_elements::Scrollbar::new(("vn-scrollbar", id), handle.clone(), style)
+        .axes(scrolls_x, scrolls_y)
+        .overscroll(overscroll)
+        .line_height(window.line_height());
+    let _ = cx;
+    let sb = if wheel_listener_above(t, id) {
+        sb.on_wheel(move |delta, window, cx| {
+            let payload = EventPayload {
+                a: f32::from(delta.x) as f64,
+                b: f32::from(delta.y) as f64,
+                c: 0.0,
+                d: mods_bits(&window.modifiers()),
+                key: None,
+            };
+            // `js_dispatch_app` returns "the app did not call
+            // preventDefault()", so the hook's answer is its negation.
+            !js_dispatch_app(id, tree::EV_WHEEL, &payload, window, cx)
+        })
+    } else {
+        sb
+    };
+    let scroll = handle.clone();
+    sb.on_scrolled(move |window, cx| report_scroll(id, &scroll, window, cx))
+}
+
+/// Does this node, or any ancestor, listen for `wheel`? A DOM `wheel` event
+/// synthesized from a scroll container propagates up the mirror tree, so an
+/// ancestor's handler is reason enough to pay for the dispatch — and nothing
+/// listening anywhere is reason not to.
+fn wheel_listener_above(t: &Tree, id: u32) -> bool {
+    let mut cur = id;
+    loop {
+        let Some(node) = t.node(cur) else { return false };
+        if node.listeners & (1u64 << tree::EV_WHEEL) != 0 {
+            return true;
+        }
+        if node.parent == 0 {
+            return false;
+        }
+        cur = node.parent;
+    }
+}
+
+/// The DOM `scroll` event for a node whose offset just moved, deduplicated
+/// against the last position reported for it.
+fn report_scroll(id: u32, handle: &ScrollHandle, window: &mut Window, cx: &mut App) {
+    if !tree::read_tree(|t| {
+        t.node(id).is_some_and(|n| n.listeners & (1u64 << tree::EV_SCROLL) != 0)
+    }) {
+        return;
+    }
+    // gpui offsets are <= 0 (content shifted up/left); CSS scrollTop/scrollLeft
+    // count down/right as positive.
+    let offset = handle.offset();
+    let (left, top) = (-f32::from(offset.x), -f32::from(offset.y));
+    let moved = SCROLL_REPORTED.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.get(&id) == Some(&(left, top)) {
+            return false;
+        }
+        m.insert(id, (left, top));
+        true
+    });
+    if moved {
+        let payload = EventPayload { a: left as f64, b: top as f64, ..Default::default() };
+        js_dispatch_app(id, tree::EV_SCROLL, &payload, window, cx);
+    }
+}
+
 /// The DOM `tabindex` attribute: `>= 0` is a tab stop at that index, `< 0` is
 /// focusable but skipped by `Tab`, absent is not focusable at all. gpui reads
 /// both values off the focus handle, so they are stamped onto the persistent
@@ -1100,6 +1242,11 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     let now = std::time::Instant::now();
     let span = crate::perf::Span::start();
     BUILT.with(|c| c.set(0));
+    // One `<label for>` index per frame, built lazily and only if a control
+    // needs a name it cannot get any other way — see `crate::aria`.
+    crate::aria::reset_frame();
+    // …and the scroll-chain registry the wheel router walks (`vn_elements`).
+    vn_elements::scrollbar::reset_frame();
     let win = windows::key(window);
     // The window that paints `Tree::root` is the primary one by definition, and
     // this is the only place that knows it — declared here rather than passed
@@ -1162,6 +1309,9 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
     // tiles, `@media` environments and hit tests.
     windows::set_painted_root(win, id);
     reset_bounds(win);
+    crate::aria::reset_frame();
+    // …and the scroll-chain registry the wheel router walks (`vn_elements`).
+    vn_elements::scrollbar::reset_frame();
     windows::of(win, |w| {
         w.any_drag_region = false;
         w.control_hitboxes.clear();
@@ -1300,6 +1450,11 @@ fn build_node<V: 'static>(
             if t.is_group_anchor(id) {
                 d = d.group(group_name(id));
             }
+            // `role` / `aria-*` → AccessKit, so this node exists for Narrator
+            // and for UI Automation. Every mirrored element already carries the
+            // stable `ElementId` gpui keys an accessibility node on, which is
+            // the only precondition — see `crate::aria`.
+            d = crate::aria::apply(d, t, id, node);
             advise_missing_font(d.style(), cx);
             apply_background_layers(d.style(), &extras);
             apply_background_clip_text(d.style(), &extras);
@@ -1534,6 +1689,18 @@ fn build_node<V: 'static>(
                 }
                 if let Some(pb) = after {
                     kids.push(pseudo_element(&pb, case, stacking));
+                }
+                // The overlay scrollbar, and the wheel routing that goes with
+                // it. LAST child, so its hitboxes sit above the content's and
+                // its capture-phase wheel listener is registered after this
+                // container's own — which, since capture runs in registration
+                // order and a container registers before painting its children,
+                // is what makes the INNERMOST scroll box get the wheel first.
+                if let Some(h) = &scroll_handle {
+                    let auto_hide = cx.should_auto_hide_scrollbars();
+                    kids.push(
+                        scrollbar_for(t, id, node, h, window, auto_hide, cx).into_any_element(),
+                    );
                 }
                 d.children(kids).into_any_element()
             }
@@ -3203,6 +3370,7 @@ fn build_img<V: 'static>(
         // A browser still lays the element out and paints the alt text, so the
         // node keeps its box and its styles.
         let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+        d = crate::aria::apply(d, t, id, node);
         if let Some(cs) = &node.computed {
             d = apply_computed_style(d, cs, id, now);
         }
@@ -3211,6 +3379,7 @@ fn build_img<V: 'static>(
     };
 
     let mut e = with_control_area(gpui::img(source).id(id as usize), id, control_area, win);
+    e = crate::aria::apply(e, t, id, node);
     if let Some(cs) = &node.computed {
         e = apply_computed_style(e, cs, id, now);
     }
@@ -3414,6 +3583,7 @@ fn build_svg<V: 'static>(
     // matrix for the whole element and `Window::paint_svg` composes it into the
     // sprite. Setting it here as well would apply it twice.
     let mut e = with_control_area(gpui::svg().data(&doc).id(id as usize), id, control_area, win);
+    e = crate::aria::apply(e, t, id, node);
     let mut inherit = true;
     if let Some(cs) = &node.computed {
         inherit = cs.base.text.color.is_none();
@@ -3517,6 +3687,7 @@ fn build_lottie<V: 'static>(
     let intrinsic = crate::lottie::sync(t, id, win);
 
     let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+    d = crate::aria::apply(d, t, id, node);
     if let Some(cs) = &node.computed {
         d = apply_computed_style(d, cs, id, now);
     }
@@ -3672,6 +3843,7 @@ fn build_video<V: 'static>(
     let intrinsic = crate::video::sync(t, id, win, window.scale_factor());
 
     let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+    d = crate::aria::apply(d, t, id, node);
     if let Some(cs) = &node.computed {
         d = apply_computed_style(d, cs, id, now);
     }
