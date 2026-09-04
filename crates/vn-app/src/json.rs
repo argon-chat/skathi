@@ -36,12 +36,19 @@ impl Json {
             _ => None,
         }
     }
+    // The two accessors only the devtools wire and the window config happen to
+    // ask for today. A reader for a JSON variant is part of what a JSON reader
+    // IS — removing one because this month's callers do not use it would mean
+    // adding it back the next time a config grows a boolean — so the exotic
+    // `--features no-devtools` build allows them rather than losing them.
+    #[cfg_attr(not(vn_devtools), allow(dead_code))]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Json::Bool(b) => Some(*b),
             _ => None,
         }
     }
+    #[cfg_attr(not(vn_devtools), allow(dead_code))]
     pub fn as_arr(&self) -> Option<&[Json]> {
         match self {
             Json::Arr(a) => Some(a),

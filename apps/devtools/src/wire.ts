@@ -15,8 +15,9 @@
 // that expects a reply has no business being multiplexed by hand.
 //
 // Discovery is the one thing neither transport can do — a handshake file has to
-// be read off disk — so it comes from `__vn_devtools_targets()`, a dev-only
-// host fn. See docs/DEVTOOLS-UI.md §3.
+// be read off disk — so it comes from `__vn_devtools_targets()`, a host fn that
+// exists in every build except `--features no-devtools` (docs/DEVTOOLS.md
+// "Shape"; it was dev-only until m22). See docs/DEVTOOLS-UI.md §3.
 
 import type { PushMessage, PushStream, Target, TargetList, WindowId } from "./protocol";
 

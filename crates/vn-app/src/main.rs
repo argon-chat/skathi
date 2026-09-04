@@ -322,6 +322,32 @@ fn install_logger() {
     }
 }
 
+/// The build model, pinned from inside whatever build is running.
+///
+/// `build.rs` emits `cfg(vn_devtools)` for every build except one that asked
+/// for `no-devtools`, and this holds for EVERY feature combination — which is
+/// what makes it the cheap proof that `--features prod` now carries the
+/// devtools. Run it under the combination you care about:
+///
+/// ```sh
+/// cargo test -p vn-app                                   # dev host: has them
+/// cargo test -p vn-app --features prod                   # shipped app: has them
+/// cargo test -p vn-app --features prod,no-devtools       # the opt-out: none
+/// ```
+///
+/// The inversion itself is docs/ARCHITECTURE.md §11 decision 12; the measured
+/// binaries are research/reports/m22/devtools-release.md.
+#[cfg(test)]
+#[test]
+fn devtools_are_in_every_build_that_did_not_opt_out() {
+    assert_eq!(cfg!(vn_devtools), !cfg!(feature = "no-devtools"));
+    // …and `prod` no longer has anything to do with it. This line is the one
+    // that would have failed before m22.
+    if cfg!(feature = "prod") && !cfg!(feature = "no-devtools") {
+        assert!(cfg!(vn_devtools), "a shipped build must carry its own devtools");
+    }
+}
+
 #[cfg(test)]
 mod logger_tests {
     use super::*;
@@ -935,9 +961,36 @@ fn main() {
             }));
         }
         // Before the runtime exists, so the log ring is already recording when
-        // the first advisory fires.
+        // the first advisory fires — and before the window config is read, for
+        // the same reason. This is only the RECORDING half; whether a listener
+        // is started at all is `devtools::boot` below, which needs the config.
         #[cfg(vn_devtools)]
-        devtools::start();
+        devtools::arm();
+
+        // The window block of `apps/<app>/vn.config.json`, read BEFORE
+        // `open_window` because that is the only tier that can set the
+        // creation-time-only gpui options (`window_min_size`, `is_resizable`,
+        // `is_minimizable`, `titlebar`, `window_background`) with no visible
+        // flash. Environment still wins on top (`VN_WINDOW`, `VN_WINDOW_FOCUS`)
+        // — the perf and screenshot harnesses depend on it (D-21).
+        //
+        // It is read here, ahead of the JS runtime, because it also carries
+        // `"devtools": false` — and that has to be answered before a port is
+        // bound rather than by closing one a moment after opening it.
+        #[cfg(vn_devtools)]
+        let window_json =
+            if devtools_mode { inspector::window_config() } else { boot_mode::window_config() };
+        #[cfg(not(vn_devtools))]
+        let window_json = boot_mode::window_config();
+        let cfg = window::load_config(window_json);
+
+        // The runtime switch (docs/DEVTOOLS.md "Turning them off"): the config's
+        // answer, the `VN_DEVTOOLS` override on top of it, and the listener if
+        // the result is on. Before `JsRuntime::init`, so the app bundle's very
+        // first line already sees the settled state.
+        #[cfg(vn_devtools)]
+        devtools::boot(window::devtools_config_enabled());
+
         JsRuntime::init();
         JsRuntime::with(|rt| {
             rt.register("__vn_set_status", 1, vn_set_status as *const _);
@@ -986,18 +1039,6 @@ fn main() {
             dev::install(rt);
         });
 
-        // The window block of `apps/<app>/vn.config.json`, read BEFORE
-        // `open_window` because that is the only tier that can set the
-        // creation-time-only gpui options (`window_min_size`, `is_resizable`,
-        // `is_minimizable`, `titlebar`, `window_background`) with no visible
-        // flash. Environment still wins on top (`VN_WINDOW`, `VN_WINDOW_FOCUS`)
-        // — the perf and screenshot harnesses depend on it (D-21).
-        #[cfg(vn_devtools)]
-        let window_json =
-            if devtools_mode { inspector::window_config() } else { boot_mode::window_config() };
-        #[cfg(not(vn_devtools))]
-        let window_json = boot_mode::window_config();
-        let cfg = window::load_config(window_json);
         let bounds = Bounds::centered(None, size(px(cfg.width), px(cfg.height)), cx);
         cx.open_window(
             WindowOptions {

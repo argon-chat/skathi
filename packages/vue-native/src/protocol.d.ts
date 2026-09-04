@@ -343,12 +343,44 @@ declare function __vn_log(message: string): void;
  * the ordinary devtools wire, which redjs's `fetch` can speak by itself — but
  * discovery has to read a handshake file off disk, and `fetch` cannot.
  *
- * Registered by `devtools::install`, i.e. in every DEV host and in NO
- * `--features prod` one, so a caller must probe with
+ * Registered by `devtools::install`, i.e. in every host EXCEPT one built with
+ * `--features no-devtools`, so a caller must probe with
  * `typeof __vn_devtools_targets === "function"` and say what the absence means.
  * `apps/devtools/src/wire.ts` is the one caller.
  */
 declare function __vn_devtools_targets(): VnJson;
+
+// ---------------------------------------------------------------------------
+// the devtools switch — crates/vn-app/src/devtools/mod.rs (docs/DEVTOOLS.md)
+// ---------------------------------------------------------------------------
+//
+// The `appDevtools` extension's three host fns (tier 3, docs/RUNTIME.md). Same
+// availability as `__vn_devtools_targets` above and the same probe: present in
+// every build except `--features no-devtools`, where `appDevtools` goes inert
+// and says so.
+
+/**
+ * `{ enabled, locked, port, pid, key, inspectors, slot }`.
+ *
+ * `enabled` is the master switch — off means there is NO listener, not merely
+ * that F12 is refused. `locked` is `VN_DEVTOOLS=1` in the environment, which
+ * refuses `disable()`. `key` is the separate `VN_DEVTOOLS_KEY` gate, which
+ * declines F12 with the protocol left alone.
+ */
+declare function __vn_devtools_state(): VnJson;
+
+/**
+ * Turns the devtools on or off, and returns the SETTLED state (the same object
+ * `__vn_devtools_state` returns) or `{ error }` when the change was refused.
+ *
+ * On → binds a fresh port with a fresh token and republishes
+ * `<dist>/devtools.json`. Off → closes the listener, drops every push socket,
+ * blanks the token and deletes the handshake.
+ */
+declare function __vn_devtools_set_enabled(on: boolean): VnJson;
+
+/** Programmatic F12: `{ opened, window }` or `{ error }`. */
+declare function __vn_devtools_open(): VnJson;
 
 /**
  * How THIS process was started, when it was started as an inspector

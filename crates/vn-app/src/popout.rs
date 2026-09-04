@@ -83,7 +83,9 @@ struct Popout {
     node: u32,
     id: WindowId,
     /// What the window's caption says — the only human-readable name a window
-    /// switcher can show for it.
+    /// switcher can show for it. Read back through [`list`], i.e. by the
+    /// devtools' `windows` command and nothing else.
+    #[cfg_attr(not(vn_devtools), allow(dead_code))]
     title: String,
     handle: WindowHandle<PopoutShell>,
     /// A GC-protected JS function called with `(nodeId)` when the window closes
@@ -312,6 +314,12 @@ fn popout_of_node(node: u32) -> Option<usize> {
 /// The devtools' `windows` command puts the primary window at the head of this
 /// list; here there is nothing but the pop-outs, because the primary window's
 /// identity is `main.rs`'s to report.
+///
+/// That command is also the only caller, so a `--features no-devtools` build
+/// has none. Kept rather than `cfg`'d: the pop-out registry is the spike's own
+/// state (docs/MULTIWINDOW.md) and reading it back is part of what the registry
+/// IS, whoever happens to be asking this month.
+#[cfg_attr(not(vn_devtools), allow(dead_code))]
 pub fn list() -> Vec<(u64, u32, String)> {
     POPOUTS.with(|p| {
         p.borrow().iter().map(|w| (w.id.as_u64(), w.node, w.title.clone())).collect()
@@ -324,6 +332,9 @@ pub fn list() -> Vec<(u64, u32, String)> {
 /// out at `vn_window_click`: the typed form wraps the body in
 /// `Entity<PopoutShell>::update`, and a devtools command that dispatches an
 /// event would re-enter that borrow the instant it reached a listener.
+///
+/// Devtools-only, like [`list`] above and for the same reason.
+#[cfg_attr(not(vn_devtools), allow(dead_code))]
 pub fn with_window<R>(
     id: u64,
     cx: &mut App,

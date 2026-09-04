@@ -223,17 +223,30 @@ pub struct Config {
     /// `window.focus()` policy: `false` = `request_attention` (the default —
     /// this host does not steal focus), `true` = `activate_window` (D-07).
     pub focus_raise: bool,
-    /// May F12 open the inspector on this app? `vn.config.json`'s TOP-LEVEL
-    /// `"devtools": false` turns it off; the builders copy that flag into the
+    /// Do this app's devtools start ON? `vn.config.json`'s TOP-LEVEL
+    /// `"devtools": false` turns them off; the builders copy that flag into the
     /// window block, which is the JSON blob the host already reads before the
     /// window exists.
     ///
-    /// It gates the KEY, never the protocol: an app that opts out still has a
-    /// devtools port, because `ctl.ts`, the MCP server and `vn-test` are how
-    /// this project drives anything and an app must not be able to make itself
-    /// untestable. That is also what a browser does — a page cannot disable
-    /// F12, it can only ask not to be one — so the divergence is nil.
+    /// Since m22 this is the STATIC SPELLING OF `appDevtools.disable()`, not a
+    /// key gate: `false` means the process starts with no listener, no
+    /// handshake file and no F12 — because the port carries `eval`, and an app
+    /// whose author turned the devtools off must not still be holding a
+    /// localhost socket that runs arbitrary JS in it. `VN_DEVTOOLS=1` in the
+    /// environment overrides it (`devtools::resolve_initial`), which is what
+    /// keeps an app from being able to make itself undebuggable.
+    ///
+    /// Before m22 it gated only the key and the port stayed open. The inversion
+    /// and its reasoning are docs/ARCHITECTURE.md §11 decision 12.
     pub devtools: bool,
+    /// May F12 open the inspector, given that the devtools are on at all?
+    ///
+    /// `VN_DEVTOOLS_KEY=off` and nothing else — there is no `vn.config.json`
+    /// spelling, because an app that wants the key gone wants
+    /// `"devtools": false`. It exists for a harness driving an app over the
+    /// wire on a machine somebody is using, where a stray F12 opening a window
+    /// is noise; the protocol is deliberately untouched.
+    pub devtools_key: bool,
 }
 
 impl Default for Config {
@@ -259,6 +272,7 @@ impl Default for Config {
             always_on_top: false,
             focus_raise: false,
             devtools: true,
+            devtools_key: true,
         }
     }
 }
@@ -271,11 +285,19 @@ pub fn config() -> Config {
     CONFIG.with(|c| c.borrow().clone())
 }
 
-/// May F12 open the inspector? Read from the loaded config, so it answers
-/// correctly from the keystroke interceptor without re-parsing anything.
+/// Does `vn.config.json` want the devtools on? Read once by
+/// `devtools::boot`, which owns the runtime switch from then on.
 #[cfg(vn_devtools)]
-pub fn devtools_enabled() -> bool {
+pub fn devtools_config_enabled() -> bool {
     CONFIG.with(|c| c.borrow().devtools)
+}
+
+/// May F12 open the inspector, `VN_DEVTOOLS_KEY` having had its say? Read from
+/// the loaded config, so it answers from the keystroke interceptor without
+/// re-parsing anything.
+#[cfg(vn_devtools)]
+pub fn devtools_key_enabled() -> bool {
+    CONFIG.with(|c| c.borrow().devtools_key)
 }
 
 fn f32_of(v: &Json, key: &str) -> Option<f32> {
@@ -407,9 +429,15 @@ pub fn load_config(raw: Option<String>) -> Config {
     }
     // Same precedence as every other override here: the environment wins, so a
     // harness can turn F12 off (or back on) without editing the app under test.
+    //
+    // The KEY only, and that is the whole point of it having its own field
+    // since m22: `VN_DEVTOOLS_KEY=off` keeps the protocol, so a spec can drive
+    // an app over the wire on a machine somebody is using without a stray F12
+    // opening a window. Turning the devtools THEMSELVES off is `VN_DEVTOOLS=0`
+    // or `"devtools": false`, and both take the port with them.
     match std::env::var("VN_DEVTOOLS_KEY").as_deref() {
-        Ok("off" | "none" | "0") => cfg.devtools = false,
-        Ok("f12" | "on" | "1") => cfg.devtools = true,
+        Ok("off" | "none" | "0") => cfg.devtools_key = false,
+        Ok("f12" | "on" | "1") => cfg.devtools_key = true,
         _ => {}
     }
 

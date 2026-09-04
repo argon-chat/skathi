@@ -42,6 +42,61 @@ async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+# Until m22 the two lines below were absent, so Cargo's defaults applied
+# (`debug = false`, `strip = "none"`) — and on MSVC that pair is not "no debug
+# info": rustc passes `/DEBUG` to link.exe anyway, the linker aggregates
+# whatever the vendored static libraries carry (the bun-webkit JSC prebuilt,
+# redjs's C++ glue, yoga), and a **326 MB `vn_app.pdb`** landed beside the exe.
+# "Release" meant optimized and LTO'd; nobody had checked what it weighed
+# (research/reports/m21/devtools-v2.md §11.2).
+#
+# `debug = false` is Cargo's default and is written down anyway: it is the line
+# somebody reads before asking why there is a PDB.
+debug = false
+# MEASURED TO DO NOTHING ON THIS TARGET, and kept anyway. `-C strip` is a Unix
+# `strip(1)` operation: a windows-msvc image has no symbol table to remove (they
+# live in the PDB), and Cargo does not translate this into the `/DEBUG:NONE`
+# that would suppress one — a `strip = "symbols"` release build emitted a byte-
+# identical exe and a 326 MB PDB (m22 report §5). It stays because it is correct
+# and free on every other target we might build for, and because deleting it
+# would invite somebody to add it back without measuring. The MSVC half of the
+# job is done where it works: `crates/vn-app/build.rs` passes `/DEBUG:NONE` to
+# the linker for release builds, and the `release-symbols` profile below opts
+# back in.
+strip = "symbols"
+# NOT set, deliberately, and both are load-bearing omissions:
+#
+# * `panic = "abort"` would break safety invariant I9 (docs/ARCHITECTURE.md §1):
+#   the JS bridge CATCHES native panics (`vn_runtime::bridge::poisoned()`) so a
+#   panic inside a host fn poisons the runtime instead of taking the process
+#   down mid-frame. `abort` deletes that seam and turns every recoverable bug
+#   into a crash dump.
+# * `opt-level = "s"`/`"z"` would trade frame time for bytes on an image whose
+#   size is dominated by a statically linked JavaScriptCore rather than by our
+#   own codegen — `vn-*` is a few MB of a ~50 MB exe. Unmeasured either way, so
+#   it stays at 3: the cascade and the renderer are what this project profiles,
+#   and a size win big enough to justify it would have to be measured first.
+
+# Release, plus the symbols a crash dump needs.
+#
+# `cargo build --profile release-symbols -p vn-app --features prod` — the same
+# code as `release` (same opt-level, same LTO, same codegen-units), emitting the
+# PDB that `release` now suppresses. It exists because the m13 voice flake was
+# diagnosed out of a libwebrtc `RTC_CHECK` abort with no Rust panic message
+# (research/reports/m13/voice-flake.md §5), and that hunt is impossible without
+# symbols for the vendored static libraries. Artifacts land in
+# `target/<triple>/release-symbols/`, so a symbol build never overwrites the
+# shippable one.
+#
+# `crates/vn-app/build.rs` reads the profile DIRECTORY out of `OUT_DIR` and only
+# suppresses the PDB for the one called `release`, so this profile needs nothing
+# but its name. `VN_PDB=1` in the environment does the same for a `release`
+# build, for the case where the binary already exists and rebuilding under
+# another profile would change the addresses in the dump you are holding.
+[profile.release-symbols]
+inherits = "release"
+strip = "none"
+debug = true
 
 # Dependencies are optimized even in a debug build; our own crates are not.
 #

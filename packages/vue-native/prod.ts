@@ -80,7 +80,16 @@ function windowConfig(): string {
   if (!existsSync(path)) return "{}";
   try {
     const cfg = JSON.parse(readFileSync(path, "utf8"));
-    return JSON.stringify(cfg?.window ?? {}, null, 2);
+    const win = { ...(cfg?.window ?? {}) };
+    // The top-level `"devtools": false` (docs/DEVTOOLS.md) rides along inside
+    // the window block: that blob is the only JSON the host reads before the
+    // window exists, and since m22 the flag decides whether a devtools listener
+    // is bound at all. Same fold, same precedence, as build.ts - a `window`
+    // block that declares its own wins.
+    if (typeof cfg?.devtools === "boolean" && typeof win.devtools !== "boolean") {
+      win.devtools = cfg.devtools;
+    }
+    return JSON.stringify(win, null, 2);
   } catch (e) {
     console.error(`[prod] ${path}: ${e}`);
     return "{}";

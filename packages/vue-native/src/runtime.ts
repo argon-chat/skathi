@@ -3453,6 +3453,236 @@ export const appStorage: AppStorage = storageHost
   ? createStorage(storageHost)
   : (inertStorage as unknown as AppStorage);
 
+// ---- devtools (docs/DEVTOOLS.md, tier 3) -----------------------------------
+//
+// Since m22 the devtools — the protocol listener, the embedded inspector and
+// F12 — are compiled into EVERY build, `--features prod` included. That is the
+// owner's decision (docs/ARCHITECTURE.md §11 decision 12) and it is what a
+// browser and what Electron do; the thing an app gets in exchange is the
+// ability to turn them off HERE, at runtime, in its own JS:
+//
+//     import { appDevtools } from "vue-native";
+//     appDevtools.disable();     // …or `"devtools": false` in vn.config.json,
+//                                //   which is the same decision made earlier
+//
+// Named after `appWindow`/`appPermissions`/`appStorage` for the same reason:
+// an extension must not be able to pass for a web API. There is no browser
+// spelling of any of this — a page cannot disable F12 and has no idea whether
+// a debugger is attached — so the whole surface is tier 3 by construction, and
+// nothing here shadows or weakens a standard API.
+//
+// WHAT "DISABLED" MEANS, and why it is the stronger of the two possible
+// answers: the devtools port carries `eval`. A shipped app whose author turned
+// the devtools off must not still be holding a localhost socket that runs
+// arbitrary JS inside it — "the key is refused but the port is open" would be
+// a security posture nobody asked for. So `disable()` closes the listener,
+// drops every attached inspector socket, blanks the token and deletes the
+// handshake file; `enable()` binds a FRESH port with a FRESH token, so a client
+// that was shown the door cannot walk back in on the old one.
+//
+// THE ONE OVERRIDE: `VN_DEVTOOLS=1` in the environment forces them on and
+// refuses `disable()`. It exists so a developer can debug a binary somebody
+// shipped with them off. It hands out no authority its user did not already
+// have — the port is localhost-only and token-guarded, so reaching it already
+// needs local code execution as the same user, and somebody who can set this
+// process's environment could equally replace its executable. What it buys back
+// is the property this whole project runs on: an app must not be able to make
+// itself undebuggable.
+
+/** The three host fns, gathered so the inert branch is a single `null` check. */
+interface DevtoolsHost {
+  state: typeof __vn_devtools_state;
+  setEnabled: typeof __vn_devtools_set_enabled;
+  open: typeof __vn_devtools_open;
+}
+
+/** Everything `appDevtools.info()` reports. */
+export interface DevtoolsInfo {
+  /** Are they on? Off means there is no listener at all. */
+  enabled: boolean;
+  /** Held on by `VN_DEVTOOLS=1`, so `disable()` is refused. */
+  locked: boolean;
+  /** The port the listener is on, or `null` when disabled. */
+  port: number | null;
+  /** This process's pid — what a client matches the handshake against. */
+  pid: number;
+  /** May F12 open the inspector? The separate `VN_DEVTOOLS_KEY` gate. */
+  key: boolean;
+  /** How many inspectors this process currently has open on itself. */
+  inspectors: number;
+  /** The dist slot whose `devtools.json` this host publishes into. */
+  slot: string;
+}
+
+/** The tier-3 surface, in both its live and its inert spelling. */
+interface AppDevtools {
+  /**
+   * Does this BUILD have the devtools at all?
+   *
+   * `false` only for `--features no-devtools`, and it is a different fact from
+   * `isEnabled()`: "turned off" is a decision this process can reverse, "not in
+   * the binary" is not. An app that draws a devtools toggle should hide it
+   * rather than draw a switch that cannot move.
+   */
+  readonly available: boolean;
+  isEnabled(): boolean;
+  enable(): boolean;
+  disable(): boolean;
+  open(): boolean;
+  info(): DevtoolsInfo;
+  onChange(fn: (enabled: boolean) => void): () => void;
+}
+
+const devtoolsHost: DevtoolsHost | null =
+  typeof __vn_devtools_state === "function"
+    ? {
+        state: __vn_devtools_state,
+        setEnabled: __vn_devtools_set_enabled,
+        open: __vn_devtools_open,
+      }
+    : null;
+
+/**
+ * The `onChange` registry.
+ *
+ * JS-side, and that is honest rather than a shortcut: every transition goes
+ * through `enable()`/`disable()` in this module (the boot state is settled
+ * before the app bundle evaluates, and nothing else in the process moves the
+ * switch), so a listener here sees exactly the set of changes that exist. If
+ * the host ever grows a second mover — a menu item in the shell, say — this
+ * becomes a host callback and the signature does not change.
+ */
+const devtoolsWatchers = new Set<(enabled: boolean) => void>();
+
+function notifyDevtools(enabled: boolean) {
+  for (const fn of [...devtoolsWatchers]) {
+    try {
+      fn(enabled);
+    } catch (e) {
+      // One listener's throw must not stop the others, and must not turn a
+      // successful `disable()` into a failed one.
+      warnCompat(
+        "appDevtools.onChange",
+        `a change listener threw and was ignored: ${String(e)}`,
+      );
+    }
+  }
+}
+
+function createDevtools(host: DevtoolsHost): AppDevtools {
+  const read = (): DevtoolsInfo => JSON.parse(host.state()) as DevtoolsInfo;
+  const set = (on: boolean): boolean => {
+    const was = read().enabled;
+    const out = JSON.parse(host.setEnabled(on)) as DevtoolsInfo & { error?: string };
+    if (out.error) {
+      // Refused, not failed — and refusal has exactly one cause. An advisory
+      // rather than a throw: the app asked for something reasonable and the
+      // machine's owner overruled it, which must not take a shipped app's boot
+      // code down.
+      warnCompat("appDevtools", `${on ? "enable" : "disable"}() was refused: ${out.error}`);
+      return was;
+    }
+    if (out.enabled !== was) notifyDevtools(out.enabled);
+    return out.enabled;
+  };
+  return {
+    available: true,
+    /** Are the devtools on in this process right now? */
+    isEnabled: () => read().enabled,
+    /**
+     * Turns them on: binds a fresh localhost port with a fresh token and
+     * republishes `<dist>/devtools.json`. Idempotent — enabling a host that is
+     * already listening keeps the port it has, so calling this on every route
+     * change does not hand an attached inspector a new port each time.
+     */
+    enable: () => set(true),
+    /**
+     * Turns them off: closes the listener, drops every attached inspector
+     * socket, blanks the token and deletes the handshake. F12 becomes a no-op
+     * that says why, once, in the log.
+     *
+     * Returns the state AFTERWARDS, so `false` means it worked and `true` means
+     * `VN_DEVTOOLS=1` overruled it (with an advisory naming that).
+     */
+    disable: () => set(false),
+    /**
+     * Programmatic F12 — for an app that wants its own "Open devtools" menu
+     * item. The same entry point the key uses, so it shares the debounce and
+     * the "raise the one that is already open" behaviour, and it does not take
+     * focus. `false` when the devtools are disabled.
+     */
+    open: () => {
+      const out = JSON.parse(host.open()) as { opened?: boolean; error?: string };
+      if (out.error) {
+        warnCompat("appDevtools", `open() did not open an inspector: ${out.error}`);
+        return false;
+      }
+      return !!out.opened;
+    },
+    /** Everything at once: `{ enabled, locked, port, pid, key, inspectors, slot }`. */
+    info: () => read(),
+    /** Calls `fn(enabled)` on every settled change. Returns the unsubscriber. */
+    onChange(fn: (enabled: boolean) => void) {
+      devtoolsWatchers.add(fn);
+      return () => {
+        devtoolsWatchers.delete(fn);
+      };
+    },
+  };
+}
+
+/**
+ * `--features no-devtools`: there is nothing to switch.
+ *
+ * It answers rather than throws — `appDevtools.disable()` in an app's entry
+ * module is the most likely single caller, and a build that already has no
+ * devtools must not crash on being asked to turn them off. One advisory, on
+ * the first touch, so the absence is stated rather than mimed.
+ */
+const inertDevtools: AppDevtools = {
+  available: false,
+  isEnabled: () => false,
+  enable: () => {
+    warnCompat(
+      "appDevtools",
+      "this host was built with `--features no-devtools`, so there are no devtools to enable " +
+        "— `appDevtools.enable()` did nothing. See docs/DEVTOOLS.md.",
+    );
+    return false;
+  },
+  disable: () => false,
+  open: () => {
+    warnCompat(
+      "appDevtools",
+      "this host was built with `--features no-devtools` — `appDevtools.open()` has no " +
+        "inspector to open. See docs/DEVTOOLS.md.",
+    );
+    return false;
+  },
+  info: () => ({
+    enabled: false,
+    locked: false,
+    port: null,
+    pid: 0,
+    key: false,
+    inspectors: 0,
+    slot: "",
+  }),
+  // Still a real registry: a listener registered here is simply never called,
+  // which is the truth, and the unsubscriber still works so no caller special-
+  // cases the inert build.
+  onChange(fn: (enabled: boolean) => void) {
+    devtoolsWatchers.add(fn);
+    return () => {
+      devtoolsWatchers.delete(fn);
+    };
+  },
+};
+
+export const appDevtools: AppDevtools = devtoolsHost
+  ? createDevtools(devtoolsHost)
+  : inertDevtools;
+
 // ---- <Transition> / <TransitionGroup> (compat roadmap G9) ------------------
 // runtime-core exports BaseTransition (the state machine) but NOT these two —
 // they live in runtime-dom, because the CSS half is DOM-specific. Libraries

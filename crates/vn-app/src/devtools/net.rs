@@ -110,8 +110,18 @@ fn splice_seq(raw: &str, seq: u64) -> String {
     format!("{{\"seq\":{seq},\"raw\":{}}}", crate::json::quote(raw))
 }
 
+/// Registers the host fn. Always — it is one entry in a table and the tee is
+/// the only caller.
 pub fn install(rt: &JsRuntime) {
     rt.register("__vn_devtools_net", 1, vn_devtools_net as *const _);
+}
+
+/// Wraps `fetch` and `WebSocket`. Split out of [`install`] since m22: the
+/// devtools are in every build now, and a host whose app has them DISABLED must
+/// leave the engine's own `fetch` alone — the divergence
+/// ("`globalThis.fetch` is not the engine's own function in a build that has
+/// devtools", docs/DEVTOOLS.md) is only owed when somebody is watching.
+pub fn install_tee(rt: &JsRuntime) {
     if let Err(e) = rt.eval(TEE_JS, "vn://devtools-net.js") {
         eprintln!("[devtools] network tee failed: {}\n{}", e.header, e.stack);
     }

@@ -64,9 +64,15 @@ describe("the inspector attaches to another instance", () => {
   }, T);
 
   test("selecting a row shows the RULES that produced it, winner first", async () => {
-    // Row 3 is `<header class="titlebar">` with the default expansion (root,
-    // .frame, its anchor, then the header).
-    await inspector.locator(".row").nth(3).click();
+    // `<header class="titlebar">`, found by what the row SAYS rather than by
+    // its position. A positional index looked tidier and was wrong within one
+    // milestone: m21 hid Vue's fragment anchors behind a toggle
+    // (research/reports/m21/devtools-v2.md §11.4), every row below the first
+    // `v-if` moved up one, and this spec started clicking `span.mark`.
+    const rows = await inspector.query(".row");
+    const at = rows.nodes.findIndex((n) => (n.text ?? "").includes("titlebar"));
+    bunExpect(at).toBeGreaterThanOrEqual(0);
+    await inspector.locator(".row").nth(at).click();
     await expect(inspector.locator(".who")).toContainText("titlebar");
     // hello's styles are `<style scoped>`, so every selector the cascade
     // matched carries the scope attribute the SFC compiler stamped.

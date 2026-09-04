@@ -123,7 +123,7 @@ const exe = typeof flags.exe === "string" && flags.exe ? resolve(flags.exe) : EX
 if (!existsSync(exe)) {
   die(
     `${exe} is missing — build the host first:\n  cargo build -p vn-app\n` +
-      `(a \`--features prod\` build has no inspector at all; \`prod,devtools\` has one)`,
+      `(every build has the inspector since m22; only \`--features no-devtools\` has none)`,
   );
 }
 

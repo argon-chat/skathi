@@ -224,7 +224,13 @@ describe("F12", () => {
     bunExpect(chip).toBe(`pid ${windows.pid}`);
   }, T);
 
-  test("`vn.config.json`'s `devtools: false` (VN_DEVTOOLS_KEY=off) declines the key", async () => {
+  test("`VN_DEVTOOLS_KEY=off` declines the key and leaves the protocol alone", async () => {
+    // The KEY gate, which since m22 is a different thing from the devtools
+    // switch (docs/DEVTOOLS.md "Two gates"). It exists for a harness driving an
+    // app on a machine somebody is using, where a stray F12 opening a window is
+    // noise — so the port must stay. The MASTER switch, which takes the port
+    // with it, is `appDevtools.disable()` / `"devtools": false`, and it has a
+    // file of its own: devtools-optout.spec.ts.
     const optOut = await launch({
       app: "hello",
       window: [500, 380],
@@ -237,11 +243,11 @@ describe("F12", () => {
       const w = await optOut.send("windows");
       bunExpect(w.inspectors).toEqual([]);
       const { entries } = await optOut.logs(0);
-      bunExpect(entries.some((e) => /devtools.*: false.*inspector is not opened/.test(e.text))).toBe(
-        true,
-      );
+      bunExpect(
+        entries.some((e) => /VN_DEVTOOLS_KEY=off.*inspector is not opened/.test(e.text)),
+      ).toBe(true);
       // …and the PROTOCOL is untouched: the port still answers, which is what
-      // keeps an app from being able to make itself untestable.
+      // keeps a harness from being locked out by a key preference.
       bunExpect((await optOut.send("ping")).pid).toBeGreaterThan(0);
     } finally {
       await optOut.close();

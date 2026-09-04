@@ -35,6 +35,7 @@ pub mod ws; // the PUSH channel: a WebSocket server on this same port
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;
 
@@ -62,18 +63,207 @@ static TOKEN: Mutex<String> = Mutex::new(String::new());
 // boot
 // ---------------------------------------------------------------------------
 
-/// Binds `127.0.0.1:0`, publishes `<dist>/devtools.json` and starts the
-/// listener thread. Any failure is reported and then ignored: a dev host that
-/// cannot open a devtools port must still run the app.
-pub fn start() {
+// ---------------------------------------------------------------------------
+// the runtime switch
+// ---------------------------------------------------------------------------
+//
+// Since m22 the devtools are compiled into EVERY build (docs/DEVTOOLS.md
+// "Shape"), so "are they on" stopped being a compile-time question and became a
+// runtime one the app itself answers. Three sources, in this order:
+//
+//   1. the default — ON. That is the owner's decision (docs/ARCHITECTURE.md
+//      §11 decision 12) and it is what a browser does.
+//   2. `vn.config.json`'s `"devtools": false` — start disabled. The static
+//      spelling of `appDevtools.disable()`, applied before the first frame so
+//      the port never exists at all rather than existing for a moment.
+//   3. `appDevtools.enable()` / `.disable()` from the app's own JS, any time.
+//
+// …and one override on top of all three: `VN_DEVTOOLS=1` in the environment
+// forces them ON and LOCKS them, for a developer debugging a build somebody
+// shipped. See `resolve_initial` for the security posture that makes that
+// override sound.
+//
+// DISABLED MEANS THE LISTENER IS GONE, not just that F12 is refused. The port
+// carries `eval`; a released app whose author turned the devtools off must not
+// still be holding a localhost socket that runs arbitrary JS in it. `enable()`
+// binds a fresh port with a fresh token; `disable()` closes the listener,
+// drops every push socket, blanks the token and deletes the handshake file.
+
+/// Are the devtools on right now? Reads from any thread — the listener thread
+/// never touches this, but the F12 interceptor and the host fns do.
+static ENABLED: AtomicBool = AtomicBool::new(true);
+/// `VN_DEVTOOLS=1` — the app may not turn them off.
+static LOCKED: AtomicBool = AtomicBool::new(false);
+/// The port the listener is on, or 0. Also how [`stop_listener`] wakes a
+/// blocked `accept()`.
+static PORT: AtomicU16 = AtomicU16::new(0);
+/// Bumped by every stop. The accept loop compares it against the generation it
+/// was started with and returns when they differ, which drops its listener.
+static ACCEPT_GEN: AtomicU64 = AtomicU64::new(0);
+/// Has the JS side (the console tee, the fetch/WebSocket tee) been installed?
+/// They are installed on the first ENABLE rather than at boot, so an app that
+/// starts disabled keeps the engine's own `console` and `fetch`.
+static TEES_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Turns on the two things a devtools client needs to have been recording
+/// BEFORE it attached. Called first thing in `main`, whatever the switch says.
+///
+/// * the log ring — an advisory that fires while the window config is being
+///   read has to be in the ring by the time anybody asks for it;
+/// * `vn_css::set_capture_rule_text` — every sheet keeps its declarations as
+///   TEXT so `rules` can show a rule the way its author wrote it. The inspector
+///   attaches to hosts that are ALREADY RUNNING, and "restart your app to see
+///   where that value came from" is not a devtools feature.
+///
+/// Both are unconditional in a build that HAS the devtools, including one whose
+/// app disables them: a disabled app can `enable()` a second later, and a rule
+/// text that was never captured cannot be recovered. `--features no-devtools`
+/// never reaches this line, so it never allocates one of those strings. The
+/// cost of being wrong in the other direction is a `String` per declaration.
+pub fn arm() {
     vn_tree::log::enable();
-    // Every sheet this host compiles keeps its declarations as TEXT, so the
-    // `rules` command can show a rule the way its author wrote it. Called
-    // unconditionally in a dev build rather than on demand: the inspector
-    // attaches to hosts that are ALREADY RUNNING, and "restart your app to see
-    // where that value came from" is not a devtools feature. A prod build never
-    // reaches this line, so it never allocates one of those strings.
     vn_css::set_capture_rule_text(true);
+}
+
+/// Resolves the initial state and, if it is ON, starts the listener.
+///
+/// Called from `main` AFTER `window::load_config`, because the config is one of
+/// the three inputs — and before the app bundle evaluates, so an app that reads
+/// `appDevtools.isEnabled()` in `setup()` gets the settled answer.
+pub fn boot(config_enabled: bool) {
+    let (on, locked) = resolve_initial(config_enabled);
+    LOCKED.store(locked, Ordering::SeqCst);
+    ENABLED.store(on, Ordering::SeqCst);
+    if on {
+        start_listener();
+    } else {
+        let why = if config_enabled {
+            "VN_DEVTOOLS=0"
+        } else {
+            "`\"devtools\": false` in vn.config.json"
+        };
+        let msg = format!(
+            "[devtools] disabled at boot ({why}) — no port, no handshake, F12 declined. \
+             `appDevtools.enable()` starts them."
+        );
+        eprintln!("{msg}");
+        vn_tree::log::record("dev", msg);
+    }
+}
+
+/// The environment override, and the reasoning that makes it sound.
+///
+/// `VN_DEVTOOLS=1` (`on`/`true`/`yes`) forces the devtools on and LOCKS them,
+/// so `appDevtools.disable()` is refused. It exists for the one case the
+/// runtime switch would otherwise make impossible: a developer debugging a
+/// binary that somebody shipped with the devtools turned off in its own JS.
+///
+/// **Why that is not a hole.** The port is `127.0.0.1` only, and every request
+/// carries a token that is written into `<dist>/devtools.json` with the
+/// process's own file permissions. So reaching it already requires local code
+/// execution as the same user — and somebody who can set this process's
+/// environment has exactly that. An attacker who can set `VN_DEVTOOLS` can also
+/// replace the executable. The override therefore hands out no authority its
+/// user did not already hold, and it buys back the property the whole project
+/// runs on: an app must not be able to make itself undebuggable.
+///
+/// `VN_DEVTOOLS=0` (`off`/`false`/`no`) is the mirror and does NOT lock: it
+/// only sets the initial state, so an app can still turn them on. There is no
+/// threat model that needs protecting from an app enabling its own devtools.
+///
+/// An empty value is not a value — `VN_DIST`-style harnesses pass `""` to mean
+/// "unset", and a spec that wants the config's own answer needs to be able to.
+fn resolve_initial(config_enabled: bool) -> (bool, bool) {
+    match std::env::var("VN_DEVTOOLS").unwrap_or_default().to_ascii_lowercase().as_str() {
+        "" => (config_enabled, false),
+        "1" | "on" | "true" | "yes" => (true, true),
+        "0" | "off" | "false" | "no" => (false, false),
+        other => {
+            eprintln!(
+                "[devtools] VN_DEVTOOLS={other:?} is not one of 1/on/true/yes or 0/off/false/no \
+                 — ignored"
+            );
+            (config_enabled, false)
+        }
+    }
+}
+
+/// Are the devtools on? The one question F12 and the host fns both ask.
+pub fn enabled() -> bool {
+    ENABLED.load(Ordering::SeqCst)
+}
+
+/// Is the switch held on by `VN_DEVTOOLS=1`?
+pub fn locked() -> bool {
+    LOCKED.load(Ordering::SeqCst)
+}
+
+/// The port the listener is on, or `None`.
+pub fn port() -> Option<u16> {
+    match PORT.load(Ordering::SeqCst) {
+        0 => None,
+        p => Some(p),
+    }
+}
+
+/// `appDevtools.enable()` / `.disable()`. `Err` names why it was refused.
+///
+/// Idempotent in both directions: enabling a listening host is a no-op that
+/// keeps the port it has, so an app that calls `enable()` on every route change
+/// does not hand its inspector a new port each time.
+pub fn set_enabled(on: bool) -> Result<bool, String> {
+    if !on && LOCKED.load(Ordering::SeqCst) {
+        return Err(
+            "VN_DEVTOOLS=1 is set in this process's environment, which holds the devtools on — \
+             `disable()` is refused. Unset it to let the app's own choice stand."
+                .into(),
+        );
+    }
+    if ENABLED.load(Ordering::SeqCst) == on {
+        return Ok(on);
+    }
+    ENABLED.store(on, Ordering::SeqCst);
+    if on {
+        start_listener();
+    } else {
+        stop_listener();
+    }
+    Ok(on)
+}
+
+/// What `appDevtools.info()` reports, and what the `state` half of every
+/// enable/disable reply carries.
+pub fn state_json() -> String {
+    let inspectors = crate::inspector::children().len();
+    Json::obj(vec![
+        ("enabled", Json::Bool(enabled())),
+        ("locked", Json::Bool(locked())),
+        (
+            "port",
+            match port() {
+                Some(p) => Json::n(f64::from(p)),
+                None => Json::Null,
+            },
+        ),
+        ("pid", Json::n(std::process::id() as f64)),
+        ("key", Json::Bool(crate::window::devtools_key_enabled())),
+        ("inspectors", Json::n(inspectors as f64)),
+        ("slot", Json::s(crate::slot::dir().display().to_string())),
+    ])
+    .to_json()
+}
+
+/// Binds `127.0.0.1:0`, publishes `<dist>/devtools.json` and starts the
+/// listener thread. Any failure is reported and then ignored: a host that
+/// cannot open a devtools port must still run the app.
+///
+/// A FRESH port and a FRESH token every time, including on a re-`enable()`.
+/// Reusing either would let a client that was told to go away at `disable()`
+/// walk straight back in.
+fn start_listener() {
+    if PORT.load(Ordering::SeqCst) != 0 {
+        return; // already listening
+    }
     let listener = match TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))) {
         Ok(l) => l,
         Err(e) => {
@@ -106,6 +296,8 @@ pub fn start() {
         eprintln!("[devtools] cannot write {}: {e} — devtools disabled", path.display());
         return;
     }
+    PORT.store(port, Ordering::SeqCst);
+    let generation = ACCEPT_GEN.load(Ordering::SeqCst);
     eprintln!(
         "[devtools] listening on 127.0.0.1:{port} — {} (pid {})",
         path.display(),
@@ -115,8 +307,42 @@ pub fn start() {
 
     std::thread::Builder::new()
         .name("vn-devtools".into())
-        .spawn(move || accept_loop(listener))
+        .spawn(move || accept_loop(listener, generation))
         .ok();
+}
+
+/// Closes the listener, drops every push socket, blanks the token and deletes
+/// the handshake. After this the port is not merely refusing commands — it is
+/// not bound, so a connect is refused by the OS.
+///
+/// The accept loop is blocked inside `accept()`, which no flag can interrupt.
+/// So the generation is bumped first and then we CONNECT TO OURSELVES: the loop
+/// wakes with a connection, sees the generation move, returns, and dropping its
+/// `TcpListener` closes the socket. One extra connection that is never served,
+/// no timeout, no polling loop, and no second thread to own the listener.
+fn stop_listener() {
+    let port = PORT.swap(0, Ordering::SeqCst);
+    // Every in-flight and queued command is now unauthenticated: a blank token
+    // never matches (`handle_request` refuses an empty one outright).
+    TOKEN.lock().unwrap().clear();
+    ws::close_all();
+    let path = crate::slot::path("devtools.json");
+    let _ = std::fs::remove_file(&path);
+    // Whoever is blocked on one of these gets a disconnected channel and the
+    // "the app closed the devtools" error, rather than the 60 s wedged-pump
+    // timeout.
+    QUEUE.lock().unwrap().clear();
+    if port != 0 {
+        ACCEPT_GEN.fetch_add(1, Ordering::SeqCst);
+        let _ = TcpStream::connect_timeout(
+            &SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            std::time::Duration::from_millis(500),
+        );
+    }
+    let msg = "[devtools] disabled — the listener is closed, the handshake is gone and F12 is \
+               declined. `appDevtools.enable()` starts a new port.";
+    eprintln!("{msg}");
+    vn_tree::log::record("dev", msg);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,10 +480,91 @@ vn_runtime::host_fn!(fn vn_devtools_emit(g, args) {
 // same token and the same one-command-per-frame execution `ctl.ts` gets.
 //
 // It hands the caller each target's TOKEN, which is the whole point (a client
-// cannot speak without one) and is also why the whole thing is dev-only: in a
-// dev build the JS already has `eval`-level trust over its own process.
+// cannot speak without one) and costs nothing extra: the JS asking already has
+// `eval`-level trust over its own process, whatever build it is. Since m22 that
+// includes a shipped one — which is exactly why an app that does not want any
+// of this turns the devtools OFF (the listener goes with them) rather than
+// relying on the build to have left them out.
 vn_runtime::host_fn!(fn vn_devtools_targets(_g, _args) {
     let payload = targets_json();
+    JsRuntime::with(|rt| rt.ctx().string(&payload).0)
+});
+
+// ---------------------------------------------------------------------------
+// `appDevtools` — the tier-3 surface (docs/DEVTOOLS.md "Turning them off")
+// ---------------------------------------------------------------------------
+//
+// Three host fns behind `import { appDevtools } from "vue-native"`, shaped like
+// `appStorage`'s: one reader that answers everything at once, one verb, and one
+// action. The JS half is `packages/vue-native/src/runtime.ts`.
+
+// `__vn_devtools_state()` — `{enabled, locked, port, pid, key, inspectors, slot}`.
+vn_runtime::host_fn!(fn vn_devtools_state(_g, _args) {
+    let payload = state_json();
+    JsRuntime::with(|rt| rt.ctx().string(&payload).0)
+});
+
+// `__vn_devtools_set_enabled(on)` — the state afterwards, or `{error}`.
+//
+// Returns the SETTLED state rather than a boolean, so a caller that was refused
+// (`VN_DEVTOOLS=1`) can see what is actually true instead of inferring it from a
+// `false` that also means "already off".
+//
+// A non-boolean argument reads as `false`, matching `__vn_set_listener`: the JS
+// side is generated by our own module and always passes a real boolean, so a
+// coercion here would only paper over a caller that had already gone wrong.
+vn_runtime::host_fn!(fn vn_devtools_set_enabled(_g, args) {
+    let on = args.arg(0).as_bool().unwrap_or(false);
+    let payload = match set_enabled(on) {
+        Ok(_) => {
+            // The tees are JS wrappers, so they can only be installed while a
+            // runtime exists — which is exactly now, since this IS JS calling.
+            if on {
+                install_tees_once();
+            }
+            state_json()
+        }
+        Err(e) => Json::obj(vec![("error", Json::s(e))]).to_json(),
+    };
+    JsRuntime::with(|rt| rt.ctx().string(&payload).0)
+});
+
+// `__vn_devtools_open()` — programmatic F12. `{opened}` or `{error}`.
+//
+// The same entry point the key uses (`inspector::open_for_window`), including
+// its debounce and its "raise the one that is already open" behaviour, so an
+// app's own "Open devtools" menu item and the key cannot disagree.
+vn_runtime::host_fn!(fn vn_devtools_open(_g, _args) {
+    let payload = if !enabled() {
+        Json::obj(vec![(
+            "error",
+            Json::s(
+                "the devtools are disabled in this process — call appDevtools.enable() first",
+            ),
+        )])
+        .to_json()
+    } else {
+        let window = crate::main_window_id();
+        let ran = vn_runtime::with_app(|cx| crate::inspector::open_for_window(window, cx));
+        match ran {
+            Some(()) => Json::obj(vec![
+                ("opened", Json::Bool(true)),
+                (
+                    "window",
+                    match window {
+                        Some(w) => Json::n(w as f64),
+                        None => Json::Null,
+                    },
+                ),
+            ])
+            .to_json(),
+            None => Json::obj(vec![(
+                "error",
+                Json::s("appDevtools.open(): called outside a published phase"),
+            )])
+            .to_json(),
+        }
+    };
     JsRuntime::with(|rt| rt.ctx().string(&payload).0)
 });
 
@@ -331,20 +638,51 @@ fn targets_json() -> String {
 }
 
 /// Registers the devtools host fns. Call before the app bundle boots.
+///
+/// Registration is unconditional — a host fn nobody calls costs one entry in a
+/// table, and `appDevtools` has to be able to answer in a process whose
+/// devtools are OFF (that is most of what it is for). The JS TEES are not: see
+/// [`install_tees_once`].
 pub fn install(rt: &JsRuntime) {
     rt.register("__vn_devtools_console", 3, vn_devtools_console as *const _);
     rt.register("__vn_devtools_emit", 1, vn_devtools_emit as *const _);
     // The inspector app's only host dependency (docs/DEVTOOLS-UI.md §3): the
-    // list of attachable instances. Registered in every dev host — the app that
+    // list of attachable instances. Registered in every host — the app that
     // never calls it never notices.
     rt.register("__vn_devtools_targets", 0, vn_devtools_targets as *const _);
-    // The Network panel's feed, installed the same way as the console tee
-    // above and for the same reason: it ADDS a reader and changes nothing an
-    // app can observe.
+    // The tier-3 `appDevtools` surface.
+    rt.register("__vn_devtools_state", 0, vn_devtools_state as *const _);
+    rt.register("__vn_devtools_set_enabled", 1, vn_devtools_set_enabled as *const _);
+    rt.register("__vn_devtools_open", 0, vn_devtools_open as *const _);
+    // The Network panel's feed. Same split: the host fn always, the wrapper
+    // only when somebody is watching.
     net::install(rt);
-    if let Err(e) = rt.eval(CONSOLE_TEE_JS, "vn://devtools-console.js") {
-        eprintln!("[devtools] console tee failed: {}\n{}", e.header, e.stack);
+    if enabled() {
+        install_tees_once();
     }
+}
+
+/// Wraps `console.*`, `fetch` and `WebSocket` — once per process, on the first
+/// moment the devtools are on.
+///
+/// Deferred rather than done at boot because a build now HAS the devtools even
+/// when its app does not want them: a host that starts disabled must leave the
+/// engine's own `console` and `fetch` untouched, so the only divergence
+/// docs/DEVTOOLS.md admits to is one a watching developer asked for. An
+/// `enable()` later installs them — the tees are additive wrappers, so they can
+/// be put on at any time; they are never taken off again, because unwrapping a
+/// function some other code has already captured is not something JS can do
+/// honestly.
+fn install_tees_once() {
+    if TEES_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    JsRuntime::with(|rt| {
+        if let Err(e) = rt.eval(CONSOLE_TEE_JS, "vn://devtools-console.js") {
+            eprintln!("[devtools] console tee failed: {}\n{}", e.header, e.stack);
+        }
+        net::install_tee(rt);
+    });
 }
 
 /// 128 bits of process-local entropy, hex. No `rand` dependency for a token
@@ -364,10 +702,19 @@ fn fresh_token() -> String {
     format!("{a:016x}{:016x}", h2.finish())
 }
 
-fn accept_loop(listener: TcpListener) {
-    for stream in listener.incoming() {
-        match stream {
-            Ok(s) => {
+/// One accepted connection per iteration, until the generation it was started
+/// with is superseded by a [`stop_listener`]. Returning drops `listener`, which
+/// is what actually closes the socket.
+fn accept_loop(listener: TcpListener, generation: u64) {
+    loop {
+        let accepted = listener.accept();
+        // Checked BEFORE the connection is served, so the wake-up connect that
+        // `stop_listener` makes is never handed to `serve`.
+        if ACCEPT_GEN.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        match accepted {
+            Ok((s, _)) => {
                 std::thread::Builder::new()
                     .name("vn-devtools-conn".into())
                     .spawn(move || serve(s))
@@ -427,10 +774,12 @@ fn handle_request(line: &str) -> String {
     match json::parse(line) {
         None => err("request is not valid JSON"),
         Some(req) => {
-            let ok_token = req
-                .get("token")
-                .and_then(Json::as_str)
-                .is_some_and(|t| t == TOKEN.lock().unwrap().as_str());
+            // A BLANK token never matches, so a request that arrives on a
+            // socket accepted moments before `disable()` is refused rather than
+            // let through by an empty-equals-empty comparison.
+            let want = TOKEN.lock().unwrap().clone();
+            let ok_token = !want.is_empty()
+                && req.get("token").and_then(Json::as_str).is_some_and(|t| t == want);
             if !ok_token {
                 err("bad or missing token — read it from <dist>/devtools.json")
             } else {
@@ -571,7 +920,15 @@ fn submit(req: Json) -> String {
     QUEUE.lock().unwrap().push_back(Job { req, reply: tx });
     match rx.recv_timeout(REPLY_TIMEOUT) {
         Ok(reply) => reply,
-        Err(_) => err(
+        // Disconnected rather than timed out: `stop_listener` cleared the
+        // queue, which is what `appDevtools.disable()` does. Told apart because
+        // "the app turned me off" and "the app is wedged" are different
+        // diagnoses and a client should not have to guess.
+        Err(mpsc::RecvTimeoutError::Disconnected) => err(
+            "the app disabled its devtools while this command was queued \
+             (appDevtools.disable()) — the listener is closed",
+        ),
+        Err(mpsc::RecvTimeoutError::Timeout) => err(
             "the app's frame pump did not run a queued command within 60s — the main thread is \
              wedged (a modal drag loop, a blocked JS call, or a caught native panic)",
         ),
@@ -2071,7 +2428,7 @@ pub(crate) fn perf_json() -> String {
 /// show something subtly different from what `localStorage.getItem` answers — a
 /// pending write, or a session area that has no disk at all. So it goes through
 /// `eval`, which is the same machinery the console uses and the same trust
-/// level (dev-only, token-guarded, `eval`-capable by construction).
+/// level (localhost, token-guarded, `eval`-capable by construction).
 fn cmd_storage(
     area: Option<&str>,
     op: Option<&str>,
@@ -2232,7 +2589,43 @@ fn cmd_screenshot(path: Option<&str>, backend: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::http_request_line;
+    use super::{http_request_line, resolve_initial};
+
+    /// The three inputs to the runtime switch, and which one wins.
+    ///
+    /// The asymmetry is deliberate and is the whole security posture in one
+    /// table: `VN_DEVTOOLS=1` LOCKS (an app must not be able to make itself
+    /// undebuggable by somebody who can already set its environment), `=0` does
+    /// not (nothing needs protecting from an app enabling its own devtools).
+    #[test]
+    fn the_env_override_forces_on_and_only_forcing_on_locks() {
+        let saved = std::env::var("VN_DEVTOOLS").ok();
+        let case = |value: &str, config: bool| {
+            std::env::set_var("VN_DEVTOOLS", value);
+            resolve_initial(config)
+        };
+
+        // Unset (and the empty string, which harnesses use to mean unset): the
+        // app's own config decides, and nothing is locked.
+        assert_eq!(case("", true), (true, false));
+        assert_eq!(case("", false), (false, false));
+        // Forced on — including over an app that said no — and locked.
+        for on in ["1", "on", "true", "yes", "ON", "True"] {
+            assert_eq!(case(on, false), (true, true), "VN_DEVTOOLS={on}");
+        }
+        // Forced off, and NOT locked: `appDevtools.enable()` still works.
+        for off in ["0", "off", "false", "no"] {
+            assert_eq!(case(off, true), (false, false), "VN_DEVTOOLS={off}");
+        }
+        // Nonsense is ignored rather than guessed at, and says so on stderr.
+        assert_eq!(case("maybe", true), (true, false));
+        assert_eq!(case("maybe", false), (false, false));
+
+        match saved {
+            Some(v) => std::env::set_var("VN_DEVTOOLS", v),
+            None => std::env::remove_var("VN_DEVTOOLS"),
+        }
+    }
 
     /// The whole framing decision is this one function: a JSON request and an
     /// HTTP request cannot be confused for each other, so one port serves both

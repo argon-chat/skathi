@@ -21,7 +21,8 @@
 //! *where the inspector comes from*: it used to be a second dist folder that
 //! `bun devtools/ui.ts` built and launched, and it is now a bundle inside this
 //! very executable, so `F12` needs nothing on disk and works in a shipped app
-//! built with `--features prod,devtools`.
+//! built with `--features prod` — which since m22 is every shipped app, unless
+//! its own JS turned the devtools off (docs/DEVTOOLS.md).
 //!
 //! Re-spawning **ourselves** is what makes that cheap. There is no second
 //! binary to ship, no second build to keep in step, and no multiwindow refactor
@@ -206,8 +207,13 @@ thread_local! {
     static CHILDREN: std::cell::RefCell<Vec<Child>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Have we already told the user this app opted out?
+/// Have we already told the user the devtools are off in this process?
 static OPTOUT_SAID: AtomicBool = AtomicBool::new(false);
+/// …and separately, that the KEY is off. Two flags rather than one, because
+/// they are two different reasons and a process can hit both — a harness that
+/// sets `VN_DEVTOOLS_KEY=off` on an app that later calls `disable()` would
+/// otherwise be told only about whichever it reached first.
+static KEY_OFF_SAID: AtomicBool = AtomicBool::new(false);
 
 /// How long after an F12 the next one is ignored.
 ///
@@ -279,11 +285,29 @@ pub fn open_for_window(window: Option<u64>, cx: &mut App) {
     if repeat {
         return;
     }
-    if !crate::window::devtools_enabled() {
+    // Two gates, and they mean different things — see `crate::window::Config`.
+    //
+    // The MASTER switch first: the app turned its devtools off (in JS, in
+    // `vn.config.json`, or through `VN_DEVTOOLS=0`), so there is no listener
+    // for an inspector to attach to and opening one would show an empty window.
+    if !crate::devtools::enabled() {
         if !OPTOUT_SAID.swap(true, Ordering::Relaxed) {
-            let msg = "F12: this app declares `\"devtools\": false` in vn.config.json, so the \
-                       inspector is not opened. (The devtools protocol itself is unaffected — \
-                       the port is still there for ctl.ts and vn-test.)";
+            let msg = "F12: this app has its devtools disabled (`appDevtools.disable()`, or \
+                       `\"devtools\": false` in vn.config.json), so the inspector is not opened \
+                       and there is no port for it to attach to. `appDevtools.enable()` — or \
+                       VN_DEVTOOLS=1 in the environment — turns them back on.";
+            eprintln!("[devtools] {msg}");
+            vn_tree::log::record("dev", format!("[devtools] {msg}"));
+        }
+        return;
+    }
+    // …then the KEY, which a harness turns off on its own with the protocol
+    // left alone.
+    if !crate::window::devtools_key_enabled() {
+        if !KEY_OFF_SAID.swap(true, Ordering::Relaxed) {
+            let msg = "F12: VN_DEVTOOLS_KEY=off, so the inspector is not opened. (The devtools \
+                       protocol itself is unaffected — the port is still there for ctl.ts and \
+                       vn-test, and `appDevtools.open()` still works.)";
             eprintln!("[devtools] {msg}");
             vn_tree::log::record("dev", format!("[devtools] {msg}"));
         }
@@ -466,6 +490,12 @@ fn spawn(window: Option<u64>) -> Result<u32, String> {
     // keeps the child's handshake out of the target's slot.
     cmd.env("VN_DIST", &slot);
     cmd.env("VN_DEVTOOLS_TARGET", &target);
+    // An inspector has to have a port OF ITS OWN: it is how the parent raises it
+    // on a second F12, and how another inspector could attach to it. Forced
+    // rather than inherited, because `VN_DEVTOOLS=0` in the developer's shell
+    // (or an `appDevtools.disable()` this app later reversed) would otherwise
+    // produce a child window nothing can reach or close politely.
+    cmd.env("VN_DEVTOOLS", "1");
     for name in ["VN_WINDOW", "VN_SCENARIO", "VN_VOICE_IDENTITY", "VN_APP_ROOT", "VN_PERF"] {
         cmd.env_remove(name);
     }

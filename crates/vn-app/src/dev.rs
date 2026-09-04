@@ -184,8 +184,8 @@ const POLL_EVERY_FRAMES: u32 = 30;
 /// `VN_DIST` points one exe at another app's build output (build.ts already
 /// takes [entry] [dist-dir] positionals), which is what lets several dev hosts
 /// run side by side without sharing packages/vue-native/dist. The rule moved to
-/// [`crate::slot`] when `--features prod,devtools` gained a slot of its own
-/// with no dist in it; this is the dev half's spelling of the same question.
+/// [`crate::slot`] when a prod build gained a slot of its own with no dist in
+/// it; this is the dev half's spelling of the same question.
 pub(crate) fn dist(rel: &str) -> std::path::PathBuf {
     crate::slot::path(rel)
 }

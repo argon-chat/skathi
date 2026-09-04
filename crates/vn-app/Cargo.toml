@@ -22,24 +22,34 @@ build = "build.rs"
 # `bun prod.ts` MUST have run first: prod.rs `include_str!`s its output.
 prod = []
 
-# The developer surface: the devtools protocol listener (docs/DEVTOOLS.md), the
-# EMBEDDED inspector (docs/DEVTOOLS-UI.md) and the F12 key that opens it.
+# The devtools OPT-OUT (m22 inverted the model — docs/ARCHITECTURE.md §11
+# decision 12). The devtools protocol listener (docs/DEVTOOLS.md), the EMBEDDED
+# inspector (docs/DEVTOOLS-UI.md) and the F12 key are in EVERY build now,
+# `--features prod` included, because that is what a browser and what Electron
+# ship. An app that does not want them turns them off at RUNTIME —
+# `appDevtools.disable()`, or `"devtools": false` in its `vn.config.json` —
+# which tears the listener down and refuses the key.
 #
-# NOT in `default`, and it does not need to be: a dev build has carried the
-# devtools since milestone 10 and still does with no flag at all. `build.rs`
-# emits `cfg(vn_devtools)` for `not(prod) || devtools`, so:
+# This flag is the rarer, harder ask: not "off", but "not in the image at all".
+# It is for a build that must be able to prove no `eval` transport was ever
+# compiled in. `build.rs` emits `cfg(vn_devtools)` unless this is set, so:
 #
 #   cargo build -p vn-app                       dev host, inspector embedded
-#   cargo build -p vn-app --features prod       shipped app, no devtools at all
-#   cargo build -p vn-app --features prod,devtools
-#                                               shipped app that can open its
-#                                               own inspector on F12 (what
-#                                               Electron ships, opted into)
+#   cargo build -p vn-app --features prod       shipped app, inspector embedded,
+#                                               F12 works, app may disable it
+#   cargo build -p vn-app --features prod,no-devtools
+#                                               shipped app with no devtools
+#                                               code in the binary at all
 #
-# The feature carries no dependencies: everything it turns on is already in the
-# graph for the dev build. What it costs a prod binary is the ~130 KB inspector
-# bundle and the listener thread — the size check is in
-# research/reports/m21/devtools-v2.md.
+# It carries no dependencies (it only removes code), and what it saves a prod
+# binary is measured in research/reports/m22/devtools-release.md.
+no-devtools = []
+
+# The pre-m22 opt-IN, kept as an accepted NO-OP so command lines and scripts
+# written against `--features prod,devtools` keep producing a working binary —
+# they now produce exactly what `--features prod` produces, which is what they
+# were asking for. `build.rs` fails the build if it is combined with
+# `no-devtools`, because that is a contradiction rather than a preference.
 devtools = []
 
 # Web Audio (`AudioContext` & co) via vn-runtime → redjs → Firewheel. ON by

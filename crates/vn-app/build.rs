@@ -28,8 +28,8 @@
 //! raised rather than by shipping a stale artifact: this script fails the build
 //! with the exact command to run, and names the flag that builds a host with no
 //! inspector at all. `bun` is already a hard requirement for a dev host to have
-//! anything to *run* (`dist/` comes from `bun build.ts`), so the only build
-//! this newly constrains is `--features prod,devtools`, which is opt-in.
+//! anything to *run* (`dist/` comes from `bun build.ts`), so this constrains no
+//! build that was not already constrained.
 //!
 //! `VN_DEVTOOLS_BUNDLE=<path to app.prod.js>` bypasses the bun invocation with
 //! a prebuilt bundle, for a packaging job that builds JS and Rust in separate
@@ -39,10 +39,23 @@
 //! ## The cfg this emits
 //!
 //! `vn_devtools` — "this build has the devtools protocol, the embedded
-//! inspector and the F12 key". True for every dev build (the devtools have
-//! always been a dev-build feature) and for a `--features prod,devtools`
-//! release. `--features prod` alone stays exactly what it was: no listener, no
-//! host fns, no bundle, no F12.
+//! inspector and the F12 key". **True for every build**, including
+//! `--features prod`, since m22: a shipped app carries its own devtools the way
+//! a browser does, and the app turns them off at RUNTIME instead
+//! (`appDevtools.disable()`, or `"devtools": false` in `vn.config.json` — see
+//! docs/DEVTOOLS.md "Shape" and docs/ARCHITECTURE.md §11 decision 12).
+//!
+//! The one build without them is `--features no-devtools`, the opt-OUT for an
+//! app that wants zero devtools code in its image: no listener, no host fns, no
+//! bundle, no F12, no `rules` text capture, and `appDevtools` inert. It is the
+//! exception, it is never selected automatically, and nothing in this repo
+//! builds it except the size/marker check in
+//! `research/reports/m22/devtools-release.md`.
+//!
+//! `--features devtools` (the m21 opt-IN spelling) is still accepted and now
+//! means nothing at all — every build has them. It is kept only so command
+//! lines and scripts written before the inversion keep producing a working
+//! binary; combining it with `no-devtools` is a contradiction and fails here.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -50,12 +63,21 @@ use std::process::Command;
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(vn_devtools)");
     println!("cargo:rerun-if-env-changed=VN_DEVTOOLS_BUNDLE");
+    suppress_release_pdb();
 
-    let prod = std::env::var_os("CARGO_FEATURE_PROD").is_some();
-    let asked = std::env::var_os("CARGO_FEATURE_DEVTOOLS").is_some();
-    // Dev builds have carried the devtools since m10 and keep doing so with no
-    // feature flag; a prod build opts in by name.
-    if prod && !asked {
+    // The opt-OUT. Cargo features are additive across a graph, so this is the
+    // one shape a "remove code" flag can take: the absence of the cfg is the
+    // default, and only this flag can produce it.
+    let opted_out = std::env::var_os("CARGO_FEATURE_NO_DEVTOOLS").is_some();
+    let legacy_opt_in = std::env::var_os("CARGO_FEATURE_DEVTOOLS").is_some();
+    if opted_out && legacy_opt_in {
+        panic!(
+            "\n`--features devtools,no-devtools` asks for both halves of one switch.\n\
+             `devtools` is the pre-m22 opt-IN and is now a no-op (every build has them);\n\
+             `no-devtools` is the opt-OUT. Drop one — almost certainly `devtools`.\n"
+        );
+    }
+    if opted_out {
         return;
     }
     println!("cargo:rustc-cfg=vn_devtools");
@@ -116,6 +138,48 @@ fn main() {
     }
 }
 
+/// `/DEBUG:NONE` for the `release` profile, so a shipped build stops writing a
+/// 326 MB `vn_app.pdb` nobody ships.
+///
+/// This lives here because there is nowhere else it CAN live. `[profile.release]
+/// strip = "symbols"` is the setting that looks like it does this and does not:
+/// `-C strip` is a Unix `strip(1)` operation, a windows-msvc image has no symbol
+/// table to remove (symbols live in the PDB), and Cargo does not translate it
+/// into a linker switch — measured, byte-identical exe and a full-size PDB
+/// (research/reports/m22/devtools-release.md §5). `RUSTFLAGS` would work and is
+/// global, which would take the PDB away from dev builds too, and Cargo has no
+/// stable per-profile `rustflags`. `cargo:rustc-link-arg-bins` is scoped to
+/// exactly this package's binaries, which is exactly the scope wanted.
+///
+/// The profile is read out of `OUT_DIR` (`…/<profile-dir>/build/<pkg>/out`)
+/// rather than out of `PROFILE`, because `PROFILE` says "release" for every
+/// profile that inherits it — including `release-symbols`, whose entire purpose
+/// is the opposite of this.
+///
+/// `VN_PDB=1` opts back in for a `release` build, for the case where the binary
+/// already exists and rebuilding it under another profile would change the
+/// addresses in the crash dump you are holding.
+fn suppress_release_pdb() {
+    println!("cargo:rerun-if-env-changed=VN_PDB");
+    let asked_for_pdb =
+        std::env::var("VN_PDB").is_ok_and(|v| !v.is_empty() && v != "0" && v != "false");
+    if asked_for_pdb || profile_dir().as_deref() != Some("release") {
+        return;
+    }
+    // Last one wins for `/DEBUG`, and rustc has already put its own on the
+    // command line — so this is an override rather than an omission.
+    println!("cargo:rustc-link-arg-bins=/DEBUG:NONE");
+}
+
+/// The name of the profile directory this build is writing into, e.g.
+/// `release`, `debug`, `release-symbols`.
+fn profile_dir() -> Option<String> {
+    // OUT_DIR = <target>/<triple>/<profile>/build/<pkg>-<hash>/out
+    let out = PathBuf::from(std::env::var("OUT_DIR").ok()?);
+    let profile = out.ancestors().nth(3)?.file_name()?;
+    Some(profile.to_string_lossy().into_owned())
+}
+
 fn failure(pkg: &Path, entry: &Path, bundle: &Path, why: &str) -> String {
     format!(
         "\n\
@@ -138,7 +202,9 @@ fn failure(pkg: &Path, entry: &Path, bundle: &Path, why: &str) -> String {
                 VN_DEVTOOLS_BUNDLE=<somewhere>/app.prod.js cargo build …\n\
          \n\
            3. build a host with no inspector at all:\n\
-                cargo build -p vn-app --features prod        (no devtools)\n\
+                cargo build -p vn-app --features no-devtools\n\
+              (the opt-OUT — docs/DEVTOOLS.md \"Shape\". Every other build,\n\
+               `--features prod` included, embeds the inspector.)\n\
          \n\
          expected output: {bundle}\n\
          ────────────────────────────────────────────────────────────────────\n",

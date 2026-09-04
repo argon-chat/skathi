@@ -72,7 +72,12 @@ pub fn status() -> Option<String> {
     STATUS.with(|s| s.borrow().clone())
 }
 
-/// Turns the ring on (dev builds only). Idempotent.
+/// Turns the ring on. Idempotent.
+///
+/// Called by `vn_app::devtools::arm()`, i.e. by every build that has the
+/// devtools compiled in — which since m22 is every build except
+/// `--features no-devtools` (docs/DEVTOOLS.md "Shape"). Off by default so an
+/// embedder without that surface pays nothing.
 pub fn enable() {
     ENABLED.store(true, Ordering::Relaxed);
     START.with(|s| {

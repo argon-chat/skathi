@@ -49,14 +49,20 @@ const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 
 /** A fresh runtime world with a recording host. */
 /**
- * @param {{ storage?: boolean }} [options] — `storage: false` builds a world
- *   with no `__vn_storage_*` at all, which is what a host compiled
- *   `--no-default-features` (or an older one) looks like from JS. It is the
- *   only way to reach `appStorage`'s inert branch, and that branch is the one
- *   that must not invent a plausible path.
+ * @param {{ storage?: boolean, devtools?: boolean }} [options] —
+ *   `storage: false` builds a world with no `__vn_storage_*` at all, which is
+ *   what a host compiled `--no-default-features` (or an older one) looks like
+ *   from JS. It is the only way to reach `appStorage`'s inert branch, and that
+ *   branch is the one that must not invent a plausible path.
+ *
+ *   `devtools: false` does the same for `__vn_devtools_*`, i.e. a host built
+ *   `--features no-devtools` (docs/DEVTOOLS.md "Shape"). That branch has to
+ *   tell an app the devtools are not merely off but ABSENT, without throwing —
+ *   `appDevtools.disable()` in an entry module is its likeliest caller.
  */
 export function createRuntime(options = {}) {
   const withStorage = options.storage !== false;
+  const withDevtools = options.devtools !== false;
   const raw = readTsSource(RUNTIME_PATH);
   if (!IMPORT_LINE.test(raw)) {
     throw new Error("runtime.ts no longer imports @vue/runtime-core — update this harness");
@@ -131,6 +137,26 @@ export function createRuntime(options = {}) {
       flushError: null,
       folderCalls: [],
       setCalls: [],
+    },
+    /**
+     * The devtools switch (`crates/vn-app/src/devtools/mod.rs`), faked. The
+     * Rust half owns a listener and a socket; the JS half's whole job is the
+     * JSON round trip, the refusal advisory and the `onChange` fan-out, so the
+     * fake is the state machine and a call log.
+     */
+    devtools: {
+      enabled: true,
+      /** `VN_DEVTOOLS=1`: `set_enabled(false)` answers `{error}` instead. */
+      locked: false,
+      key: true,
+      port: 49221,
+      inspectors: 0,
+      /** Every `__vn_devtools_set_enabled` argument, in order. */
+      setCalls: [],
+      /** How many times `__vn_devtools_open` was called. */
+      opens: 0,
+      /** When set, `open()` answers `{error}` with this text. */
+      openError: null,
     },
   };
   /** Deliver a settled request as the host's per-frame pump would. */
@@ -242,12 +268,25 @@ export function createRuntime(options = {}) {
     "__vn_storage_set_folder",
     "__vn_storage_info",
     "__vn_storage_flush",
+    "__vn_devtools_state",
+    "__vn_devtools_set_enabled",
+    "__vn_devtools_open",
     // Bound as a parameter rather than left ambient so a test can hand
     // `appPermissions` a `navigator.permissions` to re-broadcast `change` from
     // — bun has a `navigator`, but not that.
     "navigator",
   ];
   let nextId = 1;
+  /** Exactly the object `devtools::state_json` writes. */
+  const devtoolsState = () => ({
+    enabled: host.devtools.enabled,
+    locked: host.devtools.locked,
+    port: host.devtools.enabled ? host.devtools.port : null,
+    pid: 4242,
+    key: host.devtools.key,
+    inspectors: host.devtools.inspectors,
+    slot: "C:\\vn\\dist",
+  });
   const args = [
     createRenderer,
     createVNode,
@@ -362,6 +401,29 @@ export function createRuntime(options = {}) {
       host.storage.flushes++;
       return JSON.stringify({ wrote });
     },
+    // ---- __vn_devtools_* ---------------------------------------------------
+    // `state` is the reader, `set_enabled` returns the SETTLED state (or
+    // `{error}` when the environment holds the switch), `open` is programmatic
+    // F12. The Rust side is `devtools::{state_json, set_enabled}` +
+    // `inspector::open_for_window`.
+    () => JSON.stringify(devtoolsState()),
+    (on) => {
+      host.devtools.setCalls.push(on);
+      if (!on && host.devtools.locked) {
+        return JSON.stringify({
+          error: "VN_DEVTOOLS=1 is set in this process's environment, which holds the devtools on",
+        });
+      }
+      host.devtools.enabled = !!on;
+      host.devtools.port = on ? 49221 : null;
+      return JSON.stringify(devtoolsState());
+    },
+    () => {
+      host.devtools.opens++;
+      if (host.devtools.openError) return JSON.stringify({ error: host.devtools.openError });
+      host.devtools.inspectors++;
+      return JSON.stringify({ opened: true, window: 4294967297 });
+    },
     fakeNavigator,
   ];
 
@@ -371,6 +433,12 @@ export function createRuntime(options = {}) {
     const first = params.indexOf("__vn_storage_user_folder");
     for (let i = first; i < first + 4; i++) args[i] = undefined;
   }
+  if (!withDevtools) {
+    // …and the same three slots blank, which is what `--features no-devtools`
+    // looks like from JS: `appDevtools` goes inert and says so.
+    const first = params.indexOf("__vn_devtools_state");
+    for (let i = first; i < first + 3; i++) args[i] = undefined;
+  }
 
   // eslint-disable-next-line no-new-func
   const exports = new Function(
@@ -378,7 +446,7 @@ export function createRuntime(options = {}) {
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
-       vModelText, vShow };`,
+       appDevtools, vModelText, vShow };`,
   )(...args);
 
   return {

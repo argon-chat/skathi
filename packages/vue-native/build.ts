@@ -144,11 +144,32 @@ function readVnConfig(): Record<string, unknown> | undefined {
   }
 }
 
+// The top-level `"devtools": false` (docs/DEVTOOLS.md) rides along inside the
+// window block, because that blob is the only JSON the host reads before the
+// window exists - and since m22 the flag decides whether a devtools listener is
+// bound at all, which has to be answered before a port is opened rather than by
+// closing one a moment later.
+//
+// It was DOCUMENTED as top-level from the day it was added and never actually
+// copied, so only the undocumented `window.devtools` spelling worked. Both work
+// now; a `window` block that declares its own wins, because the more specific
+// place is the one somebody edited last.
+function foldDevtoolsFlag(
+  cfg: Record<string, unknown> | undefined,
+  win: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!cfg || typeof cfg.devtools !== "boolean") return win;
+  if (win && typeof win.devtools === "boolean") return win;
+  return { ...(win ?? {}), devtools: cfg.devtools };
+}
+
 function readWindowConfig(): Record<string, unknown> | undefined {
   const cfg = readVnConfig();
-  return cfg && typeof cfg.window === "object" && cfg.window
-    ? (cfg.window as Record<string, unknown>)
-    : undefined;
+  const win =
+    cfg && typeof cfg.window === "object" && cfg.window
+      ? (cfg.window as Record<string, unknown>)
+      : undefined;
+  return foldDevtoolsFlag(cfg, win);
 }
 
 // The app's own name, copied into the manifest for the Rust host.

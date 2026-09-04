@@ -1,0 +1,14 @@
+{
+  "$comment": "The control. No `devtools` key at all, so the m22 default applies: the devtools are on, the listener is bound and F12 opens the inspector. Its twin `devtools-off` is the same app with the flag set — see ../README.md.",
+
+  "name": "devtools-on",
+
+  "window": {
+    "title": "vue-native — devtools on (fixture)",
+    "width": 420,
+    "height": 220,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "backdrop": "mica"
+  }
+}

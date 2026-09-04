@@ -400,6 +400,20 @@ fn drop_sub(id: u64) {
     }
 }
 
+/// Drops every attached socket. Called by `appDevtools.disable()`
+/// (`super::stop_listener`).
+///
+/// Dropping a `Sub` drops its `Sender`, which ends that socket's writer thread,
+/// which closes the socket — so an inspector attached to an app that turns its
+/// devtools off sees its feed close rather than going quietly stale. A closing
+/// handshake would be politer and is not worth a second code path: the peer is
+/// a client that already treats a closed socket as "reattach or give up".
+pub fn close_all() {
+    if let Ok(mut subs) = SUBS.lock() {
+        subs.clear();
+    }
+}
+
 fn send_to(id: u64, text: &str) {
     let frame = encode(OP_TEXT, text.as_bytes());
     let Ok(subs) = SUBS.lock() else { return };
