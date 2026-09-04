@@ -422,6 +422,24 @@ pub fn env_for_node(t: &crate::tree::Tree, node: u32, fallback: &vn_css::Env) ->
     env_of(k).unwrap_or(*fallback)
 }
 
+/// The environment a node introduces **because it is a painted root**, or
+/// `None` when it is not one.
+///
+/// [`env_for_node`] answers "which window is this node in" by walking upwards,
+/// which is the right question at a walk ROOT and the wrong one per node — it
+/// is O(depth) and the answer only ever changes at one kind of node. This is
+/// that node: a cascade walking downwards switches environments here and
+/// nowhere else, so a full-document pass costs one map lookup per child and
+/// still gives every window's subtree its own `@media` answers.
+///
+/// The primary window is deliberately absent from `ROOTS` (its painted root is
+/// `0`), so `t.root` keeps the fallback and a single-window app never gets
+/// here at all — the caller gates on [`any_secondary`].
+pub fn env_at_root(node: u32, fallback: &vn_css::Env) -> Option<vn_css::Env> {
+    let k = ROOTS.with(|m| m.borrow().get(&node).copied())?;
+    Some(env_of(k).unwrap_or(*fallback))
+}
+
 // ---------------------------------------------------------------------------
 // focus — the one field with enough call sites to deserve helpers
 // ---------------------------------------------------------------------------

@@ -234,6 +234,34 @@ describe("pop-out", () => {
     bunExpect(wideHue).toBeGreaterThan(0.5); // blue, in the main window
   }, T);
 
+  test("…and a THIRD window opening does not hand the pop-out the primary's answers back", async () => {
+    // The regression this exists for: the cascade resolved one `Env` per WALK
+    // ROOT, which is right for the pass in which a subtree changes hands
+    // (`set_painted_root` scopes that one to the subtree) and silently wrong
+    // for every full-document pass afterwards. Opening another window dirties
+    // the tree, `restyle_roots` collapses to `t.root`, the popped-out subtree
+    // is walked as part of THAT root — and answered against the primary
+    // window's viewport again. The palette went back to the wide branch and
+    // stayed there, with nothing in the tree, the logs or the styles dump
+    // saying so until you looked at the pixels.
+    //
+    // The env now rides the walk and switches at the one node where the window
+    // can change: a painted root (`windows::env_at_root`).
+    await app.locator(".pop-notes").click();
+    await until("the notes window to exist", async () =>
+      (await popouts()).find((p) => p.title === "Notes") ?? null);
+    // The open is DEFERRED, and the pass that was wrong is the one it triggers
+    // a frame later — so read the answer after it, not before.
+    await new Promise((r) => setTimeout(r, 600));
+    bunExpect(await backgroundHue(".panel")).toBeLessThan(0.2);
+
+    await app.locator(".pop-notes").click();
+    await until("the notes window to be gone", async () =>
+      (await popouts()).every((p) => p.title !== "Notes"));
+    await new Promise((r) => setTimeout(r, 600));
+    bunExpect(await backgroundHue(".panel")).toBeLessThan(0.2);
+  }, T);
+
   test("an <input> in the pop-out takes focus IN THAT WINDOW and receives keystrokes", async () => {
     // No `--window`: since phase 1 a devtools command resolves the window from
     // the NODE, because a node hangs under exactly one painted root and each

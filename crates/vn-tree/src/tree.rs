@@ -797,8 +797,22 @@ impl Tree {
             // (research/reports/m18/live-test-round2.md §4).
             // `(node, inherited custom properties, inherited `pointer-events:
             // none`?, inherited `color`)`.
-            let mut stack: Vec<(u32, std::rc::Rc<vn_css::Vars>, bool, Option<gpui::Hsla>)> =
-                Vec::new();
+            //
+            // The last element is the `@media` ENVIRONMENT this node answers
+            // against. It rides the walk rather than being resolved per node
+            // because it changes at exactly one kind of node — a painted root —
+            // and `windows::env_at_root` is the O(1) test for that, where
+            // `env_for_node`'s ancestor walk is O(depth).
+            let mut stack: Vec<(
+                u32,
+                std::rc::Rc<vn_css::Vars>,
+                bool,
+                Option<gpui::Hsla>,
+                vn_css::Env,
+            )> = Vec::new();
+            // Free for a single-window app: `ROOTS` is empty until a pop-out
+            // actually paints, so the per-child lookup below is never reached.
+            let multiwindow = crate::windows::any_secondary();
             for r in roots {
                 // **Which window's `@media` environment does this subtree
                 // answer against?** (docs/MULTIWINDOW.md §6.) An element knows
@@ -813,7 +827,6 @@ impl Tree {
                 // Free when there is no pop-out: `window_env` short-circuits to
                 // the published env the moment no window has a painted root.
                 let root_env = crate::windows::env_for_node(this, r, env);
-                let env = &root_env;
                 // A scoped root inherits from its parent's already-computed map;
                 // `restyle_roots` guarantees the parent has one (it promotes the
                 // root upwards until that holds), so this cannot read a stale
@@ -838,8 +851,10 @@ impl Tree {
                 // `color`, which is inherited when it declares none — so the
                 // effective colour rides down the walk beside the vars map.
                 let inherited_color = parent_computed.and_then(|c| c.color);
-                stack.push((r, inherited, inherited_inert, inherited_color));
-                while let Some((id, parent_vars, parent_inert, parent_color)) = stack.pop() {
+                stack.push((r, inherited, inherited_inert, inherited_color, root_env));
+                while let Some((id, parent_vars, parent_inert, parent_color, here_env)) =
+                    stack.pop()
+                {
                     let Some(n) = this.node(id) else { continue };
                     // Text and anchor nodes have no cascade of their own; they
                     // simply pass the map down to whatever hangs under them.
@@ -849,7 +864,7 @@ impl Tree {
                             n.inline.as_deref(),
                             &parent_vars,
                             parent_color,
-                            env,
+                            &here_env,
                             &mut diagnostics,
                         );
                         // `None` = the element declared nothing, so it takes the
@@ -867,7 +882,23 @@ impl Tree {
                         (parent_vars, parent_inert, parent_color)
                     };
                     for &c in n.children.iter().rev() {
-                        stack.push((c, child_vars.clone(), child_inert, child_color));
+                        // **The window boundary.** A popped-out node is painted
+                        // by a different window, so its whole subtree answers
+                        // that window's environment — and it must do so on a
+                        // FULL-DOCUMENT pass too, not only when the subtree
+                        // happens to be its own walk root. Resolving the env
+                        // once per walk root was right for the pass that
+                        // changes hands (`set_painted_root` scopes that one)
+                        // and silently wrong for every pass afterwards: opening
+                        // a THIRD window re-cascades the document from `t.root`
+                        // and used to hand the pop-out the primary's `@media`
+                        // answers back.
+                        let child_env = if multiwindow {
+                            crate::windows::env_at_root(c, env).unwrap_or(here_env)
+                        } else {
+                            here_env
+                        };
+                        stack.push((c, child_vars.clone(), child_inert, child_color, child_env));
                     }
                 }
             }
@@ -999,8 +1030,10 @@ thread_local! {
     /// from that window (see [`set_env`]).
     ///
     /// A pop-out's own environment lives in its `WindowState`
-    /// (`crate::windows::set_env`); `restyle_with` picks between them per walk
-    /// root. This one stays a single slot because it is also the FALLBACK for
+    /// (`crate::windows::set_env`); `restyle_with` carries the chosen one down
+    /// the cascade walk and switches at a painted root
+    /// (`crate::windows::env_at_root`), which is the only node where the window
+    /// can change. This one stays a single slot because it is also the FALLBACK for
     /// a pop-out that has been requested but has not painted yet, and because
     /// `matchMedia` — a JS-realm global, and there is one realm — means it
     /// (docs/MULTIWINDOW.md §7.7, A-M04).
