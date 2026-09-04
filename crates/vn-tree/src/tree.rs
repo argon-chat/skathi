@@ -558,6 +558,14 @@ impl Tree {
         self.nodes.iter().filter(|n| n.is_some()).count() as u32
     }
 
+    /// Marks one subtree for a re-cascade — the scoped half of [`mark_dirty`].
+    /// A pop-out resizing changes the `@media` answers for the subtree IT
+    /// paints and for nothing else (docs/MULTIWINDOW.md §6.3).
+    pub fn mark_restyle_subtree(&mut self, id: u32) {
+        self.dirty = true;
+        self.mark_restyle(id);
+    }
+
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
         self.dirty_all = true;
@@ -774,6 +782,20 @@ impl Tree {
             let mut stack: Vec<(u32, std::rc::Rc<vn_css::Vars>, bool, Option<gpui::Hsla>)> =
                 Vec::new();
             for r in roots {
+                // **Which window's `@media` environment does this subtree
+                // answer against?** (docs/MULTIWINDOW.md §6.) An element knows
+                // its window implicitly: it hangs under exactly one painted
+                // root, and each painted root belongs to exactly one window. So
+                // the walk root resolves it once for the whole subtree — the
+                // conditions (`min-width`, `prefers-color-scheme`,
+                // `display-mode`, `resolution`, `env(titlebar-area-*)`) are
+                // already per-`Env` PARAMETERS inside `compute_node`, so this
+                // costs one map lookup per walk root and nothing per node.
+                //
+                // Free when there is no pop-out: `window_env` short-circuits to
+                // the published env the moment no window has a painted root.
+                let root_env = crate::windows::env_for_node(this, r, env);
+                let env = &root_env;
                 // A scoped root inherits from its parent's already-computed map;
                 // `restyle_roots` guarantees the parent has one (it promotes the
                 // root upwards until that holds), so this cannot read a stale
@@ -951,9 +973,17 @@ thread_local! {
     /// compiled AGAIN against a different `rem` basis — see [`restyle_all`].
     static SHEET_SOURCE: RefCell<String> = const { RefCell::new(String::new()) };
     static ANIMATOR: RefCell<vn_css::Animator> = RefCell::new(vn_css::Animator::new());
-    /// The `@media` environment the cascade is currently evaluated against —
-    /// the native stand-in for a browser's viewport + OS preferences. The host
-    /// refreshes it every frame from the window (see [`set_env`]).
+    /// The `@media` environment the cascade is evaluated against **for
+    /// everything the PRIMARY window paints** — the native stand-in for a
+    /// browser's viewport + OS preferences. The host refreshes it every frame
+    /// from that window (see [`set_env`]).
+    ///
+    /// A pop-out's own environment lives in its `WindowState`
+    /// (`crate::windows::set_env`); `restyle_with` picks between them per walk
+    /// root. This one stays a single slot because it is also the FALLBACK for
+    /// a pop-out that has been requested but has not painted yet, and because
+    /// `matchMedia` — a JS-realm global, and there is one realm — means it
+    /// (docs/MULTIWINDOW.md §7.7, A-M04).
     static ENV: Cell<vn_css::Env> = Cell::new(vn_css::Env::default());
 }
 
@@ -967,7 +997,14 @@ pub fn set_env(env: vn_css::Env) -> bool {
     // Pushed unconditionally (the animator only reacts to the false→true edge)
     // so it cannot be missed on the one frame where the rest of the env happens
     // to equal the default.
+    //
+    // **Deliberately only from the primary window** (docs/MULTIWINDOW.md §5.3):
+    // `set_reduce_motion` is a whole-ANIMATOR flag and the animator is shared,
+    // so a second window pushing its own value would stomp the first's. It is
+    // an OS-wide preference — `App::reduce_motion()` answers the same in every
+    // window — so taking it from one window is not an approximation.
     set_reduce_motion(env.reduce_motion);
+    crate::windows::set_env(crate::windows::primary(), env);
     ENV.with(|e| {
         if e.get() == env {
             return false;
@@ -975,6 +1012,21 @@ pub fn set_env(env: vn_css::Env) -> bool {
         e.set(env);
         true
     })
+}
+
+/// Publishes ONE non-primary window's `@media` environment (§6). Returns `true`
+/// when it changed, in which case the subtree that window paints is marked for
+/// a scoped restyle — not the whole document, because nothing outside that
+/// window's painted root can have answered against this env.
+pub fn set_window_env(k: crate::windows::WinKey, env: vn_css::Env) -> bool {
+    if !crate::windows::set_env(k, env) {
+        return false;
+    }
+    let root = crate::windows::root_of(k);
+    if root != 0 {
+        with_tree(|t| t.mark_restyle_subtree(root));
+    }
+    true
 }
 
 pub fn env() -> vn_css::Env {
@@ -1232,6 +1284,19 @@ pub fn restyle_all() {
     // contains a `vh`/`vw`. Almost none do; the ones that do cannot do without
     // it (`max-h-[85vh]` is the only thing keeping reka's dialog inside the
     // window, and dropping it turned the dialog into a full-window black slab).
+    // **A-M05, the phase-1 guard (docs/MULTIWINDOW.md §6.2 option C).** `vw` /
+    // `vh` / `rem` are flattened to px at SHEET-COMPILE time, into one
+    // process-wide basis, so two differently-sized windows sharing a
+    // `vh`-using sheet would recompile the single `Engine` on every frame —
+    // and `set_engine` clears the animator, so every running transition would
+    // be cancelled while doing it. The basis therefore stays the PRIMARY
+    // window's, and we say so once.
+    //
+    // The gate is free for the apps that use no viewport unit, which is most of
+    // them: `uses_viewport_units()` is false and per-window `@media` is
+    // completely correct today. When it is true and a pop-out is open, the
+    // conditions are still per-window (above); only the LENGTHS come from the
+    // primary window's viewport.
     if vn_css::set_viewport_basis(env.viewport_width, env.viewport_height)
         && vn_css::uses_viewport_units()
     {
@@ -1239,6 +1304,15 @@ pub fn restyle_all() {
             "viewport basis is now {}x{}px — recompiling the stylesheet (it uses vh/vw units)",
             env.viewport_width, env.viewport_height
         ));
+    }
+    if vn_css::uses_viewport_units() && crate::windows::any_secondary() {
+        crate::render::warn_compat(
+            "multiwindow-viewport-units",
+            "A-M05: this stylesheet uses `vw`/`vh`/`rem`, which vue-native flattens to px when \
+             the sheet is COMPILED — so those lengths resolve against the PRIMARY window's \
+             viewport in every window, including pop-outs. `@media` conditions, `env()` and \
+             `prefers-color-scheme` are already per-window. See docs/MULTIWINDOW.md §6.2.",
+        );
     }
     for _ in 0..REM_BASIS_PASSES {
         ENGINE.with(|eng| {

@@ -30,11 +30,12 @@ use gpui::prelude::*;
 use gpui::{
     div, AnyElement, App, ClickEvent, Context, Empty, FocusHandle, KeyDownEvent, KeyUpEvent,
     MouseButton, MouseDownEvent, MouseUpEvent, Overflow, Point, ScrollHandle, ScrollWheelEvent,
-    SharedString, Subscription, Window, WindowControlArea,
+    SharedString, Window, WindowControlArea,
 };
 use vn_css::{WindowControl, WindowDrag};
 
 use crate::tree::{self, Kind, Tree};
+use crate::windows::{self, PendingMouseMove, Rect, WinKey};
 use crate::EventPayload;
 use crate::img as img_src;
 use vn_elements::{text_input, TextInputHandlers, TextInputOptions, TextInputState};
@@ -43,15 +44,15 @@ use vn_runtime::{with_published, Phase};
 thread_local! {
     /// Persistent per-node focus handles (minting a new handle each render
     /// would blur the node every frame). GC'd against tree liveness.
+    ///
+    /// **SHARED across windows, on purpose** (docs/MULTIWINDOW.md §5.1):
+    /// `cx.focus_handle()` mints its id in `App::focus_handles`, not in a
+    /// window, so one handle per node is correct however many windows exist —
+    /// and since a node id is painted by exactly one window (A-M02), a handle
+    /// can only ever be in one window's focus path anyway. What IS per-window
+    /// is the *subscription* to it (`WindowState::focus_subs`), because
+    /// `cx.on_focus(handle, window, …)` names a window.
     static FOCUS_HANDLES: RefCell<HashMap<u32, FocusHandle>> = RefCell::new(HashMap::new());
-    /// The node that owns keyboard focus (0 = none) — drives focus/blur events.
-    static FOCUSED_NODE: Cell<u32> = const { Cell::new(0) };
-    /// gpui `on_focus` subscriptions, one per focusable node. Focus can move by
-    /// mouse, by `Tab`, or programmatically; observing the handle catches all
-    /// three with one code path.
-    static FOCUS_SUBS: RefCell<HashMap<u32, Subscription>> = RefCell::new(HashMap::new());
-    /// The single "nothing in the window is focused any more" observer.
-    static FOCUS_LOST_SUB: RefCell<Option<Subscription>> = const { RefCell::new(None) };
     /// Persistent editor state per `<input>` node (content, selection, IME,
     /// undo, echo ring live across the per-frame element rebuild).
     static INPUT_STATES: RefCell<HashMap<u32, gpui::Entity<TextInputState>>> =
@@ -69,18 +70,6 @@ thread_local! {
     /// platform call over every installed font, so it happens once — see
     /// [`advise_missing_font`].
     static FONT_NAMES: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
-    /// Absolute (window-space) layout bounds of every node that was actually
-    /// PAINTED in the last frame gpui drew — see [`record_bounds`].
-    static BOUNDS: RefCell<HashMap<u32, (f32, f32, f32, f32)>> = RefCell::new(HashMap::new());
-    /// The previous frame's [`BOUNDS`], kept because the element tree for frame
-    /// N is BUILT before frame N's prepaint runs — so the only rectangle a
-    /// builder can read is last frame's. `<lottie>` needs it to rasterise into
-    /// a box whose size CSS expresses relatively (`width: 100%`, flex).
-    static PREV_BOUNDS: RefCell<HashMap<u32, (f32, f32, f32, f32)>> = RefCell::new(HashMap::new());
-    /// The focused node that was detached from the painted tree and must lose
-    /// gpui focus (0 = nothing pending). Set from `gc_node_state` (which has no
-    /// `Window`), applied by [`apply_pending_blur`] on the next frame that does.
-    static PENDING_BLUR: Cell<u32> = const { Cell::new(0) };
     /// Nodes lowered in the build currently running — the VN_PERF counter. One
     /// `Cell` increment per node, unconditionally: the branch a probe check
     /// would add costs as much as the add.
@@ -91,44 +80,20 @@ thread_local! {
     /// no box in the tree it was declared in, exactly like the cache container
     /// half of `<KeepAlive>`. The second window builds it as its own root
     /// through [`build_subtree`].
-    static POPPED_OUT: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
-    /// [`BOUNDS`], but keyed by the popped-out root that owns them — one inner
-    /// map per pop-out window, because each is in a different window's client
-    /// space and rotates on a different draw schedule. The primary window's map
-    /// stays [`BOUNDS`] so nothing on the single-window path pays for this.
     ///
-    /// This IS the "bounds become per-window" half of the phase-2 refactor
-    /// (docs/MULTIWINDOW.md §5.6), keyed by painted root rather than by
-    /// `WindowId` — which is the same key, since each painted root belongs to
-    /// exactly one window.
-    static SUB_BOUNDS: RefCell<HashMap<u32, HashMap<u32, (f32, f32, f32, f32)>>> =
-        RefCell::new(HashMap::new());
-    /// [`PREV_BOUNDS`] for the same maps.
-    static SUB_PREV_BOUNDS: RefCell<HashMap<u32, HashMap<u32, (f32, f32, f32, f32)>>> =
-        RefCell::new(HashMap::new());
-    /// The popped-out root whose PREPAINT recursion is currently running (0 =
-    /// the primary window's). Set by [`SubtreeScope`], which brackets exactly
-    /// that recursion — a build-time flag would not do, because `record_bounds`
-    /// is called at prepaint, long after the build returned.
-    static PAINTING_ROOT: Cell<u32> = const { Cell::new(0) };
+    /// SHARED, and correctly so: "somebody else paints this" is a fact about
+    /// the ONE tree, asked by whichever window is building. Which window that
+    /// somebody is lives in `windows::ROOTS`.
+    static POPPED_OUT: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
 }
 
 /// Marks (or unmarks) a node as painted by another window. Returns `true` when
 /// the flag actually moved, so the caller can skip a pointless repaint.
 pub fn set_popped_out(id: u32, on: bool) -> bool {
-    let moved = POPPED_OUT.with(|s| {
+    POPPED_OUT.with(|s| {
         let mut s = s.borrow_mut();
         if on { s.insert(id) } else { s.remove(&id) }
-    });
-    if moved && !on {
-        // Coming back: the rectangles this subtree had are in the CLOSED
-        // window's coordinate space and must not survive into the primary
-        // window's answers even for one frame — `bounds_of` falls back to these
-        // maps, and a stale pop-out rect is worse than `None`.
-        SUB_BOUNDS.with(|m| m.borrow_mut().remove(&id));
-        SUB_PREV_BOUNDS.with(|m| m.borrow_mut().remove(&id));
-    }
-    moved
+    })
 }
 
 /// Is this node currently painted by another window?
@@ -164,82 +129,75 @@ pub(crate) fn warn_compat(key: &str, msg: &str) {
 // (an all-zero rect). Devtools surfaces that as `bounds: null` rather than
 // inventing zeros.
 
-/// Called from `build_root`, i.e. once per `render()`: last frame's rectangles
-/// are about to be replaced by this frame's, and anything that stops being
-/// painted must stop having bounds.
+/// Called from `build_root` / `build_subtree`, i.e. once per `render()` of ONE
+/// window: that window's rectangles from its last draw are about to be replaced
+/// by this draw's, and anything it stops painting must stop having bounds in it.
 ///
-/// **It rotates the PRIMARY root's map only.** A popped-out subtree
-/// (docs/MULTIWINDOW.md) is painted by another window, on that window's own
-/// draw schedule, and its rectangles are in that window's coordinate space —
-/// so they live in [`SUB_BOUNDS`], keyed by the painted root, and are rotated
-/// by that subtree's own build. Rotating them here instead is what made a
-/// popped-out node read back as "not painted (bounds null)" on every frame the
-/// primary window drew and the pop-out did not, which is most of them.
-fn reset_bounds() {
-    let last = BOUNDS.with(|m| std::mem::take(&mut *m.borrow_mut()));
-    PREV_BOUNDS.with(|m| *m.borrow_mut() = last);
+/// **Per window, on that window's own draw schedule.** Before phase 1 this
+/// rotated one global map from the primary window's build, which wiped the
+/// rectangles a pop-out had recorded: a popped-out node read back as "not
+/// painted (bounds null)" on every frame the primary drew and the pop-out did
+/// not, which is most of them — breaking `getBoundingClientRect()`, every
+/// devtools query and therefore every assertion about a pop-out.
+fn reset_bounds(win: WinKey) {
+    windows::of(win, |w| {
+        let last = std::mem::take(&mut w.bounds);
+        w.prev_bounds = last;
+    });
 }
 
-fn record_bounds(id: u32, bounds: gpui::Bounds<gpui::Pixels>) {
+fn record_bounds(id: u32, bounds: gpui::Bounds<gpui::Pixels>, window: &Window) {
     let rect = (
         f32::from(bounds.origin.x),
         f32::from(bounds.origin.y),
         f32::from(bounds.size.width),
         f32::from(bounds.size.height),
     );
-    // Which painted root's prepaint recursion are we inside? 0 is the primary
-    // window's; anything else is a pop-out, and its rectangles are in THAT
-    // window's client space.
-    let root = PAINTING_ROOT.with(|c| c.get());
-    if root == 0 {
-        BOUNDS.with(|m| m.borrow_mut().insert(id, rect));
-    } else {
-        SUB_BOUNDS.with(|m| m.borrow_mut().entry(root).or_default().insert(id, rect));
-    }
+    // Which window's prepaint recursion are we inside? gpui just told us: this
+    // is the `&mut Window` it is running the recursion with. The spike had to
+    // infer it from a `SubtreeScope` element that bracketed the recursion,
+    // because the map was keyed by painted root rather than by window.
+    windows::here(window, |w| w.bounds.insert(id, rect));
 }
 
 /// `(x, y, width, height)` in CSS pixels, **relative to the window that painted
 /// it**, from the last frame this node was painted in — `None` when it was not
 /// painted at all.
-pub fn bounds_of(id: u32) -> Option<(f32, f32, f32, f32)> {
-    if let Some(r) = BOUNDS.with(|m| m.borrow().get(&id).copied()) {
-        return Some(r);
-    }
-    // At most a handful of pop-outs, and only reached for a node the primary
-    // window did not paint.
-    SUB_BOUNDS.with(|m| m.borrow().values().find_map(|sub| sub.get(&id).copied()))
+///
+/// Searches the primary window first and then every pop-out, which is the right
+/// answer to "where is it" and the wrong one to "what is at this point" — see
+/// [`bounds_in`].
+pub fn bounds_of(id: u32) -> Option<Rect> {
+    // At most a handful of windows, and `keys()` puts the primary first.
+    windows::keys()
+        .into_iter()
+        .find_map(|k| windows::peek(k, |w| w.bounds.get(&id).copied()).flatten())
 }
 
 /// The rectangle ONE window painted this node at.
 ///
 /// [`bounds_of`] answers "where is it", which is the right question for a
-/// single-window app and for `query`/`tree`: it searches the primary window's
-/// map and then every pop-out's. But a rectangle is only meaningful in the
-/// client space of the window that painted it, and two windows' maps hold
-/// numbers that are not comparable — so a question about a POINT ("what is
+/// single-window app and for `query`/`tree`. But a rectangle is only meaningful
+/// in the client space of the window that painted it, and two windows' maps
+/// hold numbers that are not comparable — so a question about a POINT ("what is
 /// under the pointer in window B") has to name the window, or it will happily
 /// return a node from the other one whose x/y happen to overlap.
 ///
-/// `root` is the popped-out node a window paints (`0` = the primary window),
-/// which is the same key [`SUB_BOUNDS`] uses because each painted root belongs
-/// to exactly one window.
-pub fn bounds_in(root: u32, id: u32) -> Option<(f32, f32, f32, f32)> {
-    if root == 0 {
-        return BOUNDS.with(|m| m.borrow().get(&id).copied());
-    }
-    SUB_BOUNDS.with(|m| m.borrow().get(&root).and_then(|sub| sub.get(&id).copied()))
+/// `root` is the node a window paints as its root (`0` = the primary window),
+/// which is how the devtools protocol addresses a window's coordinate space.
+pub fn bounds_in(root: u32, id: u32) -> Option<Rect> {
+    let k = windows::window_of_root(root)?;
+    windows::peek(k, |w| w.bounds.get(&id).copied()).flatten()
 }
 
 /// [`painted_bounds`] for one window — what a per-window highlight overlay
 /// positions itself from.
-pub fn painted_bounds_in(root: u32, id: u32) -> Option<(f32, f32, f32, f32)> {
-    if root == 0 {
-        return bounds_in(0, id)
-            .or_else(|| PREV_BOUNDS.with(|m| m.borrow().get(&id).copied()));
-    }
-    bounds_in(root, id).or_else(|| {
-        SUB_PREV_BOUNDS.with(|m| m.borrow().get(&root).and_then(|sub| sub.get(&id).copied()))
+pub fn painted_bounds_in(root: u32, id: u32) -> Option<Rect> {
+    let k = windows::window_of_root(root)?;
+    windows::peek(k, |w| {
+        w.bounds.get(&id).copied().or_else(|| w.prev_bounds.get(&id).copied())
     })
+    .flatten()
 }
 
 /// Where the app root was painted in the window's client area, in CSS px —
@@ -251,35 +209,52 @@ pub fn painted_bounds_in(root: u32, id: u32) -> Option<(f32, f32, f32, f32)> {
 /// window host reads it to publish `window.inner*`, the cascade's `@media`
 /// viewport and the `contentInset` metric from ONE number, so JS, CSS and
 /// `getBoundingClientRect()` cannot disagree about how big the viewport is.
-pub fn root_bounds() -> Option<(f32, f32, f32, f32)> {
-    bounds_of(crate::tree::read_tree(|t| t.root))
+pub fn root_bounds() -> Option<Rect> {
+    root_bounds_in(windows::primary())
+}
+
+/// [`root_bounds`] for one window: where THAT window's painted root landed in
+/// its own client area. This is the number a per-window `@media` viewport and a
+/// `VnWindow`'s `@resize` payload are derived from (docs/MULTIWINDOW.md §6).
+pub fn root_bounds_in(k: WinKey) -> Option<Rect> {
+    let root = match windows::root_of(k) {
+        0 => crate::tree::read_tree(|t| t.root),
+        popped => popped,
+    };
+    windows::peek(k, |w| {
+        w.bounds.get(&root).copied().or_else(|| w.prev_bounds.get(&root).copied())
+    })
+    .flatten()
 }
 
 /// Where the node is, asked from INSIDE a build.
 ///
-/// `build_root` clears the live map before it walks and prepaint refills it
+/// A build clears its window's live map before it walks and prepaint refills it
 /// afterwards, so during a build the only rectangles that exist are the
 /// previous frame's. Anything the host draws BESIDE the app tree in the same
 /// render — the devtools highlight overlay is the only such thing — has to read
 /// them from here or it would see nothing at all. Exact for an element at rest,
 /// one frame behind one that is moving.
-pub fn painted_bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
-    bounds_of(id).or_else(|| PREV_BOUNDS.with(|m| m.borrow().get(&id).copied()))
+pub fn painted_bounds(id: u32) -> Option<Rect> {
+    windows::keys().into_iter().find_map(|k| {
+        windows::peek(k, |w| {
+            w.bounds.get(&id).copied().or_else(|| w.prev_bounds.get(&id).copied())
+        })
+        .flatten()
+    })
 }
 
 /// The rectangle this node was painted at in the frame BEFORE the one being
 /// built. Only builders need this — `bounds_of` is the answer to "where is it
 /// now", which is what devtools and a future `getBoundingClientRect()` want.
 fn prev_size_of(id: u32) -> Option<(f32, f32)> {
-    let live = |r: Option<(f32, f32, f32, f32)>| {
-        r.filter(|(_, _, w, h)| *w > 0.0 && *h > 0.0).map(|(_, _, w, h)| (w, h))
-    };
-    if let Some(s) = live(PREV_BOUNDS.with(|m| m.borrow().get(&id).copied())) {
-        return Some(s);
-    }
-    SUB_PREV_BOUNDS
-        .with(|m| m.borrow().values().find_map(|sub| sub.get(&id).copied()))
-        .and_then(|r| live(Some(r)))
+    // The window that paints this node is the only one whose previous frame can
+    // have a rectangle for it, so this is a direct lookup rather than a search.
+    let k = windows::window_of_node(id);
+    windows::peek(k, |w| w.prev_bounds.get(&id).copied())
+        .flatten()
+        .filter(|(_, _, w, h)| *w > 0.0 && *h > 0.0)
+        .map(|(_, _, w, h)| (w, h))
 }
 
 /// A transparent wrapper that records the bounds gpui laid its inner element
@@ -340,7 +315,7 @@ impl gpui::Element for BoundsProbe {
         window: &mut Window,
         cx: &mut App,
     ) {
-        record_bounds(self.id, bounds);
+        record_bounds(self.id, bounds, window);
         if !self.root {
             self.inner.prepaint(window, cx);
             return;
@@ -386,48 +361,58 @@ fn probe_at(id: u32, root: bool, inner: AnyElement) -> AnyElement {
 pub(crate) fn gc_node_state() {
     let live = |id: u32| tree::read_tree(|t| t.node(id).is_some());
     FOCUS_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
-    FOCUS_SUBS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_STATES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
-    BOUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
-    PREV_BOUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
-    // The pop-out maps too, and the maps themselves when their root has stopped
-    // being popped out (or stopped existing — Vue may unmount a subtree that is
-    // still in another window; `on_window_closed` handles the window, this
-    // handles the map).
-    for map in [&SUB_BOUNDS, &SUB_PREV_BOUNDS] {
-        map.with(|m| {
-            let mut m = m.borrow_mut();
-            m.retain(|&root, _| live(root) && popped_out(root));
-            for sub in m.values_mut() {
-                sub.retain(|&id, _| live(id));
-            }
-        });
-    }
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
     crate::svg::gc(live);
-    let focused = FOCUSED_NODE.with(|f| f.get());
-    if focused == 0 {
-        return;
-    }
-    if !live(focused) {
-        FOCUSED_NODE.with(|f| f.set(0));
-        return;
-    }
+    // This function runs off a JS WAVE, not off a frame, so it has no `Window`
+    // and cannot ask which one it is standing in — one of exactly two such
+    // paths (docs/MULTIWINDOW.md §5.6). It iterates every window instead, which
+    // is what it already does for every node.
+    windows::each(|_, w| {
+        w.bounds.retain(|&id, _| live(id));
+        w.prev_bounds.retain(|&id, _| live(id));
+        w.focus_subs.retain(|&id, _| live(id));
+    });
     // The browser rule: **detaching the focused element blurs it.** A node can
     // stay allocated and yet stop being part of the document — `<KeepAlive>`
-    // moves a deactivated page into a container that is never inserted, and
-    // `build_root` walks from `t.root` only, so that subtree is not painted.
-    // Liveness (above) is not enough: gpui would keep routing keystrokes to a
-    // handle whose element is nowhere in the tree, so a deactivated page's
-    // `<input>` kept its focus ring AND kept receiving `keydown` while the
-    // characters went nowhere (research/reports/m10/keepalive-state.md §4.1).
-    if !tree::read_tree(|t| reaches_root(t, focused)) {
-        PENDING_BLUR.with(|p| p.set(focused));
+    // moves a deactivated page into a container that is never inserted, and a
+    // build walks from its painted root only, so that subtree is not painted.
+    // Liveness is not enough: gpui would keep routing keystrokes to a handle
+    // whose element is nowhere in the tree, so a deactivated page's `<input>`
+    // kept its focus ring AND kept receiving `keydown` while the characters
+    // went nowhere (research/reports/m10/keepalive-state.md §4.1).
+    //
+    // Per window, because focus is: two windows can each have a focused node,
+    // and only one of them may have been detached.
+    let mut blur: Vec<(WinKey, u32)> = Vec::new();
+    windows::each(|k, w| {
+        if w.focused_node != 0 && !live(w.focused_node) {
+            w.focused_node = 0;
+        } else if w.focused_node != 0 {
+            blur.push((k, w.focused_node));
+        }
+    });
+    for (k, focused) in blur {
+        if !tree::read_tree(|t| reaches_painted_root(t, focused)) {
+            windows::of(k, |w| w.pending_blur = focused);
+        }
     }
+}
+
+/// Does `id` still hang off SOME painted root — the document root, or a node a
+/// pop-out window paints?
+///
+/// A popped-out node is still parented all the way to `t.root` (D-M05: a
+/// pop-out is a PAINT-level detachment, not a tree-level one), so
+/// [`reaches_root`] already answers `true` for everything inside one. This
+/// wrapper exists to say that out loud at the focus call sites, which are the
+/// ones where getting it wrong blurs a pop-out's `<input>` every frame.
+fn reaches_painted_root(t: &Tree, id: u32) -> bool {
+    reaches_root(t, id)
 }
 
 /// Does `id` still hang off the painted root? Walks `Node::parent`, which is a
@@ -473,11 +458,17 @@ fn reaches_root(t: &Tree, id: u32) -> bool {
 /// Anything the app focuses for real — an `<input>`, a `tabindex`ed node — takes
 /// over immediately and stays, because the root is its ANCESTOR in the dispatch
 /// tree and so keeps receiving the keystrokes anyway.
+/// **Per window**: each window focuses ITS OWN painted root, not the document
+/// root. A pop-out whose fallback focus target lived in the primary window
+/// would route every keystroke it received to an element it does not paint.
 pub(crate) fn ensure_root_focus(window: &mut Window, cx: &mut App) {
     if window.focused(cx).is_some() {
         return;
     }
-    let root = tree::read_tree(|t| t.root);
+    let root = match windows::root_of(windows::key(window)) {
+        0 => tree::read_tree(|t| t.root),
+        popped => popped,
+    };
     if root == 0 {
         return;
     }
@@ -539,14 +530,15 @@ pub(crate) fn dispatch_anim_events(window: &mut Window, cx: &mut App) -> bool {
 }
 
 pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
-    let pending = PENDING_BLUR.with(|p| p.replace(0));
+    let k = windows::key(window);
+    let pending = windows::of(k, |w| std::mem::replace(&mut w.pending_blur, 0));
     // Re-check: focus may legitimately have moved on since the mutation (the
     // same wave that detached the page can focus something on the new one), and
     // a page can be re-attached before this frame runs.
-    if pending == 0 || FOCUSED_NODE.with(|f| f.get()) != pending {
+    if pending == 0 || windows::focused_node(k) != pending {
         return;
     }
-    if tree::read_tree(|t| reaches_root(t, pending)) {
+    if tree::read_tree(|t| reaches_painted_root(t, pending)) {
         return;
     }
     // gpui first — this is what stops keystrokes reaching the detached node.
@@ -554,7 +546,7 @@ pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
     // pending-input observers, which is what we want here: the node that owned
     // the chord is gone.
     window.blur(cx);
-    FOCUSED_NODE.with(|f| f.set(0));
+    windows::set_focused_node(k, 0);
     js_dispatch_app(pending, tree::EV_BLUR, &EventPayload::default(), window, cx);
     // `:focus` rungs read the handle live, so the repaint cannot wait for a
     // JS handler to have changed something.
@@ -627,23 +619,15 @@ fn dom_key(k: &str) -> String {
 /// out — without this, one move dispatched k full capture/bubble walks for k
 /// nested listeners, and each JS mutation forced a full-tree rebuild. That is
 /// the exact shape that took shadcn to 10 fps under the cursor.
-struct PendingMouseMove {
-    id: u32,
-    position: Point<gpui::Pixels>,
-    button: f64,
-    modifiers: gpui::Modifiers,
-}
-
-thread_local! {
-    static PENDING_MOUSE_MOVE: std::cell::RefCell<Option<PendingMouseMove>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Deliver the frame's coalesced `mousemove` (if any). Called by the host's
-/// pump BEFORE the JS pump, so everything the handler schedules (Vue's queue,
-/// microtasks) drains in the same frame.
+/// (The struct itself lives in [`crate::windows`] — it is one field of
+/// `WindowState`, because two windows can be moved over at once and one slot
+/// dropped whichever move arrived second.)
+///
+/// Deliver the frame's coalesced `mousemove` (if any) for ONE window. Called by
+/// the host's pump BEFORE the JS pump, so everything the handler schedules
+/// (Vue's queue, microtasks) drains in the same frame.
 pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
-    let Some(p) = PENDING_MOUSE_MOVE.with(|c| c.borrow_mut().take()) else { return };
+    let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
     js_dispatch_app(p.id, tree::EV_MOUSEMOVE, &payload, window, cx);
 }
@@ -738,11 +722,16 @@ fn js_dispatch<V: 'static>(
 /// DOM order for a focus move: `blur` on the node that had it, then `focus` on
 /// the node that got it. Neither event bubbles (the JS runtime knows).
 fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Context<V>) {
-    let old = FOCUSED_NODE.with(|f| f.get());
+    // Per window (docs/MULTIWINDOW.md §5.2): with one slot, window B focusing
+    // an input fired `blur` on window A's — a wrong DOM event, not a wrong
+    // pixel. gpui hands the observer the window the focus moved in, so "which
+    // window" is not inferred here either.
+    let k = windows::key(window);
+    let old = windows::focused_node(k);
     if old == new_focus {
         return;
     }
-    FOCUSED_NODE.with(|f| f.set(new_focus));
+    windows::set_focused_node(k, new_focus);
     if old != 0 {
         js_dispatch(old, tree::EV_BLUR, &EventPayload::default(), window, cx);
     }
@@ -758,22 +747,28 @@ fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Co
 /// Subscribes `id` to its handle's focus changes, once. gpui fires these from
 /// the draw that first shows the new focus state, i.e. outside any tree borrow.
 fn watch_focus<V: 'static>(id: u32, handle: &FocusHandle, window: &mut Window, cx: &mut Context<V>) {
-    if FOCUS_SUBS.with(|m| m.borrow().contains_key(&id)) {
+    // **Per window.** `cx.on_focus(handle, window, …)` subscribes against ONE
+    // window, so a node whose first build happened in the primary window had no
+    // subscription in the pop-out that later painted it — and its `focus` /
+    // `blur` events simply never fired there (docs/MULTIWINDOW.md §5.1).
+    let k = windows::key(window);
+    if windows::of(k, |w| w.focus_subs.contains_key(&id)) {
         return;
     }
     let sub = cx.on_focus(handle, window, move |_, window, cx| {
         focus_transition(id, window, cx);
     });
-    FOCUS_SUBS.with(|m| m.borrow_mut().insert(id, sub));
+    windows::of(k, |w| w.focus_subs.insert(id, sub));
     // Focus leaving the window's tree entirely (the focused node was removed,
-    // or something unfocusable was clicked) has to blur the last node.
-    if FOCUS_LOST_SUB.with(|s| s.borrow().is_some()) {
+    // or something unfocusable was clicked) has to blur the last node — in the
+    // window it left, which is why this observer is per-window too.
+    if windows::of(k, |w| w.focus_lost.is_some()) {
         return;
     }
     let sub = cx.on_focus_lost(window, |_, window, cx| {
         focus_transition(0, window, cx);
     });
-    FOCUS_LOST_SUB.with(|s| *s.borrow_mut() = Some(sub));
+    windows::of(k, |w| w.focus_lost = Some(sub));
 }
 
 /// The DOM `tabindex` attribute: `>= 0` is a tab stop at that index, `< 0` is
@@ -811,40 +806,57 @@ fn focus_handle_for<V: 'static>(id: u32, tab_index: Option<isize>, cx: &mut Cont
 // window-drag / --window-control  (docs/WINDOWING.md §2.1, §2.2, §5.1)
 // ---------------------------------------------------------------------------
 
-thread_local! {
-    /// Whether the frame currently being built painted ANY `window-drag: move`
-    /// region. The host reads it to retire its fallback titlebar the first
-    /// time the app declares a drag region of its own (§4.2 mode 2) — never
-    /// silently removing a behaviour an app with no config still relies on.
-    static ANY_DRAG_REGION: Cell<bool> = const { Cell::new(false) };
-    /// Every control hitbox this frame emitted, `(node id, area)`.
-    ///
-    /// Drag regions are the one part of this surface that a synthesised
-    /// `ctl.ts click` can never exercise: `WM_NCHITTEST` is a real OS message
-    /// and the content dispatch path never reaches it. This is the
-    /// eval-reachable debug hook the acceptance transcript needs instead
-    /// (docs/WINDOWING.md §13 "Acceptance").
-    static CONTROL_HITBOXES: RefCell<Vec<(u32, WindowControlArea)>> = const { RefCell::new(Vec::new()) };
-    /// `titleBarStyle: "default"` — the OS draws the caption and owns its
-    /// buttons, so the whole CSS chrome surface is inert (§4.2 mode 3).
-    static OS_CHROME: Cell<bool> = const { Cell::new(false) };
+// The chrome trio — `any_drag_region`, `control_hitboxes`, `os_chrome` — are
+// fields of `WindowState` (docs/MULTIWINDOW.md §5.2, §7.6). Each is a fact
+// about ONE window's caption:
+//
+// * whether the frame this window just built declared a `window-drag: move`
+//   region is what retires THAT window's fallback titlebar;
+// * the hitbox list describes the chrome of the window that emitted it, and a
+//   pop-out's build used to CLEAR the primary window's;
+// * `titleBarStyle` genuinely differs between windows — `<VnWindow chrome>`
+//   exists to say so, and the spike's pop-out (a real `WS_CAPTION`) already
+//   disagreed with a custom-chrome primary window.
+
+/// Declares whether a window has OS-drawn chrome. Set for the primary window by
+/// `vn-app`'s `window::init` before its first frame, and for a pop-out by
+/// `popout::open_now` from its `chrome` prop — `titleBarStyle` cannot change at
+/// runtime (D-25), so this never flips mid-session for a given window.
+pub fn set_os_chrome_in(k: WinKey, on: bool) {
+    windows::of(k, |w| w.os_chrome = on);
 }
 
-/// Declares whether this window has OS-drawn chrome. Set once by `vn-app`'s
-/// `window::init`, before the first frame is built — `titleBarStyle` cannot
-/// change at runtime (D-25), so this never flips mid-session.
+/// [`set_os_chrome_in`] for the primary window, which is what a single-window
+/// host means and the only thing that existed before phase 1.
 pub fn set_os_chrome(on: bool) {
-    OS_CHROME.with(|c| c.set(on));
+    set_os_chrome_in(windows::primary(), on);
 }
 
-/// `true` if the last painted frame contained a `window-drag: move` region.
+/// `true` if the last frame THIS window painted contained a `window-drag: move`
+/// region.
+pub fn painted_drag_region_in(k: WinKey) -> bool {
+    windows::peek(k, |w| w.any_drag_region).unwrap_or(false)
+}
+
+/// [`painted_drag_region_in`] for the primary window.
 pub fn painted_drag_region() -> bool {
-    ANY_DRAG_REGION.with(|c| c.get())
+    painted_drag_region_in(windows::primary())
 }
 
-/// The control hitboxes the last painted frame emitted, in paint order.
+/// The control hitboxes the last frame THIS window painted emitted, in paint
+/// order.
+///
+/// Drag regions are the one part of this surface that a synthesised
+/// `ctl.ts click` can never exercise: `WM_NCHITTEST` is a real OS message and
+/// the content dispatch path never reaches it. This is the eval-reachable debug
+/// hook the acceptance transcript needs instead (docs/WINDOWING.md §13).
+pub fn control_hitboxes_in(k: WinKey) -> Vec<(u32, WindowControlArea)> {
+    windows::peek(k, |w| w.control_hitboxes.clone()).unwrap_or_default()
+}
+
+/// [`control_hitboxes_in`] for the primary window.
 pub fn control_hitboxes() -> Vec<(u32, WindowControlArea)> {
-    CONTROL_HITBOXES.with(|v| v.borrow().clone())
+    control_hitboxes_in(windows::primary())
 }
 
 /// Folds the one INHERITED property vn-css carries and decides whether this
@@ -960,6 +972,7 @@ fn with_control_area<E: gpui::InteractiveElement>(
     e: E,
     id: u32,
     area: Option<WindowControlArea>,
+    win: WinKey,
 ) -> E {
     let Some(area) = area else { return e };
     // Mode 3: the OS owns the caption. A hitbox here would hand `DefWindowProc`
@@ -967,7 +980,7 @@ fn with_control_area<E: gpui::InteractiveElement>(
     // content under it would stop receiving clicks and start dragging the
     // window, which is not what "the OS draws the titlebar" means anywhere
     // else. Inert, once, out loud (A-25).
-    if OS_CHROME.with(|c| c.get()) {
+    if windows::peek(win, |w| w.os_chrome).unwrap_or(false) {
         warn_compat(
             "window-drag/os-chrome",
             "`window-drag` / `--window-control` do nothing under `titleBarStyle: \"default\"` — \
@@ -977,33 +990,49 @@ fn with_control_area<E: gpui::InteractiveElement>(
         );
         return e;
     }
-    if area == WindowControlArea::Drag {
-        ANY_DRAG_REGION.with(|c| c.set(true));
-    }
-    CONTROL_HITBOXES.with(|v| v.borrow_mut().push((id, area)));
+    windows::of(win, |w| {
+        if area == WindowControlArea::Drag {
+            w.any_drag_region = true;
+        }
+        w.control_hitboxes.push((id, area));
+    });
     e.window_control_area(area)
 }
 
 /// Builds the current tree root (or nothing) for the hosting view `V`.
+///
+/// This is the PRIMARY window's entry point; [`build_subtree`] is a pop-out's,
+/// and the two do the same per-window bookkeeping against their own window.
 pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyElement {
     // ONE clock read per frame: nodes animating together must sample the same
     // instant or they skew.
     let now = std::time::Instant::now();
     let span = crate::perf::Span::start();
     BUILT.with(|c| c.set(0));
-    // This frame's rectangles replace last frame's wholesale — see the bounds
-    // side map above. `render()` is the only entry point, so this is the only
-    // place that can know a new element tree is being built.
-    reset_bounds();
-    ANY_DRAG_REGION.with(|c| c.set(false));
-    CONTROL_HITBOXES.with(|v| v.borrow_mut().clear());
+    let win = windows::key(window);
+    // The window that paints `Tree::root` is the primary one by definition, and
+    // this is the only place that knows it — declared here rather than passed
+    // in from the host so the two can never disagree.
+    if !windows::is_primary(win) {
+        windows::set_primary(win);
+    }
+    // This draw's rectangles replace this window's last draw's wholesale — see
+    // the bounds side map above. `render()` is the only entry point, so this is
+    // the only place that can know a new element tree is being built.
+    reset_bounds(win);
+    windows::of(win, |w| {
+        w.any_drag_region = false;
+        w.control_hitboxes.clear();
+    });
     let el = tree::read_tree(|t| {
         if t.root == 0 {
             Empty.into_any_element()
         } else {
             // The root inherits nothing: `window-drag`'s initial value is
             // `none`, spelled here as "nobody declared anything".
-            build_node(t, t.root, window, cx, now, None, None, None, None, Stacking::default())
+            build_node(
+                t, t.root, t.root, window, cx, now, None, None, None, None, Stacking::default(),
+            )
         }
     });
     crate::perf::note_build(span.ms(), BUILT.with(|c| c.get()));
@@ -1015,108 +1044,51 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
 /// same id, same listeners, same computed style, same Vue reactivity — only the
 /// gpui element tree it is lowered into is a different one.
 ///
-/// Deliberately does **not** do build_root's per-frame resets:
+/// Phase 1 makes it a peer of [`build_root`] rather than a stripped-down
+/// version of it. All three things the spike had to skip are now done, against
+/// THIS window's state instead of the primary's:
 ///
-/// * `reset_bounds()` rotates the bounds side map, which is keyed by node id
-///   and shared by every window. The primary root's build owns that rotation
-///   because it is the one that runs from the pump's own window; a second
-///   window's build ADDS its rectangles to the same frame's map. The spike's
-///   known cost is that a popped-out node's `getBoundingClientRect()` is stale
-///   by up to one frame group when the two windows draw out of step — see the
-///   report's honest-scoping section for the epoch-keyed fix.
-/// * `CONTROL_HITBOXES` / `ANY_DRAG_REGION` describe the PRIMARY window's
-///   chrome (the fallback-titlebar retire signal, `__vn_window_hitboxes`), so a
-///   second window must not clear them. A popped-out window gets OS chrome in
-///   the spike and therefore declares none of its own.
+/// * **the bounds rotation** — per window, on this window's own draw schedule,
+///   so a pop-out's `getBoundingClientRect()` is never wiped by a frame the
+///   primary window drew and this one did not;
+/// * **`control_hitboxes` / `any_drag_region`** — accumulated into this
+///   window's slots, which is what makes `chrome: "hidden"` and a pop-out's own
+///   custom titlebar work (§7.6);
+/// * **the root treatment** — `id` is the root OF THIS BUILD, so it gets
+///   `build_node`'s 100 %×100 %, `Overflow::Scroll` and `track_focus` (§7.1).
+///   The spike's `PopoutShell` wrapped the subtree in `div().size_full()` to
+///   fake the first two and could not fake the third at all, which is why a
+///   pop-out could not hold keyboard focus.
 pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<V>) -> AnyElement {
     let now = std::time::Instant::now();
-    // This subtree's own bounds rotation, on this window's own draw schedule.
-    let last = SUB_BOUNDS.with(|m| m.borrow_mut().remove(&id).unwrap_or_default());
-    SUB_PREV_BOUNDS.with(|m| {
-        m.borrow_mut().insert(id, last);
+    let win = windows::key(window);
+    // Registered from the build itself, so "which window paints this node"
+    // cannot drift from what is actually on screen — it is what
+    // `windows::window_of_node` walks to, and therefore what routes atlas
+    // tiles, `@media` environments and hit tests.
+    windows::set_painted_root(win, id);
+    reset_bounds(win);
+    windows::of(win, |w| {
+        w.any_drag_region = false;
+        w.control_hitboxes.clear();
     });
-    let inner = tree::read_tree(|t| {
+    tree::read_tree(|t| {
         if t.node(id).is_none() {
             return Empty.into_any_element();
         }
         // A popped-out root inherits nothing — it is a root, like `t.root`.
-        build_node(t, id, window, cx, now, None, None, None, None, Stacking::default())
-    });
-    SubtreeScope { root: id, inner }.into_any_element()
-}
-
-/// A transparent wrapper that brackets one popped-out subtree's prepaint
-/// recursion, so every `record_bounds` inside it lands in that subtree's own
-/// map instead of the primary window's. Contributes no layout of its own, the
-/// same way [`BoundsProbe`] does not.
-struct SubtreeScope {
-    root: u32,
-    inner: AnyElement,
-}
-
-impl gpui::IntoElement for SubtreeScope {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
-impl gpui::Element for SubtreeScope {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<gpui::ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&gpui::GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (gpui::LayoutId, ()) {
-        (self.inner.request_layout(window, cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&gpui::GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        _bounds: gpui::Bounds<gpui::Pixels>,
-        _request_layout: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        // Saved and restored rather than zeroed: nesting is not legal today
-        // (A-M01 flattens a nested `VnWindow`), and a scope that assumed it
-        // would be the outermost one would be a landmine the day it is.
-        let prev = PAINTING_ROOT.with(|c| c.replace(self.root));
-        self.inner.prepaint(window, cx);
-        PAINTING_ROOT.with(|c| c.set(prev));
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&gpui::GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        _bounds: gpui::Bounds<gpui::Pixels>,
-        _request_layout: &mut (),
-        _prepaint: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        self.inner.paint(window, cx);
-    }
+        build_node(t, id, id, window, cx, now, None, None, None, None, Stacking::default())
+    })
 }
 
 fn build_node<V: 'static>(
     t: &Tree,
     id: u32,
+    // `root` is the root of the build this node is part of: `t.root` in the
+    // primary window, the popped-out node in a pop-out. Threaded explicitly
+    // rather than looked up, because "is this the root" is a property of the
+    // BUILD, not of the tree (docs/MULTIWINDOW.md §7.1).
+    root: u32,
     window: &mut Window,
     cx: &mut Context<V>,
     now: std::time::Instant,
@@ -1130,6 +1102,9 @@ fn build_node<V: 'static>(
         return Empty.into_any_element();
     };
     BUILT.with(|c| c.set(c.get() + 1));
+    // The window this build is lowering into. gpui handed it to us; nothing is
+    // inferred (docs/MULTIWINDOW.md §5.6).
+    let win = windows::key(window);
     // `window-drag` is inherited (the CSSWG resolved that explicitly) and
     // vn-css has no inherited properties at all, so the fold happens here, on
     // the way down. A browser allows the property on a replaced element too,
@@ -1221,10 +1196,10 @@ fn build_node<V: 'static>(
             &extras,
             probe(id, build_svg(t, id, node, window, cx, now, control_area)),
         ),
-        Kind::Element => stack(z_priority, &extras, probe_at(id, id == t.root, {
+        Kind::Element => stack(z_priority, &extras, probe_at(id, id == root, {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
-            let mut d = with_control_area(div().id(id as usize), id, control_area);
+            let mut d = with_control_area(div().id(id as usize), id, control_area, win);
             if let Some(cs) = &node.computed {
                 d = apply_computed_style(d, cs, id, now);
             }
@@ -1244,12 +1219,16 @@ fn build_node<V: 'static>(
             apply_percentage_flex_basis(d.style(), t, node);
             // "The window IS the root" (see `createApp().mount()`): the root
             // element is vue-native's viewport, so it fills the box the host
-            // gives it unless a rule says otherwise. Without this it sizes to
+            // gives it unless a rule says otherwise. **The root of THIS build**
+            // — `t.root` in the primary window, the popped-out node in a
+            // pop-out — because a pop-out's window is that subtree's viewport
+            // in exactly the same sense (docs/MULTIWINDOW.md §7.1).
+            // Without this it sizes to
             // its CONTENT, and then `height: 100%` on its child resolves
             // against an indefinite parent — which is to say `overflow: auto`
             // never scrolls and `position: fixed` (laid out against the root)
             // lands wherever the content happens to end.
-            if id == t.root {
+            if id == root {
                 let style = d.style();
                 let full = gpui::Length::Definite(gpui::relative(1.0));
                 style.size.width.get_or_insert(full);
@@ -1450,7 +1429,9 @@ fn build_node<V: 'static>(
                         laid_out_children(t, node)
                             .into_iter()
                             .map(|c| {
-                                build_node(t, c, window, cx, now, drag, case, ws, align, stacking)
+                                build_node(
+                                    t, c, root, window, cx, now, drag, case, ws, align, stacking,
+                                )
                             }),
                     );
                 }
@@ -2508,15 +2489,14 @@ where
         // No dispatch here — stash and let the pump deliver ONE mousemove per
         // frame (see PendingMouseMove). Same position = same physical move
         // seen by an outer listener: the innermost already claimed it.
-        e = e.on_mouse_move(cx.listener(move |_, ev: &gpui::MouseMoveEvent, _window, _cx| {
-            PENDING_MOUSE_MOVE.with(|c| {
-                let mut slot = c.borrow_mut();
-                if let Some(p) = slot.as_ref() {
+        e = e.on_mouse_move(cx.listener(move |_, ev: &gpui::MouseMoveEvent, window, _cx| {
+            windows::here(window, |w| {
+                if let Some(p) = w.pending_mouse_move.as_ref() {
                     if p.position == ev.position {
                         return;
                     }
                 }
-                *slot = Some(PendingMouseMove {
+                w.pending_mouse_move = Some(PendingMouseMove {
                     id,
                     position: ev.position,
                     button: button_code_opt(ev.pressed_button),
@@ -2798,6 +2778,7 @@ fn build_img<V: 'static>(
     now: std::time::Instant,
     control_area: Option<WindowControlArea>,
 ) -> AnyElement {
+    let win = windows::key(window);
     let src = t.prop(id, "src").unwrap_or("").to_string();
     let alt = t.prop(id, "alt").unwrap_or("").to_string();
 
@@ -2805,7 +2786,7 @@ fn build_img<V: 'static>(
         // Nothing loadable at all (empty/unsupported `src` — already advised).
         // A browser still lays the element out and paints the alt text, so the
         // node keeps its box and its styles.
-        let mut d = with_control_area(div().id(id as usize), id, control_area);
+        let mut d = with_control_area(div().id(id as usize), id, control_area, win);
         if let Some(cs) = &node.computed {
             d = apply_computed_style(d, cs, id, now);
         }
@@ -2813,7 +2794,7 @@ fn build_img<V: 'static>(
         return d.child(alt_element(&alt)).into_any_element();
     };
 
-    let mut e = with_control_area(gpui::img(source).id(id as usize), id, control_area);
+    let mut e = with_control_area(gpui::img(source).id(id as usize), id, control_area, win);
     if let Some(cs) = &node.computed {
         e = apply_computed_style(e, cs, id, now);
     }
@@ -2992,6 +2973,7 @@ fn build_svg<V: 'static>(
     now: std::time::Instant,
     control_area: Option<WindowControlArea>,
 ) -> AnyElement {
+    let win = windows::key(window);
     let extras = extras_of(node);
     let doc = crate::svg::document(t, id, extras.fill, extras.stroke);
     if crate::svg::last_had_explicit_color() {
@@ -3008,7 +2990,7 @@ fn build_svg<V: 'static>(
     // property on the style now (m13 item 2), so `Style::paint` pushes the
     // matrix for the whole element and `Window::paint_svg` composes it into the
     // sprite. Setting it here as well would apply it twice.
-    let mut e = with_control_area(gpui::svg().data(&doc).id(id as usize), id, control_area);
+    let mut e = with_control_area(gpui::svg().data(&doc).id(id as usize), id, control_area, win);
     let mut inherit = true;
     if let Some(cs) = &node.computed {
         inherit = cs.base.text.color.is_none();
@@ -3107,10 +3089,11 @@ fn build_lottie<V: 'static>(
     now: std::time::Instant,
     control_area: Option<WindowControlArea>,
 ) -> AnyElement {
+    let win = windows::key(window);
     // Load (once per `src`) and push this frame's props into the transport.
-    let intrinsic = crate::lottie::sync(t, id);
+    let intrinsic = crate::lottie::sync(t, id, win);
 
-    let mut d = with_control_area(div().id(id as usize), id, control_area);
+    let mut d = with_control_area(div().id(id as usize), id, control_area, win);
     if let Some(cs) = &node.computed {
         d = apply_computed_style(d, cs, id, now);
     }
@@ -3261,10 +3244,11 @@ fn build_video<V: 'static>(
     now: std::time::Instant,
     control_area: Option<WindowControlArea>,
 ) -> AnyElement {
+    let win = windows::key(window);
     // Load (once per `src`) and push this frame's props into the transport.
-    let intrinsic = crate::video::sync(t, id);
+    let intrinsic = crate::video::sync(t, id, win, window.scale_factor());
 
-    let mut d = with_control_area(div().id(id as usize), id, control_area);
+    let mut d = with_control_area(div().id(id as usize), id, control_area, win);
     if let Some(cs) = &node.computed {
         d = apply_computed_style(d, cs, id, now);
     }

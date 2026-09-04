@@ -60,6 +60,14 @@ struct Entry {
     /// *prop* (a `v-bind` that never changes must not restart a paused
     /// animation every frame).
     autoplay: bool,
+    /// **The window that painted this node last** — recorded at creation, not
+    /// at drop (docs/MULTIWINDOW.md §5.1). `Window::drop_image` is per-window:
+    /// the sprite atlas belongs to the window, so a raster has to go back to
+    /// the window that put it there. By the time `gc` runs the node is already
+    /// out of the tree and the ancestor walk that would answer "which window"
+    /// has nothing left to walk — which is why it is stored rather than
+    /// derived.
+    window: crate::windows::WinKey,
 }
 
 thread_local! {
@@ -67,10 +75,21 @@ thread_local! {
     /// Wall clock for the tick. `None` until the first frame — the pump's own
     /// cadence is what defines `dt`, exactly as it does for CSS transitions.
     static LAST_TICK: Cell<Option<Instant>> = const { Cell::new(None) };
-    /// Rasters whose node was GC'd. `gc_node_state` has no `Window`, and
-    /// dropping a `RenderImage` without `Window::drop_image` leaks its atlas
-    /// tiles (CONTRACT.md §3) — so they wait here for the next frame that does.
-    static PENDING_DROPS: RefCell<Vec<Arc<RenderImage>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Rasters whose node was GC'd. `gc_node_state` has no `Window`, and dropping a
+/// `RenderImage` without `Window::drop_image` leaks its atlas tiles
+/// (CONTRACT.md §3) — so they wait for the next frame that does.
+///
+/// **Queued against the window that created the tile**
+/// (`WindowState::pending_drops`), because the atlas is the window's. gpui's
+/// `App::drop_image(image, Some(window))` sweeps every *other* window's atlas
+/// as a courtesy, but the one window it cannot reach through `App::windows` is
+/// precisely the one whose update we are standing inside — so the queue has to
+/// be keyed by the window that will drain it, or a pop-out's tiles are freed
+/// from every atlas except the one holding them.
+fn queue_drops(win: crate::windows::WinKey, images: impl IntoIterator<Item = Arc<RenderImage>>) {
+    crate::windows::of(win, |w| w.pending_drops.extend(images));
 }
 
 /// A tick longer than this is treated as a stall (debugger, minimised window,
@@ -159,7 +178,7 @@ fn warn_unsupported_props(t: &Tree, id: u32) {
 /// Called from the render walk, once per node per frame. Everything expensive
 /// (file read, JSON parse, `Renderer::prepare`) is behind the `src` comparison;
 /// the rest is a handful of setters the crate itself dedupes.
-pub(crate) fn sync(t: &Tree, id: u32) -> Option<(u32, u32)> {
+pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey) -> Option<(u32, u32)> {
     warn_unsupported_props(t, id);
     let src = t.prop(id, "src").unwrap_or("").to_string();
     let autoplay = bool_attr(t.prop(id, "autoplay"));
@@ -175,13 +194,17 @@ pub(crate) fn sync(t: &Tree, id: u32) -> Option<(u32, u32)> {
             // the place with a `Window` — queue them like the GC does.
             if let Some(mut old) = map.remove(&id) {
                 if let Some(state) = old.state.as_mut() {
-                    PENDING_DROPS.with(|p| p.borrow_mut().extend(state.take_all_images()));
+                    queue_drops(old.window, state.take_all_images());
                 }
             }
-            map.insert(id, Entry { src: src.clone(), state: load(&src), autoplay });
+            map.insert(id, Entry { src: src.clone(), state: load(&src), autoplay, window: win });
         }
 
         let entry = map.get_mut(&id)?;
+        // Re-stamped every frame: a node can move between windows over its life
+        // (pop out, come back), and the tiles it holds belong to whichever
+        // window painted them last.
+        entry.window = win;
         let state = entry.state.as_mut()?;
 
         // --- transport, every frame (the crate no-ops on unchanged values) ---
@@ -290,7 +313,7 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
                 return true;
             }
             if let Some(state) = entry.state.as_mut() {
-                PENDING_DROPS.with(|p| p.borrow_mut().extend(state.take_all_images()));
+                queue_drops(entry.window, state.take_all_images());
             }
             false
         })
@@ -350,8 +373,14 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     moved
 }
 
+/// [`drain_pending_drops`] for a window that is not the one the pump runs
+/// with — a pop-out draining its own atlas from its own draw.
+pub(crate) fn drain_pending_drops_for(window: &mut Window, cx: &mut App) {
+    drain_pending_drops(window, cx);
+}
+
 fn drain_pending_drops(window: &mut Window, cx: &mut App) {
-    let images = PENDING_DROPS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    let images = crate::windows::here(window, |w| std::mem::take(&mut w.pending_drops));
     for image in images {
         cx.drop_image(image, Some(window));
     }

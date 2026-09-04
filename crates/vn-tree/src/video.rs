@@ -80,14 +80,29 @@ struct Entry {
     /// anything. The `src` is part of it so an app that also changes `src` in
     /// the same frame gets the browser's answer (start at 0) rather than ours.
     resume: Option<(String, f64, bool)>,
+    /// **The window that painted this node last** — recorded at creation, not
+    /// at drop (docs/MULTIWINDOW.md §5.1). Two things ride on it and both are
+    /// per-window gpui resources: the atlas a retired frame's tile goes back
+    /// to, and the atlas a zero-copy GPU frame has to be blitted INTO. Getting
+    /// the second one wrong is why a `<video>` in a pop-out painted a
+    /// transparent box: the tile went to the primary window's atlas and the
+    /// pop-out's had nothing to draw.
+    window: crate::windows::WinKey,
+    /// The scale factor of that window, from its last painted frame. Two
+    /// windows can sit on displays of different DPI, and `frame_box` is in
+    /// PHYSICAL pixels — so the decoder request has to use the scale of the
+    /// window that paints the element, not of whichever one ran the pump.
+    scale: f32,
 }
 
 thread_local! {
     static VIDEO_STATES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
-    /// Frames whose node was GC'd. `gc_node_state` has no `Window`, and
-    /// dropping a `RenderImage` without `Window::drop_image` leaks its atlas
-    /// tiles — so they wait here for the next frame that does.
-    static PENDING_DROPS: RefCell<Vec<Arc<RenderImage>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Frames whose node was GC'd, queued against the window whose atlas holds
+/// their tiles — see `lottie::queue_drops` for why the key is the window.
+fn queue_drops(win: crate::windows::WinKey, images: impl IntoIterator<Item = Arc<RenderImage>>) {
+    crate::windows::of(win, |w| w.pending_drops.extend(images));
 }
 
 const RING: usize = 32;
@@ -181,7 +196,7 @@ fn warn_unsupported_props(t: &Tree, id: u32) {
 /// Called from the render walk, once per node per frame. Everything expensive
 /// (backend creation, the load) is behind the `src` comparison; the rest is a
 /// handful of setters the crate dedupes.
-pub(crate) fn sync(t: &Tree, id: u32) -> Option<(u32, u32)> {
+pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -> Option<(u32, u32)> {
     warn_unsupported_props(t, id);
     let src = t.prop(id, "src").unwrap_or("").trim().to_string();
     let autoplay = bool_attr(t.prop(id, "autoplay"));
@@ -197,7 +212,7 @@ pub(crate) fn sync(t: &Tree, id: u32) -> Option<(u32, u32)> {
             if let Some(mut old) = map.remove(&id) {
                 resume = old.resume.take().filter(|(want, _, _)| *want == src);
                 if let Some(state) = old.state.as_mut() {
-                    PENDING_DROPS.with(|p| p.borrow_mut().extend(state.take_all_images()));
+                    queue_drops(old.window, state.take_all_images());
                 }
             }
             map.insert(
@@ -212,6 +227,8 @@ pub(crate) fn sync(t: &Tree, id: u32) -> Option<(u32, u32)> {
                     recent: Vec::new(),
                     warned_error: false,
                     resume,
+                    window: win,
+                    scale,
                 },
             );
         }
@@ -366,7 +383,7 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
                 return true;
             }
             if let Some(state) = entry.state.as_mut() {
-                PENDING_DROPS.with(|p| p.borrow_mut().extend(state.take_all_images()));
+                queue_drops(entry.window, state.take_all_images());
             }
             false
         })
@@ -434,7 +451,6 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     drain_pending_drops(window, cx);
 
     let now = Instant::now();
-    let scale = window.scale_factor();
 
     // Collect first, dispatch after: a JS handler can mutate the tree (and
     // `flush_changes` re-enters `gc`), so the map must not be borrowed while
@@ -445,7 +461,18 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     // inside the map borrow and uploaded outside it, for the same reason the
     // events are collected and dispatched after — `upload_image_from_gpu` takes
     // `&mut Window`, and the map must not be borrowed while it is held.
+    //
+    // **Routed to the window that PAINTS the element.** The pump runs with the
+    // primary window; blitting a pop-out's frame into the primary window's
+    // atlas puts the tile where nothing will look for it and the `<video>`
+    // paints transparent. Frames for another window go into that window's
+    // `pending_uploads` and are drained by its own draw
+    // (`crate::window_frame_tick`), which happens later in the same effect
+    // cycle — inside the tick the texture is valid for, as
+    // `VideoState::take_gpu_upload` requires.
     let mut uploads: Vec<(u32, Arc<RenderImage>, vn_video::GpuFrame)> = Vec::new();
+    let mut elsewhere: Vec<(crate::windows::WinKey, crate::windows::PendingUpload)> = Vec::new();
+    let here = crate::windows::key(window);
     let ticks: Vec<(u32, Vec<MediaEvent>)> = VIDEO_STATES.with(|m| {
         let mut map = m.borrow_mut();
         let mut out = Vec::new();
@@ -461,6 +488,10 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
             }
             // Before the first build the box is unknown; the video's own size
             // is the honest first guess and one frame later the real box wins.
+            // The scale is the PAINTING window's, recorded by its own build:
+            // two windows can be on displays of different DPI and `frame_box`
+            // is in physical pixels (docs/MULTIWINDOW.md §5.3).
+            let scale = entry.scale;
             let max_size = if entry.frame_box == (0, 0) {
                 state
                     .native_size()
@@ -479,7 +510,14 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
                 moved = true;
             }
             if let Some((image, gpu)) = state.take_gpu_upload() {
-                uploads.push((id, image, gpu));
+                if entry.window == here {
+                    uploads.push((id, image, gpu));
+                } else {
+                    elsewhere.push((
+                        entry.window,
+                        crate::windows::PendingUpload { node: id, image, gpu },
+                    ));
+                }
             }
             // A rebuild forced by device-lost picks up where it left off. The
             // seek can only land once the new pipeline knows the duration, so
@@ -506,6 +544,16 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
         }
         out
     });
+
+    for (win, upload) in elsewhere {
+        // At most one frame per element per tick, and a queue that survived a
+        // draw is stale by definition (the texture is reused by the next
+        // `present`) — so the newest wins rather than piling up.
+        crate::windows::of(win, |w| {
+            w.pending_uploads.retain(|u| u.node != upload.node);
+            w.pending_uploads.push(upload);
+        });
+    }
 
     // Before the events, because a JS handler could unmount the node and take
     // its `VideoState` — and therefore the texture — with it.
@@ -574,8 +622,42 @@ fn attached(id: u32) -> bool {
     })
 }
 
+/// Blits every zero-copy frame queued for THIS window into its sprite atlas.
+///
+/// Called from the pop-out's own draw (`crate::window_frame_tick`), which is
+/// the only place that holds the window whose atlas the tile has to land in.
+/// A refusal falls back to the CPU readback exactly as the primary window's
+/// path does — the element paints a real picture either way.
+pub(crate) fn drain_pending_uploads(window: &mut Window) {
+    let queued = crate::windows::here(window, |w| std::mem::take(&mut w.pending_uploads));
+    for u in queued {
+        let ok = window
+            .upload_image_from_gpu(&u.image, 0, gpui::GpuTextureHandle(u.gpu.texture))
+            .unwrap_or(false);
+        if ok {
+            continue;
+        }
+        crate::render::warn_compat(
+            "video-gpu-upload-popout",
+            "<video> in a pop-out: the renderer refused the zero-copy GPU blit into that \
+             window's atlas — falling back to the CPU readback path (docs/MULTIWINDOW.md §7.4).",
+        );
+        VIDEO_STATES.with(|m| {
+            if let Some(state) = m.borrow_mut().get_mut(&u.node).and_then(|e| e.state.as_mut()) {
+                state.gpu_upload_failed();
+            }
+        });
+    }
+}
+
+/// [`drain_pending_drops`] for a window that is not the one the pump runs
+/// with — a pop-out draining its own atlas from its own draw.
+pub(crate) fn drain_pending_drops_for(window: &mut Window, cx: &mut App) {
+    drain_pending_drops(window, cx);
+}
+
 fn drain_pending_drops(window: &mut Window, cx: &mut App) {
-    let images = PENDING_DROPS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    let images = crate::windows::here(window, |w| std::mem::take(&mut w.pending_drops));
     for image in images {
         cx.drop_image(image, Some(window));
     }

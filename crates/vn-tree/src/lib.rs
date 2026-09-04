@@ -24,15 +24,18 @@ mod render;
 mod svg;
 mod tree;
 mod video;
+pub mod windows;
 
 pub mod devtools;
 
 pub use img::{asset_base, set_asset_base};
 pub use render::{
-    bounds_in, build_root, build_subtree, control_hitboxes, flush_pending_mouse_move,
-    painted_bounds_in, painted_drag_region, popped_out, root_bounds, set_os_chrome, set_popped_out,
+    bounds_in, build_root, build_subtree, control_hitboxes, control_hitboxes_in,
+    flush_pending_mouse_move, painted_bounds_in, painted_drag_region, painted_drag_region_in,
+    popped_out, root_bounds, root_bounds_in, set_os_chrome, set_os_chrome_in, set_popped_out,
     set_repaint_all,
 };
+pub use windows::WinKey;
 pub use tree::{
     with_tree, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH, EV_CLICK, EV_COMPLETE, EV_DURATIONCHANGE,
     EV_EMPTIED, EV_ENDED, EV_ENTERFRAME, EV_ERROR, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP,
@@ -385,6 +388,47 @@ pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     anim | lottie_moved | video_moved
 }
 
+/// The per-frame work a SECONDARY window has to do for itself, because the
+/// resource it touches belongs to that window and to no other
+/// (docs/MULTIWINDOW.md §5.1).
+///
+/// Called from a pop-out's own `render()`, which is the only place that holds
+/// its `&mut Window`. Three jobs, and each is a gpui resource the pump's window
+/// physically cannot reach:
+///
+/// * **atlas tiles retired by nodes this window painted** go back to THIS
+///   window's sprite atlas. `App::drop_image(image, Some(window))` sweeps every
+///   other window as a courtesy, but the one it cannot reach through
+///   `App::windows` is whichever window's update is currently running — so each
+///   window drains its own queue;
+/// * **zero-copy `<video>` frames** decoded by the pump are blitted into THIS
+///   window's atlas, or the element paints transparent here;
+/// * **focus**: a node detached while focused in THIS window loses gpui focus,
+///   and this window keeps something on its own focus path so keystrokes have
+///   somewhere to travel.
+///
+/// The JS-facing half of `frame_tick` — the lottie clock, the `<video>`
+/// transport, the CSS animation clock — is deliberately NOT here: it is a
+/// property of the one JS realm and must run once per FRAME GROUP, not once per
+/// window (D-M06). Running it twice would double every `setTimeout` rate.
+pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
+    lottie::drain_pending_drops_for(window, cx);
+    video::drain_pending_drops_for(window, cx);
+    video::drain_pending_uploads(window);
+    render::apply_pending_blur(window, cx);
+    render::ensure_root_focus(window, cx);
+}
+
+/// Forgets everything a window held, because it has closed.
+///
+/// Its sprite atlas went with it, so the tiles it still owed are simply
+/// dropped: handing them to another window's `drop_image` would remove keys a
+/// LIVE window may legitimately have re-inserted, which is a corruption rather
+/// than a leak.
+pub fn forget_window(key: windows::WinKey) {
+    windows::forget(key);
+}
+
 /// Mirrors the OS reduced-motion preference into the transition animator.
 pub fn set_reduce_motion(on: bool) {
     tree::set_reduce_motion(on);
@@ -407,8 +451,26 @@ pub fn set_env(env: vn_css::Env) -> bool {
     changed
 }
 
+/// Publishes one SECONDARY window's `@media` environment (docs/MULTIWINDOW.md
+/// §6). Same contract as [`set_env`], scoped to the subtree that window paints:
+/// `true` on the frames where it changed, and the subtree is marked for a
+/// re-cascade.
+///
+/// What this buys, exactly: `@media (max-width: …)`, `prefers-color-scheme`,
+/// `resolution`, `display-mode` and `env(titlebar-area-*)` answer against the
+/// window that PAINTS the element. What it does not: `vw`/`vh`/`rem` lengths,
+/// which vue-native flattens to px at sheet-compile time against one
+/// process-wide basis — see §6.2 and advisory A-M05.
+pub fn set_env_for(key: windows::WinKey, env: vn_css::Env) -> bool {
+    tree::set_window_env(key, env)
+}
+
 /// The environment the last [`set_env`] published — the source `matchMedia`
 /// evaluates against, so JS and CSS can never disagree.
+///
+/// The PRIMARY window's, because there is one JS realm and therefore one
+/// `matchMedia` (A-M04). [`set_env_for`] is the per-window half, and it feeds
+/// the cascade rather than JS.
 pub fn env() -> vn_css::Env {
     tree::env()
 }
