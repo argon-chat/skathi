@@ -39,6 +39,17 @@ pub enum TransitionProperty {
     BackgroundColor,
     /// `border-color` (gpui keeps one color for all four sides)
     BorderColor,
+    /// `text-decoration-color` — the colour of the underline / strikethrough,
+    /// which gpui carries on the decoration itself rather than in a slot of
+    /// its own.
+    TextDecorationColor,
+    /// SVG `fill`. Its USED value here is the element's `color`: gpui
+    /// rasterises an SVG into a single-colour alpha mask and tints the sprite
+    /// (`vn_tree::svg`), so a painted fill is that colour and an unpainted one
+    /// (`fill: none`) is a discrete endpoint CSS does not interpolate either.
+    Fill,
+    /// SVG `stroke` — the same, for the other half of the geometry.
+    Stroke,
     /// `width`
     Width,
     /// `height`
@@ -106,7 +117,7 @@ pub enum TransitionProperty {
 /// The number of concrete properties `all` expands to. `--shading`
 /// ([`TransitionProperty::Shading`]) is transitionable but deliberately outside
 /// this set — see that variant.
-pub const ANIMATABLE_COUNT: usize = 26;
+pub const ANIMATABLE_COUNT: usize = 29;
 
 impl TransitionProperty {
     /// Every property vn-css can actually interpolate — the expansion of `all`.
@@ -120,6 +131,9 @@ impl TransitionProperty {
             Color,
             BackgroundColor,
             BorderColor,
+            TextDecorationColor,
+            Fill,
+            Stroke,
             Width,
             Height,
             MinWidth,
@@ -153,6 +167,9 @@ impl TransitionProperty {
             Color => "color",
             BackgroundColor => "background-color",
             BorderColor => "border-color",
+            TextDecorationColor => "text-decoration-color",
+            Fill => "fill",
+            Stroke => "stroke",
             Width => "width",
             Height => "height",
             MinWidth => "min-width",
@@ -547,6 +564,10 @@ fn expand(id: &PropertyId) -> Expansion {
         "background" | "background-color" => one(BackgroundColor),
         // gpui keeps a single border color, so `border`/`border-color` collapse.
         "border" | "border-color" => one(BorderColor),
+        // The other three names in Tailwind's `transition-colors`.
+        "text-decoration-color" => one(TextDecorationColor),
+        "fill" => one(Fill),
+        "stroke" => one(Stroke),
         "width" => one(Width),
         "height" => one(Height),
         "min-width" => one(MinWidth),

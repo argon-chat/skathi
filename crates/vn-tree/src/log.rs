@@ -61,6 +61,35 @@ thread_local! {
     static STATUS: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
+/// Collapses every run of whitespace to one space and trims the ends.
+///
+/// Every advisory in this codebase is a long message wrapped across source
+/// lines, and there are two ways to write one: Rust's `\`-at-end-of-line, which
+/// eats the newline AND the next line's indent, or ordinary adjacent literals,
+/// which do not. Get it wrong and the message ships with a fifteen-space gap in
+/// the middle of a sentence — which several of them did, in the panel the owner
+/// reads. Normalising here means the message reads the same however it was
+/// written, so nobody has to get it right twice.
+///
+/// Deliberately NOT applied in [`record`]: a `console.log` from the app is the
+/// app's own output and must arrive byte for byte, indentation included.
+pub fn one_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            space = !out.is_empty();
+            continue;
+        }
+        if space {
+            out.push(' ');
+            space = false;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 pub fn set_status(text: impl Into<String>) {
     if !is_enabled() {
         return;

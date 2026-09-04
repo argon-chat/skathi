@@ -2634,8 +2634,17 @@ mod tests {
         assert_eq!(t[1].property, TransitionProperty::BackgroundColor);
         assert_eq!(t[1].duration, Duration::from_millis(150));
         assert_eq!(t[1].easing, Easing::CubicBezier(0.4, 0.0, 0.2, 1.0));
-        // `fill` / `stroke` have no gpui slot — they become Other, not an error.
-        assert!(matches!(t[4].property, TransitionProperty::Other(_)));
+        // Every one of Tailwind's six names is a property the animator carries
+        // — which is what took the last three "not animatable yet" lines out of
+        // the stream (m22). `fill` and `stroke` animate the colour the SVG
+        // sprite is tinted with, because that is the only colour it has here.
+        assert_eq!(t[3].property, TransitionProperty::TextDecorationColor);
+        assert_eq!(t[4].property, TransitionProperty::Fill);
+        assert_eq!(t[5].property, TransitionProperty::Stroke);
+        assert!(
+            !t.iter().any(|s| matches!(s.property, TransitionProperty::Other(_))),
+            "nothing in `transition-colors` should still be unrecognised: {t:?}",
+        );
     }
 
     #[test]

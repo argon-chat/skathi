@@ -206,6 +206,13 @@ pub struct Tree {
     /// but it must not run the cascade a second time — and neither must the
     /// next `getComputedStyle` in the same wave.
     style_flushed: bool,
+    /// Every `<style>` element in the tree, by node id.
+    ///
+    /// Kept as a set rather than rediscovered, because [`sync_runtime_sheets`]
+    /// runs on every flush that dirties the tree and a scan of the whole slab
+    /// per flush is exactly the cost m11 spent a milestone removing. Almost
+    /// every app leaves it empty and pays one `is_empty()`.
+    style_nodes: std::collections::BTreeSet<u32>,
     /// Elements some OTHER element's `group-hover:` rule watches — the ones the
     /// renderer has to give gpui's `.group(name)` to. Recomputed at the end of
     /// a restyle pass, and only for a sheet that has such a rule at all: a
@@ -242,12 +249,17 @@ pub fn read_tree<R>(f: impl FnOnce(&Tree) -> R) -> R {
     TREE.with(|t| f(&t.borrow()))
 }
 
-/// One line per distinct CSS advisory, whatever how many elements hit it.
+/// One line per distinct CSS advisory, however many elements hit it — and
+/// however many times the sheet is recompiled, since a recompile of the same
+/// source produces the same diagnostics (see [`set_stylesheet`]).
 fn warn_css(msg: &str) {
-    let fresh = CSS_WARNED.with(|w| w.borrow_mut().insert(msg.to_string()));
+    // Normalised BEFORE the dedupe, so two spellings of the same message are
+    // one line and not two (see [`crate::log::one_line`]).
+    let msg = crate::log::one_line(msg);
+    let fresh = CSS_WARNED.with(|w| w.borrow_mut().insert(msg.clone()));
     if fresh {
         eprintln!("{msg}");
-        crate::log::record("css", msg.to_string());
+        crate::log::record("css", msg);
     }
 }
 
@@ -344,7 +356,12 @@ impl Tree {
     }
 
     pub fn create_element(&mut self, tag: u32) -> u32 {
-        self.fresh(Kind::Element, tag)
+        let id = self.fresh(Kind::Element, tag);
+        // A `<style>` carries CSS, not a box (`sync_runtime_sheets`).
+        if self.name(tag).eq_ignore_ascii_case("style") {
+            self.style_nodes.insert(id);
+        }
+        id
     }
 
     pub fn create_text(&mut self) -> u32 {
@@ -447,6 +464,7 @@ impl Tree {
         let Some(node) = self.nodes.get_mut(id as usize).and_then(Option::take) else {
             return;
         };
+        self.style_nodes.remove(&id);
         for c in node.children {
             self.free_subtree(c);
         }
@@ -884,8 +902,7 @@ impl Tree {
                 }
             }
             for d in animator.take_diagnostics() {
-                eprintln!("[css transition] {d}");
-                crate::log::record("css", format!("[css transition] {d}"));
+                warn_css(&format!("[css transition] {d}"));
             }
         });
         for d in keyframe_diagnostics.into_inner() {
@@ -944,6 +961,9 @@ thread_local! {
     /// diagnostics are deduped inside the engine; these come from computed-value
     /// time (an unresolvable `var()`, a reference cycle) and are therefore
     /// per-element, so a page with 200 buttons must not print 200 lines.
+    /// The CSS every `<style>` element in the tree is carrying right now,
+    /// concatenated in document order — see [`sync_runtime_sheets`].
+    static RUNTIME_CSS: RefCell<String> = const { RefCell::new(String::new()) };
     static CSS_WARNED: RefCell<std::collections::HashSet<String>> =
         RefCell::new(std::collections::HashSet::new());
     static ENGINE: RefCell<Option<vn_css::Engine>> = const { RefCell::new(None) };
@@ -1173,9 +1193,83 @@ pub fn set_reduce_motion(on: bool) {
 
 /// Installs a compiled stylesheet, keeping its source for
 /// [`recompile_for_rem_basis`].
+/// Everything the engine compiles: the build's sheet, then whatever the running
+/// app has put in `<style>` elements.
+///
+/// The runtime half comes LAST, so at equal specificity it wins — which is
+/// where a `<style>` appended to the document sits in a browser's cascade too.
+fn full_source() -> String {
+    let base = SHEET_SOURCE.with(|s| s.borrow().clone());
+    RUNTIME_CSS.with(|r| {
+        let r = r.borrow();
+        if r.is_empty() { base } else { format!("{base}\n{r}") }
+    })
+}
+
+/// Collects every `<style>` element's text and, if it has changed, recompiles.
+///
+/// **A `<style>` element in the tree now works.** It used to render nothing and
+/// install nothing — a real gap, and one every component library walks into:
+/// reka-ui appends one at runtime to hide a scroll area's scrollbars,
+/// `vite-plugin-css-injected-by-js` ships a whole bundle that way, and
+/// `document.createElement("style")` is how half the ecosystem does anything
+/// dynamic with CSS. The element still paints nothing, exactly as in a browser
+/// (it is metadata content, `vn_tree::render::is_metadata`); what changed is
+/// that its CSS reaches the cascade.
+///
+/// Called from [`restyle_all`], i.e. once per flush that dirtied the tree —
+/// which is the only moment a `<style>`'s text can have changed. The comparison
+/// is against the installed string, so a flush that did not touch one costs a
+/// walk of the (usually empty) style-node set and nothing else, and a recompile
+/// cannot re-trigger itself.
+fn sync_runtime_sheets() {
+    let next = with_tree(|t| {
+        let mut ids: Vec<u32> = t.style_nodes.iter().copied().collect();
+        // Creation order stands in for document order: Vue creates a node
+        // before it inserts it, and a sheet appended later has to win.
+        ids.sort_unstable();
+        let mut out = String::new();
+        for id in ids {
+            if t.node(id).is_none() {
+                continue;
+            }
+            fn walk(t: &Tree, id: u32, out: &mut String) {
+                let Some(n) = t.node(id) else { return };
+                out.push_str(&n.text);
+                for &c in &n.children {
+                    walk(t, c, out);
+                }
+            }
+            walk(t, id, &mut out);
+            out.push('\n');
+        }
+        out
+    });
+    if RUNTIME_CSS.with(|r| *r.borrow() == next) {
+        return;
+    }
+    RUNTIME_CSS.with(|r| *r.borrow_mut() = next);
+    // The dedupe set is deliberately NOT cleared. A `<style>` arrives in pieces
+    // — created, then filled, then sometimes refilled — and each step is a
+    // recompile; clearing would make every advisory the BUILD's sheet already
+    // gave re-print once per step, which is the exact noise `set_stylesheet`'s
+    // freshness check exists to prevent. Whatever the new text says that has
+    // not been said is a new string and speaks on its own.
+    recompile_sheet("a <style> element in the tree changed — recompiling the stylesheet");
+}
+
 pub fn set_stylesheet(css: String) {
-    set_engine(vn_css::Engine::compile(&css));
+    // A genuinely NEW sheet is a new set of gaps: an advisory suppressed
+    // against the old one must be free to speak again (this is the HMR path).
+    // Recompiling the SAME text under a new rem/viewport basis is not that —
+    // see [`recompile_sheet`], which is why the clear lives here and not in
+    // [`set_engine`].
+    let fresh = SHEET_SOURCE.with(|s| *s.borrow() != css);
+    if fresh {
+        CSS_WARNED.with(|w| w.borrow_mut().clear());
+    }
     SHEET_SOURCE.with(|s| *s.borrow_mut() = css);
+    set_engine(vn_css::Engine::compile(&full_source()));
 }
 
 /// Installs a compiled engine WITHOUT recording a source to recompile from.
@@ -1185,12 +1279,14 @@ pub(crate) fn set_engine(engine: vn_css::Engine) {
     // Every running `@keyframes` run holds the block it started with, and a new
     // sheet can redefine or delete any of them.
     ANIMATOR.with(|a| a.borrow_mut().clear());
-    // A new sheet is a new set of gaps: an advisory suppressed against the old
-    // one must be free to speak again (this is the HMR path).
-    CSS_WARNED.with(|w| w.borrow_mut().clear());
+    // Through `warn_css`, so a recompile under a new rem/viewport basis does
+    // not re-print what the same source already said. Compiling the sheet three
+    // times at boot — once cold, once for the rem basis, once for the client
+    // size — is normal and used to TRIPLE the advisory stream the developer
+    // sees. `set_stylesheet` clears the dedupe set when the text itself
+    // changes, which is the case that has to speak again.
     for d in &engine.diagnostics {
-        eprintln!("[css] {d}");
-        crate::log::record("css", format!("[css] {d}"));
+        warn_css(&format!("[css] {d}"));
     }
     ENGINE.with(|c| *c.borrow_mut() = Some(engine));
 }
@@ -1226,6 +1322,7 @@ pub(crate) fn with_engine<R>(f: impl FnOnce(Option<&vn_css::Engine>) -> R) -> R 
 /// that leaves the root font-size alone, which is the case the `changed` test
 /// keeps free.
 pub fn restyle_all() {
+    sync_runtime_sheets();
     let env = env();
     // Viewport units are flattened to px at sheet-compile time, exactly like
     // `rem` — so a resize has to recompile, and only when the sheet actually
@@ -1303,9 +1400,17 @@ pub fn flush_pending_style() {
 /// recompile (before the first `__vn_set_stylesheet`), so the caller should
 /// stop.
 fn recompile_sheet(why: &str) -> bool {
-    crate::log::record("css", format!("[css] {why}"));
-    let css = SHEET_SOURCE.with(|s| s.borrow().clone());
-    if css.is_empty() {
+    // `dev`, not `css`. Nothing here describes a divergence from a browser:
+    // it says the engine flattened `rem`/`vh` at compile time and has just
+    // re-flattened them against a number that moved. A developer counting CSS
+    // warnings in the Console panel was being handed three of these per boot
+    // (cold, the root font-size, the first real client size) as if they were
+    // gaps, which is exactly the noise m19's rule — an advisory has to name a
+    // real divergence — was written to keep out. The line still prints and is
+    // still in the ring; it is on the channel that says "state trace".
+    crate::log::record("dev", format!("[css] {why}"));
+    let css = full_source();
+    if css.trim().is_empty() {
         return false;
     }
     set_engine(vn_css::Engine::compile(&css));
