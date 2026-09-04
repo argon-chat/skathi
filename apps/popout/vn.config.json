@@ -1,5 +1,5 @@
 {
-  "$comment": "The multi-window SPIKE (docs/MULTIWINDOW.md). One Vue app, one retained tree, TWO OS windows: `__vn_window_open(nodeId, options)` moves a subtree's PAINT into a second gpui window while it stays in the same tree, the same component instance and the same reactive graph.",
+  "$comment": "MULTI-WINDOW, phase 1 (docs/MULTIWINDOW.md). One Vue app, one retained tree, up to FOUR OS windows: each `<VnWindow>` moves a subtree's PAINT into a second gpui window while it stays in the same tree, the same component instance and the same reactive graph.",
 
   "name": "popout",
 
@@ -8,7 +8,7 @@
     "width": 620,
     "height": 460,
 
-    "$comment-titleBarStyle": "OS chrome, so the spike's screenshots are two ordinary OS windows side by side and neither of them needs a drag region. The pop-out window gets the same treatment for the same reason (crates/vn-app/src/popout.rs).",
+    "$comment-titleBarStyle": "OS chrome for the MAIN window, so the demo's screenshots are ordinary OS windows side by side and this one needs no drag region. The `notes` pop-out asks for `chrome: \"hidden\"` instead and paints its own caption — two windows of one app in two different chrome modes, which is what made `os_chrome` per-window (docs/MULTIWINDOW.md §7.6).",
     "titleBarStyle": "default",
     "backdrop": "mica"
   }
