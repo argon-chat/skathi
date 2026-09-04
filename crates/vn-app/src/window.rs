@@ -1307,22 +1307,40 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         notify("sync", &json);
     }
 
+    // The viewport is a PUSHED value: `innerWidth` / `innerHeight` /
+    // `devicePixelRatio` are whatever `redjs_dom_resize` last wrote, and JS has
+    // no way to pull them. So every snapshot that moves them pushes — the FIRST
+    // one included, which it was not before.
+    //
+    // Nothing noticed, because the first two snapshots always disagreed: frame
+    // 1's had no painted app root, so `snapshot` fell back to the window's
+    // client area, and frame 2's had the root's real box. The second frame's
+    // "resize" therefore corrected a value the boot frame had never published.
+    // The moment a layout could run BEFORE the first frame
+    // (`vn_tree::sync_layout`), the two agreed — and JS kept redjs's built-in
+    // default viewport for the life of the process.
+    //
+    // The push is not the `resize` EVENT, which still fires only on a change: a
+    // browser does not fire `resize` at load either.
+    let viewport_moved = prev.as_ref().is_none_or(|p| {
+        p.inner_width != s.inner_width || p.inner_height != s.inner_height || p.scale != s.scale
+    });
+    if viewport_moved {
+        unsafe {
+            vn_runtime::redjs::ffi::redjs_dom_resize(
+                ctx,
+                s.inner_width as i32,
+                s.inner_height as i32,
+                s.scale as f64,
+            )
+        };
+    }
+
     let mut kinds: Vec<&str> = Vec::new();
     match &prev {
         None => kinds.push("boot"),
         Some(p) => {
-            if p.inner_width != s.inner_width
-                || p.inner_height != s.inner_height
-                || p.scale != s.scale
-            {
-                unsafe {
-                    vn_runtime::redjs::ffi::redjs_dom_resize(
-                        ctx,
-                        s.inner_width as i32,
-                        s.inner_height as i32,
-                        s.scale as f64,
-                    )
-                };
+            if viewport_moved {
                 kinds.push("resize");
             }
             // "Hidden" means MINIMISED, not unfocused: a browser does not

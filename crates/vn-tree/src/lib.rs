@@ -302,6 +302,72 @@ pub fn install(rt: &JsRuntime) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// the forced synchronous layout
+// ---------------------------------------------------------------------------
+//
+// A browser lays out ON READ. `el.scrollHeight`, `getBoundingClientRect()` and
+// the whole `offset*` / `client*` family flush whatever style and layout the
+// document owes before they answer, which is why the single most common
+// measurement idiom in every Vue app there is —
+//
+//     onMounted(() => nextTick(() => { box.style.height = inner.scrollHeight + "px" }))
+//
+// — works: the tree was built microseconds ago and has never been on screen,
+// and the read lays it out anyway.
+//
+// Here, layout is what gpui does during a frame's prepaint, and the rectangles
+// live in `render`'s per-window maps. JS that runs BEFORE the first frame —
+// module evaluation, `app.mount()`, `onMounted`, and the microtasks Vue's
+// `nextTick` drains at the end of that same script — was therefore reading maps
+// that no draw had filled in yet, and got `0` from every one of those
+// accessors. Not "stale": zero. `apps/meet-probe`'s join card measured its own
+// panel that way, stored the 0 as the wrapper's `height`, and clipped its whole
+// body away with the `overflow: hidden` beside it — laid out, hit-testable, and
+// painting nothing. Nothing ever re-measured, because the app had its answer.
+//
+// So the read forces the layout, exactly as a browser's does. The host installs
+// the hook (only it knows the window), and [`sync_layout`] is called from the
+// one place that needs it — see [`dom::bounds`] for when, which is narrow on
+// purpose: a node that has never been painted, while the tree still holds
+// changes no frame has taken.
+
+thread_local! {
+    static SYNC_LAYOUT: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) };
+    static IN_SYNC_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Installs the host's "draw one frame, now" callback.
+///
+/// Only the host knows which gpui window the app root is painted by, and
+/// `vn-tree` must not depend on `vn-app`, so the direction is inverted: the
+/// host hands down a function and this crate decides when a DOM read has to
+/// call it. Called once at startup.
+pub fn set_sync_layout(f: fn()) {
+    SYNC_LAYOUT.with(|c| c.set(Some(f)));
+}
+
+/// Folds the pending changes and draws one frame, so a layout read that follows
+/// answers from rectangles rather than from an empty map.
+///
+/// Re-entrant calls are dropped: the draw walks the tree, and a layout read
+/// from inside the walk would otherwise recurse forever. It is also a no-op
+/// with no hook installed (`cargo test`, the devtools inspector process before
+/// its window exists), so every caller still has to behave when the answer is
+/// "not painted".
+pub fn sync_layout() {
+    if IN_SYNC_LAYOUT.with(|c| c.get()) {
+        return;
+    }
+    let Some(f) = SYNC_LAYOUT.with(|c| c.get()) else { return };
+    IN_SYNC_LAYOUT.with(|c| c.set(true));
+    // The frame is about to paint from `node.computed`, so the cascade owes it
+    // the same pass a JS wave's end would have run.
+    flush_changes();
+    f();
+    IN_SYNC_LAYOUT.with(|c| c.set(false));
+}
+
 /// Call after a JS wave: if the tree changed, run the restyle pass (inline
 /// parse + cascade) and report `true` so the caller notifies the root view.
 pub fn flush_changes() -> bool {

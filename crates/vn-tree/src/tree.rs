@@ -560,6 +560,13 @@ impl Tree {
         }
     }
 
+    /// [`take_dirty`](Self::take_dirty) without taking it: is there tree state
+    /// the host has not folded and painted yet? Read by the synchronous-layout
+    /// path, which must not consume the flag the frame is going to act on.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty || self.style_flushed
+    }
+
     pub fn take_dirty(&mut self) -> bool {
         // A forced flush already did the cascade, but the frame still has to be
         // told something changed, or the wave paints the old pixels.

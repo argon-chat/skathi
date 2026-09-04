@@ -74,6 +74,31 @@ const WINDOW_PRELUDE_JS: &str = include_str!("window.prelude.js");
 
 thread_local! {
     static FRAME_NO: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Has the first JS wave already been let through? See [`first_wave_waits`].
+    static FIRST_WAVE_RELEASED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// **The first JS wave waits for the first draw.**
+///
+/// `pump_frame` runs before the draw of the frame it belongs to, which is the
+/// browser's own order: a `requestAnimationFrame` callback at frame N reads the
+/// geometry frame N-1 laid out. The exception is the FIRST one. At that point
+/// the app has mounted (boot ran the bundle, Vue built the whole tree) and
+/// nothing has been laid out at all — so every `rAF`, every `setTimeout(0)` and
+/// every timer scheduled from `onMounted` measured a tree with no rectangles in
+/// it and got `0` where a browser, which lays out before it fires the first
+/// animation frame, gets the real number.
+///
+/// So the first wave — and only the first — is deferred by exactly one frame.
+/// `window.refresh()` guarantees that frame happens; from the next one on the
+/// gate is open forever, so no later wave can ever be delayed by this.
+fn first_wave_waits(window: &mut Window) -> bool {
+    if FIRST_WAVE_RELEASED.with(|c| c.get()) {
+        return false;
+    }
+    FIRST_WAVE_RELEASED.with(|c| c.set(true));
+    window.refresh();
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +450,26 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
+/// **The forced synchronous layout** a DOM measurement asks for.
+///
+/// Installed into `vn_tree` at startup (`set_sync_layout`), and called from
+/// `dom::bounds` when JS measures a node that the host has never painted while
+/// the tree still holds changes — the `onMounted` / `nextTick` case, where a
+/// browser lays out on read and this engine used to answer `0`. See
+/// `vn_tree::sync_layout` for the whole argument.
+///
+/// One draw of the primary window, which is what gpui's own effect flush does
+/// for a dirty window (`App::flush_effects` → `window.draw(cx).clear(cx)`).
+/// `with_app` is `None` outside a published phase — including inside a real
+/// frame, where nothing is published — so this can never run inside a draw;
+/// `vn_tree` guards the re-entrant case on its side as well.
+fn sync_layout() {
+    let Some(handle) = MAIN_WINDOW.with(|w| w.get()) else { return };
+    vn_runtime::bridge::with_app(|cx| {
+        let _ = handle.update(cx, |_, window, cx| window.draw(cx).clear(cx));
+    });
+}
+
 /// Marks the primary window dirty *without* borrowing its root view.
 ///
 /// `notify_shell` goes through `Entity<Shell>::update`, which is correct from
@@ -517,6 +562,11 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     drain_log_tee();
     if vn_runtime::bridge::poisoned() {
         return; // I9: no JS after a caught native panic.
+    }
+    // One frame, once, so the first wave measures a tree that has been laid out.
+    if first_wave_waits(window) {
+        window.on_next_frame(pump_frame);
+        return;
     }
     // The frame's ONE coalesced mousemove (browsers align move events to the
     // frame clock; see PendingMouseMove in vn-tree). Dispatched before the
@@ -1115,6 +1165,11 @@ fn main() {
         )
         .map(|handle| MAIN_WINDOW.with(|w| w.set(Some(handle.into()))))
         .unwrap();
+
+        // A DOM layout read lays out, the way a browser's does. Installed
+        // before any JS runs, because the very first thing that needs it is the
+        // app bundle's own `onMounted`.
+        vn_tree::set_sync_layout(sync_layout);
 
         // Startup eval: host fns called at top level land in Phase::App.
         with_published_app(cx, || {

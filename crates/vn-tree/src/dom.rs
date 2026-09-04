@@ -109,6 +109,32 @@ fn ancestors_from(t: &Tree, id: u32) -> Vec<u32> {
     out
 }
 
+/// A browser lays out on read; so does this.
+///
+/// The narrow case, and the only one that is a *wrong answer* rather than a
+/// one-frame-old one: the node has no rectangle **anywhere**, and the tree
+/// still holds changes no frame has taken. That is a node Vue built during this
+/// same JS wave — the whole app during boot, a `v-if` branch that just opened,
+/// a dialog's contents — and it is what `onMounted` + `nextTick` measures.
+/// Reporting `0` there is not "an unpainted element reports zeros"; it is a
+/// browser's answer thrown away because a frame had not come round yet.
+///
+/// A node that HAS a rectangle keeps the one the last frame gave it, which is
+/// the same thing `requestAnimationFrame` reads and the same thing every
+/// devtools query answers. And a node that has no rectangle while the tree is
+/// clean is genuinely not painted — detached, `display: none`, in a
+/// `<KeepAlive>` cache — for which an all-zero rect is exactly right, and no
+/// layout is forced.
+fn force_layout_if_unpainted(id: u32) {
+    if id == 0 || crate::render::bounds_of(id).is_some() {
+        return;
+    }
+    if !tree::read_tree(|t| t.node(id).is_some() && t.is_dirty()) {
+        return;
+    }
+    crate::sync_layout();
+}
+
 /// `getBoundingClientRect()` — `(x, y, width, height)` in CSS px, from the last
 /// frame the node was painted in, relative to **the app root**.
 ///
@@ -128,6 +154,7 @@ fn ancestors_from(t: &Tree, id: u32) -> Vec<u32> {
 /// `<KeepAlive>` cache container. A browser answers an all-zero rect for all
 /// three, which is what the JS side substitutes.
 pub fn bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
+    force_layout_if_unpainted(id);
     let (x, y, w, h) = crate::render::bounds_of(id)?;
     let (ox, oy) = crate::render::bounds_of(tree::read_tree(|t| t.root))
         .map(|(rx, ry, _, _)| (rx, ry))

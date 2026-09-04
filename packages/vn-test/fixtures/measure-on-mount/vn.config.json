@@ -1,0 +1,13 @@
+{
+  "$comment": "The 'measure it as soon as it exists' fixture — see ../README.md and packages/vn-test/specs/measure.spec.ts. It reproduces, in twelve lines, what apps/meet-probe's join card does: read a child's scrollHeight from onMounted and write the answer back as the parent's height.",
+
+  "name": "measure-on-mount",
+
+  "window": {
+    "title": "vue-native — measure on mount (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
