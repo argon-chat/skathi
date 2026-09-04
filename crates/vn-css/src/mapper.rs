@@ -6012,4 +6012,100 @@ mod tests {
         assert_eq!(r.text.font_weight, Some(gpui::FontWeight(600.0)));
         assert!(matches!(r.background, Some(gpui::Fill::Color(_))));
     }
+
+    // ---- the m22 CSS burn-down (research/reports/m22/engine-round.md §4) ----
+
+    /// `drop-shadow()` is the second `filter` function this engine implements
+    /// rather than drops: gpui's `BoxShadow` rasterises a Gaussian-blurred
+    /// rounded rect with the element's own corner radii, which IS the blurred
+    /// alpha of a box whose alpha is an opaque rounded rect (§4.4). The three
+    /// lengths transfer 1:1 — CSS's third length and gpui's `blur_radius` are
+    /// both sigmas.
+    #[test]
+    fn drop_shadow_parses_into_extras_and_says_nothing() {
+        let (_, x, d) = map_full("filter: drop-shadow(2px 4px 6px rgb(0 0 0 / 0.5))");
+        assert!(d.is_empty(), "the shape gpui can draw exactly must not advise: {d:?}");
+        let s = x.drop_shadow.expect("drop-shadow() reached Extras");
+        assert_eq!((s.dx, s.dy, s.blur), (2.0, 4.0, 6.0));
+        assert!(s.color.is_some(), "an explicit colour is flattened here");
+
+        // No colour argument is `currentColor`, which only the renderer can
+        // resolve — so the mapper records `None` rather than guessing black.
+        let (_, x, d) = map_full("filter: drop-shadow(1px 2px 3px)");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(x.drop_shadow.map(|s| s.color), Some(None));
+
+        // A second one has nowhere to go, and that IS a divergence.
+        let (_, x, d) =
+            map_full("filter: drop-shadow(1px 1px 1px red) drop-shadow(2px 2px 2px blue)");
+        assert!(x.drop_shadow.is_some(), "the first one is still honoured");
+        assert!(d.iter().any(|m| m.contains("a second drop-shadow()")), "{d:?}");
+    }
+
+    /// `clip-path: inset(50%)` is the screen-reader-only idiom: the insets meet
+    /// in the middle and enclose nothing, which is `visibility: hidden` with the
+    /// layout box intact (§4.8). Any other shape has nothing to become and says
+    /// so — and says what IS honoured.
+    #[test]
+    fn clip_path_inset_50_is_visibility_hidden_and_a_real_shape_advises() {
+        let r = clean("clip-path: inset(50%)");
+        assert_eq!(r.visibility, Some(gpui::Visibility::Hidden));
+        // …and the four-value spelling reka's `VisuallyHidden` actually writes.
+        assert_eq!(
+            clean("clip-path: inset(50% 50% 50% 50%)").visibility,
+            Some(gpui::Visibility::Hidden)
+        );
+        // An inset that encloses something is a real clip, and a real gap.
+        let (r, d) = map("clip-path: inset(10%)");
+        assert_eq!(r.visibility, None, "a real clip must not hide the element");
+        assert!(d.iter().any(|m| m.contains("clip-path")), "{d:?}");
+
+        let (_, d) = map("clip-path: circle(40%)");
+        assert!(d.iter().any(|m| m.contains("clip-path")), "{d:?}");
+
+        // `none` is the initial value and un-hides.
+        assert_eq!(clean("clip-path: none").visibility, Some(gpui::Visibility::Visible));
+    }
+
+    /// `word-wrap` is the legacy alias of `overflow-wrap` — CSS Text 3 defines
+    /// them as one property and lightningcss parses two ids, so they share an
+    /// arm. `normal` is the INITIAL value (what reka's `VisuallyHidden` writes
+    /// inline) and diverges from nothing.
+    #[test]
+    fn word_wrap_shares_the_overflow_wrap_arm_and_normal_is_silent() {
+        let (_, d) = map("word-wrap: break-word");
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(
+            d[0].contains("overflow-wrap"),
+            "the legacy spelling gets the modern message: {d:?}"
+        );
+
+        // Byte-identical to what the modern spelling says — one property, one
+        // divergence, one line in the panel.
+        let (_, modern) = map("overflow-wrap: break-word");
+        assert_eq!(d, modern);
+
+        assert!(map("word-wrap: normal").1.is_empty());
+        assert!(map("overflow-wrap: normal").1.is_empty());
+    }
+
+    /// This engine paints no scrollbar at all — gpui's scroll containers are
+    /// overlay-scrolled and the host draws no track or thumb — so no value of
+    /// `scrollbar-width` / `scrollbar-color` can be wrong. reka-ui's runtime
+    /// `<style>` writes all of these, and §4.7 made that sheet reach the
+    /// cascade; an advisory has to name a real divergence.
+    #[test]
+    fn the_scrollbar_properties_are_silent() {
+        for decl in [
+            "scrollbar-width: none",
+            "scrollbar-width: thin",
+            "scrollbar-color: red blue",
+            "-ms-overflow-style: none",
+            "-webkit-overflow-scrolling: touch",
+        ] {
+            let (_, d) = map(decl);
+            assert!(d.is_empty(), "{decl:?} must say nothing: {d:?}");
+        }
+    }
+
 }

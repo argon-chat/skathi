@@ -1617,3 +1617,95 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
         self.node().parent == 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `<style>` element in the tree used to render nothing AND install
+    /// nothing. Only the first of those is the browser's behaviour: `<style>`
+    /// is metadata content, so it generates no box — but its CSS reaches the
+    /// cascade, and every component library counts on that. reka-ui appends one
+    /// at runtime to hide a scroll area's scrollbars,
+    /// `vite-plugin-css-injected-by-js` ships a whole bundle that way, and
+    /// `document.createElement("style")` is how half the ecosystem does
+    /// anything dynamic with CSS (engine-round.md §4.7).
+    ///
+    /// The runtime half is concatenated AFTER the build's sheet, so at equal
+    /// specificity it wins — which is where a `<style>` appended to the
+    /// document sits in a browser's cascade — and a change to its TEXT
+    /// recompiles, because that is the only moment the text can have moved.
+    #[test]
+    fn a_runtime_style_element_reaches_the_cascade_and_recompiles_when_its_text_moves() {
+        let opacity = |id: u32| {
+            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
+        };
+
+        // The build's own sheet: what a `<style>` has to be able to override.
+        set_stylesheet(".probe { opacity: 0.25 }".into());
+        let (probe, sheet) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let probe = t.create_element(div);
+            t.set_class(probe, "probe");
+            t.insert(probe, root, 0);
+            let style_tag = t.intern("style");
+            let sheet = t.create_element(style_tag);
+            t.insert(sheet, root, 1);
+            (probe, sheet)
+        });
+        restyle_all();
+        assert_eq!(opacity(probe), Some(0.25), "the build's sheet, with an empty <style>");
+
+        // The `<style>` arrives in pieces — created, then filled — which is
+        // exactly how Vue and reka do it.
+        with_tree(|t| t.set_element_text(sheet, ".probe { opacity: 0.5 }".into()));
+        restyle_all();
+        assert_eq!(opacity(probe), Some(0.5), "a runtime <style> installs its rules");
+
+        // Refilled: the sheet has to be recompiled, not remembered.
+        with_tree(|t| t.set_element_text(sheet, ".probe { opacity: 0.75 }".into()));
+        restyle_all();
+        assert_eq!(opacity(probe), Some(0.75), "changed text re-installs");
+
+        // A restyle that did NOT touch the text must not change the answer (and
+        // costs a walk of the style-node set and nothing else).
+        restyle_all();
+        assert_eq!(opacity(probe), Some(0.75), "an unchanged sheet is not recompiled away");
+
+        // And emptying it hands the cascade back to the build's own sheet.
+        with_tree(|t| t.set_element_text(sheet, String::new()));
+        restyle_all();
+        assert_eq!(opacity(probe), Some(0.25), "removing the rules restores the build's sheet");
+    }
+
+    /// Two `<style>` elements concatenate in CREATION order, which stands in for
+    /// document order — Vue creates a node before it inserts it, and a sheet
+    /// appended later has to win at equal specificity.
+    #[test]
+    fn several_style_elements_concatenate_in_creation_order() {
+        let opacity = |id: u32| {
+            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
+        };
+        set_stylesheet(String::new());
+        let probe = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let probe = t.create_element(div);
+            t.set_class(probe, "probe");
+            t.insert(probe, root, 0);
+            let style_tag = t.intern("style");
+            for (i, css) in [".probe { opacity: 0.1 }", ".probe { opacity: 0.9 }"]
+                .into_iter()
+                .enumerate()
+            {
+                let sheet = t.create_element(style_tag);
+                t.set_element_text(sheet, css.into());
+                t.insert(sheet, root, 1 + i as u32);
+            }
+            probe
+        });
+        restyle_all();
+        assert_eq!(opacity(probe), Some(0.9), "the later sheet wins at equal specificity");
+    }
+}

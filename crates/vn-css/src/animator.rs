@@ -1709,6 +1709,142 @@ mod tests {
         assert!((half.params[0] - 0.35).abs() < 1e-3);
         assert!((half.params[2] - 12.0).abs() < 1e-3);
     }
+
+    // ---- the three colours m22 made animatable (engine-round.md §4.6) ------
+
+    fn rgb(r: f32, g: f32, b: f32) -> Hsla {
+        Rgba { r, g, b, a: 1.0 }.into()
+    }
+
+    /// A state whose element `color` is `c` and whose SVG paint is `paint`.
+    /// Both `fill` and `stroke` get it, because the two are the same question.
+    fn svg_states(c: Hsla, paint: Option<crate::SvgPaint>, css: &str) -> ComputedStates {
+        let mut base = StyleRefinement::default();
+        base.text.color = Some(c);
+        let mut s = states(base, css);
+        s.extras = crate::Extras { fill: paint, stroke: paint, ..Default::default() };
+        s.color = Some(c);
+        s
+    }
+
+    /// `fill` and `stroke` live in `Extras`, not in a `StyleRefinement`, and
+    /// what they animate is the colour the SVG sprite is TINTED with — gpui
+    /// rasterises an SVG into a single-colour alpha mask, so the element's own
+    /// `color` is the only colour it has. Both ends here declare the same
+    /// paint (`currentColor`) and differ only in `color`: a track that did not
+    /// follow `color` would find its endpoints equal and never start.
+    #[test]
+    fn a_fill_track_follows_the_colour_the_sprite_is_tinted_with() {
+        for css in ["transition: fill 1s linear", "transition: stroke 1s linear"] {
+            let mut a = Animator::new();
+            let now = t0();
+            let (red, blue) = (rgb(1.0, 0.0, 0.0), rgb(0.0, 0.0, 1.0));
+            let old = svg_states(red, Some(crate::SvgPaint::Current), css);
+            let new = svg_states(blue, Some(crate::SvgPaint::Current), css);
+
+            a.on_computed(1, Some(&old), &new, now);
+            assert!(a.any_active(now), "{css} must start a track");
+
+            // The interpolated paint is written into the tint slot — `text.color`
+            // is what the renderer hands the rasteriser.
+            let at = |ms: u64| {
+                a.overlay_test(1, now + Duration::from_millis(ms))
+                    .and_then(|r| r.text.color)
+                    .unwrap_or_else(|| panic!("{css}: no tint at {ms}ms"))
+            };
+            let same = |a: Hsla, b: Hsla| {
+                (a.h - b.h).abs() < 1e-4
+                    && (a.s - b.s).abs() < 1e-4
+                    && (a.l - b.l).abs() < 1e-4
+                    && (a.a - b.a).abs() < 1e-4
+            };
+            assert!(same(at(0), red), "{css} starts where it was: {:?}", at(0));
+            assert!(same(at(1000), blue), "{css} ends where it is going: {:?}", at(1000));
+            let half = at(500);
+            assert!(!same(half, red) && !same(half, blue), "{css} interpolates: {half:?}");
+        }
+    }
+
+    /// `none` ↔ a paint is a DISCRETE pair — SVG paint is not a continuous type
+    /// across that boundary and CSS does not interpolate it either — so the
+    /// value snaps and no track is started. (`clear()` staying a no-op for
+    /// `fill`/`stroke` is the other half of that: stripping `color` out of a
+    /// `:hover` rung on behalf of `fill` would leave a hover colour that only
+    /// `transition: color` is entitled to animate painted by nobody.)
+    #[test]
+    fn an_svg_paint_of_none_snaps_instead_of_interpolating() {
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: fill 1s linear";
+        let old = svg_states(rgb(1.0, 0.0, 0.0), Some(crate::SvgPaint::None), css);
+        let new = svg_states(rgb(0.0, 0.0, 1.0), Some(crate::SvgPaint::Current), css);
+
+        a.on_computed(1, Some(&old), &new, now);
+        assert!(!a.any_active(now), "an unpainted endpoint has nothing to interpolate");
+        assert!(a.overlay_test(1, now).is_none());
+
+        // …and an element that declares no paint at all is not animated either:
+        // nothing was asked for, so there is no slot.
+        let bare = svg_states(rgb(0.0, 0.0, 1.0), None, css);
+        a.on_computed(2, Some(&bare), &bare, now);
+        assert!(a.overlay_test(2, now).is_none());
+    }
+
+    /// `text-decoration-color` is a FIELD of gpui's `UnderlineStyle` /
+    /// `StrikethroughStyle` rather than a slot of its own, so the overlay has
+    /// to carry a COMPLETE decoration — thickness, waviness and offset copied
+    /// from the base, colour replaced. A bare `UnderlineStyle { color }` would
+    /// refine the base's thickness away and paint a hairline.
+    #[test]
+    fn text_decoration_color_animates_without_refining_the_line_away() {
+        fn decorated(c: Hsla) -> StyleRefinement {
+            let mut r = StyleRefinement::default();
+            r.text.underline = Some(gpui::UnderlineStyle {
+                thickness: px(3.0),
+                color: Some(c),
+                wavy: true,
+                offset: px(2.0),
+            });
+            r
+        }
+        let mut a = Animator::new();
+        let now = t0();
+        let css = "transition: text-decoration-color 1s linear";
+        let (red, blue) = (rgb(1.0, 0.0, 0.0), rgb(0.0, 0.0, 1.0));
+        let old = states(decorated(red), css);
+        let new = states(decorated(blue), css);
+
+        a.on_computed(1, Some(&old), &new, now);
+        assert!(a.any_active(now));
+        // The element's own base is what the overlay refines — the decoration
+        // it must copy thickness, waviness and offset out of lives there.
+        let base = decorated(red);
+        let half = a.overlay(1, &base, now + Duration::from_millis(500)).unwrap();
+        let u = half.text.underline.clone().expect("the overlay carries a decoration");
+        assert_eq!(u.thickness, px(3.0), "the base's thickness survives the overlay");
+        assert!(u.wavy, "…and so does its waviness");
+        assert_eq!(u.offset, px(2.0), "…and its offset");
+        let c = u.color.expect("with a colour of its own");
+        assert!(c != red && c != blue, "interpolated, not snapped: {c:?}");
+
+        let end = a.overlay(1, &base, now + Duration::from_millis(1000)).unwrap();
+        let ended = end.text.underline.and_then(|u| u.color).expect("a colour at the end");
+        assert!((ended.h - blue.h).abs() < 1e-4 && (ended.l - blue.l).abs() < 1e-4, "{ended:?}");
+    }
+
+    /// All three are in Tailwind's `transition-colors`, so `transition: all`
+    /// has to cover them or every use of that utility keeps advising.
+    #[test]
+    fn the_three_new_properties_are_covered_by_transition_all() {
+        let all = crate::transition::TransitionProperty::animatable();
+        for p in [
+            crate::transition::TransitionProperty::Fill,
+            crate::transition::TransitionProperty::Stroke,
+            crate::transition::TransitionProperty::TextDecorationColor,
+        ] {
+            assert!(all.contains(&p), "{p:?} is not in `transition: all`");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

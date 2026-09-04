@@ -4457,4 +4457,209 @@ mod tests {
             assert!(style.size.height.is_some());
         });
     }
+
+    // ---- the render-side advisories m22 narrowed (engine-round.md §4.2/§4.3) --
+
+    /// Did this advisory key ever fire on this thread? `warn_compat_at` records
+    /// one line per key for the life of the process, and the set it dedupes
+    /// against is the thread-local `WARNED` — so a test thread sees exactly its
+    /// own, and libtest gives every test its own thread.
+    fn spoke(key: &str) -> bool {
+        WARNED.with(|w| w.borrow().contains(key))
+    }
+
+    fn computed(base: gpui::StyleRefinement, extras: vn_css::Extras) -> vn_css::ComputedStates {
+        vn_css::ComputedStates { base: std::rc::Rc::new(base), extras, ..Default::default() }
+    }
+
+    fn displayed(d: gpui::Display) -> gpui::StyleRefinement {
+        gpui::StyleRefinement { display: Some(d), ..Default::default() }
+    }
+
+    fn inline_level() -> vn_css::Extras {
+        vn_css::Extras { inline_level: Some(true), ..Default::default() }
+    }
+
+    /// `display: inline-*` maps onto its block-level equivalent — taffy models
+    /// the inner display type and has no line box — but CSS itself blockifies
+    /// most of the cases (CSS Display 3 §2.7: a flex item, a grid item, an
+    /// out-of-flow box), and `apply_inline_row` covers the rest by turning a
+    /// block container full of inline content into a wrapping flex row, whose
+    /// items are sized to their content. What is genuinely left is an in-flow
+    /// inline-level box with a block-level sibling and no width of its own: it
+    /// takes a line to itself and stretches across it.
+    ///
+    /// The meet tour tripped this three times and not one of them was real
+    /// (engine-round.md §4.3). This pins each silence to its own reason.
+    #[test]
+    fn advise_inline_level_is_silent_wherever_css_blockifies_too() {
+        const KEY: &str = "display-inline-level-stretches";
+        with_tree(|t| {
+            let div = t.intern("div");
+            let span = t.intern("span");
+            let auto = gpui::StyleRefinement::default();
+
+            // A flex ITEM: blockified by CSS, so nothing diverges.
+            let flex = t.create_element(div);
+            t.node_mut(flex).unwrap().computed =
+                Some(computed(displayed(gpui::Display::Flex), Default::default()));
+            let item = t.create_element(span);
+            t.insert(item, flex, 0);
+            advise_inline_level(t, item, t.node(item).unwrap(), &inline_level(), &auto);
+            assert!(!spoke(KEY), "a flex item is blockified by CSS");
+
+            // A grid item, for the same reason.
+            let grid = t.create_element(div);
+            t.node_mut(grid).unwrap().computed =
+                Some(computed(displayed(gpui::Display::Grid), Default::default()));
+            let cell = t.create_element(span);
+            t.insert(cell, grid, 0);
+            advise_inline_level(t, cell, t.node(cell).unwrap(), &inline_level(), &auto);
+            assert!(!spoke(KEY), "a grid item is blockified by CSS");
+
+            // A block container with a block-level sibling in it — the shape
+            // that DOES stretch. Every silence below is that same element,
+            // saved by one of the other rules.
+            let block = t.create_element(div);
+            t.node_mut(block).unwrap().computed =
+                Some(computed(displayed(gpui::Display::Block), Default::default()));
+            let badge = t.create_element(span);
+            t.insert(badge, block, 0);
+            let sibling = t.create_element(div);
+            t.insert(sibling, block, 1);
+            t.node_mut(sibling).unwrap().computed =
+                Some(computed(displayed(gpui::Display::Block), Default::default()));
+
+            // Out of flow: blockified by CSS as well.
+            let absolute = gpui::StyleRefinement {
+                position: Some(gpui::Position::Absolute),
+                ..Default::default()
+            };
+            advise_inline_level(t, badge, t.node(badge).unwrap(), &inline_level(), &absolute);
+            assert!(!spoke(KEY), "an out-of-flow box is blockified by CSS");
+
+            // An explicit width answers it too: "fills the available width
+            // rather than shrinking to fit" cannot bite a box given a width.
+            let mut sized = gpui::StyleRefinement::default();
+            sized.size.width = Some(gpui::px(120.0).into());
+            advise_inline_level(t, badge, t.node(badge).unwrap(), &inline_level(), &sized);
+            assert!(!spoke(KEY), "a definite width answers it");
+
+            // …and a block container whose laid-out children are all inline
+            // content becomes a wrapping flex row, which shrink-wraps them.
+            let row = t.create_element(div);
+            let a = t.create_element(span);
+            let b = t.create_element(span);
+            t.insert(a, row, 0);
+            t.insert(b, row, 1);
+            for kid in [a, b] {
+                t.node_mut(kid).unwrap().computed =
+                    Some(computed(Default::default(), inline_level()));
+            }
+            advise_inline_level(t, a, t.node(a).unwrap(), &inline_level(), &auto);
+            assert!(!spoke(KEY), "the parent becomes an inline row and sizes it to content");
+
+            // The one that is left.
+            advise_inline_level(t, badge, t.node(badge).unwrap(), &inline_level(), &auto);
+            assert!(spoke(KEY), "an in-flow inline box beside a block sibling really stretches");
+        });
+    }
+
+    /// `position: fixed` resolves against the viewport in CSS and against the
+    /// PARENT in taffy — which agree exactly when the parent's box IS the
+    /// window's box. That is true of every `<Teleport to="body">` overlay (the
+    /// app root is the viewport by definition, which is where reka portals all
+    /// of them) and of a full-bleed wrapper of exactly viewport size, so the
+    /// advisory is geometric rather than declarative (engine-round.md §4.2).
+    ///
+    /// The `settled()` guard on top of it is what keeps a BOOT TRANSIENT from
+    /// spending a line that can never be retracted: `100vh` is flattened at
+    /// sheet-compile time, so between boot and the recompile that adopts the
+    /// real client size a full-bleed wrapper is window-sized while the app root
+    /// is window-minus-chrome.
+    #[test]
+    fn advise_out_of_flow_speaks_only_for_a_fixed_box_in_a_smaller_parent() {
+        const KEY: &str = "position-fixed-not-portalled";
+        let fixed = || vn_css::Extras { fixed: Some(true), ..Default::default() };
+        with_tree(|t| {
+            let div = t.intern("div");
+            let root = t.create_root();
+            // The rectangles the PREVIOUS frame painted — a build cannot see
+            // this frame's layout, which is what `painted_bounds` reads.
+            let win = windows::primary();
+            windows::of(win, |w| {
+                w.bounds.insert(root, (0.0, 0.0, 1200.0, 800.0));
+            });
+
+            // A child OF THE ROOT is portalled by definition: the root IS the
+            // viewport. Four builds, so `settled`'s three cannot be the reason.
+            let overlay = t.create_element(div);
+            t.insert(overlay, root, 0);
+            for _ in 0..4 {
+                advise_out_of_flow(t, overlay, t.node(overlay).unwrap(), &fixed());
+            }
+            assert!(!spoke(KEY), "a Teleport-to-body overlay lands on the viewport");
+
+            // A wrapper that IS viewport-sized (`min-h-screen` with a
+            // `fixed inset-0` decoration layer inside it) is laid out against a
+            // box of exactly the right size — advising there would be advising
+            // about a difference of zero.
+            let wrapper = t.create_element(div);
+            t.insert(wrapper, root, 1);
+            windows::of(win, |w| {
+                w.bounds.insert(wrapper, (0.0, 0.0, 1200.0, 800.0));
+            });
+            let full_bleed = t.create_element(div);
+            t.insert(full_bleed, wrapper, 0);
+            for _ in 0..4 {
+                advise_out_of_flow(t, full_bleed, t.node(full_bleed).unwrap(), &fixed());
+            }
+            assert!(!spoke(KEY), "a full-bleed wrapper of viewport size diverges by nothing");
+
+            // The genuine offender the tour left standing: a ZERO-HEIGHT
+            // wrapper. And not on the first two builds — the boot guard.
+            let squashed = t.create_element(div);
+            t.insert(squashed, root, 2);
+            windows::of(win, |w| {
+                w.bounds.insert(squashed, (0.0, 0.0, 1200.0, 0.0));
+            });
+            let child = t.create_element(div);
+            t.insert(child, squashed, 0);
+            advise_out_of_flow(t, child, t.node(child).unwrap(), &fixed());
+            advise_out_of_flow(t, child, t.node(child).unwrap(), &fixed());
+            assert!(!spoke(KEY), "two builds is not settled");
+            advise_out_of_flow(t, child, t.node(child).unwrap(), &fixed());
+            assert!(spoke(KEY), "three consecutive builds is");
+        });
+    }
+
+    /// `position: sticky` maps onto `relative` because taffy takes no scroll
+    /// offset as a LAYOUT input — but a sticky box only ever MOVES relative to
+    /// its flow position while something above it scrolls. With no scrolling
+    /// ancestor, `relative` is what a browser paints too, and the app root does
+    /// not scroll (the window is the viewport), which is why the meet tour
+    /// never reaches this.
+    #[test]
+    fn advise_sticky_needs_a_real_scroll_container_above_it() {
+        const KEY: &str = "position-sticky-in-scroller";
+        let sticky = || vn_css::Extras { sticky: Some(true), ..Default::default() };
+        with_tree(|t| {
+            let div = t.intern("div");
+            let root = t.create_root();
+            let plain = t.create_element(div);
+            t.insert(plain, root, 0);
+            let header = t.create_element(div);
+            t.insert(header, plain, 0);
+            advise_out_of_flow(t, header, t.node(header).unwrap(), &sticky());
+            assert!(!spoke(KEY), "nothing above it scrolls");
+
+            // Now give the ancestor a real `overflow-y: auto`.
+            let mut scroller = gpui::StyleRefinement::default();
+            scroller.overflow.y = Some(gpui::Overflow::Scroll);
+            t.node_mut(plain).unwrap().computed =
+                Some(computed(scroller, Default::default()));
+            advise_out_of_flow(t, header, t.node(header).unwrap(), &sticky());
+            assert!(spoke(KEY), "inside a scroll container it really does not stay put");
+        });
+    }
 }
