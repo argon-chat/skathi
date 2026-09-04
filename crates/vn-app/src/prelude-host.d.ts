@@ -104,8 +104,12 @@ declare function __vn_window_set_overlay(
 /** `{ matches, error? }` as JSON — the cascade's own evaluator, same env. */
 declare function __vn_window_match_media(query: string): string;
 
-/** `[{ node, area }]` as JSON — what the last painted frame handed gpui. */
-declare function __vn_window_hitboxes(): string;
+/**
+ * `[{ node, area }]` as JSON — what the last painted frame of ONE window handed
+ * gpui. Absent `windowId` = the primary window (docs/MULTIWINDOW.md §7.6: a
+ * `<VnWindow chrome="hidden">` draws its own caption and has its own list).
+ */
+declare function __vn_window_hitboxes(windowId?: number): string;
 
 /** `{ x, y }` in CSS px, or `null` when the platform has no cursor to report. */
 declare function __vn_window_cursor(): string;

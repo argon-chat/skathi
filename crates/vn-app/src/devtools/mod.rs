@@ -964,6 +964,11 @@ struct Pending {
     keys: Vec<String>,
     reply: Sender<String>,
     waited: u32,
+    /// The `window` argument the command carried. A parked command resumes a
+    /// frame later, by which time `TARGET_WINDOW` has been reset for the next
+    /// command — so the window rides along on the parked job instead
+    /// (docs/MULTIWINDOW.md §7.5). `None` = the primary window.
+    window: Option<u64>,
 }
 
 /// Frames a pending command will wait for focus before giving up. ~0.5 s at
@@ -1000,8 +1005,14 @@ enum Outcome {
 }
 
 fn resume_pending(mut p: Pending) -> Option<Pending> {
-    let focused = with_commit(|window, cx| vn_tree::devtools::is_focused(p.node, window, cx))
-        .unwrap_or(false);
+    // Re-publish the window the command addressed for the duration of the
+    // resume: "is it focused" and "deliver these keystrokes" are both questions
+    // about ONE window's focus path.
+    let _scope = TargetScope::new(p.window);
+    let focused = with_node_window(p.node, |window, cx| {
+        vn_tree::devtools::is_focused(p.node, window, cx)
+    })
+    .unwrap_or(false);
     if !focused {
         p.waited += 1;
         if p.waited < PENDING_MAX_FRAMES {
@@ -1014,7 +1025,7 @@ fn resume_pending(mut p: Pending) -> Option<Pending> {
         )));
         return None;
     }
-    let reply = with_commit(|window, cx| {
+    let reply = with_node_window(p.node, |window, cx| {
         let mut delivered = 0usize;
         if let Some(text) = &p.text {
             for ch in text.chars() {
@@ -1161,6 +1172,43 @@ thread_local! {
     /// primary window, which is what a single-window app always means and what
     /// every client written before v2 sends.
     static TARGET_WINDOW: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` against the window that PAINTS `node` — unless the command named
+/// a window itself, in which case that one wins.
+///
+/// This is what makes `ctl.ts type --selector "#name" --text hi` work on an
+/// `<input>` living in a pop-out without the caller having to know which window
+/// that is. The node knows: it hangs under exactly one painted root, and each
+/// painted root belongs to exactly one window (docs/MULTIWINDOW.md §5.6). A
+/// command that DOES name a window keeps naming it, because "drive window 3"
+/// is a different question from "drive this element".
+fn with_node_window<R>(node: u32, f: impl FnOnce(&mut Window, &mut App) -> R) -> Option<R> {
+    if TARGET_WINDOW.with(|c| c.get()).is_some() {
+        return with_target(f);
+    }
+    let painted_by = vn_tree::windows::window_of_node(node);
+    if crate::main_window_id() == Some(painted_by) {
+        return with_commit(f);
+    }
+    with_commit(|_, cx| crate::popout::with_window(painted_by, cx, f)).flatten()
+}
+
+/// Publishes a `window` argument for the duration of a scope, restoring
+/// whatever was there before. Used by a PARKED command's resume, which runs a
+/// frame after the argument that produced it was cleared.
+struct TargetScope(Option<u64>);
+
+impl TargetScope {
+    fn new(window: Option<u64>) -> Self {
+        TargetScope(TARGET_WINDOW.with(|c| c.replace(window)))
+    }
+}
+
+impl Drop for TargetScope {
+    fn drop(&mut self) {
+        TARGET_WINDOW.with(|c| c.set(self.0));
+    }
 }
 
 /// Runs `f` against the window the current command addressed.
@@ -1776,7 +1824,12 @@ fn cmd_click(selector: &str, index: Option<f64>, button: Option<f64>) -> String 
         ));
     };
     let (cx_, cy) = (x + w / 2.0, y + h / 2.0);
-    let proceed = with_commit(|window, app| {
+    // `with_target`, not `with_commit`: a click has to be dispatched into the
+    // window that PAINTS the node, because the listener chain gpui runs it
+    // through belongs to that window's element tree (docs/MULTIWINDOW.md §7.5).
+    // Absent a `window` argument this is the primary window, which is what
+    // every single-window app means.
+    let proceed = with_node_window(id, |window, app| {
         vn_tree::devtools::click(id, cx_, cy, button.unwrap_or(0.0), window, app)
     });
     match proceed {
@@ -1794,7 +1847,7 @@ fn cmd_scroll(selector: &str, index: Option<f64>, dx: Option<f64>, dy: Option<f6
         Ok(id) => id,
         Err(e) => return err(e),
     };
-    let out = with_commit(|window, app| {
+    let out = with_node_window(id, |window, app| {
         vn_tree::devtools::scroll(id, dx.unwrap_or(0.0) as f32, dy.unwrap_or(0.0) as f32, window, app)
     });
     match out {
@@ -1813,7 +1866,12 @@ fn cmd_focus(selector: &str, index: Option<f64>) -> String {
         Ok(id) => id,
         Err(e) => return err(e),
     };
-    match with_commit(|window, app| vn_tree::devtools::focus(id, window, app)) {
+    // Focus is PER WINDOW (docs/MULTIWINDOW.md §5.1): `window.focus(&handle)`
+    // puts the handle on THAT window's focus path, and gpui installs the native
+    // input handler for the window that painted the element. Focusing a
+    // pop-out's `<input>` through the primary window would put the handle on a
+    // path the keystrokes never travel.
+    match with_node_window(id, |window, app| vn_tree::devtools::focus(id, window, app)) {
         None => err("not in a commit phase"),
         Some(Err(e)) => err(e),
         Some(Ok(())) => ok(Json::obj(vec![("id", Json::n(f64::from(id)))])),
@@ -2095,7 +2153,7 @@ fn start_input_command(cmd: &str, req: &Json, reply: &Sender<String>) -> Outcome
         None if cmd == "key" => {
             // Straight to whatever gpui says is focused — the "press Escape on
             // the app" case, which has no element to name.
-            let out = with_commit(|window, app| {
+            let out = with_target(|window, app| {
                 for k in &keys {
                     match parse_keystroke(k) {
                         Ok(ks) => send_keystroke(ks, window, app),
@@ -2111,7 +2169,7 @@ fn start_input_command(cmd: &str, req: &Json, reply: &Sender<String>) -> Outcome
         }
         None => return Outcome::Done(err("type needs a `selector`")),
     };
-    let focus = with_commit(|window, app| vn_tree::devtools::focus(node, window, app));
+    let focus = with_node_window(node, |window, app| vn_tree::devtools::focus(node, window, app));
     match focus {
         None => return Outcome::Done(err("not in a commit phase")),
         Some(Err(e)) => return Outcome::Done(err(e)),
@@ -2119,7 +2177,16 @@ fn start_input_command(cmd: &str, req: &Json, reply: &Sender<String>) -> Outcome
     }
     // gpui installs the native input handler during PAINT, and only for a
     // handle that is already focused — so the keystrokes have to wait a frame.
-    Outcome::Parked(Pending { node, text, keys, reply: reply.clone(), waited: 0 })
+    // The window rides along: by the time this resumes, the next command has
+    // already reset `TARGET_WINDOW`.
+    Outcome::Parked(Pending {
+        node,
+        text,
+        keys,
+        reply: reply.clone(),
+        waited: 0,
+        window: TARGET_WINDOW.with(|c| c.get()),
+    })
 }
 
 /// One printable character, delivered as the real thing: gpui resolves the

@@ -1087,7 +1087,28 @@ fn main() {
                 window::init(&cfg, window, cx);
                 // `beforeunload`: `on_window_should_close` is a SYNCHRONOUS
                 // boolean, which is precisely the web event's shape.
-                window.on_window_should_close(cx, |_, _| window::should_close());
+                window.on_window_should_close(cx, |_, cx| {
+                    let closing = window::should_close();
+                    // **D-M16 / docs/MULTIWINDOW.md §7.8.** The primary window
+                    // owns the JS pump (D-M07 option 1), so closing it while a
+                    // pop-out is open would leave that pop-out painted and
+                    // frozen — a live window with no clock, no timers and no
+                    // event loop. A pop-out is a VIEW ONTO the app rather than
+                    // a peer, so it goes with it, which is also what a
+                    // one-main-window Electron app does.
+                    if closing && popout::count() > 0 {
+                        vn_tree::log::record(
+                            "window",
+                            format!(
+                                "[window] the primary window is closing — taking {} pop-out(s) \
+                                 with it (docs/MULTIWINDOW.md §7.8)",
+                                popout::count()
+                            ),
+                        );
+                        popout::close_all(cx);
+                    }
+                    closing
+                });
                 window.on_next_frame(pump_frame);
                 shell
             },

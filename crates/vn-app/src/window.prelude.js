@@ -198,7 +198,7 @@
     };
   }
   globalThis.open = () => {
-    warn("window.open", "`window.open()` is not supported (v1 is single-window). The reserved design is in " + "docs/WINDOWING.md §8.");
+    warn("window.open", "`window.open()` is not supported: it means a SECOND DOCUMENT, and the reserved design " + "is in docs/WINDOWING.md §8. To paint part of THIS tree in a second OS window — a tool " + 'palette, a detached player — use `<VnWindow>` from "vue-native" ' + "(docs/MULTIWINDOW.md §1).");
     return null;
   };
   let sticky = false;
@@ -394,7 +394,7 @@
     getCurrentWindow: () => appWindow,
     refresh,
     warn,
-    controlHitboxes: () => JSON.parse(__vn_window_hitboxes()),
+    controlHitboxes: (windowId) => JSON.parse(__vn_window_hitboxes(windowId)),
     cursorPos: () => JSON.parse(__vn_window_cursor()),
     state: () => S
   };

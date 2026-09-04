@@ -353,11 +353,19 @@
       return addEL(type, fn, opts);
     };
   }
+  // A-22. Still reserved, still an advisory, and deliberately NOT what
+  // `<VnWindow>` consumes: `window.open` means "a second DOCUMENT" (a second
+  // realm, a second `createApp`, `postMessage` as the only channel), which is a
+  // different feature from "one tree, two windows" — D-M04. Shipping multi-
+  // window must not pre-empt its semantics, so the message names the supported
+  // path instead of pretending there is none.
   globalThis.open = () => {
     warn(
       "window.open",
-      "`window.open()` is not supported (v1 is single-window). The reserved design is in " +
-        "docs/WINDOWING.md §8.",
+      "`window.open()` is not supported: it means a SECOND DOCUMENT, and the reserved design " +
+        "is in docs/WINDOWING.md §8. To paint part of THIS tree in a second OS window — a tool " +
+        "palette, a detached player — use `<VnWindow>` from \"vue-native\" " +
+        "(docs/MULTIWINDOW.md §1).",
     );
     return null;
   };
@@ -625,7 +633,8 @@
     // The eval-reachable debug hook for drag regions: `WM_NCHITTEST` is a real
     // OS message, so a synthesised click can never exercise one. This reports
     // what the last painted frame actually handed gpui.
-    controlHitboxes: (): VnWindowHitbox[] => JSON.parse(__vn_window_hitboxes()),
+    controlHitboxes: (windowId?: number): VnWindowHitbox[] =>
+      JSON.parse(__vn_window_hitboxes(windowId)),
     cursorPos: (): VnWindowCursorPos => JSON.parse(__vn_window_cursor()),
     state: () => S,
   };

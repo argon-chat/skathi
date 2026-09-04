@@ -111,6 +111,25 @@ impl Backdrop {
         }
     }
 
+    /// One backdrop name from a `<VnWindow backdrop>` prop, resolved for this
+    /// OS and with every advisory the config path would have printed.
+    ///
+    /// The config path ([`load_config`]) collects its advisories into the
+    /// config's own list; a `<VnWindow>` has no config to collect into, so it
+    /// prints them through [`advise`] — the same text, the same
+    /// print-once ledger.
+    pub fn parse(name: &str) -> Option<Backdrop> {
+        let (want, note) = Backdrop::from_str(name)?;
+        if let Some(n) = note {
+            advise(n);
+        }
+        let (resolved, os_note) = want.resolve_for_os();
+        if let Some(n) = os_note {
+            advise(n);
+        }
+        Some(resolved)
+    }
+
     /// Mica is a Windows 11 material. Asking for it on Windows 10 must advise
     /// and fall back to acrylic, never silently no-op (Tauri's precedent).
     fn resolve_for_os(self) -> (Backdrop, Option<&'static str>) {
@@ -592,11 +611,23 @@ mod win {
 
     pub fn set_always_on_top(on: bool) {
         if let Some(h) = hwnd() {
-            let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
-            let _ = unsafe {
-                SetWindowPos(h, Some(after), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-            };
+            set_always_on_top_hwnd(h, on);
         }
+    }
+
+    /// [`set_always_on_top`] against a named window rather than the primary
+    /// one — a `<VnWindow alwaysOnTop>` pop-out.
+    pub fn set_always_on_top_for(raw: isize, on: bool) {
+        set_always_on_top_hwnd(HWND(raw as *mut _), on);
+    }
+
+    fn set_always_on_top_hwnd(h: HWND, on: bool) {
+        let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        // `SWP_NOACTIVATE`: a palette that jumps in front must not also steal
+        // the caret from whatever the user is typing into.
+        let _ = unsafe {
+            SetWindowPos(h, Some(after), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        };
     }
 
     /// `appWindow.startDragging()` — the manual equivalent of a
@@ -674,6 +705,7 @@ mod win {
     pub fn set_position(_x: f32, _y: f32) {}
     pub fn set_outer_size(_w: f32, _h: f32) {}
     pub fn set_always_on_top(_on: bool) {}
+    pub fn set_always_on_top_for(_raw: isize, _on: bool) {}
     pub fn start_dragging() {}
     pub fn is_cloaked() -> bool { false }
     pub fn system_backdrop() -> Option<u32> { None }
@@ -681,23 +713,45 @@ mod win {
 }
 
 thread_local! {
-    /// The window's HWND, captured once. It never changes for the lifetime of
-    /// the window, and caching it is what lets the Win32 helpers work from
+    /// Each window's HWND, captured once. It never changes for the lifetime of
+    /// a window, and caching it is what lets the Win32 helpers work from
     /// `open_window`'s builder closure (where nothing is published yet) as well
     /// as from a host fn.
-    static HWND_CACHE: Cell<isize> = const { Cell::new(0) };
+    ///
+    /// **Keyed by window** (docs/MULTIWINDOW.md §5.1): one slot held whichever
+    /// HWND won the race, and every Win32 helper — `set_always_on_top`,
+    /// `start_dragging`, `is_iconic`, the backdrop calls — would then drive the
+    /// wrong OS window. `appWindow.*` still means the PRIMARY one (A-M04);
+    /// what the map buys is that a pop-out can be driven deliberately
+    /// ([`hwnd_of`]) instead of by accident.
+    static HWND_CACHE: RefCell<std::collections::HashMap<vn_tree::WinKey, isize>> =
+        RefCell::new(std::collections::HashMap::new());
+    /// The window `appWindow.*` and every Win32 helper below address. Set by
+    /// [`init`] from inside the primary window's own builder closure.
+    static PRIMARY_WINDOW: Cell<vn_tree::WinKey> = const { Cell::new(0) };
 }
 
 fn hwnd_raw() -> Option<isize> {
-    let cached = HWND_CACHE.with(|c| c.get());
-    if cached != 0 {
+    let primary = PRIMARY_WINDOW.with(|c| c.get());
+    if let Some(cached) = hwnd_of(primary) {
         return Some(cached);
     }
-    let found = with_commit(|window, _| capture_hwnd(window)).flatten();
-    found
+    with_commit(|window, _| capture_hwnd(window)).flatten()
 }
 
-fn capture_hwnd(window: &Window) -> Option<isize> {
+/// `HWND_TOPMOST` for ONE window, addressed by the HWND rather than by "the
+/// window" — which is what `<VnWindow alwaysOnTop>` needs and what the single
+/// `HWND_CACHE` slot could not express (docs/MULTIWINDOW.md §5.1).
+pub fn set_always_on_top_hwnd(hwnd: isize, on: bool) {
+    win::set_always_on_top_for(hwnd, on);
+}
+
+/// One window's HWND, if it has already been captured.
+pub fn hwnd_of(key: vn_tree::WinKey) -> Option<isize> {
+    HWND_CACHE.with(|m| m.borrow().get(&key).copied()).filter(|&h| h != 0)
+}
+
+pub fn capture_hwnd(window: &Window) -> Option<isize> {
     // gpui implements `raw_window_handle::HasWindowHandle` on `Window`, but the
     // inherent `Window::window_handle()` shadows the trait method — hence UFCS.
     let handle = <Window as HasWindowHandle>::window_handle(window).ok()?;
@@ -705,8 +759,15 @@ fn capture_hwnd(window: &Window) -> Option<isize> {
         RawWindowHandle::Win32(w) => Some(w.hwnd.get()),
         _ => None,
     }?;
-    HWND_CACHE.with(|c| c.set(raw));
+    let key = vn_tree::windows::key(window);
+    HWND_CACHE.with(|m| m.borrow_mut().insert(key, raw));
     Some(raw)
+}
+
+/// Forgets a window that has closed, so its HWND cannot be handed to a Win32
+/// call against a window that no longer exists.
+pub fn forget_window(key: vn_tree::WinKey) {
+    HWND_CACHE.with(|m| m.borrow_mut().remove(&key));
 }
 
 /// Windows 11 = build 22000 or later. Mica exists only there.
@@ -857,6 +918,13 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
             fallback_titlebar: cfg.title_bar_fallback,
         }
     });
+    // Declared BEFORE anything per-window is published: `set_os_chrome` and
+    // `set_env` below both address "the primary window", and until this runs
+    // there is no such key (docs/MULTIWINDOW.md §5.6). `build_root` asserts the
+    // same thing every frame, from the other side.
+    let key = vn_tree::windows::key(window);
+    PRIMARY_WINDOW.with(|c| c.set(key));
+    vn_tree::windows::set_primary(key);
     capture_hwnd(window);
     // In OS-chrome mode the caption belongs to the OS, so `window-drag` and
     // `--window-control` must stop emitting hitboxes entirely — otherwise a
@@ -1030,6 +1098,58 @@ fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> vn_css::Env {
         coarse_pointer: coarse_pointer(),
         // Desktop Windows reports none. `PlatformWindow::insets()` is the hook
         // if a platform ever does.
+        safe_area_insets: [0.0; 4],
+    }
+}
+
+/// The `@media` + `env()` environment of a SECONDARY window — a `<VnWindow>`
+/// pop-out (docs/MULTIWINDOW.md §6).
+///
+/// Built from that window directly rather than from a `Snapshot`, because a
+/// `Snapshot` is 20 fields of `appWindow` state and a pop-out has none of it:
+/// it has no observer, no `beforeunload`, no `document.title`. What it has is a
+/// viewport, a DPI and a chrome mode, which is exactly what the cascade asks
+/// for.
+///
+/// `viewport` is the box that window's PAINTED ROOT was laid out at — the same
+/// definition the primary window uses (`inner_width` is the app root's box, not
+/// the client area), so `@media (max-width: 400px)` inside a 380 px pop-out
+/// answers against 380 rather than against the main window's 620.
+pub fn popout_env(
+    window: &Window,
+    cx: &gpui::App,
+    viewport: (f32, f32),
+    os_chrome: bool,
+    title_bar_height: f32,
+) -> vn_css::Env {
+    let dark = matches!(
+        window.appearance(),
+        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+    );
+    let display_mode = if os_chrome {
+        vn_css::DisplayMode::Standalone
+    } else {
+        // Same rule as the primary window's (D-11): custom chrome means the
+        // titlebar strip belongs to content, which is what a reused PWA
+        // component branches on.
+        vn_css::DisplayMode::WindowControlsOverlay
+    };
+    let titlebar_area = if os_chrome {
+        [0.0; 4]
+    } else {
+        [0.0, 0.0, viewport.0, title_bar_height]
+    };
+    vn_css::Env {
+        viewport_width: viewport.0,
+        viewport_height: viewport.1,
+        dark,
+        // Shared by construction: it is an OS preference, and pushing a second
+        // value would stomp the one animator (docs/MULTIWINDOW.md §5.3).
+        reduce_motion: cx.reduce_motion(),
+        scale_factor: window.scale_factor(),
+        display_mode,
+        titlebar_area,
+        coarse_pointer: coarse_pointer(),
         safe_area_insets: [0.0; 4],
     }
 }
@@ -1753,12 +1873,24 @@ host_fn!(fn vn_window_match_media(g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
-host_fn!(fn vn_window_hitboxes(_g, _args) {
+// `__vn_window_hitboxes(windowId?)` — what the last frame of ONE window handed
+// gpui. Absent = the primary window, which is what it always meant.
+//
+// The window argument is phase 1's (docs/MULTIWINDOW.md §7.6): the hitbox list
+// describes the chrome of the window that emitted it, and a `<VnWindow
+// chrome="hidden">` draws its own caption. With one global list a pop-out's
+// build CLEARED the primary window's, which is both a wrong answer here and a
+// live bug in the fallback-titlebar retire rule.
+host_fn!(fn vn_window_hitboxes(_g, args) {
     // The eval-reachable debug hook the acceptance transcript needs: a
     // synthesised `ctl.ts click` cannot exercise `WM_NCHITTEST`, so the only
     // way to prove a drag region was emitted is to read back what the last
     // painted frame handed gpui (docs/WINDOWING.md §13).
-    let items: Vec<Json> = vn_tree::control_hitboxes()
+    let key = match args.arg(0).as_number() {
+        Some(n) if n > 0.0 => n as u64,
+        _ => vn_tree::windows::primary(),
+    };
+    let items: Vec<Json> = vn_tree::control_hitboxes_in(key)
         .into_iter()
         .map(|(id, area)| {
             Json::obj(vec![
@@ -1809,7 +1941,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_window_set_backdrop", 1, vn_window_set_backdrop as *const _),
         ("__vn_window_set_overlay", 4, vn_window_set_overlay as *const _),
         ("__vn_window_match_media", 1, vn_window_match_media as *const _),
-        ("__vn_window_hitboxes", 0, vn_window_hitboxes as *const _),
+        ("__vn_window_hitboxes", 1, vn_window_hitboxes as *const _),
         ("__vn_window_cursor", 0, vn_window_cursor as *const _),
         ("__vn_window_advise", 1, vn_window_advise as *const _),
     ];
