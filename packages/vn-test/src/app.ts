@@ -271,6 +271,68 @@ export class VnApp {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * The oldest bun this harness is known to survive, and why there is a floor at
+ * all.
+ *
+ * `killSync()` calls `spawnSync("taskkill", …)` — from `close()`, from a
+ * `process.exit` hook and from the signal handlers, because A LEAKED HOST IS
+ * THE WORST FAILURE MODE. On **bun 1.2.8** that `spawnSync` intermittently
+ * tripped `STATUS_HEAP_CORRUPTION` inside bun's own process spawning, which
+ * aborts the whole runner with exit code 116 — no failing test, no stack, just
+ * a dead process. It reproduced on whole-file runs of `devtools-v2.spec.ts`,
+ * which closes and relaunches more hosts than any other spec.
+ *
+ * bun **1.4.0** does not reproduce it (three consecutive whole-suite runs, 86
+ * tests across 10 files, zero aborts — research/reports/m22/adoptions-1.md).
+ * The floor is stated rather than assumed because the failure mode is a
+ * process abort: a suite running on an older bun does not fail informatively,
+ * it vanishes, and the next person to see exit 116 should not have to
+ * rediscover why.
+ */
+export const MIN_BUN = "1.4.0";
+
+/** `1.4.0` -> `[1, 4, 0]`, ignoring any `-canary.…` suffix. */
+function semver(v: string): number[] {
+  return v
+    .split("-")[0]!
+    .split(".")
+    .map((n) => Number.parseInt(n, 10) || 0);
+}
+
+function olderThan(have: string, want: string): boolean {
+  const a = semver(have);
+  const b = semver(want);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0);
+  }
+  return false;
+}
+
+let bunChecked = false;
+
+/** Fails the run before the first host starts, with the reason spelled out. */
+function requireBun() {
+  if (bunChecked) return;
+  bunChecked = true;
+  const have = typeof Bun !== "undefined" ? Bun.version : "";
+  if (!have) {
+    throw new Error(
+      "vn-test runs on bun (`bun test packages/vn-test/specs`) — this process is not bun.",
+    );
+  }
+  if (olderThan(have, MIN_BUN)) {
+    throw new Error(
+      `vn-test needs bun >= ${MIN_BUN}; this is ${have}.\n` +
+        "  Older bun aborts the whole runner with STATUS_HEAP_CORRUPTION (exit 116) inside the\n" +
+        "  `spawnSync(\"taskkill\")` that VnApp.killSync uses to make sure no host survives the\n" +
+        "  run. The abort takes the process, not a test, so a run on an old bun looks like a\n" +
+        "  crash rather than a failure.\n" +
+        "  Upgrade with `bun upgrade` (or `npm i -g bun`), then re-run. See docs/TESTING.md.",
+    );
+  }
+}
+
+/**
  * Builds if stale, allocates a private slot, starts a host on it, and waits
  * until it answers.
  *
@@ -282,6 +344,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * package is a devtools command.
  */
 export async function launch(options: LaunchOptions): Promise<VnApp> {
+  requireBun();
   ensureWorkDir();
   hookExit();
 
