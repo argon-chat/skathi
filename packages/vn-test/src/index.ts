@@ -31,3 +31,5 @@ export { ARTIFACTS_DIR, artifactPath } from "./artifacts";
 export { REPO, DEFAULT_EXE, WORK_DIR } from "./dist";
 export { featureExe, featureExeDir, fileContains } from "./features";
 export type { FeatureExeOptions } from "./features";
+export { uiaTree, uiaSupported, uiaByName, uiaByType, uiaFormat } from "./uia";
+export type { UiaNode, UiaOptions } from "./uia";

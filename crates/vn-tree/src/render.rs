@@ -1009,6 +1009,9 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     let now = std::time::Instant::now();
     let span = crate::perf::Span::start();
     BUILT.with(|c| c.set(0));
+    // One `<label for>` index per frame, built lazily and only if a control
+    // needs a name it cannot get any other way — see `crate::aria`.
+    crate::aria::reset_frame();
     let win = windows::key(window);
     // The window that paints `Tree::root` is the primary one by definition, and
     // this is the only place that knows it — declared here rather than passed
@@ -1068,6 +1071,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
     // tiles, `@media` environments and hit tests.
     windows::set_painted_root(win, id);
     reset_bounds(win);
+    crate::aria::reset_frame();
     windows::of(win, |w| {
         w.any_drag_region = false;
         w.control_hitboxes.clear();

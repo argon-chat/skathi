@@ -50,11 +50,55 @@
 //! * `aria-live` has no AccessKit equivalent in this version; a live region
 //!   advises once.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use gpui::prelude::*;
 use gpui::{Orientation, Role, Toggled};
 
 use crate::render::warn_compat;
 use crate::tree::{Node, Tree};
+
+thread_local! {
+    /// `<label for="x">` → its text, built at most ONCE per frame and only when
+    /// some control actually asks (accname step 2D). A per-control search would
+    /// be quadratic on a form; one walk is the same order as the render itself.
+    static LABEL_FOR: RefCell<Option<HashMap<String, String>>> = const { RefCell::new(None) };
+}
+
+/// Drops the per-frame `<label for>` index. Called once at the top of each
+/// element-tree build, beside the bounds rotation.
+pub(crate) fn reset_frame() {
+    LABEL_FOR.with(|m| *m.borrow_mut() = None);
+}
+
+/// The text of the `<label for="…">` that names this element, if one exists.
+fn label_for(t: &Tree, target_id: &str) -> Option<String> {
+    LABEL_FOR.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let map = cell.get_or_insert_with(|| {
+            let mut map = HashMap::new();
+            collect_labels(t, t.root, &mut map);
+            map
+        });
+        map.get(target_id).cloned()
+    })
+}
+
+fn collect_labels(t: &Tree, id: u32, out: &mut HashMap<String, String>) {
+    let Some(node) = t.node(id) else { return };
+    if t.name(node.tag) == "label" {
+        if let Some(target) = t.prop(id, "for") {
+            let text = text_content(t, id);
+            if !text.is_empty() {
+                out.entry(target.to_string()).or_insert(text);
+            }
+        }
+    }
+    for &child in &node.children {
+        collect_labels(t, child, out);
+    }
+}
 
 /// The explicit `role` attribute, lowered to an AccessKit role.
 ///
@@ -383,6 +427,80 @@ pub(crate) fn accessible_label(t: &Tree, id: u32) -> Option<String> {
     t.prop(id, "alt").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string)
 }
 
+/// Roles whose accessible NAME comes from their own contents — step 2F of the
+/// accname algorithm, and the reason `<button>Save</button>` announces "Save"
+/// without anybody writing an `aria-label`.
+///
+/// The list is the "name from author, and from content" column of the ARIA
+/// spec. Roles NOT on it (`region`, `dialog`, `textbox`, every landmark) take a
+/// name only from an attribute, which is exactly why an unlabelled dialog is
+/// an authoring bug rather than a silently-named box.
+fn names_from_content(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Button
+            | Role::DefaultButton
+            | Role::CheckBox
+            | Role::RadioButton
+            | Role::Switch
+            | Role::Link
+            | Role::Heading
+            | Role::ListBoxOption
+            | Role::MenuItem
+            | Role::MenuItemCheckBox
+            | Role::MenuItemRadio
+            | Role::Tab
+            | Role::TreeItem
+            | Role::Cell
+            | Role::GridCell
+            | Role::RowHeader
+            | Role::ColumnHeader
+            | Role::Row
+            | Role::Tooltip
+            | Role::Label
+            | Role::Legend
+            | Role::Caption
+            | Role::Term
+            | Role::DisclosureTriangle
+    )
+}
+
+/// The static-text family: roles whose UIA `Name` is, by Windows convention,
+/// the text they contain.
+///
+/// ARIA says `paragraph` and friends take no name from content, and on the web
+/// that is right because a browser also exposes the text itself, as text runs
+/// under the node. gpui does not — a `StyledText` contributes no accessibility
+/// node at all — so honouring the ARIA rule literally would put a row of
+/// nameless `Text` elements in the tree where the prose is, which is worse than
+/// either alternative. The first UIA walk of the shadcn window showed exactly
+/// that: eight `Text ""`.
+///
+/// So these take their name from their contents too, and the report says so.
+/// (`a11y_synthetic_children` is the real fix — text runs with offsets, which a
+/// screen reader can navigate by word and by line — and it is a bigger job than
+/// a lowering table.)
+fn names_from_text(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Paragraph
+            | Role::Code
+            | Role::Emphasis
+            | Role::Strong
+            | Role::Mark
+            | Role::Abbr
+            | Role::Time
+            | Role::Blockquote
+            | Role::ListItem
+            | Role::Definition
+            | Role::Note
+            | Role::Status
+            | Role::Alert
+            | Role::AlertDialog
+            | Role::FigureCaption
+    )
+}
+
 /// `aria-describedby` gets the same treatment as `aria-labelledby`, but lands
 /// on the description rather than the name.
 pub(crate) fn accessible_description(t: &Tree, id: u32) -> Option<String> {
@@ -434,7 +552,12 @@ fn find_by_dom_id(t: &Tree, from: u32, wanted: &str) -> Option<u32> {
 
 /// The rendered text of a subtree, the way `textContent` collects it.
 fn text_content(t: &Tree, id: u32) -> String {
+    /// A name is spoken, not read; past this the walk is pure cost.
+    const MAX: usize = 2048;
     fn walk(t: &Tree, id: u32, out: &mut String) {
+        if out.len() >= MAX {
+            return;
+        }
         let Some(node) = t.node(id) else { return };
         if !node.text.is_empty() {
             if !out.is_empty() && !out.ends_with(' ') {
@@ -474,7 +597,22 @@ pub(crate) fn apply<E: StatefulInteractiveElement>(mut e: E, t: &Tree, id: u32, 
     {
         e = e.aria_level(level);
     }
-    if let Some(label) = accessible_label(t, id) {
+    if let Some(label) = accessible_label(t, id)
+        // `<label for="x">` names the control with `id="x"` — accname step 2D,
+        // and the reason a shadcn checkbox (which has no text of its own)
+        // announces as anything at all.
+        .or_else(|| t.prop(id, "id").and_then(|dom_id| label_for(t, dom_id)))
+        .or_else(|| {
+            // Name from content. gpui's a11y tree carries no text runs of its
+            // own for a plain `StyledText`, so without this every
+            // `<button>Save</button>` in the app reaches UI Automation as an
+            // unnamed button — which is what the first walk of a shadcn window
+            // showed.
+            (names_from_content(role) || names_from_text(role))
+                .then(|| text_content(t, id))
+                .filter(|s| !s.is_empty())
+        })
+    {
         e = e.aria_label(label);
     }
     if let Some(description) = accessible_description(t, id) {
@@ -534,8 +672,12 @@ pub(crate) fn apply<E: StatefulInteractiveElement>(mut e: E, t: &Tree, id: u32, 
         e = e.aria_modal(true);
     }
     // `aria-hidden` prunes the node AND its descendants from the tree, which
-    // is exactly AccessKit's `hidden` flag.
-    if t.prop(id, "aria-hidden").and_then(aria_bool).unwrap_or(false) {
+    // is exactly AccessKit's `hidden` flag. HTML's own `hidden` attribute means
+    // the same thing and more (it also hides the box), and reka-ui uses it for
+    // the tab panel that is not showing — so both spellings land here.
+    if t.prop(id, "aria-hidden").and_then(aria_bool).unwrap_or(false)
+        || t.prop(id, "hidden").map(html_bool).unwrap_or(false)
+    {
         e = e.aria_hidden(true);
     }
 
@@ -733,6 +875,58 @@ mod tests {
             let key = t.intern("aria-label");
             t.set_prop(dialog, key, None);
             assert_eq!(accessible_label(t, dialog), None);
+        });
+    }
+
+    /// Name from content — the accname step that makes a plain
+    /// `<button>Save</button>` announce as "Save". Without it the first UIA
+    /// walk of the shadcn window returned 26 buttons and 26 empty names.
+    #[test]
+    fn a_button_is_named_by_its_own_text() {
+        with_tree(|t| {
+            let root = t.create_root();
+            let button = element(t, "button", &[]);
+            t.set_element_text(button, "Save changes".into());
+            t.insert(button, root, 0);
+            let node = t.node(button).unwrap();
+            let role = resolved_role(t, button, node).unwrap();
+            assert_eq!(role, Role::Button);
+            assert!(names_from_content(role));
+            assert_eq!(accessible_label(t, button), None, "no attribute names it");
+            assert_eq!(text_content(t, button), "Save changes");
+
+            // A dialog is NOT named by its contents — the spec's list is a
+            // list, and a landmark full of prose would otherwise announce the
+            // whole page.
+            let dialog = element(t, "div", &[("role", "dialog")]);
+            t.set_element_text(dialog, "Some prose".into());
+            let node = t.node(dialog).unwrap();
+            assert!(!names_from_content(resolved_role(t, dialog, node).unwrap()));
+        });
+    }
+
+    /// `<label for="x">` names the control with that id — the forms idiom, and
+    /// the only thing that names a shadcn checkbox (which has no text of its
+    /// own and no `aria-label`).
+    #[test]
+    fn a_label_for_names_the_control_it_points_at() {
+        with_tree(|t| {
+            reset_frame();
+            let root = t.create_root();
+
+            let label = element(t, "label", &[("for", "terms")]);
+            t.set_element_text(label, "Accept terms".into());
+            t.insert(label, root, 0);
+
+            let box_ = element(t, "button", &[("role", "checkbox"), ("id", "terms")]);
+            t.insert(box_, root, 0);
+
+            assert_eq!(accessible_label(t, box_), None, "no attribute names it");
+            assert_eq!(label_for(t, "terms").as_deref(), Some("Accept terms"));
+            // …and a control nothing points at stays unnamed rather than
+            // borrowing the nearest label.
+            assert_eq!(label_for(t, "other"), None);
+            reset_frame();
         });
     }
 
