@@ -21,6 +21,7 @@ use lightningcss::properties::size::Size as CssSize;
 use lightningcss::properties::text::TextAlign as CssTextAlign;
 use lightningcss::properties::{Property, PropertyId};
 use lightningcss::stylesheet::{ParserOptions, PrinterOptions};
+use lightningcss::properties::masking::ClipPath as CssClipPath;
 use lightningcss::values::color::CssColor;
 use lightningcss::values::length::{Length as CssLength, LengthPercentage, LengthPercentageOrAuto, LengthValue};
 use lightningcss::values::percentage::DimensionPercentage;
@@ -98,6 +99,29 @@ pub enum WindowControl {
     None,
 }
 
+/// One `filter: drop-shadow()`, resolved.
+///
+/// CSS's `drop-shadow()` blurs the ALPHA of whatever the element painted and
+/// lays it underneath — so for an element whose painted output is an opaque
+/// rounded rect it is exactly gpui's shadow primitive, which rasterises a
+/// Gaussian-blurred rounded rect with the element's own corner radii. That is
+/// the same argument `filter: blur()` uses (m18), one function along.
+///
+/// The colour is optional because CSS defaults it to the element's `color`,
+/// which the mapper does not resolve; the renderer substitutes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DropShadow {
+    /// Horizontal offset, px.
+    pub dx: f32,
+    /// Vertical offset, px.
+    pub dy: f32,
+    /// The Gaussian's **sigma**, px. CSS's third length and gpui's
+    /// `blur_radius` are both sigmas, so it transfers 1:1.
+    pub blur: f32,
+    /// `None` = `currentColor`, resolved by the renderer.
+    pub color: Option<gpui::Hsla>,
+}
+
 /// Computed values that a `gpui::StyleRefinement` has nowhere to carry.
 ///
 /// The refinement is the cascade's whole payload for every other property, so
@@ -120,6 +144,15 @@ pub struct Extras {
     /// renderer additionally paints the node in a deferred layer so it lands
     /// above its siblings. See the advisory in the `Position` arm.
     pub fixed: Option<bool>,
+    /// `filter: drop-shadow(<dx> <dy> <blur>? <color>?)`, recorded for the one
+    /// shape gpui can draw exactly — see [`DropShadow`] and
+    /// `vn_tree::render::apply_drop_shadow`.
+    pub drop_shadow: Option<DropShadow>,
+    /// `position: sticky`, which maps onto `relative` — taffy has no way to
+    /// take a scroll offset as a LAYOUT input. Whether that is a divergence
+    /// depends on whether anything above the element actually scrolls, which
+    /// only the renderer knows (`vn_tree::render::advise_out_of_flow`).
+    pub sticky: Option<bool>,
     /// `z-index`. gpui has no per-element z, so a POSITIVE z-index becomes a
     /// deferred draw with that priority (which is a real "paints above
     /// everything else"); a negative one cannot be expressed at all.
@@ -2312,6 +2345,32 @@ fn single_ident<'a>(
 ///
 /// Both spellings count: `rect(0, 0, 0, 0)` and `rect(0 0 0 0)`. `auto` is not
 /// a rect and is not empty.
+/// Does this `inset()` enclose a zero-area rectangle?
+///
+/// `inset(50%)` insets every side by half the box, so the two edges of each
+/// axis meet and nothing is left — the visually-hidden idiom. Anything larger
+/// than 50% on opposing sides has the same effect (CSS clamps the crossing).
+/// Only percentages are answerable without a box to measure against, which is
+/// all the idiom ever uses.
+fn inset_encloses_nothing(shape: &lightningcss::values::shape::BasicShape) -> bool {
+    use lightningcss::values::length::LengthPercentage;
+    use lightningcss::values::shape::BasicShape;
+    let BasicShape::Inset(inset) = shape else { return false };
+    let pct = |v: &LengthPercentage| match v {
+        LengthPercentage::Percentage(p) => Some(p.0),
+        _ => None,
+    };
+    let (Some(top), Some(right), Some(bottom), Some(left)) = (
+        pct(&inset.rect.0),
+        pct(&inset.rect.1),
+        pct(&inset.rect.2),
+        pct(&inset.rect.3),
+    ) else {
+        return false;
+    };
+    top + bottom >= 1.0 && left + right >= 1.0
+}
+
 fn clip_rect_is_empty(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
     use lightningcss::properties::custom::{Token, TokenOrValue};
 
@@ -2646,19 +2705,18 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     // of sitting in a line box beside its siblings, and it
                     // fills the available width instead of shrinking to fit.
                     //
-                    // shadcn's Badge and Button are `inline-flex` and look
-                    // right regardless, because they sit inside flex rows where
-                    // block-level vs inline-level never arises.
-                    if matches!(pair.outside, DisplayOutside::Inline) {
-                        warn_once(
-                            diagnostics,
-                            "`display: inline-*` maps to its BLOCK-level equivalent (v1) — taffy \
-                             models the inner display type (flex/grid/flow) but has no inline \
-                             formatting context, so the box still takes a line of its own and \
-                             fills the available width rather than shrinking to fit it. Put it in \
-                             a flex row, or give it an explicit width, for the same result",
-                        );
-                    }
+                    // …and MOST inline-level boxes do not diverge at all, which
+                    // is why there is no advisory here any more. CSS blockifies
+                    // an inline-level box that is a flex or grid item, or that
+                    // is out of flow (CSS Display 3 §2.7), so `inline-flex` on
+                    // a flex child computes to `flex` in a browser too — and
+                    // shadcn's Badge and Button, which sit in flex rows, are
+                    // exactly that. Where the parent is a block container,
+                    // `vn_tree::render::apply_inline_row` recovers the rest by
+                    // turning a run of inline content into a wrapping flex row.
+                    // Only the renderer knows which of those applies, so the
+                    // advisory lives there (`advise_inline_level`) — the same
+                    // split `transform`'s negative-z advisory has.
                     match pair.inside {
                         DisplayInside::Flex(_) => gpui::Display::Flex,
                         DisplayInside::Grid => gpui::Display::Grid,
@@ -2822,6 +2880,7 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         Position(v) => {
             use lightningcss::properties::position::Position as P;
             x.fixed = Some(matches!(v, P::Fixed));
+            x.sticky = Some(matches!(v, P::Sticky(_)));
             r.position = Some(match v {
                 P::Absolute => gpui::Position::Absolute,
                 // `fixed` is an out-of-flow box against the VIEWPORT. taffy has
@@ -2836,24 +2895,16 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 // parent. They diverge when a `fixed` element is left inside a
                 // smaller ancestor: it is then positioned against that ancestor
                 // rather than the viewport.
-                P::Fixed => {
-                    warn_once(
-                        diagnostics,
-                        "`position: fixed` is laid out as `absolute` against its PARENT (v1) — \
-                         gpui/taffy have no viewport-relative box. It is painted in a deferred \
-                         layer so it still stacks above its siblings; portal the element to the \
-                         app root (Vue's `<Teleport>`) to make the two agree",
-                    );
-                    gpui::Position::Absolute
-                }
+                // The advisory for both of these lives in the RENDERER
+                // (`vn_tree::render::advise_out_of_flow`), because whether
+                // either diverges at all is a question about the element's
+                // ANCESTORS, which the mapper cannot see: a `fixed` element
+                // portalled to the app root IS laid out against the viewport,
+                // and a `sticky` element with no scrolling ancestor behaves
+                // exactly like `relative` in a browser too.
+                P::Fixed => gpui::Position::Absolute,
                 P::Static | P::Relative => gpui::Position::Relative,
-                _ => {
-                    warn_once(
-                    diagnostics,
-                    "`position: sticky` is laid out as `relative` (v1) — it needs the scroll \n                     offset of the nearest scroll container at LAYOUT time, and taffy \n                     has no such input. A header that must stay put belongs OUTSIDE the \n                     scroll container, as a flex sibling of it",
-                );
-                    gpui::Position::Relative
-                }
+                _ => gpui::Position::Relative,
             });
         }
         // gpui has no per-element z. A POSITIVE z-index becomes a deferred draw
@@ -3960,6 +4011,21 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                         | "overscroll-behavior-y" | "-webkit-tap-highlight-color"
                         | "-webkit-overflow-scrolling" | "scroll-behavior"
                 ) => {}
+            // vue-native paints no scrollbar at all — gpui's scroll containers
+            // are overlay-scrolled and the host draws no track or thumb — so
+            // "how wide is the scrollbar" and "which scrollbar skin" have
+            // nothing to be right or wrong about. `scrollbar-width: none` is
+            // the one value anybody writes, and it is already the behaviour;
+            // `-ms-overflow-style` is an IE property that does not exist in the
+            // Chromium these apps are compared against either. Both arrive
+            // through reka-ui's runtime `<style>` (it hides a scroll area's
+            // scrollbars), which is exactly the sheet the m19 rule was written
+            // for: an advisory has to name a real divergence.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(
+                    name.0.as_ref(),
+                    "scrollbar-width" | "scrollbar-color" | "-ms-overflow-style"
+                ) => {}
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
@@ -4120,7 +4186,31 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
         // `text-size-adjust` exists to stop MOBILE BROWSERS inflating text.
         // Nothing here inflates it, under any value.
         TextSizeAdjust(..) => {}
-        OverflowWrap(v) => {
+        // `clip-path` has no general expression here — clipping a box to an
+        // arbitrary shape needs a per-element mask the paint path does not
+        // carry, and gpui's content masks are rectangles in window space. But
+        // the one shape that appears in real code is not a shape at all: it is
+        // the SCREEN-READER-ONLY idiom, `clip-path: inset(50%)`, whose insets
+        // meet in the middle and enclose nothing. An element clipped to nothing
+        // paints nothing while keeping its layout box, which is exactly
+        // `visibility: hidden` — the same reading m19 gave the deprecated
+        // `clip: rect(0,0,0,0)` beside it. reka's `VisuallyHidden` writes both.
+        ClipPath(v, _) => match v {
+            CssClipPath::None => r.visibility = Some(gpui::Visibility::Visible),
+            CssClipPath::Shape { shape, .. } if inset_encloses_nothing(shape) => {
+                r.visibility = Some(gpui::Visibility::Hidden);
+            }
+            _ => warn_once(
+                diagnostics,
+                "`clip-path` is not applied (v1) — gpui clips with rectangular content masks in                  window space, so an arbitrary shape (a circle, an ellipse, a polygon, an SVG                  path) has nothing to become. `clip-path: inset(50%)` IS honoured — it encloses                  nothing, which is `visibility: hidden` with the layout box intact — and                  `overflow: hidden` on a sized box clips for real",
+            ),
+        }
+        // `word-wrap` is the legacy alias for `overflow-wrap` — CSS Text 3
+        // defines the two as the same property, and lightningcss parses them
+        // into two ids. reka's `VisuallyHidden` writes the legacy spelling
+        // inline (`wordWrap: "normal"`), which is the INITIAL value and
+        // therefore says nothing at all; the arm below is what decides.
+        WordWrap(v) | OverflowWrap(v) => {
             use lightningcss::properties::text::OverflowWrap as OW;
             if !matches!(v, OW::Normal) {
                 warn_once(
@@ -4498,6 +4588,7 @@ fn apply_filter(
     };
 
     let mut blur_radius = None;
+    let mut drop_shadow = None;
     let mut others = Vec::new();
     for filter in filters.iter() {
         match filter {
@@ -4514,25 +4605,44 @@ fn apply_filter(
             Filter::Opacity(_) => others.push("opacity()"),
             Filter::Saturate(_) => others.push("saturate()"),
             Filter::Sepia(_) => others.push("sepia()"),
-            Filter::DropShadow(_) => others.push("drop-shadow()"),
+            Filter::DropShadow(shadow) => match drop_shadow_of(shadow) {
+                Some(s) if drop_shadow.is_none() => drop_shadow = Some(s),
+                Some(_) => others.push("a second drop-shadow()"),
+                None => others.push("drop-shadow() with a non-absolute length"),
+            },
             Filter::Url(_) => others.push("url() SVG filters"),
         }
     }
 
     x.blur = Some(blur_radius.unwrap_or(0.0));
+    x.drop_shadow = drop_shadow;
 
     if !others.is_empty() {
         once(
             diagnostics,
             format!(
                 "`filter`: gpui has no post-processing pass over an element's own painted \
-                 output, so only blur() is implemented (and only on a leaf box with a solid \
-                 background — see the render-side advisory) — dropped {}. `opacity` renders \
-                 on its own, and a drop-shadow() is expressible as a `box-shadow`",
+                 output, so only blur() and drop-shadow() are implemented, and only on a box \
+                 whose painted output IS its own rectangle (see the render-side advisory) — \
+                 dropped {}. `opacity` renders on its own",
                 others.join(", ")
             ),
         );
     }
+}
+
+/// One `drop-shadow()` argument list, in px. `None` = a length this engine
+/// cannot flatten (`em` against an unknown font size, `calc()` with a
+/// percentage), which is the same door every other length goes through.
+fn drop_shadow_of(shadow: &lightningcss::properties::effects::DropShadow) -> Option<DropShadow> {
+    Some(DropShadow {
+        dx: css_length_px(&shadow.x_offset)?,
+        dy: css_length_px(&shadow.y_offset)?,
+        blur: css_length_px(&shadow.blur)?.max(0.0),
+        // `None` here is `currentColor` — the CSS default for the function's
+        // colour argument, and the one value `color()` cannot flatten.
+        color: color(&shadow.color),
+    })
 }
 
 /// gpui models exactly two border styles. `none`/`hidden` are NOT a third: per
@@ -5056,16 +5166,32 @@ mod tests {
         assert_eq!(r.inset.top, Some(Length::Definite(px(8.0).into())));
     }
 
+    /// `fixed` records the flag and takes the deferred layer, and says NOTHING
+    /// here: whether it diverges is a question about the element's parent
+    /// (`vn_tree::render::advise_out_of_flow`), and the answer is "no" for
+    /// every portalled overlay, which is what the idiom is.
     #[test]
-    fn fixed_is_absolute_plus_a_deferred_layer_and_says_so() {
+    fn fixed_is_absolute_plus_a_deferred_layer_and_no_advisory() {
         let (x, d) = extras("position: fixed");
         assert_eq!(x.fixed, Some(true));
         assert_eq!(x.deferred_priority(), Some(0));
-        assert!(d.iter().any(|m| m.contains("position: fixed")), "{d:?}");
+        assert!(d.is_empty(), "{d:?}");
         // …and a later `relative` really undoes it.
         let (x, _) = extras("position: fixed; position: relative");
         assert_eq!(x.fixed, Some(false));
         assert_eq!(x.deferred_priority(), None);
+    }
+
+    /// Same for `sticky`: the flag is recorded, the advisory belongs to the
+    /// renderer, which is the only side that can see whether anything above
+    /// the element scrolls.
+    #[test]
+    fn sticky_is_relative_and_records_the_flag() {
+        let (x, d) = extras("position: sticky");
+        assert_eq!(x.sticky, Some(true));
+        assert!(d.is_empty(), "{d:?}");
+        let (x, _) = extras("position: sticky; position: absolute");
+        assert_eq!(x.sticky, Some(false));
     }
 
     #[test]
@@ -5632,10 +5758,9 @@ mod tests {
             ("overflow-wrap: break-word", "overflow-wrap"),
             // `blur()` alone is recorded rather than advised (see `apply_filter`),
             // so the advisory this sweep is about needs a filter that is not it.
-            ("filter: grayscale(1)", "only blur() is implemented"),
+            ("filter: grayscale(1)", "only blur() and drop-shadow() are implemented"),
             ("border-collapse: collapse", "table properties"),
             ("clip: rect(0,0,10px,10px)", "legacy `clip"),
-            ("position: sticky", "position: sticky"),
             ("font-variation-settings: \"wdth\" 80", "font-variation-settings"),
         ] {
             let (_, d) = map(body);

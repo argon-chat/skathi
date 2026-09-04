@@ -243,72 +243,87 @@ pub fn overlay_bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
     crate::render::painted_bounds(id)
 }
 
-/// The deepest ELEMENT whose painted rectangle contains `(x, y)`, as the path
-/// from the root down to it (empty when the point is over nothing).
+/// The deepest ELEMENT gpui would hit at `(x, y)`, as the path from the root
+/// down to it (empty when the point is over nothing).
 ///
-/// This is the picker's hit test, and it is deliberately NOT gpui's: gpui
-/// decides hits from hitboxes, which only interactive elements have, and its
-/// answer cannot be read back off a frame. So this asks the prepaint bounds map
-/// instead — every painted node is in it — and takes the deepest containing
-/// rectangle, later siblings winning a tie because they paint on top.
+/// **This IS gpui's hit test.** It used to be ours: a walk over the prepaint
+/// bounds map taking the deepest containing rectangle, because gpui decides
+/// hits from hitboxes, only interactive elements have one, and there was no way
+/// to ask what the frame would hit at an arbitrary point without moving the
+/// cursor. Both halves of that are gone. gpui now gives every element a hitbox
+/// tagged with its node id while a dev host is running (`render::pick_hitbox`),
+/// and upstream's `Hitbox::is_hovered_at` answers the question against the
+/// RENDERED frame — so the two divergences the hand-rolled version documented are closed
+/// by construction:
 ///
-/// The divergence that leaves: an element lifted out of document order by a
-/// deferred paint (`position: fixed`, positive `z-index`) is over the elements
-/// it covers on screen, but this only prefers it if it is also DEEPER or LATER.
-/// Good enough to point at a node; `mouse` is still what proves a control is
-/// reachable.
-pub fn hit_test(x: f32, y: f32) -> Vec<u32> {
-    hit_test_in(0, x, y)
+/// * **transforms.** A rotated or scaled element keeps its untransformed
+///   `bounds`; gpui hit-tests by mapping the pointer BACKWARDS through the
+///   hitbox's matrix, which is exact for rotation and scale alike and correctly
+///   answers "not hittable" for `scale(0)`. Comparing rectangles could only
+///   ever be right for a translation.
+/// * **paint order.** An element lifted out of document order by a deferred
+///   paint (`position: fixed`, a positive `z-index`) has its hitbox inserted
+///   later, so it is in FRONT — which is what the picker has to say, and what
+///   "deeper or later in document order" only sometimes agreed with.
+///
+/// Content masks come along too: a node scrolled out of its clipping container
+/// is no longer hit, exactly as in a browser.
+///
+/// What is left is the tie-break between the several hitboxes a point is inside
+/// (a node and all of its ancestors): the DEEPEST wins, and among equals the
+/// last in document order, which is paint order.
+pub fn hit_test(x: f32, y: f32, window: &Window) -> Vec<u32> {
+    hit_test_in(0, x, y, window)
 }
 
 /// [`hit_test`], restricted to the window that paints `root`.
 ///
 /// `root` is the popped-out node a second window paints (`0` = the primary
-/// window). Two windows' bounds maps hold numbers in two different client
-/// spaces, so a point is only answerable once a window is named: without this,
-/// hovering a pop-out at (40, 40) could pick the primary window's node at
-/// (40, 40), and the picker would confidently outline the wrong thing in the
-/// wrong window (docs/MULTIWINDOW.md §5.6).
+/// window). Hitboxes live in the frame of the window that painted them, so a
+/// point is only answerable once a window is named: without this, hovering a
+/// pop-out at (40, 40) could pick the primary window's node at (40, 40), and
+/// the picker would confidently outline the wrong thing in the wrong window
+/// (docs/MULTIWINDOW.md §5.6).
 ///
 /// The PATH is still root-first from the document root, not from `root` — the
 /// tree panel expands ancestors, and a node's ancestry does not stop at the
 /// window boundary. Only the search does.
-pub fn hit_test_in(root: u32, x: f32, y: f32) -> Vec<u32> {
+pub fn hit_test_in(root: u32, x: f32, y: f32, window: &Window) -> Vec<u32> {
+    let point = gpui::Point::new(gpui::px(x), gpui::px(y));
     tree::read_tree(|t| {
         fn walk(
             t: &Tree,
             window_root: u32,
             id: u32,
             depth: usize,
-            x: f32,
-            y: f32,
+            point: gpui::Point<gpui::Pixels>,
+            window: &Window,
             best: &mut Option<(usize, u32)>,
         ) {
             let Some(node) = t.node(id) else { return };
-            if node.kind == Kind::Element {
-                if let Some((bx, by, bw, bh)) = crate::render::bounds_in(window_root, id) {
-                    let inside = x >= bx && x < bx + bw && y >= by && y < by + bh;
-                    // `>=` on the depth: the LAST node found at the deepest
-                    // level wins, and document order is paint order.
-                    if inside && best.is_none_or(|(d, _)| depth >= d) {
-                        *best = Some((depth, id));
-                    }
-                }
+            if node.kind == Kind::Element
+                && crate::render::pick_hitbox(window, id)
+                    .is_some_and(|h| h.is_hovered_at(point, window))
+                // `>=` on the depth: the LAST node found at the deepest
+                // level wins, and document order is paint order.
+                && best.is_none_or(|(d, _)| depth >= d)
+            {
+                *best = Some((depth, id));
             }
             for &c in &node.children {
                 // A popped-out subtree is painted by a DIFFERENT window; its
-                // rectangles are not in this window's map, so descending into
-                // it can only waste time (and, if the maps ever merged, lie).
+                // hitboxes are not in this window's frame, so descending into
+                // it can only waste time.
                 if window_root == 0 && crate::render::popped_out(c) {
                     continue;
                 }
-                walk(t, window_root, c, depth + 1, x, y, best);
+                walk(t, window_root, c, depth + 1, point, window, best);
             }
         }
         let mut best = None;
         let start = if root == 0 { t.root } else { root };
         if start != 0 && t.node(start).is_some() {
-            walk(t, root, start, 0, x, y, &mut best);
+            walk(t, root, start, 0, point, window, &mut best);
         }
         let Some((_, mut id)) = best else { return Vec::new() };
         let mut path = vec![id];
@@ -323,6 +338,46 @@ pub fn hit_test_in(root: u32, x: f32, y: f32) -> Vec<u32> {
         path.reverse();
         path
     })
+}
+
+/// The window point to aim a real pointer gesture at, for a node addressed by
+/// SELECTOR rather than by coordinate — the centre of the box as it was
+/// actually painted.
+///
+/// A node's recorded `bounds` are the UNTRANSFORMED rectangle (that is the
+/// frame layout, `getBoundingClientRect` and the outline overlay all think in),
+/// so on a `rotate()`d or `translate()`d element its centre is not where the
+/// element is on screen. Mapping that centre FORWARD through the same matrix
+/// gpui hit-tests backwards through puts the point back on the element — and
+/// the result is then confirmed against gpui's own hit test, so a caller is
+/// told when the box is unreachable (covered by an overlay, clipped out of its
+/// scroll container, `scale(0)`) instead of clicking a point that belongs to
+/// something else.
+///
+/// `None` = the node was not painted in the last frame BY THIS WINDOW, or the
+/// point that would be aimed at is not the node's. Both halves are asked of
+/// `window` and only of `window`: the rectangle comes out of that window's own
+/// bounds map (`render::bounds_here`) and the hitbox out of that window's own
+/// frame, so a node painted by a pop-out answers `None` to the primary window
+/// rather than handing back a coordinate from the other window's client space
+/// (docs/MULTIWINDOW.md §5.6).
+pub fn aim_point(id: u32, window: &Window) -> Option<(f32, f32)> {
+    let (x, y, w, h) = crate::render::bounds_here(window, id)?;
+    let centre = gpui::Point::new(gpui::px(x + w / 2.0), gpui::px(y + h / 2.0));
+    let hitbox = crate::render::pick_hitbox(window, id)?;
+    let scale = window.scale_factor();
+    let point = if hitbox.transformation.is_unit() {
+        centre
+    } else {
+        let d = hitbox.transformation.apply(gpui::Point::new(
+            gpui::px(f32::from(centre.x) * scale),
+            gpui::px(f32::from(centre.y) * scale),
+        ));
+        gpui::Point::new(gpui::px(f32::from(d.x) / scale), gpui::px(f32::from(d.y) / scale))
+    };
+    hitbox
+        .is_hovered_at(point, window)
+        .then(|| (f32::from(point.x), f32::from(point.y)))
 }
 
 /// Drops `None` fields (and the blocks that become empty because of it) from a

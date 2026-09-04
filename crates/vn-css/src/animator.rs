@@ -18,7 +18,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AbsoluteLength, DefiniteLength, EffectSpec, Fill, Hsla, Interpolate, Length, Pixels, Rems,
+    AbsoluteLength, DefiniteLength, EffectSpec, Hsla, Interpolate, Length, Pixels, Rems,
     StyleRefinement, TransformSpec,
 };
 
@@ -57,6 +57,10 @@ enum Opaque {
     Fraction(f32),
     /// A gradient or pattern fill
     NonSolidFill,
+    /// `fill: none` / `stroke: none` — this half of an SVG's geometry is not
+    /// painted at all. CSS does not interpolate `none` with a paint either, so
+    /// the pair is discrete and snaps.
+    UnpaintedSvg,
 }
 
 /// What one property looks like in one `StyleRefinement`.
@@ -117,12 +121,25 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
         Color => slot_color(r.text.color),
         BackgroundColor => match &r.background {
             None => Slot::Missing,
-            Some(Fill::Color(bg)) => match bg.as_solid() {
+            Some(gpui::Fill::Color(bg)) => match bg.as_solid() {
                 Some(c) => Slot::Value(Animatable::Color(c)),
                 None => Slot::Opaque(Opaque::NonSolidFill),
             },
         },
         BorderColor => slot_color(r.border_color),
+        // CSS applies one colour to every decoration line the element has, so
+        // whichever line is present answers and both are written.
+        TextDecorationColor => slot_color(
+            r.text
+                .underline
+                .as_ref()
+                .and_then(|u| u.color)
+                .or_else(|| r.text.strikethrough.as_ref().and_then(|st| st.color)),
+        ),
+        // A refinement carries no SVG paint — [`slot_inherited`] answers these
+        // from the node's `Extras`, and a `@keyframes` block (the one caller
+        // that reaches here without any) genuinely cannot set them.
+        Fill | Stroke => Slot::Missing,
         Width => slot_length(r.size.width),
         Height => slot_length(r.size.height),
         MinWidth => slot_length(r.min_size.width),
@@ -166,15 +183,58 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
 /// This is the common shape, not a corner: Tailwind's `transition-colors` sits
 /// on a wrapper whose children inherit their colour, and `group-hover:text-…`
 /// then changes it on exactly those children.
-fn slot_inherited(r: &StyleRefinement, p: &TransitionProperty, inherited: Option<Hsla>) -> Slot {
-    match (slot_of(r, p), p) {
-        (Slot::Missing, TransitionProperty::Color) => slot_color(inherited),
-        (slot, _) => slot,
+fn slot_inherited(
+    r: &StyleRefinement,
+    p: &TransitionProperty,
+    inherited: Option<Hsla>,
+    extras: &crate::Extras,
+) -> Slot {
+    use TransitionProperty::*;
+    match p {
+        // The one animatable property that INHERITS: "undeclared" means the
+        // parent's colour, not "unset".
+        Color => match slot_of(r, p) {
+            Slot::Missing => slot_color(inherited),
+            slot => slot,
+        },
+        // `fill` / `stroke` live in `Extras`, and what they animate is the
+        // colour the sprite is tinted with — which is the element's own
+        // `color`, because that is the only colour an SVG has here.
+        Fill => slot_paint(extras.fill, r.text.color.or(inherited)),
+        Stroke => slot_paint(extras.stroke, r.text.color.or(inherited)),
+        // `text-decoration-color` defaults to `currentColor`, so an element
+        // with a decoration and no explicit colour animates with its text.
+        TextDecorationColor => match slot_of(r, p) {
+            Slot::Missing if r.text.underline.is_some() || r.text.strikethrough.is_some() => {
+                slot_color(r.text.color.or(inherited))
+            }
+            slot => slot,
+        },
+        _ => slot_of(r, p),
+    }
+}
+
+/// One SVG paint as an interpolable endpoint.
+///
+/// * undeclared — nothing to animate, and nothing was asked for;
+/// * `none` — an unpainted half of the geometry. CSS does not interpolate
+///   `none` with a colour either (SVG paint is a discrete type at that
+///   boundary), so this is deliberately opaque and snaps;
+/// * anything painted — `currentColor`, a concrete colour, a paint server:
+///   `vn_tree::svg` flattens all of them onto the element's `color`, because
+///   gpui rasterises an SVG into a single-colour alpha mask. So the value that
+///   is actually on screen, and therefore the value to interpolate, is that
+///   colour.
+fn slot_paint(paint: Option<crate::SvgPaint>, color: Option<Hsla>) -> Slot {
+    match paint {
+        None => Slot::Missing,
+        Some(crate::SvgPaint::None) => Slot::Opaque(Opaque::UnpaintedSvg),
+        Some(_) => slot_color(color),
     }
 }
 
 /// Writes one interpolated value into an overlay refinement.
-fn install(r: &mut StyleRefinement, p: &TransitionProperty, v: Animatable) {
+fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProperty, v: Animatable) {
     use TransitionProperty::*;
     let definite = || to_absolute(v).map(DefiniteLength::Absolute);
     let length = || to_absolute(v).map(|a| Length::Definite(DefiniteLength::Absolute(a)));
@@ -191,8 +251,30 @@ fn install(r: &mut StyleRefinement, p: &TransitionProperty, v: Animatable) {
             }
         }
         Color => r.text.color = color(),
-        BackgroundColor => r.background = color().map(|c| Fill::Color(c.into())),
+        BackgroundColor => r.background = color().map(|c| gpui::Fill::Color(c.into())),
         BorderColor => r.border_color = color(),
+        // The decoration is a whole struct in gpui, so the overlay has to carry
+        // a COMPLETE one — thickness, waviness and offset copied from the base,
+        // colour replaced. Writing a bare `UnderlineStyle { color }` would
+        // refine the base's thickness away and paint a hairline.
+        TextDecorationColor => {
+            if let Some(c) = color() {
+                if let Some(mut u) = r.text.underline.clone().or_else(|| base.text.underline.clone())
+                {
+                    u.color = Some(c);
+                    r.text.underline = Some(u);
+                }
+                if let Some(mut st) =
+                    r.text.strikethrough.clone().or_else(|| base.text.strikethrough.clone())
+                {
+                    st.color = Some(c);
+                    r.text.strikethrough = Some(st);
+                }
+            }
+        }
+        // The sprite's tint IS the element's `color` (see [`slot_paint`]), so
+        // that is the slot an interpolated paint is written into.
+        Fill | Stroke => r.text.color = color().or(r.text.color),
         Width => r.size.width = length(),
         Height => r.size.height = length(),
         MinWidth => r.min_size.width = length(),
@@ -242,6 +324,27 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
     match p {
         Opacity => r.opacity = None,
         Color => r.text.color = None,
+        // Take the colour out of the decoration, not the decoration out of the
+        // rung: `None` means `currentColor`, which is what an undeclared
+        // decoration colour is anyway.
+        TextDecorationColor => {
+            if let Some(u) = r.text.underline.as_mut() {
+                u.color = None;
+            }
+            if let Some(st) = r.text.strikethrough.as_mut() {
+                st.color = None;
+            }
+        }
+        // Deliberately NOTHING. `clear` takes a transitioned property out of
+        // the `:hover` rung so gpui's ladder cannot snap it; the animator then
+        // owns it. But `fill`/`stroke` are not IN a refinement — what they
+        // paint is `color`, and stripping `color` here would strip a hover
+        // colour that only `transition: color` is entitled to animate, leaving
+        // it painted by nobody. A browser makes the same distinction: with
+        // only `fill` in the transition list, a `currentColor` icon whose
+        // `color` changes on hover snaps, because `fill`'s own computed value
+        // never moved.
+        Fill | Stroke => {}
         BackgroundColor => r.background = None,
         BorderColor => r.border_color = None,
         Width => r.size.width = None,
@@ -281,6 +384,15 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
     match p {
         Opacity => dst.opacity = src.opacity,
         Color => dst.text.color = src.text.color,
+        // The decoration travels whole — its colour is a field of it.
+        TextDecorationColor => {
+            dst.text.underline = src.text.underline.clone();
+            dst.text.strikethrough = src.text.strikethrough.clone();
+        }
+        // The one non-interpolable SVG paint is `none`, and `none` is not in a
+        // refinement at all (`Extras` carries it); the renderer reads it from
+        // there, so there is nothing to copy.
+        Fill | Stroke => {}
         BackgroundColor => dst.background = src.background.clone(),
         BorderColor => dst.border_color = src.border_color,
         Width => dst.size.width = src.size.width,
@@ -585,9 +697,9 @@ impl Animator {
 
             let from_slot = match running {
                 Some(v) => Slot::Value(v),
-                None => slot_inherited(&old.base, property, old.color),
+                None => slot_inherited(&old.base, property, old.color, &old.extras),
             };
-            let to_slot = slot_inherited(&new.base, property, new.color);
+            let to_slot = slot_inherited(&new.base, property, new.color, &new.extras);
 
             match self.endpoints(from_slot, to_slot, property) {
                 Endpoints::Pair(from, to) => {
@@ -678,12 +790,12 @@ impl Animator {
                 }
                 // Same as the base? Then the base already says it and holding a
                 // copy would only make the overlay bigger.
-                if to == slot_inherited(base, p, computed.color) {
+                if to == slot_inherited(base, p, computed.color, &computed.extras) {
                     continue;
                 }
                 match to {
                     Slot::Value(v) => {
-                        install(&mut hold, p, v);
+                        install(&mut hold, base, p, v);
                         holds_anything = true;
                     }
                     // A value that cannot be interpolated (a gradient fill,
@@ -723,12 +835,14 @@ impl Animator {
             let from_slot = match running {
                 Some(v) => Slot::Value(v),
                 None => match previous.as_ref().map(|p| slot_of(p, property)) {
-                    Some(Slot::Missing) | None => slot_inherited(base, property, computed.color),
+                    Some(Slot::Missing) | None => {
+                        slot_inherited(base, property, computed.color, &computed.extras)
+                    }
                     Some(s) => s,
                 },
             };
             let to_slot = match slot_of(&hold, property) {
-                Slot::Missing => slot_inherited(base, property, computed.color),
+                Slot::Missing => slot_inherited(base, property, computed.color, &computed.extras),
                 s => s,
             };
 
@@ -802,7 +916,7 @@ impl Animator {
         if let Some(tracks) = self.nodes.get(&node).filter(|t| !t.is_empty()) {
             let out = r.get_or_insert_with(StyleRefinement::default);
             for track in tracks {
-                install(out, &track.property, track.value(now));
+                install(out, base, &track.property, track.value(now));
             }
         }
         r
@@ -1178,7 +1292,7 @@ mod tests {
         .into();
         fn mk(c: Hsla) -> StyleRefinement {
             let mut r = StyleRefinement::default();
-            r.background = Some(Fill::Color(c.into()));
+            r.background = Some(gpui::Fill::Color(c.into()));
             r
         }
         let old = states(mk(red), "transition: background-color 1s linear");
@@ -1934,17 +2048,17 @@ fn apply_keyframes(
             // those either; the discrete behaviour is to hold whichever end
             // does have a value.
             if let Slot::Value(v) = from {
-                install(out, &property, v);
+                install(out, base, &property, v);
             } else if let Slot::Value(v) = to {
-                install(out, &property, v);
+                install(out, base, &property, v);
             }
             continue;
         };
         let Some((a, b)) = unify(a, b) else {
-            install(out, &property, if segment.t < 0.5 { a } else { b });
+            install(out, base, &property, if segment.t < 0.5 { a } else { b });
             continue;
         };
         let easing = segment.easing.unwrap_or(spec.easing);
-        install(out, &property, lerp(a, b, easing.eval(segment.t.clamp(0.0, 1.0))));
+        install(out, base, &property, lerp(a, b, easing.eval(segment.t.clamp(0.0, 1.0))));
     }
 }

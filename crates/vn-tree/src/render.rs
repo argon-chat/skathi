@@ -85,6 +85,51 @@ thread_local! {
     /// the ONE tree, asked by whichever window is building. Which window that
     /// somebody is lives in `windows::ROOTS`.
     static POPPED_OUT: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
+    /// Per-node "this has looked wrong for N builds running" counters — see
+    /// [`settled`]. Empty on every app that has nothing to advise about.
+    static SETTLING: RefCell<HashMap<u32, u8>> = RefCell::new(HashMap::new());
+}
+
+/// Whether the build asks gpui to tag a hitbox onto every node.
+///
+/// Off by default and turned on by `vn-app`'s devtools boot, which a
+/// `--features prod` host never compiles — so a shipped binary tags nothing,
+/// gpui inserts hitboxes only where an element is interactive, and its per-move
+/// hit test iterates exactly what it always did. The cost when it IS on is one
+/// `Hitbox` per painted element per frame and the same number of rectangle
+/// tests per mouse move; measured on apps/meet-probe (~400 painted nodes) it
+/// does not move the frame budget.
+static PICK_HITBOXES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns [`PICK_HITBOXES`] on. Called once, from the dev host's devtools boot.
+pub fn enable_pick_hitboxes() {
+    PICK_HITBOXES.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Tells this window whether to give every element a hitbox. Called once per
+/// build, because the flag lives on the `Window` and every window this process
+/// paints has to be told.
+fn arm_pick_hitboxes(window: &mut Window) {
+    if PICK_HITBOXES.load(std::sync::atomic::Ordering::Relaxed) {
+        window.set_tag_every_hitbox(true);
+    }
+}
+
+/// The hitbox gpui made for `id` in the frame this window last rendered — the
+/// handle [`gpui::Hitbox::is_hovered_at`] takes.
+///
+/// It is gpui's OWN hitbox for the element, not one of ours beside it, which is
+/// the whole point: it carries the CSS `transform` in force where gpui inserted
+/// it (from `Style::transform_matrix`, which prepaint and paint share), the
+/// content mask of every clipping ancestor, and the place in the frame's hitbox
+/// list that a deferred draw gave it. A hitbox recorded from OUTSIDE the
+/// element — which is where a wrapper like [`BoundsProbe`] stands — would carry
+/// the PARENT's matrix, and so be wrong for exactly the case this exists for.
+///
+/// The window is the key: hitboxes belong to the frame that inserted them, so a
+/// popped-out node answers from the pop-out's own `Window`.
+pub fn pick_hitbox(window: &Window, id: u32) -> Option<gpui::Hitbox> {
+    window.tagged_hitbox(id).cloned()
 }
 
 /// Marks (or unmarks) a node as painted by another window. Returns `true` when
@@ -103,12 +148,38 @@ pub fn popped_out(id: u32) -> bool {
 
 /// Browser-compat advisory: say what was dropped and what to do instead, once.
 pub(crate) fn warn_compat(key: &str, msg: &str) {
+    warn_compat_at(key, "", msg)
+}
+
+/// [`warn_compat`], with the node that tripped it named first.
+///
+/// One advisory covers every element with the same gap, which is the point —
+/// but "somewhere on this page" is not a place a developer can go and look. The
+/// FIRST offender's id and selector are printed, and `ctl query`/`highlight`
+/// take a node id, so the line is a lead rather than a riddle. m19's own report
+/// listed "not pinned to a node" against four of these.
+pub(crate) fn warn_compat_at(key: &str, at: &str, msg: &str) {
     WARNED.with(|w| {
         if w.borrow_mut().insert(key.to_string()) {
+            let msg = crate::log::one_line(&format!("{at}{msg}"));
             eprintln!("[vue-native compat] {msg}");
             crate::log::record("advisory", msg);
         }
     });
+}
+
+/// `"node 42 (<div class=\"a b\">): "` — the lead-in [`warn_compat_at`] puts in
+/// front of an advisory. At most three classes; the point is to recognise the
+/// element, not to reproduce it.
+fn node_prefix(t: &Tree, id: u32) -> String {
+    let Some(node) = t.node(id) else { return String::new() };
+    let tag = t.name(node.tag);
+    let classes: Vec<&str> = node.classes.iter().map(String::as_str).take(3).collect();
+    if classes.is_empty() {
+        format!("node {id} (<{tag}>): ")
+    } else {
+        format!("node {id} (<{tag} class=\"{}\">): ", classes.join(" "))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +259,17 @@ pub fn bounds_of(id: u32) -> Option<Rect> {
 pub fn bounds_in(root: u32, id: u32) -> Option<Rect> {
     let k = windows::window_of_root(root)?;
     windows::peek(k, |w| w.bounds.get(&id).copied()).flatten()
+}
+
+/// [`bounds_of`], asked of ONE window: the rectangle **this** window painted
+/// the node at, `None` when this window did not paint it at all.
+///
+/// This is the form a question about a POINT needs. `bounds_of` answers "where
+/// is it" by searching every window in turn, which is right for `query`/`tree`
+/// and wrong the moment the number is going to be fed back in as a coordinate —
+/// two windows' maps hold numbers in two different client spaces.
+pub fn bounds_here(window: &Window, id: u32) -> Option<Rect> {
+    windows::peek(windows::key(window), |w| w.bounds.get(&id).copied()).flatten()
 }
 
 /// [`painted_bounds`] for one window — what a per-window highlight overlay
@@ -316,13 +398,21 @@ impl gpui::Element for BoundsProbe {
         cx: &mut App,
     ) {
         record_bounds(self.id, bounds, window);
+        // Every hitbox gpui inserts from here down is tagged with this node id
+        // until a descendant's own probe overrides it — which is how a node
+        // gets back the hitbox gpui made for IT, under the transform and
+        // content mask it made it under (see [`pick_hitbox`]). The previous tag
+        // is restored on the way out, so the parent's boxes stay the parent's.
+        let tag = window.set_hitbox_tag(self.id);
         if !self.root {
             self.inner.prepaint(window, cx);
+            window.set_hitbox_tag(tag);
             return;
         }
         crate::perf::note_taffy_gap();
         let span = crate::perf::Span::start();
         self.inner.prepaint(window, cx);
+        window.set_hitbox_tag(tag);
         crate::perf::note_prepaint(span.ms());
     }
 
@@ -364,6 +454,7 @@ pub(crate) fn gc_node_state() {
     INPUT_STATES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    SETTLING.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
@@ -1024,6 +1115,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         w.any_drag_region = false;
         w.control_hitboxes.clear();
     });
+    arm_pick_hitboxes(window);
     let el = tree::read_tree(|t| {
         if t.root == 0 {
             Empty.into_any_element()
@@ -1061,6 +1153,8 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
 ///   pop-out could not hold keyboard focus.
 pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<V>) -> AnyElement {
     let now = std::time::Instant::now();
+    // Per WINDOW, and a pop-out is a window of its own.
+    arm_pick_hitboxes(window);
     let win = windows::key(window);
     // Registered from the build itself, so "which window paints this node"
     // cannot drift from what is actually on screen — it is what
@@ -1135,6 +1229,7 @@ fn build_node<V: 'static>(
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
     advise_negative_z(t, id, &extras);
+    advise_out_of_flow(t, id, node, &extras);
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
         // element out as a full line box — and Vue anchors every Fragment
@@ -1157,17 +1252,12 @@ fn build_node<V: 'static>(
         // is instructions. reka-ui injects a `<style>` element at runtime to
         // hide a scroll container's scrollbars, and painting its source as text
         // put a paragraph of CSS at the top of the page.
-        Kind::Element if is_metadata(t.name(node.tag)) => {
-            if t.name(node.tag) == "style" {
-                warn_compat(
-                    "runtime-style-element",
-                    "a <style> element in the tree renders nothing (as in a browser) but its CSS \
-                     is NOT installed either — vue-native's stylesheet is set once per build from \
-                     the SFC <style> blocks, so a stylesheet injected at runtime has no effect",
-                );
-            }
-            Empty.into_any_element()
-        }
+        //
+        // A `<style>` is not silently ignored, though: `tree::sync_runtime_sheets`
+        // installs its CSS into the cascade. Rendering nothing and MEANING
+        // nothing are two different things, and only the first is the browser's
+        // behaviour — which is why the advisory that used to stand here is gone.
+        Kind::Element if is_metadata(t.name(node.tag)) => Empty.into_any_element(),
         // `stack` moves the PAINT into gpui's deferred layer for `position:
         // fixed` / positive `z-index`; the window-control hitbox rides the
         // inner element either way, and a deferred paint puts it *above* the
@@ -1213,9 +1303,16 @@ fn build_node<V: 'static>(
             advise_missing_font(d.style(), cx);
             apply_background_layers(d.style(), &extras);
             apply_background_clip_text(d.style(), &extras);
-            apply_self_blur(d.style(), t, node, &extras);
+            apply_self_blur(d.style(), t, id, node, &extras);
+            apply_drop_shadow(
+                d.style(),
+                &extras,
+                node.computed.as_ref().and_then(|cs| cs.color),
+                &node_prefix(t, id),
+            );
             apply_inline_row(d.style(), t, node, align);
             apply_inline_align(d.style(), &extras, align);
+            advise_inline_level(t, id, node, &extras, d.style());
             apply_percentage_flex_basis(d.style(), t, node);
             // "The window IS the root" (see `createApp().mount()`): the root
             // element is vue-native's viewport, so it fills the box the host
@@ -1563,8 +1660,8 @@ const INLINE_LEVEL_TAGS: &[&str] = &[
 /// **This is the closest thing vue-native has to an inline formatting context,
 /// and it is worth being precise about what it is not.** taffy models block,
 /// flex and grid; it has no line box, so `display: inline` maps to its
-/// block-level equivalent (`vn_css::mapper` says so, with an advisory) and a
-/// block container lays every child out on its own row. For a container whose
+/// block-level equivalent (see [`advise_inline_level`]) and a block container
+/// lays every child out on its own row. For a container whose
 /// children are ALL elements that is usually invisible, because the author
 /// wrote `flex` themselves. For a container that mixes a text node with an
 /// inline element it is not invisible at all — it is a line break in the middle
@@ -1599,24 +1696,49 @@ fn apply_inline_row(
     node: &crate::tree::Node,
     align: Option<gpui::TextAlign>,
 ) {
+    if !inline_row_applies(t, node, style.display) {
+        return;
+    }
+    style.display = Some(gpui::Display::Flex);
+    style.flex_direction = Some(gpui::FlexDirection::Row);
+    style.flex_wrap = Some(gpui::FlexWrap::Wrap);
+    style.align_items.get_or_insert(gpui::AlignItems::Baseline);
+    if style.justify_content.is_none() {
+        style.justify_content = match align {
+            Some(gpui::TextAlign::Center) => Some(gpui::JustifyContent::Center),
+            Some(gpui::TextAlign::Right) => Some(gpui::JustifyContent::End),
+            _ => None,
+        };
+    }
+}
+
+/// Does [`apply_inline_row`] fire for this container? Split out so that
+/// [`advise_inline_level`] can ask the question from the CHILD's side — an
+/// inline-level box whose parent became a row is laid out the way a browser
+/// lays it out, and has nothing to advise about.
+fn inline_row_applies(
+    t: &Tree,
+    node: &crate::tree::Node,
+    display: Option<gpui::Display>,
+) -> bool {
     // An author-declared display is authority: `display: flex` on a paragraph
     // means flex, and `display: grid` means grid.
-    if !matches!(style.display, None | Some(gpui::Display::Block)) {
-        return;
+    if !matches!(display, None | Some(gpui::Display::Block)) {
+        return false;
     }
     let kids = laid_out_children(t, node);
     if kids.len() < 2 {
-        return;
+        return false;
     }
     let mut has_text = false;
     let mut has_element = false;
     for &child in &kids {
-        let Some(kid) = t.node(child) else { return };
+        let Some(kid) = t.node(child) else { return false };
         match kid.kind {
             Kind::Text => has_text = true,
             Kind::Element => {
                 if !INLINE_LEVEL_TAGS.contains(&t.name(kid.tag)) {
-                    return;
+                    return false;
                 }
                 // …and the author can still opt a `<span>` out of the run
                 // with `display: block`.
@@ -1637,7 +1759,7 @@ fn apply_inline_row(
                 if !inline_level
                     && matches!(declared, Some(gpui::Display::Block) | Some(gpui::Display::Grid))
                 {
-                    return;
+                    return false;
                 }
                 has_element = true;
             }
@@ -1655,20 +1777,7 @@ fn apply_inline_row(
     // under the first, which is why a console line built out of several
     // styled runs came out as a column (research/reports/m21/devtools-v2.md).
     // The same was true of two adjacent text nodes.
-    if !(has_text || has_element) {
-        return;
-    }
-    style.display = Some(gpui::Display::Flex);
-    style.flex_direction = Some(gpui::FlexDirection::Row);
-    style.flex_wrap = Some(gpui::FlexWrap::Wrap);
-    style.align_items.get_or_insert(gpui::AlignItems::Baseline);
-    if style.justify_content.is_none() {
-        style.justify_content = match align {
-            Some(gpui::TextAlign::Center) => Some(gpui::JustifyContent::Center),
-            Some(gpui::TextAlign::Right) => Some(gpui::JustifyContent::End),
-            _ => None,
-        };
-    }
+    has_text || has_element
 }
 
 /// A percentage `flex-basis` REPLACES the main-axis size — and when it cannot
@@ -1721,8 +1830,8 @@ fn apply_percentage_flex_basis(
 /// `text-align` on a block container centres its INLINE-level children.
 ///
 /// taffy has no inline formatting context, so `display: inline-flex` is laid
-/// out as `flex` and the box becomes block-level (`vn_css::mapper` says so,
-/// with an advisory). Everything about the box is then right except its
+/// out as `flex` and the box becomes block-level (see [`advise_inline_level`]).
+/// Everything about the box is then right except its
 /// position: a block-level box ignores `text-align`, so a centred column full
 /// of centred text puts its one `inline-flex` badge flush against the left
 /// edge. On apps/meet-probe that badge is the hero logo, sitting a third of the
@@ -1792,6 +1901,7 @@ fn apply_inline_align(
 fn apply_self_blur(
     style: &mut gpui::StyleRefinement,
     t: &Tree,
+    node_id: u32,
     node: &crate::tree::Node,
     extras: &vn_css::Extras,
 ) {
@@ -1815,8 +1925,9 @@ fn apply_self_blur(
                 inset: false,
             }]);
         }
-        _ => warn_compat(
+        _ => warn_compat_at(
             "filter-blur-shape",
+            &node_prefix(t, node_id),
             "`filter: blur()` is honoured only on a LEAF box with a solid background colour \
              (v1) — gpui has no post-processing pass over an element's own painted output, so \
              the blur is drawn by repainting that box as its own Gaussian drop shadow, which \
@@ -1824,6 +1935,71 @@ fn apply_self_blur(
              or a gradient. This element kept its sharp edges",
         ),
     }
+}
+
+/// `filter: drop-shadow(<dx> <dy> <blur> <color>)` on a box whose painted
+/// output IS its own rectangle: gpui's shadow primitive, exactly.
+///
+/// CSS's `drop-shadow()` blurs the ALPHA of what the element painted and lays
+/// the result underneath it. gpui's `BoxShadow` rasterises a Gaussian-blurred
+/// rounded rect with the element's own corner radii — which is precisely that
+/// alpha, for an element whose alpha IS an opaque rounded rect. The sigma
+/// transfers 1:1 for the same reason `blur()`'s does (both CSS and
+/// `shaders.hlsl` define it as a sigma), and `rounded-full` casts a round
+/// shadow.
+///
+/// So the shape test is **an opaque solid background**. Children and text do
+/// not disqualify it, unlike [`apply_self_blur`]: they paint ON TOP of an
+/// opaque box and cannot change its silhouette. A translucent background does
+/// disqualify it — CSS would carry that alpha into the shadow and gpui's
+/// shadow is drawn at full strength — and so does no background at all, where
+/// the silhouette is the glyphs or the SVG strokes and there is nothing
+/// rectangular to blur.
+///
+/// It APPENDS, so `box-shadow` and `filter: drop-shadow()` on the same element
+/// both draw, which is what a browser does with them too.
+///
+/// One residual, stated because it is invisible: a child painted OUTSIDE the
+/// box (an unclipped overflow) is part of the browser's silhouette and not of
+/// this one.
+fn apply_drop_shadow(
+    style: &mut gpui::StyleRefinement,
+    extras: &vn_css::Extras,
+    inherited_color: Option<gpui::Hsla>,
+    at: &str,
+) {
+    let Some(shadow) = extras.drop_shadow else { return };
+    let opaque = style
+        .background
+        .as_ref()
+        .and_then(|fill| fill.color())
+        .and_then(|bg| bg.as_solid())
+        .filter(|c| c.a >= 0.99);
+    if opaque.is_none() {
+        advise_drop_shadow_shape(at);
+        return;
+    }
+    let color = shadow
+        .color
+        .or_else(|| style.text.color.or(inherited_color))
+        .unwrap_or_else(gpui::black);
+    style.box_shadow.get_or_insert_with(Vec::new).push(gpui::BoxShadow {
+        color,
+        offset: gpui::point(gpui::px(shadow.dx), gpui::px(shadow.dy)),
+        blur_radius: gpui::px(shadow.blur),
+        spread_radius: gpui::px(0.0),
+        inset: false,
+    });
+}
+
+/// The `drop-shadow()` this engine cannot draw, said once. Shared by
+/// [`apply_drop_shadow`] and by `build_svg`, which does not go through it.
+fn advise_drop_shadow_shape(at: &str) {
+    warn_compat_at(
+        "filter-drop-shadow-shape",
+        at,
+        "`filter: drop-shadow()` is honoured only on a box with an OPAQUE solid background          (v1) — gpui has no post-processing pass over an element's own painted output, so the          shadow is drawn as the element's OWN blurred rounded rect. That is exact for a box          and impossible for a silhouette made of glyphs, of SVG strokes, or of a translucent          fill whose alpha the shadow would have to carry. On an <svg> icon there is no          expressible substitute at all: gpui rasterises an SVG into a single-colour alpha          mask, so even an offset copy of that mask could only be the icon's own colour, never          the shadow's. On a box, `box-shadow` draws the same picture",
+    );
 }
 
 /// One `::before` / `::after` generated box.
@@ -2183,6 +2359,222 @@ fn advise_negative_z(t: &Tree, id: u32, extras: &vn_css::Extras) {
     );
 }
 
+/// `display: inline-*` — the ONE shape where mapping an inline-level box onto
+/// its block-level equivalent is visible, said once.
+///
+/// The mapper used to say it for every `inline-flex` in the sheet, which on a
+/// Tailwind page is every Button and every Badge. Almost none of them diverge,
+/// and three separate rules say why:
+///
+/// * **CSS blockifies most of them itself** (CSS Display 3 §2.7). A flex item,
+///   a grid item and an out-of-flow box all compute their `display` to its
+///   block-level equivalent — so `inline-flex` on a flex child IS `flex`, in
+///   Chromium as much as here. shadcn's controls live in flex rows; that is the
+///   whole reason they always looked right.
+/// * **[`apply_inline_row`] recovers the rest of the common case.** A block
+///   container whose laid-out children are all inline content becomes a
+///   wrapping, baseline-aligned flex row, and a flex item is sized to its
+///   content — which is shrink-to-fit, which is the property being missed.
+/// * **an explicit width answers it too.** "Fills the available width rather
+///   than shrinking to fit" cannot bite a box that was given a width.
+///
+/// What is left, and what this advises about: an in-flow inline-level box in a
+/// block container that did NOT become a row (it has a block-level sibling), with
+/// no width of its own. That box takes a line to itself and stretches across it.
+fn advise_inline_level(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    extras: &vn_css::Extras,
+    style: &gpui::StyleRefinement,
+) {
+    if extras.inline_level != Some(true) {
+        return;
+    }
+    // Out of flow: blockified by CSS, so there is nothing to report.
+    if style.position == Some(gpui::Position::Absolute) {
+        return;
+    }
+    // A definite width takes the whole complaint away.
+    if !matches!(style.size.width, None | Some(gpui::Length::Auto)) {
+        return;
+    }
+    let Some(parent) = t.node(node.parent) else { return };
+    let parent_display = parent.computed.as_ref().and_then(|cs| cs.base.display);
+    // A flex or grid ITEM is blockified by CSS as well.
+    if matches!(parent_display, Some(gpui::Display::Flex) | Some(gpui::Display::Grid)) {
+        return;
+    }
+    // …and a block container full of inline content is about to become a row,
+    // which sizes this box to its content exactly as a line box would.
+    if inline_row_applies(t, parent, parent_display) {
+        return;
+    }
+    warn_compat_at(
+        "display-inline-level-stretches",
+        &node_prefix(t, id),
+        "`display: inline-*` on an in-flow box whose siblings are block-level takes a LINE of          its own and fills the width (v1) — taffy models the inner display type (flex/grid/flow)          but has no line box, so there is nothing for an inline-level box to sit beside. Where          the parent is a flex or grid container, or the box is out of flow, CSS blockifies it          too and nothing diverges; where the parent's children are all inline content, the          renderer makes that parent a wrapping flex row and this does not arise either. Give the          box a width, or put it in a flex row, for the browser's result",
+    );
+}
+
+/// `position: fixed` and `position: sticky` — the two out-of-flow positions
+/// taffy cannot express, advised only where they actually come out different.
+///
+/// **`fixed`.** taffy has one out-of-flow mode and it resolves against the
+/// element's PARENT; CSS's `fixed` resolves against the viewport. Those two
+/// agree exactly when the parent IS the viewport — which is the case that
+/// matters, because the app root is `document.body` and every overlay library
+/// portals its layer there (`<Teleport to="body">`). reka does; so the meet
+/// app's dialogs, its popovers and its tooltips are all laid out where a
+/// browser lays them out, and were being advised about anyway. What is left is
+/// a `fixed` element left inside a smaller ancestor.
+///
+/// **`sticky`.** It needs the scroll offset of the nearest scroll container at
+/// LAYOUT time and taffy takes no such input, so it maps onto `relative`. But
+/// a sticky box only ever MOVES relative to its flow position while something
+/// above it scrolls: with no scrolling ancestor, `relative` is what a browser
+/// paints too. The app root does not scroll (the window is the viewport), so
+/// this fires only under a real `overflow: auto` / `scroll` container.
+///
+/// Both are painted in a deferred layer either way, so they still stack above
+/// their siblings; only the box's ORIGIN is in question.
+fn advise_out_of_flow(t: &Tree, id: u32, node: &crate::tree::Node, extras: &vn_css::Extras) {
+    if extras.fixed == Some(true) && settled(id, !fixed_lands_on_the_viewport(t, node)) {
+        warn_compat_at(
+            "position-fixed-not-portalled",
+            &node_prefix(t, id),
+            "`position: fixed` is laid out against a box that is NOT the viewport (v1)              — gpui/taffy have no viewport-relative position, so the element resolves              against its PARENT, and this element's parent is a different size from the              window. It is still painted in a deferred layer, so it stacks above its              siblings; portal it to the app root (Vue's `<Teleport to=\"body\">`, which              is what every overlay library already does) and the two agree exactly",
+        );
+    }
+    if extras.sticky == Some(true) && scrolling_ancestor(t, node) {
+        warn_compat_at(
+            "position-sticky-in-scroller",
+            &node_prefix(t, id),
+            "`position: sticky` inside a scroll container is laid out as `relative` (v1)              — it needs that container's scroll offset at LAYOUT time and taffy takes no              such input, so the box does not stay put as the content moves under it. A              header that must stay put belongs OUTSIDE the scroll container, as a flex              sibling of it. (Outside one this says nothing: with nothing scrolling above              it, `sticky` and `relative` paint the same box in a browser too.)",
+        );
+    }
+}
+
+/// True once `holds` has been true for this node on [`SETTLED_FRAMES`]
+/// consecutive builds; `false` resets the count.
+///
+/// The layout of the first frames of an app's life is not its layout. A page
+/// that says `min-h-screen` is exactly `100vh` tall, and `vh` is flattened at
+/// sheet-compile time — so between boot and the recompile that adopts the real
+/// client size, a full-bleed wrapper is the size of the WINDOW while the app
+/// root is the size of the window minus the chrome. For those two frames the
+/// wrapper is not the viewport, and a `position: fixed` child of it really is
+/// laid out against the wrong box.
+///
+/// An advisory fires once for the life of the process and can never be
+/// retracted, so it must not be spent on that. Three builds is long past any
+/// basis recompile and instant for anything that is really wrong.
+fn settled(id: u32, holds: bool) -> bool {
+    const SETTLED_FRAMES: u8 = 3;
+    SETTLING.with(|m| {
+        let mut m = m.borrow_mut();
+        if !holds {
+            m.remove(&id);
+            return false;
+        }
+        let n = m.entry(id).or_insert(0);
+        *n = n.saturating_add(1);
+        *n == SETTLED_FRAMES
+    })
+}
+
+/// Is the box a `position: fixed` element is actually laid out against the
+/// viewport?
+///
+/// taffy resolves an out-of-flow box against its PARENT; CSS resolves `fixed`
+/// against the viewport. So the question is not "was it portalled" but "is the
+/// parent's box the window's box" — and for the app root it is by definition
+/// (the root IS the viewport, `root_bounds`), which is what makes every
+/// `<Teleport to="body">` overlay agree exactly.
+///
+/// For anything else the rectangles are compared, because a full-bleed wrapper
+/// (`min-h-screen`, a `fixed inset-0` decoration layer inside it) is laid out
+/// against a box that happens to BE the viewport, and advising there would be
+/// advising about a difference of zero. Padding and a border on that wrapper
+/// are counted, since they inset the containing block without changing the
+/// element's own rectangle.
+///
+/// Rectangles come from the previous frame (`painted_bounds` — a build cannot
+/// see this frame's layout), so on the very first frame nothing is known and
+/// nothing is said: an advisory fires once for the life of the process, and
+/// one it can never retract must not be based on a rectangle that does not
+/// exist yet.
+fn fixed_lands_on_the_viewport(t: &Tree, node: &crate::tree::Node) -> bool {
+    if node.parent == t.root {
+        return true;
+    }
+    let (Some(parent), Some(root)) = (painted_bounds(node.parent), painted_bounds(t.root)) else {
+        return true;
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.5;
+    if !(near(parent.0, root.0)
+        && near(parent.1, root.1)
+        && near(parent.2, root.2)
+        && near(parent.3, root.3))
+    {
+        return false;
+    }
+    // The containing block is the parent's PADDING box, so a padded or bordered
+    // wrapper of exactly viewport size still insets it.
+    t.node(node.parent)
+        .and_then(|p| p.computed.as_ref())
+        .is_none_or(|cs| no_inner_inset(&cs.base))
+}
+
+/// Are this style's padding and border widths all provably zero? A percentage
+/// padding is not provable without a basis, so it counts as an inset.
+fn no_inner_inset(style: &gpui::StyleRefinement) -> bool {
+    let zero_definite = |v: &Option<gpui::DefiniteLength>| match v {
+        None => true,
+        Some(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(p))) => f32::from(*p) == 0.0,
+        Some(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Rems(r))) => r.0 == 0.0,
+        Some(gpui::DefiniteLength::Fraction(f)) => *f == 0.0,
+    };
+    let zero_absolute = |v: &Option<gpui::AbsoluteLength>| match v {
+        None => true,
+        Some(gpui::AbsoluteLength::Pixels(p)) => f32::from(*p) == 0.0,
+        Some(gpui::AbsoluteLength::Rems(r)) => r.0 == 0.0,
+    };
+    [&style.padding.top, &style.padding.right, &style.padding.bottom, &style.padding.left]
+        .into_iter()
+        .all(zero_definite)
+        && [
+            &style.border_widths.top,
+            &style.border_widths.right,
+            &style.border_widths.bottom,
+            &style.border_widths.left,
+        ]
+        .into_iter()
+        .all(zero_absolute)
+}
+
+/// Does anything between `node` and the root actually scroll? `overflow:
+/// scroll`/`auto` is what gives a node a `ScrollHandle`, and the cascade has
+/// already folded it into the ancestors' computed styles by the time a child is
+/// built.
+fn scrolling_ancestor(t: &Tree, node: &crate::tree::Node) -> bool {
+    let mut id = node.parent;
+    for _ in 0..1024 {
+        let Some(n) = t.node(id) else { return false };
+        if let Some(cs) = n.computed.as_ref() {
+            let o = &cs.base.overflow;
+            if o.x == Some(Overflow::Scroll) || o.y == Some(Overflow::Scroll) {
+                return true;
+            }
+        }
+        if n.parent == 0 {
+            return false;
+        }
+        id = n.parent;
+    }
+    false
+}
+
 /// HTML metadata content: elements that carry instructions, not a box. A
 /// browser gives all of these `display: none` from its UA stylesheet.
 fn is_metadata(tag: &str) -> bool {
@@ -2233,6 +2625,27 @@ fn pointer_mask(node: &crate::tree::Node) -> u64 {
 
 /// Does this node's pointer state have to reach the animator?
 ///
+/// **CSS `:hover` is pointer geometry and nothing else** — the compat ruling of
+/// 2026-09-04 (docs/ARCHITECTURE.md §11 item 12), spelled as the one gpui knob
+/// that expresses it.
+///
+/// gpui defaults to `InputModalityAware`: a key press suppresses hover until the
+/// pointer moves again, which is right for an editor (typing should not leave a
+/// button lit under a stationary cursor) and wrong for the web. A browser
+/// re-evaluates `:hover` from geometry alone; nothing in CSS mentions the
+/// keyboard. So a vue-native app whose user types into a form kept a hover a
+/// browser would have kept, and lost it here — a silent divergence, which is
+/// exactly the class of thing docs/COMPAT.md says we do not ship.
+///
+/// It is set on **both** gpui knobs, because they are two different decisions:
+/// upstream's `hover_listener_mode` governs the `on_hover` CALLBACK (our
+/// `mouseenter`/`mouseleave`, and the animator's state edge through
+/// [`tree::note_hover`]), and the fork's `hover_style_mode` governs the painted
+/// `hover` / `group_hover` RUNGS, which `compute_style` decides from the hitbox
+/// on its own. Setting only the first would fix the events and the transitioned
+/// half of a rung while the untransitioned half still blinked off on a keypress.
+const HOVER_MODE: gpui::HoverListenerMode = gpui::HoverListenerMode::InputModalityIndependent;
+
 /// True exactly when [`apply_computed_style`] took something out of its hover
 /// rungs — the two MUST agree, or a stripped property would have no one left to
 /// paint it. `pointer-events: none` is the case where no rung is installed at
@@ -2285,7 +2698,7 @@ where
                 .unwrap_or_else(|| rung.clone())
         };
         if let Some(h) = cs.hover.as_ref().map(split) {
-            e = e.hover(move |_| (*h).clone());
+            e = e.hover(move |_| (*h).clone()).hover_style_mode(HOVER_MODE);
         }
         if let Some(a) = cs.active.clone() {
             e = e.active(move |_| (*a).clone());
@@ -2296,7 +2709,9 @@ where
         // picked. The style is refined at PAINT time from that hitbox: an
         // ancestor's hover flip costs a repaint, never a restyle.
         if let Some((anchor, style)) = cs.group_hover.as_ref().map(|(a, s)| (*a, split(s))) {
-            e = e.group_hover(group_name(anchor as u32), move |_| (*style).clone());
+            e = e
+                .group_hover(group_name(anchor as u32), move |_| (*style).clone())
+                .hover_style_mode(HOVER_MODE);
         }
         if let Some((anchor, style)) = cs.group_active.clone() {
             e = e.group_active(group_name(anchor as u32), move |_| (*style).clone());
@@ -2511,6 +2926,7 @@ where
     // cascade gave this node a hover rung AND a `transition` to run it on; see
     // [`tree::note_hover`].
     if style_hover || bit(tree::EV_MOUSEENTER) || bit(tree::EV_MOUSELEAVE) {
+        e = e.hover_listener_mode(HOVER_MODE);
         e = e.on_hover(cx.listener(move |_, hovered: &bool, window, cx| {
             if style_hover {
                 // Before the JS handler: a `mouseenter` listener that restyles
@@ -2975,6 +3391,13 @@ fn build_svg<V: 'static>(
 ) -> AnyElement {
     let win = windows::key(window);
     let extras = extras_of(node);
+    // An `<svg>`'s silhouette is its strokes, so a `drop-shadow()` on one is
+    // precisely the case `apply_drop_shadow` cannot express — but it must
+    // still be SAID, and `build_svg` never reaches the generic element branch
+    // that would say it.
+    if extras.drop_shadow.is_some() {
+        advise_drop_shadow_shape(&node_prefix(t, id));
+    }
     let doc = crate::svg::document(t, id, extras.fill, extras.stroke);
     if crate::svg::last_had_explicit_color() {
         warn_compat(

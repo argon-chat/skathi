@@ -31,9 +31,9 @@ pub mod devtools;
 pub use img::{asset_base, set_asset_base};
 pub use render::{
     bounds_in, build_root, build_subtree, control_hitboxes, control_hitboxes_in,
-    flush_pending_mouse_move, painted_bounds_in, painted_drag_region, painted_drag_region_in,
-    popped_out, root_bounds, root_bounds_in, set_os_chrome, set_os_chrome_in, set_popped_out,
-    set_repaint_all,
+    enable_pick_hitboxes, flush_pending_mouse_move, painted_bounds_in, painted_drag_region,
+    painted_drag_region_in, popped_out, root_bounds, root_bounds_in, set_os_chrome,
+    set_os_chrome_in, set_popped_out, set_repaint_all,
 };
 pub use windows::WinKey;
 pub use tree::{
