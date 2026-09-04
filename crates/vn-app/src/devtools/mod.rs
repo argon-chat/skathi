@@ -74,6 +74,14 @@ pub fn start() {
     // where that value came from" is not a devtools feature. A prod build never
     // reaches this line, so it never allocates one of those strings.
     vn_css::set_capture_rule_text(true);
+    // …and every painted node gets a gpui hitbox, which is the only handle
+    // `Hitbox::is_hovered_at` takes — the primitive that makes `pick` gpui's own
+    // hit test instead of a rectangle walk of our own (`vn_tree::devtools::
+    // hit_test_in`). Same reasoning as the line above: the inspector attaches to
+    // a host that is already running, so it cannot be armed on demand. A prod
+    // build never reaches here, so it inserts nothing and gpui's per-move hit
+    // test iterates exactly the hitboxes it always did.
+    vn_tree::enable_pick_hitboxes();
     let listener = match TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))) {
         Ok(l) => l,
         Err(e) => {
@@ -1346,10 +1354,13 @@ fn cmd_highlight(
 /// a pop-out is a window the primary one knows nothing about. The reply always
 /// names the window it answered for, so a client is never guessing.
 ///
-/// The hit test is then restricted to that window's own bounds map
-/// (`vn_tree::hit_test_in`): two windows' rectangles live in two different
-/// client spaces, so a point without a window would happily match a node in the
-/// other one at the same x/y (docs/MULTIWINDOW.md §5.6).
+/// The hit test is then GPUI'S OWN, run against that window's rendered frame
+/// (`vn_tree::hit_test_in` → `Hitbox::is_hovered_at`), which is why it has to
+/// be asked from INSIDE the window: a hitbox belongs to the frame that inserted
+/// it, so a point without a window would be meaningless (docs/MULTIWINDOW.md
+/// §5.6). Transforms, deferred paint order and content masks therefore all get
+/// their vote, which the bounds-rectangle walk this replaced could not give
+/// them.
 fn cmd_pick(window_arg: Option<u64>) -> String {
     let candidates: Vec<u64> = match window_arg {
         Some(id) => vec![id],
@@ -1358,9 +1369,13 @@ fn cmd_pick(window_arg: Option<u64>) -> String {
     if candidates.is_empty() {
         return err("this process has no window to pick in");
     }
-    // (id, x, y, insideWindow, viewport w, viewport h)
-    let mut chosen: Option<(u64, f32, f32, bool, f32, f32)> = None;
+    // (id, x, y, insideWindow, viewport w, viewport h, path)
+    type Facts = (u64, f32, f32, bool, f32, f32, Vec<u32>);
+    let mut chosen: Option<Facts> = None;
     for id in candidates {
+        let root = window_root(id);
+        // The hit test runs INSIDE this closure because it needs the window it
+        // is about: `Hitbox::is_hovered_at` reads that window's rendered frame.
         let Some(facts) = with_window_id(id, |window, _| {
             let p = window.mouse_position();
             let size = window.viewport_size();
@@ -1370,22 +1385,22 @@ fn cmd_pick(window_arg: Option<u64>) -> String {
                 window.is_window_hovered(),
                 f32::from(size.width),
                 f32::from(size.height),
+                vn_tree::devtools::hit_test_in(root, f32::from(p.x), f32::from(p.y), window),
             )
         }) else {
             continue;
         };
-        let (x, y, inside, vw, vh) = facts;
+        let (x, y, inside, vw, vh, path) = facts;
         if inside || chosen.is_none() {
-            chosen = Some((id, x, y, inside, vw, vh));
+            chosen = Some((id, x, y, inside, vw, vh, path));
         }
         if inside {
             break;
         }
     }
-    let Some((id, x, y, inside, vw, vh)) = chosen else {
+    let Some((id, x, y, inside, vw, vh, path)) = chosen else {
         return err("no such window");
     };
-    let path = vn_tree::devtools::hit_test_in(window_root(id), x, y);
     let node = path.last().copied();
     let mut entries = vec![
         ("x", Json::n(x)),
@@ -1418,7 +1433,16 @@ fn cmd_click(selector: &str, index: Option<f64>, button: Option<f64>) -> String 
              in a <KeepAlive> cache), so there is no point to click"
         ));
     };
-    let (cx_, cy) = (x + w / 2.0, y + h / 2.0);
+    // The COORDINATE this reports is only informational — `click` dispatches by
+    // node id, not by hit test — but it must be the same point `mouse` would
+    // aim at, or the two commands describe different places for one gesture.
+    // `aim_point` maps the box's centre through the element's own transform;
+    // the raw centre is the fallback for a node gpui would NOT hit, which
+    // `click` is still allowed to reach — proving the handler chain is its job,
+    // and `mouse` is the one that proves reachability.
+    let (cx_, cy) = with_target(|window, _| vn_tree::devtools::aim_point(id, window))
+        .flatten()
+        .unwrap_or((x + w / 2.0, y + h / 2.0));
     let proceed = with_commit(|window, app| {
         vn_tree::devtools::click(id, cx_, cy, button.unwrap_or(0.0), window, app)
     });
@@ -1495,12 +1519,23 @@ fn cmd_mouse(
                 Ok(id) => id,
                 Err(e) => return err(e),
             };
-            match vn_tree::devtools::node_info(id).and_then(|i| i.bounds) {
-                Some((bx, by, bw, bh)) => (bx + bw / 2.0, by + bh / 2.0),
-                None => {
+            // `aim_point`, not the centre of `bounds`: a transformed element's
+            // recorded rectangle is the UNTRANSFORMED one (that is the frame
+            // layout and `getBoundingClientRect` think in), so its centre is
+            // not where the element is on screen. gpui's own matrix maps it
+            // there, and gpui's own hit test then confirms the point really
+            // lands on the node — so an unreachable control is REPORTED
+            // instead of the gesture silently going to whatever covers it.
+            match with_target(|window, _| vn_tree::devtools::aim_point(id, window)) {
+                None => return err("not in a commit phase"),
+                Some(Some(p)) => p,
+                Some(None) => {
                     return err(format!(
-                        "node {id} has no bounds — it was not painted in the last frame, so there \
-                         is no point to aim at"
+                        "node {id} is not reachable at its own centre — either it was not painted \
+                         in the last frame (detached, or parked in a <KeepAlive> cache), or gpui's \
+                         hit test says something else is there: an overlay above it, a clipping \
+                         scroll container it has scrolled out of, `scale(0)`. Aim with x/y to send \
+                         the gesture at a window coordinate anyway"
                     ))
                 }
             }

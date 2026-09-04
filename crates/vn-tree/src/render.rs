@@ -113,6 +113,48 @@ thread_local! {
     static PAINTING_ROOT: Cell<u32> = const { Cell::new(0) };
 }
 
+/// Whether the build asks gpui to tag a hitbox onto every node.
+///
+/// Off by default and turned on by `vn-app`'s devtools boot, which a
+/// `--features prod` host never compiles — so a shipped binary tags nothing,
+/// gpui inserts hitboxes only where an element is interactive, and its per-move
+/// hit test iterates exactly what it always did. The cost when it IS on is one
+/// `Hitbox` per painted element per frame and the same number of rectangle
+/// tests per mouse move; measured on apps/meet-probe (~400 painted nodes) it
+/// does not move the frame budget.
+static PICK_HITBOXES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns [`PICK_HITBOXES`] on. Called once, from the dev host's devtools boot.
+pub fn enable_pick_hitboxes() {
+    PICK_HITBOXES.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Tells this window whether to give every element a hitbox. Called once per
+/// build, because the flag lives on the `Window` and every window this process
+/// paints has to be told.
+fn arm_pick_hitboxes(window: &mut Window) {
+    if PICK_HITBOXES.load(std::sync::atomic::Ordering::Relaxed) {
+        window.set_tag_every_hitbox(true);
+    }
+}
+
+/// The hitbox gpui made for `id` in the frame this window last rendered — the
+/// handle [`gpui::Hitbox::is_hovered_at`] takes.
+///
+/// It is gpui's OWN hitbox for the element, not one of ours beside it, which is
+/// the whole point: it carries the CSS `transform` in force where gpui inserted
+/// it (from `Style::transform_matrix`, which prepaint and paint share), the
+/// content mask of every clipping ancestor, and the place in the frame's hitbox
+/// list that a deferred draw gave it. A hitbox recorded from OUTSIDE the
+/// element — which is where a wrapper like [`BoundsProbe`] stands — would carry
+/// the PARENT's matrix, and so be wrong for exactly the case this exists for.
+///
+/// The window is the key: hitboxes belong to the frame that inserted them, so a
+/// popped-out node answers from the pop-out's own `Window`.
+pub fn pick_hitbox(window: &Window, id: u32) -> Option<gpui::Hitbox> {
+    window.tagged_hitbox(id).cloned()
+}
+
 /// Marks (or unmarks) a node as painted by another window. Returns `true` when
 /// the flag actually moved, so the caller can skip a pointless repaint.
 pub fn set_popped_out(id: u32, on: bool) -> bool {
@@ -341,13 +383,21 @@ impl gpui::Element for BoundsProbe {
         cx: &mut App,
     ) {
         record_bounds(self.id, bounds);
+        // Every hitbox gpui inserts from here down is tagged with this node id
+        // until a descendant's own probe overrides it — which is how a node
+        // gets back the hitbox gpui made for IT, under the transform and
+        // content mask it made it under (see [`pick_hitbox`]). The previous tag
+        // is restored on the way out, so the parent's boxes stay the parent's.
+        let tag = window.set_hitbox_tag(self.id);
         if !self.root {
             self.inner.prepaint(window, cx);
+            window.set_hitbox_tag(tag);
             return;
         }
         crate::perf::note_taffy_gap();
         let span = crate::perf::Span::start();
         self.inner.prepaint(window, cx);
+        window.set_hitbox_tag(tag);
         crate::perf::note_prepaint(span.ms());
     }
 
@@ -997,6 +1047,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     reset_bounds();
     ANY_DRAG_REGION.with(|c| c.set(false));
     CONTROL_HITBOXES.with(|v| v.borrow_mut().clear());
+    arm_pick_hitboxes(window);
     let el = tree::read_tree(|t| {
         if t.root == 0 {
             Empty.into_any_element()
@@ -1030,6 +1081,8 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
 ///   the spike and therefore declares none of its own.
 pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<V>) -> AnyElement {
     let now = std::time::Instant::now();
+    // Per WINDOW, and a pop-out is a window of its own.
+    arm_pick_hitboxes(window);
     // This subtree's own bounds rotation, on this window's own draw schedule.
     let last = SUB_BOUNDS.with(|m| m.borrow_mut().remove(&id).unwrap_or_default());
     SUB_PREV_BOUNDS.with(|m| {
@@ -2252,6 +2305,27 @@ fn pointer_mask(node: &crate::tree::Node) -> u64 {
 
 /// Does this node's pointer state have to reach the animator?
 ///
+/// **CSS `:hover` is pointer geometry and nothing else** — the compat ruling of
+/// 2026-09-04 (docs/ARCHITECTURE.md §11 item 12), spelled as the one gpui knob
+/// that expresses it.
+///
+/// gpui defaults to `InputModalityAware`: a key press suppresses hover until the
+/// pointer moves again, which is right for an editor (typing should not leave a
+/// button lit under a stationary cursor) and wrong for the web. A browser
+/// re-evaluates `:hover` from geometry alone; nothing in CSS mentions the
+/// keyboard. So a vue-native app whose user types into a form kept a hover a
+/// browser would have kept, and lost it here — a silent divergence, which is
+/// exactly the class of thing docs/COMPAT.md says we do not ship.
+///
+/// It is set on **both** gpui knobs, because they are two different decisions:
+/// upstream's `hover_listener_mode` governs the `on_hover` CALLBACK (our
+/// `mouseenter`/`mouseleave`, and the animator's state edge through
+/// [`tree::note_hover`]), and the fork's `hover_style_mode` governs the painted
+/// `hover` / `group_hover` RUNGS, which `compute_style` decides from the hitbox
+/// on its own. Setting only the first would fix the events and the transitioned
+/// half of a rung while the untransitioned half still blinked off on a keypress.
+const HOVER_MODE: gpui::HoverListenerMode = gpui::HoverListenerMode::InputModalityIndependent;
+
 /// True exactly when [`apply_computed_style`] took something out of its hover
 /// rungs — the two MUST agree, or a stripped property would have no one left to
 /// paint it. `pointer-events: none` is the case where no rung is installed at
@@ -2304,7 +2378,7 @@ where
                 .unwrap_or_else(|| rung.clone())
         };
         if let Some(h) = cs.hover.as_ref().map(split) {
-            e = e.hover(move |_| (*h).clone());
+            e = e.hover(move |_| (*h).clone()).hover_style_mode(HOVER_MODE);
         }
         if let Some(a) = cs.active.clone() {
             e = e.active(move |_| (*a).clone());
@@ -2315,7 +2389,9 @@ where
         // picked. The style is refined at PAINT time from that hitbox: an
         // ancestor's hover flip costs a repaint, never a restyle.
         if let Some((anchor, style)) = cs.group_hover.as_ref().map(|(a, s)| (*a, split(s))) {
-            e = e.group_hover(group_name(anchor as u32), move |_| (*style).clone());
+            e = e
+                .group_hover(group_name(anchor as u32), move |_| (*style).clone())
+                .hover_style_mode(HOVER_MODE);
         }
         if let Some((anchor, style)) = cs.group_active.clone() {
             e = e.group_active(group_name(anchor as u32), move |_| (*style).clone());
@@ -2531,6 +2607,7 @@ where
     // cascade gave this node a hover rung AND a `transition` to run it on; see
     // [`tree::note_hover`].
     if style_hover || bit(tree::EV_MOUSEENTER) || bit(tree::EV_MOUSELEAVE) {
+        e = e.hover_listener_mode(HOVER_MODE);
         e = e.on_hover(cx.listener(move |_, hovered: &bool, window, cx| {
             if style_hover {
                 // Before the JS handler: a `mouseenter` listener that restyles

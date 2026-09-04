@@ -64,9 +64,14 @@ describe("the inspector attaches to another instance", () => {
   }, T);
 
   test("selecting a row shows the RULES that produced it, winner first", async () => {
-    // Row 3 is `<header class="titlebar">` with the default expansion (root,
-    // .frame, its anchor, then the header).
-    await inspector.locator(".row").nth(3).click();
+    // With the default expansion the rows are `<root>`, `<div.frame>`, then
+    // `<header.titlebar>` — so row 2. (It was row 3 while a fragment ANCHOR
+    // still stood between the frame and the header; the tree stopped emitting
+    // one, and this spec was the last thing still counting on it.) Asserted by
+    // text rather than trusted, so the next shift fails here and not three
+    // assertions later on a node nobody meant to select.
+    await expect(inspector.locator(".row").nth(2)).toContainText("header.titlebar");
+    await inspector.locator(".row").nth(2).click();
     await expect(inspector.locator(".who")).toContainText("titlebar");
     // hello's styles are `<style scoped>`, so every selector the cascade
     // matched carries the scope attribute the SFC compiler stamped.
