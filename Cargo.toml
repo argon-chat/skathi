@@ -56,13 +56,15 @@ debug = false
 # MEASURED TO DO NOTHING ON THIS TARGET, and kept anyway. `-C strip` is a Unix
 # `strip(1)` operation: a windows-msvc image has no symbol table to remove (they
 # live in the PDB), and Cargo does not translate this into the `/DEBUG:NONE`
-# that would suppress one — a `strip = "symbols"` release build emitted a byte-
-# identical exe and a 326 MB PDB (m22 report §5). It stays because it is correct
-# and free on every other target we might build for, and because deleting it
-# would invite somebody to add it back without measuring. The MSVC half of the
-# job is done where it works: `crates/vn-app/build.rs` passes `/DEBUG:NONE` to
-# the linker for release builds, and the `release-symbols` profile below opts
-# back in.
+# that would suppress one. The A/B, same tree, same features, only this line
+# differing: `"none"` and `"symbols"` both produced a **97 002 496-byte exe and
+# a 325 939 200-byte PDB** — identical in both files (m22 report §5).
+#
+# It stays because it is correct and free on every other target we might build
+# for, and because deleting a setting that measures as a no-op invites somebody
+# to add it back without measuring. The MSVC half of the job is done where it
+# works: `crates/vn-app/build.rs` passes `/DEBUG:NONE` to the linker for release
+# builds, and the `release-symbols` profile below opts back in.
 strip = "symbols"
 # NOT set, deliberately, and both are load-bearing omissions:
 #
