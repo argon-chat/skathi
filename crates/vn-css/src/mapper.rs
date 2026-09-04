@@ -261,6 +261,67 @@ pub struct Extras {
     /// not an approximation at all. `crate::render` decides; anything with
     /// children, text or a gradient keeps the advisory and stays sharp.
     pub blur: Option<f32>,
+    /// `scrollbar-width: auto | thin | none` — how wide the overlay scrollbar
+    /// this element's `overflow` produces should be, or that it should not be
+    /// drawn at all.
+    ///
+    /// NOT inherited here, where CSS says it is not either. `scrollbar-color`
+    /// beside it IS inherited in CSS and is not here — see
+    /// [`Extras::scrollbar_color`].
+    pub scrollbar_width: Option<ScrollbarWidth>,
+    /// `scrollbar-color: <thumb> <track>`.
+    ///
+    /// **Not inherited (v1 divergence.)** In CSS this is an inherited property,
+    /// so `html { scrollbar-color: … }` recolours every scroller on the page;
+    /// here it has to be declared on the scroll container itself. vn-css folds
+    /// no inherited property — the two that behave as if they do
+    /// (`pointer-events`, `window-drag`) are threaded down by the renderer —
+    /// and a colour pair is not worth a third thread until something asks.
+    pub scrollbar_color: Option<(gpui::Hsla, gpui::Hsla)>,
+    /// `overscroll-behavior-x`, the horizontal half of what a wheel at this
+    /// box's edge does to its ancestors.
+    pub overscroll_x: Option<OverscrollBehavior>,
+    /// `overscroll-behavior-y`.
+    pub overscroll_y: Option<OverscrollBehavior>,
+}
+
+/// CSS `scrollbar-width`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollbarWidth {
+    /// The platform's own width — 14 px here, which is what Windows 11's
+    /// overlay scrollbar occupies when it is not hovered.
+    Auto,
+    /// A narrower bar. CSS gives no number; browsers pick something around
+    /// half, and so do we (8 px).
+    Thin,
+    /// No scrollbar at all. The box still scrolls — this is the property that
+    /// makes a custom scrollbar possible, and every carousel uses it.
+    None,
+}
+
+/// CSS `overscroll-behavior`, per axis.
+///
+/// It answers one question: when a wheel arrives at a scroll box that is
+/// already at its edge on that axis, does the ANCESTOR scroll?
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverscrollBehavior {
+    /// The initial value: the scroll chains to the ancestor. (The other half
+    /// of `auto` — the platform's rubber-band bounce — has nothing to do here,
+    /// because there is no bounce to suppress.)
+    Auto,
+    /// The scroll stops at this box. `none` additionally suppresses the bounce,
+    /// which is the only way it differs from `contain` on a platform that has
+    /// one; here the two behave identically and honestly so.
+    Contain,
+    /// See [`OverscrollBehavior::Contain`].
+    None,
+}
+
+impl OverscrollBehavior {
+    /// Does a wheel that this box cannot use reach its ancestors?
+    pub fn chains(self) -> bool {
+        matches!(self, Self::Auto)
+    }
 }
 
 /// CSS `text-transform`, applied to the string before it reaches the shaper.
@@ -2599,6 +2660,91 @@ fn window_drag(
     }
 }
 
+/// `scrollbar-width: auto | thin | none`.
+fn scrollbar_width(
+    value: &lightningcss::properties::custom::TokenList,
+    diagnostics: &mut Vec<String>,
+) -> Option<ScrollbarWidth> {
+    match single_ident(value, "scrollbar-width", diagnostics) {
+        Some("auto") => Some(ScrollbarWidth::Auto),
+        Some("thin") => Some(ScrollbarWidth::Thin),
+        Some("none") => Some(ScrollbarWidth::None),
+        other => {
+            once(
+                diagnostics,
+                format!(
+                    "unsupported value for `scrollbar-width`: {} — expected `auto` | `thin`                      | `none`",
+                    other.unwrap_or("<not a keyword>")
+                ),
+            );
+            None
+        }
+    }
+}
+
+/// `scrollbar-color: <thumb> <track>`. Both colours are required by the
+/// grammar; `auto` (the initial value) means "the platform's", which is what
+/// declaring nothing already gets.
+fn scrollbar_color(
+    value: &lightningcss::properties::custom::TokenList,
+    diagnostics: &mut Vec<String>,
+) -> Option<(Hsla, Hsla)> {
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let mut colors: Vec<Hsla> = Vec::new();
+    for t in value.0.iter() {
+        match t {
+            TokenOrValue::Token(Token::WhiteSpace(_)) => {}
+            TokenOrValue::Token(Token::Ident(id)) if id.as_ref() == "auto" => return None,
+            TokenOrValue::Color(c) => match color(c) {
+                Some(c) => colors.push(c),
+                None => return None,
+            },
+            _ => {
+                once(
+                    diagnostics,
+                    "`scrollbar-color` takes two colours (thumb then track) — the declaration                      was dropped"
+                        .to_string(),
+                );
+                return None;
+            }
+        }
+    }
+    match colors.len() {
+        2 => Some((colors[0], colors[1])),
+        _ => {
+            once(
+                diagnostics,
+                "`scrollbar-color` takes exactly two colours (thumb then track) — the                  declaration was dropped"
+                    .to_string(),
+            );
+            None
+        }
+    }
+}
+
+/// `overscroll-behavior: auto | contain | none`, one axis at a time.
+fn overscroll(
+    property: &str,
+    value: &lightningcss::properties::custom::TokenList,
+    diagnostics: &mut Vec<String>,
+) -> Option<OverscrollBehavior> {
+    match single_ident(value, property, diagnostics) {
+        Some("auto") => Some(OverscrollBehavior::Auto),
+        Some("contain") => Some(OverscrollBehavior::Contain),
+        Some("none") => Some(OverscrollBehavior::None),
+        other => {
+            once(
+                diagnostics,
+                format!(
+                    "unsupported value for `{property}`: {} — expected `auto` | `contain`                      | `none`",
+                    other.unwrap_or("<not a keyword>")
+                ),
+            );
+            None
+        }
+    }
+}
+
 /// `--window-control: minimize | maximize | close | none`.
 fn window_control(
     value: &lightningcss::properties::custom::TokenList,
@@ -3956,10 +4102,60 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
-                    "touch-action" | "overscroll-behavior" | "overscroll-behavior-x"
-                        | "overscroll-behavior-y" | "-webkit-tap-highlight-color"
-                        | "-webkit-overflow-scrolling" | "scroll-behavior"
+                    "touch-action"
+                        | "-webkit-tap-highlight-color"
+                        | "-webkit-overflow-scrolling"
+                        | "scroll-behavior"
                 ) => {}
+            // `scrollbar-width` / `scrollbar-color` are real CSS properties
+            // lightningcss has no typed representation for. They mattered to
+            // nobody while we drew no scrollbars; now they decide whether the
+            // overlay bar appears at all, and what colour it is.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "scrollbar-width" =>
+            {
+                if let Some(w) = scrollbar_width(&c.value, diagnostics) {
+                    x.scrollbar_width = Some(w);
+                }
+            }
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "scrollbar-color" =>
+            {
+                if let Some(pair) = scrollbar_color(&c.value, diagnostics) {
+                    x.scrollbar_color = Some(pair);
+                }
+            }
+            // `overscroll-behavior` — whether a wheel this box cannot use
+            // reaches its ancestors. The shorthand sets both axes; the
+            // longhands one each.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if matches!(
+                    name.0.as_ref(),
+                    "overscroll-behavior"
+                        | "overscroll-behavior-x"
+                        | "overscroll-behavior-y"
+                        | "overscroll-behavior-inline"
+                        | "overscroll-behavior-block"
+                ) =>
+            {
+                let property = name.0.as_ref();
+                if let Some(b) = overscroll(property, &c.value, diagnostics) {
+                    // The logical spellings resolve against `horizontal-tb`,
+                    // the only writing mode we lay out in.
+                    match property {
+                        "overscroll-behavior-x" | "overscroll-behavior-inline" => {
+                            x.overscroll_x = Some(b)
+                        }
+                        "overscroll-behavior-y" | "overscroll-behavior-block" => {
+                            x.overscroll_y = Some(b)
+                        }
+                        _ => {
+                            x.overscroll_x = Some(b);
+                            x.overscroll_y = Some(b);
+                        }
+                    }
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
@@ -5674,7 +5870,6 @@ mod tests {
             // highlights a tap.
             "text-size-adjust: 100%",
             "touch-action: none",
-            "overscroll-behavior: contain",
             "-webkit-font-smoothing: antialiased",
             // `-webkit-line-clamp` is honoured on its own; the legacy flexbox
             // switches around it are inert in browsers too.

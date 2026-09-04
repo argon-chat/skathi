@@ -22,9 +22,11 @@
 //! See `README.md` for the full integration contract and for what was stripped
 //! from the gpui-vue implementation this is adapted from.
 
+pub mod scrollbar;
 pub mod tab_nav;
 pub mod text_input;
 
+pub use scrollbar::{Overscroll, Scrollbar, ScrollbarStyle};
 pub use tab_nav::{FocusNext, FocusPrev};
 pub use text_input::{
     DEFAULT_ROWS, InputAttributes, KEY_CONTEXT, MappedConfiguration, OnChange, OnKeyDown, OnKeyUp,
