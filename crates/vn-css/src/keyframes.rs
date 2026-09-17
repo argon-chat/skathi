@@ -221,6 +221,24 @@ impl Keyframes {
                 t: span(0.0, to.offset),
                 easing: None,
             }),
+            // A keyframe AT 100 % is the end of the timeline. CSS adds an
+            // implicit 100 % carrying the element's own value only for a
+            // property NO keyframe declares there, so there is nothing after
+            // this one to interpolate towards — `to: Some(from)` is that, and
+            // it says so without depending on an easing curve's value at 0.
+            //
+            // Without it, `@keyframes fade { to { opacity: 0.2 } }` with
+            // `animation-fill-mode: forwards` snapped back to the element's own
+            // opacity the instant it finished, which is the one thing
+            // `forwards` exists to prevent. It only ever showed with a fill
+            // mode that paints the end, which is why it survived: with
+            // `fill: none` the overlay is dropped at that exact moment anyway.
+            (Some(from), None) if from.offset >= 1.0 => Some(Segment {
+                from: Some(from),
+                to: Some(from),
+                t: 1.0,
+                easing: from.easing,
+            }),
             (Some(from), None) => Some(Segment {
                 from: Some(from),
                 to: None,

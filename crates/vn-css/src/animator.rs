@@ -1985,6 +1985,20 @@ impl Animator {
                         _ => {}
                     }
                     run.spec = spec;
+                    // **The block the name refers to can move under a running
+                    // animation, and re-resolving is not a restart.** A
+                    // `@keyframes` inside an `@media` block is declared only
+                    // where that query holds, so a resize across the breakpoint
+                    // — or a subtree teleported into a differently-sized
+                    // pop-out (docs/MULTIWINDOW.md §6) — changes which block
+                    // this name means, and a browser re-resolves it in place.
+                    // So does a `var()`-composed block when the element's
+                    // custom properties change. Only reached on a pass that
+                    // already found this node's computed style different, so a
+                    // steady frame pays nothing.
+                    if let Some(frames) = resolve(&run.spec.name) {
+                        run.frames = frames;
+                    }
                     runs.push(run);
                 }
                 None => {

@@ -988,21 +988,54 @@ impl Tree {
         // ANIMATING element, so the advisories they produce belong to the
         // element too — collected here and drained with the animator's own.
         let keyframe_diagnostics = std::cell::RefCell::new(Vec::<String>::new());
+        // The cascade switches environments at a painted root and this loop does
+        // not walk the tree, so the window has to be asked for again — but only
+        // for a node that is actually about to start an animation, and only
+        // when a pop-out exists at all. Both gates are free in the single-window
+        // case: `any_secondary` is an `is_empty`, and a sheet with no
+        // `@keyframes` never reaches the second one.
+        let multiwindow = crate::windows::any_secondary();
         ANIMATOR.with(|a| {
             let mut animator = a.borrow_mut();
             for (id, states) in computed {
+                // Before `node_mut` takes the tree: `env_for_node` reads it.
+                let node_env = if multiwindow && (has_keyframes || !states.animations.is_empty()) {
+                    crate::windows::env_for_node(self, id, env)
+                } else {
+                    *env
+                };
+                // **A node painted by a pop-out can need its animations
+                // re-bound while its own computed style has not moved at all.**
+                // The element's declarations are identical in both windows; it
+                // is the `@keyframes` block its `animation-name` refers to that
+                // is declared per window. The change-gate below therefore never
+                // fires for it — and the run it started with, on the frame
+                // before its window had painted and `ROOTS` was still empty,
+                // was resolved against the PRIMARY's environment.
+                let rebind = node_env != *env && !states.animations.is_empty();
                 if let Some(n) = self.node_mut(id) {
                     if n.computed.as_ref() != Some(&states) {
                         animator.on_computed(id, n.computed.as_ref(), &states, now);
                         // `@keyframes` are document-scoped, so the animation
                         // half needs the sheet; a sheet without any pays
                         // nothing for the check.
+                        //
+                        // **Against the PAINTING window's environment**, like
+                        // the rest of the cascade (docs/MULTIWINDOW.md §6). A
+                        // `@keyframes` block inside an `@media` one is declared
+                        // only where that query holds, and `env()` inside a
+                        // keyframe resolves against the window too — so the
+                        // same `animation-name` can be a different animation in
+                        // a 380px pop-out and in the document that opened it.
+                        // This used to take the pass's fallback environment,
+                        // which is the PRIMARY window's
+                        // (m22/integration.md §6 item 4).
                         if has_keyframes || !states.animations.is_empty() {
                             animator.on_computed_animations(id, &states, now, &|name| {
                                 engine.keyframes_for(
                                     name,
                                     &states.vars,
-                                    env,
+                                    &node_env,
                                     &mut keyframe_diagnostics.borrow_mut(),
                                 )
                             });
@@ -1020,6 +1053,20 @@ impl Tree {
                             }
                         }
                         n.computed = Some(states);
+                    } else if rebind {
+                        // Same style, possibly a different animation. The run
+                        // is kept (the name has not changed) and only the block
+                        // behind it is re-resolved, which is what a browser
+                        // does when a media query flips under a running
+                        // animation.
+                        animator.on_computed_animations(id, &states, now, &|name| {
+                            engine.keyframes_for(
+                                name,
+                                &states.vars,
+                                &node_env,
+                                &mut keyframe_diagnostics.borrow_mut(),
+                            )
+                        });
                     }
                 }
             }

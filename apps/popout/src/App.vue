@@ -115,6 +115,13 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       </button>
     </div>
 
+    <!-- **The per-window `@keyframes` proof** (§6). One `animation-name`,
+         declared twice in one sheet — once at the top level and once inside the
+         same `@media` block the panel's background uses. This one is painted by
+         the 620px main window, the one below by the 380px palette, and they
+         settle on different opacities. -->
+    <div class="pulse pulse-main" />
+
     <p class="hint" v-show="palette">
       The panel is being painted by the palette window. It is still in this tree.
     </p>
@@ -178,7 +185,14 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       @resize="(m: VnWindowMetrics) => (paletteSize = m)"
       @focus="paletteFocused = true"
       @blur="paletteFocused = false"
-    />
+    >
+      <!-- A slot child rather than the Teleport'd panel: this node is CREATED
+           with the window, so the run starts in the window that paints it. A
+           run that is later teleported into another window re-resolves its
+           block in place, which is what a browser does when a media query
+           flips under a running animation. -->
+      <div class="pulse pulse-palette" />
+    </VnWindow>
 
 
     <!-- ================================================================== -->
@@ -361,6 +375,34 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   }
   .ptitle {
     color: #ff9d5c;
+  }
+}
+
+/* **The per-window `@keyframes` proof** (§6). ONE `animation-name`, declared
+   twice: the default below, then an override inside the same
+   `@media (max-width: 420px)` the panel's background uses. Document order is
+   what CSS decides duplicate names by, so the override has to come LAST — and
+   which of the two is declared at all is a question about the WINDOW.
+
+   `forwards` and one iteration, so each element parks on its own answer and the
+   assertion is a settled computed style rather than a race against a clock. */
+.pulse {
+  width: 40px;
+  height: 6px;
+  border-radius: 3px;
+  background: #7aa2ff;
+  animation: pulse 80ms linear 1 forwards;
+}
+@keyframes pulse {
+  to {
+    opacity: 0.2;
+  }
+}
+@media (max-width: 420px) {
+  @keyframes pulse {
+    to {
+      opacity: 0.8;
+    }
   }
 }
 

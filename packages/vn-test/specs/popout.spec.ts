@@ -234,6 +234,25 @@ describe("pop-out", () => {
     bunExpect(wideHue).toBeGreaterThan(0.5); // blue, in the main window
   }, T);
 
+  test("@keyframes resolve against the painting window too, not the primary's", async () => {
+    // The other half of §6, and the one m22/integration.md §6 item 4 left
+    // standing: the CASCADE became per window, but the ANIMATION half still
+    // handed `engine.keyframes_for` the pass's fallback environment — which is
+    // always the primary window's. Worse, the `@media` a `@keyframes` block sat
+    // under was thrown away at COMPILE time, so one by-name slot held whichever
+    // block the file ended with and no environment could have changed it.
+    //
+    // `.pulse` is one `animation-name`, declared twice in one sheet: `to {
+    // opacity: 0.2 }` at the top level and `to { opacity: 0.8 }` inside the
+    // same `@media (max-width: 420px)` block the panel's background uses. It is
+    // `forwards`, so each element parks on its own answer and the `live` bucket
+    // — `base` refined by what the animator holds — is a settled value rather
+    // than a race against a clock.
+    await expect(app.locator(".pulse-palette")).toHaveComputedStyle("opacity", "0.8");
+    // …and the SAME name, at the same moment, in the 620px main window.
+    await expect(app.locator(".pulse-main")).toHaveComputedStyle("opacity", "0.2");
+  }, T);
+
   test("…and a THIRD window opening does not hand the pop-out the primary's answers back", async () => {
     // The regression this exists for: the cascade resolved one `Env` per WALK
     // ROOT, which is right for the pass in which a subtree changes hands
