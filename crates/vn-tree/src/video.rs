@@ -102,7 +102,7 @@ thread_local! {
 /// Frames whose node was GC'd, queued against the window whose atlas holds
 /// their tiles — see `lottie::queue_drops` for why the key is the window.
 fn queue_drops(win: crate::windows::WinKey, images: impl IntoIterator<Item = Arc<RenderImage>>) {
-    crate::windows::of(win, |w| w.pending_drops.extend(images));
+    crate::windows::queue_drops(win, images);
 }
 
 const RING: usize = 32;
@@ -234,6 +234,25 @@ pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -
         }
 
         let entry = map.get_mut(&id)?;
+        // **Re-stamped every frame**, exactly as `lottie::sync` does and for
+        // the same reason: a node can move between windows over its life — a
+        // `<Teleport>` into a pop-out and back is the demo's own shape — and
+        // both of these are facts about the window that is painting it NOW.
+        //
+        // Recorded only at creation, the zero-copy upload path kept routing
+        // decoded frames into the `pending_uploads` of the window that no
+        // longer paints the element: the tile was blitted into an atlas nothing
+        // would look in, and the `<video>` painted transparent in the window it
+        // had moved to. That is the seventh hazard (§7.4) one teleport later.
+        // `scale` goes with it because `frame_box` is in PHYSICAL pixels and
+        // the two windows can sit on displays of different DPI.
+        //
+        // The atlas tiles already handed out do NOT need re-homing: a drop is
+        // drained from the new window's own `window_frame_tick`, so
+        // `App::drop_image(image, Some(new))` can reach every other window
+        // through `App::windows` and sweeps the old one's atlas as well.
+        entry.window = win;
+        entry.scale = scale;
         let state = entry.state.as_mut()?;
         // Being BUILT means being in the painted tree, so this is where a
         // `<KeepAlive>` page coming back out of the cache puts its decoder
@@ -897,6 +916,56 @@ mod tests {
         assert_eq!(number_attr(Some(" 2 ")), Some(2.0));
         assert_eq!(number_attr(Some("fast")), None);
         assert_eq!(number_attr(None), None);
+    }
+
+    /// **A `<video>` that moves between windows is re-stamped with the window
+    /// that paints it NOW** (docs/MULTIWINDOW.md §7.4).
+    ///
+    /// The window and the DPI used to be recorded only when the entry was
+    /// created, so a `<Teleport>` into a pop-out and back left the element
+    /// answering the window it was born in. The zero-copy upload path then
+    /// routed every decoded frame into the `pending_uploads` of a window that
+    /// no longer painted it — the tile was blitted into an atlas nothing would
+    /// look in, and the `<video>` painted transparent in the window it had
+    /// moved to. That is the seventh hazard one teleport later.
+    ///
+    /// `lottie::sync` has always re-stamped; this is the same line.
+    #[test]
+    fn a_video_that_changes_window_is_re_stamped() {
+        let id = tree::with_tree(|t| {
+            let root = t.create_root();
+            let video = t.intern("video");
+            let node = t.create_element(video);
+            t.insert(node, root, 0);
+            node
+        });
+        // An empty `src` loads nothing, which is exactly what this wants: the
+        // entry and its bookkeeping exist, the decoder does not.
+        let here = |k, scale| tree::read_tree(|t| {
+            sync(t, id, k, scale);
+        });
+        let recorded = || VIDEO_STATES.with(|m| {
+            m.borrow().get(&id).map(|e| (e.window, e.scale)).expect("the entry exists")
+        });
+
+        here(7u64, 1.0);
+        assert_eq!(recorded(), (7u64, 1.0), "the window that created it");
+
+        // Popped out: a different window, on a display of a different DPI.
+        here(9u64, 2.0);
+        assert_eq!(
+            recorded(),
+            (9u64, 2.0),
+            "the window that paints it now, and ITS scale — `frame_box` is physical px"
+        );
+
+        // …and back.
+        here(7u64, 1.0);
+        assert_eq!(recorded(), (7u64, 1.0), "and back again");
+
+        VIDEO_STATES.with(|m| {
+            m.borrow_mut().remove(&id);
+        });
     }
 
     /// Every `MediaEvent` must have a code, and no two may share one — a
