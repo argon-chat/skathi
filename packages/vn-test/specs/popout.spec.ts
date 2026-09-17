@@ -76,6 +76,20 @@ async function backgroundHue(selector: string): Promise<number> {
   return Number(m[1]);
 }
 
+/**
+ * `__vn_media_events(id)` DRAINS the element's event ring — it is the JS side's
+ * "what happened since you last asked" — so a poller has to accumulate. This
+ * keeps one bag per node for the life of the file.
+ */
+const mediaSeen = new Map<number, Set<string>>();
+async function mediaEvents(id: number): Promise<Set<string>> {
+  const bag = mediaSeen.get(id) ?? new Set<string>();
+  mediaSeen.set(id, bag);
+  const raw: string = await app.eval(`__vn_media_events(${id})`);
+  for (const name of raw.split(/[\s,]+/)) if (name) bag.add(name);
+  return bag;
+}
+
 /** `__vn_media_state` answers `key=value` lines, not JSON. */
 async function mediaState(id: number): Promise<Record<string, string>> {
   const raw: string = await app.eval(`__vn_media_state(${id})`);
@@ -350,8 +364,13 @@ describe("pop-out", () => {
     });
     bunExpect(player.title).toBe("Player");
 
-    // It is laid out in the player window, not the main one.
-    const box = await app.locator(".clip").boundingBox();
+    // It is laid out in the player window, not the main one — waited for
+    // rather than read, because `__vn_window_popouts()` lists a window from the
+    // deferred open, which is BEFORE its first paint fills its bounds map.
+    const box = await until("the clip to be laid out in the player window", async () => {
+      const b = await app.locator(".clip").boundingBox();
+      return b && b.w > 0 ? b : null;
+    });
     bunExpect(box.w).toBe(320);
     bunExpect(box.h).toBe(180);
 
@@ -359,14 +378,36 @@ describe("pop-out", () => {
     // reached THIS window's sprite atlas. Before phase 1 the tile went to the
     // primary window's atlas — the pop-out had nothing to paint — and the
     // retired tiles were freed from every atlas except the one holding them.
-    const state = await until("the video to report a frame", async () => {
-      const id = (await app.query(".clip")).nodes[0].id;
+    //
+    // **Waited on `playing`, not on `readyState`.** This test used to poll for
+    // `readyState >= 2` and then assert `currentTime > 0`, which are two
+    // different facts: HAVE_CURRENT_DATA means a frame for the CURRENT position
+    // exists, and the current position at that moment is 0. Measured, the gap
+    // is real and wide — `readyState` reaches 4 (with `videoWidth` already 160,
+    // through `loadeddata`/`canplaythrough`) about 60 ms before `playing` fires
+    // and the clock starts moving. Whether the poll landed inside those 60 ms
+    // is the whole of the flake (research/reports/m23/tails.md §4).
+    //
+    // `playing` is the edge HTML defines as "playback has begun", so it is the
+    // signal this assertion is about. No sleep: the loop is polling a real
+    // state change, and the clock check that follows is the same edge from the
+    // other side.
+    const id = (await app.query(".clip")).nodes[0].id;
+    const events = await until("the video to report `playing`", async () => {
+      const bag = await mediaEvents(id);
+      return bag.has("playing") ? bag : null;
+    });
+    // `loadeddata` is the browser's "the first frame is available" edge, and it
+    // is the one the atlas upload rides on — so it is worth naming.
+    bunExpect([...events]).toContain("loadeddata");
+
+    const state = await until("the transport clock to advance", async () => {
       const s = await mediaState(id);
-      return Number(s.readyState) >= 2 ? s : null;
+      return Number(s.currentTime) > 0 ? s : null;
     });
     bunExpect(Number(state.videoWidth)).toBeGreaterThan(0);
+    bunExpect(Number(state.readyState)).toBeGreaterThanOrEqual(2);
     bunExpect(state.paused).toBe("false");
-    bunExpect(Number(state.currentTime)).toBeGreaterThan(0);
 
     await app.locator(".pop-player").click();
     await until("the player to be gone", async () =>
