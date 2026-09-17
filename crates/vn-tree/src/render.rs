@@ -1379,7 +1379,7 @@ fn build_node<V: 'static>(
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
     advise_negative_z(t, id, &extras);
-    advise_out_of_flow(t, id, node, &extras);
+    advise_out_of_flow(t, id, node, &extras, windows::key(window));
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
         // element out as a full line box — and Vue anchors every Fragment
@@ -2605,8 +2605,27 @@ fn advise_inline_level(
 ///
 /// Both are painted in a deferred layer either way, so they still stack above
 /// their siblings; only the box's ORIGIN is in question.
-fn advise_out_of_flow(t: &Tree, id: u32, node: &crate::tree::Node, extras: &vn_css::Extras) {
-    if extras.fixed == Some(true) && settled(id, !fixed_lands_on_the_viewport(t, node)) {
+fn advise_out_of_flow(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    extras: &vn_css::Extras,
+    win: WinKey,
+) {
+    // **A-M03** (docs/MULTIWINDOW.md §10), said at the point the design named:
+    // where a fixed box is about to be deferred and its nearest painted root is
+    // not `t.root`. The behaviour is the BROWSER's — a `position: fixed`
+    // element in a second window anchors to that window's viewport, because
+    // that is the viewport it is in — but it is still a real change for the
+    // same element the moment it is popped out of the document, so it is worth
+    // saying once.
+    if extras.fixed == Some(true) && !windows::is_primary(win) {
+        warn_compat(
+            "position-fixed-in-popout",
+            "A-M03: `position: fixed` inside a pop-out resolves against THAT window's              viewport, not the main window's — the element anchors to the edges of the              window that paints it. That is what a second browser window does too, and it              is still a behaviour change for an element that was pinned to the document's              viewport a moment ago. See docs/MULTIWINDOW.md §10",
+        );
+    }
+    if extras.fixed == Some(true) && settled(id, !fixed_lands_on_the_viewport(t, node, win)) {
         warn_compat_at(
             "position-fixed-not-portalled",
             &node_prefix(t, id),
@@ -2650,6 +2669,19 @@ fn settled(id: u32, holds: bool) -> bool {
     })
 }
 
+/// `(the node whose box IS this window's viewport, the key
+/// [`painted_bounds_in`] addresses that window by)`.
+///
+/// They differ for the primary window and only there: its painted root is the
+/// sentinel `0` ("the tree root"), while the node whose rectangle is the
+/// viewport is `t.root` itself. A pop-out's painted root is both.
+fn window_viewport(t: &Tree, win: WinKey) -> (u32, u32) {
+    match windows::root_of(win) {
+        0 => (t.root, 0),
+        popped => (popped, popped),
+    }
+}
+
 /// Is the box a `position: fixed` element is actually laid out against the
 /// viewport?
 ///
@@ -2671,11 +2703,23 @@ fn settled(id: u32, holds: bool) -> bool {
 /// nothing is said: an advisory fires once for the life of the process, and
 /// one it can never retract must not be based on a rectangle that does not
 /// exist yet.
-fn fixed_lands_on_the_viewport(t: &Tree, node: &crate::tree::Node) -> bool {
-    if node.parent == t.root {
+fn fixed_lands_on_the_viewport(t: &Tree, node: &crate::tree::Node, win: WinKey) -> bool {
+    // **The viewport is the PAINTING window's, not the primary's** (A-M03).
+    // A pop-out's painted root is its viewport exactly as `t.root` is the
+    // document's, so a fixed box that is a child of it lands on the viewport
+    // and nothing is owed — and one inside a smaller wrapper in that window is
+    // owed the advisory, measured against the right rectangle. Asking
+    // `painted_bounds` (which searches every window, primary first) would have
+    // compared a pop-out's box against the MAIN window's root: two coordinate
+    // spaces, and an advisory fired at every `fixed` element in every pop-out.
+    let (viewport, painted_root) = window_viewport(t, win);
+    if node.parent == viewport {
         return true;
     }
-    let (Some(parent), Some(root)) = (painted_bounds(node.parent), painted_bounds(t.root)) else {
+    let (Some(parent), Some(root)) = (
+        painted_bounds_in(painted_root, node.parent),
+        painted_bounds_in(painted_root, viewport),
+    ) else {
         return true;
     };
     let near = |a: f32, b: f32| (a - b).abs() < 0.5;
@@ -4768,7 +4812,7 @@ mod tests {
             let overlay = t.create_element(div);
             t.insert(overlay, root, 0);
             for _ in 0..4 {
-                advise_out_of_flow(t, overlay, t.node(overlay).unwrap(), &fixed());
+                advise_out_of_flow(t, overlay, t.node(overlay).unwrap(), &fixed(), win);
             }
             assert!(!spoke(KEY), "a Teleport-to-body overlay lands on the viewport");
 
@@ -4784,7 +4828,7 @@ mod tests {
             let full_bleed = t.create_element(div);
             t.insert(full_bleed, wrapper, 0);
             for _ in 0..4 {
-                advise_out_of_flow(t, full_bleed, t.node(full_bleed).unwrap(), &fixed());
+                advise_out_of_flow(t, full_bleed, t.node(full_bleed).unwrap(), &fixed(), win);
             }
             assert!(!spoke(KEY), "a full-bleed wrapper of viewport size diverges by nothing");
 
@@ -4797,12 +4841,74 @@ mod tests {
             });
             let child = t.create_element(div);
             t.insert(child, squashed, 0);
-            advise_out_of_flow(t, child, t.node(child).unwrap(), &fixed());
-            advise_out_of_flow(t, child, t.node(child).unwrap(), &fixed());
+            advise_out_of_flow(t, child, t.node(child).unwrap(), &fixed(), win);
+            advise_out_of_flow(t, child, t.node(child).unwrap(), &fixed(), win);
             assert!(!spoke(KEY), "two builds is not settled");
-            advise_out_of_flow(t, child, t.node(child).unwrap(), &fixed());
+            advise_out_of_flow(t, child, t.node(child).unwrap(), &fixed(), win);
             assert!(spoke(KEY), "three consecutive builds is");
         });
+    }
+
+    /// **A-M03: the viewport a `position: fixed` box resolves against is the
+    /// PAINTING window's** (docs/MULTIWINDOW.md §10).
+    ///
+    /// A pop-out's painted root is its viewport exactly as `t.root` is the
+    /// document's, so a fixed box that is a child of it anchors to that
+    /// window's edges and owes nothing — which is also what a `position: fixed`
+    /// element in a second browser window does. Asking the PRIMARY window's
+    /// root instead compared two coordinate spaces and fired
+    /// `position-fixed-not-portalled` at every `fixed` element in every
+    /// pop-out, while the one that genuinely IS in a smaller wrapper in that
+    /// window went unmeasured.
+    #[test]
+    fn a_fixed_box_in_a_popout_resolves_against_that_windows_viewport() {
+        const KEY: &str = "position-fixed-not-portalled";
+        let fixed = || vn_css::Extras { fixed: Some(true), ..Default::default() };
+        let popout: windows::WinKey = 4242;
+        let (panel, toolbar, inner, pinned) = with_tree(|t| {
+            let div = t.intern("div");
+            let root = t.create_root();
+            let panel = t.create_element(div);
+            t.insert(panel, root, 0);
+            let toolbar = t.create_element(div);
+            t.insert(toolbar, panel, 0);
+            let inner = t.create_element(div);
+            t.insert(inner, panel, 1);
+            let pinned = t.create_element(div);
+            t.insert(pinned, inner, 0);
+            // The document is 1200x800 in the main window…
+            windows::of(windows::primary(), |w| {
+                w.bounds.insert(root, (0.0, 0.0, 1200.0, 800.0));
+            });
+            (panel, toolbar, inner, pinned)
+        });
+        // …and a 360x280 pop-out paints `panel`, which is therefore ITS viewport
+        // and is nothing like the document's box. Outside `with_tree`:
+        // `set_painted_root` marks the subtree for a re-cascade and so takes the
+        // tree's mutable borrow itself.
+        windows::set_painted_root(popout, panel);
+        windows::of(popout, |w| {
+            w.bounds.insert(panel, (0.0, 0.0, 360.0, 280.0));
+            w.bounds.insert(inner, (0.0, 0.0, 360.0, 40.0));
+        });
+        with_tree(|t| {
+            // A `fixed` toolbar that is a child of the pop-out's root lands on
+            // that window's viewport. Four builds, so `settled`'s three cannot
+            // be the reason nothing was said.
+            for _ in 0..4 {
+                advise_out_of_flow(t, toolbar, t.node(toolbar).unwrap(), &fixed(), popout);
+            }
+            assert!(!spoke(KEY), "the pop-out's painted root IS its viewport");
+
+            // …and a wrapper inside that window which is NOT its viewport is
+            // advised, measured against the pop-out's rectangle rather than the
+            // document's.
+            for _ in 0..3 {
+                advise_out_of_flow(t, pinned, t.node(pinned).unwrap(), &fixed(), popout);
+            }
+            assert!(spoke(KEY), "a 40px-tall wrapper in a 280px window is not the viewport");
+        });
+        windows::forget(popout);
     }
 
     /// `position: sticky` maps onto `relative` because taffy takes no scroll
@@ -4822,7 +4928,7 @@ mod tests {
             t.insert(plain, root, 0);
             let header = t.create_element(div);
             t.insert(header, plain, 0);
-            advise_out_of_flow(t, header, t.node(header).unwrap(), &sticky());
+            advise_out_of_flow(t, header, t.node(header).unwrap(), &sticky(), windows::primary());
             assert!(!spoke(KEY), "nothing above it scrolls");
 
             // Now give the ancestor a real `overflow-y: auto`.
@@ -4830,7 +4936,7 @@ mod tests {
             scroller.overflow.y = Some(gpui::Overflow::Scroll);
             t.node_mut(plain).unwrap().computed =
                 Some(computed(scroller, Default::default()));
-            advise_out_of_flow(t, header, t.node(header).unwrap(), &sticky());
+            advise_out_of_flow(t, header, t.node(header).unwrap(), &sticky(), windows::primary());
             assert!(spoke(KEY), "inside a scroll container it really does not stay put");
         });
     }

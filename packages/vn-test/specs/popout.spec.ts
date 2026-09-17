@@ -407,6 +407,47 @@ describe("pop-out", () => {
       (await popouts()).every((p) => p.title !== "Notes"));
   }, T);
 
+  test("A-M03: a `position: fixed` box sits at the POP-OUT's edge, not the document's", async () => {
+    // The last designed-not-built row of §10. taffy has no viewport-relative
+    // position, so a fixed box resolves against its PARENT — which agrees with
+    // CSS exactly when the parent's box IS the viewport. In a pop-out the
+    // viewport is that WINDOW's painted root, not `t.root`, and the geometric
+    // test used to ask the primary window's rectangle: two coordinate spaces,
+    // so `position-fixed-not-portalled` fired at every `fixed` element in every
+    // pop-out while a genuinely mis-parented one went unmeasured.
+    //
+    // `.wtool` is `right: 8px; bottom: 8px` inside the 320x260 notes window.
+    await app.locator(".pop-notes").click();
+    const notes = await until("the notes window to exist", async () => {
+      const l = await popouts();
+      return l.find((p) => p.title === "Notes") ?? null;
+    });
+    bunExpect(notes.width).toBe(320);
+    bunExpect(notes.height).toBe(260);
+
+    const tool = await until("the fixed toolbar to be laid out", async () => {
+      const b = await app.locator(".wtool").boundingBox();
+      return b.w > 0 ? b : null;
+    });
+    // Anchored to THIS window's edges: 320 - 8 and 260 - 8. Against the
+    // document's 620x460 viewport those numbers would be 612 and 452, and
+    // against its own parent's content box they would be neither.
+    bunExpect(tool.x + tool.w).toBe(notes.width - 8);
+    bunExpect(tool.y + tool.h).toBe(notes.height - 8);
+
+    // …and it was SAID once, which is the advisory half of A-M03: the same
+    // element pinned to the document's viewport a moment ago is now pinned to
+    // this window's, and that is a real behaviour change even though it is
+    // exactly what a second browser window does.
+    const { entries } = await app.logs(0);
+    const spoken = entries.filter((e) => e.text.includes("A-M03"));
+    bunExpect(spoken.length).toBe(1);
+
+    await app.locator(".pop-notes").click();
+    await until("the notes window to be gone", async () =>
+      (await popouts()).every((p) => p.title !== "Notes"));
+  }, T);
+
   test("a second pop-out of the same node is refused, not queued", async () => {
     await app.locator(".pop").click();
     const p = await until("the palette to exist", async () => {

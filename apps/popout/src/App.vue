@@ -240,6 +240,13 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
         </div>
         <textarea class="note-input" v-model="note" />
         <div class="foot">this window's caption is CSS</div>
+
+        <!-- **A-M03** (§10). `position: fixed` anchors to the viewport of the
+             window that PAINTS it, so this toolbar sits on THIS window's
+             bottom edge — not on the document's, which is 320x260 away and a
+             different size. Exactly where a browser puts a `fixed` element in
+             a second window. -->
+        <div class="wtool">fixed</div>
       </section>
     </VnWindow>
   </main>
@@ -467,5 +474,20 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
 }
 .note-mirror {
   color: #ffffffc0;
+}
+
+/* **A-M03** (§10): the viewport this resolves against is the pop-out's, so the
+   box is pinned 8px from the bottom-right of the NOTES window — 304x244 inside
+   a 320x260 client area — rather than to the 620x460 document. */
+.wtool {
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  width: 52px;
+  height: 18px;
+  border-radius: 4px;
+  background: #7aa2ff55;
+  color: #ffffff;
+  font-size: 10px;
 }
 </style>
