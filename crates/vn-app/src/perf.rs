@@ -424,11 +424,26 @@ fn report_phases() {
     }
     if p.build_passes > 0 {
         eprintln!(
-            "[vn-perf]   build   passes={:<4} nodes={:<7} {:<12} total={:.1}ms  \
+            "[vn-perf]   build   passes={:<4} nodes={:<7} {:<22} total={:.1}ms  \
              avg={:.2}  max={:.2}",
             p.build_passes,
             compact(p.elements_built),
-            "",
+            // How many retained-render cache boundaries actually re-rendered.
+            // Blank when nothing is cached, so the line reads exactly as it did
+            // on every app that never crosses the threshold.
+            // replayed / re-rendered / stood down — the whole story of whether
+            // the retained-render cache is earning its keep, and blank on every
+            // app whose subtrees never cross the threshold.
+            if p.cache_offers + p.cache_standdowns > 0 {
+                format!(
+                    "cache={}/{}/{}",
+                    p.cache_offers.saturating_sub(p.cached_renders),
+                    p.cached_renders,
+                    p.cache_standdowns
+                )
+            } else {
+                String::new()
+            },
             p.build_ms,
             p.build_ms / p.build_passes as f32,
             p.build_max_ms,

@@ -329,7 +329,7 @@ pub fn painted_bounds(id: u32) -> Option<Rect> {
 /// The rectangle this node was painted at in the frame BEFORE the one being
 /// built. Only builders need this — `bounds_of` is the answer to "where is it
 /// now", which is what devtools and a future `getBoundingClientRect()` want.
-fn prev_size_of(id: u32) -> Option<(f32, f32)> {
+pub(crate) fn prev_size_of(id: u32) -> Option<(f32, f32)> {
     // The window that paints this node is the only one whose previous frame can
     // have a rectangle for it, so this is a direct lookup rather than a search.
     let k = windows::window_of_node(id);
@@ -337,6 +337,14 @@ fn prev_size_of(id: u32) -> Option<(f32, f32)> {
         .flatten()
         .filter(|(_, _, w, h)| *w > 0.0 && *h > 0.0)
         .map(|(_, _, w, h)| (w, h))
+}
+
+/// The whole rectangle this node was painted at in the frame BEFORE the one
+/// being built — [`prev_size_of`]'s origin included, which is what the cache's
+/// "did my parent reflow?" check compares.
+pub(crate) fn prev_rect_of(id: u32) -> Option<Rect> {
+    let k = windows::window_of_node(id);
+    windows::peek(k, |w| w.prev_bounds.get(&id).copied()).flatten()
 }
 
 /// A transparent wrapper that records the bounds gpui laid its inner element
@@ -455,6 +463,7 @@ pub(crate) fn gc_node_state() {
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SETTLING.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    crate::cache::gc(&live);
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
@@ -760,8 +769,17 @@ pub(crate) fn js_dispatch_app(id: u32, event: u32, payload: &EventPayload, windo
         crate::dispatch_event(id, event, payload)
     });
     if crate::flush_changes() {
-        window.refresh();
-        repaint_other_windows(cx);
+        // NOT `window.refresh()`. Refreshing a window sets gpui's `refreshing`
+        // flag, which makes the next draw ignore every `Entity::cached` span in
+        // it — so a single devtools click or synthesized event re-rendered the
+        // WHOLE document however little of it had moved (m23). The fan-out below
+        // notifies the hosting view of every window instead, which schedules the
+        // same redraw and leaves the untouched subtrees replayable.
+        if !repaint_other_windows(cx) {
+            // No host registered the fan-out (a bare unit-test harness): fall
+            // back to the hammer rather than silently not repainting.
+            window.refresh();
+        }
     }
     proceed
 }
@@ -785,9 +803,13 @@ pub fn set_repaint_all(f: fn(&mut App)) {
     REPAINT_ALL.with(|c| c.set(Some(f)));
 }
 
-fn repaint_other_windows(cx: &mut App) {
-    if let Some(f) = REPAINT_ALL.with(|c| c.get()) {
-        f(cx);
+fn repaint_other_windows(cx: &mut App) -> bool {
+    match REPAINT_ALL.with(|c| c.get()) {
+        Some(f) => {
+            f(cx);
+            true
+        }
+        None => false,
     }
 }
 
@@ -1263,6 +1285,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         w.control_hitboxes.clear();
     });
     arm_pick_hitboxes(window);
+    crate::cache::begin_frame(window);
     let el = tree::read_tree(|t| {
         if t.root == 0 {
             Empty.into_any_element()
@@ -1316,6 +1339,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
         w.any_drag_region = false;
         w.control_hitboxes.clear();
     });
+    crate::cache::begin_frame(window);
     tree::read_tree(|t| {
         if t.node(id).is_none() {
             return Empty.into_any_element();
@@ -1323,6 +1347,56 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
         // A popped-out root inherits nothing — it is a root, like `t.root`.
         build_node(t, id, id, window, cx, now, None, None, None, None, Stacking::default())
     })
+}
+
+/// Everything `build_node` threads DOWN the walk rather than folding into a
+/// node's own style: the inherited values CSS has and vn-css does not carry, plus
+/// the stacking context the children sort inside.
+///
+/// It is a struct rather than five arguments because the retained-render cache
+/// has to compare it: a cached subtree is lowered from its node id and this, so
+/// a change to any of them at an ancestor changes the subtree's pixels without
+/// touching a single node inside it (`crate::cache`).
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct Inherited {
+    pub(crate) drag: Option<WindowDrag>,
+    pub(crate) case: Option<vn_css::TextTransform>,
+    pub(crate) ws: Option<vn_css::WhiteSpaceMode>,
+    pub(crate) align: Option<gpui::TextAlign>,
+    pub(crate) stack: Stacking,
+}
+
+/// Lowers ONE cache boundary's subtree — `crate::cache::CachedSubtree`'s
+/// `render`. It is `build_node` with the inherited context restored from the
+/// recording rather than from a live walk, and with the ids it lowers collected
+/// so the boundary can carry their rectangles on a replay frame.
+pub(crate) fn build_cached<V: 'static>(
+    id: u32,
+    root: u32,
+    ctx: Inherited,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let now = std::time::Instant::now();
+    let span = crate::perf::Span::start();
+    let before = BUILT.with(|c| c.get());
+    let (el, ids) = tree::read_tree(|t| {
+        let el =
+            build_node(t, id, root, window, cx, now, ctx.drag, ctx.case, ctx.ws, ctx.align, ctx.stack);
+        // The WHOLE subtree, not only what this render lowered: a nested
+        // boundary's own nodes are recorded here too, because when this one
+        // replays nothing else will ever carry their rectangles
+        // (`cache::Entry::ids`).
+        let mut ids = Vec::new();
+        crate::cache::subtree_ids(t, id, &mut ids);
+        (el, ids)
+    });
+    crate::cache::note_rendered(id, ids);
+    // The build cost lands in the `build` bucket wherever it is paid, so the
+    // VN_PERF partition still adds up: a boundary's render runs inside gpui's
+    // prepaint, and without this it would be attributed to prepaint instead.
+    crate::perf::note_build_extra(span.ms(), BUILT.with(|c| c.get()) - before);
+    el
 }
 
 fn build_node<V: 'static>(
@@ -1345,10 +1419,26 @@ fn build_node<V: 'static>(
     let Some(node) = t.node(id) else {
         return Empty.into_any_element();
     };
-    BUILT.with(|c| c.set(c.get() + 1));
     // The window this build is lowering into. gpui handed it to us; nothing is
     // inferred (docs/MULTIWINDOW.md §5.6).
     let win = windows::key(window);
+    // A cache boundary returns the ENTIRE node — probe, stacking wrapper and
+    // all — because its recording already contains them (`crate::cache`). The
+    // `active` gate is one `Cell` read, so a build with caching switched off
+    // (or refused for the frame) pays nothing per node for it.
+    if crate::cache::active() {
+        let inherited = Inherited {
+            drag: parent_drag,
+            case: parent_case,
+            ws: parent_ws,
+            align: parent_align,
+            stack: parent_stack,
+        };
+        if let Some(cached) = crate::cache::boundary(t, id, node, root, inherited, win, cx) {
+            return cached;
+        }
+    }
+    BUILT.with(|c| c.set(c.get() + 1));
     // `window-drag` is inherited (the CSSWG resolved that explicitly) and
     // vn-css has no inherited properties at all, so the fold happens here, on
     // the way down. A browser allows the property on a replaced element too,
@@ -1501,6 +1591,21 @@ fn build_node<V: 'static>(
                 // app has focused nothing of its own (the browser's "the body
                 // has focus by default").
                 d = d.track_focus(&focus_handle_for(id, None, cx));
+            } else if id == crate::cache::boundary_root() {
+                // A cache boundary is laid out AS A ROOT inside the box its
+                // wrapper reserved (`Entity::cached` → `layout_as_root`), and a
+                // root box with `width: auto` shrinks to fit its content
+                // instead of stretching to its parent — which is not what the
+                // node's own place in the flow said. Same `get_or_insert` as
+                // the build root above, and for the same reason: fill the box
+                // you were given, unless a rule already said otherwise.
+                //
+                // NOT the viewport treatment, though: no `Overflow::Scroll` and
+                // no root focus handle. This node is a node, not a document.
+                let style = d.style();
+                let full = gpui::Length::Definite(gpui::relative(1.0));
+                style.size.width.get_or_insert(full);
+                style.size.height.get_or_insert(full);
             }
             // `overflow: scroll|auto` on either axis. The style itself is all
             // gpui's layout/clipping needs (it came in through the wholesale
@@ -2943,8 +3048,8 @@ fn group_name(id: u32) -> gpui::SharedString {
 /// nesting level, most significant first — which compares exactly the way CSS
 /// orders the tree: an element sorts after the context that contains it, and
 /// before anything that outranks that context.
-#[derive(Clone, Copy, Default)]
-struct Stacking {
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Stacking {
     prefix: usize,
     depth: u32,
 }

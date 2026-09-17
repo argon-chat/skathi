@@ -169,6 +169,19 @@ pub struct Node {
     /// with the element work that needs it (research/reports/m11/video.md §9.4).
     pub listeners: u64,
     pub(crate) inline_dirty: bool,
+    /// "Something in this subtree changed" — bumped on the node itself and on
+    /// every ancestor by [`Tree::touch`], which every mutator calls. It is the
+    /// signal the renderer's retained-render cache compares against: a cache
+    /// boundary is only allowed to replay a recorded frame while the number it
+    /// was rendered at still stands (docs/ARCHITECTURE.md §11, D-P01).
+    ///
+    /// Upwards only, and that is the whole design: a mutation can move any
+    /// ancestor's box, so every ancestor's *recorded* frame is stale; it cannot
+    /// move a node outside its own subtree except through the cascade, and the
+    /// cascade reports those itself — the restyle pass touches every node whose
+    /// `ComputedStates` actually changed, which is precisely the set a
+    /// descendant combinator can reach.
+    pub(crate) sub_rev: u64,
     /// Everything the inline `style` body contributes: the mapped refinement,
     /// its transitions and `object-fit`, plus the `--x` declarations and
     /// `var()`-composed values that can only be resolved once the node's place
@@ -348,6 +361,7 @@ impl Tree {
             scopes: Vec::new(),
             listeners: 0,
             inline_dirty: false,
+            sub_rev: 0,
             inline: None,
             computed: None,
         });
@@ -384,6 +398,7 @@ impl Tree {
             n.text = text;
             self.dirty = true;
             self.mark_restyle(id);
+            self.touch(id);
         }
     }
 
@@ -402,6 +417,7 @@ impl Tree {
         }
         self.dirty = true;
         self.mark_restyle(id);
+        self.touch(id);
     }
 
     /// Insert-or-move `child` under `parent`, before `anchor` (0 = append).
@@ -434,6 +450,12 @@ impl Tree {
             c.parent = parent;
         }
         self.dirty = true;
+        // BOTH chains: the subtree left one parent and joined another, and a
+        // cache boundary over either has a stale recording.
+        if old_parent != 0 {
+            self.touch(old_parent);
+        }
+        self.touch(child);
     }
 
     fn detach(&mut self, id: u32) {
@@ -458,6 +480,9 @@ impl Tree {
         self.detach(id);
         self.free_subtree(id);
         self.dirty = true;
+        if parent != 0 {
+            self.touch(parent);
+        }
     }
 
     fn free_subtree(&mut self, id: u32) {
@@ -487,6 +512,7 @@ impl Tree {
             self.dirty = true;
             self.inline_dirty_nodes.push(id);
             self.mark_restyle(id);
+            self.touch(id);
         }
     }
 
@@ -505,6 +531,7 @@ impl Tree {
             }
             self.dirty = true;
             self.mark_restyle(id);
+            self.touch(id);
         }
     }
 
@@ -530,6 +557,7 @@ impl Tree {
                 n.scopes.push(scope);
                 self.dirty = true;
                 self.mark_restyle(id);
+                self.touch(id);
             }
         }
     }
@@ -539,6 +567,7 @@ impl Tree {
             n.classes = classes.split_whitespace().map(str::to_string).collect();
             self.dirty = true;
             self.mark_restyle(id);
+            self.touch(id);
         }
     }
 
@@ -557,6 +586,7 @@ impl Tree {
                 n.listeners &= !bit;
             }
             self.dirty = true;
+            self.touch(id);
         }
     }
 
@@ -607,6 +637,37 @@ impl Tree {
     /// structural pseudos that read the child list are handled by marking the
     /// PARENT wherever the child list changes). Siblings are covered only when
     /// the sheet actually contains `+` / `~`; see [`Tree::restyle_roots`].
+    /// "Something inside this subtree changed": bumps [`Node::sub_rev`] on `id`
+    /// and on every ancestor up to the root.
+    ///
+    /// One `u64` add per level, and the depth of a DOM is a small number — a
+    /// Vue wave of a thousand mutations under one parent costs a thousand times
+    /// the depth, which is nothing beside the cascade it is about to run. It is
+    /// deliberately NOT change-gated: a mutator that stored the same string
+    /// again still moved the DOM as far as `MutationObserver` is concerned, and
+    /// a cache that replayed through it would be betting on a comparison the
+    /// caller already declined to make.
+    pub(crate) fn touch(&mut self, id: u32) {
+        let mut cur = id;
+        // A cycle cannot happen (`insert` detaches first), but a corrupt id
+        // must not hang the pump.
+        for _ in 0..4096 {
+            let Some(n) = self.node_mut(cur) else { return };
+            n.sub_rev = n.sub_rev.wrapping_add(1);
+            match n.parent {
+                0 => return,
+                p => cur = p,
+            }
+        }
+    }
+
+    /// The subtree revision — see [`Node::sub_rev`]. `0` for a node that does
+    /// not exist, which is also the revision of a never-touched one: a caller
+    /// comparing it must therefore hold a node it knows is alive.
+    pub fn sub_rev(&self, id: u32) -> u64 {
+        self.node(id).map(|n| n.sub_rev).unwrap_or(0)
+    }
+
     fn mark_restyle(&mut self, id: u32) {
         if self.dirty_all || id == 0 {
             return;
@@ -926,6 +987,12 @@ impl Tree {
         // ANIMATING element, so the advisories they produce belong to the
         // element too — collected here and drained with the animator's own.
         let keyframe_diagnostics = std::cell::RefCell::new(Vec::<String>::new());
+        // Every node whose fold actually MOVED. The cascade is the one way a
+        // change at one node can reach a node that is not its descendant in the
+        // mutation sense (a descendant combinator, an inherited `var()`, a
+        // structural pseudo), so the renderer's cache learns about those from
+        // here rather than from the mutator — see [`Tree::touch`].
+        let mut restyled: Vec<u32> = Vec::new();
         ANIMATOR.with(|a| {
             let mut animator = a.borrow_mut();
             for (id, states) in computed {
@@ -958,6 +1025,7 @@ impl Tree {
                             }
                         }
                         n.computed = Some(states);
+                        restyled.push(id);
                     }
                 }
             }
@@ -967,6 +1035,9 @@ impl Tree {
         });
         for d in keyframe_diagnostics.into_inner() {
             warn_css(&format!("[css] {d}"));
+        }
+        for id in restyled {
+            self.touch(id);
         }
         // The set of elements that have to carry gpui's `.group(name)`. Costs
         // one pass over the slab, and only for a sheet that has a
@@ -1661,6 +1732,91 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The retained-render cache replays a subtree for exactly as long as
+    /// [`Node::sub_rev`] says nothing in it moved, so the number has to move for
+    /// every mutation and for no mutation next door. Upwards, and only upwards:
+    /// a change at a node restyles its own subtree and can move any ancestor's
+    /// box, but it cannot move a cousin's.
+    #[test]
+    fn a_mutation_bumps_the_subtree_revision_of_every_ancestor_and_of_nothing_else() {
+        let (root, left, leaf, right) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let left = t.create_element(div);
+            let leaf = t.create_element(div);
+            let right = t.create_element(div);
+            t.insert(left, root, 0);
+            t.insert(leaf, left, 0);
+            t.insert(right, root, 0);
+            (root, left, leaf, right)
+        });
+        let before = read_tree(|t| (t.sub_rev(root), t.sub_rev(left), t.sub_rev(leaf), t.sub_rev(right)));
+
+        with_tree(|t| t.set_class(leaf, "hot"));
+
+        let after = read_tree(|t| (t.sub_rev(root), t.sub_rev(left), t.sub_rev(leaf), t.sub_rev(right)));
+        assert!(after.0 > before.0, "the root is an ancestor of the change");
+        assert!(after.1 > before.1, "so is the parent");
+        assert!(after.2 > before.2, "and the node itself");
+        assert_eq!(after.3, before.3, "the sibling subtree did not move");
+    }
+
+    /// Removing a child is a change to the PARENT's subtree — `:last-child`
+    /// and the parent's own box both depend on the child list — and the node
+    /// that went away cannot report anything itself.
+    #[test]
+    fn removing_a_child_bumps_the_parent() {
+        let (parent, child) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            let child = t.create_element(div);
+            t.insert(parent, root, 0);
+            t.insert(child, parent, 0);
+            (parent, child)
+        });
+        let before = read_tree(|t| t.sub_rev(parent));
+        with_tree(|t| t.remove(child));
+        assert!(read_tree(|t| t.sub_rev(parent)) > before);
+    }
+
+    /// The one way a change at one node reaches a node that is not its
+    /// descendant is the CASCADE — a descendant combinator, an inherited
+    /// `var()`, a structural pseudo. The mutator cannot see that far, so the
+    /// restyle pass reports it: every node whose fold actually moved is
+    /// touched, and a cache boundary sitting on one of them invalidates.
+    #[test]
+    fn the_cascade_touches_every_node_whose_fold_moved() {
+        set_stylesheet(".on .leaf { opacity: 0.5 }".into());
+        let (wrap, leaf, bystander) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let wrap = t.create_element(div);
+            let leaf = t.create_element(div);
+            let bystander = t.create_element(div);
+            t.set_class(leaf, "leaf");
+            t.insert(wrap, root, 0);
+            t.insert(leaf, wrap, 0);
+            t.insert(bystander, root, 0);
+            (wrap, leaf, bystander)
+        });
+        restyle_all();
+        let before = read_tree(|t| (t.sub_rev(leaf), t.sub_rev(bystander)));
+
+        // One class, on the ANCESTOR. Nothing about `leaf` itself was written.
+        with_tree(|t| t.set_class(wrap, "on"));
+        restyle_all();
+
+        let after = read_tree(|t| (t.sub_rev(leaf), t.sub_rev(bystander)));
+        assert_eq!(
+            read_tree(|t| t.node(leaf).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity)),
+            Some(0.5),
+            "the descendant combinator reached the leaf",
+        );
+        assert!(after.0 > before.0, "…so the leaf's subtree revision moved with it");
+        assert_eq!(after.1, before.1, "the bystander's fold did not move");
+    }
 
     /// A `<style>` element in the tree used to render nothing AND install
     /// nothing. Only the first of those is the browser's behaviour: `<style>`

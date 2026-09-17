@@ -73,6 +73,16 @@ pub struct Phases {
 
     /// How many times `build_root` ran (once per gpui `render()`).
     pub build_passes: u32,
+    /// How many cache boundaries actually re-rendered in the window — the
+    /// counter that says whether the retained-render cache is working. Zero
+    /// with boundaries live means every one of them replayed.
+    pub cached_renders: u32,
+    /// Boundaries offered to gpui across the window (`replay` = offered minus
+    /// re-rendered), and boundaries that stood down because they were thrashing
+    /// (`vn_tree::cache::THRASH_LIMIT`). The three together are the whole story
+    /// of whether the retained-render cache is earning its keep.
+    pub cache_offers: u32,
+    pub cache_standdowns: u32,
     pub build_ms: f32,
     pub build_max_ms: f32,
     /// Tree nodes lowered into gpui elements across the window.
@@ -117,6 +127,9 @@ thread_local! {
         nodes_cascaded: 0,
         rules_tested: 0,
         build_passes: 0,
+        cached_renders: 0,
+        cache_offers: 0,
+        cache_standdowns: 0,
         build_ms: 0.0,
         build_max_ms: 0.0,
         elements_built: 0,
@@ -197,6 +210,43 @@ pub fn note_build(total_ms: f32, elements: u64) {
         p.build_ms += total_ms;
         p.build_max_ms = p.build_max_ms.max(total_ms);
         p.elements_built += elements;
+    });
+}
+
+/// A cache boundary lowered its subtree — see `vn_tree::render::build_cached`.
+///
+/// It is the SAME work `note_build` measures and it is charged to the same
+/// bucket, but it does not open a new pass: a boundary renders inside gpui's
+/// prepaint, so counting it as a pass would make `build avg` the average of a
+/// frame and a fragment. Without this line the work would land in `prepaint`
+/// instead and the partition would still add up — while quietly saying our
+/// lowering had got cheaper because gpui's prepaint had got dearer.
+/// A cache boundary was offered to gpui, or stood down instead.
+#[inline]
+pub fn note_cache_offer(stood_down: bool) {
+    if !enabled() {
+        return;
+    }
+    with(|p| {
+        if stood_down {
+            p.cache_standdowns += 1;
+        } else {
+            p.cache_offers += 1;
+        }
+    });
+}
+
+pub fn note_build_extra(total_ms: f32, elements: u64) {
+    if !enabled() {
+        return;
+    }
+    with(|p| {
+        p.build_ms += total_ms;
+        p.elements_built += elements;
+        p.cached_renders += 1;
+        // The subtree's own prepaint+layout runs inside gpui's prepaint, which
+        // is where it belongs; only the lowering is moved.
+        p.prepaint_ms -= total_ms;
     });
 }
 

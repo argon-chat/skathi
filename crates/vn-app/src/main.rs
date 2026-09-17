@@ -484,9 +484,16 @@ pub(crate) fn main_window_id() -> Option<u64> {
     MAIN_WINDOW.with(|w| w.get()).map(|h| h.window_id().as_u64())
 }
 
+/// Repaint the primary window.
+///
+/// `notify_shell`, not `Window::refresh` — the two schedule the same redraw,
+/// but `refresh` also raises gpui's `refreshing` flag, and a frame drawn with
+/// that flag up ignores every `Entity::cached` recording in the window. Marking
+/// the hosting view dirty is what the pump does for a JS wave, and it is what
+/// leaves the retained-render cache (`vn_tree::cache`) able to replay the
+/// subtrees the wave did not touch.
 pub(crate) fn refresh_main(cx: &mut App) {
-    let Some(handle) = MAIN_WINDOW.with(|w| w.get()) else { return };
-    let _ = handle.update(cx, |_, window, _| window.refresh());
+    notify_shell(cx);
 }
 
 /// Repaint the primary window. The popped-out windows are notified next to it
