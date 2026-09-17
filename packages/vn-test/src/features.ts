@@ -35,6 +35,7 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { DEFAULT_EXE, REPO, WORK_DIR, stagedExe } from "./dist";
 
 export interface FeatureExeOptions {
@@ -111,7 +112,26 @@ function stale(exe: string): boolean {
   return built < newestSource;
 }
 
+/**
+ * `cargo`, wherever rustup put it.
+ *
+ * A shell spawned by a long-lived process inherits the PATH that process was
+ * started with, so a machine where `cargo` was added to the user PATH *after*
+ * the terminal (or the editor, or an agent's shell) opened runs these specs
+ * with no `cargo` on PATH at all — while the same command works by hand in a
+ * fresh window. rustup's location is fixed, so ask it before giving up.
+ */
+function cargoCommand(): string {
+  if (spawnSync("cargo", ["--version"], { shell: true, encoding: "utf8" }).status === 0) {
+    return "cargo";
+  }
+  const home = process.env.CARGO_HOME ?? join(process.env.USERPROFILE ?? homedir(), ".cargo");
+  const exe = join(home, "bin", process.platform === "win32" ? "cargo.exe" : "cargo");
+  return existsSync(exe) ? exe : "cargo";
+}
+
 function run(cmd: string, args: string[], log: (l: string) => void) {
+  if (cmd === "cargo") cmd = cargoCommand();
   log(`[vn-test] ${cmd} ${args.join(" ")}`);
   // `shell: true` because on Windows neither `bun` nor `cargo` is necessarily
   // an `.exe` on PATH (bun ships a `.cmd` shim), and `spawnSync` applies

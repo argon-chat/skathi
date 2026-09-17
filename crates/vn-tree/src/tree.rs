@@ -801,6 +801,68 @@ impl Tree {
         self.ancestors(id).count() as u32
     }
 
+    /// The root element's computed `font-size` in px, resolved **without
+    /// committing a cascade**.
+    ///
+    /// `rem` is flattened to px when the sheet is COMPILED, so the basis has to
+    /// be settled before the sheet the document cascades against is chosen
+    /// ([`crate::restyle_all`]). Learning it used to cost a full document pass
+    /// per attempt, and a full pass commits `node.computed` — which made the
+    /// pass after the recompile look like an author's style change, so every
+    /// element with a `transition` animated across it. Invisible on screen (no
+    /// frame ran in between) and very visible to `onMounted`, which measures
+    /// through `sync_layout`'s forced frame: `apps/meet-probe`'s join card read
+    /// its panel at t≈0 of that transition and pinned 293 px where the settled
+    /// layout says 278 (research/reports/m23/tails.md §3).
+    ///
+    /// The root is the one node whose computed style needs no walk: it has no
+    /// parent, so nothing is inherited into it, and no siblings, so no
+    /// combinator can reach it. One [`vn_css::Engine::compute_node`] is the
+    /// whole answer.
+    ///
+    /// The root's inline style is parsed here when it is dirty — `@argon/theme`
+    /// sets `documentElement.style.fontSize` at boot, so the inline style IS
+    /// the interesting case — but `inline_dirty` is deliberately left standing:
+    /// the pass that commits owns that list, and this is a probe.
+    pub(crate) fn probe_root_font_size(
+        &self,
+        engine: Option<&vn_css::Engine>,
+        env: &vn_css::Env,
+    ) -> Option<f32> {
+        let engine = engine?;
+        let n = self.node(self.root)?;
+        let parsed;
+        let inline: Option<&vn_css::InlineStyle> = if n.inline_dirty {
+            let body = n
+                .style
+                .iter()
+                .map(|(k, v)| format!("{}: {}", self.name(*k), v))
+                .collect::<Vec<_>>()
+                .join("; ");
+            parsed = (!body.is_empty())
+                .then(|| vn_css::parse_inline_style(&body, &mut Vec::new()))
+                .filter(|s| !s.is_empty());
+            parsed.as_ref()
+        } else {
+            n.inline.as_deref()
+        };
+        let states = engine.compute_node(
+            NodeRef { tree: self, id: self.root },
+            inline,
+            &std::rc::Rc::new(vn_css::Vars::default()),
+            None,
+            env,
+            &mut Vec::new(),
+        );
+        match states.base.text.font_size? {
+            gpui::AbsoluteLength::Pixels(p) => Some(f32::from(p)),
+            // `Rems` cannot reach here (the mapper flattens), but if it ever
+            // does, resolving it against the current basis would be a fixed
+            // point that never moves — take the value at face value instead.
+            gpui::AbsoluteLength::Rems(r) => Some(r.0 * vn_css::rem_basis()),
+        }
+    }
+
     fn restyle_with(&mut self, engine: &vn_css::Engine, env: &vn_css::Env) {
         let pass = crate::perf::Span::start();
         let phase = crate::perf::Span::start();
@@ -993,21 +1055,54 @@ impl Tree {
         // structural pseudo), so the renderer's cache learns about those from
         // here rather than from the mutator — see [`Tree::touch`].
         let mut restyled: Vec<u32> = Vec::new();
+        // The cascade switches environments at a painted root and this loop does
+        // not walk the tree, so the window has to be asked for again — but only
+        // for a node that is actually about to start an animation, and only
+        // when a pop-out exists at all. Both gates are free in the single-window
+        // case: `any_secondary` is an `is_empty`, and a sheet with no
+        // `@keyframes` never reaches the second one.
+        let multiwindow = crate::windows::any_secondary();
         ANIMATOR.with(|a| {
             let mut animator = a.borrow_mut();
             for (id, states) in computed {
+                // Before `node_mut` takes the tree: `env_for_node` reads it.
+                let node_env = if multiwindow && (has_keyframes || !states.animations.is_empty()) {
+                    crate::windows::env_for_node(self, id, env)
+                } else {
+                    *env
+                };
+                // **A node painted by a pop-out can need its animations
+                // re-bound while its own computed style has not moved at all.**
+                // The element's declarations are identical in both windows; it
+                // is the `@keyframes` block its `animation-name` refers to that
+                // is declared per window. The change-gate below therefore never
+                // fires for it — and the run it started with, on the frame
+                // before its window had painted and `ROOTS` was still empty,
+                // was resolved against the PRIMARY's environment.
+                let rebind = node_env != *env && !states.animations.is_empty();
                 if let Some(n) = self.node_mut(id) {
                     if n.computed.as_ref() != Some(&states) {
                         animator.on_computed(id, n.computed.as_ref(), &states, now);
                         // `@keyframes` are document-scoped, so the animation
                         // half needs the sheet; a sheet without any pays
                         // nothing for the check.
+                        //
+                        // **Against the PAINTING window's environment**, like
+                        // the rest of the cascade (docs/MULTIWINDOW.md §6). A
+                        // `@keyframes` block inside an `@media` one is declared
+                        // only where that query holds, and `env()` inside a
+                        // keyframe resolves against the window too — so the
+                        // same `animation-name` can be a different animation in
+                        // a 380px pop-out and in the document that opened it.
+                        // This used to take the pass's fallback environment,
+                        // which is the PRIMARY window's
+                        // (m22/integration.md §6 item 4).
                         if has_keyframes || !states.animations.is_empty() {
                             animator.on_computed_animations(id, &states, now, &|name| {
                                 engine.keyframes_for(
                                     name,
                                     &states.vars,
-                                    env,
+                                    &node_env,
                                     &mut keyframe_diagnostics.borrow_mut(),
                                 )
                             });
@@ -1026,6 +1121,20 @@ impl Tree {
                         }
                         n.computed = Some(states);
                         restyled.push(id);
+                    } else if rebind {
+                        // Same style, possibly a different animation. The run
+                        // is kept (the name has not changed) and only the block
+                        // behind it is re-resolved, which is what a browser
+                        // does when a media query flips under a running
+                        // animation.
+                        animator.on_computed_animations(id, &states, now, &|name| {
+                            engine.keyframes_for(
+                                name,
+                                &states.vars,
+                                &node_env,
+                                &mut keyframe_diagnostics.borrow_mut(),
+                            )
+                        });
                     }
                 }
             }
@@ -1522,22 +1631,46 @@ pub fn restyle_all() {
              `prefers-color-scheme` are already per-window. See docs/MULTIWINDOW.md §6.2.",
         );
     }
+    // **The rem basis is settled BEFORE the document is cascaded, not by
+    // cascading it.** `rem` is flattened at sheet-compile time, so the basis
+    // has to be known before the sheet the document cascades against is
+    // chosen. This used to iterate a FULL cascade per pass — and a full
+    // cascade COMMITS `node.computed`, so the pass that followed the recompile
+    // was, to the animator, an author's style change: every element carrying a
+    // `transition` animated from the 16px-basis geometry to the real one.
+    //
+    // Nothing painted in between, so nothing showed it — except a layout read.
+    // `apps/meet-probe`'s join card measures its panel from `onMounted`, which
+    // is `sync_layout`'s forced frame, which is t≈0 of that transition: the
+    // panel answered 293 where the settled layout (and a browser) says 278, and
+    // the app wrote that number back as a height for the life of the process
+    // (research/reports/m23/tails.md §3).
+    //
+    // The root has no parent and no siblings, so its own computed style is one
+    // `compute_node`: the basis can be resolved from it alone, and the document
+    // is cascaded exactly ONCE, under the settled basis. Which is also what a
+    // browser does — `rem` is resolved at computed-value time, so an
+    // intermediate computed style never exists to transition from.
     for _ in 0..REM_BASIS_PASSES {
-        ENGINE.with(|eng| {
+        let Some(root_font_size) = ENGINE.with(|eng| {
             let eng = eng.borrow();
-            with_tree(|t| t.restyle(eng.as_ref(), &env));
-        });
-        let Some(root_font_size) = read_tree(root_font_size) else { return };
+            read_tree(|t| t.probe_root_font_size(eng.as_ref(), &env))
+        }) else {
+            break;
+        };
         if !vn_css::set_rem_basis(root_font_size) {
-            return;
+            break;
         }
         if !recompile_sheet(&format!(
-            "rem basis is now {root_font_size}px (the root element's font-size) — recompiling \
-             the stylesheet"
+            "rem basis is now {root_font_size}px (the root element's font-size) — recompiling \n             the stylesheet"
         )) {
-            return;
+            break;
         }
     }
+    ENGINE.with(|eng| {
+        let eng = eng.borrow();
+        with_tree(|t| t.restyle(eng.as_ref(), &env));
+    });
 }
 
 /// A FORCED STYLE FLUSH: run the pending restyle now, because JS is about to
@@ -1607,18 +1740,6 @@ fn recompile_sheet(why: &str) -> bool {
 /// font-size was itself relative. A third would be a cycle.
 const REM_BASIS_PASSES: usize = 3;
 
-/// The root element's computed `font-size` in px, when it has one that is an
-/// absolute length.
-fn root_font_size(t: &Tree) -> Option<f32> {
-    let computed = t.node(t.root)?.computed.as_ref()?;
-    match computed.base.text.font_size? {
-        gpui::AbsoluteLength::Pixels(p) => Some(f32::from(p)),
-        // `Rems` cannot reach here (the mapper flattens), but if it ever does,
-        // resolving it against the current basis would be a fixed point that
-        // never moves — take the value at face value instead.
-        gpui::AbsoluteLength::Rems(r) => Some(r.0 * vn_css::rem_basis()),
-    }
-}
 
 /// The matcher's view of one element node.
 #[derive(Clone, Copy)]
@@ -1873,6 +1994,77 @@ mod tests {
         with_tree(|t| t.set_element_text(sheet, String::new()));
         restyle_all();
         assert_eq!(opacity(probe), Some(0.25), "removing the rules restores the build's sheet");
+    }
+
+    /// **A `rem` recompile is the engine correcting its own basis, not the
+    /// author changing a declaration — so it must not start a transition.**
+    ///
+    /// `rem` is flattened to px when the sheet is COMPILED, so an app that sets
+    /// its own root font-size (every Tailwind app with a 14 px base) makes the
+    /// engine compile twice. [`restyle_all`] used to learn the basis by
+    /// CASCADING the document, and a cascade commits `node.computed`: the pass
+    /// after the recompile was, to the animator, a style change, and every
+    /// element carrying a `transition` animated from the 16 px-basis geometry
+    /// to the real one.
+    ///
+    /// No frame ran between the two passes, so nothing on screen showed it —
+    /// but `onMounted` measures through `sync_layout`'s forced frame, which is
+    /// t=0 of that animation. `apps/meet-probe`'s join card measured its panel
+    /// at 293 px where the settled layout says 278 and pinned it as its own
+    /// height (research/reports/m23/tails.md §3).
+    #[test]
+    fn a_rem_recompile_at_boot_starts_no_transition() {
+        set_stylesheet(".card { padding: 1.5rem; transition: all 300ms }".into());
+        let card = with_tree(|t| {
+            let root = t.create_root();
+            // EXACTLY `@argon/theme`'s line, and the reason the cold compile
+            // cannot have known the basis: an INLINE root font-size, written
+            // before the app mounts.
+            let font_size = t.intern("font-size");
+            t.set_style(root, font_size, "14px".into());
+            let div = t.intern("div");
+            let card = t.create_element(div);
+            t.set_class(card, "card");
+            t.insert(card, root, 0);
+            card
+        });
+
+        // The basis is resolved from the ROOT ALONE, and resolving it commits
+        // nothing: no node has a computed style until the one cascade runs.
+        let probed = ENGINE.with(|eng| {
+            let eng = eng.borrow();
+            read_tree(|t| t.probe_root_font_size(eng.as_ref(), &env()))
+        });
+        assert_eq!(probed, Some(14.0), "the root's own inline font-size, without a cascade");
+        assert!(
+            read_tree(|t| t.node(t.root).is_some_and(|n| n.computed.is_none())),
+            "probing the basis must not commit a computed style"
+        );
+
+        restyle_all();
+        assert_eq!(vn_css::rem_basis(), 14.0, "the sheet was recompiled against the root");
+
+        // `1.5rem` at 14 px is 21, not the 24 the cold sheet flattened.
+        let padding = read_tree(|t| {
+            t.node(card).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.padding.top)
+        });
+        assert_eq!(
+            padding,
+            Some(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(gpui::px(21.0)))),
+            "the ONE committed cascade ran under the settled basis"
+        );
+
+        // …and the animator has nothing to say about this node. Before the fix
+        // it held a 300 ms `padding` track from 24 px to 21 px, and a layout
+        // read at t=0 answered 24.
+        let base = read_tree(|t| {
+            t.node(card).and_then(|n| n.computed.as_ref()).map(|c| c.base.clone())
+        })
+        .expect("the card is cascaded");
+        assert!(
+            animation_overlay(card, &base, std::time::Instant::now()).is_none(),
+            "a basis recompile is not a style change, so no transition runs across it"
+        );
     }
 
     /// Two `<style>` elements concatenate in CREATION order, which stands in for

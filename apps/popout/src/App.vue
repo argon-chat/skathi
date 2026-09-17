@@ -115,6 +115,13 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       </button>
     </div>
 
+    <!-- **The per-window `@keyframes` proof** (§6). One `animation-name`,
+         declared twice in one sheet — once at the top level and once inside the
+         same `@media` block the panel's background uses. This one is painted by
+         the 620px main window, the one below by the 380px palette, and they
+         settle on different opacities. -->
+    <div class="pulse pulse-main" />
+
     <p class="hint" v-show="palette">
       The panel is being painted by the palette window. It is still in this tree.
     </p>
@@ -178,7 +185,14 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
       @resize="(m: VnWindowMetrics) => (paletteSize = m)"
       @focus="paletteFocused = true"
       @blur="paletteFocused = false"
-    />
+    >
+      <!-- A slot child rather than the Teleport'd panel: this node is CREATED
+           with the window, so the run starts in the window that paints it. A
+           run that is later teleported into another window re-resolves its
+           block in place, which is what a browser does when a media query
+           flips under a running animation. -->
+      <div class="pulse pulse-palette" />
+    </VnWindow>
 
 
     <!-- ================================================================== -->
@@ -226,6 +240,13 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
         </div>
         <textarea class="note-input" v-model="note" />
         <div class="foot">this window's caption is CSS</div>
+
+        <!-- **A-M03** (§10). `position: fixed` anchors to the viewport of the
+             window that PAINTS it, so this toolbar sits on THIS window's
+             bottom edge — not on the document's, which is 320x260 away and a
+             different size. Exactly where a browser puts a `fixed` element in
+             a second window. -->
+        <div class="wtool">fixed</div>
       </section>
     </VnWindow>
   </main>
@@ -364,6 +385,34 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
   }
 }
 
+/* **The per-window `@keyframes` proof** (§6). ONE `animation-name`, declared
+   twice: the default below, then an override inside the same
+   `@media (max-width: 420px)` the panel's background uses. Document order is
+   what CSS decides duplicate names by, so the override has to come LAST — and
+   which of the two is declared at all is a question about the WINDOW.
+
+   `forwards` and one iteration, so each element parks on its own answer and the
+   assertion is a settled computed style rather than a race against a clock. */
+.pulse {
+  width: 40px;
+  height: 6px;
+  border-radius: 3px;
+  background: #7aa2ff;
+  animation: pulse 80ms linear 1 forwards;
+}
+@keyframes pulse {
+  to {
+    opacity: 0.2;
+  }
+}
+@media (max-width: 420px) {
+  @keyframes pulse {
+    to {
+      opacity: 0.8;
+    }
+  }
+}
+
 /* ---- the player -------------------------------------------------------- */
 .player {
   display: flex;
@@ -425,5 +474,20 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
 }
 .note-mirror {
   color: #ffffffc0;
+}
+
+/* **A-M03** (§10): the viewport this resolves against is the pop-out's, so the
+   box is pinned 8px from the bottom-right of the NOTES window — 304x244 inside
+   a 320x260 client area — rather than to the 620x460 document. */
+.wtool {
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  width: 52px;
+  height: 18px;
+  border-radius: 4px;
+  background: #7aa2ff55;
+  color: #ffffff;
+  font-size: 10px;
 }
 </style>

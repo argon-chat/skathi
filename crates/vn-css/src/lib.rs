@@ -323,10 +323,27 @@ pub struct Engine {
     group_states: bool,
     /// `@keyframes` blocks by name. Document-scoped rather than per element:
     /// an element's `animation-name` is a REFERENCE into this map, resolved by
-    /// the animator when a track starts. A later block with the same name wins,
-    /// as in CSS.
-    keyframes: std::collections::HashMap<Box<str>, Rc<keyframes::Keyframes>>,
+    /// the animator when a track starts.
+    ///
+    /// A LIST per name, in document order, because a `@keyframes` block can sit
+    /// inside an `@media` one — and which of them is "the" block is then a
+    /// question with a different answer per WINDOW, not per document
+    /// (docs/MULTIWINDOW.md §6). [`Engine::keyframes`] picks the last entry
+    /// whose condition holds in the environment it is asked about; with no
+    /// `@media` around any of them that is exactly CSS's "a later block with
+    /// the same name wins", at the cost of one `Vec` of length 1.
+    keyframes: std::collections::HashMap<Box<str>, Vec<KeyframesBlock>>,
     pub diagnostics: Vec<String>,
+}
+
+/// One `@keyframes` block, and the `@media` condition it was declared under.
+///
+/// `condition` indexes [`Engine::conditions`], exactly as a style rule's does,
+/// so a media-scoped block is "not there" in a window the query does not hold
+/// in — which is what CSS means by it, and what makes the answer per window.
+struct KeyframesBlock {
+    condition: Option<u32>,
+    block: Rc<keyframes::Keyframes>,
 }
 
 /// Which rules an element could possibly match, keyed off the RIGHTMOST
@@ -528,13 +545,26 @@ impl Engine {
         self.group_states
     }
 
-    /// The `@keyframes` block `name` refers to, if the sheet has one.
+    /// The `@keyframes` block `name` refers to in THIS environment, if the
+    /// sheet has one.
     ///
     /// Shared by `Rc` because a running animation holds the block it started
     /// with (see `Animator`'s `AnimRun`): the render walk has a node id and a
     /// clock, and no stylesheet to look the name up in again.
-    pub fn keyframes(&self, name: &str) -> Option<Rc<keyframes::Keyframes>> {
-        self.keyframes.get(name).cloned()
+    ///
+    /// `env` is not decoration. A `@keyframes` inside an `@media` block is only
+    /// declared where that query holds, and "where" is a WINDOW: the same name
+    /// can resolve to a different animation in a 380 px pop-out and in the
+    /// 1280 px document that opened it (docs/MULTIWINDOW.md §6). The last
+    /// entry in document order whose condition holds wins, which is CSS's rule
+    /// for duplicate names with the inactive blocks removed first.
+    pub fn keyframes(&self, name: &str, env: &Env) -> Option<Rc<keyframes::Keyframes>> {
+        self.keyframes.get(name)?.iter().rev().find_map(|entry| {
+            match entry.condition {
+                Some(c) if !self.conditions[c as usize].eval(env) => None,
+                _ => Some(entry.block.clone()),
+            }
+        })
     }
 
     /// The `@keyframes` block `name` refers to, with its `var()`-composed
@@ -559,9 +589,9 @@ impl Engine {
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> Option<Rc<keyframes::Keyframes>> {
-        let block = self.keyframes.get(name)?;
+        let block = self.keyframes(name, env)?;
         if !block.dynamic {
-            return Some(block.clone());
+            return Some(block);
         }
         let steps = block
             .steps
@@ -687,7 +717,10 @@ impl Engine {
                     continue;
                 }
                 CssRule::Keyframes(kf) => {
-                    self.collect_keyframes(kf);
+                    // The enclosing `@media` rides along: a block declared
+                    // inside one exists only where that query holds, which is
+                    // a per-WINDOW question (docs/MULTIWINDOW.md §6).
+                    self.collect_keyframes(kf, condition);
                     continue;
                 }
                 // `@supports` is a feature TEST, and the honest answer to it is
@@ -1388,6 +1421,7 @@ impl Engine {
     fn collect_keyframes(
         &mut self,
         rule: &'static lightningcss::rules::keyframes::KeyframesRule<'static>,
+        condition: Option<u32>,
     ) {
         use lightningcss::rules::keyframes::{KeyframeSelector, KeyframesName};
         let name: Box<str> = match &rule.name {
@@ -1482,8 +1516,14 @@ impl Engine {
         }
         steps.sort_by(|a, b| a.offset.total_cmp(&b.offset));
         let dynamic = steps.iter().any(|s| s.dynamic.is_some());
-        // A later block with the same name replaces the earlier one, as in CSS.
-        self.keyframes.insert(name, Rc::new(keyframes::Keyframes { steps, dynamic }));
+        // Appended, not replaced: "a later block with the same name wins" is
+        // still the rule, but only among the blocks that are DECLARED — and a
+        // media-scoped one is declared per window. [`Engine::keyframes`] does
+        // the last-one-that-holds pick at lookup time.
+        self.keyframes.entry(name).or_default().push(KeyframesBlock {
+            condition,
+            block: Rc::new(keyframes::Keyframes { steps, dynamic }),
+        });
     }
 }
 
@@ -4519,13 +4559,48 @@ mod tests {
 
         let mut a = Animator::new();
         let now = Instant::now();
-        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
 
         let base = StyleRefinement::default();
         let at = |ms: u64| a.overlay(1, &base, now + Duration::from_millis(ms)).unwrap();
         assert!((opacity(&at(0)) - 0.0).abs() < 1e-6);
         assert!((opacity(&at(500)) - 0.5).abs() < 1e-3);
         assert!((opacity(&at(999)) - 1.0).abs() < 1e-2);
+    }
+
+    /// **A keyframe AT 100 % is the end of the timeline, not a step before an
+    /// implicit one.**
+    ///
+    /// `@keyframes x { to { … } }` is the commonest block there is, and with
+    /// `animation-fill-mode: forwards` it used to SNAP BACK to the element's
+    /// own value the instant it finished: at `progress == 1.0` the 100 %
+    /// keyframe sorted as the segment's `from`, and the segment's `to` became
+    /// the implicit 100 % — the element's value — at t = 1. CSS adds that
+    /// implicit end only for a property no keyframe declares there.
+    ///
+    /// It survived because it only shows with a fill mode that paints the end:
+    /// with `fill: none` the overlay is dropped at that same moment anyway.
+    /// Found by the per-window `@keyframes` spec, which needed a SETTLED value
+    /// to assert on (research/reports/m23/tails.md §2).
+    #[test]
+    fn a_100_percent_keyframe_holds_under_fill_forwards() {
+        let engine = Engine::compile(
+            ".box { animation: pulse 80ms linear 1 forwards }              @keyframes pulse { to { opacity: 0.2 } }",
+        );
+        let cs = engine.compute(box_node(), None, &Env::default());
+        let mut a = Animator::new();
+        let now = Instant::now();
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
+
+        let base = StyleRefinement::default();
+        let at = |ms: u64| opacity(&a.overlay(1, &base, now + Duration::from_millis(ms)).unwrap());
+        // The element's own value at 0, interpolating across the whole timeline.
+        assert!((at(0) - 1.0).abs() < 1e-6);
+        assert!((at(40) - 0.6).abs() < 1e-3);
+        // …and it STAYS at the keyframe's value once finished, which is what
+        // `forwards` means. This was 1.0.
+        assert!((at(200) - 0.2).abs() < 1e-6, "forwards holds the 100 % keyframe");
+        assert!((at(5000) - 0.2).abs() < 1e-6, "…and keeps holding it");
     }
 
     /// `fill-mode` is what decides whether the ends are painted at all — the
@@ -4536,7 +4611,7 @@ mod tests {
         let cs = engine.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
         let now = Instant::now();
-        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
         let base = StyleRefinement::default();
         // `animation-fill-mode` defaults to `none`, so past the end nothing is
         // applied and the element's own style shows through again.
@@ -4548,7 +4623,7 @@ mod tests {
         );
         let cs = forwards.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
-        a.on_computed_animations(1, &cs, now, &|name| forwards.keyframes(name));
+        a.on_computed_animations(1, &cs, now, &|name| forwards.keyframes(name, &Env::default()));
         let held = a.overlay(1, &base, now + Duration::from_millis(2000)).unwrap();
         assert!((opacity(&held) - 1.0).abs() < 1e-6);
 
@@ -4560,7 +4635,7 @@ mod tests {
         );
         let cs = backwards.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
-        a.on_computed_animations(1, &cs, now, &|name| backwards.keyframes(name));
+        a.on_computed_animations(1, &cs, now, &|name| backwards.keyframes(name, &Env::default()));
         let during_delay = a.overlay(1, &base, now + Duration::from_millis(100)).unwrap();
         assert!((opacity(&during_delay) - 0.25).abs() < 1e-6);
     }
@@ -4575,7 +4650,7 @@ mod tests {
         let cs = engine.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
         let now = Instant::now();
-        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
         // There is no `from`, so 0 % is whatever the element computes to.
         let mut base = StyleRefinement::default();
         base.opacity = Some(0.2);
@@ -4594,7 +4669,7 @@ mod tests {
         assert!(!cs.animations[0].iterations.is_finite());
         let mut a = Animator::new();
         let now = Instant::now();
-        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
         assert!(a.any_animation(now + Duration::from_secs(3600)));
         let base = StyleRefinement::default();
         let mid = a.overlay(1, &base, now + Duration::from_millis(1000)).unwrap();
@@ -4614,7 +4689,7 @@ mod tests {
         let cs = engine.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
         let now = Instant::now();
-        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
 
         // Still inside the delay: nothing yet.
         a.tick(now + Duration::from_millis(10));
@@ -4646,7 +4721,7 @@ mod tests {
         let cs = engine.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
         let now = Instant::now();
-        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
         a.tick(now);
         a.take_events();
 
@@ -4668,7 +4743,7 @@ mod tests {
         let mut a = Animator::new();
         a.set_reduce_motion(true);
         let now = Instant::now();
-        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name));
+        a.on_computed_animations(1, &cs, now, &|name| engine.keyframes(name, &Env::default()));
         assert!(a.is_idle());
         assert!(a.overlay(1, &StyleRefinement::default(), now).is_none());
     }
@@ -4734,9 +4809,60 @@ mod tests {
         assert_eq!(cs.animations[0].duration, Duration::from_secs(1));
         assert_eq!(cs.animations[0].easing, crate::Easing::Linear);
         // …and `rotate()` reaches the keyframe as a computed value (item 4).
-        let frames = engine.keyframes("spin").unwrap();
+        let frames = engine.keyframes("spin", &Env::default()).unwrap();
         assert_eq!(frames.steps.len(), 1);
         assert_eq!(frames.steps[0].offset, 1.0);
+    }
+
+    /// **A `@keyframes` block inside an `@media` one is declared per WINDOW.**
+    ///
+    /// The condition used to be thrown away at collection time: every
+    /// `@keyframes` went into one by-name slot and the last one compiled won,
+    /// whatever query it sat under. So a sheet that defines `slide`
+    /// differently for a narrow viewport gave BOTH windows the narrow block
+    /// (or the wide one — whichever came last in the file), and no
+    /// environment could change it.
+    ///
+    /// Now the blocks are kept in document order with their condition, and the
+    /// lookup picks the last one that HOLDS. With no `@media` around any of
+    /// them that is exactly CSS's "a later block with the same name wins"
+    /// (docs/MULTIWINDOW.md §6, research/reports/m23/tails.md §2).
+    #[test]
+    fn media_scoped_keyframes_resolve_per_environment() {
+        let engine = Engine::compile(
+            "@keyframes slide { to { opacity: 0.25 } }              @media (max-width: 420px) { @keyframes slide { to { opacity: 0.75 } } }",
+        );
+        let wide = Env { viewport_width: 1280.0, ..Env::default() };
+        let narrow = Env { viewport_width: 380.0, ..Env::default() };
+
+        let opacity = |env: &Env| {
+            engine.keyframes("slide", env).map(|k| k.steps.last().unwrap().style.opacity.unwrap())
+        };
+        assert_eq!(opacity(&wide), Some(0.25), "the unconditional block, in a wide window");
+        assert_eq!(
+            opacity(&narrow),
+            Some(0.75),
+            "the @media block, in a window the query holds in — the SAME sheet, the same name"
+        );
+
+        // …and a name that only ever exists inside an `@media` block is simply
+        // not there where the query does not hold, which is what CSS means by
+        // an undeclared `animation-name`.
+        let only_narrow = Engine::compile(
+            "@media (max-width: 420px) { @keyframes pop { to { opacity: 0.5 } } }",
+        );
+        assert!(only_narrow.keyframes("pop", &narrow).is_some(), "declared in the narrow window");
+        assert!(only_narrow.keyframes("pop", &wide).is_none(), "not declared in the wide one");
+
+        // Document order still decides between two blocks that BOTH hold.
+        let twice = Engine::compile(
+            "@keyframes dup { to { opacity: 0.1 } } @keyframes dup { to { opacity: 0.9 } }",
+        );
+        assert_eq!(
+            twice.keyframes("dup", &wide).map(|k| k.steps.last().unwrap().style.opacity.unwrap()),
+            Some(0.9),
+            "a later block with the same name wins, as in CSS"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4763,7 +4889,7 @@ mod tests {
     fn a_var_composed_keyframe_resolves_against_the_animating_element() {
         let engine = Engine::compile(TW_ANIMATE);
         // The block survives compilation instead of collapsing to zero steps.
-        let raw = engine.keyframes("enter").expect("@keyframes enter");
+        let raw = engine.keyframes("enter", &Env::default()).expect("@keyframes enter");
         assert_eq!(raw.steps.len(), 1, "the `from` step is kept, unresolved");
         assert!(raw.dynamic, "and it is flagged as needing per-element work");
 
@@ -4821,7 +4947,7 @@ mod tests {
     fn a_var_free_keyframes_block_takes_the_shared_fast_path() {
         let engine = Engine::compile(SPIN);
         let cs = engine.compute(box_node(), None, &Env::default());
-        let shared = engine.keyframes("spin").unwrap();
+        let shared = engine.keyframes("spin", &Env::default()).unwrap();
         assert!(!shared.dynamic);
         let resolved = engine
             .keyframes_for("spin", &cs.vars, &Env::default(), &mut Vec::new())
@@ -4940,7 +5066,7 @@ mod tests {
         let cs = engine.compute(box_node(), None, &Env::default());
         let mut a = Animator::new();
         let created = Instant::now();
-        a.on_computed_animations(1, &cs, created, &|name| engine.keyframes(name));
+        a.on_computed_animations(1, &cs, created, &|name| engine.keyframes(name, &Env::default()));
 
         // 300 ms of mount work happen before the first frame renders.
         let first_frame = created + Duration::from_millis(300);

@@ -231,6 +231,24 @@ pub fn of<R>(k: WinKey, f: impl FnOnce(&mut WindowState) -> R) -> R {
     WINDOWS.with(|m| f(m.borrow_mut().entry(k).or_default()))
 }
 
+/// Queues atlas tiles for `Window::drop_image` on the window whose atlas holds
+/// them — and **drops them on the floor when that window is gone**.
+///
+/// [`of`] creates a [`WindowState`] on first touch, which is right for a window
+/// that is about to paint and wrong for one that has closed: the queue would
+/// sit in a resurrected state nothing will ever drain, and the `Arc`s would
+/// outlive the process's need for them. [`forget`] already says what the right
+/// answer is — a closed window's sprite atlas went with it, so dropping the
+/// `Arc`s IS the cleanup, and handing them to another window's `drop_image`
+/// would remove keys a live window may legitimately have re-inserted.
+pub fn queue_drops(k: WinKey, images: impl IntoIterator<Item = std::sync::Arc<gpui::RenderImage>>) {
+    let live = WINDOWS.with(|m| m.borrow().contains_key(&k));
+    if !live {
+        return;
+    }
+    of(k, |w| w.pending_drops.extend(images));
+}
+
 /// Reads one window's state without creating it. `None` = no such window has
 /// ever painted.
 pub fn peek<R>(k: WinKey, f: impl FnOnce(&WindowState) -> R) -> Option<R> {

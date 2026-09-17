@@ -76,6 +76,20 @@ async function backgroundHue(selector: string): Promise<number> {
   return Number(m[1]);
 }
 
+/**
+ * `__vn_media_events(id)` DRAINS the element's event ring — it is the JS side's
+ * "what happened since you last asked" — so a poller has to accumulate. This
+ * keeps one bag per node for the life of the file.
+ */
+const mediaSeen = new Map<number, Set<string>>();
+async function mediaEvents(id: number): Promise<Set<string>> {
+  const bag = mediaSeen.get(id) ?? new Set<string>();
+  mediaSeen.set(id, bag);
+  const raw: string = await app.eval(`__vn_media_events(${id})`);
+  for (const name of raw.split(/[\s,]+/)) if (name) bag.add(name);
+  return bag;
+}
+
 /** `__vn_media_state` answers `key=value` lines, not JSON. */
 async function mediaState(id: number): Promise<Record<string, string>> {
   const raw: string = await app.eval(`__vn_media_state(${id})`);
@@ -234,6 +248,25 @@ describe("pop-out", () => {
     bunExpect(wideHue).toBeGreaterThan(0.5); // blue, in the main window
   }, T);
 
+  test("@keyframes resolve against the painting window too, not the primary's", async () => {
+    // The other half of §6, and the one m22/integration.md §6 item 4 left
+    // standing: the CASCADE became per window, but the ANIMATION half still
+    // handed `engine.keyframes_for` the pass's fallback environment — which is
+    // always the primary window's. Worse, the `@media` a `@keyframes` block sat
+    // under was thrown away at COMPILE time, so one by-name slot held whichever
+    // block the file ended with and no environment could have changed it.
+    //
+    // `.pulse` is one `animation-name`, declared twice in one sheet: `to {
+    // opacity: 0.2 }` at the top level and `to { opacity: 0.8 }` inside the
+    // same `@media (max-width: 420px)` block the panel's background uses. It is
+    // `forwards`, so each element parks on its own answer and the `live` bucket
+    // — `base` refined by what the animator holds — is a settled value rather
+    // than a race against a clock.
+    await expect(app.locator(".pulse-palette")).toHaveComputedStyle("opacity", "0.8");
+    // …and the SAME name, at the same moment, in the 620px main window.
+    await expect(app.locator(".pulse-main")).toHaveComputedStyle("opacity", "0.2");
+  }, T);
+
   test("…and a THIRD window opening does not hand the pop-out the primary's answers back", async () => {
     // The regression this exists for: the cascade resolved one `Env` per WALK
     // ROOT, which is right for the pass in which a subtree changes hands
@@ -331,8 +364,13 @@ describe("pop-out", () => {
     });
     bunExpect(player.title).toBe("Player");
 
-    // It is laid out in the player window, not the main one.
-    const box = await app.locator(".clip").boundingBox();
+    // It is laid out in the player window, not the main one — waited for
+    // rather than read, because `__vn_window_popouts()` lists a window from the
+    // deferred open, which is BEFORE its first paint fills its bounds map.
+    const box = await until("the clip to be laid out in the player window", async () => {
+      const b = await app.locator(".clip").boundingBox();
+      return b && b.w > 0 ? b : null;
+    });
     bunExpect(box.w).toBe(320);
     bunExpect(box.h).toBe(180);
 
@@ -340,14 +378,36 @@ describe("pop-out", () => {
     // reached THIS window's sprite atlas. Before phase 1 the tile went to the
     // primary window's atlas — the pop-out had nothing to paint — and the
     // retired tiles were freed from every atlas except the one holding them.
-    const state = await until("the video to report a frame", async () => {
-      const id = (await app.query(".clip")).nodes[0].id;
+    //
+    // **Waited on `playing`, not on `readyState`.** This test used to poll for
+    // `readyState >= 2` and then assert `currentTime > 0`, which are two
+    // different facts: HAVE_CURRENT_DATA means a frame for the CURRENT position
+    // exists, and the current position at that moment is 0. Measured, the gap
+    // is real and wide — `readyState` reaches 4 (with `videoWidth` already 160,
+    // through `loadeddata`/`canplaythrough`) about 60 ms before `playing` fires
+    // and the clock starts moving. Whether the poll landed inside those 60 ms
+    // is the whole of the flake (research/reports/m23/tails.md §4).
+    //
+    // `playing` is the edge HTML defines as "playback has begun", so it is the
+    // signal this assertion is about. No sleep: the loop is polling a real
+    // state change, and the clock check that follows is the same edge from the
+    // other side.
+    const id = (await app.query(".clip")).nodes[0].id;
+    const events = await until("the video to report `playing`", async () => {
+      const bag = await mediaEvents(id);
+      return bag.has("playing") ? bag : null;
+    });
+    // `loadeddata` is the browser's "the first frame is available" edge, and it
+    // is the one the atlas upload rides on — so it is worth naming.
+    bunExpect([...events]).toContain("loadeddata");
+
+    const state = await until("the transport clock to advance", async () => {
       const s = await mediaState(id);
-      return Number(s.readyState) >= 2 ? s : null;
+      return Number(s.currentTime) > 0 ? s : null;
     });
     bunExpect(Number(state.videoWidth)).toBeGreaterThan(0);
+    bunExpect(Number(state.readyState)).toBeGreaterThanOrEqual(2);
     bunExpect(state.paused).toBe("false");
-    bunExpect(Number(state.currentTime)).toBeGreaterThan(0);
 
     await app.locator(".pop-player").click();
     await until("the player to be gone", async () =>
@@ -382,6 +442,47 @@ describe("pop-out", () => {
     // build cleared it, which is both a wrong answer and a live bug in the
     // fallback-titlebar retire rule.
     bunExpect(JSON.parse(await app.eval("__vn_window_hitboxes()"))).toEqual([]);
+
+    await app.locator(".pop-notes").click();
+    await until("the notes window to be gone", async () =>
+      (await popouts()).every((p) => p.title !== "Notes"));
+  }, T);
+
+  test("A-M03: a `position: fixed` box sits at the POP-OUT's edge, not the document's", async () => {
+    // The last designed-not-built row of §10. taffy has no viewport-relative
+    // position, so a fixed box resolves against its PARENT — which agrees with
+    // CSS exactly when the parent's box IS the viewport. In a pop-out the
+    // viewport is that WINDOW's painted root, not `t.root`, and the geometric
+    // test used to ask the primary window's rectangle: two coordinate spaces,
+    // so `position-fixed-not-portalled` fired at every `fixed` element in every
+    // pop-out while a genuinely mis-parented one went unmeasured.
+    //
+    // `.wtool` is `right: 8px; bottom: 8px` inside the 320x260 notes window.
+    await app.locator(".pop-notes").click();
+    const notes = await until("the notes window to exist", async () => {
+      const l = await popouts();
+      return l.find((p) => p.title === "Notes") ?? null;
+    });
+    bunExpect(notes.width).toBe(320);
+    bunExpect(notes.height).toBe(260);
+
+    const tool = await until("the fixed toolbar to be laid out", async () => {
+      const b = await app.locator(".wtool").boundingBox();
+      return b.w > 0 ? b : null;
+    });
+    // Anchored to THIS window's edges: 320 - 8 and 260 - 8. Against the
+    // document's 620x460 viewport those numbers would be 612 and 452, and
+    // against its own parent's content box they would be neither.
+    bunExpect(tool.x + tool.w).toBe(notes.width - 8);
+    bunExpect(tool.y + tool.h).toBe(notes.height - 8);
+
+    // …and it was SAID once, which is the advisory half of A-M03: the same
+    // element pinned to the document's viewport a moment ago is now pinned to
+    // this window's, and that is a real behaviour change even though it is
+    // exactly what a second browser window does.
+    const { entries } = await app.logs(0);
+    const spoken = entries.filter((e) => e.text.includes("A-M03"));
+    bunExpect(spoken.length).toBe(1);
 
     await app.locator(".pop-notes").click();
     await until("the notes window to be gone", async () =>

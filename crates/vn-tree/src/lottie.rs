@@ -89,7 +89,7 @@ thread_local! {
 /// be keyed by the window that will drain it, or a pop-out's tiles are freed
 /// from every atlas except the one holding them.
 fn queue_drops(win: crate::windows::WinKey, images: impl IntoIterator<Item = Arc<RenderImage>>) {
-    crate::windows::of(win, |w| w.pending_drops.extend(images));
+    crate::windows::queue_drops(win, images);
 }
 
 /// A tick longer than this is treated as a stall (debugger, minimised window,
