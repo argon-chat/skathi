@@ -74,6 +74,14 @@ thread_local! {
     /// `Cell` increment per node, unconditionally: the branch a probe check
     /// would add costs as much as the add.
     static BUILT: Cell<u64> = const { Cell::new(0) };
+    /// Element-tree builds since the process started.
+    ///
+    /// Not a statistic: it is how a DOM read that asks for a forced layout
+    /// finds out whether it GOT one. `sync_layout` is a no-op wherever a
+    /// second `draw` is refused — which is anywhere inside the window's own
+    /// update, i.e. every event handler — and a caller that has to report a
+    /// stale answer has no other way to tell (`crate::dom::layout_if_stale`).
+    static BUILDS: Cell<u64> = const { Cell::new(0) };
     /// Nodes that are being painted by SOME OTHER window (docs/MULTIWINDOW.md).
     /// A popped-out node stays in the retained tree — it keeps its id, its
     /// listeners, its computed style and its Vue reactivity — but it generates
@@ -339,6 +347,24 @@ pub(crate) fn prev_size_of(id: u32) -> Option<(f32, f32)> {
         .map(|(_, _, w, h)| (w, h))
 }
 
+/// Element-tree builds since the process started — see [`BUILDS`].
+pub(crate) fn build_count() -> u64 {
+    BUILDS.with(|c| c.get())
+}
+
+/// The [`ScrollHandle`] a scroll container owns, or `None` for anything the
+/// cascade never gave `overflow: scroll|auto`.
+///
+/// The handle is the scroll position: gpui paints the subtree through it, our
+/// wheel router moves it, the overlay scrollbar reads its geometry from it, and
+/// [`crate::scroll`] is the JS surface on top of the same object. It outlives
+/// the frame (the map here is keyed by node id and swept by
+/// [`gc_node_state`]), which is what makes a programmatic write readable back
+/// on the next line with no frame in between.
+pub(crate) fn scroll_handle_of(id: u32) -> Option<ScrollHandle> {
+    SCROLL_HANDLES.with(|m| m.borrow().get(&id).cloned())
+}
+
 /// The whole rectangle this node was painted at in the frame BEFORE the one
 /// being built — [`prev_size_of`]'s origin included, which is what the cache's
 /// "did my parent reflow?" check compares.
@@ -464,6 +490,7 @@ pub(crate) fn gc_node_state() {
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SETTLING.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     crate::cache::gc(&live);
+    crate::scroll::gc(&live);
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
@@ -1002,7 +1029,7 @@ fn wheel_listener_above(t: &Tree, id: u32) -> bool {
 
 /// The DOM `scroll` event for a node whose offset just moved, deduplicated
 /// against the last position reported for it.
-fn report_scroll(id: u32, handle: &ScrollHandle, window: &mut Window, cx: &mut App) {
+pub(crate) fn report_scroll(id: u32, handle: &ScrollHandle, window: &mut Window, cx: &mut App) {
     if !tree::read_tree(|t| {
         t.node(id).is_some_and(|n| n.listeners & (1u64 << tree::EV_SCROLL) != 0)
     }) {
@@ -1259,6 +1286,7 @@ fn with_control_area<E: gpui::InteractiveElement>(
 /// This is the PRIMARY window's entry point; [`build_subtree`] is a pop-out's,
 /// and the two do the same per-window bookkeeping against their own window.
 pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyElement {
+    BUILDS.with(|c| c.set(c.get().wrapping_add(1)));
     // ONE clock read per frame: nodes animating together must sample the same
     // instant or they skew.
     let now = std::time::Instant::now();
@@ -1625,6 +1653,10 @@ fn build_node<V: 'static>(
             });
             if let Some(h) = &scroll_handle {
                 d = d.track_scroll(h);
+                // Where this container stood when the frame was built, so a
+                // `getBoundingClientRect()` taken after a scroll and before the
+                // next paint can correct for the difference (`crate::scroll`).
+                crate::scroll::note_built(id, h);
             }
 
             let mask = pointer_mask(node);
@@ -3376,50 +3408,37 @@ pub(crate) fn scroll_node(
     window: &mut Window,
     cx: &mut App,
 ) -> Result<(f32, f32), String> {
-    let Some(handle) = SCROLL_HANDLES.with(|m| m.borrow().get(&id).cloned()) else {
-        // A `<textarea>` scrolls its own overflow inside the native widget
-        // rather than through a gpui `ScrollHandle`, so it has no entry here.
-        // Route to the editor instead — otherwise devtools would report "not a
-        // scroll container" about the one element on the page that visibly is.
-        if let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) {
-            let top = state.update(cx, |s, cx| {
-                s.scroll_by(gpui::px(dy), window, cx);
-                f32::from(s.scroll_top())
-            });
-            return Ok((0.0, top));
-        }
-        return Err(format!(
-            "node {id} is not a scroll container — nothing in the cascade gave it \
-             `overflow: scroll` or `overflow: auto`, so there is no scroll offset to move"
-        ));
-    };
-    // gpui offsets are <= 0 (content shifted up/left); CSS scrollTop/scrollLeft
-    // count down/right as positive, and so does the `dy` a caller passes.
-    let offset = handle.offset();
-    let max = handle.max_offset();
-    let want = gpui::point(offset.x - gpui::px(dx), offset.y - gpui::px(dy));
-    // The same clamp gpui's own wheel handler applies, so a programmatic scroll
-    // cannot leave the box somewhere a real wheel could not.
-    let clamped = gpui::point(
-        want.x.clamp(-max.x, gpui::px(0.)),
-        want.y.clamp(-max.y, gpui::px(0.)),
-    );
-    handle.set_offset(clamped);
-    let (left, top) = (-f32::from(clamped.x), -f32::from(clamped.y));
-    let moved = SCROLL_REPORTED.with(|m| {
-        let mut m = m.borrow_mut();
-        if m.get(&id) == Some(&(left, top)) {
-            return false;
-        }
-        m.insert(id, (left, top));
-        true
-    });
-    if moved {
-        let payload = EventPayload { a: left as f64, b: top as f64, ..Default::default() };
-        js_dispatch_app(id, tree::EV_SCROLL, &payload, window, cx);
+    // The same path `el.scrollBy(...)` takes, and that is the point: a devtools
+    // gesture that moved the box differently from the app's own API would be a
+    // harness that proves the wrong thing. `crate::scroll` clamps, invalidates
+    // the enclosing cache boundaries and queues the DOM `scroll` event for the
+    // next frame (where a browser fires it too).
+    //
+    // It used to end in `window.refresh()`, which was correct and expensive:
+    // a frame drawn with gpui's `refreshing` flag up ignores EVERY
+    // `Entity::cached` recording in the window, so a spec that scrolled a
+    // 1 000-row list re-rendered the whole document on every step. The
+    // `Tree::touch` inside `scroll::apply` invalidates exactly the boundaries
+    // whose recording has stopped describing the pixels, and `frame_tick`
+    // repaints because the queue is not empty.
+    if let Some(info) = crate::scroll::by(id, dx, dy) {
+        return Ok((info.left, info.top));
     }
-    window.refresh();
-    Ok((left, top))
+    // A `<textarea>` scrolls its own overflow inside the native widget rather
+    // than through a gpui `ScrollHandle`, so it has no entry there. Route to
+    // the editor instead — otherwise devtools would report "not a scroll
+    // container" about the one element on the page that visibly is.
+    if let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) {
+        let top = state.update(cx, |s, cx| {
+            s.scroll_by(gpui::px(dy), window, cx);
+            f32::from(s.scroll_top())
+        });
+        return Ok((0.0, top));
+    }
+    Err(format!(
+        "node {id} is not a scroll container — nothing in the cascade gave it \
+         `overflow: scroll` or `overflow: auto`, so there is no scroll offset to move"
+    ))
 }
 
 /// Synthesizes one input event on `id` through exactly the path a real gpui

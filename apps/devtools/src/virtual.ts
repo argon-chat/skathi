@@ -3,10 +3,15 @@
 // ## Why not `overflow: auto`
 //
 // The engine has real scroll containers — `overflow: auto` works, the wheel
-// works, `scroll` events fire. What it does not have is a way for JS to MOVE
-// one: `element.scrollIntoView()` is an advisory no-op and `scrollTop` is
-// read-only from the app's side (packages/vue-native/src/runtime.ts). For most
-// UI that is a footnote. For an inspector it is disqualifying, because the two
+// works, `scroll` events fire. When this was written it had no way for JS to
+// MOVE one: `element.scrollIntoView()` was an advisory no-op and `scrollTop`
+// was effectively read-only from the app's side. **m23 fixed that** (`scrollTop`
+// is writable, `scrollTo`/`scrollBy`/`scrollIntoView()` are real — see
+// crates/vn-tree/src/scroll.rs), so this list could now be rewritten on a
+// native container. It has not been: the other two things it buys below (a
+// 10 000-node tree costing what 50 do, and a thumb styled to match the panel)
+// are unaffected by that, and the rewrite would change how the inspector
+// behaves for no visible gain. The original argument, for the record — the two
 // lists that matter here are exactly the two that have to move themselves:
 //
 //   * the element tree — arrow-key navigation is useless if the row you just

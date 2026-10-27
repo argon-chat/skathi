@@ -166,8 +166,6 @@ interface MirrorElement extends MirrorNodeBase {
   attrs: Record<string, string>;
   /** The class VUE assigned, kept apart from `<Transition>`'s `_vtc`. */
   className: string;
-  scrollLeft: number;
-  scrollTop: number;
   /** The element's OWN text — exclusive with children, as in the host tree. */
   ownText?: string;
   addEventListener(name: string, fn: EventHandler, opts?: ListenerOptions): void;
@@ -195,14 +193,23 @@ interface MirrorElement extends MirrorNodeBase {
   readonly offsetHeight: number;
   readonly clientWidth: number;
   readonly clientHeight: number;
-  readonly scrollWidth: number;
-  readonly scrollHeight: number;
   readonly offsetTop: number;
   readonly offsetLeft: number;
   readonly offsetParent: null;
   readonly clientTop: number;
   readonly clientLeft: number;
-  scrollIntoView(): void;
+
+  // -- scrolling, over the host's real `ScrollHandle` (see `hostScroll`)
+  /** The CONTENT box of a scroll container; the border box of anything else. */
+  readonly scrollWidth: number;
+  readonly scrollHeight: number;
+  /** Read and WRITTEN: assigning clamps and is visible to the getter at once. */
+  scrollLeft: number;
+  scrollTop: number;
+  scrollTo(x?: unknown, y?: unknown): void;
+  scroll(x?: unknown, y?: unknown): void;
+  scrollBy(x?: unknown, y?: unknown): void;
+  scrollIntoView(arg?: unknown): void;
 
   // -- the attribute channel
   getAttribute(name: string): string | null;
@@ -547,10 +554,11 @@ function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode {
     // `<Transition>` layers on top (runtime-dom keeps the same split, for the
     // same reason: a re-render must not wipe an in-flight `v-enter-active`).
     n.className = "";
-    // Scroll containers report their position through these, exactly like the
-    // DOM: CSS convention, positive px, 0 before the first scroll.
-    n.scrollLeft = 0;
-    n.scrollTop = 0;
+    // `scrollTop` / `scrollLeft` are NOT initialised here any more: they are
+    // accessors on the prototype now, reading and writing the host's real
+    // `ScrollHandle` (see `defineDomGet("scrollTop", …)`). An own data property
+    // would shadow them, which is exactly what used to make a write a no-op.
+    //
     // Own-property methods shadow any prototype ones: these route into the
     // same registry the renderer's props use, so propagation sees both.
     n.addEventListener = (name, fn, opts) => addExtraListener(n as MirrorElement, name, fn, opts);
@@ -1265,11 +1273,24 @@ for (const [name, pick] of [
   ["offsetHeight", (r: MirrorRect) => r.height],
   ["clientWidth", (r: MirrorRect) => r.width],
   ["clientHeight", (r: MirrorRect) => r.height],
-  ["scrollWidth", (r: MirrorRect) => r.width],
-  ["scrollHeight", (r: MirrorRect) => r.height],
 ] as [string, (r: MirrorRect) => number][]) {
   defineDomGet(name, function (this: MirrorElement) {
     return Math.round(pick(rectOf(this)));
+  });
+}
+// `scrollWidth` / `scrollHeight` are the CONTENT box, not the painted one.
+// For a scroll container the two differ by exactly the thing that makes the
+// box a scroll container, and `el.scrollTop = el.scrollHeight` — the
+// scroll-to-bottom idiom — is wrong by the whole overflow if this answers the
+// viewport. For everything else a browser reports the border box, which is
+// what the rectangle already is.
+for (const [name, pick, fallback] of [
+  ["scrollWidth", (s: ScrollPos) => s.scrollWidth, (r: MirrorRect) => r.width],
+  ["scrollHeight", (s: ScrollPos) => s.scrollHeight, (r: MirrorRect) => r.height],
+] as [string, (s: ScrollPos) => number, (r: MirrorRect) => number][]) {
+  defineDomGet(name, function (this: MirrorElement) {
+    const s = hostScroll(this, 0, NaN, NaN, true);
+    return Math.round(s ? pick(s) : fallback(rectOf(this)));
   });
 }
 // `offset*` is measured from the offsetParent in the DOM; we have no positioned
@@ -1294,12 +1315,177 @@ defineDomGet("offsetParent", () => null);
 // `undefined` there turns the whole computation into NaN.
 defineDomGet("clientTop", () => 0);
 defineDomGet("clientLeft", () => 0);
-defineDom("scrollIntoView", function () {
+
+// ---- programmatic scrolling ----------------------------------------------
+//
+// `scrollTop` / `scrollLeft` / `scrollTo` / `scrollBy` / `scrollIntoView` all
+// drive the host's real `ScrollHandle` — the same object the wheel, the
+// scrollbar thumb and the devtools `scroll` command move
+// (`crates/vn-tree/src/scroll.rs`). Three properties carry over from a
+// browser and are worth stating, because each one is load-bearing somewhere:
+//
+//  * the write is CLAMPED to what the box can cover, and the getter answers
+//    the clamped value SYNCHRONOUSLY — `el.scrollTop = 1e9` then reading it
+//    back gives the bottom, with no frame in between;
+//  * a write on an element that does not scroll does nothing and says
+//    nothing, exactly as in a browser;
+//  * the `scroll` EVENT is asynchronous. CSSOM-View fires it from the
+//    update-the-rendering loop, not from the assignment, and so does the host.
+
+/** What `__vn_scroll` answers, decoded. */
+interface ScrollPos {
+  left: number;
+  top: number;
+  scrollWidth: number;
+  scrollHeight: number;
+  /** The content size and the clamp are a frame old — see `noteStale`. */
+  stale: boolean;
+}
+
+/**
+ * One host call for every scroll accessor. `null` means "this element is not a
+ * scroll container", which is the answer a browser gives by reporting zeros.
+ *
+ * `sizeMatters` asks for the advisory in `noteStale` when the answer's CONTENT
+ * half is a frame old. The offset half never is, so a plain `scrollTop` read
+ * passes `false` and stays silent.
+ */
+function hostScroll(
+  node: MirrorElement,
+  op: 0 | 1 | 2,
+  x = NaN,
+  y = NaN,
+  sizeMatters = false,
+): ScrollPos | null {
+  if (!node.id) return null;
+  const raw = __vn_scroll(node.id, op, x, y);
+  if (!raw) return null;
+  const [left, top, scrollWidth, scrollHeight, stale] = raw.split(",").map(Number);
+  if (stale && sizeMatters) noteStale();
+  return { left, top, scrollWidth, scrollHeight, stale: !!stale };
+}
+
+/**
+ * The one honest gap in this surface, named once per session.
+ *
+ * A browser lays out on read, so `list.append(row); list.scrollTop =
+ * list.scrollHeight` sees the row. Here layout is a frame, and the host can
+ * only force one where a second `Window::draw` is legal — during boot, module
+ * evaluation and `onMounted`, and NOWHERE inside an event handler or a timer,
+ * because those already run inside the window's own update. So a content-size
+ * read (or the clamp that uses it) in the same JS wave as a DOM change answers
+ * the last painted frame, and "scroll to bottom" lands one item short.
+ *
+ * The offset itself is never stale — `el.scrollTop` is exact at all times, and
+ * so is a scroll to a position the app computed itself. This is only about
+ * `scrollWidth` / `scrollHeight` and the clamp derived from them.
+ */
+function noteStale(): void {
   warnCompat(
-    "scrollIntoView",
-    "element.scrollIntoView() is a no-op — vue-native cannot drive a scroll container from JS yet " +
-      "(the host exposes scrolling to devtools only)",
+    "scroll-layout",
+    "scrollWidth/scrollHeight (and the clamp on a scroll) answered from the LAST PAINTED frame: " +
+      "the DOM changed in this same wave and a layout cannot be forced from inside an event " +
+      "handler here (it can during boot/onMounted). `el.scrollTop = el.scrollHeight` right after " +
+      "adding content therefore stops one item short — do it inside requestAnimationFrame(), " +
+      "which runs after the frame that laid the new content out",
   );
+}
+
+/**
+ * `behavior: "smooth"` — performed instantly, once per session.
+ *
+ * The final position is identical, which is the half app logic reads back; the
+ * interpolation is the half that is missing. It is not faked with the CSS
+ * animator on purpose: a scroll offset is not a style property, a running
+ * animation switches the retained-render cache off document-wide (so a smooth
+ * scroll would cost exactly the frames caching a long list saves), and a
+ * smooth scroll that cannot be cancelled by the wheel and never fires
+ * `scrollend` is a worse divergence than an instant jump that says so.
+ * See research/reports/m23/scroll.md.
+ */
+function noteBehavior(behavior: unknown): void {
+  if (behavior !== "smooth") return;
+  warnCompat(
+    "scroll-behavior",
+    'scroll behavior: "smooth" is performed INSTANTLY — the final position is exact and readable ' +
+      "on the next line, but there is no interpolation and no `scrollend` event; " +
+      'use behavior: "auto" (or "instant") to say so explicitly',
+  );
+}
+
+/** `scrollTo(x, y)` and `scrollTo({ left, top, behavior })`, both spellings. */
+function scrollArgs(a: unknown, b: unknown): { left: number; top: number } {
+  if (a !== null && typeof a === "object") {
+    const o = a as { left?: unknown; top?: unknown; behavior?: unknown };
+    noteBehavior(o.behavior);
+    return { left: o.left === undefined ? NaN : Number(o.left), top: o.top === undefined ? NaN : Number(o.top) };
+  }
+  return { left: a === undefined ? NaN : Number(a), top: b === undefined ? NaN : Number(b) };
+}
+
+for (const [name, axis] of [
+  ["scrollLeft", "left"],
+  ["scrollTop", "top"],
+] as [string, "left" | "top"][]) {
+  defineDomGet(
+    name,
+    function (this: MirrorElement) {
+      // A browser rounds these to integers for a non-fractional layout; ours
+      // are gpui pixels, which are already the units the box was laid out in.
+      const s = hostScroll(this, 0);
+      return s ? s[axis] : 0;
+    },
+    function (this: MirrorElement, value: never) {
+      const v = Number(value);
+      // A browser ignores a non-finite assignment rather than throwing.
+      if (!Number.isFinite(v)) return;
+      // `sizeMatters`: the write is CLAMPED against the content size, so a
+      // stale content size makes a stale landing.
+      hostScroll(this, 1, axis === "left" ? v : NaN, axis === "top" ? v : NaN, true);
+    },
+  );
+}
+
+const scrollToImpl = function (this: MirrorElement, a: unknown, b: unknown) {
+  const { left, top } = scrollArgs(a, b);
+  hostScroll(this, 1, left, top, true);
+};
+defineDom("scrollTo", scrollToImpl);
+defineDom("scroll", scrollToImpl);
+defineDom("scrollBy", function (this: MirrorElement, a: unknown, b: unknown) {
+  const { left, top } = scrollArgs(a, b);
+  hostScroll(this, 2, Number.isFinite(left) ? left : 0, Number.isFinite(top) ? top : 0, true);
+});
+
+/** `start | center | end | nearest` → the host's alignment code. */
+const SCROLL_ALIGN: Record<string, VnScrollAlign> = {
+  start: 0,
+  center: 1,
+  end: 2,
+  nearest: 3,
+};
+
+defineDom("scrollIntoView", function (this: MirrorElement, arg: unknown) {
+  if (!this.id) return;
+  // The three spellings a browser takes: nothing / `true` is
+  // `{block: "start", inline: "nearest"}`, `false` is `{block: "end"}`, and an
+  // object names either axis.
+  let block: VnScrollAlign = 0;
+  let inline: VnScrollAlign = 3;
+  if (arg === false) block = 2;
+  else if (arg !== null && typeof arg === "object") {
+    const o = arg as { block?: unknown; inline?: unknown; behavior?: unknown };
+    noteBehavior(o.behavior);
+    if (o.block !== undefined) block = SCROLL_ALIGN[String(o.block)] ?? 0;
+    if (o.inline !== undefined) inline = SCROLL_ALIGN[String(o.inline)] ?? 3;
+  }
+  // `block` / `inline` are writing-mode relative in CSS; we have one writing
+  // mode (horizontal-tb, ltr), so block is vertical and inline horizontal.
+  // That is stated rather than assumed because `direction: rtl` would flip the
+  // inline axis and nothing here would notice.
+  const out = __vn_scroll_into_view(this.id, block, inline);
+  if (out.charCodeAt(0) === 33 /* ! */) warnCompat("scrollIntoView", out.slice(1));
+  else if (out === "stale") noteStale();
 });
 
 // -- the attribute channel (`patchProp` is the writer; see `mk`)
@@ -1950,9 +2136,9 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   if (name === "keydown" || name === "mousedown") globalThis.__vnStickyActivation?.();
   // input: the payload string is the new value — mirror it onto the node
   // BEFORE dispatch so `e.target.value` reads like the browser.
-  // (`value`, `scrollLeft` and `scrollTop` are element fields; the host only
-  // ever targets an element with these three events, which is what the casts
-  // record — a text node reaching here would be a host bug, not a JS one.)
+  // (`value` is an element field; the host only ever targets an element with
+  // this event, which is what the cast records — a text node reaching here
+  // would be a host bug, not a JS one.)
   //
   // `change` is listed with it deliberately, and is currently UNREACHABLE:
   // `CODE_TO_NAME` is built from `EV_CODES`, which mirrors `tree.rs`, and
@@ -1962,11 +2148,11 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // the directive that wanted it.
   if ((name === "input" || name === "change") && key != null)
     (target as MirrorElement).value = key;
-  // scroll: same idea — the position lives on the element, not on the event.
-  if (name === "scroll") {
-    (target as MirrorElement).scrollLeft = a;
-    (target as MirrorElement).scrollTop = b;
-  }
+  // `scroll` used to write the position onto the node here, because that was
+  // the only way `e.target.scrollTop` could answer anything. It is now an
+  // accessor over the host's live `ScrollHandle`, so writing it back would
+  // push the position the event describes into the box the event came from —
+  // a round trip with one possible outcome and one possible bug.
   // The derived family (`pointerdown` from `mousedown`, `focusin` from `focus`,
   // …): each one is a full W3C event of its own with its own propagation, in
   // the order a browser fires them. `preventDefault()` on a derived pointer

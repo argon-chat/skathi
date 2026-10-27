@@ -237,6 +237,57 @@ declare function __vn_bounds(id: VnNodeId): VnRect;
 /** The folded computed values + every custom property, as `name=value` lines. */
 declare function __vn_computed_style(id: VnNodeId): VnKvLines;
 
+/** `__vn_scroll`'s verb: 0 read, 1 set absolute, 2 scroll by. */
+type VnScrollOp = 0 | 1 | 2;
+
+/**
+ * `"left,top,scrollWidth,scrollHeight,stale"` in CSS px — the whole of
+ * `scrollTop`, `scrollLeft`, `scrollTo`, `scrollBy`, `scrollWidth` and
+ * `scrollHeight` in one call, because all six read the same `ScrollHandle`.
+ *
+ * `stale` is `1` when the CONTENT half of the answer (and the clamp derived
+ * from it) is from the last painted frame, because the tree changed in this
+ * same JS wave and a layout could not be forced. The offset half is never
+ * stale. The runtime turns it into one advisory.
+ *
+ * `""` for a node the cascade never gave `overflow: scroll|auto`. That is not
+ * an error: a browser reports 0 for `scrollTop` on every non-scrollable
+ * element and silently ignores a write to it, which is what the runtime
+ * substitutes.
+ */
+type VnScrollPos = string;
+
+/**
+ * Reads or moves a scroll container, through the very `ScrollHandle` gpui
+ * paints the subtree with — so the answer is the position AFTER the clamp, and
+ * a write is readable back on the next line with no frame in between.
+ *
+ * `x` / `y` are CSS px (positive = right / down). With op 1 a `NaN` axis is
+ * left where it is, which is what `scrollTo({ top })` with no `left` means;
+ * with op 2 it is 0. The DOM `scroll` event is fired on the next frame, not
+ * from inside the call — CSSOM-View fires it from the update-the-rendering
+ * loop and so do we (`crates/vn-tree/src/scroll.rs`).
+ */
+declare function __vn_scroll(id: VnNodeId, op: VnScrollOp, x: number, y: number): VnScrollPos;
+
+/** `scrollIntoView`'s alignment: 0 start, 1 center, 2 end, 3 nearest. */
+type VnScrollAlign = 0 | 1 | 2 | 3;
+
+/**
+ * `element.scrollIntoView({ block, inline })` — scrolls every scrollable
+ * ancestor, innermost first, clamping each and carrying the element's
+ * rectangle down the chain by however far each one actually moved.
+ *
+ * `""` when it ran, `"stale"` when it ran against a layout a frame old (see
+ * `__vn_scroll`), and `"!<advisory>"` when it could not run at all (a node
+ * with no rectangle), in the same shape `__vn_query` uses.
+ */
+declare function __vn_scroll_into_view(
+  id: VnNodeId,
+  block: VnScrollAlign,
+  inline: VnScrollAlign,
+): string;
+
 // ---------------------------------------------------------------------------
 // `<video>` / `<audio>` — crates/vn-video (CONTRACT.md §6)
 // ---------------------------------------------------------------------------

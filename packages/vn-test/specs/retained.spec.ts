@@ -118,6 +118,37 @@ describe("retained-render cache", () => {
     );
   }, T);
 
+  test("the whole scroll container is cached, and still routes its wheel", async () => {
+    // m23 §6's exclusion, removed: `vn_elements::scrollbar`'s wheel registry is
+    // rebuilt from the PAINT walk and a replayed subtree does not walk, so a
+    // cached scroll box used to keep its pixels and lose its wheel. The
+    // boundary records the span it contributed and re-registers it on a
+    // replay (`cache.rs`'s `Boundary`), and these are the two ways to see it
+    // from outside the process.
+    //
+    // One: the registry has the same number of containers in it either way.
+    // It is a count of a structure only the paint walk can build, so if the
+    // replay ever stops re-registering, it drops here first.
+    const chain = async (app: VnApp) => (await app.send("perf")).scrollChain as number;
+    expect(await chain(cached)).toBe(await chain(plain));
+    expect(await chain(cached)).toBeGreaterThan(0);
+
+    // Two: a REAL wheel, through gpui's hit test, over the cached box. It has
+    // to move the offset and fire the app's own `@scroll`.
+    for (const app of [cached, plain]) {
+      await app.eval(`document.querySelector(${JSON.stringify(LIST)}).scrollTop = 0`);
+    }
+    await settle();
+    const box = await cached.locator(LIST).boundingBox();
+    await cached.send("wheel", { x: box.x + box.w / 2, y: box.y + box.h / 2, dx: 0, dy: 400 });
+    await settle();
+
+    expect(await scrollTop(cached)).toBeGreaterThan(0);
+    await expect(cached.locator("#pos")).toContainText(
+      `scrollTop ${Math.round((await scrollTop(cached)) as number)}`,
+    );
+  }, T);
+
   test("neither instance logs an error or a new advisory", async () => {
     await cached.expectNoErrors();
     await plain.expectNoErrors();

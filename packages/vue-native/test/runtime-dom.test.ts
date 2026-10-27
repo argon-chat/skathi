@@ -155,6 +155,214 @@ describe("layout comes from the host's painted bounds", () => {
   });
 });
 
+describe("programmatic scrolling drives the host's ScrollHandle", () => {
+  /** A scroll container: 300×200 viewport with 1 000 px of content below it. */
+  function scroller(rt, node, extra = {}) {
+    rt.host.scrollById.set(node.id, {
+      left: 0,
+      top: 0,
+      maxLeft: 0,
+      maxTop: 800,
+      width: 300,
+      height: 200,
+      ...extra,
+    });
+  }
+
+  test("a write reaches the host and the getter sees it on the next line", () => {
+    // The whole of the bug this replaced: `scrollTop` was a plain field, so a
+    // write updated a number nobody read and the box never moved.
+    const rt = createRuntime();
+    const { section } = tree(rt);
+    scroller(rt, section);
+
+    expect(section.scrollTop).toBe(0);
+    section.scrollTop = 250;
+
+    expect(rt.host.scrollCalls.some((c) => c.op === 1 && c.y === 250)).toBe(true);
+    expect(section.scrollTop).toBe(250);
+    expect(section.scrollLeft).toBe(0);
+  });
+
+  test("a write past the end lands at the end, like a browser's clamp", () => {
+    const rt = createRuntime();
+    const { section } = tree(rt);
+    scroller(rt, section);
+    section.scrollTop = 1e9;
+    expect(section.scrollTop).toBe(800);
+    section.scrollTop = -50;
+    expect(section.scrollTop).toBe(0);
+  });
+
+  test("a non-finite assignment is ignored rather than thrown", () => {
+    const rt = createRuntime();
+    const { section } = tree(rt);
+    scroller(rt, section);
+    section.scrollTop = 120;
+    section.scrollTop = NaN;
+    section.scrollTop = "nope";
+    expect(section.scrollTop).toBe(120);
+  });
+
+  test("scrollTo takes both spellings and scrollBy is relative", () => {
+    const rt = createRuntime();
+    const { section } = tree(rt);
+    scroller(rt, section, { maxLeft: 400 });
+
+    section.scrollTo({ top: 100, left: 40 });
+    expect([section.scrollLeft, section.scrollTop]).toEqual([40, 100]);
+
+    section.scrollTo(10, 20);
+    expect([section.scrollLeft, section.scrollTop]).toEqual([10, 20]);
+
+    section.scrollBy({ top: 30 });
+    expect([section.scrollLeft, section.scrollTop]).toEqual([10, 50]);
+
+    // An axis the caller did not name is LEFT WHERE IT IS, which is what
+    // `scrollTo({ top })` means — not "scrolled to 0".
+    section.scrollTo({ top: 5 });
+    expect([section.scrollLeft, section.scrollTop]).toEqual([10, 5]);
+  });
+
+  test("scrollWidth/scrollHeight report the CONTENT box, so scroll-to-bottom works", () => {
+    // `el.scrollTop = el.scrollHeight` is THE scroll-to-bottom idiom. Reporting
+    // the painted rectangle here (the viewport) would stop the list one
+    // viewport down and look like a clamp bug in the app.
+    const rt = createRuntime();
+    const { section } = tree(rt);
+    scroller(rt, section);
+    rt.host.boundsById.set(section.id, "0,0,300,200");
+
+    expect(section.clientHeight).toBe(200);
+    expect(section.scrollHeight).toBe(1000);
+
+    section.scrollTop = section.scrollHeight;
+    expect(section.scrollTop).toBe(800); // the bottom, clamped
+  });
+
+  test("an element that does not scroll reports zeros and swallows a write", () => {
+    // A browser's behaviour exactly, so no advisory is warranted.
+    const rt = createRuntime();
+    const { button } = tree(rt);
+    rt.host.boundsById.set(button.id, "0,0,100,40");
+    expect(button.scrollTop).toBe(0);
+    expect(button.scrollLeft).toBe(0);
+    // …and `scrollWidth` falls back to the border box, which is what a browser
+    // reports for a non-scrollable element.
+    expect(button.scrollWidth).toBe(100);
+    button.scrollTop = 500;
+    expect(button.scrollTop).toBe(0);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("scrollIntoView sends the alignment a browser would", () => {
+    const rt = createRuntime();
+    const { button } = tree(rt);
+
+    button.scrollIntoView();
+    // CSSOM-View's defaults: block "start", inline "nearest".
+    expect(rt.host.intoViewCalls.at(-1)).toEqual({ id: button.id, block: 0, inline: 3 });
+
+    button.scrollIntoView(false);
+    expect(rt.host.intoViewCalls.at(-1)).toMatchObject({ block: 2, inline: 3 });
+
+    button.scrollIntoView({ block: "center", inline: "end" });
+    expect(rt.host.intoViewCalls.at(-1)).toMatchObject({ block: 1, inline: 2 });
+
+    // An unknown keyword falls back to the spec default for that axis rather
+    // than throwing — a browser ignores it too.
+    button.scrollIntoView({ block: "sideways" });
+    expect(rt.host.intoViewCalls.at(-1)).toMatchObject({ block: 0, inline: 3 });
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("a host refusal becomes one advisory, not silence", () => {
+    const rt = createRuntime();
+    const { span } = tree(rt);
+    rt.host.intoViewAnswer = "!scrollIntoView(): node has no rectangle";
+    span.scrollIntoView();
+    span.scrollIntoView();
+    expect(rt.advisories().filter((a) => a.includes("no rectangle")).length).toBe(1);
+  });
+
+  test('behavior: "smooth" is performed instantly and says so, once', () => {
+    // The position is exact; the interpolation is what is missing, and that is
+    // a divergence, so it is named. See research/reports/m23/scroll.md for why
+    // it is not run through the CSS animator.
+    const rt = createRuntime();
+    const { section } = tree(rt);
+    scroller(rt, section);
+
+    section.scrollTo({ top: 300, behavior: "smooth" });
+    expect(section.scrollTop).toBe(300);
+    section.scrollBy({ top: 10, behavior: "smooth" });
+    section.scrollIntoView({ behavior: "smooth" });
+
+    const smooth = rt.advisories().filter((a) => a.includes("smooth"));
+    expect(smooth.length).toBe(1);
+    expect(smooth[0]).toContain("INSTANTLY");
+
+    // …and the ordinary spellings say nothing at all.
+    const quiet = createRuntime();
+    const t2 = tree(quiet);
+    quiet.host.scrollById.set(t2.section.id, { left: 0, top: 0, maxLeft: 0, maxTop: 800, width: 300, height: 200 });
+    t2.section.scrollTo({ top: 10, behavior: "auto" });
+    t2.section.scrollTo({ top: 20 });
+    expect(quiet.advisories()).toEqual([]);
+  });
+
+  test("a content-size answer the host calls STALE becomes one advisory", () => {
+    // The honest gap: a browser lays out on read, and here layout is a frame.
+    // The host can force one during boot/onMounted and nowhere inside an event
+    // handler, so `el.scrollTop = el.scrollHeight` right after adding content
+    // stops one item short — and must say so rather than be quietly wrong.
+    const rt = createRuntime();
+    const { section } = tree(rt);
+    scroller(rt, section);
+    rt.host.scrollStale = true;
+
+    // The OFFSET half is never stale, so a plain read stays silent.
+    expect(section.scrollTop).toBe(0);
+    expect(rt.advisories()).toEqual([]);
+
+    // The content half, and the clamp that uses it, are not.
+    expect(section.scrollHeight).toBe(1000);
+    section.scrollTop = 500;
+    section.scrollTo({ top: 10 });
+    section.scrollBy({ top: 10 });
+
+    const stale = rt.advisories().filter((a) => a.includes("LAST PAINTED frame"));
+    expect(stale.length).toBe(1);
+    expect(stale[0]).toContain("requestAnimationFrame");
+  });
+
+  test("a stale scrollIntoView reports the same one advisory", () => {
+    const rt = createRuntime();
+    const { button } = tree(rt);
+    rt.host.intoViewAnswer = "stale";
+    button.scrollIntoView();
+    expect(rt.advisories().filter((a) => a.includes("LAST PAINTED frame")).length).toBe(1);
+  });
+
+  test("a scroll EVENT no longer writes the position back onto the node", () => {
+    // It used to, because the field was the only place a position could live.
+    // The accessor reads the host now, so a write-back would push the position
+    // the event describes into the box the event came from.
+    const rt = createRuntime();
+    const { section } = tree(rt);
+    scroller(rt, section);
+    section.scrollTop = 120;
+
+    const seen = [];
+    section.addEventListener("scroll", (e) => seen.push(e.target.scrollTop));
+    rt.host.dispatcher(section.id, rt.EV_CODES.scroll, 0, 120, 0, 0, null);
+
+    expect(seen).toEqual([120]);
+    // …and the only `__vn_scroll` writes are the ones the test made.
+    expect(rt.host.scrollCalls.filter((c) => c.op !== 0).length).toBe(1);
+  });
+});
+
 describe("the attribute channel", () => {
   test("what patchProp writes is what getAttribute/dataset read back", () => {
     const rt = createRuntime();

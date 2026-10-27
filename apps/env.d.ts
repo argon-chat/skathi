@@ -203,6 +203,25 @@ declare global {
     readonly height: number;
   }
 
+  /**
+   * `scrollTo` / `scrollBy`'s option bag. Spelled here rather than taken from
+   * `lib.dom` for the reason at the top of this file: nothing is declared that
+   * the host does not provide, and `behavior: "smooth"` is honoured as an
+   * instant jump with one advisory (research/reports/m23/scroll.md).
+   */
+  interface VnScrollToOptions {
+    left?: number;
+    top?: number;
+    behavior?: "auto" | "instant" | "smooth";
+  }
+
+  /** `scrollIntoView`'s option bag; `block` is vertical, `inline` horizontal. */
+  interface VnScrollIntoViewOptions {
+    block?: "start" | "center" | "end" | "nearest";
+    inline?: "start" | "center" | "end" | "nearest";
+    behavior?: "auto" | "instant" | "smooth";
+  }
+
   interface VnElement extends VnEventTarget {
     /**
      * The RETAINED-TREE node id — `crates/vn-tree`'s arena index, which
@@ -217,8 +236,33 @@ declare global {
      */
     readonly id: VnNodeId;
     getBoundingClientRect(): VnDomRect;
-    readonly scrollTop: number;
-    readonly scrollLeft: number;
+    /**
+     * The scroll position, over the host's real `ScrollHandle` — the same one
+     * the wheel and the scrollbar thumb move. WRITABLE since m23: the value is
+     * clamped to what the box can cover and the getter answers the clamped
+     * number on the next line, with no frame in between. `0` on an element
+     * that does not scroll, and a write to one does nothing, exactly as in a
+     * browser.
+     */
+    scrollTop: number;
+    scrollLeft: number;
+    /** The CONTENT box of a scroll container (viewport + overflow). */
+    readonly scrollWidth: number;
+    readonly scrollHeight: number;
+    /**
+     * `scrollTo(x, y)` / `scrollTo({ left, top, behavior })`. `behavior:
+     * "smooth"` is performed INSTANTLY and advises once — see
+     * research/reports/m23/scroll.md for why it is not animated.
+     */
+    scrollTo(x?: number | VnScrollToOptions, y?: number): void;
+    scrollBy(x?: number | VnScrollToOptions, y?: number): void;
+    /**
+     * Scrolls every scrollable ancestor so this element lands where `block` /
+     * `inline` ask (`start` | `center` | `end` | `nearest`). Off-screen
+     * elements work: the whole document is laid out, so a row far below the
+     * fold has an exact rectangle to aim at.
+     */
+    scrollIntoView(arg?: boolean | VnScrollIntoViewOptions): void;
     focus(): void;
     blur(): void;
     /** Patched onto `Element.prototype` by window.prelude.js; makes the

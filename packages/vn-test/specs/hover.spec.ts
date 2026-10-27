@@ -13,6 +13,23 @@
 // Nothing here activates the window or moves the OS cursor. The pointer gpui
 // hit-tests against is its own `mouse_position`, which is why this runs while
 // somebody else is using the mouse.
+//
+// ## Why that last sentence needed a fix, not a comment (m23)
+//
+// `mouse_position` is ONE value per window, fed by whatever `PlatformInput`
+// move arrived last — the synthetic one the `mouse` command delivers, and
+// every real one the person at the machine makes. So this file used to assert
+// about the LIVE USER'S POINTER the moment their hand moved: it passed alone
+// and failed inside a full run, on a different test each time, because a full
+// run is long enough for that to happen. Retrying harder cannot help — a retry
+// re-reads the same overwritten value.
+//
+// The harness now owns the pointer: `locator.hover()` / `unhover()` record
+// where they put it and `locator.styles()` puts it back immediately before
+// every read that depends on the hit test (`VnApp.settlePointer`), so the last
+// word always belongs to the test. "a hand on the mouse cannot decide the
+// result" below is the pin, and it makes the interference deliberate rather
+// than waiting to be unlucky.
 
 import { afterAll, describe, test } from "bun:test";
 import { expect, launch, parseHsla, styleValue } from "../src/index";
@@ -109,6 +126,32 @@ describe("hover", () => {
 
     await btn.unhover();
     await expect(btn).toHaveComputedStyle("background", "a: 0.34901962");
+  }, T);
+
+  test("a hand on the mouse cannot decide the result", async () => {
+    // The flake, made deterministic. `mouse --kind move` is the SAME
+    // `PlatformInput` a real cursor crossing the window produces and lands in
+    // the same single `Window::mouse_position` — so interleaving one here is a
+    // faithful stand-in for the person at the machine, with no real cursor
+    // touched.
+    const tab = app.locator(".tab").nth(1);
+    await tab.hover();
+    await expect(tab).toBeHovered();
+
+    // …their hand moves. Before m23 this was the end of the story and whatever
+    // assertion came next was a coin flip.
+    await app.send("mouse", { x: 900, y: 700, kind: "move" });
+
+    // The assertion still holds, because reading the hover state re-places the
+    // pointer this spec asked for first.
+    await expect(tab).toBeHovered();
+    await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
+
+    // And the same in the other direction: `unhover()` owns the pointer too,
+    // so a stray move ONTO the element cannot make "not hovered" fail.
+    await tab.unhover();
+    await app.send("mouse", { selector: ".tab", index: 1, kind: "move" });
+    await expect(tab).not.toBeHovered();
   }, T);
 
   test("hovering is not clicking", async () => {

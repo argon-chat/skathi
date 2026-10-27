@@ -23,6 +23,7 @@ pub mod log;
 mod lottie;
 pub mod perf;
 mod render;
+mod scroll;
 mod svg;
 mod tree;
 mod video;
@@ -231,6 +232,62 @@ host_fn!(fn vn_computed_style(_g, args) {
 });
 
 // ---------------------------------------------------------------------------
+// programmatic scrolling (crates/vn-tree/src/scroll.rs)
+// ---------------------------------------------------------------------------
+//
+// One call for the whole of `scrollTop` / `scrollLeft` / `scrollTo` /
+// `scrollBy` / `scrollWidth` / `scrollHeight`, because all six are the same
+// question asked of the same `ScrollHandle` and a round trip per accessor
+// would cost more than the arithmetic.
+//
+//   op 0  read            — x, y ignored
+//   op 1  set absolute    — NaN on an axis leaves it alone (`scrollTo({top})`)
+//   op 2  scroll by       — NaN is 0
+//
+// Answers `"left,top,scrollWidth,scrollHeight"` in CSS px, or `""` for a node
+// the cascade never gave `overflow: scroll|auto` — which is not an error: a
+// browser reports 0 for `scrollTop` on every non-scrollable element and
+// ignores a write to it.
+host_fn!(fn vn_scroll(_g, args) {
+    let id = arg_id(args.arg(0));
+    let op = arg_id(args.arg(1));
+    let x = args.arg(2).as_number().unwrap_or(f64::NAN);
+    let y = args.arg(3).as_number().unwrap_or(f64::NAN);
+    let axis = |v: f64| (!v.is_nan()).then_some(v as f32);
+    let out = match op {
+        1 => scroll::set(id, axis(x), axis(y)),
+        2 => scroll::by(id, axis(x).unwrap_or(0.0), axis(y).unwrap_or(0.0)),
+        _ => scroll::info(id),
+    };
+    ret_string(&match out {
+        Some(i) => format!(
+            "{},{},{},{},{}",
+            i.left,
+            i.top,
+            i.scroll_width,
+            i.scroll_height,
+            u8::from(i.stale)
+        ),
+        None => String::new(),
+    })
+});
+
+// `element.scrollIntoView({ block, inline })` — 0 start, 1 center, 2 end,
+// 3 nearest. `""` when it scrolled (or had nothing to do), `!<advisory>` when
+// it could not, in the same shape `__vn_query` uses for a selector the engine
+// cannot run.
+host_fn!(fn vn_scroll_into_view(_g, args) {
+    let id = arg_id(args.arg(0));
+    let block = scroll::Align::from_code(arg_id(args.arg(1)));
+    let inline = scroll::Align::from_code(arg_id(args.arg(2)));
+    ret_string(&match scroll::into_view(id, block, inline) {
+        Ok(false) => String::new(),
+        Ok(true) => "stale".to_string(),
+        Err(e) => format!("!{e}"),
+    })
+});
+
+// ---------------------------------------------------------------------------
 // the `<video>` media surface (crates/vn-video/CONTRACT.md §6)
 // ---------------------------------------------------------------------------
 //
@@ -293,6 +350,8 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_query", 3, vn_query as *const _),
         ("__vn_bounds", 1, vn_bounds as *const _),
         ("__vn_computed_style", 1, vn_computed_style as *const _),
+        ("__vn_scroll", 4, vn_scroll as *const _),
+        ("__vn_scroll_into_view", 3, vn_scroll_into_view as *const _),
         ("__vn_media_state", 1, vn_media_state as *const _),
         ("__vn_media_call", 3, vn_media_call as *const _),
         ("__vn_media_can_play", 2, vn_media_can_play as *const _),
@@ -453,7 +512,14 @@ pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let anim = render::dispatch_anim_events(window, cx);
     let lottie_moved = lottie::tick(window, cx);
     let video_moved = video::tick(window, cx);
-    anim | lottie_moved | video_moved
+    // `el.scrollTop = n`, `scrollTo`, `scrollBy`, `scrollIntoView()`: the write
+    // itself happened synchronously inside the host fn (a `ScrollHandle` is an
+    // `Rc`, so the getter sees it on the next line), but the DOM `scroll` event
+    // is asynchronous in a browser and asynchronous here — this is the frame
+    // hook that fires it, and the `true` is what repaints a scroll no
+    // `@scroll` listener was watching.
+    let scrolled = scroll::dispatch_pending(window, cx);
+    anim | lottie_moved | video_moved | scrolled
 }
 
 /// The per-frame work a SECONDARY window has to do for itself, because the

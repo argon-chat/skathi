@@ -106,6 +106,26 @@ export function createRuntime(options = {}) {
     boundsById: new Map(),
     /** `__vn_computed_style` answers: node id -> "k=v\n…". */
     computedById: new Map(),
+    /**
+     * The scroll containers this fake host has, keyed by node id:
+     * `{ left, top, maxLeft, maxTop, width, height }` — the viewport size plus
+     * how far the content overflows it, which is exactly what a real
+     * `ScrollHandle` holds. A node that is not in here is not a scroll
+     * container, and `__vn_scroll` answers `""` for it, as the host does.
+     */
+    scrollById: new Map(),
+    /** Every `__vn_scroll` call: `{ id, op, x, y }`. */
+    scrollCalls: [],
+    /** Every `__vn_scroll_into_view` call: `{ id, block, inline }`. */
+    intoViewCalls: [],
+    /** What `__vn_scroll_into_view` answers — `""`, `"stale"`, or `"!advisory"`. */
+    intoViewAnswer: "",
+    /**
+     * Is the host reporting that the CONTENT half of a scroll answer is from
+     * the last painted frame? `__vn_scroll`'s fifth field — see
+     * `crates/vn-tree/src/scroll.rs` and `noteStale` in runtime.ts.
+     */
+    scrollStale: false,
     /** `__vn_media_state` answers: node id -> "name=value\n…". */
     mediaById: new Map(),
     /** `__vn_media_call` log: { id, verb, arg }. */
@@ -270,6 +290,8 @@ export function createRuntime(options = {}) {
     "__vn_query",
     "__vn_bounds",
     "__vn_computed_style",
+    "__vn_scroll",
+    "__vn_scroll_into_view",
     "__vn_media_state",
     "__vn_media_call",
     "__vn_media_can_play",
@@ -348,6 +370,27 @@ export function createRuntime(options = {}) {
     },
     (id) => host.boundsById.get(id) ?? "",
     (id) => host.computedById.get(id) ?? "",
+    // `__vn_scroll` — the same clamp the host applies (`scroll::apply`), so a
+    // test that asserts "a write past the end lands at the end" is asserting
+    // the contract rather than the fake.
+    (id, op, x, y) => {
+      host.scrollCalls.push({ id, op, x, y });
+      const s = host.scrollById.get(id);
+      if (!s) return "";
+      const clamp = (v, max) => Math.max(0, Math.min(v, max));
+      if (op === 1) {
+        if (Number.isFinite(x)) s.left = clamp(x, s.maxLeft);
+        if (Number.isFinite(y)) s.top = clamp(y, s.maxTop);
+      } else if (op === 2) {
+        if (Number.isFinite(x)) s.left = clamp(s.left + x, s.maxLeft);
+        if (Number.isFinite(y)) s.top = clamp(s.top + y, s.maxTop);
+      }
+      return `${s.left},${s.top},${s.width + s.maxLeft},${s.height + s.maxTop},${host.scrollStale ? 1 : 0}`;
+    },
+    (id, block, inline) => {
+      host.intoViewCalls.push({ id, block, inline });
+      return host.intoViewAnswer;
+    },
     (id) => host.mediaById.get(id) ?? "",
     (id, verb, arg) => {
       host.mediaCalls.push({ id, verb, arg });

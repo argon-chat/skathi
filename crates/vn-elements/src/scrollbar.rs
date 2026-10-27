@@ -49,6 +49,8 @@
 //! all-ancestors-at-once listener.
 
 use std::cell::Cell;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -243,10 +245,150 @@ thread_local! {
     static CHAIN: std::cell::RefCell<Vec<ChainEntry>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    /// What the pointer is doing to each scrollbar, and when its content last
+    /// moved — keyed by the bar's own `ElementId`, which is the scroll
+    /// container's node id.
+    ///
+    /// **Deliberately not gpui element state.** `Window::use_state` is keyed by
+    /// the `GlobalElementId` — the whole path of element ids down to this one —
+    /// and a retained-render boundary CHANGES that path: the first offer after
+    /// an ordinary build mints a fresh `Entity`, a fresh `EntityId` is a fresh
+    /// `ElementId::View`, and every descendant's global id moves with it. The
+    /// state that comes back is then a default one.
+    ///
+    /// For most elements that is invisible. For this one it ended a drag
+    /// mid-gesture: a boundary re-rendered three frames running stands down
+    /// (`vn_tree::cache`'s thrash backoff) and is re-offered ~24 frames later
+    /// with a new entity, which is well inside the time a hand takes to drag a
+    /// thumb. `scrollbar.spec.ts`'s "dragging the thumb scrolls the box" is the
+    /// pin. The bar's identity is the container it belongs to, not its position
+    /// in an element tree that is rebuilt every frame, so that is what it is
+    /// keyed by.
+    static STATES: std::cell::RefCell<HashMap<u64, (u64, Rc<Cell<State>>)>> =
+        std::cell::RefCell::new(HashMap::new());
+    /// Builds since the process started — the clock [`STATES`] is swept against.
+    static FRAME: Cell<u64> = const { Cell::new(0) };
+}
+
+/// A stable key for one scrollbar: its `ElementId`, hashed. The renderer builds
+/// that id as `("vn-scrollbar", <node id>)`, so it is the container's identity
+/// and nothing else.
+fn state_key(id: &ElementId) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut h);
+    h.finish()
+}
+
+fn state_for(id: &ElementId) -> Rc<Cell<State>> {
+    let key = state_key(id);
+    let frame = FRAME.with(|c| c.get());
+    STATES.with(|m| {
+        let mut m = m.borrow_mut();
+        let slot = m.entry(key).or_insert_with(|| (frame, Rc::new(Cell::new(State::default()))));
+        slot.0 = frame;
+        slot.1.clone()
+    })
+}
+
+/// How many builds a scrollbar may go unseen before its state is dropped.
+/// Generous on purpose — a `<KeepAlive>`d page comes back, and the state is
+/// two pointers — and swept in the same batches, so the sweep is amortised to
+/// nothing.
+const STATE_TTL: u64 = 4096;
+
 /// Drops the last frame's scroll-container registry. Called from the renderer
 /// at the top of each element-tree build.
 pub fn reset_frame() {
     CHAIN.with(|c| c.borrow_mut().clear());
+    let frame = FRAME.with(|c| {
+        let n = c.get().wrapping_add(1);
+        c.set(n);
+        n
+    });
+    if frame % STATE_TTL == 0 {
+        STATES.with(|m| m.borrow_mut().retain(|_, (seen, _)| frame.saturating_sub(*seen) < STATE_TTL));
+    }
+}
+
+/// A contiguous run of registry entries — what one retained-render boundary
+/// contributed to the chain while it was painted for real.
+///
+/// The registry is rebuilt from the paint walk, and a replayed subtree does not
+/// walk: gpui copies its recorded hitboxes, mouse listeners and scene forward
+/// and never calls `paint` again. Without this the wheel router simply loses
+/// every scroll container inside a cached subtree — the box keeps its pixels
+/// and stops scrolling (research/reports/m23/perf-retained.md §4.4), which is
+/// why v1 refused to cache a scroll container at all.
+///
+/// A span is safe to replay because **both** of its fields outlive the frame
+/// they were recorded in:
+///
+/// * `HitboxId` is allocated from a counter that is never reset
+///   (`Window::next_hitbox_id`, initialised once per window), so an id is
+///   unique for the life of the window and cannot come to mean a different
+///   hitbox later; and `reuse_prepaint` clones the recorded hitboxes into the
+///   new frame **with their ids**, so the very hitbox this entry names is in
+///   this frame's hit test.
+/// * `ScrollHandle` is an `Rc` the embedder keeps per node, so the offset the
+///   router reads and moves is the live one either way.
+///
+/// The embedder records a span with [`chain_mark`] + [`chain_since`] around the
+/// boundary's paint and re-registers it with [`chain_replay`] on the frames
+/// that replay. Order is preserved, and the span is re-pushed at the point in
+/// the walk the subtree occupied, so "innermost first" still holds.
+#[derive(Clone, Default)]
+pub struct ChainSpan(Vec<ChainEntry>);
+
+impl ChainSpan {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl std::fmt::Debug for ChainSpan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChainSpan").field("entries", &self.0.len()).finish()
+    }
+}
+
+/// `mark` / `since` / `replay` over a `Vec`, with no gpui in it.
+///
+/// Split out from [`CHAIN`] for one reason: a `HitboxId` cannot be fabricated
+/// outside gpui's own `test-support` feature, so the span mechanics would
+/// otherwise be the one part of this file with no unit test. They are the part
+/// a replay depends on being exactly right, so they are generic and tested
+/// below over `u32`.
+fn span_since<T: Clone>(v: &[T], mark: usize) -> Vec<T> {
+    v.get(mark..).map(<[T]>::to_vec).unwrap_or_default()
+}
+
+/// How many scroll containers have registered in this frame so far — the mark
+/// a boundary takes before it paints.
+pub fn chain_mark() -> usize {
+    CHAIN.with(|c| c.borrow().len())
+}
+
+/// The entries registered since `mark`, in registration order.
+pub fn chain_since(mark: usize) -> ChainSpan {
+    CHAIN.with(|c| ChainSpan(span_since(&c.borrow(), mark)))
+}
+
+/// Re-registers a recorded span at the current point in the walk.
+pub fn chain_replay(span: &ChainSpan) {
+    if span.0.is_empty() {
+        return;
+    }
+    CHAIN.with(|c| c.borrow_mut().extend(span.0.iter().cloned()));
+}
+
+/// How many scroll containers are registered in this frame. The embedder's
+/// regression pin for "a replayed subtree still routes the wheel".
+pub fn chain_count() -> usize {
+    chain_mark()
 }
 
 /// Can this box still move on `axis` in the direction `delta` points?
@@ -412,7 +554,7 @@ impl Element for Scrollbar {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let state = window.use_state(cx, |_, _| Rc::new(Cell::new(State::default()))).read(cx).clone();
+        let state = state_for(&self.id);
         let now = Instant::now();
 
         // The viewport, in window space, as the container recorded it. NOT this
@@ -1024,6 +1166,46 @@ mod tests {
         assert_eq!(thumb_len(100., 10_000., 100.), f32::from(MIN_THUMB));
         // …and the floor never exceeds the track.
         assert_eq!(thumb_len(10., 10_000., 10.), 10.);
+    }
+
+    /// A boundary records the run of registry entries its own paint added, and
+    /// re-adds exactly that run — in order — on the frames it replays.
+    ///
+    /// Order is the whole of it: the router reads the registry as
+    /// innermost-first, and that ordering is a property of WHERE in the paint
+    /// walk each entry was pushed. Re-pushing the span at the point the
+    /// subtree occupied is what keeps a nested box ahead of the box that
+    /// contains it.
+    #[test]
+    fn a_recorded_span_replays_in_the_order_it_was_recorded() {
+        // The walk so far: one outer container was registered before us.
+        let mut chain = vec![10u32];
+        let mark = chain.len();
+        // …the subtree paints for real and registers two of its own…
+        chain.extend([20, 21]);
+        let span = span_since(&chain, mark);
+        assert_eq!(span, vec![20, 21]);
+
+        // …and the next frame it replays: nothing pushes, so the span goes
+        // back at the same point, ahead of whatever the parent adds after it.
+        let mut next = vec![10u32];
+        let mark = next.len();
+        assert!(span_since(&next, mark).is_empty(), "a replay contributes nothing itself");
+        next.extend(span.iter().copied());
+        next.push(11);
+        assert_eq!(next, vec![10, 20, 21, 11]);
+    }
+
+    /// A mark past the end is the "the subtree registered nothing" case, and it
+    /// has to answer an empty span rather than panic — a subtree with no scroll
+    /// container in it takes this path on every single frame.
+    #[test]
+    fn a_span_with_nothing_in_it_is_empty_not_a_panic() {
+        let chain: Vec<u32> = vec![1, 2];
+        assert!(span_since(&chain, 2).is_empty());
+        assert!(span_since(&chain, 9).is_empty());
+        assert!(ChainSpan::default().is_empty());
+        assert_eq!(ChainSpan::default().len(), 0);
     }
 
     /// `overscroll-behavior` is one question with one answer per axis.

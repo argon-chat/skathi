@@ -105,6 +105,20 @@ pub fn node_count() -> u32 {
     tree::read_tree(|t| t.live_count())
 }
 
+/// How many scroll containers registered with the wheel router in the frame
+/// just painted.
+///
+/// A one-number window onto the one thing a retained-render replay cannot
+/// rebuild for itself. `vn_elements::scrollbar`'s registry is filled by the
+/// PAINT walk, and a replayed subtree does not walk — so before m23 this
+/// number silently dropped every container inside a cache boundary, which is
+/// why a boundary refused to cover one at all. `crate::cache::Boundary` now
+/// re-registers the span it recorded, and this is how a spec asserts that from
+/// outside the process: cache on or off, the count is the same.
+pub fn scroll_chain_count() -> u32 {
+    vn_elements::scrollbar::chain_count() as u32
+}
+
 pub fn node_info(id: u32) -> Option<NodeInfo> {
     tree::read_tree(|t| {
         let n = t.node(id)?;

@@ -126,13 +126,50 @@ fn ancestors_from(t: &Tree, id: u32) -> Vec<u32> {
 /// `<KeepAlive>` cache — for which an all-zero rect is exactly right, and no
 /// layout is forced.
 fn force_layout_if_unpainted(id: u32) {
-    if id == 0 || crate::render::bounds_of(id).is_some() {
+    if id == 0 {
+        return;
+    }
+    if crate::render::bounds_of(id).is_some() {
         return;
     }
     if !tree::read_tree(|t| t.node(id).is_some() && t.is_dirty()) {
         return;
     }
     crate::sync_layout();
+}
+
+/// The same forced layout, for a read whose answer depends on the node's
+/// CONTENT rather than only on its own box: `scrollWidth` / `scrollHeight`, and
+/// every write that has to be clamped against them.
+///
+/// Wider than [`force_layout_if_unpainted`] by exactly one case, and that case
+/// is the whole reason it exists: a node that HAS a rectangle while the tree
+/// still holds changes no frame has taken. `list.append(row);
+/// list.scrollTop = list.scrollHeight` is the canonical scroll-to-bottom
+/// idiom, and the list has been painted many times — it is the row that is
+/// newer than the last frame. Clamping against `max_offset` from before the
+/// append stops the list a row short, forever, because nothing ever
+/// re-measures.
+///
+/// It is still narrow: `sync_layout` flushes the pending changes itself, so a
+/// JS wave that writes twice forces one layout and the second write finds the
+/// tree clean. A clean tree costs nothing here at all.
+///
+/// **Returns `true` when the answer that follows is STALE** — the tree had
+/// changes and the layout could not be forced. `sync_layout` draws through
+/// `Window::draw`, and a second draw is refused anywhere inside the window's
+/// own update, which is every event handler and every timer callback; it works
+/// during boot, module evaluation and `onMounted`, which is the case m22 built
+/// it for. So the caller has to be able to say so, and the build counter is
+/// how it finds out: if no build happened, no layout happened.
+#[must_use]
+pub(crate) fn layout_if_stale(id: u32) -> bool {
+    if id == 0 || !tree::read_tree(|t| t.node(id).is_some() && t.is_dirty()) {
+        return false;
+    }
+    let before = crate::render::build_count();
+    crate::sync_layout();
+    crate::render::build_count() == before
 }
 
 /// `getBoundingClientRect()` — `(x, y, width, height)` in CSS px, from the last
@@ -159,7 +196,14 @@ pub fn bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
     let (ox, oy) = crate::render::bounds_of(tree::read_tree(|t| t.root))
         .map(|(rx, ry, _, _)| (rx, ry))
         .unwrap_or((0.0, 0.0));
-    Some((x - ox, y - oy, w, h))
+    // A scroll that no frame has painted yet moved this rectangle and nothing
+    // told the map. `row.scrollIntoView(); row.getBoundingClientRect()` answers
+    // the NEW position in a browser, on the same line, and a forced layout
+    // cannot produce it here — a scroll from a click handler is already inside
+    // the window's update. The shift is exact arithmetic instead; see
+    // [`crate::scroll::unpainted_shift`].
+    let (sx, sy) = crate::scroll::unpainted_shift(id);
+    Some((x - ox + sx, y - oy + sy, w, h))
 }
 
 /// `getComputedStyle(el)` — the useful subset, as `name=value` lines.

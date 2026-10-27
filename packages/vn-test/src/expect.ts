@@ -220,6 +220,12 @@ export class LocatorAssertions {
    */
   async toBeHovered(options: AssertOptions = {}): Promise<void> {
     await this.#poll("hovered", "true", options, async () => {
+      // This assertion's SUBJECT is the pointer, so it is placed before it is
+      // read even when the spec has not hovered yet — `not.toBeHovered()`
+      // before the first `hover()` is a claim about where the pointer is, and
+      // reading whatever the live user left there is how that claim used to
+      // become a coin flip. `styles()` re-places it on every poll.
+      await this.locator.app.settlePointer(true);
       const { hovered } = await this.locator.styles(options);
       return { pass: !!hovered, actual: String(!!hovered) };
     });

@@ -198,6 +198,10 @@ export class Locator {
   async click(options: { real?: boolean; button?: number; timeout?: number } = {}): Promise<void> {
     const { index } = await this.resolve(options.timeout ?? this.timeout);
     if (options.real) {
+      // A real click moves the pointer onto the node first, so it IS a hover
+      // gesture as far as gpui is concerned — record it, or the next style
+      // read would re-place the pointer somewhere else and undo it.
+      this.app.notePointer({ kind: "node", selector: this.selector, index });
       await this.app.send("mouse", {
         selector: this.selector,
         index,
@@ -218,14 +222,23 @@ export class Locator {
    * make `:hover` happen, because the hover ladder is decided by gpui's hit
    * test and not by anything we could synthesize. No cursor moves on the
    * screen and no window is activated.
+   *
+   * The placement is also REMEMBERED, and that half is what makes a hover
+   * assertion mean anything: gpui hit-tests against one `mouse_position` per
+   * window, fed by every `PlatformInput` move — ours and the live user's
+   * alike — so every later read that depends on the hit test re-places the
+   * pointer first (`VnApp.settlePointer`). Without it a hand on the mouse
+   * decides the result, which is exactly the flake this file used to have.
    */
   async hover(options: { timeout?: number } = {}): Promise<{ x: number; y: number; focused: number | null }> {
     const { index } = await this.resolve(options.timeout ?? this.timeout);
+    this.app.notePointer({ kind: "node", selector: this.selector, index });
     return this.app.send("mouse", { selector: this.selector, index, kind: "move" });
   }
 
   /** Moves the pointer away from everything, so a previous `hover()` ends. */
   async unhover(): Promise<void> {
+    this.app.notePointer({ kind: "point", x: 1, y: 1 });
     await this.app.send("mouse", { x: 1, y: 1, kind: "move" });
   }
 
@@ -292,12 +305,19 @@ export class Locator {
    * produced, which is true whether or not anything is hovering. `hovered`
    * says which world you are in.
    */
-  async styles(options: { timeout?: number } = {}): Promise<{
+  async styles(options: { timeout?: number; settlePointer?: boolean } = {}): Promise<{
     id: number;
     hovered: boolean;
     computed: Record<string, string[]>;
   }> {
     const { index } = await this.resolve(options.timeout ?? this.timeout);
+    // Both `hovered` and the `live` bucket are answers about gpui's hit test,
+    // and gpui hit-tests against a `mouse_position` the person at the machine
+    // can overwrite at any moment. So the last word on where the pointer is
+    // belongs to the harness: it goes back where this spec put it,
+    // immediately before the read. `settlePointer: false` opts out for a
+    // caller that genuinely wants whatever is there.
+    if (options.settlePointer !== false) await this.app.settlePointer();
     return this.app.send("styles", { selector: this.selector, index });
   }
 

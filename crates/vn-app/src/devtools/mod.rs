@@ -2522,6 +2522,12 @@ fn perf_data() -> Json {
         ("fps", Json::n(f64::from((fps * 10.0).round() / 10.0))),
         ("samples", Json::arr(tail)),
         ("nodes", Json::n(f64::from(vn_tree::devtools::node_count()))),
+        // Scroll containers registered with the wheel router last frame. It is
+        // here because it is the one structure a retained-render REPLAY cannot
+        // rebuild by itself (it is filled by the paint walk), so it is the
+        // number that says whether a cached scroll box still routes its wheel
+        // — see `crates/vn-tree/src/cache.rs`'s `Boundary`.
+        ("scrollChain", Json::n(f64::from(vn_tree::devtools::scroll_chain_count()))),
         ("windows", Json::n(window_ids().len() as f64)),
         // The detailed phase breakdown belongs to `VN_PERF`, which OWNS those
         // counters (it clears them when it reports). Saying whether it is on

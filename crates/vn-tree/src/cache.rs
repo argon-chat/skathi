@@ -43,12 +43,6 @@
 //! A boundary is refused when its subtree contains anything whose per-frame
 //! work does not survive a replay:
 //!
-//! * a **scroll container** — `vn_elements::scrollbar`'s wheel-routing registry
-//!   is rebuilt per frame from the paint walk, and a replayed subtree does not
-//!   walk, so the wheel would stop chaining. (Measured: caching a 5 000-node
-//!   scroll container takes the mutation frame from 96 ms to **6.04 ms**, so
-//!   this is the one exclusion worth removing next — it needs the registry to
-//!   become replayable first.)
 //! * **`<input>`/`<textarea>`, `<img>`, `<svg>`, `<video>`, `<lottie>`** —
 //!   native widgets and decoders that repaint on their own clock;
 //! * an **out-of-flow box** (`position: absolute|fixed`) or a **group anchor**
@@ -56,6 +50,17 @@
 //! * anything at all, while a transition/animation, a Lottie or a video is
 //!   running, or while a screen reader is attached — the AccessKit tree is
 //!   built during the frame and is not part of the replayed spans.
+//!
+//! A **scroll container** used to be on that list and is the one item that came
+//! off it (m23, `research/reports/m23/scroll.md`). It was refused because
+//! `vn_elements::scrollbar`'s wheel-routing registry is rebuilt from the paint
+//! walk and a replay does not walk, so a cached scroll box kept its pixels and
+//! lost its wheel. [`Boundary`] now records the run of registry entries the
+//! subtree's paint contributed and re-registers it, in place, on the frames
+//! that replay. On the 1 000-row scenario the mutation frame goes from 11.5 ms
+//! of work per draw to **3.6 ms** against the rest of the cache, and from
+//! 89.3 ms with no cache at all — the largest single number in the
+//! retained-render work, and the one this exclusion was costing.
 //!
 //! `VN_NO_CACHE=1` turns the whole thing off; `VN_CACHE_MIN=<n>` moves the
 //! smallest subtree worth a boundary (default [`MIN_NODES`]). A boundary costs
@@ -65,7 +70,10 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use gpui::{AnyElement, AppContext as _, Context, Entity, IntoElement, Window};
+use gpui::{
+    AnyElement, App, AppContext as _, Bounds, Context, Element, ElementId, Entity, GlobalElementId,
+    InspectorElementId, IntoElement, LayoutId, Pixels, Window,
+};
 
 use crate::render::{self, Inherited};
 use crate::tree::{Kind, Node, Tree};
@@ -95,14 +103,27 @@ struct Entry {
     ctx: Inherited,
     /// The parent's rectangle at the last render — "nothing outside resized me".
     parent_rect: Option<Rect>,
-    /// The box this boundary would be pinned at, as of the last frame.
+    /// The box this boundary would be pinned at, as of the last frame, or
+    /// `None` on the frame the node was first seen as a candidate.
     ///
     /// It is part of the freshness key, and that is the load-bearing half of the
     /// design: while a boundary replays, its own probe records the box we PINNED
     /// rather than the box its content would take, so the pin cannot correct
     /// itself. A boundary is therefore only offered once a frame that lowered
     /// the subtree for real has measured the same box twice running.
-    size: (f32, f32),
+    ///
+    /// **`None` is what makes "twice running" true rather than aspirational.**
+    /// Seeding a new entry with the size in hand made the first sighting
+    /// compare equal to itself and offer immediately — on ONE frame's
+    /// measurement, taken *before* the build that is happening now. When the
+    /// two disagree (the first frame a stylesheet lands on: the tree is being
+    /// lowered styled while `prev_size_of` still answers with the unstyled
+    /// box), the wrong box is pinned, the replay's own probe re-records it,
+    /// and nothing ever measures again. `apps/listperf` froze its whole page
+    /// at the unstyled 104 px row height that way — the exact shape
+    /// `research/reports/m23/perf-retained.md` §4.2 describes and the rule it
+    /// names, which until m23 the code did not actually implement.
+    size: Option<(f32, f32)>,
     /// Was a boundary actually offered last frame? A subtree that fell back to
     /// an ordinary build has no recording gpui can trust, so the first offer
     /// after one must force a render.
@@ -119,6 +140,18 @@ struct Entry {
     /// `bounds: null` for every tab in its nav the moment a Shift+Tab made the
     /// outer boundary replay.
     ids: Vec<u32>,
+    /// The run of `vn_elements::scrollbar` registry entries this subtree
+    /// contributed the last time it was painted for real.
+    ///
+    /// The wheel router's registry is rebuilt from the PAINT walk, and a
+    /// replayed subtree does not walk — which is why v1 refused a boundary
+    /// over a scroll container outright (§4.4 of the report). The span is
+    /// recorded by [`Boundary::paint`] around the inner element's paint and
+    /// re-registered, in place, on the frames that replay. Both of an entry's
+    /// halves survive: a `HitboxId` comes from a counter that is never reset,
+    /// and `reuse_prepaint` copies the recorded hitbox into this frame's hit
+    /// test WITH that id, so `should_handle_scroll` still answers for it.
+    chain: vn_elements::ChainSpan,
     /// gpui rendered this boundary since the last time it was offered.
     rendered: bool,
     /// Consecutive frames in which a boundary we believed CLEAN was re-rendered
@@ -178,6 +211,33 @@ fn enabled() -> bool {
                 })
                 .unwrap_or(false);
             c.set(i8::from(!off));
+        }
+        c.get() == 1
+    })
+}
+
+/// `VN_CACHE_NO_SCROLL=1` — put the scroll-container exclusion back.
+///
+/// Two jobs, and the second is why it is shipped rather than deleted after the
+/// measurement. It is the A/B switch the "cache on, scroll container refused"
+/// column of `research/reports/m23/scroll.md` §3 was measured with, so the 3×
+/// that removing the exclusion is worth stays reproducible by anyone reading
+/// the report. And it is the one-flag way to answer "is this a cached scroll
+/// box?" about a suspected rendering bug in the field, without giving up the
+/// rest of the cache the way `VN_NO_CACHE=1` does.
+fn refuse_scroll_containers() -> bool {
+    thread_local! {
+        static ON: Cell<i8> = const { Cell::new(-1) };
+    }
+    ON.with(|c| {
+        if c.get() < 0 {
+            let on = std::env::var("VN_CACHE_NO_SCROLL")
+                .map(|v| {
+                    let v = v.trim().to_ascii_lowercase();
+                    !(v.is_empty() || v == "0" || v == "false" || v == "off")
+                })
+                .unwrap_or(false);
+            c.set(i8::from(on));
         }
         c.get() == 1
     })
@@ -277,10 +337,16 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     let Some(cs) = &node.computed else {
         return false;
     };
-    // A scroll container: `vn_elements::scrollbar`'s wheel-routing registry is
-    // per-frame and rebuilt from the paint walk (see the module docs).
-    if cs.base.overflow.x == Some(gpui::Overflow::Scroll)
-        || cs.base.overflow.y == Some(gpui::Overflow::Scroll)
+    // A scroll container is NO LONGER refused by default. The wheel registry
+    // it contributes to is rebuilt from the paint walk and a replay does not
+    // walk, so the span it pushed is recorded and re-registered in place
+    // instead — see [`Boundary`]. That exclusion was the last one with a known
+    // fix and the most expensive one there has been (11.5 ms → 3.6 ms per draw
+    // on the 1 000-row scenario); [`refuse_scroll_containers`] is the switch
+    // that puts it back, for the A/B and for a field diagnosis.
+    if refuse_scroll_containers()
+        && (cs.base.overflow.x == Some(gpui::Overflow::Scroll)
+            || cs.base.overflow.y == Some(gpui::Overflow::Scroll))
     {
         return true;
     }
@@ -409,8 +475,11 @@ pub(crate) fn boundary<V: 'static>(
             sub_rev,
             ctx,
             parent_rect,
-            size,
+            // NOT `Some(size)`: the first sighting must not compare equal to
+            // itself and offer on one frame's measurement — see [`Entry::size`].
+            size: None,
             ids: Vec::new(),
+            chain: Default::default(),
             rendered: false,
             misses: 0,
             cooldown: 0,
@@ -436,7 +505,10 @@ pub(crate) fn boundary<V: 'static>(
             return None;
         }
         let fresh =
-            e.sub_rev == sub_rev && e.ctx == ctx && e.parent_rect == parent_rect && e.size == size;
+            e.sub_rev == sub_rev
+                && e.ctx == ctx
+                && e.parent_rect == parent_rect
+                && e.size == Some(size);
         if !fresh {
             // Lower it the ordinary way this frame. That is what re-measures it
             // honestly — a wrapper would pin the very box we have just decided
@@ -445,8 +517,9 @@ pub(crate) fn boundary<V: 'static>(
             e.sub_rev = sub_rev;
             e.ctx = ctx;
             e.parent_rect = parent_rect;
-            e.size = size;
+            e.size = Some(size);
             e.ids.clear();
+            e.chain = Default::default();
             e.offered = false;
             return None;
         }
@@ -465,6 +538,7 @@ pub(crate) fn boundary<V: 'static>(
         if !std::mem::replace(&mut e.offered, true) {
             e.entity = None;
             e.ids.clear();
+            e.chain = Default::default();
         }
         let entity = e
             .entity
@@ -478,7 +552,113 @@ pub(crate) fn boundary<V: 'static>(
     // last frame are the rectangles it has now — the replay is only taken when
     // the bounds are identical, and a re-render overwrites them anyway.
     carry_bounds(id, win);
-    Some(entity.cached(wrapper_style(node, size)).into_any_element())
+    Some(
+        Boundary { id, inner: entity.cached(wrapper_style(node, size)).into_any_element() }
+            .into_any_element(),
+    )
+}
+
+/// The one thing a replay has to be given back by hand: the scroll chain.
+///
+/// Everything else a boundary needs is either copied forward by gpui
+/// (`reuse_prepaint` / `reuse_paint`) or carried by us before the element is
+/// even built ([`carry_bounds`]). `vn_elements::scrollbar`'s wheel-routing
+/// registry is neither: it is rebuilt from the **paint walk**, so a subtree
+/// that replays contributes nothing to it and every scroll container inside it
+/// falls out of the chain — the box keeps its pixels and stops scrolling. That
+/// is the whole of why v1 refused to cache a scroll container.
+///
+/// This wrapper brackets the cached element's paint and does the bookkeeping
+/// the walk would have done:
+///
+/// * **painted for real** — the subtree pushed its own entries, so record the
+///   run as this boundary's span;
+/// * **replayed** — it pushed nothing, so re-push the recorded run, *here*,
+///   which is exactly the position in the walk the subtree occupied. The
+///   registry is read innermost-first and that order is positional, so
+///   re-registering in place is what keeps a nested box ahead of the box that
+///   contains it.
+///
+/// It contributes no layout of its own: `request_layout` hands back the inner
+/// element's `LayoutId`, so taffy sees the same one leaf it saw before.
+struct Boundary {
+    id: u32,
+    inner: AnyElement,
+}
+
+impl IntoElement for Boundary {
+    type Element = Self;
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for Boundary {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.inner.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.inner.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let mark = vn_elements::scrollbar::chain_mark();
+        self.inner.paint(window, cx);
+        let span = vn_elements::scrollbar::chain_since(mark);
+        if span.is_empty() {
+            // Nothing registered: either this subtree really has no scroll
+            // container (the span is empty too, and this is a no-op), or gpui
+            // replayed the recording and the walk that would have registered
+            // them never ran.
+            with_entry(self.id, |e| vn_elements::scrollbar::chain_replay(&e.chain));
+        } else {
+            with_entry(self.id, |e| e.chain = span);
+        }
+    }
+}
+
+/// Runs `f` against one boundary's entry, if it still has one.
+fn with_entry(id: u32, f: impl FnOnce(&mut Entry)) {
+    ENTRIES.with(|m| {
+        if let Some(e) = m.borrow_mut().get_mut(&id) {
+            f(e);
+        }
+    });
 }
 
 /// Refills the live bounds map with the subtree's rectangles.
@@ -568,14 +748,18 @@ mod tests {
         assert_eq!(shape(row), (5, false), "the row plus its four cells");
     }
 
-    /// A scroll container anywhere inside refuses the boundary, however big the
-    /// subtree is. `vn_elements::scrollbar`'s wheel-routing registry is rebuilt
-    /// from the paint walk every frame, and a replayed subtree does not walk —
-    /// so a cached scroll box would keep its pixels and lose its wheel.
+    /// A scroll container no longer refuses the boundary — anywhere inside it,
+    /// or as the boundary node itself.
+    ///
+    /// It was the one exclusion with a real price (11.5 ms → 3.6 ms per draw on
+    /// the 1 000-row scenario) and the one with a known fix: the registry entry a
+    /// scroll box contributes to the wheel router is recorded per boundary and
+    /// re-registered on a replay ([`Boundary`]), rather than being rebuilt by a
+    /// paint walk that does not happen.
     #[test]
-    fn a_scroll_container_anywhere_inside_refuses_the_boundary() {
+    fn a_scroll_container_no_longer_refuses_the_boundary() {
         set_stylesheet(".scrolls { overflow: scroll }".into());
-        let (outer, plain) = with_tree(|t| {
+        let (outer, plain, box_) = with_tree(|t| {
             let root = t.create_root();
             let div = t.intern("div");
             let outer = t.create_element(div);
@@ -587,21 +771,44 @@ mod tests {
             t.insert(plain, outer, 0);
             t.insert(deep, plain, 0);
             t.insert(box_, deep, 0);
-            (outer, plain)
+            (outer, plain, box_)
         });
         restyle_all();
         forget_shapes();
-        assert!(shape(outer).1, "the scroll box is three levels down and still blocks");
-        assert!(shape(plain).1, "and it blocks every ancestor of itself");
+        assert_eq!(shape(outer), (4, false), "four nodes, and the scroll box does not block");
+        assert!(!shape(plain).1, "nor does it block any ancestor of itself");
+        assert!(!shape(box_).1, "nor itself");
+    }
+
+    /// The things that DO still refuse one, so removing the scroll-container
+    /// exclusion cannot be read as "the predicate stopped refusing".
+    #[test]
+    fn a_replaced_element_still_refuses_the_boundary() {
+        let (wrap, plain) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let img = t.intern("img");
+            let wrap = t.create_element(div);
+            let plain = t.create_element(div);
+            let pic = t.create_element(img);
+            t.insert(wrap, root, 0);
+            t.insert(plain, wrap, 0);
+            t.insert(pic, plain, 0);
+            (wrap, plain)
+        });
+        restyle_all();
+        forget_shapes();
+        assert!(shape(wrap).1, "an <img> two levels down blocks");
+        assert!(shape(plain).1, "and every ancestor of it");
     }
 
     /// The shape is memoised against the subtree revision, because deriving it
     /// is the walk the boundary exists to avoid. A mutation has to be enough to
-    /// re-derive it — otherwise a `<div>` that becomes a scroll container would
-    /// keep a boundary that is no longer sound.
+    /// re-derive it — otherwise a `<div>` that becomes a replaced element or an
+    /// out-of-flow box would keep a boundary that is no longer sound.
     #[test]
     fn the_shape_memo_follows_the_subtree_revision() {
-        set_stylesheet(".scrolls { overflow: scroll }".into());
+        set_stylesheet(".floats { position: absolute }".into());
         let (wrap, inner) = with_tree(|t| {
             let root = t.create_root();
             let div = t.intern("div");
@@ -613,9 +820,9 @@ mod tests {
         });
         restyle_all();
         forget_shapes();
-        assert_eq!(shape(wrap), (2, false), "nothing scrolls yet");
+        assert_eq!(shape(wrap), (2, false), "nothing is out of flow yet");
 
-        with_tree(|t| t.set_class(inner, "scrolls"));
+        with_tree(|t| t.set_class(inner, "floats"));
         restyle_all();
         assert!(shape(wrap).1, "the memo was invalidated by the mutation, not by a timer");
     }

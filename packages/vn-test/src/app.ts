@@ -94,9 +94,35 @@ function hookExit() {
   }
 }
 
+/**
+ * Where this harness last put the pointer: a node (resolved fresh every time,
+ * because a re-render moves boxes) or a window coordinate.
+ */
+export type PointerIntent =
+  | { kind: "node"; selector: string; index: number }
+  | { kind: "point"; x: number; y: number };
+
 export class VnApp {
   readonly locatorDefaults: LocatorOptions;
   #closed = false;
+  /**
+   * The pointer, as a FACT THIS HARNESS OWNS rather than one it reads.
+   *
+   * gpui decides `:hover` from its own `mouse_position`, and that is a single
+   * per-window value fed by whatever `PlatformInput` arrived last — the
+   * synthetic move our `mouse` command delivers, *and every real one the
+   * person at the machine makes*. So a spec that hovered and then asserted was
+   * asserting about the LIVE USER'S POINTER from the moment they moved it:
+   * `hover.spec.ts` passed alone and failed inside a full run, on a different
+   * test each time, because a full run is long enough for a hand to move.
+   *
+   * The fix is not to retry harder — a retry re-reads the same overwritten
+   * value. It is for the harness to place the pointer itself and to RE-PLACE
+   * it immediately before every read that depends on it (see
+   * [`settlePointer`]), so the last word on where the pointer is always
+   * belongs to the test.
+   */
+  #pointer: PointerIntent | null = null;
 
   constructor(
     readonly wire: Wire,
@@ -124,6 +150,50 @@ export class VnApp {
    */
   locator(selector: string, options: LocatorOptions = {}): Locator {
     return new Locator(this, selector, { ...this.locatorDefaults, ...options });
+  }
+
+  // -- the pointer ----------------------------------------------------------
+
+  /**
+   * Records where a gesture just put the pointer. Called by `locator.hover()`,
+   * `locator.unhover()` and a real `locator.click()` — every command that
+   * delivers a `PlatformInput` move.
+   */
+  notePointer(intent: PointerIntent): void {
+    this.#pointer = intent;
+  }
+
+  /**
+   * Puts the pointer back where this harness last put it, and waits for the
+   * host to have processed the move.
+   *
+   * Called before every hit-test-dependent read (`locator.styles()`, which
+   * carries both `hovered` and the `live` style bucket). It is a no-op until
+   * something has placed the pointer, so a spec that never hovers never pays
+   * for it and never has a stray move delivered into it.
+   *
+   * `force` is for an assertion whose SUBJECT is the pointer
+   * (`toBeHovered`, and its `.not`): a claim that the pointer is or is not
+   * over an element is only meaningful if the harness knows where it is, so
+   * those settle it to "away" (1, 1) rather than reading whatever the person
+   * at the machine left behind.
+   */
+  async settlePointer(force = false): Promise<void> {
+    if (this.#closed) return;
+    let intent = this.#pointer;
+    if (!intent) {
+      if (!force) return;
+      intent = { kind: "point", x: 1, y: 1 };
+      this.#pointer = intent;
+    }
+    const args =
+      intent.kind === "node"
+        ? { selector: intent.selector, index: intent.index, kind: "move" }
+        : { x: intent.x, y: intent.y, kind: "move" };
+    // A failure here is not the assertion's failure: the node may have gone
+    // away between the hover and the read, and the matcher's own retry is the
+    // thing that should report that.
+    await this.send("mouse", args).catch(() => {});
   }
 
   // -- raw commands ---------------------------------------------------------
