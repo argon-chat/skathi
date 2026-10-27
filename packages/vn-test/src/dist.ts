@@ -22,6 +22,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { reapOrphans } from "./reap";
 
 /** …/packages/vn-test/src -> the workspace root. */
 export const REPO = resolve(import.meta.dir, "../../..");
@@ -198,6 +199,9 @@ export function stagedExe(source = DEFAULT_EXE): string {
   }
   const dir = join(WORK_DIR, "bin");
   mkdirSync(dir, { recursive: true });
+  // A host still running from a dead run is what keeps its copy locked, so the
+  // reap goes first and the sweep below can then delete what it freed.
+  reapOrphans();
   // Leftovers from runs that died before their exit hook: anything still locked
   // belongs to a live process and simply refuses to delete, which is the test.
   for (const name of readdirSync(dir)) {

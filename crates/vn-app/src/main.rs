@@ -37,6 +37,7 @@ mod devtools;
 #[cfg(vn_devtools)]
 mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child registry
 mod json; // the dev transport, the devtools wire and vn.config.json share one codec
+mod owner; // VN_OWNER_PID: a test host dies with the runner that launched it
 mod perf;
 mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWINDOW.md)
 #[cfg(feature = "prod")]
@@ -983,6 +984,8 @@ fn install_http_client(app: gpui::Application) -> gpui::Application {
 }
 
 fn main() {
+    // First, so a host whose runner is already gone never opens a window.
+    owner::watch();
     // `--devtools` rewrites two environment variables (the dist slot this
     // process publishes into, and which instance it prefers), so it has to run
     // before anything reads either — which the logger and the profiler both

@@ -439,6 +439,12 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
 
   const env: Record<string, string> = { ...(process.env as Record<string, string>), VN_DIST: slotDir };
   if (options.window) env.VN_WINDOW = `${options.window[0]}x${options.window[1]}`;
+  // The host holds a handle on THIS process and terminates itself when it
+  // exits — the one kill path that survives the runner being killed
+  // (crates/vn-app/src/owner.rs). Not for `keepAlive`, whose whole point is
+  // to outlive the run.
+  if (options.keepAlive) delete env.VN_OWNER_PID;
+  else env.VN_OWNER_PID = String(process.pid);
   Object.assign(env, options.env ?? {});
 
   log(`[vn-test] ${label}: launching ${exe} on ${slotDir}`);

@@ -150,6 +150,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_Storage_Xps",
     "Win32_System_SystemInformation",
+    # `OpenProcess` + `WaitForSingleObject` — `VN_OWNER_PID` (src/owner.rs).
+    "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
     # `RtlGetVersion` — the only version query Windows does not lie about for an
