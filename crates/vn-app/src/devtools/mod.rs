@@ -2370,7 +2370,7 @@ fn cmd_wheel(
             app,
         );
         window.dispatch_event(
-            gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+            gpui::PlatformInput::Scroll(gpui::ScrollEvent {
                 position,
                 // Negated: gpui's sign is the platform's (positive = the wheel
                 // turned away from you = a scroll UP), the DOM's is the
@@ -2378,6 +2378,9 @@ fn cmd_wheel(
                 delta: gpui::ScrollDelta::Pixels(gpui::Point::new(gpui::px(-dx), gpui::px(-dy))),
                 modifiers: gpui::Modifiers::default(),
                 touch_phase: gpui::TouchPhase::Moved,
+                // A wheel, as `gpui_windows` reports one — not a touch pan,
+                // which gpui would route through its gesture recognizer.
+                source: gpui::ScrollSource::Pointer,
             }),
             app,
         );

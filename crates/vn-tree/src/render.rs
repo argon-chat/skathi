@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use gpui::prelude::*;
 use gpui::{
     div, AnyElement, App, ClickEvent, Context, Empty, FocusHandle, KeyDownEvent, KeyUpEvent,
-    MouseButton, MouseDownEvent, MouseUpEvent, Overflow, Point, ScrollHandle, ScrollWheelEvent,
+    MouseButton, MouseDownEvent, MouseUpEvent, Overflow, Point, ScrollHandle, ScrollEvent,
     SharedString, Window, WindowControlArea,
 };
 use vn_css::{WindowControl, WindowDrag};
@@ -974,7 +974,7 @@ fn scrollbar_for<V: 'static>(
     //
     // Two paths reach here that gpui's own listener never covers: a wheel the
     // router TOOK OVER (it stops propagation, so the renderer's own
-    // `on_scroll_wheel` listeners do not run), and a thumb drag or track click,
+    // `on_scroll` listeners do not run), and a thumb drag or track click,
     // which moves the offset with no wheel event anywhere in sight — so before
     // this, `@scroll` never fired for a scrollbar drag at all.
     //
@@ -1721,7 +1721,7 @@ fn build_node<V: 'static>(
             // in reverse registration order, so gpui's runs first and the
             // handle already holds the new offset when this one reads it.
             if let Some(scroll) = scroll_handle.clone().filter(|_| bit(tree::EV_SCROLL)) {
-                d = d.on_scroll_wheel(cx.listener(move |_, _: &ScrollWheelEvent, window, cx| {
+                d = d.on_scroll(cx.listener(move |_, _: &ScrollEvent, window, cx| {
                     // gpui offsets are <= 0 (content shifted up/left); CSS
                     // scrollTop/scrollLeft count down/right as positive.
                     let offset = scroll.offset();
@@ -3292,7 +3292,7 @@ where
         }));
     }
     if bit(tree::EV_WHEEL) {
-        e = e.on_scroll_wheel(cx.listener(move |_, ev: &ScrollWheelEvent, window, cx| {
+        e = e.on_scroll(cx.listener(move |_, ev: &ScrollEvent, window, cx| {
             let (dx, dy) = dom_wheel_delta(ev.delta.pixel_delta(gpui::px(16.0)));
             let payload = EventPayload {
                 a: dx,

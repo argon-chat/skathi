@@ -29,8 +29,13 @@ exclude = ["vendor", "crates/vn-thorvg-sys/tools/regen-bindings"]
 # Replicated from vendor/zed's workspace root: gpui depends on async-task
 # APIs that only exist on this fork rev, and [patch] sections apply only from
 # THIS workspace root, never from a path dependency's own workspace.
+#
+# m24: moved with zed#65274 from smol-rs rev b4486cd7 to zed-industries' pin of
+# the waker-identity fix under review as smol-rs/async-task#108 (a clone of a
+# task waker got a different vtable than the original, so `will_wake` lied and
+# futures were woken over and over).
 [patch.crates-io]
-async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
 
 # vendor/redjs is a git submodule (https://github.com/argon-chat/redjs) consumed as a
 # path dep (vendor/redjs/redjs). NOTE: it currently path-depends on `../../redcss`

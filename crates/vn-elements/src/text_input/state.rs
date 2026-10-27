@@ -157,6 +157,18 @@ fn take_echo(pending: &mut VecDeque<String>, value: &str) -> bool {
     }
 }
 
+/// The keystroke gpui synthesizes when one modifier is pressed and released
+/// with nothing in between (zed#64537 hands it to interceptors): one of five
+/// fixed names, no character, no modifiers held.
+fn is_standalone_modifier(keystroke: &gpui::Keystroke) -> bool {
+    keystroke.key_char.is_none()
+        && keystroke.modifiers == gpui::Modifiers::default()
+        && matches!(
+            keystroke.key.as_str(),
+            "shift" | "control" | "alt" | "platform" | "function"
+        )
+}
+
 #[derive(Clone)]
 struct EditSnapshot {
     content: String,
@@ -452,6 +464,15 @@ impl TextInputState {
     ) {
         self.suppress_text_input = false;
         if !self.focus_handle.is_focused(window) {
+            return;
+        }
+        // Since zed#64537 interceptors also receive the keystroke gpui
+        // synthesizes for a modifier pressed and released ALONE — on the
+        // RELEASE, as `key: "shift"` with no modifiers. A browser fires that
+        // key's `keydown` on the press, so turning this into one would be a
+        // keydown at keyup time; it was never delivered before the merge, and
+        // it is not now.
+        if is_standalone_modifier(&event.keystroke) {
             return;
         }
         let Some(on_key_down) = self.on_key_down.clone() else {
@@ -1440,6 +1461,24 @@ mod tests {
         assert_eq!(utf16_offset_to_utf8("é🙂", 0), 0);
         assert_eq!(utf16_offset_to_utf8("é🙂", 1), "é".len());
         assert_eq!(utf16_offset_to_utf8("é🙂", 3), "é🙂".len());
+    }
+
+    /// Only gpui's synthesized lone-modifier stroke is filtered; a real key
+    /// with a modifier held, or a modifier-named key carrying text, is not.
+    #[test]
+    fn a_released_lone_modifier_is_not_a_keydown() {
+        let stroke = |key: &str, modifiers: gpui::Modifiers, key_char: Option<&str>| gpui::Keystroke {
+            key: key.into(),
+            modifiers,
+            key_char: key_char.map(Into::into),
+        };
+        for key in ["shift", "control", "alt", "platform", "function"] {
+            assert!(is_standalone_modifier(&stroke(key, gpui::Modifiers::default(), None)));
+        }
+        assert!(!is_standalone_modifier(&stroke("a", gpui::Modifiers::default(), Some("a"))));
+        assert!(!is_standalone_modifier(&stroke("a", gpui::Modifiers::shift(), Some("A"))));
+        assert!(!is_standalone_modifier(&stroke("shift", gpui::Modifiers::control(), None)));
+        assert!(!is_standalone_modifier(&stroke("f12", gpui::Modifiers::default(), None)));
     }
 
     #[test]

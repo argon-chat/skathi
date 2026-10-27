@@ -57,7 +57,7 @@ use std::time::{Duration, Instant};
 use gpui::{
     px, size, point, App, Axis, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hitbox,
     HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Position, ScrollHandle, ScrollWheelEvent, Style,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Position, ScrollHandle, ScrollEvent, Style,
     Window, WindowControlArea, fill, relative,
 };
 
@@ -770,7 +770,7 @@ impl Element for Scrollbar {
             let hitbox_id = viewport.id;
             let on_wheel = self.on_wheel.clone();
             let on_scrolled = self.on_scrolled.clone();
-            window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                 if !phase.capture() || !hitbox_id.should_handle_scroll(window) {
                     return;
                 }
@@ -855,7 +855,7 @@ impl Element for Scrollbar {
                 // then letting the event carry on to the bubble phase would
                 // fire the app's `@wheel` handler TWICE for one physical
                 // wheel — once from `on_wheel` below and once from the
-                // renderer's own `on_scroll_wheel` listener on this same node.
+                // renderer's own `on_scroll` listener on this same node.
                 let will_stop = (usable && can_move(&handle, axis, delta))
                     || !overscroll.chains(axis);
                 if !will_stop {
