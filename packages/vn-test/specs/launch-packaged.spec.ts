@@ -1,0 +1,198 @@
+// Single instance and protocols in a PACKAGED exe (docs/LAUNCH.md,
+// docs/PACKAGING.md §3).
+//
+//   bun test packages/vn-test/specs/launch-packaged.spec.ts
+//
+// launch.spec.ts holds these down on a dev host; this file is about the
+// shipped artifact, where two things differ and both matter:
+//
+// * the launch keys come from the payload's META, not from a manifest beside
+//   the exe — so a `vn build` that dropped them would ship an app that
+//   silently runs N copies;
+// * the declared `protocols` are registered BY THE EXE ITSELF at startup,
+//   with no `--vn-dist` in the command (owner decision: per user, idempotent,
+//   never over another app's scheme).
+//
+// The app is the `launch` fixture's code under a vn.config.json written here,
+// so its scheme is test-only and per run (`vntest-pkg-<runner pid>`). The key
+// is deleted in teardown whatever happened, and the last test asserts the
+// hive is clean. The host is whatever `vn build` would find (`bareHost`).
+
+import { afterAll, describe, expect as bunExpect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { expect, launch, packagedExe, REPO, WORK_DIR } from "../src/index";
+import { KIND, NAMES, readVnpk } from "../../vue-native/cli/vnpk";
+
+const T = 30_000;
+/** A packaged build; a missing host is built (debug) once — see `bareHost`. */
+const BUILD_T = 20 * 60_000;
+
+const scheme = `vntest-pkg-${process.pid}`;
+const id = "gl.argon.vn-test.launch-packaged";
+const keyOf = (s: string) => `HKCU\\Software\\Classes\\${s}`;
+const regExists = (key: string) => spawnSync("reg", ["query", key], { stdio: "ignore" }).status === 0;
+/** A key's value (`/ve` = the default one), or null. */
+function regValue(key: string, name: string | null): string | null {
+  const r = spawnSync("reg", ["query", key, ...(name === null ? ["/ve"] : ["/v", name])], { encoding: "utf8" });
+  if (r.status !== 0) return null;
+  const line = r.stdout.split(/\r?\n/).find((l) => /\sREG_SZ\s/.test(l));
+  return line ? line.replace(/^.*?\sREG_SZ\s+/, "") : "";
+}
+
+// The app: the launch fixture's source, this run's config.
+const appDir = join(WORK_DIR, "launch-packaged", `app-${process.pid}`);
+rmSync(appDir, { recursive: true, force: true });
+mkdirSync(appDir, { recursive: true });
+cpSync(join(REPO, "packages", "vn-test", "fixtures", "launch", "src"), join(appDir, "src"), { recursive: true });
+writeFileSync(
+  join(appDir, "vn.config.json"),
+  JSON.stringify(
+    {
+      name: "vn-test-launch-packaged",
+      productName: "vn-test launch (packaged)",
+      version: "0.0.1",
+      id,
+      singleInstance: true,
+      raiseOnSecondInstance: true,
+      protocols: [scheme],
+      assets: [],
+      window: { title: "vue-native — launch, packaged (fixture)", width: 480, height: 320 },
+    },
+    null,
+    2,
+  ),
+);
+
+// Nothing of ours may exist before the exe starts: the registration below
+// must be the exe's own doing.
+spawnSync("reg", ["delete", keyOf(scheme), "/f"], { stdio: "ignore" });
+
+const scratch = join(WORK_DIR, "launch-packaged", `cwd-${process.pid}`);
+mkdirSync(scratch, { recursive: true });
+const doc = join(scratch, "y.txt");
+writeFileSync(doc, "a document the second launch names\n");
+
+const p = await packagedExe({ app: appDir, label: "launch-packaged" });
+const app = await launch({
+  app: "launch-packaged",
+  exe: p.exe,
+  packaged: p.name,
+  label: "launch-packaged",
+  env: { VN_SINGLE_INSTANCE: "1" },
+  launchTimeout: BUILD_T,
+});
+
+afterAll(() => {
+  app.close();
+  // Belt and braces: the uninstaller's hook first, then the key by name.
+  spawnSync(p.exe, ["--vn-unregister-protocols"], { cwd: REPO, stdio: "ignore", timeout: 15_000 });
+  spawnSync("reg", ["delete", keyOf(scheme), "/f"], { stdio: "ignore" });
+  rmSync(scratch, { recursive: true, force: true });
+  rmSync(appDir, { recursive: true, force: true });
+});
+
+const secondEnv = () => ({
+  ...(process.env as Record<string, string>),
+  VN_SINGLE_INSTANCE: "1",
+  VN_LAUNCH_RAISE: "off",
+  VN_OWNER_PID: String(process.pid),
+});
+
+type Record_ = {
+  opened: string[];
+  own: { argv: string[]; cwd: string; url: string | null; paths: string[]; singleInstance: boolean };
+  events: { argv: string[]; cwd: string; url: string | null; paths: string[]; source: string }[];
+  params: { targetURL: string | null; files: number }[];
+};
+const rec = async (): Promise<Record_> => JSON.parse(await app.eval("JSON.stringify(__VN_TEST_LAUNCH__)"));
+async function untilEvents(n: number, ms = 5_000): Promise<Record_> {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const r = await rec();
+    if (r.events.length >= n || Date.now() > deadline) return r;
+    await new Promise((res) => setTimeout(res, 50));
+  }
+}
+
+describe("the packaged exe", () => {
+  test("carries the launch keys in its payload and holds the lock", async () => {
+    // The payload that was stamped, read back: META's `launch` is what the
+    // host enforces before anything else exists.
+    const v = readVnpk(new Uint8Array(readFileSync(p.result.vnpk)));
+    const meta = v.find(KIND.META, NAMES.META);
+    bunExpect(meta).toBeDefined();
+    const launchMeta = JSON.parse(new TextDecoder().decode(v.bytes(meta!))).launch;
+    bunExpect(launchMeta).toMatchObject({ id, singleInstance: true, raiseOnSecondInstance: true, protocols: [scheme] });
+    const r = await rec();
+    bunExpect(r.own.singleInstance).toBe(true);
+    bunExpect(r.params).toEqual([{ targetURL: null, files: 0 }]);
+  }, T);
+
+  test("registered its declared protocol at startup: per user, our marker, no dev slot", async () => {
+    const key = keyOf(scheme);
+    bunExpect(regValue(key, null)).toBe(`URL:${scheme}`);
+    bunExpect(regValue(key, "URL Protocol")).toBe("");
+    bunExpect(regValue(key, "VnOwner")).toBe(id);
+    bunExpect(regValue(`${key}\\DefaultIcon`, null)?.toLowerCase()).toBe(`"${p.exe.toLowerCase()}",0`);
+    const command = regValue(`${key}\\shell\\open\\command`, null) ?? "";
+    bunExpect(command.toLowerCase()).toBe(`"${p.exe.toLowerCase()}" --vn-protocol-launch -- "%1"`);
+    bunExpect(await app.eval(`__VN_TEST_LAUNCH__.api.isRegistered(${JSON.stringify(scheme)})`)).toBe(true);
+    const { entries } = await app.logs(0);
+    bunExpect(entries.some((e) => e.text.includes(`registered ${scheme}://`))).toBe(true);
+  }, T);
+});
+
+describe("a second launch of the packaged exe", () => {
+  test("forwards its argv, cwd and paths to the running one and exits 0", async () => {
+    const r = spawnSync(p.exe, ["--open", doc], { cwd: scratch, env: secondEnv(), timeout: 15_000 });
+    bunExpect(r.status).toBe(0);
+    const got = await untilEvents(1);
+    bunExpect(got.events.length).toBe(1);
+    const ev = got.events[0];
+    bunExpect(ev.source).toBe("second-instance");
+    bunExpect(ev.argv.slice(1)).toEqual(["--open", doc]);
+    bunExpect(ev.cwd.toLowerCase()).toBe(scratch.toLowerCase());
+    bunExpect(ev.paths).toEqual([doc]);
+    await expect(app.locator(".fixture")).toHaveText("forwarded launches: 1");
+  }, T);
+
+  test("a link to its scheme, opened through the SHELL, reaches the running instance", async () => {
+    // ShellExecuteExW → the command the exe registered for itself → a second
+    // process of the packaged exe → the instance pipe → `launch`.
+    const before = (await rec()).events.length;
+    // (Quotes and spaces byte-exact are launch.spec's, through a hand-built
+    // command line: what the shell itself does to them is Windows' business.)
+    const url = `${scheme}://open/item?id=7&q=x`;
+    await app.eval(`__VN_TEST_LAUNCH__.api.open(${JSON.stringify(url)})`);
+    const got = await untilEvents(before + 1, 15_000);
+    bunExpect(got.opened.at(-1)).toBe("ok");
+    bunExpect(got.events.length).toBe(before + 1);
+    bunExpect(got.events.at(-1)!.url).toBe(url);
+    bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
+  }, T);
+});
+
+describe("uninstalling", () => {
+  test("--vn-unregister-protocols removes the exe's keys and exits without a window", async () => {
+    const r = spawnSync(p.exe, ["--vn-unregister-protocols"], {
+      cwd: REPO,
+      env: secondEnv(),
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    bunExpect(r.status).toBe(0);
+    bunExpect(r.stdout).toContain(`unregistered ${scheme}:`);
+    bunExpect(regExists(keyOf(scheme))).toBe(false);
+    bunExpect(await app.eval(`__VN_TEST_LAUNCH__.api.isRegistered(${JSON.stringify(scheme)})`)).toBe(false);
+  }, T);
+
+  test("nothing went wrong in the primary", async () => {
+    await app.expectNoErrors();
+  }, T);
+
+  test("the hive is clean", () => {
+    bunExpect(regExists(keyOf(scheme))).toBe(false);
+  });
+});
