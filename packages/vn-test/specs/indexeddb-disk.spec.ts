@@ -166,6 +166,19 @@ describe("IndexedDB on disk, dev host", () => {
     await quit(a);
     bunExpect(legible(i.folder, key, value, `${value}-2`)).toEqual([]);
 
+    // `setStorageFolder(path)` with no options — the owner's own sketch — at
+    // boot and again late: neither is a decryption.
+    a = await host("sealed", ["keep"]);
+    await expect(a.locator("#status")).toHaveText("ready");
+    i = await info(a);
+    bunExpect(i.mode).toBe("encrypted");
+    bunExpect(await scenario(a, "get", key)).toBe(value);
+    const kept = JSON.parse(await scenario(a, "late", "keep")) as IdbInfo;
+    bunExpect(kept.key).toBe(true);
+    bunExpect(existsSync(join(i.folder, "key.retire")), "no decryption was queued for the next start").toBe(false);
+    await quit(a);
+    bunExpect(legible(i.folder, key, value, `${value}-2`)).toEqual([]);
+
     // An explicit `{ encrypted: false }`: decrypted in place, the key retired —
     // and the same scan now FINDS the plaintext, so it was a real check.
     a = await host("sealed", ["decrypt"]);

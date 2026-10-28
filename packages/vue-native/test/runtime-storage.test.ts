@@ -19,7 +19,7 @@ describe("appStorage", () => {
     const folder = rt.appStorage.getUserFolder("APPDATA", "myAppFolder");
     expect(folder).toBe("C:\\Users\\test\\AppData\\Roaming\\myAppFolder");
     expect(rt.appStorage.setStorageFolder(folder)).toBe(folder);
-    expect(rt.host.storage.setCalls).toEqual([{ path: folder, encrypted: false }]);
+    expect(rt.host.storage.setCalls).toEqual([{ path: folder, encrypted: "keep" }]);
   });
 
   test("the subfolder is optional", () => {
@@ -61,14 +61,19 @@ describe("appStorage", () => {
   test("setStorageFolder passes the encryption flag through and reports it back", () => {
     const rt = createRuntime();
     rt.appStorage.setStorageFolder("C:\\data", { encrypted: true });
-    expect(rt.host.storage.setCalls).toEqual([{ path: "C:\\data", encrypted: true }]);
+    expect(rt.host.storage.setCalls).toEqual([{ path: "C:\\data", encrypted: "true" }]);
     expect(rt.appStorage.encrypted).toBe(true);
     expect(rt.appStorage.folder).toBe("C:\\data");
-    // `{}`, a missing options object and `{ encrypted: false }` are all "no".
-    rt.appStorage.setStorageFolder("C:\\plain");
-    rt.appStorage.setStorageFolder("C:\\plain", {});
-    rt.appStorage.setStorageFolder("C:\\plain", { encrypted: false });
-    expect(rt.host.storage.setCalls.slice(1).every((c) => c.encrypted === false)).toBe(true);
+    // A missing options object and `{}` say nothing: the format is KEPT —
+    // an encrypted folder must not come out of a move in plaintext.
+    rt.appStorage.setStorageFolder("C:\\moved");
+    rt.appStorage.setStorageFolder("C:\\moved", {});
+    expect(rt.host.storage.setCalls.slice(1).map((c) => c.encrypted)).toEqual(["keep", "keep"]);
+    expect(rt.appStorage.encrypted).toBe(true);
+    // Only an explicit `{ encrypted: false }` is "no".
+    rt.appStorage.setStorageFolder("C:\\moved", { encrypted: false });
+    expect(rt.host.storage.setCalls[3].encrypted).toBe("false");
+    expect(rt.appStorage.encrypted).toBe(false);
   });
 
   test("a refused setStorageFolder throws rather than silently keeping the old one", () => {

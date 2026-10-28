@@ -388,15 +388,17 @@ fn sanitize(name: &str) -> String {
     }
 }
 
-/// Points the backend at `folder`, creating it, and turns encryption on or off.
+/// Points the backend at `folder`, creating it, and turns encryption on or off
+/// — or, with `None`, leaves it as it is (`setStorageFolder(path)` with no
+/// `encrypted`: a folder change must never be a silent decryption).
 ///
 /// Idempotent, and safe to call at any time: before the first `localStorage`
 /// touch it simply decides where the lazy load will read from; after it, the
 /// in-memory area is authoritative and gets re-written into the new place and
 /// format (which is what makes turning encryption on a migration rather than a
 /// data loss).
-pub fn set_storage_folder(folder: &Path, encrypted: bool) -> Result<PathBuf, String> {
-    if encrypted && crypt::provider().is_none() {
+pub fn set_storage_folder(folder: &Path, encrypted: Option<bool>) -> Result<PathBuf, String> {
+    if encrypted == Some(true) && crypt::provider().is_none() {
         return Err(format!(
             "encrypted storage is not available on this platform — refusing to write plaintext \
              into {} after being asked for encryption",
@@ -421,16 +423,26 @@ pub fn set_storage_folder(folder: &Path, encrypted: bool) -> Result<PathBuf, Str
 }
 
 /// The `localStorage` half of [`set_storage_folder`].
-fn relocate(folder: &Path, encrypted: bool) -> Result<(), String> {
+fn relocate(folder: &Path, encrypted: Option<bool>) -> Result<(), String> {
     let folder = folder.to_path_buf();
     let s = storage();
     let mut st = s.state.lock().unwrap();
     let same_folder = st.folder == folder;
     let was_encrypted = st.encrypted;
+    // `None` keeps the format, and keeps the sticky rule in charge of it: a
+    // host that never said takes on a sealed area in the new folder exactly as
+    // its load would have (`read_folder`), rather than writing plaintext next
+    // to it.
+    let encrypted = match encrypted {
+        Some(e) => {
+            st.encryption_explicit = true;
+            e
+        }
+        None => was_encrypted || (!st.encryption_explicit && file::sealed_path(&folder).exists()),
+    };
     let moved = !same_folder || was_encrypted != encrypted;
     st.folder = folder.clone();
     st.encrypted = encrypted;
-    st.encryption_explicit = true;
     st.error = None;
     if moved && st.loaded {
         // The area this process is holding is the truth; put it where it now
@@ -558,10 +570,15 @@ host_fn!(fn vn_storage_user_folder(g, args) {
 });
 
 // `__vn_storage_set_folder(path, encrypted) -> json` — `{"path":"…"}` (the
-// canonical path it settled on) or `{"error":"…"}`.
+// canonical path it settled on) or `{"error":"…"}`. `encrypted` is `"true"`,
+// `"false"`, or `"keep"` (the app did not say: the format stays).
 host_fn!(fn vn_storage_set_folder(g, args) {
     let path = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let encrypted = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default() == "true";
+    let encrypted = match unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    };
     let json = if path.trim().is_empty() {
         err_json("setStorageFolder needs a path")
     } else {
@@ -756,7 +773,7 @@ mod tests {
 
     /// Drives the backend exactly as redjs does: load, store, flush.
     fn cycle(folder: &Path, encrypted: bool, entries: &[(String, String)]) {
-        set_storage_folder(folder, encrypted).expect("set folder");
+        set_storage_folder(folder, Some(encrypted)).expect("set folder");
         let _ = storage().load();
         storage().store(entries);
         flush().expect("flush");
@@ -766,7 +783,7 @@ mod tests {
     /// restarted host does when the app calls `setStorageFolder` at boot.
     fn read_back(folder: &Path, encrypted: bool) -> Vec<(String, String)> {
         cold();
-        set_storage_folder(folder, encrypted).expect("set folder");
+        set_storage_folder(folder, Some(encrypted)).expect("set folder");
         storage().load()
     }
 
@@ -844,7 +861,7 @@ mod tests {
         let entries = vec![("k".to_string(), "v".to_string())];
         cold();
         cycle(&t.0, false, &entries);
-        set_storage_folder(&t.0, true).expect("flip to encrypted");
+        set_storage_folder(&t.0, Some(true)).expect("flip to encrypted");
         assert!(file::sealed_path(&t.0).exists());
         assert!(!file::plain_path(&t.0).exists(), "the plaintext copy is retired");
         assert_eq!(read_back(&t.0, true), entries);
@@ -880,6 +897,54 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
+    fn a_folder_change_that_says_nothing_about_encryption_keeps_the_format() {
+        // `setStorageFolder(path)` with no `encrypted` is "put it there", not
+        // "and decrypt it": the same sticky rule, applied to the call itself.
+        let _g = serial();
+        let a = Temp::new("keep-a");
+        let b = Temp::new("keep-b");
+        let entries = vec![("secret".to_string(), "value".to_string())];
+        cold();
+        cycle(&a.0, true, &entries);
+
+        // Same folder, live area: nothing to flip.
+        set_storage_folder(&a.0, None).expect("same folder");
+        assert!(storage().state.lock().unwrap().encrypted);
+        assert!(file::sealed_path(&a.0).exists());
+        assert!(!file::plain_path(&a.0).exists(), "nothing was decrypted");
+
+        // A new folder: the data goes there, still sealed.
+        set_storage_folder(&b.0, None).expect("move");
+        assert!(file::sealed_path(&b.0).exists());
+        assert!(!file::plain_path(&b.0).exists(), "the move did not decrypt");
+
+        // A cold start that says nothing before its load: the folder decides,
+        // and the app has still not said anything.
+        cold();
+        set_storage_folder(&b.0, None).expect("cold, unsaid");
+        assert_eq!(storage().load(), entries);
+        let st = storage().state.lock().unwrap();
+        assert!(st.encrypted, "the sealed area kept its format");
+        assert!(!st.encryption_explicit, "and nothing was recorded as the app's choice");
+    }
+
+    #[test]
+    fn a_folder_change_that_says_nothing_keeps_an_explicit_plaintext_choice() {
+        let _g = serial();
+        let t = Temp::new("keep-plain");
+        let entries = vec![("k".to_string(), "v".to_string())];
+        cold();
+        cycle(&t.0, false, &entries);
+        set_storage_folder(&t.0, None).expect("same folder");
+        let st = storage().state.lock().unwrap();
+        assert!(!st.encrypted && st.encryption_explicit);
+        drop(st);
+        assert!(file::plain_path(&t.0).exists());
+        assert!(!file::sealed_path(&t.0).exists());
+    }
+
+    #[test]
     fn a_corrupt_file_is_an_empty_area_and_a_recorded_error_not_a_panic() {
         let _g = serial();
         let t = Temp::new("corrupt");
@@ -900,7 +965,7 @@ mod tests {
         cold();
         cycle(&a.0, false, &entries);
         // …and now the app calls setStorageFolder for the first time.
-        set_storage_folder(&b.0, false).expect("move");
+        set_storage_folder(&b.0, Some(false)).expect("move");
         assert_eq!(read_back(&b.0, false), entries);
         assert!(file::plain_path(&a.0).exists(), "the old folder is left alone");
     }
@@ -914,7 +979,7 @@ mod tests {
         std::fs::create_dir_all(&t.0).unwrap();
         let blocked = t.0.join("not-a-dir");
         std::fs::write(&blocked, b"x").unwrap();
-        let e = set_storage_folder(&blocked, false).unwrap_err();
+        let e = set_storage_folder(&blocked, Some(false)).unwrap_err();
         assert!(e.contains("could not create"), "{e}");
     }
 
@@ -923,7 +988,7 @@ mod tests {
     fn asking_for_encryption_without_a_provider_is_refused_not_silently_plaintext() {
         let _g = serial();
         let t = Temp::new("no-provider");
-        let e = set_storage_folder(&t.0, true).unwrap_err();
+        let e = set_storage_folder(&t.0, Some(true)).unwrap_err();
         assert!(e.contains("not available on this platform"), "{e}");
     }
 }

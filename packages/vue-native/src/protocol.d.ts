@@ -519,8 +519,11 @@ declare function __vn_permissions_set_dispatcher(
 
 /** `{ path }` or `{ error }`. Creates nothing — a path is not a directory. */
 declare function __vn_storage_user_folder(kind: string, subfolder: string): VnJson;
-/** Points `localStorage` at `path`, creating it. `{ path }` or `{ error }`. */
-declare function __vn_storage_set_folder(path: string, encrypted: boolean): VnJson;
+/**
+ * Points `localStorage` at `path`, creating it. `{ path }` or `{ error }`.
+ * `"keep"`: the app did not say — the format stays (encryption is sticky).
+ */
+declare function __vn_storage_set_folder(path: string, encrypted: "true" | "false" | "keep"): VnJson;
 /** `{ folder, file, encrypted, bytes, loaded, pending, provider, kinds, error }`. */
 declare function __vn_storage_info(): VnJson;
 /** Forces the coalesced write. `{ wrote: boolean }` or `{ error }`. */

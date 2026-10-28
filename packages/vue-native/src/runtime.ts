@@ -3786,7 +3786,9 @@ function createStorage(host: StorageHost): AppStorage {
      * protect). Turning it on for a folder that already holds a plaintext area
      * MIGRATES that area and removes the plaintext copy; turning it off does
      * the reverse. On a platform with no encryption provider this THROWS rather
-     * than quietly writing plaintext.
+     * than quietly writing plaintext. Leaving `encrypted` out keeps the current
+     * format — a folder that is encrypted stays encrypted; only an explicit
+     * `{ encrypted: false }` decrypts.
      *
      * Best called before the first `localStorage` touch. Called later it still
      * works: the area this process is holding is written to the new place.
@@ -3799,7 +3801,10 @@ function createStorage(host: StorageHost): AppStorage {
      * late again). docs/STORAGE.md "IndexedDB".
      */
     setStorageFolder(path: string, options: { encrypted?: boolean } = {}) {
-      const encrypted = !!(options && options.encrypted);
+      // No `encrypted` is "keep the format", not "plaintext": a folder change
+      // must never silently decrypt (the sticky rule, docs/STORAGE.md §5).
+      const said = options ? options.encrypted : undefined;
+      const encrypted = said === undefined ? "keep" : said ? "true" : "false";
       return storageResult<{ path: string }>(
         host.setFolder(String(path), encrypted),
         "setStorageFolder",

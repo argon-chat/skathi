@@ -65,7 +65,9 @@
 //! the app makes the same late call again: `{ encrypted: true }` creates the
 //! folder's `key.sealed` now (the next start finds it — sticky), and
 //! `{ encrypted: false }` leaves `key.retire` next to an existing key (the next
-//! start decrypts). The FOLDER half cannot be remembered without a pointer
+//! start decrypts). A late call that does not mention `encrypted` changes no
+//! format: it flips nothing, and a move carries an encrypted IndexedDB's
+//! `key.sealed` into the new folder. The FOLDER half cannot be remembered without a pointer
 //! file in a folder the app moved away from, so it is not: a new folder takes
 //! effect at a start whose `setStorageFolder` runs before the first
 //! `indexedDB` call — the advisory says so.
@@ -371,8 +373,11 @@ pub fn install() {
 /// `setStorageFolder` ran. Before IndexedDB's first use there is nothing to
 /// do: redjs reads the new state when it starts. After it, the change is for
 /// the next start — say so (redjs's advisory), and make the encryption half
-/// stick (module header, "A late setStorageFolder").
-pub fn storage_changed(storage: &Path, encrypted: bool) {
+/// stick (module header, "A late setStorageFolder"). `encrypted: None` — the
+/// app did not say — keeps the latched format: it flips nothing, and a move
+/// takes an encrypted IndexedDB's encryption to the new folder rather than
+/// leaving it to start there in plaintext.
+pub fn storage_changed(storage: &Path, encrypted: Option<bool>) {
     let (latched_dir, latched_mode) = {
         let l = LATCHED.lock().unwrap();
         match (&l.folder, l.mode) {
@@ -384,12 +389,8 @@ pub fn storage_changed(storage: &Path, encrypted: bool) {
     };
     let dir = folder_of(storage);
     let moved = dir != latched_dir;
-    let flipped = match latched_mode {
-        Mode::Encrypted => !encrypted,
-        Mode::Plaintext | Mode::Decrypting => encrypted,
-        Mode::Refused => true,
-    };
-    if !moved && !flipped {
+    let (changed, persist) = late_change(latched_mode, moved, encrypted);
+    if !changed {
         return;
     }
     api::config_changed();
@@ -401,10 +402,33 @@ pub fn storage_changed(storage: &Path, encrypted: bool) {
             dir.display()
         );
     }
-    if let Err(e) = persist_intent(&dir, encrypted) {
+    let Some(intent) = persist else { return };
+    if let Err(e) = persist_intent(&dir, intent) {
         eprintln!("[storage] could not record the IndexedDB encryption for the next start: {e}");
         LATCHED.lock().unwrap().error = Some(e);
     }
+}
+
+/// A late call, decided: does it change anything for the next start (the
+/// advisory), and which encryption, if any, to record for it.
+fn late_change(latched: Mode, moved: bool, encrypted: Option<bool>) -> (bool, Option<bool>) {
+    let flipped = match (latched, encrypted) {
+        (_, None) => false,
+        (Mode::Encrypted, Some(e)) => !e,
+        (Mode::Plaintext | Mode::Decrypting, Some(e)) => e,
+        (Mode::Refused, Some(_)) => true,
+    };
+    if !moved && !flipped {
+        return (false, None);
+    }
+    let persist = match encrypted {
+        Some(e) => Some(e),
+        // Unsaid, only an encryption is carried over: "plaintext" written into
+        // the new folder would be a `key.retire`, i.e. a decryption nobody
+        // asked for.
+        None => (latched == Mode::Encrypted).then_some(true),
+    };
+    (true, persist)
 }
 
 /// The encryption half of a late call, made to outlive this run.
@@ -573,5 +597,24 @@ mod tests {
         // …unless that start asks for encryption again, which wins.
         assert_eq!(mode(&t, Some(true)).1, IdbEncryption::Encrypted(k));
         assert!(!t.dir().join(RETIRE_NAME).exists());
+    }
+
+    #[test]
+    fn a_late_call_that_does_not_mention_encryption_changes_no_format() {
+        use Mode::*;
+        // Same folder, unsaid: nothing at all — in particular no decryption.
+        for m in [Encrypted, Plaintext, Decrypting, Refused] {
+            assert_eq!(late_change(m, false, None), (false, None), "{m:?}");
+        }
+        // A move, unsaid: an encrypted IndexedDB stays encrypted in the new
+        // folder; a plaintext one records nothing (no `key.retire` there).
+        assert_eq!(late_change(Encrypted, true, None), (true, Some(true)));
+        assert_eq!(late_change(Plaintext, true, None), (true, None));
+        assert_eq!(late_change(Decrypting, true, None), (true, None));
+        // Said: as before.
+        assert_eq!(late_change(Encrypted, false, Some(false)), (true, Some(false)));
+        assert_eq!(late_change(Encrypted, false, Some(true)), (false, None));
+        assert_eq!(late_change(Plaintext, false, Some(true)), (true, Some(true)));
+        assert_eq!(late_change(Plaintext, true, Some(false)), (true, Some(false)));
     }
 }

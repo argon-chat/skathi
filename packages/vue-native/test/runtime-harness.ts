@@ -510,7 +510,8 @@ export function createRuntime(
       host.storage.setCalls.push({ path, encrypted });
       if (host.storage.refuse) return JSON.stringify({ error: host.storage.refuse });
       host.storage.folder = path;
-      host.storage.encrypted = !!encrypted;
+      // "keep" — the app did not say — leaves the format alone, as lib.rs does.
+      if (encrypted !== "keep") host.storage.encrypted = encrypted === "true";
       return JSON.stringify({ path });
     },
     () =>

@@ -6,15 +6,16 @@
 // first use:
 //   1. the launch's own argv picks the encryption — `encrypt` calls
 //      `appStorage.setStorageFolder(<the current folder>, { encrypted: true })`,
-//      `decrypt` the same with `{ encrypted: false }`, neither calls nothing
-//      (the sticky rule decides);
+//      `decrypt` the same with `{ encrypted: false }`, `keep` the same with no
+//      options at all (which must change no format), none of them calls
+//      nothing (the sticky rule decides);
 //   2. the database opens. A failure is RENDERED (`#status` = `failed: <name>`)
 //      rather than thrown: the second-instance test reads it.
 //
 // `__VN_TEST_IDB__.run(name, ...args)` starts a scenario over the devtools
 // `eval` and records how it settled into `results[name]` (a promise does not
 // survive the round trip): `put key value`, `get key`, `open`, `databases`,
-// `info`, `late encrypted`.
+// `info`, `late true|false|keep`.
 import { appLaunch, appStorage, createApp, h, onMounted, ref } from "vue-native";
 
 const req = <T>(q: VnIDBRequest<T>): Promise<T> =>
@@ -31,6 +32,7 @@ const done = (tx: VnIDBTransaction): Promise<void> =>
 const argv = appLaunch.argv;
 const asked = argv.includes("encrypt") ? true : argv.includes("decrypt") ? false : null;
 if (asked !== null) appStorage.setStorageFolder(appStorage.folder, { encrypted: asked });
+else if (argv.includes("keep")) appStorage.setStorageFolder(appStorage.folder);
 
 const status = ref("opening");
 let db: VnIDBDatabase | null = null;
@@ -72,7 +74,8 @@ const scenarios: Record<string, (...args: string[]) => Promise<string>> = {
   },
   /** A setStorageFolder AFTER IndexedDB started — for the next start. */
   async late(encrypted: string) {
-    appStorage.setStorageFolder(appStorage.folder, { encrypted: encrypted === "true" });
+    if (encrypted === "keep") appStorage.setStorageFolder(appStorage.folder);
+    else appStorage.setStorageFolder(appStorage.folder, { encrypted: encrypted === "true" });
     return JSON.stringify(appStorage.info().indexedDB);
   },
 };
