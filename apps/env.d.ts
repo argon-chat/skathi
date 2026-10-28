@@ -417,15 +417,95 @@ declare global {
 //
 // redjs's own RFC 6455 client: a real EventTarget with real CloseEvent and
 // real binary frames. Nothing about the Lab page's use of it is native-specific.
+//
+// Blob / File / FileList / blob: URLs / DataTransfer are the File layer
+// (docs/DESKTOP.md "File layer"): webapi/{blob,file,url,uievents}.rs. A File
+// the host made from a picked or dropped path is read lazily, off the UI
+// thread, under Chromium's snapshot rule.
 
 declare global {
+  type VnBlobPart = VnBlob | ArrayBuffer | ArrayBufferView | string;
+  interface VnBlobPropertyBag {
+    type?: string;
+    endings?: "transparent" | "native";
+  }
+  /** `stream()`'s result: redjs's ReadableStream (webapi/streams.rs +
+   *  streams.js) of `Uint8Array` chunks of at most 64 KiB. */
+  interface VnByteStream extends AsyncIterable<Uint8Array> {
+    getReader(): {
+      read(): Promise<{ done: boolean; value?: Uint8Array }>;
+      cancel(reason?: unknown): Promise<void>;
+      releaseLock(): void;
+    };
+    cancel(reason?: unknown): Promise<void>;
+    readonly locked: boolean;
+  }
   interface VnBlob {
     readonly size: number;
     readonly type: string;
     arrayBuffer(): Promise<ArrayBuffer>;
+    bytes(): Promise<Uint8Array>;
     text(): Promise<string>;
+    slice(start?: number, end?: number, contentType?: string): VnBlob;
+    stream(): VnByteStream;
   }
-  var Blob: { new (parts?: unknown[], options?: { type?: string }): VnBlob; prototype: VnBlob };
+  var Blob: { new (parts?: Iterable<VnBlobPart>, options?: VnBlobPropertyBag): VnBlob; prototype: VnBlob };
+
+  interface VnFile extends VnBlob {
+    readonly name: string;
+    readonly lastModified: number;
+    readonly webkitRelativePath: string;
+  }
+  var File: {
+    new (bits: Iterable<VnBlobPart>, name: string, options?: VnBlobPropertyBag & { lastModified?: number }): VnFile;
+    prototype: VnFile;
+  };
+
+  /** Made by the host only (`new FileList()` throws), like a browser's. */
+  interface VnFileList extends Iterable<VnFile> {
+    readonly length: number;
+    item(index: number): VnFile | null;
+    readonly [index: number]: VnFile;
+  }
+  var FileList: { prototype: VnFileList };
+
+  /** Merged onto engine.d.ts's `VnURLConstructor`: the blob URL store
+   *  (webapi/url.rs). `blob:<origin>/<uuid>`; `fetch()`, `<img src>` and
+   *  `<video src>` resolve it. */
+  interface VnURLConstructor {
+    createObjectURL(blob: VnBlob): string;
+    revokeObjectURL(url: string): void;
+  }
+
+  interface VnDataTransferItem {
+    readonly kind: "string" | "file" | "";
+    readonly type: string;
+    getAsString(callback: ((data: string) => void) | null): void;
+    getAsFile(): VnFile | null;
+    /** Present only where the host provides it (File System Access) — feature
+     *  detect with `"getAsFileSystemHandle" in item`. */
+    getAsFileSystemHandle?(): Promise<unknown | null>;
+  }
+  interface VnDataTransferItemList extends Iterable<VnDataTransferItem> {
+    readonly length: number;
+    readonly [index: number]: VnDataTransferItem;
+    add(data: string, type: string): VnDataTransferItem | null;
+    add(file: VnFile): VnDataTransferItem | null;
+    remove(index: number): void;
+    clear(): void;
+  }
+  interface VnDataTransfer {
+    dropEffect: "none" | "copy" | "link" | "move";
+    effectAllowed: "none" | "copy" | "copyLink" | "copyMove" | "link" | "linkMove" | "move" | "all" | "uninitialized";
+    readonly items: VnDataTransferItemList;
+    readonly types: readonly string[];
+    readonly files: VnFileList;
+    getData(format: string): string;
+    setData(format: string, data: string): void;
+    clearData(format?: string): void;
+    setDragImage(image: unknown, x: number, y: number): void;
+  }
+  var DataTransfer: { new (): VnDataTransfer; prototype: VnDataTransfer };
 
   interface VnCloseEvent extends VnEvent {
     readonly code: number;
@@ -448,7 +528,7 @@ declare global {
     onerror: ((ev: VnEvent) => void) | null;
     onclose: ((ev: VnCloseEvent) => void) | null;
     onmessage: ((ev: VnMessageEvent) => void) | null;
-    send(data: string | ArrayBuffer | ArrayBufferView): void;
+    send(data: string | ArrayBuffer | ArrayBufferView | VnBlob): void;
     close(code?: number, reason?: string): void;
   }
   var WebSocket: {

@@ -295,7 +295,13 @@ interface VnURL {
   readonly href: string;
   readonly protocol: string;
 }
-declare var URL: { new (url: string, base?: string): VnURL; prototype: VnURL } | undefined;
+/** Named so apps/env.d.ts can merge the statics an app uses
+ *  (`createObjectURL` / `revokeObjectURL`) without a second `URL`. */
+interface VnURLConstructor {
+  new (url: string, base?: string): VnURL;
+  prototype: VnURL;
+}
+declare var URL: VnURLConstructor | undefined;
 
 // ---- Web Audio ------------------------------------------------------------
 
