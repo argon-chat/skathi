@@ -1,0 +1,15 @@
+[package]
+name = "vn-desktop"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The desktop surface a browser does not have words for, plus the tier-1 pieces
+# that have to reach the OS: the central argv parser, the shell (open a URL or a
+# file, reveal, trash), single instance and the custom-protocol registration
+# (docs/SHELL.md, docs/LAUNCH.md; research/reports/m25/desktop-apis-design.md).
+#
+# `args` is pure and dependency-free on purpose: it is what `main()` reads
+# before anything else exists, and what the inspector mode is decided by.
+
+[dependencies]

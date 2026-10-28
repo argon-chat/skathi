@@ -14,6 +14,7 @@ members = [
     "crates/vn-clipboard",  # navigator.clipboard over the SAME gpui clipboard the <input> uses
     "crates/vn-thorvg-sys", # vendored ThorVG C++ + checked-in FFI (vn-lottie's `thorvg` feature)
     "crates/vn-payload",    # VNPK v1 (a packaged exe's app payload) + the one URL→asset-key normaliser
+    "crates/vn-desktop",    # argv parser, shell (open/reveal/trash), single instance, custom protocols
     # "crates/vn-window",   # window chrome: backdrops, dark mode, titlebar
     "crates/vn-app",        # host binary shell
 ]

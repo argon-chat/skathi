@@ -77,22 +77,25 @@ pub struct Mode {
 
 static MODE: std::sync::OnceLock<Option<Mode>> = std::sync::OnceLock::new();
 
-/// Parses argv once. `None` in an ordinary host, which is every host that was
-/// not started by [`open_for_window`] or by hand with `--devtools`.
+/// `None` in an ordinary host, which is every host that was not started by
+/// [`open_for_window`] or by hand with `--devtools`.
+///
+/// Read off the ONE argv parser (`vn_desktop::args`), never off argv directly.
+/// Until m25 this was `argv.iter().any(|a| a == "--devtools")` — `--devtools`
+/// ANYWHERE flipped the process into the inspector, which a custom-protocol
+/// link (`myapp://x" --devtools "…`) could have reached. The parser honours it
+/// only as a LEADING host flag, and never in a protocol launch
+/// (docs/LAUNCH.md §2, research/reports/m25/desktop-apis-design.md finding 6).
 pub fn mode() -> Option<&'static Mode> {
     MODE.get_or_init(|| {
-        let argv: Vec<String> = std::env::args().skip(1).collect();
-        if !argv.iter().any(|a| a == "--devtools") {
+        let host = &vn_desktop::args::process().host;
+        if !host.devtools {
             return None;
         }
-        let value = |name: &str| -> Option<String> {
-            let i = argv.iter().position(|a| a == name)?;
-            argv.get(i + 1).filter(|v| !v.starts_with("--")).cloned()
-        };
         Some(Mode {
-            target: value("--target"),
-            window: value("--window").and_then(|v| v.parse().ok()),
-            parent: value("--parent").and_then(|v| v.parse().ok()),
+            target: host.target.clone(),
+            window: host.window.as_deref().and_then(|v| v.parse().ok()),
+            parent: host.parent.as_deref().and_then(|v| v.parse().ok()),
         })
     })
     .as_ref()

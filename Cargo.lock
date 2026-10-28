@@ -7730,6 +7730,7 @@ dependencies = [
  "reqwest_client",
  "vn-clipboard",
  "vn-css",
+ "vn-desktop",
  "vn-elements",
  "vn-payload",
  "vn-permissions",
@@ -7757,6 +7758,10 @@ dependencies = [
  "parcel_selectors",
  "vn-effects",
 ]
+
+[[package]]
+name = "vn-desktop"
+version = "0.1.0"
 
 [[package]]
 name = "vn-effects"

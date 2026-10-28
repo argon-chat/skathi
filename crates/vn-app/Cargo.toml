@@ -112,6 +112,11 @@ vn-tree = { path = "../vn-tree" }
 # share. No dependencies — it is its own crate so the format is testable without
 # linking an engine.
 vn-payload = { path = "../vn-payload" }
+# The desktop surface (docs/SHELL.md, docs/LAUNCH.md): the ONE argv parser every
+# consumer of this process's command line reads (the inspector mode,
+# `--vn-host-info`, the protocol handler), plus the shell, single instance and
+# custom protocols.
+vn-desktop = { path = "../vn-desktop" }
 # The platform backends behind redjs's `navigator.permissions`, plus the
 # `appPermissions` extension surface. NOT dev-gated, for the same reason
 # vn-voice is not: an app asking whether it may use the microphone is doing

@@ -999,13 +999,25 @@ fn install_http_client(app: gpui::Application) -> gpui::Application {
 fn main() {
     // First, so a host whose runner is already gone never opens a window.
     owner::watch();
+    // The ONE parse of this process's command line (docs/LAUNCH.md §2). Every
+    // consumer below — the host check, the inspector mode, the protocol
+    // handler, `appLaunch.argv` — reads this, never `std::env::args()`.
+    let args = vn_desktop::args::process();
     // `vn build`'s host check: a BARE host (nothing stamped into it) prints
     // what it is — mode, vue-native version, variant — as one JSON line and
     // exits before any window, logger or JS exists. A packaged exe never takes
     // this branch; its argv belongs to its app.
-    if std::env::args().nth(1).as_deref() == Some("--vn-host-info") && !payload::embedded_present() {
+    if args.host.host_info && !payload::embedded_present() {
         println!("{}", payload::host_info_json());
         return;
+    }
+    // `--vn-dist <slot>` is `VN_DIST` spelled on the command line — what a
+    // protocol registration made by a DEV host writes, because a process the
+    // shell starts for a `myapp://` link inherits no environment of ours.
+    // Before anything reads the slot (the logger and the profiler do, through
+    // `slot::dir`).
+    if let Some(dist) = args.host.vn_dist.as_deref().filter(|d| !d.is_empty()) {
+        std::env::set_var("VN_DIST", dist);
     }
     // `--devtools` rewrites two environment variables (the dist slot this
     // process publishes into, and which instance it prefers), so it has to run
