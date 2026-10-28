@@ -167,6 +167,13 @@ impl JsRuntime {
         RUNTIME.with(|r| f(r.get().expect("JsRuntime::init has not run on this thread")))
     }
 
+    /// [`JsRuntime::with`] for a caller that can do without: `None` when no
+    /// runtime runs on this thread (a unit test, a headless tool), where
+    /// `with` would panic. vn-tree resolves `blob:` URLs through this.
+    pub fn try_with<R>(f: impl FnOnce(&JsRuntime) -> R) -> Option<R> {
+        RUNTIME.with(|r| r.get().map(f))
+    }
+
     pub fn raw(&self) -> *mut c_void {
         self.ctx.raw()
     }

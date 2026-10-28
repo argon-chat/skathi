@@ -6,6 +6,7 @@
 //! |---|---|---|
 //! | data URL | `data:image/png;base64,iVBOR…` | `ImageSource::Image` (bytes decoded once, cached per node) |
 //! | http(s) URL | `https://host/a.png` | `Resource::Uri` — fetched by gpui's asset loader through the `ReqwestClient` `vn-app` installs |
+//! | blob URL | `blob:app://redpew/<uuid>` | a picked file: `Resource::Path` (no copy); a slice or bytes in memory: `ImageSource::Image` (see "blob: URLs" below) |
 //! | `file://` URL | `file:///C:/x/a.png` | `Resource::Path` |
 //! | absolute path | `C:\x\a.png`, `C:/x/a.png` | `Resource::Path` |
 //! | root-relative | `/assets/a.png` | `Resource::Path` under the **app root** |
@@ -72,6 +73,9 @@ use std::path::{Component, Path, PathBuf};
 use gpui::{Image, ImageFormat, ImageSource, Resource};
 pub use vn_payload::content_key;
 use vn_payload::KeyError;
+use vn_runtime::redjs;
+use vn_runtime::redjs::webapi::url::BlobTarget;
+use vn_runtime::JsRuntime;
 
 /// A packaged app's asset store: an app-root-relative key → the bytes, which
 /// live in the mapped exe for the life of the process.
@@ -175,6 +179,9 @@ pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
     if scheme_of(src) == "data" {
         return data_bytes(tag, src);
     }
+    if scheme_of(src) == "blob" {
+        return blob_bytes(tag, src, blob_target(src));
+    }
     // A packaged app: the payload, never the disk (module docs).
     if scheme_of(src).is_empty() {
         if let Some(hit) = stored(tag, src) {
@@ -219,6 +226,20 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
         "file" => {
             file_url(src).ok_or_else(|| format!("<{tag} src=\"{src}\">: malformed file: URL"))
         }
+        // A blob: URL of a whole picked file IS a path; a slice or an
+        // in-memory Blob is not one.
+        "blob" => match blob_target(src) {
+            Some(t @ BlobTarget::Path { range: None, .. }) => {
+                check_snapshot(tag, src, &t)?;
+                let BlobTarget::Path { path, .. } = t else { unreachable!() };
+                Ok(path)
+            }
+            Some(_) => Err(format!(
+                "<{tag} src=\"{src}\">: this element loads by PATH, and this blob: URL names bytes \
+                 in memory or a slice of a file, which have none."
+            )),
+            None => Err(unknown_blob(tag, src)),
+        },
         // A single-letter "scheme" is a Windows drive, never a URL scheme.
         s if s.len() == 1 && s.chars().all(|c| c.is_ascii_alphabetic()) => Ok(PathBuf::from(src)),
         "" => Ok(relative_to_base(tag, src)),
@@ -274,6 +295,7 @@ pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<vn_video::MediaSourc
             })
         }
         "http" | "https" => Ok(vn_video::MediaSource::Uri(src.to_string())),
+        "blob" => blob_media(tag, src, blob_target(src)),
         // A packaged app: the payload entry, as bytes with the media type its
         // extension names — the shape a `data:` URI already takes, so the
         // backend's memory-stream path (and its temp-file fallback) is reused.
@@ -368,6 +390,7 @@ fn resolve(src: &str) -> Option<ImageSource> {
         // NOT `ImageSource::from(&str)`: gpui's `is_uri` classifies a bare
         // relative path as `Embedded`, so the scheme is decided here.
         "http" | "https" => Some(ImageSource::Resource(Resource::Uri(src.to_string().into()))),
+        "blob" => blob_image(src, blob_target(src)),
         "file" => file_url(src).map(path_source),
         // A single-letter "scheme" is a Windows drive (`C:\x\a.png`), never a
         // URL scheme — no registered scheme is one character long.
@@ -496,6 +519,137 @@ fn hex_val(b: u8) -> Option<u8> {
         b'a'..=b'f' => Some(b - b'a' + 10),
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// blob: URLs
+// ---------------------------------------------------------------------------
+//
+// `URL.createObjectURL(blob)` puts the Blob's SOURCE in redjs's per-context
+// store — the `Arc` of its bytes, or the path of the file it was picked from
+// — and these arms read it back with no JS involved. A whole picked file is
+// handed on as its PATH, exactly like `src="C:\x\a.png"`: gpui (or Media
+// Foundation) reads it, and the bytes are never copied into the tree. A slice
+// of a file is read here, once per `src` (the per-node memo); bytes in memory
+// are used where they are.
+//
+// The file behind a path-backed URL must still be the one that was picked:
+// if its size or mtime changed, the load fails as a browser's does (the File
+// API's snapshot rule, the same one `file.text()` applies).
+
+/// What the JS context's blob URL store holds for `src`. `None` with no
+/// runtime on this thread (unit tests, a headless tool), or for a URL that was
+/// never created, was revoked, or names a Blob that cannot be read.
+fn blob_target(src: &str) -> Option<BlobTarget> {
+    JsRuntime::try_with(|rt| redjs::webapi::url::resolve_blob_url(rt.raw(), src)).flatten()
+}
+
+fn unknown_blob(tag: &str, src: &str) -> String {
+    format!(
+        "<{tag} src=\"{src}\">: this blob: URL is not in the blob URL store — it was revoked \
+         (URL.revokeObjectURL), or was never created in this window."
+    )
+}
+
+/// The snapshot rule for a path-backed target (see the section comment).
+fn check_snapshot(tag: &str, src: &str, t: &BlobTarget) -> Result<(), String> {
+    if t.snapshot_holds() {
+        return Ok(());
+    }
+    let path = match t {
+        BlobTarget::Path { path, .. } => path.display().to_string(),
+        BlobTarget::Bytes { .. } => String::new(),
+    };
+    Err(format!(
+        "<{tag} src=\"{src}\">: {path} changed (or is gone) since its File was made, so the load \
+         fails — as a browser's does (NotReadableError). Pick the file again for its new contents."
+    ))
+}
+
+/// The bytes a blob: URL names: a copy of the store's window when they are in
+/// memory (gpui's `Image` and `<lottie>` own theirs), read from the file for a
+/// path-backed one.
+fn blob_bytes(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<Vec<u8>, String> {
+    match target {
+        None => Err(unknown_blob(tag, src)),
+        Some(BlobTarget::Bytes { bytes, offset, len, .. }) => match bytes.get(offset..offset + len) {
+            Some(b) => Ok(b.to_vec()),
+            None => Err(format!("<{tag} src=\"{src}\">: the blob: URL's window lies outside its bytes")),
+        },
+        Some(t @ BlobTarget::Path { .. }) => {
+            check_snapshot(tag, src, &t)?;
+            let BlobTarget::Path { path, range, size, .. } = t else { unreachable!() };
+            let (offset, len) = range.unwrap_or((0, size));
+            read_window(&path, offset, len)
+                .map_err(|e| format!("<{tag} src=\"{src}\">: could not read {} — {e}", path.display()))
+        }
+    }
+}
+
+fn read_window(path: &Path, offset: u64, len: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path)?;
+    f.seek(SeekFrom::Start(offset))?;
+    let mut out = Vec::with_capacity(len as usize);
+    f.take(len).read_to_end(&mut out)?;
+    Ok(out)
+}
+
+/// `<img src="blob:…">`. A browser sniffs an image's format from its bytes
+/// and ignores the Blob's type; so does this, with the type as the fallback.
+fn blob_image(src: &str, target: Option<BlobTarget>) -> Option<ImageSource> {
+    if let Some(t @ BlobTarget::Path { range: None, .. }) = &target {
+        // The whole file: by path, no copy — exactly an absolute-path src.
+        if let Err(msg) = check_snapshot("img", src, t) {
+            warn(msg);
+            return None;
+        }
+        let BlobTarget::Path { path, .. } = t else { unreachable!() };
+        return Some(path_source(path.clone()));
+    }
+    let mime = target.as_ref().map(|t| t.mime().to_ascii_lowercase()).unwrap_or_default();
+    let bytes = match blob_bytes("img", src, target) {
+        Ok(b) => b,
+        Err(msg) => {
+            warn(msg);
+            return None;
+        }
+    };
+    let Some(format) = sniff(&bytes).or_else(|| image_format(&mime)) else {
+        warn(format!(
+            "<img src=\"{src}\">: the Blob is not an image this renderer decodes (type {mime:?}) — png, \
+             jpeg, webp, gif, bmp, tiff, ico and svg+xml do"
+        ));
+        return None;
+    };
+    Some(ImageSource::Image(std::sync::Arc::new(Image::from_bytes(format, bytes))))
+}
+
+/// `<video src="blob:…">`: a whole picked file is a PATH (the OS streams it);
+/// a Blob in memory is its own `Arc`, shared when the URL names all of it.
+fn blob_media(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<vn_video::MediaSource, String> {
+    match target {
+        None => Err(unknown_blob(tag, src)),
+        Some(t @ BlobTarget::Path { range: None, .. }) => {
+            check_snapshot(tag, src, &t)?;
+            let BlobTarget::Path { path, .. } = t else { unreachable!() };
+            Ok(vn_video::MediaSource::Path(path))
+        }
+        Some(BlobTarget::Bytes { bytes, offset: 0, len, mime }) if len == bytes.len() => {
+            if len == 0 {
+                return Err(format!("<{tag} src=\"{src}\">: the Blob is empty"));
+            }
+            Ok(vn_video::MediaSource::Bytes { mime: mime.to_ascii_lowercase(), data: bytes })
+        }
+        Some(t) => {
+            let mime = t.mime().to_ascii_lowercase();
+            let data = blob_bytes(tag, src, Some(t))?;
+            if data.is_empty() {
+                return Err(format!("<{tag} src=\"{src}\">: the Blob is empty"));
+            }
+            Ok(vn_video::MediaSource::Bytes { mime, data: std::sync::Arc::new(data) })
+        }
     }
 }
 
@@ -847,5 +1001,89 @@ mod tests {
             as_path(source_for(7, "b.png")),
             Some(PathBuf::from("Y:\\base\\b.png"))
         );
+    }
+
+    // -- blob: URLs ---------------------------------------------------------
+
+    /// A file under the OS temp dir with the target a picked File over it
+    /// would resolve to, removed on drop.
+    struct Picked(PathBuf);
+
+    impl Picked {
+        fn new(name: &str, bytes: &[u8]) -> Picked {
+            let dir = std::env::temp_dir().join(format!("vn-tree-blob-{}-{name}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            Picked(p)
+        }
+
+        fn target(&self, range: Option<(u64, u64)>, mime: &str) -> BlobTarget {
+            let m = std::fs::metadata(&self.0).unwrap();
+            BlobTarget::Path { path: self.0.clone(), range, size: m.len(), mtime: m.modified().ok(), mime: mime.into() }
+        }
+    }
+
+    impl Drop for Picked {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_dir(self.0.parent().unwrap());
+        }
+    }
+
+    const PNG_1PX: &[u8] = &[
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+        0, 0, 0x1F, 0x15, 0xC4, 0x89,
+    ];
+
+    #[test]
+    fn a_whole_picked_file_loads_by_path_without_a_copy() {
+        let f = Picked::new("pic.png", PNG_1PX);
+        let src = "blob:app://redpew/00000000-0000-4000-8000-000000000001";
+        assert_eq!(as_path(blob_image(src, Some(f.target(None, "image/png")))), Some(f.0.clone()));
+        assert!(matches!(
+            blob_media("video", src, Some(f.target(None, "video/mp4"))),
+            Ok(vn_video::MediaSource::Path(p)) if p == f.0
+        ));
+    }
+
+    #[test]
+    fn a_slice_or_bytes_in_memory_decode_from_their_bytes() {
+        let mut body = b"xx".to_vec();
+        body.extend_from_slice(PNG_1PX);
+        let f = Picked::new("two.bin", &body);
+        let src = "blob:app://redpew/00000000-0000-4000-8000-000000000002";
+        // A slice of a file: read here, sniffed (the type says nothing).
+        let t = f.target(Some((2, PNG_1PX.len() as u64)), "");
+        assert!(matches!(blob_image(src, Some(t)), Some(ImageSource::Image(_))));
+        // Bytes in memory: a whole Arc is shared with the media pipeline.
+        let arc = std::sync::Arc::new(PNG_1PX.to_vec());
+        let whole = BlobTarget::Bytes { bytes: arc.clone(), offset: 0, len: arc.len(), mime: "video/mp4".into() };
+        match blob_media("video", src, Some(whole)) {
+            Ok(vn_video::MediaSource::Bytes { data, mime }) => {
+                assert!(std::sync::Arc::ptr_eq(&data, &arc));
+                assert_eq!(mime, "video/mp4");
+            }
+            other => panic!("{other:?}"),
+        }
+        let part = BlobTarget::Bytes { bytes: arc.clone(), offset: 1, len: 3, mime: String::new() };
+        assert_eq!(blob_bytes("lottie", src, Some(part)).unwrap(), b"PNG");
+        // Not an image at all: broken, with a reason.
+        let text = BlobTarget::Bytes { bytes: std::sync::Arc::new(b"hello".to_vec()), offset: 0, len: 5, mime: "text/plain".into() };
+        assert!(blob_image(src, Some(text)).is_none());
+    }
+
+    #[test]
+    fn a_changed_file_or_an_unknown_url_fails_the_load() {
+        let f = Picked::new("snap.png", PNG_1PX);
+        let src = "blob:app://redpew/00000000-0000-4000-8000-000000000003";
+        let t = f.target(None, "image/png");
+        std::fs::write(&f.0, b"a different file now").unwrap();
+        assert!(blob_image(src, Some(t.clone())).is_none());
+        assert!(blob_media("video", src, Some(t)).unwrap_err().contains("changed"));
+        // No runtime on this thread: nothing is in a store, and that is said.
+        assert!(resolve(src).is_none());
+        assert!(read_bytes("lottie", src).unwrap_err().contains("blob URL store"));
+        assert!(resolve_media("video", src).unwrap_err().contains("revoked"));
     }
 }
