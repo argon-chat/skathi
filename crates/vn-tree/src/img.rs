@@ -587,12 +587,25 @@ fn blob_bytes(tag: &str, src: &str, target: Option<BlobTarget>) -> Result<Vec<u8
     }
 }
 
+/// `len` bytes of `path` from `offset`: all of them, or an error. A buffer
+/// that cannot be had is an error (the element is broken), never an
+/// out-of-memory abort; so is a file that ends early (shorter than the File
+/// that was picked says), where a truncated image used to be decoded.
 fn read_window(path: &Path, offset: u64, len: u64) -> std::io::Result<Vec<u8>> {
-    use std::io::{Read, Seek, SeekFrom};
+    use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path)?;
     f.seek(SeekFrom::Start(offset))?;
-    let mut out = Vec::with_capacity(len as usize);
+    let want = usize::try_from(len).map_err(|_| Error::new(ErrorKind::OutOfMemory, "too large to hold in memory"))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(want)
+        .map_err(|_| Error::new(ErrorKind::OutOfMemory, format!("{len} bytes could not be held in memory")))?;
     f.take(len).read_to_end(&mut out)?;
+    if out.len() != want {
+        return Err(Error::new(
+            ErrorKind::UnexpectedEof,
+            format!("the file ended after {} of the {len} bytes the blob: URL names", out.len()),
+        ));
+    }
     Ok(out)
 }
 
@@ -1085,6 +1098,19 @@ mod tests {
         assert!(resolve(src).is_none());
         assert!(read_bytes("lottie", src).unwrap_err().contains("blob URL store"));
         assert!(resolve_media("video", src).unwrap_err().contains("revoked"));
+    }
+
+    /// A slice is read whole or not at all: a file that ends early is an
+    /// error (it decoded a truncated image), and so is a window too large to
+    /// hold (it was an out-of-memory abort). m25 review, findings 6 and 13.
+    #[test]
+    fn a_window_is_read_whole_or_refused() {
+        let f = Picked::new("window.bin", b"0123456789");
+        assert_eq!(read_window(&f.0, 4, 4).unwrap(), b"4567");
+        let short = read_window(&f.0, 8, 10).unwrap_err();
+        assert_eq!(short.kind(), std::io::ErrorKind::UnexpectedEof, "{short}");
+        let huge = read_window(&f.0, 0, u64::MAX).unwrap_err();
+        assert_eq!(huge.kind(), std::io::ErrorKind::OutOfMemory, "{huge}");
     }
 
     /// The link the hand-built targets above cannot prove: a URL a SCRIPT
