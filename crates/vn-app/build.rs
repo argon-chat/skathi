@@ -64,6 +64,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(vn_devtools)");
     println!("cargo:rerun-if-env-changed=VN_DEVTOOLS_BUNDLE");
     suppress_release_pdb();
+    no_identical_code_folding();
 
     // The opt-OUT. Cargo features are additive across a graph, so this is the
     // one shape a "remove code" flag can take: the absence of the cfg is the
@@ -169,6 +170,36 @@ fn suppress_release_pdb() {
     // Last one wins for `/DEBUG`, and rustc has already put its own on the
     // command line — so this is an override rather than an omission.
     println!("cargo:rustc-link-arg-bins=/DEBUG:NONE");
+}
+
+/// `/OPT:NOICF` on the final link: no identical-COMDAT folding in the image
+/// that carries JavaScriptCore.
+///
+/// rustc passes `/OPT:REF,ICF` to link.exe for every optimized MSVC build
+/// (debug gets `/OPT:REF,NOICF`). JSC tells a constructor from a plain function
+/// by comparing native function POINTERS against `callHostFunctionAsConstructor`
+/// (`JSFunctionInlines.h`), so when the linker folds a real constructor's
+/// `[[Construct]]` stub into that function because their bytes match, the
+/// constructor stops being one. MEASURED on the d6375c72 engine, same source,
+/// only this line differing (research/reports/m24/jsc-bump.md §ICF): a
+/// `--release --features prod` exe reported `BigInt` and `Symbol` as
+/// non-constructors and `class X extends BigInt {}` threw "The superclass is
+/// not a constructor" — a silent divergence from every browser. Bun hit the same
+/// fold; WebKit's own build links `/OPT:NOICF`.
+///
+/// Scope: `-bins`, i.e. only vn-app's executable — nothing else's fingerprint
+/// moves. It lands after rustc's own `/OPT:REF,ICF` and link.exe takes the last
+/// `/OPT` it sees (the probe above is how that was checked, not assumed). redjs
+/// says the same for the images IT links (its build.rs).
+///
+/// The price is real: ICF had been sharing a lot of identical (mostly
+/// monomorphized Rust) code, and the `--release --features prod` exe goes from
+/// 100 529 664 to 108 826 112 bytes (+8.3 MB). lld-link with `/OPT:SAFEICF`
+/// (folds only functions whose address is never taken — Bun's setting) measured
+/// correct and 104 149 504 bytes; switching linkers is an open decision, not
+/// something this line does.
+fn no_identical_code_folding() {
+    println!("cargo:rustc-link-arg-bins=/OPT:NOICF");
 }
 
 /// The name of the profile directory this build is writing into, e.g.

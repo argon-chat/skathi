@@ -1184,10 +1184,10 @@ fn main() {
         // Startup eval: host fns called at top level land in Phase::App.
         with_published_app(cx, || {
             JsRuntime::with(|rt| {
-                if let Err(e) = rt.eval(PRELUDE_JS, "vn://prelude.js") {
+                if let Err(e) = perf::boot_eval("preludes", || rt.eval(PRELUDE_JS, "vn://prelude.js")) {
                     eprintln!("[js boot] {}\n{}", e.header, e.stack);
                 }
-                if let Err(e) = rt.eval(WINDOW_PRELUDE_JS, "vn://window.js") {
+                if let Err(e) = perf::boot_eval("preludes", || rt.eval(WINDOW_PRELUDE_JS, "vn://window.js")) {
                     eprintln!("[js boot] {}\n{}", e.header, e.stack);
                 }
                 // `VN_SCENARIO=<name>` — a harness app can pin itself to one

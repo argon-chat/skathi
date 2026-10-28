@@ -2518,6 +2518,23 @@ fn perf_data() -> Json {
                 None => Json::Null,
             },
         ),
+        // Script evaluation before the first frame, per label (preludes,
+        // vendor.js, modules, boot.js / app.prod.js) — `crate::perf::boot_eval`.
+        (
+            "bootJs",
+            Json::arr(
+                crate::perf::boot_js()
+                    .into_iter()
+                    .map(|(label, scripts, ms)| {
+                        Json::obj(vec![
+                            ("label", Json::s(label)),
+                            ("scripts", Json::n(f64::from(scripts))),
+                            ("ms", Json::n(round2(ms))),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
         ("avgMs", Json::n(round2(avg))),
         ("p50Ms", Json::n(round2(p50))),
         ("p95Ms", Json::n(round2(p95))),

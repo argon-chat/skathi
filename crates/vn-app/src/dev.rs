@@ -229,7 +229,9 @@ thread_local! {
     static VENDOR_REV: std::cell::Cell<f64> = const { std::cell::Cell::new(-1.0) };
 }
 
-fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str) -> bool {
+/// `label` is what boot-time accounting charges the evaluation to
+/// (`crate::perf::boot_eval`); the file read is not part of it.
+fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str, label: &'static str) -> bool {
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -237,7 +239,7 @@ fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str) -> bool {
             return false;
         }
     };
-    if let Err(e) = rt.eval(&src, url) {
+    if let Err(e) = crate::perf::boot_eval(label, || rt.eval(&src, url)) {
         eprintln!("[dev] {url}: {}\n{}", e.header, e.stack);
         return false;
     }
@@ -351,14 +353,14 @@ pub fn boot(rt: &JsRuntime) {
     publish_asset_base(&manifest.entry);
     // After the base exists, before any app code can `fetch()`.
     install_asset_provider(rt);
-    if !eval_path(rt, &dist("vendor.js"), "vn://vendor.js") {
+    if !eval_path(rt, &dist("vendor.js"), "vn://vendor.js", "vendor.js") {
         return;
     }
     for id in &manifest.modules {
-        eval_path(rt, &module_path(id), &format!("vn://{id}"));
+        eval_path(rt, &module_path(id), &format!("vn://{id}"), "modules");
     }
     let js = format!("__VN__.boot({});", json::quote(&manifest.entry));
-    if let Err(e) = rt.eval(&js, "vn://boot.js") {
+    if let Err(e) = crate::perf::boot_eval("boot.js (mount)", || rt.eval(&js, "vn://boot.js")) {
         eprintln!("[dev] boot: {}\n{}", e.header, e.stack);
     }
     VENDOR_REV.with(|v| v.set(manifest.vendor_rev));
@@ -423,7 +425,9 @@ pub fn poll_frame(frame_no: u32) {
         // Redefine first (each script re-registers its factory + CSS), then let
         // the loader decide what to tell __VUE_HMR_RUNTIME__ about each id.
         for id in &ids {
-            eval_path(rt, &module_path(id), &format!("vn://{id}"));
+            // After the first frame, so boot accounting has closed and this
+            // label is never charged.
+            eval_path(rt, &module_path(id), &format!("vn://{id}"), "hmr");
         }
         if let Err(e) = rt.eval(&format!("__VN__.hmrApply({text});"), "vn://hmr.js") {
             eprintln!("[dev] hmrApply: {}\n{}", e.header, e.stack);

@@ -21,8 +21,14 @@ target = "x86_64-pc-windows-msvc"
 rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608,1048576"]
 
 [env]
-# Dev-machine location of the pinned bun-webkit prebuilt (fetched once by
-# PEWPEW's packages/jscore/setup.ps1). TODO: a vue-native setup script that
-# fetches into vendor/redjs/prebuilt so this path becomes machine-independent
-# (vendor/redjs/setup.ps1 already does exactly that when run in place).
-BUN_WEBKIT_DIR = "Z:\\!argon\\PEWPEW\\packages\\jscore\\prebuilt\\bun-webkit"
+# vue-native's OWN copy of the bun-webkit prebuilt, at the version pinned in
+# vendor/redjs/pins.txt. `vendor/redjs/setup.ps1` fetches it (and the mimalloc
+# sources redjs compiles) into the git-ignored vendor/redjs/prebuilt/, and
+# redjs's build.rs refuses to build against a prebuilt at any other version —
+# so after a submodule bump that moves the pin, the build says "run setup.ps1"
+# instead of quietly linking the old engine.
+#
+# `relative = true` resolves against this file's workspace root, so the path is
+# the same on every machine. (Until m24 this pointed into a PEWPEW checkout on
+# Z:, which tied the build to one machine and to PEWPEW's copy of the engine.)
+BUN_WEBKIT_DIR = { value = "vendor/redjs/prebuilt/bun-webkit", relative = true }

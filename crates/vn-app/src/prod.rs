@@ -75,7 +75,7 @@ pub fn boot(rt: &JsRuntime) {
         }
     });
 
-    if let Err(e) = rt.eval(APP_JS, "vn://app.prod.js") {
+    if let Err(e) = crate::perf::boot_eval("app.prod.js (+mount)", || rt.eval(APP_JS, "vn://app.prod.js")) {
         eprintln!("[prod] app.prod.js: {}\n{}", e.header, e.stack);
         return;
     }

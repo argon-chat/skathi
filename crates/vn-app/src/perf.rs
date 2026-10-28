@@ -84,6 +84,9 @@ struct State {
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+    /// The probe-off half of "has the first frame happened" (the probe-on half
+    /// is `State::first_frame`).
+    static FIRST_FRAME_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Starts the clock. Called once from `main`, before the window opens.
@@ -242,12 +245,92 @@ fn roll_frame(now: Instant) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// boot-time JS evaluation
+// ---------------------------------------------------------------------------
+//
+// How much of boot→first-frame is the engine evaluating scripts: the preludes,
+// then either `vendor.js` + the module scripts + `__VN__.boot` (dev) or the one
+// `app.prod.js` IIFE (prod). It is the number a bytecode cache would act on, so
+// it is measured before anyone builds one (m24, research/reports/m24/jsc-bump.md).
+//
+// Each figure is wall time around `JsRuntime::eval`: parse + bytecode
+// generation + running the top level — for `boot.js` and `app.prod.js` that
+// top level CREATES AND MOUNTS THE APP, host calls included. A cache can only
+// remove the parse/compile part of it.
+//
+// Always recorded — one `Instant` pair per boot script, nothing per frame —
+// and closed at the first frame, so a dev cold restart or an HMR re-eval is
+// never charged to boot. Printed on the VN_PERF first-frame line and served as
+// `bootJs` by the devtools `perf` command.
+
+struct BootJs {
+    /// `(label, scripts, ms)`, in first-evaluated order.
+    parts: Vec<(&'static str, u32, f32)>,
+    closed: bool,
+}
+
+thread_local! {
+    static BOOT_JS: RefCell<BootJs> = const { RefCell::new(BootJs { parts: Vec::new(), closed: false }) };
+}
+
+/// Runs `f` — one script evaluation — and, until the first frame, charges its
+/// wall time to `label` (several scripts may share a label: `modules`).
+pub fn boot_eval<T>(label: &'static str, f: impl FnOnce() -> T) -> T {
+    let start = Instant::now();
+    let out = f();
+    let ms = ms_since(start, Instant::now());
+    BOOT_JS.with(|b| {
+        let mut b = b.borrow_mut();
+        if b.closed {
+            return;
+        }
+        match b.parts.iter_mut().find(|p| p.0 == label) {
+            Some(p) => {
+                p.1 += 1;
+                p.2 += ms;
+            }
+            None => b.parts.push((label, 1, ms)),
+        }
+    });
+    out
+}
+
+/// The boot-time evaluation record: `(label, scripts, ms)` per label.
+pub fn boot_js() -> Vec<(&'static str, u32, f32)> {
+    BOOT_JS.with(|b| b.borrow().parts.clone())
+}
+
+fn close_boot_js() {
+    BOOT_JS.with(|b| b.borrow_mut().closed = true);
+}
+
+/// `boot js 38.4ms (18%)  vendor.js 21.0 · modules×42 9.1 · boot.js 6.2`.
+fn boot_js_line(boot_ms: f32) -> String {
+    let parts = boot_js();
+    let total: f32 = parts.iter().map(|p| p.2).sum();
+    let detail: Vec<String> = parts
+        .iter()
+        .map(|(label, n, ms)| if *n > 1 { format!("{label}×{n} {ms:.1}") } else { format!("{label} {ms:.1}") })
+        .collect();
+    format!(
+        "[vn-perf]   boot js {:.1}ms ({:.0}% of boot)  {}",
+        total,
+        if boot_ms > 0.0 { total / boot_ms * 100.0 } else { 0.0 },
+        detail.join(" · ")
+    )
+}
+
 /// One frame happened. Call from the per-frame pump.
 #[inline]
 pub fn frame() {
     #[cfg(vn_devtools)]
     roll_frame(Instant::now());
     if !enabled() {
+        // The record closes at the first frame whether or not anybody prints it.
+        if !FIRST_FRAME_SEEN.with(|f| f.replace(true)) {
+            close_boot_js();
+        }
         return;
     }
     let now = Instant::now();
@@ -256,10 +339,10 @@ pub fn frame() {
         let Some(st) = slot.as_mut() else { return };
         if st.first_frame.is_none() {
             st.first_frame = Some(now);
-            eprintln!(
-                "[vn-perf] boot->first-frame {:.1}ms",
-                (now - st.boot).as_secs_f32() * 1000.0
-            );
+            let boot_ms = (now - st.boot).as_secs_f32() * 1000.0;
+            eprintln!("[vn-perf] boot->first-frame {boot_ms:.1}ms");
+            eprintln!("{}", boot_js_line(boot_ms));
+            close_boot_js();
         }
         if let Some(prev) = st.last_frame {
             st.samples.push((now - prev).as_secs_f32() * 1000.0);
