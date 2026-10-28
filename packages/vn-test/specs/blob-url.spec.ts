@@ -13,7 +13,10 @@
 //
 // `fixtures/blob-url` is the app. Its three <img>s: a live URL (red), a URL
 // revoked before the <img> saw it (broken, one advisory), and a slice of a
-// larger Blob (red: the URL names a window, not all of its bytes).
+// larger Blob (red: the URL names a window, not all of its bytes). The same
+// URLs also go through redjs's own loaders on the host's runtime, an
+// offscreen `new Image()` and `createImageBitmap` (the review round's
+// finding 1).
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { expect, launch, readPng, type VnApp } from "../src/index";
@@ -47,6 +50,16 @@ describe("blob: URLs on the host", () => {
     const urls = JSON.parse((await app.eval("JSON.stringify(__VN_TEST_BLOB__)")) as string);
     bunExpect(urls.live).toMatch(/^blob:app:\/\/redpew\/[0-9a-f-]{36}$/);
     bunExpect(urls.results.fetch).toBe("200|image/png|75|true");
+  }, T);
+
+  test("new Image() and createImageBitmap resolve the same URLs through redjs's store", async () => {
+    const { results } = JSON.parse((await app.eval("JSON.stringify(__VN_TEST_BLOB__)")) as string);
+    bunExpect(results.image).toBe("load|8|8|true");
+    bunExpect(results.imageSliced).toBe("load|8|8|true");
+    bunExpect(results.imageRevoked).toBe("error");
+    bunExpect(results.bitmapUrl).toBe("8|8");
+    bunExpect(results.bitmapRevoked).toBe("ERR TypeError");
+    bunExpect(results.bitmapBlob).toBe("8|8");
   }, T);
 
   test("an <img> paints a blob: URL made from bytes in memory", async () => {
