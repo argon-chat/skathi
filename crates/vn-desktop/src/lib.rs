@@ -17,31 +17,49 @@
 //! # The settle protocol (permissions-shaped, design §3.2)
 //!
 //! Every async host fn answers SYNCHRONOUSLY with `{token}` or `{error, name}`.
-//! The worker (the shell thread, the pipe server) pushes `(token, ok, payload)`
-//! and [`pump`] — beside `vn_permissions::pump()` in vn-app's `pump_frame`,
-//! inside the same Commit publication — calls the one JS dispatcher
-//! `(token, ok, payloadJson)` and drains microtasks, so a Vue patch triggered by
-//! `await appShell.openPath(…)` lands in that same frame. Token `0` is reserved
-//! for UNSOLICITED host events (`launch`), with `payload.kind` naming them.
+//! The worker (the shell thread, the pipe server, the I/O pool, a dialog
+//! thread) pushes `(token, ok, payload)`, and the one JS dispatcher is called
+//! with `(token, ok, payloadJson, value)` on the JS thread. `value` is a JS
+//! value the host makes at delivery — a path-backed `File`, a `FileList` —
+//! because a worker cannot touch JSC; it is `undefined` otherwise. Token `0`
+//! is reserved for UNSOLICITED host events (`launch`), with `payload.kind`
+//! naming them.
+//!
+//! Delivery happens in two places, both inside the frame's Commit publication:
+//!
+//! - **inside the redjs pump's budget**, through a `PumpSource` (the seam
+//!   IndexedDB and path-backed Blob reads deliver through). While an I/O-pool
+//!   job is in flight the pump waits for it, up to its budget, and delivers
+//!   each result with a microtask checkpoint after it. So `for await` over a
+//!   folder, or a loop of `await writable.write(…)`, does not cost a frame per
+//!   step. Dialog and shell results are delivered there too, but they never
+//!   count as in flight: a Save As open for a minute must not make every
+//!   frame wait;
+//! - by [`pump`], beside `vn_permissions::pump()` in vn-app's `pump_frame`,
+//!   which also writes worker log lines into the ring.
 //!
 //! # Threads (the review checklist)
 //!
 //! | thread | does | never |
 //! |---|---|---|
-//! | frame (JS + gpui) | validate arguments; registry reads/writes (µs, sync like `appStorage`) | stat a user path; ShellExecute; any modal loop |
+//! | frame (JS + gpui) | validate arguments, the FSA name fence; registry reads/writes (µs, sync like `appStorage`); make `File`s from metadata a worker already stat'ed | stat a user path; ShellExecute; any modal loop |
 //! | `vn-shell` (one STA) | `ShellExecuteExW`, `SHOpenFolderAndSelectItems`, `IFileOperation`, the `stat` in front of each | touch JSC |
+//! | `vn-dialog` (one STA per dialog) | `IFileDialog::Show(owner)`, the `stat` of each result, the `webkitdirectory` walk, a download's write | touch JSC |
+//! | `vn-fs-*` (the pool, four) | every File System Access operation on a path | touch JSC |
 //! | `vn-instance` (pipe server) | accept, verify the peer, read one launch message, raise | touch JSC |
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use vn_runtime::redjs::api::Value;
 use vn_runtime::{host_fn, JsRuntime};
 
 pub mod args;
+pub mod fs;
 pub mod launch;
+mod pool;
 pub mod shell;
 
 // ---------------------------------------------------------------------------
@@ -109,8 +127,28 @@ impl Fail {
 // the results queue
 // ---------------------------------------------------------------------------
 
+/// Makes the JS value a settle carries, on the JS thread at delivery. A
+/// worker cannot make a `File`; it hands over what to make it from.
+pub(crate) type Maker = Box<dyn FnOnce(*mut c_void) -> u64 + Send>;
+
+/// What a successful async operation hands back: its JSON payload, and maybe
+/// a value to make at delivery.
+pub(crate) struct Done {
+    pub payload: String,
+    pub make: Option<Maker>,
+}
+
+impl Done {
+    pub fn json(payload: &str) -> Done {
+        Done { payload: payload.to_string(), make: None }
+    }
+    pub fn with_value(payload: String, make: impl FnOnce(*mut c_void) -> u64 + Send + 'static) -> Done {
+        Done { payload, make: Some(Box::new(make)) }
+    }
+}
+
 enum Item {
-    Settle { token: u32, ok: bool, payload: String },
+    Settle { token: u32, ok: bool, payload: String, make: Option<Maker> },
     /// A line for the devtools log ring, which is the MAIN thread's: a worker
     /// cannot write it, so it rides the queue like a result does.
     Log { kind: &'static str, text: String },
@@ -118,6 +156,8 @@ enum Item {
 
 static QUEUE: Mutex<VecDeque<Item>> = Mutex::new(VecDeque::new());
 static NEXT_TOKEN: AtomicU32 = AtomicU32::new(1);
+/// How many `Settle` items the queue holds (the pump source's `ready`).
+static SETTLES_QUEUED: AtomicUsize = AtomicUsize::new(0);
 
 /// How many items one frame may deliver. A launch storm or a shell queue that
 /// finishes in a burst must not lengthen one frame without bound.
@@ -133,22 +173,30 @@ pub(crate) fn next_token() -> u32 {
     }
 }
 
-/// Settles `token` from any thread.
-pub(crate) fn settle(token: u32, result: Result<String, Fail>) {
-    let item = match result {
-        Ok(payload) => Item::Settle { token, ok: true, payload },
-        Err(f) => Item::Settle { token, ok: false, payload: f.to_json() },
-    };
+fn push_settle(item: Item) {
     if let Ok(mut q) = QUEUE.lock() {
         q.push_back(item);
+        SETTLES_QUEUED.fetch_add(1, Ordering::AcqRel);
     }
+    wake();
+}
+
+/// Settles `token` from any thread.
+pub(crate) fn settle(token: u32, result: Result<String, Fail>) {
+    settle_done(token, result.map(|payload| Done { payload, make: None }));
+}
+
+/// [`settle`], with a value to make at delivery.
+pub(crate) fn settle_done(token: u32, result: Result<Done, Fail>) {
+    push_settle(match result {
+        Ok(Done { payload, make }) => Item::Settle { token, ok: true, payload, make },
+        Err(f) => Item::Settle { token, ok: false, payload: f.to_json(), make: None },
+    });
 }
 
 /// Queues an unsolicited event (token 0) from any thread.
 pub(crate) fn emit(payload: String) {
-    if let Ok(mut q) = QUEUE.lock() {
-        q.push_back(Item::Settle { token: 0, ok: true, payload });
-    }
+    push_settle(Item::Settle { token: 0, ok: true, payload, make: None });
 }
 
 /// Tests: takes every queued unsolicited event's payload out of the queue.
@@ -159,11 +207,106 @@ pub(crate) fn take_emitted() -> Vec<String> {
     q.retain(|item| match item {
         Item::Settle { token: 0, payload, .. } => {
             out.push(payload.clone());
+            SETTLES_QUEUED.fetch_sub(1, Ordering::AcqRel);
             false
         }
         _ => true,
     });
     out
+}
+
+/// Tests: takes the settles of `tokens` out of the queue, as `(ok, payload)`.
+#[cfg(test)]
+pub(crate) fn take_settled(tokens: &[u32]) -> std::collections::HashMap<u32, (bool, String)> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(mut q) = QUEUE.lock() else { return out };
+    q.retain(|item| match item {
+        Item::Settle { token, ok, payload, .. } if tokens.contains(token) => {
+            out.insert(*token, (*ok, payload.clone()));
+            SETTLES_QUEUED.fetch_sub(1, Ordering::AcqRel);
+            false
+        }
+        _ => true,
+    });
+    out
+}
+
+// ---------------------------------------------------------------------------
+// waking the pump, and delivering inside its budget
+// ---------------------------------------------------------------------------
+
+/// The context the dispatcher lives in (`g`), and its redjs id, set by
+/// [`install`]. 0 = no JS runtime (a unit test, a headless tool).
+static RT_G: AtomicUsize = AtomicUsize::new(0);
+static RT_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Wakes the JS pump from any thread, so a pump waiting inside its budget for
+/// a pool result returns the moment one lands.
+pub(crate) fn wake() {
+    let id = RT_ID.load(Ordering::Acquire);
+    if id != 0 {
+        vn_runtime::redjs::web::wake(vn_runtime::redjs::context::ContextId(id));
+    }
+}
+
+fn is_ours(g: *mut c_void) -> bool {
+    g as usize == RT_G.load(Ordering::Acquire) && !g.is_null()
+}
+
+unsafe fn src_inflight(g: *mut c_void) -> bool {
+    is_ours(g) && pool::in_flight() != 0
+}
+
+unsafe fn src_ready(g: *mut c_void) -> bool {
+    is_ours(g) && SETTLES_QUEUED.load(Ordering::Acquire) != 0 && DISPATCHER.with(|d| d.get()) != 0
+}
+
+/// One settle at a time, each a task with a checkpoint after it, until the
+/// queue has none or the pump's budget is spent. Log lines stay for [`pump`].
+unsafe fn src_drain(g: *mut c_void) -> usize {
+    if !src_ready(g) {
+        return 0;
+    }
+    let budget = std::time::Duration::from_micros(vn_runtime::redjs::web::pump_budget_us() as u64);
+    let start = std::time::Instant::now();
+    let mut n = 0;
+    loop {
+        let item = {
+            let Ok(mut q) = QUEUE.lock() else { break };
+            let Some(i) = q.iter().position(|it| matches!(it, Item::Settle { .. })) else { break };
+            SETTLES_QUEUED.fetch_sub(1, Ordering::AcqRel);
+            q.remove(i)
+        };
+        let Some(Item::Settle { token, ok, payload, make }) = item else { break };
+        deliver(g, token, ok, &payload, make);
+        vn_runtime::redjs::web::checkpoint(g);
+        n += 1;
+        if budget.is_zero() || start.elapsed() >= budget {
+            break;
+        }
+    }
+    n
+}
+
+/// Calls the dispatcher with one settle. The value is made here, on the JS
+/// thread, from what the worker handed over.
+fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str, make: Option<Maker>) {
+    let dispatcher = DISPATCHER.with(|d| d.get());
+    if dispatcher == 0 {
+        return;
+    }
+    JsRuntime::with(|rt| {
+        let value = match make {
+            Some(m) => Value(m(g)),
+            None => Value::undefined(),
+        };
+        let p = rt.ctx().string(payload);
+        let a = [Value::number(f64::from(token)), Value::boolean(ok), p, value];
+        if let Err(vn_runtime::redjs::api::Error::Exception(e)) = rt.ctx().call(Value(dispatcher), Value::undefined(), &a) {
+            let err = rt.describe(e);
+            eprintln!("[desktop dispatch] {}\n{}", err.header, err.stack);
+        }
+    });
 }
 
 /// Queues a log-ring line from any thread; [`pump`] writes it on the main one.
@@ -260,6 +403,142 @@ host_fn!(fn vn_shell_trash(g, args) {
     js_string(&shell::start_trash(&path))
 });
 
+// ---- File System Access (fs/mod.rs) — every argument is a handle id -------
+
+fn arg_id(args: &vn_runtime::redjs::api::HostArgs, i: u32) -> u64 {
+    args.arg(i).as_number().filter(|n| n.is_finite() && *n >= 0.0).map(|n| n as u64).unwrap_or(0)
+}
+
+/// A position or size from script: a non-negative integer, or `None`.
+fn arg_offset(args: &vn_runtime::redjs::api::HostArgs, i: u32) -> Option<u64> {
+    args.arg(i).as_number().filter(|n| n.is_finite() && *n >= 0.0).map(|n| n as u64)
+}
+
+thread_local! {
+    /// `(id, name, kind) => FileSystemHandle`, from desktop.ts — what the
+    /// DataTransfer hook makes a dropped path's handle with.
+    static HANDLE_FACTORY: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+// `__vn_fs_set_handle_factory(fn)`: also installs redjs's
+// `getAsFileSystemHandle` hook, so the method appears on DataTransferItem
+// exactly when there is something to make a handle with.
+host_fn!(fn vn_fs_set_handle_factory(g, args) {
+    let f = args.arg(0);
+    unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
+    HANDLE_FACTORY.with(|h| h.set(f.0));
+    unsafe { vn_runtime::redjs::webapi::uievents::set_file_system_handle_hook(g, Some(drop_handle_hook)) };
+    Value::undefined().0
+});
+
+/// `DataTransferItem.getAsFileSystemHandle()` for a dropped path: a handle
+/// granted on what the user dropped, made synchronously (the drop already
+/// knows whether it is a folder, so there is nothing to stat), which the
+/// method wraps in a resolved promise.
+unsafe fn drop_handle_hook(g: *mut c_void, path: &std::path::Path, is_dir: bool) -> Result<u64, u64> {
+    let factory = HANDLE_FACTORY.with(|h| h.get());
+    let kind = if is_dir { fs::Kind::Directory } else { fs::Kind::File };
+    let v = fs::handle_json(path.to_path_buf(), kind);
+    let id = v["h"].as_u64().unwrap_or(0);
+    let name = vn_runtime::redjs::webapi::util::js_string(g, v["name"].as_str().unwrap_or(""));
+    let kind = vn_runtime::redjs::webapi::util::js_string(g, kind.as_str());
+    vn_runtime::redjs::webapi::util::call(g, factory, Value::undefined().0, &[Value::number(id as f64).0, name, kind])
+}
+
+// `__vn_fs_release(h)`: the handle's JS object was collected.
+host_fn!(fn vn_fs_release(_g, args) {
+    fs::release(arg_id(&args, 0));
+    Value::undefined().0
+});
+
+// `__vn_fs_get_file(h) -> {token}`; settles `{name, size}` + the File.
+host_fn!(fn vn_fs_get_file(_g, args) {
+    js_string(&fs::start_get_file(arg_id(&args, 0)))
+});
+
+// `__vn_fs_child(dir, name, isDirectory, create) -> {token} | {error, name}`.
+host_fn!(fn vn_fs_child(g, args) {
+    let name = read_arg_string(g, args.arg(1).0);
+    let kind = if args.arg(2).as_bool().unwrap_or(false) { fs::Kind::Directory } else { fs::Kind::File };
+    js_string(&fs::start_child(arg_id(&args, 0), &name, kind, args.arg(3).as_bool().unwrap_or(false)))
+});
+
+// `__vn_fs_remove(dir, name, recursive) -> {token} | {error, name}`.
+host_fn!(fn vn_fs_remove(g, args) {
+    let name = read_arg_string(g, args.arg(1).0);
+    js_string(&fs::start_remove(arg_id(&args, 0), &name, args.arg(2).as_bool().unwrap_or(false)))
+});
+
+// `__vn_fs_same(a, b) -> {token}`; settles `{same}`.
+host_fn!(fn vn_fs_same(_g, args) {
+    js_string(&fs::start_same(arg_id(&args, 0), arg_id(&args, 1)))
+});
+
+// `__vn_fs_resolve(root, other) -> {token}`; settles `{path}`.
+host_fn!(fn vn_fs_resolve(_g, args) {
+    js_string(&fs::start_resolve(arg_id(&args, 0), arg_id(&args, 1)))
+});
+
+// `__vn_fs_dir_open(dir) / _next(cursor) -> {token}`, `_close(cursor)`.
+host_fn!(fn vn_fs_dir_open(_g, args) {
+    js_string(&fs::start_dir_open(arg_id(&args, 0)))
+});
+host_fn!(fn vn_fs_dir_next(_g, args) {
+    js_string(&fs::start_dir_next(arg_id(&args, 0)))
+});
+host_fn!(fn vn_fs_dir_close(_g, args) {
+    fs::dir_close(arg_id(&args, 0));
+    Value::undefined().0
+});
+
+// `__vn_fs_writable_open(h, keepExistingData) -> {token}`; settles `{w}`.
+host_fn!(fn vn_fs_writable_open(_g, args) {
+    js_string(&fs::writable::start_open(arg_id(&args, 0), args.arg(1).as_bool().unwrap_or(false)))
+});
+
+// `__vn_fs_writable_write(w, position | -1, data)`. `data` is a string
+// (UTF-8), a Uint8Array (desktop.ts turns every BufferSource into one) or a
+// Blob. Bytes are copied out here, on the JS thread (a memcpy); a Blob's
+// source goes to the pool and is copied there, under its snapshot.
+host_fn!(fn vn_fs_writable_write(g, args) {
+    let w = arg_id(&args, 0);
+    let position = arg_offset(&args, 1);
+    let v = args.arg(2).0;
+    let data = unsafe {
+        if let Some(range) = vn_runtime::redjs::webapi::blob::range_of(g, v) {
+            fs::writable::Data::Blob(range)
+        } else if let Some(bytes) = vn_runtime::redjs::webapi::util::bufferish(g, v) {
+            fs::writable::Data::Bytes(bytes.to_vec())
+        } else {
+            fs::writable::Data::Bytes(read_arg_string(g, v).into_bytes())
+        }
+    };
+    js_string(&fs::writable::start_write(w, position, data))
+});
+
+host_fn!(fn vn_fs_writable_seek(_g, args) {
+    js_string(&fs::writable::start_seek(arg_id(&args, 0), arg_offset(&args, 1).unwrap_or(0)))
+});
+host_fn!(fn vn_fs_writable_truncate(_g, args) {
+    js_string(&fs::writable::start_truncate(arg_id(&args, 0), arg_offset(&args, 1).unwrap_or(0)))
+});
+host_fn!(fn vn_fs_writable_close(_g, args) {
+    js_string(&fs::writable::start_close(arg_id(&args, 0)))
+});
+host_fn!(fn vn_fs_writable_abort(_g, args) {
+    js_string(&fs::writable::start_abort(arg_id(&args, 0)))
+});
+
+// `__vn_fs_refuse_clone(prototype, interfaceName)`: structuredClone of an
+// instance is a DataCloneError naming the interface, as for any platform
+// object that is not [Serializable] (desktop.ts marks its handle classes and
+// FileReader; docs/DESKTOP.md D-F23).
+host_fn!(fn vn_fs_refuse_clone(g, args) {
+    let name = read_arg_string(g, args.arg(1).0);
+    unsafe { vn_runtime::redjs::webapi::serialize::refuse_platform_prototype(g, args.arg(0).0, &name) };
+    Value::undefined().0
+});
+
 // `__vn_launch_info() -> {argv, cwd, url, paths, singleInstance, id, name}` —
 // this process's own launch, as `launch::start` resolved it. Sync: it is a
 // read of a value fixed before the window existed.
@@ -300,10 +579,41 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_launch_register_protocol", 1, vn_launch_register_protocol as *const _),
         ("__vn_launch_unregister_protocol", 1, vn_launch_unregister_protocol as *const _),
         ("__vn_launch_is_protocol_registered", 1, vn_launch_is_protocol_registered as *const _),
+        ("__vn_fs_set_handle_factory", 1, vn_fs_set_handle_factory as *const _),
+        ("__vn_fs_release", 1, vn_fs_release as *const _),
+        ("__vn_fs_get_file", 1, vn_fs_get_file as *const _),
+        ("__vn_fs_child", 4, vn_fs_child as *const _),
+        ("__vn_fs_remove", 3, vn_fs_remove as *const _),
+        ("__vn_fs_same", 2, vn_fs_same as *const _),
+        ("__vn_fs_resolve", 2, vn_fs_resolve as *const _),
+        ("__vn_fs_dir_open", 1, vn_fs_dir_open as *const _),
+        ("__vn_fs_dir_next", 1, vn_fs_dir_next as *const _),
+        ("__vn_fs_dir_close", 1, vn_fs_dir_close as *const _),
+        ("__vn_fs_writable_open", 2, vn_fs_writable_open as *const _),
+        ("__vn_fs_writable_write", 3, vn_fs_writable_write as *const _),
+        ("__vn_fs_writable_seek", 2, vn_fs_writable_seek as *const _),
+        ("__vn_fs_writable_truncate", 2, vn_fs_writable_truncate as *const _),
+        ("__vn_fs_writable_close", 1, vn_fs_writable_close as *const _),
+        ("__vn_fs_writable_abort", 1, vn_fs_writable_abort as *const _),
+        ("__vn_fs_refuse_clone", 2, vn_fs_refuse_clone as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
     }
+    // Results are delivered inside the redjs pump's budget (module docs).
+    let g = rt.raw();
+    RT_G.store(g as usize, Ordering::Release);
+    if let Some(id) = vn_runtime::redjs::context::id_of(g) {
+        RT_ID.store(id.0, Ordering::Release);
+        // Created now, so a result that lands before the first pump has a
+        // waker to set.
+        let _ = vn_runtime::redjs::web::waker(id);
+    }
+    vn_runtime::redjs::web::register_pump_source(vn_runtime::redjs::web::PumpSource {
+        inflight: src_inflight,
+        ready: src_ready,
+        drain: src_drain,
+    });
 }
 
 /// Delivers settled calls and unsolicited events into JS, and worker log lines
@@ -331,25 +641,20 @@ pub fn pump() {
             logs
         } else {
             let n = q.len().min(DRAIN_CAP);
-            q.drain(..n).collect()
+            let batch: Vec<Item> = q.drain(..n).collect();
+            let settles = batch.iter().filter(|i| matches!(i, Item::Settle { .. })).count();
+            SETTLES_QUEUED.fetch_sub(settles, Ordering::AcqRel);
+            batch
         }
     };
     let mut called = false;
+    let g = JsRuntime::with(|rt| rt.raw());
     for item in batch {
         match item {
             Item::Log { kind, text } => log_now(kind, text),
-            Item::Settle { token, ok, payload } => {
+            Item::Settle { token, ok, payload, make } => {
                 called = true;
-                JsRuntime::with(|rt| {
-                    let p = rt.ctx().string(&payload);
-                    let a = [Value::number(f64::from(token)), Value::boolean(ok), p];
-                    if let Err(vn_runtime::redjs::api::Error::Exception(e)) =
-                        rt.ctx().call(Value(dispatcher), Value::undefined(), &a)
-                    {
-                        let err = rt.describe(e);
-                        eprintln!("[desktop dispatch] {}\n{}", err.header, err.stack);
-                    }
-                });
+                deliver(g, token, ok, &payload, make);
             }
         }
     }
@@ -361,8 +666,49 @@ pub fn pump() {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Waits (20 s at most) until every token in `tokens` has settled, and
+    /// takes their results out of the queue.
+    pub(crate) fn wait_for_settles(tokens: &[u32]) -> std::collections::HashMap<u32, (bool, String)> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut got = std::collections::HashMap::new();
+        while got.len() < tokens.len() {
+            got.extend(take_settled(tokens));
+            assert!(std::time::Instant::now() < deadline, "timed out waiting for {tokens:?}; have {got:?}");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        got
+    }
+
+    /// The token a `start_*` answer carries (panics on a refusal).
+    pub(crate) fn token_of(answer: &str) -> u32 {
+        let v: serde_json::Value = serde_json::from_str(answer).unwrap();
+        v["token"].as_u64().unwrap_or_else(|| panic!("not a token: {answer}")) as u32
+    }
+
+    /// A pool operation, end to end without JS: start it, wait for it.
+    #[test]
+    fn a_child_lookup_settles_with_a_handle_and_never_a_path() {
+        let dir = std::env::temp_dir().join(format!("vn-desktop-lib-child-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        let h = fs::register(dir.clone(), fs::Kind::Directory);
+        let t = token_of(&fs::start_child(h, "a.txt", fs::Kind::File, false));
+        let missing = token_of(&fs::start_child(h, "nope.txt", fs::Kind::File, false));
+        let got = wait_for_settles(&[t, missing]);
+        let (ok, payload) = &got[&t];
+        assert!(ok);
+        let v: serde_json::Value = serde_json::from_str(payload).unwrap();
+        assert_eq!((v["name"].as_str(), v["kind"].as_str()), (Some("a.txt"), Some("file")));
+        assert!(!payload.contains(&*dir.to_string_lossy()), "no path in what JS sees: {payload}");
+        fs::release(v["h"].as_u64().unwrap());
+        fs::release(h);
+        assert_eq!(got[&missing].0, false);
+        assert!(got[&missing].1.contains("NotFoundError"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_failure_serialises_both_ways() {

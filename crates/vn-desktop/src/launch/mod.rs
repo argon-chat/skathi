@@ -174,6 +174,23 @@ pub fn existing_paths(args: &[String], cwd: &Path) -> Vec<String> {
     out
 }
 
+/// `LaunchParams.files`: one File System Access handle per launch path,
+/// `{h, name, kind}`, granted here because the user named these paths on the
+/// command line (or in Explorer's "Open with"), which is the launch-time
+/// equivalent of picking them. A path's kind is its target's: a symlink to a
+/// folder is a directory handle. A path that vanished between the parse and
+/// now (or a dangling link) has no handle; it stays on `paths`.
+pub(crate) fn handles_for(paths: &[String]) -> Vec<Json> {
+    paths
+        .iter()
+        .filter_map(|p| {
+            let meta = std::fs::metadata(p).ok()?;
+            let kind = if meta.is_dir() { crate::fs::Kind::Directory } else { crate::fs::Kind::File };
+            Some(crate::fs::handle_json(PathBuf::from(p), kind))
+        })
+        .collect()
+}
+
 struct Boot {
     identity: Identity,
     config: LaunchConfig,
@@ -196,17 +213,21 @@ pub fn config() -> Option<&'static LaunchConfig> {
     BOOT.get().map(|b| &b.config)
 }
 
-/// `__vn_launch_info()`'s answer: the boot launch plus who we are.
+/// `__vn_launch_info()`'s answer: the boot launch plus who we are. Each call
+/// grants fresh `handles` (the runtime asks once per realm, and each realm
+/// releases its own through the handles' FinalizationRegistry).
 pub fn info_json() -> String {
     match BOOT.get() {
         Some(b) => {
             let mut v = b.info.to_json();
+            v["handles"] = Json::Array(handles_for(&b.info.paths));
             v["singleInstance"] = Json::Bool(b.single_instance);
             v["id"] = Json::String(b.identity.id.clone());
             v["name"] = Json::String(b.identity.name.clone());
             v.to_string()
         }
-        None => json!({ "argv": [], "cwd": "", "url": null, "paths": [], "singleInstance": false }).to_string(),
+        None => json!({ "argv": [], "cwd": "", "url": null, "paths": [], "handles": [], "singleInstance": false })
+            .to_string(),
     }
 }
 
@@ -283,6 +304,7 @@ pub(crate) fn deliver(msg: Forward) {
         "argv": msg.argv,
         "cwd": msg.cwd,
         "url": msg.url,
+        "handles": handles_for(&paths),
         "paths": paths,
     });
     crate::emit(event.to_string());
@@ -617,6 +639,16 @@ mod tests {
         let got = existing_paths(&args, &dir);
         let x = dir.join("x.txt").to_string_lossy().into_owned();
         assert_eq!(got, vec![x.clone(), dir.to_string_lossy().into_owned(), x]);
+        // The handles name the entry and its kind; the path stays in Rust.
+        let missing = dir.join("gone.txt").to_string_lossy().into_owned();
+        let hs = handles_for(&[got[0].clone(), got[1].clone(), missing]);
+        assert_eq!(hs.len(), 2, "a path that vanished has no handle");
+        assert_eq!((hs[0]["name"].as_str(), hs[0]["kind"].as_str()), (Some("x.txt"), Some("file")));
+        assert_eq!(hs[1]["kind"].as_str(), Some("directory"));
+        for h in &hs {
+            assert!(!h.to_string().contains(&*dir.to_string_lossy()), "no path in {h}");
+            crate::fs::release(h["h"].as_u64().unwrap());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
