@@ -1,0 +1,3 @@
+# golden.vnpk is read byte-for-byte by BOTH the TS writer test and the Rust
+# parser test (crates/vn-payload). autocrlf must never touch it.
+*.vnpk binary
