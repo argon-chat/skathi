@@ -330,7 +330,7 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
 
     <!-- ===== the other two src grammars (m13 item 3) ===================== -->
     <div class="card">
-      <div class="title">src grammars — data: and http(s)</div>
+      <div class="title">src grammars — data:, http(s) and relative</div>
       <div class="src-row">
         <div class="src-cell">
           <video class="mini" :src="tinyClip" autoplay loop muted />
@@ -352,6 +352,13 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
           <div class="src-label">
             &lt;img&gt; over http — gpui's asset loader fetches it through the ReqwestClient the
             host installs, asynchronously: alt text for a frame, then the picture.
+          </div>
+        </div>
+        <div class="src-cell">
+          <img class="mini relative-img" src="assets/clip-1080p.poster.png" alt="relative image" />
+          <div class="src-label">
+            &lt;img&gt; by relative URL — the app root in dev, the exe's own payload once packaged
+            (docs/PACKAGING.md). The same key either way, so the two cannot disagree.
           </div>
         </div>
       </div>
@@ -383,6 +390,7 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
 .src-row {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   gap: 14px;
 }
 .src-cell {

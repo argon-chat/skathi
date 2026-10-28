@@ -33,20 +33,18 @@
 // hosts are using is already pinned and cannot be replaced underneath them.
 
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { cpSync, existsSync, linkSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { DEFAULT_EXE, REPO, WORK_DIR, stagedExe } from "./dist";
 
 export interface FeatureExeOptions {
-  /** Cargo features, e.g. `["prod"]` or `["prod", "no-devtools"]`. */
-  features: string[];
   /**
-   * For a build that includes `prod`: whose bundle gets baked in. `prod.rs`
-   * `include_str!`s `packages/vue-native/dist/app.prod.js`, so the JS build has
-   * to run first and it decides which app the executable IS.
+   * Cargo features, e.g. `["prod"]` or `["prod", "no-devtools"]`. A `prod`
+   * build is a BARE HOST since m25 — no app inside; give it one with
+   * [`packagedExe`].
    */
-  prodApp?: string;
+  features: string[];
   log?: (line: string) => void;
 }
 
@@ -187,20 +185,8 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
       `crate and relinks (~1 min), then restores the dev exe. It is cached at ${exe}.`,
   );
 
-  if (options.features.includes("prod")) {
-    // `prod.rs` include_str!s `packages/vue-native/dist/app.prod.js`, so the JS
-    // build has to run first and it decides which app the executable IS.
-    // Absolute script path: `prod.ts` derives its own directories from
-    // `import.meta.dir`, so it does not care where it is invoked from, but the
-    // shell does.
-    const app = options.prodApp ?? "hello";
-    run(
-      "bun",
-      [join(REPO, "packages", "vue-native", "prod.ts"), join(REPO, "apps", app, "src", "main.ts")],
-      log,
-    );
-  }
-
+  // No JS step: a `prod` build carries no app any more (it is stamped in
+  // afterwards — `packagedExe`), so the host is the same whatever runs on it.
   const args = ["build", "-p", "vn-app"];
   if (options.features.length) args.push("--features", options.features.join(","));
   run("cargo", args, log);
@@ -212,6 +198,78 @@ async function build(options: FeatureExeOptions, dir: string): Promise<string> {
   // find a prod host where the dev host belongs.
   if (options.features.length) run("cargo", ["build", "-p", "vn-app"], log);
   return exe;
+}
+
+// ---------------------------------------------------------------------------
+// packaged apps (`vn build`, docs/PACKAGING.md)
+// ---------------------------------------------------------------------------
+
+export type HostVariant = "standard" | "no-devtools";
+
+/**
+ * A BARE prod host of `variant`, the way `vn build` finds one: `VN_HOST`, the
+ * in-repo release exe, or the local host cache (`vn host build` fills it).
+ * When none exists, a DEBUG feature build stands in — minutes rather than the
+ * release build's tens of minutes, and the same host for a spec's purposes.
+ */
+export async function bareHost(variant: HostVariant, log: (l: string) => void = () => {}): Promise<string> {
+  const { resolveHost, HostError } = await import("../../vue-native/cli/host");
+  try {
+    const h = resolveHost({ variant, log });
+    log(`[vn-test] ${variant} host: ${h.exe} (${h.source}, ${h.info.profile})`);
+    return h.exe;
+  } catch (e) {
+    if (!(e instanceof HostError)) throw e;
+    log(`[vn-test] no prebuilt ${variant} host (${e.message.split("\n")[0]}) — building a debug one`);
+    return featureExe({ features: variant === "standard" ? ["prod"] : ["prod", "no-devtools"], log });
+  }
+}
+
+export interface PackagedExeOptions {
+  /** A name under `apps/`, or a path to an app directory. */
+  app: string;
+  /** The bare host to stamp. Default: [`bareHost`] of `variant`. */
+  host?: string;
+  variant?: HostVariant;
+  /** Names the output directory and the exe. Default: the app. */
+  label?: string;
+  log?: (line: string) => void;
+}
+
+export interface PackagedExe {
+  /** The stamped exe, renamed `vn-app-vntest-<runner pid>-<label>.exe` so the reaper knows it. */
+  exe: string;
+  /** What `vn build` wrote, under its own name (`Hello.exe`). */
+  built: string;
+  /** `vn.config.json` `"name"` — what `launch({ packaged })` takes. */
+  name: string;
+  result: import("../../vue-native/cli/build-app").BuildResult;
+}
+
+/**
+ * `vn build <app> --host <bare host>` into `.vn-test/packaged/<label>/`, then a
+ * copy under a reaper-visible name. In-process (the CLI is TypeScript in this
+ * repo), so a spec gets the build's own result back rather than parsing text.
+ */
+export async function packagedExe(options: PackagedExeOptions): Promise<PackagedExe> {
+  const log = options.log ?? (() => {});
+  const label = (options.label ?? options.app).replace(/[^\w.-]+/g, "-");
+  const variant = options.variant ?? "standard";
+  const host = options.host ?? (await bareHost(variant, log));
+  const target = existsSync(join(REPO, "apps", options.app)) ? join(REPO, "apps", options.app) : options.app;
+  const out = join(WORK_DIR, "packaged", label);
+  const { buildApp } = await import("../../vue-native/cli/build-app");
+  const result = await buildApp({ target, out, host, variant, log });
+  if (!result.exe) throw new Error(`vn build ${target} produced no exe`);
+  const exe = join(out, `vn-app-vntest-${process.pid}-${label}.exe`);
+  // A hard link, not a copy: the same ~100 MB image under a second name.
+  rmSync(exe, { force: true });
+  try {
+    linkSync(result.exe, exe);
+  } catch {
+    cpSync(result.exe, exe);
+  }
+  return { exe, built: result.exe, name: result.config.name, result };
 }
 
 /**

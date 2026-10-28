@@ -17,7 +17,7 @@
 // it was written. docs/TESTING.md is the guide, including an honest table of
 // what Playwright does that we do not.
 
-export { launch, MIN_BUN, VnApp, VnCommandError } from "./app";
+export { launch, MIN_BUN, packagedSlot, VnApp, VnCommandError } from "./app";
 export type { LaunchOptions, LogEntry, Bounds, NodeInfo } from "./app";
 export { Locator, LocatorError, POLL_MS } from "./locator";
 export type { LocatorOptions, Resolved } from "./locator";
@@ -31,7 +31,7 @@ export { ARTIFACTS_DIR, artifactPath } from "./artifacts";
 export { REPO, DEFAULT_EXE, WORK_DIR } from "./dist";
 export { findOrphans, reapOrphans } from "./reap";
 export type { Orphan } from "./reap";
-export { featureExe, featureExeDir, fileContains } from "./features";
-export type { FeatureExeOptions } from "./features";
+export { featureExe, featureExeDir, fileContains, packagedExe, bareHost } from "./features";
+export type { FeatureExeOptions, PackagedExeOptions } from "./features";
 export { uiaTree, uiaSupported, uiaByName, uiaByType, uiaFormat } from "./uia";
 export type { UiaNode, UiaOptions } from "./uia";

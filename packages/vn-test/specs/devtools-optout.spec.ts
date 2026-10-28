@@ -42,7 +42,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { allocateSlot, ensureBuild, resolveEntry, stagedExe } from "../src/dist";
-import { featureExe, fileContains, launch } from "../src/index";
+import { featureExe, fileContains, launch, packagedExe } from "../src/index";
 
 const T = 60_000;
 /** A feature build recompiles one crate and relinks — see `src/features.ts`. */
@@ -171,13 +171,16 @@ async function spawnHost(
 describe("a shipped build carries its own devtools", () => {
   test("`--features prod` answers on the wire and opens the inspector on F12", async () => {
     // The whole inversion in one test. This binary has no dist/, no manifest
-    // and no watcher — `prod.rs` include_str!s the bundle — and it is the
-    // artifact an app author would ship. Before m22 it had no listener at all,
-    // so `launch()` would not have found a handshake to attach to.
-    const exe = await featureExe({ features: ["prod"], prodApp: "hello" });
+    // and no watcher — the app is the payload `vn build` stamped into it
+    // (docs/PACKAGING.md) — and it is the artifact an app author would ship.
+    // Before m22 it had no listener at all, so `launch()` would not have found
+    // a handshake to attach to.
+    const host = await featureExe({ features: ["prod"] });
+    const packed = await packagedExe({ app: "hello", host, label: "dt-prod" });
     const app = await launch({
       app: "hello",
-      exe,
+      exe: packed.exe,
+      packaged: packed.name,
       window: [820, 600],
       label: "dt-prod",
       env: { VN_DEVTOOLS_RAISE: "off" },
@@ -198,7 +201,7 @@ describe("a shipped build carries its own devtools", () => {
       bunExpect(after.inspectors[0].pid).toBeGreaterThan(0);
 
       // The host's own view of the switch, read through the host fn rather than
-      // through `appDevtools` — this exe embeds `apps/hello`, whose modules are
+      // through `appDevtools` — this exe carries `apps/hello`, whose modules are
       // not reachable from a global `eval`. The tier-3 wrapper is driven in the
       // fixtures below.
       const state = JSON.parse(await app.eval("__vn_devtools_state()"));
@@ -215,13 +218,16 @@ describe("a shipped build carries its own devtools", () => {
     // The opt-OUT, and the one build that still has to work. Two proofs on
     // purpose: the marker says the inspector's bundle and window config are not
     // in the file, and running it says no listener was started.
-    const without = await featureExe({ features: ["prod", "no-devtools"], prodApp: "hello" });
-    const with_ = await featureExe({ features: ["prod"], prodApp: "hello" });
+    const without = await featureExe({ features: ["prod", "no-devtools"] });
+    const with_ = await featureExe({ features: ["prod"] });
 
     bunExpect(await fileContains(with_, MARKER)).toBe(true);
     bunExpect(await fileContains(without, MARKER)).toBe(false);
 
-    const { slot, child } = await spawnHost("hello", "dt-nodev", {}, without);
+    // A bare host exits at once ("no app inside"), so the claim is made on a
+    // packaged one — the thing that would actually ship.
+    const packed = await packagedExe({ app: "hello", host: without, variant: "no-devtools", label: "dt-nodev" });
+    const { slot, child } = await spawnHost("hello", "dt-nodev", {}, packed.exe);
     // Long enough that a host which was going to publish a handshake has —
     // `launch()` normally sees one within a second or two.
     await sleep(8000);

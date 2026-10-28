@@ -24,7 +24,8 @@
 
 import { spawnSync } from "node:child_process";
 
-const HOST_IMAGE = /^vn-app-vntest-(\d+)\.exe$/i;
+// `-<label>` is a packaged app (`packagedExe` in features.ts): same owner, same rule.
+const HOST_IMAGE = /^vn-app-vntest-(\d+)(?:-[\w.-]+)?\.exe$/i;
 const RUNNER_IMAGE = /^bun(-[\w.]+)?\.exe$/i;
 
 export type Orphan = { pid: number; image: string; runner: number };

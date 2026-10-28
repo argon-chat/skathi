@@ -4,6 +4,16 @@
   "$comment-name": "The app's IDENTITY, not its title: it names %LOCALAPPDATA%\\<name>\\storage, where localStorage lives (docs/STORAGE.md §3). Optional — without it the host derives `hello` from the entry module's app directory, which is the same answer. Spelled out here so that renaming the folder does not silently move a user's saved data.",
   "name": "hello",
 
+  "$comment-packaging": "Read only by `vn build` (docs/PACKAGING.md). productName is what Explorer and Task Manager show; version is the exe's VERSIONINFO; `assets` defaults to [\"assets\"] and is spelled out so the packaged set is visible; `windows` is the exe's own identity.",
+  "productName": "Hello",
+  "version": "0.1.0",
+  "assets": ["assets"],
+  "windows": {
+    "exeName": "Hello",
+    "icon": "icon.png",
+    "description": "The vue-native demo app"
+  },
+
   "window": {
     "title": "vue-native — hello",
     "width": 980,

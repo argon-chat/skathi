@@ -12,6 +12,7 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, openSync, closeSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Locator, type LocatorOptions } from "./locator";
 import { Wire, readHandshake, pingOnce, VnCommandError } from "./wire";
@@ -52,6 +53,13 @@ export interface LaunchOptions {
   label?: string;
   /** Use this executable instead of a staged copy of `target/.../vn-app.exe`. */
   exe?: string;
+  /**
+   * `exe` is a PACKAGED app (`vn build`) whose `vn.config.json` name is this.
+   * Nothing is built and no `VN_DIST` is set: the exe runs exactly as a user's
+   * double-click would, and the harness finds it where a packaged app publishes
+   * its handshake — `%TEMP%\vue-native\apps\<name>\<pid>` (docs/PACKAGING.md).
+   */
+  packaged?: string;
   /** Leave the process running at teardown — for debugging a red test by hand. */
   keepAlive?: boolean;
 }
@@ -341,6 +349,20 @@ export class VnApp {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * `%TEMP%\vue-native\apps\<name>\<pid>` — where a packaged app publishes its
+ * handshake. The name is cleaned with the host's own rule
+ * (`payload::slot_name`, crates/vn-app/src/payload.rs), so the two agree.
+ */
+export function packagedSlot(name: string, pid: number): string {
+  const cleaned = [...name]
+    .map((c) => (/[A-Za-z0-9._-]/.test(c) ? c : "-"))
+    .slice(0, 64)
+    .join("")
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return join(tmpdir(), "vue-native", "apps", cleaned || "vn-host", String(pid));
+}
+
+/**
  * The oldest bun this harness is known to survive, and why there is a floor at
  * all.
  *
@@ -419,17 +441,24 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
   hookExit();
 
   const log = options.verbose ? (l: string) => console.log(l) : () => {};
-  const entry = resolveEntry(options.app);
   const label = options.label ?? options.app.replace(/[\\/]/g, "-");
   const timeout = options.timeout ?? 10_000;
   const launchTimeout = options.launchTimeout ?? 60_000;
 
-  const cache = options.noBuild ? cacheDistFor(entry) : await ensureBuild(entry, log);
-  if (!existsSync(join(cache, "manifest.json"))) {
-    throw new Error(`${cache} has no manifest.json — drop \`noBuild\` or run the builder first`);
+  if (options.packaged !== undefined && !options.exe) {
+    throw new Error(`${label}: \`packaged\` needs \`exe\` — the packaged app to run`);
   }
-
-  const slotDir = allocateSlot(cache, label);
+  // A packaged app's slot is per process, so it is only known once the pid
+  // is; a dev host's is allocated (and its handshake deleted) up front.
+  let slotDir = "";
+  if (options.packaged === undefined) {
+    const entry = resolveEntry(options.app);
+    const cache = options.noBuild ? cacheDistFor(entry) : await ensureBuild(entry, log);
+    if (!existsSync(join(cache, "manifest.json"))) {
+      throw new Error(`${cache} has no manifest.json — drop \`noBuild\` or run the builder first`);
+    }
+    slotDir = allocateSlot(cache, label);
+  }
   const exe = options.exe ? resolve(options.exe) : stagedExe();
 
   const logsDir = join(WORK_DIR, "logs");
@@ -438,6 +467,10 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
   const logFd = openSync(hostLog, "w");
 
   const env: Record<string, string> = { ...(process.env as Record<string, string>), VN_DIST: slotDir };
+  if (options.packaged !== undefined) {
+    // Exactly the user's environment: no slot of ours, no dev-only pointers.
+    for (const name of ["VN_DIST", "VN_APP_ROOT", "VN_PAYLOAD", "VN_APP_NAME"]) delete env[name];
+  }
   if (options.window) env.VN_WINDOW = `${options.window[0]}x${options.window[1]}`;
   // The host holds a handle on THIS process and terminates itself when it
   // exits — the one kill path that survives the runner being killed
@@ -447,7 +480,7 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
   else env.VN_OWNER_PID = String(process.pid);
   Object.assign(env, options.env ?? {});
 
-  log(`[vn-test] ${label}: launching ${exe} on ${slotDir}`);
+  log(`[vn-test] ${label}: launching ${exe} on ${slotDir || "its own %TEMP% slot"}`);
   const child = spawn(exe, [], {
     cwd: REPO,
     detached: true,
@@ -466,6 +499,7 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
     exited = code ?? -1;
   });
 
+  if (options.packaged !== undefined) slotDir = packagedSlot(options.packaged, pid);
   const handshakePath = join(slotDir, "devtools.json");
   const deadline = Date.now() + launchTimeout;
   const fail = (why: string) => {
