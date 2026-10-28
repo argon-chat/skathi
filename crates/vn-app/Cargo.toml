@@ -57,7 +57,7 @@ devtools = []
 # default; `cargo build -p vn-app --no-default-features` builds a host with no
 # audio at all, which is ~40 fewer crates to compile. The reasoning for the
 # default living on rather than off is in crates/vn-runtime/Cargo.toml.
-default = ["audio", "storages", "clipboard"]
+default = ["audio", "storages", "clipboard", "indexeddb"]
 # `vn-voice/audio` rides along: it is the flag that lets the voice mixer see
 # `redjs::webapi::pcm` and route a room's playout into the app's graph. The two
 # must move together — a host with `AudioContext` but no way to reach it from
@@ -78,6 +78,12 @@ storages = ["vn-runtime/storages", "dep:vn-storage"]
 # <input>'s own Ctrl+C is unaffected — the two share gpui's clipboard, not this
 # crate.
 clipboard = ["vn-runtime/clipboard", "dep:vn-clipboard"]
+# `indexedDB` + `navigator.storage`. ON by default, no dependency. m25 P1 is
+# the in-memory backend (nothing survives a restart, advised once); P2 adds the
+# SQLite file under the storage folder, with vn-storage as its host. Results
+# are delivered inside the frame's pump, within `vn_runtime::runtime::
+# VN_PUMP_DELIVERY_BUDGET_US`.
+indexeddb = ["vn-runtime/indexeddb"]
 
 [dependencies]
 # `stacker` (zed#63187) made `stacksafe` opt-in; before that PR it was an

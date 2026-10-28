@@ -39,6 +39,31 @@ fn apply_user_agent() {
     redjs::webapi::navigator::set_user_agent(Some(VN_USER_AGENT));
 }
 
+/// How long one frame's pump may spend delivering results that arrive from
+/// another thread — today IndexedDB's (m25 indexeddb-design §3.3), later a
+/// worker's messages, all under this ONE budget.
+///
+/// A browser runs tasks continuously between frames; this pump runs once per
+/// frame. Picking results up once per pump would make every *awaited* request
+/// cost a frame — `for (const k of keys) await store.get(k)` over 1000 keys
+/// would take ~6 s at 165 Hz. So while a request is in flight the pump keeps
+/// delivering, and waits on the server's next result, for at most this long:
+/// 1000 sequential awaited gets then take 7–10 frames (redjs
+/// tests/idb_libs.rs). The wait only happens while something is outstanding;
+/// an idle frame pays one atomic load.
+///
+/// 4 ms is the design's number: a quarter of a 60 Hz frame, and what a long
+/// chain of awaited requests costs a browser's main thread anyway. It is the
+/// cap, not the typical cost — a dependent `get` takes ~30 µs, so the usual
+/// frame spends a fraction of it. Set here, explicitly, for the same reason as
+/// [`VN_USER_AGENT`]: the frame belongs to vue-native, so the share it gives
+/// away is vue-native's decision, made in one place.
+pub const VN_PUMP_DELIVERY_BUDGET_US: u32 = 4000;
+
+fn apply_pump_budget() {
+    redjs::web::set_pump_budget_us(VN_PUMP_DELIVERY_BUDGET_US);
+}
+
 thread_local! {
     static RUNTIME: OnceCell<JsRuntime> = const { OnceCell::new() };
     static ERRORS: RefCell<VecDeque<JsError>> = const { RefCell::new(VecDeque::new()) };
@@ -64,6 +89,7 @@ impl JsRuntime {
             assert_eq!(rc, 0, "redjs_init failed: {rc}");
         }
         apply_user_agent();
+        apply_pump_budget();
         let ctx = Context::new();
         unsafe {
             let rc = ffi::redjs_web_install(ctx.raw());
@@ -293,5 +319,57 @@ mod tests {
         assert_eq!(read("navigator.appVersion"), "5.0 (Windows NT 10.0; Win64; x64) RedVue/1.0");
         assert_eq!(read("navigator.platform"), "Win32");
         assert_eq!(read("String(navigator instanceof Navigator)"), "true");
+    }
+
+    /// The vue-native build carries IndexedDB, and a chain of awaited requests
+    /// completes inside the pump the app runs once per frame — TIMERS | RAF |
+    /// MICROTASKS under the lock, `JsRuntime::pump`'s shape — in a handful of
+    /// frames, because the delivery budget lets results land mid-pump.
+    #[cfg(feature = "indexeddb")]
+    #[test]
+    fn indexeddb_answers_an_awaited_chain_within_a_few_frames() {
+        unsafe { assert_eq!(ffi::redjs_init(std::ptr::null()), 0) };
+        apply_pump_budget();
+        assert_eq!(redjs::web::pump_budget_us(), VN_PUMP_DELIVERY_BUDGET_US);
+        let ctx = Context::new();
+        unsafe {
+            assert_eq!(ffi::redjs_web_install(ctx.raw()), 0);
+            let root: Vec<u16> = NO_DISK_ROOT.encode_utf16().collect();
+            assert_eq!(ffi::redjs_webshim_install(ctx.raw(), root.as_ptr(), root.len(), root.as_ptr(), root.len()), 0);
+        }
+        let read = |src: &str| ctx.to_rust_string(ctx.eval(src).unwrap()).unwrap();
+        assert_eq!(read("typeof indexedDB + ',' + typeof IDBKeyRange + ',' + typeof navigator.storage.estimate"), "object,function,function");
+        read(
+            "globalThis.__r = '';
+             const p = (q) => new Promise((res, rej) => { q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+             (async () => {
+               const open = indexedDB.open('vn-runtime-chain', 1);
+               open.onupgradeneeded = () => open.result.createObjectStore('s');
+               const db = await p(open);
+               const tx = db.transaction('s', 'readwrite');
+               for (let i = 0; i < 200; i++) tx.objectStore('s').put(i * 2, i);
+               await new Promise((res) => { tx.oncomplete = res; });
+               let sum = 0;
+               for (let i = 0; i < 200; i++) sum += await p(db.transaction('s').objectStore('s').get(i));
+               return sum;
+             })().then((v) => { globalThis.__r = String(v); }, (e) => { globalThis.__r = 'ERR ' + e; });
+             ''",
+        );
+        let mut frames = 0;
+        let out = loop {
+            unsafe {
+                ffi::redjs_lock(ctx.raw());
+                ffi::redjs_pump(ctx.raw(), PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS, std::ptr::null_mut());
+                ffi::redjs_unlock(ctx.raw());
+            }
+            frames += 1;
+            let r = read("globalThis.__r");
+            if !r.is_empty() || frames > 500 {
+                break r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        assert_eq!(out, "39800");
+        assert!(frames <= 10, "200 awaited gets took {frames} frames");
     }
 }

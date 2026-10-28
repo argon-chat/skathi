@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/indexeddb.spec.ts: IndexedDB in a real Vue app on the real host (m25 P1) — a notes list whose state lives in the database, plus scenarios the spec starts over eval. See ../README.md.",
+
+  "name": "vn-test-indexeddb",
+
+  "window": {
+    "title": "vue-native — IndexedDB (fixture)",
+    "width": 480,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
