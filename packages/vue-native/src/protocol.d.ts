@@ -557,6 +557,15 @@ declare function __vn_shell_trash(path: string): VnJson;
  * Forwarded launches arrive later, as token-0 `{ kind: "launch", … }` events.
  */
 declare function __vn_launch_info(): VnJson;
+/**
+ * Registers `scheme://` for this exe under HKCU. `{ ok, wrote, scheme }`, or a
+ * refusal `{ error, name: "TypeError" }` (invalid, reserved, foreign-owned).
+ */
+declare function __vn_launch_register_protocol(scheme: string): VnJson;
+/** Removes a registration carrying our marker AND our exe. Did it? */
+declare function __vn_launch_unregister_protocol(scheme: string): boolean;
+/** Ours, and pointing at this exe? */
+declare function __vn_launch_is_protocol_registered(scheme: string): boolean;
 
 // ---------------------------------------------------------------------------
 // voice — crates/vn-voice/src/lib.rs (CONTRACT.md, docs/VOICE.md)

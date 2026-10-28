@@ -220,6 +220,8 @@ export function createRuntime(
       nextToken: 1,
       /** When set, the next shell call answers this object (a sync refusal). */
       refuse: null,
+      /** The fake registry: scheme -> owner id ("test" is this app). */
+      protocols: new Map(),
       /** What `__vn_launch_info` answers — this world's own launch. */
       launch: {
         argv: ["C:\\apps\\Test.exe"],
@@ -371,6 +373,9 @@ export function createRuntime(
     "__vn_shell_show_item",
     "__vn_shell_trash",
     "__vn_launch_info",
+    "__vn_launch_register_protocol",
+    "__vn_launch_unregister_protocol",
+    "__vn_launch_is_protocol_registered",
     // Bound as parameters so the link path's `new MouseEvent` / `new URL` are
     // the world's own: bun has a `URL` but no `MouseEvent`, and a test that
     // wants the engine's "is this a MouseEvent?" check can hand one in.
@@ -564,6 +569,23 @@ export function createRuntime(
     (path) => shellCall("showItem", path),
     (path) => shellCall("trash", path),
     () => JSON.stringify(host.desktop.launch),
+    // The registry, faked as scheme -> owner id. `launch/protocol_win.rs` is
+    // the real one (and its unit tests run against a scratch HKCU subtree).
+    (scheme) => {
+      const s = String(scheme).toLowerCase();
+      if (!/^[a-z][a-z0-9+.-]{0,62}$/.test(s) || ["http", "https", "file", "mailto"].includes(s) || s.startsWith("ms-")) {
+        return JSON.stringify({ error: `registerProtocol: "${scheme}" cannot be registered`, name: "TypeError" });
+      }
+      const owner = host.desktop.protocols.get(s);
+      if (owner !== undefined && owner !== "test") {
+        return JSON.stringify({ error: `registerProtocol: the "${s}" scheme is registered to ${owner}`, name: "TypeError" });
+      }
+      host.desktop.protocols.set(s, "test");
+      return JSON.stringify({ ok: true, wrote: owner === undefined, scheme: s });
+    },
+    (scheme) => host.desktop.protocols.get(String(scheme).toLowerCase()) === "test" &&
+      host.desktop.protocols.delete(String(scheme).toLowerCase()),
+    (scheme) => host.desktop.protocols.get(String(scheme).toLowerCase()) === "test",
     options.MouseEvent ?? globalThis.MouseEvent,
     globalThis.URL,
     fakeNavigator,
@@ -584,7 +606,7 @@ export function createRuntime(
   if (options.desktop === false) {
     // A host without vn-desktop: `appShell` goes inert, links advise.
     const first = params.indexOf("__vn_desktop_set_dispatcher");
-    for (let i = first; i < first + 6; i++) args[i] = undefined;
+    for (let i = first; i < first + 9; i++) args[i] = undefined;
   }
 
   // eslint-disable-next-line no-new-func

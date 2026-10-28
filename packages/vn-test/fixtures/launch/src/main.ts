@@ -5,9 +5,32 @@
 // and each forwarded one (the `launch` event and the LaunchParams that
 // follows it). A module export is not a global in either boot mode, hence the
 // `globalThis` hand-off (see devtools-on/main.ts).
-import { appLaunch, createApp, h, ref } from "vue-native";
+import { appLaunch, appShell, createApp, h, ref } from "vue-native";
 
+const opened: string[] = [];
 const record = {
+  opened,
+  // The tier-2 verbs the spec drives. `register` answers instead of throwing,
+  // because an exception would come back through eval as a failed command.
+  api: {
+    register(scheme: string): string {
+      try {
+        appLaunch.registerProtocol(scheme);
+        return "ok";
+      } catch (e) {
+        const err = e as Error;
+        return `${err.name}: ${err.message}`;
+      }
+    },
+    unregister: (scheme: string) => appLaunch.unregisterProtocol(scheme),
+    isRegistered: (scheme: string) => appLaunch.isProtocolRegistered(scheme),
+    open(url: string): void {
+      appShell.openExternal(url).then(
+        () => opened.push("ok"),
+        (e: Error) => opened.push(`${e.name}: ${e.message}`),
+      );
+    },
+  },
   own: {
     argv: appLaunch.argv,
     cwd: appLaunch.cwd,

@@ -133,6 +133,20 @@ describe("appLaunch", () => {
     expect(order).toEqual(["queue null", "event", "queue notes://z"]);
   });
 
+  test("registerProtocol is sync, throws a TypeError for bad or foreign schemes; the other two answer booleans", () => {
+    const rt = createRuntime();
+    rt.host.desktop.protocols.set("theirs", "gl.argon.other");
+    expect(rt.appLaunch.isProtocolRegistered("notes")).toBe(false);
+    expect(rt.appLaunch.registerProtocol("Notes")).toBe(undefined);
+    expect(rt.appLaunch.isProtocolRegistered("notes")).toBe(true);
+    expect(() => rt.appLaunch.registerProtocol("https")).toThrow(TypeError);
+    expect(() => rt.appLaunch.registerProtocol("ms-settings")).toThrow(TypeError);
+    expect(() => rt.appLaunch.registerProtocol("theirs")).toThrow(/gl\.argon\.other/);
+    expect(rt.appLaunch.unregisterProtocol("theirs")).toBe(false);
+    expect(rt.appLaunch.unregisterProtocol("notes")).toBe(true);
+    expect(rt.appLaunch.unregisterProtocol("notes")).toBe(false);
+  });
+
   test("with no desktop host: an empty launch, and no LaunchParams at all", () => {
     const rt = createRuntime({ desktop: false });
     expect(rt.appLaunch.argv).toEqual([]);
@@ -140,5 +154,7 @@ describe("appLaunch", () => {
     const seen: Params[] = [];
     rt.global.launchQueue.setConsumer((p: Params) => seen.push(p));
     expect(seen).toEqual([]);
+    expect(() => rt.appLaunch.registerProtocol("notes")).toThrow(TypeError);
+    expect(rt.appLaunch.isProtocolRegistered("notes")).toBe(false);
   });
 });

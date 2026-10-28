@@ -29,6 +29,10 @@ mod instance_win;
 #[cfg(target_os = "windows")]
 use instance_win as instance;
 
+pub mod protocol;
+#[cfg(target_os = "windows")]
+pub mod protocol_win;
+
 // ---------------------------------------------------------------------------
 // configuration: the `launch` block of the manifest / payload META
 // ---------------------------------------------------------------------------
@@ -176,6 +180,8 @@ struct Boot {
     info: LaunchInfo,
     /// Does THIS process hold the instance lock?
     single_instance: bool,
+    /// A dev host's slot — written into a protocol command as `--vn-dist`.
+    dev_slot: Option<String>,
 }
 
 static BOOT: OnceLock<Boot> = OnceLock::new();
@@ -359,6 +365,15 @@ pub fn start(args: &Args, config_json: Option<&str>, build_name: Option<String>,
         url: args.url.clone(),
         paths: existing_paths(&args.app_args, &cwd),
     };
+    // `<exe> --vn-unregister-protocols`: the uninstaller's hook. Removes every
+    // registration carrying this app's marker and exits, with no window.
+    if args.host.unregister_protocols {
+        #[cfg(target_os = "windows")]
+        for scheme in protocol_win::unregister_all(&protocol_win::Hive::user(), &identity.id) {
+            println!("unregistered {scheme}:");
+        }
+        return Outcome::Exit(0);
+    }
     let skip = !config.single_instance
         || args.host.devtools
         || args.host.unregister_protocols
@@ -405,8 +420,131 @@ pub fn start(args: &Args, config_json: Option<&str>, build_name: Option<String>,
             eprintln!("[vue-native compat] singleInstance is not implemented on this platform yet; running as a separate instance");
         }
     }
-    let _ = BOOT.set(Boot { identity, config, info, single_instance: holds });
+    let dev_slot = dev_slot.map(|p| std::path::absolute(&p).unwrap_or(p).to_string_lossy().into_owned());
+    let _ = BOOT.set(Boot { identity, config, info, single_instance: holds, dev_slot });
     outcome
+}
+
+// ---------------------------------------------------------------------------
+// protocols (docs/LAUNCH.md §5)
+// ---------------------------------------------------------------------------
+
+fn own_exe() -> String {
+    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// The declared `protocols`, at startup: a PACKAGED app (re-)registers each
+/// one per-user, idempotently — which also heals a registration after the exe
+/// moved (owner decision Q1). A dev host never does so on its own, because
+/// that would point the scheme at a dev slot; `appLaunch.registerProtocol()`
+/// is the explicit way there (A-F10). Main thread, before the window.
+pub fn register_declared() {
+    let Some(b) = BOOT.get() else { return };
+    if b.config.protocols.is_empty() {
+        return;
+    }
+    if !b.config.single_instance {
+        // A-F4.
+        crate::advise_later(&format!(
+            "\"protocols\" is declared without \"singleInstance\": every {}:// link starts a new instance of the app",
+            b.config.protocols[0]
+        ));
+    }
+    if b.dev_slot.is_some() {
+        crate::log_later(
+            "launch",
+            format!(
+                "[launch] a dev host does not register the declared protocols ({}); a packaged exe does at startup, \
+                 and appLaunch.registerProtocol() does here",
+                b.config.protocols.join(", ")
+            ),
+        );
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if protocol_win::has_package_identity() {
+            // A-F9.
+            crate::advise_later(
+                "this app runs with MSIX package identity: per-user protocol registration is virtualised there and \
+                 would register nothing — declare the protocols in AppxManifest (uap:Protocol) instead; skipped",
+            );
+            return;
+        }
+        let hive = protocol_win::Hive::user();
+        let exe = own_exe();
+        for raw in &b.config.protocols {
+            let result = protocol::validate_scheme(raw)
+                .and_then(|s| protocol_win::register(&hive, &s, &b.identity.id, &exe, None).map(|w| (s, w)));
+            match result {
+                Ok((s, true)) => crate::log_later("launch", format!("[launch] registered {s}:// → {exe}")),
+                Ok((_, false)) => {}
+                Err(why) => crate::advise_later(&format!("protocol \"{raw}\" was not registered: {why}")),
+            }
+        }
+    }
+}
+
+/// `appLaunch.registerProtocol(scheme)`: `{ok, wrote}` or `{error, name}`.
+pub fn js_register(raw: &str) -> String {
+    let fail = |m: String| crate::Fail::type_error(format!("registerProtocol: {m}")).to_sync_json();
+    let scheme = match protocol::validate_scheme(raw) {
+        Ok(s) => s,
+        Err(m) => return fail(m),
+    };
+    let Some(b) = BOOT.get() else { return fail("the launch state is not initialised".into()) };
+    #[cfg(target_os = "windows")]
+    {
+        if protocol_win::has_package_identity() {
+            return fail("this app runs with MSIX package identity; declare the protocol in AppxManifest (uap:Protocol)".into());
+        }
+        if b.dev_slot.is_some() {
+            // A-F10.
+            crate::advise(&format!(
+                "registerProtocol(\"{scheme}\") in a DEV host points {scheme}:// at this dev slot ({}) — a packaged \
+                 exe registers its declared protocols itself; unregister this one when done",
+                b.dev_slot.as_deref().unwrap_or_default()
+            ));
+        }
+        match protocol_win::register(&protocol_win::Hive::user(), &scheme, &b.identity.id, &own_exe(), b.dev_slot.as_deref()) {
+            Ok(wrote) => json!({ "ok": true, "wrote": wrote, "scheme": scheme }).to_string(),
+            Err(m) => fail(m),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (b, scheme);
+        crate::Fail::new("NotSupportedError", "registerProtocol is not implemented on this platform yet").to_sync_json()
+    }
+}
+
+/// `appLaunch.unregisterProtocol(scheme)`: true when a registration of OURS,
+/// pointing at THIS exe, was removed.
+pub fn js_unregister(raw: &str) -> bool {
+    let (Ok(scheme), Some(b)) = (protocol::validate_scheme(raw), BOOT.get()) else { return false };
+    #[cfg(target_os = "windows")]
+    {
+        protocol_win::unregister(&protocol_win::Hive::user(), &scheme, &b.identity.id, &own_exe())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (b, scheme);
+        false
+    }
+}
+
+/// `appLaunch.isProtocolRegistered(scheme)`: ours, and pointing at this exe.
+pub fn js_is_registered(raw: &str) -> bool {
+    let (Ok(scheme), Some(b)) = (protocol::validate_scheme(raw), BOOT.get()) else { return false };
+    #[cfg(target_os = "windows")]
+    {
+        protocol_win::is_registered(&protocol_win::Hive::user(), &scheme, &b.identity.id, &own_exe())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (b, scheme);
+        false
+    }
 }
 
 #[cfg(test)]

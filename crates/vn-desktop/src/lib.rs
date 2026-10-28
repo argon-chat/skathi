@@ -203,7 +203,6 @@ pub fn advise(msg: &str) {
 }
 
 /// [`advise`], from any thread.
-#[allow(dead_code)] // the instance pipe's peer-check advisories (next)
 pub(crate) fn advise_later(msg: &str) {
     eprintln!("[vue-native compat] {msg}");
     log_later("advisory", format!("[vue-native compat] {msg}"));
@@ -268,6 +267,25 @@ host_fn!(fn vn_launch_info(_g, _args) {
     js_string(&launch::info_json())
 });
 
+// `__vn_launch_register_protocol(scheme) -> {ok, wrote, scheme} | {error, name}`.
+// Sync, like `appStorage`: three registry calls, microseconds.
+host_fn!(fn vn_launch_register_protocol(g, args) {
+    let scheme = read_arg_string(g, args.arg(0).0);
+    js_string(&launch::js_register(&scheme))
+});
+
+// `__vn_launch_unregister_protocol(scheme) -> boolean`.
+host_fn!(fn vn_launch_unregister_protocol(g, args) {
+    let scheme = read_arg_string(g, args.arg(0).0);
+    Value::boolean(launch::js_unregister(&scheme)).0
+});
+
+// `__vn_launch_is_protocol_registered(scheme) -> boolean`.
+host_fn!(fn vn_launch_is_protocol_registered(g, args) {
+    let scheme = read_arg_string(g, args.arg(0).0);
+    Value::boolean(launch::js_is_registered(&scheme)).0
+});
+
 /// Registers the `__vn_desktop_*` / `__vn_shell_*` / `__vn_launch_*` surface.
 /// Called from vn-app's boot beside `vn_permissions::install`, before any app
 /// code runs.
@@ -279,6 +297,9 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_shell_show_item", 1, vn_shell_show_item as *const _),
         ("__vn_shell_trash", 1, vn_shell_trash as *const _),
         ("__vn_launch_info", 0, vn_launch_info as *const _),
+        ("__vn_launch_register_protocol", 1, vn_launch_register_protocol as *const _),
+        ("__vn_launch_unregister_protocol", 1, vn_launch_unregister_protocol as *const _),
+        ("__vn_launch_is_protocol_registered", 1, vn_launch_is_protocol_registered as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);

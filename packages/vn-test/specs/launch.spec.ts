@@ -10,6 +10,10 @@
 // `myapp://` link) would start it. VN_LAUNCH_RAISE=off (the harness default)
 // keeps the primary from taking the foreground, so the run never steals focus
 // from whoever is at the machine.
+//
+// The protocol tests use the REAL HKCU\Software\Classes with a test-only
+// scheme (`vntest-<runner pid>`), delete it in teardown whatever happened,
+// and assert the hive is clean before the file ends.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
@@ -50,6 +54,7 @@ const secondEnv = (more: Record<string, string> = {}) => ({
 });
 
 type Record_ = {
+  opened: string[];
   own: { argv: string[]; cwd: string; url: string | null; paths: string[]; singleInstance: boolean };
   events: { argv: string[]; cwd: string; url: string | null; paths: string[]; source: string }[];
   params: { targetURL: string | null; files: number }[];
@@ -123,7 +128,96 @@ describe("a second launch", () => {
     bunExpect(got.events[2].argv.slice(1)).toEqual(["report.txt", "--devtools"]);
   }, T);
 
+});
+
+// ---------------------------------------------------------------------------
+// protocols — the REAL per-user registry, with a test-only scheme that is
+// removed in teardown and checked gone (docs/LAUNCH.md §5)
+// ---------------------------------------------------------------------------
+
+const scheme = `vntest-${process.pid}`;
+const foreign = `vntest-foreign-${process.pid}`;
+const keyOf = (s: string) => `HKCU\\Software\\Classes\\${s}`;
+const regExists = (key: string) => spawnSync("reg", ["query", key], { stdio: "ignore" }).status === 0;
+/** A key's value (`/ve` = the default one), or null. */
+function regValue(key: string, name: string | null): string | null {
+  const r = spawnSync("reg", ["query", key, ...(name === null ? ["/ve"] : ["/v", name])], { encoding: "utf8" });
+  if (r.status !== 0) return null;
+  const line = r.stdout.split(/\r?\n/).find((l) => /\sREG_SZ\s/.test(l));
+  return line ? line.replace(/^.*?\sREG_SZ\s+/, "") : "";
+}
+const api = (call: string) => app.eval(`__VN_TEST_LAUNCH__.api.${call}`);
+afterAll(() => {
+  for (const s of [scheme, foreign]) spawnSync("reg", ["delete", keyOf(s), "/f"], { stdio: "ignore" });
+});
+
+describe("protocols", () => {
+  test("registerProtocol writes the documented per-user key, pointing a dev host at its slot", async () => {
+    bunExpect(regExists(keyOf(scheme))).toBe(false);
+    bunExpect(await api(`isRegistered(${JSON.stringify(scheme)})`)).toBe(false);
+    bunExpect(await api(`register(${JSON.stringify(scheme)})`)).toBe("ok");
+    bunExpect(regValue(keyOf(scheme), null)).toBe(`URL:${scheme}`);
+    bunExpect(regValue(keyOf(scheme), "URL Protocol")).toBe("");
+    bunExpect(regValue(keyOf(scheme), "VnOwner")).toBe("gl.argon.vn-test.launch");
+    const command = regValue(`${keyOf(scheme)}\\shell\\open\\command`, null) ?? "";
+    bunExpect(command.toLowerCase().startsWith(`"${exe.toLowerCase()}" --vn-dist "`)).toBe(true);
+    bunExpect(command.toLowerCase()).toContain(app.slotDir.toLowerCase());
+    bunExpect(command.endsWith(` --vn-protocol-launch -- "%1"`)).toBe(true);
+    bunExpect(await api(`isRegistered(${JSON.stringify(scheme)})`)).toBe(true);
+    // A-F10: a dev host says what it just did.
+    const { entries } = await app.logs(0);
+    bunExpect(entries.some((e) => e.text.includes(`points ${scheme}:// at this dev slot`))).toBe(true);
+  }, T);
+
+  test("a link to it, opened through the SHELL, reaches the running instance", async () => {
+    // ShellExecuteExW → the registry command → a second process of this exe
+    // → the instance pipe → the `launch` event. No browser is involved: the
+    // scheme is ours.
+    const before = (await rec()).events.length;
+    const url = `${scheme}://open/item?id=42`;
+    await api(`open(${JSON.stringify(url)})`);
+    const got = await untilEvents(before + 1, 15_000);
+    bunExpect(got.opened.at(-1)).toBe("ok");
+    bunExpect(got.events.length).toBe(before + 1);
+    bunExpect(got.events.at(-1)!.url).toBe(url);
+    bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
+  }, T);
+
+  test("a scheme another app owns is refused, named, and left alone", async () => {
+    spawnSync("reg", ["add", keyOf(foreign), "/ve", "/d", "URL:Some Other App", "/f"], { stdio: "ignore" });
+    const answer = await api(`register(${JSON.stringify(foreign)})`);
+    bunExpect(answer).toStartWith("TypeError:");
+    bunExpect(answer).toContain("Some Other App");
+    bunExpect(regValue(keyOf(foreign), null)).toBe("URL:Some Other App");
+    bunExpect(regExists(`${keyOf(foreign)}\\shell`)).toBe(false);
+    bunExpect(await api(`unregister(${JSON.stringify(foreign)})`)).toBe(false);
+    bunExpect(regExists(keyOf(foreign))).toBe(true);
+    spawnSync("reg", ["delete", keyOf(foreign), "/f"], { stdio: "ignore" });
+    bunExpect(await api(`register("https")`)).toStartWith("TypeError:");
+    bunExpect(await api(`register("ms-settings")`)).toStartWith("TypeError:");
+  }, T);
+
+  test("unregisterProtocol removes it; --vn-unregister-protocols removes every key of this app and exits", async () => {
+    bunExpect(await api(`unregister(${JSON.stringify(scheme)})`)).toBe(true);
+    bunExpect(regExists(keyOf(scheme))).toBe(false);
+    bunExpect(await api(`isRegistered(${JSON.stringify(scheme)})`)).toBe(false);
+    // Again, then the uninstaller's hook from outside, with no window.
+    bunExpect(await api(`register(${JSON.stringify(scheme)})`)).toBe("ok");
+    const r = spawnSync(exe, ["--vn-unregister-protocols"], { cwd: REPO, env: secondEnv(), encoding: "utf8", timeout: 15_000 });
+    bunExpect(r.status).toBe(0);
+    bunExpect(r.stdout).toContain(`unregistered ${scheme}:`);
+    bunExpect(regExists(keyOf(scheme))).toBe(false);
+  }, T);
+
+  test("the hive is clean", () => {
+    bunExpect(regExists(keyOf(scheme))).toBe(false);
+    bunExpect(regExists(keyOf(foreign))).toBe(false);
+  });
+});
+
+describe("opting out", () => {
   test("VN_SINGLE_INSTANCE=0 runs a second copy side by side instead of forwarding", async () => {
+    const before = (await rec()).events.length;
     const child = spawn(exe, [], {
       cwd: REPO,
       env: secondEnv({ VN_SINGLE_INSTANCE: "0" }),
@@ -139,7 +233,7 @@ describe("a second launch", () => {
     await new Promise((res) => setTimeout(res, 2_500));
     bunExpect(exited).toBe(null);
     const r = await rec();
-    bunExpect(r.events.length).toBe(3);
+    bunExpect(r.events.length).toBe(before);
   }, T);
 
   test("nothing went wrong in the primary", async () => {

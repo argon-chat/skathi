@@ -334,6 +334,12 @@ pub fn quote_arg(arg: &str) -> String {
     if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
         return arg.to_string();
     }
+    quote_always(arg)
+}
+
+/// [`quote_arg`], but ALWAYS wrapped in quotes — what a registry command line
+/// wants for a path, whether or not this one happens to contain a space.
+pub fn quote_always(arg: &str) -> String {
     let mut out = String::with_capacity(arg.len() + 2);
     out.push('"');
     let mut backslashes = 0usize;

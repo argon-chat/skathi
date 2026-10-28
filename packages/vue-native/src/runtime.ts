@@ -4072,13 +4072,16 @@ export interface VnLaunchEvent extends VnEvent {
   readonly source: "second-instance" | "open-url" | "reopen";
 }
 
-/** The tier-2 surface. `registerProtocol` & co. arrive with protocol registration. */
+/** The tier-2 surface, in both its live and its host-less spelling. */
 interface AppLaunch extends VnEventTarget {
   readonly argv: readonly string[];
   readonly cwd: string;
   readonly url: string | null;
   readonly paths: readonly string[];
   readonly singleInstance: boolean;
+  registerProtocol(scheme: string): void;
+  unregisterProtocol(scheme: string): boolean;
+  isProtocolRegistered(scheme: string): boolean;
 }
 
 const launchInfo: LaunchInfo = (() => {
@@ -4208,6 +4211,37 @@ function createLaunch(): AppLaunch {
     paths: { get: () => paths, enumerable: true },
     /** Does THIS process hold the single-instance lock (`"singleInstance": true` and it was first)? */
     singleInstance: { get: () => launchInfo.singleInstance, enumerable: true },
+    /**
+     * Registers `scheme://` for THIS exe, per user (HKCU — never machine-wide).
+     * Synchronous: three registry writes. Throws a TypeError for an invalid
+     * or reserved scheme (http, file, ms-*, …) and for one that another app
+     * already owns — vue-native never takes over a scheme. A packaged app
+     * registers its declared `protocols` itself at startup; in a DEV host this
+     * points the scheme at the dev slot (advisory A-F10).
+     */
+    registerProtocol: {
+      value(scheme: string): void {
+        if (typeof __vn_launch_register_protocol !== "function") {
+          throw new TypeError("appLaunch.registerProtocol is unavailable: no desktop host");
+        }
+        const out = JSON.parse(__vn_launch_register_protocol(String(scheme))) as Partial<DesktopFailure>;
+        if (out.error !== undefined) throw desktopError({ name: out.name ?? "TypeError", ...out });
+      },
+    },
+    /** Removes a registration of OURS that points at THIS exe. Returns whether it did. */
+    unregisterProtocol: {
+      value(scheme: string): boolean {
+        return typeof __vn_launch_unregister_protocol === "function" && __vn_launch_unregister_protocol(String(scheme));
+      },
+    },
+    /** Is `scheme://` registered to this app AND to this exe? */
+    isProtocolRegistered: {
+      value(scheme: string): boolean {
+        return (
+          typeof __vn_launch_is_protocol_registered === "function" && __vn_launch_is_protocol_registered(String(scheme))
+        );
+      },
+    },
   }) as AppLaunch;
 }
 

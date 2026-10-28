@@ -1044,6 +1044,12 @@ fn main() {
         {
             std::process::exit(code);
         }
+        // The declared `protocols`: a packaged exe (re-)registers them per
+        // user, idempotently; a dev host only says it did not (docs/LAUNCH.md
+        // §5). Only the process that is going to RUN gets here.
+        if !args.host.devtools {
+            vn_desktop::launch::register_declared();
+        }
     }
     // `--devtools` rewrites two environment variables (the dist slot this
     // process publishes into, and which instance it prefers), so it has to run
