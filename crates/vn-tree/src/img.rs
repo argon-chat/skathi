@@ -64,7 +64,10 @@
 //! expensive — path normalisation, base64 decoding — is therefore memoised per
 //! node and only redone when the node's `src` string actually changes. gpui's
 //! own asset cache (keyed by the `Resource` / `Image` id) is what dedupes the
-//! *decode* across nodes that share a source.
+//! *decode* across nodes that share a source. It never evicts on its own, so a
+//! `blob:` source is handed back to it when no node shows it any more, and a
+//! path whose file was picked again after it changed loses its stale decode
+//! (see [`release`]).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -88,8 +91,90 @@ thread_local! {
     static STORE: Cell<Option<AssetLookup>> = const { Cell::new(None) };
     /// Per-node memo: the `src` string it was built from → the resolved source.
     /// Keyed by node id and GC'd with the rest of the per-node side state.
-    static RESOLVED: RefCell<HashMap<u32, (String, Option<ImageSource>)>> =
-        RefCell::new(HashMap::new());
+    static RESOLVED: RefCell<HashMap<u32, Memo>> = RefCell::new(HashMap::new());
+    /// For each path a `blob:` URL handed to gpui BY PATH: the (size, mtime)
+    /// of the file whose decode gpui's asset cache may now hold for it.
+    static BLOB_PATHS: RefCell<HashMap<PathBuf, Snapshot>> = RefCell::new(HashMap::new());
+    /// Sources gpui's asset cache must let go of, at the next point that has
+    /// a `Window` ([`evict_pending`]).
+    static EVICT: RefCell<Vec<ImageSource>> = const { RefCell::new(Vec::new()) };
+}
+
+type Snapshot = (u64, Option<std::time::SystemTime>);
+
+/// One node's memo entry.
+struct Memo {
+    src: String,
+    source: Option<ImageSource>,
+    /// Resolved from a `blob:` URL. gpui's asset cache keeps every decode it
+    /// was given until told otherwise, so a blob: source is handed back to it
+    /// when the last node showing it goes ([`release`]).
+    blob: bool,
+}
+
+/// gpui caches a `Resource::Path` decode under the path and an `Image` under
+/// its id, and drops neither. Two cases need it to:
+///
+/// - **A file picked again after it changed.** The new File passes the
+///   snapshot check, but the path's cached decode is the OLD file's, so the
+///   new blob: URL would show the old pixels. When a path arrives with a
+///   snapshot other than the one recorded for it, its cached decode goes.
+///   (An element still showing an older URL of the same file then reloads,
+///   and shows the new pixels where a browser would keep the old ones.)
+/// - **Residency.** A picked photo's decode would otherwise stay for the life
+///   of the app. When no node shows a blob: source any more, it goes.
+///
+/// For an `Image` (bytes in memory) only the decode goes: its atlas tiles are
+/// reachable only through gpui's private `ImageDecoder` asset, so they stay
+/// until the window closes. A `Resource::Path`'s tiles go with it.
+fn release(map: &HashMap<u32, Memo>, gone: Memo) {
+    let Memo { source: Some(source), blob: true, .. } = gone else { return };
+    if map.values().any(|m| m.source.as_ref().is_some_and(|s| same_source(s, &source))) {
+        return; // another node still shows it
+    }
+    if let ImageSource::Resource(Resource::Path(p)) = &source {
+        BLOB_PATHS.with(|b| b.borrow_mut().remove(p.as_ref()));
+    }
+    EVICT.with(|e| e.borrow_mut().push(source));
+}
+
+/// The identity gpui's cache keys by: the resource, or the `Image` itself.
+fn same_source(a: &ImageSource, b: &ImageSource) -> bool {
+    match (a, b) {
+        (ImageSource::Resource(x), ImageSource::Resource(y)) => x == y,
+        (ImageSource::Image(x), ImageSource::Image(y)) => std::sync::Arc::ptr_eq(x, y),
+        _ => false,
+    }
+}
+
+/// Records that `path` goes to gpui as the file with `snap`; queues its old
+/// decode for eviction when gpui may hold one of a different file.
+fn note_blob_path(path: &Path, snap: Snapshot) {
+    let stale = BLOB_PATHS.with(|b| b.borrow_mut().insert(path.to_path_buf(), snap)).is_some_and(|old| old != snap);
+    if stale {
+        EVICT.with(|e| e.borrow_mut().push(path_source(path.to_path_buf())));
+    }
+}
+
+/// Hands queued sources back to gpui: the cached decode, and for a path its
+/// atlas tiles (in every window). Called where a `Window` is at hand: right
+/// after `<img>` resolves its `src` (so a stale decode is gone before gpui
+/// is asked for the new one) and once per frame ([`crate::frame_tick`]).
+pub(crate) fn evict_pending(window: &mut gpui::Window, cx: &mut gpui::App) {
+    let queued = EVICT.with(|e| std::mem::take(&mut *e.borrow_mut()));
+    for source in queued {
+        if let ImageSource::Resource(r) = &source {
+            if let Some(Ok(image)) = window.get_asset::<gpui::ImgResourceLoader>(r, cx) {
+                cx.drop_image(image, Some(window));
+            }
+        }
+        source.remove_asset(cx);
+    }
+}
+
+#[cfg(test)]
+fn take_evictions() -> Vec<ImageSource> {
+    EVICT.with(|e| std::mem::take(&mut *e.borrow_mut()))
 }
 
 /// Publishes the directory relative `src`s resolve against. The host calls this
@@ -138,7 +223,14 @@ fn stored(tag: &str, src: &str) -> Option<Result<(String, &'static [u8]), String
 
 /// Drops memoised sources for nodes that no longer exist.
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
-    RESOLVED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    RESOLVED.with(|m| {
+        let mut map = m.borrow_mut();
+        let dead: Vec<u32> = map.keys().copied().filter(|&id| !live(id)).collect();
+        let gone: Vec<Memo> = dead.iter().filter_map(|id| map.remove(id)).collect();
+        for g in gone {
+            release(&map, g);
+        }
+    });
 }
 
 /// The resolved `ImageSource` for `id`'s current `src`, memoised.
@@ -149,13 +241,17 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 pub(crate) fn source_for(id: u32, src: &str) -> Option<ImageSource> {
     RESOLVED.with(|m| {
         let mut map = m.borrow_mut();
-        if let Some((cached_src, source)) = map.get(&id) {
-            if cached_src == src {
-                return source.clone();
+        if let Some(memo) = map.get(&id) {
+            if memo.src == src {
+                return memo.source.clone();
             }
         }
         let source = resolve(src);
-        map.insert(id, (src.to_string(), source.clone()));
+        let blob = src.trim().get(..5).is_some_and(|s| s.eq_ignore_ascii_case("blob:"));
+        let old = map.insert(id, Memo { src: src.to_string(), source: source.clone(), blob });
+        if let Some(old) = old {
+            release(&map, old);
+        }
         source
     })
 }
@@ -618,7 +714,8 @@ fn blob_image(src: &str, target: Option<BlobTarget>) -> Option<ImageSource> {
             warn(msg);
             return None;
         }
-        let BlobTarget::Path { path, .. } = t else { unreachable!() };
+        let BlobTarget::Path { path, size, mtime, .. } = t else { unreachable!() };
+        note_blob_path(path, (*size, *mtime));
         return Some(path_source(path.clone()));
     }
     let mime = target.as_ref().map(|t| t.mime().to_ascii_lowercase()).unwrap_or_default();
@@ -1138,7 +1235,43 @@ mod tests {
         let by_path = eval("URL.createObjectURL(picked)");
         assert_eq!(as_path(resolve(&by_path)), Some(f.0.clone()), "a picked file is handed on by path");
         assert!(matches!(resolve_media("video", &by_path), Ok(vn_video::MediaSource::Path(p)) if p == f.0));
+        // gpui's cache lets go of a blob: decode when the last node showing it
+        // goes, and not before (m25 review, finding 4).
+        let again = eval("URL.createObjectURL(picked)");
+        let _ = take_evictions();
+        assert!(source_for(901, &mem).is_some());
+        assert!(source_for(902, &by_path).is_some());
+        assert!(source_for(903, &again).is_some(), "a second URL of the same File: the same path");
+        gc(|id| id != 901 && id != 902);
+        let ev = take_evictions();
+        assert_eq!(ev.len(), 1, "the memory decode goes; the path is still shown by 903");
+        assert!(matches!(&ev[0], ImageSource::Image(_)));
+        gc(|id| id != 903);
+        let ev = take_evictions();
+        assert!(matches!(&ev[..], [ImageSource::Resource(Resource::Path(p))] if p.as_ref() == f.0), "{} queued", ev.len());
         eval(&format!("URL.revokeObjectURL('{mem}'); 'ok'"));
         assert!(resolve(&mem).is_none(), "revoked");
+    }
+
+    /// gpui keys a path's cached decode by the path alone: a file picked
+    /// again after it changed must not show the old pixels, so the old decode
+    /// is queued for eviction before the new one is asked for (m25 review,
+    /// finding 4).
+    #[test]
+    fn a_file_picked_again_after_it_changed_evicts_the_old_decode() {
+        let f = Picked::new("again.png", PNG_1PX);
+        let first = "blob:app://redpew/00000000-0000-4000-8000-0000000000a1";
+        let t1 = f.target(None, "image/png");
+        assert!(blob_image(first, Some(t1.clone())).is_some());
+        assert!(take_evictions().is_empty(), "first sight: nothing of it is cached");
+        assert!(blob_image(first, Some(t1)).is_some());
+        assert!(take_evictions().is_empty(), "the same file again: the cached decode is right");
+        let mut edited = PNG_1PX.to_vec();
+        edited.extend([0u8; 16]);
+        std::fs::write(&f.0, &edited).unwrap();
+        let t2 = f.target(None, "image/png");
+        assert!(blob_image("blob:app://redpew/00000000-0000-4000-8000-0000000000a2", Some(t2)).is_some());
+        let ev = take_evictions();
+        assert!(matches!(&ev[..], [ImageSource::Resource(Resource::Path(p))] if p.as_ref() == f.0), "{} queued", ev.len());
     }
 }

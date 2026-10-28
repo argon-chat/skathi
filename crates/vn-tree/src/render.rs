@@ -3544,7 +3544,11 @@ fn build_img<V: 'static>(
     let src = t.prop(id, "src").unwrap_or("").to_string();
     let alt = t.prop(id, "alt").unwrap_or("").to_string();
 
-    let Some(source) = img_src::source_for(id, &src) else {
+    let resolved = img_src::source_for(id, &src);
+    // A stale cached decode (a blob: URL of a file picked again after it
+    // changed) goes BEFORE gpui is asked for this source.
+    img_src::evict_pending(window, cx);
+    let Some(source) = resolved else {
         // Nothing loadable at all (empty/unsupported `src` — already advised).
         // A browser still lays the element out and paints the alt text, so the
         // node keeps its box and its styles.

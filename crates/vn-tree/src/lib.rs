@@ -488,7 +488,10 @@ pub fn video_device_changed() -> usize {
 /// Call it once per frame from the pump, BEFORE the draw; returns `true` when
 /// something moved and the window must repaint.
 ///
-/// Four jobs today:
+/// Five jobs today:
+/// * `blob:` image decodes that no node shows any more, or that belong to a
+///   file picked again after it changed, are handed back to gpui's asset
+///   cache (`img::evict_pending`);
 /// * every `<lottie>` is advanced by the wall-clock delta and its events are
 ///   dispatched (CONTRACT.md §4) — this is also where retired atlas tiles go
 ///   back to gpui, since `flush_changes` has no `Window` to hand them to;
@@ -500,6 +503,8 @@ pub fn video_device_changed() -> usize {
 ///   gpui focus, which is the browser's rule and what makes a `<KeepAlive>`
 ///   page stop swallowing keystrokes after it deactivates.
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
+    // gpui's asset cache lets go of blob: decodes no node shows any more.
+    img::evict_pending(window, cx);
     render::apply_pending_blur(window, cx);
     render::ensure_root_focus(window, cx);
     // `transitionend` / `animationstart` / `animationend` / `animationcancel`:
@@ -528,7 +533,8 @@ pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
 ///
 /// Called from a pop-out's own `render()`, which is the only place that holds
 /// its `&mut Window`. Three jobs, and each is a gpui resource the pump's window
-/// physically cannot reach:
+/// physically cannot reach (plus the `blob:` decodes of [`frame_tick`], which
+/// any window can hand back):
 ///
 /// * **atlas tiles retired by nodes this window painted** go back to THIS
 ///   window's sprite atlas. `App::drop_image(image, Some(window))` sweeps every
@@ -546,6 +552,7 @@ pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
 /// property of the one JS realm and must run once per FRAME GROUP, not once per
 /// window (D-M06). Running it twice would double every `setTimeout` rate.
 pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
+    img::evict_pending(window, cx);
     lottie::drain_pending_drops_for(window, cx);
     video::drain_pending_drops_for(window, cx);
     video::drain_pending_uploads(window);
