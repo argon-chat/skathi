@@ -50,15 +50,30 @@ describe("launchQueue", () => {
     expect(seen.map((p) => p.targetURL)).toEqual([null, "notes://1", "notes://2"]);
   });
 
-  test("files stays empty until FileSystemHandle exists — and says so once", () => {
-    const rt = createRuntime({ launch: { paths: ["C:\\docs\\a.txt"] } });
+  test("files are handles for the launch's paths, holding no path (D-F8)", async () => {
+    const rt = createRuntime({
+      launch: { paths: ["C:\\docs\\a.txt"], handles: [{ h: 7, name: "a.txt", kind: "file" }] },
+    });
     const seen: Params[] = [];
     rt.global.launchQueue.setConsumer((p: Params) => seen.push(p));
-    rt.host.desktop.forward({ argv: [], cwd: "C:\\", url: null, paths: ["C:\\docs\\b.txt"] });
-    expect(seen.every((p) => p.files.length === 0)).toBe(true);
-    const adv = rt.advisories().filter((l: string) => l.includes("LaunchParams.files"));
-    expect(adv.length).toBe(1);
-    expect(adv[0]).toContain("appLaunch.paths");
+    rt.host.desktop.forward({
+      argv: [],
+      cwd: "C:\\",
+      url: null,
+      paths: ["C:\\docs\\proj"],
+      handles: [{ h: 8, name: "proj", kind: "directory" }],
+    });
+    expect(seen.length).toBe(2);
+    const [a] = seen[0].files as { kind: string; name: string }[];
+    const [b] = seen[1].files as { kind: string; name: string }[];
+    expect([a.name, a.kind, b.name, b.kind]).toEqual(["a.txt", "file", "proj", "directory"]);
+    expect(a).toBeInstanceOf(rt.global.FileSystemFileHandle);
+    expect(b).toBeInstanceOf(rt.global.FileSystemDirectoryHandle);
+    expect(JSON.stringify(a)).not.toContain("docs");
+    // The handle answers through the host by id, not by path.
+    rt.host.desktop.fs.answers.set("getFile", (h: number) => ({ payload: { name: "a.txt", size: 1 }, value: { h } }));
+    expect(await (a as unknown as { getFile(): Promise<unknown> }).getFile()).toEqual({ h: 7 });
+    expect(rt.advisories().some((l: string) => l.includes("LaunchParams.files"))).toBe(false);
   });
 
   test("a consumer that throws does not take the next launch with it", () => {

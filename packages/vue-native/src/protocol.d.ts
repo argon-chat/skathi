@@ -535,12 +535,13 @@ declare function __vn_storage_flush(): VnJson;
 
 /**
  * The one callback the per-frame pump settles every desktop call through:
- * `(token, ok, payloadJson)`. `ok` false means `payloadJson` is
- * `{ name, message, code?, osError? }`. Token `0` is an UNSOLICITED host event
- * whose `payload.kind` names it (`"launch"`).
+ * `(token, ok, payloadJson, value)`. `ok` false means `payloadJson` is
+ * `{ name, message, code?, osError? }`. `value` is a JS value the host made on
+ * delivery (a path-backed `File`, a `FileList`), else `undefined`. Token `0`
+ * is an UNSOLICITED host event whose `payload.kind` names it (`"launch"`).
  */
 declare function __vn_desktop_set_dispatcher(
-  fn: (token: number, ok: boolean, payloadJson: VnJson) => void,
+  fn: (token: number, ok: boolean, payloadJson: VnJson, value: unknown) => void,
 ): void;
 /**
  * `{ token }`, or a synchronous refusal `{ error, name, code? }`. `content`
@@ -569,6 +570,51 @@ declare function __vn_launch_register_protocol(scheme: string): VnJson;
 declare function __vn_launch_unregister_protocol(scheme: string): boolean;
 /** Ours, and pointing at this exe? */
 declare function __vn_launch_is_protocol_registered(scheme: string): boolean;
+
+// ---- File System Access and dialogs (vn-desktop fs/, dialog/) ---------------
+//
+// Every handle argument is a NUMBER into the host's handle table; no host fn
+// takes or returns a path. `{ token }` answers settle through the dispatcher
+// above; `{ error, name, code? }` is a synchronous refusal (the name fence, an
+// unknown handle, a second dialog on one window).
+
+/** `(id, name, kind) => handle` — what a dropped path's handle is made with. */
+declare function __vn_fs_set_handle_factory(fn: (h: number, name: string, kind: string) => unknown): void;
+/** The handle's JS object was collected. */
+declare function __vn_fs_release(h: number): void;
+/** Settles `{ name, size }` with the `File` as the value. */
+declare function __vn_fs_get_file(h: number): VnJson;
+/** Settles `{ h, name, kind }`. */
+declare function __vn_fs_child(dir: number, name: string, isDirectory: boolean, create: boolean): VnJson;
+declare function __vn_fs_remove(dir: number, name: string, recursive: boolean): VnJson;
+/** Settles `{ same }`. */
+declare function __vn_fs_same(a: number, b: number): VnJson;
+/** Settles `{ path: string[] | null }`. */
+declare function __vn_fs_resolve(root: number, other: number): VnJson;
+/** Settles `{ cursor }`. */
+declare function __vn_fs_dir_open(dir: number): VnJson;
+/** Settles `{ entries: {h, name, kind}[], done }`, 256 at most. */
+declare function __vn_fs_dir_next(cursor: number): VnJson;
+declare function __vn_fs_dir_close(cursor: number): void;
+/** Settles `{ w }`. */
+declare function __vn_fs_writable_open(h: number, keepExistingData: boolean): VnJson;
+/** `position` -1 = at the cursor. `data`: a string, a Uint8Array or a Blob. */
+declare function __vn_fs_writable_write(w: number, position: number, data: unknown): VnJson;
+declare function __vn_fs_writable_seek(w: number, position: number): VnJson;
+declare function __vn_fs_writable_truncate(w: number, size: number): VnJson;
+declare function __vn_fs_writable_close(w: number): VnJson;
+declare function __vn_fs_writable_abort(w: number): VnJson;
+/** `structuredClone` of an instance is a DataCloneError naming `interfaceName`. */
+declare function __vn_fs_refuse_clone(proto: object, interfaceName: string): void;
+/**
+ * A picker: `{ kind: "open"|"save"|"folder", multiple?, accept?, types?,
+ * excludeAcceptAllOption?, id?, startIn?, suggestedName?, result: "files"|"handles" }`.
+ * Settles `{ files }` + a FileList, `{ handles }`, or `{ cancelled: true }`.
+ * `currentFiles` is an input's FileList (the same selection again is a cancel).
+ */
+declare function __vn_dialog_open(requestJson: VnJson, currentFiles: unknown): VnJson;
+/** Save As for a `blob:`/`data:` URL, resolved at the call. Settles `{ saved }` or `{ cancelled }`. */
+declare function __vn_download(url: string, downloadAttribute: string): VnJson;
 
 // ---------------------------------------------------------------------------
 // voice — crates/vn-voice/src/lib.rs (CONTRACT.md, docs/VOICE.md)

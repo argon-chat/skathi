@@ -32,6 +32,23 @@ import { readTsSource } from "./ts-source";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
+export const DESKTOP_PATH = join(HERE, "../src/desktop.ts");
+
+/**
+ * src/desktop.ts, evaluated once into its one export. runtime.ts IMPORTS it
+ * (`import { installDesktop } from "./desktop"`), and that line goes with the
+ * other imports below; the function comes back in as a parameter. desktop.ts
+ * reads no ambient `__vn_*` name — its host, engine classes and settle
+ * channel are arguments — so one evaluation serves every world.
+ */
+let installDesktopFn: unknown = null;
+function loadInstallDesktop(): unknown {
+  if (installDesktopFn) return installDesktopFn;
+  const body = readTsSource(DESKTOP_PATH).replace(/^export\s+(function|const|let|class)\s/gm, "$1 ");
+  // eslint-disable-next-line no-new-func
+  installDesktopFn = new Function(`${body}\nreturn installDesktop;`)();
+  return installDesktopFn;
+}
 
 /** The W3C names `vn-permissions` knows — kept in step with `Capability::ALL`. */
 export const PERMISSION_NAMES = [
@@ -238,9 +255,39 @@ export function createRuntime(
   /** Deliver a forwarded second launch, as the pipe thread + pump would. */
   host.desktop.forward = (launch: Record<string, unknown>) =>
     host.desktop.dispatcher?.(0, true, JSON.stringify({ kind: "launch", source: "second-instance", ...launch }));
-  /** Settle a desktop token as `vn_desktop::pump()` would. */
-  host.desktop.settle = (token, ok = true, payload = {}) =>
-    host.desktop.dispatcher?.(token, ok, JSON.stringify(payload));
+  /** Settle a desktop token as `vn_desktop::pump()` would (`value`: what the host made). */
+  host.desktop.settle = (token, ok = true, payload = {}, value = undefined) =>
+    host.desktop.dispatcher?.(token, ok, JSON.stringify(payload), value);
+  /**
+   * The File System Access + dialog host (`vn-desktop` fs/, dialog/), faked
+   * at the seam. Every call is recorded in `fs.calls` as `{ op, args, token }`
+   * and answers `{token}`. An entry in `fs.answers` (op → fn(...args)) makes
+   * the fake settle that call itself, a microtask later — the pump source,
+   * in one line — with what the fn returns: `{ ok?, payload?, value? }`, or
+   * `{ sync }` for a synchronous refusal. Without one, a test settles the
+   * token by hand with `host.desktop.settle`.
+   */
+  host.desktop.fs = {
+    calls: [],
+    answers: new Map(),
+    released: [],
+    refused: [],
+    factory: null,
+  };
+  const fsCall = (op, ...args) => {
+    const answer = host.desktop.fs.answers.get(op);
+    const out = answer ? answer(...args) : null;
+    if (out && out.sync) {
+      host.desktop.fs.calls.push({ op, args, token: null });
+      return JSON.stringify(out.sync);
+    }
+    const token = host.desktop.nextToken++;
+    host.desktop.fs.calls.push({ op, args, token });
+    if (out) {
+      queueMicrotask(() => host.desktop.settle(token, out.ok !== false, out.payload ?? {}, out.value));
+    }
+    return JSON.stringify({ token });
+  };
   const shellCall = (op, ...rest) => {
     host.desktop.calls.push({ op, args: rest });
     if (host.desktop.refuse) {
@@ -281,6 +328,14 @@ export function createRuntime(
     // stay compatible: the world is private so that each test gets its own DOM
     // globals, not so that it is sealed off from the host.
     __VN_WINDOW__: globalThis.__VN_WINDOW__,
+    // The engine classes desktop.ts builds on (its `DesktopEngine`), which the
+    // runtime hands it off its own global. bun has all five; redjs has all
+    // five too, which is the point of testing against bun's.
+    Blob: globalThis.Blob,
+    DOMException: globalThis.DOMException,
+    TextDecoder: globalThis.TextDecoder,
+    WritableStream: globalThis.WritableStream,
+    btoa: globalThis.btoa,
     // Whatever a test says the PRELUDE put on the global before the bundle
     // ran (window.open's A-22, say).
     ...(options.globals ?? {}),
@@ -376,6 +431,27 @@ export function createRuntime(
     "__vn_launch_register_protocol",
     "__vn_launch_unregister_protocol",
     "__vn_launch_is_protocol_registered",
+    "__vn_fs_set_handle_factory",
+    "__vn_fs_release",
+    "__vn_fs_get_file",
+    "__vn_fs_child",
+    "__vn_fs_remove",
+    "__vn_fs_same",
+    "__vn_fs_resolve",
+    "__vn_fs_dir_open",
+    "__vn_fs_dir_next",
+    "__vn_fs_dir_close",
+    "__vn_fs_writable_open",
+    "__vn_fs_writable_write",
+    "__vn_fs_writable_seek",
+    "__vn_fs_writable_truncate",
+    "__vn_fs_writable_close",
+    "__vn_fs_writable_abort",
+    "__vn_fs_refuse_clone",
+    "__vn_dialog_open",
+    "__vn_download",
+    // desktop.ts's one export (see `loadInstallDesktop`).
+    "installDesktop",
     // Bound as parameters so the link path's `new MouseEvent` / `new URL` are
     // the world's own: bun has a `URL` but no `MouseEvent`, and a test that
     // wants the engine's "is this a MouseEvent?" check can hand one in.
@@ -587,6 +663,29 @@ export function createRuntime(
     (scheme) => host.desktop.protocols.get(String(scheme).toLowerCase()) === "test" &&
       host.desktop.protocols.delete(String(scheme).toLowerCase()),
     (scheme) => host.desktop.protocols.get(String(scheme).toLowerCase()) === "test",
+    // ---- __vn_fs_* / __vn_dialog_open / __vn_download (see `fsCall`) ---------
+    (fn) => {
+      host.desktop.fs.factory = fn;
+    },
+    (h) => host.desktop.fs.released.push(h),
+    (h) => fsCall("getFile", h),
+    (dir, name, isDir, create) => fsCall("child", dir, name, isDir, create),
+    (dir, name, recursive) => fsCall("remove", dir, name, recursive),
+    (a, b) => fsCall("same", a, b),
+    (root, other) => fsCall("resolve", root, other),
+    (dir) => fsCall("dirOpen", dir),
+    (cursor) => fsCall("dirNext", cursor),
+    (cursor) => host.desktop.fs.calls.push({ op: "dirClose", args: [cursor], token: null }),
+    (h, keep) => fsCall("writableOpen", h, keep),
+    (w, position, data) => fsCall("writableWrite", w, position, data),
+    (w, position) => fsCall("writableSeek", w, position),
+    (w, size) => fsCall("writableTruncate", w, size),
+    (w) => fsCall("writableClose", w),
+    (w) => fsCall("writableAbort", w),
+    (proto, name) => host.desktop.fs.refused.push({ proto, name }),
+    (json, current) => fsCall("dialogOpen", JSON.parse(json), current),
+    (url, attr) => fsCall("download", url, attr),
+    loadInstallDesktop(),
     options.MouseEvent ?? globalThis.MouseEvent,
     globalThis.URL,
     fakeNavigator,
@@ -605,9 +704,11 @@ export function createRuntime(
     for (let i = first; i < first + 3; i++) args[i] = undefined;
   }
   if (options.desktop === false) {
-    // A host without vn-desktop: `appShell` goes inert, links advise.
+    // A host without vn-desktop: `appShell` goes inert, links advise, there
+    // are no pickers. Every `__vn_desktop_*` … `__vn_download` slot blanks.
     const first = params.indexOf("__vn_desktop_set_dispatcher");
-    for (let i = first; i < first + 9; i++) args[i] = undefined;
+    const last = params.indexOf("__vn_download");
+    for (let i = first; i <= last; i++) args[i] = undefined;
   }
 
   // eslint-disable-next-line no-new-func
@@ -616,7 +717,7 @@ export function createRuntime(
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
-       appDevtools, appShell, appLaunch, vModelText, vShow };`,
+       appDevtools, appShell, appLaunch, vModelText, vShow, desktopApi, activation, noteActivation };`,
   )(...args);
 
   return {

@@ -24,6 +24,11 @@ import {
 // Vue's own declaration, so a signature that drifts from what the renderer
 // actually calls is a build error rather than an `undefined` at runtime.
 import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
+// File System Access, FileReader and the file pickers (docs/DESKTOP.md). A
+// module of its own with its dependencies injected (see its header); it has no
+// tier-2 surface to re-export, so it is installed here rather than re-exported.
+import { installDesktop } from "./desktop";
+import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWire } from "./desktop";
 
 // ---- the shapes this file is built out of ---------------------------------
 // The host protocol itself is typed in ./protocol.d.ts; what follows is the JS
@@ -2331,7 +2336,11 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // events never reach — the host delivers them HERE. The prelude publishes
   // this hook for exactly that reason; without the call, `beforeunload` could
   // never veto a close because the window would never count as interacted with.
-  if (name === "keydown" || name === "mousedown") globalThis.__vnStickyActivation?.();
+  if (name === "keydown" || name === "mousedown") {
+    globalThis.__vnStickyActivation?.();
+    // …and TRANSIENT activation, which a file picker needs (HTML; Chromium).
+    noteActivation(name, key ?? undefined);
+  }
   // input: the payload string is the new value — mirror it onto the node
   // BEFORE dispatch so `e.target.value` reads like the browser.
   // (`value` is an element field; the host only ever targets an element with
@@ -3877,7 +3886,9 @@ export const appStorage: AppStorage = storageHost
 // Every async desktop call answers `{token}` (or a synchronous refusal) and is
 // settled later through ONE dispatcher by `vn_desktop::pump()` in the frame
 // pump — the permissions shape. Token 0 is an UNSOLICITED host event (a second
-// instance's `launch`) and is handed to `desktopEvents`.
+// instance's `launch`) and is handed to `desktopEvents`. A settle may carry a
+// VALUE the host made on delivery (a picked file's `File`, an input's
+// `FileList`) as the dispatcher's fourth argument.
 
 /** The host fns, gathered so the inert branch is a single `null` check. */
 interface DesktopHost {
@@ -3886,6 +3897,8 @@ interface DesktopHost {
   openPath: typeof __vn_shell_open_path;
   showItem: typeof __vn_shell_show_item;
   trash: typeof __vn_shell_trash;
+  /** The File System Access and dialog half, or null on a host from before it. */
+  fs: DesktopFsHost | null;
 }
 
 const desktopHost: DesktopHost | null =
@@ -3896,6 +3909,30 @@ const desktopHost: DesktopHost | null =
         openPath: __vn_shell_open_path,
         showItem: __vn_shell_show_item,
         trash: __vn_shell_trash,
+        fs:
+          typeof __vn_dialog_open === "function"
+            ? {
+                setHandleFactory: __vn_fs_set_handle_factory,
+                release: __vn_fs_release,
+                getFile: __vn_fs_get_file,
+                child: __vn_fs_child,
+                remove: __vn_fs_remove,
+                same: __vn_fs_same,
+                resolve: __vn_fs_resolve,
+                dirOpen: __vn_fs_dir_open,
+                dirNext: __vn_fs_dir_next,
+                dirClose: __vn_fs_dir_close,
+                writableOpen: __vn_fs_writable_open,
+                writableWrite: __vn_fs_writable_write,
+                writableSeek: __vn_fs_writable_seek,
+                writableTruncate: __vn_fs_writable_truncate,
+                writableClose: __vn_fs_writable_close,
+                writableAbort: __vn_fs_writable_abort,
+                refuseClone: __vn_fs_refuse_clone,
+                dialogOpen: __vn_dialog_open,
+                download: __vn_download,
+              }
+            : null,
       }
     : null;
 
@@ -3928,12 +3965,21 @@ function desktopError(f: DesktopFailure): AppDesktopError {
   return e;
 }
 
-const desktopPending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+/**
+ * A pending call. `raw` ones (desktop.ts's) resolve `{payload, value}` and
+ * reject with the host's failure object, which desktop.ts turns into the
+ * DOMException its spec names; the rest resolve the payload and reject with
+ * `desktopError`.
+ */
+const desktopPending = new Map<
+  number,
+  { resolve: (v: unknown) => void; reject: (e: unknown) => void; raw: boolean }
+>();
 /** Consumers of token-0 events, by `payload.kind`. */
 const desktopEvents = new Map<string, (payload: Record<string, unknown>) => void>();
 
 if (desktopHost) {
-  desktopHost.setDispatcher((token, ok, json) => {
+  desktopHost.setDispatcher((token, ok, json, value) => {
     let payload: Record<string, unknown> = {};
     try {
       payload = JSON.parse(json) as Record<string, unknown>;
@@ -3947,13 +3993,22 @@ if (desktopHost) {
     const p = desktopPending.get(token);
     if (!p) return;
     desktopPending.delete(token);
-    if (ok) p.resolve(payload);
-    else p.reject(desktopError(payload as unknown as DesktopFailure));
+    if (ok) p.resolve(p.raw ? ({ payload, value } satisfies DesktopSettle) : payload);
+    else p.reject(p.raw ? payload : desktopError(payload as unknown as DesktopFailure));
   });
 }
 
 /** One host answer → a promise: `{token}` waits for the pump, a refusal rejects now. */
 function desktopCall(json: VnJson): Promise<Record<string, unknown>> {
+  return desktopAwait(json, false) as Promise<Record<string, unknown>>;
+}
+
+/** {@link desktopCall} for desktop.ts: `{payload, value}`, and raw failures. */
+function desktopCallRaw(json: VnJson): Promise<DesktopSettle> {
+  return desktopAwait(json, true) as Promise<DesktopSettle>;
+}
+
+function desktopAwait(json: VnJson, raw: boolean): Promise<unknown> {
   let out: { token?: number } & Partial<DesktopFailure>;
   try {
     out = JSON.parse(json) as typeof out;
@@ -3961,13 +4016,66 @@ function desktopCall(json: VnJson): Promise<Record<string, unknown>> {
     return Promise.reject(new Error(`the desktop host answered something that is not JSON: ${json}`));
   }
   if (out.error !== undefined || out.token === undefined) {
-    return Promise.reject(desktopError({ name: out.name ?? "Error", ...out }));
+    const f = { name: out.name ?? "Error", ...out };
+    return Promise.reject(raw ? f : desktopError(f));
   }
   const token = out.token;
-  return new Promise((resolve, reject) =>
-    desktopPending.set(token, { resolve: resolve as (v: unknown) => void, reject }),
-  );
+  return new Promise((resolve, reject) => desktopPending.set(token, { resolve, reject, raw }));
 }
+
+// ---- transient activation (HTML "user activation") ---------------------------
+//
+// What a picker needs and a `<input type=file>` click checks: a keydown or a
+// mousedown the HOST delivered in the last five seconds (Chromium's lifespan).
+// `el.click()` and `dispatchEvent` never activate — script cannot vouch for a
+// user. Escape and a lone modifier do not count (HTML: "the Esc key" is
+// excluded; Chromium skips modifier-only presses). The host dispatcher below
+// calls `noteActivation`, beside the sticky-activation hook.
+
+const ACTIVATION_MS = 5000;
+let activationAt = -Infinity;
+let hasBeenActive = false;
+const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock", "Fn", "OS"]);
+const nowMs = () => Date.now();
+
+function noteActivation(name: string, key: string | undefined): void {
+  if (name === "keydown" && (key === "Escape" || (key !== undefined && MODIFIER_KEYS.has(key)))) return;
+  activationAt = nowMs();
+  hasBeenActive = true;
+}
+
+const activation = {
+  isActive: () => nowMs() - activationAt <= ACTIVATION_MS,
+  consume: () => void (activationAt = -Infinity),
+};
+
+// `navigator.userActivation` (HTML), where the engine has none: the read side
+// of the same state, for an app that wants to know before it asks.
+if (typeof navigator !== "undefined" && navigator && !("userActivation" in navigator)) {
+  try {
+    Object.defineProperty(navigator, "userActivation", {
+      value: Object.freeze(
+        Object.create(Object.prototype, {
+          isActive: { get: activation.isActive, enumerable: true },
+          hasBeenActive: { get: () => hasBeenActive, enumerable: true },
+        }),
+      ),
+      configurable: true,
+    });
+  } catch {
+    /* a frozen navigator keeps its own shape */
+  }
+}
+
+// ---- File System Access, FileReader, the pickers (desktop.ts) ---------------
+
+const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<string, unknown>, {
+  host: desktopHost?.fs ?? null,
+  engine: globalThis as unknown as DesktopEngine,
+  call: desktopCallRaw,
+  warnCompat,
+  activation,
+});
 
 // ---- links and window.open: the tier-1 path to the shell --------------------
 
@@ -4131,6 +4239,8 @@ interface LaunchInfo {
   cwd: string;
   url: string | null;
   paths: string[];
+  /** One granted handle per existing path, for `LaunchParams.files`. */
+  handles?: HandleWire[];
   singleInstance: boolean;
   id?: string;
   name?: string;
@@ -4168,11 +4278,11 @@ const launchInfo: LaunchInfo = (() => {
 })();
 
 /**
- * `LaunchParams` (WICG Launch Handler). `targetURL` is the RAW deep link —
- * there is no app URL scope to template it into — and `files` is empty until
- * the File System Access handles exist (desktop-apis tracks B/C); the paths
- * are on `appLaunch.paths` / the `launch` event meanwhile. Both divergences
- * are D-F8, and the second one advises once.
+ * `LaunchParams` (WICG Launch Handler + File Handling). `targetURL` is the RAW
+ * deep link — there is no app URL scope to template it into — and `files`
+ * holds a `FileSystemFileHandle` / `FileSystemDirectoryHandle` for EVERY
+ * existing path argument, where a PWA gets only those its manifest's
+ * `file_handlers` accept: there is no such list. Both are D-F8.
  */
 class LaunchParams {
   readonly targetURL: string | null;
@@ -4219,15 +4329,11 @@ class LaunchQueue {
   }
 }
 
-function launchParamsFor(url: string | null, paths: readonly string[]): LaunchParams {
-  if (paths.length) {
-    warnCompat(
-      "launchQueue:files",
-      "launchQueue: LaunchParams.files is empty — FileSystemFileHandle is not implemented yet (desktop-apis " +
-        "track C); the launch's existing paths are on appLaunch.paths and on the `launch` event",
-    );
-  }
-  return new LaunchParams(url, []);
+function launchParamsFor(url: string | null, handles: unknown): LaunchParams {
+  const files = Array.isArray(handles)
+    ? (handles as HandleWire[]).filter((w) => w && typeof w.h === "number").map((w) => desktopApi.handleFrom(w))
+    : [];
+  return new LaunchParams(url, files);
 }
 
 const launchQueue = new LaunchQueue();
@@ -4242,7 +4348,7 @@ const launchQueue = new LaunchQueue();
 }
 // This process's own launch. A host without vn-desktop has no launch to report.
 if (typeof __vn_launch_info === "function") {
-  launchQueue._enqueue(launchParamsFor(launchInfo.url, launchInfo.paths));
+  launchQueue._enqueue(launchParamsFor(launchInfo.url, launchInfo.handles));
 }
 
 function createLaunch(): AppLaunch {
@@ -4270,7 +4376,7 @@ function createLaunch(): AppLaunch {
     try {
       target.dispatchEvent(ev);
     } finally {
-      launchQueue._enqueue(launchParamsFor(url, evPaths));
+      launchQueue._enqueue(launchParamsFor(url, p.handles));
     }
   });
   return Object.defineProperties(target, {
