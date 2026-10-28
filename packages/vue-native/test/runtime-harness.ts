@@ -85,6 +85,7 @@ export function createRuntime(
     desktop?: boolean;
     MouseEvent?: unknown;
     globals?: Record<string, unknown>;
+    launch?: Record<string, unknown>;
   } = {},
 ) {
   const withStorage = options.storage !== false;
@@ -219,8 +220,22 @@ export function createRuntime(
       nextToken: 1,
       /** When set, the next shell call answers this object (a sync refusal). */
       refuse: null,
+      /** What `__vn_launch_info` answers — this world's own launch. */
+      launch: {
+        argv: ["C:\\apps\\Test.exe"],
+        cwd: "C:\\work",
+        url: null,
+        paths: [],
+        singleInstance: false,
+        id: "test",
+        name: "test",
+        ...(options.launch ?? {}),
+      },
     },
   };
+  /** Deliver a forwarded second launch, as the pipe thread + pump would. */
+  host.desktop.forward = (launch: Record<string, unknown>) =>
+    host.desktop.dispatcher?.(0, true, JSON.stringify({ kind: "launch", source: "second-instance", ...launch }));
   /** Settle a desktop token as `vn_desktop::pump()` would. */
   host.desktop.settle = (token, ok = true, payload = {}) =>
     host.desktop.dispatcher?.(token, ok, JSON.stringify(payload));
@@ -355,6 +370,7 @@ export function createRuntime(
     "__vn_shell_open_path",
     "__vn_shell_show_item",
     "__vn_shell_trash",
+    "__vn_launch_info",
     // Bound as parameters so the link path's `new MouseEvent` / `new URL` are
     // the world's own: bun has a `URL` but no `MouseEvent`, and a test that
     // wants the engine's "is this a MouseEvent?" check can hand one in.
@@ -547,6 +563,7 @@ export function createRuntime(
     (path, allow) => shellCall("openPath", path, allow),
     (path) => shellCall("showItem", path),
     (path) => shellCall("trash", path),
+    () => JSON.stringify(host.desktop.launch),
     options.MouseEvent ?? globalThis.MouseEvent,
     globalThis.URL,
     fakeNavigator,
@@ -567,7 +584,7 @@ export function createRuntime(
   if (options.desktop === false) {
     // A host without vn-desktop: `appShell` goes inert, links advise.
     const first = params.indexOf("__vn_desktop_set_dispatcher");
-    for (let i = first; i < first + 5; i++) args[i] = undefined;
+    for (let i = first; i < first + 6; i++) args[i] = undefined;
   }
 
   // eslint-disable-next-line no-new-func
@@ -576,7 +593,7 @@ export function createRuntime(
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
-       appDevtools, appShell, vModelText, vShow };`,
+       appDevtools, appShell, appLaunch, vModelText, vShow };`,
   )(...args);
 
   return {

@@ -62,6 +62,11 @@ export interface LaunchOptions {
   packaged?: string;
   /** Leave the process running at teardown — for debugging a red test by hand. */
   keepAlive?: boolean;
+  /**
+   * Command-line arguments after the exe: the app's own (`appLaunch.argv`),
+   * or host flags in front of them (docs/LAUNCH.md §2). Default none.
+   */
+  args?: string[];
 }
 
 export type LogEntry = { seq: number; at: number; kind: string; text: string };
@@ -478,10 +483,17 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
   // to outlive the run.
   if (options.keepAlive) delete env.VN_OWNER_PID;
   else env.VN_OWNER_PID = String(process.pid);
+  // Single instance is OFF under the harness unless a spec turns it on
+  // (docs/LAUNCH.md §3). A dev host's instance key includes its slot, so
+  // parallel slots never collide anyway — but a spec that relaunches one slot
+  // must get a second host, not a forwarded launch. And a forwarded launch
+  // never takes the foreground from the person at the machine.
+  if (env.VN_SINGLE_INSTANCE === undefined) env.VN_SINGLE_INSTANCE = "0";
+  if (env.VN_LAUNCH_RAISE === undefined) env.VN_LAUNCH_RAISE = "off";
   Object.assign(env, options.env ?? {});
 
   log(`[vn-test] ${label}: launching ${exe} on ${slotDir || "its own %TEMP% slot"}`);
-  const child = spawn(exe, [], {
+  const child = spawn(exe, options.args ?? [], {
     cwd: REPO,
     detached: true,
     stdio: ["ignore", logFd, logFd],

@@ -1,0 +1,16 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/launch.spec.ts: a single-instance app that records every launch it is told about — its own, and each one a second process forwards. See docs/LAUNCH.md.",
+
+  "name": "vn-test-launch",
+  "id": "gl.argon.vn-test.launch",
+  "singleInstance": true,
+  "raiseOnSecondInstance": true,
+
+  "window": {
+    "title": "vue-native — launch (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

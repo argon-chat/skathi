@@ -190,6 +190,31 @@ function readAppName(): string | undefined {
   return typeof name === "string" && name.trim() ? name.trim() : undefined;
 }
 
+// The launch keys (docs/LAUNCH.md), gathered from the TOP LEVEL of
+// vn.config.json into one `launch` object for the host: `id`,
+// `singleInstance`, `raiseOnSecondInstance`, `protocols`. The host reads it
+// before anything else exists — the single-instance check is the first thing
+// `main()` does — so it rides in the manifest like the window block does.
+// Only well-typed keys are copied; `vn build` (cli/config.ts) is where a
+// wrong one is an error, and the host re-validates every scheme anyway.
+function readLaunchConfig(): Record<string, unknown> | undefined {
+  const cfg = readVnConfig();
+  if (!cfg) return undefined;
+  const out: Record<string, unknown> = {};
+  if (typeof cfg.id === "string" && cfg.id.trim()) out.id = cfg.id.trim();
+  if (typeof cfg.singleInstance === "boolean") out.singleInstance = cfg.singleInstance;
+  if (typeof cfg.raiseOnSecondInstance === "boolean") out.raiseOnSecondInstance = cfg.raiseOnSecondInstance;
+  if (Array.isArray(cfg.protocols)) {
+    out.protocols = cfg.protocols.filter((p): p is string => typeof p === "string" && p.trim() !== "");
+  }
+  for (const key of ["id", "singleInstance", "raiseOnSecondInstance", "protocols"]) {
+    if (cfg[key] !== undefined && out[key] === undefined) {
+      console.error(`[build] ${VN_CONFIG_PATH}: "${key}" has the wrong type and was ignored (docs/LAUNCH.md)`);
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const encId = (id: string) => id.split("/").join("__") + ".js";
 const J = (v: unknown) => JSON.stringify(v);
@@ -1020,6 +1045,7 @@ function writeManifest(files: string[]) {
         modules: ids,
         deps,
         window: readWindowConfig(),
+        launch: readLaunchConfig(),
       },
       null,
       2,

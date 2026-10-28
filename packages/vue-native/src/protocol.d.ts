@@ -551,6 +551,12 @@ declare function __vn_shell_open_path(path: string, allowExecutable: boolean): V
 declare function __vn_shell_show_item(path: string): VnJson;
 /** `{ token }` or `{ error, name }`. Recycle Bin only, never a permanent delete. */
 declare function __vn_shell_trash(path: string): VnJson;
+/**
+ * This process's launch, as `vn_desktop::launch::start` resolved it before the
+ * window existed: `{ argv, cwd, url, paths, singleInstance, id, name }`.
+ * Forwarded launches arrive later, as token-0 `{ kind: "launch", … }` events.
+ */
+declare function __vn_launch_info(): VnJson;
 
 // ---------------------------------------------------------------------------
 // voice — crates/vn-voice/src/lib.rs (CONTRACT.md, docs/VOICE.md)

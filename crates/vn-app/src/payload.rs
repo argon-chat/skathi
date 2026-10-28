@@ -55,6 +55,9 @@ pub struct Meta {
     /// The vue-native version whose `vn` built this payload.
     pub vue_native: String,
     pub host_variant: String,
+    /// The `launch` object (`id`, `singleInstance`, `raiseOnSecondInstance`,
+    /// `protocols`) as JSON, when `vn build` wrote one (docs/LAUNCH.md).
+    pub launch: Option<String>,
 }
 
 pub struct Loaded {
@@ -143,6 +146,7 @@ fn parse_meta(text: &str) -> Meta {
             .and_then(crate::json::Json::as_str)
             .unwrap_or_default()
             .to_string(),
+        launch: v.get("launch").map(crate::json::Json::to_json),
     }
 }
 

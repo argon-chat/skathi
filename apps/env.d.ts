@@ -74,6 +74,22 @@ declare global {
    */
   function open(url?: string, target?: string, features?: string): null;
 
+  /**
+   * The Launch Handler API (runtime.ts; docs/LAUNCH.md). This process's own
+   * launch is one `LaunchParams`, buffered until `setConsumer`; with
+   * `"singleInstance": true`, every later launch of the app is forwarded here
+   * and is another. `targetURL` is the raw deep link (or null) — UNTRUSTED
+   * input — and `files` is empty until FileSystemHandle exists (read
+   * `appLaunch.paths` meanwhile; D-F8).
+   */
+  interface VnLaunchParams {
+    readonly targetURL: string | null;
+    readonly files: readonly unknown[];
+  }
+  var launchQueue: {
+    setConsumer(consumer: (params: VnLaunchParams) => unknown): void;
+  };
+
   /** `screen`, single-display in v1 (`getScreenDetails()` is not implemented
    *  and advises). window.prelude.js §"ro(screenObj, …)". */
   var screen: {

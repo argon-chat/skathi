@@ -4038,6 +4038,181 @@ const inertShell = new Proxy(
 
 export const appShell: AppShell = desktopHost ? createShell(desktopHost) : (inertShell as unknown as AppShell);
 
+// ---- launch (docs/LAUNCH.md) ------------------------------------------------
+//
+// TIER 1 is the Launch Handler API: `launchQueue.setConsumer(params => …)`,
+// with `params.targetURL` the deep link and `params.files` the file handles.
+// This process's own launch is one `LaunchParams`, buffered until a consumer
+// is set (per spec); every launch a SECOND process forwards here (with
+// `singleInstance`) is another one — the `"focus-existing"` client mode.
+//
+// TIER 2, `appLaunch`, is what a browser cannot say: the raw argv (Electron's
+// `process.argv` shape), the launch directory, which arguments are existing
+// paths, whether this process holds the single-instance lock, and the
+// `launch` event with its `source`. Deep links and argv are UNTRUSTED INPUT —
+// a web page can start `myapp://anything` — so they are strings, never code.
+
+/** What `__vn_launch_info` reports. */
+interface LaunchInfo {
+  argv: string[];
+  cwd: string;
+  url: string | null;
+  paths: string[];
+  singleInstance: boolean;
+  id?: string;
+  name?: string;
+}
+
+/** The `launch` event (`appLaunch.addEventListener("launch", …)`). */
+export interface VnLaunchEvent extends VnEvent {
+  readonly argv: readonly string[];
+  readonly cwd: string;
+  readonly url: string | null;
+  readonly paths: readonly string[];
+  readonly source: "second-instance" | "open-url" | "reopen";
+}
+
+/** The tier-2 surface. `registerProtocol` & co. arrive with protocol registration. */
+interface AppLaunch extends VnEventTarget {
+  readonly argv: readonly string[];
+  readonly cwd: string;
+  readonly url: string | null;
+  readonly paths: readonly string[];
+  readonly singleInstance: boolean;
+}
+
+const launchInfo: LaunchInfo = (() => {
+  const empty: LaunchInfo = { argv: [], cwd: "", url: null, paths: [], singleInstance: false };
+  if (typeof __vn_launch_info !== "function") return empty;
+  try {
+    return { ...empty, ...(JSON.parse(__vn_launch_info()) as Partial<LaunchInfo>) };
+  } catch {
+    return empty;
+  }
+})();
+
+/**
+ * `LaunchParams` (WICG Launch Handler). `targetURL` is the RAW deep link —
+ * there is no app URL scope to template it into — and `files` is empty until
+ * the File System Access handles exist (desktop-apis tracks B/C); the paths
+ * are on `appLaunch.paths` / the `launch` event meanwhile. Both divergences
+ * are D-F8, and the second one advises once.
+ */
+class LaunchParams {
+  readonly targetURL: string | null;
+  readonly files: readonly unknown[];
+  constructor(targetURL: string | null, files: readonly unknown[] = []) {
+    this.targetURL = targetURL;
+    this.files = Object.freeze(files.slice());
+  }
+}
+
+type LaunchConsumer = (params: LaunchParams) => unknown;
+
+/** `window.launchQueue`. */
+class LaunchQueue {
+  #consumer: LaunchConsumer | null = null;
+  #pending: LaunchParams[] = [];
+
+  /**
+   * Sets the consumer and hands it every launch that arrived before it —
+   * synchronously, in order, as Chromium's `LaunchQueue::setConsumer` does.
+   */
+  setConsumer(consumer: LaunchConsumer): void {
+    if (typeof consumer !== "function") {
+      throw new TypeError("Failed to execute 'setConsumer' on 'LaunchQueue': parameter 1 is not a function.");
+    }
+    this.#consumer = consumer;
+    const queued = this.#pending.splice(0);
+    for (const p of queued) this.#deliver(p);
+  }
+
+  /** Host side: a launch happened. */
+  _enqueue(params: LaunchParams): void {
+    if (this.#consumer) this.#deliver(params);
+    else this.#pending.push(params);
+  }
+
+  #deliver(params: LaunchParams): void {
+    try {
+      void this.#consumer!(params);
+    } catch (e) {
+      // A consumer that throws must not take the next launch with it.
+      console.error(`[vue-native] launchQueue consumer threw: ${e instanceof Error ? e.stack ?? e.message : e}`);
+    }
+  }
+}
+
+function launchParamsFor(url: string | null, paths: readonly string[]): LaunchParams {
+  if (paths.length) {
+    warnCompat(
+      "launchQueue:files",
+      "launchQueue: LaunchParams.files is empty — FileSystemFileHandle is not implemented yet (desktop-apis " +
+        "track C); the launch's existing paths are on appLaunch.paths and on the `launch` event",
+    );
+  }
+  return new LaunchParams(url, []);
+}
+
+const launchQueue = new LaunchQueue();
+{
+  const g = globalThis as unknown as { launchQueue?: unknown; LaunchParams?: unknown; LaunchQueue?: unknown };
+  // Installed only where the engine has none (redjs does not), never over one.
+  if (g.launchQueue === undefined) {
+    g.launchQueue = launchQueue;
+    g.LaunchParams = LaunchParams;
+    g.LaunchQueue = LaunchQueue;
+  }
+}
+// This process's own launch. A host without vn-desktop has no launch to report.
+if (typeof __vn_launch_info === "function") {
+  launchQueue._enqueue(launchParamsFor(launchInfo.url, launchInfo.paths));
+}
+
+function createLaunch(): AppLaunch {
+  const target = new EventTarget();
+  const frozen = <T>(v: T[]): readonly T[] => Object.freeze(v.slice());
+  const argv = frozen(launchInfo.argv);
+  const paths = frozen(launchInfo.paths);
+  desktopEvents.set("launch", (p) => {
+    const evArgv = frozen(Array.isArray(p.argv) ? (p.argv as string[]) : []);
+    const evPaths = frozen(Array.isArray(p.paths) ? (p.paths as string[]) : []);
+    const url = typeof p.url === "string" ? p.url : null;
+    const ev = new Event("launch");
+    for (const [k, v] of Object.entries({
+      argv: evArgv,
+      cwd: typeof p.cwd === "string" ? p.cwd : "",
+      url,
+      paths: evPaths,
+      source: typeof p.source === "string" ? p.source : "second-instance",
+    })) {
+      Object.defineProperty(ev, k, { value: v, enumerable: true, configurable: true });
+    }
+    // The tier-2 event first, then the tier-1 queue — the order docs/LAUNCH.md
+    // §4 documents. Either may be the one an app listens to; neither waits on
+    // the other.
+    try {
+      target.dispatchEvent(ev);
+    } finally {
+      launchQueue._enqueue(launchParamsFor(url, evPaths));
+    }
+  });
+  return Object.defineProperties(target, {
+    /** Electron's `process.argv` shape: the exe first, then the arguments (no `--vn-*`). */
+    argv: { get: () => argv, enumerable: true },
+    /** The directory the app was launched from. */
+    cwd: { get: () => launchInfo.cwd, enumerable: true },
+    /** The deep link this process was started for (`myapp://…`), or null. UNTRUSTED. */
+    url: { get: () => launchInfo.url, enumerable: true },
+    /** The arguments that name an existing file or folder, absolute. */
+    paths: { get: () => paths, enumerable: true },
+    /** Does THIS process hold the single-instance lock (`"singleInstance": true` and it was first)? */
+    singleInstance: { get: () => launchInfo.singleInstance, enumerable: true },
+  }) as AppLaunch;
+}
+
+export const appLaunch: AppLaunch = createLaunch();
+
 // ---- devtools (docs/DEVTOOLS.md, tier 3) -----------------------------------
 //
 // Since m22 the devtools — the protocol listener, the embedded inspector and

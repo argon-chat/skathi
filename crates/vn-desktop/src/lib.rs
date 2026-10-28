@@ -41,6 +41,7 @@ use vn_runtime::redjs::api::Value;
 use vn_runtime::{host_fn, JsRuntime};
 
 pub mod args;
+pub mod launch;
 pub mod shell;
 
 // ---------------------------------------------------------------------------
@@ -144,11 +145,25 @@ pub(crate) fn settle(token: u32, result: Result<String, Fail>) {
 }
 
 /// Queues an unsolicited event (token 0) from any thread.
-#[allow(dead_code)] // the instance pipe's `launch` (single instance lands next)
 pub(crate) fn emit(payload: String) {
     if let Ok(mut q) = QUEUE.lock() {
         q.push_back(Item::Settle { token: 0, ok: true, payload });
     }
+}
+
+/// Tests: takes every queued unsolicited event's payload out of the queue.
+#[cfg(test)]
+pub(crate) fn take_emitted() -> Vec<String> {
+    let Ok(mut q) = QUEUE.lock() else { return Vec::new() };
+    let mut out = Vec::new();
+    q.retain(|item| match item {
+        Item::Settle { token: 0, payload, .. } => {
+            out.push(payload.clone());
+            false
+        }
+        _ => true,
+    });
+    out
 }
 
 /// Queues a log-ring line from any thread; [`pump`] writes it on the main one.
@@ -246,8 +261,16 @@ host_fn!(fn vn_shell_trash(g, args) {
     js_string(&shell::start_trash(&path))
 });
 
-/// Registers the `__vn_desktop_*` / `__vn_shell_*` surface. Called from vn-app's
-/// boot beside `vn_permissions::install`, before any app code runs.
+// `__vn_launch_info() -> {argv, cwd, url, paths, singleInstance, id, name}` —
+// this process's own launch, as `launch::start` resolved it. Sync: it is a
+// read of a value fixed before the window existed.
+host_fn!(fn vn_launch_info(_g, _args) {
+    js_string(&launch::info_json())
+});
+
+/// Registers the `__vn_desktop_*` / `__vn_shell_*` / `__vn_launch_*` surface.
+/// Called from vn-app's boot beside `vn_permissions::install`, before any app
+/// code runs.
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_desktop_set_dispatcher", 1, vn_desktop_set_dispatcher as *const _),
@@ -255,6 +278,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_shell_open_path", 2, vn_shell_open_path as *const _),
         ("__vn_shell_show_item", 1, vn_shell_show_item as *const _),
         ("__vn_shell_trash", 1, vn_shell_trash as *const _),
+        ("__vn_launch_info", 0, vn_launch_info as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);

@@ -11,6 +11,10 @@
 //     "version": "1.2.3",         default: the app's package.json version
 //     "window": { … },            unchanged
 //     "devtools": true,           unchanged (a runtime switch)
+//     "id": "gl.argon.hello",     launch identity (instance key, protocol owner) — default name
+//     "singleInstance": true,     one process per user session; a 2nd launch forwards (docs/LAUNCH.md)
+//     "raiseOnSecondInstance": true,  bring the window forward on a forwarded launch (default true)
+//     "protocols": ["hello"],     custom URL schemes, registered per-user at startup (prod)
 //     "assets": ["assets"],       what is packaged: dirs/globs relative to the app root
 //     "windows": {                Windows exe identity — only `vn build` reads it
 //       "exeName": "Hello", "icon": "icon.png", "company": "…", "copyright": "…",
@@ -56,10 +60,85 @@ export interface AppConfig {
   windows: WindowsConfig;
   exeName: string;
   iconPath: string | null;
+  /** `"id"`, or the name. */
+  id: string;
+  /** The launch keys, defaults applied (docs/LAUNCH.md). */
+  launch: LaunchConfig;
   warnings: string[];
 }
 
-const TOP_LEVEL = new Set(["name", "productName", "version", "window", "devtools", "assets", "windows"]);
+/** The `launch` object `vn build` writes into the payload's META. */
+export interface LaunchConfig {
+  id: string;
+  singleInstance: boolean;
+  raiseOnSecondInstance: boolean;
+  protocols: string[];
+}
+
+const TOP_LEVEL = new Set([
+  "name",
+  "productName",
+  "version",
+  "window",
+  "devtools",
+  "assets",
+  "windows",
+  "id",
+  "singleInstance",
+  "raiseOnSecondInstance",
+  "protocols",
+]);
+
+/** RFC 3986 scheme, lowercase, as the host registers it. */
+const SCHEME = /^[a-z][a-z0-9+.-]{0,62}$/;
+/**
+ * Schemes an app may never claim — the browser's own, the shell's, and
+ * Windows' `ms-*` / `search-ms`. The host refuses them too; refusing here is
+ * what makes it a build error instead of a startup advisory.
+ */
+const RESERVED_SCHEMES = new Set([
+  "http", "https", "file", "ftp", "mailto", "tel", "data", "blob", "javascript", "about", "vbscript", "search-ms",
+]);
+/** An id names a kernel object and a registry value: keep it to a safe alphabet. */
+const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+function readLaunch(raw: Record<string, unknown>, name: string): LaunchConfig {
+  const bool = (k: string, dflt: boolean): boolean => {
+    const v = raw[k];
+    if (v === undefined) return dflt;
+    if (typeof v !== "boolean") throw new ConfigError(`vn.config.json "${k}" must be true or false`);
+    return v;
+  };
+  let id = name;
+  if (raw.id !== undefined) {
+    if (typeof raw.id !== "string" || !ID.test(raw.id.trim())) {
+      throw new ConfigError(
+        'vn.config.json "id" must be a reverse-DNS style identifier (letters, digits, ".", "_", "-"), e.g. "gl.argon.notes"',
+      );
+    }
+    id = raw.id.trim();
+  }
+  const protocols: string[] = [];
+  if (raw.protocols !== undefined) {
+    if (!Array.isArray(raw.protocols)) throw new ConfigError('vn.config.json "protocols" must be an array of scheme names');
+    for (const p of raw.protocols) {
+      const s = typeof p === "string" ? p.trim().toLowerCase().replace(/:\/*$/, "") : "";
+      if (!SCHEME.test(s)) {
+        throw new ConfigError(`vn.config.json "protocols": ${JSON.stringify(p)} is not a URL scheme (a letter, then letters, digits, "+", "-" or ".")`);
+      }
+      if (RESERVED_SCHEMES.has(s) || s.startsWith("ms-")) {
+        throw new ConfigError(`vn.config.json "protocols": "${s}" belongs to the browser or to Windows and cannot be registered by an app`);
+      }
+      if (!protocols.includes(s)) protocols.push(s);
+    }
+  }
+  return {
+    id,
+    singleInstance: bool("singleInstance", false),
+    raiseOnSecondInstance: bool("raiseOnSecondInstance", true),
+    protocols,
+  };
+}
 const WINDOWS_KEYS = new Set(["exeName", "icon", "company", "copyright", "description", "console", "host"]);
 const ENTRY_CANDIDATES = ["src/main.ts", "src/main.js", "src/main.mts", "main.ts", "main.js"];
 
@@ -130,6 +209,13 @@ export function loadAppConfig(target: string): AppConfig {
   }
 
   const name = str(raw.name, where('"name"')) ?? basename(appRoot);
+  const launch = readLaunch(raw, name);
+  if (launch.protocols.length && !launch.singleInstance) {
+    // A-F4, at build time as well as at startup.
+    warnings.push(
+      'vn.config.json declares "protocols" without "singleInstance": every link to them will start a new instance of the app',
+    );
+  }
   const win = raw.window && typeof raw.window === "object" ? (raw.window as Record<string, unknown>) : {};
   const title = typeof win.title === "string" && win.title.trim() ? win.title.trim() : undefined;
   const productName = str(raw.productName, where('"productName"')) ?? title ?? name;
@@ -217,6 +303,8 @@ export function loadAppConfig(target: string): AppConfig {
     windows,
     exeName,
     iconPath,
+    id: launch.id,
+    launch,
     warnings,
   };
 }

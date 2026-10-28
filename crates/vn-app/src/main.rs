@@ -1023,6 +1023,28 @@ fn main() {
     if let Some(dist) = args.host.vn_dist.as_deref().filter(|d| !d.is_empty()) {
         std::env::set_var("VN_DIST", dist);
     }
+    // Single instance (docs/LAUNCH.md §3), BEFORE the inspector, the logger and
+    // gpui: a second launch of a `singleInstance` app forwards its argv / url /
+    // cwd to the running one and exits here, having created no window and
+    // touched no `localStorage`. Every other process records its launch for
+    // `appLaunch` and carries on. The inspector (`--devtools`) is never an
+    // instance of anything and reads no app config.
+    {
+        let launch_cfg = if args.host.devtools { None } else { boot_mode::launch_config() };
+        // A DEV host runs many apps out of one exe, so the slot is part of the
+        // instance key (parallel e2e slots of one app must not collide); a
+        // packaged exe IS its app.
+        #[cfg(not(feature = "prod"))]
+        let dev_slot = Some(slot::dir());
+        #[cfg(feature = "prod")]
+        let dev_slot = None;
+        let build_name = if args.host.devtools { None } else { boot_mode::app_name() };
+        if let vn_desktop::launch::Outcome::Exit(code) =
+            vn_desktop::launch::start(args, launch_cfg.as_deref(), build_name, dev_slot)
+        {
+            std::process::exit(code);
+        }
+    }
     // `--devtools` rewrites two environment variables (the dist slot this
     // process publishes into, and which instance it prefers), so it has to run
     // before anything reads either — which the logger and the profiler both
@@ -1206,6 +1228,14 @@ fn main() {
                 });
                 SHELL.with(|s| *s.borrow_mut() = Some(shell.downgrade()));
                 window::init(&cfg, window, cx);
+                // The window a forwarded second launch brings to the front
+                // (`raiseOnSecondInstance`, docs/LAUNCH.md §3). The pipe thread
+                // raises it directly: the foreground grant the second process
+                // passed on is short-lived, and a JS-initiated focus could not
+                // use it.
+                if let Some(hwnd) = window::capture_hwnd(window) {
+                    vn_desktop::launch::set_window(hwnd);
+                }
                 // `beforeunload`: `on_window_should_close` is a SYNCHRONOUS
                 // boolean, which is precisely the web event's shape.
                 window.on_window_should_close(cx, |_, cx| {

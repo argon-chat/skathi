@@ -284,6 +284,17 @@ pub fn window_config() -> Option<String> {
     Some(v.get("window")?.to_json())
 }
 
+/// The `launch` block `build.ts` gathers from `vn.config.json`'s top-level
+/// `id` / `singleInstance` / `raiseOnSecondInstance` / `protocols`
+/// (docs/LAUNCH.md). Read by `main()` before anything else exists — the
+/// single-instance check is the first thing a process does — which is why it
+/// is a function here beside [`window_config`] rather than part of [`boot`].
+pub fn launch_config() -> Option<String> {
+    let text = std::fs::read_to_string(dist("manifest.json")).ok()?;
+    let v = json::parse(&text)?;
+    Some(v.get("launch")?.to_json())
+}
+
 /// The app's own name — what a per-app place on disk is named after
 /// (`%LOCALAPPDATA%\<app name>\storage`, see crates/vn-storage).
 ///

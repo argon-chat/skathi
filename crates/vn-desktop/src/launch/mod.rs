@@ -1,0 +1,484 @@
+//! How this process was launched, and the one-instance rule (docs/LAUNCH.md).
+//!
+//! ```text
+//!   main()  ──args::process()──▶ start(cfg) ──┬─ not single-instance ─▶ run as the app
+//!                                             ├─ first instance ──────▶ run, + pipe server
+//!                                             └─ another one runs ────▶ forward argv/url/cwd,
+//!                                                                      exit 0 (2: no answer,
+//!                                                                      3: pipe not ours)
+//!   pipe server (vn-instance) ── verify client ── read ≤ 1 MiB ── ack ── raise ── emit(launch)
+//!                                                                                │
+//!   JS: appLaunch "launch" event + launchQueue LaunchParams ◀── pump(), token 0 ─┘
+//! ```
+//!
+//! `start` is the first thing `main()` does after the argv parse — before the
+//! inspector, the logger, the payload's assets or gpui — so a second launch
+//! never creates a window, never touches `localStorage`, and is gone in
+//! milliseconds.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::OnceLock;
+
+use serde_json::{json, Value as Json};
+
+use crate::args::Args;
+
+#[cfg(target_os = "windows")]
+mod instance_win;
+#[cfg(target_os = "windows")]
+use instance_win as instance;
+
+// ---------------------------------------------------------------------------
+// configuration: the `launch` block of the manifest / payload META
+// ---------------------------------------------------------------------------
+
+/// `vn.config.json`'s launch keys, as the builder copied them (`build.ts` into
+/// `dist/manifest.json`, `vn build` into the payload's META).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchConfig {
+    /// `"id"` — reverse-DNS, `gl.argon.notes`. `None`: the app name stands in.
+    pub id: Option<String>,
+    /// `"singleInstance"` — default false.
+    pub single_instance: bool,
+    /// `"raiseOnSecondInstance"` — default true.
+    pub raise: bool,
+    /// `"protocols"` — the custom schemes this app handles. Default none.
+    pub protocols: Vec<String>,
+}
+
+impl Default for LaunchConfig {
+    fn default() -> Self {
+        LaunchConfig { id: None, single_instance: false, raise: true, protocols: Vec::new() }
+    }
+}
+
+impl LaunchConfig {
+    /// Parses the launch block. A key of the wrong type is IGNORED with a line
+    /// on stderr — the builders validate, so reaching this means a hand-edited
+    /// manifest, and the app should still start.
+    pub fn parse(text: Option<&str>) -> LaunchConfig {
+        let mut cfg = LaunchConfig::default();
+        let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else { return cfg };
+        let v: Json = match serde_json::from_str(text) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[launch] the launch block is not JSON ({e}); using the defaults");
+                return cfg;
+            }
+        };
+        let bad = |k: &str, want: &str| eprintln!("[launch] `{k}` must be {want}; ignored");
+        match v.get("id") {
+            None | Some(Json::Null) => {}
+            Some(Json::String(s)) if !s.trim().is_empty() => cfg.id = Some(s.trim().to_string()),
+            Some(_) => bad("id", "a non-empty string"),
+        }
+        match v.get("singleInstance") {
+            None | Some(Json::Null) => {}
+            Some(Json::Bool(b)) => cfg.single_instance = *b,
+            Some(_) => bad("singleInstance", "true or false"),
+        }
+        match v.get("raiseOnSecondInstance") {
+            None | Some(Json::Null) => {}
+            Some(Json::Bool(b)) => cfg.raise = *b,
+            Some(_) => bad("raiseOnSecondInstance", "true or false"),
+        }
+        match v.get("protocols") {
+            None | Some(Json::Null) => {}
+            Some(Json::Array(list)) => {
+                for p in list {
+                    match p.as_str() {
+                        Some(s) if !s.trim().is_empty() => cfg.protocols.push(s.trim().to_ascii_lowercase()),
+                        _ => bad("protocols[…]", "a scheme string"),
+                    }
+                }
+            }
+            Some(_) => bad("protocols", "an array of scheme strings"),
+        }
+        cfg
+    }
+}
+
+// ---------------------------------------------------------------------------
+// identity
+// ---------------------------------------------------------------------------
+
+/// The app's name and id. The NAME chain is vn-storage's (`VN_APP_NAME` → the
+/// build's `name` → the exe stem) so the two can never disagree about which
+/// app this is; the id is `vn.config.json`'s `"id"`, defaulting to the name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub name: String,
+    pub id: String,
+}
+
+pub fn resolve_identity(cfg: &LaunchConfig, build_name: Option<String>) -> Identity {
+    let name = std::env::var("VN_APP_NAME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or(build_name.filter(|s| !s.trim().is_empty()))
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        })
+        .unwrap_or_else(|| "vue-native-app".to_string());
+    let id = cfg.id.clone().unwrap_or_else(|| name.clone());
+    Identity { name, id }
+}
+
+// ---------------------------------------------------------------------------
+// what this launch was
+// ---------------------------------------------------------------------------
+
+/// The launch, as `appLaunch` and `launchQueue` see it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchInfo {
+    /// Electron's `process.argv` shape (exe first), minus the `--vn-*` internals.
+    pub argv: Vec<String>,
+    pub cwd: String,
+    /// The deep link, when this is a protocol launch.
+    pub url: Option<String>,
+    /// The app arguments that name an existing file or folder, absolute.
+    pub paths: Vec<String>,
+}
+
+impl LaunchInfo {
+    pub fn to_json(&self) -> Json {
+        json!({ "argv": self.argv, "cwd": self.cwd, "url": self.url, "paths": self.paths })
+    }
+}
+
+/// `args` that resolve to an existing file or folder against `cwd`, made
+/// absolute. Flags (`-x`, `--y`) are never paths, and neither is a URL.
+pub fn existing_paths(args: &[String], cwd: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for a in args {
+        if a.is_empty() || a.starts_with('-') || crate::shell::scheme_of(a).is_some_and(|s| s.len() > 1) {
+            continue;
+        }
+        let p = Path::new(a);
+        let joined = if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
+        // Lexically normalised (`.` and `..` folded, no `\\?\` prefix) — what
+        // Explorer would show, and what `canonicalize` would not.
+        let abs = std::path::absolute(&joined).unwrap_or(joined);
+        if std::fs::symlink_metadata(&abs).is_ok() {
+            out.push(abs.to_string_lossy().into_owned());
+        }
+    }
+    out
+}
+
+struct Boot {
+    identity: Identity,
+    config: LaunchConfig,
+    info: LaunchInfo,
+    /// Does THIS process hold the instance lock?
+    single_instance: bool,
+}
+
+static BOOT: OnceLock<Boot> = OnceLock::new();
+
+/// The identity `start` resolved (None before it ran).
+pub fn identity() -> Option<&'static Identity> {
+    BOOT.get().map(|b| &b.identity)
+}
+
+/// The launch configuration `start` read (None before it ran).
+pub fn config() -> Option<&'static LaunchConfig> {
+    BOOT.get().map(|b| &b.config)
+}
+
+/// `__vn_launch_info()`'s answer: the boot launch plus who we are.
+pub fn info_json() -> String {
+    match BOOT.get() {
+        Some(b) => {
+            let mut v = b.info.to_json();
+            v["singleInstance"] = Json::Bool(b.single_instance);
+            v["id"] = Json::String(b.identity.id.clone());
+            v["name"] = Json::String(b.identity.name.clone());
+            v.to_string()
+        }
+        None => json!({ "argv": [], "cwd": "", "url": null, "paths": [], "singleInstance": false }).to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the forwarded-launch message (one pipe message, strict JSON)
+// ---------------------------------------------------------------------------
+
+/// The cap on one forwarded launch. zed's 128 bytes truncate a long path; a
+/// megabyte is a few thousand of them and still bounded.
+pub const MAX_MESSAGE: usize = 1 << 20;
+
+/// What a second launch sends the first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Forward {
+    pub argv: Vec<String>,
+    /// The app arguments (`Args::app_args`) — what `paths` is computed from.
+    pub args: Vec<String>,
+    pub cwd: String,
+    pub url: Option<String>,
+}
+
+impl Forward {
+    pub fn encode(&self) -> Vec<u8> {
+        json!({ "v": 1, "argv": self.argv, "args": self.args, "cwd": self.cwd, "url": self.url })
+            .to_string()
+            .into_bytes()
+    }
+
+    /// STRICT: an object with exactly these keys and types, `v == 1`, at most
+    /// [`MAX_MESSAGE`] bytes. Anything else is refused whole — this crosses a
+    /// process boundary.
+    pub fn decode(bytes: &[u8]) -> Result<Forward, String> {
+        if bytes.len() > MAX_MESSAGE {
+            return Err(format!("message is {} bytes, over the {MAX_MESSAGE}-byte cap", bytes.len()));
+        }
+        let v: Json = serde_json::from_slice(bytes).map_err(|e| format!("not JSON: {e}"))?;
+        let obj = v.as_object().ok_or("not a JSON object")?;
+        for k in obj.keys() {
+            if !matches!(k.as_str(), "v" | "argv" | "args" | "cwd" | "url") {
+                return Err(format!("unknown key {k:?}"));
+            }
+        }
+        if obj.get("v").and_then(Json::as_u64) != Some(1) {
+            return Err("`v` must be 1".into());
+        }
+        let strings = |k: &str| -> Result<Vec<String>, String> {
+            obj.get(k)
+                .and_then(Json::as_array)
+                .ok_or(format!("`{k}` must be an array"))?
+                .iter()
+                .map(|x| x.as_str().map(str::to_string).ok_or(format!("`{k}` must hold strings")))
+                .collect()
+        };
+        let cwd = obj.get("cwd").and_then(Json::as_str).ok_or("`cwd` must be a string")?.to_string();
+        let url = match obj.get("url") {
+            None | Some(Json::Null) => None,
+            Some(Json::String(s)) => Some(s.clone()),
+            Some(_) => return Err("`url` must be a string or null".into()),
+        };
+        Ok(Forward { argv: strings("argv")?, args: strings("args")?, cwd, url })
+    }
+}
+
+/// A forwarded launch, delivered: raise the window, then hand it to JS as an
+/// unsolicited `launch` event. Runs on the pipe server's thread.
+pub(crate) fn deliver(msg: Forward) {
+    let paths = existing_paths(&msg.args, Path::new(&msg.cwd));
+    if config().is_none_or(|c| c.raise) && !raise_disabled() {
+        raise();
+    }
+    let event = json!({
+        "kind": "launch",
+        "source": "second-instance",
+        "argv": msg.argv,
+        "cwd": msg.cwd,
+        "url": msg.url,
+        "paths": paths,
+    });
+    crate::emit(event.to_string());
+    crate::log_later(
+        "launch",
+        format!("[launch] a second launch was forwarded here ({} argument(s){})", msg.args.len(), if msg.url.is_some() { ", a URL" } else { "" }),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// raising the primary window
+// ---------------------------------------------------------------------------
+
+static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// The window a forwarded launch brings to the front. vn-app publishes the
+/// primary window's HWND as soon as it exists; a launch that arrives before
+/// that has nothing to raise and is still delivered.
+pub fn set_window(hwnd: isize) {
+    MAIN_HWND.store(hwnd, Ordering::Relaxed);
+}
+
+/// `VN_LAUNCH_RAISE=off`: deliver, never take the foreground — the test seam,
+/// with VN_DEVTOOLS_RAISE=off as its precedent.
+fn raise_disabled() -> bool {
+    std::env::var("VN_LAUNCH_RAISE").is_ok_and(|v| v.eq_ignore_ascii_case("off") || v == "0")
+}
+
+fn raise() {
+    let hwnd = MAIN_HWND.load(Ordering::Relaxed);
+    if hwnd == 0 {
+        return;
+    }
+    #[cfg(target_os = "windows")]
+    instance::raise(hwnd);
+}
+
+// ---------------------------------------------------------------------------
+// start: the first thing main() does
+// ---------------------------------------------------------------------------
+
+/// What `main()` should do next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Run as the app.
+    Run,
+    /// Exit with this code: 0 = forwarded to the running instance, 2 = the
+    /// running instance did not answer in time, 3 = the pipe is not ours.
+    Exit(i32),
+}
+
+/// How long a second launch waits for the first to answer.
+pub const FORWARD_TIMEOUT_MS: u64 = 5_000;
+
+/// Resolves who we are and what this launch is, and — when `singleInstance`
+/// is on — either becomes THE instance or forwards to it.
+///
+/// `build_name` is the build's `name` (`boot_mode::app_name()`); `dev_slot`
+/// is the canonical dist slot in a DEV host (it is part of the instance key,
+/// so parallel e2e slots of one app never collide), `None` in prod.
+pub fn start(args: &Args, config_json: Option<&str>, build_name: Option<String>, dev_slot: Option<PathBuf>) -> Outcome {
+    let config = LaunchConfig::parse(config_json);
+    let identity = resolve_identity(&config, build_name);
+    if !args.ignored.is_empty() {
+        // A protocol launch honours nothing but `--vn-dist`: whatever else sits
+        // in front of the marker came from a registry command someone edited,
+        // or from an attempt to smuggle a mode switch in. Before the logger
+        // exists, so stderr now and the log ring once it does.
+        let msg = format!(
+            "[vue-native compat] a protocol launch ignores host flags in front of --vn-protocol-launch: {}",
+            args.ignored.join(" ")
+        );
+        eprintln!("{msg}");
+        crate::log_later("advisory", msg);
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let info = LaunchInfo {
+        argv: args.argv.clone(),
+        cwd: cwd.to_string_lossy().into_owned(),
+        url: args.url.clone(),
+        paths: existing_paths(&args.app_args, &cwd),
+    };
+    let skip = !config.single_instance
+        || args.host.devtools
+        || args.host.unregister_protocols
+        || args.host.host_info
+        || std::env::var("VN_SINGLE_INSTANCE").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("off"));
+    let mut outcome = Outcome::Run;
+    let mut holds = false;
+    if !skip {
+        #[cfg(target_os = "windows")]
+        {
+            let fwd = Forward {
+                argv: info.argv.clone(),
+                args: args.app_args.clone(),
+                cwd: info.cwd.clone(),
+                url: info.url.clone(),
+            };
+            match instance::claim(&identity.id, dev_slot.as_deref(), &fwd) {
+                instance::Claim::Primary => holds = true,
+                instance::Claim::Unavailable(why) => {
+                    eprintln!("[vue-native compat] singleInstance is declared but could not be enforced: {why}; running as a separate instance");
+                }
+                instance::Claim::Forwarded => outcome = Outcome::Exit(0),
+                instance::Claim::NoAnswer => {
+                    eprintln!(
+                        "[launch] {} is already running but did not answer within {} s; not starting a second copy",
+                        identity.name,
+                        FORWARD_TIMEOUT_MS / 1000
+                    );
+                    outcome = Outcome::Exit(2);
+                }
+                instance::Claim::Impostor(why) => {
+                    // A-F5.
+                    eprintln!(
+                        "[vue-native compat] the single-instance pipe for {} is owned by a process that is not this app ({why}) — forwarding refused",
+                        identity.name
+                    );
+                    outcome = Outcome::Exit(3);
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = &dev_slot;
+            eprintln!("[vue-native compat] singleInstance is not implemented on this platform yet; running as a separate instance");
+        }
+    }
+    let _ = BOOT.set(Boot { identity, config, info, single_instance: holds });
+    outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_launch_block_parses_with_defaults_and_ignores_wrong_types() {
+        assert_eq!(LaunchConfig::parse(None), LaunchConfig::default());
+        assert!(LaunchConfig::default().raise, "raising is on by default");
+        let c = LaunchConfig::parse(Some(
+            r#"{"id":"gl.argon.notes","singleInstance":true,"raiseOnSecondInstance":false,"protocols":["Notes","x-y"]}"#,
+        ));
+        assert_eq!(c.id.as_deref(), Some("gl.argon.notes"));
+        assert!(c.single_instance);
+        assert!(!c.raise);
+        assert_eq!(c.protocols, vec!["notes", "x-y"]);
+        let c = LaunchConfig::parse(Some(r#"{"singleInstance":"yes","protocols":"notes","id":3}"#));
+        assert_eq!(c, LaunchConfig::default());
+        assert_eq!(LaunchConfig::parse(Some("not json")), LaunchConfig::default());
+    }
+
+    #[test]
+    fn the_id_defaults_to_the_name() {
+        let c = LaunchConfig::default();
+        let id = resolve_identity(&c, Some("notes".into()));
+        if std::env::var("VN_APP_NAME").is_err() {
+            assert_eq!(id, Identity { name: "notes".into(), id: "notes".into() });
+        }
+        let c = LaunchConfig { id: Some("gl.argon.notes".into()), ..LaunchConfig::default() };
+        assert_eq!(resolve_identity(&c, Some("notes".into())).id, "gl.argon.notes");
+    }
+
+    #[test]
+    fn a_forward_round_trips_and_the_decoder_is_strict() {
+        let f = Forward {
+            argv: vec!["C:\\a\\Notes.exe".into(), "x.txt".into()],
+            args: vec!["x.txt".into()],
+            cwd: "C:\\work".into(),
+            url: Some("notes://a?b=\"c d\"".into()),
+        };
+        assert_eq!(Forward::decode(&f.encode()), Ok(f.clone()));
+        let none = Forward { url: None, ..f.clone() };
+        assert_eq!(Forward::decode(&none.encode()), Ok(none));
+        for bad in [
+            &br#"[]"#[..],
+            br#"{"v":2,"argv":[],"args":[],"cwd":""}"#,
+            br#"{"v":1,"argv":[1],"args":[],"cwd":""}"#,
+            br#"{"v":1,"argv":[],"args":[],"cwd":"","url":5}"#,
+            br#"{"v":1,"argv":[],"args":[],"cwd":"","extra":true}"#,
+            br#"{"v":1,"argv":[],"cwd":""}"#,
+            b"\xff\xfe",
+        ] {
+            assert!(Forward::decode(bad).is_err(), "{:?}", String::from_utf8_lossy(bad));
+        }
+        let huge = vec![b' '; MAX_MESSAGE + 1];
+        assert!(Forward::decode(&huge).unwrap_err().contains("cap"));
+    }
+
+    #[test]
+    fn paths_are_the_arguments_that_exist() {
+        let dir = std::env::temp_dir().join(format!("vn-desktop-paths-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.txt"), "x").unwrap();
+        let args: Vec<String> =
+            ["x.txt", "missing.txt", "--flag", "https://example.com/", ".", dir.join("x.txt").to_str().unwrap()]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        let got = existing_paths(&args, &dir);
+        let x = dir.join("x.txt").to_string_lossy().into_owned();
+        assert_eq!(got, vec![x.clone(), dir.to_string_lossy().into_owned(), x]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

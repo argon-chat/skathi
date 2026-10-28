@@ -105,6 +105,12 @@ pub fn window_config() -> Option<String> {
     payload::get()?.payload.window_json().map(str::to_string)
 }
 
+/// The `launch` block of the payload's META — the same JSON the dev host
+/// reads out of `dist/manifest.json` (see [`crate::dev::launch_config`]).
+pub fn launch_config() -> Option<String> {
+    payload::get()?.meta.launch.clone()
+}
+
 /// The app's name — see [`crate::dev::app_name`] for what it is for.
 ///
 /// The payload's `name`, resolved by `vn build` with dev's own chain

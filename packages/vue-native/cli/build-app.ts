@@ -71,6 +71,9 @@ export function appMeta(config: AppConfig, variant: Variant, host: ResolvedHost 
     host: { version: host?.info.vueNative ?? CLI_VERSION, variant },
     entry,
     assets: assetCount,
+    // Read by the host before anything else exists (docs/LAUNCH.md): the
+    // single-instance check and the per-user protocol registration.
+    launch: config.launch,
   });
 }
 
