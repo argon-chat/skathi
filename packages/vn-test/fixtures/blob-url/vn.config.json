@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/blob-url.spec.ts: <img src=\"blob:…\"> on the real host (m25 desktop track B). See ../README.md.",
+
+  "name": "vn-test-blob-url",
+
+  "window": {
+    "title": "vue-native — blob: URLs (fixture)",
+    "width": 420,
+    "height": 200,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
