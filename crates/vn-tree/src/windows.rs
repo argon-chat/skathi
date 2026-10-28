@@ -125,6 +125,12 @@ pub struct WindowState {
     /// The one `mousemove` THIS window is allowed to deliver this frame.
     /// Simultaneous moves in two windows used to drop one.
     pub pending_mouse_move: Option<PendingMouseMove>,
+    /// Has a node already taken THIS mouse-up's `click`? gpui fires `on_click`
+    /// on every listening box under the pointer, innermost first; the browser
+    /// has one target. Reset in the capture phase of every mouse-up (which
+    /// runs before any bubble-phase click), claimed by the first click
+    /// listener — see `bind_events`.
+    pub click_claimed: bool,
 
     // --- chrome (§5.2, §7.6) -----------------------------------------------
     /// Whether the frame this window is currently building painted any

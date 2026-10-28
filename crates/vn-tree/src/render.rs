@@ -3202,7 +3202,23 @@ where
 {
     let bit = move |ev: u32| mask & (1u64 << ev) != 0;
     if bit(tree::EV_CLICK) {
+        // ONE click per press, at the innermost listening box — the browser's
+        // target. gpui fires `on_click` on EVERY listening box under the
+        // pointer (innermost first, in the bubble phase), and the JS side
+        // already walks the ancestors itself, so without the claim an outer
+        // `@click` ran twice for one press: once bubbled from the inner
+        // target, once as a target of its own. (An `<a href>` listens for its
+        // own activation, which is how this surfaced: desktop-a-impl.md.)
+        // Every mouse-up's capture phase runs before any bubble-phase click,
+        // so it is where the claim is released. Keyboard clicks (Enter/Space
+        // on the focused box) reach one element only and never consult it.
+        e = e.capture_any_mouse_up(|_, window, _| windows::here(window, |w| w.click_claimed = false));
         e = e.on_click(cx.listener(move |_, ev: &ClickEvent, window, cx| {
+            if matches!(ev, ClickEvent::Mouse(_))
+                && windows::here(window, |w| std::mem::replace(&mut w.click_claimed, true))
+            {
+                return;
+            }
             let payload = mouse_payload(ev.position(), 0.0, &ev.modifiers());
             js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
         }));
