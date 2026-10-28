@@ -289,7 +289,6 @@ declare var fetch:
  * redjs's WHATWG `URL` (vendor/redjs/redjs/src/webapi/url.rs). Only what the
  * link path reads: `href`, the serialised form a browser's `a.href` reports
  * (spaces and non-ASCII percent-encoded), which is what goes to the shell.
- * Probed with `typeof URL === "function"` like every engine-revision class.
  */
 interface VnURL {
   readonly href: string;
@@ -301,7 +300,15 @@ interface VnURLConstructor {
   new (url: string, base?: string): VnURL;
   prototype: VnURL;
 }
-declare var URL: VnURLConstructor | undefined;
+/**
+ * NOT `| undefined`, unlike the engine-revision classes around it: redjs's
+ * `webapi::install` installs `URL` unconditionally (url.rs, no cargo feature),
+ * as it does `AbortController`, and the bun harness's world has one too. The
+ * optional type was only there for the link path's `typeof URL === "function"`
+ * probe, which still compiles and stays as cheap insurance, and it made every
+ * app's `URL.createObjectURL(file)` a TS18048 under `strict`.
+ */
+declare var URL: VnURLConstructor;
 
 // ---- Web Audio ------------------------------------------------------------
 

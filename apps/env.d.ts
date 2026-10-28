@@ -454,6 +454,9 @@ declare global {
   interface VnFile extends VnBlob {
     readonly name: string;
     readonly lastModified: number;
+    /** @deprecated Not in the File API any more; Chromium and Safari still ship
+     *  it, and so does redjs (file.rs). A new Date each read. Use `lastModified`. */
+    readonly lastModifiedDate: Date;
     readonly webkitRelativePath: string;
   }
   var File: {
@@ -467,7 +470,10 @@ declare global {
     item(index: number): VnFile | null;
     readonly [index: number]: VnFile;
   }
-  var FileList: { prototype: VnFileList };
+  /** The construct signature is lib.dom's: calling it throws "Illegal
+   *  constructor", as in a browser, but without one `x instanceof FileList`
+   *  (zod's `z.instanceof(FileList)`) is a TS2359 error. */
+  var FileList: { new (): VnFileList; prototype: VnFileList };
 
   /** Merged onto engine.d.ts's `VnURLConstructor`: the blob URL store
    *  (webapi/url.rs). `blob:<origin>/<uuid>`; `fetch()`, `<img src>` and
