@@ -778,6 +778,11 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
       }
     }
     if (key === "value") el.value = next == null ? "" : String(next);
+    // An `<a href>` has an ACTIVATION BEHAVIOUR whether or not anything
+    // listens: following the link is what a click on it means. The host only
+    // delivers a click to a node whose click bit is on, so the bit follows the
+    // href (`syncListenerFlag` ORs it in). docs/SHELL.md §1.
+    if (key === "href" && el.tag === "a") syncListenerFlag(el.id, "click");
   }
 }
 
@@ -827,6 +832,12 @@ function syncListenerFlag(id: VnNodeId, name: string): void {
     on = NAMES_BY_CODE[code].some((n) =>
       [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)),
     );
+  }
+  // …and a link listens for its own click (its activation behaviour), so
+  // removing the last `@click` from an `<a href>` must not switch it off.
+  if (!on && code === EV_CODES.click) {
+    const n = nodesById.get(id);
+    if (n && isLink(n)) on = true;
   }
   // …and only tell the host when the ANSWER CHANGED.
   //
@@ -1649,10 +1660,148 @@ defineDom(
   "dispatchEvent",
   function (this: MirrorNode, ev: VnEvent) {
     if (!ev || typeof ev.type !== "string") return true;
-    return propagate(this, canonicalEvent(ev.type), ev);
+    const name = canonicalEvent(ev.type);
+    const proceed = propagate(this, name, ev);
+    // The DOM's activation step: a dispatched `MouseEvent("click")` that
+    // nobody cancelled follows a link exactly as a real click does — which is
+    // the FileSaver.js / "build an <a>, dispatch a click" idiom, and what
+    // `el.click()` below is built on.
+    if (proceed && name === "click" && isActivationEvent(ev)) activate(this, !!ev.bubbles);
+    return proceed;
   },
   NODE_MEMBERS,
 );
+
+// -- links: activation behaviour (docs/SHELL.md §1; desktop-apis-design §5.1)
+//
+//    There is no document to navigate, so a link's activation hands its URL
+//    to the system — the system browser is the only honest "browsing context"
+//    a desktop app has. And because a link is reachable by CONTENT (a chat
+//    message, a rendered Markdown file), the scheme allowlist is the security
+//    line: http, https and mailto only. `file:`, custom protocols and
+//    `ms-settings:` are refused with an advisory naming
+//    `appShell.openExternal`, which is the call for a URL the app's own code
+//    trusts. That closes `openExternal(untrusted)` → `file:///…/calc.exe` by
+//    default.
+
+/** What content may hand to the OS. Mirrors `shell::CONTENT_SCHEMES`. */
+const CONTENT_SCHEMES = new Set(["http", "https", "mailto"]);
+/** RFC 3986 `scheme ":"`, or null for a relative reference. */
+const SCHEME_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
+
+/** An `<a>` (or `<area>`) with an `href` — an element whose click is a navigation. */
+function isLink(n: MirrorNode): n is MirrorElement {
+  return n.kind === 1 && (n.tag === "a" || n.tag === "area") && n.attrs != null && n.attrs.href != null;
+}
+
+/** The elements HTML gives an activation behaviour. The FIRST one on the path wins. */
+const ACTIVATABLE = new Set(["button", "input", "label", "summary"]);
+const hasActivationBehaviour = (n: MirrorNode): n is MirrorElement =>
+  n.kind === 1 && (ACTIVATABLE.has(n.tag) || isLink(n));
+
+/**
+ * DOM "dispatch" step 5.5: is this event an activation event? A `MouseEvent`
+ * whose type is `click`. A `CustomEvent("click")` is not — and an engine
+ * with no MouseEvent class at all cannot make that distinction, so there any
+ * click counts (that is only ever the unit-test world).
+ */
+function isActivationEvent(ev: VnEvent): boolean {
+  return typeof MouseEvent !== "function" || ev instanceof MouseEvent;
+}
+
+/**
+ * The activation target: the event's target if it has an activation
+ * behaviour, else — for a bubbling event — the nearest ancestor that does.
+ * A `<button>` inside an `<a>` is therefore the button's click, not the
+ * link's, exactly as the DOM spec words it.
+ */
+function activate(target: MirrorNode, bubbles: boolean): void {
+  for (let n: MirrorNode | null = target; n; n = n.parentNode) {
+    if (hasActivationBehaviour(n)) {
+      if (isLink(n)) followLink(n);
+      return;
+    }
+    if (!bubbles) return;
+  }
+}
+
+function followLink(a: MirrorElement): void {
+  const raw = String(a.attrs.href ?? "").trim();
+  // `href=""` and `href="#…"` are the in-page idioms (a JS-handled link); a
+  // browser would scroll, there is nothing to do here.
+  if (raw === "" || raw.startsWith("#")) return;
+  const m = SCHEME_RE.exec(raw);
+  if (!m) {
+    warnCompat(
+      "link:relative",
+      `<a href="${raw}"> — a relative link has no document to navigate in vue-native, so ` +
+        `activating it does nothing. In-app links belong to vue-router's <RouterLink> (which ` +
+        `handles the click itself); an external one needs an absolute https: URL`,
+    );
+    return;
+  }
+  const scheme = m[1].toLowerCase();
+  if (scheme === "javascript") {
+    // `javascript:void(0)` is the old "a link that only has a click handler"
+    // idiom and means nothing either way; anything else asked for code to run.
+    if (!/^javascript:\s*(void\s*\(?\s*0\s*\)?\s*;?\s*|;?)$/i.test(raw)) {
+      warnCompat(
+        "link:javascript",
+        `<a href="javascript:…"> — javascript: URLs are not executed (CSP-style); put the code ` +
+          `in a @click handler`,
+      );
+    }
+    return;
+  }
+  if (a.attrs.download != null && (scheme === "blob" || scheme === "data")) {
+    warnCompat(
+      "link:download",
+      `<a download href="${scheme}:…"> — saving a download is not supported yet: it needs the ` +
+        `Save As dialog and the blob store (desktop-apis tracks B/C). Nothing was saved`,
+    );
+    return;
+  }
+  if (!CONTENT_SCHEMES.has(scheme)) {
+    adviseScheme(scheme, "<a href>");
+    return;
+  }
+  openContentUrl(raw, "<a href>");
+}
+
+/** A-F1: a content link with a scheme the allowlist does not hold. */
+function adviseScheme(scheme: string, via: string): void {
+  warnCompat(
+    `link-scheme:${scheme}`,
+    `${via} with a ${scheme}: URL was refused: links and window.open() only hand http, https ` +
+      `and mailto to the system, because content can reach them. If the app trusts this URL, ` +
+      `open it from your own code with appShell.openExternal(url) (docs/SHELL.md)`,
+  );
+}
+
+// -- el.click(): HTML's synthetic click. A real `MouseEvent`, through the same
+//    walk a host click takes, then the activation behaviour if nobody
+//    cancelled it. `click()` on a disabled form control does nothing at all,
+//    and a click() from inside its own click handler is ignored (HTML's
+//    "click in progress" flag).
+const DISABLEABLE = new Set(["button", "input", "select", "textarea", "fieldset", "optgroup", "option"]);
+const clicking = new Set<MirrorElement>();
+defineDom("click", function (this: MirrorElement) {
+  if (DISABLEABLE.has(this.tag) && this.attrs.disabled != null && this.attrs.disabled !== "false") return;
+  if (clicking.has(this)) return;
+  clicking.add(this);
+  try {
+    let ev: VnEvent;
+    const init = { bubbles: true, cancelable: true, composed: true, detail: 1 };
+    try {
+      ev = new MouseEvent("click", init);
+    } catch {
+      ev = new CustomEvent("click", init);
+    }
+    if (propagate(this, "click", ev)) activate(this, true);
+  } finally {
+    clicking.delete(this);
+  }
+});
 
 // -- pointer capture. gpui captures the mouse implicitly for the duration of a
 //    press, which is what this API is FOR — so the capture itself is already
@@ -2124,6 +2273,12 @@ function hasListener(target: MirrorNode, name: string): boolean {
   return false;
 }
 
+/** Is there an `<a href>` on this node's ancestor chain (itself included)? */
+function linkOnPath(target: MirrorNode): boolean {
+  for (let n: MirrorNode | null = target; n; n = n.parentNode) if (isLink(n)) return true;
+  return false;
+}
+
 __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   const name = CODE_TO_NAME[evCode];
   const target = nodesById.get(nodeId);
@@ -2171,10 +2326,15 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // and the sole thing that could have set that flag is the `preventDefault()`
   // two lines below — whose whole job is to make `proceed` false, which it
   // already is.
-  if (hasListener(target, name)) {
+  // A click whose path holds a link must be BUILT even with no handler on it:
+  // a `preventDefault()` anywhere on the path is what cancels the navigation,
+  // and the walk is the only way to learn that.
+  const link = name === "click" && linkOnPath(target);
+  if (link || hasListener(target, name)) {
     const ev = synthesize(name, a, b, c, d, key);
     if (!proceed && ev.preventDefault) ev.preventDefault();
     proceed = propagate(target, name, ev) && proceed;
+    if (link && proceed) activate(target, true);
   }
   if (derived) {
     for (const dn of derived) {
@@ -3638,6 +3798,245 @@ const inertStorage = new Proxy(
 export const appStorage: AppStorage = storageHost
   ? createStorage(storageHost)
   : (inertStorage as unknown as AppStorage);
+
+// ---- the desktop host: settle channel (crates/vn-desktop) -------------------
+//
+// Every async desktop call answers `{token}` (or a synchronous refusal) and is
+// settled later through ONE dispatcher by `vn_desktop::pump()` in the frame
+// pump — the permissions shape. Token 0 is an UNSOLICITED host event (a second
+// instance's `launch`) and is handed to `desktopEvents`.
+
+/** The host fns, gathered so the inert branch is a single `null` check. */
+interface DesktopHost {
+  setDispatcher: typeof __vn_desktop_set_dispatcher;
+  openExternal: typeof __vn_shell_open_external;
+  openPath: typeof __vn_shell_open_path;
+  showItem: typeof __vn_shell_show_item;
+  trash: typeof __vn_shell_trash;
+}
+
+const desktopHost: DesktopHost | null =
+  typeof __vn_desktop_set_dispatcher === "function"
+    ? {
+        setDispatcher: __vn_desktop_set_dispatcher,
+        openExternal: __vn_shell_open_external,
+        openPath: __vn_shell_open_path,
+        showItem: __vn_shell_show_item,
+        trash: __vn_shell_trash,
+      }
+    : null;
+
+/** A rejection as the host serialises it (`Fail::to_json` / `to_sync_json`). */
+interface DesktopFailure {
+  name: string;
+  message?: string;
+  error?: string;
+  code?: string;
+  osError?: number;
+}
+
+/**
+ * The error a tier-2 desktop call rejects with: an `Error` whose `name` is the
+ * DOMException-style name (`NotFoundError`, `NotAllowedError`, …), plus the
+ * Node-style `code` an app can switch on and the raw Win32 `osError`
+ * (desktop-apis-design §3.3). A refused argument is a plain `TypeError`.
+ */
+export interface AppDesktopError extends Error {
+  code?: string;
+  osError?: number;
+}
+
+function desktopError(f: DesktopFailure): AppDesktopError {
+  const message = f.message ?? f.error ?? f.name;
+  const e: AppDesktopError = f.name === "TypeError" ? new TypeError(message) : new Error(message);
+  if (f.name !== "TypeError") e.name = f.name;
+  if (f.code) e.code = f.code;
+  if (typeof f.osError === "number") e.osError = f.osError;
+  return e;
+}
+
+const desktopPending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+/** Consumers of token-0 events, by `payload.kind`. */
+const desktopEvents = new Map<string, (payload: Record<string, unknown>) => void>();
+
+if (desktopHost) {
+  desktopHost.setDispatcher((token, ok, json) => {
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = JSON.parse(json) as Record<string, unknown>;
+    } catch {
+      /* a malformed payload settles with {} rather than leaving the promise hanging */
+    }
+    if (token === 0) {
+      desktopEvents.get(String(payload.kind))?.(payload);
+      return;
+    }
+    const p = desktopPending.get(token);
+    if (!p) return;
+    desktopPending.delete(token);
+    if (ok) p.resolve(payload);
+    else p.reject(desktopError(payload as unknown as DesktopFailure));
+  });
+}
+
+/** One host answer → a promise: `{token}` waits for the pump, a refusal rejects now. */
+function desktopCall(json: VnJson): Promise<Record<string, unknown>> {
+  let out: { token?: number } & Partial<DesktopFailure>;
+  try {
+    out = JSON.parse(json) as typeof out;
+  } catch {
+    return Promise.reject(new Error(`the desktop host answered something that is not JSON: ${json}`));
+  }
+  if (out.error !== undefined || out.token === undefined) {
+    return Promise.reject(desktopError({ name: out.name ?? "Error", ...out }));
+  }
+  const token = out.token;
+  return new Promise((resolve, reject) =>
+    desktopPending.set(token, { resolve: resolve as (v: unknown) => void, reject }),
+  );
+}
+
+// ---- links and window.open: the tier-1 path to the shell --------------------
+
+/**
+ * Hands a CONTENT URL (an `<a href>`, a `window.open`) to the system. The
+ * allowlist has already been applied by the caller and is applied AGAIN by the
+ * host (`content = true`), so neither side alone is the security line. Never
+ * throws and returns nothing, as a browser's navigation does not; a failure
+ * (no mail client for `mailto:`) is a console warning.
+ */
+function openContentUrl(url: string, via: string): void {
+  if (!desktopHost) {
+    warnCompat(
+      "shell:absent",
+      `${via}: the desktop host is missing (vn_desktop::install did not run) — the link was not ` +
+        `opened. See docs/SHELL.md`,
+    );
+    return;
+  }
+  // The serialised form a browser's `a.href` reports: spaces and non-ASCII
+  // percent-encoded, which is also what the shell wants.
+  let href = url;
+  try {
+    if (typeof URL === "function") href = new URL(url).href;
+  } catch {
+    /* not a parseable URL: the host validates and refuses */
+  }
+  desktopCall(desktopHost.openExternal(href, true)).catch((e: AppDesktopError) => {
+    if (e && e.code === "ESCHEME") return void adviseScheme(SCHEME_RE.exec(href)?.[1] ?? "?", via);
+    console.warn(`[vue-native] ${via}: could not open ${href} — ${e && e.message}`);
+  });
+}
+
+// `window.open(url)` for an EXTERNAL url opens the system browser and returns
+// `null` — `noopener` semantics, and what an Electron app whose
+// `setWindowOpenHandler` answers `{action: "deny"}` returns (D-F7). Everything
+// else — no url, a relative one, `about:blank` — is still the prelude's A-22
+// ("a second document" stays reserved, docs/WINDOWING.md §8). Wrapped HERE
+// rather than in window.prelude.ts because this is where the link path and the
+// desktop host live; the prelude evaluates first, so its `open` is the
+// fallback.
+{
+  type OpenFn = (url?: unknown, target?: unknown, features?: unknown) => unknown;
+  const g = globalThis as unknown as { open?: OpenFn };
+  const prior = typeof g.open === "function" ? g.open : null;
+  g.open = function open(url?: unknown, target?: unknown, features?: unknown) {
+    const s = url == null ? "" : String(url).trim();
+    const m = SCHEME_RE.exec(s);
+    // A one-letter "scheme" is a drive letter (`C:\x`), not a URL.
+    if (m && m[1].length > 1) {
+      const scheme = m[1].toLowerCase();
+      if (scheme !== "about" && scheme !== "javascript") {
+        if (CONTENT_SCHEMES.has(scheme)) openContentUrl(s, "window.open()");
+        else adviseScheme(scheme, "window.open()");
+        return null;
+      }
+    }
+    return prior ? prior(url, target, features) : null;
+  };
+}
+
+// ---- shell (docs/SHELL.md tier 2) -------------------------------------------
+//
+// What a browser cannot do, so there is no tier-1 spelling to prefer: open a
+// FILE with its default app, reveal one in Explorer, move one to the Recycle
+// Bin, and open a URL of a scheme content may not reach. Electron's
+// `shell.openExternal` / `openPath` / `showItemInFolder` / `trashItem`, with
+// two deliberate differences, both of them in the safe direction:
+//
+//   * `openPath` REFUSES programs and scripts (`.exe`, `.bat`, `.lnk`, `.ps1`,
+//     `.js`, every PATHEXT entry, …) unless `{ allowExecutable: true }` — a
+//     Save-dialog-then-open flow must not launch an attacker-named
+//     `report.pdf.exe`;
+//   * `openExternal` refuses `file:` (a TypeError naming `openPath`), so a URL
+//     is never a way around the executable guard.
+//
+// Every call is a promise that REJECTS on failure — `NotFoundError`/`ENOENT`
+// for a missing file, `NotFoundError`/`ENOASSOC` for "nothing is associated
+// with .xyz" — instead of Electron's resolve-with-an-error-string.
+
+/** The tier-2 surface, in both its live and its inert spelling. */
+interface AppShell {
+  openExternal(url: string): Promise<void>;
+  openPath(path: string, options?: { allowExecutable?: boolean }): Promise<void>;
+  showItemInFolder(path: string): Promise<void>;
+  trashItem(path: string): Promise<void>;
+}
+
+function createShell(host: DesktopHost): AppShell {
+  const done = (p: Promise<unknown>): Promise<void> => p.then(() => undefined);
+  return {
+    /**
+     * Opens `url` with whatever the system has registered for its scheme —
+     * the default browser for https, the mail client for mailto, an app's own
+     * protocol, `ms-settings:`. Any scheme but `file:`. Resolves once the shell
+     * has accepted it (not when the browser has loaded the page).
+     */
+    openExternal(url: string) {
+      return done(desktopCall(host.openExternal(String(url), false)));
+    },
+    /**
+     * Opens a FILE (or folder) with its default application, as a double-click
+     * in Explorer does. `path` must be absolute. Programs and scripts are
+     * refused (`NotAllowedError`, code `EEXECUTABLE`) unless
+     * `{ allowExecutable: true }`.
+     */
+    openPath(path: string, options: { allowExecutable?: boolean } = {}) {
+      return done(desktopCall(host.openPath(String(path), !!(options && options.allowExecutable))));
+    },
+    /** Opens the containing folder in Explorer with `path` selected. */
+    showItemInFolder(path: string) {
+      return done(desktopCall(host.showItem(String(path))));
+    },
+    /**
+     * Moves `path` to the Recycle Bin. NEVER a permanent delete: on a drive
+     * with no Recycle Bin (or an item too large for it) this rejects
+     * (`InvalidStateError`, code `ENOTRASH`) and nothing is deleted.
+     */
+    trashItem(path: string) {
+      return done(desktopCall(host.trash(String(path))));
+    },
+  };
+}
+
+const inertShell = new Proxy(
+  {},
+  {
+    get(_t, key) {
+      warnCompat(
+        "appShell",
+        "the desktop host is missing (vn_desktop::install did not run) — `appShell` is inert and " +
+          "every call rejects. See docs/SHELL.md.",
+      );
+      return () =>
+        Promise.reject(
+          desktopError({ name: "NotSupportedError", message: `appShell.${String(key)}: no desktop host`, code: "ENOSYS" }),
+        );
+    },
+  },
+);
+
+export const appShell: AppShell = desktopHost ? createShell(desktopHost) : (inertShell as unknown as AppShell);
 
 // ---- devtools (docs/DEVTOOLS.md, tier 3) -----------------------------------
 //

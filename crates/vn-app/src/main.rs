@@ -640,6 +640,10 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         // are dispatched from inside `rt.pump()` above, by redjs, because that
         // is where the status objects live.
         vn_permissions::pump();
+        // Settled `appShell.*` promises and unsolicited desktop events (a
+        // second instance's `launch`), same publication, same reasoning: the
+        // `.then()` and the Vue patch it triggers land in this frame.
+        vn_desktop::pump();
         // At most ONE localStorage file write per frame, whatever the app did
         // to the area during this wave. Inside the publication like everything
         // else here, though nothing in it touches gpui — it is here because the
@@ -1129,6 +1133,12 @@ fn main() {
             // runs; the hook is read per call, so nothing else depends on the
             // order within this block. See docs/PERMISSIONS.md.
             vn_permissions::install(rt);
+            // `__vn_desktop_*` / `__vn_shell_*`: the settle dispatcher and the
+            // shell behind `<a href>`, `window.open(url)` and `appShell`
+            // (docs/SHELL.md). The shell thread's log lines ("recorded" under
+            // VN_SHELL=record) reach the ring through `pump()`, on this thread.
+            vn_desktop::set_log_sink(|kind, text| vn_tree::log::record(kind, text));
+            vn_desktop::install(rt);
             // The backend behind redjs's `localStorage`, plus
             // `__vn_storage_*` for the `appStorage` extension. Must happen
             // before any app code runs: the area is loaded lazily on first

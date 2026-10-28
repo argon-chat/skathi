@@ -277,6 +277,20 @@ declare var fetch:
   | ((url: string, init?: Record<string, unknown>) => Promise<VnFetchResponse>)
   | undefined;
 
+// ---- URL ------------------------------------------------------------------
+
+/**
+ * redjs's WHATWG `URL` (vendor/redjs/redjs/src/webapi/url.rs). Only what the
+ * link path reads: `href`, the serialised form a browser's `a.href` reports
+ * (spaces and non-ASCII percent-encoded), which is what goes to the shell.
+ * Probed with `typeof URL === "function"` like every engine-revision class.
+ */
+interface VnURL {
+  readonly href: string;
+  readonly protocol: string;
+}
+declare var URL: { new (url: string, base?: string): VnURL; prototype: VnURL } | undefined;
+
 // ---- Web Audio ------------------------------------------------------------
 
 /**

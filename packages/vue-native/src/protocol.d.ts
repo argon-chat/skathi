@@ -527,6 +527,32 @@ declare function __vn_storage_info(): VnJson;
 declare function __vn_storage_flush(): VnJson;
 
 // ---------------------------------------------------------------------------
+// desktop — crates/vn-desktop/src/lib.rs (docs/SHELL.md, docs/LAUNCH.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * The one callback the per-frame pump settles every desktop call through:
+ * `(token, ok, payloadJson)`. `ok` false means `payloadJson` is
+ * `{ name, message, code?, osError? }`. Token `0` is an UNSOLICITED host event
+ * whose `payload.kind` names it (`"launch"`).
+ */
+declare function __vn_desktop_set_dispatcher(
+  fn: (token: number, ok: boolean, payloadJson: VnJson) => void,
+): void;
+/**
+ * `{ token }`, or a synchronous refusal `{ error, name, code? }`. `content`
+ * true is the TIER-1 path (`<a href>`, `window.open`): http, https and mailto
+ * only. False (`appShell.openExternal`) takes any scheme but `file:`.
+ */
+declare function __vn_shell_open_external(url: string, content: boolean): VnJson;
+/** `{ token }` or `{ error, name, code? }`. Executables refused unless `allowExecutable`. */
+declare function __vn_shell_open_path(path: string, allowExecutable: boolean): VnJson;
+/** `{ token }` or `{ error, name }`. A folder is selected in its parent. */
+declare function __vn_shell_show_item(path: string): VnJson;
+/** `{ token }` or `{ error, name }`. Recycle Bin only, never a permanent delete. */
+declare function __vn_shell_trash(path: string): VnJson;
+
+// ---------------------------------------------------------------------------
 // voice — crates/vn-voice/src/lib.rs (CONTRACT.md, docs/VOICE.md)
 // ---------------------------------------------------------------------------
 

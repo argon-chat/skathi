@@ -64,6 +64,16 @@ declare global {
    *  window is `appWindow.setBounds()`, which is what WindowPage.vue does. */
   function resizeBy(dw: number, dh: number): void;
 
+  /**
+   * `window.open(url)` — runtime.ts over window.prelude.js's A-22. An
+   * absolute http/https/mailto URL opens in the SYSTEM browser / mail client
+   * and the call returns `null` (noopener semantics, D-F7); any other scheme
+   * is refused with an advisory naming `appShell.openExternal`. No url, a
+   * relative one or `about:blank` is A-22: "a second document" is not
+   * supported, and the call returns `null`. docs/SHELL.md §1.
+   */
+  function open(url?: string, target?: string, features?: string): null;
+
   /** `screen`, single-display in v1 (`getScreenDetails()` is not implemented
    *  and advises). window.prelude.js §"ro(screenObj, …)". */
   var screen: {
@@ -265,6 +275,14 @@ declare global {
     scrollIntoView(arg?: boolean | VnScrollIntoViewOptions): void;
     focus(): void;
     blur(): void;
+    /**
+     * HTML's synthetic click (runtime.ts): a `MouseEvent("click")` through the
+     * same capture/bubble walk a real click takes, then the activation
+     * behaviour if nobody cancelled it — so `a.click()` on an `<a href>`
+     * follows the link (http/https/mailto to the system, docs/SHELL.md §1).
+     * Does nothing on a disabled form control.
+     */
+    click(): void;
     /** Patched onto `Element.prototype` by window.prelude.js; makes the
      *  WINDOW fullscreen and advises that per-element fullscreen is not a
      *  thing here. */

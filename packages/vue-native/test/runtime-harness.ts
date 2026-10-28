@@ -73,8 +73,20 @@ const NAMED_REEXPORT = /^\s*export\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*
  *   `--features no-devtools` (docs/DEVTOOLS.md "Shape"). That branch has to
  *   tell an app the devtools are not merely off but ABSENT, without throwing —
  *   `appDevtools.disable()` in an entry module is its likeliest caller.
+ *
+ *   `desktop: false` blanks `__vn_desktop_*` / `__vn_shell_*` (no vn-desktop).
+ *   `MouseEvent` hands the world an event class (bun has none), which is what
+ *   makes the "only a MouseEvent click activates" rule observable.
  */
-export function createRuntime(options = {}) {
+export function createRuntime(
+  options: {
+    storage?: boolean;
+    devtools?: boolean;
+    desktop?: boolean;
+    MouseEvent?: unknown;
+    globals?: Record<string, unknown>;
+  } = {},
+) {
   const withStorage = options.storage !== false;
   const withDevtools = options.devtools !== false;
   const raw = readTsSource(RUNTIME_PATH);
@@ -193,6 +205,33 @@ export function createRuntime(options = {}) {
       /** When set, `open()` answers `{error}` with this text. */
       openError: null,
     },
+    /**
+     * The desktop host (`crates/vn-desktop`), faked at the seam: every
+     * `__vn_shell_*` call is recorded and answers `{token}` (or the refusal
+     * in `refuse`, verbatim); `settle(token, ok, payload)` is the frame pump.
+     * The scheme allowlist and the executable guard are the RUST side's — the
+     * fake applies only the content allowlist, so a test can tell whether the
+     * JS refused before ever reaching the host.
+     */
+    desktop: {
+      dispatcher: null,
+      calls: [],
+      nextToken: 1,
+      /** When set, the next shell call answers this object (a sync refusal). */
+      refuse: null,
+    },
+  };
+  /** Settle a desktop token as `vn_desktop::pump()` would. */
+  host.desktop.settle = (token, ok = true, payload = {}) =>
+    host.desktop.dispatcher?.(token, ok, JSON.stringify(payload));
+  const shellCall = (op, ...rest) => {
+    host.desktop.calls.push({ op, args: rest });
+    if (host.desktop.refuse) {
+      const r = host.desktop.refuse;
+      host.desktop.refuse = null;
+      return JSON.stringify(r);
+    }
+    return JSON.stringify({ token: host.desktop.nextToken++ });
   };
   /** Deliver a settled request as the host's per-frame pump would. */
   host.permissions.settle = (token, state) => host.permissions.dispatcher?.(token, state);
@@ -225,6 +264,9 @@ export function createRuntime(options = {}) {
     // stay compatible: the world is private so that each test gets its own DOM
     // globals, not so that it is sealed off from the host.
     __VN_WINDOW__: globalThis.__VN_WINDOW__,
+    // Whatever a test says the PRELUDE put on the global before the bundle
+    // ran (window.open's A-22, say).
+    ...(options.globals ?? {}),
   };
 
   const permState = (name) => host.permissions.states.get(name) ?? "unsupported";
@@ -308,6 +350,16 @@ export function createRuntime(options = {}) {
     "__vn_devtools_state",
     "__vn_devtools_set_enabled",
     "__vn_devtools_open",
+    "__vn_desktop_set_dispatcher",
+    "__vn_shell_open_external",
+    "__vn_shell_open_path",
+    "__vn_shell_show_item",
+    "__vn_shell_trash",
+    // Bound as parameters so the link path's `new MouseEvent` / `new URL` are
+    // the world's own: bun has a `URL` but no `MouseEvent`, and a test that
+    // wants the engine's "is this a MouseEvent?" check can hand one in.
+    "MouseEvent",
+    "URL",
     // Bound as a parameter rather than left ambient so a test can hand
     // `appPermissions` a `navigator.permissions` to re-broadcast `change` from
     // — bun has a `navigator`, but not that.
@@ -482,6 +534,21 @@ export function createRuntime(options = {}) {
       host.devtools.inspectors++;
       return JSON.stringify({ opened: true, window: 4294967297 });
     },
+    // ---- __vn_desktop_* / __vn_shell_* --------------------------------------
+    (fn) => {
+      host.desktop.dispatcher = fn;
+    },
+    (url, content) => {
+      if (content && !/^(https?|mailto):/i.test(url)) {
+        return JSON.stringify({ error: "content links only open http, https and mailto", name: "NotAllowedError", code: "ESCHEME" });
+      }
+      return shellCall("openExternal", url, content);
+    },
+    (path, allow) => shellCall("openPath", path, allow),
+    (path) => shellCall("showItem", path),
+    (path) => shellCall("trash", path),
+    options.MouseEvent ?? globalThis.MouseEvent,
+    globalThis.URL,
     fakeNavigator,
   ];
 
@@ -497,6 +564,11 @@ export function createRuntime(options = {}) {
     const first = params.indexOf("__vn_devtools_state");
     for (let i = first; i < first + 3; i++) args[i] = undefined;
   }
+  if (options.desktop === false) {
+    // A host without vn-desktop: `appShell` goes inert, links advise.
+    const first = params.indexOf("__vn_desktop_set_dispatcher");
+    for (let i = first; i < first + 5; i++) args[i] = undefined;
+  }
 
   // eslint-disable-next-line no-new-func
   const exports = new Function(
@@ -504,7 +576,7 @@ export function createRuntime(options = {}) {
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
-       appDevtools, vModelText, vShow };`,
+       appDevtools, appShell, vModelText, vShow };`,
   )(...args);
 
   return {
