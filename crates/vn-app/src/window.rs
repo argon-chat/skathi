@@ -1673,7 +1673,16 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
                 window.zoom_window();
             }
         }
-        Op::Close => window.remove_window(),
+        // After a file dialog this window owns has closed (dialogs.rs).
+        Op::Close => {
+            if !vn_desktop::dialog::owner_closing(vn_tree::windows::key(window)) {
+                window.remove_window();
+            } else {
+                // gpui's own handle, not raw-window-handle's (in scope here).
+                let handle = gpui::Window::window_handle(window);
+                cx.defer(move |cx| crate::dialogs::remove_window(handle, cx));
+            }
+        }
         // `toggle_fullscreen` is a TOGGLE, so guard every call with the live
         // state or a double `setFullscreen(true)` leaves fullscreen.
         Op::Fullscreen(on) => {

@@ -192,8 +192,8 @@ pub fn close_all(cx: &mut App) {
     let handles: Vec<WindowHandle<PopoutShell>> =
         POPOUTS.with(|p| p.borrow().iter().map(|w| w.handle).collect());
     for handle in handles {
-        let _ = gpui::AnyWindowHandle::from(handle)
-            .update(cx, |_, window, _| window.remove_window());
+        // After its file dialog, if it has one open (dialogs.rs).
+        crate::dialogs::remove_window(handle.into(), cx);
     }
 }
 
@@ -350,8 +350,8 @@ host_fn!(fn vn_window_close_popout(_g, args) {
         cx.defer(move |cx| {
             // Untyped, for the reason spelled out in `vn_window_click` below:
             // never take the root entity's borrow when the body can re-enter it.
-            let _ = gpui::AnyWindowHandle::from(handle)
-                .update(cx, |_, window, _| window.remove_window());
+            // A file dialog it owns closes first (dialogs.rs).
+            crate::dialogs::remove_window(handle.into(), cx);
         });
     });
     UNDEF
@@ -718,8 +718,12 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     // The HWND has to exist before `alwaysOnTop` can be applied to it, and
     // `open_window` has already drawn the window once by now — so the handle is
     // live and `capture_hwnd` succeeds.
-    let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| {
+    let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
         crate::window::capture_hwnd(window);
+        // Its own X while it owns a file dialog: the dialog closes first
+        // (dialogs.rs). The OS keeps an owner disabled under its modal
+        // dialog, so this is the taskbar's "Close window", not a click.
+        window.on_window_should_close(cx, |window, cx| crate::dialogs::may_close_now(window.window_handle(), cx));
     });
     if opts.always_on_top {
         set_always_on_top(handle, true);

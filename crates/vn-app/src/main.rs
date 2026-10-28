@@ -36,6 +36,7 @@ mod dev;
 // asked for its own inspector by name.
 #[cfg(vn_devtools)]
 mod devtools;
+mod dialogs; // the window a file dialog belongs to, and closing it safely
 #[cfg(vn_devtools)]
 mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child registry
 mod json; // the dev transport, the devtools wire and vn.config.json share one codec
@@ -1193,6 +1194,9 @@ fn main() {
             // VN_SHELL=record) reach the ring through `pump()`, on this thread.
             vn_desktop::set_log_sink(|kind, text| vn_tree::log::record(kind, text));
             vn_desktop::install(rt);
+            // A file dialog is owned by the window published for the call
+            // that asked for it (docs/DESKTOP.md, pickers).
+            vn_desktop::dialog::set_owner_resolver(dialogs::owner);
             // The backend behind redjs's `localStorage`, plus
             // `__vn_storage_*` for the `appStorage` extension. Must happen
             // before any app code runs: the area is loaded lazily on first
@@ -1270,7 +1274,7 @@ fn main() {
                 }
                 // `beforeunload`: `on_window_should_close` is a SYNCHRONOUS
                 // boolean, which is precisely the web event's shape.
-                window.on_window_should_close(cx, |_, cx| {
+                window.on_window_should_close(cx, |window, cx| {
                     let closing = window::should_close();
                     // **D-M16 / docs/MULTIWINDOW.md §7.8.** The primary window
                     // owns the JS pump (D-M07 option 1), so closing it while a
@@ -1290,7 +1294,10 @@ fn main() {
                         );
                         popout::close_all(cx);
                     }
-                    closing
+                    // A file dialog owned by this window outlives a close
+                    // request by the dialog's own 100 ms timer; the window is
+                    // destroyed after it (dialogs.rs).
+                    closing && dialogs::may_close_now(window.window_handle(), cx)
                 });
                 window.on_next_frame(pump_frame);
                 shell

@@ -57,6 +57,7 @@ use vn_runtime::redjs::api::Value;
 use vn_runtime::{host_fn, JsRuntime};
 
 pub mod args;
+pub mod dialog;
 pub mod fs;
 pub mod launch;
 mod pool;
@@ -539,6 +540,58 @@ host_fn!(fn vn_fs_refuse_clone(g, args) {
     Value::undefined().0
 });
 
+// ---- dialogs (dialog/mod.rs) ------------------------------------------------
+
+// `__vn_dialog_open(requestJson, currentFiles) -> {token} | {error, name}`.
+// Settles `{files}` + a FileList, `{handles}`, or `{cancelled}`.
+// `currentFiles` is an input's FileList: its host-made Files' paths are read
+// here, so "the same selection again" is decided without a path in JS.
+host_fn!(fn vn_dialog_open(g, args) {
+    let req = read_arg_string(g, args.arg(0).0);
+    let prev = unsafe {
+        vn_runtime::redjs::webapi::file::file_list_items(g, args.arg(1).0)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|f| vn_runtime::redjs::webapi::file::path_of(g, f))
+            .collect()
+    };
+    js_string(&dialog::start_open(&req, prev))
+});
+
+// `__vn_download(url, downloadAttribute) -> {token} | {error, name}`: Save As
+// for a `blob:` or `data:` URL, resolved NOW, at the click, so the common
+// `a.click(); URL.revokeObjectURL(url)` still saves. Settles `{saved}` or
+// `{cancelled}`.
+host_fn!(fn vn_download(g, args) {
+    let url = read_arg_string(g, args.arg(0).0);
+    let attr = read_arg_string(g, args.arg(1).0);
+    let (data, mime) = if url.starts_with("blob:") {
+        match vn_runtime::redjs::webapi::url::resolve_blob_url(g, &url) {
+            Some(t) => {
+                let mime = t.mime().to_string();
+                (dialog::data_of_blob_target(t), mime)
+            }
+            None => {
+                return js_string(
+                    &Fail::new("NotFoundError", "the blob: URL was revoked, or was never created here; nothing to save")
+                        .code("ENOENT")
+                        .to_sync_json(),
+                )
+            }
+        }
+    } else if url.starts_with("data:") {
+        let f = vn_runtime::redjs::webapi::fsutil::fetch_url(g, &url);
+        if !f.ok {
+            return js_string(&Fail::type_error("the data: URL could not be decoded").to_sync_json());
+        }
+        (fs::writable::Data::Bytes(f.bytes), f.mime)
+    } else {
+        return js_string(&Fail::type_error("only blob: and data: URLs are saved as downloads").to_sync_json());
+    };
+    let name = dialog::download_name(&attr, &url, &mime);
+    js_string(&dialog::start_download(data, name))
+});
+
 // `__vn_launch_info() -> {argv, cwd, url, paths, singleInstance, id, name}` —
 // this process's own launch, as `launch::start` resolved it. Sync: it is a
 // read of a value fixed before the window existed.
@@ -596,6 +649,8 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_fs_writable_close", 1, vn_fs_writable_close as *const _),
         ("__vn_fs_writable_abort", 1, vn_fs_writable_abort as *const _),
         ("__vn_fs_refuse_clone", 2, vn_fs_refuse_clone as *const _),
+        ("__vn_dialog_open", 2, vn_dialog_open as *const _),
+        ("__vn_download", 2, vn_download as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);

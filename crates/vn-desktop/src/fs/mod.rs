@@ -529,8 +529,14 @@ pub fn dir_close(cursor: u64) {
     cursors().lock().unwrap_or_else(|p| p.into_inner()).remove(&cursor);
 }
 
+/// The path behind a handle id, for the other host modules (a picker's
+/// `startIn`). Never handed to JS.
+pub(crate) fn path_of(id: u64) -> Option<(PathBuf, Kind)> {
+    lookup(id).map(|e| (e.path, e.kind))
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A scratch folder under the OS temp dir, removed on drop.
