@@ -536,18 +536,24 @@ describe("custom events and dispatchEvent", () => {
     expect(ev.target).toBe(inner);
   });
 
-  test("…and a listener that throws still leaves the event reset", () => {
-    const rt = createRuntime();
+  test("…and a listener that throws is reported, not the end of the dispatch", () => {
+    // DOM §2.10 "inner invoke": report the exception, go on to the next
+    // listener; dispatchEvent never throws a listener's error.
+    const reported: (() => void)[] = [];
+    const rt = createRuntime({ globals: { queueMicrotask: (f: () => void) => reported.push(f) } });
     const { button: inner } = tree(rt);
+    const ran: string[] = [];
     inner.addEventListener("x.boom", () => {
       throw new Error("listener");
     });
-    const ev = new CustomEvent("x.boom");
-    try {
-      inner.dispatchEvent(ev);
-    } catch {
-      // Whether the walk reports or rethrows is not what this pins down.
-    }
+    inner.addEventListener("x.boom", () => ran.push("same node"));
+    inner.parentNode.addEventListener("x.boom", () => ran.push("ancestor"));
+    const ev = new CustomEvent("x.boom", { bubbles: true });
+    expect(inner.dispatchEvent(ev)).toBe(true);
+    expect(ran).toEqual(["same node", "ancestor"]);
+    // Reported once, as the error the listener threw, after the walk.
+    expect(reported.length).toBe(1);
+    expect(() => reported[0]()).toThrow("listener");
     expect(ev.currentTarget).toBe(null);
     expect(ev.eventPhase).toBe(0);
   });

@@ -2162,6 +2162,27 @@ interface PropagationState {
 /** DOM `Event.eventPhase` (NONE, CAPTURING_PHASE, AT_TARGET, BUBBLING_PHASE). */
 const EVENT_PHASE = { none: 0, capturing: 1, atTarget: 2, bubbling: 3 } as const;
 
+/**
+ * One listener call. A listener that throws does not end the dispatch: DOM
+ * §2.10 "inner invoke" REPORTS the exception and goes on to the next listener,
+ * and `dispatchEvent` itself never throws a listener's error. Until m25 the
+ * throw escaped the walk, so every listener after it — on that node and on
+ * every ancestor — silently never ran.
+ *
+ * Reported from a microtask: it reaches the same uncaught-error sink a throw
+ * out of a host callback always did (`[js uncaught]` in the log and the
+ * devtools console), after the walk instead of in place of the rest of it.
+ */
+function callListener(fn: (this: unknown, ev: VnEvent) => unknown, self: unknown, ev: VnEvent): void {
+  try {
+    fn.call(self, ev);
+  } catch (e) {
+    (globalThis.queueMicrotask ?? queueMicrotask)(() => {
+      throw e;
+    });
+  }
+}
+
 function invoke(
   buckets: Buckets,
   phase: Phase,
@@ -2185,9 +2206,9 @@ function invoke(
     if (Array.isArray(fn)) {
       for (const f of fn) {
         if (state.immediate) break;
-        f(ev);
+        callListener(f, undefined, ev);
       }
-    } else fn(ev);
+    } else callListener(fn, undefined, ev);
   }
   const extra = phase === "capture" ? buckets.extraC : buckets.extraB;
   // snapshot: spec semantics — listeners added during dispatch don't fire now
@@ -2197,7 +2218,7 @@ function invoke(
       const i = extra.indexOf(entry);
       if (i >= 0) extra.splice(i, 1);
     }
-    entry.fn.call(node, ev);
+    callListener(entry.fn, node, ev);
   }
   if (isMirrorNode(node)) syncListenerFlag(node.id, name);
   else if (appRoot) syncListenerFlag(appRoot.id, name);

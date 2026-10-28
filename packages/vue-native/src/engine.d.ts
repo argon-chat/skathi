@@ -36,6 +36,8 @@ declare function setTimeout(fn: () => void, ms?: number): number;
 declare function clearTimeout(handle: number | undefined): void;
 declare function setInterval(fn: () => void, ms?: number): number;
 declare function clearInterval(handle: number | undefined): void;
+/** redjs installs it on the global (web.rs); `var` so `globalThis.queueMicrotask` types too. */
+declare var queueMicrotask: (cb: () => void) => void;
 
 /**
  * Driven by the host's frame pump, so a callback runs once per PAINTED frame.
