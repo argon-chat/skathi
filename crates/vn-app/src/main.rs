@@ -609,6 +609,11 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         // `fullscreenchange` fires after the viewport has finished resizing —
         // which the Fullscreen spec requires.
         vn_runtime::with_commit(|window, cx| window::pump(window, cx));
+        // The pump's delivery budget (IndexedDB results landing mid-pump) is a
+        // quarter of THIS display's frame, from the snapshot just taken — so a
+        // 144 Hz window does not give away 58% of every frame for the latency
+        // a 60 Hz one gets at 25% (vn_runtime::runtime::delivery_budget_us).
+        vn_runtime::runtime::set_frame_budget_ms(window::frame_budget_ms());
         JsRuntime::with(|rt| {
             rt.pump(PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS);
             for err in rt.drain_errors() {

@@ -58,10 +58,55 @@ fn apply_user_agent() {
 /// frame spends a fraction of it. Set here, explicitly, for the same reason as
 /// [`VN_USER_AGENT`]: the frame belongs to vue-native, so the share it gives
 /// away is vue-native's decision, made in one place.
+///
+/// It is the CAP. The budget a frame actually gets is [`delivery_budget_us`]:
+/// a quarter of the display's refresh interval, at most this.
 pub const VN_PUMP_DELIVERY_BUDGET_US: u32 = 4000;
+
+/// The floor under [`delivery_budget_us`]: below ~0.5 ms the thread hop
+/// (~10-50 µs) and the pump's own spin are a visible share of the slice, and a
+/// 500 Hz display is the fastest anyone ships.
+pub const VN_PUMP_DELIVERY_MIN_US: u32 = 500;
+
+/// The per-pump delivery budget for a display that refreshes every
+/// `frame_ms`: a QUARTER of the frame, between [`VN_PUMP_DELIVERY_MIN_US`] and
+/// [`VN_PUMP_DELIVERY_BUDGET_US`]; the cap when the refresh rate is unknown.
+///
+/// Why scale it, measured (m25 P2, research/reports/m25/indexeddb-p2-impl.md
+/// §budget; redjs tests/idb_libs.rs under `REDJS_IDB_BUDGET_US`, on the
+/// memory, SQLite and encrypted SQLite backends): for reads and relaxed
+/// commits the time spent INSIDE pumps does not depend on the budget —
+/// 1000 awaited gets cost ~23-30 ms of frame-thread time at 4, 2 or 1 ms —
+/// the budget only decides how many frames it is spread over (6, 12, 24).
+/// Frames × refresh interval is the wall-clock latency, so a fixed 4 ms gives
+/// a 144 Hz display (6.9 ms frames) 58% of every frame for the same latency a
+/// quarter-frame budget gets at 25%: 1000 gets ≈ 6 frames × 16.7 ms at 60 Hz
+/// ≈ 12 frames × 8.3 ms at 120 Hz ≈ 100 ms either way. Strict-durability
+/// commits are the one case where the slice is mostly WAITING (on the fsync,
+/// ~1.6 ms each): 200 of them cost 67 frames / 284 ms in pumps at 4 ms, 104 /
+/// 238 ms at 2 ms — the quarter-frame rule bounds that too.
+pub fn delivery_budget_us(frame_ms: Option<f32>) -> u32 {
+    match frame_ms {
+        Some(ms) if ms.is_finite() && ms > 0.0 => {
+            ((ms * 250.0) as u32).clamp(VN_PUMP_DELIVERY_MIN_US, VN_PUMP_DELIVERY_BUDGET_US)
+        }
+        _ => VN_PUMP_DELIVERY_BUDGET_US,
+    }
+}
 
 fn apply_pump_budget() {
     redjs::web::set_pump_budget_us(VN_PUMP_DELIVERY_BUDGET_US);
+}
+
+/// Re-derives the delivery budget from the display's refresh interval. Called
+/// by the host once per frame, before the pump, with what the window snapshot
+/// just read (`None` until the platform says): one atomic store when it moved,
+/// nothing otherwise.
+pub fn set_frame_budget_ms(frame_ms: Option<f32>) {
+    let us = delivery_budget_us(frame_ms);
+    if redjs::web::pump_budget_us() != us {
+        redjs::web::set_pump_budget_us(us);
+    }
 }
 
 thread_local! {
@@ -319,6 +364,22 @@ mod tests {
         assert_eq!(read("navigator.appVersion"), "5.0 (Windows NT 10.0; Win64; x64) RedVue/1.0");
         assert_eq!(read("navigator.platform"), "Win32");
         assert_eq!(read("String(navigator instanceof Navigator)"), "true");
+    }
+
+    /// A quarter of the frame, capped at the design's 4 ms and floored at
+    /// 0.5 ms; the cap when the platform has not said.
+    #[test]
+    fn the_delivery_budget_is_a_quarter_of_the_frame() {
+        assert_eq!(delivery_budget_us(None), VN_PUMP_DELIVERY_BUDGET_US);
+        assert_eq!(delivery_budget_us(Some(1000.0 / 60.0)), 4000, "60 Hz: the cap (a quarter is 4.17 ms)");
+        assert_eq!(delivery_budget_us(Some(1000.0 / 120.0)), 2083);
+        assert_eq!(delivery_budget_us(Some(1000.0 / 144.0)), 1736);
+        assert_eq!(delivery_budget_us(Some(1000.0 / 240.0)), 1041);
+        assert_eq!(delivery_budget_us(Some(1000.0 / 1000.0)), VN_PUMP_DELIVERY_MIN_US);
+        assert_eq!(delivery_budget_us(Some(100.0)), VN_PUMP_DELIVERY_BUDGET_US, "30 Hz and slower: still the cap");
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(delivery_budget_us(Some(bad)), VN_PUMP_DELIVERY_BUDGET_US, "{bad}");
+        }
     }
 
     /// The vue-native build carries IndexedDB, and a chain of awaited requests
