@@ -82,6 +82,8 @@
     // the apps themselves (imgperf calls `__vn_log`).
     "../packages/vue-native/src/engine.d.ts",
     "../packages/vue-native/src/protocol.d.ts",
+    // IndexedDB + `navigator.storage`, shipped by the runtime (m25 P2).
+    "../packages/vue-native/src/indexeddb.d.ts",
     "env.d.ts",
     "hello/src/**/*.ts",
     "hello/src/**/*.vue",

@@ -27,7 +27,18 @@
 //!                                    │
 //!                     <folder>/localStorage.json   (plaintext)
 //!                     <folder>/localStorage.sealed (DPAPI)
+//!
+//!   apps/*      ──indexedDB.open(…)── redjs::webapi::indexeddb (SQLite)
+//!                                    ▲  dyn IndexedDbHost
+//!                            vn_storage::idb::Host   (feature `indexeddb`)
+//!                                    │
+//!                     <folder>/indexeddb/<h>.sqlite3   (ChaCha20-Poly1305
+//!                     <folder>/indexeddb/key.sealed     under a DPAPI-sealed key
+//!                                                       when the folder is encrypted)
 //! ```
+//!
+//! IndexedDB follows the SAME folder and the SAME encryption setting, with the
+//! same sticky rule — see [`idb`] (compiled with the `indexeddb` feature).
 //!
 //! # The default folder, and how the app name is found
 //!
@@ -104,6 +115,8 @@ use vn_runtime::{host_fn, JsRuntime};
 pub mod crypt;
 pub mod file;
 pub mod folders;
+#[cfg(feature = "indexeddb")]
+pub mod idb;
 
 pub use folders::{user_folder, KINDS};
 
@@ -398,6 +411,18 @@ pub fn set_storage_folder(folder: &Path, encrypted: bool) -> Result<PathBuf, Str
     let folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let folder = strip_verbatim(&folder);
 
+    let r = relocate(&folder, encrypted);
+    // IndexedDB latches its folder and key at its first use; a change after
+    // that is for the next start (src/idb.rs, "A late setStorageFolder").
+    // Outside the State lock: the IndexedDB host takes it from its own thread.
+    #[cfg(feature = "indexeddb")]
+    idb::storage_changed(&folder, encrypted);
+    r.map(|()| folder)
+}
+
+/// The `localStorage` half of [`set_storage_folder`].
+fn relocate(folder: &Path, encrypted: bool) -> Result<(), String> {
+    let folder = folder.to_path_buf();
     let s = storage();
     let mut st = s.state.lock().unwrap();
     let same_folder = st.folder == folder;
@@ -430,7 +455,28 @@ pub fn set_storage_folder(folder: &Path, encrypted: bool) -> Result<PathBuf, Str
             e
         })?;
     }
-    Ok(folder)
+    Ok(())
+}
+
+/// The storage folder as of now: the configured one, else the default
+/// `install` would have set. What IndexedDB's host latches (src/idb.rs).
+#[cfg_attr(not(feature = "indexeddb"), allow(dead_code))]
+fn current_folder() -> PathBuf {
+    let folder = storage().state.lock().unwrap().folder.clone();
+    if folder.as_os_str().is_empty() {
+        default_folder(embedder_app_name().as_deref())
+    } else {
+        folder
+    }
+}
+
+/// What the app SAID about encryption this run: `Some(encrypted)` once it
+/// called `setStorageFolder`, `None` if it never did (the sticky rule then
+/// decides — see `State::encryption_explicit`).
+#[cfg_attr(not(feature = "indexeddb"), allow(dead_code))]
+fn encryption_intent() -> Option<bool> {
+    let st = storage().state.lock().unwrap();
+    st.encryption_explicit.then_some(st.encrypted)
 }
 
 /// `\\?\C:\x` → `C:\x`. Only ever applied to a path we just canonicalised.
@@ -540,9 +586,13 @@ host_fn!(fn vn_storage_info(_g, _args) {
     let path = if st.encrypted { file::sealed_path(&folder) } else { file::plain_path(&folder) };
     let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     let provider = crypt::provider().map(|p| p.name()).unwrap_or("");
+    #[cfg(feature = "indexeddb")]
+    let indexed_db = idb::info_json(&folder);
+    #[cfg(not(feature = "indexeddb"))]
+    let indexed_db = "null";
     let json = format!(
         "{{\"folder\":\"{}\",\"file\":\"{}\",\"encrypted\":{},\"bytes\":{},\"loaded\":{},\
-          \"pending\":{},\"provider\":\"{}\",\"kinds\":[{}],\"error\":{}}}",
+          \"pending\":{},\"provider\":\"{}\",\"kinds\":[{}],\"error\":{},\"indexedDB\":{}}}",
         json_escape(&folder.display().to_string()),
         json_escape(&path.display().to_string()),
         st.encrypted,
@@ -555,6 +605,7 @@ host_fn!(fn vn_storage_info(_g, _args) {
             Some(e) => format!("\"{}\"", json_escape(e)),
             None => String::from("null"),
         },
+        indexed_db,
     );
     JsRuntime::with(|rt| rt.ctx().string(&json).0)
 });
@@ -597,6 +648,11 @@ pub fn install(rt: &JsRuntime, app_name: Option<String>) {
         }
     }
     api::set_host(storage());
+    // …and the same folder (its `indexeddb\` subfolder) for IndexedDB, BEFORE
+    // app code: redjs reads its host once, at the first `indexedDB` use, and a
+    // host installed after that would leave the run in memory.
+    #[cfg(feature = "indexeddb")]
+    idb::install();
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_storage_user_folder", 2, vn_storage_user_folder as *const _),
         ("__vn_storage_set_folder", 2, vn_storage_set_folder as *const _),

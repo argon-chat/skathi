@@ -78,12 +78,14 @@ storages = ["vn-runtime/storages", "dep:vn-storage"]
 # <input>'s own Ctrl+C is unaffected — the two share gpui's clipboard, not this
 # crate.
 clipboard = ["vn-runtime/clipboard", "dep:vn-clipboard"]
-# `indexedDB` + `navigator.storage`. ON by default, no dependency. m25 P1 is
-# the in-memory backend (nothing survives a restart, advised once); P2 adds the
-# SQLite file under the storage folder, with vn-storage as its host. Results
-# are delivered inside the frame's pump, within `vn_runtime::runtime::
-# VN_PUMP_DELIVERY_BUDGET_US`.
-indexeddb = ["vn-runtime/indexeddb"]
+# `indexedDB` + `navigator.storage`. ON by default, no Rust dependency. With
+# `storages` on (the default) the databases are SQLite files under the app's
+# storage folder, encrypted at rest when the storage is (vn-storage is the
+# host; docs/STORAGE.md "IndexedDB"). With `storages` off there is no host, so
+# the in-memory backend runs and says once that nothing survives a restart.
+# Results are delivered inside the frame's pump, within
+# `vn_runtime::runtime::delivery_budget_us` (a quarter of the frame, ≤ 4 ms).
+indexeddb = ["vn-runtime/indexeddb", "vn-storage?/indexeddb"]
 
 [dependencies]
 # `stacker` (zed#63187) made `stacksafe` opt-in; before that PR it was an

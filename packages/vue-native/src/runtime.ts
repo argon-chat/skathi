@@ -3691,6 +3691,23 @@ interface StorageHost {
   flush: typeof __vn_storage_flush;
 }
 
+/**
+ * IndexedDB's half of `appStorage.info()` (crates/vn-storage/src/idb.rs): the
+ * databases live in `<folder>\indexeddb`. `mode` is what IndexedDB is running
+ * in — `null` until the app's first `indexedDB` use, when the folder and the
+ * key are latched for the run; a `setStorageFolder` after that applies at the
+ * next start. `key`: a sealed key exists in that folder. `null` as a whole in
+ * a host built without on-disk IndexedDB.
+ */
+interface IndexedDbInfo {
+  folder: string;
+  started: boolean;
+  mode: "plaintext" | "encrypted" | "decrypting" | "refused" | null;
+  encrypted: boolean | null;
+  key: boolean;
+  error: string | null;
+}
+
 /** Everything `appStorage.info()` reports. `error` is the LAST failure, or null. */
 interface StorageInfo {
   folder: string;
@@ -3702,6 +3719,7 @@ interface StorageInfo {
   provider: string;
   kinds: string[];
   error: string | null;
+  indexedDB: IndexedDbInfo | null;
 }
 
 /** The tier-2 surface, in both its live and its inert spelling. */
@@ -3772,6 +3790,13 @@ function createStorage(host: StorageHost): AppStorage {
      *
      * Best called before the first `localStorage` touch. Called later it still
      * works: the area this process is holding is written to the new place.
+     *
+     * IndexedDB follows the same folder (`<path>\indexeddb`) and the same
+     * encryption, with the same sticky rule — but it latches both at its first
+     * use and never moves open databases, so call this BEFORE the first
+     * `indexedDB` call. Later, the change applies at the next start (said once
+     * on stderr; the encryption half is remembered even if that start calls
+     * late again). docs/STORAGE.md "IndexedDB".
      */
     setStorageFolder(path: string, options: { encrypted?: boolean } = {}) {
       const encrypted = !!(options && options.encrypted);

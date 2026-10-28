@@ -13,6 +13,13 @@ publish = false
 # `vn-permissions` and `vn-voice`.
 vn-runtime = { path = "../vn-runtime", default-features = false, features = ["storages"] }
 
+[features]
+# IndexedDB on disk: this crate becomes redjs's `IndexedDbHost` (src/idb.rs)
+# — the databases live in `<storage folder>\indexeddb\`, encrypted at rest
+# under a DPAPI-sealed key whenever the storage is. vn-app turns it on with
+# its own `indexeddb` feature.
+indexeddb = ["vn-runtime/indexeddb-disk"]
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # 0.62, matching `vn-permissions` (this crate shares no types with gpui, so it
 # does not have to agree with gpui's 0.61).

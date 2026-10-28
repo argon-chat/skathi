@@ -40,12 +40,16 @@ storages = ["redjs/storages"]
 # `navigator.clipboard` (crates/vn-clipboard is the backend, over gpui's).
 clipboard = ["redjs/clipboard"]
 # `indexedDB` + `navigator.storage` (research/reports/m25/indexeddb-design.md).
-# m25 P1: redjs's in-memory backend — the whole API, nothing survives a
-# restart, and redjs advises once that it is so. P2 swaps in
-# `redjs/indexeddb-sqlite` with crates/vn-storage as the `IndexedDbHost`, under
-# the app's storage folder; the API does not change. Off, `typeof indexedDB`
-# is "undefined" — the truth, rather than a database that pretends.
+# On its own: redjs's in-memory backend — the whole API, nothing survives a
+# restart, and redjs advises once that it is so. Off, `typeof indexedDB` is
+# "undefined" — the truth, rather than a database that pretends.
 indexeddb = ["redjs/indexeddb"]
+# IndexedDB ON DISK (m25 P2): redjs's SQLite3 Multiple Ciphers backend — a C
+# compile and ~0.9 MB of the release exe. Not turned on here but by crates/vn-storage's
+# `indexeddb` feature, because the backend only runs when an `IndexedDbHost`
+# is installed and vn-storage is that host: a build without vn-storage would
+# carry the code for nothing.
+indexeddb-disk = ["indexeddb", "redjs/indexeddb-sqlite"]
 
 [dependencies]
 # Lean redjs: no game-engine host classes (physics/mesh/css-host/yoga-host are

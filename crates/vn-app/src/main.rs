@@ -1107,6 +1107,27 @@ fn main() {
                 std::future::ready(())
             }));
         }
+        // IndexedDB ends before the process does, in EVERY build: transactions
+        // that never committed are dropped (as a browser's are) and every
+        // database is closed on the server thread — for the SQLite backend
+        // that checkpoints the WAL into the file and removes it. Synchronous,
+        // inside the observer, so gpui's 200 ms SHUTDOWN_TIMEOUT for quit
+        // FUTURES does not cut it short; bounded by its own timeout instead.
+        // A kill skips this, and loses nothing committed either (the WAL is
+        // replayed at the next open — redjs tests/idb_crash.rs). A no-op when
+        // the app never touched IndexedDB.
+        #[cfg(feature = "indexeddb")]
+        std::mem::forget(cx.on_app_quit(|_| {
+            let t = std::time::Instant::now();
+            let done = vn_runtime::redjs::ffi::redjs_idb_shutdown(2_000);
+            if done == 0 {
+                eprintln!(
+                    "[vn] IndexedDB did not finish closing within {} ms; the next start recovers from its WAL",
+                    t.elapsed().as_millis()
+                );
+            }
+            std::future::ready(())
+        }));
         // Before the runtime exists, so the log ring is already recording when
         // the first advisory fires — and before the window config is read, for
         // the same reason. This is only the RECORDING half; whether a listener

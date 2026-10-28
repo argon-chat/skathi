@@ -1,30 +1,52 @@
 // IndexedDB in a real Vue app, on the real host, inside the real frame loop
-// (m25 P1 — research/reports/m25/indexeddb-design.md, -p1-impl.md).
+// (m25 P1/P2 — research/reports/m25/indexeddb-design.md, -p1-impl.md,
+// -p2-impl.md).
 //
 //   bun test packages/vn-test/specs/indexeddb.spec.ts
 //
 // redjs proves the API itself — the WPT subset (vendor/redjs/redjs/tests/
 // wpt_idb.rs) and Dexie / idb / idb-keyval / localForage unmodified
-// (tests/idb_libs.rs). What only a host can prove is the integration: that the
-// build ships it, that a Vue app's state can live in it, that a click handler's
-// transaction commits and Vue re-renders what came back, that results land
-// inside vn-app's own frame pump within the budget vn-runtime sets
-// (VN_PUMP_DELIVERY_BUDGET_US), and that the P1 limitation — memory only — is
-// SAID, on stderr, rather than left to be discovered after a restart.
+// (tests/idb_libs.rs), on both backends. What only a host can prove is the
+// integration: that the build ships it, that a Vue app's state can live in
+// it, that a click handler's transaction commits and Vue re-renders what came
+// back, that results land inside vn-app's own frame pump within the budget
+// vn-runtime sets (`delivery_budget_us`), and that the databases are ON DISK
+// under the app's storage folder — no memory-only advisory. Persistence across
+// restarts, encryption and the second instance: indexeddb-disk.spec.ts.
 //
 // `fixtures/indexeddb` is the app; `__VN_TEST_IDB__.run(name)` starts one of its
-// scenarios and records how it settled.
+// scenarios and records how it settled. The host gets its own `VN_APP_NAME`
+// (a fresh, empty storage folder), removed afterwards.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { expect, launch } from "../src/index";
 
+const appName = `vn-test-idb-${process.pid}-p1`;
 const app = await launch({
   app: "packages/vn-test/fixtures/indexeddb/src/main.ts",
   window: [480, 360],
   label: "indexeddb",
+  env: { VN_APP_NAME: appName },
 });
-afterAll(() => app.close());
+let idbFolder = "";
+afterAll(async () => {
+  await app.close();
+  // `<LOCALAPPDATA>\<appName>\storage\indexeddb` — the app-name directory goes,
+  // once the killed host has let go of its files.
+  const appDir = dirname(dirname(idbFolder));
+  if (!idbFolder || basename(appDir) !== appName) return;
+  for (let i = 0; ; i++) {
+    try {
+      rmSync(appDir, { recursive: true, force: true });
+      break;
+    } catch (e) {
+      if (i >= 50) throw e;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+});
 
 const T = 30_000;
 
@@ -91,12 +113,25 @@ describe("IndexedDB in a Vue app", () => {
   }, T);
 
   test("databases() and navigator.storage see the app's data", async () => {
-    bunExpect(await scenario("storage")).toBe(`true|true|${2 ** 30}|true`);
+    // The quota is the disk's (vn-storage idb.rs: min(60% of the volume,
+    // used + free)), not P1's fixed 1 GiB.
+    const [names, used, quota, persisted] = (await scenario("storage")).split("|");
+    bunExpect([names, used, persisted]).toEqual(["true", "true", "true"]);
+    console.log(`[indexeddb] navigator.storage.estimate().quota = ${quota}`);
+    bunExpect(Number(quota)).toBeGreaterThan(0);
   }, T);
 
-  test("the memory-only limitation of this build is said, once, on stderr", async () => {
+  test("the databases are on disk under the storage folder, and nothing says 'memory only'", async () => {
+    const info = JSON.parse((await app.eval("__vn_storage_info()")) as string) as {
+      folder: string;
+      indexedDB: { folder: string; started: boolean; mode: string };
+    };
+    idbFolder = info.indexedDB.folder;
+    bunExpect(info.indexedDB.folder).toBe(`${info.folder}\\indexeddb`);
+    bunExpect(info.indexedDB.started).toBe(true);
+    bunExpect(info.indexedDB.mode).toBe("plaintext");
     const log = readFileSync(app.hostLog, "utf8");
     const lines = log.split(/\r?\n/).filter((l) => l.includes("[redjs] IndexedDB") && l.includes("IN MEMORY ONLY"));
-    bunExpect(lines.length).toBe(1);
+    bunExpect(lines).toEqual([]);
   }, T);
 });
