@@ -2,7 +2,7 @@
 /**
  * vn-devtools CLI — the zero-setup way to drive a running dev host.
  *
- *   bun devtools/ctl.ts [--dist <slot>] <cmd> [args...]
+ *   bun devtools/ctl.ts [--dist <slot> | --app <name>] <cmd> [args...]
  *
  * Reads `<dist>/devtools.json` (written by the host at boot), opens a TCP
  * connection to 127.0.0.1:<port>, sends ONE newline-delimited JSON request and
@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 // has a command list of its own any more — that is what let the MCP server sit
 // on the m10 set for a milestone after the CLI grew six commands.
 import { buildRequest, usageBlock, UsageError, type Flags } from "./commands";
+import { appSlot } from "./apps";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DIST = resolve(HERE, "..", "dist");
@@ -42,6 +43,8 @@ ${usageBlock()}
 options
   --dist <slot>    the dist directory the target host was launched with
                    (default: ${DEFAULT_DIST})
+  --app <name>     a PACKAGED app instead (vn build): its newest live instance
+                   under %TEMP%\\vue-native\\apps\\<name> (docs/PACKAGING.md)
   --window <id>    which of the target's OS windows the command is about
                    (\`windows\` lists them; default: the primary one)
   --timeout <ms>   client-side reply timeout (default ${DEFAULT_TIMEOUT_MS})
@@ -80,7 +83,14 @@ if (flags.help || positional.length === 0) {
   process.exit(positional.length === 0 && !flags.help ? 1 : 0);
 }
 
-const distDir = typeof flags.dist === "string" && flags.dist ? resolve(flags.dist) : DEFAULT_DIST;
+const distDir = (() => {
+  if (typeof flags.app === "string" && flags.app) {
+    const found = appSlot(flags.app);
+    if ("error" in found) die(found.error);
+    return found.dir;
+  }
+  return typeof flags.dist === "string" && flags.dist ? resolve(flags.dist) : DEFAULT_DIST;
+})();
 const timeoutMs = Number(flags.timeout ?? DEFAULT_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,10 @@
  * vn-devtools MCP server — the same wire as `ctl.ts`, exposed as MCP tools so
  * an agent can drive a running vue-native dev host without shelling out.
  *
- *   bun packages/vue-native/devtools/mcp.ts [--dist <slot>]
+ *   bun packages/vue-native/devtools/mcp.ts [--dist <slot> | --app <name>]
+ *
+ * `--app <name>` attaches to a PACKAGED app (`vn build`) by its vn.config name
+ * instead — its newest live instance, re-resolved per call (./apps.ts).
  *
  * Registered per-repo in `.mcp.json`. One server instance per dist slot: the
  * `--dist` argument decides which `<dist>/devtools.json` handshake it reads,
@@ -30,18 +33,30 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { appSlot } from "./apps";
 import { mcpTools } from "./commands";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const distFlag = argv.indexOf("--dist");
 const DIST = distFlag >= 0 && argv[distFlag + 1] ? resolve(argv[distFlag + 1]) : resolve(HERE, "..", "dist");
+// `--app <name>`: a PACKAGED app (docs/PACKAGING.md). Re-resolved on every
+// call, because each launch of the exe is a new pid and so a new slot.
+const appFlag = argv.indexOf("--app");
+const APP = appFlag >= 0 && argv[appFlag + 1] ? argv[appFlag + 1]! : null;
 const TIMEOUT_MS = 10_000;
 
 type Handshake = { port: number; pid: number; token: string };
 
+function slotDir(): string {
+  if (!APP) return DIST;
+  const found = appSlot(APP);
+  if ("error" in found) throw new Error(found.error);
+  return found.dir;
+}
+
 function handshake(): Handshake {
-  const path = join(DIST, "devtools.json");
+  const path = join(slotDir(), "devtools.json");
   const raw = readFileSync(path, "utf8"); // throws → reported as the tool error
   const h = JSON.parse(raw) as Handshake;
   if (!h.port || !h.token) throw new Error(`${path} has no port/token`);
@@ -123,10 +138,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [
         {
           type: "text",
-          text:
-            `${(e as Error).message}\n` +
-            `(dist slot: ${DIST} — is a dev host running with this dist? ` +
-            `start one with VN_DIST=${DIST} target/x86_64-pc-windows-msvc/debug/vn-app.exe)`,
+          text: APP
+            ? `${(e as Error).message}\n(packaged app: ${APP})`
+            : `${(e as Error).message}\n` +
+              `(dist slot: ${DIST} — is a dev host running with this dist? ` +
+              `start one with VN_DIST=${DIST} target/x86_64-pc-windows-msvc/debug/vn-app.exe)`,
         },
       ],
     };
