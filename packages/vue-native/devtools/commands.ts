@@ -453,7 +453,8 @@ export const COMMANDS: CommandSpec[] = [
     cmd: "perf",
     description:
       "The rolling frame window, always on: {frames, uptimeMs, bootMs, avgMs, p50Ms, p95Ms, " +
-      "maxMs, fps, samples[], nodes, windows, phases}. One Instant read and one store per frame, " +
+      "maxMs, fps, budgetMs, samples[], nodes, windows, phases}. `budgetMs` is the display's " +
+      "refresh interval (null when unreported). One Instant read and one store per frame, " +
       "so \"why is this janky\" can be asked of a host that is already running. `phases` reports " +
       "whether VN_PERF's stderr breakdown is on rather than duplicating its counters (reading " +
       "them would clear them under the person profiling).",

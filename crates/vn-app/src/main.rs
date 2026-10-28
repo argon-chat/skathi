@@ -1180,6 +1180,11 @@ fn main() {
         // before any JS runs, because the very first thing that needs it is the
         // app bundle's own `onMounted`.
         vn_tree::set_sync_layout(sync_layout);
+        // `font-family` resolves to the first INSTALLED family in its list, so
+        // the mapper needs the host's family names — read lazily, the first
+        // time a sheet maps a `font-family`, and before any JS has run.
+        let text_system = cx.text_system().clone();
+        vn_css::set_font_source(move || text_system.all_font_names());
 
         // Startup eval: host fns called at top level land in Phase::App.
         with_published_app(cx, || {

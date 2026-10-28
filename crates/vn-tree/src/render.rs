@@ -66,10 +66,6 @@ thread_local! {
     static SCROLL_REPORTED: RefCell<HashMap<u32, (f32, f32)>> = RefCell::new(HashMap::new());
     /// One-shot compat advisories already emitted (keyed by message).
     static WARNED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
-    /// Every font family the host can actually resolve. Enumerating them is a
-    /// platform call over every installed font, so it happens once — see
-    /// [`advise_missing_font`].
-    static FONT_NAMES: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
     /// Nodes lowered in the build currently running — the VN_PERF counter. One
     /// `Cell` increment per node, unconditionally: the branch a probe check
     /// would add costs as much as the add.
@@ -1573,7 +1569,7 @@ fn build_node<V: 'static>(
             // stable `ElementId` gpui keys an accessibility node on, which is
             // the only precondition — see `crate::aria`.
             d = crate::aria::apply(d, t, id, node);
-            advise_missing_font(d.style(), cx);
+            advise_missing_font();
             apply_background_layers(d.style(), &extras);
             apply_background_clip_text(d.style(), &extras);
             apply_self_blur(d.style(), t, id, node, &extras);
@@ -1845,44 +1841,43 @@ fn build_node<V: 'static>(
     }
 }
 
-/// Says so when a `font-family` names a font the host does not have.
+/// Says so when a `font-family` list's FIRST choice is a font the host does not
+/// have.
 ///
-/// The substitution itself is correct and unavoidable — gpui falls back the way
-/// a browser does — but the SILENCE was not, and this is the one gap on
-/// apps/meet-probe that changed how much text fitted on a line: the app asks
-/// for Inter, ships Inter as a `@font-face` in a stylesheet vue-native never
-/// loads (there is no `@font-face` and no `<link rel=stylesheet>`; the sheet is
-/// the SFC `<style>` blocks plus Tailwind), and gets the platform UI font,
-/// which is wider. The hero subtitle wraps to two lines where a browser fits it
-/// on one, and nothing anywhere said why.
+/// The substitution itself is correct — vn-css takes the first installed
+/// family in the list, CSS's "first available font", as a browser does — but
+/// the SILENCE was not, and this is the one gap on apps/meet-probe that changed
+/// how much text fitted on a line: the app asks for Inter, ships Inter as a
+/// `@font-face` in a stylesheet vue-native never loads (there is no
+/// `@font-face` and no `<link rel=stylesheet>`; the sheet is the SFC `<style>`
+/// blocks plus Tailwind), and gets the platform UI font, which is wider. The
+/// hero subtitle wraps to two lines where a browser fits it on one, and nothing
+/// anywhere said why.
 ///
-/// The system font list is enumerated once — it is a platform call over every
-/// installed family — and the advisory is one-shot per family name, so a page
-/// asking for a missing font on 300 nodes reports it once.
-fn advise_missing_font(style: &gpui::StyleRefinement, cx: &mut App) {
-    let Some(family) = style.text.font_family.as_ref() else {
-        return;
-    };
-    let known = FONT_NAMES.with(|c| {
-        let mut cache = c.borrow_mut();
-        cache
-            .get_or_insert_with(|| cx.text_system().all_font_names().into_iter().collect())
-            .contains(family.as_ref())
-    });
-    if known {
-        return;
+/// Only a missing FIRST entry is reported: `ui-monospace, SFMono-Regular, …,
+/// Consolas` landing on Consolas is exactly what a browser on this machine
+/// does. The misses are recorded where the list is mapped
+/// (`vn_css::take_font_misses`) and drained here, one-shot per family name, so
+/// a page asking for a missing font on 300 nodes reports it once.
+fn advise_missing_font() {
+    for (family, used) in vn_css::take_font_misses() {
+        let used = match used.as_deref() {
+            Some(".SystemUIFont") => "the platform UI font".to_string(),
+            Some(u) => format!("`{u}`, the first installed family in the list"),
+            None => "the platform default (nothing in the list is installed)".to_string(),
+        };
+        warn_compat(
+            &format!("missing-font:{family}"),
+            &format!(
+                "no font installed for `font-family: {family}` — using {used}, which has \
+                 different metrics, so text measures and wraps differently than where \
+                 `{family}` exists. vue-native loads no `@font-face` and no \
+                 `<link rel=stylesheet>`: the stylesheet is the SFC <style> blocks plus \
+                 Tailwind, so a webfont the app ships is never fetched. Install the family on \
+                 the host, or pick one that is"
+            ),
+        );
     }
-    warn_compat(
-        &format!("missing-font:{family}"),
-        &format!(
-            "no font installed for `font-family: {family}` — gpui is falling back to the \
-             platform default, which has different metrics, so text measures and wraps \
-             differently than in a browser. vue-native loads no `@font-face` and no \
-             `<link rel=stylesheet>`: the stylesheet is the SFC <style> blocks plus Tailwind, \
-             so a webfont the app ships is never fetched. Install the family on the host, or \
-             pick one that is"
-        ),
-    );
 }
 
 /// `background-clip: text` — paint the TEXT, not a box.

@@ -46,7 +46,8 @@ pub use animator::{AnimEvent, AnimEventKind, Animator, strip_transitioned};
 pub use element::MatchDom;
 pub use mapper::{
     parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
-    set_rem_basis, set_viewport_basis, uses_viewport_units, viewport_basis, BackgroundLayer,
+    set_font_source, set_rem_basis, set_viewport_basis, take_font_misses, uses_viewport_units,
+    viewport_basis, BackgroundLayer,
     CurrentColorTargets, Decls, Extras, InlineStyle, ListMarker, ObjectFit, OverscrollBehavior,
     ScrollbarWidth, SvgPaint, TextTransform,
     TileLength, WhiteSpaceMode, WindowControl, WindowDrag,

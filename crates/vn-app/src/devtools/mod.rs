@@ -2540,6 +2540,16 @@ fn perf_data() -> Json {
         ("p95Ms", Json::n(round2(p95))),
         ("maxMs", Json::n(round2(max))),
         ("fps", Json::n(f64::from((fps * 10.0).round() / 10.0))),
+        // One frame's budget: the primary window's display refresh interval
+        // (gpui's `Window::refresh_interval`). `null` when the platform does
+        // not report it.
+        (
+            "budgetMs",
+            match crate::window::frame_budget_ms() {
+                Some(ms) => Json::n((f64::from(ms) * 100.0).round() / 100.0),
+                None => Json::Null,
+            },
+        ),
         ("samples", Json::arr(tail)),
         ("nodes", Json::n(f64::from(vn_tree::devtools::node_count()))),
         // Scroll containers registered with the wheel router last frame. It is

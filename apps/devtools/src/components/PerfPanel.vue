@@ -43,17 +43,19 @@ function barHeight(ms: number): number {
 /**
  * A bar's colour is about the DISPLAY, not a fixed 16.7 ms budget: a 165 Hz
  * monitor has a 6 ms frame and a 60 Hz one has 16.7, and painting the first
- * red for missing the second would be a lie. So the reference is the window's
- * own median — a bar is "slow" when it is well past what this machine has been
+ * red for missing the second would be a lie. So the reference is the display's
+ * own refresh interval (`budgetMs`, gpui's `Window::refresh_interval`) — a bar
+ * 1.6× past it missed a vsync — and, from a target that does not report one,
+ * the window's own median: "slow" is well past what this machine has been
  * managing, which is what a hitch actually is.
  */
-const median = computed(() => perf.value?.p50Ms || 0);
+const reference = computed(() => perf.value?.budgetMs || perf.value?.p50Ms || 0);
 
 function barClass(ms: number): string {
-  const p50 = median.value;
-  if (!p50) return "";
-  if (ms > p50 * 3) return "bad";
-  if (ms > p50 * 1.6) return "warn";
+  const ref = reference.value;
+  if (!ref) return "";
+  if (ms > ref * 3) return "bad";
+  if (ms > ref * 1.6) return "warn";
   return "";
 }
 
@@ -95,15 +97,19 @@ function seconds(ms: number | null | undefined): string {
           <span class="v">{{ perf.p50Ms.toFixed(2) }}</span><span class="u">ms</span>
           <span class="k">p50 frame</span>
         </div>
+        <div v-if="perf.budgetMs" class="stat">
+          <span class="v">{{ perf.budgetMs.toFixed(2) }}</span><span class="u">ms</span>
+          <span class="k">frame budget · display</span>
+        </div>
         <div class="stat">
-          <span class="v" :class="{ warn: perf.p95Ms > perf.p50Ms * 1.6 }">{{
+          <span class="v" :class="{ warn: perf.p95Ms > reference * 1.6 }">{{
             perf.p95Ms.toFixed(2)
           }}</span
           ><span class="u">ms</span>
           <span class="k">p95 frame</span>
         </div>
         <div class="stat">
-          <span class="v" :class="{ bad: perf.maxMs > perf.p50Ms * 3 }">{{
+          <span class="v" :class="{ bad: perf.maxMs > reference * 3 }">{{
             perf.maxMs.toFixed(2)
           }}</span
           ><span class="u">ms</span>

@@ -1087,6 +1087,125 @@ thread_local! {
     /// Set the first time a sheet resolves a viewport unit. Nothing else has to
     /// recompile when the window resizes, and almost no sheet uses one.
     static VIEWPORT_UNITS_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// See [`set_font_source`].
+    static FONT_SOURCE: std::cell::RefCell<Option<Box<dyn Fn() -> Vec<String>>>> =
+        const { std::cell::RefCell::new(None) };
+    /// The installed families, read from [`FONT_SOURCE`] the first time a
+    /// `font-family` is mapped.
+    static INSTALLED_FONTS: std::cell::RefCell<Option<Rc<std::collections::HashSet<String>>>> =
+        const { std::cell::RefCell::new(None) };
+    /// See [`take_font_misses`].
+    static FONT_MISSES: std::cell::RefCell<Vec<(String, Option<String>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Where the installed font families come from — the host's text system
+/// (`gpui::TextSystem::all_font_names`, real families only since zed v1.26).
+///
+/// Read lazily, once, on the first `font-family` the mapper sees: it is a
+/// platform enumeration over every installed family, and a sheet with no
+/// `font-family` never pays for it. Without a source (unit tests, tools with no
+/// text system) every named family counts as installed, which is the old
+/// "first named family wins" behaviour.
+pub fn set_font_source(source: impl Fn() -> Vec<String> + 'static) {
+    FONT_SOURCE.with(|s| *s.borrow_mut() = Some(Box::new(source)));
+    INSTALLED_FONTS.with(|c| *c.borrow_mut() = None);
+}
+
+/// `Some(installed?)`, or `None` when no source was set.
+fn font_installed(name: &str) -> Option<bool> {
+    let set = INSTALLED_FONTS.with(|c| c.borrow().clone()).or_else(|| {
+        let names = FONT_SOURCE.with(|s| s.borrow().as_ref().map(|f| f()))?;
+        let set = Rc::new(names.into_iter().collect::<std::collections::HashSet<_>>());
+        INSTALLED_FONTS.with(|c| *c.borrow_mut() = Some(set.clone()));
+        Some(set)
+    })?;
+    Some(set.contains(name))
+}
+
+/// `(asked for, used instead)` for every `font-family` whose FIRST entry names
+/// a family that is not installed — drained by the renderer's one-shot
+/// advisory. `used` is `None` when nothing in the list was available and
+/// gpui's own default takes over.
+pub fn take_font_misses() -> Vec<(String, Option<String>)> {
+    FONT_MISSES.with(|m| std::mem::take(&mut *m.borrow_mut()))
+}
+
+fn note_font_miss(asked: String, used: Option<String>) {
+    FONT_MISSES.with(|m| {
+        let mut m = m.borrow_mut();
+        // A recompile maps the same declarations again.
+        if !m.iter().any(|(a, _)| *a == asked) {
+            m.push((asked, used));
+        }
+    });
+}
+
+/// The family a generic stands for — Chrome's defaults on Windows first, then
+/// their usual stand-ins elsewhere. `system-ui` is gpui's own system UI font.
+/// The `ui-*` four are Safari-only (Chrome skips them, so do we), and `emoji` /
+/// `math` / `fangsong` are never what a list means as its PRIMARY font; the
+/// CSS-wide keywords lightningcss parses as generics are not families at all.
+fn generic_family(g: &lightningcss::properties::font::GenericFontFamily) -> Option<String> {
+    use lightningcss::properties::font::GenericFontFamily as G;
+    let candidates: &[&str] = match g {
+        G::SystemUI => return Some(".SystemUIFont".into()),
+        G::SansSerif => &["Arial", "Helvetica", "Liberation Sans"],
+        G::Serif => &["Times New Roman", "Times", "Liberation Serif"],
+        G::Monospace => &["Consolas", "Menlo", "DejaVu Sans Mono", "Liberation Mono", "Courier New"],
+        G::Cursive => &["Comic Sans MS"],
+        G::Fantasy => &["Impact"],
+        _ => return None,
+    };
+    // A generic always resolves in a browser, so it does here too.
+    Some(
+        candidates
+            .iter()
+            .find(|c| font_installed(c) != Some(false))
+            .map_or(".SystemUIFont", |c| *c)
+            .into(),
+    )
+}
+
+/// CSS Fonts 4 §5's "first available font": the first entry of the list that
+/// is installed (or a generic, which always is). Only that first available
+/// family is mapped — per-glyph fallback through the REST of the list is not
+/// (DirectWrite's system fallback still covers missing glyphs).
+///
+/// When nothing in the list is available the first named family is kept, so
+/// gpui's own default applies exactly as before.
+fn first_available_family(families: &[CssFontFamily]) -> Option<String> {
+    use lightningcss::traits::ToCss;
+    let mut first_named = None;
+    let mut asked_first = None;
+    for (i, f) in families.iter().enumerate() {
+        let found = match f {
+            CssFontFamily::FamilyName(name) => {
+                let Ok(css) = name.to_css_string(Default::default()) else { continue };
+                let clean = css.trim_matches('"').to_string();
+                if font_installed(&clean) == Some(false) {
+                    if i == 0 {
+                        asked_first = Some(clean.clone());
+                    }
+                    first_named.get_or_insert(clean);
+                    None
+                } else {
+                    Some(clean)
+                }
+            }
+            CssFontFamily::Generic(g) => generic_family(g),
+        };
+        if let Some(used) = found {
+            if let Some(asked) = asked_first {
+                note_font_miss(asked, Some(used.clone()));
+            }
+            return Some(used);
+        }
+    }
+    if let Some(asked) = asked_first {
+        note_font_miss(asked, None);
+    }
+    first_named
 }
 
 /// A browser's initial root font size, and the basis every sheet compiles
@@ -2502,12 +2621,12 @@ fn single_ident_is(value: &lightningcss::properties::custom::TokenList<'_>, expe
     single_ident_raw(value).is_some_and(|v| v.eq_ignore_ascii_case(expected))
 }
 
-/// `font-feature-settings` / `font-variant-numeric` → gpui's `FontFeatures`,
-/// the tag/value list DirectWrite installs as an `IDWriteTypography` over the
-/// run.
+/// `font-feature-settings` / `font-variant-numeric` / `font-variant-ligatures`
+/// / `font-kerning` → gpui's `FontFeatures`, the tag/value list DirectWrite
+/// installs as an `IDWriteTypography` over the run.
 ///
-/// `font-variant-numeric`'s keywords are defined in terms of OpenType features,
-/// so they map one-to-one rather than approximately.
+/// The keyword properties are defined in terms of OpenType features, so they
+/// map one-to-one rather than approximately.
 fn font_features(
     value: &lightningcss::properties::custom::TokenList<'_>,
     property: &str,
@@ -2536,6 +2655,37 @@ fn font_features(
                 _ => return None,
             };
             pairs.push((tag.to_string(), 1));
+        }
+        return Some(gpui::FontFeatures(std::sync::Arc::new(pairs)));
+    }
+    // `font-kerning` is the `kern` feature. `auto` / `normal` write nothing:
+    // DirectWrite kerns by default now (zed v1.26), as a browser does.
+    if property == "font-kerning" {
+        return match single_ident_raw(value)?.to_ascii_lowercase().as_str() {
+            "auto" | "normal" => Some(gpui::FontFeatures::default()),
+            "none" => Some(gpui::FontFeatures(std::sync::Arc::new(vec![("kern".into(), 0)]))),
+            _ => None,
+        };
+    }
+    // `font-variant-ligatures`: CSS Fonts 4 §6.4 defines each keyword as
+    // OpenType features, so this is one to one as well.
+    if property == "font-variant-ligatures" {
+        for t in value.0.iter() {
+            let TokenOrValue::Token(Token::Ident(name)) = t else { continue };
+            let set: &[(&str, u32)] = match name.as_ref() {
+                "normal" => continue,
+                "none" => &[("liga", 0), ("clig", 0), ("dlig", 0), ("hlig", 0), ("calt", 0)],
+                "common-ligatures" => &[("liga", 1), ("clig", 1)],
+                "no-common-ligatures" => &[("liga", 0), ("clig", 0)],
+                "discretionary-ligatures" => &[("dlig", 1)],
+                "no-discretionary-ligatures" => &[("dlig", 0)],
+                "historical-ligatures" => &[("hlig", 1)],
+                "no-historical-ligatures" => &[("hlig", 0)],
+                "contextual" => &[("calt", 1)],
+                "no-contextual" => &[("calt", 0)],
+                _ => return None,
+            };
+            pairs.extend(set.iter().map(|(tag, v)| (tag.to_string(), *v)));
         }
         return Some(gpui::FontFeatures(std::sync::Arc::new(pairs)));
     }
@@ -3791,15 +3941,8 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             r.box_shadow = Some(out);
         }
         FontFamily(families) => {
-            for f in families {
-                if let CssFontFamily::FamilyName(name) = f {
-                    use lightningcss::traits::ToCss;
-                    if let Ok(css) = name.to_css_string(Default::default()) {
-                        let clean = css.trim_matches('"').to_string();
-                        r.text.font_family = Some(gpui::SharedString::from(clean));
-                    }
-                    break;
-                }
+            if let Some(family) = first_available_family(families) {
+                r.text.font_family = Some(gpui::SharedString::from(family));
             }
         }
         FontSize(v) => {
@@ -4124,20 +4267,47 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             // OpenType FEATURES reach the shaper for real: gpui's `Font`
             // carries a `FontFeatures` tag/value list and DirectWrite applies
             // it as an `IDWriteTypography` over the run.
+            //
+            // All four properties share that ONE field. Within a rule they
+            // merge (a later tag wins); across rules and down the tree gpui's
+            // refinement replaces the list whole, so a child that sets
+            // `font-variant-numeric` does not keep its parent's
+            // `font-kerning: none` the way CSS's independent properties would.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if matches!(name.0.as_ref(), "font-feature-settings" | "font-variant-numeric") =>
+                if matches!(
+                    name.0.as_ref(),
+                    "font-feature-settings"
+                        | "font-variant-numeric"
+                        | "font-variant-ligatures"
+                        | "font-kerning"
+                ) =>
             {
                 match font_features(&c.value, name.0.as_ref()) {
                     // `normal` and the CSS-wide keywords write nothing: the
                     // first is the initial value (no features) and the rest
                     // mean "take what you would have taken anyway".
                     Some(features) if features.0.is_empty() => {}
-                    Some(features) => r.text.font_features = Some(features),
+                    Some(features) => {
+                        let mut pairs = r
+                            .text
+                            .font_features
+                            .take()
+                            .map(|f| (*f.0).clone())
+                            .unwrap_or_default();
+                        for (tag, v) in features.0.iter() {
+                            match pairs.iter_mut().find(|(t, _)| t == tag) {
+                                Some(slot) => slot.1 = *v,
+                                None => pairs.push((tag.clone(), *v)),
+                            }
+                        }
+                        r.text.font_features = Some(gpui::FontFeatures(std::sync::Arc::new(pairs)));
+                    }
                     None => warn_once(
                         diagnostics,
                         "an OpenType FEATURE value was not understood (v1) — \
-                         `font-feature-settings` takes `\"tag\" <number|on|off>` pairs and \
-                         `font-variant-numeric` the keyword set; both reach the shaper when they \
+                         `font-feature-settings` takes `\"tag\" <number|on|off>` pairs, \
+                         `font-variant-numeric` / `font-variant-ligatures` their keyword sets and \
+                         `font-kerning` `auto | normal | none`; all reach the shaper when they \
                          parse",
                     ),
                 }
@@ -5707,6 +5877,99 @@ mod tests {
         assert!(d.iter().any(|m| m.contains("font-variation-settings")), "{d:?}");
     }
 
+    /// `font-kerning` and `font-variant-ligatures` are OpenType features too,
+    /// and share the one `FontFeatures` field with the others — merged inside
+    /// a rule, a later tag winning.
+    #[test]
+    fn kerning_and_ligature_keywords_become_features() {
+        let features = |css: &str| {
+            clean(css).text.font_features.map(|f| (*f.0).clone()).unwrap_or_default()
+        };
+        let pairs = |p: &[(&str, u32)]| -> Vec<(String, u32)> {
+            p.iter().map(|(t, v)| (t.to_string(), *v)).collect()
+        };
+        assert_eq!(features("font-kerning: none"), pairs(&[("kern", 0)]));
+        // The initial values write nothing — DirectWrite already kerns and
+        // ligates by default, as a browser does.
+        assert!(features("font-kerning: auto").is_empty());
+        assert!(features("font-kerning: normal").is_empty());
+        assert!(features("font-variant-ligatures: normal").is_empty());
+        assert_eq!(
+            features("font-variant-ligatures: none"),
+            pairs(&[("liga", 0), ("clig", 0), ("dlig", 0), ("hlig", 0), ("calt", 0)])
+        );
+        assert_eq!(
+            features("font-variant-ligatures: no-common-ligatures discretionary-ligatures"),
+            pairs(&[("liga", 0), ("clig", 0), ("dlig", 1)])
+        );
+        assert_eq!(features("font-variant-ligatures: no-contextual"), pairs(&[("calt", 0)]));
+        // One rule, three properties: merged, and the later `liga` wins.
+        assert_eq!(
+            features(
+                "font-variant-numeric: tabular-nums; font-kerning: none; \
+                 font-variant-ligatures: no-common-ligatures; font-feature-settings: \"liga\" 1"
+            ),
+            pairs(&[("tnum", 1), ("kern", 0), ("liga", 1), ("clig", 0)])
+        );
+        let (_, d) = map("font-kerning: sideways");
+        assert!(d.iter().any(|m| m.contains("OpenType FEATURE")), "{d:?}");
+    }
+
+    /// `font-family` is CSS's "first available font": the first INSTALLED
+    /// entry, with a generic standing for its platform default — and a missing
+    /// FIRST choice recorded for the renderer's advisory.
+    #[test]
+    fn font_family_takes_the_first_installed_family() {
+        let family = |css: &str| clean(css).text.font_family.map(|f| f.to_string());
+        // No source (tools, tests): the first named family, as before.
+        assert_eq!(family("font-family: Inter, sans-serif").as_deref(), Some("Inter"));
+
+        set_font_source(|| vec!["Segoe UI".into(), "Consolas".into(), "Arial".into()]);
+        assert_eq!(
+            family("font-family: Inter, \"Segoe UI\", sans-serif").as_deref(),
+            Some("Segoe UI")
+        );
+        // Tailwind's `font-mono`: the Apple faces are skipped, Consolas wins —
+        // which is what Chrome on Windows does with the same list.
+        assert_eq!(
+            family(
+                "font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \
+                 \"Liberation Mono\", \"Courier New\", monospace"
+            )
+            .as_deref(),
+            Some("Consolas")
+        );
+        // Tailwind's `font-sans`: `ui-sans-serif` is Safari-only and
+        // `system-ui` is the platform UI font — NOT the emoji face the old
+        // "first named family" rule landed on.
+        assert_eq!(
+            family(
+                "font-family: ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \
+                 \"Segoe UI Emoji\""
+            )
+            .as_deref(),
+            Some(".SystemUIFont")
+        );
+        assert_eq!(family("font-family: monospace").as_deref(), Some("Consolas"));
+        assert_eq!(family("font-family: sans-serif").as_deref(), Some("Arial"));
+        // No stand-in for `serif` is installed here: the UI font, not nothing.
+        assert_eq!(family("font-family: serif").as_deref(), Some(".SystemUIFont"));
+        // Nothing available: the first named family stays, and gpui's own
+        // default applies as before.
+        assert_eq!(family("font-family: Roboto, Helvetica").as_deref(), Some("Roboto"));
+        // Only a missing FIRST entry is reported, once per family.
+        let misses = take_font_misses();
+        assert_eq!(
+            misses,
+            vec![
+                ("Inter".to_string(), Some("Segoe UI".to_string())),
+                ("Roboto".to_string(), None),
+            ],
+            "{misses:?}"
+        );
+        assert!(take_font_misses().is_empty());
+    }
+
     /// The screen-reader-only idiom is a box clipped to an EMPTY rectangle,
     /// which paints nothing — expressible as `visibility: hidden`, which keeps
     /// the layout box exactly as `clip` does.
@@ -6056,6 +6319,10 @@ mod tests {
             "font-variant-numeric: tabular-nums",
             "font-feature-settings: \"ss01\" 1, \"liga\" 0",
             "font-feature-settings: normal",
+            "font-kerning: none",
+            "font-kerning: auto",
+            "font-variant-ligatures: no-common-ligatures",
+            "font-variant-ligatures: normal",
             "font-variation-settings: normal",
             // `auto` IS what the fork's DirectWrite path now does.
             "font-optical-sizing: auto",

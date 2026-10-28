@@ -234,6 +234,11 @@ export interface PerfReply {
   p95Ms: number;
   maxMs: number;
   fps: number;
+  /**
+   * One frame's budget — the target's display refresh interval. `null` when the
+   * platform does not report it (and absent from a target older than this field).
+   */
+  budgetMs?: number | null;
   /** The tail of the rolling frame-interval ring, oldest first. */
   samples: number[];
   /** Live nodes in the retained tree. */

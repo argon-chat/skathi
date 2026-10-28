@@ -8,9 +8,15 @@
 //
 // The window opens. Nothing here focuses it, moves the cursor or sends global
 // input — every gesture is a devtools command, which is why the suite can run
-// while somebody is using the machine.
+// while somebody is using the machine. (The one exception is the minimise test,
+// which restores the window from outside with `SW_SHOWNOACTIVATE`: still no
+// focus, no cursor, no input.)
 
-import { afterAll, describe, test } from "bun:test";
+import { afterAll, describe, expect as bunExpect, test } from "bun:test";
+import { dlopen, FFIType } from "bun:ffi";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, launch } from "../src/index";
 
 const app = await launch({ app: "hello", window: [1100, 820], label: "hello" });
@@ -101,6 +107,47 @@ describe("hello", () => {
     await expect(keep).toContainText(`onActivated fired ${before + 1}×`);
     // …and the store is untouched by the round trip.
     await expect(app.locator(".store-row .btn").first()).toHaveText("visits++ (3)");
+  }, T);
+
+  test("minimise → restore fires visibilitychange both ways", async () => {
+    // A minimised window paints no frames, and the event used to come from a
+    // per-frame diff — so `hidden` was never delivered at all. It now comes
+    // from gpui's visibility observer, out of band. JS cannot restore a window
+    // whose pump is parked (nor answer devtools while it is), so the restore
+    // comes from outside, without activating anything.
+    const user32 = dlopen("user32.dll", {
+      ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
+      IsIconic: { args: [FFIType.u64], returns: FFIType.i32 },
+    });
+    const shot = await app.send("screenshot", {
+      path: join(tmpdir(), `vn-hello-hwnd-${process.pid}.png`),
+      backend: "render_to_image",
+    });
+    rmSync(shot.path, { force: true });
+    const hwnd = BigInt(shot.hwnd);
+    await app.eval(
+      "globalThis.__vis = []; " +
+        "document.addEventListener('visibilitychange', () => " +
+        "__vis.push(document.visibilityState + '/' + document.hidden)); " +
+        "for (const k of ['minimize', 'restore']) " +
+        "__VN_WINDOW__.appWindow.addEventListener(k, () => __vis.push(k)); 'ok'",
+    );
+    await app.eval("__vn_window_verb('minimize'); 'ok'");
+    const until = Date.now() + 10_000;
+    while (!user32.symbols.IsIconic(hwnd) && Date.now() < until) await Bun.sleep(50);
+    bunExpect(user32.symbols.IsIconic(hwnd)).not.toBe(0);
+    // Give the observer's foreground task its turn before restoring.
+    await Bun.sleep(300);
+    user32.symbols.ShowWindow(hwnd, 4 /* SW_SHOWNOACTIVATE */);
+    let seen: string[] = [];
+    while (Date.now() < until + 10_000) {
+      seen = JSON.parse(await app.eval("JSON.stringify(__vis)"));
+      if (seen.length >= 4) break;
+      await Bun.sleep(50);
+    }
+    bunExpect(seen).toEqual(["hidden/true", "minimize", "visible/false", "restore"]);
+    bunExpect(await app.eval("document.visibilityState")).toBe("visible");
+    user32.close();
   }, T);
 
   test("the app logged nothing broken", async () => {

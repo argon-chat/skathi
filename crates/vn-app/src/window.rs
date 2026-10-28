@@ -694,6 +694,32 @@ mod win {
         unsafe { GetCursorPos(&mut p) }.ok()?;
         Some((p.x as f32, p.y as f32))
     }
+
+    /// The window's monitor and that monitor's rect + work area, PHYSICAL px:
+    /// `MonitorFromWindow` + `GetMonitorInfoW`, no enumeration. The display
+    /// cache's key (`display_part`).
+    pub fn monitor_key() -> Option<(isize, [i32; 8])> {
+        use windows::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        };
+        let h = hwnd()?;
+        let m = unsafe { MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) };
+        if m.is_invalid() {
+            return None;
+        }
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !unsafe { GetMonitorInfoW(m, &mut info) }.as_bool() {
+            return None;
+        }
+        let (a, w) = (info.rcMonitor, info.rcWork);
+        Some((
+            m.0 as isize,
+            [a.left, a.top, a.right, a.bottom, w.left, w.top, w.right, w.bottom],
+        ))
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -710,6 +736,7 @@ mod win {
     pub fn is_cloaked() -> bool { false }
     pub fn system_backdrop() -> Option<u32> { None }
     pub fn cursor_pos() -> Option<(f32, f32)> { None }
+    pub fn monitor_key() -> Option<(isize, [i32; 8])> { None }
 }
 
 thread_local! {
@@ -935,6 +962,9 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     if cfg.always_on_top {
         win::set_always_on_top(true);
     }
+    // Before the first snapshot, so nothing can be read through a stale cache.
+    window.observe_window_display(|_, _| invalidate_display()).detach();
+    cx.observe_displays(|_, _| invalidate_display()).detach();
     let s = snapshot(window, cx);
     SNAPSHOT.with(|c| *c.borrow_mut() = s);
     // Seed the cascade env too, so the very first restyle already knows the
@@ -945,6 +975,38 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     );
     let s = SNAPSHOT.with(|c| c.borrow().clone());
     vn_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
+    // `visibilitychange` on the platform's edge rather than the frame's: a
+    // minimised window paints no frames, so the per-frame diff below only ever
+    // saw `minimized` flip at the moment it was restored — and then compared
+    // two visible snapshots. `hidden` was never reported (measured before this
+    // landed: minimise → restore delivered zero `visibilitychange` events).
+    window
+        .observe_window_visibility(|_, window, cx| visibility_changed(window, cx))
+        .detach();
+}
+
+/// gpui's visibility observer — on Windows `IsWindowVisible && !IsIconic`,
+/// reported from a foreground task after `WM_SIZE` / `WM_SHOWWINDOW`, so never
+/// from inside the update that minimised the window.
+///
+/// Runs the same funnel the frame does, out of band: the snapshot reads
+/// `minimized` from the OS, the diff against `PREV` turns it into
+/// `redjs_dom_set_visibility` + `minimize` / `restore`, and the next frame's
+/// diff then sees nothing new, so nothing fires twice.
+fn visibility_changed(window: &mut Window, cx: &mut gpui::App) {
+    if vn_runtime::bridge::poisoned()
+        // Nested inside a published phase (a modal loop entered from a host
+        // fn): the frame's own diff picks the change up afterwards.
+        || vn_runtime::with_app(|_| ()).is_some()
+        // Before the first frame: that frame's funnel owns `boot`.
+        || PREV.with(|p| p.borrow().is_none())
+    {
+        return;
+    }
+    vn_runtime::bridge::with_published(window, cx, vn_runtime::Phase::Commit, || {
+        with_commit(|window, cx| pump(window, cx));
+        JsRuntime::with(|rt| rt.ctx().drain_microtasks());
+    });
 }
 
 /// Whether the host still draws its own titlebar strip.
@@ -972,12 +1034,50 @@ fn display_mode(fullscreen: bool) -> vn_css::DisplayMode {
     }
 }
 
-/// Reads the window once. Everything derived — every event, every getter —
-/// comes from here, so nothing can observe two different frames at once.
-pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
-    let viewport = window.viewport_size();
-    let bounds = window.bounds();
-    let live = LIVE.with(|l| l.borrow().clone());
+/// The display half of a [`Snapshot`]: `screen.*` and `isExtended`.
+#[derive(Clone)]
+struct DisplayPart {
+    /// What the cached value was read against: the monitor, its rect and work
+    /// area (physical px), and the window's scale factor.
+    key: Option<(isize, [i32; 8], u32)>,
+    screen: (f32, f32, f32, f32, f32, f32),
+    displays: usize,
+}
+
+thread_local! {
+    /// The primary window's [`DisplayPart`]. `None` = read it again.
+    static DISPLAY: RefCell<Option<DisplayPart>> = const { RefCell::new(None) };
+    /// The primary window's display refresh interval in ms, as of the last read.
+    static REFRESH_MS: Cell<Option<f32>> = const { Cell::new(None) };
+}
+
+/// Dropped by gpui's display observers (a display added, removed or changed;
+/// the window moved to another one), so the next snapshot re-reads.
+fn invalidate_display() {
+    DISPLAY.with(|d| *d.borrow_mut() = None);
+}
+
+/// The display half, cached.
+///
+/// `Window::display(cx)` is `cx.platform.displays()` plus a find —
+/// `EnumDisplayMonitors`, then `GetMonitorInfoW` + `GetDpiForMonitor` per
+/// monitor — and `cx.displays().len()` was a second enumeration: both on every
+/// snapshot, i.e. every frame. Now they run when gpui's observers say a display
+/// changed, or when the cheap per-frame key moves: `MonitorFromWindow` +
+/// `GetMonitorInfoW`, two calls. The key is what keeps `screen.avail*` honest —
+/// a taskbar resize moves the work area without any display event.
+fn display_part(window: &Window, cx: &gpui::App) -> DisplayPart {
+    let primary = vn_tree::windows::key(window) == PRIMARY_WINDOW.with(|c| c.get());
+    let key = if primary {
+        win::monitor_key().map(|(m, r)| (m, r, window.scale_factor().to_bits()))
+    } else {
+        None
+    };
+    if key.is_some() {
+        if let Some(hit) = DISPLAY.with(|d| d.borrow().clone().filter(|c| c.key == key)) {
+            return hit;
+        }
+    }
     let display = window.display(cx);
     let (screen, displays) = match &display {
         Some(d) => {
@@ -997,6 +1097,27 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         }
         None => ((0.0, 0.0, 0.0, 0.0, 0.0, 0.0), 1),
     };
+    let part = DisplayPart { key, screen, displays };
+    if primary {
+        DISPLAY.with(|d| *d.borrow_mut() = key.is_some().then(|| part.clone()));
+        REFRESH_MS.with(|c| c.set(window.refresh_interval(cx).map(|r| r.as_secs_f32() * 1000.0)));
+    }
+    part
+}
+
+/// The primary window's display refresh interval in ms — one frame's budget.
+/// `None` before the first snapshot or when the platform does not say.
+pub fn frame_budget_ms() -> Option<f32> {
+    REFRESH_MS.with(|c| c.get())
+}
+
+/// Reads the window once. Everything derived — every event, every getter —
+/// comes from here, so nothing can observe two different frames at once.
+pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
+    let viewport = window.viewport_size();
+    let bounds = window.bounds();
+    let live = LIVE.with(|l| l.borrow().clone());
+    let DisplayPart { screen, displays, .. } = display_part(window, cx);
     let scale = window.scale_factor();
     // `GetWindowRect` is in PHYSICAL pixels; everything else on this surface is
     // CSS px, which is what gpui's `Pixels` already are.
@@ -1274,7 +1395,8 @@ thread_local! {
     static BOOTED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Runs inside `pump_frame`'s `Phase::Commit`, BEFORE `rt.pump`.
+/// Runs inside `pump_frame`'s `Phase::Commit`, BEFORE `rt.pump` — and from
+/// `visibility_changed`, since a minimised window has no frames.
 ///
 /// Order is the contract:
 /// 1. drain anything a module-scope mutator queued;
@@ -1347,7 +1469,9 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
             // report a background-but-visible window as hidden, and ours keeps
             // rendering when inactive by design. Virtual-desktop cloaking is
             // read (`snapshot.cloaked`) but deliberately NOT folded in here —
-            // documented rather than silently reported as `visible`.
+            // documented rather than silently reported as `visible`. The edge
+            // normally arrives through `visibility_changed`; this diff is
+            // what makes that path and the frame's agree.
             if p.minimized != s.minimized {
                 unsafe {
                     vn_runtime::redjs::ffi::redjs_dom_set_visibility(ctx, s.minimized as i32)
