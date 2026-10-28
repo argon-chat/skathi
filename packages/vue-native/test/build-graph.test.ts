@@ -135,6 +135,51 @@ describe("a JavaScript app still builds", () => {
   });
 });
 
+// `import.meta` in a PROD bundle. The bundle is a classic script (an IIFE the
+// host evaluates), where `import.meta` is a SyntaxError — and Bun leaves it
+// verbatim in iife output. build.ts has defined it since m20; prod.ts did not,
+// so the most common line in a Vite app (`import.meta.env.MODE`) worked in dev
+// and killed the whole shipped bundle (research/reports/m25/packaging-design.md
+// §1). Fixed by the same define block with production values.
+describe("import.meta in a prod bundle", () => {
+  const dir = mkdtempSync(join(FIXTURES, "meta-app-"));
+  tmpDirs.push(dir);
+
+  test("evaluates to Vite's production values, and a mention in a string is not mistaken for one", () => {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(
+      join(dir, "src/main.ts"),
+      "const { MODE } = import.meta.env;\n" +
+        "const parts = [import.meta.env.MODE, import.meta.env.PROD, import.meta.env.DEV, MODE, import.meta.url, typeof import.meta.hot];\n" +
+        // A library error message that merely MENTIONS it must not trip the check.
+        'const note = "import.meta is only valid inside modules";\n' +
+        "(globalThis as any).__metaProbe = parts.join('|') + '|' + note.length;\n",
+    );
+    const out = join(mkdtempSync(join(tmpdir(), "vn-prod-meta-")), "app.prod.js");
+    tmpDirs.push(dirname(out));
+    const proc = Bun.spawnSync(["bun", "prod.ts", join(dir, "src/main.ts"), out], { cwd: PKG_DIR });
+    if (proc.exitCode !== 0) throw new Error(`prod.ts exited ${proc.exitCode}\n${proc.stderr.toString()}`);
+    const bundle = readFileSync(out, "utf8");
+    // A classic script, run the way the host runs one.
+    new Function(bundle)();
+    expect((globalThis as any).__metaProbe).toBe("production|true|false|production|vn://app.prod.js|undefined|40");
+  });
+
+  test("the dev builder substitutes an OBJECT, not a string, for import.meta.env", () => {
+    // Bun inserts a define value that is not JSON as a string literal, which is
+    // what `({MODE:"development",…})` was: `const { MODE } = import.meta.env`
+    // destructured a string. Both builders now pass JSON.
+    const dist = mkdtempSync(join(tmpdir(), "vn-build-meta-"));
+    tmpDirs.push(dist);
+    const proc = Bun.spawnSync(["bun", "build.ts", join(dir, "src/main.ts"), dist], { cwd: PKG_DIR });
+    expect(proc.exitCode).toBe(0);
+    const rel = "packages/vue-native/test/fixtures/" + dir.split(/[\\/]/).pop() + "/src/main.ts";
+    const script = readFileSync(join(dist, "modules", rel.split("/").join("__") + ".js"), "utf8");
+    expect(script).not.toContain("({MODE:");
+    expect(script).toMatch(/MODE:\s*"development"/);
+  });
+});
+
 describe("module scripts", () => {
   const out = build("graph-app");
   const APP = id("graph-app", "App.vue");

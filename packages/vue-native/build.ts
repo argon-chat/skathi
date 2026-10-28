@@ -321,6 +321,9 @@ const TS_AVAILABLE = (() => {
 const PRESEEDED = ["vue", "vue-native", "vue-router", "pinia", "livekit-client"];
 const isPreseeded = (spec: string) => PRESEEDED.includes(spec);
 
+/** What Vite's dev server inlines for `import.meta.env`. */
+const VITE_ENV_DEV = { MODE: "development", DEV: true, PROD: false, SSR: false, BASE_URL: "/" };
+
 // Vue's esm-bundler build reads these as bare identifiers.
 const DEFINES: Record<string, string> = {
   __DEV__: "true",
@@ -344,20 +347,26 @@ const DEFINES: Record<string, string> = {
   // so this is parity rather than a shim. The dotted forms come first (Bun
   // matches the longest key), and the bare `import.meta` catches destructuring
   // (`const { MODE } = import.meta.env`) and anything else.
+  //
+  // The two OBJECT values are JSON.stringify'd, and that is load-bearing: Bun
+  // parses a define value as JSON (or an identifier), and anything else — the
+  // `({MODE:"development",…})` JS literal this used to be — is inserted as a
+  // STRING. So `const { MODE } = import.meta.env` destructured a string and got
+  // `undefined`, in dev AND in prod (m25 packaging, found by the prod test).
+  // JSON has no `undefined`, so `hot` is simply absent from the bare object,
+  // which reads back as `undefined` all the same.
   "import.meta.env.MODE": '"development"',
   "import.meta.env.DEV": "true",
   "import.meta.env.PROD": "false",
   "import.meta.env.SSR": "false",
   "import.meta.env.BASE_URL": '"/"',
-  "import.meta.env":
-    '({MODE:"development",DEV:true,PROD:false,SSR:false,BASE_URL:"/"})',
+  "import.meta.env": JSON.stringify(VITE_ENV_DEV),
   // A dev server's HMR client hook. Vue SFCs compiled by `@vue/compiler-sfc`
   // do not emit it (our HMR rides `__VUE_HMR_RUNTIME__`), but library code
   // guards on it, and `undefined` is the "not a dev server" answer.
   "import.meta.hot": "undefined",
   "import.meta.url": '"vn://module"',
-  "import.meta":
-    '({env:{MODE:"development",DEV:true,PROD:false,SSR:false,BASE_URL:"/"},url:"vn://module",hot:undefined})',
+  "import.meta": JSON.stringify({ env: VITE_ENV_DEV, url: "vn://module" }),
 };
 
 function writeAtomic(path: string, text: string) {

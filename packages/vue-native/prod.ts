@@ -4,8 +4,11 @@
 //
 //   dist/app.prod.js   IIFE — @vue/runtime-core + src/runtime.ts + every app
 //                      module + every SFC <style>, minified, __DEV__ = false.
-//                      The Rust host `include_str!`s this file (vn-app with
-//                      --features prod) so the shipped exe needs no dist/.
+//                      `vn build` (cli/build-app.ts) packs it into the app's
+//                      VNPK payload and stamps that into a prebuilt host, so
+//                      the shipped exe needs no dist/ and no Rust toolchain
+//                      (docs/PACKAGING.md). crates/vn-app/build.rs also runs
+//                      this file, for the embedded devtools inspector.
 //
 // Differences vs the dev builder (build.ts), and why:
 //
@@ -61,12 +64,11 @@ const APP_SRC_DIR = dirname(ENTRY_ABS);
 const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
 
 // `apps/<app>/vn.config.json`'s `window` block, emitted next to the bundle as
-// `dist/window.json` and `include_str!`d by crates/vn-app/src/prod.rs. The
-// host reads it BEFORE `cx.open_window`, so it cannot ride inside the bundle
-// (which evaluates long after the window exists) - see docs/WINDOWING.md 4.1.
-// Always written, `{}` when the app declares none: a missing file would be a
-// Rust compile error, which is the right failure mode for the bundle but not
-// for an optional config.
+// `window.json`: `vn build` packs it as the payload's `vn/window.json`, and
+// the inspector build `include_str!`s its own. The host reads it BEFORE
+// `cx.open_window`, so it cannot ride inside the bundle (which evaluates long
+// after the window exists) - see docs/WINDOWING.md 4.1. Always written, `{}`
+// when the app declares none.
 //
 // It sits next to `src/`, which is NOT the same thing as the app's package
 // root: `APP_ROOT` below walks up to the nearest `package.json`/`node_modules`
@@ -150,6 +152,9 @@ try {
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const J = (v: unknown) => JSON.stringify(v);
 
+/** What `vite build` inlines for `import.meta.env`. */
+const VITE_ENV_PROD = { MODE: "production", DEV: false, PROD: true, SSR: false, BASE_URL: "/" };
+
 // Vue's esm-bundler build reads these as bare identifiers. Same block as
 // build.ts with the two production flips; `__DEV__: false` is what strips
 // hmr.ts, customFormatter.ts and every dev warning through the
@@ -167,6 +172,28 @@ const DEFINES: Record<string, string> = {
   __SSR__: "false",
   __TEST__: "false",
   __VERSION__: '"3.5"',
+  // `import.meta` is a SyntaxError in a classic script, and this bundle is one
+  // (an IIFE the host evaluates) — Bun leaves `import.meta` VERBATIM in an
+  // iife output, so a single `import.meta.env.MODE`, which is how every Vite
+  // app asks what build it is, used to work in dev (build.ts defines it) and
+  // kill the whole prod bundle at eval. Same block as build.ts, production
+  // values: this is the substitution Vite itself performs, so it is parity
+  // rather than a shim. Dotted forms first (Bun matches the longest key); the
+  // bare `import.meta` catches destructuring. The tripwire in `build()` fails
+  // the build if anything still survives.
+  //
+  // The object values MUST be JSON: Bun parses a define value as JSON (or an
+  // identifier) and inserts anything else as a STRING — see the same block in
+  // build.ts for how that made `const { MODE } = import.meta.env` undefined.
+  "import.meta.env.MODE": '"production"',
+  "import.meta.env.DEV": "false",
+  "import.meta.env.PROD": "true",
+  "import.meta.env.SSR": "false",
+  "import.meta.env.BASE_URL": '"/"',
+  "import.meta.env": JSON.stringify(VITE_ENV_PROD),
+  "import.meta.hot": "undefined",
+  "import.meta.url": '"vn://app.prod.js"',
+  "import.meta": JSON.stringify({ env: VITE_ENV_PROD, url: "vn://app.prod.js" }),
 };
 
 function writeAtomic(path: string, text: string) {
@@ -370,6 +397,24 @@ async function build() {
   // The whole point of the prod define block: no dev branches survive.
   if (/\b__DEV__\b/.test(body)) {
     throw new Error("__DEV__ survived minification — the define block did not apply");
+  }
+  // …and the bundle must PARSE as the classic script the host evaluates it as.
+  // A surviving `import.meta` is the case this exists for — a SyntaxError that
+  // takes the WHOLE bundle down at eval — and it has to fail here, at build
+  // time, rather than on a user's machine as a blank window. Parsing (bun's
+  // parser is JavaScriptCore's, the host's own engine) rather than grepping,
+  // because a library's string literal that merely MENTIONS `import.meta`
+  // would be a false positive. `new Function` compiles without running.
+  try {
+    new Function(body);
+  } catch (e) {
+    if (!(e instanceof SyntaxError)) throw e;
+    const meta = /\bimport\s*\.\s*meta\b/.exec(body);
+    const near = meta ? `: …${body.slice(Math.max(0, meta.index - 60), meta.index + 60)}…` : "";
+    throw new Error(
+      `the bundle is not a valid classic script (${e.message})${near}` +
+        (meta ? " — prod.ts defines import.meta.env/url/hot; anything else needs a define of its own" : ""),
+    );
   }
 
   // Styles run BEFORE the bundle: runtime.js createApp joins __VN_CSS__ into
