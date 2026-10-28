@@ -27,6 +27,18 @@ pub struct JsError {
 /// (see `JsRuntime::init`).
 const NO_DISK_ROOT: &str = r"\\?\vue-native-no-disk-root";
 
+/// What `navigator.userAgent` says in a vue-native app. Set here, explicitly,
+/// rather than left to redjs's default (which happens to be the same string
+/// today): it is a product decision, and the one place that makes it is the
+/// one place that should change it. `appVersion` and `platform` follow it.
+pub const VN_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RedVue/1.0";
+
+/// Process-wide and read per access, so it holds for every context — a
+/// worker's included — whenever it is called.
+fn apply_user_agent() {
+    redjs::webapi::navigator::set_user_agent(Some(VN_USER_AGENT));
+}
+
 thread_local! {
     static RUNTIME: OnceCell<JsRuntime> = const { OnceCell::new() };
     static ERRORS: RefCell<VecDeque<JsError>> = const { RefCell::new(VecDeque::new()) };
@@ -51,6 +63,7 @@ impl JsRuntime {
             let rc = ffi::redjs_init(std::ptr::null());
             assert_eq!(rc, 0, "redjs_init failed: {rc}");
         }
+        apply_user_agent();
         let ctx = Context::new();
         unsafe {
             let rc = ffi::redjs_web_install(ctx.raw());
@@ -255,5 +268,30 @@ fn describe_raw(g: *mut c_void, exc: u64) -> JsError {
         let name = redjs::webapi::util::read_string(g, name_v).unwrap_or_default();
         let header = if name.is_empty() { msg } else { format!("{name}: {msg}") };
         JsError { header, stack }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The product's user agent is the one `navigator` reports — through the
+    /// same redjs install the app runs, not by asserting on the constant alone.
+    #[test]
+    fn navigator_reports_the_vue_native_user_agent() {
+        assert_eq!(VN_USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RedVue/1.0");
+        unsafe { assert_eq!(ffi::redjs_init(std::ptr::null()), 0) };
+        apply_user_agent();
+        let ctx = Context::new();
+        unsafe {
+            assert_eq!(ffi::redjs_web_install(ctx.raw()), 0);
+            let root: Vec<u16> = NO_DISK_ROOT.encode_utf16().collect();
+            assert_eq!(ffi::redjs_webshim_install(ctx.raw(), root.as_ptr(), root.len(), root.as_ptr(), root.len()), 0);
+        }
+        let read = |src: &str| ctx.to_rust_string(ctx.eval(src).unwrap()).unwrap();
+        assert_eq!(read("navigator.userAgent"), VN_USER_AGENT);
+        assert_eq!(read("navigator.appVersion"), "5.0 (Windows NT 10.0; Win64; x64) RedVue/1.0");
+        assert_eq!(read("navigator.platform"), "Win32");
+        assert_eq!(read("String(navigator instanceof Navigator)"), "true");
     }
 }

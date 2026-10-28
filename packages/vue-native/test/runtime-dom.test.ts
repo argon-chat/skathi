@@ -511,6 +511,47 @@ describe("custom events and dispatchEvent", () => {
     }
   });
 
+  test("eventPhase, currentTarget and composedPath() read as a browser's, during the walk and after it", () => {
+    const rt = createRuntime();
+    const { section: outer, button: inner } = tree(rt);
+    const seen = [];
+    const who = (t) => (t === inner ? "inner" : t === outer ? "outer" : String(t));
+    const note = (where) => (e) =>
+      seen.push(`${where}:${e.eventPhase}:${who(e.currentTarget)}:${e.composedPath()[0] === inner}:${e.composedPath()[1] === outer}`);
+    outer.addEventListener("x.probe", note("capture"), { capture: true });
+    inner.addEventListener("x.probe", note("target"));
+    outer.addEventListener("x.probe", note("bubble"));
+
+    const ev = new CustomEvent("x.probe", { bubbles: true });
+    inner.dispatchEvent(ev);
+    expect(seen).toEqual([
+      "capture:1:outer:true:true", // CAPTURING_PHASE
+      "target:2:inner:true:true", //  AT_TARGET
+      "bubble:3:outer:true:true", //  BUBBLING_PHASE
+    ]);
+    // Over: no current target, no phase, no path; the target stays.
+    expect(ev.currentTarget).toBe(null);
+    expect(ev.eventPhase).toBe(0);
+    expect(ev.composedPath()).toEqual([]);
+    expect(ev.target).toBe(inner);
+  });
+
+  test("…and a listener that throws still leaves the event reset", () => {
+    const rt = createRuntime();
+    const { button: inner } = tree(rt);
+    inner.addEventListener("x.boom", () => {
+      throw new Error("listener");
+    });
+    const ev = new CustomEvent("x.boom");
+    try {
+      inner.dispatchEvent(ev);
+    } catch {
+      // Whether the walk reports or rethrows is not what this pins down.
+    }
+    expect(ev.currentTarget).toBe(null);
+    expect(ev.eventPhase).toBe(0);
+  });
+
   test("preventDefault on a dispatched event is reported to the dispatcher", () => {
     const rt = createRuntime();
     const { button: inner } = tree(rt);

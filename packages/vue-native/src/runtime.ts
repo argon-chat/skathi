@@ -2159,15 +2159,23 @@ interface PropagationState {
   immediate: boolean;
 }
 
+/** DOM `Event.eventPhase` (NONE, CAPTURING_PHASE, AT_TARGET, BUBBLING_PHASE). */
+const EVENT_PHASE = { none: 0, capturing: 1, atTarget: 2, bubbling: 3 } as const;
+
 function invoke(
   buckets: Buckets,
   phase: Phase,
+  eventPhase: number,
   ev: VnEvent,
   node: PropagationTarget,
   name: string,
   state: PropagationState,
 ): void {
+  // The walk is ours, not the engine's, so the engine's own `currentTarget` /
+  // `eventPhase` getters would answer "no dispatch" — own properties say what
+  // a browser's would at this step.
   Object.defineProperty(ev, "currentTarget", { value: node, configurable: true });
+  Object.defineProperty(ev, "eventPhase", { value: eventPhase, configurable: true });
   const fn = phase === "capture" ? buckets.capture : buckets.bubble;
   if (fn) {
     if (buckets[phase === "capture" ? "onceC" : "onceB"]) {
@@ -2221,15 +2229,29 @@ function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
     const buckets = isMirrorNode(node)
       ? handlers.get(node.id)?.[name]
       : globalHandlers.get(node)?.[name];
-    if (buckets) invoke(buckets, phase, ev, node, name, state);
+    const eventPhase =
+      node === target ? EVENT_PHASE.atTarget : phase === "capture" ? EVENT_PHASE.capturing : EVENT_PHASE.bubbling;
+    if (buckets) invoke(buckets, phase, eventPhase, ev, node, name, state);
   };
-  // capture: root -> target (exclusive)
-  for (let i = path.length - 1; i > 0 && !state.stopped; i--) at(path[i], "capture");
-  // at target: capture listeners, then bubble listeners
-  if (!state.stopped) at(target, "capture");
-  if (!state.stopped) at(target, "bubble");
-  // bubble: target.parent -> root
-  if (ev.bubbles) for (let i = 1; i < path.length && !state.stopped; i++) at(path[i], "bubble");
+  // `composedPath()` is the path for as long as the dispatch runs — target
+  // first, window last — and empty once it is over (DOM §2.9).
+  const composed = path.slice();
+  Object.defineProperty(ev, "composedPath", { value: () => composed.slice(), configurable: true });
+  try {
+    // capture: root -> target (exclusive)
+    for (let i = path.length - 1; i > 0 && !state.stopped; i--) at(path[i], "capture");
+    // at target: capture listeners, then bubble listeners
+    if (!state.stopped) at(target, "capture");
+    if (!state.stopped) at(target, "bubble");
+    // bubble: target.parent -> root
+    if (ev.bubbles) for (let i = 1; i < path.length && !state.stopped; i++) at(path[i], "bubble");
+  } finally {
+    // The dispatch is over: no current target, no phase, no path — what a
+    // handler that kept the event and reads it later sees in a browser.
+    Object.defineProperty(ev, "currentTarget", { value: null, configurable: true });
+    Object.defineProperty(ev, "eventPhase", { value: EVENT_PHASE.none, configurable: true });
+    Object.defineProperty(ev, "composedPath", { value: () => [], configurable: true });
+  }
   return !ev.defaultPrevented;
 }
 

@@ -61,8 +61,12 @@ interface VnEvent {
   readonly defaultPrevented: boolean;
   /** Written by `propagate()` — the mirror node the host targeted. */
   target: unknown;
-  /** Rewritten at each step of the propagation walk. */
+  /** Rewritten at each step of the propagation walk; `null` once it is over. */
   currentTarget: unknown;
+  /** 0 NONE, 1 CAPTURING_PHASE, 2 AT_TARGET, 3 BUBBLING_PHASE — own, per step. */
+  readonly eventPhase: number;
+  /** The walk's path (target first) during dispatch, `[]` after. */
+  composedPath(): unknown[];
   preventDefault(): void;
   stopPropagation(): void;
   stopImmediatePropagation(): void;
