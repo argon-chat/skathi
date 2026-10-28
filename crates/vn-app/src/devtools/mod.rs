@@ -604,7 +604,8 @@ fn read_target(dir: &std::path::Path) -> Option<Json> {
 
 /// The dist slots to look in: everything beside our own dist (that is where
 /// `build.ts <entry> <dist>` puts a parallel app), the e2e harness's slot pool,
-/// and whatever `VN_DEVTOOLS_TARGET` names explicitly.
+/// every packaged app's instances (`%TEMP%\vue-native\apps\<name>\<pid>`, see
+/// `crate::slot`), and whatever `VN_DEVTOOLS_TARGET` names explicitly.
 fn scan_roots() -> Vec<std::path::PathBuf> {
     let mut roots = Vec::new();
     let own = crate::slot::path("devtools.json");
@@ -613,6 +614,14 @@ fn scan_roots() -> Vec<std::path::PathBuf> {
         // …/packages/vue-native -> …/packages/vn-test/.vn-test/slots
         if let Some(packages) = parent.parent() {
             roots.push(packages.join("vn-test").join(".vn-test").join("slots"));
+        }
+    }
+    if let Ok(apps) = std::fs::read_dir(crate::slot::apps_root()) {
+        for app in apps.flatten() {
+            let path = app.path();
+            if path.is_dir() && !roots.contains(&path) {
+                roots.push(path);
+            }
         }
     }
     roots

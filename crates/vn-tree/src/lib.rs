@@ -31,7 +31,7 @@ pub mod windows;
 
 pub mod devtools;
 
-pub use img::{asset_base, set_asset_base};
+pub use img::{asset_base, asset_store, content_key, set_asset_base, set_asset_store, AssetLookup};
 pub use render::{
     bounds_in, build_root, build_subtree, control_hitboxes, control_hitboxes_in,
     enable_pick_hitboxes, flush_pending_mouse_move, painted_bounds_in, painted_drag_region,

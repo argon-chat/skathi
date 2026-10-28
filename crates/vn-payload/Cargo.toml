@@ -1,0 +1,13 @@
+[package]
+name = "vn-payload"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "VNPK v1 — the app payload a packaged vue-native exe carries — and the one URL→asset-key normaliser"
+
+# NO dependencies, on purpose. This is the half of packaging that has to be
+# right byte for byte, and keeping it free of gpui and JavaScriptCore is what
+# lets `cargo test -p vn-payload` build and run in seconds on a machine where
+# linking the host is a multi-gigabyte job. vn-app (the payload SOURCE) and
+# vn-tree (the asset STORE hook) both depend on it.
+[dependencies]

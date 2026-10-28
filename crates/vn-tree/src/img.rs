@@ -26,6 +26,37 @@
 //! With no base set at all, relative paths resolve against the process working
 //! directory (and say so once).
 //!
+//! # The key — one normaliser, every mode
+//!
+//! A relative or root-relative `src` is first turned into an app-root-relative
+//! KEY by [`content_key`] (crates/vn-payload): `?query`/`#hash` cut,
+//! `%XX` decoded, `\` → `/`, `.`/`..` folded. That is what a browser's server
+//! sees, so `a.png?v=2` is the file `a.png` and `my%20pic.png` is `my pic.png`
+//! — here and in `fetch()`, whose content provider uses the same function.
+//!
+//! # The store — a packaged app
+//!
+//! A packaged exe (`vn build`, docs/PACKAGING.md) has no app directory: its
+//! files are entries in the payload stamped into the exe. vn-app hands this
+//! module the payload's lookup with [`set_asset_store`], and from then on a
+//! relative `src` is looked up THERE, under exactly the key dev would have
+//! joined onto the app root — so app code cannot tell which of the two it runs
+//! in:
+//!
+//! * `<img>` / `poster` → `Resource::Embedded(key)`, which gpui reads back
+//!   through the `AssetSource` vn-app installs (and caches by key);
+//! * `<lottie>` → the entry's bytes;
+//! * `<video>` → `MediaSource::Bytes` with the media type from the extension.
+//!
+//! A key that is not in the store is a broken element plus one advisory — what
+//! a 404 is in a browser. There is NO fallback to the disk: in a packaged app
+//! the package is the document. Absolute paths and `file://` still reach the
+//! disk in both modes, because they say so.
+//!
+//! **Invariant:** every URL-taking feature resolves through this module, so
+//! CSS `url()` and `@font-face` (unsupported today) inherit the store when they
+//! land rather than growing a second resolver.
+//!
 //! # Caching
 //!
 //! Resolution runs on the render walk, i.e. per node per frame. Everything
@@ -34,15 +65,23 @@
 //! own asset cache (keyed by the `Resource` / `Image` id) is what dedupes the
 //! *decode* across nodes that share a source.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use gpui::{Image, ImageFormat, ImageSource, Resource};
+pub use vn_payload::content_key;
+use vn_payload::KeyError;
+
+/// A packaged app's asset store: an app-root-relative key → the bytes, which
+/// live in the mapped exe for the life of the process.
+pub type AssetLookup = fn(&str) -> Option<&'static [u8]>;
 
 thread_local! {
     /// The app root relative `src`s resolve against (see module docs).
     static BASE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    /// The packaged app's store, when there is one (see module docs).
+    static STORE: Cell<Option<AssetLookup>> = const { Cell::new(None) };
     /// Per-node memo: the `src` string it was built from → the resolved source.
     /// Keyed by node id and GC'd with the rest of the per-node side state.
     static RESOLVED: RefCell<HashMap<u32, (String, Option<ImageSource>)>> =
@@ -58,6 +97,39 @@ pub fn set_asset_base(dir: PathBuf) {
 /// The current base, or `None` when the host never published one.
 pub fn asset_base() -> Option<PathBuf> {
     BASE.with(|b| b.borrow().clone())
+}
+
+/// Makes relative `src`s resolve out of `lookup` instead of the disk. Set once,
+/// at boot, by a packaged exe (vn-app's `payload`), on the thread that renders.
+pub fn set_asset_store(lookup: AssetLookup) {
+    STORE.with(|s| s.set(Some(lookup)));
+}
+
+/// The store, when this process is a packaged app.
+pub fn asset_store() -> Option<AssetLookup> {
+    STORE.with(Cell::get)
+}
+
+/// A relative `src` looked up in the store. `None` when there is no store (a
+/// dev host), so the caller takes the path route; otherwise the key and its
+/// bytes, or the advisory a miss deserves.
+fn stored(tag: &str, src: &str) -> Option<Result<(String, &'static [u8]), String>> {
+    let store = asset_store()?;
+    Some(match vn_payload::content_key_checked(src) {
+        Ok(key) => match store(&key) {
+            Some(bytes) => Ok((key, bytes)),
+            None => Err(format!(
+                "<{tag} src=\"{src}\">: {key:?} is not in this app's package — a packaged exe carries \
+                 only the files its vn.config.json \"assets\" names (default: the assets/ directory). \
+                 A browser would have answered 404; the element is broken."
+            )),
+        },
+        Err(KeyError::EscapesRoot) => Err(format!(
+            "<{tag} src=\"{src}\">: the path climbs out of the app root, and a packaged app has \
+             nothing outside its package."
+        )),
+        Err(_) => Err(format!("<{tag} src=\"{src}\">: names no file inside the app — nothing to load.")),
+    })
 }
 
 /// Drops memoised sources for nodes that no longer exist.
@@ -103,6 +175,12 @@ pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
     if scheme_of(src) == "data" {
         return data_bytes(tag, src);
     }
+    // A packaged app: the payload, never the disk (module docs).
+    if scheme_of(src).is_empty() {
+        if let Some(hit) = stored(tag, src) {
+            return hit.map(|(_, bytes)| bytes.to_vec());
+        }
+    }
     let path = resolve_path(tag, src)?;
     std::fs::read(&path).map_err(|e| {
         format!(
@@ -143,7 +221,7 @@ pub(crate) fn resolve_path(tag: &str, src: &str) -> Result<PathBuf, String> {
         }
         // A single-letter "scheme" is a Windows drive, never a URL scheme.
         s if s.len() == 1 && s.chars().all(|c| c.is_ascii_alphabetic()) => Ok(PathBuf::from(src)),
-        "" => Ok(relative_to_base(src)),
+        "" => Ok(relative_to_base(tag, src)),
         other => Err(format!(
             "<{tag} src=\"{src}\">: the `{other}:` URL scheme is not supported — use a file \
              path or a data: URI."
@@ -196,9 +274,34 @@ pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<vn_video::MediaSourc
             })
         }
         "http" | "https" => Ok(vn_video::MediaSource::Uri(src.to_string())),
+        // A packaged app: the payload entry, as bytes with the media type its
+        // extension names — the shape a `data:` URI already takes, so the
+        // backend's memory-stream path (and its temp-file fallback) is reused.
+        //
+        // v1 COPIES the clip once per source; a zero-copy `MediaSource` over
+        // the mapped image is phase 2 (research/reports/m25/packaging-design.md
+        // §6), and a big clip says so rather than silently costing memory.
+        "" if asset_store().is_some() => {
+            let (key, bytes) = stored(tag, src).expect("asset_store() is set")?;
+            if bytes.len() > LARGE_PACKAGED_MEDIA {
+                warn(format!(
+                    "<{tag} src=\"{src}\">: a packaged {} MiB clip is copied into memory to play — in a \
+                     dev host the OS streams it from disk. (A zero-copy source for packaged media is \
+                     planned; until then, ship clips this large beside the exe and use an absolute path.)",
+                    bytes.len() >> 20
+                ));
+            }
+            Ok(vn_video::MediaSource::Bytes {
+                mime: vn_payload::media_type_for(&key).to_string(),
+                data: std::sync::Arc::new(bytes.to_vec()),
+            })
+        }
         _ => resolve_path(tag, src).map(vn_video::MediaSource::Path),
     }
 }
+
+/// Above this, a packaged `<video>` source gets an advisory about its copy.
+const LARGE_PACKAGED_MEDIA: usize = 64 << 20;
 
 fn scheme_of(src: &str) -> String {
     src.split_once(':')
@@ -271,7 +374,17 @@ fn resolve(src: &str) -> Option<ImageSource> {
         s if s.len() == 1 && s.chars().all(|c| c.is_ascii_alphabetic()) => {
             Some(path_source(PathBuf::from(src)))
         }
-        "" => Some(path_source(relative_to_base(src))),
+        "" => match stored("img", src) {
+            // gpui reads `Embedded` back through the app's `AssetSource` (the
+            // payload), off the render thread, and caches the decode by key —
+            // the same lifecycle a `Resource::Path` gets, minus the disk.
+            Some(Ok((key, _))) => Some(ImageSource::Resource(Resource::Embedded(key.into()))),
+            Some(Err(msg)) => {
+                warn(msg);
+                None
+            }
+            None => Some(path_source(relative_to_base("img", src))),
+        },
         other => {
             warn(format!(
                 "<img src=\"{src}\">: the `{other}:` URL scheme is not supported — use a file \
@@ -289,10 +402,10 @@ fn path_source(p: PathBuf) -> ImageSource {
     ImageSource::Resource(Resource::Path(p.into()))
 }
 
-/// Joins a relative or root-relative `src` onto the app root and folds away
-/// `.` / `..` lexically (the paths are URLs, not filesystem walks — a browser
-/// resolves them purely textually too).
-fn relative_to_base(src: &str) -> PathBuf {
+/// Joins a relative or root-relative `src` onto the app root — through
+/// [`content_key`], so the query is cut, escapes are decoded and `.`/`..` fold
+/// exactly as they do for `fetch()` and for a packaged exe's store.
+fn relative_to_base(tag: &str, src: &str) -> PathBuf {
     let base = match asset_base() {
         Some(b) => b,
         None => {
@@ -305,9 +418,27 @@ fn relative_to_base(src: &str) -> PathBuf {
             std::env::current_dir().unwrap_or_default()
         }
     };
-    // A leading `/` is a *server* root in a browser; our server root is the app.
-    let rel = src.trim_start_matches(['/', '\\']);
-    normalize(&base.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR)))
+    let sep = std::path::MAIN_SEPARATOR_STR;
+    match vn_payload::content_key_checked(src) {
+        Ok(key) => base.join(key.replace('/', sep)),
+        Err(why) => {
+            // The legacy lexical join, kept so nothing that resolved before
+            // stops resolving in dev — but a path that climbs OUT of the app
+            // root is one a packaged exe cannot serve, and the author should
+            // hear that here rather than from a user.
+            if why == KeyError::EscapesRoot {
+                warn(format!(
+                    "<{tag} src=\"{src}\"> climbs out of the app root ({}) — it resolves in a dev host, \
+                     but a packaged exe carries only the app's own files, so there it will be broken.",
+                    base.display()
+                ));
+            }
+            let rel = src.split(['?', '#']).next().unwrap_or_default();
+            // A leading `/` is a *server* root in a browser; ours is the app.
+            let rel = rel.trim_start_matches(['/', '\\']);
+            normalize(&base.join(rel.replace('/', sep)))
+        }
+    }
 }
 
 fn normalize(p: &Path) -> PathBuf {
@@ -620,6 +751,88 @@ mod tests {
         assert_eq!(base64_decode("QU\n JD\r\n").unwrap(), b"ABC");
         assert_eq!(base64_decode("QQ==").unwrap(), b"A");
         assert!(base64_decode("**").is_none());
+    }
+
+    // -- a packaged app's store ----------------------------------------------
+
+    const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    static FAKE: &[(&str, &[u8])] = &[
+        ("assets/a.png", PNG),
+        ("assets/clip.mp4", b"mp4bytes"),
+        ("assets/s.tgs", b"tgs"),
+        ("assets/my pic.png", PNG),
+    ];
+    fn fake_store(key: &str) -> Option<&'static [u8]> {
+        FAKE.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+    }
+    /// The store is thread-local; a test that sets one takes it away again, so
+    /// no other test on a reused thread inherits it.
+    struct StoreGuard;
+    impl Drop for StoreGuard {
+        fn drop(&mut self) {
+            STORE.with(|s| s.set(None));
+        }
+    }
+    fn packaged() -> StoreGuard {
+        set_asset_store(fake_store);
+        StoreGuard
+    }
+
+    #[test]
+    fn a_packaged_app_resolves_relative_srcs_out_of_its_store() {
+        let _g = packaged();
+        for src in ["assets/a.png", "./assets/a.png", "/assets/a.png", "assets/a.png?v=2", "assets/x/../a.png"] {
+            match resolve(src) {
+                Some(ImageSource::Resource(Resource::Embedded(key))) => {
+                    assert_eq!(key.as_ref(), "assets/a.png", "{src}")
+                }
+                other => panic!("{src}: not an embedded resource (some: {})", other.is_some()),
+            }
+        }
+        assert!(matches!(
+            resolve("assets/my%20pic.png"),
+            Some(ImageSource::Resource(Resource::Embedded(k))) if k.as_ref() == "assets/my pic.png"
+        ));
+        // A miss is a broken image (alt text), NEVER the disk — even with a base set.
+        set_asset_base(PathBuf::from("Y:\\vue-native\\apps\\hello"));
+        assert!(resolve("assets/nope.png").is_none());
+        assert!(resolve("../hello/assets/a.png").is_none());
+        // What names the disk or the network explicitly still does.
+        assert!(matches!(resolve("C:/pics/a.png"), Some(ImageSource::Resource(Resource::Path(_)))));
+        assert!(matches!(resolve("https://example.com/a.png"), Some(ImageSource::Resource(Resource::Uri(_)))));
+        assert!(matches!(resolve("data:;base64,iVBORw0KGgo="), Some(ImageSource::Image(_))));
+    }
+
+    #[test]
+    fn lottie_and_video_read_the_same_store() {
+        use vn_video::MediaSource;
+        let _g = packaged();
+        assert_eq!(read_bytes("lottie", "assets/s.tgs").unwrap(), b"tgs");
+        assert_eq!(read_bytes("lottie", "/assets/s.tgs?x").unwrap(), b"tgs");
+        let miss = read_bytes("lottie", "assets/missing.tgs").unwrap_err();
+        assert!(miss.contains("not in this app's package"), "{miss}");
+        match resolve_media("video", "assets/clip.mp4") {
+            Ok(MediaSource::Bytes { mime, data }) => {
+                assert_eq!(mime, "video/mp4");
+                assert_eq!(data.as_slice(), &b"mp4bytes"[..]);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(resolve_media("video", "assets/missing.mp4").is_err());
+        assert!(matches!(resolve_media("video", "https://example.com/a.mp4"), Ok(MediaSource::Uri(_))));
+    }
+
+    #[test]
+    fn a_dev_host_has_no_store_and_joins_the_same_key_onto_the_app_root() {
+        assert!(asset_store().is_none());
+        set_asset_base(PathBuf::from("Y:\\base"));
+        // Browser-shaped: the server never sees the query, and decodes escapes.
+        assert_eq!(as_path(resolve("a.png?v=2")), Some(PathBuf::from("Y:\\base\\a.png")));
+        assert_eq!(as_path(resolve("my%20pic.png")), Some(PathBuf::from("Y:\\base\\my pic.png")));
+        assert_eq!(as_path(resolve("dir\\a.png")), Some(PathBuf::from("Y:\\base\\dir\\a.png")));
+        // A decoded drive letter must not replace the app root.
+        assert_eq!(as_path(resolve("C%3A/x.png")), Some(PathBuf::from("Y:\\base\\C%3A\\x.png")));
+        assert!(matches!(resolve_media("video", "assets/clip.mp4"), Ok(vn_video::MediaSource::Path(_))));
     }
 
     /// The memo must follow the `src`, not the node id — Vue reuses ids.

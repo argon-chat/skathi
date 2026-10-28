@@ -65,6 +65,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=VN_DEVTOOLS_BUNDLE");
     suppress_release_pdb();
     no_identical_code_folding();
+    host_identity();
 
     // The opt-OUT. Cargo features are additive across a graph, so this is the
     // one shape a "remove code" flag can take: the absence of the cfg is the
@@ -200,6 +201,48 @@ fn suppress_release_pdb() {
 /// something this line does.
 fn no_identical_code_folding() {
     println!("cargo:rustc-link-arg-bins=/OPT:NOICF");
+}
+
+/// What `vn-app --vn-host-info` reports and a payload is checked against
+/// (src/payload.rs, docs/PACKAGING.md §host):
+///
+/// * `VN_PKG_VERSION` — `packages/vue-native/package.json` `"version"`. The
+///   renderer half of the contract: a payload records the version of the
+///   vue-native it was bundled against, and a host built from a different one
+///   says so instead of failing in some unrelated way.
+/// * `VN_JSC_PIN` — `vendor/redjs/pins.txt` `webkit.version`, the engine.
+///
+/// Emitted before the `no-devtools` early return: both variants are hosts.
+fn host_identity() {
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let repo = manifest.join("..").join("..");
+    let pkg = repo.join("packages/vue-native/package.json");
+    let pins = repo.join("vendor/redjs/pins.txt");
+    println!("cargo:rerun-if-changed={}", disp(&pkg));
+    println!("cargo:rerun-if-changed={}", disp(&pins));
+    let version = std::fs::read_to_string(&pkg)
+        .ok()
+        .and_then(|text| {
+            // The first `"version": "…"` — package.json's own, which precedes
+            // every dependency map by convention and in this file.
+            let at = text.find("\"version\"")?;
+            let rest = &text[at + "\"version\"".len()..];
+            let open = rest.find('"')?;
+            let rest = &rest[open + 1..];
+            Some(rest[..rest.find('"')?].to_string())
+        })
+        .unwrap_or_else(|| "0.0.0".into());
+    let pin = std::fs::read_to_string(&pins)
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|l| {
+                let (k, v) = l.split_once('=')?;
+                (k.trim() == "webkit.version").then(|| v.trim().to_string())
+            })
+        })
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=VN_PKG_VERSION={version}");
+    println!("cargo:rustc-env=VN_JSC_PIN={pin}");
 }
 
 /// The name of the profile directory this build is writing into, e.g.

@@ -1,86 +1,96 @@
-//! Production boot: everything the app needs is inside the exe.
+//! Production boot: the app comes out of the payload stamped into this exe.
 //!
 //! Enabled by `--features prod`. There is no manifest, no module registry, no
 //! watcher and no polling — [`poll_frame`] is an empty inline function, so the
-//! frame pump costs nothing extra. Two things are baked in at compile time:
+//! frame pump costs nothing extra.
 //!
-//!   1. `packages/vue-native/dist/app.prod.js` — the single IIFE produced by
-//!      `bun prod.ts` (see that file's header for how it differs from the dev
-//!      two-tier output). `include_str!` means **the JS build must run before
-//!      `cargo build --features prod`**; a missing file is a compile error, on
-//!      purpose — shipping an exe with a stale or absent bundle is worse.
-//!   2. `apps/hello/assets/**` — served to `fetch()` / `Image` through redjs'
-//!      content provider (research/reports/vue-renderer.md §e.4), which is
-//!      consulted BEFORE the on-disk roots. So `fetch("assets/hello.txt")`
-//!      resolves out of the binary with no filesystem and no HTTP.
+//! Until m25 this file `include_str!`d `packages/vue-native/dist/app.prod.js`,
+//! `dist/window.json` and a hand-rolled table of `apps/hello/assets/**`, which
+//! meant the prod exe WAS apps/hello: every other app needed a Rust edit and a
+//! full engine build. Now a prod build is a BARE HOST and `vn build` stamps an
+//! app into a copy of it (docs/PACKAGING.md); everything app-specific reads the
+//! payload ([`crate::payload`]):
 //!
-//! v1 keeps the asset table hand-rolled — one `include_bytes!` per entry via
-//! the [`embed`] macro below — rather than pulling in `rust-embed`. Adding a
-//! file means adding a line here; a build script that walks the directory is
-//! the obvious follow-up when the list stops being short.
+//! | what | from |
+//! |---|---|
+//! | the bundle | `vn/app.js` — exactly `bun prod.ts`'s output |
+//! | the window config | `vn/window.json` — exactly what dev reads from the manifest |
+//! | the app's name | `vn/app.json` `name` — `vn.config.json` `"name"`, else the app directory |
+//! | `fetch()` / `Image` | the content provider below, over the payload's assets |
+//! | `<img>` / `<lottie>` / `<video>` | `vn_tree::set_asset_store` (main.rs) — the same lookup |
+//!
+//! The inspector bundle and the preludes stay `include_str!`: they belong to
+//! the host, not to the app.
 
 use vn_runtime::JsRuntime;
 
-/// The whole Vue app, compiled and minified, as one classic script.
-const APP_JS: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/vue-native/dist/app.prod.js"));
+use crate::payload;
 
-/// Content-relative key -> bytes. Keys are exactly what redjs hands the
-/// provider: `/`-separated, no leading `./` or `/`, query/hash already stripped.
-macro_rules! embed {
-    ($($rel:literal),* $(,)?) => {
-        &[$((
-            concat!("assets/", $rel),
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/hello/assets/", $rel))
-                as &[u8],
-        )),*]
-    };
-}
-
-static ASSETS: &[(&str, &[u8])] = embed!["hello.txt"];
-
-fn lookup(key: &str) -> Option<&'static [u8]> {
-    // redjs already normalizes, but a provider that only ever matches one
-    // spelling of a path is a footgun; be liberal about the leading slash.
-    let key = key.trim_start_matches('/');
-    ASSETS.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
-}
-
-/// Proof that the embedded-asset path is live, printed into the shell log.
-/// Prod-only and Rust-side on purpose: `apps/hello` stays a plain Vue app with
-/// no host-probe code in it.
-const ASSET_PROBE_JS: &str = r#"
-    fetch("assets/hello.txt")
-        .then((r) => (r.ok ? r.text() : Promise.reject(new Error("HTTP " + r.status))))
-        .then((t) => __vn_log("[asset] " + String(t).trim()))
-        .catch((e) => __vn_log("[asset] fetch failed: " + e));
-"#;
-
-/// Installs the content provider, evaluates the embedded bundle (which mounts
-/// the app), then fires the asset probe.
+/// Installs the content provider and evaluates the packaged bundle, which
+/// mounts the app. `main` has already refused to get here without a payload.
 pub fn boot(rt: &JsRuntime) {
+    let Some(loaded) = payload::get() else {
+        eprintln!("[prod] no app payload — nothing to boot");
+        return;
+    };
+    let meta = &loaded.meta;
+    let from = match &loaded.source {
+        payload::Source::Embedded => "embedded".to_string(),
+        payload::Source::File(p) => format!("VN_PAYLOAD={}", p.display()),
+    };
+    eprintln!(
+        "[prod] {} {} (\"{}\") — payload {from}, {} KiB, {} asset(s)",
+        meta.product_name,
+        meta.version,
+        meta.name,
+        loaded.payload.len() / 1024,
+        loaded.payload.asset_count()
+    );
+    let variant = if cfg!(vn_devtools) {
+        "standard"
+    } else {
+        "no-devtools"
+    };
+    if !meta.host_variant.is_empty() && meta.host_variant != variant {
+        // `vn build` picks the host from this field, so a mismatch means a
+        // hand-made stamp. Harmless, but the app asked for the other build.
+        eprintln!(
+            "[vue-native compat] this app was packaged for the {} host and is running on the {variant} one",
+            meta.host_variant
+        );
+    }
+    // `fetch("assets/x")` and `new Image()`: redjs hands us its own cleaned key
+    // (query cut, `./` and `/` trimmed) and we run it through the SAME
+    // normaliser `<img>` uses, so the two cannot disagree about a URL.
     rt.set_content_provider(|key| {
-        match lookup(key) {
+        let Some(k) = vn_payload::content_key(key) else { return None };
+        match payload::lookup(&k) {
             Some(bytes) => Some(bytes.to_vec()),
             None => {
-                // A miss is not an error — redjs falls through to the on-disk
-                // roots and `fetch` ends up with a browser-shaped 404. But in a
-                // shipped exe there is no disk to fall through to, so say so
-                // once with the key list rather than leaving a silent 404.
-                if key.starts_with("assets/") {
-                    warn_missing_asset(key);
-                }
+                // A miss is not an error — redjs answers with a browser-shaped
+                // 404. But a packaged app's author should hear WHY once per
+                // key, instead of debugging a silent 404.
+                let count = payload::get().map_or(0, |l| l.payload.asset_count());
+                payload::advise_once(
+                    &k,
+                    &format!(
+                        "fetch({key:?}): {k:?} is not in this app's package ({count} packaged asset(s)) — \
+                         vn.config.json \"assets\" decides what is packaged (default: the assets/ directory)"
+                    ),
+                );
                 None
             }
         }
     });
 
-    if let Err(e) = crate::perf::boot_eval("app.prod.js (+mount)", || rt.eval(APP_JS, "vn://app.prod.js")) {
-        eprintln!("[prod] app.prod.js: {}\n{}", e.header, e.stack);
+    let Some(script) = loaded.payload.script() else {
+        eprintln!("[prod] the payload has no vn/app.js — nothing to run");
         return;
-    }
-    if let Err(e) = rt.eval(ASSET_PROBE_JS, "vn://asset-probe.js") {
-        eprintln!("[prod] asset probe: {}\n{}", e.header, e.stack);
+    };
+    if let Err(e) = crate::perf::boot_eval("app.prod.js (+mount)", || {
+        rt.eval(script, "vn://app.prod.js")
+    }) {
+        eprintln!("[prod] app.prod.js: {}\n{}", e.header, e.stack);
     }
 }
 
@@ -88,39 +98,58 @@ pub fn boot(rt: &JsRuntime) {
 #[inline(always)]
 pub fn poll_frame(_frame_no: u32) {}
 
-/// The `window` block of `apps/<app>/vn.config.json`, inlined by `bun prod.ts`
-/// as `dist/window.json` (`{}` when the app declares none) — the same JSON the
-/// dev host reads out of `dist/manifest.json`.
-///
-/// `include_str!` for the same reason `APP_JS` uses it: shipping an exe whose
-/// window config silently disappeared is worse than a compile error.
+/// The `window` block of `vn.config.json`, as `bun prod.ts` wrote it into the
+/// payload (`{}` when the app declares none) — the same JSON the dev host reads
+/// out of `dist/manifest.json`.
 pub fn window_config() -> Option<String> {
-    const RAW: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/vue-native/dist/window.json"));
-    Some(RAW.to_string())
+    payload::get()?.payload.window_json().map(str::to_string)
 }
 
 /// The app's name — see [`crate::dev::app_name`] for what it is for.
 ///
-/// `None`, on purpose, and NOT a fourth build artifact: a shipped build is ONE
-/// executable for ONE app, so the executable's own file name already is the
-/// app's name, and vn-storage falls through to it. Renaming `myapp.exe` renames
-/// its storage folder, which is the behaviour a portable-app user expects and
-/// the one a `dist/app.json` would have taken away.
+/// The payload's `name`, resolved by `vn build` with dev's own chain
+/// (`vn.config.json` `"name"`, else the app directory). It beats the exe's file
+/// stem: renaming `Hello.exe` must not lose a user's data, and before m25 every
+/// prod exe was `vn-app.exe` and so every prod app shared ONE storage folder
+/// (docs/STORAGE.md §3 row 4, owner decision m25). `VN_APP_NAME` still wins.
 pub fn app_name() -> Option<String> {
-    None
+    payload::get()
+        .map(|l| l.meta.name.clone())
+        .filter(|n| !n.is_empty())
 }
 
-fn warn_missing_asset(key: &str) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static WARNED: AtomicBool = AtomicBool::new(false);
-    if WARNED.swap(true, Ordering::Relaxed) {
+/// `<img>`, `<lottie>`, `<video>`, `poster`: resolve relative URLs out of the
+/// payload instead of the disk. Returns whether a store was installed.
+///
+/// `VN_APP_ROOT` is ignored in a packaged exe — the package IS the document,
+/// and an env var that pointed `<img>` at a directory while `fetch()` kept
+/// reading the payload would be exactly the dev/prod split this replaced.
+pub fn publish_asset_store() -> bool {
+    if payload::get().is_none() {
+        return false;
+    }
+    vn_tree::set_asset_store(payload::lookup);
+    if std::env::var_os("VN_APP_ROOT").is_some_and(|v| !v.is_empty()) {
+        eprintln!(
+            "[prod] VN_APP_ROOT is ignored: this exe resolves relative URLs out of its own package"
+        );
+    }
+    true
+}
+
+/// A prod build with no payload is a bare host: say what it is and stop.
+/// `--devtools` (the inspector mode) needs no app and keeps working.
+pub fn require_payload() {
+    if payload::get().is_some() {
         return;
     }
-    let keys: Vec<&str> = ASSETS.iter().map(|(k, _)| *k).collect();
-    eprintln!(
-        "[prod] no embedded asset {key:?} — this build embeds: {}\n\
-         [prod] (add it to ASSETS in crates/vn-app/src/prod.rs; further misses are silent)",
-        keys.join(", ")
+    let msg = format!(
+        "This is the vue-native {} host with no app inside.\n\nBuild one with `vn build <app>` \
+         (bun packages/vue-native/cli/vn.ts build apps/hello), or run a payload directly with \
+         VN_PAYLOAD=<app.vnpk>.",
+        env!("VN_PKG_VERSION")
     );
+    eprintln!("[prod] {}", msg.replace("\n\n", " "));
+    payload::message_box(&msg);
+    std::process::exit(2);
 }

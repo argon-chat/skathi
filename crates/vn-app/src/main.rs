@@ -10,9 +10,11 @@
 //!
 //! - **dev** (default) — [`dev`]: reads `packages/vue-native/dist` off disk and
 //!   polls `changes.json` for HMR. Needs the `bun build.ts --watch` loop.
-//! - **prod** (`--features prod`) — [`prod`]: `include_str!`s the single IIFE
-//!   from `bun prod.ts` plus the app's assets, so the exe runs standalone with
-//!   no dist/ folder, no watcher and no filesystem reads at all.
+//! - **prod** (`--features prod`) — [`prod`]: a BARE HOST. The app — the single
+//!   IIFE from `bun prod.ts`, its window config, its identity and its assets —
+//!   is the VNPK payload `vn build` stamps into a copy of this exe
+//!   ([`payload`], docs/PACKAGING.md), so the exe runs standalone with no dist/
+//!   folder, no watcher, and no Rust toolchain on the app author's side.
 //!
 //! Both expose exactly `boot(&JsRuntime)` and `poll_frame(frame_no: u32)`.
 
@@ -38,6 +40,7 @@ mod devtools;
 mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child registry
 mod json; // the dev transport, the devtools wire and vn.config.json share one codec
 mod owner; // VN_OWNER_PID: a test host dies with the runner that launched it
+mod payload; // the app stamped into a packaged exe (VNPK), and `--vn-host-info`
 mod perf;
 mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWINDOW.md)
 #[cfg(feature = "prod")]
@@ -439,6 +442,10 @@ mod logger_tests {
 struct Shell {
     status: String,
     log: Vec<String>,
+    /// The fallback titlebar's text: the window's own title (`vn.config.json`
+    /// `window.title`), so a packaged app that never paints its own chrome
+    /// does not show the engine's name in its titlebar.
+    title: String,
 }
 
 thread_local! {
@@ -739,7 +746,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .text_size(px(13.))
-                    .child("vue-native — gpui + JSC + Vue"),
+                    .child(self.title.clone()),
             )
             .child(
                 div()
@@ -900,6 +907,12 @@ fn window_controls_overlay() -> Option<gpui::Div> {
 /// and the prod build — which reads no files at all — leaves it unset, so
 /// relative paths fall back to the working directory with an advisory.
 fn publish_app_root() {
+    // A packaged exe: relative URLs resolve out of the payload, the same store
+    // `fetch()` reads — the package is the document (docs/PACKAGING.md).
+    #[cfg(feature = "prod")]
+    if prod::publish_asset_store() {
+        return;
+    }
     if let Some(dir) = std::env::var_os("VN_APP_ROOT") {
         if !dir.is_empty() {
             vn_tree::set_asset_base(std::path::PathBuf::from(dir));
@@ -986,16 +999,41 @@ fn install_http_client(app: gpui::Application) -> gpui::Application {
 fn main() {
     // First, so a host whose runner is already gone never opens a window.
     owner::watch();
+    // `vn build`'s host check: a BARE host (nothing stamped into it) prints
+    // what it is — mode, vue-native version, variant — as one JSON line and
+    // exits before any window, logger or JS exists. A packaged exe never takes
+    // this branch; its argv belongs to its app.
+    if std::env::args().nth(1).as_deref() == Some("--vn-host-info") && !payload::embedded_present() {
+        println!("{}", payload::host_info_json());
+        return;
+    }
     // `--devtools` rewrites two environment variables (the dist slot this
     // process publishes into, and which instance it prefers), so it has to run
     // before anything reads either — which the logger and the profiler both
     // do indirectly through `slot::dir`.
     #[cfg(vn_devtools)]
     inspector::init();
+    // A prod build with no app is a bare host: it says so and stops, rather
+    // than opening an empty window. The inspector mode needs no app.
+    #[cfg(feature = "prod")]
+    {
+        #[cfg(vn_devtools)]
+        let inspecting = inspector::is_devtools_host();
+        #[cfg(not(vn_devtools))]
+        let inspecting = false;
+        if !inspecting {
+            prod::require_payload();
+        }
+    }
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
     perf::boot();
-    install_http_client(application()).run(|cx: &mut App| {
+    let app = install_http_client(application());
+    // gpui reads `Resource::Embedded(key)` — what an `<img>` resolves to in a
+    // packaged exe — through this, straight out of the mapped payload.
+    #[cfg(feature = "prod")]
+    let app = if payload::get().is_some() { app.with_assets(payload::GpuiAssets) } else { app };
+    app.run(|cx: &mut App| {
         // `--devtools` is a THIRD boot mode over this same shell: the app is
         // the inspector, and it comes out of this executable rather than off
         // disk. Everything below — the window, the pump, the preludes — is
@@ -1142,6 +1180,7 @@ fn main() {
                 let shell = cx.new(|_| Shell {
                     status: "booting JS…".into(),
                     log: Vec::new(),
+                    title: cfg.title.clone(),
                 });
                 SHELL.with(|s| *s.borrow_mut() = Some(shell.downgrade()));
                 window::init(&cfg, window, cx);

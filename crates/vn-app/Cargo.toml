@@ -9,17 +9,18 @@ publish = false
 build = "build.rs"
 
 [features]
-# Self-contained release build: the Vue bundle and the app's assets are baked
-# into the exe (crates/vn-app/src/prod.rs), the dev manifest/HMR polling is
-# compiled out entirely, and the process never touches dist/ or any other file.
+# The BARE HOST (m25, docs/PACKAGING.md): the dev manifest/HMR polling is
+# compiled out, and the app — bundle, window config, name, assets — is the VNPK
+# payload `vn build` stamps into a COPY of this exe (src/payload.rs, src/prod.rs).
+# The host itself carries no app, so one build serves every app, and an app
+# author never needs a Rust toolchain:
+#
+#   bun packages/vue-native/cli/vn.ts host build   # both variants, into the cache
+#   bun packages/vue-native/cli/vn.ts build apps/hello
 #
 # NOT implied by `--release` — a release build of the dev shell is a legitimate
-# thing to want (fast HMR loop, optimized host). Opt in explicitly:
-#
-#   cd packages/vue-native && bun prod.ts          # writes dist/app.prod.js
-#   cargo build --release -p vn-app --features prod
-#
-# `bun prod.ts` MUST have run first: prod.rs `include_str!`s its output.
+# thing to want (fast HMR loop, optimized host). `vn host build` is the opt-in;
+# by hand it is `cargo build --release -p vn-app --features prod`.
 prod = []
 
 # The devtools OPT-OUT (m22 inverted the model — docs/ARCHITECTURE.md §11
@@ -106,6 +107,11 @@ vn-css = { path = "../vn-css" }
 vn-elements = { path = "../vn-elements" }
 vn-runtime = { path = "../vn-runtime" }
 vn-tree = { path = "../vn-tree" }
+# The VNPK payload format (docs/PACKAGING.md): the zero-copy parser a packaged
+# exe reads its app out of, and the URL→key normaliser `fetch` and `<img>`
+# share. No dependencies — it is its own crate so the format is testable without
+# linking an engine.
+vn-payload = { path = "../vn-payload" }
 # The platform backends behind redjs's `navigator.permissions`, plus the
 # `appPermissions` extension surface. NOT dev-gated, for the same reason
 # vn-voice is not: an app asking whether it may use the microphone is doing
@@ -149,6 +155,9 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Storage_Xps",
+    # `FindResourceW` / `LoadResource` / `LockResource` — the stamped payload,
+    # read in place out of the mapped image (src/payload.rs).
+    "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
     # `OpenProcess` + `WaitForSingleObject` — `VN_OWNER_PID` (src/owner.rs).
     "Win32_System_Threading",

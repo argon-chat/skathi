@@ -426,54 +426,15 @@ fn allow_foreground(pid: u32) {
     let _ = pid;
 }
 
-/// Deletes the slot directories of inspectors that are no longer running.
-///
-/// Each child publishes a handshake into a slot under the temp directory, and
-/// a child that CRASHES leaves it behind. That is not a disk-space problem —
-/// it is 60 bytes — it is a DISCOVERY problem: those slots are siblings, so
-/// every later inspector scans them and lists half a dozen dead instances in
-/// its target picker (`targets_json`). Pruning on spawn keeps the list to what
-/// is actually running, and it is the one moment we are certainly allowed to
-/// touch that directory.
-///
-/// "No longer running" is answered by the PORT, exactly as `read_target` does
-/// and for the same reason: a pid can be recycled, a refused connect on
-/// loopback cannot lie, and it is instant.
-fn prune_dead_slots(keep: &Path) {
-    let Some(root) = keep.parent() else { return };
-    let Ok(entries) = std::fs::read_dir(root) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() || path == keep {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(path.join("devtools.json")) else {
-            continue;
-        };
-        let Some(port) = crate::json::parse(&text)
-            .and_then(|d| d.get("port").and_then(crate::json::Json::as_f64))
-        else {
-            continue;
-        };
-        let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port as u16));
-        let alive = std::net::TcpStream::connect_timeout(
-            &addr,
-            std::time::Duration::from_millis(120),
-        )
-        .is_ok();
-        if !alive {
-            let _ = std::fs::remove_dir_all(&path);
-        }
-    }
-}
-
 /// Starts a new inspector for `window`.
 fn spawn(window: Option<u64>) -> Result<u32, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let target = crate::slot::dir();
     let slot = child_slot(std::process::id(), window);
     std::fs::create_dir_all(&slot).map_err(|e| format!("{}: {e}", slot.display()))?;
-    prune_dead_slots(&slot);
+    // Children that crashed left their slots behind (crate::slot — shared
+    // with a packaged app's own `%TEMP%\vue-native\apps\<name>\<pid>`).
+    crate::slot::prune_dead_slots(&slot);
 
     let mut cmd = std::process::Command::new(&exe);
     cmd.arg("--devtools")

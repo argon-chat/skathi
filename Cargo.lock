@@ -7731,6 +7731,7 @@ dependencies = [
  "vn-clipboard",
  "vn-css",
  "vn-elements",
+ "vn-payload",
  "vn-permissions",
  "vn-runtime",
  "vn-storage",
@@ -7787,6 +7788,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vn-payload"
+version = "0.1.0"
+
+[[package]]
 name = "vn-permissions"
 version = "0.1.0"
 dependencies = [
@@ -7826,6 +7831,7 @@ dependencies = [
  "vn-css",
  "vn-elements",
  "vn-lottie",
+ "vn-payload",
  "vn-runtime",
  "vn-video",
 ]
