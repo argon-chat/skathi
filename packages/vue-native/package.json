@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "bin": {
+    "vn": "./cli/vn.ts"
+  },
   "dependencies": {
     "@vue/compiler-sfc": "^3.5.41",
     "@vue/runtime-core": "^3.5.0",
@@ -15,6 +18,7 @@
     "watch": "bun build.ts --watch",
     "devtools:ui": "bun devtools/ui.ts",
     "build:prod": "bun prod.ts",
+    "vn": "bun cli/vn.ts",
     "shaders": "bun shaders.ts",
     "shaders:check": "bun shaders.ts --check",
     "shaders:fetch": "bun fetch-slang.ts",
