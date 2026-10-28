@@ -22,6 +22,11 @@ pub struct JsError {
     pub stack: String,
 }
 
+/// The on-disk root a content-provider miss is resolved against: a device-
+/// namespace name no volume can carry, so the read fails and the miss is a 404
+/// (see `JsRuntime::init`).
+const NO_DISK_ROOT: &str = r"\\?\vue-native-no-disk-root";
+
 thread_local! {
     static RUNTIME: OnceCell<JsRuntime> = const { OnceCell::new() };
     static ERRORS: RefCell<VecDeque<JsError>> = const { RefCell::new(VecDeque::new()) };
@@ -50,9 +55,19 @@ impl JsRuntime {
         unsafe {
             let rc = ffi::redjs_web_install(ctx.raw());
             assert_eq!(rc, 0, "redjs_web_install failed: {rc}");
-            // Scripts/assets roots empty for now — assets will come through
-            // redjs_content_provider_set later.
-            let rc = ffi::redjs_webshim_install(ctx.raw(), std::ptr::null(), 0, std::ptr::null(), 0);
+            // Relative reads come through the content provider (the app root
+            // in dev, the payload in a packaged exe — `set_content_provider`).
+            // The on-disk roots below are only what a provider MISS falls
+            // through to, and they used to be EMPTY — which made redjs read a
+            // miss relative to the PROCESS CWD: a packaged exe double-clicked
+            // from Explorer (cwd = its own folder) could `fetch()` files lying
+            // beside it, the same exe started from a terminal could not, and a
+            // dev host started from the repo could read the repo. A root that
+            // cannot exist turns every miss into the plain 404 a browser's
+            // server would give, in every mode (m25, docs/PACKAGING.md).
+            // Absolute paths and `file:///` URLs are unaffected.
+            let root: Vec<u16> = NO_DISK_ROOT.encode_utf16().collect();
+            let rc = ffi::redjs_webshim_install(ctx.raw(), root.as_ptr(), root.len(), root.as_ptr(), root.len());
             assert_eq!(rc, 0, "redjs_webshim_install failed: {rc}");
             ffi::redjs_set_uncaught_handler(on_uncaught as *const c_void);
         }
@@ -130,9 +145,9 @@ impl JsRuntime {
     /// separators normalized to `/`, and any leading `./` or `/` trimmed
     /// (redjs `webapi::fsutil::clean_relative`), so `fetch("/assets/a.png")`,
     /// `fetch("./assets/a.png")` and `fetch("assets/a.png")` all arrive as
-    /// `assets/a.png`. `None` = miss, and resolution falls through to the
-    /// on-disk roots from `redjs_webshim_install` — which is what keeps the dev
-    /// loop (loose files) working when no provider is installed.
+    /// `assets/a.png`. `None` = miss: a 404, because the on-disk roots it
+    /// falls through to are a root that cannot exist ([`NO_DISK_ROOT`]) rather
+    /// than the process cwd it used to be.
     ///
     /// ## Why `Send + Sync` and not the plain `Fn` the rest of this crate uses
     ///

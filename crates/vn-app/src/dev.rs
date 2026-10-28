@@ -327,25 +327,54 @@ fn app_dir_of(entry: &str) -> Option<String> {
 /// So `<img src="assets/a.png">` worked and `fetch("assets/a.png")` 404'd from
 /// the same component — a divergence with no upside.
 ///
-/// This is the same seam `prod.rs` uses to serve assets baked into the exe;
-/// pointing it at the app directory is what makes the dev loop agree with both
-/// the browser and the shipped build. A miss still falls through to redjs's own
-/// on-disk resolution, so nothing that worked before stops working.
+/// This is the same seam `prod.rs` uses to serve a packaged exe's payload, and
+/// since m25 it uses the same KEY: `vn_payload::content_key` (percent-decoded,
+/// `.`/`..` folded, never above the root) — the normaliser `<img>` uses too —
+/// so a URL that resolves here resolves to the same file once packaged, and
+/// one that cannot be packaged cannot be read here either.
+///
+/// A miss is a 404. It used to fall through to redjs's on-disk resolution,
+/// which read it relative to the PROCESS CWD; that is gone in every mode
+/// (vn-runtime `NO_DISK_ROOT`), because a packaged exe has no meaningful cwd.
+/// A miss that the old fallthrough WOULD have served says so, once.
 fn install_asset_provider(rt: &JsRuntime) {
     // `boot` runs again on a cold restart, and the provider is process-wide and
     // set-once; re-registering would only print an advisory.
     static ONCE: std::sync::Once = std::sync::Once::new();
     let Some(base) = vn_tree::asset_base() else { return };
     ONCE.call_once(move || {
-        rt.set_content_provider(move |key| {
-            // `clean_relative` already stripped `./` and any leading `/`, but
-            // not `..` — and a content key must not climb out of the app.
-            if key.split('/').any(|seg| seg == "..") {
-                return None;
+        rt.set_content_provider(move |raw| {
+            let key = vn_payload::content_key(raw)?;
+            let path = base.join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
+            match std::fs::read(&path) {
+                Ok(bytes) => Some(bytes),
+                Err(_) => {
+                    if std::path::Path::new(raw).is_file() {
+                        cwd_advisory(raw);
+                    }
+                    None
+                }
             }
-            std::fs::read(base.join(key)).ok()
         });
     });
+}
+
+/// One line per key, bounded: the miss above was a file relative to the cwd.
+fn cwd_advisory(raw: &str) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SEEN: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+    let Ok(mut seen) = SEEN.lock() else { return };
+    let seen = seen.get_or_insert_with(HashSet::new);
+    if seen.len() >= 32 || !seen.insert(raw.to_string()) {
+        return;
+    }
+    eprintln!(
+        "[vue-native compat] fetch({raw:?}) is a 404: it is not under the app root. A file of that name \
+         exists relative to the working directory, which hosts before m25 read as a fallback — a packaged \
+         exe has no such fallback, so neither does dev. Move it under the app (and into vn.config.json \
+         \"assets\") to have it served."
+    );
 }
 
 pub fn boot(rt: &JsRuntime) {
