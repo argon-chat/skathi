@@ -1826,6 +1826,7 @@ fn build_node<V: 'static>(
             );
             apply_inline_row(d.style(), t, node, align);
             apply_inline_align(d.style(), t, node, &extras, align);
+            apply_button_content_box(d.style(), t, node);
             advise_inline_level(t, id, node, &extras, d.style());
             apply_percentage_flex_basis(d.style(), t, node);
             // "The window IS the root" (see `createApp().mount()`): the root
@@ -2477,6 +2478,29 @@ fn apply_inline_align(
             style.margin.left.get_or_insert(gpui::Length::Auto);
         }
         _ => {}
+    }
+}
+
+/// HTML's button layout: unless a `<button>` is a flex or grid container, its
+/// content sits in an anonymous box that is centred vertically while it fits
+/// and starts at the top when it overflows (the HTML standard's Rendering
+/// section, "The button element"). There is no UA stylesheet and no anonymous
+/// box here, so the
+/// button's own container gets `align-content: safe center`, which is the same
+/// picture. taffy's block layout honours it, and so does the wrapping flex row
+/// [`apply_inline_row`] makes of a button holding text beside an icon. An
+/// author's `align-content` wins.
+///
+/// @argon/ui's radio relies on it: reka's indicator is a zero-height `<span>`
+/// and its dot is positioned at `top: 50%` of that span, so only the centring
+/// puts the dot in the middle of the circle (m26 client sweep #36).
+fn apply_button_content_box(style: &mut gpui::StyleRefinement, t: &Tree, node: &crate::tree::Node) {
+    if style.align_content.is_some() || t.name(node.tag) != "button" {
+        return;
+    }
+    let declared = node.computed.as_ref().and_then(|cs| cs.base.display);
+    if matches!(declared, None | Some(gpui::Display::Block)) {
+        style.align_content = Some(gpui::AlignContent::SafeCenter);
     }
 }
 
@@ -5431,6 +5455,48 @@ mod tests {
             let mut style3 = gpui::StyleRefinement::default();
             apply_inline_row(&mut style3, t, t.node(declared).unwrap(), None);
             assert_eq!(style3.display, Some(gpui::Display::Flex));
+        });
+    }
+
+    /// m26 client sweep #36: a `<button>` that is not a flex or grid container
+    /// centres its content vertically, safely; one that is keeps its own
+    /// alignment, and so does a button whose author wrote `align-content`.
+    #[test]
+    fn a_block_button_centres_its_content_safely() {
+        with_tree(|t| {
+            let button = t.intern("button");
+            let div = t.intern("div");
+            let declared = |t: &mut Tree, tag: u32, display: Option<gpui::Display>| {
+                let id = t.create_element(tag);
+                let mut base = gpui::StyleRefinement::default();
+                base.display = display;
+                let mut cs = vn_css::ComputedStates::default();
+                cs.base = std::rc::Rc::new(base);
+                if let Some(n) = t.node_mut(id) {
+                    n.computed = Some(cs);
+                }
+                id
+            };
+            let laid = |t: &Tree, id: u32, authored: Option<gpui::AlignContent>| {
+                let mut s = gpui::StyleRefinement::default();
+                s.align_content = authored;
+                apply_button_content_box(&mut s, t, t.node(id).unwrap());
+                s.align_content
+            };
+            let safe = Some(gpui::AlignContent::SafeCenter);
+
+            let bare = declared(t, button, None);
+            assert_eq!(laid(t, bare, None), safe, "no display: a block container");
+            let block = declared(t, button, Some(gpui::Display::Block));
+            assert_eq!(laid(t, block, None), safe, "block, inline-block, inline");
+            let flex = declared(t, button, Some(gpui::Display::Flex));
+            assert_eq!(laid(t, flex, None), None, "a flex button is a flex container as normal");
+            let grid = declared(t, button, Some(gpui::Display::Grid));
+            assert_eq!(laid(t, grid, None), None, "and a grid one a grid container");
+            let start = Some(gpui::AlignContent::Start);
+            assert_eq!(laid(t, bare, start), start, "the author's align-content wins");
+            let plain = declared(t, div, None);
+            assert_eq!(laid(t, plain, None), None, "only a button");
         });
     }
 

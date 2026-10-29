@@ -236,3 +236,40 @@ button {
   height: 40px;
   backdrop-filter: blur(8px);
 }
+
+/* #36: Tailwind preflight for a button and an svg, then the item's utilities. */
+.radio-at {
+  position: absolute;
+  left: 20px;
+  top: 400px;
+}
+.radio {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #888;
+  border-radius: 9999px;
+  background-color: transparent;
+  color: lime;
+}
+.radio-ind {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.radio-dot {
+  display: block;
+  vertical-align: middle;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  fill: lime;
+  transform: translate(-50%, -50%);
+}

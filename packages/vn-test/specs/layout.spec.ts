@@ -197,3 +197,36 @@ describe("#18 backdrop-filter under a transform", () => {
     bunExpect(ghost).toBeLessThan(40 * 20 * 0.2);
   }, T);
 });
+
+describe("#36 a radio's dot", () => {
+  test("is drawn in the inherited colour, in the middle of the circle", async () => {
+    // `#radio` is 16x16 with `color: lime`; the dot is an 8px lucide circle
+    // positioned absolutely against reka's zero-height indicator span. It is
+    // centred only because a button centres its content vertically, and it
+    // is lime only because an absolutely positioned (deferred) <svg> paints
+    // under its ancestors' text colour. Before the fix it was black, at the
+    // circle's top edge.
+    const b = await app.locator("#radio").boundingBox();
+    const lime = ([r, g, bl]: [number, number, number]) => g > 150 && r < 120 && bl < 120;
+    const read = async () => {
+      const shot = readPng(await app.screenshot());
+      let n = 0;
+      let sx = 0;
+      let sy = 0;
+      for (let y = Math.floor(b.y) - 8; y < b.y + b.h + 8; y++) {
+        for (let x = Math.floor(b.x) - 8; x < b.x + b.w + 8; x++) {
+          if (lime(shot.at(x, y))) {
+            n++;
+            sx += x + 0.5;
+            sy += y + 0.5;
+          }
+        }
+      }
+      return { n, cx: n ? sx / n : 0, cy: n ? sy / n : 0 };
+    };
+    const got = await until(read, (g) => g.n >= 30);
+    bunExpect(got.n).toBeGreaterThanOrEqual(30);
+    bunExpect(Math.abs(got.cx - (b.x + b.w / 2))).toBeLessThanOrEqual(1);
+    bunExpect(Math.abs(got.cy - (b.y + b.h / 2))).toBeLessThanOrEqual(1);
+  }, T);
+});
