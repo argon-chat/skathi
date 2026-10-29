@@ -66,5 +66,7 @@ net-h2 = ["redjs/net-h2"]
 # all off) — JSC, the web platform layer, timers/rAF/microtask pump, and (with
 # the `audio` feature above) Web Audio over Firewheel. `svg-images` always: an
 # SVG `Image` (a data: URL, a Blob) decodes with the resvg gpui already builds.
-redjs = { path = "../../vendor/redjs/redjs", default-features = false, features = ["svg-images"] }
+# `canvas` always: CanvasRenderingContext2D and a real OffscreenCanvas
+# (src/canvas.ts gives `<canvas>` its element half), rasterized by vello_cpu.
+redjs = { path = "../../vendor/redjs/redjs", default-features = false, features = ["svg-images", "canvas"] }
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
