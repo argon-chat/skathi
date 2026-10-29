@@ -1,0 +1,14 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/reload.spec.ts: the devtools are OFF at boot (`\"devtools\": false`, read at the top level) and src/main.ts turns them on with `appDevtools.enable()` once the runtime has run. That is the late order, in which the Network tee goes on over the runtime's realm proxy for WebSocket instead of under it (crates/vn-app/src/devtools/net.rs, \"Across a reload\"). The listener binds at that call, so vn-test finds the handshake then.",
+
+  "name": "devtools-late",
+  "devtools": false,
+
+  "window": {
+    "title": "vue-native — devtools turned on late (fixture)",
+    "width": 420,
+    "height": 220,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
