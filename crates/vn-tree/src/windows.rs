@@ -131,6 +131,12 @@ pub struct WindowState {
     /// runs before any bubble-phase click), claimed by the first click
     /// listener — see `bind_events`.
     pub click_claimed: bool,
+    /// Did a JS `keydown` handler cancel THE keystroke being dispatched? Reset
+    /// in the root's capture phase (the first listener every keystroke
+    /// meets), set by `bind_events`' keydown listener, and read by the root's
+    /// clipboard listener (the last one), because a cancelled Ctrl+C has no
+    /// `copy` event (`crate::clipboard`).
+    pub key_prevented: bool,
 
     // --- chrome (§5.2, §7.6) -----------------------------------------------
     /// Whether the frame this window is currently building painted any

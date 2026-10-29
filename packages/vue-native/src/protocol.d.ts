@@ -121,11 +121,14 @@ declare function __vn_set_listener(id: VnNodeId, code: VnEventCode, on: boolean)
 declare function __vn_set_dispatcher(fn: VnDispatcher): void;
 
 /**
- * `(nodeId, code, a, b, c, d, key) -> proceed`.
+ * `(nodeId, code, a, b, c, d, key, data) -> proceed`.
  *
  * The four numbers and the optional string are ONE payload shape reused for
  * every event; `VnEventPayload` below documents what each slot means per
- * event, mirroring `vn_tree::EventPayload`'s own doc comment.
+ * event, mirroring `vn_tree::EventPayload`'s own doc comment. `data` is an
+ * object the event carries, `undefined` for every event but copy / cut /
+ * paste, where it is the `clipboardData` DataTransfer the host built
+ * (`vn_tree::dispatch_event_with`).
  */
 type VnDispatcher = (
   node: VnNodeId,
@@ -135,6 +138,7 @@ type VnDispatcher = (
   c: number,
   d: number,
   key: string | undefined,
+  data: unknown,
 ) => boolean;
 
 /**
@@ -155,6 +159,7 @@ type VnDispatcher = (
  * | lottie `complete`         | currentTime  | totalTime   | loops       | —          | —               |
  * | transitionend             | elapsedTime  | —           | —           | —          | property name   |
  * | animation{start,end,cancel} | elapsedTime | —          | —           | —          | @keyframes name |
+ * | copy / cut / paste        | —            | —           | —           | —          | —  (`data` is the DataTransfer) |
  *
  * `mods` is a bitfield: 1 ctrl, 2 shift, 4 alt, 8 meta.
  */
@@ -217,7 +222,10 @@ type VnEventCode =
   | 35 // transitionend       (vn-css animator)
   | 36 // animationstart
   | 37 // animationend
-  | 38; // animationcancel
+  | 38 // animationcancel
+  | 39 // paste               (ClipboardEvent, crates/vn-tree/src/clipboard.rs)
+  | 40 // copy
+  | 41; // cut
 
 // ---------------------------------------------------------------------------
 // the DOM surface — crates/vn-tree/src/dom.rs

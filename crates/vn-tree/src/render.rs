@@ -788,9 +788,14 @@ fn mouse_payload(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers
 /// Publish → dispatch → flush; the shape every listener shares. Returns
 /// `false` when a JS handler called `preventDefault()`.
 pub(crate) fn js_dispatch_app(id: u32, event: u32, payload: &EventPayload, window: &mut Window, cx: &mut App) -> bool {
-    let proceed = with_published(window, cx, Phase::Commit, || {
-        crate::dispatch_event(id, event, payload)
-    });
+    js_wave_app(window, cx, || crate::dispatch_event(id, event, payload))
+}
+
+/// [`js_dispatch_app`]'s frame around any dispatch: `wave` runs with the
+/// commit phase published, and whatever it changed is flushed and repainted.
+/// The clipboard events build their DataTransfer inside it (`crate::clipboard`).
+pub(crate) fn js_wave_app(window: &mut Window, cx: &mut App, wave: impl FnOnce() -> bool) -> bool {
+    let proceed = with_published(window, cx, Phase::Commit, wave);
     if crate::flush_changes() {
         // NOT `window.refresh()`. Refreshing a window sets gpui's `refreshing`
         // flag, which makes the next draw ignore every `Entity::cached` span in
@@ -1726,6 +1731,12 @@ fn build_node<V: 'static>(
             // would deliver every key twice.
             let style_hover = wants_style_hover(t, id, node);
             d = bind_events(d, id, mask, click_focus, focusable, !is_input, style_hover, cx);
+            // Copy / cut / paste outside a text field: the root is on every
+            // keystroke's path, and its listener (bound AFTER its own keydown
+            // one, so it runs after every keydown handler) is the last stop.
+            if id == root {
+                d = crate::clipboard::bind_root(d, id);
+            }
 
             // `scroll` reports the position *after* the move. gpui installs its
             // own wheel listener that advances the offset during
@@ -3489,7 +3500,11 @@ where
                 key: Some(&key),
                 ..Default::default()
             };
-            js_dispatch(id, tree::EV_KEYDOWN, &payload, window, cx);
+            if !js_dispatch(id, tree::EV_KEYDOWN, &payload, window, cx) {
+                // A cancelled Ctrl+C has no `copy` event: the root's clipboard
+                // listener, which this keystroke reaches last, reads this.
+                windows::here(window, |w| w.key_prevented = true);
+            }
         }));
     }
     if bit(tree::EV_KEYUP) && keys_here {
@@ -4662,10 +4677,18 @@ fn build_input<V: 'static>(
         }) as vn_elements::OnKeyUp
     });
 
+    // Copy / cut / paste in the field: the ClipboardEvent first, the widget's
+    // own clipboard work only if nothing cancelled it (`crate::clipboard`).
+    let on_clipboard: vn_elements::OnClipboard =
+        std::rc::Rc::new(move |command, window: &mut Window, cx: &mut App| {
+            crate::clipboard::fire(id, crate::clipboard::Verb::of_command(command), window, cx)
+        });
+
     let handlers = TextInputHandlers {
         on_change: Some(on_change),
         on_key_down,
         on_key_up,
+        on_clipboard: Some(on_clipboard),
     };
 
     let focus_target = state.read(cx).focus_handle();

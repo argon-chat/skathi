@@ -17,6 +17,7 @@
 
 mod aria;
 mod cache;
+mod clipboard;
 mod dom;
 mod img;
 pub mod log;
@@ -40,7 +41,8 @@ pub use render::{
 };
 pub use windows::WinKey;
 pub use tree::{
-    with_tree, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH, EV_CLICK, EV_COMPLETE, EV_DURATIONCHANGE,
+    with_tree, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH, EV_CLICK, EV_COMPLETE, EV_COPY, EV_CUT,
+    EV_DURATIONCHANGE, EV_PASTE,
     EV_EMPTIED, EV_ENDED, EV_ENTERFRAME, EV_ERROR, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP,
     EV_LOADEDDATA, EV_LOADEDMETADATA, EV_LOADSTART, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEENTER,
     EV_MOUSELEAVE, EV_MOUSEMOVE, EV_MOUSEUP, EV_PAUSE, EV_PLAY, EV_PLAYING, EV_RATECHANGE,
@@ -1085,17 +1087,24 @@ mod tests {
 /// called with `Phase::Commit` published. Returns `false` when a JS handler
 /// called `preventDefault()`.
 pub fn dispatch_event(node: u32, event: u32, payload: &EventPayload) -> bool {
+    dispatch_event_with(node, event, payload, None)
+}
+
+/// [`dispatch_event`] with an object for the event to carry, passed as the
+/// dispatcher's eighth argument: a ClipboardEvent's `clipboardData`
+/// (`crate::clipboard`). The caller keeps `data` alive across the call.
+pub fn dispatch_event_with(node: u32, event: u32, payload: &EventPayload, data: Option<Value>) -> bool {
     let f = tree::dispatcher();
     if f == 0 {
         return true;
     }
     let span = perf::Span::start();
-    let proceed = dispatch_event_inner(f, node, event, payload);
+    let proceed = dispatch_event_inner(f, node, event, payload, data);
     perf::note_js(span.ms());
     proceed
 }
 
-fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload) -> bool {
+fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, data: Option<Value>) -> bool {
     JsRuntime::with(|rt| {
         let key = payload.key.map(|k| rt.ctx().string(k));
         let args = [
@@ -1106,6 +1115,7 @@ fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload) -
             Value::double(payload.c),
             Value::double(payload.d),
             key.unwrap_or_else(Value::undefined),
+            data.unwrap_or_else(Value::undefined),
         ];
         let proceed = match rt.ctx().call(Value(f), Value::undefined(), &args) {
             Ok(v) => v.as_bool().unwrap_or(true),

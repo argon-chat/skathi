@@ -23,7 +23,8 @@
 //! * [`TextInputOptions`] — everything the CSS engine recomputes per frame
 //!   (placeholder, colours, font size, disabled, tab index).
 //! * [`TextInputHandlers`] — the per-frame event sinks (`input`, `keydown`,
-//!   `keyup`); `keydown` runs *before* the widget acts and can cancel it.
+//!   `keyup`, `copy`/`cut`/`paste`); `keydown` and the clipboard hook run
+//!   *before* the widget acts and can cancel it.
 //! * [`text_input`] — builds the element for one frame out of the three.
 
 mod boundaries;
@@ -119,6 +120,27 @@ pub type OnKeyDown = Rc<dyn Fn(&KeyDownEvent, &mut Window, &mut App) -> bool>;
 /// action to cancel, so there is nothing to report back.
 pub type OnKeyUp = Rc<dyn Fn(&KeyUpEvent, &mut Window, &mut App)>;
 
+/// The three clipboard commands, whichever key gave them: `ctrl-c` /
+/// `ctrl-insert`, `ctrl-x` / `shift-delete`, `ctrl-v` / `shift-insert`
+/// (`cmd-…` on macOS).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipboardCommand {
+    Copy,
+    Cut,
+    Paste,
+}
+
+/// Fired when the user copies, cuts or pastes in this field, BEFORE the widget
+/// touches the clipboard or the content: the native side of the DOM's `copy` /
+/// `cut` / `paste` ClipboardEvents.
+///
+/// Returning `false` means the event was cancelled: the widget does nothing
+/// at all (no copy, no deletion, no insertion). Writing a cancelled copy's
+/// own data (`clipboardData.setData` + `preventDefault()`) to the system
+/// clipboard is the hook's job, not the widget's. It is called outside any
+/// update of the widget's state, so it may call back into it.
+pub type OnClipboard = Rc<dyn Fn(ClipboardCommand, &mut Window, &mut App) -> bool>;
+
 /// The per-frame callback set the framework hands the widget. All optional:
 /// the framework only fills in what the JS side actually listens for.
 #[derive(Clone, Default)]
@@ -128,6 +150,8 @@ pub struct TextInputHandlers {
     /// Pre-processing hook for keystrokes; see [`OnKeyDown`].
     pub on_key_down: Option<OnKeyDown>,
     pub on_key_up: Option<OnKeyUp>,
+    /// Copy / cut / paste, before the widget acts; see [`OnClipboard`].
+    pub on_clipboard: Option<OnClipboard>,
 }
 
 impl std::fmt::Debug for TextInputHandlers {
@@ -136,6 +160,7 @@ impl std::fmt::Debug for TextInputHandlers {
             .field("on_change", &self.on_change.is_some())
             .field("on_key_down", &self.on_key_down.is_some())
             .field("on_key_up", &self.on_key_up.is_some())
+            .field("on_clipboard", &self.on_clipboard.is_some())
             .finish()
     }
 }
@@ -251,6 +276,7 @@ pub fn text_input(
     let multiline = options.multiline;
     let input_config = options.input_config.clone();
     let on_key_up = handlers.on_key_up.clone();
+    let on_clipboard = handlers.on_clipboard.clone();
     // The focus handle carries the tab order (gpui reads `tab_index`/`tab_stop`
     // straight off the handle when the element is painted), so it has to be
     // updated before `track_focus` clones it below.
@@ -307,9 +333,12 @@ pub fn text_input(
     element = on_state_action(element, state, TextInputState::delete_word_right);
     element = on_state_action(element, state, TextInputState::delete_to_start);
     element = on_state_action(element, state, TextInputState::delete_to_end);
-    element = on_state_action(element, state, TextInputState::copy);
-    element = on_state_action(element, state, TextInputState::cut);
-    element = on_state_action(element, state, TextInputState::paste);
+    // The clipboard commands ask `on_clipboard` first: the DOM fires `copy` /
+    // `cut` / `paste` before the default action, and a cancelled one has none.
+    let clip = &on_clipboard;
+    element = on_clipboard_action(element, state, clip, ClipboardCommand::Copy, TextInputState::copy);
+    element = on_clipboard_action(element, state, clip, ClipboardCommand::Cut, TextInputState::cut);
+    element = on_clipboard_action(element, state, clip, ClipboardCommand::Paste, TextInputState::paste);
     element = on_state_action(element, state, TextInputState::undo);
     element = on_state_action(element, state, TextInputState::redo);
     element = on_state_action(element, state, TextInputState::clear_selection);
@@ -372,6 +401,32 @@ where
     })
 }
 
+/// [`on_state_action`] for copy / cut / paste: the hook runs first, outside
+/// the state update (it dispatches into JS, which may write the field back),
+/// and a `false` from it skips the widget's own handling.
+fn on_clipboard_action<E, A>(
+    element: E,
+    state: &Entity<TextInputState>,
+    hook: &Option<OnClipboard>,
+    command: ClipboardCommand,
+    handler: fn(&mut TextInputState, &A, &mut Window, &mut Context<TextInputState>),
+) -> E
+where
+    E: InteractiveElement,
+    A: gpui::Action,
+{
+    let state = state.clone();
+    let hook = hook.clone();
+    element.on_action(move |action: &A, window, cx| {
+        if let Some(hook) = &hook {
+            if !hook(command, window, cx) {
+                return;
+            }
+        }
+        state.update(cx, |this, cx| handler(this, action, window, cx));
+    })
+}
+
 fn bindings() -> Vec<KeyBinding> {
     let context = Some(KEY_CONTEXT);
     // The platform's "do the thing" modifier, and the one that means "by word".
@@ -415,6 +470,16 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new(&format!("shift-{primary}-z"), Redo, context),
     ]);
 
+    // The IBM CUA clipboard keys every Windows and Linux edit control still
+    // honours, and so does a browser's text field there.
+    if !cfg!(target_os = "macos") {
+        bindings.extend([
+            KeyBinding::new("ctrl-insert", Copy, context),
+            KeyBinding::new("shift-delete", Cut, context),
+            KeyBinding::new("shift-insert", Paste, context),
+        ]);
+    }
+
     if cfg!(target_os = "macos") {
         bindings.extend([
             KeyBinding::new("cmd-left", Home, context),
@@ -448,4 +513,34 @@ fn bindings() -> Vec<KeyBinding> {
     ));
 
     bindings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::Action;
+
+    /// What one keystroke is bound to in the input's context, by action name.
+    fn bound(keys: &str) -> Option<&'static str> {
+        let want = gpui::Keystroke::parse(keys).unwrap();
+        bindings()
+            .iter()
+            .find(|b| b.keystrokes().len() == 1 && *b.keystrokes()[0].inner() == want)
+            .map(|b| b.action().name())
+    }
+
+    /// Shift+Insert, Ctrl+Insert and Shift+Delete are the same three commands
+    /// as Ctrl+V/C/X, so they raise the same ClipboardEvents.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn the_cua_clipboard_keys_are_the_same_commands() {
+        assert_eq!(bound("ctrl-c"), Some(Copy.name()));
+        assert_eq!(bound("ctrl-x"), Some(Cut.name()));
+        assert_eq!(bound("ctrl-v"), Some(Paste.name()));
+        assert_eq!(bound("ctrl-insert"), Some(Copy.name()));
+        assert_eq!(bound("shift-delete"), Some(Cut.name()));
+        assert_eq!(bound("shift-insert"), Some(Paste.name()));
+        // A plain Delete still deletes.
+        assert_eq!(bound("delete"), Some(Delete.name()));
+    }
 }

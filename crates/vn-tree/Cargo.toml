@@ -18,6 +18,10 @@ vn-runtime = { path = "../vn-runtime" }
 # relative URL names — and, in a packaged exe, the key the payload store is
 # searched with. No dependencies of its own.
 vn-payload = { path = "../vn-payload" }
+# A pasted bitmap is offered as image.png, as Chromium offers it (Windows
+# hands a screenshot over as a DIB). The version and the decoders are the ones
+# gpui already builds (vendor/zed/Cargo.toml), so nothing new is compiled.
+image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp", "tiff", "ico"] }
 
 [dev-dependencies]
 # The parser gpui feeds our serialized `<svg>` documents to. Pinned to the same

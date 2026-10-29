@@ -410,6 +410,12 @@ const EV_CODES = {
   animationstart: 36,
   animationend: 37,
   animationcancel: 38,
+  // The ClipboardEvents (crates/vn-tree/src/clipboard.rs): copy/cut/paste in a
+  // text field, or the same keys anywhere else, at the focused node or the
+  // root. No numbers: `clipboardData` is the dispatcher's eighth argument.
+  paste: 39,
+  copy: 40,
+  cut: 41,
 } as const;
 
 /** Every event name the HOST delivers under a code of its own. */
@@ -2957,6 +2963,35 @@ const SubmitEventClass: (new (type: string, init?: SubmitEventInit) => VnEvent) 
   return SubmitEvent as unknown as new (type: string, init?: SubmitEventInit) => VnEvent;
 })();
 
+type ClipboardEventInit = { bubbles?: boolean; cancelable?: boolean; composed?: boolean; clipboardData?: unknown };
+/**
+ * The engine's `ClipboardEvent`, or ours, installed on the global when it
+ * lacks one. `clipboardData` is a prototype getter, as WebIDL puts a readonly
+ * attribute, so `"clipboardData" in ClipboardEvent.prototype` holds.
+ */
+const ClipboardEventClass: (new (type: string, init?: ClipboardEventInit) => VnEvent) | null = (() => {
+  const g = globalThis as { ClipboardEvent?: unknown };
+  if (typeof g.ClipboardEvent === "function")
+    return g.ClipboardEvent as new (type: string, init?: ClipboardEventInit) => VnEvent;
+  if (typeof Event !== "function") return null;
+  const data = new WeakMap<object, unknown>();
+  class ClipboardEvent extends Event {
+    constructor(type: string, init: ClipboardEventInit = {}) {
+      super(type, init);
+      data.set(this, init.clipboardData ?? null);
+    }
+    get clipboardData(): unknown {
+      return data.has(this) ? data.get(this) : null;
+    }
+  }
+  try {
+    Object.defineProperty(globalThis, "ClipboardEvent", { value: ClipboardEvent, configurable: true, writable: true });
+  } catch {
+    /* a frozen global: the class still serves this module */
+  }
+  return ClipboardEvent as unknown as new (type: string, init?: ClipboardEventInit) => VnEvent;
+})();
+
 function adviseNoNavigation(via: string): void {
   warnCompat(
     "form:navigate",
@@ -3542,10 +3577,15 @@ function synthesize(
   c: number,
   d: number,
   key: string | undefined,
+  data?: unknown,
 ): VnEvent {
   const common = { bubbles: !NO_BUBBLE.has(name), cancelable: !NO_BUBBLE.has(name) };
   const M = mods(d);
   try {
+    // copy / cut / paste: bubbling, cancelable and composed, carrying the
+    // host's DataTransfer (read-only for paste, read/write for copy and cut).
+    if ((name === "copy" || name === "cut" || name === "paste") && ClipboardEventClass)
+      return new ClipboardEventClass(name, { ...common, composed: true, clipboardData: data ?? null });
     if (POINTER_EVENTS.has(name)) {
       const init = {
         ...common,
@@ -3857,7 +3897,7 @@ function activatableOnPath(target: MirrorNode): boolean {
   return false;
 }
 
-__vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
+__vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
   const name = CODE_TO_NAME[evCode];
   const target = nodesById.get(nodeId);
   if (!name || !target) return true;
@@ -3925,7 +3965,7 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // learn that.
   const link = name === "click" && activatableOnPath(target);
   if (link || hasListener(target, name)) {
-    const ev = synthesize(name, a, b, c, d, key);
+    const ev = synthesize(name, a, b, c, d, key, data);
     if (!proceed && ev.preventDefault) ev.preventDefault();
     proceed = propagate(target, name, ev) && proceed;
     if (link && proceed) activate(target, true);
