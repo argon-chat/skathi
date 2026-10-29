@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/layout.spec.ts: the layout and paint shapes the m26 client sweep found broken in the Argon client (research/reports/m26/fixes-layout-1.md). See ../README.md.",
+
+  "name": "vn-test-layout",
+
+  "window": {
+    "title": "vue-native — layout (fixture)",
+    "width": 720,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
