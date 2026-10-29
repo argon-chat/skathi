@@ -69,3 +69,24 @@ describe("#1 group-hover that changes `display`", () => {
     T,
   );
 });
+
+describe("#9 inline content in a block", () => {
+  test("a mention and the text after it sit on one line inside a bubble that fits them", async () => {
+    const at = await app.locator("#m-at").boundingBox();
+    const name = await app.locator("#m-name").boundingBox();
+    const bubble = await app.locator("#m-bubble").boundingBox();
+    const text = await app.locator("#m-text").boundingBox();
+    const trigger = await app.locator("#m-trigger").boundingBox();
+
+    // `@` and the name side by side, not stacked.
+    bunExpect(Math.abs(at.y - name.y)).toBeLessThanOrEqual(1);
+    bunExpect(name.x).toBeGreaterThanOrEqual(at.x + at.w - 1);
+    // One line of 14 px text at line-height 1.45.
+    bunExpect(text.h).toBeLessThanOrEqual(22);
+    // The bubble is its padding (24 px) plus the line, not the padding alone.
+    bunExpect(bubble.w).toBeGreaterThan(24 + 60);
+    bunExpect(text.w).toBeGreaterThan(60);
+    // …and the context-menu trigger has an area to hit.
+    bunExpect(trigger.w).toBeGreaterThan(60);
+  });
+});

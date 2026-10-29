@@ -41,3 +41,83 @@
 .group-msg:hover {
   background: #2a2a30;
 }
+
+/* #9 */
+.chat {
+  position: absolute;
+  left: 330px;
+  top: 10px;
+  width: 380px;
+}
+.m-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.m-avatar {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: #555;
+}
+.m-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 85%;
+}
+.m-meta {
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+.m-rowbody {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.m-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.m-media {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.m-bubble {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  max-width: 520px;
+  background: #3a3a44;
+  border-radius: 12px;
+}
+.m-text {
+  position: relative;
+}
+button {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+}
+.mention {
+  display: inline;
+  font-weight: 500;
+  color: #8ab4ff;
+}
+.mention-icon {
+  opacity: 0.8;
+}
+.mention-name {
+  font-weight: 600;
+}

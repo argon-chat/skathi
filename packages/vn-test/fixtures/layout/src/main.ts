@@ -4,9 +4,10 @@
 //
 // One section per finding, each laid out where the spec can hit it. The class
 // names spell out the Tailwind utilities the client wrote, so a rule maps back
-// to `apps/client` (MessageItem.vue). Render functions rather than an SFC: this
-// package is `"type": "module"`, and the dev builder's CommonJS interop hands
-// such an importer a `.vue` module's NAMESPACE as its default export.
+// to `apps/client` (MessageItem.vue, MentionSegment.vue). Render functions
+// rather than an SFC: this package is `"type": "module"`, and the dev
+// builder's CommonJS interop hands such an importer a `.vue` module's
+// NAMESPACE as its default export.
 import { createApp, h } from "vue-native";
 import "./layout.css";
 
@@ -28,6 +29,40 @@ const messages = () =>
     ),
   );
 
+/** #9: MessageItem's bubble around a mention, nested as the client nests it. */
+const bubble = () =>
+  h("div", { class: "chat" }, [
+    h("div", { class: "m-row" }, [
+      h("div", { class: "m-avatar" }),
+      h("div", { id: "m-col", class: "m-col" }, [
+        h("div", { class: "m-meta" }, "name 12:00"),
+        h("span", { id: "m-trigger" }, [
+          h("div", { class: "m-rowbody" }, [
+            h("div", { id: "m-wrap", class: "m-wrap" }, [
+              h(
+                "div",
+                { id: "m-media", class: "m-media", style: "max-width: calc(var(--chat-width, 600px) * 0.8)" },
+                [
+                  h("div", { id: "m-bubble", class: "m-bubble" }, [
+                    h("div", { id: "m-text", class: "m-text" }, [
+                      h("button", { id: "m-mention", type: "button" }, [
+                        h("span", { class: "mention" }, [
+                          h("span", { id: "m-at", class: "mention-icon" }, "@"),
+                          h("span", { id: "m-name", class: "mention-name" }, "owner"),
+                        ]),
+                      ]),
+                      " hello there",
+                    ]),
+                  ]),
+                ],
+              ),
+            ]),
+          ]),
+        ]),
+      ]),
+    ]),
+  ]);
+
 createApp({
-  render: () => h("div", { id: "root" }, [messages()]),
+  render: () => h("div", { id: "root" }, [messages(), bubble()]),
 }).mount();
