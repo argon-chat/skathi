@@ -79,12 +79,12 @@ declare global {
    * launch is one `LaunchParams`, buffered until `setConsumer`; with
    * `"singleInstance": true`, every later launch of the app is forwarded here
    * and is another. `targetURL` is the raw deep link (or null) — UNTRUSTED
-   * input — and `files` is empty until FileSystemHandle exists (read
-   * `appLaunch.paths` meanwhile; D-F8).
+   * input. `files` holds one granted handle per launch path that exists: a
+   * folder is a directory handle. No `file_handlers` list filters it (D-F8).
    */
   interface VnLaunchParams {
     readonly targetURL: string | null;
-    readonly files: readonly unknown[];
+    readonly files: readonly (VnFileSystemFileHandle | VnFileSystemDirectoryHandle)[];
   }
   var launchQueue: {
     setConsumer(consumer: (params: VnLaunchParams) => unknown): void;
@@ -149,6 +149,18 @@ declare global {
       writeText(text: string): Promise<void>;
       read(): Promise<unknown[]>;
       write(items: unknown[]): Promise<void>;
+    };
+
+    /**
+     * HTML's user activation (runtime.ts, where the engine has none). A host
+     * press (a keydown that is not Escape or a lone modifier, a mousedown, or
+     * the click a press produced) makes it active for five seconds, which is
+     * Chromium's lifespan. `el.click()` and `dispatchEvent` never activate.
+     * A file picker needs it (docs/DESKTOP.md §2.2).
+     */
+    readonly userActivation: {
+      readonly isActive: boolean;
+      readonly hasBeenActive: boolean;
     };
   }
 
@@ -513,6 +525,23 @@ declare global {
   }
   var DataTransfer: { new (): VnDataTransfer; prototype: VnDataTransfer };
 
+  /**
+   * `<input type=file>` as runtime.ts gives it (docs/DESKTOP.md §2.7): the
+   * members a browser's HTMLInputElement has for the file state. `files` takes
+   * a FileList (`input.files = dt.files`). `value` is `C:\fakepath\<name>`,
+   * and setting it to anything but "" throws InvalidStateError. A template ref
+   * to a file input is a `VnElement`; cast it to this once.
+   */
+  interface VnFileInputElement extends VnElement {
+    files: VnFileList;
+    value: string;
+    accept: string;
+    multiple: boolean;
+    webkitdirectory: boolean;
+    /** Opens the picker. Needs a user activation (NotAllowedError otherwise). */
+    showPicker(): void;
+  }
+
   interface VnCloseEvent extends VnEvent {
     readonly code: number;
     readonly reason: string;
@@ -544,6 +573,142 @@ declare global {
     readonly OPEN: 1;
     readonly CLOSING: 2;
     readonly CLOSED: 3;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// File System Access, FileReader, the pickers — packages/vue-native/src/desktop.ts
+// over crates/vn-desktop (docs/DESKTOP.md §2)
+// ---------------------------------------------------------------------------
+//
+// A handle holds a host id, never a path: `JSON.stringify(handle)` is "{}".
+// Handles are [Serializable] (structuredClone, IndexedDB). A handle restored
+// in a later session is "prompt" until requestPermission() runs on a user
+// activation (D-F22). Every picker needs a user activation, else SecurityError.
+
+declare global {
+  type VnPermissionState = "granted" | "prompt";
+  interface VnFileSystemHandlePermissionDescriptor {
+    mode?: "read" | "readwrite";
+  }
+  interface VnFileSystemHandle {
+    readonly kind: "file" | "directory";
+    readonly name: string;
+    isSameEntry(other: VnFileSystemHandle): Promise<boolean>;
+    queryPermission(descriptor?: VnFileSystemHandlePermissionDescriptor): Promise<VnPermissionState>;
+    requestPermission(descriptor?: VnFileSystemHandlePermissionDescriptor): Promise<VnPermissionState>;
+  }
+  interface VnFileSystemFileHandle extends VnFileSystemHandle {
+    readonly kind: "file";
+    /** A path-backed File, read lazily under the snapshot rule (§1.2). */
+    getFile(): Promise<VnFile>;
+    /** Writes go to a swap file beside the target; close() replaces it atomically. */
+    createWritable(options?: { keepExistingData?: boolean }): Promise<VnFileSystemWritableFileStream>;
+  }
+  interface VnFileSystemDirectoryHandle
+    extends VnFileSystemHandle,
+      AsyncIterable<[string, VnFileSystemFileHandle | VnFileSystemDirectoryHandle]> {
+    readonly kind: "directory";
+    getFileHandle(name: string, options?: { create?: boolean }): Promise<VnFileSystemFileHandle>;
+    getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<VnFileSystemDirectoryHandle>;
+    removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>;
+    resolve(possibleDescendant: VnFileSystemHandle): Promise<string[] | null>;
+    entries(): AsyncIterableIterator<[string, VnFileSystemFileHandle | VnFileSystemDirectoryHandle]>;
+    keys(): AsyncIterableIterator<string>;
+    values(): AsyncIterableIterator<VnFileSystemFileHandle | VnFileSystemDirectoryHandle>;
+  }
+  type VnFileSystemWriteData = VnBlob | ArrayBuffer | ArrayBufferView | string;
+  type VnFileSystemWriteChunk =
+    | VnFileSystemWriteData
+    | { type: "write"; position?: number | null; data: VnFileSystemWriteData }
+    | { type: "seek"; position: number }
+    | { type: "truncate"; size: number };
+  /** A WritableStream (redjs's streams.js) with the three FSA verbs. */
+  interface VnFileSystemWritableFileStream {
+    readonly locked: boolean;
+    write(data: VnFileSystemWriteChunk): Promise<void>;
+    seek(position: number): Promise<void>;
+    truncate(size: number): Promise<void>;
+    close(): Promise<void>;
+    abort(reason?: unknown): Promise<void>;
+  }
+  // The construct signatures are lib.dom's: calling one throws "Illegal
+  // constructor", but without it `x instanceof FileSystemFileHandle` does not
+  // type-check.
+  var FileSystemHandle: { new (): VnFileSystemHandle; prototype: VnFileSystemHandle };
+  var FileSystemFileHandle: { new (): VnFileSystemFileHandle; prototype: VnFileSystemFileHandle };
+  var FileSystemDirectoryHandle: { new (): VnFileSystemDirectoryHandle; prototype: VnFileSystemDirectoryHandle };
+  var FileSystemWritableFileStream: { new (): VnFileSystemWritableFileStream; prototype: VnFileSystemWritableFileStream };
+
+  type VnWellKnownDirectory = "desktop" | "documents" | "downloads" | "music" | "pictures" | "videos";
+  interface VnFilePickerAcceptType {
+    description?: string;
+    /** MIME type → extensions, each starting with ".". */
+    accept: Record<string, string | string[]>;
+  }
+  interface VnFilePickerOptions {
+    /** Up to 32 of [A-Za-z0-9_-]: the dialog remembers its folder per id, per app. */
+    id?: string;
+    startIn?: VnWellKnownDirectory | VnFileSystemHandle;
+    types?: VnFilePickerAcceptType[];
+    excludeAcceptAllOption?: boolean;
+  }
+  interface VnOpenFilePickerOptions extends VnFilePickerOptions {
+    multiple?: boolean;
+  }
+  interface VnSaveFilePickerOptions extends VnFilePickerOptions {
+    suggestedName?: string;
+  }
+  interface VnDirectoryPickerOptions {
+    id?: string;
+    startIn?: VnWellKnownDirectory | VnFileSystemHandle;
+    mode?: "read" | "readwrite";
+  }
+  /** AbortError when dismissed; NotAllowedError "File picker already active." while
+   *  the window has a dialog open; SecurityError without a user activation. */
+  function showOpenFilePicker(options?: VnOpenFilePickerOptions): Promise<VnFileSystemFileHandle[]>;
+  /** The picked file is created empty, or truncated (FSA step 7.7). */
+  function showSaveFilePicker(options?: VnSaveFilePickerOptions): Promise<VnFileSystemFileHandle>;
+  function showDirectoryPicker(options?: VnDirectoryPickerOptions): Promise<VnFileSystemDirectoryHandle>;
+
+  interface VnProgressEvent extends VnEvent {
+    readonly lengthComputable: boolean;
+    readonly loaded: number;
+    readonly total: number;
+  }
+  /** redjs ships none; desktop.ts installs one where the engine has none. */
+  var ProgressEvent: {
+    new (type: string, init?: VnEventInit & { lengthComputable?: boolean; loaded?: number; total?: number }): VnProgressEvent;
+    prototype: VnProgressEvent;
+  };
+
+  /** The File API's FileReader (desktop.ts), over Blob.arrayBuffer(). */
+  interface VnFileReader extends VnEventTarget {
+    readonly readyState: 0 | 1 | 2;
+    readonly result: string | ArrayBuffer | null;
+    readonly error: VnDOMException | null;
+    readonly EMPTY: 0;
+    readonly LOADING: 1;
+    readonly DONE: 2;
+    readAsArrayBuffer(blob: VnBlob): void;
+    readAsBinaryString(blob: VnBlob): void;
+    /** `encoding`, else the Blob type's charset, else UTF-8; a BOM wins over all three. */
+    readAsText(blob: VnBlob, encoding?: string): void;
+    readAsDataURL(blob: VnBlob): void;
+    abort(): void;
+    onloadstart: ((ev: VnProgressEvent) => void) | null;
+    onprogress: ((ev: VnProgressEvent) => void) | null;
+    onload: ((ev: VnProgressEvent) => void) | null;
+    onerror: ((ev: VnProgressEvent) => void) | null;
+    onabort: ((ev: VnProgressEvent) => void) | null;
+    onloadend: ((ev: VnProgressEvent) => void) | null;
+  }
+  var FileReader: {
+    new (): VnFileReader;
+    prototype: VnFileReader;
+    readonly EMPTY: 0;
+    readonly LOADING: 1;
+    readonly DONE: 2;
   };
 }
 
