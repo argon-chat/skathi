@@ -498,6 +498,37 @@ export const COMMANDS: CommandSpec[] = [
       }),
   },
   {
+    cmd: "dialog",
+    description:
+      "The file dialogs waiting for an answer — <input type=file>, the File System Access pickers, " +
+      "<a download>'s Save As — when the app runs with VN_DIALOGS=scripted (nothing reaches the " +
+      "OS then). `list` names each one ({id, window, what, kind, multiple, filters, startIn, " +
+      "suggestedName}); `answer` finishes one with absolute paths, checked as the OS dialog " +
+      "would check them; `cancel` dismisses it as Esc would. Without VN_DIALOGS=scripted every " +
+      "dialog is real and this command refuses.",
+    usage: [
+      "  dialog   [list]                     dialogs waiting for an answer (VN_DIALOGS=scripted)",
+      "  dialog   answer <id> <path>...      answer one with absolute paths",
+      "  dialog   cancel <id>                dismiss one, as Esc would",
+    ],
+    args: {
+      op: str('"list" (default), "answer" or "cancel"'),
+      id: int("the dialog to answer or cancel (from `list`)"),
+      paths: str("for op=answer: absolute paths, separated by `|` (the wire also takes an array)"),
+    },
+    cli: (rest, flags) => {
+      const op = rest[0] || "list";
+      // `dialog answer 3 C:\a.txt` or `dialog answer --id 3 C:\a.txt`
+      const flagged = num(flags.id);
+      const id = flagged ?? num(rest[1]);
+      if (op !== "list" && id === undefined) die(`dialog ${op} needs the dialog's id`);
+      const listed = rest.slice(flagged === undefined ? 2 : 1);
+      const paths = typeof flags.paths === "string" ? flags.paths : listed.length ? listed.join("|") : undefined;
+      if (op === "answer" && paths === undefined) die("dialog answer needs at least one path");
+      return compact({ op, id, paths });
+    },
+  },
+  {
     cmd: "raise",
     description:
       "Bring the addressed window to the front. The ONLY command here that deliberately takes " +

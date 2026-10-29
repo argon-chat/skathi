@@ -18,7 +18,7 @@
 // what Playwright does that we do not.
 
 export { launch, MIN_BUN, packagedSlot, VnApp, VnCommandError } from "./app";
-export type { LaunchOptions, LogEntry, Bounds, NodeInfo } from "./app";
+export type { LaunchOptions, LogEntry, Bounds, NodeInfo, PendingDialog } from "./app";
 export { Locator, LocatorError, POLL_MS } from "./locator";
 export type { LocatorOptions, Resolved } from "./locator";
 export { expect, vnExpect, LocatorAssertions } from "./expect";

@@ -81,6 +81,20 @@ export type NodeInfo = {
   groupAnchor?: boolean;
   gone?: boolean;
 };
+/** One file dialog waiting for a scripted answer (`dialog list`, docs/DEVTOOLS.md). */
+export type PendingDialog = {
+  id: number;
+  /** The owner window's key. */
+  window: number;
+  what: "picker" | "download";
+  kind: "open" | "folder" | "save";
+  multiple: boolean;
+  filters: { name: string; spec: string }[];
+  allowAll: boolean;
+  startIn: string | null;
+  suggestedName: string | null;
+  [more: string]: unknown;
+};
 
 const live = new Set<VnApp>();
 let hooked = false;
@@ -261,6 +275,41 @@ export class VnApp {
   /** A real keystroke to whatever currently has focus. `"Enter"`, `"Shift+Tab"`, `"ArrowDown"`. */
   press(key: string): Promise<any> {
     return this.send("key", { key });
+  }
+
+  // -- file dialogs (VN_DIALOGS=scripted, which launch() sets) ---------------
+
+  /** The file dialogs waiting for an answer, oldest first. */
+  dialogs(): Promise<PendingDialog[]> {
+    return this.send("dialog", { op: "list" });
+  }
+
+  /**
+   * Waits until a file dialog is pending and returns the oldest one: the
+   * dialog thread parks it a moment after the click that opened it.
+   */
+  async waitForDialog(timeoutMs = 5000): Promise<PendingDialog> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const [first] = await this.dialogs();
+      if (first) return first;
+      if (Date.now() > deadline) throw new Error(`no file dialog opened within ${timeoutMs} ms`);
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  /**
+   * Finishes dialog `id` with absolute paths, as the user picking them would.
+   * Checked as the OS dialog would check them (existing files for an Open, one
+   * path unless `multiple`); a rejected answer throws and leaves it waiting.
+   */
+  answerDialog(id: number, paths: string | string[]): Promise<{ id: number; answered: number }> {
+    return this.send("dialog", { op: "answer", id, paths: Array.isArray(paths) ? paths : [paths] });
+  }
+
+  /** Dismisses dialog `id`, as Esc would. */
+  cancelDialog(id: number): Promise<{ id: number; cancelled: true }> {
+    return this.send("dialog", { op: "cancel", id });
   }
 
   // -- diagnostics ----------------------------------------------------------
@@ -490,6 +539,11 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
   // never takes the foreground from the person at the machine.
   if (env.VN_SINGLE_INSTANCE === undefined) env.VN_SINGLE_INSTANCE = "0";
   if (env.VN_LAUNCH_RAISE === undefined) env.VN_LAUNCH_RAISE = "off";
+  // A test never opens a real file dialog: every <input type=file>, picker
+  // and Save As waits for `app.answerDialog()` / `app.cancelDialog()` instead
+  // (docs/DEVTOOLS.md, `dialog`). A real dialog would block the run on a
+  // window nobody is there to answer, and steal the foreground from whoever is.
+  if (env.VN_DIALOGS === undefined) env.VN_DIALOGS = "scripted";
   Object.assign(env, options.env ?? {});
 
   log(`[vn-test] ${label}: launching ${exe} on ${slotDir || "its own %TEMP% slot"}`);

@@ -128,6 +128,14 @@ describe("CLI parity", () => {
         { key: "theme", value: "dark" },
         { cmd: "storage", area: "local", op: "set", key: "theme", value: "dark" },
       ],
+      [["dialog"], {}, { cmd: "dialog", op: "list" }],
+      [
+        ["dialog", "answer", "3", "C:\\a.txt", "C:\\b.txt"],
+        {},
+        { cmd: "dialog", op: "answer", id: 3, paths: "C:\\a.txt|C:\\b.txt" },
+      ],
+      [["dialog", "cancel"], { id: "4" }, { cmd: "dialog", op: "cancel", id: 4 }],
+      [["dialog", "answer", "C:\\a.txt"], { id: "5" }, { cmd: "dialog", op: "answer", id: 5, paths: "C:\\a.txt" }],
     ];
     for (const [argv, flags, wire] of cases) {
       expect(buildRequest(argv, flags)).toEqual(wire);
@@ -143,6 +151,8 @@ describe("CLI parity", () => {
     expect(() => buildRequest(["nosuchcommand"], {})).toThrow(UsageError);
     expect(() => buildRequest(["query"], {})).toThrow(UsageError);
     expect(() => buildRequest(["mouse"], {})).toThrow(/--x and --y/);
+    expect(() => buildRequest(["dialog", "cancel"], {})).toThrow(UsageError);
+    expect(() => buildRequest(["dialog", "answer", "3"], {})).toThrow(/at least one path/);
   });
 
   test("`highlight --clear` is the one command whose flag replaces its target", () => {

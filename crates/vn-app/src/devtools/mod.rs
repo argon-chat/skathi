@@ -1173,6 +1173,7 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             arg("value").as_deref(),
         ),
         "screenshot" => cmd_screenshot(arg("path").as_deref(), arg("backend").as_deref()),
+        "dialog" => cmd_dialog(arg("op").as_deref(), num("id"), req.get("paths")),
         "type" | "key" => return start_input_command(cmd, req, reply),
         "" => err("no `cmd` in the request"),
         other => err(format!("unknown command `{other}` — see docs/DEVTOOLS.md")),
@@ -2655,6 +2656,54 @@ fn cmd_storage(
              (docs/STORAGE.md)"
         )),
         Some(v) => ok(v.clone()),
+    }
+}
+
+/// `dialog`: the file dialogs waiting for a scripted answer — `<input
+/// type=file>`, the File System Access pickers, `<a download>`'s Save As
+/// (crates/vn-desktop dialog/scripted.rs). Only under `VN_DIALOGS=scripted`:
+/// a real dialog is the user's, and the devtools never answer one.
+///
+/// `list` (the default) names each one: its `id`, `window`, `what` (`picker`
+/// or `download`), its kind and filters, `suggestedName`. `answer` finishes
+/// one with `paths` (a JSON array, or one string with `|` between paths; `|`
+/// cannot appear in a Windows path), checked the way the OS dialog would
+/// check them. `cancel` dismisses it as Esc would.
+fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>) -> String {
+    use vn_desktop::dialog::{scripted, scripted_mode};
+    if !scripted_mode() {
+        return err(
+            "dialog needs the app started with VN_DIALOGS=scripted — without it every dialog is a \
+             real one, which is the user's to answer (docs/DESKTOP.md)",
+        );
+    }
+    // vn-desktop answers serde_json values; the wire embeds their text.
+    fn embed(v: impl std::fmt::Display) -> Json {
+        Json::from(Raw(v.to_string()))
+    }
+    let id: Option<u64> = id.filter(|n| n.is_finite() && *n > 0.0).map(|n| n as u64);
+    match op.unwrap_or("list") {
+        "list" => ok(embed(scripted::list())),
+        "answer" => {
+            let Some(id) = id else { return err("dialog answer needs the dialog's `id` (see `dialog list`)") };
+            let list: Vec<std::path::PathBuf> = match paths {
+                Some(Json::Arr(items)) => items.iter().filter_map(Json::as_str).map(Into::into).collect(),
+                Some(Json::Str(s)) => s.split('|').map(str::trim).filter(|p| !p.is_empty()).map(Into::into).collect(),
+                _ => return err("dialog answer needs `paths`: an array of absolute paths, or one string split by `|`"),
+            };
+            match scripted::answer(id, list) {
+                Ok(v) => ok(embed(v)),
+                Err(e) => err(e),
+            }
+        }
+        "cancel" => {
+            let Some(id) = id else { return err("dialog cancel needs the dialog's `id` (see `dialog list`)") };
+            match scripted::cancel(id) {
+                Ok(v) => ok(embed(v)),
+                Err(e) => err(e),
+            }
+        }
+        other => err(format!("unknown dialog op {other:?} — use \"list\", \"answer\" or \"cancel\"")),
     }
 }
 
