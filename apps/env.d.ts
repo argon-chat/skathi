@@ -118,6 +118,11 @@ declare global {
   /** redjs's `performance`. Only `now()` is used here; it is a monotonic
    *  millisecond clock, as in a browser. */
   var performance: { now(): number };
+
+  /** The `online` / `offline` handler attributes (redjs navigator.rs), next
+   *  to `addEventListener("online", …)`. See `navigator.onLine`. */
+  var ononline: ((ev: VnEvent) => unknown) | null;
+  var onoffline: ((ev: VnEvent) => unknown) | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +167,15 @@ declare global {
       readonly isActive: boolean;
       readonly hasBeenActive: boolean;
     };
+
+    /**
+     * NavigatorOnLine (vendor/redjs/redjs/src/webapi/navigator.rs, fed by
+     * crates/vn-desktop/src/network.rs; docs/DESKTOP.md §3). Chromium's
+     * meaning: the OS believes there is a network, NOT that a server is
+     * reachable. A change fires a trusted `online` / `offline` Event on the
+     * window, after Chromium's settle delay (0.5 s up, 1.5 s down).
+     */
+    readonly onLine: boolean;
   }
 
   interface VnWindowControlsOverlay extends VnEventTarget {
@@ -736,6 +750,10 @@ declare global {
     createAnalyser(): VnAnalyserNode;
     createBuffer(channels: number, frames: number, sampleRate: number): VnAudioBuffer;
     createBufferSource(): VnAudioBufferSourceNode;
+    /** 1..32 outputs, default 6; outside that is an `IndexSizeError`. */
+    createChannelSplitter(numberOfOutputs?: number): VnChannelSplitterNode;
+    /** 1..32 mono inputs, default 6; outside that is an `IndexSizeError`. */
+    createChannelMerger(numberOfInputs?: number): VnChannelMergerNode;
     decodeAudioData(bytes: ArrayBuffer): Promise<VnAudioBuffer>;
     resume(): Promise<void>;
     suspend(): Promise<void>;
@@ -826,6 +844,55 @@ declare global {
     stop(when?: number): void;
   }
 
+  /** Merged onto engine.d.ts's `VnAudioNode` (connect/disconnect by index,
+   *  webapi/audio.rs `node_connect` / `node_disconnect`). An output or input
+   *  past the node's count is an `IndexSizeError`. */
+  interface VnAudioNode {
+    readonly numberOfInputs: number;
+    readonly numberOfOutputs: number;
+    connect(to: VnAudioNode, output?: number, input?: number): unknown;
+    disconnect(outputOrDestination?: number | VnAudioNode, output?: number, input?: number): void;
+  }
+
+  /**
+   * The channel attributes exist on these two nodes only, a deviation named
+   * in vendor/redjs/README.md's Web Audio row. The spec pins each of them
+   * here: a change is an `InvalidStateError`, the current value is allowed.
+   */
+  interface VnChannelSplitterNode extends VnAudioNode {
+    /** = `numberOfOutputs`, fixed. */
+    channelCount: number;
+    /** `"explicit"`, fixed. */
+    channelCountMode: string;
+    /** `"discrete"`, fixed. */
+    channelInterpretation: string;
+  }
+
+  interface VnChannelMergerNode extends VnAudioNode {
+    /** 1, fixed. */
+    channelCount: number;
+    /** `"explicit"`, fixed. */
+    channelCountMode: string;
+    /** `"speakers"` (default) or `"discrete"`: how a stereo connection
+     *  into one mono input is down-mixed. */
+    channelInterpretation: string;
+  }
+
+  interface VnChannelNodeOptions {
+    channelCount?: number;
+    channelCountMode?: string;
+    channelInterpretation?: string;
+  }
+
+  var ChannelSplitterNode: {
+    new (context: VnAudioContext, options?: VnChannelNodeOptions & { numberOfOutputs?: number }): VnChannelSplitterNode;
+    prototype: VnChannelSplitterNode;
+  };
+  var ChannelMergerNode: {
+    new (context: VnAudioContext, options?: VnChannelNodeOptions & { numberOfInputs?: number }): VnChannelMergerNode;
+    prototype: VnChannelMergerNode;
+  };
+
   var AudioContext: { new (): VnAudioContext; prototype: VnAudioContext } | undefined;
   /** Probed by AudioPage's capability matrix and genuinely absent — there is
    *  no offline rendering. Declared so the probe compiles; `undefined` is the
@@ -843,6 +910,18 @@ declare global {
 // optional here.
 
 declare global {
+  /**
+   * vue-native's identity flag, the one exception to "optional" above: it is
+   * ALWAYS there under vue-native, so its type is `true`. It is for an app's
+   * own adaptations to the host, `if (globalThis.isVn) …`, without importing
+   * "vue-native" (which a browser build of the same app cannot resolve).
+   * Every browser leaves it `undefined`, so code shared with a browser build
+   * declares it `true | undefined` there. Read-only and non-configurable:
+   * crates/vn-app/src/prelude.ts defines it before the bundle evaluates.
+   * Prefer feature detection for a web API; this is for the host itself.
+   */
+  var isVn: true;
+
   /**
    * `VN_SCENARIO=<name>` — pins the app to one screen at boot, so a soak or a
    * frame-time measurement is ONE process, ONE screen and no input.
