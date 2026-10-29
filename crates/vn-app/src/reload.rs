@@ -21,7 +21,11 @@
 //!
 //! What a browser does and this does not, also in the runtime's advisory:
 //!
-//! - the realm survives: globals the old app set stay set;
+//! - the realm survives. The runtime's unload deletes every configurable
+//!   global the old app added and replaces the runtime's own classes and
+//!   hooks (1a84b39), so what carries over is only built-ins the old app
+//!   MODIFIED, plus globals it made non-configurable (counted in an
+//!   advisory);
 //! - fetches in flight still settle into the old app's promise chains;
 //! - IndexedDB connections and voice rooms stay open until the old code
 //!   closes them;
