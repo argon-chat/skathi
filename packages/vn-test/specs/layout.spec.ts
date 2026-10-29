@@ -46,8 +46,11 @@ describe("#1 group-hover that changes `display`", () => {
       // `.group-msg:hover .group-msg-hover-flex { display: flex }` over a
       // `display: none` box — Tailwind's `hidden group-hover/msg:flex`, the
       // chat row's timestamp (MessageItem.vue:64-69).
+      // Painted first (`boundingBox` waits for it): on a cold host the first
+      // hover could otherwise land before the row had a hitbox.
+      await app.locator("#msg-2").boundingBox();
       await app.locator("#msg-2").hover();
-      bunExpect(shown(await until(() => box("#ts-2"), shown))).toBe(true);
+      bunExpect(shown(await until(() => box("#ts-2"), shown, 10_000))).toBe(true);
 
       // The content moves under the pointer with no mouse move. The host used
       // to panic in paint ("must call prepaint before paint", gpui
