@@ -486,7 +486,9 @@ describe("custom events and dispatchEvent", () => {
     const rt = createRuntime();
     const { button: inner } = tree(rt);
     inner.addEventListener("focusScope.autoFocusOnMount", () => {});
-    expect(rt.host.listeners).toEqual([]);
+    // The one bit set is the <button>'s own click, armed at creation for its
+    // activation behaviour (it submits its form; m26 phase 2), not the event's.
+    expect(rt.host.listeners).toEqual([{ id: inner.id, code: rt.EV_CODES.click, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -507,7 +509,7 @@ describe("custom events and dispatchEvent", () => {
       const { button: inner } = tree(rt);
       inner.addEventListener(name, () => {});
       expect(rt.advisories()).toEqual([]);
-      expect(rt.host.listeners.length).toBe(1);
+      expect(rt.flagsFor(rt.EV_CODES[name])).toEqual([{ id: inner.id, code: rt.EV_CODES[name], on: true }]);
     }
   });
 

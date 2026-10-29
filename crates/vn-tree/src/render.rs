@@ -3386,6 +3386,140 @@ pub(crate) fn focus_node(id: u32, window: &mut Window, cx: &mut App) -> Result<(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Programmatic focus: `el.focus()` / `el.blur()` from JS (`__vn_focus`)
+// ---------------------------------------------------------------------------
+//
+// A browser's `el.focus()` is SYNCHRONOUS: when it returns,
+// `document.activeElement === el` and `blur` / `focusout` / `focus` /
+// `focusin` have already run, in that order. gpui's focus observers fire
+// later, from the next draw. So for a node that can take focus NOW (it has
+// been built and has a handle), the host moves gpui's focus and the window's
+// `focused_node` slot together, and tells JS which node lost focus. JS then
+// dispatches the four events itself. When the observer fires on the next
+// draw, it finds the slot already at the new node (`focus_transition`'s
+// `old == new`), so nothing is reported twice.
+//
+// A node that cannot take focus yet because it has not been built (an
+// `<input>` mounted in the same wave, `nextTick(() => input.focus())`) is
+// queued instead. The queue holds ONE node, because the last `focus()` wins.
+// It is applied from the frame tick once the node has a handle, for up to
+// `PENDING_FOCUS_FRAMES` frames. Its events then come from the observers,
+// exactly like a click's, so they fire a frame late: a named divergence.
+
+thread_local! {
+    /// `(node, frames left)`; `(0, 0)` = nothing queued.
+    static PENDING_FOCUS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
+}
+
+const PENDING_FOCUS_FRAMES: u32 = 10;
+
+/// What `el.focus()` did.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FocusAnswer {
+    /// Focus moved now. JS fires `blur`/`focusout` on `old` (0 = none) and
+    /// then `focus`/`focusin` on the node.
+    Moved { old: u32 },
+    /// It already had focus: no events, as in a browser.
+    Already,
+    /// Queued for the frame tick; the observers report it.
+    Pending,
+    /// Not focusable, or not in the document: a no-op, as in a browser.
+    Refused,
+}
+
+/// Could `id` get a focus handle once it is built? An `<input>` or
+/// `<textarea>`, a `tabindex`, or a key/focus listener: the renderer's own
+/// rules (see `bind_events` and `build_input`).
+fn could_take_focus(t: &Tree, id: u32) -> bool {
+    let Some(n) = t.node(id) else { return false };
+    let tag = t.name(n.tag);
+    let bits = (1u64 << tree::EV_KEYDOWN) | (1 << tree::EV_KEYUP) | (1 << tree::EV_FOCUS) | (1 << tree::EV_BLUR);
+    tag == "input" || tag == "textarea" || t.prop(id, "tabindex").is_some() || n.listeners & bits != 0
+}
+
+/// Queues `id` for the frame tick (the last call wins).
+pub(crate) fn queue_focus(id: u32) {
+    PENDING_FOCUS.with(|p| p.set((id, PENDING_FOCUS_FRAMES)));
+}
+
+/// `el.focus()`, host-side. See the section header.
+pub(crate) fn js_focus(id: u32, window: &mut Window, cx: &mut App) -> FocusAnswer {
+    let k = windows::key(window);
+    let (in_document, could) =
+        tree::read_tree(|t| (t.node(id).is_some() && reaches_painted_root(t, id), could_take_focus(t, id)));
+    if !in_document {
+        return FocusAnswer::Refused;
+    }
+    // Another window paints it: that window's tick applies it.
+    if windows::window_of_node(id) != k {
+        queue_focus(id);
+        return FocusAnswer::Pending;
+    }
+    let Some(handle) = focus_target_of(id, cx) else {
+        if could {
+            queue_focus(id);
+            return FocusAnswer::Pending;
+        }
+        return FocusAnswer::Refused;
+    };
+    PENDING_FOCUS.with(|p| p.set((0, 0)));
+    let old = windows::focused_node(k);
+    if handle.is_focused(window) && old == id {
+        return FocusAnswer::Already;
+    }
+    window.focus(&handle, cx);
+    windows::set_focused_node(k, id);
+    crate::log::record("dev", format!("[focus] el.focus() focused node {id}"));
+    FocusAnswer::Moved { old: if old == id { 0 } else { old } }
+}
+
+/// `el.blur()`, host-side: `true` when `id` had focus and lost it (JS fires
+/// `blur` / `focusout`). Focus then falls back to the window's root, which
+/// reports nothing, like a browser's `body`.
+pub(crate) fn js_blur(id: u32, window: &mut Window, cx: &mut App) -> bool {
+    PENDING_FOCUS.with(|p| {
+        if p.get().0 == id {
+            p.set((0, 0));
+        }
+    });
+    let k = windows::key(window);
+    if windows::focused_node(k) != id {
+        return false;
+    }
+    window.blur(cx);
+    windows::set_focused_node(k, 0);
+    true
+}
+
+/// Applies a queued `el.focus()` once the node has a handle. Runs from the
+/// frame ticks, before `ensure_root_focus`.
+pub(crate) fn apply_pending_focus(window: &mut Window, cx: &mut App) {
+    let (id, left) = PENDING_FOCUS.with(|p| p.get());
+    if id == 0 || windows::window_of_node(id) != windows::key(window) {
+        return;
+    }
+    if !tree::read_tree(|t| t.node(id).is_some() && reaches_painted_root(t, id)) {
+        PENDING_FOCUS.with(|p| p.set((0, 0)));
+        return;
+    }
+    if let Some(handle) = focus_target_of(id, cx) {
+        PENDING_FOCUS.with(|p| p.set((0, 0)));
+        if !handle.is_focused(window) {
+            // The observers report it, as they do a click.
+            window.focus(&handle, cx);
+            crate::log::record("dev", format!("[focus] queued el.focus() focused node {id}"));
+        }
+        return;
+    }
+    if left <= 1 {
+        PENDING_FOCUS.with(|p| p.set((0, 0)));
+        crate::log::record("dev", format!("[focus] queued el.focus() on node {id} dropped: it never got a focus handle"));
+    } else {
+        PENDING_FOCUS.with(|p| p.set((id, left - 1)));
+    }
+}
+
 /// True while `id` owns keyboard focus. Used to wait out the frame a
 /// programmatic focus needs before the native input handler is installed.
 pub(crate) fn is_node_focused(id: u32, window: &Window, cx: &App) -> bool {

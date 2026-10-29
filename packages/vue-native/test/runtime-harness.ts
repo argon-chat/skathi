@@ -196,6 +196,17 @@ export function createRuntime(
      * `crates/vn-tree/src/scroll.rs` and `noteStale` in runtime.ts.
      */
     scrollStale: false,
+    /**
+     * `__vn_focus(id, op)`, faked: every call, and what the host answers
+     * (`"moved:<old>"`, `"already"`, `"pending"`, `"refused"`; `"blurred"` or
+     * `""` for op 1). The default refuses every focus and every blur.
+     */
+    focus: {
+      calls: [] as { id: number; op: number }[],
+      answer: ((_id: number, op: number) => (op === 1 ? "" : "refused")) as (id: number, op: number) => string,
+    },
+    /** How many times `__vn_reload()` was called. */
+    reloads: 0,
     /** `__vn_media_state` answers: node id -> "name=value\n…". */
     mediaById: new Map(),
     /** `__vn_media_call` log: { id, verb, arg }. */
@@ -468,6 +479,8 @@ export function createRuntime(
     "__vn_computed_style",
     "__vn_scroll",
     "__vn_scroll_into_view",
+    "__vn_focus",
+    "__vn_reload",
     "__vn_media_state",
     "__vn_media_call",
     "__vn_media_can_play",
@@ -609,6 +622,14 @@ export function createRuntime(
     (id, block, inline) => {
       host.intoViewCalls.push({ id, block, inline });
       return host.intoViewAnswer;
+    },
+    // `__vn_focus` — the host's answer comes from `host.focus.answer`.
+    (id, op) => {
+      host.focus.calls.push({ id, op });
+      return host.focus.answer(id, op);
+    },
+    () => {
+      host.reloads++;
     },
     (id) => host.mediaById.get(id) ?? "",
     (id, verb, arg) => {

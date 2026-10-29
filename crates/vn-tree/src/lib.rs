@@ -288,6 +288,44 @@ host_fn!(fn vn_scroll_into_view(_g, args) {
 });
 
 // ---------------------------------------------------------------------------
+// programmatic focus (render.rs, "Programmatic focus")
+// ---------------------------------------------------------------------------
+//
+// `__vn_focus(id, op)`:
+//
+//   op 0  `el.focus()` -> "moved:<old id>" (focus moved now; JS fires blur/
+//         focusout on <old> unless it is 0, then focus/focusin) | "already" |
+//         "pending" (queued for the frame tick; the host's observers fire the
+//         events) | "refused" (not focusable, or not in the document)
+//   op 1  `el.blur()`  -> "blurred" (JS fires blur/focusout) | ""
+//
+// Outside a Commit publication (no window: module-scope code at startup), a
+// focus is queued and a blur is a no-op.
+host_fn!(fn vn_focus(_g, args) {
+    let id = arg_id(args.arg(0));
+    let op = arg_id(args.arg(1));
+    let out = vn_runtime::with_commit(|window, cx| {
+        if op == 1 {
+            return if render::js_blur(id, window, cx) { "blurred".to_string() } else { String::new() };
+        }
+        match render::js_focus(id, window, cx) {
+            render::FocusAnswer::Moved { old } => format!("moved:{old}"),
+            render::FocusAnswer::Already => "already".to_string(),
+            render::FocusAnswer::Pending => "pending".to_string(),
+            render::FocusAnswer::Refused => "refused".to_string(),
+        }
+    })
+    .unwrap_or_else(|| {
+        if op == 1 {
+            return String::new();
+        }
+        render::queue_focus(id);
+        "pending".to_string()
+    });
+    ret_string(&out)
+});
+
+// ---------------------------------------------------------------------------
 // the `<video>` media surface (crates/vn-video/CONTRACT.md §6)
 // ---------------------------------------------------------------------------
 //
@@ -352,6 +390,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_computed_style", 1, vn_computed_style as *const _),
         ("__vn_scroll", 4, vn_scroll as *const _),
         ("__vn_scroll_into_view", 3, vn_scroll_into_view as *const _),
+        ("__vn_focus", 2, vn_focus as *const _),
         ("__vn_media_state", 1, vn_media_state as *const _),
         ("__vn_media_call", 3, vn_media_call as *const _),
         ("__vn_media_can_play", 2, vn_media_can_play as *const _),
@@ -506,6 +545,7 @@ pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // gpui's asset cache lets go of blob: decodes no node shows any more.
     img::evict_pending(window, cx);
     render::apply_pending_blur(window, cx);
+    render::apply_pending_focus(window, cx);
     render::ensure_root_focus(window, cx);
     // `transitionend` / `animationstart` / `animationend` / `animationcancel`:
     // the animator queues them from the restyle pass and the paint clock, and
@@ -557,6 +597,7 @@ pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     video::drain_pending_drops_for(window, cx);
     video::drain_pending_uploads(window);
     render::apply_pending_blur(window, cx);
+    render::apply_pending_focus(window, cx);
     render::ensure_root_focus(window, cx);
 }
 

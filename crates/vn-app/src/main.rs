@@ -46,6 +46,7 @@ mod perf;
 mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWINDOW.md)
 #[cfg(feature = "prod")]
 mod prod;
+mod reload; // `location.reload()`: the restart path, on request
 mod slot; // which dist slot this process is — the one thing dev, prod and devtools all ask
 // TEMPORARY (m26): the Argon client's `ArgonSecure` cookie, opt-in. One file,
 // one call below; delete both to remove it.
@@ -607,6 +608,10 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
             n
         });
         boot_mode::poll_frame(n);
+        // `location.reload()` asked during the last frame: unload, tear down
+        // and re-run the app now, before the pump, so the new app's first
+        // wave drains in this frame (src/reload.rs).
+        reload::pump();
         // The window-state funnel (docs/WINDOWING.md §5.3): ONE snapshot, then
         // resize → visibility → the JS observer, in that order, all inside the
         // same JS wave the pump below runs in. Before `rt.pump` so a `resize`
@@ -1186,6 +1191,7 @@ fn main() {
             rt.register("__vn_set_status", 1, vn_set_status as *const _);
             rt.register("__vn_log", 1, vn_log as *const _);
             rt.register("__vn_perf_mark", 1, vn_perf_mark as *const _);
+            reload::install(rt);
             vn_tree::install(rt);
             window::install(rt);
             // SPIKE: `__vn_window_open` / `_close` / `_popouts` / `_click` —

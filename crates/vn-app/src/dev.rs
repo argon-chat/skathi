@@ -414,6 +414,12 @@ pub fn boot(rt: &JsRuntime) {
     CHANGES_STAMP.with(|s| s.set(mtime(&dist("changes.json"))));
 }
 
+/// `location.reload()`'s second half (src/reload.rs): the app is already torn
+/// down; evaluate `dist/` again, exactly as a cold restart does.
+pub fn reboot(rt: &JsRuntime) {
+    boot(rt);
+}
+
 fn cold_restart(rt: &JsRuntime) {
     eprintln!("[dev] vendor.js changed — cold restart (state is lost)");
     if let Err(e) = rt.eval(

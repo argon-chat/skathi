@@ -598,8 +598,11 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
   createElement: (type) => {
     const el = mk(__vn_create_element(I(type)), 1, type);
     // A `<label>` clicks its control whether or not anything listens, so the
-    // host must deliver its clicks (desktop-apis-design §4.2).
-    if (type === "label") syncListenerFlag(el.id, "click");
+    // host must deliver its clicks (desktop-apis-design §4.2). So does a
+    // `<button>` (submit is its default type: it submits its form), and an
+    // `<input>` hears Enter for implicit submission (text is its default).
+    if (type === "label" || type === "button") syncListenerFlag(el.id, "click");
+    if (type === "input") syncListenerFlag(el.id, "keydown");
     return el;
   },
   createText: (text) => {
@@ -745,7 +748,9 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
     // host actually emits.
     const name = namespaced ? rest.slice(1) : canonicalEvent(hyphenate(rest));
     const code = hostCode(name);
-    if (!code && JS_SOURCED_EVENTS.has(name)) {
+    if (!code && RUNTIME_FIRED_EVENTS.has(name)) {
+      // `submit` / `reset`: fired by the runtime's form submission.
+    } else if (!code && JS_SOURCED_EVENTS.has(name)) {
       // `change` / `cancel`: the runtime fires them itself on a file input
       // (and they bubble to whatever wraps one), so the handler is kept.
       if (next) adviseJsSourced(el, name, `@${name}`);
@@ -810,6 +815,21 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
     if (key === "href" && el.tag === "a") syncListenerFlag(el.id, "click");
     // …and so does `<input type=file>`'s, which also takes Enter and Space.
     if (key === "type" && el.tag === "input") syncFileInput(el);
+    // …and a submit button's and a text field's (forms, below): the type
+    // decides whether a click submits and whether Enter does.
+    if (key === "type" && (el.tag === "input" || el.tag === "button")) {
+      syncListenerFlag(el.id, "click");
+      if (el.tag === "input") syncListenerFlag(el.id, "keydown");
+    }
+    // F-4 (docs/RUNTIME.md §5.2): the runtime honours a disabled fieldset;
+    // the host's native widgets read only their own `disabled`.
+    if (key === "disabled" && el.tag === "fieldset" && next != null && next !== false && next !== "false") {
+      warnCompat(
+        "fieldset:disabled",
+        "<fieldset disabled>: clicks, focus() and form submission treat the controls inside as disabled, " +
+          "as a browser does, but the native <input>s inside still accept typing; disable each one as well",
+      );
+    }
   }
 }
 
@@ -864,12 +884,15 @@ function syncListenerFlag(id: VnNodeId, name: string): void {
   // removing the last `@click` from an `<a href>` must not switch it off. So
   // do a `<label>` and an `<input type=file>`, which also hears Enter (keydown)
   // and Space (keyup) — the keys that click it.
+  // A submit or reset button submits or resets its form, and a text-like
+  // `<input>` submits its form on Enter (implicit submission).
   if (!on && code === EV_CODES.click) {
     const n = nodesById.get(id);
-    if (n && (isLabel(n) || isFileInput(n) || isLink(n))) on = true;
+    if (n && (isLabel(n) || isFileInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n))) on = true;
   }
   if (!on && (code === EV_CODES.keydown || code === EV_CODES.keyup)) {
-    if (isFileInput(nodesById.get(id))) on = true;
+    const n = nodesById.get(id);
+    if (isFileInput(n) || (code === EV_CODES.keydown && blocksImplicitSubmission(n))) on = true;
   }
   // …and only tell the host when the ANSWER CHANGED.
   //
@@ -930,7 +953,7 @@ function addGlobalListener(
   const name = canonicalEvent(rawName);
   // A file input's `change`/`cancel` bubble to the document like the host's
   // events do, so a delegated listener takes the same walk.
-  if (!hostCode(name) && !JS_SOURCED_EVENTS.has(name)) return false;
+  if (!hostCode(name) && !JS_SOURCED_EVENTS.has(name) && !RUNTIME_FIRED_EVENTS.has(name)) return false;
   let m = globalHandlers.get(target);
   if (!m) globalHandlers.set(target, (m = {}));
   const buckets = ensureBuckets(m, name);
@@ -966,22 +989,50 @@ type GlobalTargetLike = {
   removeEventListener?: (name: string, fn: EventHandler, opts?: ListenerOptions) => void;
 };
 
+/**
+ * What a `window` / `document` listener the HOST does not source was handed
+ * to: the target's own `addEventListener` as the FIRST runtime of this process
+ * found it. Kept on the global so that a runtime evaluated again by
+ * `location.reload()` wraps the same function, not the previous runtime's
+ * wrapper (see `realm` below).
+ */
+function nativeListenFns(target: object): { add: GlobalTargetLike["addEventListener"]; remove: GlobalTargetLike["removeEventListener"] } {
+  const g = globalThis as { __VN_NATIVE_LISTEN__?: WeakMap<object, ReturnType<typeof nativeListenFns>> };
+  const table = (g.__VN_NATIVE_LISTEN__ ??= new WeakMap());
+  let fns = table.get(target);
+  if (!fns) {
+    const t = target as GlobalTargetLike;
+    fns = {
+      add: typeof t.addEventListener === "function" ? t.addEventListener.bind(target) : undefined,
+      remove: typeof t.removeEventListener === "function" ? t.removeEventListener.bind(target) : undefined,
+    };
+    table.set(target, fns);
+  }
+  return fns;
+}
+
+/** The engine-side `window`/`document` listeners this runtime added, which `location.reload()` removes. */
+const passedThrough: { target: object; name: string; fn: EventHandler; opts: ListenerOptions }[] = [];
+
 function interceptGlobalTarget(target: object | undefined): void {
   if (!target) return;
-  const nativeAdd = typeof (target as GlobalTargetLike).addEventListener === "function" ? (target as GlobalTargetLike).addEventListener!.bind(target) : null;
-  const nativeRemove =
-    typeof (target as GlobalTargetLike).removeEventListener === "function" ? (target as GlobalTargetLike).removeEventListener!.bind(target) : null;
+  const { add: nativeAdd, remove: nativeRemove } = nativeListenFns(target);
   try {
     Object.defineProperty(target, "addEventListener", {
       value: (name: string, fn: EventHandler, opts: ListenerOptions) => {
-        if (!addGlobalListener(target, name, fn, opts)) nativeAdd?.(name, fn, opts);
+        if (addGlobalListener(target, name, fn, opts)) return;
+        nativeAdd?.(name, fn, opts);
+        passedThrough.push({ target, name, fn, opts });
       },
       configurable: true,
       writable: true,
     });
     Object.defineProperty(target, "removeEventListener", {
       value: (name: string, fn: EventHandler, opts: ListenerOptions) => {
-        if (!removeGlobalListener(target, name, fn, opts)) nativeRemove?.(name, fn, opts);
+        if (removeGlobalListener(target, name, fn, opts)) return;
+        nativeRemove?.(name, fn, opts);
+        const i = passedThrough.findIndex((p) => p.target === target && p.name === name && p.fn === fn);
+        if (i >= 0) passedThrough.splice(i, 1);
       },
       configurable: true,
       writable: true,
@@ -1036,7 +1087,9 @@ function addExtraListener(
   const name = canonicalEvent(rawName);
   const code = hostCode(name);
   if (!code && WINDOW_ONLY_EVENTS.has(name)) return;
-  if (!code && JS_SOURCED_EVENTS.has(name)) {
+  if (!code && RUNTIME_FIRED_EVENTS.has(name)) {
+    // `submit` / `reset`: kept; the runtime's form submission fires them.
+  } else if (!code && JS_SOURCED_EVENTS.has(name)) {
     adviseJsSourced(node, name, `addEventListener("${rawName}")`);
   } else if (!code && looksNative(name)) {
     warnCompat(
@@ -1683,16 +1736,8 @@ defineDomGet("style", function (this: MirrorElement) {
   return style;
 });
 
-// -- focus: gpui owns it and exposes no programmatic call to JS yet
-defineDom("focus", function () {
-  warnCompat(
-    "focus",
-    "element.focus() is a no-op — gpui owns focus and the host exposes no programmatic focus " +
-      "call to JS yet, so focus traps and roving (arrow-key) focus are inert; clicking and Tab " +
-      "still move focus for real",
-  );
-});
-defineDom("blur", function () {});
+// -- focus: `el.focus()` / `el.blur()` are defined with the forms, below
+//    (`__vn_focus`; crates/vn-tree/src/render.rs, "Programmatic focus").
 
 // -- dispatchEvent: a component's own events, through the SAME capture/bubble
 //    walk the host's events take. reka-ui builds its whole selection protocol
@@ -1768,6 +1813,7 @@ function activate(target: MirrorNode, bubbles: boolean): void {
       if (isFileInput(n)) showFilePicker(fileInputOps(n), null);
       else if (isLabel(n)) activateLabel(n, target);
       else if (isLink(n)) followLink(n);
+      else if (isSubmitButton(n) || isResetButton(n)) activateFormButton(n);
       return;
     }
     if (!bubbles) return;
@@ -2088,8 +2134,9 @@ const FOCUS_ONLY_TYPES = new Set(["button", "submit", "reset", "image", "file", 
 
 /**
  * A `<label>`'s activation: a click on its control, unless the click came
- * from inside the control (then it already was one). A browser also moves
- * focus to a text control; `focus()` is a no-op here, so that half is D-F23.
+ * from inside the control (then it already was one). A text control is also
+ * focused, as in a browser (D-F23 until m26 phase 2, when `focus()` became
+ * real).
  */
 function activateLabel(label: MirrorElement, target: MirrorNode): void {
   const control = labelControl(label);
@@ -2098,13 +2145,7 @@ function activateLabel(label: MirrorElement, target: MirrorNode): void {
   const textual =
     control.tag === "textarea" || control.tag === "select" ||
     (control.tag === "input" && !FOCUS_ONLY_TYPES.has(String(control.attrs.type ?? "text").trim().toLowerCase()));
-  if (textual) {
-    warnCompat(
-      "label:focus",
-      "<label> (D-F23): a click on a label clicks its control, but cannot move focus into a text field, " +
-        "as a browser does: gpui owns focus and element.focus() is a no-op here",
-    );
-  }
+  if (textual) control.focus();
   control.click();
 }
 
@@ -2255,7 +2296,10 @@ defineDom("showPicker", function (this: MirrorElement) {
 const DISABLEABLE = new Set(["button", "input", "select", "textarea", "fieldset", "optgroup", "option"]);
 const clicking = new Set<MirrorElement>();
 defineDom("click", function (this: MirrorElement) {
-  if (DISABLEABLE.has(this.tag) && this.attrs.disabled != null && this.attrs.disabled !== "false") return;
+  // A mirror control is "actually disabled" (its own attribute or a disabled
+  // fieldset); a detached one has only its own attribute.
+  const mirror: boolean = isMirrorNode(this);
+  if (mirror ? isDisabledControl(this) : DISABLEABLE.has(this.tag) && this.attrs.disabled != null && this.attrs.disabled !== "false") return;
   if (clicking.has(this)) return;
   clicking.add(this);
   try {
@@ -2271,6 +2315,497 @@ defineDom("click", function (this: MirrorElement) {
     clicking.delete(this);
   }
 });
+
+// -- forms: submission (HTML §4.10.21; m26 phase 2)
+//
+//    There was none. `@submit` had no host code, so patchProp dropped the
+//    handler with an advisory: Enter in a field did nothing, and so did a
+//    click on `<button type=submit>`. Login forms are the case that matters
+//    (`<form @submit.prevent>` plus a submit button).
+//
+//    What is here, in the spec's own terms:
+//    - a submit button's activation behaviour: a click (host or `el.click()`)
+//      submits its form owner, unless it is disabled;
+//    - implicit submission: Enter in a field (keydown, not cancelled) clicks
+//      the form's default button (the first submit button in tree order;
+//      nothing if it is disabled), or, with no submit button, submits the form
+//      when at most one field blocks implicit submission;
+//    - `form.requestSubmit(submitter?)` with the spec's TypeError and
+//      NotFoundError, `form.submit()` (no event, as in a browser), and
+//      `form.reset()` / a reset button (fires `reset`);
+//    - the `submit` event is a `SubmitEvent` (bubbles, cancelable,
+//      `submitter`), walked like any other event; `SubmitEvent` is defined if
+//      the engine lacks it.
+//
+//    Divergences, each an advisory: constraint validation is not run (a
+//    form without `novalidate` submits anyway, and no bubble is shown); a
+//    submission nobody cancelled has no document to navigate, so it does
+//    nothing; a reset does not restore the controls' values.
+
+/** Events the runtime itself fires, for which no host code exists. Their handlers are kept. */
+const RUNTIME_FIRED_EVENTS = new Set<string>(["submit", "reset"]);
+
+/** HTML's boolean-attribute rule as patchProp stores it: present, and not the string "false". */
+const hasFlag = (n: MirrorElement, name: string): boolean => n.attrs?.[name] != null && n.attrs[name] !== "false";
+/** HTML's "actually disabled": its own `disabled`, or a disabled `<fieldset>` around it (outside that fieldset's first `<legend>`). */
+const FIELDSET_DISABLES = new Set(["button", "input", "select", "textarea", "fieldset"]);
+function isDisabledControl(n: MirrorElement): boolean {
+  if (!DISABLEABLE.has(n.tag)) return false;
+  if (hasFlag(n, "disabled")) return true;
+  if (!FIELDSET_DISABLES.has(n.tag)) return false;
+  let child: MirrorNode = n;
+  for (let p = n.parentNode; p; child = p, p = p.parentNode) {
+    if (p.kind === 1 && p.tag === "fieldset" && hasFlag(p as MirrorElement, "disabled")) {
+      const legend = p.childNodes.find((c) => c.kind === 1 && c.tag === "legend");
+      if (child !== legend) return true;
+    }
+  }
+  return false;
+}
+const typeOf = (n: MirrorElement): string => String(n.attrs?.type ?? "").trim().toLowerCase();
+
+/** `<button>` (submit is its default, and any unknown type), `<input type=submit|image>`. */
+function isSubmitButton(n: unknown): n is MirrorElement {
+  const e = n as MirrorElement | null | undefined;
+  if (!e || e.kind !== 1) return false;
+  if (e.tag === "button") return typeOf(e) !== "button" && typeOf(e) !== "reset";
+  return e.tag === "input" && (typeOf(e) === "submit" || typeOf(e) === "image");
+}
+
+function isResetButton(n: unknown): n is MirrorElement {
+  const e = n as MirrorElement | null | undefined;
+  return !!e && e.kind === 1 && (e.tag === "button" || e.tag === "input") && typeOf(e) === "reset";
+}
+
+/** The input types that "block implicit submission" (HTML §4.10.21.2). No type is `text`. */
+const IMPLICIT_SUBMIT_TYPES = new Set([
+  "text", "search", "url", "tel", "email", "password", "date", "month", "week", "time", "datetime-local", "number",
+]);
+function blocksImplicitSubmission(n: unknown): n is MirrorElement {
+  const e = n as MirrorElement | null | undefined;
+  return !!e && e.kind === 1 && e.tag === "input" && IMPLICIT_SUBMIT_TYPES.has(typeOf(e) || "text");
+}
+
+/** HTML's listed elements: the ones a form owns. */
+const LISTED = new Set(["button", "fieldset", "input", "object", "output", "select", "textarea"]);
+
+function topOf(n: MirrorNode): MirrorNode {
+  while (n.parentNode) n = n.parentNode;
+  return n;
+}
+
+/** The form owner: the `form` attribute's form (or none), else the nearest `<form>` ancestor. */
+function formOwner(n: MirrorElement): MirrorElement | null {
+  const fid = n.attrs?.form;
+  if (fid != null && LISTED.has(n.tag)) {
+    const f = firstInTree(topOf(n), (x) => x.attrs?.id === fid);
+    return f && f.tag === "form" ? f : null;
+  }
+  for (let p = n.parentNode; p; p = p.parentNode) if (p.kind === 1 && p.tag === "form") return p as MirrorElement;
+  return null;
+}
+
+/** The form's owned controls, in tree order. */
+function formControls(form: MirrorElement): MirrorElement[] {
+  const out: MirrorElement[] = [];
+  forEachDeep(topOf(form), (n) => {
+    if (n.kind === 1 && LISTED.has(n.tag) && formOwner(n as MirrorElement) === form) out.push(n as MirrorElement);
+  });
+  return out;
+}
+
+type SubmitEventInit = { bubbles?: boolean; cancelable?: boolean; composed?: boolean; submitter?: unknown };
+/** The engine's `SubmitEvent`, or ours, installed on the global when it lacks one. */
+const SubmitEventClass: (new (type: string, init?: SubmitEventInit) => VnEvent) | null = (() => {
+  const g = globalThis as { SubmitEvent?: unknown };
+  if (typeof g.SubmitEvent === "function") return g.SubmitEvent as new (type: string, init?: SubmitEventInit) => VnEvent;
+  if (typeof Event !== "function") return null;
+  class SubmitEvent extends Event {
+    readonly submitter: unknown;
+    constructor(type: string, init: SubmitEventInit = {}) {
+      super(type, init);
+      this.submitter = init.submitter ?? null;
+    }
+  }
+  try {
+    Object.defineProperty(globalThis, "SubmitEvent", { value: SubmitEvent, configurable: true, writable: true });
+  } catch {
+    /* a frozen global: the class still serves this module */
+  }
+  return SubmitEvent as unknown as new (type: string, init?: SubmitEventInit) => VnEvent;
+})();
+
+function adviseNoNavigation(via: string): void {
+  warnCompat(
+    "form:navigate",
+    `${via}: in a browser an uncancelled form submission navigates to the form's action. vue-native has ` +
+      `no document to navigate, so it does nothing. Cancel it (@submit.prevent) and send the data from JS`,
+  );
+}
+
+/** Constraint validation is not run; said once, and only for a form that has constraints to skip. */
+function adviseNoValidation(form: MirrorElement): void {
+  if (warned.has("form:validation")) return;
+  const constrained = formControls(form).some(
+    (c) =>
+      ["required", "pattern", "min", "max", "minlength", "maxlength"].some((a) => c.attrs?.[a] != null) ||
+      (c.tag === "input" && ["email", "url", "number"].includes(typeOf(c))),
+  );
+  if (!constrained) return;
+  warnCompat(
+    "form:validation",
+    "a <form> without novalidate is submitted WITHOUT constraint validation: required, pattern, " +
+      "type=email and the rest are not checked, no validation bubble is shown, and the submit event " +
+      "fires anyway. Validate in the submit handler (and add novalidate to say so)",
+  );
+}
+
+/** The form's "firing submission events" flag: a submit from inside a submit handler is ignored. */
+const submitting = new WeakSet<MirrorElement>();
+
+/** HTML "submit": `submitter` is the button, or null for the form itself. */
+function submitForm(form: MirrorElement, submitter: MirrorElement | null, fromSubmitMethod: boolean): void {
+  if (fromSubmitMethod) {
+    // `form.submit()` fires no event and skips validation, then navigates.
+    adviseNoNavigation("form.submit()");
+    return;
+  }
+  if (submitting.has(form)) return;
+  if (!hasFlag(form, "novalidate") && !(submitter && hasFlag(submitter, "formnovalidate"))) adviseNoValidation(form);
+  submitting.add(form);
+  let proceed = true;
+  try {
+    const init = { bubbles: true, cancelable: true, submitter };
+    const ev = SubmitEventClass ? new SubmitEventClass("submit", init) : withProps(new CustomEvent("submit", init), { submitter });
+    proceed = propagate(form, "submit", ev);
+  } finally {
+    submitting.delete(form);
+  }
+  if (proceed) adviseNoNavigation("a submit event nobody cancelled");
+}
+
+/** HTML "reset": the `reset` event; the controls are not restored (advisory). */
+function resetForm(form: MirrorElement): void {
+  const init = { bubbles: true, cancelable: true };
+  const ev = typeof Event === "function" ? new Event("reset", init) : new CustomEvent("reset", init);
+  if (propagate(form, "reset", ev)) {
+    warnCompat(
+      "form:reset",
+      "form reset (a reset button or form.reset()) fired `reset` but cannot restore the controls: the " +
+        "mirror keeps no default values. Reset the model in the handler",
+    );
+  }
+}
+
+/** A submit or reset button's activation behaviour. */
+function activateFormButton(n: MirrorElement): void {
+  if (isDisabledControl(n)) return;
+  const form = formOwner(n);
+  if (!form) return;
+  if (isSubmitButton(n)) submitForm(form, n, false);
+  else if (isResetButton(n)) resetForm(form);
+}
+
+/** Enter in `field` (HTML §4.10.21.2). */
+function implicitSubmit(field: MirrorElement): void {
+  const form = formOwner(field);
+  if (!form) return;
+  const controls = formControls(form);
+  const defaultButton = controls.find(isSubmitButton);
+  if (defaultButton) {
+    // "If the form has no submit button…" — it has one, so the button is
+    // clicked, and a disabled default button means nothing happens at all.
+    if (!isDisabledControl(defaultButton)) defaultButton.click();
+    return;
+  }
+  if (controls.filter(blocksImplicitSubmission).length > 1) return;
+  submitForm(form, null, false);
+}
+
+const asForm = (el: MirrorElement, method: string): MirrorElement => {
+  if (!isMirrorNode(el) || el.tag !== "form") throw new TypeError(`${method} is not a function`);
+  return el;
+};
+defineDom("requestSubmit", function (this: MirrorElement, submitter?: unknown) {
+  const form = asForm(this, "requestSubmit");
+  if (submitter != null) {
+    if (!isSubmitButton(submitter)) {
+      throw new TypeError("Failed to execute 'requestSubmit' on 'HTMLFormElement': The specified element is not a submit button.");
+    }
+    if (formOwner(submitter) !== form) {
+      throw new DOMException(
+        "Failed to execute 'requestSubmit' on 'HTMLFormElement': The specified element is not owned by this form element.",
+        "NotFoundError",
+      );
+    }
+  }
+  submitForm(form, (submitter as MirrorElement | null | undefined) ?? null, false);
+});
+defineDom("submit", function (this: MirrorElement) {
+  submitForm(asForm(this, "submit"), null, true);
+});
+defineDom("reset", function (this: MirrorElement) {
+  resetForm(asForm(this, "reset"));
+});
+
+// -- focus: `el.focus()` / `el.blur()` / `document.activeElement` (m26 phase 2)
+//
+//    The host moves gpui's focus (`__vn_focus`, crates/vn-tree/src/lib.rs and
+//    render.rs "Programmatic focus"). A node that can take focus NOW gets it
+//    synchronously, and the four events fire here, in the browser's order:
+//    blur and focusout on the old node, then focus and focusin on the new one,
+//    each with its `relatedTarget`. A node that has not been built yet (mounted
+//    in this same update) is queued; its events come from the host a frame
+//    later, which is one advisory. Not focusable, disabled or detached: a
+//    no-op, as in a browser. Divergence, named: `focus()` does not scroll the
+//    element into view (`preventScroll` is the only behaviour).
+
+/** The element JS last learned has focus: a move from here, or a host focus/blur event. */
+let focusedNode: MirrorElement | null = null;
+
+function fireFocusEvents(target: MirrorElement, base: "focus" | "blur", related: MirrorElement | null): void {
+  for (const name of base === "focus" ? ["focus", "focusin"] : ["blur", "focusout"]) {
+    if (!hasListener(target, name)) continue;
+    const ev = synthesize(name, 0, 0, 0, 0, undefined);
+    try {
+      Object.defineProperty(ev, "relatedTarget", { value: related, configurable: true });
+    } catch {
+      /* the engine's own accessor: leave it */
+    }
+    propagate(target, name, ev);
+  }
+}
+
+/** What `focus()` / `blur()` work on: a connected mirror element. */
+const focusable = (el: MirrorElement): boolean =>
+  isMirrorNode(el) && el.kind === 1 && nodesById.get(el.id) === el && !isDisabledControl(el);
+
+defineDom("focus", function (this: MirrorElement) {
+  if (!focusable(this)) return;
+  if (typeof __vn_focus !== "function") {
+    warnCompat("focus", "element.focus() is a no-op: this host has no programmatic focus (__vn_focus)");
+    return;
+  }
+  const answer = __vn_focus(this.id, 0);
+  if (answer.startsWith("moved:")) {
+    const old = nodesById.get(Number(answer.slice(6))) as MirrorElement | undefined;
+    focusedNode = this;
+    if (old && old !== this) fireFocusEvents(old, "blur", this);
+    fireFocusEvents(this, "focus", old && old !== this ? old : null);
+  } else if (answer === "pending") {
+    warnCompat(
+      "focus:deferred",
+      "element.focus() on an element that has not been painted yet (mounted in this same update) takes " +
+        "effect on the next frame: until then document.activeElement is unchanged, and its focus/focusin " +
+        "events fire then rather than before focus() returns",
+    );
+  }
+});
+defineDom("blur", function (this: MirrorElement) {
+  if (!isMirrorNode(this) || typeof __vn_focus !== "function") return;
+  if (__vn_focus(this.id, 1) === "blurred") {
+    if (focusedNode === this) focusedNode = null;
+    fireFocusEvents(this, "blur", null);
+  }
+});
+
+/** `document.activeElement`: the focused element, else the root (which is `body` here). */
+function activeElement(): MirrorElement | null {
+  if (focusedNode && nodesById.get(focusedNode.id) === focusedNode) return focusedNode;
+  return appRoot;
+}
+
+// -- location.reload() (m26 phase 2): the host's restart path, on request
+//
+//    `location.reload()` asks the host (`__vn_reload`, crates/vn-app/src/
+//    reload.rs). At the start of the next frame the host calls
+//    `__VN_UNLOAD__`, below, and then evaluates the bundle again. A browser
+//    would throw the realm away. This one stays, so the outgoing app's own
+//    scheduling is undone here, after `pagehide` and the unmount:
+//
+//    - every timer, interval, animation frame and idle callback scheduled
+//      since this runtime loaded;
+//    - every WebSocket opened since, with its listeners removed first, so
+//      the old code's reconnect logic cannot run;
+//    - every `window` / `document` listener added through the runtime for
+//      an event the host does not source (`resize`, `message`, `storage`…).
+//
+//    What stays, and is said once when a reload happens: globals the old app
+//    set, fetches in flight (they settle into the old promise chains),
+//    IndexedDB connections, voice rooms, and the fact that `DOMContentLoaded`
+//    / `load` do not fire again. `beforeunload` is not asked.
+
+type Fn = (...args: unknown[]) => unknown;
+type SocketLike = {
+  close(): void;
+  addEventListener?: Fn;
+  removeEventListener?: Fn;
+  [handler: string]: unknown;
+};
+
+const realm = (() => {
+  const g = globalThis as unknown as Record<string, unknown>;
+  // The engine's own functions, kept ONCE per process (see `nativeListenFns`).
+  const native = (g.__VN_NATIVE_SCHED__ ??= {
+    setTimeout: g.setTimeout,
+    clearTimeout: g.clearTimeout,
+    setInterval: g.setInterval,
+    clearInterval: g.clearInterval,
+    requestAnimationFrame: g.requestAnimationFrame,
+    cancelAnimationFrame: g.cancelAnimationFrame,
+    requestIdleCallback: g.requestIdleCallback,
+    cancelIdleCallback: g.cancelIdleCallback,
+    WebSocket: g.WebSocket,
+  }) as Record<string, Fn | undefined>;
+  const timers = new Set<unknown>();
+  const frames = new Set<unknown>();
+  const idles = new Set<unknown>();
+  const sockets = new Map<SocketLike, { type: string; fn: unknown; opts: unknown }[]>();
+
+  /** `set(cb, …)` → id, tracked until it fires (`once`) or is cancelled. */
+  const track = (setName: string, live: Set<unknown>, once: boolean) => {
+    const set = native[setName];
+    if (typeof set !== "function") return;
+    g[setName] = function (cb: unknown, ...rest: unknown[]) {
+      if (typeof cb !== "function") return set.call(g, cb, ...rest); // the string form
+      let id: unknown;
+      const run = once
+        ? function (this: unknown, ...a: unknown[]) {
+            live.delete(id);
+            return (cb as Fn).apply(this, a);
+          }
+        : cb;
+      id = set.call(g, run, ...rest);
+      live.add(id);
+      return id;
+    };
+  };
+  const untrack = (clearName: string, ...lives: Set<unknown>[]) => {
+    const clear = native[clearName];
+    if (typeof clear !== "function") return;
+    g[clearName] = function (id: unknown) {
+      for (const live of lives) live.delete(id);
+      return clear.call(g, id);
+    };
+  };
+  track("setTimeout", timers, true);
+  track("setInterval", timers, false);
+  // One id space for both (HTML): either clear cancels either.
+  untrack("clearTimeout", timers);
+  untrack("clearInterval", timers);
+  track("requestAnimationFrame", frames, true);
+  untrack("cancelAnimationFrame", frames);
+  track("requestIdleCallback", idles, true);
+  untrack("cancelIdleCallback", idles);
+
+  const NativeWS = native.WebSocket;
+  if (typeof NativeWS === "function") {
+    g.WebSocket = new Proxy(NativeWS, {
+      construct(target, args, newTarget) {
+        const ws = Reflect.construct(target, args, newTarget) as SocketLike;
+        const added: { type: string; fn: unknown; opts: unknown }[] = [];
+        sockets.set(ws, added);
+        const add = ws.addEventListener;
+        const remove = ws.removeEventListener;
+        if (typeof add === "function") {
+          Object.defineProperty(ws, "addEventListener", {
+            value(type: string, fn: unknown, opts?: unknown) {
+              added.push({ type, fn, opts });
+              return add.call(ws, type, fn, opts);
+            },
+            configurable: true,
+            writable: true,
+          });
+          add.call(ws, "close", () => sockets.delete(ws));
+        }
+        if (typeof remove === "function") {
+          Object.defineProperty(ws, "removeEventListener", {
+            value(type: string, fn: unknown, opts?: unknown) {
+              const i = added.findIndex((a) => a.type === type && a.fn === fn);
+              if (i >= 0) added.splice(i, 1);
+              return remove.call(ws, type, fn, opts);
+            },
+            configurable: true,
+            writable: true,
+          });
+        }
+        return ws as object;
+      },
+    });
+  }
+
+  /** Undoes everything above for the outgoing app. */
+  const close = () => {
+    for (const { target, name, fn, opts } of passedThrough.splice(0)) {
+      try {
+        nativeListenFns(target).remove?.(name, fn, opts);
+      } catch {
+        /* already gone */
+      }
+    }
+    for (const [ws, added] of sockets) {
+      const remove = Object.getOwnPropertyDescriptor(ws, "removeEventListener")?.value as Fn | undefined;
+      for (const a of added.splice(0)) remove?.call(ws, a.type, a.fn, a.opts);
+      for (const h of ["onopen", "onmessage", "onerror", "onclose"]) ws[h] = null;
+      try {
+        ws.close();
+      } catch {
+        /* closing a closed socket */
+      }
+    }
+    sockets.clear();
+    for (const id of timers) native.clearTimeout?.call(g, id);
+    for (const id of frames) native.cancelAnimationFrame?.call(g, id);
+    for (const id of idles) native.cancelIdleCallback?.call(g, id);
+    timers.clear();
+    frames.clear();
+    idles.clear();
+  };
+  return { close };
+})();
+
+{
+  const g = globalThis as { location?: Record<string, unknown>; __VN_UNLOAD__?: () => void; __VN_TEARDOWN__?: () => void };
+  if (g.location && typeof __vn_reload === "function") {
+    try {
+      Object.defineProperty(g.location, "reload", {
+        value: function reload() {
+          __vn_reload();
+        },
+        configurable: true,
+        writable: true,
+      });
+    } catch (e) {
+      warnCompat("location.reload:install", `location.reload() could not be installed on this engine and does nothing (${e})`);
+    }
+  }
+  // The host calls this instead of `__VN_TEARDOWN__` for a reload.
+  g.__VN_UNLOAD__ = () => {
+    g.__VN_UNLOAD__ = undefined;
+    warnCompat(
+      "location.reload",
+      "location.reload() re-runs the app in the SAME JavaScript realm: its timers, animation frames, " +
+        "WebSockets and window/document listeners are closed, but globals it set, fetches in flight, " +
+        "IndexedDB connections and voice rooms stay until the old code ends them, beforeunload is not " +
+        "asked, and DOMContentLoaded / load do not fire again",
+    );
+    try {
+      const ev = typeof Event === "function" ? new Event("pagehide") : null;
+      if (ev) {
+        Object.defineProperty(ev, "persisted", { value: false });
+        (globalThis as { dispatchEvent?: (e: VnEvent) => boolean }).dispatchEvent?.(ev);
+      }
+    } catch (e) {
+      __vn_log("reload: pagehide: " + e);
+    }
+    try {
+      g.__VN_TEARDOWN__?.();
+    } catch (e) {
+      __vn_log("reload: teardown: " + e);
+    }
+    realm.close();
+  };
+}
 
 // -- pointer capture. gpui captures the mouse implicitly for the duration of a
 //    press, which is what this API is FOR — so the capture itself is already
@@ -2795,7 +3330,7 @@ const ACTIVATING_EVENTS = new Set(["keydown", "mousedown", "pointerdown", "mouse
 
 function activatableOnPath(target: MirrorNode): boolean {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
-    if (isLabel(n) || isFileInput(n) || isLink(n)) return true;
+    if (isLabel(n) || isFileInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n)) return true;
   }
   return false;
 }
@@ -2804,6 +3339,10 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   const name = CODE_TO_NAME[evCode];
   const target = nodesById.get(nodeId);
   if (!name || !target) return true;
+  // `document.activeElement` follows the host's focus moves (a click, Tab, a
+  // queued `el.focus()`): blur arrives before the next focus.
+  if (name === "focus") focusedNode = target as MirrorElement;
+  else if (name === "blur" && focusedNode === target) focusedNode = null;
   // Sticky activation (docs/WINDOWING.md §1.9). The windowing prelude arms it
   // from `keydown`/`mousedown` on the engine's own EventTarget, which gpui
   // events never reach — the host delivers them HERE. The prelude publishes
@@ -2874,6 +3413,12 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // KeyboardClickableInputTypeView.
   if (proceed && isFileInput(target) && ((name === "keydown" && key === "Enter") || (name === "keyup" && key === " "))) {
     (target as MirrorElement).click();
+  }
+  // Enter in a text field submits its form (implicit submission, HTML
+  // §4.10.21.2), unless the keydown was cancelled. Chromium does it from
+  // keypress, which a cancelled keydown suppresses: the same rule.
+  if (proceed && name === "keydown" && key === "Enter" && blocksImplicitSubmission(target)) {
+    implicitSubmit(target as MirrorElement);
   }
   if (derived) {
     for (const dn of derived) {
@@ -4012,7 +4557,12 @@ if (doc) {
     };
   });
   defDocGet("defaultView", () => globalThis);
-  defDocGet("activeElement", () => null);
+  // Forced, not filled in: redjs answers null whatever has focus.
+  try {
+    Object.defineProperty(doc, "activeElement", { get: activeElement, configurable: true });
+  } catch (e) {
+    warnCompat("activeElement", `document.activeElement could not be installed on this engine and reads null (${e})`);
+  }
   // `document.addEventListener("keydown"|"pointerdown"|…)` is how every
   // dismissable layer in the ecosystem closes itself.
   interceptGlobalTarget(doc);

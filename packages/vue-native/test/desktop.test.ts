@@ -665,8 +665,9 @@ describe("<label> activation (HTML)", () => {
     expect([clicks, calls(rt, "dialogOpen").length]).toEqual([2, 2]);
   });
 
-  test("a label for a text field clicks it but cannot focus it, and says so once (D-F23)", () => {
+  test("a label for a text field focuses it and clicks it (D-F23 closed in m26 phase 2)", () => {
     const rt = createRuntime();
+    rt.host.focus.answer = (_id: number, op: number) => (op === 0 ? "moved:0" : "");
     const label = rt.nodeOps.createElement("label");
     const input = rt.nodeOps.createElement("input");
     rt.nodeOps.insert(input, label, null);
@@ -675,7 +676,9 @@ describe("<label> activation (HTML)", () => {
     rt.host.dispatcher(label.id, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
     rt.host.dispatcher(label.id, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
     expect(clicked).toBe(2);
-    expect(rt.advisories().filter((l: string) => l.includes("D-F23")).length).toBe(1);
+    expect(rt.host.focus.calls).toEqual([{ id: input.id, op: 0 }, { id: input.id, op: 0 }]);
+    expect(rt.global.document.activeElement).toBe(input);
+    expect(rt.advisories().filter((l: string) => l.includes("D-F23"))).toEqual([]);
   });
 });
 

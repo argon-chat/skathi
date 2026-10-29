@@ -94,6 +94,19 @@ pub fn boot(rt: &JsRuntime) {
     }
 }
 
+/// `location.reload()`'s second half (src/reload.rs): the app is already torn
+/// down; evaluate the payload's script again. The content provider [`boot`]
+/// installed stays (it is set once per process).
+pub fn reboot(rt: &JsRuntime) {
+    let Some(script) = payload::get().and_then(|l| l.payload.script()) else {
+        eprintln!("[prod] reload: the payload has no vn/app.js — nothing to run");
+        return;
+    };
+    if let Err(e) = rt.eval(script, "vn://app.prod.js") {
+        eprintln!("[prod] app.prod.js (reload): {}\n{}", e.header, e.stack);
+    }
+}
+
 /// No dev transport in prod: nothing to poll, nothing to reload.
 #[inline(always)]
 pub fn poll_frame(_frame_no: u32) {}

@@ -288,6 +288,23 @@ declare function __vn_scroll_into_view(
   inline: VnScrollAlign,
 ): string;
 
+/**
+ * `el.focus()` (op 0) / `el.blur()` (op 1), crates/vn-tree/src/lib.rs.
+ *
+ * Focus answers `"moved:<old id>"` (focus moved now; the runtime fires blur/
+ * focusout on the old node, 0 = none, then focus/focusin), `"already"`,
+ * `"pending"` (queued until the node is built; the host fires the events), or
+ * `"refused"` (not focusable or not in the document). Blur answers
+ * `"blurred"` or `""`.
+ */
+declare function __vn_focus(id: VnNodeId, op: 0 | 1): string;
+
+/**
+ * `location.reload()`: asks the host to unload and re-run the app at the next
+ * frame (crates/vn-app/src/reload.rs). Returns at once.
+ */
+declare function __vn_reload(): void;
+
 // ---------------------------------------------------------------------------
 // `<video>` / `<audio>` — crates/vn-video (CONTRACT.md §6)
 // ---------------------------------------------------------------------------
