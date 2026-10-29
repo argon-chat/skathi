@@ -1160,6 +1160,9 @@ thread_local! {
     /// Set the first time a sheet resolves a viewport unit. Nothing else has to
     /// recompile when the window resizes, and almost no sheet uses one.
     static VIEWPORT_UNITS_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while one declaration is mapped when a `calc()` in it had to be
+    /// dropped. [`apply`] turns it into the advisory. See [`calc_dropped`].
+    static CALC_DROPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// See [`set_font_source`].
     static FONT_SOURCE: std::cell::RefCell<Option<Box<dyn Fn() -> Vec<String>>>> =
         const { std::cell::RefCell::new(None) };
@@ -1526,11 +1529,81 @@ fn lp_leaf_px(lp: &LengthPercentage) -> Option<f32> {
     }
 }
 
+/// [`calc_px`] over a `<length-percentage>` for a property whose percentage is
+/// NOT resolved at layout here (a background position, a gradient stop, a
+/// radius, a translation): a calc() that mixes one in is dropped, and
+/// [`calc_dropped`] says so.
+fn lp_calc_px(c: &lightningcss::values::calc::Calc<LengthPercentage>) -> Option<f32> {
+    let v = calc_px(c, &lp_leaf_px);
+    if v.is_none() {
+        calc_dropped();
+    }
+    v
+}
+
+/// Record that the declaration being mapped lost a `calc()` (see [`apply`]).
+fn calc_dropped() {
+    CALC_DROPPED.with(|c| c.set(true));
+}
+
+/// A `calc()` over `<length-percentage>`s folded to its LINEAR form,
+/// `(fraction, px)` meaning `fraction × basis + px`, or `None` when it is not
+/// linear in the basis.
+///
+/// That is every calc() a layout ever needs from a stylesheet in practice:
+/// sums, differences and scalings of percentages and lengths (reka's slider
+/// thumb `left: calc(38.89% + 13.33px)`, Tailwind's `w-[calc(100%-2rem)]`,
+/// `calc(var(--chat-width, 600px) * 0.8)`). `min()` / `max()` / `clamp()`
+/// with a percentage inside are piecewise in the basis, so they stay
+/// unresolved, as do a bare number in a length position and a division by a
+/// length; [`lp_definite`] reports those.
+fn calc_linear(c: &lightningcss::values::calc::Calc<LengthPercentage>) -> Option<(f32, f32)> {
+    use lightningcss::values::calc::{Calc, MathFunction};
+    match c {
+        Calc::Value(v) => match &**v {
+            DimensionPercentage::Dimension(d) => Some((0.0, length_value_px(d)?)),
+            DimensionPercentage::Percentage(p) => Some((p.0, 0.0)),
+            DimensionPercentage::Calc(inner) => calc_linear(inner),
+        },
+        Calc::Number(_) => None,
+        Calc::Sum(a, b) => {
+            let (fa, pa) = calc_linear(a)?;
+            let (fb, pb) = calc_linear(b)?;
+            Some((fa + fb, pa + pb))
+        }
+        Calc::Product(n, v) => {
+            let (f, p) = calc_linear(v)?;
+            Some((n * f, n * p))
+        }
+        Calc::Function(f) => match &**f {
+            MathFunction::Calc(inner) => calc_linear(inner),
+            // Piecewise in the basis unless every term is absolute, in which
+            // case it is a constant.
+            _ => calc_px(c, &lp_leaf_px).map(|p| (0.0, p)),
+        },
+    }
+}
+
 fn lp_definite(lp: &LengthPercentage) -> Option<DefiniteLength> {
     match lp {
         DimensionPercentage::Dimension(v) => length_value_px(v).map(|p| px(p).into()),
         DimensionPercentage::Percentage(p) => Some(relative(p.0)),
-        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(|p| px(p).into()),
+        // A calc() of lengths alone is a constant; one that mixes in a
+        // percentage is resolved by the layout, as a percentage is
+        // (`DefiniteLength::Calc`, a vue-native fork variant).
+        DimensionPercentage::Calc(c) => match calc_px(c, &lp_leaf_px) {
+            Some(p) => Some(px(p).into()),
+            None => match calc_linear(c) {
+                Some((fraction, pixels)) if fraction == 0.0 => Some(px(pixels).into()),
+                Some((fraction, pixels)) => {
+                    Some(DefiniteLength::Calc { fraction, pixels: px(pixels) })
+                }
+                None => {
+                    calc_dropped();
+                    None
+                }
+            },
+        },
     }
 }
 
@@ -1561,7 +1634,7 @@ fn max_size_length(v: &lightningcss::properties::size::MaxSize) -> Option<Length
 fn lp_absolute(lp: &LengthPercentage) -> Option<AbsoluteLength> {
     match lp {
         DimensionPercentage::Dimension(v) => length_value_px(v).map(|p| px(p).into()),
-        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(|p| px(p).into()),
+        DimensionPercentage::Calc(c) => lp_calc_px(c).map(|p| px(p).into()),
         DimensionPercentage::Percentage(_) => None,
     }
 }
@@ -1640,8 +1713,9 @@ fn track_breadth(b: &lightningcss::properties::grid::TrackBreadth) -> Option<gpu
         B::Length(DimensionPercentage::Dimension(l)) => G::Px(length_value_px(l)?),
         // taffy's percentages are fractions, CSS's are 0..100.
         B::Length(DimensionPercentage::Percentage(p)) => G::Percent(p.0),
-        // `calc()` mixing the two has no box to resolve against here.
-        B::Length(DimensionPercentage::Calc(_)) => return None,
+        // A calc() of lengths is a constant; one mixing in a percentage has
+        // no box to resolve against here.
+        B::Length(DimensionPercentage::Calc(c)) => G::Px(lp_calc_px(c)?),
     })
 }
 
@@ -1877,7 +1951,7 @@ impl TileLength {
         match v {
             DimensionPercentage::Percentage(p) => Some(TileLength::Fraction(p.0)),
             DimensionPercentage::Dimension(d) => length_value_px(d).map(TileLength::Pixels),
-            DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(TileLength::Pixels),
+            DimensionPercentage::Calc(c) => lp_calc_px(c).map(TileLength::Pixels),
         }
     }
 }
@@ -1998,7 +2072,7 @@ fn stop_position_lp(v: &LengthPercentage) -> Option<StopPosition> {
     match v {
         DimensionPercentage::Percentage(p) => Some(StopPosition::Fraction(p.0)),
         DimensionPercentage::Dimension(d) => length_value_px(d).map(StopPosition::Pixels),
-        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px).map(StopPosition::Pixels),
+        DimensionPercentage::Calc(c) => lp_calc_px(c).map(StopPosition::Pixels),
     }
 }
 
@@ -2012,7 +2086,10 @@ fn stop_position_angle(
         DimensionPercentage::Dimension(a) => {
             Some(StopPosition::Fraction(a.to_degrees() / 360.0))
         }
-        DimensionPercentage::Calc(_) => None,
+        DimensionPercentage::Calc(_) => {
+            calc_dropped();
+            None
+        }
     }
 }
 
@@ -2069,7 +2146,7 @@ fn gradient_center(position: &lightningcss::values::position::Position) -> ((f32
     fn component<S: Copy>(c: &P<S>, from_start: impl Fn(S) -> bool) -> (f32, bool) {
         let absolute = |v: &LengthPercentage| match v {
             DimensionPercentage::Dimension(d) => length_value_px(d),
-            DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px),
+            DimensionPercentage::Calc(c) => lp_calc_px(c),
             DimensionPercentage::Percentage(_) => None,
         };
         match c {
@@ -2260,7 +2337,7 @@ where
     use lightningcss::values::position::PositionComponent as P;
     let absolute = |v: &LengthPercentage| match v {
         DimensionPercentage::Dimension(d) => length_value_px(d),
-        DimensionPercentage::Calc(c) => calc_px(c, &lp_leaf_px),
+        DimensionPercentage::Calc(c) => lp_calc_px(c),
         DimensionPercentage::Percentage(_) => None,
     };
     match component {
@@ -2420,7 +2497,7 @@ fn gradient_layer(
                         DimensionPercentage::Percentage(p) => Some((p.0, false)),
                         DimensionPercentage::Dimension(d) => length_value_px(d).map(|v| (v, true)),
                         DimensionPercentage::Calc(c) => {
-                            calc_px(c, &lp_leaf_px).map(|v| (v, true))
+                            lp_calc_px(c).map(|v| (v, true))
                         }
                     };
                     match (axis(x), axis(y)) {
@@ -3091,7 +3168,39 @@ fn window_control(
     }
 }
 
+/// Maps one declaration — and says so when a `calc()` in it was dropped.
+///
+/// The sizing properties (width/height and their min/max, inset, margin,
+/// padding, gap, flex-basis, line-height) take any LINEAR calc(), percentage
+/// or not (`DefiniteLength::Calc`). Everything else resolves its percentages
+/// before layout here, so a calc() mixing one in has nothing to resolve
+/// against; it used to vanish without a word (reka's slider thumbs sat at 0
+/// with no advisory, m26 client sweep #12).
 fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mut Vec<String>) {
+    CALC_DROPPED.with(|c| c.set(false));
+    apply_property(p, r, x, diagnostics);
+    if CALC_DROPPED.with(|c| c.replace(false)) {
+        once(
+            diagnostics,
+            format!(
+                "`{}`: this calc() is dropped (v1) — a calc() that mixes a percentage with a \
+                 length is resolved at layout only by the sizing properties (width/height and \
+                 their min/max, inset, margin, padding, gap, flex-basis), and only in its \
+                 linear form (sums and scalings; min()/max()/clamp() over a percentage are \
+                 not). Here the declaration is ignored, as if it were invalid. Write the \
+                 length or the percentage alone, or move the offset into a sizing property",
+                p.property_id().name()
+            ),
+        );
+    }
+}
+
+fn apply_property(
+    p: &Property,
+    r: &mut StyleRefinement,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
     use Property::*;
     match p {
         Display(d) => {
@@ -3358,7 +3467,10 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                     P::Length(DimensionPercentage::Percentage(p)) => {
                         Some(TransformLength::Fraction(p.0))
                     }
-                    P::Length(DimensionPercentage::Calc(_)) => None,
+                    P::Length(DimensionPercentage::Calc(_)) => {
+                        calc_dropped();
+                        None
+                    }
                     P::Side { side, offset: None } => keyword(side).map(TransformLength::Fraction),
                     // `right 10px` — a keyword plus an offset, which needs the
                     // box to resolve into one number.
@@ -3764,9 +3876,9 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 None => unsupported(
                     diagnostics,
                     "grid-template-columns — `repeat(auto-fill|auto-fit, …)`, `fit-content()`, \
-                     named lines and `calc()` breadths are not modelled; every explicit track \
-                     list of lengths, percentages, `auto`, `min-content`, `max-content`, `<flex>` \
-                     and `minmax()` is",
+                     named lines and a `calc()` breadth with a percentage in it are not \
+                     modelled; every explicit track list of lengths, percentages, `auto`, \
+                     `min-content`, `max-content`, `<flex>` and `minmax()` is",
                 ),
             },
         },
@@ -3777,9 +3889,9 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
                 None => unsupported(
                     diagnostics,
                     "grid-template-rows — `repeat(auto-fill|auto-fit, …)`, `fit-content()`, named \
-                     lines and `calc()` breadths are not modelled; every explicit track list of \
-                     lengths, percentages, `auto`, `min-content`, `max-content`, `<flex>` and \
-                     `minmax()` is",
+                     lines and a `calc()` breadth with a percentage in it are not modelled; \
+                     every explicit track list of lengths, percentages, `auto`, `min-content`, \
+                     `max-content`, `<flex>` and `minmax()` is",
                 ),
             },
         },
@@ -4823,7 +4935,10 @@ fn apply_transform(
         match v {
             DimensionPercentage::Dimension(l) => length_value_px(l).map(TransformLength::Pixels),
             DimensionPercentage::Percentage(p) => Some(TransformLength::Fraction(p.0)),
-            DimensionPercentage::Calc(_) => None,
+            DimensionPercentage::Calc(_) => {
+                calc_dropped();
+                None
+            }
         }
     }
     fn is_one(v: &NumberOrPercentage) -> bool {
@@ -5604,10 +5719,47 @@ mod tests {
     }
 
     /// A percentage inside a `calc()` needs the containing block, which does not
-    /// exist before layout — so it stays unresolved rather than being guessed.
+    /// exist before layout — so the sizing properties hand the LINEAR form to
+    /// the layout (`DefiniteLength::Calc`), which resolves it as it resolves a
+    /// percentage (m26 client sweep #12: reka's slider thumbs sat at 0).
     #[test]
-    fn a_percentage_inside_calc_is_not_guessed_at() {
-        let (r, _) = map("width: calc(100% - 8px)");
+    fn a_percentage_inside_calc_is_resolved_by_the_layout() {
+        let calc = |fraction: f32, pixels: f32| {
+            Some(Length::Definite(DefiniteLength::Calc { fraction, pixels: px(pixels) }))
+        };
+        assert_eq!(clean("left: calc(38.89% + 13.33px)").inset.left, calc(0.3889, 13.33));
+        assert_eq!(clean("width: calc(100% - 8px)").size.width, calc(1.0, -8.0));
+        // rem folds into the length half; products scale both halves.
+        assert_eq!(clean("max-width: calc((100% - 1rem) * 0.5)").max_size.width, calc(0.5, -8.0));
+        assert_eq!(clean("margin-left: calc(-50% + 2px)").margin.left, calc(-0.5, 2.0));
+        assert_eq!(
+            clean("padding-top: calc(10% - 1px)").padding.top,
+            Some(DefiniteLength::Calc { fraction: 0.1, pixels: px(-1.0) })
+        );
+        // The percentages cancel: a plain length, not a calc.
+        assert_eq!(
+            clean("width: calc(50% - 50% + 3px)").size.width,
+            Some(Length::Definite(px(3.0).into()))
+        );
+    }
+
+    /// What the layout cannot take is dropped — and SAID, which it was not.
+    #[test]
+    fn a_calc_that_cannot_be_laid_out_is_advised() {
+        let advised = |body: &str, property: &str| {
+            let (_, d) = map(body);
+            assert!(
+                d.iter().any(|m| m.starts_with(&format!("`{property}`: this calc() is dropped"))),
+                "{body:?} produced {d:?}"
+            );
+        };
+        // Piecewise in the basis.
+        advised("width: min(100%, 10px)", "width");
+        advised("left: clamp(0px, 50%, 100px)", "left");
+        // A property whose percentage is resolved before layout here.
+        advised("border-radius: calc(50% - 1px)", "border-radius");
+        advised("background-position: calc(100% - 4px) 0", "background-position");
+        let (r, _) = map("width: min(100%, 10px)");
         assert_eq!(r.size.width, None);
     }
 

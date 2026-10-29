@@ -2350,9 +2350,13 @@ fn apply_percentage_flex_basis(
     t: &Tree,
     node: &crate::tree::Node,
 ) {
+    // A `calc()` with a percentage in it is as unresolvable as the bare
+    // percentage, for the same reason.
     if !matches!(
         style.flex_basis,
-        Some(gpui::Length::Definite(gpui::DefiniteLength::Fraction(_)))
+        Some(gpui::Length::Definite(
+            gpui::DefiniteLength::Fraction(_) | gpui::DefiniteLength::Calc { .. }
+        ))
     ) {
         return;
     }
@@ -3153,6 +3157,7 @@ fn no_inner_inset(style: &gpui::StyleRefinement) -> bool {
         Some(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(p))) => f32::from(*p) == 0.0,
         Some(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Rems(r))) => r.0 == 0.0,
         Some(gpui::DefiniteLength::Fraction(f)) => *f == 0.0,
+        Some(gpui::DefiniteLength::Calc { .. }) => false,
     };
     let zero_absolute = |v: &Option<gpui::AbsoluteLength>| match v {
         None => true,

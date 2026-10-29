@@ -328,6 +328,15 @@ project's browser-compat-first policy.
 8. **One border color.** gpui has a single `border_color`, so `border-top-color`
    and friends are neither mapped nor animatable; `border-color` transitions the
    one color.
+9. **`calc()` with a percentage in it is laid out by the sizing properties
+   only** (m26): width/height and their min/max, inset, margin, padding, gap and
+   flex-basis take any LINEAR calc — sums and scalings, `calc(38.89% + 13.33px)`,
+   `calc((100% - 1rem) * 0.5)` — as gpui's `DefiniteLength::Calc`, resolved at
+   layout like a percentage. Everywhere else a percentage is resolved before
+   layout, so a calc mixing one in (and `min()` / `max()` / `clamp()` over a
+   percentage anywhere) drops the declaration, as if it were invalid, with the
+   advisory "`<prop>`: this calc() is dropped (v1)". A calc of lengths alone is
+   a constant and works everywhere. A transition with a calc endpoint snaps.
 
 ---
 

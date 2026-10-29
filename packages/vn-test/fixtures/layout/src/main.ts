@@ -4,9 +4,9 @@
 //
 // One section per finding, each laid out where the spec can hit it. The class
 // names spell out the Tailwind utilities the client wrote, so a rule maps back
-// to `apps/client` (MessageItem.vue, MentionSegment.vue). Render functions
-// rather than an SFC: this package is `"type": "module"`, and the dev
-// builder's CommonJS interop hands such an importer a `.vue` module's
+// to `apps/client` (MessageItem.vue, MentionSegment.vue, reka's Slider). Render
+// functions rather than an SFC: this package is `"type": "module"`, and the
+// dev builder's CommonJS interop hands such an importer a `.vue` module's
 // NAMESPACE as its default export.
 import { createApp, h } from "vue-native";
 import "./layout.css";
@@ -63,6 +63,13 @@ const bubble = () =>
     ]),
   ]);
 
+/** #12: reka Slider's thumb, and a Tailwind `w-[calc(100%-40px)]`. */
+const track = () =>
+  h("div", { id: "track", class: "track" }, [
+    h("div", { id: "thumb", class: "thumb", style: "left: calc(38.89% + 13.33px)" }),
+    h("div", { id: "calc-w", class: "calc-w" }),
+  ]);
+
 createApp({
-  render: () => h("div", { id: "root" }, [messages(), bubble()]),
+  render: () => h("div", { id: "root" }, [messages(), bubble(), track()]),
 }).mount();

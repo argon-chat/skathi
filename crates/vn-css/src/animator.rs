@@ -55,6 +55,9 @@ enum Opaque {
     Auto,
     /// A percentage (gpui `DefiniteLength::Fraction`)
     Fraction(f32),
+    /// A `calc(<percentage> + <length>)` (gpui `DefiniteLength::Calc`):
+    /// `(fraction, px)`.
+    Calc(f32, f32),
     /// A gradient or pattern fill
     NonSolidFill,
     /// `fill: none` / `stroke: none` — this half of an SVG's geometry is not
@@ -96,6 +99,9 @@ fn slot_definite(v: Option<DefiniteLength>) -> Slot {
         None => Slot::Missing,
         Some(DefiniteLength::Absolute(a)) => Slot::Value(from_absolute(a)),
         Some(DefiniteLength::Fraction(f)) => Slot::Opaque(Opaque::Fraction(f)),
+        Some(DefiniteLength::Calc { fraction, pixels }) => {
+            Slot::Opaque(Opaque::Calc(fraction, f32::from(pixels)))
+        }
     }
 }
 

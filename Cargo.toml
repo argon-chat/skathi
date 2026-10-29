@@ -43,8 +43,12 @@ async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "
 # auto margins already took (a `mx-auto` item in a `justify-center` row moved
 # twice as far). Upstream fixed it in taffy 0.14.0; the vendored copy is the
 # 0.13.0 crate as published plus that change, marked in
-# vendor/taffy/src/compute/flexbox.rs. Drop this line when gpui moves to a
+# vendor/taffy/src/compute/flexbox.rs. Drop the backport when gpui moves to a
 # taffy >= 0.14.
+# ...and one vue-native patch that stays: `TaffyTree::resolve_calc_value`
+# decodes the calc() handle gpui packs for `DefiniteLength::Calc`
+# (vendor/taffy/src/tree/taffy_tree.rs; upstream resolves every calc to 0).
+# Moving off the vendored copy means carrying that patch to the new taffy.
 taffy = { path = "vendor/taffy" }
 
 # vendor/redjs is a git submodule (https://github.com/argon-chat/redjs) consumed as a

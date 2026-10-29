@@ -90,3 +90,17 @@ describe("#9 inline content in a block", () => {
     bunExpect(trigger.w).toBeGreaterThan(60);
   });
 });
+
+describe("#12 calc() mixing a percentage and a length", () => {
+  test("reka's slider thumb is placed at `left: calc(38.89% + 13.33px)`", async () => {
+    const track = await app.locator("#track").boundingBox();
+    const thumb = await app.locator("#thumb").boundingBox();
+    // 0.3889 × 300 + 13.33 = 130.
+    bunExpect(Math.abs(thumb.x - track.x - 130)).toBeLessThanOrEqual(1);
+  });
+
+  test("`width: calc(100% - 40px)` is resolved against the parent", async () => {
+    const w = await app.locator("#calc-w").boundingBox();
+    bunExpect(Math.abs(w.w - 260)).toBeLessThanOrEqual(1);
+  });
+});
