@@ -29,7 +29,15 @@ publish = false
 #
 # `indexeddb` likewise: no dependency, and an app written for a browser expects
 # `indexedDB` (Dexie, idb, localForage and every offline queue assume it).
-default = ["audio", "storages", "clipboard", "indexeddb"]
+#
+# `net-h2` is how a browser talks to a server, so it is on as well: HTTP/2 via
+# ALPN, keep-alive, and one pooled connection per origin. Its crates (tokio,
+# hyper, h2) are already in this link, at the same versions, through gpui's
+# http client. Off, `fetch` falls back to redjs's blocking transport: one
+# thread and one fresh HTTP/1.1 connection per request. It is still correct,
+# just slower. See the module header of redjs/src/webapi/http.rs and
+# research/reports/m26/net-h2-pool.md.
+default = ["audio", "storages", "clipboard", "indexeddb", "net-h2"]
 # `audio-codecs-extra` rides along: an app runtime's `decodeAudioData` input is
 # "whatever file the user has", not a curated asset pipeline, so AAC-LC/M4A,
 # ALAC, AIFF, CAF and MKV belong in the box. A game shipping its own .ogg does
@@ -50,6 +58,8 @@ indexeddb = ["redjs/indexeddb"]
 # is installed and vn-storage is that host: a build without vn-storage would
 # carry the code for nothing.
 indexeddb-disk = ["indexeddb", "redjs/indexeddb-sqlite"]
+# `fetch`'s pooled HTTP/2 + HTTP/1.1 keep-alive transport (see `default`).
+net-h2 = ["redjs/net-h2"]
 
 [dependencies]
 # Lean redjs: no game-engine host classes (physics/mesh/css-host/yoga-host are

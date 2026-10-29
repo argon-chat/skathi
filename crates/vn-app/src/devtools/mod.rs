@@ -752,7 +752,7 @@ fn accept_loop(listener: TcpListener, generation: u64) {
 ///   still costs one frame, in order.
 /// * **HTTP/1.1** — one `POST /` per connection, the request object as the
 ///   body. Same token, same command, same reply object, `Connection: close`
-///   (which is also all redjs' own `fetch` client ever asks for).
+///   (redjs' pooled `fetch` honours it and never reuses the socket).
 ///
 /// The two are told apart by the first line and nothing else: a JSON request
 /// starts with `{`, an HTTP request line ends with ` HTTP/1.x`. Neither can be
