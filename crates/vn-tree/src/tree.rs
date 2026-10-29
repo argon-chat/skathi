@@ -423,9 +423,20 @@ impl Tree {
 
     pub fn set_text(&mut self, id: u32, text: String) {
         if let Some(n) = self.node_mut(id) {
+            // `:empty` reads whether a text child has data (`NodeRef::is_empty`),
+            // so a text node gaining its first character, or losing its last,
+            // restyles the element it sits in, looking through anchors.
+            let flips = n.kind == Kind::Text && n.text.is_empty() != text.is_empty();
+            let mut parent = n.parent;
             n.text = text;
             self.dirty = true;
             self.mark_restyle(id);
+            if flips {
+                while let Some(p) = self.node(parent).filter(|p| p.kind == Kind::Anchor) {
+                    parent = p.parent;
+                }
+                self.mark_restyle(parent);
+            }
             self.touch(id);
         }
     }
@@ -1955,8 +1966,29 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
             .find(|(k, _, _)| *k == key)
             .map(|(_, v, _)| v.as_str())
     }
+    /// `:empty` as Selectors 3 and the browsers read it: only an element, or a
+    /// text node with data, makes a parent non-empty. A comment does not, and
+    /// neither does a zero-length text node. Those are exactly what Vue leaves
+    /// behind: a comment for a `v-if` that is off, and empty text for a
+    /// fragment's or a Teleport's two ends in a production build. Counting
+    /// them meant `empty:hidden` never matched (m26 client sweep #23).
+    /// Whitespace-only text still counts, as it does in Chrome and Firefox.
+    /// An anchor that carries children is looked through, as `each_child`
+    /// does.
     fn is_empty(&self) -> bool {
-        self.node().children.is_empty() && self.node().text.is_empty()
+        fn bare(tree: &Tree, id: u32) -> bool {
+            let Some(n) = tree.node(id) else { return true };
+            n.text.is_empty()
+                && n.children.iter().all(|&c| match tree.node(c) {
+                    Some(child) => match child.kind {
+                        Kind::Element => false,
+                        Kind::Text => child.text.is_empty(),
+                        Kind::Anchor => bare(tree, c),
+                    },
+                    None => true,
+                })
+        }
+        bare(self.tree, self.id)
     }
     fn is_root(&self) -> bool {
         self.node().parent == 0
@@ -2107,6 +2139,59 @@ mod tests {
         with_tree(|t| t.set_element_text(sheet, String::new()));
         restyle_all();
         assert_eq!(opacity(probe), Some(0.25), "removing the rules restores the build's sheet");
+    }
+
+    /// m26 client sweep #23: `fixed inset-0 … empty:hidden` overlays stayed
+    /// laid out and painted, because the anchors Vue leaves in an empty
+    /// container counted as children. A comment and a zero-length text node
+    /// do not make an element non-empty; an element, or text with data, does;
+    /// and a text node gaining or losing its data restyles its parent.
+    #[test]
+    fn empty_ignores_vue_anchors_and_empty_text() {
+        let opacity = |id: u32| {
+            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
+        };
+        set_stylesheet(".box:empty { opacity: 0.5 }".into());
+        let (bare, anchored, texted, text) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let mut boxed = || {
+                let b = t.create_element(div);
+                t.set_class(b, "box");
+                t.insert(b, root, 0);
+                b
+            };
+            let (bare, anchored, texted) = (boxed(), boxed(), boxed());
+            // A `v-if` that is off, and a fragment's two ends.
+            for _ in 0..2 {
+                let a = t.create_anchor();
+                t.insert(a, anchored, 0);
+            }
+            let start = t.create_text();
+            t.insert(start, anchored, 0);
+            let text = t.create_text();
+            t.insert(text, texted, 0);
+            (bare, anchored, texted, text)
+        });
+        restyle_all();
+        assert_eq!(opacity(bare), Some(0.5), "no children");
+        assert_eq!(opacity(anchored), Some(0.5), "anchors and an empty text node only");
+        assert_eq!(opacity(texted), Some(0.5), "a text node with no data");
+
+        with_tree(|t| t.set_text(text, " ".into()));
+        restyle_all();
+        assert_eq!(opacity(texted), None, "text with data, whitespace included");
+        with_tree(|t| t.set_text(text, String::new()));
+        restyle_all();
+        assert_eq!(opacity(texted), Some(0.5), "and empty again");
+
+        with_tree(|t| {
+            let span = t.intern("span");
+            let child = t.create_element(span);
+            t.insert(child, anchored, 0);
+        });
+        restyle_all();
+        assert_eq!(opacity(anchored), None, "an element child");
     }
 
     #[test]
