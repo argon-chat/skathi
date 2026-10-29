@@ -1660,9 +1660,17 @@ fn build_node<V: 'static>(
             // `<input>` and `<textarea>` are the SAME native widget — only
             // `TextInputOptions::multiline` differs (see `build_input`), so
             // everything the wrapper does for one it does for the other.
-            let is_input = matches!(t.name(node.tag), "input" | "textarea");
-            // Both are tabbable by default in HTML; a plain <div> is not.
-            let tab_index = tab_index_of(t, id).or(is_input.then_some(0));
+            //
+            // `<input type=file>` is NOT that widget: it is a button and a
+            // status line (`file_input_children`), and the runtime opens the
+            // picker from its click. It keeps the ordinary wrapper's focus
+            // handle, so Enter and Space reach it as keydown/keyup.
+            let is_file_input = crate::aria::is_file_input(t, id);
+            let is_input = matches!(t.name(node.tag), "input" | "textarea") && !is_file_input;
+            // Both are tabbable by default in HTML; a plain <div> is not. A
+            // disabled file input is not focusable at all.
+            let file_tab = is_file_input && !t.prop(id, "disabled").is_some_and(|v| v != "false");
+            let tab_index = tab_index_of(t, id).or((is_input || file_tab).then_some(0));
 
             // Keyboard/focus events and tab navigation need a persistent
             // FocusHandle. `<input>` owns its own focus handle inside the
@@ -1797,7 +1805,9 @@ fn build_node<V: 'static>(
                 if let Some(pb) = before {
                     kids.push(pseudo_element(&pb, case, stacking));
                 }
-                if !node.text.is_empty() {
+                if is_file_input {
+                    kids.push(file_input_children(t, id, node, case));
+                } else if !node.text.is_empty() {
                     // `setElementText` — what Vue calls for an element whose
                     // only child is text, which is most of them. The text IS
                     // the element's whole content, so both its ends are the
@@ -4132,6 +4142,41 @@ fn build_video<V: 'static>(
     let click_focus = handle.filter(|_| focusable);
     let style_hover = wants_style_hover(t, id, node);
     bind_events(d, id, mask, click_focus, focusable, true, style_hover, cx).into_any_element()
+}
+
+/// What an `<input type=file>` paints inside its own box: the "Choose File"
+/// button, then the status ("No file chosen", the file's name, "3 files"),
+/// in one row whatever the input's own `display`.
+///
+/// The button's look is Chromium's UA default, approximately (D-F12): a
+/// light face, a 1px grey border, small radius, `1px 6px` padding and a 4px
+/// gap before the status. `::file-selector-button` rules refine it, which is
+/// what Tailwind's `file:` variants and shadcn-vue's `<Input type="file">`
+/// write. The strings are Chromium's English ones (`aria::file_input_labels`);
+/// the status comes from the runtime as the reserved `:file-label` prop.
+fn file_input_children(t: &Tree, id: u32, node: &crate::tree::Node, case: Option<vn_css::TextTransform>) -> AnyElement {
+    use gpui::Refineable as _;
+    let (button_text, status) = crate::aria::file_input_labels(t, id).unwrap_or(("Choose File", String::new()));
+    let mut button = div()
+        .flex_none()
+        .mr(gpui::px(4.0))
+        .px(gpui::px(6.0))
+        .py(gpui::px(1.0))
+        .rounded(gpui::px(3.0))
+        .border_1()
+        .border_color(gpui::rgb(0x767676))
+        .bg(gpui::rgb(0xefefef))
+        .text_color(gpui::black());
+    if let Some(r) = node.computed.as_ref().and_then(|cs| cs.file_selector_button.as_ref()) {
+        button.style().refine(r);
+    }
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .child(button.child(transformed_text(button_text, case)))
+        .child(div().flex_none().child(transformed_text(&status, case)))
+        .into_any_element()
 }
 
 /// The native `<input>` / `<textarea>` widget: persistent `TextInputState`

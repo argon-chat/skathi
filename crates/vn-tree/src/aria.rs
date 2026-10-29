@@ -314,8 +314,9 @@ fn input_role(input_type: Option<&str>) -> Option<Role> {
         "week" => Role::WeekInput,
         "color" => Role::ColorWell,
         "button" | "submit" | "reset" | "image" => Role::Button,
-        // `type=file` has no AccessKit counterpart and no widget here either.
-        "file" => return None,
+        // `type=file` is a button that opens the picker (render.rs
+        // `file_input_children`), and Chromium exposes it as one.
+        "file" => Role::Button,
         // `type=hidden` renders nothing.
         "hidden" => return None,
         _ => Role::TextInput,
@@ -421,10 +422,36 @@ pub(crate) fn accessible_label(t: &Tree, id: u32) -> Option<String> {
             return Some(text);
         }
     }
+    // A file input is named by its button and its status, "Choose File, No
+    // file chosen" — what a screen reader says for it in Chromium.
+    if let Some((button, status)) = file_input_labels(t, id) {
+        return Some(format!("{button}, {status}"));
+    }
     // `alt` names an `<img>` — the oldest accessible name on the web, and the
     // one every image in every app already carries. (`alt=""` never reaches
     // here: an empty alt keeps the element out of the tree entirely.)
     t.prop(id, "alt").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string)
+}
+
+/// Is `id` an `<input type=file>`?
+pub(crate) fn is_file_input(t: &Tree, id: u32) -> bool {
+    t.node(id).is_some_and(|n| t.name(n.tag) == "input")
+        && t.prop(id, "type").is_some_and(|ty| ty.trim().eq_ignore_ascii_case("file"))
+}
+
+/// A file input's two strings, Chromium's English UA text: the button
+/// ("Choose File", or "Choose Files" with `multiple`, which is Chromium's
+/// only test; a `webkitdirectory` input without it says "Choose File") and
+/// the status the runtime pushes as the reserved `:file-label` prop ("No
+/// file chosen", the file's name, "3 files"). `None` for any other element.
+pub(crate) fn file_input_labels(t: &Tree, id: u32) -> Option<(&'static str, String)> {
+    if !is_file_input(t, id) {
+        return None;
+    }
+    let several = t.prop(id, "multiple").is_some_and(|v| v != "false");
+    let button = if several { "Choose Files" } else { "Choose File" };
+    let status = t.prop(id, ":file-label").filter(|s| !s.is_empty()).unwrap_or("No file chosen");
+    Some((button, status.to_string()))
 }
 
 /// Roles whose accessible NAME comes from their own contents — step 2F of the
@@ -834,6 +861,26 @@ mod tests {
         });
     }
 
+    /// `<input type=file>` is a button named by its button and its status;
+    /// `aria-label` still wins, and `multiple` pluralises the button.
+    #[test]
+    fn a_file_input_is_a_button_named_by_its_button_and_status() {
+        with_tree(|t| {
+            let input = element(t, "input", &[("type", "file")]);
+            let node = t.node(input).unwrap();
+            assert_eq!(resolved_role(t, input, &node), Some(Role::Button));
+            assert_eq!(accessible_label(t, input).as_deref(), Some("Choose File, No file chosen"));
+            let many = element(t, "input", &[("type", "File"), ("multiple", ""), (":file-label", "3 files")]);
+            assert_eq!(accessible_label(t, many).as_deref(), Some("Choose Files, 3 files"));
+            let folder = element(t, "input", &[("type", "file"), ("webkitdirectory", "")]);
+            assert_eq!(accessible_label(t, folder).as_deref(), Some("Choose File, No file chosen"));
+            let named = element(t, "input", &[("type", "file"), ("aria-label", "Avatar")]);
+            assert_eq!(accessible_label(t, named).as_deref(), Some("Avatar"));
+            let text = element(t, "input", &[("type", "text")]);
+            assert_eq!(file_input_labels(t, text), None);
+        });
+    }
+
     /// `aria-labelledby` names OTHER elements; the accessible name is their
     /// text, concatenated in reference order — which needs a real tree walk.
     #[test]
@@ -1049,7 +1096,7 @@ mod tests {
         ] {
             assert_eq!(implicit_role("input", ty, false, false), Some(want), "type={ty:?}");
         }
-        assert_eq!(implicit_role("input", Some("file"), false, false), None);
+        assert_eq!(implicit_role("input", Some("file"), false, false), Some(Role::Button));
         assert_eq!(implicit_role("input", Some("hidden"), false, false), None);
     }
 

@@ -155,6 +155,12 @@ pub struct ComputedStates {
     /// selection is a quad behind the glyphs, and the glyphs keep the colour
     /// the field draws them in.
     pub selection: Option<Rc<StyleRefinement>>,
+    /// `::file-selector-button` — the "Choose File" button an
+    /// `<input type=file>` paints (vn-tree `build_file_input`). A box of its
+    /// own, so box properties apply; base state only, like `::placeholder`.
+    /// Tailwind's `file:` variants and shadcn-vue's `<Input type="file">`
+    /// write exactly these rules.
+    pub file_selector_button: Option<Rc<StyleRefinement>>,
     /// The element's resolved custom properties: what it inherited from its
     /// parent, overridden by what it declared. Children read this one, which is
     /// why the restyle pass must walk in document order.
@@ -188,6 +194,10 @@ pub enum PseudoElement {
     /// one selection that exists here (gpui paints ordinary text; only the
     /// field has a selection model). The renderer reads `background` off it.
     Selection,
+    /// `::file-selector-button`, the button inside `<input type=file>`. Not
+    /// a generated box either: the renderer builds the button and refines it
+    /// with this.
+    FileSelectorButton,
 }
 
 /// A `::before` / `::after` generated box, folded out of the cascade.
@@ -1127,8 +1137,9 @@ impl Engine {
         let mut after = (StyleRefinement::default(), Extras::default());
         let mut placeholder = (StyleRefinement::default(), Extras::default());
         let mut selection = (StyleRefinement::default(), Extras::default());
+        let mut file_button = (StyleRefinement::default(), Extras::default());
         let (mut any_before, mut any_after, mut any_placeholder) = (false, false, false);
-        let mut any_selection = false;
+        let (mut any_selection, mut any_file_button) = (false, false);
         for important_pass in [false, true] {
             for r in &matched {
                 if let Some(which) = r.pseudo {
@@ -1137,6 +1148,7 @@ impl Engine {
                         PseudoElement::After => (&mut after, &mut any_after),
                         PseudoElement::Placeholder => (&mut placeholder, &mut any_placeholder),
                         PseudoElement::Selection => (&mut selection, &mut any_selection),
+                        PseudoElement::FileSelectorButton => (&mut file_button, &mut any_file_button),
                     };
                     *seen = true;
                     slot.1.refine(if important_pass {
@@ -1406,6 +1418,7 @@ impl Engine {
                 }),
             placeholder: any_placeholder.then(|| Rc::new(placeholder.0)),
             selection: any_selection.then(|| Rc::new(selection.0)),
+            file_selector_button: any_file_button.then(|| Rc::new(file_button.0)),
             vars,
             color: effective_color,
         }
@@ -1859,6 +1872,9 @@ fn pseudo_box(
         // thing; lightningcss folds every spelling into one variant.
         PE::Placeholder(_) => Some(PseudoElement::Placeholder),
         PE::Selection(_) => Some(PseudoElement::Selection),
+        // `::-webkit-file-upload-button` is the same thing; lightningcss folds
+        // the spellings into one variant here too.
+        PE::FileSelectorButton(_) => Some(PseudoElement::FileSelectorButton),
         _ => None,
     }
 }
@@ -1871,12 +1887,13 @@ fn pseudo_box(
 /// * `::backdrop` styles the layer behind an OPEN `<dialog>` or a fullscreen
 ///   element. vue-native has neither, and Tailwind's preflight writes a
 ///   `::backdrop` rule into every sheet, so this would fire on every app.
-/// * The native form-control parts (`::file-selector-button`,
-///   `::-webkit-inner-spin-button`, …). vue-native paints NO native control
-///   skin — that is the same fact `appearance` rests on — so there is no spin
-///   button and no file-picker button to style. The divergence is the absence
-///   of those widgets, which is a forms question, not a selector the cascade
-///   got wrong.
+/// * The native form-control parts (`::-webkit-inner-spin-button`, …).
+///   vue-native paints NO native control skin — that is the same fact
+///   `appearance` rests on — so there is no spin button to style. The
+///   divergence is the absence of those widgets, which is a forms question,
+///   not a selector the cascade got wrong. `::file-selector-button` left
+///   this family in m25: `<input type=file>` paints its button now, and the
+///   rule refines it ([`ComputedStates::file_selector_button`]).
 ///
 /// `::-webkit-scrollbar` used to be in the second family and is not any more:
 /// there IS a scrollbar now (`vn_elements::scrollbar`), so a rule that restyles
@@ -1892,7 +1909,7 @@ fn never_matches_anywhere(
 ) -> bool {
     use lightningcss::selector::PseudoElement as PE;
     match pe {
-        PE::Backdrop(_) | PE::FileSelectorButton(_) => true,
+        PE::Backdrop(_) => true,
         PE::WebKitScrollbar(_) => false,
         PE::Custom { name } => {
             let name = name.as_ref();
@@ -2334,6 +2351,7 @@ impl Engine {
                     PseudoElement::After => "::after",
                     PseudoElement::Placeholder => "::placeholder",
                     PseudoElement::Selection => "::selection",
+                    PseudoElement::FileSelectorButton => "::file-selector-button",
                 }),
                 declarations: r.decls.as_deref().cloned().unwrap_or_default(),
                 diagnostics: r.diagnostics.as_deref().cloned().unwrap_or_default(),
@@ -3959,6 +3977,37 @@ mod tests {
         let input = &states[3];
         assert!(input.placeholder.as_ref().unwrap().text.color.is_some());
         assert_eq!(input.base.text.color, None, "the input itself is untouched");
+    }
+
+    /// `::file-selector-button` styles the button `<input type=file>` paints,
+    /// so it folds into its own refinement, box properties included. This is
+    /// Tailwind's `file:` variant, verbatim.
+    #[test]
+    fn file_selector_button_folds_into_its_own_refinement() {
+        let engine = Engine::compile(
+            ".file\\:border-0::file-selector-button { border-width: 0px } \
+             input::file-selector-button { background-color: rgb(1 2 3); padding-left: 12px }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = doc();
+        let states = cascade(&engine, &d, &Env::default());
+        let input = &states[3];
+        let button = input.file_selector_button.as_ref().expect("the rule reaches the input's button");
+        assert!(button.background.is_some());
+        assert!(button.padding.left.is_some());
+        assert!(input.base.background.is_none(), "the input itself is untouched");
+        assert!(states[0].file_selector_button.is_none(), "only an element a rule matched gets one");
+    }
+
+    /// …and the devtools' rule list names it, as it names `::placeholder`.
+    #[test]
+    fn file_selector_button_rules_are_listed_with_their_pseudo() {
+        let engine = Engine::compile("input::-webkit-file-upload-button { color: red }");
+        assert!(engine.diagnostics.is_empty(), "the -webkit- spelling is the same pseudo: {:?}", engine.diagnostics);
+        let d = doc();
+        let rules = engine.matched_rules(DocRef { doc: &d, i: 4 }, &Env::default());
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        assert_eq!(rules[0].pseudo, Some("::file-selector-button"));
     }
 
     /// Every OTHER pseudo-element still cannot match, and the whole family
