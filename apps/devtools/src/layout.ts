@@ -42,6 +42,18 @@ export const ROW_H = 18;
 export const LOG_H = 17;
 /** One network row. */
 export const NET_H = 20;
+/** The network list's column-header strip. */
+export const NET_COLS_H = 22;
+/** The request details pane's tab strip. */
+export const DETAIL_TABS_H = 26;
+/** The bar above a body view: size, truncation, the view toggles, copy. */
+export const BODY_BAR_H = 24;
+/** One row of a body view — a text line or sixteen bytes of hex. */
+export const BODY_LINE_H = 16;
+/** The 11 px mono face's advance width (see `wrappedLines` in virtual.ts). */
+export const MONO_W = 6.62;
+/** One right-click menu item. */
+export const MENU_ITEM_H = 22;
 
 /** The window, as the host reports it. Kept live by the `resize` listener. */
 export const viewport = reactive({ w: 1180, h: 820 });

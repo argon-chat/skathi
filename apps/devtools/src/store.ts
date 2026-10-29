@@ -29,8 +29,11 @@ import type {
   ConsoleLine,
   EvalReply,
   LogsReply,
+  MenuItem,
+  NetDetail,
   NetEntry,
   NetReply,
+  NetTab,
   NodeId,
   PerfReply,
   PickReply,
@@ -111,7 +114,7 @@ interface State {
   consoleOpen: boolean;
   treeWidth: number;
   consoleHeight: number;
-  dragging: "tree" | "console" | null;
+  dragging: "tree" | "console" | "net" | null;
 
   // -- elements
   tree: TreeNode | null;
@@ -162,6 +165,14 @@ interface State {
   net: NetEntry[];
   netCursor: number;
   netFilter: string;
+  /** The row whose details are open (its `seq`), or `null` — the list alone. */
+  netSelected: number | null;
+  netDetail: NetDetail | null;
+  netDetailError: string;
+  netDetailBusy: boolean;
+  netTab: NetTab;
+  /** The request list's width while the details pane is open. */
+  netListWidth: number;
 
   // -- storage
   storageArea: string;
@@ -233,6 +244,12 @@ export const state = reactive<State>({
   net: [],
   netCursor: 0,
   netFilter: "",
+  netSelected: null,
+  netDetail: null,
+  netDetailError: "",
+  netDetailBusy: false,
+  netTab: "headers",
+  netListWidth: 420,
 
   storageArea: "local",
   storage: [],
@@ -265,6 +282,17 @@ export const ui = reactive({
   closeElementSearch: null as null | (() => void),
   /** Set by the Console so Ctrl+F and the prompt focus can reach it. */
   focusPrompt: null as null | (() => void),
+  /**
+   * Which panel Ctrl+C copies from: the one whose row was clicked LAST. Two
+   * panels have a selection at once (the console drawer sits under Network),
+   * and "the one you touched" is the only answer a person would expect.
+   */
+  copyTarget: "" as "" | "console" | "network",
+  /** The right-click menu, when one is open (`components/ContextMenu.vue`). */
+  menu: null as null | { x: number; y: number; items: MenuItem[] },
+  /** A one-line acknowledgement in the status bar: "copied 3 lines". */
+  flash: "",
+  flashBad: false,
 });
 
 // ---------------------------------------------------------------------------
@@ -367,6 +395,9 @@ function resetInspection(): void {
   state.perfHistory = [];
   state.net = [];
   state.netCursor = 0;
+  state.netSelected = null;
+  state.netDetail = null;
+  state.netDetailError = "";
   state.treeRev = 0;
   state.seenRev = -1;
 }
@@ -789,7 +820,10 @@ function note(entry: { kind: string; text: string; seq?: number; at?: number }):
   pushLine({ seq: -1, at: Date.now(), ...entry });
 }
 
+let lineUid = 0;
+
 function pushLine(entry: ConsoleLine): void {
+  entry.uid = ++lineUid;
   state.logs.push(entry);
   if (state.logs.length > LOG_LIMIT) state.logs.splice(0, state.logs.length - LOG_LIMIT);
 }
@@ -943,6 +977,129 @@ export async function refreshNet(): Promise<void> {
 
 export function clearNet(): void {
   state.net = [];
+  closeNetDetail();
+}
+
+/**
+ * Opens the details pane on row `seq` and asks the target for what is behind
+ * it. On demand, one command per click: a body never rides the push feed.
+ */
+export function selectNet(seq: number | null): Promise<void> {
+  ui.copyTarget = "network";
+  if (seq === state.netSelected && state.netDetail) return Promise.resolve();
+  state.netSelected = seq;
+  state.netDetail = null;
+  state.netDetailError = "";
+  if (seq === null) return Promise.resolve();
+  const entry = state.net.find((e) => e.seq === seq);
+  if (entry?.kind === "ws") state.netTab = "socket";
+  else if (state.netTab === "socket") state.netTab = "headers";
+  return loadNetDetail(seq);
+}
+
+export function closeNetDetail(): void {
+  state.netSelected = null;
+  state.netDetail = null;
+  state.netDetailError = "";
+}
+
+/**
+ * `net_detail` for `seq`, into the pane if that row is still the one open.
+ *
+ * The response body is read off a CLONE after the row was recorded
+ * (`net.rs` TEE_JS), so a click on a row that has only just appeared can land
+ * before the body does. That is retried a few times, a little later each
+ * time, rather than shown as "no body".
+ */
+export async function loadNetDetail(seq: number, attempt = 0): Promise<void> {
+  if (!state.target) return;
+  state.netDetailBusy = true;
+  try {
+    const detail = await detailFor(seq);
+    if (state.netSelected !== seq) return;
+    state.netDetail = detail;
+    state.netDetailError = "";
+    const res = detail.response;
+    const waiting =
+      (detail.entry.kind !== "ws" && res !== undefined && res.body === null && !detail.error) ||
+      !!detail.cookies?.pending;
+    if (waiting && attempt < 4) {
+      setTimeout(() => {
+        if (state.netSelected === seq) void loadNetDetail(seq, attempt + 1);
+      }, 250 * (attempt + 1));
+    }
+  } catch (e) {
+    if (state.netSelected !== seq) return;
+    const text = message(e);
+    state.netDetailError = /unknown command/.test(text)
+      ? "this target predates net_detail (m26): it records the rows, not what is behind them"
+      : text;
+    if (/cannot reach/.test(text)) fail(e);
+  } finally {
+    state.netDetailBusy = false;
+  }
+}
+
+/** The details of `seq`, from the pane when it already has them. */
+export function detailFor(seq: number): Promise<NetDetail> {
+  if (state.netDetail && state.netDetail.entry.seq === seq) return Promise.resolve(state.netDetail);
+  return cmd<NetDetail>("net_detail", { seq });
+}
+
+// ---------------------------------------------------------------------------
+// the clipboard, the right-click menu, the status-bar acknowledgement
+// ---------------------------------------------------------------------------
+//
+// INTERIM. vue-native cannot select painted text yet
+// (crates/vn-css/src/mapper.rs: "text painted by gpui is not selectable"), so
+// every panel that shows text a developer will want to paste somewhere — a
+// console message, a URL, a response body — offers an explicit copy instead:
+// a hover icon, the right-click menu, and Ctrl+C on the selected rows. When
+// real text selection lands, drag-select should work in these panes too, and
+// these become the shortcuts they are in a browser rather than the only way.
+
+let flashTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function flash(text: string, bad = false): void {
+  ui.flash = text;
+  ui.flashBad = bad;
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => {
+    ui.flash = "";
+    flashTimer = null;
+  }, 4000);
+}
+
+/**
+ * Puts `text` on the system clipboard through the app's own
+ * `navigator.clipboard` — redjs's async Clipboard API over the host clipboard,
+ * the same one a native `<input>` uses for Ctrl+C. `what` is how the status
+ * bar names it ("the URL", "3 lines").
+ */
+export async function copyText(text: string, what: string): Promise<boolean> {
+  // Probed, not assumed: `clipboard` needs vn-app's `clipboard` feature, and a
+  // host built without it has no `navigator.clipboard` to call.
+  const clipboard = globalThis.navigator?.clipboard;
+  if (!clipboard || typeof clipboard.writeText !== "function") {
+    flash("no clipboard in this host — vn-app was built without its `clipboard` feature", true);
+    return false;
+  }
+  try {
+    await clipboard.writeText(text);
+    flash(`copied ${what}`);
+    return true;
+  } catch (e) {
+    flash(`copy failed: ${message(e)}`, true);
+    return false;
+  }
+}
+
+export function openMenu(x: number, y: number, items: MenuItem[]): void {
+  ui.menu = { x, y, items };
+}
+
+export function closeMenu(): void {
+  ui.menu = null;
 }
 
 export function visibleNet(): NetEntry[] {

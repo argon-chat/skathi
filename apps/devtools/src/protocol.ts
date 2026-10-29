@@ -251,7 +251,13 @@ export interface PerfReply {
 /** One exchange the network tee recorded (`crates/vn-app/src/devtools/net.rs`). */
 export interface NetEntry {
   seq: number;
-  /** `"fetch"` or `"ws"`. */
+  /**
+   * The exchange's record id. Present when the host kept DETAILS for it
+   * (`net_detail`); absent from a host older than m26, or for a request that
+   * started while the devtools were off. A socket's rows all share one.
+   */
+  rid?: number;
+  /** `"fetch"`, `"xhr"` or `"ws"`. */
   kind: string;
   url: string;
   /** fetch only. */
@@ -274,6 +280,111 @@ export interface NetReply {
   next: number;
   dropped: number;
 }
+
+/** `[name, value]`, in the order the app (or the server) gave them. */
+export type HeaderPair = [string, string];
+
+/**
+ * A captured body — `net.rs` `body_json`. `data` is absent when nothing was
+ * read (`note` says why) or the bytes were `evicted` to stay in the budget.
+ */
+export interface NetBody {
+  /** `utf8`: `data` is the text. `base64`: `data` is the bytes (binary types). */
+  encoding?: "utf8" | "base64";
+  data?: string;
+  /** Bytes kept — at most `limits.bodyCap`. */
+  stored: number;
+  /** Fewer bytes are kept than the body had. */
+  truncated?: boolean;
+  /** The whole body's size when known: bytes, or UTF-16 units when `unit` is `chars`. */
+  total?: number;
+  /** How much the tee saw before it stopped reading. */
+  seen?: number;
+  complete?: boolean;
+  unit?: string;
+  mime?: string;
+  /** What the request body WAS: text, urlencoded, formdata, blob, binary, stream, request. */
+  kind?: string;
+  /** Why nothing (or only part) was read. */
+  note?: string;
+  evicted?: boolean;
+}
+
+export interface FormField {
+  name: string;
+  value?: string;
+  file?: { name: string; size?: number; type: string };
+}
+
+/** `net_detail <seq>` — everything behind one row (`net.rs` `Ring::detail`). */
+export interface NetDetail {
+  /** The row that was asked about, as the feed has it. */
+  entry: NetEntry;
+  /** `null` when the host has no record for the row — `note` says why. */
+  detail?: null;
+  note?: string;
+  rid?: number;
+  /** Every row of the exchange: one for a fetch, one per phase for a socket. */
+  seqs?: number[];
+  kind?: string;
+  url?: string;
+  method?: string;
+  at?: number;
+  request?: {
+    /** As the APP passed them. The transport's own (Host, Content-Length, …) are not seen by script. */
+    headers?: HeaderPair[];
+    credentials?: string;
+    mode?: string;
+    redirect?: string;
+    cache?: string;
+    bodyInfo?: { kind: string; fields?: FormField[]; implied?: string };
+    body?: NetBody | null;
+  };
+  response?: {
+    status?: number;
+    statusText?: string;
+    type?: string;
+    redirected?: boolean;
+    url?: string;
+    headers?: HeaderPair[];
+    /** XMLHttpRequest only. */
+    responseType?: string;
+    /** `null` until the tee has read it (it reads a clone, after the row was recorded). */
+    body?: NetBody | null;
+  };
+  /** The jar's side — script never sees either header. */
+  cookies?: { sent: string | null; set: string[]; pending?: boolean; note?: string } | null;
+  /**
+   * What the transport reports about the connection. Empty today: the slot is
+   * here so a transport that learns HTTP/2 and pooling can fill it in.
+   */
+  transport?: { protocol?: string; reused?: boolean; remote?: string };
+  timing?: { headersMs?: number; bodyMs?: number; failedMs?: number };
+  error?: { name?: string; message?: string };
+  ws?: {
+    protocols?: string[];
+    protocol?: string;
+    extensions?: string;
+    binaryType?: string;
+    openMs?: number;
+    closeMs?: number;
+    errorMs?: number;
+    closeCode?: number;
+    closeReason?: string;
+    wasClean?: boolean;
+    error?: boolean;
+    sent?: number;
+    received?: number;
+    sentBytes?: number;
+    receivedBytes?: number;
+    lastAt?: number;
+  };
+  metaTruncated?: boolean;
+  limits?: { bodyCap: number; budget: number; used: number; evicted: number };
+}
+
+/** The tabs of the request details pane. */
+export type NetTab = "headers" | "payload" | "response" | "timing" | "socket";
 
 export interface StorageReply {
   area: string;
@@ -343,6 +454,23 @@ export interface ConsoleLine {
   kind: string;
   text: string;
   styles?: StyleRun[] | null;
+  /**
+   * This inspector's own id for the line, stamped when it is pushed. Selection
+   * and expansion key on it: an index moves every time the 1000-line buffer
+   * drops its oldest, and `seq` is `-1` for every line the inspector wrote.
+   */
+  uid?: number;
+}
+
+/** One entry of the right-click menu (`components/ContextMenu.vue`). */
+export interface MenuItem {
+  label: string;
+  /** A shortcut or a count, drawn dim on the right. */
+  hint?: string;
+  disabled?: boolean;
+  /** Draw a divider ABOVE this item. */
+  divider?: boolean;
+  run: () => void;
 }
 
 /** A capture, plus when it was taken and where the pane should load it from. */

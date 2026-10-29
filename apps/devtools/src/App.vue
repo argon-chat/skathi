@@ -38,11 +38,14 @@ import NetworkPanel from "./components/NetworkPanel.vue";
 import PerfPanel from "./components/PerfPanel.vue";
 import StoragePanel from "./components/StoragePanel.vue";
 import TargetsPanel from "./components/TargetsPanel.vue";
+import ContextMenu from "./components/ContextMenu.vue";
 import { onKeydown } from "./keys";
 import { mainHeight, trackViewport, viewport } from "./layout";
 import {
   attach,
   bestTarget,
+  closeMenu,
+  closeNetDetail,
   highlight,
   pickStep,
   pollFallback,
@@ -60,20 +63,26 @@ const mainH = computed(() =>
   mainHeight(state.consoleOpen, state.consoleHeight, !!state.error),
 );
 
-/** Drag state for the two splitters. */
+/** Drag state for the three splitters. */
 const dragFrom = ref(0);
 const dragBase = ref(0);
 
-function startDrag(which: "tree" | "console", event: VnMouseEvent): void {
+function startDrag(which: "tree" | "console" | "net", event: VnMouseEvent): void {
+  if (event.button !== 0) return;
   state.dragging = which;
-  dragFrom.value = which === "tree" ? event.clientX : event.clientY;
-  dragBase.value = which === "tree" ? state.treeWidth : state.consoleHeight;
+  dragFrom.value = which === "console" ? event.clientY : event.clientX;
+  dragBase.value =
+    which === "tree" ? state.treeWidth : which === "net" ? state.netListWidth : state.consoleHeight;
 }
 
 function onDrag(event: VnMouseEvent): void {
   if (state.dragging === "tree") {
     const next = dragBase.value + (event.clientX - dragFrom.value);
     state.treeWidth = Math.max(220, Math.min(viewport.w - 280, next));
+  } else if (state.dragging === "net") {
+    // The Network list against its details pane; the pane keeps 320 px.
+    const next = dragBase.value + (event.clientX - dragFrom.value);
+    state.netListWidth = Math.max(220, Math.min(viewport.w - 320, next));
   } else if (state.dragging === "console") {
     // Dragging the drawer's top edge DOWN makes it shorter, hence the sign.
     const next = dragBase.value - (event.clientY - dragFrom.value);
@@ -113,13 +122,22 @@ function onKey(event: VnKeyboardEvent): void {
     return;
   }
   if (event.key === "Escape") {
-    // ONE owner for Escape. The Elements search is a layer over the drawer, so
-    // it closes first and the drawer keeps its state — but the panel does not
-    // handle the key itself: two listeners on one target cannot stop each
-    // other's propagation, and the child's runs first, so a panel that closed
-    // its own search would have this line toggle the drawer on the same press.
+    // ONE owner for Escape. The layers close innermost first — the right-click
+    // menu, the Elements search, the Network details pane — and the drawer
+    // keeps its state until nothing is left over it. The panels do not handle
+    // the key themselves: two listeners on one target cannot stop each other's
+    // propagation, and the child's runs first, so a panel that closed its own
+    // layer would have this line toggle the drawer on the same press.
+    if (ui.menu) {
+      closeMenu();
+      return;
+    }
     if (ui.elementSearchOpen) {
       ui.closeElementSearch?.();
+      return;
+    }
+    if (state.tab === "network" && state.netSelected !== null && !ui.typing) {
+      closeNetDetail();
       return;
     }
     state.consoleOpen = !state.consoleOpen;
@@ -186,7 +204,7 @@ onUnmounted(() => {
         ></div>
         <StylesPanel :height="mainH" />
       </template>
-      <NetworkPanel v-else-if="state.tab === 'network'" :height="mainH" />
+      <NetworkPanel v-else-if="state.tab === 'network'" :height="mainH" @drag="startDrag('net', $event)" />
       <PerfPanel v-else-if="state.tab === 'performance'" :height="mainH" />
       <StoragePanel v-else-if="state.tab === 'storage'" :height="mainH" />
       <TargetsPanel v-else :height="mainH" />
@@ -204,8 +222,9 @@ onUnmounted(() => {
       <span v-if="state.picking" class="mode">
         ⌖ picking — hover the element in the app, then move back here
       </span>
+      <span v-else-if="ui.flash" class="flash" :class="{ bad: ui.flashBad }">{{ ui.flash }}</span>
       <span v-else class="hint">
-        Ctrl+Shift+C inspect · Ctrl+F find · Esc console · Ctrl+1…5 panels · Ctrl+` prompt
+        Ctrl+Shift+C inspect · Ctrl+F find · Esc console · Ctrl+1…5 panels · Ctrl+` prompt · Ctrl+C copy row
       </span>
       <span class="spacer"></span>
       <span v-if="state.tab === 'elements' && state.selected !== null" class="fact"
@@ -220,6 +239,9 @@ onUnmounted(() => {
     <!-- The drag shield. It exists only while a splitter is held, and it is what
          makes the drag keep working after the pointer leaves the 5-px divider. -->
     <div v-if="state.dragging" class="shield" @mousemove="onDrag" @mouseup="endDrag"></div>
+
+    <!-- The right-click menu, over everything (it carries its own shield). -->
+    <ContextMenu />
   </div>
 </template>
 
@@ -290,6 +312,12 @@ onUnmounted(() => {
 }
 .mode {
   color: #6cb6ff;
+}
+.flash {
+  color: #7ee08a;
+}
+.flash.bad {
+  color: #ff9d96;
 }
 .spacer {
   flex: 1;

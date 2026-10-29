@@ -16,6 +16,16 @@
 // Everything else is the usual console furniture that was missing: level
 // filters, a text filter, clear, preserve-on-reattach, an eval history and
 // completion of the target's own globals.
+//
+// ## Copying (m26) — INTERIM
+//
+// Painted text cannot be selected in this engine yet (see the note in
+// ../store.ts), so a message is copied explicitly: the ⧉ that appears on a
+// hovered or selected line, the right-click menu ("Copy message", "Copy all
+// visible"), and Ctrl+C over the selected lines. A click selects a line,
+// Ctrl+click adds or removes one, Shift+click selects the range from the last
+// one. When real text selection lands, drag-select should work here as well —
+// these stay as the shortcuts they are in a browser.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { onKeydown } from "../keys";
 import { LOG_H, PANE_HEAD_H, PROMPT_H } from "../layout";
@@ -24,35 +34,47 @@ import {
   LEVELS,
   clearConsole,
   complete,
+  copyText,
   levelOf,
   loadCompletions,
+  openMenu,
   runEval,
   state,
   ui,
   visibleLogs,
 } from "../store";
 import { useVirtual, wrappedLines } from "../virtual";
-import type { ConsoleLine, StyleRun } from "../protocol";
+import type { ConsoleLine, MenuItem, StyleRun } from "../protocol";
 
 const props = defineProps<{ height: number }>();
 
 const listHeight = computed(() => Math.max(30, props.height - PANE_HEAD_H - PROMPT_H));
 const lines = computed(() => visibleLogs());
+/**
+ * Keyed by the line's `uid` (store.ts `pushLine`), not its index: an index
+ * names a different line every time the filter changes or the 1000-line buffer
+ * drops its oldest.
+ */
 const expanded = ref<Record<number, boolean>>({});
+const selected = ref<Record<number, boolean>>({});
+/** Where a Shift+click range starts: the last line clicked without Shift. */
+let anchor: number | null = null;
 const promptBox = ref<VnElement | null>(null);
 const draft = ref("");
 const hint = ref<string[]>([]);
 
-/** The text column's width — the pane minus the gutter and the kind chip. */
-const textWidth = computed(() => Math.max(200, viewport.w - 210));
+/** The text column's width — the pane minus the gutter, the kind chip and the ⧉. */
+const textWidth = computed(() => Math.max(200, viewport.w - 230));
+
+const uidOf = (line: ConsoleLine): number => line.uid ?? -1;
 
 const heights = computed(() =>
-  lines.value.map((line, i) => {
+  lines.value.map((line) => {
     // A collapsed line is one row with an ellipsis; an expanded one wraps.
     // Nothing here can measure text (see `../virtual.ts`), so the wrapped
     // height is an estimate that is deliberately generous by a fraction of a
     // line rather than short by one.
-    if (!expanded.value[i]) return LOG_H;
+    if (!expanded.value[uidOf(line)]) return LOG_H;
     return LOG_H * wrappedLines(line.text, textWidth.value) + 4;
   }),
 );
@@ -81,8 +103,91 @@ watch(
   },
 );
 
-function toggleLine(i: number): void {
-  expanded.value[i] = !expanded.value[i];
+// ---- selection --------------------------------------------------------------
+
+function selectedLines(): ConsoleLine[] {
+  return lines.value.filter((line) => selected.value[uidOf(line)]);
+}
+
+function onLineClick(line: ConsoleLine, event: VnMouseEvent): void {
+  ui.copyTarget = "console";
+  const uid = uidOf(line);
+  if (event.ctrlKey || event.metaKey) {
+    // Add or remove one line; nothing else changes.
+    if (selected.value[uid]) delete selected.value[uid];
+    else selected.value[uid] = true;
+    anchor = uid;
+    return;
+  }
+  if (event.shiftKey && anchor !== null) {
+    const all = lines.value;
+    const from = all.findIndex((l) => uidOf(l) === anchor);
+    const to = all.findIndex((l) => uidOf(l) === uid);
+    if (from >= 0 && to >= 0) {
+      const next: Record<number, boolean> = {};
+      for (let i = Math.min(from, to); i <= Math.max(from, to); i++) next[uidOf(all[i])] = true;
+      selected.value = next;
+      return;
+    }
+  }
+  // A plain click selects the line alone — and, as before, opens or closes it
+  // when there is more of it than one row shows. (A one-row line is left
+  // alone: "expanding" it only adds the wrap padding, and that nudge is enough
+  // to take the list off the tail it was following.)
+  selected.value = { [uid]: true };
+  anchor = uid;
+  if (expanded.value[uid] || wrappedLines(line.text, textWidth.value) > 1) {
+    expanded.value[uid] = !expanded.value[uid];
+  }
+}
+
+function onLineDown(line: ConsoleLine, event: VnMouseEvent): void {
+  if (event.button !== 2) return;
+  ui.copyTarget = "console";
+  const uid = uidOf(line);
+  // Right-clicking outside the selection moves it, as every list does.
+  if (!selected.value[uid]) {
+    selected.value = { [uid]: true };
+    anchor = uid;
+  }
+  const picked = selectedLines();
+  const visible = lines.value;
+  const items: MenuItem[] = [{ label: "Copy message", hint: picked.length === 1 ? "Ctrl+C" : undefined, run: () => copyLine(line) }];
+  if (picked.length > 1) {
+    items.push({ label: `Copy selected (${picked.length})`, hint: "Ctrl+C", run: () => copyLines(picked) });
+  }
+  items.push({ label: `Copy all visible (${visible.length})`, run: () => copyLines(visible) });
+  items.push({
+    label: expanded.value[uid] ? "Collapse" : "Expand",
+    divider: true,
+    run: () => {
+      expanded.value[uid] = !expanded.value[uid];
+    },
+  });
+  items.push({ label: "Select all", hint: "Ctrl+A", run: selectAll });
+  items.push({ label: "Clear console", hint: "Ctrl+L", divider: true, run: clearConsole });
+  openMenu(event.clientX, event.clientY, items);
+}
+
+function selectAll(): void {
+  const next: Record<number, boolean> = {};
+  for (const line of lines.value) next[uidOf(line)] = true;
+  selected.value = next;
+  ui.copyTarget = "console";
+}
+
+// ---- copy -------------------------------------------------------------------
+
+function copyLine(line: ConsoleLine): void {
+  void copyText(line.text, "the message");
+}
+
+/** Several lines: one per line, with the channel each came from. */
+function copyLines(picked: ConsoleLine[]): void {
+  if (!picked.length) return;
+  if (picked.length === 1) return copyLine(picked[0]);
+  const text = picked.map((l) => `[${l.kind}] ${l.text}`).join("\n");
+  void copyText(text, `${picked.length} lines`);
 }
 
 function submit(): void {
@@ -142,12 +247,41 @@ function focusPrompt(): void {
 }
 
 function onKey(event: VnKeyboardEvent): void {
+  const ctrl = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
   // Ctrl+L is the terminal's clear and nobody has ever had to learn it.
-  if (event.key.toLowerCase() === "l" && event.ctrlKey && state.consoleOpen) {
+  if (key === "l" && ctrl && state.consoleOpen) {
     event.preventDefault();
     clearConsole();
+    return;
+  }
+  // Ctrl+C / Ctrl+A belong to a text field while one has focus (the prompt,
+  // the filter), and to this list only when it was the last thing clicked.
+  if (!ctrl || event.shiftKey || ui.typing || ui.menu || !state.consoleOpen || ui.copyTarget !== "console") return;
+  if (key === "c") {
+    const picked = selectedLines();
+    if (!picked.length) return;
+    event.preventDefault();
+    copyLines(picked);
+  } else if (key === "a") {
+    event.preventDefault();
+    selectAll();
   }
 }
+
+// A cleared console has nothing selected; a line that scrolled out of the
+// 1000-line buffer is simply gone from `lines`, which is what `selectedLines`
+// reads, so only the explicit clear needs handling.
+watch(
+  () => state.logs.length === 0,
+  (empty) => {
+    if (empty) {
+      selected.value = {};
+      expanded.value = {};
+      anchor = null;
+    }
+  },
+);
 
 let offKey: (() => void) | null = null;
 
@@ -278,11 +412,16 @@ function glyph(kind: string): string {
       <div class="viewport" :style="{ marginTop: list.padTop + 'px' }">
         <div
           v-for="row in slice"
-          :key="row.line.seq + ':' + row.index"
+          :key="uidOf(row.line)"
           class="line mono"
-          :class="[row.line.kind, levelOf(row.line.kind), { open: expanded[row.index] }]"
+          :class="[
+            row.line.kind,
+            levelOf(row.line.kind),
+            { open: expanded[uidOf(row.line)], sel: selected[uidOf(row.line)] },
+          ]"
           :style="{ height: heights[row.index] + 'px' }"
-          @click="toggleLine(row.index)"
+          @click="onLineClick(row.line, $event)"
+          @mousedown="onLineDown(row.line, $event)"
         >
           <span class="glyph">{{ glyph(row.line.kind) }}</span>
           <span class="kind">{{ row.line.kind }}</span>
@@ -293,7 +432,7 @@ function glyph(kind: string): string {
           <span
             v-if="row.line.styles && row.line.styles.length"
             class="text"
-            :class="{ wrap: expanded[row.index] }"
+            :class="{ wrap: expanded[uidOf(row.line)] }"
           >
             <span
               v-for="(seg, i) in segments(row.line)"
@@ -303,9 +442,11 @@ function glyph(kind: string): string {
               >{{ seg.text }}</span
             >
           </span>
-          <span v-else class="text plain" :class="{ wrap: expanded[row.index] }">{{
+          <span v-else class="text plain" :class="{ wrap: expanded[uidOf(row.line)] }">{{
             row.line.text
           }}</span>
+          <!-- INTERIM: the explicit copy, until painted text can be selected. -->
+          <span class="copy" title="Copy message" @click.stop="copyLine(row.line)">⧉</span>
         </div>
       </div>
       <div
@@ -420,6 +561,31 @@ function glyph(kind: string): string {
 }
 .line:hover {
   background: #ffffff08;
+}
+.line.sel {
+  background: #14344f99;
+}
+.line.sel:hover {
+  background: #17405f;
+}
+/* The per-line copy affordance: present on every line, drawn only on the
+ * hovered or selected one (an ancestor `:hover` rule — vn-css folds it into
+ * the line's hover bucket). Transparent rather than `display: none` so that
+ * showing it never re-lays the row out. */
+.copy {
+  width: 14px;
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 17px;
+  color: #00000000;
+  text-align: center;
+}
+.line:hover .copy,
+.line.sel .copy {
+  color: #5c6b80;
+}
+.line .copy:hover {
+  color: #a8d4ff;
 }
 .glyph {
   width: 8px;
