@@ -4051,13 +4051,13 @@ fn build_svg<V: 'static>(
         advise_drop_shadow_shape(&node_prefix(t, id));
     }
     let doc = crate::svg::document(t, id, extras.fill, extras.stroke);
-    if crate::svg::last_had_explicit_color() {
+    if doc.css_paint_colour {
         warn_compat(
-            "svg-multicolor",
-            "an inline <svg> declares a concrete `fill`/`stroke` colour — gpui rasterises an SVG \
-             into a single-colour alpha MASK and tints the whole sprite with the element's \
-             computed `color`, so every painted part of the icon comes out that one colour. \
-             Monochrome icon sets (`stroke=\"currentColor\"`) are unaffected",
+            "svg-css-paint-colour",
+            "an inline <svg> takes a concrete `fill`/`stroke` colour from a CSS rule; vn-css \
+             keeps only whether such a paint is painted, so it is drawn in the element's `color` \
+             (`currentColor`). A colour written on the shapes (`fill=\"#…\"`, or an inline \
+             style) is drawn as written",
         );
     }
 
@@ -4065,7 +4065,36 @@ fn build_svg<V: 'static>(
     // property on the style now (m13 item 2), so `Style::paint` pushes the
     // matrix for the whole element and `Window::paint_svg` composes it into the
     // sprite. Setting it here as well would apply it twice.
-    let mut e = with_control_area(gpui::svg().data(&doc).id(id as usize), id, control_area, win);
+    //
+    // Mono: gpui's mask, tinted by `color`. Anything else: the full-colour
+    // raster (`crate::svg` explains the split).
+    match doc.paint {
+        crate::svg::Paint::Mono => {
+            crate::svg::forget_raster(id);
+            let e = with_control_area(gpui::svg().data(&doc.bytes).id(id as usize), id, control_area, win);
+            finish_svg(e, t, id, node, window, cx, now)
+        }
+        crate::svg::Paint::Colour(_) => {
+            let e = with_control_area(crate::svg::raster(id, doc.clone()).id(id as usize), id, control_area, win);
+            finish_svg(e, t, id, node, window, cx, now)
+        }
+    }
+}
+
+/// Everything after the choice of element: ARIA, the computed style, the
+/// presentational size, focus and events, and the inherited-colour tint.
+fn finish_svg<E, V: 'static>(
+    mut e: E,
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+) -> AnyElement
+where
+    E: gpui::StatefulInteractiveElement + gpui::Styled + gpui::Element + 'static,
+{
     e = crate::aria::apply(e, t, id, node);
     let mut inherit = true;
     if let Some(cs) = &node.computed {
