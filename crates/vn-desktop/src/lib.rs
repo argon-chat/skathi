@@ -47,6 +47,7 @@
 //! | `vn-dialog` (one STA per dialog) | `IFileDialog::Show(owner)`, the `stat` of each result, the `webkitdirectory` walk, a download's write | touch JSC |
 //! | `vn-fs-*` (the pool, four) | every File System Access operation on a path | touch JSC |
 //! | `vn-instance` (pipe server) | accept, verify the peer, read one launch message, raise | touch JSC |
+//! | `vn-net` (one), and iphlpapi's thread-pool callback | the connectivity hint, Chromium's change delays, `navigator::set_on_line` (`network`) | touch JSC |
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -60,6 +61,7 @@ pub mod args;
 pub mod dialog;
 pub mod fs;
 pub mod launch;
+pub mod network;
 mod pool;
 pub mod shell;
 

@@ -1160,6 +1160,13 @@ fn main() {
         #[cfg(vn_devtools)]
         devtools::boot(window::devtools_config_enabled());
 
+        // `navigator.onLine` from the OS connectivity hint (docs/DESKTOP.md
+        // §3). Before `JsRuntime::init`: the value is seeded while no context
+        // exists, so the bundle's first read is already the OS's answer and
+        // the seed queues no `online`/`offline` event. A missing API is an
+        // advisory, delivered to the log ring by `vn_desktop::pump()`.
+        vn_desktop::network::install();
+
         JsRuntime::init();
         JsRuntime::with(|rt| {
             rt.register("__vn_set_status", 1, vn_set_status as *const _);

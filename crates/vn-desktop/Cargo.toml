@@ -30,6 +30,8 @@ serde_json = "1"
 #   UI_Shell(+Common)      ShellExecuteExW, SHOpenFolderAndSelectItems,
 #                          IFileOperation (trash), SHChangeNotify
 #   System_Com             the shell thread's STA
+#   System_LibraryLoader   iphlpapi's connectivity hint, resolved at run time
+#                          (navigator.onLine; Windows 10 2004+)
 #   System_Pipes, IO       the single-instance pipe
 #   System_Threading       the instance mutex, peer-process checks
 #   System_RemoteDesktop   ProcessIdToSessionId (the pipe name is per session)
@@ -46,6 +48,7 @@ windows = { version = "0.62", features = [
     "Win32_Storage_Packaging_Appx",
     "Win32_System_Com",
     "Win32_System_IO",
+    "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_RemoteDesktop",
