@@ -130,12 +130,14 @@ describe("<a href>: activation", () => {
     expect(loud.rt.advisories()[0]).toContain("not executed");
   });
 
-  test("<a download href=blob:…> says saving is not supported yet instead of doing nothing", () => {
+  test("<a download href=blob:…> asks the host to save it (Save As, D-F6), with no gesture needed", () => {
     const { rt, a, opens, click } = linkWorld("blob:vn/1234");
     rt.patchProp(a, "download", null, "report.csv");
     click(a);
     expect(opens()).toEqual([]);
-    expect(rt.advisories()[0]).toContain("not supported yet");
+    const saves = rt.host.desktop.fs.calls.filter((c: { op: string }) => c.op === "download");
+    expect(saves.map((c: { args: unknown[] }) => c.args)).toEqual([["blob:vn/1234", "report.csv"]]);
+    expect(rt.advisories().filter((l: string) => l.includes("D-F6")).length).toBe(1);
   });
 
   test("<a download href=https:…> opens the browser — a cross-origin download is ignored there too", () => {

@@ -78,6 +78,31 @@ const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
  */
 const NAMED_REEXPORT = /^\s*export\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 
+/**
+ * `FileList`, as much of it as an input's `files` needs (redjs has the real
+ * class; bun has none): indexed, `length`, `item()`, iterable, and a class for
+ * `instanceof`. A test makes one from bun's own `File`s.
+ */
+export class FakeFileList {
+  [i: number]: unknown;
+  length: number;
+  constructor(files: unknown[] = []) {
+    this.length = files.length;
+    files.forEach((f, i) => (this[i] = f));
+  }
+  item(i: number): unknown {
+    return this[i] ?? null;
+  }
+  *[Symbol.iterator](): Iterator<unknown> {
+    for (let i = 0; i < this.length; i++) yield this[i];
+  }
+}
+
+/** `DataTransfer`, for `new DataTransfer().files` (an empty FileList). */
+class FakeDataTransfer {
+  files = new FakeFileList();
+}
+
 /** A fresh runtime world with a recording host. */
 /**
  * @param {{ storage?: boolean, devtools?: boolean }} [options] —
@@ -320,12 +345,23 @@ export function createRuntime(
   // globals (MutationObserver, DocumentFragment, getComputedStyle, …) on it,
   // and each test must get its own set rather than whichever world happened to
   // run first.
+  // redjs's `document.createElement`: a "dumb" element on HTMLElement.prototype
+  // with only a `tagName`, outside the tree. The prototype is the world's own
+  // element prototype, found off the first mirror the test creates.
+  let elementProto: object | null = null;
+  let worldExports: { nodeOps: { createElement(tag: string): object } } | null = null;
   const fakeGlobal = {
     document: {
       body: {},
       documentElement: {},
       head: {},
+      createElement(tag: string) {
+        elementProto ??= worldExports ? Object.getPrototypeOf(worldExports.nodeOps.createElement("div")) : Object.prototype;
+        return Object.assign(Object.create(elementProto), { tagName: String(tag).toUpperCase() });
+      },
     },
+    FileList: FakeFileList,
+    DataTransfer: FakeDataTransfer,
     requestAnimationFrame: (cb) => setTimeout(cb, 0),
     // The windowing host (crates/vn-app/src/window.prelude.js) publishes itself
     // on the REAL global before the app bundle evaluates, and runtime-window's
@@ -736,6 +772,7 @@ export function createRuntime(
        writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
        appDevtools, appShell, appLaunch, vModelText, vShow, desktopApi, activation, noteActivation };`,
   )(...args);
+  worldExports = exports;
 
   return {
     ...exports,

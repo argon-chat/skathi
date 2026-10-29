@@ -227,6 +227,10 @@ interface MirrorElement extends MirrorNodeBase {
   readonly classList: MirrorClassList;
   readonly style: MirrorStyle;
 
+  // -- activation (a click, and a file input's picker without one)
+  click(): void;
+  showPicker(): void;
+
   // -- focus and pointer capture
   focus(): void;
   blur(): void;
@@ -585,7 +589,13 @@ const handlers = new Map<VnNodeId, HandlerMap>(); // node id -> { click: fn }
 // separately below: every hook's parameter types come from the renderer that
 // calls them, so nothing here can drift out of step with what Vue passes.
 const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
-  createElement: (type) => mk(__vn_create_element(I(type)), 1, type),
+  createElement: (type) => {
+    const el = mk(__vn_create_element(I(type)), 1, type);
+    // A `<label>` clicks its control whether or not anything listens, so the
+    // host must deliver its clicks (desktop-apis-design §4.2).
+    if (type === "label") syncListenerFlag(el.id, "click");
+    return el;
+  },
   createText: (text) => {
     const n = mk(__vn_create_text(), 2, "#text");
     // The mirror keeps the string too — `textContent` and `Node.data` read it
@@ -729,7 +739,11 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
     // host actually emits.
     const name = namespaced ? rest.slice(1) : canonicalEvent(hyphenate(rest));
     const code = hostCode(name);
-    if (!code) {
+    if (!code && JS_SOURCED_EVENTS.has(name)) {
+      // `change` / `cancel`: the runtime fires them itself on a file input
+      // (and they bubble to whatever wraps one), so the handler is kept.
+      if (next) adviseJsSourced(el, name, `@${name}`);
+    } else if (!code) {
       // Compat-first: a listener the host will never deliver must not vanish in
       // silence. `onUpdate:modelValue` & friends are excluded — a `:` inside
       // (rather than in front of) the name marks a component-emit prop that
@@ -788,6 +802,8 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
     // delivers a click to a node whose click bit is on, so the bit follows the
     // href (`syncListenerFlag` ORs it in). docs/SHELL.md §1.
     if (key === "href" && el.tag === "a") syncListenerFlag(el.id, "click");
+    // …and so does `<input type=file>`'s, which also takes Enter and Space.
+    if (key === "type" && el.tag === "input") syncFileInput(el);
   }
 }
 
@@ -839,10 +855,15 @@ function syncListenerFlag(id: VnNodeId, name: string): void {
     );
   }
   // …and a link listens for its own click (its activation behaviour), so
-  // removing the last `@click` from an `<a href>` must not switch it off.
+  // removing the last `@click` from an `<a href>` must not switch it off. So
+  // do a `<label>` and an `<input type=file>`, which also hears Enter (keydown)
+  // and Space (keyup) — the keys that click it.
   if (!on && code === EV_CODES.click) {
     const n = nodesById.get(id);
-    if (n && isLink(n)) on = true;
+    if (n && (isLabel(n) || isFileInput(n) || isLink(n))) on = true;
+  }
+  if (!on && (code === EV_CODES.keydown || code === EV_CODES.keyup)) {
+    if (isFileInput(nodesById.get(id))) on = true;
   }
   // …and only tell the host when the ANSWER CHANGED.
   //
@@ -901,7 +922,9 @@ function addGlobalListener(
 ): boolean {
   if (!fn) return false;
   const name = canonicalEvent(rawName);
-  if (!hostCode(name)) return false;
+  // A file input's `change`/`cancel` bubble to the document like the host's
+  // events do, so a delegated listener takes the same walk.
+  if (!hostCode(name) && !JS_SOURCED_EVENTS.has(name)) return false;
   let m = globalHandlers.get(target);
   if (!m) globalHandlers.set(target, (m = {}));
   const buckets = ensureBuckets(m, name);
@@ -976,6 +999,14 @@ function interceptGlobalTarget(target: object | undefined): void {
 /// through [`dispatchEvent`] and never touch the host at all.
 const looksNative = (name: string): boolean => /^[a-z]+$/.test(name);
 
+/**
+ * Platform events the RUNTIME fires, which no host code exists for: a file
+ * input's `change` and `cancel` (desktop-apis-design §4.1). Their listeners
+ * are kept; the "never fires" advisory is left for elements that neither are
+ * nor wrap a file input (`adviseJsSourced`).
+ */
+const JS_SOURCED_EVENTS = new Set<string>(["change", "cancel"]);
+
 /// Events a BROWSER only ever fires on `window` (or `document`), never on an
 /// element. `el.addEventListener("resize", …)` is dead code in Chrome too, so
 /// warning about it here would report a divergence that does not exist — and a
@@ -999,7 +1030,9 @@ function addExtraListener(
   const name = canonicalEvent(rawName);
   const code = hostCode(name);
   if (!code && WINDOW_ONLY_EVENTS.has(name)) return;
-  if (!code && looksNative(name)) {
+  if (!code && JS_SOURCED_EVENTS.has(name)) {
+    adviseJsSourced(node, name, `addEventListener("${rawName}")`);
+  } else if (!code && looksNative(name)) {
     warnCompat(
       `event:${name}`,
       `addEventListener("${rawName}") — this event type is not delivered by the native host yet; ` +
@@ -1721,9 +1754,14 @@ function isActivationEvent(ev: VnEvent): boolean {
  * link's, exactly as the DOM spec words it.
  */
 function activate(target: MirrorNode, bubbles: boolean): void {
+  // redjs's own `document.createElement("a" | "input")` elements are not in
+  // the tree; the FileSaver.js and VueUse `useFileDialog` idioms click them.
+  if (!isMirrorNode(target)) return activateDetached(target);
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
     if (hasActivationBehaviour(n)) {
-      if (isLink(n)) followLink(n);
+      if (isFileInput(n)) showFilePicker(fileInputOps(n), null);
+      else if (isLabel(n)) activateLabel(n, target);
+      else if (isLink(n)) followLink(n);
       return;
     }
     if (!bubbles) return;
@@ -1731,7 +1769,12 @@ function activate(target: MirrorNode, bubbles: boolean): void {
 }
 
 function followLink(a: MirrorElement): void {
-  const raw = String(a.attrs.href ?? "").trim();
+  followHref(String(a.attrs.href ?? ""), a.attrs.download ?? null);
+}
+
+/** A link's activation, by its `href` and its `download` attribute (null: none). */
+function followHref(href: string, download: string | null): void {
+  const raw = href.trim();
   // `href=""` and `href="#…"` are the in-page idioms (a JS-handled link); a
   // browser would scroll, there is nothing to do here.
   if (raw === "" || raw.startsWith("#")) return;
@@ -1758,12 +1801,11 @@ function followLink(a: MirrorElement): void {
     }
     return;
   }
-  if (a.attrs.download != null && (scheme === "blob" || scheme === "data")) {
-    warnCompat(
-      "link:download",
-      `<a download href="${scheme}:…"> — saving a download is not supported yet: it needs the ` +
-        `Save As dialog and the blob store (desktop-apis tracks B/C). Nothing was saved`,
-    );
+  if (download != null && (scheme === "blob" || scheme === "data")) {
+    // Save As, then the bytes (desktop.ts; D-F6). Resolved now, at the click,
+    // so `a.click(); URL.revokeObjectURL(url)` still saves. No activation is
+    // needed: Chromium lets a page start a download without one.
+    desktopApi.download(raw, download);
     return;
   }
   if (!CONTENT_SCHEMES.has(scheme)) {
@@ -1782,6 +1824,422 @@ function adviseScheme(scheme: string, via: string): void {
       `open it from your own code with appShell.openExternal(url) (docs/SHELL.md)`,
   );
 }
+
+// -- <input type=file> and <label>: activation behaviour (docs/DESKTOP.md
+//    "<input type=file>"; desktop-apis-design §4.1, §4.2)
+//
+//    A file input's click opens the picker, through desktop.ts and the host's
+//    dialog. Its `files`, `value`, `accept`, `multiple` and `webkitdirectory`
+//    are own accessors, installed when `type` becomes "file". Its `input`,
+//    `change` and `cancel` are fired from here and walk the tree like any
+//    host event. A `<label>` clicks its control. The same behaviour serves
+//    redjs's detached `document.createElement("input")`, which is how VueUse's
+//    `useFileDialog` picks files without an element in the tree.
+
+/** Chromium's English status strings (D-F12): what `:file-label` pushes. */
+function fileStatus(files: ArrayLike<{ name?: unknown }> | null): string {
+  const n = files?.length ?? 0;
+  if (n === 0) return "No file chosen";
+  return n === 1 ? String(files![0]?.name ?? "") : `${n} files`;
+}
+
+/**
+ * Is this a mirror `<input type=file>`? (Any casing of the attribute, as HTML
+ * says.) Deliberately not a type guard: an element that is not one is still
+ * an element.
+ */
+function isFileInput(n: unknown): boolean {
+  const e = n as MirrorElement | null | undefined;
+  return !!e && e.kind === 1 && e.tag === "input" && String(e.attrs?.type ?? "").trim().toLowerCase() === "file";
+}
+
+/** Is this a mirror `<label>`? */
+function isLabel(n: unknown): boolean {
+  const e = n as MirrorElement | null | undefined;
+  return !!e && e.kind === 1 && e.tag === "label";
+}
+
+/** `instanceof FileList`, where the engine has the class (redjs does). */
+function isFileList(v: unknown): boolean {
+  const FL = (globalThis as { FileList?: unknown }).FileList;
+  if (typeof FL === "function") return v instanceof (FL as new () => object);
+  return !!v && typeof v === "object" && typeof (v as { length?: unknown }).length === "number" &&
+    typeof (v as { item?: unknown }).item === "function";
+}
+
+/** An empty FileList: what `files` is before anything is picked. */
+function emptyFileList(): unknown {
+  const DT = (globalThis as { DataTransfer?: new () => { files: unknown } }).DataTransfer;
+  if (typeof DT === "function") {
+    try {
+      return new DT().files;
+    } catch {
+      /* fall through to the array-like below */
+    }
+  }
+  return Object.freeze(Object.assign([], { item: () => null }));
+}
+
+/**
+ * A file input's selected files (`null`: none yet), mirror or detached alike,
+ * and what to do when they change (push the status to the host).
+ */
+interface FileState {
+  files: unknown;
+  changed: () => void;
+}
+const fileStates = new WeakMap<object, FileState>();
+
+const FAKEPATH = "C:\\fakepath\\";
+const VALUE_REFUSED =
+  "Failed to set the 'value' property on 'HTMLInputElement': This input element accepts a filename, " +
+  "which may only be programmatically set to the empty string.";
+const FILES_REFUSED = "Failed to set the 'files' property on 'HTMLInputElement': The provided value is not of type 'FileList'.";
+
+/**
+ * HTML's `files` and filename-mode `value` over one state, for either kind of
+ * element. `files` is a FileList always (an empty one before a pick); setting
+ * it takes a FileList (`input.files = dataTransfer.files`) and fires nothing;
+ * `null` is ignored. `value` is `C:\fakepath\<name>`. Setting it to "" clears
+ * the selection; anything else throws.
+ */
+function fileAccessors(state: FileState, isFile: () => boolean, other?: { value: string }) {
+  const list = () => (state.files ??= emptyFileList()) as ArrayLike<{ name?: unknown }>;
+  return {
+    files: {
+      get: () => (isFile() ? list() : null),
+      set: (v: unknown) => {
+        if (!isFile() || v == null) return;
+        if (!isFileList(v)) throw new TypeError(FILES_REFUSED);
+        state.files = v;
+        state.changed();
+      },
+      configurable: true,
+      enumerable: true,
+    },
+    value: {
+      get: () => {
+        if (!isFile()) return other?.value ?? "";
+        const f = list();
+        return f.length ? FAKEPATH + String(f[0]?.name ?? "") : "";
+      },
+      set: (v: unknown) => {
+        if (!isFile()) {
+          if (other) other.value = v == null ? "" : String(v);
+          return;
+        }
+        if (v != null && String(v) !== "") throw new DOMException(VALUE_REFUSED, "InvalidStateError");
+        state.files = emptyFileList();
+        state.changed();
+      },
+      configurable: true,
+      enumerable: true,
+    },
+  };
+}
+
+let advisedFileLook = false;
+
+/**
+ * `type` was patched on an `<input>`: become a file input (the accessors, the
+ * status prop, the click/Enter/Space bits) or stop being one.
+ */
+function syncFileInput(el: MirrorElement): void {
+  const file = isFileInput(el);
+  const had = fileStates.has(el);
+  if (file && !had) {
+    const state: FileState = { files: null, changed: () => {} };
+    state.changed = () =>
+      __vn_set_prop(el.id, I(":file-label"), fileStatus(state.files as ArrayLike<{ name?: unknown }> | null));
+    fileStates.set(el, state);
+    const acc = fileAccessors(state, () => isFileInput(el));
+    const flag = (k: string) => ({
+      get: () => el.attrs[k] != null && el.attrs[k] !== "false",
+      set: (v: unknown) => patchProp(el, k, el.attrs[k], v ? "" : null),
+      configurable: true,
+      enumerable: true,
+    });
+    Object.defineProperties(el, {
+      files: acc.files,
+      value: acc.value,
+      accept: {
+        get: () => el.attrs.accept ?? "",
+        set: (v: unknown) => patchProp(el, "accept", el.attrs.accept, String(v)),
+        configurable: true,
+        enumerable: true,
+      },
+      multiple: flag("multiple"),
+      webkitdirectory: flag("webkitdirectory"),
+    });
+    state.changed();
+    if (!advisedFileLook) {
+      advisedFileLook = true;
+      warnCompat(
+        "input-file:look",
+        "<input type=file> (D-F12): the button and status are an approximation of Chromium's, with its " +
+          "English strings (\"Choose File\", \"No file chosen\"); restyle it with ::file-selector-button",
+      );
+    }
+  } else if (!file && had) {
+    fileStates.delete(el);
+    for (const k of ["files", "value", "accept", "multiple", "webkitdirectory"]) delete (el as unknown as Record<string, unknown>)[k];
+    el.value = "";
+    __vn_set_prop(el.id, I(":file-label"), undefined);
+  }
+  for (const n of ["click", "keydown", "keyup"]) syncListenerFlag(el.id, n);
+}
+
+/** What the picker flow needs from a file input, whichever kind it is. */
+interface FileInputOps {
+  accept: string;
+  multiple: boolean;
+  directory: boolean;
+  disabled: boolean;
+  current: unknown;
+  setFiles(list: unknown): void;
+  fire(type: "input" | "change" | "cancel"): void;
+}
+
+/** HTML: `input` bubbles and is composed; `change` and `cancel` bubble. */
+const fileEvent = (type: string): VnEvent => new Event(type, { bubbles: true, composed: type === "input" }) as VnEvent;
+
+function fileInputOps(el: MirrorElement): FileInputOps {
+  const flag = (k: string) => el.attrs[k] != null && el.attrs[k] !== "false";
+  if (!fileStates.has(el)) syncFileInput(el);
+  const state = fileStates.get(el)!;
+  return {
+    accept: el.attrs.accept ?? "",
+    multiple: flag("multiple"),
+    directory: flag("webkitdirectory"),
+    disabled: flag("disabled"),
+    current: state.files,
+    setFiles: (list) => {
+      state.files = list;
+      state.changed();
+    },
+    fire: (type) => void propagate(el, type, fileEvent(type)),
+  };
+}
+
+/**
+ * HTML "show the picker, if applicable", for a click (`via` null) or for
+ * `showPicker()`, which has already thrown for what it throws. A click with
+ * no transient activation does nothing but say so, in Chromium's words.
+ * Picked: `files` changes, then `input` and `change`. Dismissed, or the same
+ * selection again: `cancel`. Another dialog already open on the window: the
+ * request is dropped, as Chromium drops it.
+ */
+function showFilePicker(ops: FileInputOps, via: "showPicker" | null): void {
+  if (ops.disabled) return;
+  if (via === null && !activation.isActive()) {
+    console.warn("File chooser dialog can only be shown with a user activation.");
+    return;
+  }
+  void desktopApi
+    .pickForInput({ accept: ops.accept, multiple: ops.multiple, directory: ops.directory, current: ops.current })
+    .then((list) => {
+      if (list === undefined) return;
+      if (list === null) return ops.fire("cancel");
+      ops.setFiles(list);
+      ops.fire("input");
+      ops.fire("change");
+    });
+}
+
+/** HTML's labelable elements. */
+const LABELABLE = new Set(["button", "meter", "output", "progress", "select", "textarea"]);
+const isLabelable = (n: MirrorNode): n is MirrorElement =>
+  n.kind === 1 && (LABELABLE.has(n.tag) || (n.tag === "input" && String(n.attrs.type ?? "").trim().toLowerCase() !== "hidden"));
+
+/** The first element at or under `root`, in tree order, that `pred` accepts. */
+function firstInTree(root: MirrorNode, pred: (n: MirrorElement) => boolean): MirrorElement | null {
+  if (root.kind === 1 && pred(root)) return root;
+  for (const c of root.childNodes ?? []) {
+    const hit = firstInTree(c, pred);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * A label's labeled control: the element its `for` names, if that one is
+ * labelable (the first with that id in the label's tree, as
+ * `getElementById` finds it), else its first labelable descendant.
+ */
+function labelControl(label: MirrorElement): MirrorElement | null {
+  const forId = label.attrs.for;
+  if (forId != null) {
+    let root: MirrorNode = label;
+    while (root.parentNode) root = root.parentNode;
+    const found = firstInTree(root, (n) => n.attrs?.id === forId);
+    return found && isLabelable(found) ? found : null;
+  }
+  return firstInTree(label, (n) => n !== label && isLabelable(n));
+}
+
+/** The controls a label click would focus in a browser (and cannot here). */
+const FOCUS_ONLY_TYPES = new Set(["button", "submit", "reset", "image", "file", "checkbox", "radio", "range", "color"]);
+
+/**
+ * A `<label>`'s activation: a click on its control, unless the click came
+ * from inside the control (then it already was one). A browser also moves
+ * focus to a text control; `focus()` is a no-op here, so that half is D-F23.
+ */
+function activateLabel(label: MirrorElement, target: MirrorNode): void {
+  const control = labelControl(label);
+  if (!control) return;
+  for (let n: MirrorNode | null = target; n; n = n.parentNode) if (n === control) return;
+  const textual =
+    control.tag === "textarea" || control.tag === "select" ||
+    (control.tag === "input" && !FOCUS_ONLY_TYPES.has(String(control.attrs.type ?? "text").trim().toLowerCase()));
+  if (textual) {
+    warnCompat(
+      "label:focus",
+      "<label> (D-F23): a click on a label clicks its control, but cannot move focus into a text field, " +
+        "as a browser does: gpui owns focus and element.focus() is a no-op here",
+    );
+  }
+  control.click();
+}
+
+/** A `change` or `cancel` listener on something that neither is nor wraps a file input. */
+function adviseJsSourced(el: MirrorElement, name: string, via: string): void {
+  const key = `event:${name}`;
+  if (warned.has(key)) return;
+  queueMicrotask(() => {
+    if (warned.has(key) || firstInTree(el, (n) => isFileInput(n))) return;
+    warnCompat(
+      key,
+      `${via} — this event type is not delivered by the native host yet: only <input type=file> fires it ` +
+        `here, so on this element it will never fire`,
+    );
+  });
+}
+
+// -- detached elements: redjs's `document.createElement("a" | "input")`
+//
+//    They are plain objects on HTMLElement.prototype, outside the tree, and
+//    their attribute methods are no-ops. `wrapDetached` gives the two the
+//    idioms need a reflected attribute map, and an input the same
+//    `files`/`value` accessors a mirror file input has. Their events go
+//    through the engine's own EventTarget (`input.onchange = …` included).
+
+const REFLECTED_BOOL = new Set(["multiple", "webkitdirectory", "disabled"]);
+const REFLECTED_STR = new Set(["href", "download", "type", "accept", "rel", "target"]);
+const nativeDispatch =
+  typeof EventTarget === "function" ? (EventTarget.prototype.dispatchEvent as (this: object, ev: VnEvent) => boolean) : null;
+
+type Detached = Record<string, unknown>;
+
+/** Makes a fresh detached `<a>` / `<input>` behave like the element it names. */
+function wrapDetached(el: Detached, tag: string): void {
+  const attrs: Record<string, string> = Object.create(null);
+  const define = (name: string, value: unknown) => {
+    try {
+      Object.defineProperty(el, name, { value, configurable: true, writable: true });
+    } catch {
+      /* a non-configurable engine slot keeps the engine's method */
+    }
+  };
+  define("setAttribute", (name: unknown, value: unknown) => {
+    const k = String(name).toLowerCase();
+    const v = value == null ? "" : String(value);
+    attrs[k] = v;
+    if (REFLECTED_BOOL.has(k)) el[k] = true;
+    else if (REFLECTED_STR.has(k)) el[k] = v;
+  });
+  define("getAttribute", (name: unknown) => {
+    const k = String(name).toLowerCase();
+    if (REFLECTED_BOOL.has(k)) return el[k] ? (attrs[k] ?? "") : null;
+    if (REFLECTED_STR.has(k) && el[k] != null) return String(el[k]);
+    return attrs[k] ?? null;
+  });
+  define("hasAttribute", (name: unknown) => (el.getAttribute as (n: unknown) => string | null)(name) !== null);
+  define("removeAttribute", (name: unknown) => {
+    const k = String(name).toLowerCase();
+    delete attrs[k];
+    if (REFLECTED_BOOL.has(k)) el[k] = false;
+    else if (REFLECTED_STR.has(k)) delete el[k];
+  });
+  if (tag !== "input") return;
+  const state: FileState = { files: null, changed: () => {} };
+  fileStates.set(el, state);
+  const other = { value: String(el.value ?? "") };
+  const acc = fileAccessors(state, () => String(el.type ?? "").trim().toLowerCase() === "file", other);
+  try {
+    Object.defineProperties(el, { files: acc.files, value: acc.value });
+  } catch {
+    /* as above */
+  }
+}
+
+/** Fires `type` on a detached element through the engine's EventTarget. */
+function fireDetached(el: Detached, type: string): void {
+  const ev = fileEvent(type);
+  try {
+    if (!nativeDispatch) throw new TypeError("no EventTarget");
+    nativeDispatch.call(el, ev);
+  } catch {
+    // Not an EventTarget the engine will dispatch on: the handler attribute,
+    // with the target a browser would give it (VueUse reads
+    // `event.target.files`).
+    const h = el[`on${type}`];
+    Object.defineProperty(ev, "target", { value: el, configurable: true });
+    if (typeof h === "function") callListener(h as (this: unknown, ev: VnEvent) => unknown, el, ev);
+  }
+}
+
+function detachedFileOps(el: Detached): FileInputOps {
+  if (!fileStates.has(el)) wrapDetached(el, "input");
+  const state = fileStates.get(el)!;
+  return {
+    accept: String(el.accept ?? ""),
+    multiple: !!el.multiple,
+    directory: !!el.webkitdirectory,
+    disabled: !!el.disabled,
+    current: state.files,
+    setFiles: (list) => {
+      state.files = list;
+    },
+    fire: (type) => fireDetached(el, type),
+  };
+}
+
+/** The activation behaviour of a detached `<a>` or `<input type=file>`. */
+function activateDetached(target: object): void {
+  const el = target as Detached;
+  const tag = String(el.tagName ?? "").toUpperCase();
+  if (tag === "A" && el.href != null) {
+    followHref(String(el.href), el.download == null ? null : String(el.download));
+  } else if (tag === "INPUT" && String(el.type ?? "").trim().toLowerCase() === "file") {
+    showFilePicker(detachedFileOps(el), null);
+  }
+}
+
+// -- showPicker() (HTML): the picker without the click. Chromium's checks and
+//    words: an immutable control is InvalidStateError, no user activation is
+//    NotAllowedError. Only file pickers exist here (A-F6).
+defineDom("showPicker", function (this: MirrorElement) {
+  const mirror = isMirrorNode(this);
+  const raw = this as unknown as Detached;
+  const tag = mirror ? this.tag : String(raw.tagName ?? "").toLowerCase();
+  if (tag !== "input") {
+    throw new TypeError("Failed to execute 'showPicker': this element has no picker (only <input> has one here).");
+  }
+  const attr = (k: string) => (mirror ? this.attrs[k] != null && this.attrs[k] !== "false" : !!raw[k]);
+  const type = String((mirror ? this.attrs.type : raw.type) ?? "text").trim().toLowerCase();
+  const fail = (name: string, msg: string) =>
+    new DOMException(`Failed to execute 'showPicker' on 'HTMLInputElement': ${msg}`, name);
+  if (attr("disabled") || (type !== "file" && attr("readonly"))) {
+    throw fail("InvalidStateError", "HTMLInputElement::showPicker() cannot be used on immutable controls.");
+  }
+  if (!activation.isActive()) throw fail("NotAllowedError", "HTMLInputElement::showPicker() requires a user gesture.");
+  if (type !== "file") {
+    warnCompat(`showPicker:${type}`, `showPicker() on <input type=${type}> is a no-op: only file pickers exist here (A-F6)`);
+    return;
+  }
+  showFilePicker(mirror ? fileInputOps(this) : detachedFileOps(raw), "showPicker");
+});
 
 // -- el.click(): HTML's synthetic click. A real `MouseEvent`, through the same
 //    walk a host click takes, then the activation behaviour if nobody
@@ -2321,9 +2779,15 @@ function hasListener(target: MirrorNode, name: string): boolean {
   return false;
 }
 
-/** Is there an `<a href>` on this node's ancestor chain (itself included)? */
-function linkOnPath(target: MirrorNode): boolean {
-  for (let n: MirrorNode | null = target; n; n = n.parentNode) if (isLink(n)) return true;
+/**
+ * Is there an element on this node's ancestor chain (itself included) whose
+ * click does something by itself: an `<a href>`, a `<label>`, an
+ * `<input type=file>`?
+ */
+function activatableOnPath(target: MirrorNode): boolean {
+  for (let n: MirrorNode | null = target; n; n = n.parentNode) {
+    if (isLabel(n) || isFileInput(n) || isLink(n)) return true;
+  }
   return false;
 }
 
@@ -2378,15 +2842,22 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // and the sole thing that could have set that flag is the `preventDefault()`
   // two lines below — whose whole job is to make `proceed` false, which it
   // already is.
-  // A click whose path holds a link must be BUILT even with no handler on it:
-  // a `preventDefault()` anywhere on the path is what cancels the navigation,
-  // and the walk is the only way to learn that.
-  const link = name === "click" && linkOnPath(target);
+  // A click whose path holds a link (or a label, or a file input) must be
+  // BUILT even with no handler on it: a `preventDefault()` anywhere on the
+  // path is what cancels the activation, and the walk is the only way to
+  // learn that.
+  const link = name === "click" && activatableOnPath(target);
   if (link || hasListener(target, name)) {
     const ev = synthesize(name, a, b, c, d, key);
     if (!proceed && ev.preventDefault) ev.preventDefault();
     proceed = propagate(target, name, ev) && proceed;
     if (link && proceed) activate(target, true);
+  }
+  // A focused file input clicks itself on Enter (keydown; Chromium's
+  // keypress) and on Space (keyup), unless the key event was cancelled —
+  // KeyboardClickableInputTypeView.
+  if (proceed && isFileInput(target) && ((name === "keydown" && key === "Enter") || (name === "keyup" && key === " "))) {
+    (target as MirrorElement).click();
   }
   if (derived) {
     for (const dn of derived) {
@@ -3035,6 +3506,22 @@ if (doc) {
   forceDoc("getElementById", (id: unknown) =>
     queryOne(`[id=${JSON.stringify(String(id))}]`, rootId()),
   );
+  // `document.createElement("a" | "input")` stays the engine's detached
+  // element, given the attribute map and the file-input state the download
+  // and pick idioms need (FileSaver.js, VueUse `useFileDialog`; see
+  // `wrapDetached`). Every other tag is untouched.
+  const nativeCreate =
+    typeof (doc as { createElement?: unknown }).createElement === "function"
+      ? ((doc as unknown as { createElement: (tag: unknown, opts?: unknown) => unknown }).createElement.bind(doc))
+      : null;
+  if (nativeCreate) {
+    forceDoc("createElement", (tag: unknown, opts?: unknown) => {
+      const el = nativeCreate(tag, opts);
+      const t = String(tag).toLowerCase();
+      if ((t === "a" || t === "input") && el && typeof el === "object") wrapDetached(el as Detached, t);
+      return el;
+    });
+  }
   // `DocumentFragment` is installed on the global by `defineGlobal` above, so
   // it is not part of the engine's declared surface — hence the cast.
   defDoc("createDocumentFragment", () =>

@@ -431,7 +431,10 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       handleFrom: () => {
         throw new TypeError("no desktop host");
       },
-      pickForInput: () => Promise.resolve(undefined),
+      pickForInput: () => {
+        warnCompat("input-file:nohost", "<input type=file>: this host has no vn-desktop, so there is no file picker");
+        return Promise.resolve(undefined);
+      },
       download: () => warnCompat("download:nohost", "<a download>: this host has no vn-desktop; nothing was saved"),
     };
   }
@@ -832,7 +835,12 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
 
   // ---- <input type=file> and <a download> -----------------------------------
 
-  /** HTML `accept`: trimmed, lowercased tokens; anything else advised (A-F8) and dropped. */
+  /**
+   * HTML `accept`: trimmed, lowercased tokens; anything else advised (A-F8)
+   * and dropped. A `type/*` other than the three HTML names is kept, as
+   * Chromium keeps it (`*` is a token character) and maps it to every
+   * extension of that type.
+   */
   const acceptTokens = (accept: string): string[] => {
     const out: string[] = [];
     for (const raw of accept.split(",")) {
@@ -841,10 +849,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       const [type, sub, ...rest] = t.split("/");
       const ok =
         (t.startsWith(".") && t.length > 1) ||
-        t === "image/*" ||
-        t === "audio/*" ||
-        t === "video/*" ||
-        (!rest.length && !!type && !!sub && TOKEN_RE.test(type) && TOKEN_RE.test(sub) && sub !== "*");
+        (!rest.length && !!type && !!sub && TOKEN_RE.test(type) && TOKEN_RE.test(sub));
       if (ok) out.push(t);
       else warnCompat(`accept:${t}`, `<input accept>: the token "${t}" is not an extension or MIME type and was ignored (A-F8)`);
     }
@@ -872,6 +877,11 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       );
     },
     download(url, attr) {
+      warnCompat(
+        "download:saveas",
+        "<a download> (D-F6): the file is saved through a Save As dialog, starting in Downloads. Chromium " +
+          "saves to Downloads without asking unless \"Ask where to save each file\" is on",
+      );
       deps.call(fs.download(url, attr)).then(
         () => {},
         (f: DesktopFailure) =>
