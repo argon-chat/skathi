@@ -702,6 +702,17 @@ fn install_tees_once() {
     });
 }
 
+/// The host is about to run the app again in the same JS realm. Called from
+/// `crate::reload::run` (`location.reload()`) between the old app's unload and
+/// the new bundle. It puts a `kind: "reload"` marker in the Network ring
+/// (`net::mark_reload`) with `cause` saying why. Nothing is recorded while the
+/// tees are off: a ring that holds no requests needs no divider.
+pub fn mark_reload(cause: &str) {
+    if TEES_INSTALLED.load(Ordering::SeqCst) {
+        net::mark_reload(cause);
+    }
+}
+
 /// 128 bits of process-local entropy, hex. No `rand` dependency for a token
 /// whose only job is to stop an unrelated local process from driving the app:
 /// the address of a fresh allocation, the pid, and two clock reads taken apart

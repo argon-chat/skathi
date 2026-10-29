@@ -69,12 +69,12 @@ test("after location.reload() the runtime's classes are new, ResizeObserver fire
 // The devtools Network tee (crates/vn-app/src/devtools/net.rs) is installed
 // once per process and has to stay underneath what each new runtime puts on the
 // global: a reload's runtime replaces `WebSocket` with a new realm proxy. The
-// ring is the host's, so it goes on across the reload, with a marker row where
-// the app asked for it. Checked in both install orders: at boot (`events`, the
+// ring is the host's, so it goes on across the reload, and the host puts a
+// marker row between the runs. Checked in both install orders: at boot (`events`, the
 // devtools on from the start) and late (`devtools-late`, turned on by the app
 // after the runtime ran), which is the order that used to lose WebSocket.
 type Host = Awaited<ReturnType<typeof launch>>;
-type Row = { seq: number; kind: string; url: string; phase?: string; status?: number };
+type Row = { seq: number; kind: string; url: string; phase?: string; status?: number; cause?: string };
 
 async function untilOn(host: Host, cond: string): Promise<boolean> {
   for (let i = 0; i < 100; i++) {
@@ -145,6 +145,7 @@ async function networkAcrossReload(host: Host, mounted: string): Promise<void> {
     const closed = at((e) => e.kind === "ws" && e.phase === "close" && e.url.includes("?after"));
     expect(before).toBeGreaterThanOrEqual(0);
     expect(marker).toBeGreaterThan(before);
+    expect(got[marker]?.cause).toBe("location.reload()");
     expect(after).toBeGreaterThan(marker);
     expect(opened).toBeGreaterThan(marker);
     expect(closed).toBeGreaterThan(opened);

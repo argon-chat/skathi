@@ -258,12 +258,15 @@ export interface NetEntry {
    */
   rid?: number;
   /**
-   * `"fetch"`, `"xhr"` or `"ws"`, or `"reload"`: a marker row where the app
-   * called `location.reload()`. A marker has no record behind it, and `url` is
-   * the page's `location.href`. The rows before it are the previous run's.
+   * `"fetch"`, `"xhr"` or `"ws"`, or `"reload"`: a marker row the host put in
+   * where it ran the app again in the same realm (`cause` says why). A marker
+   * has no record behind it and an empty `url`. The rows before it are the
+   * previous run's.
    */
   kind: string;
   url: string;
+  /** A reload marker only: why the host ran the app again, e.g. `"location.reload()"`. */
+  cause?: string;
   /** fetch only. */
   method?: string;
   /** Milliseconds since the epoch, as the TARGET measured it. */

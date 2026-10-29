@@ -40,9 +40,10 @@
 //! `location.reload()` and the dev host's cold restart run the app again in the
 //! same JS realm (`crate::reload`), and the runtime evaluated next puts its own
 //! classes on the global (1a84b39). The ring is the host's, so it simply goes
-//! on: seqs keep counting, and a `kind: "reload"` marker row goes in where the
-//! app asked for the reload. The tee itself is installed once per process and
-//! has to stay underneath what each new runtime installs:
+//! on: seqs keep counting, and for `location.reload()` the host puts a
+//! `kind: "reload"` marker row ([`mark_reload`]) between the old app's unload
+//! and the new bundle. The tee itself is installed once per process and has to
+//! stay underneath what each new runtime installs:
 //!
 //! - `fetch`: the runtime does not wrap it, and the unload keeps globals that
 //!   predate the first runtime, so the teed `fetch` stays.
@@ -559,8 +560,8 @@ impl Ring {
             let marker = raw.contains("\"reload\"")
                 && json::parse(raw).is_some_and(|j| j.get("kind").and_then(Json::as_str) == Some("reload"));
             let note = if marker {
-                "a reload marker: the app called location.reload() here, and the rows before it are \
-                 the previous run's. There is no exchange behind it"
+                "a reload marker: the host ran the app again here (`cause` says why), and the rows \
+                 before it are the previous run's. There is no exchange behind it"
             } else {
                 "no details were recorded for this entry: the devtools were off when it \
                  started, or it was recorded by a tee older than net_detail"
@@ -1081,6 +1082,27 @@ pub fn install_tee(rt: &JsRuntime) {
     }
 }
 
+/// A `kind: "reload"` marker row: the host is about to run the app again in
+/// the same realm. `cause` says why: `"location.reload()"`, or whatever another
+/// restart path that calls it passes. The caller ([`super::mark_reload`]) puts
+/// it after the old app's unload and before the new bundle evaluates, so the
+/// old run's rows are above it and the new run's below. Only what the old run
+/// still had in flight settles below it: a fetch that was pending, the close
+/// of a socket the unload shut. `url` is empty because a marker is not an
+/// exchange.
+pub fn mark_reload(cause: &str) {
+    let raw = Json::obj(vec![
+        ("kind", Json::s("reload")),
+        ("url", Json::s("")),
+        ("cause", Json::s(cause)),
+        ("at", Json::n(now_ms().round())),
+    ])
+    .to_json();
+    with_ring(|ring| {
+        ring.record(&raw);
+    });
+}
+
 /// Everything recorded since the last call. Drained by the push channel once
 /// per frame.
 pub fn drain() -> Vec<String> {
@@ -1155,15 +1177,8 @@ const TEE_JS: &str = r#"
   var message = function (e) { try { return String((e && e.message) || e); } catch (x) { return "?"; } };
   var clip = function (s, n) { return s.length > n ? s.slice(0, n) + "…" : s; };
 
-  // `lastSeq`: the newest row's seq, for the reload marker below.
-  var lastSeq = 0;
   var record = function (o) {
-    try {
-      var s = emit(stringify(o));
-      if (typeof s !== "number") return 0;
-      lastSeq = s;
-      return s;
-    } catch (e) { return 0; }
+    try { var s = emit(stringify(o)); return typeof s === "number" ? s : 0; } catch (e) { return 0; }
   };
   var begin = function (o) {
     if (!deep) return 0;
@@ -1674,31 +1689,6 @@ const TEE_JS: &str = r#"
       }
     } catch (e) {}
   }
-
-  // ---- location.reload() ---------------------------------------------------
-  // A marker row, `kind: "reload"`, where the app asked for a reload. The rows
-  // before it are the previous run's, since the ring outlives the reload (it is
-  // host-side). The runtime's `location.reload` calls the host fn
-  // `__vn_reload` by name at call time, and `__vn*` globals survive a reload,
-  // so this one wrapper serves every run. The host reloads at the next frame,
-  // so anything the old app sends in between (a `pagehide` handler's request)
-  // lands after the marker. Two calls with no row between them make one marker.
-  var hReload = G.__vn_reload;
-  if (typeof hReload === "function" && !hReload.__vnTeed) {
-    var markSeq = -1;
-    var reloadTee = function __vn_reload() {
-      try {
-        if (!lastSeq || markSeq !== lastSeq) {
-          var href = "";
-          try { href = str((G.location && G.location.href) || ""); } catch (e) {}
-          markSeq = record({ kind: "reload", url: href, at: now() });
-        }
-      } catch (e) {}
-      return hReload.apply(this, arguments);
-    };
-    reloadTee.__vnTeed = true;
-    try { G.__vn_reload = reloadTee; } catch (e) {}
-  }
 })();
 "#;
 
@@ -1749,7 +1739,7 @@ mod tests {
         let mut ring = Ring::new();
         let rid = begun(&mut ring, "fetch");
         let before = summary(&mut ring, Some(rid));
-        let marker = ring.record(r#"{"kind":"reload","url":"app://redpew/","at":1}"#);
+        let marker = ring.record(r#"{"kind":"reload","url":"","cause":"location.reload()","at":1}"#);
         assert_eq!(marker, before + 1, "the seqs run on through a reload");
         let d = ring.detail(marker).unwrap();
         assert!(matches!(d.get("detail"), Some(Json::Null)));

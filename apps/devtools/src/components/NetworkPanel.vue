@@ -117,10 +117,10 @@ const pool = computed(() => {
 
 // ---- reload markers -------------------------------------------------------------
 //
-// A `kind: "reload"` row is not an exchange. The target's tee puts it where the
-// app called `location.reload()`: the ring outlives the reload, so the rows
-// above the marker are the previous run's. It is a divider, so it cannot be
-// selected or opened.
+// A `kind: "reload"` row is not an exchange. The target's host puts it where it
+// ran the app again in the same realm, and `cause` says why (`location.reload()`).
+// The ring outlives that, so the rows above the marker are the previous run's.
+// It is a divider, so it cannot be selected or opened.
 
 function isMarker(entry: NetEntry): boolean {
   return entry.kind === "reload";
@@ -134,11 +134,14 @@ function clock(at: number): string {
 
 function markerText(entry: NetEntry): string {
   const at = typeof entry.at === "number" && entry.at > 0 ? `${clock(entry.at)}  ` : "";
-  return `${at}location.reload(): the app ran again, same JS realm (rows above: the previous run)`;
+  return `${at}${entry.cause || "reload"}: the app ran again, same JS realm (rows above: the previous run)`;
 }
 
 function markerTitle(entry: NetEntry): string {
-  return `The app called location.reload()${entry.url ? ` on ${entry.url}` : ""}. The host ran it again at the next frame.`;
+  return (
+    `The host ran the app again in the same JS realm (${entry.cause || "reload"}). The rows above are the ` +
+    "previous run's. A request it still had in flight, or a socket the unload closed, can settle below."
+  );
 }
 
 const recorded = computed(() => state.net.reduce((n, e) => (isMarker(e) ? n : n + 1), 0));
