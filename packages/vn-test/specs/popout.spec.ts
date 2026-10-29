@@ -459,9 +459,13 @@ describe("pop-out", () => {
     //
     // `.wtool` is `right: 8px; bottom: 8px` inside the 320x260 notes window.
     await app.locator(".pop-notes").click();
-    const notes = await until("the notes window to exist", async () => {
+    // The size arrives with the pop-out's first frame (`report_metrics`), the
+    // moment its `@resize` fires — a beat after the entry itself, which exists
+    // at 0x0 from the open. Since JS runs without frames (the background tick),
+    // a devtools eval can land in that beat.
+    const notes = await until("the notes window to be painted", async () => {
       const l = await popouts();
-      return l.find((p) => p.title === "Notes") ?? null;
+      return l.find((p) => p.title === "Notes" && p.width > 0) ?? null;
     });
     bunExpect(notes.width).toBe(320);
     bunExpect(notes.height).toBe(260);
