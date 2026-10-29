@@ -1580,7 +1580,7 @@ fn build_node<V: 'static>(
                 &node_prefix(t, id),
             );
             apply_inline_row(d.style(), t, node, align);
-            apply_inline_align(d.style(), &extras, align);
+            apply_inline_align(d.style(), t, node, &extras, align);
             advise_inline_level(t, id, node, &extras, d.style());
             apply_percentage_flex_basis(d.style(), t, node);
             // "The window IS the root" (see `createApp().mount()`): the root
@@ -2153,12 +2153,27 @@ fn apply_percentage_flex_basis(
 /// author's own margin (`mx-4`, `ml-auto`) authoritative, and a box that is
 /// auto-width fills the line anyway, so there is no free space to distribute
 /// and the margins are a no-op — which is also what a browser does.
+///
+/// **Only in a BLOCK container** (m26). In a flex or grid container an
+/// inline-level child is blockified into a flex/grid item, and `text-align`
+/// does not place items at all — `justify-content` / `justify-items` do. The
+/// auto margins were therefore wrong there, and in flexbox they actively
+/// move the item, because auto margins take the free space before
+/// `justify-content` sees it. The Argon client's `.icon-box` (`inline-flex`, in a
+/// `flex justify-center` div that inherits `text-center`) landed at the right
+/// edge. The same holds for a parent that [`apply_inline_row`] turned into a
+/// flex row: its own `justify-content` already carries the `text-align`.
 fn apply_inline_align(
     style: &mut gpui::StyleRefinement,
+    t: &Tree,
+    node: &crate::tree::Node,
     extras: &vn_css::Extras,
     align: Option<gpui::TextAlign>,
 ) {
     if extras.inline_level != Some(true) {
+        return;
+    }
+    if parent_is_flex_or_grid(t, node) {
         return;
     }
     match align {
@@ -2170,6 +2185,17 @@ fn apply_inline_align(
             style.margin.left.get_or_insert(gpui::Length::Auto);
         }
         _ => {}
+    }
+}
+
+/// Is `node` laid out by a flex or grid container: a parent whose display is
+/// flex or grid, or one [`apply_inline_row`] turns into a flex row?
+fn parent_is_flex_or_grid(t: &Tree, node: &crate::tree::Node) -> bool {
+    let Some(parent) = t.node(node.parent) else { return false };
+    let display = parent.computed.as_ref().and_then(|cs| cs.base.display);
+    match display {
+        Some(gpui::Display::Flex) | Some(gpui::Display::Grid) => true,
+        _ => inline_row_applies(t, parent, display),
     }
 }
 
@@ -4802,6 +4828,63 @@ mod tests {
             let mut style3 = gpui::StyleRefinement::default();
             apply_inline_row(&mut style3, t, t.node(declared).unwrap(), None);
             assert_eq!(style3.display, Some(gpui::Display::Flex));
+        });
+    }
+
+    /// `text-align: center` centres an inline-level box with auto margins in
+    /// a BLOCK container only. In a flex or grid container (declared, or one
+    /// `apply_inline_row` made) it is an item, and auto margins would move it:
+    /// the Argon client's `.icon-box` landed at x=852 instead of 694.
+    #[test]
+    fn text_align_adds_auto_margins_in_a_block_parent_only() {
+        with_tree(|t| {
+            let div = t.intern("div");
+            let span = t.intern("span");
+            let extras = vn_css::Extras { inline_level: Some(true), ..Default::default() };
+            let centred = |t: &Tree, child: u32| {
+                let mut s = gpui::StyleRefinement::default();
+                apply_inline_align(&mut s, t, t.node(child).unwrap(), &extras, Some(gpui::TextAlign::Center));
+                (s.margin.left, s.margin.right)
+            };
+            let with_display = |t: &mut Tree, id: u32, display: gpui::Display| {
+                let mut base = gpui::StyleRefinement::default();
+                base.display = Some(display);
+                let mut cs = vn_css::ComputedStates::default();
+                cs.base = std::rc::Rc::new(base);
+                if let Some(n) = t.node_mut(id) {
+                    n.computed = Some(cs);
+                }
+            };
+            let auto = (Some(gpui::Length::Auto), Some(gpui::Length::Auto));
+
+            // A block parent with a block sibling (no inline row): centred.
+            let block = t.create_element(div);
+            let badge = t.create_element(div);
+            let sibling = t.create_element(div);
+            t.insert(badge, block, 0);
+            t.insert(sibling, block, 1);
+            assert_eq!(centred(t, badge), auto);
+
+            // Declared flex, and declared grid: left alone.
+            for display in [gpui::Display::Flex, gpui::Display::Grid] {
+                let parent = t.create_element(div);
+                let item = t.create_element(div);
+                t.insert(item, parent, 0);
+                with_display(t, parent, display);
+                assert_eq!(centred(t, item), (None, None), "{display:?}");
+            }
+
+            // A block parent that `apply_inline_row` turns into a flex row
+            // (text beside a span): left alone, the row's justify-content
+            // already says `center`.
+            let row = t.create_element(div);
+            let text = t.create_text();
+            t.set_text(text, "Argon".to_string());
+            let run = t.create_element(span);
+            t.insert(text, row, 0);
+            t.insert(run, row, 1);
+            assert!(inline_row_applies(t, t.node(row).unwrap(), None));
+            assert_eq!(centred(t, run), (None, None));
         });
     }
 
