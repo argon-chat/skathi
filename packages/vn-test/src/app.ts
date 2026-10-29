@@ -545,6 +545,11 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
   // window nobody is there to answer, and steal the foreground from whoever is.
   if (env.VN_DIALOGS === undefined) env.VN_DIALOGS = "scripted";
   Object.assign(env, options.env ?? {});
+  // A test never opens the machine's microphone, whatever the app or a spec
+  // asks for: getUserMedia is a NotAllowedError for the whole run
+  // (crates/vn-voice/src/lib.rs, `capture_gate`). Set after the spec's env on
+  // purpose, so no spec can turn it off.
+  env.VN_MEDIA_CAPTURE = "deny";
 
   log(`[vn-test] ${label}: launching ${exe} on ${slotDir || "its own %TEMP% slot"}`);
   const child = spawn(exe, options.args ?? [], {

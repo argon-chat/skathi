@@ -5703,6 +5703,7 @@ dependencies = [
  "image",
  "libc",
  "native-tls",
+ "resvg",
  "sha1",
  "sha2",
  "symphonium",
