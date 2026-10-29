@@ -16,6 +16,8 @@
 //     "raiseOnSecondInstance": true,  bring the window forward on a forwarded launch (default true)
 //     "protocols": ["hello"],     custom URL schemes, registered per-user at startup (prod)
 //     "assets": ["assets"],       what is packaged: dirs/globs relative to the app root
+//     "publicDir": "public",      Vite's public/: packaged with keys relative to IT (served at /)
+//     "define": { "K": … },       Vite's `define` — read by the builders (vitecompat.ts appDefines)
 //     "windows": {                Windows exe identity — only `vn build` reads it
 //       "exeName": "Hello", "icon": "icon.png", "company": "…", "copyright": "…",
 //       "description": "…", "console": false, "host": "standard" | "no-devtools"
@@ -57,6 +59,8 @@ export interface AppConfig {
   /** `vn.config.json` `assets`, or the default `["assets"]`. */
   assets: string[];
   assetsDeclared: boolean;
+  /** `vn.config.json` `publicDir`, app-root-relative and `/`-separated; null when undeclared. */
+  publicDir: string | null;
   windows: WindowsConfig;
   exeName: string;
   iconPath: string | null;
@@ -82,6 +86,8 @@ const TOP_LEVEL = new Set([
   "window",
   "devtools",
   "assets",
+  "publicDir",
+  "define",
   "windows",
   "id",
   "singleInstance",
@@ -249,6 +255,27 @@ export function loadAppConfig(target: string): AppConfig {
     assets = (raw.assets as string[]).map((a) => a.trim());
   }
 
+  // Vite's `publicDir`: files served at the root, so `public/favicon.ico` is
+  // `/favicon.ico`. Opt-in here (Vite defaults it to "public"): turning it on
+  // by default would re-key a package that already ships a public/ directory
+  // under "assets". An undeclared public/ next to vn.config.json is a warning
+  // in collectAssets instead.
+  let publicDir: string | null = null;
+  if (raw.publicDir !== undefined && raw.publicDir !== false) {
+    const p = typeof raw.publicDir === "string" ? raw.publicDir.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "") : "";
+    if (!p || p.startsWith("/") || /^[a-zA-Z]:/.test(p) || p.split("/").includes("..")) {
+      throw new ConfigError('vn.config.json "publicDir" must be a directory relative to the app root, inside it (or false)');
+    }
+    const abs = join(appRoot, p);
+    if (!existsSync(abs) || !statSync(abs).isDirectory()) {
+      warnings.push(`vn.config.json "publicDir": ${JSON.stringify(p)} is not a directory — nothing is packaged from it`);
+    }
+    publicDir = p;
+  }
+  if (raw.define !== undefined && (!raw.define || typeof raw.define !== "object" || Array.isArray(raw.define))) {
+    throw new ConfigError('vn.config.json "define" must be an object of { "NAME": value }');
+  }
+
   const windows: WindowsConfig = {};
   if (raw.windows !== undefined) {
     if (!raw.windows || typeof raw.windows !== "object" || Array.isArray(raw.windows)) {
@@ -300,6 +327,7 @@ export function loadAppConfig(target: string): AppConfig {
     versionFrom,
     assets,
     assetsDeclared,
+    publicDir,
     windows,
     exeName,
     iconPath,

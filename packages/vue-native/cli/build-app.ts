@@ -7,12 +7,15 @@
 //                                                                 ▼
 //                                                  <appRoot>/dist/<exeName>.exe
 //
-// Intermediates go to `dist/.vn/` (`app.prod.js`, `window.json`, `app.vnpk`).
+// Intermediates go to `dist/.vn/` (`app.prod.js`, `window.json`, `assets.json`,
+// `app.vnpk`). `assets.json` is the builder's list of files the bundle's
+// imports refer to (`?url`, image imports); they are packed beside "assets"
+// and "publicDir".
 // The `.vnpk` is the exact blob that was stamped, so a bare host can run it
 // without a re-stamp while iterating: `VN_PAYLOAD=dist/.vn/app.vnpk <host>`.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { collectAssets, type AssetFile } from "./assets";
 import { loadAppConfig, type AppConfig, type Variant } from "./config";
@@ -40,7 +43,24 @@ export interface BuildOptions {
   /** Write `dist/.vn/app.vnpk` and stop — no host needed. */
   payloadOnly?: boolean;
   allowHostMismatch?: boolean;
+  /** `--define K=V`, each passed to prod.ts on top of vn.config.json `define`. */
+  defines?: string[];
   log?: (line: string) => void;
+}
+
+/** One entry of the builder's `assets.json` (prod.ts): a file an import referred to. */
+interface BuilderAsset {
+  key: string;
+  path: string;
+}
+
+function readBuilderAssets(path: string): BuilderAsset[] {
+  if (!existsSync(path)) return [];
+  const list = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!Array.isArray(list)) throw new Error(`${path}: not a list`);
+  return list.filter(
+    (a): a is BuilderAsset => !!a && typeof (a as BuilderAsset).key === "string" && typeof (a as BuilderAsset).path === "string",
+  );
 }
 
 export interface BuildResult {
@@ -98,8 +118,12 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
 
   // 1. The bundle — the same `prod.ts` every prod build in this repo uses.
   const jsOut = join(work, "app.prod.js");
+  const assetsJson = join(work, "assets.json");
+  // A stale list from an older build must not survive a builder that wrote none.
+  rmSync(assetsJson, { force: true });
   const tb = performance.now();
-  const r = spawnSync(process.execPath, [PROD_TS, config.entry, jsOut], { cwd: PKG_DIR, encoding: "utf8" });
+  const defineArgs = (options.defines ?? []).map((d) => `--define=${d}`);
+  const r = spawnSync(process.execPath, [PROD_TS, config.entry, jsOut, ...defineArgs], { cwd: PKG_DIR, encoding: "utf8" });
   if (r.status !== 0 || !existsSync(jsOut)) {
     throw new Error(`bun prod.ts failed for ${config.entry}\n${r.stdout ?? ""}${r.stderr ?? ""}`);
   }
@@ -110,8 +134,28 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
 
   // 2. The assets.
   const ta = performance.now();
-  const collected = collectAssets(config.appRoot, config.assets, config.assetsDeclared);
+  const collected = collectAssets(config.appRoot, config.assets, config.assetsDeclared, config.publicDir);
   warnings.push(...collected.warnings);
+  // What the bundle's imports referred to (`?url`, `import logo from "./a.png"`),
+  // keyed the way the bundle spells the URL. They live under src/ or in a
+  // package, which the "assets" walk never packages, so they are added here.
+  const known = new Map(collected.files.map((f) => [f.key, f]));
+  for (const a of readBuilderAssets(assetsJson)) {
+    const prev = known.get(a.key);
+    if (prev) {
+      if (resolve(prev.path) !== resolve(a.path)) {
+        warnings.push(`${JSON.stringify(a.key)}: an import refers to ${a.path}, but "assets" packages ${prev.path} under that key — the import's file wins`);
+        prev.path = a.path;
+        prev.size = statSync(a.path).size;
+      }
+      continue;
+    }
+    const file: AssetFile = { key: a.key, path: a.path, size: statSync(a.path).size };
+    known.set(a.key, file);
+    collected.files.push(file);
+  }
+  collected.files.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  collected.totalBytes = collected.files.reduce((n, f) => n + f.size, 0);
   const msAssets = performance.now() - ta;
   if (collected.totalBytes > MAX_PAYLOAD_BYTES) {
     throw new Error(

@@ -70,7 +70,7 @@
 // use, so the diagnostics an app sees are about ITS OWN classes.
 
 import { existsSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join, resolve as resolvePath } from "path";
 
 import postcss from "postcss";
 import tailwindcss from "tailwindcss";
@@ -117,13 +117,42 @@ export function findConfig(startDir: string, stopDir: string): string | null {
 /// utilities sheet. Re-reads the content files on every call (Tailwind's own
 /// mtime tracking decides whether to rebuild its context), so watch mode can
 /// simply call this again after any template edit.
-export async function generate(configPath: string, source?: CssSource): Promise<string> {
-  const result = await postcss([tailwindcss(configPath) as any]).process(
-    source?.text ?? "@tailwind base;\n@tailwind utilities;\n",
-    { from: source?.from },
-  );
-  return result.css;
+///
+/// With the CONFIG'S DIRECTORY as the working directory. Tailwind v3 resolves a
+/// relative `content` glob (`"./src/**/*.vue"`, what every Vite app writes)
+/// against `process.cwd()` unless the config opts into `content.relative`, and
+/// under Vite cwd is the project root, i.e. the config's directory. Both
+/// builders run from `packages/vue-native`, so such a config used to scan the
+/// RUNTIME's sources instead of the app's — measured on the Argon client: 475 KB
+/// of the wrong utilities against 611 KB of the right ones
+/// (research/reports/m26/client-gap/B-build-ui.md §1.1 #2a). In-repo apps that
+/// anchor their globs with `join(__dirname, …)` are unaffected.
+///
+/// The directory change is held across the whole PostCSS run (Tailwind reads
+/// cwd when it sets up its context, which is inside the async plugin), so calls
+/// are SERIALIZED: two overlapping runs must never see each other's cwd. They
+/// are CPU-bound on one JS thread anyway, so nothing is lost.
+export function generate(configPath: string, source?: CssSource): Promise<string> {
+  const run = async () => {
+    const dir = dirname(configPath);
+    const prev = process.cwd();
+    const move = resolvePath(prev).toLowerCase() !== resolvePath(dir).toLowerCase();
+    if (move) process.chdir(dir);
+    try {
+      const result = await postcss([tailwindcss(configPath) as any]).process(
+        source?.text ?? "@tailwind base;\n@tailwind utilities;\n",
+        { from: source?.from },
+      );
+      return result.css;
+    } finally {
+      if (move) process.chdir(prev);
+    }
+  };
+  const next = queue.then(run, run);
+  queue = next.catch(() => undefined);
+  return next;
 }
+let queue: Promise<unknown> = Promise.resolve();
 
 /// A stylesheet the APP owns, handed to Tailwind as its own entry.
 ///
@@ -134,13 +163,13 @@ export async function generate(configPath: string, source?: CssSource): Promise<
 /// its `@apply` rules resolve against the app's own config.
 export type CssSource = { text: string; from: string };
 
-/// Does this stylesheet contain `@tailwind` / `@layer` / `@apply` — i.e. does it
-/// have to go through Tailwind's PostCSS pass to mean anything?
+/// Does this stylesheet contain `@tailwind` / `@layer` / `@apply` / `theme()` —
+/// i.e. does it have to go through Tailwind's PostCSS pass to mean anything?
 ///
 /// A plain stylesheet does not, and is emitted verbatim, so an app with no
 /// Tailwind config still gets its CSS.
 export function needsTailwindPass(css: string): boolean {
-  return /@tailwind\b|@layer\b|@apply\b|@screen\b/.test(css);
+  return /@tailwind\b|@layer\b|@apply\b|@screen\b|(?<![\w-])theme\(/.test(css);
 }
 
 /// Does this stylesheet declare the utilities layer itself? When it does, the

@@ -37,15 +37,21 @@ build options
   --console                    keep the console subsystem (a console window opens with it)
   --payload-only               write dist/.vn/app.vnpk and stop; no host needed
   --allow-host-mismatch        stamp a host from another vue-native version (maintainers)
+  --define K=V                 a Vite-style define on top of vn.config.json "define"
+                               (V is an expression: --define __FLAG__=true,
+                               --define 'APP_NAME="argon"'); repeatable
   --json                       one JSON line instead of the summary (build, host path)
 `;
 
 type Flags = Record<string, string | boolean>;
 const BOOLEAN = new Set(["console", "payload-only", "allow-host-mismatch", "help", "json"]);
+/** Flags that may be given more than once; collected in order into `repeated`. */
+const REPEATABLE = new Set(["define"]);
 
-function parse(argv: string[]): { positional: string[]; flags: Flags; rest: string[] } {
+function parse(argv: string[]): { positional: string[]; flags: Flags; repeated: Record<string, string[]>; rest: string[] } {
   const positional: string[] = [];
   const flags: Flags = {};
+  const repeated: Record<string, string[]> = {};
   let rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -55,12 +61,17 @@ function parse(argv: string[]): { positional: string[]; flags: Flags; rest: stri
     }
     if (a === "-h") flags.help = true;
     else if (a.startsWith("--")) {
-      const [name, inline] = a.slice(2).split("=", 2) as [string, string | undefined];
+      // Split at the FIRST "=" only: `--define=K=V` keeps its own "=".
+      const body = a.slice(2);
+      const eq = body.indexOf("=");
+      const name = eq < 0 ? body : body.slice(0, eq);
+      const inline = eq < 0 ? undefined : body.slice(eq + 1);
       if (BOOLEAN.has(name)) flags[name] = true;
+      else if (REPEATABLE.has(name)) (repeated[name] ??= []).push(inline ?? argv[++i] ?? "");
       else flags[name] = inline ?? argv[++i] ?? "";
     } else positional.push(a);
   }
-  return { positional, flags, rest };
+  return { positional, flags, repeated, rest };
 }
 
 function variantOf(flags: Flags): Variant | undefined {
@@ -73,7 +84,7 @@ function variantOf(flags: Flags): Variant | undefined {
 }
 
 async function main(argv: string[]): Promise<number> {
-  const { positional, flags, rest } = parse(argv);
+  const { positional, flags, repeated, rest } = parse(argv);
   const [command, ...args] = positional;
   if (!command || flags.help || command === "help") {
     console.log(USAGE);
@@ -93,6 +104,7 @@ async function main(argv: string[]): Promise<number> {
       console: flags.console === true,
       payloadOnly: flags["payload-only"] === true,
       allowHostMismatch: flags["allow-host-mismatch"] === true,
+      defines: repeated.define,
     });
     if (flags.json) {
       // One line, for scripts and specs — the summary minus the prose.

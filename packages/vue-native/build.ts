@@ -87,7 +87,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   statSync,
   writeFileSync,
@@ -101,10 +100,13 @@ import {
   generate as generateTailwind,
   needsTailwindPass,
 } from "./tailwind";
+import { GLOB_TRIPWIRE, SFC_FS, appDefines, inlineCssImports, takeDefineArgs } from "./vitecompat";
 
 // ---- paths ----------------------------------------------------------------
 
-const argv = process.argv.slice(2);
+// `--define K=V` takes two argv slots; pulled out first so its value is not
+// mistaken for the entry path.
+const { defines: cliDefines, rest: argv } = takeDefineArgs(process.argv.slice(2));
 const positional = argv.filter((a) => !a.startsWith("--"));
 const WATCH = argv.includes("--watch");
 
@@ -305,23 +307,10 @@ function entryCandidates(spec: string): string[] {
 //              We load it from the APP's node_modules, so an app that needs
 //              cross-package type resolution declares `typescript` itself and
 //              apps that don't stay dependency-free.
-const SFC_FS = {
-  fileExists: (file: string) => existsSync(file),
-  readFile: (file: string) => {
-    try {
-      return readFileSync(file, "utf-8");
-    } catch {
-      return undefined;
-    }
-  },
-  realpath: (file: string) => {
-    try {
-      return realpathSync.native(file);
-    } catch {
-      return file;
-    }
-  },
-};
+//
+// SFC_FS lives in vitecompat.ts, shared with prod.ts: its `fileExists` answers
+// for FILES only, because compiler-sfc probes `./types` before `./types.ts`
+// and a directory of that name used to win (client-gap/B-build-ui.md row 2).
 
 const TS_AVAILABLE = (() => {
   try {
@@ -346,8 +335,25 @@ const TS_AVAILABLE = (() => {
 const PRESEEDED = ["vue", "vue-native", "vue-router", "pinia", "livekit-client"];
 const isPreseeded = (spec: string) => PRESEEDED.includes(spec);
 
-/** What Vite's dev server inlines for `import.meta.env`. */
-const VITE_ENV_DEV = { MODE: "development", DEV: true, PROD: false, SSR: false, BASE_URL: "/" };
+// The app's own defines: vn.config.json `"define"` plus `--define K=V`, with
+// Vite's semantics (vitecompat.ts `appDefines`). Read once at startup — a
+// watcher picks up a changed `define` on restart, as `vite` does.
+const APP_DEFINES = appDefines(readVnConfig()?.define, cliDefines, VN_CONFIG_PATH);
+if (APP_DEFINES.errors.length) {
+  for (const e of APP_DEFINES.errors) console.error(`[build] ${e}`);
+  process.exit(1);
+}
+
+/** What Vite's dev server inlines for `import.meta.env` — plus the app's own `import.meta.env.*` defines. */
+const VITE_ENV_DEV: Record<string, unknown> = { MODE: "development", DEV: true, PROD: false, SSR: false, BASE_URL: "/" };
+for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
+  if (!k.startsWith("import.meta.env.")) continue;
+  try {
+    VITE_ENV_DEV[k.slice("import.meta.env.".length)] = JSON.parse(v);
+  } catch {
+    /* an identifier value: it reads right through the dotted define, not the object */
+  }
+}
 
 // Vue's esm-bundler build reads these as bare identifiers.
 const DEFINES: Record<string, string> = {
@@ -391,7 +397,13 @@ const DEFINES: Record<string, string> = {
   // guards on it, and `undefined` is the "not a dev server" answer.
   "import.meta.hot": "undefined",
   "import.meta.url": '"vn://module"',
+  // The dev builder does not expand `import.meta.glob` (prod.ts does,
+  // vitecompat.ts `expandGlobs`). Defined to a findable name so buildModule
+  // can fail with a sentence instead of the module dying at eval with
+  // `{env,url}.glob is not a function`.
+  "import.meta.glob": GLOB_TRIPWIRE,
   "import.meta": JSON.stringify({ env: VITE_ENV_DEV, url: "vn://module" }),
+  ...APP_DEFINES.defines,
 };
 
 function writeAtomic(path: string, text: string) {
@@ -449,10 +461,34 @@ const scopeIdOf = (id: string) => Bun.hash(id).toString(16).slice(0, 8);
 
 /** Filled by the .vue onLoad hook; each Bun.build below handles exactly one file. */
 let capturedCss: string | null = null;
-/** Ditto: the Bun loader the emitted chunk needs ("ts" for <script lang="ts">). */
-let capturedLoader: "js" | "ts" = "js";
 
-function compileVue(absPath: string, source: string): string {
+/** Build-log lines said once per watcher run (an unsupported `<style lang>`, …). */
+const devAdvised = new Set<string>();
+function devAdvise(m: string) {
+  if (devAdvised.has(m)) return;
+  devAdvised.add(m);
+  console.warn(`${stamp()} advisory: ${m}`);
+}
+
+/**
+ * A stylesheet through what Vite's CSS pipeline does for every sheet: local
+ * `@import`s inlined (postcss-import), then the app's Tailwind when the text
+ * uses it (`@apply`, `@layer`, `theme()`, `@tailwind`). Same steps as prod.ts
+ * `viteCss`; a failed Tailwind pass logs and keeps the inlined text, as the
+ * CSS-entry path below always has, so one bad `@apply` does not stop a watcher.
+ */
+async function viteCss(text: string, from: string, label: string): Promise<string> {
+  const css = inlineCssImports(text, from, VN_CONFIG_DIR, devAdvise);
+  if (!TW_CONFIG || !needsTailwindPass(css)) return css;
+  try {
+    return await generateTailwind(TW_CONFIG, { text: css, from });
+  } catch (e) {
+    console.error(`${stamp()} ${label}: tailwind pass failed — emitting the source verbatim`, e);
+    return css;
+  }
+}
+
+async function compileVue(absPath: string, source: string): Promise<{ contents: string; loader: "js" | "ts" }> {
   const id = toId(absPath);
   const { descriptor, errors } = parse(source, { filename: absPath });
   if (errors.length) {
@@ -465,8 +501,9 @@ function compileVue(absPath: string, source: string): string {
   // of the TS syntax in place (interfaces, `satisfies`, annotations on plain
   // locals) — the bundler is expected to transpile. Loading that chunk as "js"
   // is a syntax error, so the loader has to follow the block's `lang`.
+  // RETURNED, not stashed: the style pass below awaits, and an npm bundle can
+  // carry several SFCs, so two compiles can interleave.
   const isTS = /^tsx?$/.test(descriptor.scriptSetup?.lang ?? descriptor.script?.lang ?? "");
-  capturedLoader = isTS ? "ts" : "js";
 
   const chunks: string[] = [];
   let bindings: any;
@@ -528,8 +565,22 @@ function compileVue(absPath: string, source: string): string {
 
   const cssChunks: string[] = [];
   for (const style of descriptor.styles) {
+    let text = style.content;
+    // Vite's order: the CSS pipeline first, the scoped/v-bind transform after,
+    // so an `@import`ed sheet is scoped too and `@apply` lands inside the
+    // scoped rule.
+    if (!style.lang || style.lang === "css" || style.lang === "postcss") {
+      text = await viteCss(text, absPath, `${id} <style>`);
+    } else {
+      devAdvise(`${id}: <style lang="${style.lang}"> is not preprocessed by vue-native — it is compiled as plain CSS`);
+    }
+    if (style.module) {
+      devAdvise(`${id}: <style module> — CSS modules are not supported yet; useCssModule() answers {}`);
+    }
+    // `isProd` left at its default (false) on both this and compileScript:
+    // they hash a `v-bind()` variable's name from it and must agree.
     const out = compileStyle({
-      source: style.content,
+      source: text,
       filename: absPath,
       id: scopeId,
       scoped: style.scoped,
@@ -539,7 +590,7 @@ function compileVue(absPath: string, source: string): string {
   }
   capturedCss = cssChunks.length ? cssChunks.join("\n") : null;
 
-  return chunks.join("\n");
+  return { contents: chunks.join("\n"), loader: isTS ? "ts" : "js" };
 }
 
 const vuePlugin = {
@@ -547,8 +598,7 @@ const vuePlugin = {
   setup(build: any) {
     build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
       const source = await Bun.file(args.path).text();
-      const contents = compileVue(args.path, source);
-      return { contents, loader: capturedLoader };
+      return compileVue(args.path, source);
     });
   },
 };
@@ -710,7 +760,10 @@ const cssIds = () => Array.from(cssModules.keys());
  */
 async function buildCssModule(id: string): Promise<boolean> {
   const abs = cssModules.get(id)!;
-  let css = readFileSync(abs, "utf-8");
+  // Local `@import`s inlined first, as postcss-import does ahead of Tailwind.
+  // The watcher rebuilds this sheet when IT changes; an edit to an imported
+  // file shows on the next change here or on restart.
+  let css = inlineCssImports(readFileSync(abs, "utf-8"), abs, VN_CONFIG_DIR, devAdvise);
   if (TW_CONFIG && needsTailwindPass(css)) {
     const t0 = Date.now();
     try {
@@ -781,6 +834,12 @@ async function buildModule(absPath: string, ids: Set<string>) {
   const body = await result.outputs[0].text();
   if (/\bcreateStaticVNode\b/.test(body)) {
     throw new Error(`${id}: emitted createStaticVNode — hoistStatic leaked back on (F7)`);
+  }
+  if (new RegExp(`\\b${GLOB_TRIPWIRE}\\b`).test(body)) {
+    throw new Error(
+      `${id}: import.meta.glob is expanded by the production builder only (prod.ts, \`vn build\`) — ` +
+        `the dev builder would emit a call that throws at eval (docs/PACKAGING.md)`,
+    );
   }
 
   // Stylesheets first: their specifiers must be known before `depsOf`/`bareOf`

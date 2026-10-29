@@ -1,0 +1,4 @@
+{
+  "$comment": "test/vite-compat.test.ts — the dev builder's half: define, SFC <style> through @import + Tailwind.",
+  "define": { "__DEV_FIX__": { "on": true } }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "vn-fixture-vite-app",
+  "private": true,
+  "description": "test/vite-compat.test.ts: the Vite import shapes, index.html, define and Tailwind cwd through prod.ts. Not installed — vite-svg-loader is listed only because that is how a Vite app says a bare .svg import is a component.",
+  "devDependencies": {
+    "vite-svg-loader": "^5.1.0"
+  }
+}

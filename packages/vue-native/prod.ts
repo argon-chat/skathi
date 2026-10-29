@@ -1,6 +1,6 @@
 // vue-native PRODUCTION builder: one self-contained IIFE, no loader, no HMR.
 //
-// Usage: bun prod.ts [app-entry.js] [out-file]
+// Usage: bun prod.ts [app-entry.js] [out-file] [--define=KEY=VALUE ...]
 //
 //   dist/app.prod.js   IIFE — @vue/runtime-core + src/runtime.ts + every app
 //                      module + every SFC <style>, minified, __DEV__ = false.
@@ -9,6 +9,10 @@
 //                      the shipped exe needs no dist/ and no Rust toolchain
 //                      (docs/PACKAGING.md). crates/vn-app/build.rs also runs
 //                      this file, for the embedded devtools inspector.
+//   dist/window.json   the `window` block of vn.config.json (see below)
+//   dist/assets.json   [{ key, path }] — every file an import referred to by
+//                      URL (`?url`, `import x from "./a.png"`), which `vn build`
+//                      packs into the payload under that key (vitecompat.ts)
 //
 // Differences vs the dev builder (build.ts), and why:
 //
@@ -32,6 +36,12 @@
 // - the scope id hashes the module id only, so it matches the dev builder's
 //   (`Bun.hash(id)`), which keeps dev/prod CSS identical.
 //
+// VITE PARITY (vitecompat.ts): the import shapes a Vite app writes (`?raw`,
+// `?url`, assets, `.svg` components, `import.meta.glob`, `?worker`/`.wasm`
+// stubs), the app's `define`, SFC `<style>` through the app's Tailwind with
+// `@import` inlined, `index.html`'s styles and classic scripts, and the app's
+// own pinia/vue-router. research/reports/m26/client-gap.md §3.1 is the list.
+//
 // DEBT: compileVue()/the style pipeline below is a deliberate ~100-line copy of
 // build.ts. build.ts is owned by the dev-loop track this round, so importing
 // from it (or refactoring a shared module out of it) is off limits; the two
@@ -40,7 +50,7 @@
 import { parse, compileScript, compileTemplate, compileStyle, registerTS } from "@vue/compiler-sfc";
 import { createRequire } from "module";
 import { resolve, dirname, join, relative, sep } from "path";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 
 import {
   TW_ID,
@@ -49,15 +59,33 @@ import {
   generate as generateTailwind,
   needsTailwindPass,
 } from "./tailwind";
+import {
+  GLOB_TRIPWIRE,
+  SFC_FS,
+  appDefines,
+  frameworkDep,
+  htmlPreludeModule,
+  inlineCssImports,
+  liftIndexHtml,
+  readPackageJson,
+  svgDefaultOf,
+  takeDefineArgs,
+  transformSource,
+  viteShapesPlugin,
+  type CssPiece,
+  type LiftedHtml,
+} from "./vitecompat";
 
 // ---- paths ----------------------------------------------------------------
 
-const argv = process.argv.slice(2);
+const { defines: cliDefines, rest: argv } = takeDefineArgs(process.argv.slice(2));
 const positional = argv.filter((a) => !a.startsWith("--"));
 
 const PKG_DIR = import.meta.dir; // .../packages/vue-native
 const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relative to this
 const RUNTIME_ENTRY = join(PKG_DIR, "src", "runtime.ts");
+/** vue-native's LiveKit, the module `livekit-client` means here (docs/VOICE.md). */
+const LIVEKIT_ENTRY = join(PKG_DIR, "src", "livekit.ts");
 
 const ENTRY_ABS = resolve(positional[0] ?? join(WS_ROOT, "apps/hello/src/main.ts"));
 const APP_SRC_DIR = dirname(ENTRY_ABS);
@@ -76,26 +104,33 @@ const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
 // same reason as `build.ts`'s `VN_CONFIG_DIR`.
 const VN_CONFIG_DIR = APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR;
 const WINDOW_JSON = join(dirname(OUT_FILE), "window.json");
+const ASSETS_JSON = join(dirname(OUT_FILE), "assets.json");
 
-function windowConfig(): string {
+function readVnConfig(): Record<string, unknown> {
   const path = join(VN_CONFIG_DIR, "vn.config.json");
-  if (!existsSync(path)) return "{}";
+  if (!existsSync(path)) return {};
   try {
     const cfg = JSON.parse(readFileSync(path, "utf8"));
-    const win = { ...(cfg?.window ?? {}) };
-    // The top-level `"devtools": false` (docs/DEVTOOLS.md) rides along inside
-    // the window block: that blob is the only JSON the host reads before the
-    // window exists, and since m22 the flag decides whether a devtools listener
-    // is bound at all. Same fold, same precedence, as build.ts - a `window`
-    // block that declares its own wins.
-    if (typeof cfg?.devtools === "boolean" && typeof win.devtools !== "boolean") {
-      win.devtools = cfg.devtools;
-    }
-    return JSON.stringify(win, null, 2);
+    return cfg && typeof cfg === "object" && !Array.isArray(cfg) ? cfg : {};
   } catch (e) {
     console.error(`[prod] ${path}: ${e}`);
-    return "{}";
+    return {};
   }
+}
+const VN_CONFIG = readVnConfig();
+
+function windowConfig(): string {
+  const cfg = VN_CONFIG;
+  const win = { ...((cfg.window as Record<string, unknown> | undefined) ?? {}) };
+  // The top-level `"devtools": false` (docs/DEVTOOLS.md) rides along inside
+  // the window block: that blob is the only JSON the host reads before the
+  // window exists, and since m22 the flag decides whether a devtools listener
+  // is bound at all. Same fold, same precedence, as build.ts - a `window`
+  // block that declares its own wins.
+  if (typeof cfg.devtools === "boolean" && typeof win.devtools !== "boolean") {
+    win.devtools = cfg.devtools;
+  }
+  return JSON.stringify(win, null, 2);
 }
 
 /// Same discovery rule as the dev builder — no config, no Tailwind, and the
@@ -107,7 +142,8 @@ const TW_CONFIG = findConfig(APP_SRC_DIR, WS_ROOT);
 // `registerTS` are both required to compile a component that writes
 // `defineProps<SomeImportedType>()`. npm DEPENDENCIES need nothing special
 // here: prod is a single Bun bundle, so a bare specifier resolves and inlines
-// like any other import (only "vue"/"vue-native" are re-pointed, below).
+// like any other import (only "vue"/"vue-native"/"livekit-client" are
+// re-pointed, and pinia/vue-router chosen, below).
 function findAppRoot(startDir: string, stopDir: string): string {
   let dir = startDir;
   for (;;) {
@@ -122,24 +158,7 @@ const APP_ROOT = findAppRoot(APP_SRC_DIR, WS_ROOT);
 const appRequire = createRequire(join(APP_ROOT, "package.json"));
 /** Resolves the runtime's OWN vendored deps (vue-router, pinia). */
 const runtimeRequire = createRequire(join(PKG_DIR, "package.json"));
-
-const SFC_FS = {
-  fileExists: (file: string) => existsSync(file),
-  readFile: (file: string) => {
-    try {
-      return readFileSync(file, "utf-8");
-    } catch {
-      return undefined;
-    }
-  },
-  realpath: (file: string) => {
-    try {
-      return realpathSync.native(file);
-    } catch {
-      return file;
-    }
-  },
-};
+const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
 
 try {
   const ts = appRequire("typescript");
@@ -152,8 +171,28 @@ try {
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const J = (v: unknown) => JSON.stringify(v);
 
-/** What `vite build` inlines for `import.meta.env`. */
-const VITE_ENV_PROD = { MODE: "production", DEV: false, PROD: true, SSR: false, BASE_URL: "/" };
+/** Build-log lines, said once each, printed after the build. */
+const advisories = new Set<string>();
+const advise = (m: string) => advisories.add(m);
+
+// ---- defines --------------------------------------------------------------
+
+const APP_DEFINES = appDefines(VN_CONFIG.define, cliDefines, join(VN_CONFIG_DIR, "vn.config.json"));
+if (APP_DEFINES.errors.length) {
+  for (const e of APP_DEFINES.errors) console.error(`[prod] ${e}`);
+  process.exit(1);
+}
+
+/** What `vite build` inlines for `import.meta.env` — plus the app's own `import.meta.env.*` defines. */
+const VITE_ENV_PROD: Record<string, unknown> = { MODE: "production", DEV: false, PROD: true, SSR: false, BASE_URL: "/" };
+for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
+  if (!k.startsWith("import.meta.env.")) continue;
+  try {
+    VITE_ENV_PROD[k.slice("import.meta.env.".length)] = JSON.parse(v);
+  } catch {
+    /* an identifier value: it reads right through the dotted define, not the object */
+  }
+}
 
 // Vue's esm-bundler build reads these as bare identifiers. Same block as
 // build.ts with the two production flips; `__DEV__: false` is what strips
@@ -193,13 +232,43 @@ const DEFINES: Record<string, string> = {
   "import.meta.env": JSON.stringify(VITE_ENV_PROD),
   "import.meta.hot": "undefined",
   "import.meta.url": '"vn://app.prod.js"',
+  // An `import.meta.glob` the load-time expansion did not reach would
+  // otherwise become `{env,url}.glob(...)` — valid syntax, so the classic-script
+  // check below passes, and a TypeError at eval. Defined to a name instead, so
+  // a survivor is FINDABLE in the output and fails the build (vitecompat.ts).
+  "import.meta.glob": GLOB_TRIPWIRE,
   "import.meta": JSON.stringify({ env: VITE_ENV_PROD, url: "vn://app.prod.js" }),
+  // The app's own (vn.config.json "define", `--define`), Vite's semantics.
+  ...APP_DEFINES.defines,
 };
 
 function writeAtomic(path: string, text: string) {
   const tmp = path + ".tmp";
   writeFileSync(tmp, text);
   renameSync(tmp, path);
+}
+
+// ---- index.html -----------------------------------------------------------
+// A Vite app keeps its global CSS and its theme script in `index.html` next to
+// `src/`. Nothing reads that file in a window that has no document, so it is
+// lifted: styles into the stylesheet in document order, classic scripts into a
+// prelude module that runs before the entry, the mount element's attributes
+// onto the root (vitecompat.ts `liftIndexHtml`).
+const INDEX_HTML = join(VN_CONFIG_DIR, "index.html");
+const LIFTED: LiftedHtml | null = existsSync(INDEX_HTML) ? liftIndexHtml(INDEX_HTML, VN_CONFIG_DIR) : null;
+const HTML_PRELUDE =
+  LIFTED && (LIFTED.scripts.length || LIFTED.rootClasses.length || Object.keys(LIFTED.rootAttrs).length)
+    ? htmlPreludeModule(LIFTED)
+    : null;
+if (LIFTED) {
+  for (const a of LIFTED.advisories) advise(`index.html: ${a}`);
+  for (const s of LIFTED.scripts) {
+    try {
+      new Function(s.text);
+    } catch (e) {
+      advise(`${s.label}: the inline <script> does not parse (${(e as Error).message}) — it will throw at startup`);
+    }
+  }
 }
 
 // ---- SFC pipeline (see DEBT note in the header) ----------------------------
@@ -210,10 +279,27 @@ const scopeIdOf = (id: string) => Bun.hash(id).toString(16).slice(0, 8);
 
 /** id -> compiled css, filled by the .vue onLoad hook below. */
 const cssById = new Map<string, string>();
-/** The Bun loader the emitted chunk needs ("ts" for <script lang="ts">). */
-let capturedLoader: "js" | "ts" = "js";
 
-function compileVue(absPath: string, source: string): string {
+/**
+ * A stylesheet's text through what Vite's CSS pipeline does for every sheet:
+ * local `@import`s inlined (postcss-import), then the app's Tailwind when the
+ * text uses it (`@apply`, `@layer`, `theme()`, `@tailwind`) — 228 `@apply`s in
+ * the Argon client's SFCs reached vn-css verbatim before this and were dropped
+ * there without a word.
+ */
+async function viteCss(text: string, from: string, label: string): Promise<string> {
+  let css = inlineCssImports(text, from, VN_CONFIG_DIR, advise);
+  if (TW_CONFIG && needsTailwindPass(css)) {
+    try {
+      css = await generateTailwind(TW_CONFIG, { text: css, from: from.replace(/\?.*$/, "") });
+    } catch (e) {
+      throw new Error(`${label}: tailwind: ${(e as Error).message}`);
+    }
+  }
+  return css;
+}
+
+async function compileVue(absPath: string, source: string): Promise<{ contents: string; loader: "js" | "ts" }> {
   const id = toId(absPath);
   const { descriptor, errors } = parse(source, { filename: absPath });
   if (errors.length) {
@@ -223,9 +309,10 @@ function compileVue(absPath: string, source: string): string {
   const scopeId = `data-v-${shortId}`;
   const hasScoped = descriptor.styles.some((s) => s.scoped);
   // Same rule as build.ts: compileScript leaves TS syntax in its output, so the
-  // chunk must be handed to Bun with the matching loader.
+  // chunk must be handed to Bun with the matching loader. RETURNED rather than
+  // stashed in a module variable: the style pass below awaits, so two
+  // components compile interleaved.
   const isTS = /^tsx?$/.test(descriptor.scriptSetup?.lang ?? descriptor.script?.lang ?? "");
-  capturedLoader = isTS ? "ts" : "js";
 
   const chunks: string[] = [];
 
@@ -290,26 +377,44 @@ function compileVue(absPath: string, source: string): string {
   // keeps it from being tree-shaken), so scanning the output is a false
   // positive waiting to happen. The compiled template is the only place the
   // leak can originate.
-  const code = chunks.join("\n");
+  let code = chunks.join("\n");
   if (/\bcreateStaticVNode\b/.test(code)) {
     throw new Error(`${id}: emitted createStaticVNode — hoistStatic leaked back on (F7)`);
   }
+  // `import.meta.glob` / worker URLs written inside a component's <script>.
+  code = transformSource(code, absPath, SHAPES) ?? code;
 
   const cssChunks: string[] = [];
   for (const style of descriptor.styles) {
+    let text = style.content;
+    // Vite's order: the CSS pipeline (postcss-import, Tailwind) first, the
+    // scoped/v-bind transform after — so an `@import`ed sheet is scoped too
+    // and `@apply`'s expansion lands inside the scoped rule.
+    if (!style.lang || style.lang === "css" || style.lang === "postcss") {
+      text = await viteCss(text, absPath, `${id} <style>`);
+    } else {
+      advise(`${id}: <style lang="${style.lang}"> is not preprocessed by vue-native — it is compiled as plain CSS`);
+    }
+    if (style.module) {
+      advise(`${id}: <style module> — CSS modules are not supported yet; useCssModule() answers {}`);
+    }
     const out = compileStyle({
-      source: style.content,
+      source: text,
       filename: absPath,
       id: scopeId,
       scoped: style.scoped,
       trim: true,
+      // MUST match compileScript's `isProd`: both hash a `v-bind()` variable's
+      // name from it, and a mismatch makes useCssVars write `--x` while the
+      // rule reads `--y`.
+      isProd: true,
     });
     if (out.errors.length) throw new Error(`${id} <style>: ${out.errors.join("; ")}`);
     cssChunks.push(out.code);
   }
   if (cssChunks.length) cssById.set(id, cssChunks.join("\n"));
 
-  return code;
+  return { contents: code, loader: isTS ? "ts" : "js" };
 }
 
 /**
@@ -324,6 +429,46 @@ const cssEntryIds: string[] = [];
 /** True when one of them declares `@tailwind utilities` itself. */
 let appOwnsUtilities = false;
 
+// ---- the import shapes, and the framework packages ---------------------------
+
+/** payload key -> absolute path: every asset an import referred to by URL. */
+const ASSETS = new Map<string, string>();
+const SHAPE_NOTES = new Map<string, number>();
+const SHAPES = {
+  docRoot: VN_CONFIG_DIR,
+  wsRoot: WS_ROOT,
+  svgDefault: svgDefaultOf(APP_PKG),
+  compileSfc: (absPath: string, source: string) => compileVue(absPath, source),
+  assets: ASSETS,
+  notes: SHAPE_NOTES,
+};
+
+// pinia / vue-router: the app's own copy when it declares one (an app on
+// pinia 3 gets pinia 3, as in its Vite build), vue-native's otherwise.
+const FRAMEWORK = new Map(
+  ["vue-router", "pinia"].map((name) => {
+    const dep = frameworkDep(
+      name,
+      APP_PKG,
+      (s) => appRequire.resolve(s),
+      (s) => runtimeRequire.resolve(s),
+    );
+    if (dep.warning) advise(dep.warning);
+    return [name, dep] as const;
+  }),
+);
+
+/** Does the app have the browser SDK installed — the case where the substitution is worth a line? */
+const APP_HAS_LIVEKIT = (() => {
+  if (!APP_PKG) return false;
+  try {
+    appRequire.resolve("livekit-client");
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 const vuePlugin = {
   name: "vue-sfc-prod",
   setup(build: any) {
@@ -333,17 +478,14 @@ const vuePlugin = {
     // the stylesheet instead. Same rule as build.ts: when the app has a
     // Tailwind config the sheet goes through Tailwind's own PostCSS pass with
     // ITSELF as the entry, which is what makes its `@tailwind`, `@layer` and
-    // `@apply` mean anything.
+    // `@apply` mean anything — after its local `@import`s are inlined, as
+    // postcss-import does in Vite.
     build.onLoad({ filter: /\.css$/ }, async (args: any) => {
       const id = toId(args.path);
       if (!cssById.has(id)) {
         const source = await Bun.file(args.path).text();
         if (declaresUtilities(source)) appOwnsUtilities = true;
-        let css = source;
-        if (TW_CONFIG && needsTailwindPass(source)) {
-          css = await generateTailwind(TW_CONFIG, { text: source, from: args.path });
-        }
-        cssById.set(id, css);
+        cssById.set(id, await viteCss(source, args.path, id));
         cssEntryIds.push(id);
       }
       return { contents: "", loader: "js" };
@@ -352,17 +494,44 @@ const vuePlugin = {
     // helpers) and "vue-native" (app code) have to resolve somewhere: both are
     // our runtime module, exactly as the loader aliases them at runtime.
     build.onResolve({ filter: /^(vue|vue-native)$/ }, () => ({ path: RUNTIME_ENTRY }));
+    // "livekit-client" is vue-native's LiveKit, as in dev (build.ts PRESEEDED,
+    // where the reason is written out): an app with the npm SDK installed —
+    // for its typings, or because it also ships a browser build — must not get
+    // the browser SDK silently bundled into its exe.
+    build.onResolve({ filter: /^livekit-client$/ }, () => {
+      if (APP_HAS_LIVEKIT) {
+        advise("livekit-client → vue-native's LiveKit (src/livekit.ts); the app's npm SDK is not bundled (docs/VOICE.md)");
+      }
+      return { path: LIVEKIT_ENTRY };
+    });
     // The other two pre-seeded ids ride vendor.js in dev, which means they are
-    // resolved from THIS package's node_modules, not the app's. Prod has no
-    // vendor bundle, so the same resolution has to be spelled out or an app
-    // that uses them (apps/hello uses both) fails to build.
+    // resolved from THIS package's node_modules there. Prod resolves them once,
+    // up front (FRAMEWORK above), so every importer — app code, a workspace
+    // package, a library — lands on ONE copy.
     build.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: any) => ({
-      path: runtimeRequire.resolve(args.path),
+      path: FRAMEWORK.get(args.path)!.path,
     }));
     build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
       const source = await Bun.file(args.path).text();
-      const contents = compileVue(args.path, source);
-      return { contents, loader: capturedLoader };
+      return compileVue(args.path, source);
+    });
+  },
+};
+
+/** `index.html`'s scripts and root attributes run ahead of the entry: a virtual entry imports both. */
+const ENTRY_ID = "vn-entry:main";
+const entryPlugin = {
+  name: "vn-html-entry",
+  setup(build: any) {
+    build.onResolve({ filter: /^vn-(entry|html):/ }, (args: any) => ({ path: args.path, namespace: "vn-html" }));
+    build.onLoad({ filter: /.*/, namespace: "vn-html" }, (args: any) => {
+      if (args.path === ENTRY_ID) {
+        return {
+          contents: `import "vn-html:prelude";\nimport ${J(ENTRY_ABS.split(sep).join("/"))};\n`,
+          loader: "js",
+        };
+      }
+      return { contents: HTML_PRELUDE ?? "", loader: "js" };
     });
   },
 };
@@ -378,11 +547,12 @@ async function build() {
   appOwnsUtilities = false;
 
   const result = await Bun.build({
-    entrypoints: [ENTRY_ABS],
+    entrypoints: [HTML_PRELUDE ? ENTRY_ID : ENTRY_ABS],
     format: "iife",
     target: "browser",
     define: DEFINES,
-    plugins: [vuePlugin],
+    // The import shapes FIRST, so their onLoad hooks (`.svg`, assets) win.
+    plugins: [viteShapesPlugin(SHAPES), vuePlugin, entryPlugin],
     minify: { whitespace: true, identifiers: true, syntax: true },
     sourcemap: "none",
   });
@@ -397,6 +567,14 @@ async function build() {
   // The whole point of the prod define block: no dev branches survive.
   if (/\b__DEV__\b/.test(body)) {
     throw new Error("__DEV__ survived minification — the define block did not apply");
+  }
+  // An `import.meta.glob` the expansion did not see (a non-literal argument
+  // is an error already, so this is a shape vitecompat.ts does not know).
+  const glob = new RegExp(`\\b${GLOB_TRIPWIRE}\\b`).exec(body);
+  if (glob) {
+    throw new Error(
+      `an import.meta.glob(...) survived the build and would throw at startup: …${body.slice(Math.max(0, glob.index - 80), glob.index + 80)}…`,
+    );
   }
   // …and the bundle must PARSE as the classic script the host evaluates it as.
   // A surviving `import.meta` is the case this exists for — a SyntaxError that
@@ -417,6 +595,18 @@ async function build() {
     );
   }
 
+  // index.html's own sheets, through the same pipeline as a CSS entry.
+  const htmlCss = async (pieces: CssPiece[]) => {
+    const out: string[] = [];
+    for (const p of pieces) {
+      if (declaresUtilities(p.text)) appOwnsUtilities = true;
+      out.push(await viteCss(p.text, p.from, toId(p.from)));
+    }
+    return out;
+  };
+  const headCss = LIFTED ? await htmlCss(LIFTED.headCss) : [];
+  const bodyCss = LIFTED ? await htmlCss(LIFTED.bodyCss) : [];
+
   // Styles run BEFORE the bundle: runtime.js createApp joins __VN_CSS__ into
   // the stylesheet on mount, so the first paint is already styled. Sorted by
   // module id so the cascade order matches the dev loader's (which aggregates
@@ -430,15 +620,23 @@ async function build() {
   // …unless one of the app's OWN stylesheets already declares `@tailwind
   // utilities`, in which case it carries them and a second copy would be pure
   // duplication. build.ts makes the same call for the same reason.
+  //
+  // index.html's sheets bracket all of it the way a browser orders them: the
+  // ones in <head> come before the bundle's CSS (which Vite injects as a
+  // <link> at the end of <head>), the ones in <body> after it.
   if (TW_CONFIG && !appOwnsUtilities) {
     const t = Date.now();
     cssById.set(TW_ID, await generateTailwind(TW_CONFIG));
     tailwindMs = Date.now() - t;
   }
-  const css = Array.from(cssById.keys())
-    .sort()
-    .map((id) => `(globalThis.__VN_CSS__ ??= []).push(${J(cssById.get(id))});`)
-    .join("\n");
+  const sheets = [
+    ...headCss,
+    ...Array.from(cssById.keys())
+      .sort()
+      .map((id) => cssById.get(id)!),
+    ...bodyCss,
+  ];
+  const css = sheets.map((text) => `(globalThis.__VN_CSS__ ??= []).push(${J(text)});`).join("\n");
 
   const out = [
     `// vue-native production bundle — entry ${toId(ENTRY_ABS)}`,
@@ -448,6 +646,22 @@ async function build() {
   ].join("\n");
   writeAtomic(OUT_FILE, out);
   writeAtomic(WINDOW_JSON, windowConfig() + "\n");
+  const assets = Array.from(ASSETS.entries())
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, path]) => ({ key, path }));
+  writeAtomic(ASSETS_JSON, JSON.stringify(assets, null, 2) + "\n");
+
+  for (const [what, n] of SHAPE_NOTES) console.log(`[prod] ${what}: ${n}`);
+  if (LIFTED) {
+    console.log(
+      `[prod] index.html: ${LIFTED.headCss.length + LIFTED.bodyCss.length} stylesheet(s), ` +
+        `${LIFTED.scripts.length} inline script(s) lifted`,
+    );
+  }
+  for (const [name, dep] of FRAMEWORK) {
+    if (dep.from === "app") console.log(`[prod] ${name} ${dep.version}: the app's own copy`);
+  }
+  for (const a of advisories) console.log(`[prod] advisory: ${a}`);
 
   const sfcs = cssById.size - cssEntryIds.length - (cssById.has(TW_ID) ? 1 : 0);
   console.log(
@@ -456,6 +670,7 @@ async function build() {
       (cssById.has(TW_ID)
         ? ` + ${((cssById.get(TW_ID)?.length ?? 0) / 1024).toFixed(1)} KB tailwind in ${tailwindMs} ms`
         : "") +
+      (assets.length ? ` + ${assets.length} asset${assets.length === 1 ? "" : "s"}` : "") +
       `) -> ${relative(WS_ROOT, OUT_FILE).split(sep).join("/")} in ${Date.now() - t0} ms`,
   );
 }
