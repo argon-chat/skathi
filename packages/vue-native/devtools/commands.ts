@@ -99,6 +99,11 @@ export const WINDOW_ARG = int(
 export interface CommandSpec {
   /** The wire `cmd`. The MCP tool is `vn_<cmd>` and the CLI verb is this. */
   cmd: string;
+  /**
+   * Other CLI spellings of the same verb. The request still carries `cmd`, so
+   * an alias never reaches the wire and never becomes a second MCP tool.
+   */
+  aliases?: string[];
   /** The MCP tool description. */
   description: string;
   /** `ctl --help` lines for this command, already column-aligned. */
@@ -468,12 +473,39 @@ export const COMMANDS: CommandSpec[] = [
   {
     cmd: "net",
     description:
-      "Every fetch() and every WebSocket the app opened, from BOOT — a bounded ring of 300. " +
-      "`kind` is fetch or ws; a socket's `phase` is open-requested / open / error / close and its " +
-      "messages are COUNTED rather than logged. Page with `since`.",
-    usage: ["  net      [--since N]               the fetch / WebSocket log"],
+      "Every fetch(), XMLHttpRequest and WebSocket the app opened, from BOOT — a bounded ring of " +
+      "300 summary rows. `kind` is fetch, xhr or ws; a socket's `phase` is open-requested / open / " +
+      "error / close and its messages are COUNTED rather than logged. Page with `since`. Headers, " +
+      "bodies, cookies and timing are NOT here — pass a row's `seq` to vn_net_detail.",
+    usage: ["  net      [--since N]               the fetch / WebSocket / XHR log"],
     args: { since: SINCE },
     cli: (_rest, flags) => compact({ since: num(flags.since) }),
+  },
+  {
+    cmd: "net_detail",
+    aliases: ["net-detail"],
+    description:
+      "Everything behind ONE vn_net row, asked for by its `seq`: the request (URL, method, the " +
+      "headers the app passed, credentials, the body — text, form fields, or bytes) and the " +
+      "response (status, headers, a body preview). A body is `encoding: utf8` text or `base64` " +
+      "bytes (binary types such as application/ion are always base64), capped at 256 KB with " +
+      "`truncated` set; the most recent ~12 MB of bodies are kept and an older one says " +
+      "`evicted`. `cookies.sent` is the Cookie header the jar sent and `cookies.set` the " +
+      "Set-Cookie lines it stored — reconstructed from the jar, since script never sees either. " +
+      "`timing` has headersMs / bodyMs / failedMs; a WebSocket row answers with its socket: " +
+      "protocol, close code and reason, and sent/received message counts.",
+    usage: [
+      "  net_detail <seq>                   headers, bodies, cookies and timing behind one",
+      "                                     `net` row (also spelled net-detail)",
+    ],
+    args: {
+      seq: { type: "number", description: "the row's `seq`, from vn_net", required: true },
+    },
+    cli: (rest, flags) => {
+      const seq = num(rest[0]) ?? num(flags.seq);
+      if (seq === undefined) die("net_detail needs a row's seq (from `net`): ctl net_detail 12");
+      return { seq };
+    },
   },
   {
     cmd: "storage",
@@ -607,7 +639,7 @@ export function usageBlock(): string {
  */
 export function buildRequest(argv: string[], flags: Flags): Record<string, unknown> {
   const [cmd, ...rest] = argv;
-  const spec = COMMANDS.find((c) => c.cmd === cmd);
+  const spec = COMMANDS.find((c) => c.cmd === cmd || (c.aliases ?? []).includes(cmd));
   if (!spec) die(`unknown command \`${cmd}\``);
   return { cmd: spec.cmd, ...spec.cli(rest, flags) };
 }

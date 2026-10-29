@@ -28,7 +28,7 @@
 //!
 //! The whole module is compiled out under `--features prod`.
 
-mod net; // the Network panel's feed: a JS-side fetch/WebSocket tee
+mod net; // the Network panel's feed (a JS-side fetch/XHR/WebSocket tee) and `net_detail`
 mod screenshot;
 pub mod ws; // the PUSH channel: a WebSocket server on this same port
 
@@ -1163,6 +1163,13 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
         },
         "logs" => cmd_logs(num("since")),
         "net" => cmd_net(num("since")),
+        // `net-detail` is accepted too: it is how the command was first named,
+        // and a hyphen is what a CLI verb usually looks like. The table name is
+        // `net_detail` because the MCP tool is derived from it (`vn_net_detail`).
+        "net_detail" | "net-detail" => match num("seq") {
+            None => err("net_detail needs a `seq` — a row's `seq` from `net`"),
+            Some(seq) => cmd_net_detail(seq),
+        },
         "perf" => ok(perf_data()),
         "windows" => cmd_windows(),
         "raise" => cmd_raise(),
@@ -2716,6 +2723,20 @@ fn cmd_net(since: Option<f64>) -> String {
         ("next", Json::n(next as f64)),
         ("dropped", Json::n(dropped as f64)),
     ]))
+}
+
+/// Everything behind one Network row — the request and response headers and
+/// bodies, the cookies, the timing, a socket's counts (`net.rs`, "The
+/// details"). Asked for per row rather than pushed: a body never rides the
+/// feed, and an inspector that never clicks pays nothing for it.
+fn cmd_net_detail(seq: f64) -> String {
+    if !seq.is_finite() || seq < 1.0 {
+        return err(format!("net_detail: {seq} is not a row's seq"));
+    }
+    match net::detail(seq as u64) {
+        Ok(data) => ok(data),
+        Err(e) => err(e),
+    }
 }
 
 // ---------------------------------------------------------------------------
