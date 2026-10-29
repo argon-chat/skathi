@@ -295,6 +295,13 @@ pub fn launch_config() -> Option<String> {
     Some(v.get("launch")?.to_json())
 }
 
+/// The manifest's `argonSecure`, copied by `build.ts` from `vn.config.json`
+/// (src/temp_argon_secure.rs). TEMPORARY.
+pub fn argon_secure() -> bool {
+    let Ok(text) = std::fs::read_to_string(dist("manifest.json")) else { return false };
+    json::parse(&text).and_then(|v| v.get("argonSecure").and_then(json::Json::as_bool)).unwrap_or(false)
+}
+
 /// The app's own name — what a per-app place on disk is named after
 /// (`%LOCALAPPDATA%\<app name>\storage`, see crates/vn-storage).
 ///

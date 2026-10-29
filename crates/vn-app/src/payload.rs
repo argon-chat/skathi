@@ -58,6 +58,9 @@ pub struct Meta {
     /// The `launch` object (`id`, `singleInstance`, `raiseOnSecondInstance`,
     /// `protocols`) as JSON, when `vn build` wrote one (docs/LAUNCH.md).
     pub launch: Option<String>,
+    /// `vn.config.json` `"argonSecure": true`: run the TEMPORARY ArgonSecure
+    /// producer (src/temp_argon_secure.rs) at startup.
+    pub argon_secure: bool,
 }
 
 pub struct Loaded {
@@ -147,6 +150,7 @@ fn parse_meta(text: &str) -> Meta {
             .unwrap_or_default()
             .to_string(),
         launch: v.get("launch").map(crate::json::Json::to_json),
+        argon_secure: v.get("argonSecure").and_then(crate::json::Json::as_bool).unwrap_or(false),
     }
 }
 

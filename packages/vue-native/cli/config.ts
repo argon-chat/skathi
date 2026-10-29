@@ -68,6 +68,8 @@ export interface AppConfig {
   id: string;
   /** The launch keys, defaults applied (docs/LAUNCH.md). */
   launch: LaunchConfig;
+  /** TEMPORARY (m26): `"argonSecure": true` runs the host's ArgonSecure producer. */
+  argonSecure: boolean;
   warnings: string[];
 }
 
@@ -93,6 +95,8 @@ const TOP_LEVEL = new Set([
   "singleInstance",
   "raiseOnSecondInstance",
   "protocols",
+  // TEMPORARY (m26): the host's ArgonSecure producer, crates/vn-app/src/temp_argon_secure.rs.
+  "argonSecure",
 ]);
 
 /** RFC 3986 scheme, lowercase, as the host registers it. */
@@ -307,6 +311,11 @@ export function loadAppConfig(target: string): AppConfig {
     }
   }
 
+  if (raw.argonSecure !== undefined && typeof raw.argonSecure !== "boolean") {
+    throw new ConfigError('vn.config.json "argonSecure" must be true or false');
+  }
+  const argonSecure = raw.argonSecure === true;
+
   const exeName = sanitizeExeName(windows.exeName ?? productName) || sanitizeExeName(name) || "app";
   let iconPath: string | null = null;
   if (windows.icon) {
@@ -333,6 +342,7 @@ export function loadAppConfig(target: string): AppConfig {
     iconPath,
     id: launch.id,
     launch,
+    argonSecure,
     warnings,
   };
 }

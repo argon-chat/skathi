@@ -101,6 +101,25 @@ pub fn provider() -> Option<&'static dyn SecretProvider> {
     }
 }
 
+/// Fills `buf` from the OS's preferred CSPRNG (`BCryptGenRandom`). An error,
+/// never a weaker fallback, on a platform without one here.
+pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Security::Cryptography::{BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG};
+        let st = unsafe { BCryptGenRandom(None, buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
+        if st.0 < 0 {
+            return Err(format!("BCryptGenRandom failed: 0x{:08x}", st.0 as u32));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = buf;
+        Err(String::from("no random generator on this platform"))
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub struct Dpapi;
 

@@ -94,6 +94,8 @@ export function appMeta(config: AppConfig, variant: Variant, host: ResolvedHost 
     // Read by the host before anything else exists (docs/LAUNCH.md): the
     // single-instance check and the per-user protocol registration.
     launch: config.launch,
+    // TEMPORARY (m26): crates/vn-app/src/temp_argon_secure.rs. Only when on.
+    ...(config.argonSecure ? { argonSecure: true } : {}),
   });
 }
 

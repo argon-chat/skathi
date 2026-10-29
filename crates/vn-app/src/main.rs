@@ -47,6 +47,10 @@ mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWIN
 #[cfg(feature = "prod")]
 mod prod;
 mod slot; // which dist slot this process is — the one thing dev, prod and devtools all ask
+// TEMPORARY (m26): the Argon client's `ArgonSecure` cookie, opt-in. One file,
+// one call below; delete both to remove it.
+#[cfg(feature = "storages")]
+mod temp_argon_secure;
 mod window; // windowing & chrome (docs/WINDOWING.md)
 
 #[cfg(not(feature = "prod"))]
@@ -1226,6 +1230,15 @@ fn main() {
                 rt,
                 if devtools_mode { Some("vn-devtools".to_string()) } else { boot_mode::app_name() },
             );
+            // TEMPORARY (m26): the Argon client's `ArgonSecure` cookie, when the
+            // build or `VN_ARGON_SECURE` opts in. After the jar's file is loaded
+            // (just above) and before any JS (src/temp_argon_secure.rs).
+            #[cfg(feature = "storages")]
+            {
+                if !devtools_mode && temp_argon_secure::wanted(boot_mode::argon_secure()) {
+                    temp_argon_secure::run();
+                }
+            }
             #[cfg(vn_devtools)]
             devtools::install(rt);
             // `__vn_dev_voice_token` — the LiveKit dev token minter. Dev only,

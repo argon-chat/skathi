@@ -111,6 +111,11 @@ pub fn launch_config() -> Option<String> {
     payload::get()?.meta.launch.clone()
 }
 
+/// The payload META's `argonSecure` (src/temp_argon_secure.rs). TEMPORARY.
+pub fn argon_secure() -> bool {
+    payload::get().is_some_and(|l| l.meta.argon_secure)
+}
+
 /// The app's name — see [`crate::dev::app_name`] for what it is for.
 ///
 /// The payload's `name`, resolved by `vn build` with dev's own chain
