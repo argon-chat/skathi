@@ -156,7 +156,21 @@ pub struct Extras {
     /// `z-index`. gpui has no per-element z, so a POSITIVE z-index becomes a
     /// deferred draw with that priority (which is a real "paints above
     /// everything else"); a negative one cannot be expressed at all.
+    ///
+    /// Recorded wherever it is declared. Whether it APPLIES is the renderer's
+    /// question (`vn_tree::render::z_applies`). It needs [`Self::positioned`]
+    /// and the parent's display, and the mapper sees neither.
     pub z_index: Option<i32>,
+    /// The element DECLARED a `position` other than `static`: `Some(true)` for
+    /// `relative` / `absolute` / `fixed` / `sticky`, `Some(false)` for
+    /// `static`, `None` for no declaration (static too). gpui's own `position`
+    /// cannot say this, because `static` and `relative` both map onto its
+    /// `Relative`, which is also its default.
+    ///
+    /// CSS needs the difference for `z-index`, which applies only to a
+    /// positioned box or a flex or grid item (CSS 2.1 §9.9.1, css-flexbox
+    /// §4.3, css-grid §9). `z-10` on a static block is inert in a browser.
+    pub positioned: Option<bool>,
     /// `pointer-events: none` — the node takes no listeners and no hover/active
     /// rungs, which is how a hitbox stops existing in gpui.
     ///
@@ -485,6 +499,9 @@ impl Extras {
         if other.z_index.is_some() {
             self.z_index = other.z_index;
         }
+        if other.positioned.is_some() {
+            self.positioned = other.positioned;
+        }
         if other.pointer_events_none.is_some() {
             self.pointer_events_none = other.pointer_events_none;
         }
@@ -594,8 +611,12 @@ impl Extras {
         out
     }
 
-    /// True when this node has to be painted in gpui's deferred layer for its
-    /// stacking to be right: `position: fixed`, or a positive `z-index`.
+    /// `Some` when this node MAY be painted in gpui's deferred layer:
+    /// `position: fixed`, or a positive `z-index` that was declared. A superset
+    /// of what the renderer defers, because whether a `z-index` applies depends
+    /// on the parent's display, which only the renderer sees
+    /// (`vn_tree::render::layer_of`). vn-tree's cache uses it to refuse a
+    /// boundary, where being conservative is safe.
     pub fn deferred_priority(&self) -> Option<usize> {
         let z = self.z_index.unwrap_or(0);
         if z > 0 {
@@ -3217,6 +3238,7 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             use lightningcss::properties::position::Position as P;
             x.fixed = Some(matches!(v, P::Fixed));
             x.sticky = Some(matches!(v, P::Sticky(_)));
+            x.positioned = Some(!matches!(v, P::Static));
             r.position = Some(match v {
                 P::Absolute => gpui::Position::Absolute,
                 // `fixed` is an out-of-flow box against the VIEWPORT. taffy has
@@ -5589,6 +5611,26 @@ mod tests {
         assert!(d.is_empty(), "{d:?}");
         let (x, _) = extras("position: sticky; position: absolute");
         assert_eq!(x.sticky, Some(false));
+    }
+
+    /// m26 6d: `positioned` says whether a non-`static` position was DECLARED,
+    /// which gpui's `position` cannot (static and relative are both its
+    /// `Relative`). `z-index` applies only to a positioned box or a flex or grid
+    /// item, so the renderer needs exactly this bit.
+    #[test]
+    fn positioned_records_a_declared_non_static_position() {
+        for decl in ["position: relative", "position: absolute", "position: fixed", "position: sticky"] {
+            assert_eq!(extras(decl).0.positioned, Some(true), "{decl}");
+        }
+        assert_eq!(extras("position: static").0.positioned, Some(false));
+        assert_eq!(extras("z-index: 10").0.positioned, None, "no declaration");
+        // Later wins, across declarations and across a refine.
+        assert_eq!(extras("position: absolute; position: static").0.positioned, Some(false));
+        let mut folded = extras("position: relative").0;
+        folded.refine(&extras("position: static").0);
+        assert_eq!(folded.positioned, Some(false));
+        folded.refine(&extras("color: red").0);
+        assert_eq!(folded.positioned, Some(false), "a block that says nothing keeps it");
     }
 
     #[test]

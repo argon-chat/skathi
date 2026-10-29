@@ -1486,13 +1486,21 @@ fn build_node<V: 'static>(
         .as_ref()
         .and_then(|cs| cs.base.text.text_align)
         .or(parent_align);
-    // `position: fixed` / `z-index` open a stacking context; the children are
-    // built with it so their own z-indices sort INSIDE it (see `Stacking`).
-    let (z_priority, stacking) = parent_stack.enter(&extras);
+    // `position: fixed` / an applying `z-index` open a stacking context; the
+    // children are built with it so their own z-indices sort INSIDE it. A
+    // z-auto `absolute` box is deferred in the context it is in (see
+    // `Stacking`).
+    let parent_display = t.node(node.parent).and_then(|p| p.computed.as_ref()).and_then(|cs| cs.base.display);
+    let own_position = node.computed.as_ref().and_then(|cs| cs.base.position);
+    let layer = layer_of(&extras, own_position, parent_display);
+    let (z_priority, stacking) = parent_stack.enter(layer);
+    advise_relative_tree_order(&extras, layer);
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
-    advise_negative_z(t, id, &extras);
+    if z_applies(&extras, parent_display) {
+        advise_negative_z(t, id, &extras);
+    }
     advise_out_of_flow(t, id, node, &extras, windows::key(window));
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
@@ -1798,12 +1806,13 @@ fn build_node<V: 'static>(
                     Some(cs) => (cs.before.clone(), cs.after.clone()),
                     None => (None, None),
                 };
+                let own_display = node.computed.as_ref().and_then(|cs| cs.base.display);
                 let mut kids: Vec<AnyElement> = Vec::new();
                 if let Some(marker) = list_marker_for(t, id, node, &extras) {
                     kids.push(marker);
                 }
                 if let Some(pb) = before {
-                    kids.push(pseudo_element(&pb, case, stacking));
+                    kids.push(pseudo_element(&pb, case, stacking, own_display));
                 }
                 if is_file_input {
                     kids.push(file_input_children(t, id, node, case));
@@ -1831,7 +1840,7 @@ fn build_node<V: 'static>(
                     );
                 }
                 if let Some(pb) = after {
-                    kids.push(pseudo_element(&pb, case, stacking));
+                    kids.push(pseudo_element(&pb, case, stacking, own_display));
                 }
                 // The overlay scrollbar, and the wheel routing that goes with
                 // it. LAST child, so its hitboxes sit above the content's and
@@ -2353,6 +2362,9 @@ fn pseudo_element(
     pb: &vn_css::PseudoBox,
     parent_case: Option<vn_css::TextTransform>,
     stacking: Stacking,
+    // The ORIGINATING element's display: a generated box is its child, so a
+    // flex or grid container makes it an item, which `z-index` applies to.
+    parent_display: Option<gpui::Display>,
 ) -> AnyElement {
     let mut d = div();
     *d.style() = (*pb.style).clone();
@@ -2362,7 +2374,8 @@ fn pseudo_element(
     } else {
         d.child(transformed_text(&pb.content, case)).into_any_element()
     };
-    stack(stacking.enter(&pb.extras).0, &pb.extras, e)
+    let layer = layer_of(&pb.extras, pb.style.position, parent_display);
+    stack(stacking.enter(layer).0, &pb.extras, e)
 }
 
 /// The marker box an `<li>` gets from the `list-style-type` in force.
@@ -3155,10 +3168,107 @@ fn group_name(id: u32) -> gpui::SharedString {
 /// nesting level, most significant first — which compares exactly the way CSS
 /// orders the tree: an element sorts after the context that contains it, and
 /// before anything that outranks that context.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+///
+/// **What gets a priority** is [`Layer`], decided by [`layer_of`] (m26):
+///
+/// - **A `z-index` counts only where it applies:** on a positioned box, or on
+///   a flex or grid item even when static. `z-10` on a static block in a
+///   block parent is inert in a browser and inert here. The Argon client's
+///   sign-in `<Input class="z-10">` used to lift over the error badge beside
+///   it.
+/// - **A `position: absolute` box with `z-index: auto` or `0`** is deferred at
+///   its context's own priority, without opening a context. CSS 2.1 Appendix
+///   E paints positioned descendants after all the in-flow content of their
+///   stacking context (step 8), in tree order. gpui's stable sort keeps that
+///   tree order among them, a positive z in the same context still sorts after
+///   them, and a z>0 descendant still sorts in the OUTER context, because z
+///   auto creates none.
+/// - **`relative` and `sticky` with z auto paint in tree order.** That is a
+///   stated limit, with an advisory (`position-relative-tree-order`).
+///   `relative` wrappers hold whole subtrees (an app shell's root, a card),
+///   and lifting them would move most of a page into the deferred layer for
+///   the rare case where a later in-flow sibling overlaps one.
+/// - **`z-index: 0`** opens no context of its own: it is treated as `auto`,
+///   so its z>0 descendants sort in the outer context.
+/// - **Equal priorities nested a round deeper** keep gpui's round order,
+///   not tree order: a `fixed` overlay EARLIER in the document has its
+///   absolute children paint over a later absolute z-auto box. Overlays are
+///   portalled to the end of `<body>`, which is where this cannot arise.
+///
+/// Deferral nests: every deferred box inside another is one more prepaint
+/// round, and gpui asserts at ten. Past [`MAX_DEFERRED_NESTING`] a box paints
+/// in flow, with an advisory.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Stacking {
     prefix: usize,
     depth: u32,
+    /// How many deferred boxes enclose this one. Bounds gpui's deferred rounds.
+    deferred: u32,
+}
+
+/// How one box takes part in painting, by CSS 2.1 Appendix E. See [`Stacking`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Layer {
+    /// Painted where it is, in tree order: an in-flow box, a `z-index` that
+    /// does not apply, a negative one, or z auto on `relative` / `sticky`.
+    InFlow,
+    /// `position: absolute` with `z-index: auto` / `0`: after the in-flow
+    /// content of its stacking context, opening none.
+    Positioned,
+    /// `position: fixed` without a positive `z-index`: a context at level 0.
+    Fixed,
+    /// A positive `z-index` that applies: a context at that level.
+    Z(usize),
+}
+
+/// Nested deferred boxes allowed before one paints in flow. gpui runs one
+/// prepaint round per nesting level and asserts below ten.
+const MAX_DEFERRED_NESTING: u32 = 8;
+
+/// Does `z-index` apply to a box? Only to a positioned one (a declared
+/// `position` other than `static`, CSS 2.1 §9.9.1) or to a flex or grid item,
+/// static or not (css-flexbox §4.3, css-grid §9). `parent_display` is the
+/// DECLARED display of the box's parent; a block that `apply_inline_row`
+/// lays out as a row is still a block container to CSS.
+pub(crate) fn z_applies(extras: &vn_css::Extras, parent_display: Option<gpui::Display>) -> bool {
+    extras.positioned == Some(true)
+        || matches!(parent_display, Some(gpui::Display::Flex) | Some(gpui::Display::Grid))
+}
+
+/// The [`Layer`] of a box: its extras, its own `position` as gpui has it
+/// (`Absolute` for both `absolute` and `fixed`), and its parent's display.
+pub(crate) fn layer_of(
+    extras: &vn_css::Extras,
+    position: Option<gpui::Position>,
+    parent_display: Option<gpui::Display>,
+) -> Layer {
+    let z = if z_applies(extras, parent_display) { extras.z_index.unwrap_or(0) } else { 0 };
+    if z > 0 {
+        Layer::Z(z as usize)
+    } else if extras.fixed == Some(true) {
+        Layer::Fixed
+    } else if z == 0 && position == Some(gpui::Position::Absolute) {
+        Layer::Positioned
+    } else {
+        Layer::InFlow
+    }
+}
+
+/// The stated limit of [`Stacking`]: a `relative` / `sticky` box with z auto
+/// keeps its tree-order paint. Said once.
+fn advise_relative_tree_order(extras: &vn_css::Extras, layer: Layer) {
+    if layer != Layer::InFlow || extras.positioned != Some(true) || extras.z_index.unwrap_or(0) != 0 {
+        return;
+    }
+    warn_compat(
+        "position-relative-tree-order",
+        "`position: relative` / `sticky` with `z-index: auto` paints in TREE ORDER (v1). CSS paints \
+         a positioned box after the in-flow content of its stacking context (CSS 2.1 Appendix E, \
+         step 8), so a LATER in-flow sibling that overlaps it paints under it in a browser and over \
+         it here. `position: absolute` boxes are painted in that layer; `relative` ones are not, \
+         because relative wrappers hold whole subtrees and lifting them would move most of a page \
+         into the deferred layer. A positive `z-index` lifts the box",
+    );
 }
 
 /// Bits per level. 0..=16383 covers every `z-index` a real sheet writes (the
@@ -3173,9 +3283,28 @@ const Z_LEVELS: u32 = 4;
 impl Stacking {
     /// This node's own deferred priority (`None` = paints in flow), and the
     /// context its children see.
-    fn enter(self, extras: &vn_css::Extras) -> (Option<usize>, Stacking) {
-        let Some(z) = extras.deferred_priority() else {
+    fn enter(self, layer: Layer) -> (Option<usize>, Stacking) {
+        let z = match layer {
+            Layer::InFlow => return (None, self),
+            Layer::Positioned => None,
+            Layer::Fixed => Some(0),
+            Layer::Z(z) => Some(z),
+        };
+        if self.deferred >= MAX_DEFERRED_NESTING {
+            warn_compat(
+                "deferred-paint-nesting",
+                "more than eight nested out-of-flow layers (`position: absolute` / `fixed` / a \
+                 `z-index`, each inside the last) — the ninth and deeper paint in tree order \
+                 instead of above their in-flow siblings (gpui's deferred paint nests at most ten \
+                 rounds deep)",
+            );
             return (None, self);
+        }
+        let deferred = self.deferred + 1;
+        // z auto: this context's own priority, and the SAME context for the
+        // children — a positioned z-auto box creates none.
+        let Some(z) = z else {
+            return (Some(self.prefix), Stacking { deferred, ..self });
         };
         if self.depth >= Z_LEVELS {
             warn_compat(
@@ -3184,16 +3313,17 @@ impl Stacking {
                  beyond the fourth a descendant shares its context's paint priority instead of \
                  sorting inside it. It still paints above everything that context outranks",
             );
-            return (Some(self.prefix), self);
+            return (Some(self.prefix), Stacking { deferred, ..self });
         }
         let shift = Z_BITS * (Z_LEVELS - 1 - self.depth);
         let priority = self.prefix | ((z.min(Z_MAX as usize)) << shift);
-        (Some(priority), Stacking { prefix: priority, depth: self.depth + 1 })
+        (Some(priority), Stacking { prefix: priority, depth: self.depth + 1, deferred })
     }
 }
 
 /// Wraps a node that has to escape its siblings' paint order — `position:
-/// fixed`, or a positive `z-index` — in gpui's deferred layer.
+/// fixed`, a positive `z-index` that applies, or a z-auto `position: absolute`
+/// box (see [`Layer`]) — in gpui's deferred layer.
 ///
 /// `Deferred` keeps the child's LAYOUT where it is (it returns the child's own
 /// `LayoutId`) and only moves the PAINT to after every ancestor, ordered by
@@ -4576,12 +4706,20 @@ mod tests {
     use super::*;
     use crate::tree::with_tree;
 
+    /// A POSITIONED box with this `z-index` (the dialog's `fixed z-50`, its
+    /// header's `sticky z-10`): positioned, so the z applies.
     fn z(z_index: i32) -> vn_css::Extras {
-        vn_css::Extras { z_index: Some(z_index), ..Default::default() }
+        vn_css::Extras { z_index: Some(z_index), positioned: Some(true), ..Default::default() }
     }
 
     fn fixed() -> vn_css::Extras {
-        vn_css::Extras { fixed: Some(true), ..Default::default() }
+        vn_css::Extras { fixed: Some(true), positioned: Some(true), ..Default::default() }
+    }
+
+    /// The layer of a box in a BLOCK parent; `fixed` is gpui's `Absolute`.
+    fn layer(x: &vn_css::Extras) -> Layer {
+        let position = (x.fixed == Some(true)).then_some(gpui::Position::Absolute);
+        layer_of(x, position, None)
     }
 
     /// A `z-index` orders an element among its siblings INSIDE its stacking
@@ -4595,10 +4733,10 @@ mod tests {
     #[test]
     fn a_nested_stacking_context_sorts_inside_its_parent() {
         let root = Stacking::default();
-        let (dialog, inside_dialog) = root.enter(&z(50));
-        let (header, _) = inside_dialog.enter(&z(10));
-        let (overlay, _) = root.enter(&z(50));
-        let (toast, _) = root.enter(&z(60));
+        let (dialog, inside_dialog) = root.enter(layer(&z(50)));
+        let (header, _) = inside_dialog.enter(layer(&z(10)));
+        let (overlay, _) = root.enter(layer(&z(50)));
+        let (toast, _) = root.enter(layer(&z(60)));
 
         let dialog = dialog.unwrap();
         let header = header.unwrap();
@@ -4613,12 +4751,12 @@ mod tests {
     #[test]
     fn fixed_opens_a_level_even_at_z_zero() {
         let root = Stacking::default();
-        let (outer, inside) = root.enter(&fixed());
-        let (inner, _) = inside.enter(&z(1));
+        let (outer, inside) = root.enter(layer(&fixed()));
+        let (inner, _) = inside.enter(layer(&z(1)));
         assert_eq!(outer, Some(0));
         assert!(inner.unwrap() > 0);
         // …and still below anything the document ranks above the overlay.
-        assert!(inner.unwrap() < root.enter(&z(1)).0.unwrap());
+        assert!(inner.unwrap() < root.enter(layer(&z(1))).0.unwrap());
     }
 
     /// An element that is not out of flow neither defers nor opens a level, so
@@ -4626,10 +4764,98 @@ mod tests {
     #[test]
     fn an_in_flow_element_changes_nothing() {
         let root = Stacking::default();
-        let (priority, child) = root.enter(&vn_css::Extras::default());
+        let (priority, child) = root.enter(layer(&vn_css::Extras::default()));
         assert_eq!(priority, None);
         assert_eq!(child.depth, root.depth);
         assert_eq!(child.prefix, root.prefix);
+    }
+
+    /// m26 6d, rule 1: `z-index` applies to a positioned box, or to a flex or
+    /// grid item even when it is static (CSS 2.1 §9.9.1, css-flexbox §4.3,
+    /// css-grid §9). Anywhere else it is inert. The Argon client's
+    /// `<Input class="z-10">` is a static block in a block parent, and it used
+    /// to lift over the absolute error badge beside it.
+    #[test]
+    fn z_index_applies_only_to_positioned_boxes_and_flex_or_grid_items() {
+        let z10 = |positioned: Option<bool>| vn_css::Extras {
+            z_index: Some(10),
+            positioned,
+            ..Default::default()
+        };
+        let block = None;
+        let flex = Some(gpui::Display::Flex);
+        let grid = Some(gpui::Display::Grid);
+
+        assert_eq!(layer_of(&z10(None), None, block), Layer::InFlow, "static (undeclared) in a block");
+        assert_eq!(layer_of(&z10(Some(false)), None, block), Layer::InFlow, "`position: static`");
+        assert_eq!(layer_of(&z10(Some(false)), None, Some(gpui::Display::Block)), Layer::InFlow);
+        assert_eq!(layer_of(&z10(None), None, flex), Layer::Z(10), "a static flex item");
+        assert_eq!(layer_of(&z10(None), None, grid), Layer::Z(10), "a static grid item");
+        assert_eq!(layer_of(&z10(Some(true)), None, block), Layer::Z(10), "relative in a block");
+        assert!(!z_applies(&z10(None), block) && z_applies(&z10(None), flex));
+
+        // An inert z opens no context, so the subtree's own z-indices keep
+        // sorting in the outer one.
+        let root = Stacking::default();
+        let (p, inside) = root.enter(layer_of(&z10(None), None, block));
+        assert_eq!(p, None);
+        assert_eq!(inside, root);
+    }
+
+    /// m26 6d, rule 2: a `position: absolute` box with `z-index: auto` paints
+    /// after ALL the in-flow content of its stacking context (CSS 2.1
+    /// Appendix E, step 8): it is deferred at its context's own priority, and
+    /// it opens no context. So:
+    ///
+    /// - the badge (before the `<Input>` in tree order) paints over it;
+    /// - a z>0 box of the same context still paints above the badge;
+    /// - a z>0 DESCENDANT of the badge sorts in the outer context, as if the
+    ///   badge were not there;
+    /// - inside reka's dialog (`fixed z-50`) the same holds one level down,
+    ///   below the dialog's `sticky z-10` header.
+    #[test]
+    fn an_absolute_z_auto_box_paints_after_in_flow_content_and_opens_no_context() {
+        let absolute = vn_css::Extras { positioned: Some(true), ..Default::default() };
+        let abs = Some(gpui::Position::Absolute);
+        assert_eq!(layer_of(&absolute, abs, None), Layer::Positioned);
+        let zero = vn_css::Extras { z_index: Some(0), ..absolute.clone() };
+        assert_eq!(layer_of(&zero, abs, None), Layer::Positioned, "z-index: 0 is treated as auto");
+        let behind = vn_css::Extras { z_index: Some(-1), ..absolute.clone() };
+        assert_eq!(layer_of(&behind, abs, None), Layer::InFlow, "negative z is `paint_first_z`'s");
+        assert_eq!(layer_of(&absolute, None, None), Layer::InFlow, "relative/sticky: the stated limit");
+
+        let root = Stacking::default();
+        let (badge, inside_badge) = root.enter(Layer::Positioned);
+        assert_eq!(badge, Some(root.prefix), "deferred, at the context's own priority");
+        assert_eq!((inside_badge.prefix, inside_badge.depth), (root.prefix, root.depth), "no new context");
+        assert!(root.enter(Layer::Z(1)).0.unwrap() > badge.unwrap(), "a z-1 sibling paints above it");
+        assert_eq!(
+            inside_badge.enter(Layer::Z(5)).0,
+            root.enter(Layer::Z(5)).0,
+            "a z-5 descendant sorts in the OUTER context"
+        );
+
+        let (dialog, inside_dialog) = root.enter(layer(&z(50)));
+        let (in_dialog, _) = inside_dialog.enter(Layer::Positioned);
+        let (header, _) = inside_dialog.enter(layer(&z(10)));
+        assert_eq!(in_dialog, dialog, "the dialog's own level, after its in-flow content (a later round)");
+        assert!(header.unwrap() > in_dialog.unwrap(), "below the dialog's z-10 header");
+        assert!(in_dialog.unwrap() > root.enter(Layer::Z(49)).0.unwrap(), "and above a z-49 document box");
+    }
+
+    /// Each deferred box inside another costs gpui one more prepaint round,
+    /// and gpui asserts below ten. Past eight, a box paints in flow.
+    #[test]
+    fn deferred_nesting_stops_below_gpuis_round_limit() {
+        let mut s = Stacking::default();
+        for level in 0..MAX_DEFERRED_NESTING {
+            let (p, inside) = s.enter(Layer::Positioned);
+            assert!(p.is_some(), "level {level} defers");
+            s = inside;
+        }
+        assert_eq!(s.enter(Layer::Positioned).0, None);
+        assert_eq!(s.enter(Layer::Z(3)).0, None);
+        assert_eq!(s.enter(Layer::Fixed).0, None);
     }
 
     /// `<div class="flex gap-2">` with three components in it. Vue anchors each
