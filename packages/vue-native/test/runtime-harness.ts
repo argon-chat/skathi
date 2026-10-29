@@ -141,6 +141,14 @@ export function createRuntime(
     globals?: Record<string, unknown>;
     launch?: Record<string, unknown>;
     styleAccepts?: boolean;
+    /**
+     * Evaluate into an EXISTING world's global (`rt.global`) instead of a
+     * fresh one: what `location.reload()` and the dev host's cold restart
+     * do, a second runtime in the same realm. `globals` is ignored then.
+     */
+    realm?: Record<string, unknown>;
+    /** The `navigator` the runtime sees (bound as a parameter), instead of a fresh fake. */
+    navigator?: Record<string, unknown>;
   } = {},
 ) {
   const withStorage = options.storage !== false;
@@ -381,7 +389,7 @@ export function createRuntime(
   // element prototype, found off the first mirror the test creates.
   let elementProto: object | null = null;
   let worldExports: { nodeOps: { createElement(tag: string): object } } | null = null;
-  const fakeGlobal = {
+  const fakeGlobal = options.realm ?? {
     document: {
       body: {},
       documentElement: {},
@@ -795,7 +803,7 @@ export function createRuntime(
     loadInstallDesktop(),
     options.MouseEvent ?? globalThis.MouseEvent,
     globalThis.URL,
-    fakeNavigator,
+    options.navigator ?? fakeNavigator,
     // `__vn_style_accepts` — the fake engine accepts every declaration except
     // the `"prop: value"` strings in `host.styleRejects`. `styleAccepts:
     // false` makes it absent, which is an older host.

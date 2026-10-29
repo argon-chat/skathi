@@ -36,6 +36,104 @@ import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/
 import { installDesktop } from "./desktop";
 import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWire } from "./desktop";
 
+// ---- the realm a reload keeps (m26 client sweep #3) ------------------------
+//
+// `location.reload()` evaluates this module again in the SAME JavaScript realm
+// (crates/vn-app/src/reload.rs), and so does the dev host's cold restart. A
+// browser would start over in a fresh realm. Here the outgoing runtime and app
+// leave their globals behind, and two records keep that from leaking into the
+// next run:
+//
+// - `REALM.installed` holds every function and object a runtime installed on
+//   an engine-owned object: the global, `document`, `document.head`. Where this
+//   file fills a hole ("only when the engine has none"), `vacant()` counts a
+//   predecessor's install as a hole, so the runtime evaluated next installs its
+//   OWN class over it. A kept class runs against the old runtime's state. The
+//   old `ResizeObserver` waited forever on an animation frame the unload had
+//   cancelled, and every observer after a reload stayed silent.
+// - `REALM.base` is the global's own keys when the FIRST runtime started,
+//   before the app. `__VN_UNLOAD__` deletes every configurable global added
+//   since (`resetGlobals`), so the next app sees what a fresh realm would; for
+//   example, Mediabunny's "loaded twice" flag is gone. `__vn*` and `__VN*`
+//   names stay. They are the host's and this runtime's process-wide state, this
+//   record among them.
+interface RealmRecord {
+  base: Set<PropertyKey>;
+  installed: WeakSet<object>;
+  /** How many runtimes this realm has evaluated, this one included. */
+  runs: number;
+  /** What `original()` recorded: engine and host functions before any runtime replaced them. */
+  originals?: WeakMap<object, Map<PropertyKey, unknown>>;
+}
+const REALM: RealmRecord = ((globalThis as { __VN_REALM__?: RealmRecord }).__VN_REALM__ ??= {
+  base: new Set(Reflect.ownKeys(globalThis)),
+  installed: new WeakSet(),
+  runs: 0,
+});
+REALM.runs++;
+
+/** Records `v` as a vue-native runtime's install, and hands it back. */
+function mark<T>(v: T): T {
+  if ((typeof v === "object" && v !== null) || typeof v === "function") REALM.installed.add(v as object);
+  return v;
+}
+
+/**
+ * `obj[name]` as the FIRST runtime in this realm found it, given what it is
+ * now. For an engine or host function a runtime wraps or replaces
+ * (`document.createElement`, `__vn_set_stylesheet`): the runtime evaluated
+ * after a reload must wrap the original, not its predecessor's wrapper, whose
+ * state belongs to the old app.
+ */
+function original<T>(obj: object, name: PropertyKey, now: T): T {
+  const table = (REALM.originals ??= new WeakMap());
+  let byName = table.get(obj);
+  if (!byName) table.set(obj, (byName = new Map()));
+  if (!byName.has(name)) byName.set(name, now);
+  return byName.get(name) as T;
+}
+
+/**
+ * Is `obj[name]` missing, or a previous runtime's install? Either way, the
+ * runtime evaluated now installs its own. The lookup walks the prototype
+ * chain by descriptor, so no getter runs.
+ */
+function vacant(obj: object, name: PropertyKey): boolean {
+  for (let o: object | null = obj; o; o = Object.getPrototypeOf(o)) {
+    const d = Object.getOwnPropertyDescriptor(o, name);
+    if (!d) continue;
+    const v = d.get ?? d.value;
+    if (v === undefined) return true;
+    return (typeof v === "object" && v !== null) || typeof v === "function" ? REALM.installed.has(v) : false;
+  }
+  return true;
+}
+
+/**
+ * Deletes the configurable globals added since the first runtime started,
+ * except `__vn*` / `__VN*`. Called by `__VN_UNLOAD__`, after the teardown, so
+ * the runtime and app evaluated next start from the realm the first one
+ * found. Returns how many could not be deleted (non-configurable ones).
+ */
+function resetGlobals(): number {
+  let kept = 0;
+  for (const k of Reflect.ownKeys(globalThis)) {
+    if (REALM.base.has(k) || (typeof k === "string" && /^__vn/i.test(k))) continue;
+    const d = Object.getOwnPropertyDescriptor(globalThis, k);
+    if (!d) continue;
+    if (!d.configurable) {
+      kept++;
+      continue;
+    }
+    try {
+      delete (globalThis as Record<PropertyKey, unknown>)[k];
+    } catch {
+      kept++;
+    }
+  }
+  return kept;
+}
+
 // ---- the shapes this file is built out of ---------------------------------
 // The host protocol itself is typed in ./protocol.d.ts; what follows is the JS
 // side — the mirror tree, the listener registry, and the DOM surface installed
@@ -3000,7 +3098,8 @@ type SubmitEventInit = { bubbles?: boolean; cancelable?: boolean; composed?: boo
 /** The engine's `SubmitEvent`, or ours, installed on the global when it lacks one. */
 const SubmitEventClass: (new (type: string, init?: SubmitEventInit) => VnEvent) | null = (() => {
   const g = globalThis as { SubmitEvent?: unknown };
-  if (typeof g.SubmitEvent === "function") return g.SubmitEvent as new (type: string, init?: SubmitEventInit) => VnEvent;
+  if (typeof g.SubmitEvent === "function" && !vacant(g, "SubmitEvent"))
+    return g.SubmitEvent as new (type: string, init?: SubmitEventInit) => VnEvent;
   if (typeof Event !== "function") return null;
   class SubmitEvent extends Event {
     readonly submitter: unknown;
@@ -3010,7 +3109,7 @@ const SubmitEventClass: (new (type: string, init?: SubmitEventInit) => VnEvent) 
     }
   }
   try {
-    Object.defineProperty(globalThis, "SubmitEvent", { value: SubmitEvent, configurable: true, writable: true });
+    Object.defineProperty(globalThis, "SubmitEvent", { value: mark(SubmitEvent), configurable: true, writable: true });
   } catch {
     /* a frozen global: the class still serves this module */
   }
@@ -3025,7 +3124,7 @@ type ClipboardEventInit = { bubbles?: boolean; cancelable?: boolean; composed?: 
  */
 const ClipboardEventClass: (new (type: string, init?: ClipboardEventInit) => VnEvent) | null = (() => {
   const g = globalThis as { ClipboardEvent?: unknown };
-  if (typeof g.ClipboardEvent === "function")
+  if (typeof g.ClipboardEvent === "function" && !vacant(g, "ClipboardEvent"))
     return g.ClipboardEvent as new (type: string, init?: ClipboardEventInit) => VnEvent;
   if (typeof Event !== "function") return null;
   const data = new WeakMap<object, unknown>();
@@ -3039,7 +3138,7 @@ const ClipboardEventClass: (new (type: string, init?: ClipboardEventInit) => VnE
     }
   }
   try {
-    Object.defineProperty(globalThis, "ClipboardEvent", { value: ClipboardEvent, configurable: true, writable: true });
+    Object.defineProperty(globalThis, "ClipboardEvent", { value: mark(ClipboardEvent), configurable: true, writable: true });
   } catch {
     /* a frozen global: the class still serves this module */
   }
@@ -3396,9 +3495,10 @@ const realm = (() => {
     warnCompat(
       "location.reload",
       "location.reload() re-runs the app in the SAME JavaScript realm: its timers, animation frames, " +
-        "WebSockets and window/document listeners are closed, but globals it set, fetches in flight, " +
-        "IndexedDB connections and voice rooms stay until the old code ends them, beforeunload is not " +
-        "asked, and DOMContentLoaded / load do not fire again",
+        "WebSockets and window/document listeners are closed and the globals it added are deleted, but " +
+        "changes it made to built-in objects and to globals that were already there stay, fetches in " +
+        "flight settle into the old code, IndexedDB connections and voice rooms stay until the old code " +
+        "ends them, beforeunload is not asked, and DOMContentLoaded / load do not fire again",
     );
     try {
       const ev = typeof Event === "function" ? new Event("pagehide") : null;
@@ -3415,6 +3515,15 @@ const realm = (() => {
       __vn_log("reload: teardown: " + e);
     }
     realm.close();
+    // Last: the teardown and the realm hygiene above still call through the
+    // globals they are about to lose.
+    const kept = resetGlobals();
+    if (kept)
+      warnCompat(
+        "location.reload:globals",
+        `location.reload(): ${kept} global(s) the old app declared cannot be deleted (a top-level var or ` +
+          "function in a classic script, or a non-configurable property), so the new app finds them set",
+      );
   };
 }
 
@@ -4589,9 +4698,12 @@ export const initDirectivesForSSR = (): void => {};
 // before it renders. They are installed on the global unconditionally when the
 // engine does not already have them.
 
+// A hole includes a PREVIOUS runtime's install (see `REALM`): after a
+// same-realm reload this runtime's class replaces the old one, whose state
+// (queued polls, the old mirror tree) is dead.
 const defineGlobal = (name: string, value: unknown) => {
-  if (typeof (globalThis as Record<string, unknown>)[name] === "undefined") {
-    Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+  if (vacant(globalThis, name)) {
+    Object.defineProperty(globalThis, name, { value: mark(value), configurable: true, writable: true });
   }
 };
 
@@ -5379,7 +5491,8 @@ const TAG_ACCESSORS: Record<string, readonly string[]> = {
 
 for (const [name, tag] of Object.entries(TAG_CLASSES)) {
   const existing = (globalThis as Record<string, unknown>)[name];
-  if (typeof existing === "function") {
+  const ours = vacant(globalThis, name);
+  if (typeof existing === "function" && !ours) {
     // The ENGINE's class — redjs ships HTMLImageElement, the offscreen image
     // `new Image()` and `document.createElement("img")` make (and a canvas
     // draws). It knows nothing of mirror elements, so `<img>` in the tree was
@@ -5397,7 +5510,7 @@ for (const [name, tag] of Object.entries(TAG_CLASSES)) {
     }
     continue;
   }
-  if (typeof existing !== "undefined") continue;
+  if (!ours) continue;
   // Mirror nodes are all plain HTMLElement, so `instanceof` is answered by the
   // tag name instead of by the prototype chain — which is the ONLY way to make
   // `el instanceof HTMLInputElement` true for a real `<input>` here.
@@ -5449,8 +5562,7 @@ function defineInterface(
   parent: Iface | null,
   construct?: (...args: unknown[]) => object,
 ): Iface | undefined {
-  const existing = (globalThis as Record<string, unknown>)[name];
-  if (typeof existing !== "undefined") return existing as Iface;
+  if (!vacant(globalThis, name)) return (globalThis as Record<string, unknown>)[name] as Iface;
   const iface = function (this: unknown, ...args: unknown[]): object {
     if (construct && new.target) return construct(...args);
     throw new TypeError(
@@ -5479,7 +5591,11 @@ const WindowIface = defineInterface("Window", (x) => x != null && (x === globalT
 if (WindowIface) {
   try {
     // `window.constructor === Window`, which is how some code spots a window.
-    if (!Object.prototype.hasOwnProperty.call(globalThis, "constructor") || theGlobal("constructor") === Object)
+    if (
+      !Object.prototype.hasOwnProperty.call(globalThis, "constructor") ||
+      theGlobal("constructor") === Object ||
+      vacant(globalThis, "constructor")
+    )
       Object.defineProperty(globalThis, "constructor", { value: WindowIface, writable: true, configurable: true });
   } catch {
     /* a global that refuses the property keeps Object's */
@@ -5632,11 +5748,12 @@ defineGlobal("getComputedStyle", (node: unknown) => {
 //    it; these are the entry points a reused component reaches through.
 const doc = globalThis.document;
 if (doc) {
+  // Filled in where the engine has none; a previous runtime's counts as none.
   const defDoc = (name: string, value: unknown) => {
-    if (!(name in doc)) Object.defineProperty(doc, name, { value, configurable: true, writable: true });
+    if (vacant(doc, name)) Object.defineProperty(doc, name, { value: mark(value), configurable: true, writable: true });
   };
   const defDocGet = (name: string, get: () => unknown) => {
-    if (!(name in doc)) Object.defineProperty(doc, name, { get, configurable: true });
+    if (vacant(doc, name)) Object.defineProperty(doc, name, { get: mark(get), configurable: true });
   };
   // These three are FORCE-installed, not filled in: redjs ships its own
   // `querySelector`/`getElementById` backed by a registry of the elements IT
@@ -5656,9 +5773,12 @@ if (doc) {
   // element, given the attribute map and the file-input state the download
   // and pick idioms need (FileSaver.js, VueUse `useFileDialog`; see
   // `wrapDetached`). Every other tag is untouched.
+  // The engine's, not a previous runtime's wrapper (`original`): a reload would
+  // otherwise wrap the old wrapper, and every reload would add a layer.
+  const engineCreate = original(doc, "createElement", (doc as { createElement?: unknown }).createElement);
   const nativeCreate =
-    typeof (doc as { createElement?: unknown }).createElement === "function"
-      ? ((doc as unknown as { createElement: (tag: unknown, opts?: unknown) => unknown }).createElement.bind(doc))
+    typeof engineCreate === "function"
+      ? (engineCreate as (tag: unknown, opts?: unknown) => unknown).bind(doc)
       : null;
   if (nativeCreate) {
     forceDoc("createElement", (tag: unknown, opts?: unknown) => {
@@ -5947,7 +6067,10 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
 {
   const d = globalThis.document as unknown as Record<string, unknown> | undefined;
   const head = d?.head as Record<string, unknown> | undefined;
-  const hostSetSheet = typeof __vn_set_stylesheet === "function" ? __vn_set_stylesheet : null;
+  // The HOST's function, even after a reload: the global of that name is the
+  // previous runtime's `install` by then (see `original`).
+  const hostSetSheet =
+    typeof __vn_set_stylesheet === "function" ? original(globalThis, "__vn_set_stylesheet", __vn_set_stylesheet) : null;
   if (d && head && typeof head === "object" && hostSetSheet) {
     /** `<style>` elements in head, insertion order, with the text each one holds. */
     const injected: { el: Record<string, unknown>; text: string }[] = [];
@@ -6058,25 +6181,28 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
       return n;
     });
     if (!("tagName" in head)) def("tagName", "HEAD");
-    if (!("childNodes" in head)) {
-      Object.defineProperty(head, "childNodes", { get: () => injected.map((s) => s.el), configurable: true });
+    // A previous runtime's getter (a same-realm reload, see `REALM`) read ITS
+    // injected list, so it is replaced too.
+    if (vacant(head, "childNodes")) {
+      Object.defineProperty(head, "childNodes", { get: mark(() => injected.map((s) => s.el)), configurable: true });
     }
 
     // A browser's Text node, here a mirror text node: Vue-created and
     // library-created text are the same kind of object, so either can be
     // inserted anywhere in the tree.
-    if (typeof d.createTextNode !== "function") {
+    // Replaced after a reload as well: the old one made nodes in the OLD mirror.
+    if (vacant(d, "createTextNode")) {
       Object.defineProperty(d, "createTextNode", {
-        value: (data: unknown) => nodeOps.createText(data == null ? "" : String(data)),
+        value: mark((data: unknown) => nodeOps.createText(data == null ? "" : String(data))),
         configurable: true,
         writable: true,
       });
     }
     // An ARRAY, not a live HTMLCollection: it is a snapshot, which every
     // `getElementsByTagName("head")[0]` and one-shot scan reads the same.
-    if (typeof d.getElementsByTagName !== "function") {
+    if (vacant(d, "getElementsByTagName")) {
       Object.defineProperty(d, "getElementsByTagName", {
-        value: (tag: unknown) => {
+        value: mark((tag: unknown) => {
           const t = String(tag).toLowerCase();
           let out: unknown[];
           if (t === "head") out = [head];
@@ -6086,7 +6212,7 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
             out = qsa ? Array.from(qsa.call(d, t === "*" ? "*" : t)) : [];
           }
           return Object.assign(out, { item: (i: number) => out[i] ?? null });
-        },
+        }),
         configurable: true,
         writable: true,
       });
@@ -6905,14 +7031,17 @@ const activation = {
 
 // `navigator.userActivation` (HTML), where the engine has none: the read side
 // of the same state, for an app that wants to know before it asks.
-if (typeof navigator !== "undefined" && navigator && !("userActivation" in navigator)) {
+// A previous runtime's (a same-realm reload) read ITS activation, so it goes too.
+if (typeof navigator !== "undefined" && navigator && vacant(navigator, "userActivation")) {
   try {
     Object.defineProperty(navigator, "userActivation", {
-      value: Object.freeze(
-        Object.create(Object.prototype, {
-          isActive: { get: activation.isActive, enumerable: true },
-          hasBeenActive: { get: () => hasBeenActive, enumerable: true },
-        }),
+      value: mark(
+        Object.freeze(
+          Object.create(Object.prototype, {
+            isActive: { get: activation.isActive, enumerable: true },
+            hasBeenActive: { get: () => hasBeenActive, enumerable: true },
+          }),
+        ),
       ),
       configurable: true,
     });
@@ -6929,6 +7058,7 @@ const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<st
   call: desktopCallRaw,
   warnCompat,
   activation,
+  realm: { vacant, mark },
 });
 
 // ---- links and window.open: the tier-1 path to the shell --------------------
@@ -7194,14 +7324,17 @@ const launchQueue = new LaunchQueue();
 {
   const g = globalThis as unknown as { launchQueue?: unknown; LaunchParams?: unknown; LaunchQueue?: unknown };
   // Installed only where the engine has none (redjs does not), never over one.
-  if (g.launchQueue === undefined) {
-    g.launchQueue = launchQueue;
-    g.LaunchParams = LaunchParams;
-    g.LaunchQueue = LaunchQueue;
+  // A previous runtime's counts as none (`REALM`).
+  if (vacant(g, "launchQueue")) {
+    g.launchQueue = mark(launchQueue);
+    g.LaunchParams = mark(LaunchParams);
+    g.LaunchQueue = mark(LaunchQueue);
   }
 }
-// This process's own launch. A host without vn-desktop has no launch to report.
-if (typeof __vn_launch_info === "function") {
+// This process's own launch, once per process. A reload is not a launch, and a
+// browser hands a reloaded page no LaunchParams either. A host without
+// vn-desktop has no launch to report.
+if (typeof __vn_launch_info === "function" && REALM.runs === 1) {
   launchQueue._enqueue(launchParamsFor(launchInfo.url, launchInfo.handles));
 }
 

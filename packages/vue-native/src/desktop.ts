@@ -136,6 +136,13 @@ export interface DesktopDeps {
   warnCompat(key: string, message: string): void;
   /** HTML transient activation, as the runtime tracks it. */
   activation: { isActive(): boolean; consume(): void };
+  /**
+   * The runtime's same-realm reload bookkeeping (runtime.ts `REALM`). Is a
+   * global missing or a previous runtime's (`vacant`), and record one as
+   * this runtime's (`mark`). A class kept from before a reload would run
+   * against the old runtime's state.
+   */
+  realm: { vacant(obj: object, name: PropertyKey): boolean; mark<T>(v: T): T };
 }
 
 /** What `<input type=file>` asks for (runtime.ts). */
@@ -211,7 +218,9 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       });
     }
   }
-  const PE = (typeof target.ProgressEvent === "function" ? target.ProgressEvent : ProgressEvent) as typeof ProgressEvent;
+  const PE = (
+    typeof target.ProgressEvent === "function" && !deps.realm.vacant(target, "ProgressEvent") ? target.ProgressEvent : ProgressEvent
+  ) as typeof ProgressEvent;
 
   // Does this engine's EventTarget call `on<type>` itself? redjs does (as an
   // own listener after the others, HTML's event handler attribute); bun's
@@ -419,8 +428,8 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     Object.defineProperty(FileReader.prototype, k, { value: v, enumerable: true });
   }
 
-  if (target.FileReader === undefined) target.FileReader = FileReader;
-  if (target.ProgressEvent === undefined) target.ProgressEvent = ProgressEvent;
+  if (deps.realm.vacant(target, "FileReader")) target.FileReader = deps.realm.mark(FileReader);
+  if (deps.realm.vacant(target, "ProgressEvent")) target.ProgressEvent = deps.realm.mark(ProgressEvent);
   host?.refuseClone(FileReader.prototype, "FileReader");
 
   // ---- File System Access --------------------------------------------------

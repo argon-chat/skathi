@@ -1,0 +1,193 @@
+// A same-realm reload (m26 client sweep #3): `location.reload()` and the dev
+// host's cold restart evaluate the runtime AGAIN in the realm the first one
+// ran in. These tests run two runtimes in one fake global, the way
+// crates/vn-app/src/reload.rs does: `__VN_UNLOAD__`, then a second evaluation.
+//
+// Before the fix the second runtime kept the first one's `ResizeObserver`,
+// whose poll was parked on an animation frame the unload had cancelled, so no
+// observer fired again. The Argon Dashboard's grid collapsed and popovers
+// stayed parked at their anchors.
+
+import { describe, expect, test } from "bun:test";
+import { createRuntime } from "./runtime-harness";
+
+/** Animation frames that run only when the test says so, and can be cancelled. */
+function frameQueue() {
+  const frames = new Map<number, () => void>();
+  let next = 1;
+  return {
+    globals: {
+      requestAnimationFrame: (cb: () => void) => (frames.set(next, cb), next++),
+      cancelAnimationFrame: (id: number) => frames.delete(id),
+    },
+    run() {
+      const due = [...frames.values()];
+      frames.clear();
+      for (const cb of due) cb();
+    },
+    get size() {
+      return frames.size;
+    },
+  };
+}
+
+type G = Record<PropertyKey, unknown> & {
+  __VN_UNLOAD__?: () => void;
+  ResizeObserver: new (cb: (entries: { contentRect: { width: number } }[]) => void) => { observe(n: unknown): void };
+};
+
+describe("a same-realm reload", () => {
+  test("the next runtime's ResizeObserver replaces the old one, and it fires", () => {
+    const raf = frameQueue();
+    const first = createRuntime({ globals: { ...raf.globals } });
+    const g = first.global as unknown as G;
+    const OldRO = g.ResizeObserver;
+    // The old app observes something, so its poll is queued on a frame...
+    const a = first.nodeOps.createElement("div");
+    first.host.boundsById.set(a.id, "0,0,50,10");
+    new OldRO(() => {}).observe(a);
+    expect(raf.size).toBe(1);
+    // ...which the unload cancels.
+    g.__VN_UNLOAD__!();
+    expect(raf.size).toBe(0);
+
+    const second = createRuntime({ realm: first.global });
+    expect(g.ResizeObserver).not.toBe(OldRO);
+    const b = second.nodeOps.createElement("div");
+    second.host.boundsById.set(b.id, "0,0,120,30");
+    const seen: number[] = [];
+    new g.ResizeObserver((entries) => seen.push(...entries.map((e) => e.contentRect.width))).observe(b);
+    raf.run();
+    expect(seen).toEqual([120]);
+  });
+
+  test("every class and interface the runtime installs is the new runtime's", () => {
+    const first = createRuntime();
+    const g = first.global as unknown as Record<string, unknown>;
+    const names = [
+      "MutationObserver",
+      "ResizeObserver",
+      "DocumentFragment",
+      "getComputedStyle",
+      "CSS",
+      "HTMLInputElement",
+      "Window",
+      "Text",
+      "CSSStyleDeclaration",
+      "DOMRect",
+      "SubmitEvent",
+      "ClipboardEvent",
+      "FileReader",
+      "launchQueue",
+    ];
+    const before = Object.fromEntries(names.map((n) => [n, g[n]]));
+    for (const n of names) expect([n, typeof before[n]]).not.toEqual([n, "undefined"]);
+    (g.__VN_UNLOAD__ as () => void)();
+    createRuntime({ realm: first.global });
+    for (const n of names) {
+      expect([n, g[n] === before[n]]).toEqual([n, false]);
+      expect([n, typeof g[n]]).toEqual([n, typeof before[n]]);
+    }
+    expect(g.constructor).toBe(g.Window);
+  });
+
+  test("without an unload (the dev host's cold restart) the next runtime still installs its own", () => {
+    const first = createRuntime();
+    const g = first.global as unknown as Record<string, unknown>;
+    const before = { RO: g.ResizeObserver, MO: g.MutationObserver, Text: g.Text, Window: g.Window };
+    const second = createRuntime({ realm: first.global });
+    expect(g.ResizeObserver).not.toBe(before.RO);
+    expect(g.MutationObserver).not.toBe(before.MO);
+    expect(g.Window).not.toBe(before.Window);
+    expect(g.constructor).toBe(g.Window);
+    // `new Text()` builds a node in the NEW mirror tree.
+    const t = new (g.Text as new (s: string) => { id: number })("hi");
+    expect(second.nodesById.get(t.id)).toBe(t);
+    expect(first.nodesById.get(t.id)).toBeUndefined();
+  });
+
+  test("document.createTextNode and head.childNodes are the new runtime's", () => {
+    const doc = { head: {} as Record<string, unknown> } as Record<string, unknown>;
+    const first = createRuntime({ globals: { document: doc } });
+    const create = doc.createTextNode as (s: string) => { id: number };
+    expect(first.nodesById.has(create("a").id)).toBe(true);
+    (first.global.__VN_UNLOAD__ as () => void)();
+    const second = createRuntime({ realm: first.global });
+    const created = (doc.createTextNode as (s: string) => { id: number })("b");
+    expect(doc.createTextNode).not.toBe(create);
+    expect(second.nodesById.get(created.id)).toBe(created);
+    // A <style> the new app puts in <head> is what head.childNodes lists.
+    const style = second.nodeOps.createElement("style");
+    (doc.head.appendChild as (n: unknown) => unknown)(style);
+    expect(doc.head.childNodes).toEqual([style]);
+  });
+
+  test("document.createElement wraps the ENGINE's after a reload, not the old wrapper", () => {
+    let engineCalls = 0;
+    const doc = {
+      head: {},
+      createElement(tag: string) {
+        engineCalls++;
+        return { tagName: String(tag).toUpperCase() };
+      },
+    } as Record<string, unknown>;
+    const first = createRuntime({ globals: { document: doc } });
+    const wrapper = doc.createElement;
+    for (let i = 0; i < 3; i++) {
+      (first.global.__VN_UNLOAD__ as (() => void) | undefined)?.();
+      createRuntime({ realm: first.global });
+    }
+    expect(doc.createElement).not.toBe(wrapper);
+    const a = (doc.createElement as (t: string) => Record<string, unknown>)("a");
+    // One engine call per element: no wrapper of a wrapper.
+    expect(engineCalls).toBe(1);
+    expect(typeof a.setAttribute).toBe("function");
+  });
+
+  test("navigator.userActivation reads the new runtime's activation", () => {
+    const nav = {} as Record<string, unknown>;
+    const first = createRuntime({ navigator: nav });
+    const old = nav.userActivation;
+    expect(old).toBeDefined();
+    (first.global.__VN_UNLOAD__ as () => void)();
+    createRuntime({ realm: first.global, navigator: nav });
+    expect(nav.userActivation).not.toBe(old);
+  });
+
+  test("the unload deletes the globals the old app added, string and symbol keys alike, and keeps the rest", () => {
+    const first = createRuntime({ globals: { location: { href: "app://redpew/" }, preludeFlag: 1 } });
+    const g = first.global as unknown as Record<PropertyKey, unknown>;
+    const loaded = Symbol.for("mediabunny loaded");
+    g.appState = { user: 1 };
+    g[loaded] = true;
+    g.__VN_HOST_STATE__ = "host";
+    g.__vn_host_fn = () => 1;
+    Object.defineProperty(g, "pinned", { value: 1, configurable: false });
+    (g.__VN_UNLOAD__ as () => void)();
+    expect("appState" in g).toBe(false);
+    expect(loaded in g).toBe(false);
+    // What the realm had before the first runtime ran, and the host's names.
+    expect(g.preludeFlag).toBe(1);
+    expect(g.location).toEqual(expect.objectContaining({ href: "app://redpew/" }));
+    expect(g.__VN_HOST_STATE__).toBe("host");
+    expect(typeof g.__vn_host_fn).toBe("function");
+    // A non-configurable one cannot go, and the advisory counts it.
+    expect(g.pinned).toBe(1);
+    expect(first.advisories().some((l: string) => l.includes("1 global(s) the old app declared cannot be deleted"))).toBe(true);
+  });
+
+  test("the process's own launch reaches launchQueue once, not again after a reload", async () => {
+    const launch = { url: "argon://invite/abc" };
+    const first = createRuntime({ launch });
+    const got: unknown[] = [];
+    const lq = () => first.global.launchQueue as { setConsumer(fn: (p: { targetURL: unknown }) => void): void };
+    lq().setConsumer((p) => got.push(p.targetURL));
+    await Promise.resolve();
+    expect(got).toEqual(["argon://invite/abc"]);
+    (first.global.__VN_UNLOAD__ as () => void)();
+    createRuntime({ realm: first.global, launch });
+    lq().setConsumer((p) => got.push(p.targetURL));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(got).toEqual(["argon://invite/abc"]);
+  });
+});
