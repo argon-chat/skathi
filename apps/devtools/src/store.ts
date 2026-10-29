@@ -994,11 +994,13 @@ export function clearNet(): void {
 export function selectNet(seq: number | null): Promise<void> {
   ui.copyTarget = "network";
   if (seq === state.netSelected && state.netDetail) return Promise.resolve();
+  const entry = seq === null ? undefined : state.net.find((e) => e.seq === seq);
+  // A reload marker is a divider with nothing behind it; the selection stays.
+  if (entry?.kind === "reload") return Promise.resolve();
   state.netSelected = seq;
   state.netDetail = null;
   state.netDetailError = "";
   if (seq === null) return Promise.resolve();
-  const entry = state.net.find((e) => e.seq === seq);
   if (entry?.kind === "ws") state.netTab = "socket";
   else if (state.netTab === "socket") state.netTab = "headers";
   return loadNetDetail(seq);
@@ -1112,7 +1114,8 @@ export function closeMenu(): void {
 export function visibleNet(): NetEntry[] {
   const needle = state.netFilter.trim().toLowerCase();
   if (!needle) return state.net;
-  return state.net.filter((e) => e.url.toLowerCase().includes(needle));
+  // Reload markers stay: they say which run a matching row belongs to.
+  return state.net.filter((e) => e.kind === "reload" || e.url.toLowerCase().includes(needle));
 }
 
 // ---------------------------------------------------------------------------

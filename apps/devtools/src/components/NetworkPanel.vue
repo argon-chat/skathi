@@ -115,6 +115,34 @@ const pool = computed(() => {
   };
 });
 
+// ---- reload markers -------------------------------------------------------------
+//
+// A `kind: "reload"` row is not an exchange. The target's tee puts it where the
+// app called `location.reload()`: the ring outlives the reload, so the rows
+// above the marker are the previous run's. It is a divider, so it cannot be
+// selected or opened.
+
+function isMarker(entry: NetEntry): boolean {
+  return entry.kind === "reload";
+}
+
+function clock(at: number): string {
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function markerText(entry: NetEntry): string {
+  const at = typeof entry.at === "number" && entry.at > 0 ? `${clock(entry.at)}  ` : "";
+  return `${at}location.reload(): the app ran again, same JS realm (rows above: the previous run)`;
+}
+
+function markerTitle(entry: NetEntry): string {
+  return `The app called location.reload()${entry.url ? ` on ${entry.url}` : ""}. The host ran it again at the next frame.`;
+}
+
+const recorded = computed(() => state.net.reduce((n, e) => (isMarker(e) ? n : n + 1), 0));
+
 const totals = computed(() => {
   const fetches = state.net.filter((e) => e.kind === "fetch" || e.kind === "xhr");
   const failed = state.net.filter((e) => e.error || e.phase === "error").length;
@@ -125,6 +153,7 @@ const totals = computed(() => {
 // ---- selection ----------------------------------------------------------------
 
 function onRowClick(entry: NetEntry): void {
+  if (isMarker(entry)) return;
   void selectNet(entry.seq);
 }
 
@@ -139,7 +168,8 @@ watch(
 );
 
 function step(delta: number): void {
-  const all = rows.value;
+  // Markers are dividers; the keyboard steps over them.
+  const all = rows.value.filter((e) => !isMarker(e));
   if (!all.length) return;
   const at = all.findIndex((e) => e.seq === state.netSelected);
   const next = at < 0 ? (delta > 0 ? 0 : all.length - 1) : Math.max(0, Math.min(all.length - 1, at + delta));
@@ -179,6 +209,7 @@ function copyBody(seq: number): void {
 }
 
 function menuFor(entry: NetEntry): MenuItem[] {
+  if (isMarker(entry)) return [{ label: "Clear", run: () => clearNet() }];
   const ws = entry.kind === "ws";
   const items: MenuItem[] = [];
   if (state.netSelected !== entry.seq) items.push({ label: "Open details", run: () => void selectNet(entry.seq) });
@@ -243,7 +274,7 @@ onUnmounted(() => {
   <section class="pane net" :style="{ height: props.height + 'px' }">
     <header class="pane-head">
       <span class="label">Network</span>
-      <span class="chip">{{ state.net.length }} recorded</span>
+      <span class="chip">{{ recorded }} recorded</span>
       <span v-if="totals.failed" class="chip bad">{{ totals.failed }} failed</span>
       <span v-if="totals.fetches && !open" class="chip">avg {{ totals.avg.toFixed(0) }} ms</span>
       <span v-if="pool" class="chip" :title="pool.title">{{ pool.text }}</span>
@@ -274,28 +305,33 @@ onUnmounted(() => {
 
         <div class="list" :style="{ height: listHeight + 'px' }" @wheel="list.onWheel($event)">
           <div class="viewport" :style="{ marginTop: list.padTop + 'px' }">
-            <div
-              v-for="entry in slice"
-              :key="entry.seq"
-              class="row mono"
-              :class="{ sel: entry.seq === state.netSelected }"
-              @click="onRowClick(entry)"
-              @mousedown="onRowDown(entry, $event)"
-            >
-              <span class="c-kind" :class="entry.kind">{{ entry.kind }}</span>
-              <span v-if="!open" class="c-method">{{ entry.method || "—" }}</span>
-              <span v-if="shortUrl(entry.url).host" class="c-url split-url" :title="entry.url">
-                <span class="host">{{ shortUrl(entry.url).host }}</span
-                ><span class="rest">{{ shortUrl(entry.url).rest }}</span>
-              </span>
-              <span v-else class="c-url rest-only" :title="entry.url">{{ entry.url }}</span>
-              <span v-if="!open" class="c-proto" :class="{ h2: entry.proto === 'h2' }">{{ protoText(entry) }}</span>
-              <span v-if="!open" class="c-conn" :class="{ fresh: entry.conn !== undefined && !entry.reused }" :title="connTitle(entry)">{{
-                entry.conn === undefined ? "" : "#" + entry.conn
-              }}</span>
-              <span class="c-status" :class="statusClass(entry)">{{ statusText(entry) }}</span>
-              <span v-if="!open" class="c-time">{{ entry.ms === undefined ? "" : Math.round(entry.ms) + " ms" }}</span>
-            </div>
+            <template v-for="entry in slice" :key="entry.seq">
+              <div v-if="isMarker(entry)" class="row mono marker" :title="markerTitle(entry)" @mousedown="onRowDown(entry, $event)">
+                <span class="c-kind reload">reload</span>
+                <span class="c-url mark-text">{{ markerText(entry) }}</span>
+              </div>
+              <div
+                v-else
+                class="row mono"
+                :class="{ sel: entry.seq === state.netSelected }"
+                @click="onRowClick(entry)"
+                @mousedown="onRowDown(entry, $event)"
+              >
+                <span class="c-kind" :class="entry.kind">{{ entry.kind }}</span>
+                <span v-if="!open" class="c-method">{{ entry.method || "—" }}</span>
+                <span v-if="shortUrl(entry.url).host" class="c-url split-url" :title="entry.url">
+                  <span class="host">{{ shortUrl(entry.url).host }}</span
+                  ><span class="rest">{{ shortUrl(entry.url).rest }}</span>
+                </span>
+                <span v-else class="c-url rest-only" :title="entry.url">{{ entry.url }}</span>
+                <span v-if="!open" class="c-proto" :class="{ h2: entry.proto === 'h2' }">{{ protoText(entry) }}</span>
+                <span v-if="!open" class="c-conn" :class="{ fresh: entry.conn !== undefined && !entry.reused }" :title="connTitle(entry)">{{
+                  entry.conn === undefined ? "" : "#" + entry.conn
+                }}</span>
+                <span class="c-status" :class="statusClass(entry)">{{ statusText(entry) }}</span>
+                <span v-if="!open" class="c-time">{{ entry.ms === undefined ? "" : Math.round(entry.ms) + " ms" }}</span>
+              </div>
+            </template>
           </div>
           <div
             v-if="list.thumb"
@@ -421,6 +457,22 @@ onUnmounted(() => {
 }
 .c-kind.xhr {
   color: #e3b341;
+}
+/* A reload marker: a divider in the list, not an exchange. Same 20 px height
+ * as a row (the virtual list's rows are fixed-height). */
+.row.marker {
+  background: #1c1730;
+  border-color: #3b2f63;
+  color: #b7a6f0;
+}
+.row.marker:hover {
+  background: #221c3a;
+}
+.c-kind.reload {
+  color: #b7a6f0;
+}
+.mark-text {
+  color: #9d8fd4;
 }
 .c-method {
   width: 56px;

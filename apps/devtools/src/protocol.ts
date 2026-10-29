@@ -257,7 +257,11 @@ export interface NetEntry {
    * started while the devtools were off. A socket's rows all share one.
    */
   rid?: number;
-  /** `"fetch"`, `"xhr"` or `"ws"`. */
+  /**
+   * `"fetch"`, `"xhr"` or `"ws"`, or `"reload"`: a marker row where the app
+   * called `location.reload()`. A marker has no record behind it, and `url` is
+   * the page's `location.href`. The rows before it are the previous run's.
+   */
   kind: string;
   url: string;
   /** fetch only. */

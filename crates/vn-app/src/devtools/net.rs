@@ -35,6 +35,28 @@
 //! attached reads with the `net` command; the queue is what a client that is
 //! already attached is told without asking.
 //!
+//! ## Across a reload
+//!
+//! `location.reload()` and the dev host's cold restart run the app again in the
+//! same JS realm (`crate::reload`), and the runtime evaluated next puts its own
+//! classes on the global (1a84b39). The ring is the host's, so it simply goes
+//! on: seqs keep counting, and a `kind: "reload"` marker row goes in where the
+//! app asked for the reload. The tee itself is installed once per process and
+//! has to stay underneath what each new runtime installs:
+//!
+//! - `fetch`: the runtime does not wrap it, and the unload keeps globals that
+//!   predate the first runtime, so the teed `fetch` stays.
+//! - `XMLHttpRequest`: the tee is on the engine's prototype, which no runtime
+//!   replaces.
+//! - `WebSocket`: each runtime sets the global to a new realm proxy over the
+//!   class the FIRST runtime found (`__VN_NATIVE_SCHED__.WebSocket` in
+//!   runtime.ts). At boot the tee is installed before any runtime, so that
+//!   class is the tee. A tee installed later (`appDevtools.enable()`) wraps
+//!   that record too, so from the first reload on it is in the same place.
+//!   Its listeners are added through `EventTarget.prototype.addEventListener`,
+//!   not the proxy's own per-socket method, so they still hear the close
+//!   when a reload shuts the old app's sockets.
+//!
 //! ## The details, and what they cost (m26)
 //!
 //! A row is a SUMMARY: URL, method, status, time. Clicking one in the panel asks
@@ -534,16 +556,19 @@ impl Ring {
         ]);
         let Some(r) = self.by_seq.get(&seq).and_then(|rid| self.index_of(*rid)).map(|i| &self.records[i])
         else {
+            let marker = raw.contains("\"reload\"")
+                && json::parse(raw).is_some_and(|j| j.get("kind").and_then(Json::as_str) == Some("reload"));
+            let note = if marker {
+                "a reload marker: the app called location.reload() here, and the rows before it are \
+                 the previous run's. There is no exchange behind it"
+            } else {
+                "no details were recorded for this entry: the devtools were off when it \
+                 started, or it was recorded by a tee older than net_detail"
+            };
             return Ok(Json::obj(vec![
                 ("entry", entry),
                 ("detail", Json::Null),
-                (
-                    "note",
-                    Json::s(
-                        "no details were recorded for this entry: the devtools were off when it \
-                         started, or it was recorded by a tee older than net_detail",
-                    ),
-                ),
+                ("note", Json::s(note)),
                 ("limits", limits),
             ]));
         };
@@ -1130,8 +1155,15 @@ const TEE_JS: &str = r#"
   var message = function (e) { try { return String((e && e.message) || e); } catch (x) { return "?"; } };
   var clip = function (s, n) { return s.length > n ? s.slice(0, n) + "…" : s; };
 
+  // `lastSeq`: the newest row's seq, for the reload marker below.
+  var lastSeq = 0;
   var record = function (o) {
-    try { var s = emit(stringify(o)); return typeof s === "number" ? s : 0; } catch (e) { return 0; }
+    try {
+      var s = emit(stringify(o));
+      if (typeof s !== "number") return 0;
+      lastSeq = s;
+      return s;
+    } catch (e) { return 0; }
   };
   var begin = function (o) {
     if (!deep) return 0;
@@ -1412,6 +1444,17 @@ const TEE_JS: &str = r#"
   }
 
   // ---- WebSocket ---------------------------------------------------------
+  //
+  // A same-realm reload (location.reload(), the dev host's cold restart) runs
+  // a new runtime, and it sets `G.WebSocket` to a new realm proxy (runtime.ts
+  // `realm`). The proxy is built over `__VN_NATIVE_SCHED__.WebSocket`, the
+  // global as the FIRST runtime found it, which is kept once per process. When
+  // the devtools are on at boot, this tee runs before any runtime, so that
+  // record already holds the tee and every proxy wraps it. When the app turns
+  // them on later (`appDevtools.enable()`), the record holds the engine's
+  // class and the next proxy would drop the tee. So the record is wrapped too:
+  // after a reload the proxy sits over the tee, as it does at boot, and the
+  // global (the running runtime's proxy) is wrapped for the app running now.
   var OrigWS = G.WebSocket;
   if (typeof OrigWS === "function" && !OrigWS.__vnTeed) {
     var socks = typeof WeakMap === "function" ? new WeakMap() : null;
@@ -1434,38 +1477,66 @@ const TEE_JS: &str = r#"
         onProto = WP.send === sendTee;
       } catch (e) {}
     }
-    var Wrapped = function WebSocket(url, protocols) {
-      var t0 = now();
-      // `new OrigWS(...)` with exactly the arguments we were given: passing
-      // `undefined` for an absent `protocols` is NOT the same call.
-      var ws = arguments.length > 1 ? new OrigWS(url, protocols) : new OrigWS(url);
+    // The listeners go on through EventTarget's own method, not `ws.addEventListener`.
+    // A runtime proxy over the engine's class (the case above, devtools turned on
+    // late) gives every socket an own `addEventListener` that records the
+    // listener, and at a reload the runtime removes those before it closes the
+    // old app's sockets. The tee's listeners must stay, so the panel records
+    // that close.
+    var listenOn = WP && typeof WP.addEventListener === "function" ? WP.addEventListener : null;
+    var wsListen = function (ws, type, fn) {
+      if (listenOn) listenOn.call(ws, type, fn); else ws.addEventListener(type, fn);
+    };
+    // One wrapper per class it wraps (the global's, and the runtime's record of
+    // it). They share `socks` and the prototype's `send`, so a socket is counted
+    // once whichever made it.
+    var wrapWS = function (Orig) {
+      var W = function WebSocket(url, protocols) {
+        var t0 = now();
+        // `new Orig(...)` with exactly the arguments we were given: passing
+        // `undefined` for an absent `protocols` is NOT the same call.
+        var ws = arguments.length > 1 ? new Orig(url, protocols) : new Orig(url);
+        teeSocket(ws, t0, url, arguments.length > 1, protocols);
+        // Returning an object from a constructor makes `new W()` evaluate
+        // to it, so the caller gets the REAL socket and nothing is proxied.
+        return ws;
+      };
+      W.prototype = Orig.prototype;
+      for (var k in Orig) { try { W[k] = Orig[k]; } catch (e) {} }
+      for (var i = 0, names = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"]; i < names.length; i++) {
+        try { W[names[i]] = Orig[names[i]]; } catch (e) {}
+      }
+      W.__vnTeed = true;
+      return W;
+    };
+    var teeSocket = function (ws, t0, url, hasProtocols, protocols) {
       var u = String(url);
       try { if (ws.url) u = String(ws.url); } catch (e) {}
       var st = { rid: 0, sent: 0, received: 0 };
       try {
-        var asked = arguments.length > 1 ? (isArray(protocols) ? protocols.map(str) : [str(protocols)]) : [];
+        var asked = hasProtocols ? (isArray(protocols) ? protocols.map(str) : [str(protocols)]) : [];
         st.rid = begin({ kind: "ws", url: u, at: t0, jar: true, ws: { protocols: asked } });
         if (socks) socks.set(ws, st);
       } catch (e) {}
       var rid = st.rid;
       record({ kind: "ws", url: u, at: t0, phase: "open-requested", rid: rid || undefined });
       try {
-        ws.addEventListener("open", function () {
+        wsListen(ws, "open", function () {
           record({ kind: "ws", url: u, at: now(), ms: now() - t0, phase: "open", rid: rid || undefined });
           meta(rid, { ws: { protocol: str(ws.protocol || ""), extensions: str(ws.extensions || ""),
                             binaryType: str(ws.binaryType || ""), openMs: now() - t0 }, jarAfter: true });
         });
-        ws.addEventListener("message", function (e) {
+        wsListen(ws, "message", function (e) {
           // Counted, not logged: a chatty socket would evict every other entry
           // in the ring within seconds. The count rides the close entry.
           count(st, true, e && e.data);
         });
-        ws.addEventListener("error", function () {
+        wsListen(ws, "error", function () {
           record({ kind: "ws", url: u, at: now(), phase: "error",
                    sent: st.sent, received: st.received, rid: rid || undefined });
           meta(rid, { ws: { error: true, errorMs: now() - t0 } });
         });
-        ws.addEventListener("close", function (e) {
+        wsListen(ws, "close", function (e) {
           record({ kind: "ws", url: u, at: now(), ms: now() - t0, phase: "close",
                    status: e && e.code, sent: st.sent, received: st.received, rid: rid || undefined });
           meta(rid, { ws: { closeCode: e && e.code, closeReason: str((e && e.reason) || ""),
@@ -1478,18 +1549,16 @@ const TEE_JS: &str = r#"
           ws.send = function send(data) { var r = own.apply(this, arguments); count(st, false, data); return r; };
         }
       } catch (e) {}
-      // Returning an object from a constructor makes `new Wrapped()` evaluate
-      // to it, so the caller gets the REAL socket and nothing is proxied.
-      return ws;
     };
-    Wrapped.prototype = OrigWS.prototype;
-    for (var k in OrigWS) { try { Wrapped[k] = OrigWS[k]; } catch (e) {} }
-    for (var i = 0, names = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"]; i < names.length; i++) {
-      try { Wrapped[names[i]] = OrigWS[names[i]]; } catch (e) {}
+    // The runtime's record first (see the top of this section). It only exists
+    // once a runtime has run, so at boot this is skipped.
+    var NS = G.__VN_NATIVE_SCHED__;
+    if (NS && typeof NS.WebSocket === "function" && !NS.WebSocket.__vnTeed) {
+      try { NS.WebSocket = wrapWS(NS.WebSocket); } catch (e) {}
     }
+    var Wrapped = wrapWS(OrigWS);
     // So that `ws.constructor === WebSocket` holds for the global the app sees.
     try { if (WP && WP.constructor === OrigWS) WP.constructor = Wrapped; } catch (e) {}
-    Wrapped.__vnTeed = true;
     G.WebSocket = Wrapped;
   }
 
@@ -1605,6 +1674,31 @@ const TEE_JS: &str = r#"
       }
     } catch (e) {}
   }
+
+  // ---- location.reload() ---------------------------------------------------
+  // A marker row, `kind: "reload"`, where the app asked for a reload. The rows
+  // before it are the previous run's, since the ring outlives the reload (it is
+  // host-side). The runtime's `location.reload` calls the host fn
+  // `__vn_reload` by name at call time, and `__vn*` globals survive a reload,
+  // so this one wrapper serves every run. The host reloads at the next frame,
+  // so anything the old app sends in between (a `pagehide` handler's request)
+  // lands after the marker. Two calls with no row between them make one marker.
+  var hReload = G.__vn_reload;
+  if (typeof hReload === "function" && !hReload.__vnTeed) {
+    var markSeq = -1;
+    var reloadTee = function __vn_reload() {
+      try {
+        if (!lastSeq || markSeq !== lastSeq) {
+          var href = "";
+          try { href = str((G.location && G.location.href) || ""); } catch (e) {}
+          markSeq = record({ kind: "reload", url: href, at: now() });
+        }
+      } catch (e) {}
+      return hReload.apply(this, arguments);
+    };
+    reloadTee.__vnTeed = true;
+    try { G.__vn_reload = reloadTee; } catch (e) {}
+  }
 })();
 "#;
 
@@ -1648,6 +1742,24 @@ mod tests {
         assert_eq!(b.get("encoding").and_then(Json::as_str), Some("utf8"));
         assert_eq!(b.get("data").and_then(Json::as_str), Some("{\"a\":1}"));
         assert_eq!(b.get("truncated").and_then(Json::as_bool), Some(false));
+    }
+
+    #[test]
+    fn a_reload_marker_is_a_row_with_nothing_behind_it() {
+        let mut ring = Ring::new();
+        let rid = begun(&mut ring, "fetch");
+        let before = summary(&mut ring, Some(rid));
+        let marker = ring.record(r#"{"kind":"reload","url":"app://redpew/","at":1}"#);
+        assert_eq!(marker, before + 1, "the seqs run on through a reload");
+        let d = ring.detail(marker).unwrap();
+        assert!(matches!(d.get("detail"), Some(Json::Null)));
+        assert!(d.get("note").and_then(Json::as_str).is_some_and(|n| n.starts_with("a reload marker")));
+        // The previous run's row still answers from its record.
+        assert_eq!(ring.detail(before).unwrap().get("rid").and_then(Json::as_f64), Some(rid as f64));
+        // A row without a record that is NOT a marker keeps the old note.
+        let plain = summary(&mut ring, None);
+        let note = ring.detail(plain).unwrap().get("note").and_then(Json::as_str).map(str::to_string);
+        assert!(note.is_some_and(|n| n.starts_with("no details were recorded")));
     }
 
     #[test]

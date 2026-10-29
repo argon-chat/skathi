@@ -38,7 +38,8 @@ function pickWindow(id: number): void {
   void selectWindow(w && w.kind === "main" ? null : id);
 }
 
-const netCount = computed(() => state.net.length);
+// Exchanges only: a reload marker is a divider in the list, not a request.
+const netCount = computed(() => state.net.reduce((n, e) => (e.kind === "reload" ? n : n + 1), 0));
 const errorCount = computed(() => state.logs.filter((l) => l.kind === "error").length);
 </script>
 

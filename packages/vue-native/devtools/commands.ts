@@ -475,7 +475,9 @@ export const COMMANDS: CommandSpec[] = [
     description:
       "Every fetch(), XMLHttpRequest and WebSocket the app opened, from BOOT — a bounded ring of " +
       "300 summary rows. `kind` is fetch, xhr or ws; a socket's `phase` is open-requested / open / " +
-      "error / close and its messages are COUNTED rather than logged. Page with `since`. A row " +
+      "error / close and its messages are COUNTED rather than logged. The ring outlives " +
+      "location.reload(): a `kind: reload` marker row (url = location.href) sits where the app " +
+      "asked, and the rows before it are the previous run's. Page with `since`. A row " +
       "that came off the network carries `proto` (h2 / http/1.1), `conn` (connection id; equal ids " +
       "shared one) and `reused`; `pool` is the transport's connection/request/reuse/retry counters. " +
       "Headers, bodies, cookies and timing are NOT here — pass a row's `seq` to vn_net_detail.",
