@@ -337,6 +337,21 @@ project's browser-compat-first policy.
    percentage anywhere) drops the declaration, as if it were invalid, with the
    advisory "`<prop>`: this calc() is dropped (v1)". A calc of lengths alone is
    a constant and works everywhere. A transition with a calc endpoint snaps.
+10. **`background-image: url()` is painted by vn-tree, not by gpui** (m26). The
+    mapper carries each `url()` layer with its CSS index (`Extras::
+    background_urls`) and `background-size` keeps `cover` / `contain`;
+    `vn_tree::bgimage` loads the URL through `<img src>`'s resolver and paints
+    the whole stack, gradients included and in CSS order, from a child laid
+    over the element's padding box. Size, position, per-axis repeat and rounded
+    corners follow CSS. What differs: the painting area is the padding box
+    (`background-clip: padding-box`, so nothing under a translucent border); a
+    relative URL resolves against the app root rather than the stylesheet; in
+    a scroll container the image scrolls with the content (`background-
+    attachment: local`); `space` / `round` repeat plainly; an animated GIF
+    shows its first frame; an SVG with no width/height takes its viewBox size;
+    `image-set()` is still not painted (advisory); and a layer needing more than
+    4096 tiles is skipped (advisory). A URL that fails to load paints nothing,
+    with an advisory.
 
 ---
 

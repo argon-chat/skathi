@@ -16,6 +16,7 @@
 //! (vn-css: stylesheets, cascade, per-state refinements) replaces it.
 
 mod aria;
+mod bgimage;
 mod cache;
 mod clipboard;
 mod dom;

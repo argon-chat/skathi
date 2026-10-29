@@ -256,10 +256,13 @@ pub struct Extras {
     /// other, so the fold happens once, afterwards, in
     /// [`Extras::resolve_background_layers`].
     pub background_images: Option<Rc<Vec<BackgroundLayer>>>,
-    /// `background-size`, per layer, in CSS order. `None` on an axis is
-    /// `auto` / `cover` / `contain`, none of which tile: a gradient has no
-    /// intrinsic size, so all three resolve to the box itself.
-    pub background_size: Option<Rc<Vec<(Option<TileLength>, Option<TileLength>)>>>,
+    /// The `url()` layers of the same `background-image` list, next to their
+    /// CSS layer indices. Always written together with
+    /// [`Extras::background_images`] (an empty list when the declaration has no
+    /// `url()`), so the two halves of one declaration cascade as one.
+    pub background_urls: Option<Rc<Vec<BackgroundUrl>>>,
+    /// `background-size`, per layer, in CSS order.
+    pub background_size: Option<Rc<Vec<BackgroundSize>>>,
     /// `background-position`, per layer, in CSS order.
     pub background_position: Option<Rc<Vec<(TileLength, TileLength)>>>,
     /// `background-repeat`, per layer, in CSS order, as `(x, y)`.
@@ -534,6 +537,7 @@ impl Extras {
         }
         if other.background_images.is_some() {
             self.background_images = other.background_images.clone();
+            self.background_urls = other.background_urls.clone();
         }
         if other.background_size.is_some() {
             self.background_size = other.background_size.clone();
@@ -581,34 +585,69 @@ impl Extras {
         let Some(images) = self.background_images.as_ref() else {
             return Vec::new();
         };
-        /// CSS matches a geometry list to the image list by index and repeats
-        /// the shorter one.
-        fn cycled<T: Copy>(list: Option<&Rc<Vec<T>>>, i: usize) -> Option<T> {
-            let list = list.filter(|l| !l.is_empty())?;
-            Some(list[i % list.len()])
-        }
-        let mut out: Vec<gpui::Background> = Vec::with_capacity(images.len());
-        for layer in images.iter() {
-            let index = layer.index as usize;
-            let mut background = layer.background;
-            let size = cycled(self.background_size.as_ref(), index);
-            if let Some((Some(w), Some(h))) = size {
-                let position = cycled(self.background_position.as_ref(), index)
-                    .unwrap_or((TileLength::Fraction(0.0), TileLength::Fraction(0.0)));
-                let repeat = cycled(self.background_repeat.as_ref(), index).unwrap_or((true, true));
-                background = background.tiled(
-                    (w.value(), h.value()),
-                    (w.is_fraction(), h.is_fraction()),
-                    (position.0.value(), position.1.value()),
-                    (position.0.is_fraction(), position.1.is_fraction()),
-                    repeat,
-                );
-            }
-            out.push(background);
-        }
+        let mut out: Vec<gpui::Background> =
+            images.iter().map(|layer| self.tiled_gradient(layer)).collect();
         // CSS paints layer 0 on top; gpui paints the list in order.
         out.reverse();
         out
+    }
+
+    /// The whole background stack, BOTTOM layer first, when it holds at least
+    /// one `url()` image — `None` when it is gradients only, which gpui paints
+    /// on its own ([`Extras::resolve_background_layers`]).
+    ///
+    /// An image is not a gpui `Background`: vn-tree loads it through the same
+    /// loader `<img>` uses and paints it itself, under the content. Once one
+    /// layer has to be painted there, they all are, so a gradient written ABOVE
+    /// an image (the darkened-banner idiom, `linear-gradient(#0008, #0008),
+    /// url(banner.png)`) still paints above it.
+    pub fn resolve_background_stack(&self) -> Option<Vec<PaintLayer>> {
+        let urls = self.background_urls.as_ref().filter(|u| !u.is_empty())?;
+        let mut stack: Vec<(u16, PaintLayer)> = Vec::new();
+        for layer in self.background_images.iter().flat_map(|l| l.iter()) {
+            stack.push((layer.index, PaintLayer::Gradient(self.tiled_gradient(layer))));
+        }
+        for u in urls.iter() {
+            let i = u.index as usize;
+            stack.push((
+                u.index,
+                PaintLayer::Image {
+                    url: u.url.clone(),
+                    size: cycled(self.background_size.as_ref(), i)
+                        .unwrap_or(BackgroundSize::Explicit(None, None)),
+                    position: cycled(self.background_position.as_ref(), i)
+                        .unwrap_or((TileLength::Fraction(0.0), TileLength::Fraction(0.0))),
+                    repeat: cycled(self.background_repeat.as_ref(), i).unwrap_or((true, true)),
+                },
+            ));
+        }
+        // CSS order (layer 0 on top), stable so a banded gradient keeps its
+        // bands in order — then bottom first, as gpui paints.
+        stack.sort_by_key(|(index, _)| *index);
+        Some(stack.into_iter().rev().map(|(_, layer)| layer).collect())
+    }
+
+    /// One gradient layer with its `background-size` / `-position` /
+    /// `-repeat` folded on. A layer with no explicit two-axis size is not
+    /// tiled: a gradient has no intrinsic size, so `auto`, `cover` and
+    /// `contain` all resolve to the box itself.
+    fn tiled_gradient(&self, layer: &BackgroundLayer) -> gpui::Background {
+        let index = layer.index as usize;
+        let mut background = layer.background;
+        let size = cycled(self.background_size.as_ref(), index);
+        if let Some(BackgroundSize::Explicit(Some(w), Some(h))) = size {
+            let position = cycled(self.background_position.as_ref(), index)
+                .unwrap_or((TileLength::Fraction(0.0), TileLength::Fraction(0.0)));
+            let repeat = cycled(self.background_repeat.as_ref(), index).unwrap_or((true, true));
+            background = background.tiled(
+                (w.value(), h.value()),
+                (w.is_fraction(), h.is_fraction()),
+                (position.0.value(), position.1.value()),
+                (position.0.is_fraction(), position.1.is_fraction()),
+                repeat,
+            );
+        }
+        background
     }
 
     /// `Some` when this node MAY be painted in gpui's deferred layer:
@@ -1957,6 +1996,47 @@ impl CurrentColorTargets {
     }
 }
 
+/// CSS matches a background geometry list to the image list by index and
+/// repeats the shorter one.
+fn cycled<T: Copy>(list: Option<&Rc<Vec<T>>>, i: usize) -> Option<T> {
+    let list = list.filter(|l| !l.is_empty())?;
+    Some(list[i % list.len()])
+}
+
+/// A `background-image: url()` layer: the URL as written, next to its CSS layer
+/// index (see [`BackgroundLayer`]). vn-css does not resolve it: vn-tree does,
+/// through the loader `<img src>` uses, so the two accept the same URLs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackgroundUrl {
+    /// Position in the `background-image` list, layer 0 being the top one.
+    pub index: u16,
+    pub url: Rc<str>,
+}
+
+/// One layer's `background-size`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BackgroundSize {
+    /// `<length-percentage> | auto` per axis, `None` being `auto`.
+    Explicit(Option<TileLength>, Option<TileLength>),
+    Cover,
+    Contain,
+}
+
+/// One layer of [`Extras::resolve_background_stack`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum PaintLayer {
+    /// A gradient, tiled already.
+    Gradient(gpui::Background),
+    /// A `url()` image and the geometry that places it.
+    Image {
+        url: Rc<str>,
+        size: BackgroundSize,
+        position: (TileLength, TileLength),
+        /// `(x, y)`; `space` and `round` count as `repeat`.
+        repeat: (bool, bool),
+    },
+}
+
 /// One `background-image` layer, kept next to the CSS layer index it came from
 /// because `background-size` and friends are matched to the image list BY
 /// index — and one CSS layer can become several gpui backgrounds when its stop
@@ -2298,7 +2378,18 @@ fn collect_background_images<'a>(
     diagnostics: &mut Vec<String>,
 ) {
     let mut layers: Vec<BackgroundLayer> = Vec::new();
+    let mut urls: Vec<BackgroundUrl> = Vec::new();
     for (index, image) in images.enumerate() {
+        if let lightningcss::values::image::Image::Url(u) = image {
+            // `url("")` is an invalid image, which CSS draws as no layer.
+            if !u.url.trim().is_empty() {
+                urls.push(BackgroundUrl {
+                    index: index.min(u16::MAX as usize) as u16,
+                    url: Rc::from(u.url.as_ref()),
+                });
+            }
+            continue;
+        }
         let Some((backgrounds, key)) = gradient_layer(image, diagnostics) else {
             continue;
         };
@@ -2315,17 +2406,18 @@ fn collect_background_images<'a>(
         }
     }
     x.background_images = Some(Rc::new(layers));
+    x.background_urls = Some(Rc::new(urls));
 }
 
-/// `background-size`. `auto`, `cover` and `contain` all resolve to the box for
-/// a gradient, which has no intrinsic size — and "the box" is what an untiled
-/// background already is, so they produce `None` rather than a tile.
-fn background_size(
-    size: &lightningcss::properties::background::BackgroundSize,
-) -> (Option<TileLength>, Option<TileLength>) {
+/// `background-size`. A gradient has no intrinsic size, so for one `auto`,
+/// `cover` and `contain` all resolve to the box — which is what an untiled
+/// background already is ([`Extras::resolve_background_layers`]). A `url()`
+/// image has one, and vn-tree works them out against it.
+fn background_size(size: &lightningcss::properties::background::BackgroundSize) -> BackgroundSize {
     use lightningcss::properties::background::BackgroundSize as BS;
     match size {
-        BS::Cover | BS::Contain => (None, None),
+        BS::Cover => BackgroundSize::Cover,
+        BS::Contain => BackgroundSize::Contain,
         BS::Explicit { width, height } => {
             let axis = |v: &LengthPercentageOrAuto| match v {
                 LengthPercentageOrAuto::Auto => None,
@@ -2333,10 +2425,7 @@ fn background_size(
                     TileLength::from_length_percentage(lp)
                 }
             };
-            // CSS resolves a single explicit axis against the image's aspect
-            // ratio. A gradient has none, so the other axis is the box — which
-            // is what `None` means here.
-            (axis(width), axis(height))
+            BackgroundSize::Explicit(axis(width), axis(height))
         }
     }
 }
@@ -2462,21 +2551,13 @@ fn gradient_layer(
 
     let gradient = match img {
         Image::Gradient(g) => g.as_ref(),
-        Image::Url(_) => {
-            warn_once(
-                diagnostics,
-                "background-image: url() is not painted (v1) — gpui's background is a colour or a \
-                 gradient, not an image layer. Use an `<img>` (positioned behind the content) for \
-                 a raster background; the image loader, object-fit and the file://, data: and \
-                 http(s) source grammars are all live on that element",
-            );
-            return None;
-        }
+        // Carried as a `BackgroundUrl` by `collect_background_images`.
+        Image::Url(_) => return None,
         Image::ImageSet(_) => {
             warn_once(
                 diagnostics,
-                "background-image: image-set() is not painted (v1) — pick one source and use an \
-                 `<img>`; there is no resolution negotiation here",
+                "background-image: image-set() is not painted (v1) — write one source as a plain \
+                 `url()`, which is; there is no resolution negotiation here",
             );
             return None;
         }
@@ -6112,13 +6193,84 @@ mod tests {
         assert!(!x.resolve_background_layers()[0].is_tiled());
     }
 
-    /// `background-image: url()` is still not painted — that is an image
-    /// layer rather than a gradient — and says so.
+    /// `background-image: url()` is carried to vn-tree with the geometry that
+    /// places it (m26 client sweep #14: the emoji picker's sprites, a server
+    /// banner) — and once an image is in the stack, the gradients are painted
+    /// with it, in CSS order.
     #[test]
-    fn a_url_background_still_names_the_alternative() {
-        let (r, d) = map("background-image: url(bg.png)");
+    fn a_url_background_is_carried_with_its_geometry() {
+        let (r, x, d) = map_full(
+            "background-image: url(atlas.webp); background-size: 6100% 600%; \
+             background-position: 45% 20%; background-repeat: no-repeat",
+        );
+        assert!(d.is_empty(), "{d:?}");
         assert_eq!(r.background, None);
-        assert!(d.iter().any(|m| m.contains("background-image: url()")), "{d:?}");
+        assert_eq!(
+            x.resolve_background_stack(),
+            Some(vec![PaintLayer::Image {
+                url: Rc::from("atlas.webp"),
+                size: BackgroundSize::Explicit(
+                    Some(TileLength::Fraction(61.0)),
+                    Some(TileLength::Fraction(6.0))
+                ),
+                position: (TileLength::Fraction(0.45), TileLength::Fraction(0.2)),
+                repeat: (false, false),
+            }])
+        );
+
+        // emojix's pixel form, and `cover` / `contain`.
+        let (_, x, _) = map_full(
+            "background-image: url(\"a.png\"); background-size: 1342px 268px; \
+             background-position: -88px -44px",
+        );
+        let stack = x.resolve_background_stack().unwrap();
+        let [PaintLayer::Image { size, position, repeat, .. }] = stack.as_slice() else {
+            panic!("one image layer: {stack:?}");
+        };
+        assert_eq!(
+            *size,
+            BackgroundSize::Explicit(Some(TileLength::Pixels(1342.0)), Some(TileLength::Pixels(268.0)))
+        );
+        assert_eq!(*position, (TileLength::Pixels(-88.0), TileLength::Pixels(-44.0)));
+        assert_eq!(*repeat, (true, true));
+        let size_of = |body: &str| match map_full(body).1.resolve_background_stack().unwrap()[0] {
+            PaintLayer::Image { size, .. } => size,
+            ref other => panic!("{other:?}"),
+        };
+        assert_eq!(size_of("background: url(b.png) center / cover no-repeat"), BackgroundSize::Cover);
+        assert_eq!(size_of("background-image: url(b.png); background-size: contain"), BackgroundSize::Contain);
+
+        // The darkened-banner idiom: the gradient is written FIRST, so it
+        // paints on top of the image — bottom-first, the image comes first.
+        let (_, x, _) = map_full("background-image: linear-gradient(#0008, #0008), url(banner.png)");
+        let stack = x.resolve_background_stack().unwrap();
+        assert!(matches!(stack[0], PaintLayer::Image { .. }), "{stack:?}");
+        assert!(matches!(stack[1], PaintLayer::Gradient(_)), "{stack:?}");
+
+        // Gradients alone stay gpui's to paint.
+        let (_, x, _) = map_full("background-image: linear-gradient(#f00, #00f)");
+        assert_eq!(x.resolve_background_stack(), None);
+        // `url("")` is an invalid image: no layer.
+        assert_eq!(map_full("background-image: url(\"\")").1.resolve_background_stack(), None);
+    }
+
+    /// A later rule's gradient-only `background-image` replaces an earlier
+    /// rule's `url()`: the two halves of one declaration cascade together.
+    #[test]
+    fn a_later_background_image_replaces_an_earlier_url() {
+        let (_, mut x, _) = map_full("background-image: url(a.png)");
+        let (_, later, _) = map_full("background-image: linear-gradient(#f00, #00f)");
+        x.refine(&later);
+        assert_eq!(x.resolve_background_stack(), None);
+        assert_eq!(x.resolve_background_layers().len(), 1);
+    }
+
+    /// `image-set()` still has no painter, and says what does.
+    #[test]
+    fn an_image_set_names_the_alternative() {
+        let (r, d) = map("background-image: image-set(\"a.png\" 1x, \"a-2x.png\" 2x)");
+        assert_eq!(r.background, None);
+        assert!(d.iter().any(|m| m.contains("image-set() is not painted")), "{d:?}");
     }
 
 

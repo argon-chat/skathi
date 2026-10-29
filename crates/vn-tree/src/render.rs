@@ -1810,7 +1810,12 @@ fn build_node<V: 'static>(
             // the only precondition — see `crate::aria`.
             d = crate::aria::apply(d, t, id, node);
             advise_missing_font();
-            apply_background_layers(d.style(), &extras);
+            // A `url()` layer anywhere in the stack moves the WHOLE stack into
+            // a painter child (`crate::bgimage`), so gradients and images keep
+            // their CSS order; gpui keeps only the colour.
+            let bg_stack = extras.resolve_background_stack();
+            let bg_radii = bg_stack.as_ref().map(|_| padding_box_radii(d.style(), window.rem_size()));
+            apply_background_layers(d.style(), &extras, bg_stack.is_some());
             apply_background_clip_text(d.style(), &extras);
             apply_self_blur(d.style(), t, id, node, &extras);
             apply_drop_shadow(
@@ -2051,6 +2056,10 @@ fn build_node<V: 'static>(
                 };
                 let own_display = node.computed.as_ref().and_then(|cs| cs.base.display);
                 let mut kids: Vec<AnyElement> = Vec::new();
+                // FIRST, so it paints under every real child (`crate::bgimage`).
+                if let (Some(stack), Some(radii)) = (bg_stack, bg_radii) {
+                    kids.push(crate::bgimage::layer_element(id, stack, radii));
+                }
                 if let Some(marker) = list_marker_for(t, id, node, &extras) {
                     kids.push(marker);
                 }
@@ -2189,13 +2198,40 @@ fn apply_background_clip_text(style: &mut gpui::StyleRefinement, extras: &vn_css
 /// and a tile size from `bg-[size:64px_64px]`, which are two different rules
 /// that never see each other. The cascade is what brings them together, so the
 /// fold belongs after it.
-fn apply_background_layers(style: &mut gpui::StyleRefinement, extras: &vn_css::Extras) {
+///
+/// `painted_by_child`: the stack holds a `url()` image, and `crate::bgimage`
+/// paints all of it, so gpui must paint none of it.
+fn apply_background_layers(
+    style: &mut gpui::StyleRefinement,
+    extras: &vn_css::Extras,
+    painted_by_child: bool,
+) {
     if extras.background_images.is_none() {
+        return;
+    }
+    if painted_by_child {
+        style.background_layers = Some(Vec::new());
         return;
     }
     let layers = extras.resolve_background_layers();
     if !layers.is_empty() {
         style.background_layers = Some(layers);
+    }
+}
+
+/// The corner radii of an element's PADDING box — its border radii, less the
+/// border each corner sits in — which is where `crate::bgimage` paints.
+fn padding_box_radii(style: &gpui::StyleRefinement, rem: gpui::Pixels) -> gpui::Corners<gpui::Pixels> {
+    let radius = |v: Option<gpui::AbsoluteLength>| v.map_or(0.0, |v| f32::from(v.to_pixels(rem)));
+    let border = |v: Option<gpui::AbsoluteLength>| v.map_or(0.0, |v| f32::from(v.to_pixels(rem)));
+    let (top, right) = (border(style.border_widths.top), border(style.border_widths.right));
+    let (bottom, left) = (border(style.border_widths.bottom), border(style.border_widths.left));
+    let inner = |r: f32, a: f32, b: f32| gpui::px((r - a.max(b)).max(0.0));
+    gpui::Corners {
+        top_left: inner(radius(style.corner_radii.top_left), top, left),
+        top_right: inner(radius(style.corner_radii.top_right), top, right),
+        bottom_right: inner(radius(style.corner_radii.bottom_right), bottom, right),
+        bottom_left: inner(radius(style.corner_radii.bottom_left), bottom, left),
     }
 }
 

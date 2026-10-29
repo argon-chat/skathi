@@ -231,6 +231,43 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
             release(&map, g);
         }
     });
+    BACKGROUNDS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+}
+
+thread_local! {
+    /// `background-image: url()` sources, per node, as `(url, source)`: an
+    /// element can carry several image layers, and a node can be an `<img>`
+    /// with a background too, so this is a memo of its own beside `RESOLVED`.
+    static BACKGROUNDS: RefCell<HashMap<u32, Vec<(std::rc::Rc<str>, Option<ImageSource>)>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// The resolved source of one `background-image: url()` on `id`, memoised like
+/// [`source_for`]. CSS `url()` takes the URL grammar `<img src>` does, through
+/// the same resolver — so a relative URL is relative to the APP ROOT, as an
+/// imported asset's URL (`/node_modules/…/atlas.webp`) is, and not to the
+/// stylesheet that wrote it (see `crate::bgimage`).
+///
+/// A `blob:` source here is not handed back to gpui's cache when the node
+/// goes, as an `<img>`'s is ([`release`]): CSS backgrounds name blob: URLs
+/// rarely enough that the decode staying until the window closes is the
+/// simpler trade.
+pub(crate) fn background_source(id: u32, url: &str) -> Option<ImageSource> {
+    BACKGROUNDS.with(|m| {
+        let mut m = m.borrow_mut();
+        let list = m.entry(id).or_default();
+        if let Some((_, source)) = list.iter().find(|(u, _)| &**u == url) {
+            return source.clone();
+        }
+        let source = resolve(url);
+        // A node whose background URL keeps changing (an animated sprite
+        // sheet swapping sheets) must not grow this without bound.
+        if list.len() >= 8 {
+            list.clear();
+        }
+        list.push((std::rc::Rc::from(url), source.clone()));
+        source
+    })
 }
 
 /// The resolved `ImageSource` for `id`'s current `src`, memoised.
@@ -360,7 +397,7 @@ fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
 
 /// Does the URL's path end in `.svg` (the query and fragment cut)? The one
 /// thing that says a decoded http(s) image was an SVG.
-fn names_svg(src: &str) -> bool {
+pub(crate) fn names_svg(src: &str) -> bool {
     let path = src.split(['?', '#']).next().unwrap_or(src).trim();
     path.len() > 4 && path.is_char_boundary(path.len() - 4) && path[path.len() - 4..].eq_ignore_ascii_case(".svg")
 }

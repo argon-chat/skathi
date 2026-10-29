@@ -8,7 +8,7 @@
 // client spells it.
 
 import { afterAll, describe, expect as bunExpect, test } from "bun:test";
-import { launch, type Bounds } from "../src/index";
+import { launch, readPng, type Bounds } from "../src/index";
 
 const app = await launch({
   app: "packages/vn-test/fixtures/layout/src/main.ts",
@@ -126,4 +126,54 @@ describe("#15 repeat(auto-fill | auto-fit, …)", () => {
     bunExpect(Math.abs(a.w - 225)).toBeLessThanOrEqual(1);
     bunExpect(Math.abs(b.x - a.x - 225)).toBeLessThanOrEqual(1);
   });
+});
+
+describe("#14 background-image: url()", () => {
+  type Rgb = [number, number, number];
+  const RED: Rgb = [255, 0, 0];
+  const BLUE: Rgb = [0, 0, 255];
+  const LIME: Rgb = [0, 255, 0];
+  const near = (a: Rgb, b: Rgb) => a.every((v, i) => Math.abs(v - b[i]) <= 24);
+
+  /** The colours at `points` (offsets inside `selector`'s box), once the
+   *  images have decoded — a data: URL decodes off the render thread, so the
+   *  first frames paint the box without it. */
+  async function colours(selector: string, points: [number, number][], want: Rgb[]): Promise<Rgb[]> {
+    const b = await app.locator(selector).boundingBox();
+    const read = async () => {
+      const shot = readPng(await app.screenshot());
+      return points.map(([dx, dy]) => shot.at(Math.round(b.x + dx), Math.round(b.y + dy)));
+    };
+    return until(read, (got) => got.every((c, i) => near(c, want[i])));
+  }
+
+  test("emojix's pixel sprite shows its cell", async () => {
+    const got = await colours("#bg-px", [[10, 10]], [BLUE]);
+    bunExpect(near(got[0], BLUE)).toBe(true);
+  }, T);
+
+  test("emojix's percentage sprite shows its cell", async () => {
+    const got = await colours("#bg-pct", [[10, 10]], [BLUE]);
+    bunExpect(near(got[0], BLUE)).toBe(true);
+  }, T);
+
+  test("`cover` scales the image over the box and `center` centres it", async () => {
+    // 20x20 → 60x60, centred in 60x30: the seam of the red/blue halves is
+    // the box's middle row.
+    const got = await colours("#bg-cover", [[30, 5], [30, 25]], [RED, BLUE]);
+    bunExpect(near(got[0], RED)).toBe(true);
+    bunExpect(near(got[1], BLUE)).toBe(true);
+  }, T);
+
+  test("`repeat-x` tiles along the box", async () => {
+    const points: [number, number][] = [[5, 10], [15, 10], [25, 10], [35, 10], [45, 10], [55, 10]];
+    const want = [RED, BLUE, RED, BLUE, RED, BLUE];
+    const got = await colours("#bg-tile", points, want);
+    got.forEach((c, i) => bunExpect(near(c, want[i])).toBe(true));
+  }, T);
+
+  test("a gradient written above an image paints over it", async () => {
+    const got = await colours("#bg-over", [[10, 10]], [LIME]);
+    bunExpect(near(got[0], LIME)).toBe(true);
+  }, T);
 });

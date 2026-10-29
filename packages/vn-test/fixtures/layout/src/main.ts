@@ -83,6 +83,18 @@ const grids = () => [
   ]),
 ];
 
+/** #14: `background-image: url()` — emojix's two sprite forms, a cover banner,
+ *  a repeat, and a gradient written above an image. The images are SVG data
+ *  URLs (layout.css), so the fixture carries no binary. */
+const backgrounds = () =>
+  h("div", { id: "bgs", class: "bgs" }, [
+    h("div", { id: "bg-px", class: "bg bg-sheet bg-px" }),
+    h("div", { id: "bg-pct", class: "bg bg-sheet bg-pct" }),
+    h("div", { id: "bg-cover", class: "bg bg-cover" }),
+    h("div", { id: "bg-tile", class: "bg bg-tile" }),
+    h("div", { id: "bg-over", class: "bg bg-over" }),
+  ]);
+
 createApp({
-  render: () => h("div", { id: "root" }, [messages(), bubble(), track(), ...grids()]),
+  render: () => h("div", { id: "root" }, [messages(), bubble(), track(), ...grids(), backgrounds()]),
 }).mount();
