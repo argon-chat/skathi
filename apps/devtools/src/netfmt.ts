@@ -104,6 +104,30 @@ export function textLines(text: string, cols: number, max = 250_000): string[] {
   return out;
 }
 
+/**
+ * Like `textLines`, but a line is broken at its last space when there is one
+ * in the second half of the row — for a header VALUE, which is often prose
+ * ("credentials include · mode cors · …") and reads badly cut mid-word. A
+ * token longer than the row (a URL, a cookie) is still cut hard: the engine
+ * will not break it either.
+ */
+export function wrapWords(text: string, cols: number, max = 400): string[] {
+  const width = Math.max(8, Math.floor(cols));
+  const out: string[] = [];
+  for (const raw of text.split("\n")) {
+    let line = raw.replace(/\r$/, "").replace(/\t/g, "  ");
+    while (line.length > width && out.length < max) {
+      const space = line.lastIndexOf(" ", width);
+      const at = space > width / 2 ? space : width;
+      out.push(line.slice(0, at));
+      line = space > width / 2 ? line.slice(at + 1) : line.slice(at);
+    }
+    out.push(line);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 export function isJsonMime(mime: string | undefined): boolean {
   const essence = (mime || "").split(";")[0].trim().toLowerCase();
   return essence === "application/json" || essence.endsWith("+json") || essence === "application/x-ndjson";
@@ -255,15 +279,29 @@ export function requestHeaderRows(d: NetDetail): HeaderRow[] {
   return rows;
 }
 
-/** The response headers, plus the Set-Cookie lines reconstructed from the jar. */
+/**
+ * The response headers, plus its Set-Cookie lines: the RAW ones the transport
+ * received when the host has them (`cookies.wire`, redjs `net_info`), else the
+ * ones reconstructed from what the jar changed.
+ */
 export function responseHeaderRows(d: NetDetail): HeaderRow[] {
   const rows: HeaderRow[] = (d.response?.headers || []).map(([name, value]) => ({
     name,
     value,
     sensitive: isSensitive(name),
   }));
-  for (const line of d.cookies?.set || []) {
-    rows.push({ name: "set-cookie", value: line, sensitive: true, note: "reconstructed from the jar" });
+  const wire = d.cookies?.wire;
+  if (wire) {
+    // The jar stores a response's cookies only under credentials "include"
+    // (redjs `Credentials::applies`: the app's origin is opaque, so
+    // "same-origin" matches nothing). Received is not the same as kept.
+    const cred = d.request?.credentials;
+    const note = cred && cred !== "include" ? `as received · not stored (credentials "${cred}")` : "as received";
+    for (const line of wire) rows.push({ name: "set-cookie", value: line, sensitive: true, note });
+  } else {
+    for (const line of d.cookies?.set || []) {
+      rows.push({ name: "set-cookie", value: line, sensitive: true, note: "reconstructed from the jar" });
+    }
   }
   return rows;
 }

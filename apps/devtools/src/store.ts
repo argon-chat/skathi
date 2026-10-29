@@ -35,6 +35,7 @@ import type {
   NetReply,
   NetTab,
   NodeId,
+  PoolStats,
   PerfReply,
   PickReply,
   PingReply,
@@ -173,6 +174,8 @@ interface State {
   netTab: NetTab;
   /** The request list's width while the details pane is open. */
   netListWidth: number;
+  /** The target's pooled-transport counters, as of the newest entries. */
+  netPool: PoolStats | null;
 
   // -- storage
   storageArea: string;
@@ -250,6 +253,7 @@ export const state = reactive<State>({
   netDetailBusy: false,
   netTab: "headers",
   netListWidth: 420,
+  netPool: null,
 
   storageArea: "local",
   storage: [],
@@ -398,6 +402,7 @@ function resetInspection(): void {
   state.netSelected = null;
   state.netDetail = null;
   state.netDetailError = "";
+  state.netPool = null;
   state.treeRev = 0;
   state.seenRev = -1;
 }
@@ -476,6 +481,7 @@ function onPush(msg: PushMessage): void {
       break;
     case "net":
       for (const entry of msg.entries || []) pushNet(entry);
+      if (msg.pool) state.netPool = msg.pool;
       break;
     case "perf":
       applyPerf(msg);
@@ -970,6 +976,7 @@ export async function refreshNet(): Promise<void> {
     const data = await cmd<NetReply>("net", { since: state.netCursor });
     for (const entry of data.entries || []) pushNet(entry);
     state.netCursor = data.next;
+    if (data.pool) state.netPool = data.pool;
   } catch (e) {
     fail(e);
   }

@@ -35,6 +35,7 @@ import {
   requestHeaderRows,
   responseHeaderRows,
   textLines,
+  wrapWords,
 } from "../netfmt";
 import BodyView from "./BodyView.vue";
 import type { NetBody, NetDetail, NetTab } from "../protocol";
@@ -94,7 +95,7 @@ watch(
   },
 );
 
-// The value column is hard-wrapped (`textLines`): the engine does not break a
+// The value column is wrapped here (`wrapWords`): the engine does not break a
 // word that is wider than its box (`word-break` / `overflow-wrap` are not
 // applied), and a URL or a cookie IS one long word.
 const nameW = computed(() => Math.round(Math.max(110, Math.min(210, props.width * 0.3))));
@@ -106,7 +107,7 @@ const nameCols = computed(() => Math.max(8, Math.floor(nameW.value / MONO_W)));
 
 function shown(kv: KV, key: string): string {
   const v = kv.sensitive && !revealed[key] ? maskHeader(kv.name, kv.value) : kv.value;
-  return textLines(v, valueCols.value, 400).join("\n");
+  return wrapWords(v, valueCols.value, 400).join("\n");
 }
 function nameOf(kv: KV): string {
   return textLines(kv.name, nameCols.value, 6).join("\n");
@@ -117,7 +118,25 @@ function reveal(kv: KV, key: string): void {
 
 // ---- headers ----------------------------------------------------------------
 
-const NOT_REPORTED = "not reported by this transport";
+/**
+ * Why a connection fact is missing. The transport reports it (redjs
+ * `fetch::net_info`) for every response that crossed a network; what is left
+ * is a response that did not, a request that never got one, or an API the
+ * host has no hook for.
+ */
+const noTransport = computed(() => {
+  const e = entry.value;
+  if (!e) return "—";
+  if (/^(data|blob|file):/i.test(e.url)) return "none — this response never crossed a network";
+  if (e.error || d.value?.error) return "none — the request failed before a response";
+  if (e.kind === "xhr") return "not reported for XMLHttpRequest";
+  if (e.kind === "fetch" && d.value?.response?.status === undefined) return "pending";
+  return "not reported by this host";
+});
+
+function protocolLabel(p: string): string {
+  return p === "h2" ? "h2 (HTTP/2)" : p;
+}
 
 function statusTone(status: number | undefined): KV["tone"] {
   if (status === undefined) return undefined;
@@ -158,12 +177,20 @@ const general = computed<KV[]>(() => {
   if (res?.type) rows.push({ name: "Response Type", value: res.type });
   if (res?.responseType !== undefined) rows.push({ name: "responseType", value: res.responseType || '"" (text)' });
   const t = det?.transport || {};
-  rows.push({ name: "Remote Address", value: t.remote || NOT_REPORTED, faint: !t.remote });
-  rows.push({ name: "Protocol", value: t.protocol || NOT_REPORTED, faint: !t.protocol });
+  const missing = noTransport.value;
+  rows.push({ name: "Remote Address", value: t.remote || missing, faint: !t.remote });
+  rows.push({ name: "Protocol", value: t.protocol ? protocolLabel(t.protocol) : missing, faint: !t.protocol });
   rows.push({
     name: "Connection",
-    value: t.reused === undefined ? NOT_REPORTED : t.reused ? "reused" : "new",
-    faint: t.reused === undefined,
+    value:
+      t.connectionId !== undefined
+        ? `#${t.connectionId} · ${t.reused ? "reused — it had carried an earlier request" : "new"}`
+        : t.reused !== undefined
+          ? t.reused
+            ? "reused"
+            : "new"
+          : missing,
+    faint: t.connectionId === undefined && t.reused === undefined,
   });
   if (req) {
     const bits = [
@@ -222,10 +249,11 @@ const headerNotes = computed<string[]>(() => {
       "(Host, User-Agent, Accept-Encoding, Content-Length, …); script never sees those, so they are not listed.",
   );
   const cred = det.request?.credentials;
-  if (cred && cred !== "include" && !det.cookies) {
+  if (cred && cred !== "include" && !det.cookies?.sent) {
     out.push(
-      `No cookies: credentials "${cred}". The app's origin (app://redpew) is opaque, so no URL is ` +
-        `same-origin with it — cookies are sent and stored only with credentials: "include" (withCredentials for XHR).`,
+      `No Cookie header, and no Set-Cookie stored: credentials "${cred}". The app's origin (app://redpew) is ` +
+        `opaque, so no URL is same-origin with it — cookies are sent and stored only with credentials: ` +
+        `"include" (withCredentials for XHR).`,
     );
   }
   if (det.cookies?.note) out.push(`Cookies — ${det.cookies.note}`);

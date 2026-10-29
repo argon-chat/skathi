@@ -89,6 +89,32 @@ function shortUrl(url: string): { host: string; rest: string } {
   return { host: m[1], rest: m[2] || "/" };
 }
 
+/** `h2`, `http/1.1` — Chromium's Protocol column; empty when there was no connection. */
+function protoText(entry: NetEntry): string {
+  return entry.proto || "";
+}
+
+/** Chromium's Connection ID column: the id, with the first request on a connection marked. */
+function connTitle(entry: NetEntry): string {
+  if (entry.conn === undefined) return "no connection: not a network response, or it failed first";
+  return `connection #${entry.conn} — ${entry.reused ? "reused: it had carried an earlier request" : "new: opened for this request"}`;
+}
+
+/** The pooled transport's counters, one chip. */
+const pool = computed(() => {
+  const p = state.netPool;
+  if (!p || !p.requests) return null;
+  const conns = [p.h2 ? `${p.h2} h2` : "", p.h1 ? `${p.h1} h1` : ""].filter(Boolean).join(" + ") || "0";
+  return {
+    text: `${conns} conn · ${p.reused}/${p.requests} reused`,
+    retries: p.retries,
+    title:
+      `The target's connection pool since it started: ${p.h2} HTTP/2 and ${p.h1} HTTP/1.1 connections opened, ` +
+      `${p.requests} requests put on them (a retry counts twice), ${p.reused} on a connection that had carried ` +
+      `one before, ${p.retries} retried on a fresh connection.`,
+  };
+});
+
 const totals = computed(() => {
   const fetches = state.net.filter((e) => e.kind === "fetch" || e.kind === "xhr");
   const failed = state.net.filter((e) => e.error || e.phase === "error").length;
@@ -220,6 +246,8 @@ onUnmounted(() => {
       <span class="chip">{{ state.net.length }} recorded</span>
       <span v-if="totals.failed" class="chip bad">{{ totals.failed }} failed</span>
       <span v-if="totals.fetches && !open" class="chip">avg {{ totals.avg.toFixed(0) }} ms</span>
+      <span v-if="pool" class="chip" :title="pool.title">{{ pool.text }}</span>
+      <span v-if="pool && pool.retries" class="chip warn" :title="pool.title">{{ pool.retries }} retried</span>
       <input
         v-model="state.netFilter"
         class="input filter"
@@ -238,6 +266,8 @@ onUnmounted(() => {
           <span class="c-kind">kind</span>
           <span v-if="!open" class="c-method">method</span>
           <span class="c-url">url</span>
+          <span v-if="!open" class="c-proto">protocol</span>
+          <span v-if="!open" class="c-conn">conn</span>
           <span class="c-status">status</span>
           <span v-if="!open" class="c-time">time</span>
         </div>
@@ -259,6 +289,10 @@ onUnmounted(() => {
                 ><span class="rest">{{ shortUrl(entry.url).rest }}</span>
               </span>
               <span v-else class="c-url rest-only" :title="entry.url">{{ entry.url }}</span>
+              <span v-if="!open" class="c-proto" :class="{ h2: entry.proto === 'h2' }">{{ protoText(entry) }}</span>
+              <span v-if="!open" class="c-conn" :class="{ fresh: entry.conn !== undefined && !entry.reused }" :title="connTitle(entry)">{{
+                entry.conn === undefined ? "" : "#" + entry.conn
+              }}</span>
               <span class="c-status" :class="statusClass(entry)">{{ statusText(entry) }}</span>
               <span v-if="!open" class="c-time">{{ entry.ms === undefined ? "" : Math.round(entry.ms) + " ms" }}</span>
             </div>
@@ -431,6 +465,27 @@ onUnmounted(() => {
   flex-shrink: 1;
 }
 .rest-only {
+  color: #d7e0ea;
+}
+/* Chromium's Protocol and Connection ID columns, from the transport's own
+ * account of the connection (redjs `fetch::net_info`, spliced onto the row by
+ * the host). A new connection's id is drawn brighter than a reused one's, so
+ * a burst of fresh dials — the thing worth seeing — stands out. */
+.c-proto {
+  width: 58px;
+  flex-shrink: 0;
+  color: #6d7c90;
+}
+.c-proto.h2 {
+  color: #a5d6ff;
+}
+.c-conn {
+  width: 40px;
+  flex-shrink: 0;
+  text-align: right;
+  color: #5c6b80;
+}
+.c-conn.fresh {
   color: #d7e0ea;
 }
 .c-status {

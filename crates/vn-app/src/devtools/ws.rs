@@ -555,6 +555,9 @@ pub fn broadcast_frame() {
         broadcast(&mut subs, WANT_NET, &Json::obj(vec![
             ("t", Json::s("net")),
             ("entries", Json::arr(net.into_iter().map(|raw| Json::from(Raw(raw))).collect())),
+            // The transport's counters as of these entries; they only move
+            // when a request does, so riding the entries keeps them current.
+            ("pool", super::net::pool_json()),
         ]).to_json());
     }
 

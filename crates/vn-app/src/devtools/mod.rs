@@ -2722,6 +2722,9 @@ fn cmd_net(since: Option<f64>) -> String {
         ("entries", Json::arr(entries.into_iter().map(|t| Json::from(Raw(t))).collect())),
         ("next", Json::n(next as f64)),
         ("dropped", Json::n(dropped as f64)),
+        // The pooled transport's counters (connections opened, requests,
+        // reuse, retries) — the panel header's chip.
+        ("pool", net::pool_json()),
     ]))
 }
 

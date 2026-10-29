@@ -56,12 +56,27 @@
 //! | summaries | [`CAPACITY`] = 300 rows (~300 B each) |
 //! | records | one per summary still in the ring, plus at most [`OPEN_CAP`] = 128 in flight |
 //! | per-record meta (headers, form fields, timing, cookies) | [`META_CAP`] = 16 KiB, then only small updates land |
+//! | per-record raw `Set-Cookie` lines | [`WIRE_COOKIES_CAP`] = 16 KiB, at most 32 lines |
 //! | one body | [`BODY_CAP`] = 256 KiB — the rest is cut, and the panel says "truncated" |
 //! | ALL bodies | [`BODY_BUDGET`] = 12 MiB. Past it the OLDEST bodies are evicted first; their record keeps its headers and says "body evicted" |
 //!
 //! So the bodies of roughly the most recent 24 (all at the cap) to several
 //! hundred (typical API payloads) exchanges are kept, and the worst case for
-//! the whole module is ~12 MiB of bodies + ~7 MiB of meta.
+//! the whole module is ~12 MiB of bodies + ~7 MiB of meta (+ ~7 MiB of raw
+//! Set-Cookie lines in the pathological case of every response carrying 16 KiB
+//! of them).
+//!
+//! ## The connection (m26, redjs f1e563c)
+//!
+//! For a response that came off the network, redjs's `fetch::net_info` says
+//! which protocol it used (`h2` / `http/1.1`), which connection (a
+//! process-unique id; equal ids shared one), whether that connection had
+//! carried an earlier request, and the remote address. The tee hands the app's
+//! `Response` to `__vn_devtools_net_conn` just before it records the row; the
+//! host stores the facts on the record, splices `proto` / `conn` / `reused`
+//! into the summary row (the list's Protocol and Connection columns), and
+//! answers `transport` from them in `net_detail`. The pooled transport's
+//! counters (`http::pool::stats`) ride the `net` reply and the push as `pool`.
 //!
 //! What the TEE spends, in the app's heap, is transient: a capped copy of a body
 //! while it is being handed over, never a ring of them. See `TEE_JS` for the
@@ -77,17 +92,24 @@
 //! the jar's view of that URL — the `Cookie` header it is about to send — and
 //! when the response head is in, a second view, whose difference is what the
 //! response's `Set-Cookie` did. That is a reconstruction and the reply says so:
-//! a concurrent request to the same site lands in the same jar. Nothing here
-//! hands a cookie to JS — `HttpOnly` stays HttpOnly; the values only leave
-//! through the token-guarded `net_detail`.
+//! a concurrent request to the same site lands in the same jar.
+//!
+//! Since redjs f1e563c the transport keeps the final hop's `Set-Cookie` lines
+//! exactly as received, for the embedder (`NetInfo::set_cookies`), so a fetch
+//! that crossed a network answers `cookies.wire` — the real lines, whatever
+//! the credentials mode — and the panel shows those instead. The jar diff stays
+//! for what has no `Response` to ask: a WebSocket handshake, an XHR.
+//!
+//! Nothing here hands a cookie to JS — `HttpOnly` stays HttpOnly; the values
+//! only leave through the token-guarded `net_detail`.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
 use vn_runtime::redjs::api::Value;
-use vn_runtime::redjs::webapi::cookies;
 use vn_runtime::redjs::webapi::util::{bufferish, read_string};
+use vn_runtime::redjs::webapi::{cookies, fetch};
 use vn_runtime::{host_fn, JsRuntime};
 
 use crate::json::{self, Json, Raw};
@@ -109,11 +131,32 @@ const OPEN_CAP: usize = 128;
 const JAR_CAP: usize = 64;
 const COOKIE_HEADER_CAP: usize = 8 * 1024;
 const SET_COOKIE_LINES_CAP: usize = 32;
+/// One raw `Set-Cookie` line as the transport received it (a cookie is at most
+/// 4096 bytes of name + value, RFC 6265bis §5.6; the rest is attributes)…
+const WIRE_LINE_CAP: usize = 4096 + 512;
+/// …and all of one response's lines together.
+const WIRE_COOKIES_CAP: usize = 16 * 1024;
 
 const COOKIE_NOTE: &str = "reconstructed from the cookie jar: script never sees Set-Cookie (Fetch \
      forbids it, and redjs strips it before a Response exists), so these lines are what the jar \
      changed for this URL while the request was in flight — a concurrent request to the same site \
      can show up here too. The Cookie header is the jar's view of the URL when the request started.";
+
+const WIRE_NOTE: &str = "Set-Cookie exactly as the transport received it on the final hop (redjs \
+     `fetch::net_info`; the Response script sees has none, as Fetch requires). The Cookie header \
+     is the jar's view of the URL when the request started.";
+
+/// What the transport says about the connection a response came over
+/// (`vn_runtime::redjs::webapi::fetch::NetInfo`, minus the cookies, which are
+/// kept in [`Record::wire_cookies`]).
+struct Conn {
+    /// `"h2"` or `"http/1.1"` — ALPN spelling, as `nextHopProtocol` has it.
+    protocol: &'static str,
+    reused: bool,
+    /// Process-unique: equal ids shared one connection.
+    id: u64,
+    remote: Option<String>,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Which {
@@ -175,6 +218,11 @@ struct Record {
     jar_before: Option<Vec<Print>>,
     cookies: Option<Cookies>,
     ws: Option<WsCount>,
+    /// The connection, when the response came off the network.
+    conn: Option<Conn>,
+    /// The final hop's `Set-Cookie` lines as received — present (possibly
+    /// empty) exactly when [`Record::conn`] is.
+    wire_cookies: Option<Vec<String>>,
 }
 
 impl Record {
@@ -296,10 +344,26 @@ impl Ring {
     fn record(&mut self, raw: &str) -> u64 {
         let seq = self.next_seq;
         self.next_seq += 1;
+        let rid = rid_of(raw).filter(|rid| self.index_of(*rid).is_some());
+        // The connection rides the summary row (`proto`, `conn`, `reused`) so
+        // the list can show Chromium's Protocol / Connection ID columns without
+        // a `net_detail` per row. The tee reports it just before it records the
+        // row, and it is spliced in HERE, host-side: script never sees it.
+        let conn = rid
+            .and_then(|rid| self.records[self.index_of(rid)?].conn.as_ref())
+            .map(|c| {
+                format!(
+                    "\"proto\":{},\"conn\":{},\"reused\":{}",
+                    json::quote(c.protocol),
+                    c.id,
+                    c.reused
+                )
+            })
+            .unwrap_or_default();
         // The seq is spliced in rather than wrapped: the panel wants one flat
         // object, and a `{"seq":n,"entry":{…}}` envelope would make every field
         // access in the UI one level deeper for no benefit.
-        let stamped = splice_seq(raw, seq);
+        let stamped = splice_seq(raw, seq, &conn);
         if self.entries.len() == CAPACITY {
             if let Some((old, _)) = self.entries.pop_front() {
                 self.forget_seq(old);
@@ -310,13 +374,33 @@ impl Ring {
         if self.pending.len() < CAPACITY {
             self.pending.push(stamped);
         }
-        if let Some(rid) = rid_of(raw) {
+        if let Some(rid) = rid {
+            // `forget_seq` above may have removed a record, so look it up again.
             if let Some(i) = self.index_of(rid) {
                 self.records[i].seqs.push(seq);
                 self.by_seq.insert(seq, rid);
             }
         }
         seq
+    }
+
+    /// `__vn_devtools_net_conn`: what the transport said about the response's
+    /// connection, and the raw `Set-Cookie` lines it received.
+    fn conn(&mut self, rid: u64, conn: Conn, set_cookies: Vec<String>) {
+        let Some(i) = self.index_of(rid) else { return };
+        let mut lines = Vec::new();
+        let mut total = 0;
+        for line in set_cookies.into_iter().take(SET_COOKIE_LINES_CAP) {
+            let line = cap_line(line, WIRE_LINE_CAP);
+            if total + line.len() > WIRE_COOKIES_CAP {
+                break;
+            }
+            total += line.len();
+            lines.push(line);
+        }
+        let r = &mut self.records[i];
+        r.conn = Some(conn);
+        r.wire_cookies = Some(lines);
     }
 
     /// A summary row left the ring; its record goes with its LAST row.
@@ -471,17 +555,36 @@ impl Ring {
             set(obj_at(&mut out, "request"), "body", body_json(r.req.as_ref()));
             set(obj_at(&mut out, "response"), "body", body_json(r.res.as_ref()));
         }
-        if let Some(c) = &r.cookies {
+        if let Some(c) = &r.conn {
+            // The transport's own account replaces the tee's
+            // `nextHopProtocol` guess wholesale.
             set(
                 &mut out,
-                "cookies",
+                "transport",
                 Json::obj(vec![
-                    ("sent", c.sent.clone().map_or(Json::Null, Json::s)),
-                    ("set", Json::arr(c.set.iter().cloned().map(Json::s).collect())),
-                    ("pending", Json::Bool(r.jar_before.is_some())),
-                    ("note", Json::s(COOKIE_NOTE)),
+                    ("protocol", Json::s(c.protocol)),
+                    ("reused", Json::Bool(c.reused)),
+                    ("connectionId", Json::n(c.id as f64)),
+                    ("remote", c.remote.clone().map_or(Json::Null, Json::s)),
                 ]),
             );
+        }
+        if r.cookies.is_some() || r.wire_cookies.is_some() {
+            let sent = r.cookies.as_ref().and_then(|c| c.sent.clone());
+            let set_lines = r.cookies.as_ref().map(|c| c.set.clone()).unwrap_or_default();
+            let mut cookies = vec![
+                ("sent", sent.map_or(Json::Null, Json::s)),
+                ("set", Json::arr(set_lines.into_iter().map(Json::s).collect())),
+                ("pending", Json::Bool(r.jar_before.is_some())),
+            ];
+            match &r.wire_cookies {
+                Some(lines) => {
+                    cookies.push(("wire", Json::arr(lines.iter().cloned().map(Json::s).collect())));
+                    cookies.push(("note", Json::s(WIRE_NOTE)));
+                }
+                None => cookies.push(("note", Json::s(COOKIE_NOTE))),
+            }
+            set(&mut out, "cookies", Json::obj(cookies));
         }
         if r.kind() == "ws" {
             let w = r.ws.as_ref();
@@ -513,17 +616,33 @@ fn rid_of(raw: &str) -> Option<u64> {
 }
 
 /// `{"url":…}` → `{"seq":7,"url":…}`. Text surgery rather than a parse/print
-/// round trip, because the input is `JSON.stringify` output and the only thing
-/// being added is a leading member.
-fn splice_seq(raw: &str, seq: u64) -> String {
+/// round trip, because the input is `JSON.stringify` output and the only things
+/// being added are leading members.
+///
+/// `extra` is more leading members, already serialized (`"a":1,"b":2`) or
+/// empty — the connection facts the host adds to a row.
+fn splice_seq(raw: &str, seq: u64, extra: &str) -> String {
+    let head = if extra.is_empty() { format!("\"seq\":{seq}") } else { format!("\"seq\":{seq},{extra}") };
     let trimmed = raw.trim_start();
     if let Some(rest) = trimmed.strip_prefix('{') {
         let sep = if rest.trim_start().starts_with('}') { "" } else { "," };
-        return format!("{{\"seq\":{seq}{sep}{rest}");
+        return format!("{{{head}{sep}{rest}");
     }
     // Not an object: keep it, wrapped, rather than dropping a line the app
     // meant to record.
-    format!("{{\"seq\":{seq},\"raw\":{}}}", crate::json::quote(raw))
+    format!("{{{head},\"raw\":{}}}", crate::json::quote(raw))
+}
+
+/// A string cut to at most `cap` bytes, on a character boundary.
+fn cap_line(mut s: String, cap: usize) -> String {
+    if s.len() > cap {
+        let mut at = cap;
+        while !s.is_char_boundary(at) {
+            at -= 1;
+        }
+        s.truncate(at);
+    }
+    s
 }
 
 // ---------------------------------------------------------------------------
@@ -862,6 +981,59 @@ host_fn!(fn vn_devtools_net_ws(g, args) {
     Value::undefined().0
 });
 
+// `__vn_devtools_net_conn(rid, response)` — the transport's account of the
+// connection the app's `Response` came over (redjs `fetch::net_info`): the
+// protocol, whether the connection was reused and its id, the remote address,
+// and the final hop's raw `Set-Cookie` lines.
+//
+// It RETURNS NOTHING, on purpose. The function is a global the app could call
+// too, and what it reads is exactly what script must not see — `Set-Cookie`
+// (HttpOnly cookies included) and a remote address no web API exposes. So it
+// only ever writes into the host's record; the values leave through the
+// token-guarded `net_detail`, and the protocol / connection id through the
+// summary row, which is spliced host-side (`Ring::record`). A response that
+// never crossed a network (`new Response`, `data:`, `blob:`, `file:`) has no
+// info, and nothing is stored.
+host_fn!(fn vn_devtools_net_conn(g, args) {
+    let Some(rid) = rid_arg(args.arg(0)) else { return Value::undefined().0 };
+    let response = args.arg(1);
+    if response.is_null() || response.is_undefined() {
+        return Value::undefined().0;
+    }
+    // SAFETY: `g` is this context's global and `response` a value of its heap,
+    // read on the JS thread — the contract `net_info` states. A value that is
+    // not a redjs `Response` answers `None`.
+    let Some(info) = (unsafe { fetch::net_info(g, response.0) }) else { return Value::undefined().0 };
+    let conn = Conn {
+        protocol: info.protocol,
+        reused: info.reused,
+        id: info.connection_id,
+        remote: info.remote_addr.map(|a| a.to_string()),
+    };
+    with_ring(|ring| ring.conn(rid, conn, info.set_cookies));
+    Value::undefined().0
+});
+
+/// The pooled transport's counters, for the Network panel's header: how many
+/// HTTP/1.1 and HTTP/2 connections were opened, how many requests went out, how
+/// many rode a connection that had carried one before, how many were retried.
+///
+/// `http::pool` exists only under redjs's `net-h2`, which vn-runtime turns on
+/// by default and vn-app takes vn-runtime with its defaults — so it is always in
+/// this link. A build that ever drops it needs a vn-app feature to gate this on
+/// (Cargo cannot `cfg` on a dependency's feature); the compile error will point
+/// here.
+pub fn pool_json() -> Json {
+    let s = vn_runtime::redjs::webapi::http::pool::stats();
+    Json::obj(vec![
+        ("h1", Json::n(s.h1_connections as f64)),
+        ("h2", Json::n(s.h2_connections as f64)),
+        ("requests", Json::n(s.requests as f64)),
+        ("reused", Json::n(s.reused as f64)),
+        ("retries", Json::n(s.retries as f64)),
+    ])
+}
+
 /// Registers the host fns. Always — they are entries in a table and the tee is
 /// the only caller.
 pub fn install(rt: &JsRuntime) {
@@ -870,6 +1042,7 @@ pub fn install(rt: &JsRuntime) {
     rt.register("__vn_devtools_net_meta", 2, vn_devtools_net_meta as *const _);
     rt.register("__vn_devtools_net_body", 4, vn_devtools_net_body as *const _);
     rt.register("__vn_devtools_net_ws", 3, vn_devtools_net_ws as *const _);
+    rt.register("__vn_devtools_net_conn", 2, vn_devtools_net_conn as *const _);
 }
 
 /// Wraps `fetch`, `WebSocket` and `XMLHttpRequest`. Split out of [`install`]
@@ -941,7 +1114,7 @@ const TEE_JS: &str = r#"
   var emit = G.__vn_devtools_net;
   if (typeof emit !== "function") return;
   var hBegin = G.__vn_devtools_net_begin, hMeta = G.__vn_devtools_net_meta;
-  var hBody = G.__vn_devtools_net_body, hWs = G.__vn_devtools_net_ws;
+  var hBody = G.__vn_devtools_net_body, hWs = G.__vn_devtools_net_ws, hConn = G.__vn_devtools_net_conn;
   var deep = typeof hBegin === "function" && typeof hMeta === "function" && typeof hBody === "function";
 
   // Keep CAP in step with net.rs BODY_CAP.
@@ -1020,10 +1193,11 @@ const TEE_JS: &str = r#"
     return typeof ArrayBuffer === "function" && (b instanceof ArrayBuffer || ArrayBuffer.isView(b));
   };
 
-  // Not yet reported by redjs. PerformanceResourceTiming.nextHopProtocol is the
-  // web's own place for the negotiated protocol, so that is where it is read
-  // from when an engine fills it in; `reused` and `remote` have a slot in the
-  // panel and are left for the transport to report.
+  // The fallback only: a response that came off redjs's network has its
+  // protocol, reuse and remote address reported host-side (hConn above,
+  // `fetch::net_info`), which replaces this. PerformanceResourceTiming's
+  // nextHopProtocol is the web's own place for the protocol, so it is read
+  // from there for an engine that fills it in and has no host hook.
   var transport = function (url) {
     var out = {};
     try {
@@ -1214,6 +1388,10 @@ const TEE_JS: &str = r#"
       if (!p || typeof p.then !== "function") return p;
       return p.then(
         function (res) {
+          // The transport's connection facts, BEFORE the row is recorded so
+          // the host can put the protocol and connection id on it. Handed the
+          // Response itself; nothing comes back to script (see net.rs).
+          if (rid && res && typeof hConn === "function") { try { hConn(rid, res); } catch (e) {} }
           record({ kind: "fetch", url: url, method: M, at: t0,
                    ms: now() - t0, status: res && res.status, ok: !!(res && res.ok),
                    type: (res && res.headers && res.headers.get && res.headers.get("content-type")) || undefined,
@@ -1473,6 +1651,55 @@ mod tests {
     }
 
     #[test]
+    fn the_connection_rides_the_row_and_answers_transport_and_raw_set_cookie() {
+        let mut ring = Ring::new();
+        let rid = begun(&mut ring, "fetch");
+        let conn = Conn { protocol: "h2", reused: true, id: 7, remote: Some("93.184.215.14:443".into()) };
+        ring.conn(rid, conn, vec!["sid=abc; Path=/; HttpOnly".into(), "theme=dark".into()]);
+        let seq = summary(&mut ring, Some(rid));
+        // The row carries the columns, spliced host-side.
+        let row = json::parse(&ring.entries.back().unwrap().1).unwrap();
+        assert_eq!(row.get("proto").and_then(Json::as_str), Some("h2"));
+        assert_eq!(row.get("conn").and_then(Json::as_f64), Some(7.0));
+        assert_eq!(row.get("reused").and_then(Json::as_bool), Some(true));
+        assert_eq!(row.get("seq").and_then(Json::as_f64), Some(seq as f64));
+        let d = ring.detail(seq).unwrap();
+        let t = d.get("transport").unwrap();
+        assert_eq!(t.get("protocol").and_then(Json::as_str), Some("h2"));
+        assert_eq!(t.get("connectionId").and_then(Json::as_f64), Some(7.0));
+        assert_eq!(t.get("remote").and_then(Json::as_str), Some("93.184.215.14:443"));
+        // No jar snapshot (credentials were not "include"), yet the lines the
+        // transport received are there, exactly.
+        let c = d.get("cookies").unwrap();
+        assert_eq!(c.get("sent"), Some(&Json::Null));
+        let wire = match c.get("wire") {
+            Some(Json::Arr(a)) => a.iter().filter_map(Json::as_str).collect::<Vec<_>>(),
+            _ => panic!("no wire cookies"),
+        };
+        assert_eq!(wire, ["sid=abc; Path=/; HttpOnly", "theme=dark"]);
+        assert!(c.get("note").and_then(Json::as_str).unwrap().contains("exactly as the transport received"));
+    }
+
+    #[test]
+    fn raw_set_cookie_lines_are_capped_per_line_and_per_response() {
+        let mut ring = Ring::new();
+        let rid = begun(&mut ring, "fetch");
+        let conn = Conn { protocol: "http/1.1", reused: false, id: 1, remote: None };
+        let huge = format!("big={}", "x".repeat(10_000));
+        let lines: Vec<String> = std::iter::once(huge).chain((0..100).map(|i| format!("c{i}=v"))).collect();
+        ring.conn(rid, conn, lines);
+        let r = &ring.records[ring.index_of(rid).unwrap()];
+        let wire = r.wire_cookies.as_ref().unwrap();
+        assert_eq!(wire[0].len(), WIRE_LINE_CAP);
+        assert!(wire.len() <= SET_COOKIE_LINES_CAP);
+        assert!(wire.iter().map(String::len).sum::<usize>() <= WIRE_COOKIES_CAP);
+        // A row with no connection (a data: URL, a failure) gets no columns.
+        let other = begun(&mut ring, "fetch");
+        summary(&mut ring, Some(other));
+        assert!(!ring.entries.back().unwrap().1.contains("\"proto\""));
+    }
+
+    #[test]
     fn a_row_without_a_record_says_so_rather_than_failing() {
         let mut ring = Ring::new();
         let seq = summary(&mut ring, None);
@@ -1642,8 +1869,10 @@ mod tests {
 
     #[test]
     fn splice_seq_keeps_the_object_flat() {
-        assert_eq!(splice_seq("{\"a\":1}", 7), "{\"seq\":7,\"a\":1}");
-        assert_eq!(splice_seq("{}", 2), "{\"seq\":2}");
+        assert_eq!(splice_seq("{\"a\":1}", 7, ""), "{\"seq\":7,\"a\":1}");
+        assert_eq!(splice_seq("{}", 2, ""), "{\"seq\":2}");
+        assert_eq!(splice_seq("{\"a\":1}", 3, "\"conn\":9"), "{\"seq\":3,\"conn\":9,\"a\":1}");
+        assert_eq!(splice_seq("{}", 4, "\"conn\":9"), "{\"seq\":4,\"conn\":9}");
         assert_eq!(rid_of("{\"rid\":4,\"x\":1}"), Some(4));
         assert_eq!(rid_of("{\"x\":1}"), None);
     }

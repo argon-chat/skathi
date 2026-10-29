@@ -475,8 +475,10 @@ export const COMMANDS: CommandSpec[] = [
     description:
       "Every fetch(), XMLHttpRequest and WebSocket the app opened, from BOOT — a bounded ring of " +
       "300 summary rows. `kind` is fetch, xhr or ws; a socket's `phase` is open-requested / open / " +
-      "error / close and its messages are COUNTED rather than logged. Page with `since`. Headers, " +
-      "bodies, cookies and timing are NOT here — pass a row's `seq` to vn_net_detail.",
+      "error / close and its messages are COUNTED rather than logged. Page with `since`. A row " +
+      "that came off the network carries `proto` (h2 / http/1.1), `conn` (connection id; equal ids " +
+      "shared one) and `reused`; `pool` is the transport's connection/request/reuse/retry counters. " +
+      "Headers, bodies, cookies and timing are NOT here — pass a row's `seq` to vn_net_detail.",
     usage: ["  net      [--since N]               the fetch / WebSocket / XHR log"],
     args: { since: SINCE },
     cli: (_rest, flags) => compact({ since: num(flags.since) }),
@@ -490,8 +492,10 @@ export const COMMANDS: CommandSpec[] = [
       "response (status, headers, a body preview). A body is `encoding: utf8` text or `base64` " +
       "bytes (binary types such as application/ion are always base64), capped at 256 KB with " +
       "`truncated` set; the most recent ~12 MB of bodies are kept and an older one says " +
-      "`evicted`. `cookies.sent` is the Cookie header the jar sent and `cookies.set` the " +
-      "Set-Cookie lines it stored — reconstructed from the jar, since script never sees either. " +
+      "`evicted`. `cookies.sent` is the Cookie header the jar sent; `cookies.wire` the response's " +
+      "Set-Cookie lines exactly as received (`cookies.set`, reconstructed from the jar, when there " +
+      "is no wire copy) — script never sees either. `transport` has protocol, reused, " +
+      "connectionId and the remote address. " +
       "`timing` has headersMs / bodyMs / failedMs; a WebSocket row answers with its socket: " +
       "protocol, close code and reason, and sent/received message counts.",
     usage: [

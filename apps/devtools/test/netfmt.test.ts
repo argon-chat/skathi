@@ -29,6 +29,7 @@ import {
   responseHeaderRows,
   shellQuote,
   textLines,
+  wrapWords,
 } from "../src/netfmt";
 import type { NetDetail } from "../src/protocol";
 
@@ -74,6 +75,16 @@ describe("text", () => {
     expect(textLines("a\tb", 8)).toEqual(["a  b"]);
     expect(textLines("one\r\ntwo", 80)).toEqual(["one", "two"]);
     expect(textLines("x\n".repeat(10), 80, 4)).toHaveLength(4);
+  });
+
+  test("header values break at a space when one is near, and cut a long token hard", () => {
+    expect(wrapWords("credentials same-origin · cache default", 30)).toEqual([
+      "credentials same-origin ·",
+      "cache default",
+    ]);
+    expect(wrapWords("abcdefghijklmnopqrstuvwxyz", 10)).toEqual(["abcdefghij", "klmnopqrst", "uvwxyz"]);
+    // A space too early in the row is not worth a near-empty line.
+    expect(wrapWords("a bcdefghijklmnop", 10)).toEqual(["a bcdefghi", "jklmnop"]);
   });
 
   test("JSON is recognised by type and pretty-printed only when it parses", () => {
@@ -160,6 +171,19 @@ describe("header rows", () => {
     const rows = responseHeaderRows(d);
     expect(rows).toHaveLength(2);
     expect(rows[1]).toMatchObject({ name: "set-cookie", sensitive: true, note: "reconstructed from the jar" });
+  });
+
+  test("the transport's raw Set-Cookie lines replace the reconstruction, and say when they were not kept", () => {
+    const wire = ["sid=new; Path=/; HttpOnly", "theme=dark"];
+    const kept = detail({ cookies: { sent: null, set: ["sid=new; Path=/"], wire } });
+    const rows = responseHeaderRows(kept).filter((r) => r.name === "set-cookie");
+    expect(rows.map((r) => r.value)).toEqual(wire);
+    expect(rows.every((r) => r.sensitive && r.note === "as received")).toBe(true);
+    const notKept = detail({
+      request: { headers: [], credentials: "same-origin" },
+      cookies: { sent: null, set: [], wire: ["a=1"] },
+    });
+    expect(responseHeaderRows(notKept)[0].note).toBe('as received · not stored (credentials "same-origin")');
   });
 });
 

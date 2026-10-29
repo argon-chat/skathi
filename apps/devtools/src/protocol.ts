@@ -273,12 +273,35 @@ export interface NetEntry {
   phase?: string;
   sent?: number;
   received?: number;
+  /**
+   * The connection, spliced on by the host for a response that came off the
+   * network (redjs `fetch::net_info`): `h2` / `http/1.1`, a process-unique
+   * connection id (equal ids shared one connection), and whether it had
+   * carried an earlier request. Absent for `data:`, a failure, a socket, XHR.
+   */
+  proto?: string;
+  conn?: number;
+  reused?: boolean;
+}
+
+/** The pooled transport's counters (redjs `http::pool::stats`). */
+export interface PoolStats {
+  /** Connections opened, by protocol. */
+  h1: number;
+  h2: number;
+  /** Attempts put on a connection — a retried request counts twice. */
+  requests: number;
+  /** …of which on a connection that had carried an earlier one. */
+  reused: number;
+  retries: number;
 }
 
 export interface NetReply {
   entries: NetEntry[];
   next: number;
   dropped: number;
+  /** Absent from a host older than the pooled transport. */
+  pool?: PoolStats;
 }
 
 /** `[name, value]`, in the order the app (or the server) gave them. */
@@ -352,13 +375,22 @@ export interface NetDetail {
     /** `null` until the tee has read it (it reads a clone, after the row was recorded). */
     body?: NetBody | null;
   };
-  /** The jar's side — script never sees either header. */
-  cookies?: { sent: string | null; set: string[]; pending?: boolean; note?: string } | null;
+  /** The cookie side — script never sees either header. */
+  cookies?: {
+    /** The jar's Cookie header for the URL when the request started. */
+    sent: string | null;
+    /** Set-Cookie lines RECONSTRUCTED from what the jar changed. */
+    set: string[];
+    /** The final hop's Set-Cookie lines exactly as received, when the response came off the network. */
+    wire?: string[];
+    pending?: boolean;
+    note?: string;
+  } | null;
   /**
-   * What the transport reports about the connection. Empty today: the slot is
-   * here so a transport that learns HTTP/2 and pooling can fill it in.
+   * What the transport reports about the connection (redjs `fetch::net_info`)
+   * — or, failing that, the protocol from `nextHopProtocol`.
    */
-  transport?: { protocol?: string; reused?: boolean; remote?: string };
+  transport?: { protocol?: string; reused?: boolean; connectionId?: number; remote?: string | null };
   timing?: { headersMs?: number; bodyMs?: number; failedMs?: number };
   error?: { name?: string; message?: string };
   ws?: {
@@ -421,6 +453,7 @@ export interface PushStatus {
 export interface PushNet {
   t: "net";
   entries: NetEntry[];
+  pool?: PoolStats;
 }
 export interface PushPerf extends PerfReply {
   t: "perf";
