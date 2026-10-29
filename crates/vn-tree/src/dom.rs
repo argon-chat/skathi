@@ -125,17 +125,27 @@ fn ancestors_from(t: &Tree, id: u32) -> Vec<u32> {
 /// clean is genuinely not painted — detached, `display: none`, in a
 /// `<KeepAlive>` cache — for which an all-zero rect is exactly right, and no
 /// layout is forced.
-fn force_layout_if_unpainted(id: u32) {
+///
+/// **Returns `true` when the answer stays STALE**: the node has no rectangle,
+/// the tree holds changes no frame has laid out, and no layout happened. The
+/// host cannot draw inside a gpui input listener (`crate::in_input_dispatch`),
+/// so a node a click handler mounted and measured in the same wave is the case;
+/// the runtime turns it into an advisory. "Owed" rather than "dirty": the
+/// first forced layout flushes the changes even when its draw is refused, and a
+/// second read in the same wave must still be told.
+fn force_layout_if_unpainted(id: u32) -> bool {
     if id == 0 {
-        return;
+        return false;
     }
     if crate::render::bounds_of(id).is_some() {
-        return;
+        return false;
     }
-    if !tree::read_tree(|t| t.node(id).is_some() && t.is_dirty()) {
-        return;
+    if !tree::read_tree(|t| t.node(id).is_some()) || !crate::layout_owed() {
+        return false;
     }
+    let before = crate::render::build_count();
     crate::sync_layout();
+    crate::render::build_count() == before && crate::render::bounds_of(id).is_none()
 }
 
 /// The same forced layout, for a read whose answer depends on the node's
@@ -164,7 +174,7 @@ fn force_layout_if_unpainted(id: u32) {
 /// how it finds out: if no build happened, no layout happened.
 #[must_use]
 pub(crate) fn layout_if_stale(id: u32) -> bool {
-    if id == 0 || !tree::read_tree(|t| t.node(id).is_some() && t.is_dirty()) {
+    if id == 0 || !tree::read_tree(|t| t.node(id).is_some()) || !crate::layout_owed() {
         return false;
     }
     let before = crate::render::build_count();
@@ -190,8 +200,15 @@ pub(crate) fn layout_if_stale(id: u32) -> bool {
 /// `None` = never painted this frame: detached, `display: none`, or parked in a
 /// `<KeepAlive>` cache container. A browser answers an all-zero rect for all
 /// three, which is what the JS side substitutes.
-pub fn bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
-    force_layout_if_unpainted(id);
+///
+/// The `bool` says a missing answer is STALE rather than "not painted": a
+/// layout was owed and could not be forced (see [`force_layout_if_unpainted`]).
+pub fn bounds(id: u32) -> (Option<(f32, f32, f32, f32)>, bool) {
+    let stale = force_layout_if_unpainted(id);
+    (bounds_now(id), stale)
+}
+
+fn bounds_now(id: u32) -> Option<(f32, f32, f32, f32)> {
     let (x, y, w, h) = crate::render::bounds_of(id)?;
     let (ox, oy) = crate::render::bounds_of(tree::read_tree(|t| t.root))
         .map(|(rx, ry, _, _)| (rx, ry))

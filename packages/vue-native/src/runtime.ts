@@ -1921,8 +1921,37 @@ function viewportRect(): MirrorRect {
   const height = Math.round(r.y + r.height);
   return { x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height };
 }
-function rectOf(node: MirrorNode): MirrorRect {
-  const raw = node.__vnId ? __vn_bounds(node.__vnId) : "";
+/**
+ * `__vn_bounds`, with `"stale"` folded into `""` (not painted). The host says
+ * `"stale"` when the node has no rectangle yet and the layout it is owed could
+ * not be forced: a gpui input listener is on the stack, and a draw there would
+ * swap the frame whose listeners are running (crates/vn-tree/src/dom.rs). A
+ * browser would lay out and answer the real size, so a script-facing read
+ * (`kind`) leaves an advisory, once per call site and kind: a component that
+ * measures in a click handler would otherwise print one per row.
+ */
+function boundsOf(node: MirrorNode, kind?: string): VnRect {
+  if (!node.__vnId) return "";
+  const raw = __vn_bounds(node.__vnId);
+  if (raw !== "stale") return raw;
+  if (kind) {
+    // Frames only (V8 and bun put an `Error` line first, JSC does not): [0] this
+    // function, [1] rectOf, [2] the accessor, [3] its caller.
+    const frames = (new Error().stack ?? "").split("\n").filter((l) => /^\s*at |@/.test(l));
+    const site = frames[3]?.trim() ?? "";
+    warnCompat(
+      `layout-stale:${kind}:${site}`,
+      `${kind} answered 0 for an element that has not been laid out yet` +
+        (site ? ` (${site})` : "") +
+        ": vue-native cannot lay out while the platform is dispatching mouse or keyboard input, " +
+        "so a node mounted in this same event has no size; a browser would lay out and answer it. " +
+        "Measure from requestAnimationFrame() or a ResizeObserver callback",
+    );
+  }
+  return "";
+}
+function rectOf(node: MirrorNode, kind?: string): MirrorRect {
+  const raw = boundsOf(node, kind);
   // A node that was not painted (detached, `display: none`, parked in a
   // <KeepAlive> cache) reports nothing — and an all-zero rect is exactly what a
   // browser reports for those, so no advisory is warranted.
@@ -2130,10 +2159,10 @@ defineDom("querySelectorAll", function (this: MirrorElement, selector: string) {
 
 // -- layout, off the bounds gpui recorded for the last painted frame
 defineDom("getBoundingClientRect", function (this: MirrorElement) {
-  return asDomRect(rectOf(this));
+  return asDomRect(rectOf(this, "getBoundingClientRect()"));
 });
 defineDom("getClientRects", function (this: MirrorElement) {
-  const r = rectOf(this);
+  const r = rectOf(this, "getClientRects()");
   return r.width || r.height ? [r] : [];
 });
 for (const [name, pick] of [
@@ -2143,7 +2172,7 @@ for (const [name, pick] of [
   ["clientHeight", (r: MirrorRect) => r.height],
 ] as [string, (r: MirrorRect) => number][]) {
   defineDomGet(name, function (this: MirrorElement) {
-    return Math.round(pick(rectOf(this)));
+    return Math.round(pick(rectOf(this, name)));
   });
 }
 // `scrollWidth` / `scrollHeight` are the CONTENT box, not the painted one.
@@ -2158,7 +2187,7 @@ for (const [name, pick, fallback] of [
 ] as [string, (s: ScrollPos) => number, (r: MirrorRect) => number][]) {
   defineDomGet(name, function (this: MirrorElement) {
     const s = hostScroll(this, 0, NaN, NaN, true);
-    return Math.round(s ? pick(s) : fallback(rectOf(this)));
+    return Math.round(s ? pick(s) : fallback(rectOf(this, name)));
   });
 }
 // `offset*` is measured from the offsetParent in the DOM; we have no positioned
@@ -2173,7 +2202,7 @@ for (const [name, pick] of [
       "offsetTop/offsetLeft are measured from the WINDOW, not from an offsetParent — " +
         "vue-native has no positioned-ancestor chain; use getBoundingClientRect(), which is exact",
     );
-    return Math.round(pick(rectOf(this)));
+    return Math.round(pick(rectOf(this, name)));
   });
 }
 defineDomGet("offsetParent", () => null);
@@ -5673,7 +5702,7 @@ class VnIntersectionObserver {
   _rootBounds(): MirrorRect | null {
     let r: MirrorRect;
     if (this.root) {
-      if (!this.root.__vnId || !__vn_bounds(this.root.__vnId)) return null;
+      if (!boundsOf(this.root)) return null;
       r = rectOf(this.root);
     } else {
       if (!appRoot) return null;
@@ -5690,7 +5719,7 @@ class VnIntersectionObserver {
   _update(time: number) {
     const rootBounds = this._rootBounds();
     for (const [target, state] of this._targets) {
-      const painted = !!target.__vnId && !!__vn_bounds(target.__vnId);
+      const painted = !!boundsOf(target);
       // Never painted yet: give the first layout a few frames (see the header).
       if (!painted && state.prevIndex === -1 && state.waited < 3) {
         state.waited++;

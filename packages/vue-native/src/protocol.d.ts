@@ -38,7 +38,10 @@ type VnNodeId = number;
 type VnNameId = number;
 /** `"12,40,3"` — matched node ids, or `""` for none. See `__vn_query`. */
 type VnIdList = string;
-/** `"x,y,w,h"` as f32s, or `""` when the node was not painted. */
+/**
+ * `"x,y,w,h"` as f32s, `""` when the node was not painted, or `"stale"` when it
+ * has not been laid out YET and the host could not force a layout. See `__vn_bounds`.
+ */
 type VnRect = string;
 /** `name=value` lines, `\n`-separated. `""` when there is nothing to report. */
 type VnKvLines = string;
@@ -257,6 +260,12 @@ declare function __vn_query(selector: string, root: VnNodeId, mode: VnQueryMode)
  * window's client-area space. `""` for a node that was not painted (detached,
  * `display: none`, parked in a `<KeepAlive>` cache) — which is exactly the
  * all-zero rect a browser reports for those, so it needs no advisory.
+ *
+ * A node with no rectangle while the tree holds changes no frame has laid out
+ * (one this wave mounted) makes the host lay out first, as a browser's forced
+ * layout does. It cannot inside a gpui input listener: a draw there would swap
+ * the frame whose listeners are running. It then answers `"stale"`, and the
+ * runtime reads that as an all-zero rect with one advisory per call site.
  */
 declare function __vn_bounds(id: VnNodeId): VnRect;
 

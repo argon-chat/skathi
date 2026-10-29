@@ -348,6 +348,12 @@ pub(crate) fn build_count() -> u64 {
     BUILDS.with(|c| c.get())
 }
 
+/// A build, for a test that has no window to build in.
+#[cfg(test)]
+pub(crate) fn note_build() {
+    BUILDS.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
 /// The [`ScrollHandle`] a scroll container owns, or `None` for anything the
 /// cascade never gave `overflow: scroll|auto`.
 ///
@@ -759,7 +765,8 @@ fn dom_key(k: &str) -> String {
 pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
     let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
-    js_dispatch_app(p.id, tree::EV_MOUSEMOVE, &payload, window, cx);
+    // The pump's, before gpui's draw: a forced layout may draw (`crate::off_input`).
+    crate::off_input(|| js_dispatch_app(p.id, tree::EV_MOUSEMOVE, &payload, window, cx));
 }
 
 /// gpui's scroll delta as the DOM's `WheelEvent.deltaX` / `deltaY`.
@@ -892,7 +899,9 @@ fn claim_up(
         !std::mem::replace(&mut wave.scheduled, true)
     });
     if schedule {
-        window.defer(cx, flush_up_waves);
+        // Deferred, so no gpui listener is under the waves: a forced layout may
+        // draw in them (`crate::off_input`).
+        window.defer(cx, |window, cx| crate::off_input(|| flush_up_waves(window, cx)));
     }
 }
 
@@ -1006,6 +1015,9 @@ pub(crate) fn js_dispatch_app(id: u32, event: u32, payload: &EventPayload, windo
 /// commit phase published, and whatever it changed is flushed and repainted.
 /// The clipboard events build their DataTransfer inside it (`crate::clipboard`).
 pub(crate) fn js_wave_app(window: &mut Window, cx: &mut App, wave: impl FnOnce() -> bool) -> bool {
+    // A gpui listener's dispatch (unless the frame tick is the caller): no
+    // forced layout may draw under it (`crate::in_input_dispatch`).
+    let _input = crate::InputDispatch::enter();
     let proceed = with_published(window, cx, Phase::Commit, wave);
     if crate::flush_changes() {
         // NOT `window.refresh()`. Refreshing a window sets gpui's `refreshing`
@@ -1061,6 +1073,7 @@ fn js_dispatch<V: 'static>(
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> bool {
+    let _input = crate::InputDispatch::enter();
     let proceed = with_published(window, &mut **cx, Phase::Commit, || {
         crate::dispatch_event(id, event, payload)
     });
@@ -1074,6 +1087,9 @@ fn js_dispatch<V: 'static>(
 /// DOM order for a focus move: `blur` on the node that had it, then `focus` on
 /// the node that got it. Neither event bubbles (the JS runtime knows).
 fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Context<V>) {
+    // gpui calls focus listeners from inside `Window::draw`, after its frame
+    // swap: a forced layout must not draw under them (`crate::in_input_dispatch`).
+    let _in_draw = crate::InputDispatch::inside_gpui();
     // Per window (docs/MULTIWINDOW.md §5.2): with one slot, window B focusing
     // an input fired `blur` on window A's — a wrong DOM event, not a wrong
     // pixel. gpui hands the observer the window the focus moved in, so "which
@@ -4034,6 +4050,10 @@ pub(crate) fn scroll_node(
 /// dispatcher (which builds the W3C event and runs capture/bubble over the
 /// mirror tree), then flush the tree so Vue's wave repaints in this frame.
 /// Returns `false` when a handler called `preventDefault()`.
+///
+/// The devtools call it from the frame pump, so unlike a real listener's
+/// dispatch no gpui dispatch is under it, and a forced layout may draw
+/// (`crate::off_input`).
 pub(crate) fn synth_event(
     id: u32,
     event: u32,
@@ -4041,7 +4061,7 @@ pub(crate) fn synth_event(
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
-    js_dispatch_app(id, event, payload, window, cx)
+    crate::off_input(|| js_dispatch_app(id, event, payload, window, cx))
 }
 
 // ---------------------------------------------------------------------------
@@ -4904,14 +4924,12 @@ fn build_input<V: 'static>(
     let mask = pointer_mask(node);
     let bit = move |ev: u32| mask & (1u64 << ev) != 0;
 
+    // vn-elements reports an edit from a `window.defer`, outside gpui's key
+    // dispatch, so a forced layout may draw in the `input` handler.
     let on_change: vn_elements::OnChange = std::rc::Rc::new(move |text, window, cx| {
-        js_dispatch_app(
-            id,
-            tree::EV_INPUT,
-            &EventPayload { key: Some(text), ..Default::default() },
-            window,
-            cx,
-        );
+        crate::off_input(|| {
+            js_dispatch_app(id, tree::EV_INPUT, &EventPayload { key: Some(text), ..Default::default() }, window, cx)
+        });
     });
 
     // Keystrokes are forwarded *before* the widget acts on them, so a JS

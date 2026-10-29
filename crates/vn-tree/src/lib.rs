@@ -238,12 +238,15 @@ host_fn!(fn vn_query(g, args) {
 });
 
 // `getBoundingClientRect()` — `"x,y,w,h"`, or `""` when the node was not
-// painted in the last frame (detached / `display: none`).
+// painted in the last frame (detached / `display: none`), or `"stale"` when it
+// has no rectangle YET and the layout it is owed could not be forced (a gpui
+// input listener is on the stack; see `dom::bounds`).
 host_fn!(fn vn_bounds(_g, args) {
     let id = arg_id(args.arg(0));
     let out = match dom::bounds(id) {
-        Some((x, y, w, h)) => format!("{x},{y},{w},{h}"),
-        None => String::new(),
+        (Some((x, y, w, h)), _) => format!("{x},{y},{w},{h}"),
+        (None, true) => "stale".to_string(),
+        (None, false) => String::new(),
     };
     ret_string(&out)
 });
@@ -458,6 +461,90 @@ pub fn install(rt: &JsRuntime) {
 thread_local! {
     static SYNC_LAYOUT: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) };
     static IN_SYNC_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How many JS dispatches a gpui listener (or gpui's own draw) has on the
+    /// stack ([`InputDispatch`]). See [`in_input_dispatch`].
+    static INPUT_DISPATCH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Inside a dispatch no gpui listener is under ([`off_input`]): the frame
+    /// tick, the pump's coalesced `mousemove`, the devtools' synthesized
+    /// events, a `window.defer` callback.
+    static OFF_INPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// [`render::build_count`] when [`flush_changes`] last took changes: while
+    /// it still equals the build count, the restyled tree has not been laid out.
+    static FLUSHED_AT_BUILD: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// A forced layout took the wave's changes ([`sync_layout`] flushes them
+    /// for its draw), so the next [`flush_changes`] must still report them:
+    /// the host repaints and presents on that answer, and a draw that is never
+    /// presented would leave the window showing the frame before.
+    static FLUSHED_BY_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Is a gpui listener on the stack that called into JS (a mouse, key, wheel or
+/// clipboard handler), or gpui's own draw (`focus` / `blur`)?
+///
+/// gpui takes the rendered frame's mouse listeners out of the frame for the
+/// whole of a mouse dispatch and puts them back afterwards, and a key dispatch
+/// walks the rendered frame's dispatch tree. A draw in the middle would swap
+/// the frames under both: the old listeners would be written into the new
+/// frame. Focus listeners run INSIDE `Window::draw`, after its frame swap, and
+/// a draw there would nest. So the host's [`sync_layout`] hook does not draw
+/// while this is true, and a layout read there stays stale
+/// ([`dom::bounds`]).
+pub fn in_input_dispatch() -> bool {
+    INPUT_DISPATCH.with(|c| c.get()) > 0
+}
+
+/// Marks a JS dispatch that a gpui listener started; a no-op under
+/// [`off_input`] (see [`in_input_dispatch`]).
+pub(crate) struct InputDispatch(bool);
+
+impl InputDispatch {
+    pub(crate) fn enter() -> Self {
+        if OFF_INPUT.with(|c| c.get()) {
+            return Self(false);
+        }
+        Self::inside_gpui()
+    }
+
+    /// The same mark, whatever encloses it: for a listener gpui calls from
+    /// inside its draw, which no enclosing mark can make safe to draw under.
+    pub(crate) fn inside_gpui() -> Self {
+        INPUT_DISPATCH.with(|c| c.set(c.get() + 1));
+        Self(true)
+    }
+}
+
+impl Drop for InputDispatch {
+    fn drop(&mut self) {
+        if self.0 {
+            INPUT_DISPATCH.with(|c| c.set(c.get().saturating_sub(1)));
+        }
+    }
+}
+
+/// Runs `f`, whose JS dispatches no gpui listener is under: the frame tick,
+/// the pump's coalesced `mousemove` and the devtools' synthesized events (all
+/// in the pump, before gpui's draw), and a `window.defer` callback (gpui runs
+/// it once the dispatch that queued it has returned and put the frame's
+/// listeners back). A forced layout may draw there. The mark only keeps a
+/// dispatch from COUNTING as input; an enclosing input dispatch still counts.
+/// None of them synthesizes input through `Window::dispatch_event`; one that
+/// did would have to leave this mark first.
+pub(crate) fn off_input<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OFF_INPUT.with(|c| c.set(self.0));
+        }
+    }
+    let _r = Restore(OFF_INPUT.with(|c| c.replace(true)));
+    f()
+}
+
+/// Does the tree hold changes no frame has laid out yet? Either they have not
+/// been flushed, or they were flushed and no element-tree build followed (a
+/// forced layout that the host could not draw).
+pub(crate) fn layout_owed() -> bool {
+    tree::read_tree(|t| t.is_dirty()) || FLUSHED_AT_BUILD.with(|c| c.get()) == Some(render::build_count())
 }
 
 /// Installs the host's "draw one frame, now" callback.
@@ -486,7 +573,9 @@ pub fn sync_layout() {
     IN_SYNC_LAYOUT.with(|c| c.set(true));
     // The frame is about to paint from `node.computed`, so the cascade owes it
     // the same pass a JS wave's end would have run.
-    flush_changes();
+    if flush_changes() {
+        FLUSHED_BY_SYNC.with(|c| c.set(true));
+    }
     f();
     IN_SYNC_LAYOUT.with(|c| c.set(false));
 }
@@ -499,8 +588,12 @@ pub fn flush_changes() -> bool {
         tree::restyle_all();
         render::gc_node_state();
         tree::animator_gc();
+        FLUSHED_AT_BUILD.with(|c| c.set(Some(render::build_count())));
     }
-    dirty
+    // Inside a forced layout this is its own flush; outside, it also answers
+    // for the changes a forced layout took earlier in the wave.
+    let forced = !IN_SYNC_LAYOUT.with(|c| c.get()) && FLUSHED_BY_SYNC.with(|c| c.replace(false));
+    dirty || forced
 }
 
 /// True while any CSS transition runs — the host keeps repainting.
@@ -566,6 +659,12 @@ pub fn video_device_changed() -> usize {
 ///   gpui focus, which is the browser's rule and what makes a `<KeepAlive>`
 ///   page stop swallowing keystrokes after it deactivates.
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
+    // The pump's, not an input listener's: a layout read in one of these
+    // handlers (an `<img>` `load` measuring the picture) may force a frame.
+    off_input(|| frame_tick_inner(window, cx))
+}
+
+fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // gpui's asset cache lets go of blob: decodes no node shows any more.
     img::evict_pending(window, cx);
     render::apply_pending_blur(window, cx);
@@ -772,6 +871,82 @@ mod tests {
         });
         flush_changes();
         assert_eq!(opacity_of(child), Some(1.0));
+    }
+
+    fn mounted_child() -> u32 {
+        tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let child = t.create_element(div);
+            t.insert(child, root, 0);
+            child
+        })
+    }
+
+    /// m26 client sweep #8. A node with no rectangle while the tree owes a
+    /// layout, and no host that can draw (none here, as under a gpui input
+    /// listener), reads STALE, and the runtime advises. It stays stale after the
+    /// wave's flush took the changes, until a build lays them out; a node
+    /// nothing is owed for is plainly "not painted".
+    #[test]
+    fn an_owed_layout_that_cannot_be_forced_reads_stale() {
+        let child = mounted_child();
+        assert_eq!(dom::bounds(child), (None, true));
+        assert!(flush_changes());
+        assert_eq!(dom::bounds(child), (None, true), "flushed is not laid out");
+        render::note_build();
+        assert_eq!(dom::bounds(child), (None, false), "built and still unpainted: not painted");
+    }
+
+    /// The host's hook is installed but refuses to draw (`in_input_dispatch`):
+    /// the forced layout has flushed the changes for its draw, so the read is
+    /// stale, and the wave's own flush must still report them, or the frame
+    /// would not repaint (and pop-outs would not hear of it). A hook that
+    /// draws makes the answer fresh.
+    #[test]
+    fn a_refused_forced_layout_keeps_the_waves_repaint() {
+        fn refuse() {}
+        set_sync_layout(refuse);
+        let child = mounted_child();
+        assert_eq!(dom::bounds(child), (None, true));
+        assert!(!tree::read_tree(|t| t.is_dirty()), "the forced layout flushed");
+        assert!(flush_changes(), "…and the wave still repaints");
+        assert!(!flush_changes(), "once");
+
+        fn draw() {
+            render::note_build();
+        }
+        set_sync_layout(draw);
+        let other = mounted_child();
+        assert_eq!(dom::bounds(other), (None, false));
+        assert!(flush_changes(), "a forced layout that drew still repaints every window");
+    }
+
+    /// What may draw: a dispatch under `off_input` (the pump, a deferred wave)
+    /// does not count as input, but it never hides an input dispatch around
+    /// it, and gpui's draw (focus listeners) counts whatever encloses it.
+    #[test]
+    fn off_input_never_masks_an_enclosing_input_dispatch() {
+        assert!(!in_input_dispatch());
+        off_input(|| {
+            let _d = InputDispatch::enter();
+            assert!(!in_input_dispatch());
+        });
+        {
+            let _d = InputDispatch::enter();
+            assert!(in_input_dispatch());
+            off_input(|| {
+                let _n = InputDispatch::enter();
+                assert!(in_input_dispatch());
+            });
+            assert!(in_input_dispatch());
+        }
+        assert!(!in_input_dispatch());
+        off_input(|| {
+            let _f = InputDispatch::inside_gpui();
+            assert!(in_input_dispatch());
+        });
+        assert!(!in_input_dispatch());
     }
 
     /// `getComputedStyle` is a FLUSH POINT: a component may change an attribute

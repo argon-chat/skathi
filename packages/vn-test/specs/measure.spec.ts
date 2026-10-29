@@ -38,6 +38,23 @@ const rem = await launch({
 });
 afterAll(() => rem.close());
 
+// The same read in a LATER wave (m26 client sweep #8): the Argon chat list,
+// mounted after a fetch. See the describe block "a later wave" below.
+const late = await launch({
+  app: "packages/vn-test/fixtures/measure-late-mount/src/main.ts",
+  window: [480, 420],
+  label: "measure-late",
+});
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  fetch: () => new Response("[]", { headers: { "content-type": "application/json" } }),
+});
+afterAll(async () => {
+  await late.close();
+  server.stop(true);
+});
+
 const T = 30_000;
 
 /** The fixture's content box: 20 px padding, twice, around two 60 px rows. */
@@ -162,5 +179,59 @@ describe("a rem recompile is not a style change", () => {
 
   test("no errors and no advisories on the way", async () => {
     await rem.expectNoErrors();
+  }, T);
+});
+
+/**
+ * **A layout read in a later wave lays out too** (m26 client sweep #8).
+ *
+ * Everything above runs at boot, when the host's forced layout can reach the
+ * window through its handle. Every later JS wave runs inside a gpui update that
+ * holds the window, so the same read answered **0**. The Argon chat list mounts
+ * after a fetch, measured its width in `onMounted`, stored `0px` and collapsed
+ * every bubble. The forced layout now draws through the window the wave has
+ * published, except under a gpui listener, where it says "stale" instead
+ * (docs/RUNTIME.md §5.8).
+ *
+ * Each list here measures itself in `onMounted` and sizes a bubble at 60% of
+ * the width it read.
+ */
+describe("a later wave", () => {
+  /** 8 px padding, twice, around two 24 px rows with a 4 px gap. */
+  const LIST_H = 8 + 24 + 4 + 24 + 8;
+
+  /** The list's own painted width, and the one `onMounted` read. */
+  async function check(stage: string) {
+    await expect(late.locator(`#seen-${stage}`)).toHaveText(/=\d/);
+    const list = await late.locator(`#list-${stage}`).resolve();
+    const w = Math.round(list.node.bounds?.w ?? 0);
+    bunExpect(w).toBeGreaterThan(0);
+    await expect(late.locator(`#seen-${stage}`)).toHaveText(`${stage}=${w},${LIST_H},${LIST_H}`);
+    // What the app did with the answer: a bubble at 60% of it, not at 0.
+    const bubble = await late.locator(`#bubble-${stage}`).resolve();
+    bunExpect(Math.round(bubble.node.bounds?.w ?? 0)).toBe(Math.round(w * 0.6));
+  }
+
+  test("mounted from a timer", async () => {
+    await check("timeout");
+  }, T);
+
+  test("mounted after a fetch completes", async () => {
+    await late.eval(`__VN_TEST_LATE__.fetchMount(${JSON.stringify(`http://127.0.0.1:${server.port}/chats`)})`);
+    await check("fetch");
+  }, T);
+
+  test("mounted from a click, synthesized and real", async () => {
+    // The devtools' click runs in the frame pump. A real one is delivered
+    // after gpui's dispatch of the release (docs/RUNTIME.md §5.6), outside its
+    // listeners, so the forced layout may draw in both.
+    await late.locator("#mount-click").click();
+    await check("click");
+    await late.locator("#mount-realclick").click({ real: true });
+    await check("realclick");
+  }, T);
+
+  test("no errors and no advisories on the way", async () => {
+    await late.expectNoErrors();
   }, T);
 });

@@ -1,0 +1,13 @@
+{
+  "$comment": "The 'measure what a later wave mounted' fixture (m26 client sweep #8) — see ../README.md and packages/vn-test/specs/measure.spec.ts. The Argon chat list mounts after a fetch, measures its own width in onMounted and sizes every bubble from the answer.",
+
+  "name": "measure-late-mount",
+
+  "window": {
+    "title": "vue-native — measure a late mount (fixture)",
+    "width": 480,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

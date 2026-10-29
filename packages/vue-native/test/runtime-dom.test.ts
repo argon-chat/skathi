@@ -225,6 +225,36 @@ describe("layout comes from the host's painted bounds", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
+  // m26 #8: the host answers "stale" when the node has no rectangle YET and the
+  // layout it is owed could not be forced (a gpui input listener is on the
+  // stack). A browser would have laid out, so this one IS a gap: zero, plus one
+  // advisory per call site and accessor, never one per read.
+  test("a read the host could not lay out for reads zero and advises once per site and kind", () => {
+    const rt = createRuntime();
+    const { button, span } = tree(rt);
+    rt.host.boundsById.set(button.__vnId, "stale");
+    rt.host.boundsById.set(span.__vnId, "stale");
+    const measure = (el) => el.offsetWidth;
+    for (let i = 0; i < 3; i++) expect(measure(button)).toBe(0);
+    expect(measure(span)).toBe(0);
+    const stale = () => rt.advisories().filter((a) => a.includes("not been laid out"));
+    expect(stale().length).toBe(1);
+    expect(stale()[0]).toContain("offsetWidth");
+    expect(stale()[0]).toContain("requestAnimationFrame");
+    // Another call site of the same accessor is another advisory…
+    const elsewhere = (el) => el.offsetWidth;
+    expect(elsewhere(span)).toBe(0);
+    expect(stale().length).toBe(2);
+    // …and so is another accessor; the rect is all zeros, not NaN.
+    expect(button.getBoundingClientRect()).toMatchObject({ x: 0, y: 0, width: 0, height: 0 });
+    expect(button.getClientRects()).toEqual([]);
+    expect(stale().length).toBe(4);
+    // Once laid out, the same node answers its real size, silently.
+    rt.host.boundsById.set(button.__vnId, "0,0,120,30");
+    expect(measure(button)).toBe(120);
+    expect(stale().length).toBe(4);
+  });
+
   test("offsetTop/offsetLeft are window-relative and say so", () => {
     const rt = createRuntime();
     const { button } = tree(rt);

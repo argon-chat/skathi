@@ -479,10 +479,34 @@ thread_local! {
 /// `with_app` is `None` outside a published phase — including inside a real
 /// frame, where nothing is published — so this can never run inside a draw;
 /// `vn_tree` guards the re-entrant case on its side as well.
+///
+/// Two ways to reach the window (m26 client sweep #8):
+///
+/// * **Not leased** (boot, module evaluation, the first mount): through its
+///   handle, as before.
+/// * **Leased by its own update**, which is every later JS wave: the frame
+///   pump (`pump_frame`, an `on_next_frame` callback: timers, fetch and
+///   WebSocket completions, rAF, devtools) and the media tick. `handle.update`
+///   fails there, and the read used to answer 0 — the Argon chat list measured
+///   its width in an `onMounted` after a fetch, stored `0px`, and every bubble
+///   collapsed. The window that wave publishes IS the leased one, so the draw
+///   goes through it. In the pump this is a draw before gpui's own draw of the
+///   frame, which is what `flush_effects` would do for a dirty window anyway;
+///   the second draw that frame finds the tree it just laid out.
+/// * **Never inside a gpui input listener** (`vn_tree::in_input_dispatch`):
+///   gpui has the rendered frame's mouse listeners taken out for the dispatch
+///   and walks its dispatch tree for keys, and a draw would swap the frame
+///   under both. The read stays stale there, and `__vn_bounds` says so.
 fn sync_layout() {
     let Some(handle) = MAIN_WINDOW.with(|w| w.get()) else { return };
-    vn_runtime::bridge::with_app(|cx| {
-        let _ = handle.update(cx, |_, window, cx| window.draw(cx).clear(cx));
+    let drew = vn_runtime::bridge::with_app(|cx| handle.update(cx, |_, window, cx| window.draw(cx).clear(cx)).is_ok());
+    if drew != Some(false) || vn_tree::in_input_dispatch() {
+        return;
+    }
+    vn_runtime::with_commit(|window, cx| {
+        if window.window_handle() == handle {
+            window.draw(cx).clear(cx);
+        }
     });
 }
 
