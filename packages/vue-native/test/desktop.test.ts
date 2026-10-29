@@ -495,10 +495,19 @@ describe("<input type=file> (HTML)", () => {
   });
 
   test("a click without a user activation opens nothing, and says so in Chromium's words", () => {
-    const { rt, input, host } = fileWorld();
-    host(input, "click");
+    const { rt, input } = fileWorld();
+    input.click();
     expect(calls(rt, "dialogOpen")).toEqual([]);
     expect(rt.host.logs).toContain("File chooser dialog can only be shown with a user activation.");
+  });
+
+  test("a host click is a user's press even when no mousedown came first (nobody listened for one)", () => {
+    // The host forwards only what is listened for; the input arms click, not
+    // mousedown. The e2e spec (vn-test files.spec.ts) found this on a real
+    // click: the press never reached JS, so nothing counted as a gesture.
+    const { rt, input, host } = fileWorld();
+    host(input, "click");
+    expect(calls(rt, "dialogOpen").length).toBe(1);
   });
 
   test("a user's click asks for files; the pick sets files, then fires input and change, both bubbling", async () => {

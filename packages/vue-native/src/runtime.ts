@@ -2784,6 +2784,9 @@ function hasListener(target: MirrorNode, name: string): boolean {
  * click does something by itself: an `<a href>`, a `<label>`, an
  * `<input type=file>`?
  */
+/** Host events that mean a person just pressed something (see the dispatcher). */
+const ACTIVATING_EVENTS = new Set(["keydown", "mousedown", "pointerdown", "mouseup", "pointerup", "click"]);
+
 function activatableOnPath(target: MirrorNode): boolean {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
     if (isLabel(n) || isFileInput(n) || isLink(n)) return true;
@@ -2800,7 +2803,14 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key) => {
   // events never reach — the host delivers them HERE. The prelude publishes
   // this hook for exactly that reason; without the call, `beforeunload` could
   // never veto a close because the window would never count as interacted with.
-  if (name === "keydown" || name === "mousedown") {
+  //
+  // The host forwards only the events some listener (or an armed bit) asks
+  // for, so the press itself often never arrives: a `<button @click>` gets
+  // its `click` and no `mousedown`. A host `click`, `mouseup` or
+  // `pointerup` is the proof of a press that just happened, so each counts as
+  // the activation the press would have given. Only the host's: `el.click()`
+  // and `dispatchEvent` never come through here.
+  if (ACTIVATING_EVENTS.has(name)) {
     globalThis.__vnStickyActivation?.();
     // …and TRANSIENT activation, which a file picker needs (HTML; Chromium).
     noteActivation(name, key ?? undefined);
