@@ -139,7 +139,11 @@ export function ensureBuild(entry: string, log: BuildLog = () => {}): Promise<st
     }
     log(`[vn-test] ${name}: building ${stamp ? "(sources moved)" : "(no dist yet)"} …`);
     const t0 = Date.now();
-    const r = spawnSync("bun", ["build.ts", entry, cache], {
+    // `--no-install`: a fixture under packages/vn-test has no node_modules above
+    // it, and there Bun AUTO-INSTALLS a bare specifier it cannot resolve —
+    // build.ts's `appRequire("typescript")` included — from the network. With
+    // the registry unreachable that is a hang with no timeout, not an error.
+    const r = spawnSync("bun", ["--no-install", "build.ts", entry, cache], {
       cwd: VUE_NATIVE_PKG,
       encoding: "utf8",
     });
