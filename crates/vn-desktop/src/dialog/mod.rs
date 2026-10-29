@@ -4,7 +4,8 @@
 //! ```text
 //!   JS ── __vn_dialog_open(json) ─▶ parse + validate (frame thread)
 //!                                   │  owner = the published window (vn-app's resolver)
-//!                                   │  one dialog per owner: a second is refused
+//!                                   │  one dialog per owner: a second picker is
+//!                                   │  refused, a download waits its turn
 //!                                   ▼
 //!                       vn-dialog thread (an STA of its own, one per dialog)
 //!                         IFileDialog::Show(owner)   │ VN_DIALOGS=scripted: wait for
@@ -491,6 +492,16 @@ struct OwnerState {
     /// A dialog of this owner is in the OS (or waiting for its scripted
     /// answer), using the HWND.
     active: AtomicBool,
+    /// Downloads wait in click order: the next ticket to hand out, and the
+    /// tickets waiting, the front one's turn next.
+    ticket: std::sync::atomic::AtomicU64,
+    queue: Mutex<std::collections::VecDeque<u64>>,
+}
+
+impl OwnerState {
+    fn leave_queue(&self, ticket: u64) {
+        self.queue.lock().unwrap_or_else(|p| p.into_inner()).retain(|&t| t != ticket);
+    }
 }
 
 fn owners() -> &'static Mutex<std::collections::HashMap<u64, Arc<OwnerState>>> {
@@ -554,10 +565,16 @@ pub fn scripted_mode() -> bool {
 pub const ALREADY_ACTIVE: &str = "File picker already active.";
 
 /// `__vn_dialog_open(json, currentFiles)` and `__vn_download(…)`: one
-/// request, refused at once if its owner already has a dialog open.
+/// request. A picker is refused at once if its owner already has a dialog
+/// open. A download WAITS for that dialog instead: a page that saves three
+/// files in a loop gets three Save As in a row, as Chromium shows them with
+/// "Ask where to save each file" on.
 pub fn start(native: Native, then: Then, label: &'static str) -> String {
     start_owned(RESOLVER.get().and_then(|f| f()), native, then, label)
 }
+
+/// How often a queued download looks for its turn.
+const QUEUE_POLL: std::time::Duration = std::time::Duration::from_millis(25);
 
 fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static str) -> String {
     let key = owner.map(|o| o.key).unwrap_or(0);
@@ -568,11 +585,40 @@ fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static
         crate::settle(token, Ok(cancelled()));
         return format!("{{\"token\":{token}}}");
     }
-    if st.active.swap(true, Ordering::AcqRel) {
+    let queued = matches!(then, Then::Download(_));
+    if !queued && st.active.swap(true, Ordering::AcqRel) {
         return Fail::new("NotAllowedError", ALREADY_ACTIVE).code("EBUSY").to_sync_json();
+    }
+    // Queued here, on the frame thread, so the order is the order of the clicks.
+    let ticket = st.ticket.fetch_add(1, Ordering::AcqRel);
+    if queued {
+        st.queue.lock().unwrap_or_else(|p| p.into_inner()).push_back(ticket);
     }
     let cancel = Cancellation(st.clone());
     let spawned = std::thread::Builder::new().name("vn-dialog".into()).spawn(move || {
+        if queued {
+            // Its turn comes after the downloads clicked before it, once the
+            // owner has no dialog open. A window that closes meanwhile cancels
+            // it before it ever uses the HWND.
+            loop {
+                if cancel.is_requested() {
+                    st.leave_queue(ticket);
+                    crate::settle(token, Ok(cancelled()));
+                    return;
+                }
+                let front = st.queue.lock().unwrap_or_else(|p| p.into_inner()).front() == Some(&ticket);
+                if front && !st.active.swap(true, Ordering::AcqRel) {
+                    break;
+                }
+                std::thread::sleep(QUEUE_POLL);
+            }
+            st.leave_queue(ticket);
+            if cancel.is_requested() {
+                st.active.store(false, Ordering::Release);
+                crate::settle(token, Ok(cancelled()));
+                return;
+            }
+        }
         let picked = if scripted_mode() {
             scripted::pick(&native, key, label, &cancel)
         } else {
@@ -589,8 +635,14 @@ fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static
         crate::settle_done(token, result);
     });
     if spawned.is_err() {
-        // The closure (and its `st`) went down with the failed spawn.
-        owner_state(key).active.store(false, Ordering::Release);
+        // The closure (and its `st`) went down with the failed spawn. A
+        // queued download had claimed nothing but its place in the queue.
+        let st = owner_state(key);
+        if queued {
+            st.leave_queue(ticket);
+        } else {
+            st.active.store(false, Ordering::Release);
+        }
         return Fail::new("InvalidStateError", "could not start the dialog thread").code("EIO").to_sync_json();
     }
     format!("{{\"token\":{token}}}")
@@ -1046,5 +1098,68 @@ mod tests {
         let names: Vec<String> =
             std::fs::read_dir(&s.0).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         assert!(!names.iter().any(|n| n.contains(".vnswap")), "no swap left: {names:?}");
+    }
+
+    fn download(o: Option<Owner>, name: &str, bytes: &[u8]) -> String {
+        let n = Native {
+            kind: Kind::Save,
+            multiple: false,
+            filters: vec![],
+            allow_all: true,
+            client: 0,
+            start: None,
+            force_start: false,
+            suggested_name: Some(name.into()),
+            default_ext: None,
+        };
+        start_owned(o, n, Then::Download(Data::Bytes(bytes.to_vec())), "download")
+    }
+
+    fn pending_count(window: u64) -> usize {
+        scripted::list().as_array().unwrap().iter().filter(|v| v["window"] == window).count()
+    }
+
+    #[test]
+    fn a_download_waits_for_the_open_dialog_instead_of_being_refused() {
+        let s = Scratch::new("dialog-queue");
+        let o = owner();
+        let key = o.unwrap().key;
+        let picker = token_of(&open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
+        let first = pending_of(key);
+        // Two downloads while the picker is open: both queued, neither refused.
+        let d1 = token_of(&download(o, "one.txt", b"1"));
+        let d2 = token_of(&download(o, "two.txt", b"2"));
+        std::thread::sleep(QUEUE_POLL * 3);
+        assert_eq!(pending_count(key), 1, "only the picker is in front of the user");
+        scripted::cancel(first).unwrap();
+        assert_eq!(wait_for_settles(&[picker])[&picker], (true, cancelled()));
+        // Then one Save As at a time, in the order of the clicks.
+        for name in ["one.txt", "two.txt"] {
+            let id = pending_of(key);
+            assert_eq!(pending_count(key), 1);
+            let listed = scripted::list();
+            let v = listed.as_array().unwrap().iter().find(|v| v["id"] == id).unwrap();
+            assert_eq!(v["suggestedName"], name);
+            scripted::answer(id, vec![s.0.join(name)]).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while scripted::list().as_array().unwrap().iter().any(|v| v["id"] == id) || !s.0.join(name).exists() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        let got = wait_for_settles(&[d1, d2]);
+        assert_eq!(got[&d1], (true, r#"{"saved":"one.txt"}"#.to_string()));
+        assert_eq!(got[&d2], (true, r#"{"saved":"two.txt"}"#.to_string()));
+        assert_eq!(std::fs::read(s.0.join("two.txt")).unwrap(), b"2");
+        // A queued download on a window that closes is a cancel, and never shown.
+        let o = owner();
+        let key = o.unwrap().key;
+        let picker = token_of(&open(o, r#"{"kind":"open","result":"handles"}"#, vec![]));
+        let _ = pending_of(key);
+        let queued = token_of(&download(o, "never.txt", b"x"));
+        assert!(owner_closing(key));
+        let got = wait_for_settles(&[picker, queued]);
+        assert_eq!((got[&picker].1.as_str(), got[&queued].1.as_str()), (cancelled().as_str(), cancelled().as_str()));
+        assert!(!s.0.join("never.txt").exists());
     }
 }
