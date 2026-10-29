@@ -17,6 +17,20 @@
 //! be an undocumented one. What a page can learn about where a file is stays
 //! what a browser shows: a `File`'s `name` and its `webkitRelativePath`.
 //!
+//! # Handles are [Serializable], and permission is per path
+//!
+//! As in Chromium, a handle survives `structuredClone`, `postMessage` and
+//! IndexedDB ([`to_wire`] / [`from_wire`], through redjs's tag 0x39). The
+//! bytes carry the path, and no script ever reads them. A handle made from
+//! them is the same path in a new object, maybe in a later session. So
+//! permission belongs to the path, as Chromium's belongs to the origin and
+//! path, and not to the object. A GRANT ([`grant`]) is a path the user chose:
+//! a pick, a drop, a launch. It covers that path and everything below it, for
+//! this session. A handle on a path that no grant covers is `"prompt"`,
+//! Chromium's state for a handle read back after a restart. Every operation
+//! through it is `NotAllowedError` until `requestPermission()` grants the path
+//! again ([`permission`]; docs/DESKTOP.md D-F22).
+//!
 //! # Threads
 //!
 //! Everything below that touches the disk runs on the pool (`pool.rs`). The
@@ -73,9 +87,11 @@ fn handles() -> &'static Mutex<HashMap<u64, Entry>> {
 
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
-/// Grants a handle on `path`. Called only by the places listed in the module
-/// docs; the kind comes from a stat that already happened (a dialog thread, a
-/// launch, a drop) or from the child lookup that made it.
+/// Makes a handle id for `path`. Called only by the places listed in the
+/// module docs. The kind comes from a stat that already happened (a dialog
+/// thread, a launch, a drop), from the child lookup that made it, or from the
+/// serialized handle. Registering grants nothing: [`granted_handle_json`] is
+/// for what the user chose.
 pub(crate) fn register(path: PathBuf, kind: Kind) -> u64 {
     let id = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     handles().lock().unwrap_or_else(|p| p.into_inner()).insert(id, Entry { path, kind });
@@ -104,6 +120,112 @@ pub fn name_of(path: &Path) -> String {
 pub(crate) fn handle_json(path: PathBuf, kind: Kind) -> serde_json::Value {
     let name = name_of(&path);
     json!({ "h": register(path, kind), "name": name, "kind": kind.as_str() })
+}
+
+/// [`handle_json`] for a path the user just chose (a pick, a drop, a launch),
+/// with the grant that comes with it.
+pub(crate) fn granted_handle_json(path: PathBuf, kind: Kind) -> serde_json::Value {
+    grant(&path);
+    handle_json(path, kind)
+}
+
+// ---------------------------------------------------------------------------
+// permission: the session's grants (module docs)
+// ---------------------------------------------------------------------------
+
+fn grants() -> &'static Mutex<Vec<String>> {
+    static G: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    G.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// The key a grant is compared by. It is lexical, with no I/O, because it is
+/// checked on the frame thread before every operation. Every path in the
+/// table is absolute already: it came from a dialog, a launch, a drop, or a
+/// child joined onto one of those.
+fn grant_key(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    if cfg!(windows) {
+        let s = s.replace('/', "\\").to_lowercase();
+        // `c:\` keeps its separator; `c:\x\` does not.
+        let t = s.trim_end_matches('\\');
+        if t.ends_with(':') || t.is_empty() { s } else { t.to_string() }
+    } else {
+        let t = s.trim_end_matches('/');
+        if t.is_empty() { s.to_string() } else { t.to_string() }
+    }
+}
+
+/// Grants `path` and everything below it, for the session.
+pub(crate) fn grant(path: &Path) {
+    let k = grant_key(path);
+    let mut g = grants().lock().unwrap_or_else(|p| p.into_inner());
+    if !g.contains(&k) {
+        g.push(k);
+    }
+}
+
+/// Whether a grant covers `path`: it is a granted path or inside one.
+pub fn is_granted(path: &Path) -> bool {
+    let k = grant_key(path);
+    let sep = if cfg!(windows) { '\\' } else { '/' };
+    grants().lock().unwrap_or_else(|p| p.into_inner()).iter().any(|g| {
+        k == *g || (k.starts_with(g.as_str()) && (g.ends_with(sep) || k[g.len()..].starts_with(sep)))
+    })
+}
+
+/// `__vn_fs_permission(h, request)`: `"granted"` or `"prompt"`, both modes
+/// alike (D-F2). `request` grants the handle's path. The runtime calls it with
+/// `request` only on a user activation (D-F22). `None` for an id the table
+/// does not hold.
+pub fn permission(id: u64, request: bool) -> Option<&'static str> {
+    let e = lookup(id)?;
+    if request {
+        grant(&e.path);
+    }
+    Some(if is_granted(&e.path) { "granted" } else { "prompt" })
+}
+
+/// The refusal for an operation through a `"prompt"` handle, Chromium's.
+fn not_granted() -> Fail {
+    Fail::new("NotAllowedError", NOT_ALLOWED)
+}
+
+/// The entry behind `id`, if a grant covers it.
+fn granted(id: u64) -> Result<Entry, Fail> {
+    let e = lookup(id).ok_or_else(gone)?;
+    if !is_granted(&e.path) {
+        return Err(not_granted());
+    }
+    Ok(e)
+}
+
+// ---------------------------------------------------------------------------
+// the serialized handle (redjs tag 0x39's payload)
+// ---------------------------------------------------------------------------
+
+/// The bytes a handle is serialized as: `{"v":1,"kind":…,"path":…}`. They hold
+/// the path, and they are opaque to script: redjs stores them inside its own
+/// format, and nothing hands the raw bytes back.
+pub(crate) fn to_wire(id: u64) -> Option<Vec<u8>> {
+    let e = lookup(id)?;
+    Some(json!({ "v": 1, "kind": e.kind.as_str(), "path": e.path.to_string_lossy() }).to_string().into_bytes())
+}
+
+/// The path and kind back from [`to_wire`]'s bytes, or `None` for anything
+/// else: another version, a relative path, a kind that is not one of the two.
+pub(crate) fn from_wire(bytes: &[u8]) -> Option<(PathBuf, Kind)> {
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    if v["v"].as_u64() != Some(1) {
+        return None;
+    }
+    let kind = match v["kind"].as_str()? {
+        "file" => Kind::File,
+        "directory" => Kind::Directory,
+        _ => return None,
+    };
+    let path = PathBuf::from(v["path"].as_str()?);
+    path.is_absolute().then_some((path, kind))
 }
 
 fn token_json(token: u32) -> String {
@@ -415,7 +537,10 @@ static NEXT_CURSOR: AtomicU64 = AtomicU64::new(1);
 /// dispatcher the path-backed `File` (made on the JS thread at delivery from
 /// the stat that ran here).
 pub fn start_get_file(id: u64) -> String {
-    let Some(e) = lookup(id) else { return gone().to_sync_json() };
+    let e = match granted(id) {
+        Ok(e) => e,
+        Err(f) => return f.to_sync_json(),
+    };
     if e.kind != Kind::File {
         return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
     }
@@ -437,7 +562,10 @@ pub fn start_child(dir: u64, name: &str, kind: Kind, create: bool) -> String {
     if let Err(f) = check_name(name) {
         return f.to_sync_json();
     }
-    let Some(e) = lookup(dir) else { return gone().to_sync_json() };
+    let e = match granted(dir) {
+        Ok(e) => e,
+        Err(f) => return f.to_sync_json(),
+    };
     if e.kind != Kind::Directory {
         return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
     }
@@ -455,7 +583,10 @@ pub fn start_remove(dir: u64, name: &str, recursive: bool) -> String {
     if let Err(f) = check_name(name) {
         return f.to_sync_json();
     }
-    let Some(e) = lookup(dir) else { return gone().to_sync_json() };
+    let e = match granted(dir) {
+        Ok(e) => e,
+        Err(f) => return f.to_sync_json(),
+    };
     if e.kind != Kind::Directory {
         return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
     }
@@ -490,7 +621,10 @@ pub fn start_resolve(root: u64, other: u64) -> String {
 
 /// `__vn_fs_dir_open(dir)`: settles `{cursor}`.
 pub fn start_dir_open(dir: u64) -> String {
-    let Some(e) = lookup(dir) else { return gone().to_sync_json() };
+    let e = match granted(dir) {
+        Ok(e) => e,
+        Err(f) => return f.to_sync_json(),
+    };
     if e.kind != Kind::Directory {
         return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
     }
@@ -694,6 +828,65 @@ pub(crate) mod tests {
         assert!(out.get("token").is_none());
         if cfg!(windows) {
             assert_eq!(name_of(Path::new(r"C:\")), r"C:\");
+        }
+    }
+
+    #[test]
+    fn a_grant_covers_its_path_and_what_is_below_it_and_nothing_else() {
+        let s = Scratch::new("grant");
+        let root = s.0.join("Picked");
+        std::fs::create_dir_all(root.join("inner")).unwrap();
+        std::fs::write(root.join("inner/a.txt"), b"a").unwrap();
+        std::fs::write(s.0.join("Picked2.txt"), b"b").unwrap();
+        // A handle made from bytes (a restored one) on a path nobody granted.
+        let h = register(root.clone(), Kind::Directory);
+        assert_eq!(permission(h, false), Some("prompt"));
+        for refused in [start_dir_open(h), start_child(h, "inner", Kind::Directory, false), start_remove(h, "inner", true)] {
+            let v: serde_json::Value = serde_json::from_str(&refused).unwrap();
+            assert_eq!((v["name"].as_str(), v["error"].as_str()), (Some("NotAllowedError"), Some(NOT_ALLOWED)), "{refused}");
+        }
+        assert!(root.join("inner/a.txt").exists(), "nothing ran");
+        // requestPermission grants the path, and its subtree with it.
+        assert_eq!(permission(h, true), Some("granted"));
+        assert!(is_granted(&root.join("inner").join("a.txt")));
+        if cfg!(windows) {
+            assert!(is_granted(Path::new(&root.to_string_lossy().to_uppercase())), "NTFS names compare without case");
+            assert!(is_granted(&PathBuf::from(format!("{}\\", root.display()))));
+        }
+        // A sibling whose name merely starts with the grant's is not inside it.
+        assert!(!is_granted(&s.0.join("Picked2.txt")));
+        assert!(!is_granted(&s.0));
+        let f = register(s.0.join("Picked2.txt"), Kind::File);
+        let v: serde_json::Value = serde_json::from_str(&start_get_file(f)).unwrap();
+        assert_eq!(v["name"], "NotAllowedError");
+        assert_eq!(permission(f, false), Some("prompt"));
+        assert_eq!(permission(u64::MAX, true), None, "an unknown id grants nothing");
+        // The writable is refused the same way.
+        let v: serde_json::Value = serde_json::from_str(&writable::start_open(f, false)).unwrap();
+        assert_eq!(v["name"], "NotAllowedError");
+        release(h);
+        release(f);
+    }
+
+    #[test]
+    fn a_serialized_handle_is_its_path_and_kind_and_nothing_else_parses() {
+        let path = if cfg!(windows) { PathBuf::from(r"C:\data\ünï\report.txt") } else { PathBuf::from("/data/report.txt") };
+        let id = register(path.clone(), Kind::File);
+        let bytes = to_wire(id).unwrap();
+        assert_eq!(from_wire(&bytes), Some((path.clone(), Kind::File)));
+        release(id);
+        assert_eq!(to_wire(id), None, "a released handle has nothing to write");
+        let dir = register(path.parent().unwrap().to_path_buf(), Kind::Directory);
+        assert_eq!(from_wire(&to_wire(dir).unwrap()).map(|(_, k)| k), Some(Kind::Directory));
+        release(dir);
+        for bad in [
+            &br#"{"v":2,"kind":"file","path":"C:\\x"}"#[..],
+            br#"{"v":1,"kind":"link","path":"C:\\x"}"#,
+            br#"{"v":1,"kind":"file","path":"relative\\x"}"#,
+            br#"{"v":1,"kind":"file"}"#,
+            b"not json",
+        ] {
+            assert_eq!(from_wire(bad), None, "{}", String::from_utf8_lossy(bad));
         }
     }
 

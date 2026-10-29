@@ -3929,6 +3929,8 @@ const desktopHost: DesktopHost | null =
                 writableClose: __vn_fs_writable_close,
                 writableAbort: __vn_fs_writable_abort,
                 refuseClone: __vn_fs_refuse_clone,
+                setSerializer: __vn_fs_set_serializer,
+                permission: __vn_fs_permission,
                 dialogOpen: __vn_dialog_open,
                 download: __vn_download,
               }

@@ -276,12 +276,53 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(typeof f.move).toBe("undefined");
   });
 
-  test("permissions are always granted (D-F2); an invalid mode is a TypeError", async () => {
+  test("what the user chose is granted in both modes (D-F2); an invalid mode is a TypeError", async () => {
     const rt = createRuntime();
     const f = handle(rt, 3, "notes.txt", "file");
     expect(await f.queryPermission()).toBe("granted");
     expect(await f.requestPermission({ mode: "readwrite" })).toBe("granted");
     expect(await f.queryPermission({ mode: "write" }).catch((e: Error) => e)).toBeInstanceOf(TypeError);
+    expect(rt.host.desktop.fs.permissionCalls.every((c: { request: boolean }) => !c.request)).toBe(true);
+  });
+
+  test("a restored handle is 'prompt'; requestPermission needs a gesture, then grants once-advised (D-F22)", async () => {
+    const rt = createRuntime();
+    rt.host.desktop.fs.prompt.add(8);
+    const f = handle(rt, 8, "restored.txt", "file");
+    expect(await f.queryPermission({ mode: "readwrite" })).toBe("prompt");
+    const denied = await f.requestPermission().catch((e: Error) => e);
+    expect(denied).toBeInstanceOf(DOMException);
+    expect([denied.name, denied.message]).toEqual(["SecurityError", "User activation is required to request permissions."]);
+    expect(rt.host.desktop.fs.prompt.has(8)).toBe(true);
+    gesture(rt);
+    expect(await f.requestPermission()).toBe("granted");
+    // Not consumed: a picker may still follow in the same gesture.
+    expect(rt.activation.isActive()).toBe(true);
+    expect(await f.queryPermission()).toBe("granted");
+    rt.host.desktop.fs.prompt.add(9);
+    await handle(rt, 9, "other.txt", "file").requestPermission();
+    expect(rt.advisories().filter((l: string) => l.includes("D-F22")).length).toBe(1);
+  });
+
+  test("a write through a 'prompt' handle asks on a gesture, and is the host's NotAllowedError without one", async () => {
+    const rt = createRuntime();
+    rt.host.desktop.fs.prompt.add(8);
+    const dir = handle(rt, 8, "restored", "directory");
+    rt.host.desktop.fs.answers.set("remove", (d: number) =>
+      rt.host.desktop.fs.prompt.has(d)
+        ? { sync: { error: "The request is not allowed by the user agent or the platform in the current context.", name: "NotAllowedError" } }
+        : { payload: {} },
+    );
+    const refused = await dir.removeEntry("x").catch((e: Error) => e);
+    expect(refused).toBeInstanceOf(DOMException);
+    expect(refused.name).toBe("NotAllowedError");
+    // A plain lookup never asks, gesture or not (Chromium checks read access only).
+    gesture(rt);
+    rt.host.desktop.fs.answers.set("child", () => ({ payload: { h: 10, name: "a", kind: "file" } }));
+    await dir.getFileHandle("a");
+    expect(rt.host.desktop.fs.prompt.has(8)).toBe(true);
+    await dir.removeEntry("x");
+    expect(rt.host.desktop.fs.prompt.has(8)).toBe(false);
   });
 
   test("a child is looked up by the parent's id; failures are the spec's DOMExceptions", async () => {
@@ -343,19 +384,19 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(await dir.resolve({}).catch((e: Error) => e)).toBeInstanceOf(TypeError);
   });
 
-  test("every handle class is refused by structuredClone (D-F23), most specific first, and advises once", () => {
+  test("handles are [Serializable] through their base, by id; a writable stream and FileReader are refused", () => {
     const rt = createRuntime();
+    const { proto, idOf } = rt.host.desktop.fs.serializer;
+    expect(proto).toBe(rt.global.FileSystemHandle.prototype);
+    expect(idOf(handle(rt, 31, "a", "file"))).toBe(31);
+    expect(idOf(handle(rt, 32, "d", "directory"))).toBe(32);
+    expect(idOf(Object.create(rt.global.FileSystemFileHandle.prototype))).toBeUndefined();
     const names = rt.host.desktop.fs.refused.map((r: { name: string }) => r.name);
-    expect(names).toEqual([
-      "FileReader",
-      "FileSystemFileHandle",
-      "FileSystemDirectoryHandle",
-      "FileSystemHandle",
-      "FileSystemWritableFileStream",
-    ]);
-    handle(rt, 1, "a", "file");
-    handle(rt, 2, "b", "file");
-    expect(rt.advisories().filter((l: string) => l.includes("D-F23")).length).toBe(1);
+    expect(names).toEqual(["FileReader", "FileSystemWritableFileStream"]);
+    // The clone comes back through the factory, as a drop's handle does.
+    const clone = rt.host.desktop.fs.factory(33, "a", "file");
+    expect(clone).toBeInstanceOf(rt.global.FileSystemFileHandle);
+    expect(rt.advisories()).toEqual([]);
   });
 });
 

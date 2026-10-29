@@ -696,7 +696,7 @@ fn finish(paths: Vec<PathBuf>, then: Then) -> Result<Done, Fail> {
             for p in paths {
                 let meta = std::fs::metadata(&p).map_err(|e| fail_io(&e, Access::Read))?;
                 let kind = if meta.is_dir() { fs::Kind::Directory } else { fs::Kind::File };
-                handles.push(fs::handle_json(p, kind));
+                handles.push(fs::granted_handle_json(p, kind));
             }
             Ok(Done { payload: json!({ "handles": handles }).to_string(), make: None })
         }
@@ -708,7 +708,7 @@ fn finish(paths: Vec<PathBuf>, then: Then) -> Result<Done, Fail> {
                 .truncate(true)
                 .open(&p)
                 .map_err(|e| fail_io(&e, Access::Write))?;
-            Ok(Done { payload: json!({ "handles": [fs::handle_json(p, fs::Kind::File)] }).to_string(), make: None })
+            Ok(Done { payload: json!({ "handles": [fs::granted_handle_json(p, fs::Kind::File)] }).to_string(), make: None })
         }
         Then::Download(data) => {
             let p = paths.into_iter().next().ok_or_else(|| Fail::new("AbortError", "nothing was picked"))?;

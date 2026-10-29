@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::json;
 
-use super::{fail_io, lookup, Access, Kind, NOT_FOUND, NOT_READABLE, TYPE_MISMATCH};
+use super::{fail_io, granted, Access, Kind, NOT_FOUND, NOT_READABLE, TYPE_MISMATCH};
 use crate::{pool, Done, Fail};
 
 /// What one write carries: bytes copied out of JS on the frame thread (a
@@ -316,7 +316,10 @@ fn closed() -> Fail {
 
 /// `__vn_fs_writable_open(h, keepExistingData)`: settles `{w}`.
 pub fn start_open(file: u64, keep: bool) -> String {
-    let Some(e) = lookup(file) else { return closed().to_sync_json() };
+    let e = match granted(file) {
+        Ok(e) => e,
+        Err(f) => return f.to_sync_json(),
+    };
     if e.kind != Kind::File {
         return Fail::new("TypeMismatchError", TYPE_MISMATCH).to_sync_json();
     }

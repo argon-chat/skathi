@@ -607,6 +607,14 @@ declare function __vn_fs_writable_abort(w: number): VnJson;
 /** `structuredClone` of an instance is a DataCloneError naming `interfaceName`. */
 declare function __vn_fs_refuse_clone(proto: object, interfaceName: string): void;
 /**
+ * Makes instances of `proto` (FileSystemHandle.prototype) [Serializable]:
+ * `idOf(handle)` names the id the host writes, as bytes script never sees; a
+ * clone comes back through the handle factory. The first call wins.
+ */
+declare function __vn_fs_set_serializer(proto: object, idOf: (handle: object) => number | undefined): void;
+/** `"granted"` or `"prompt"`; `request` grants the handle's path (on a user activation only). */
+declare function __vn_fs_permission(h: number, request: boolean): "granted" | "prompt";
+/**
  * A picker: `{ kind: "open"|"save"|"folder", multiple?, accept?, types?,
  * excludeAcceptAllOption?, id?, startIn?, suggestedName?, result: "files"|"handles" }`.
  * Settles `{ files }` + a FileList, `{ handles }`, or `{ cancelled: true }`.

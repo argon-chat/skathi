@@ -186,7 +186,7 @@ pub(crate) fn handles_for(paths: &[String]) -> Vec<Json> {
         .filter_map(|p| {
             let meta = std::fs::metadata(p).ok()?;
             let kind = if meta.is_dir() { crate::fs::Kind::Directory } else { crate::fs::Kind::File };
-            Some(crate::fs::handle_json(PathBuf::from(p), kind))
+            Some(crate::fs::granted_handle_json(PathBuf::from(p), kind))
         })
         .collect()
 }

@@ -273,6 +273,11 @@ export function createRuntime(
     released: [],
     refused: [],
     factory: null,
+    /** What `__vn_fs_set_serializer` was handed: `{ proto, idOf }`. */
+    serializer: null,
+    /** Handle ids whose permission is "prompt" (restored, not yet granted). */
+    prompt: new Set(),
+    permissionCalls: [],
   };
   const fsCall = (op, ...args) => {
     const answer = host.desktop.fs.answers.get(op);
@@ -448,6 +453,8 @@ export function createRuntime(
     "__vn_fs_writable_close",
     "__vn_fs_writable_abort",
     "__vn_fs_refuse_clone",
+    "__vn_fs_set_serializer",
+    "__vn_fs_permission",
     "__vn_dialog_open",
     "__vn_download",
     // desktop.ts's one export (see `loadInstallDesktop`).
@@ -683,6 +690,16 @@ export function createRuntime(
     (w) => fsCall("writableClose", w),
     (w) => fsCall("writableAbort", w),
     (proto, name) => host.desktop.fs.refused.push({ proto, name }),
+    (proto, idOf) => {
+      host.desktop.fs.serializer = { proto, idOf };
+    },
+    // The session's grants, faked per handle id: an id in `prompt` is a
+    // restored handle nobody granted yet; `request` grants it.
+    (h, request) => {
+      host.desktop.fs.permissionCalls.push({ h, request });
+      if (request) host.desktop.fs.prompt.delete(h);
+      return host.desktop.fs.prompt.has(h) ? "prompt" : "granted";
+    },
     (json, current) => fsCall("dialogOpen", JSON.parse(json), current),
     (url, attr) => fsCall("download", url, attr),
     loadInstallDesktop(),

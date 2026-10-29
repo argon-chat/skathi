@@ -166,8 +166,12 @@ const DRAIN_CAP: usize = 16;
 
 /// A fresh token. Never 0 — that is the unsolicited-event channel.
 pub(crate) fn next_token() -> u32 {
+    next_from(&NEXT_TOKEN)
+}
+
+fn next_from(counter: &AtomicU32) -> u32 {
     loop {
-        let t = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+        let t = counter.fetch_add(1, Ordering::Relaxed);
         if t != 0 {
             return t;
         }
@@ -437,14 +441,75 @@ host_fn!(fn vn_fs_set_handle_factory(g, args) {
 /// knows whether it is a folder, so there is nothing to stat), which the
 /// method wraps in a resolved promise.
 unsafe fn drop_handle_hook(g: *mut c_void, path: &std::path::Path, is_dir: bool) -> Result<u64, u64> {
-    let factory = HANDLE_FACTORY.with(|h| h.get());
     let kind = if is_dir { fs::Kind::Directory } else { fs::Kind::File };
-    let v = fs::handle_json(path.to_path_buf(), kind);
-    let id = v["h"].as_u64().unwrap_or(0);
-    let name = vn_runtime::redjs::webapi::util::js_string(g, v["name"].as_str().unwrap_or(""));
-    let kind = vn_runtime::redjs::webapi::util::js_string(g, kind.as_str());
-    vn_runtime::redjs::webapi::util::call(g, factory, Value::undefined().0, &[Value::number(id as f64).0, name, kind])
+    make_handle(g, &fs::granted_handle_json(path.to_path_buf(), kind))
 }
+
+/// The JS handle for `{h, name, kind}`, through desktop.ts's factory.
+unsafe fn make_handle(g: *mut c_void, wire: &serde_json::Value) -> Result<u64, u64> {
+    use vn_runtime::redjs::webapi::util;
+    let factory = HANDLE_FACTORY.with(|h| h.get());
+    let id = wire["h"].as_u64().unwrap_or(0);
+    let name = util::js_string(g, wire["name"].as_str().unwrap_or(""));
+    let kind = util::js_string(g, wire["kind"].as_str().unwrap_or("file"));
+    util::call(g, factory, Value::undefined().0, &[Value::number(id as f64).0, name, kind])
+}
+
+thread_local! {
+    /// `(handle) => id | undefined`, from desktop.ts: the id behind a handle
+    /// object, which lives in a WeakMap there.
+    static HANDLE_ID_OF: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Blink's words for a handle this host cannot write or read back.
+const NOT_CLONED: &str = "FileSystemHandle object could not be cloned.";
+const NOT_DESERIALIZED: &str = "Unable to deserialize cloned data.";
+
+/// redjs's [`HostCodec`](vn_runtime::redjs::webapi::serialize::HostCodec)
+/// `encode` for a `FileSystemHandle`: its path and kind, as bytes no script
+/// sees (fs/mod.rs, "Handles are [Serializable]").
+unsafe fn handle_encode(g: *mut c_void, v: u64) -> Result<Vec<u8>, String> {
+    let id_of = HANDLE_ID_OF.with(|h| h.get());
+    let id = vn_runtime::redjs::webapi::util::call(g, id_of, Value::undefined().0, &[v])
+        .ok()
+        .and_then(|n| Value(n).as_number())
+        .filter(|n| n.is_finite() && *n > 0.0)
+        .ok_or_else(|| NOT_CLONED.to_string())?;
+    fs::to_wire(id as u64).ok_or_else(|| NOT_CLONED.to_string())
+}
+
+/// `decode`: a new handle on the same path. It is granted only if a grant of
+/// this session covers the path; otherwise it is `"prompt"` (D-F22).
+unsafe fn handle_decode(g: *mut c_void, bytes: &[u8]) -> Result<u64, String> {
+    let (path, kind) = fs::from_wire(bytes).ok_or_else(|| NOT_DESERIALIZED.to_string())?;
+    if HANDLE_FACTORY.with(|h| h.get()) == 0 {
+        return Err(NOT_DESERIALIZED.to_string());
+    }
+    make_handle(g, &fs::handle_json(path, kind)).map_err(|_| NOT_DESERIALIZED.to_string())
+}
+
+// `__vn_fs_set_serializer(FileSystemHandle.prototype, idOf)`: handles become
+// [Serializable], as in Chromium (redjs tag 0x39). The first call wins: an
+// app cannot point the serializer at another prototype afterwards.
+host_fn!(fn vn_fs_set_serializer(g, args) {
+    if HANDLE_ID_OF.with(|h| h.get()) != 0 {
+        return Value::undefined().0;
+    }
+    let f = args.arg(1);
+    unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
+    HANDLE_ID_OF.with(|h| h.set(f.0));
+    let codec = vn_runtime::redjs::webapi::serialize::HostCodec { encode: handle_encode, decode: handle_decode };
+    unsafe { vn_runtime::redjs::webapi::serialize::serialize_platform_prototype(g, args.arg(0).0, "FileSystemHandle", codec) };
+    Value::undefined().0
+});
+
+// `__vn_fs_permission(h, request) -> "granted" | "prompt"`. Sync: a lookup in
+// the session's grants, no I/O. desktop.ts asks with `request` only on a
+// user activation.
+host_fn!(fn vn_fs_permission(_g, args) {
+    let state = fs::permission(arg_id(&args, 0), args.arg(1).as_bool().unwrap_or(false)).unwrap_or("prompt");
+    js_string(state)
+});
 
 // `__vn_fs_release(h)`: the handle's JS object was collected.
 host_fn!(fn vn_fs_release(_g, args) {
@@ -532,8 +597,8 @@ host_fn!(fn vn_fs_writable_abort(_g, args) {
 
 // `__vn_fs_refuse_clone(prototype, interfaceName)`: structuredClone of an
 // instance is a DataCloneError naming the interface, as for any platform
-// object that is not [Serializable] (desktop.ts marks its handle classes and
-// FileReader; docs/DESKTOP.md D-F23).
+// object that is not [Serializable] (desktop.ts marks
+// FileSystemWritableFileStream and FileReader).
 host_fn!(fn vn_fs_refuse_clone(g, args) {
     let name = read_arg_string(g, args.arg(1).0);
     unsafe { vn_runtime::redjs::webapi::serialize::refuse_platform_prototype(g, args.arg(0).0, &name) };
@@ -649,6 +714,8 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_fs_writable_close", 1, vn_fs_writable_close as *const _),
         ("__vn_fs_writable_abort", 1, vn_fs_writable_abort as *const _),
         ("__vn_fs_refuse_clone", 2, vn_fs_refuse_clone as *const _),
+        ("__vn_fs_set_serializer", 2, vn_fs_set_serializer as *const _),
+        ("__vn_fs_permission", 2, vn_fs_permission as *const _),
         ("__vn_dialog_open", 2, vn_dialog_open as *const _),
         ("__vn_download", 2, vn_download as *const _),
     ];
@@ -750,6 +817,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), b"x").unwrap();
         let h = fs::register(dir.clone(), fs::Kind::Directory);
+        fs::grant(&dir);
         let t = token_of(&fs::start_child(h, "a.txt", fs::Kind::File, false));
         let missing = token_of(&fs::start_child(h, "nope.txt", fs::Kind::File, false));
         let got = wait_for_settles(&[t, missing]);
@@ -782,8 +850,10 @@ pub(crate) mod tests {
 
     #[test]
     fn tokens_are_never_zero() {
-        NEXT_TOKEN.store(u32::MAX, Ordering::Relaxed);
-        assert_eq!(next_token(), u32::MAX);
-        assert_ne!(next_token(), 0);
+        // On a counter of its own: wrapping the shared one would hand the
+        // tests running beside this one tokens that are already in use.
+        let counter = AtomicU32::new(u32::MAX);
+        assert_eq!(next_from(&counter), u32::MAX);
+        assert_eq!(next_from(&counter), 1);
     }
 }

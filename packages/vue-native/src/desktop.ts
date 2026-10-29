@@ -19,6 +19,17 @@
 // devtools eval all see `{}`-shaped objects with no path anywhere. A
 // FinalizationRegistry releases the id when the handle is collected.
 //
+// ## Handles are [Serializable]; permission is the path's
+//
+// As in Chromium, `structuredClone`, `postMessage` and IndexedDB keep a
+// handle: redjs writes the bytes the host gives it (tag 0x39), and the clone
+// is a new handle on the same path. Permission follows the path, not the
+// object. A handle on something the user picked, dropped or launched with
+// in this session, or on something inside it, is "granted". A handle read
+// back in a later session is "prompt" until `requestPermission()` runs on a
+// user activation. Chromium shows a prompt there; this host grants with no
+// prompt, and says so once (D-F22).
+//
 // ## Why this is a separate module with injected dependencies
 //
 // It is re-exported by runtime.ts (like vnwindow.ts) and installed by it. It
@@ -79,6 +90,8 @@ export interface DesktopFsHost {
   writableClose(w: number): Json;
   writableAbort(w: number): Json;
   refuseClone(proto: object, interfaceName: string): void;
+  setSerializer(proto: object, idOf: (handle: object) => number | undefined): void;
+  permission(h: number, request: boolean): "granted" | "prompt";
   dialogOpen(requestJson: Json, currentFiles: unknown): Json;
   download(url: string, downloadAttribute: string): Json;
 }
@@ -428,7 +441,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
   const ids = new WeakMap<object, number>();
   const released = new FinalizationRegistry<number>((h) => fs.release(h));
   const INTERNAL = Symbol("vn.fs.internal");
-  let advisedClone = false;
 
   const idOf = (h: object, method: string, iface: string): number => {
     const id = ids.get(h);
@@ -445,15 +457,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       this.#kind = kind!;
       ids.set(this, id!);
       released.register(this, id!);
-      if (!advisedClone) {
-        advisedClone = true;
-        warnCompat(
-          "fsa:serialize",
-          "FileSystemHandle (D-F23): handles are not serializable here — structuredClone, postMessage " +
-            "and IndexedDB refuse them with a DataCloneError, where Chromium stores them. Keep a handle " +
-            "in memory for the session; a later session asks the user again.",
-        );
-      }
     }
     get kind(): "file" | "directory" {
       idOf(this, "kind", "FileSystemHandle");
@@ -476,28 +479,60 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
         return Promise.reject(e);
       }
     }
-    /** D-F2: always "granted" — the app is trusted local code (design §8). */
-    queryPermission(descriptor?: { mode?: string }): Promise<"granted"> {
-      return permission(this, "queryPermission", descriptor);
+    /**
+     * The path's state: "granted" for what the user chose this session (both
+     * modes alike, D-F2), "prompt" for a handle restored from storage.
+     */
+    queryPermission(descriptor?: { mode?: string }): Promise<"granted" | "prompt"> {
+      return permission(this, "queryPermission", descriptor, false);
     }
-    requestPermission(descriptor?: { mode?: string }): Promise<"granted"> {
-      return permission(this, "requestPermission", descriptor);
+    /** "prompt" becomes "granted" on a user activation, with no prompt (D-F22). */
+    requestPermission(descriptor?: { mode?: string }): Promise<"granted" | "prompt"> {
+      return permission(this, "requestPermission", descriptor, true);
     }
   }
 
-  const permission = (h: object, method: string, d?: { mode?: string }): Promise<"granted"> => {
+  let advisedGrant = false;
+  /** `requestPermission` on a "prompt" handle: Chromium asks; this host grants on the gesture. */
+  const grantOnGesture = (id: number): void => {
+    fs.permission(id, true);
+    if (advisedGrant) return;
+    advisedGrant = true;
+    warnCompat(
+      "fsa:grant",
+      "FileSystemHandle (D-F22): a handle restored from storage was granted on a user activation with no " +
+        "prompt. Chromium asks the user first (\"Allow this site to view/edit …?\"); this host has no such prompt yet.",
+    );
+  };
+
+  const permission = (h: object, method: string, d: { mode?: string } | undefined, request: boolean): Promise<"granted" | "prompt"> => {
     try {
-      idOf(h, method, "FileSystemHandle");
+      const id = idOf(h, method, "FileSystemHandle");
       const mode = d?.mode ?? "read";
       if (mode !== "read" && mode !== "readwrite") {
         throw new TypeError(
           failed(method, "FileSystemHandle", `The provided value '${mode}' is not a valid enum value of type FileSystemPermissionMode.`),
         );
       }
-      return Promise.resolve("granted");
+      const state = fs.permission(id, false);
+      if (!request || state === "granted") return Promise.resolve(state);
+      // Chromium's browser-side words: no "Failed to execute" prefix.
+      if (!activation.isActive()) throw new DOMException("User activation is required to request permissions.", "SecurityError");
+      grantOnGesture(id);
+      return Promise.resolve(fs.permission(id, false));
     } catch (e) {
       return Promise.reject(e);
     }
+  };
+
+  /**
+   * What Chromium's `RunWithWritePermission` does in front of createWritable,
+   * a `create` lookup and removeEntry: a "prompt" handle is asked, which needs
+   * a user activation; without one the operation is NotAllowedError (the host
+   * refuses it, so nothing more is needed here).
+   */
+  const writeAccess = (id: number): void => {
+    if (fs.permission(id, false) === "prompt" && activation.isActive()) grantOnGesture(id);
   };
 
   class FileSystemFileHandle extends FileSystemHandle {
@@ -511,6 +546,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     createWritable(options?: { keepExistingData?: boolean }): Promise<FileSystemWritableFileStream> {
       try {
         const id = idOf(this, "createWritable", "FileSystemFileHandle");
+        writeAccess(id);
         return settle(fs.writableOpen(id, !!options?.keepExistingData)).then(
           (s) => new FileSystemWritableFileStream(INTERNAL, Number(s.payload.w)),
         );
@@ -535,6 +571,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     #child(method: string, name: string, dir: boolean, options?: { create?: boolean }): Promise<FileSystemHandle> {
       try {
         const id = idOf(this, method, "FileSystemDirectoryHandle");
+        if (options?.create) writeAccess(id);
         return settle(fs.child(id, String(name), dir, !!options?.create)).then((s) => makeHandle(s.payload as unknown as HandleWire));
       } catch (e) {
         return Promise.reject(e);
@@ -543,6 +580,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
       try {
         const id = idOf(this, "removeEntry", "FileSystemDirectoryHandle");
+        writeAccess(id);
         return settle(fs.remove(id, String(name), !!options?.recursive)).then(() => undefined);
       } catch (e) {
         return Promise.reject(e);
@@ -667,9 +705,11 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     [FileSystemWritableFileStream, "FileSystemWritableFileStream"],
   ] as const) {
     Object.defineProperty(cls.prototype, Symbol.toStringTag, { value: name, configurable: true });
-    // Most specific first: redjs names the first refused prototype it finds.
-    fs.refuseClone(cls.prototype, name);
   }
+  // Both kinds are [Serializable] through their base (the clone's kind is in
+  // the host's bytes); a writable stream is not, as in Chromium.
+  fs.setSerializer(FileSystemHandle.prototype, (h) => ids.get(h));
+  fs.refuseClone(FileSystemWritableFileStream.prototype, "FileSystemWritableFileStream");
 
   fs.setHandleFactory((h, name, kind) => makeHandle({ h, name, kind: kind === "directory" ? "directory" : "file" }));
 
