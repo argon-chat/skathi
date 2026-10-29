@@ -2323,6 +2323,9 @@ fn parse_keystroke(spec: &str) -> Result<gpui::Keystroke, String> {
         "arrowright" => "right",
         "pageup" => "pageup",
         "pagedown" => "pagedown",
+        // The Menu key is VK_APPS: gpui names it "menu", and the DOM names it
+        // "ContextMenu" (`render::dom_key`).
+        "contextmenu" => "menu",
         " " => "space",
         lower => lower,
     }
@@ -2824,7 +2827,21 @@ fn cmd_screenshot(path: Option<&str>, backend: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{http_request_line, resolve_initial};
+    use super::{http_request_line, parse_keystroke, resolve_initial};
+
+    /// DOM `KeyboardEvent.key` names map to gpui's, the inverse of
+    /// `render::dom_key`. If one of them is missed, the `key` command
+    /// dispatches a key that no binding knows, and nothing happens.
+    #[test]
+    fn dom_key_names_reach_gpui_under_its_own_names() {
+        let key = |spec: &str| parse_keystroke(spec).unwrap().key;
+        assert_eq!(key("ContextMenu"), "menu");
+        assert_eq!(key("Shift+ContextMenu"), "menu");
+        assert_eq!(key("ArrowDown"), "down");
+        assert_eq!(key("Enter"), "enter");
+        assert_eq!(key("F10"), "f10");
+        assert!(parse_keystroke("Shift+F10").unwrap().modifiers.shift);
+    }
 
     /// The three inputs to the runtime switch, and which one wins.
     ///
