@@ -16,6 +16,14 @@ globalThis.__VUE_OPTIONS_API__ = true;
 globalThis.__VUE_PROD_DEVTOOLS__ = false;
 globalThis.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__ = false;
 globalThis.__VN_CSS__ = [];
+// vue-native's identity flag (apps/env.d.ts): `window.isVn === true` here and
+// `undefined` in every browser, so an app can branch on the host in plain
+// code, `if (window.isVn)`, without importing "vue-native". Defined first,
+// with the `__VUE_*` flags, so the bundle's module scope already sees it.
+// Read-only and non-configurable: an identity a script can rewrite is no
+// identity, and a polyfill that sets `isVn = false` to look like a browser
+// must fail, not succeed half-way.
+Object.defineProperty(globalThis, "isVn", { value: true, writable: false, enumerable: true, configurable: false });
 // Browser-compat: redjs ships no `history`; vue-router's dev build touches
 // it at startup even with memory history (its isBrowser heuristic sees our
 // window/document). Inert stub, like `location`. TODO: move into redjs

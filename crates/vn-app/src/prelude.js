@@ -14,6 +14,7 @@ globalThis.__VUE_OPTIONS_API__ = true;
 globalThis.__VUE_PROD_DEVTOOLS__ = false;
 globalThis.__VUE_PROD_HYDRATION_MISMATCH_DETAILS__ = false;
 globalThis.__VN_CSS__ = [];
+Object.defineProperty(globalThis, "isVn", { value: true, writable: false, enumerable: true, configurable: false });
 globalThis.history = {
   state: null,
   length: 1,
