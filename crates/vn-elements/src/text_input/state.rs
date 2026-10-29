@@ -26,7 +26,8 @@ use gpui::{
 use super::boundaries;
 use super::{
     Backspace, ClearSelection, Copy, Cut, Delete, DeleteToEnd, DeleteToStart, DeleteWordLeft,
-    DeleteWordRight, Down, End, Home, Left, Newline, OnChange, OnKeyDown, Paste, Redo, Right,
+    ControlledValue, DeleteWordRight, Down, End, Home, Left, Newline, OnChange, OnKeyDown, Paste,
+    Redo, Right,
     SelectAll, SelectDown, SelectEnd, SelectHome, SelectLeft, SelectRight, SelectUp, SelectWordLeft,
     SelectWordRight, ShowCharacterPalette, TextInputHandlers, Undo, Up, WordLeft, WordRight,
 };
@@ -211,6 +212,9 @@ pub struct TextInputState {
     /// two assignments, and the second one still has to land if the user typed
     /// in between (`v-model` clearing a field the user refilled).
     last_synced_write: Option<u32>,
+    /// Where the controlled value is read again before a default action; see
+    /// [`ControlledValue`].
+    controlled_value: Option<ControlledValue>,
 
     undo_stack: Vec<EditSnapshot>,
     redo_stack: Vec<EditSnapshot>,
@@ -319,6 +323,7 @@ impl TextInputState {
             _key_interceptor: Some(interceptor),
             pending_values: VecDeque::new(),
             last_synced_write: None,
+            controlled_value: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             is_selecting: false,
@@ -369,6 +374,19 @@ impl TextInputState {
         self.set_external_text(value, cx);
     }
 
+    /// [`Self::sync_value`] from the framework's [`ControlledValue`], now
+    /// rather than at the next frame: a hook that let a key or clipboard
+    /// command through may have assigned the field, and the default action
+    /// edits what it wrote.
+    pub(crate) fn resync_controlled(&mut self, cx: &mut Context<Self>) {
+        let Some(source) = self.controlled_value.clone() else {
+            return;
+        };
+        if let Some((value, write)) = source(cx) {
+            self.sync_value(&value, write, cx);
+        }
+    }
+
     /// The focus handle owned by this input. The framework needs it to focus
     /// the input programmatically (autofocus, tab order) and to observe
     /// focus/blur.
@@ -406,6 +424,7 @@ impl TextInputState {
     ) {
         self.on_change = handlers.on_change;
         self.on_key_down = handlers.on_key_down;
+        self.controlled_value = handlers.controlled_value;
         self.read_only = read_only;
         self.multiline = multiline;
         self.input_config = input_config;
@@ -484,6 +503,9 @@ impl TextInputState {
             prefer_character_input: false,
         };
         if on_key_down(&key_down, window, cx) {
+            // The keydown's handlers may have assigned the field; the binding
+            // or the character that follows edits what they wrote.
+            self.resync_controlled(cx);
             return;
         }
         // preventDefault(): no binding action for this keystroke, and no

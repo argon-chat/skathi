@@ -2783,6 +2783,15 @@ function isFileInput(n: unknown): boolean {
   return !!e && e.kind === 1 && e.tag === "input" && String(e.attrs?.type ?? "").trim().toLowerCase() === "file";
 }
 
+/**
+ * Is this one of the host's text widgets? An `<input>` other than a file input,
+ * or a `<textarea>`: the host's own rule (`vn-tree` `build_node`).
+ */
+function isTextWidget(n: unknown): boolean {
+  const e = n as MirrorElement | null | undefined;
+  return !!e && e.kind === 1 && (e.tag === "textarea" || (e.tag === "input" && !isFileInput(e)));
+}
+
 /** Is this a mirror `<label>`? */
 function isLabel(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;
@@ -4884,6 +4893,15 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
       propagate(target, dn, synthesize(dn, a, b, c, d, key));
     }
   }
+  // L-2 (docs/RUNTIME.md §5.8): the host's text widget takes its own press
+  // before any listener runs. The host cancels a press's focus, but not on one.
+  if (!proceed && name === "mousedown" && isTextWidget(target)) {
+    warnCompat(
+      "mousedown-prevent:text-field",
+      "`mousedown.preventDefault()` on an <input> or <textarea> — a browser leaves the focus where it was; " +
+        "vue-native's text field has already focused itself and placed the caret (docs/RUNTIME.md §5.8 L-2)",
+    );
+  }
   return proceed;
 });
 
@@ -4963,6 +4981,11 @@ export function createApp(
     // to="body">`, `document.querySelectorAll`, `document.body.contains`) all
     // mean this node.
     appRoot = root;
+    // `document`/`window` listeners added at module scope, before there was a
+    // root to carry their bit (`addGlobalListener` only syncs one that exists):
+    // without this a `document.addEventListener("copy", …)` from before
+    // `mount()` was never delivered.
+    for (const m of globalHandlers.values()) for (const name of Object.keys(m)) syncListenerFlag(root, name);
     // Anything module-scope theme code wrote to `document.documentElement`
     // before there was a root — the `dark` class, the `--radius` overrides —
     // lands now, BEFORE the first render, so the first paint is themed.

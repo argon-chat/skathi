@@ -93,6 +93,18 @@ describe("ClipboardEvent", () => {
     expect(got[0].target).toBe(body);
   });
 
+  // Found by packages/vn-test/specs/event-order.spec.ts: module-scope code
+  // registers its document listeners BEFORE `mount()`, when there is no root to
+  // carry the bit, and the host never delivered the event.
+  test("a document listener added before mount() still rides the root's bit", () => {
+    const rt = createRuntime();
+    rt.global.document.addEventListener("copy", () => {});
+    rt.host.listeners.length = 0;
+    rt.createApp({ render: () => null }).mount();
+    const root = rt.global.document.documentElement;
+    expect(rt.flagsFor(rt.EV_CODES.copy)).toEqual([{ id: root.__vnId, code: rt.EV_CODES.copy, on: true }]);
+  });
+
   test("no clipboardData from the host is null, not undefined", () => {
     const { rt, input, fire } = world();
     const seen: Ev[] = [];

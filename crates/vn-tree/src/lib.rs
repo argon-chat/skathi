@@ -1271,9 +1271,15 @@ mod tests {
 }
 
 /// Dispatches an input event into JS (through the registered dispatcher) and
-/// drains microtasks so Vue's reactive flush lands in the same frame. Must be
-/// called with `Phase::Commit` published. Returns `false` when a JS handler
-/// called `preventDefault()`.
+/// runs its microtask checkpoint, so Vue's reactive flush lands in the same
+/// frame. Must be called with `Phase::Commit` published. Returns `false` when
+/// a JS handler called `preventDefault()`.
+///
+/// Under a gpui listener ([`in_input_dispatch`]) the checkpoint is OWED
+/// rather than run (`vn_runtime::bridge::owe_drain`), and the listener's
+/// wrapper queues it for after gpui's dispatch (`render::settle_owed_later`),
+/// where an `onMounted` that measures can lay out. Any JS that starts before
+/// then settles it first, so the order of checkpoints is unchanged.
 pub fn dispatch_event(node: u32, event: u32, payload: &EventPayload) -> bool {
     dispatch_event_with(node, event, payload, None)
 }
@@ -1293,6 +1299,15 @@ pub fn dispatch_event_with(node: u32, event: u32, payload: &EventPayload, data: 
 }
 
 fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, data: Option<Value>) -> bool {
+    // The dispatch before this one may have left its checkpoint owed: it runs
+    // first, as a browser's would have between the two events.
+    vn_runtime::bridge::settle_owed_drain();
+    // Under a gpui listener, owe this dispatch's checkpoint (see above). Before
+    // the call: owing holds the engine lock, or JSC drains when the call ends.
+    let owe = in_input_dispatch();
+    if owe {
+        vn_runtime::bridge::owe_drain();
+    }
     JsRuntime::with(|rt| {
         let key = payload.key.map(|k| rt.ctx().string(k));
         let args = [
@@ -1315,9 +1330,12 @@ fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, d
             }
             Err(_) => true,
         };
-        // Vue schedules its patch flush on Promise microtasks: drain now so
-        // the DOM ops run inside this very listener's Commit publication.
-        rt.ctx().drain_microtasks();
+        // Vue schedules its patch flush on Promise microtasks. Off a gpui
+        // listener, drain now so the DOM ops run inside this Commit
+        // publication; under one, the checkpoint stays owed.
+        if !owe {
+            rt.ctx().drain_microtasks();
+        }
         proceed
     })
 }

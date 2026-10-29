@@ -1019,6 +1019,7 @@ pub(crate) fn js_wave_app(window: &mut Window, cx: &mut App, wave: impl FnOnce()
     // forced layout may draw under it (`crate::in_input_dispatch`).
     let _input = crate::InputDispatch::enter();
     let proceed = with_published(window, cx, Phase::Commit, wave);
+    settle_owed_later(window, cx);
     if crate::flush_changes() {
         // NOT `window.refresh()`. Refreshing a window sets gpui's `refreshing`
         // flag, which makes the next draw ignore every `Entity::cached` span in
@@ -1077,11 +1078,65 @@ fn js_dispatch<V: 'static>(
     let proceed = with_published(window, &mut **cx, Phase::Commit, || {
         crate::dispatch_event(id, event, payload)
     });
+    settle_owed_later(window, &mut **cx);
     if crate::flush_changes() {
         cx.notify();
         repaint_other_windows(cx);
     }
     proceed
+}
+
+thread_local! {
+    /// [`settle_owed_later`] has a deferred checkpoint queued.
+    static SETTLE_QUEUED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Queues the microtask checkpoint a listener's dispatch left owed
+/// (`crate::dispatch_event`) for after gpui's dispatch (docs/RUNTIME.md §5.8).
+///
+/// An `App::defer` runs once the update that called the listener has
+/// returned, and with it the frame's listeners. There the checkpoint runs in a
+/// publication of its own, off input, so an `onMounted` that the patch mounts
+/// can measure, and the forced layout draws. One is queued per gpui dispatch.
+/// Any JS that starts before it settles the checkpoint itself
+/// (`vn_runtime::bridge::settle_owed_drain`), and then this one finds nothing
+/// owed. It publishes the window the listener ran in; if that one has closed,
+/// any other; with none left, the next publication settles it.
+fn settle_owed_later(window: &Window, cx: &mut App) {
+    if !vn_runtime::bridge::drain_owed() || SETTLE_QUEUED.with(|c| c.replace(true)) {
+        return;
+    }
+    let origin = window.window_handle();
+    cx.defer(move |cx| {
+        SETTLE_QUEUED.with(|c| c.set(false));
+        if !vn_runtime::bridge::drain_owed() {
+            return;
+        }
+        // `js_wave_app`'s publication settles it on entry, then flushes and
+        // repaints what the patch changed.
+        let settle = |window: &mut Window, cx: &mut App| {
+            crate::off_input(|| js_wave_app(window, cx, || true));
+        };
+        if origin.update(cx, |_, window, cx| settle(window, cx)).is_ok() {
+            return;
+        }
+        for other in cx.windows() {
+            if other.update(cx, |_, window, cx| settle(window, cx)).is_ok() {
+                return;
+            }
+        }
+    });
+}
+
+/// A text field's default action must see what its own event's handlers did
+/// (a browser runs the checkpoint between the event and the default action),
+/// so the checkpoint is settled HERE, under the listener, before the widget
+/// edits. Its microtasks then cannot lay out (L-1); the field's other events
+/// (`input`, the mouse-up wave) are dispatched off input anyway.
+fn settle_before_default(window: &mut Window, cx: &mut App) {
+    if vn_runtime::bridge::drain_owed() {
+        js_wave_app(window, cx, || true);
+    }
 }
 
 /// DOM order for a focus move: `blur` on the node that had it, then `focus` on
@@ -3434,6 +3489,15 @@ where
 /// `<input>` focused the editor and then the root's automatic listener focused
 /// the root instead: the caret vanished and the keystrokes went to `document`.
 ///
+/// The focus itself waits until gpui's dispatch is over (`press_focus`). A
+/// browser focuses as the mousedown's DEFAULT action, after its listeners and
+/// their microtask checkpoint. So a `preventDefault()` in any of them cancels it
+/// ([`cancel_press_focus`]); Vue's `@mousedown.prevent` on a mention list or a
+/// toolbar button is how a composer keeps its caret. And a target the
+/// checkpoint removed is left unfocused. The `mousedown` is dispatched by the
+/// innermost LISTENING box, which may be an ancestor whose listener runs after
+/// this one, so the claim waits for it.
+///
 /// One log line per real focus move, at `dev` kind — this is the exact failure
 /// the meet app's "typing does nothing" turned out to be, and it is invisible
 /// from JS (`focus` events do not fire while the window is inactive: gpui
@@ -3446,10 +3510,29 @@ fn claim_press_focus(id: u32, handle: &FocusHandle, window: &mut Window, cx: &mu
     if window.default_prevented() {
         return;
     }
-    if !handle.is_focused(window) {
-        window.focus(handle, cx);
-        crate::log::record("dev", format!("[focus] press focused node {id}"));
-    }
+    // gpui's own focus-on-press (`track_focus`) backs off from this too.
+    window.prevent_default();
+    windows::here(window, |w| w.press_focus = Some((id, handle.clone())));
+    window.defer(cx, |window, cx| {
+        let Some((id, handle)) = windows::here(window, |w| w.press_focus.take()) else {
+            return; // the mousedown was cancelled
+        };
+        // The mousedown's checkpoint first, as in a browser (the one
+        // `settle_owed_later` queued finds nothing owed after this).
+        if vn_runtime::bridge::drain_owed() {
+            crate::off_input(|| js_wave_app(window, cx, || true));
+        }
+        if !handle.is_focused(window) {
+            window.focus(&handle, cx);
+            crate::log::record("dev", format!("[focus] press focused node {id}"));
+        }
+    });
+}
+
+/// A cancelled `mousedown`: the press focuses nothing, neither the box that
+/// claimed it nor a focusable ancestor nor gpui's own focus-on-press.
+fn cancel_press_focus(window: &mut Window) {
+    windows::here(window, |w| w.press_focus = None);
     window.prevent_default();
 }
 
@@ -3721,8 +3804,8 @@ where
         let handle = click_focus;
         e = e.on_any_mouse_down(cx.listener(move |_, ev: &MouseDownEvent, window, cx| {
             if let Some(h) = &handle {
-                // Focus follows the press, as in a browser; the focus/blur
-                // events come out of the subscription.
+                // Focus follows the press, as in a browser, once the mousedown
+                // is over; the focus/blur events come out of the subscription.
                 claim_press_focus(id, h, window, &mut **cx);
             }
             if bit(tree::EV_MOUSEDOWN) && !windows::here(window, |w| std::mem::replace(&mut w.down_claimed, true)) {
@@ -3732,7 +3815,9 @@ where
                 });
                 watch_activation(window, cx);
                 let payload = mouse_payload_n(ev.position, button, &ev.modifiers, ev.click_count);
-                js_dispatch(id, tree::EV_MOUSEDOWN, &payload, window, cx);
+                if !js_dispatch(id, tree::EV_MOUSEDOWN, &payload, window, cx) {
+                    cancel_press_focus(window);
+                }
             }
         }));
     }
@@ -5008,6 +5093,9 @@ fn build_input<V: 'static>(
                 // The root's key listeners (clipboard, Shift+F10) run after
                 // the field's and read this.
                 windows::here(window, |w| w.key_prevented = true);
+            } else {
+                // The widget acts on the key next.
+                settle_before_default(window, cx);
             }
             proceed
         }) as vn_elements::OnKeyDown
@@ -5030,14 +5118,26 @@ fn build_input<V: 'static>(
     // own clipboard work only if nothing cancelled it (`crate::clipboard`).
     let on_clipboard: vn_elements::OnClipboard =
         std::rc::Rc::new(move |command, window: &mut Window, cx: &mut App| {
-            crate::clipboard::fire(id, crate::clipboard::Verb::of_command(command), window, cx)
+            let proceed = crate::clipboard::fire(id, crate::clipboard::Verb::of_command(command), window, cx);
+            if proceed {
+                // The widget copies, cuts or pastes next.
+                settle_before_default(window, cx);
+            }
+            proceed
         });
+
+    // What the keydown's or the clipboard event's handlers assigned, for the
+    // widget to edit (`settle_before_default` ran their microtasks).
+    let controlled_value: vn_elements::ControlledValue = std::rc::Rc::new(move |_| {
+        tree::read_tree(|t| t.prop_write(id, "value").map(|(v, write)| (v.to_string(), write)))
+    });
 
     let handlers = TextInputHandlers {
         on_change: Some(on_change),
         on_key_down,
         on_key_up,
         on_clipboard: Some(on_clipboard),
+        controlled_value: Some(controlled_value),
     };
 
     let focus_target = state.read(cx).focus_handle();

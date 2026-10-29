@@ -29,8 +29,8 @@ pub mod text_input;
 pub use scrollbar::{ChainSpan, Overscroll, Scrollbar, ScrollbarStyle};
 pub use tab_nav::{FocusNext, FocusPrev};
 pub use text_input::{
-    ClipboardCommand, DEFAULT_ROWS, InputAttributes, KEY_CONTEXT, MappedConfiguration, OnChange,
-    OnClipboard, OnKeyDown, OnKeyUp,
+    ClipboardCommand, ControlledValue, DEFAULT_ROWS, InputAttributes, KEY_CONTEXT,
+    MappedConfiguration, OnChange, OnClipboard, OnKeyDown, OnKeyUp,
     TEXTAREA_KEY_CONTEXT, TextInputHandlers, TextInputOptions, TextInputState, configuration,
     text_input,
 };

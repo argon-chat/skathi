@@ -1575,6 +1575,9 @@ fn notify(kind: &str, state_json: &str) -> bool {
     if f == 0 {
         return true;
     }
+    // `close-requested` comes from gpui's should-close callback, outside any
+    // publication: an owed checkpoint runs first (vn_runtime::bridge::owe_drain).
+    vn_runtime::bridge::settle_owed_drain();
     JsRuntime::with(|rt| {
         let args = [rt.ctx().string(kind), rt.ctx().string(state_json)];
         let out = match rt.ctx().call(Value(f), Value::undefined(), &args) {

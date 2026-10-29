@@ -141,6 +141,18 @@ pub enum ClipboardCommand {
 /// update of the widget's state, so it may call back into it.
 pub type OnClipboard = Rc<dyn Fn(ClipboardCommand, &mut Window, &mut App) -> bool>;
 
+/// The framework's controlled value as it stands NOW: the string and its write
+/// counter (see [`TextInputState::sync_value`]), or `None` when nothing
+/// assigned one.
+///
+/// The widget reads it again after an [`OnKeyDown`] or [`OnClipboard`] hook
+/// lets the key or command through, right before it acts. The hook's handlers
+/// may have assigned the field (a chat composer clearing itself on Enter, a
+/// handler rewriting the text), and a browser's default action edits what they
+/// wrote, not what the field showed before the event. Without it the
+/// assignment would only land at the next frame's sync, after the edit.
+pub type ControlledValue = Rc<dyn Fn(&App) -> Option<(String, u32)>>;
+
 /// The per-frame callback set the framework hands the widget. All optional:
 /// the framework only fills in what the JS side actually listens for.
 #[derive(Clone, Default)]
@@ -152,6 +164,8 @@ pub struct TextInputHandlers {
     pub on_key_up: Option<OnKeyUp>,
     /// Copy / cut / paste, before the widget acts; see [`OnClipboard`].
     pub on_clipboard: Option<OnClipboard>,
+    /// Re-read after a hook, before the default action; see [`ControlledValue`].
+    pub controlled_value: Option<ControlledValue>,
 }
 
 impl std::fmt::Debug for TextInputHandlers {
@@ -161,6 +175,7 @@ impl std::fmt::Debug for TextInputHandlers {
             .field("on_key_down", &self.on_key_down.is_some())
             .field("on_key_up", &self.on_key_up.is_some())
             .field("on_clipboard", &self.on_clipboard.is_some())
+            .field("controlled_value", &self.controlled_value.is_some())
             .finish()
     }
 }
@@ -430,7 +445,11 @@ where
                 return;
             }
         }
-        state.update(cx, |this, cx| handler(this, action, window, cx));
+        state.update(cx, |this, cx| {
+            // The hook's handlers may have assigned the field ([`ControlledValue`]).
+            this.resync_controlled(cx);
+            handler(this, action, window, cx)
+        });
     })
 }
 

@@ -132,6 +132,11 @@ pub struct WindowState {
     /// root's bit) ran once as the inner box's ancestor and again as a target
     /// of its own. Reset in the capture phase of every mouse-down.
     pub down_claimed: bool,
+    /// The focus THIS mouse-down will give, once its `mousedown` has been
+    /// dispatched and checkpointed (`render::claim_press_focus`). A cancelled
+    /// `mousedown` takes it back, as a browser's `preventDefault()` cancels the
+    /// press's default focus.
+    pub press_focus: Option<(u32, gpui::FocusHandle)>,
     /// The mouse-up waves not yet delivered to JS (`render::UpWave`). One
     /// physical mouse-up is a `mouseup`, a `click` and (right button) a
     /// `contextmenu`, each at its own innermost listening box (the same "one

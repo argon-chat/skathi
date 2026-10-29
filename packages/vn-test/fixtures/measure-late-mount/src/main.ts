@@ -3,14 +3,14 @@
 //
 // `measure-on-mount` pins the reads made before the first frame. This one
 // mounts its lists afterwards, from the waves an app mounts things from: a
-// timer, a fetch completion, a click. Each list does what the Argon chat list
-// does: measure its own width in `onMounted`, keep the answer, and size its
-// bubbles from it. Before #8 every one of those reads answered 0. The wave ran
+// timer, a fetch completion, a click, a mousedown, a keydown. Each list does
+// what the Argon chat list does: measure its own width in `onMounted`, keep
+// the answer, and size its bubbles from it. Before #8 every one of those reads answered 0. The wave ran
 // inside a gpui update that held the window, the forced layout could not draw,
 // and the list sized its bubbles at `0px`.
 import { createApp, defineComponent, h, onMounted, ref } from "vue-native";
 
-const STAGES = ["timeout", "fetch", "click", "realclick"] as const;
+const STAGES = ["timeout", "fetch", "click", "realclick", "mousedown", "keydown"] as const;
 type Stage = (typeof STAGES)[number];
 
 /** Which lists are mounted. */
@@ -79,6 +79,10 @@ createApp({
         h("div", { style: { display: "flex", gap: "8px" } }, [
           h("button", { id: "mount-click", onClick: () => show("click") }, "click"),
           h("button", { id: "mount-realclick", onClick: () => show("realclick") }, "real click"),
+          // Dispatched under gpui's listener: the patch and `onMounted` run
+          // from the checkpoint the host settles after gpui's dispatch.
+          h("button", { id: "mount-down", onMousedown: () => show("mousedown") }, "down"),
+          h("button", { id: "mount-key", onKeydown: () => show("keydown") }, "key"),
         ]),
         ...STAGES.map((k) => (shown.value[k] ? h(List, { key: k, stage: k }) : null)),
         // One box per stage, so only text changes across a patch.

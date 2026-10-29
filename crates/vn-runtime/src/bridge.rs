@@ -33,6 +33,50 @@ thread_local! {
     static PHASE: Cell<Phase> = const { Cell::new(Phase::None) };
     static POISONED: Cell<bool> = const { Cell::new(false) };
     static LAST_PANIC: Cell<Option<(String, String)>> = const { Cell::new(None) };
+    static DRAIN_OWED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A dispatch made under a gpui listener leaves its microtask checkpoint OWED
+/// instead of running it there (vn-tree's `dispatch_event`; docs/RUNTIME.md
+/// §5.8). The listener's host queues a deferred checkpoint for after gpui's
+/// dispatch, where a layout read may lay out. Until then, every JS entry
+/// settles it first ([`settle_owed_drain`]), so no script runs ahead of the
+/// microtasks of the dispatch before it: there is still a checkpoint between
+/// any two events.
+///
+/// Call it BEFORE the dispatch's call into JS. It takes the engine's API lock
+/// and keeps it until the checkpoint is settled: JSC drains the microtask
+/// queue by itself whenever the OUTERMOST API lock is released, which, for a
+/// call made without the lock, is the end of that call (redjs `web::checkpoint`).
+pub fn owe_drain() {
+    if DRAIN_OWED.with(|c| c.replace(true)) {
+        return;
+    }
+    // SAFETY: the context is live and this is its VM thread.
+    if crate::JsRuntime::try_with(|rt| unsafe { redjs::ffi::redjs_lock(rt.raw()) }).is_none() {
+        DRAIN_OWED.with(|c| c.set(false));
+    }
+}
+
+/// Is a checkpoint owed ([`owe_drain`])?
+pub fn drain_owed() -> bool {
+    DRAIN_OWED.with(|c| c.get())
+}
+
+/// The owed checkpoint, now, if there is one, and the API lock released.
+/// Every publication runs it first ([`with_published`],
+/// [`with_published_app`]); so must a host that calls into JS outside one.
+pub fn settle_owed_drain() {
+    if !DRAIN_OWED.with(|c| c.replace(false)) {
+        return;
+    }
+    crate::JsRuntime::try_with(|rt| {
+        if !poisoned() {
+            rt.ctx().drain_microtasks();
+        }
+        // SAFETY: as in `owe_drain`, which took the lock this releases.
+        unsafe { redjs::ffi::redjs_unlock(rt.raw()) };
+    });
 }
 
 /// True once a host-fn panic has been caught. gpui state must be assumed
@@ -55,7 +99,8 @@ impl Drop for Guard {
     }
 }
 
-/// Publishes `window` + `cx` for the duration of `f`.
+/// Publishes `window` + `cx` for the duration of `f`, after settling an owed
+/// microtask checkpoint ([`owe_drain`]) inside the publication.
 ///
 /// Takes `&mut` for the whole call so the borrow checker guarantees the caller
 /// cannot touch them while the raw pointers are live: exactly one live `&mut`
@@ -72,6 +117,7 @@ pub fn with_published<R>(
         WINDOW.with(|c| c.replace(window as *mut Window)),
         PHASE.with(|c| c.replace(phase)),
     );
+    settle_owed_drain();
     f()
 }
 
@@ -82,6 +128,7 @@ pub fn with_published_app<R>(cx: &mut App, f: impl FnOnce() -> R) -> R {
         WINDOW.with(|c| c.replace(std::ptr::null_mut())),
         PHASE.with(|c| c.replace(Phase::App)),
     );
+    settle_owed_drain();
     f()
 }
 

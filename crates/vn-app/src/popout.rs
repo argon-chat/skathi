@@ -533,6 +533,9 @@ fn emit(on_event: u64, kind: &str, detail: Json) {
     if on_event == 0 {
         return;
     }
+    // Outside a publication: settle an input dispatch's owed checkpoint first,
+    // as every publication does (vn_runtime::bridge::owe_drain).
+    vn_runtime::bridge::settle_owed_drain();
     JsRuntime::with(|rt| {
         let args = [rt.ctx().string(kind), rt.ctx().string(&detail.to_json())];
         if let Err(vn_runtime::redjs::api::Error::Exception(e)) =
@@ -783,6 +786,7 @@ fn on_window_closed(id: WindowId, cx: &mut App) {
     vn_tree::with_tree(|t| t.mark_restyle_subtree(popout.node));
     crate::notify_shell(cx);
     if popout.on_close != 0 {
+        vn_runtime::bridge::settle_owed_drain();
         JsRuntime::with(|rt| {
             let args = [Value::int32(popout.node as i32)];
             if let Err(vn_runtime::redjs::api::Error::Exception(e)) =

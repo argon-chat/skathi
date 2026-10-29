@@ -42,7 +42,7 @@ afterAll(() => rem.close());
 // mounted after a fetch. See the describe block "a later wave" below.
 const late = await launch({
   app: "packages/vn-test/fixtures/measure-late-mount/src/main.ts",
-  window: [480, 420],
+  window: [480, 700],
   label: "measure-late",
 });
 const server = Bun.serve({
@@ -229,6 +229,16 @@ describe("a later wave", () => {
     await check("click");
     await late.locator("#mount-realclick").click({ real: true });
     await check("realclick");
+  }, T);
+
+  test("mounted from a mousedown and a keydown, under gpui's listener", async () => {
+    // Both handlers run inside gpui's dispatch, where no frame can be drawn.
+    // Their microtask checkpoint, and with it Vue's patch and the list's
+    // onMounted, is settled after the dispatch (docs/RUNTIME.md §5.8).
+    await late.locator("#mount-down").click({ real: true });
+    await check("mousedown");
+    await late.locator("#mount-key").press("k");
+    await check("keydown");
   }, T);
 
   test("no errors and no advisories on the way", async () => {

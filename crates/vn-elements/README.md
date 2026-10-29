@@ -58,12 +58,20 @@ pub type OnChange  = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 /// no key-binding action and no character insertion for that keystroke.
 pub type OnKeyDown = Rc<dyn Fn(&KeyDownEvent, &mut Window, &mut App) -> bool>;
 pub type OnKeyUp   = Rc<dyn Fn(&KeyUpEvent, &mut Window, &mut App)>;
+/// Copy / cut / paste, BEFORE the widget acts. `false` == the event was cancelled.
+pub type OnClipboard = Rc<dyn Fn(ClipboardCommand, &mut Window, &mut App) -> bool>;
+/// The controlled value (string + write counter) as it stands now. Re-read
+/// after `OnKeyDown` / `OnClipboard` let a key or command through, before the
+/// widget edits: their handlers may have assigned the field.
+pub type ControlledValue = Rc<dyn Fn(&App) -> Option<(String, u32)>>;
 
 #[derive(Clone, Default)]
 pub struct TextInputHandlers {
     pub on_change: Option<OnChange>,
     pub on_key_down: Option<OnKeyDown>,
     pub on_key_up: Option<OnKeyUp>,
+    pub on_clipboard: Option<OnClipboard>,
+    pub controlled_value: Option<ControlledValue>,
 }
 
 // ---- the element for one frame --------------------------------------------

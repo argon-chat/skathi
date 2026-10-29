@@ -198,6 +198,47 @@ describe("button and buttons", () => {
   });
 });
 
+describe("a cancelled press (docs/RUNTIME.md §5.8)", () => {
+  test("the host is told: a cancelled mousedown or pointerdown returns false", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    inner.addEventListener("mousedown", (e) => e.preventDefault());
+    expect(fire(rt, inner, "mousedown", 0, 0, 0)).toBe(false);
+    const { inner: other } = tree(rt);
+    other.addEventListener("pointerdown", (e) => e.preventDefault());
+    expect(fire(rt, other, "mousedown", 0, 0, 0)).toBe(false);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("on a text field it is advised once (L-2): the field has already focused itself", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { outer } = tree(rt);
+    const field = rt.nodeOps.createElement("textarea") as unknown as El;
+    rt.nodeOps.insert(field as never, outer as never, null);
+    field.addEventListener("mousedown", (e) => e.preventDefault());
+    expect(fire(rt, field, "mousedown", 0, 0, 0)).toBe(false);
+    fire(rt, field, "mousedown", 0, 0, 0);
+    expect(rt.advisories().length).toBe(1);
+    expect(rt.advisories()[0]).toContain("L-2");
+  });
+
+  test("an uncancelled press on a field, or a cancelled one on a file input, is not advised", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { outer } = tree(rt);
+    const field = rt.nodeOps.createElement("input") as unknown as El;
+    rt.nodeOps.insert(field as never, outer as never, null);
+    field.addEventListener("mousedown", () => {});
+    expect(fire(rt, field, "mousedown", 0, 0, 0)).toBe(true);
+    const file = rt.nodeOps.createElement("input") as unknown as El;
+    file.setAttribute("type", "file");
+    rt.nodeOps.insert(file as never, outer as never, null);
+    file.addEventListener("mousedown", (e) => e.preventDefault());
+    expect(fire(rt, file, "mousedown", 0, 0, 0)).toBe(false);
+    // (A file input has an advisory of its own, D-F12, for its rendering.)
+    expect(rt.advisories().filter((a) => a.includes("L-2"))).toEqual([]);
+  });
+});
+
 describe("pointercancel", () => {
   test("its own code; a PointerEvent that bubbles to the window and cannot be cancelled", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
