@@ -21,14 +21,14 @@ function linkWorld(href: string | null, options: Parameters<typeof createRuntime
   rt.nodeOps.insert(span, a, null);
   if (href !== null) rt.patchProp(a, "href", null, href);
   const opens = () => rt.host.desktop.calls.filter((c: { op: string }) => c.op === "openExternal");
-  const click = (node: { id: number }) => rt.host.dispatcher(node.id, rt.EV_CODES.click, 5, 6, 0, 0, undefined);
+  const click = (node: { id: number }) => rt.host.dispatcher(node.__vnId, rt.EV_CODES.click, 5, 6, 0, 0, undefined);
   return { rt, root, a, span, opens, click };
 }
 
 describe("<a href>: the click bit follows the href", () => {
   test("an href arms the host's click bit with no @click at all", () => {
     const { rt, a } = linkWorld("https://example.com/");
-    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: a.id, code: 1, on: true }]);
+    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: a.__vnId, code: 1, on: true }]);
   });
 
   test("removing the last @click keeps a link listening; removing the href disarms it", () => {
@@ -36,9 +36,9 @@ describe("<a href>: the click bit follows the href", () => {
     const fn = () => {};
     rt.patchProp(a, "onClick", null, fn);
     rt.patchProp(a, "onClick", fn, null);
-    expect(rt.flagsFor(rt.EV_CODES.click).at(-1)).toEqual({ id: a.id, code: 1, on: true });
+    expect(rt.flagsFor(rt.EV_CODES.click).at(-1)).toEqual({ id: a.__vnId, code: 1, on: true });
     rt.patchProp(a, "href", "https://example.com/", null);
-    expect(rt.flagsFor(rt.EV_CODES.click).at(-1)).toEqual({ id: a.id, code: 1, on: false });
+    expect(rt.flagsFor(rt.EV_CODES.click).at(-1)).toEqual({ id: a.__vnId, code: 1, on: false });
   });
 
   test("an <a> without an href is not a link", () => {

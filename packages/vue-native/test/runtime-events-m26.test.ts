@@ -53,7 +53,7 @@ function tree(rt: Rt) {
   return { root, outer, inner };
 }
 const fire = (rt: Rt, el: El, name: string, a = 0, b = 0, c = 0, d = 0, key?: string) =>
-  rt.host.dispatcher(el.id, (rt.EV_CODES as Record<string, number>)[name], a, b, c, d, key);
+  rt.host.dispatcher(el.__vnId, (rt.EV_CODES as Record<string, number>)[name], a, b, c, d, key);
 
 describe("contextmenu", () => {
   test("a listener arms the host's own code", () => {
@@ -231,7 +231,7 @@ describe("<img> load and error", () => {
     };
     expect(img.complete).toBe(true); // no src yet
     img.src = "blob:app://x/1";
-    expect(srcWrites(rt, img.id)).toEqual(["blob:app://x/1"]);
+    expect(srcWrites(rt, img.__vnId)).toEqual(["blob:app://x/1"]);
     expect(img.src).toBe("blob:app://x/1");
     expect([img.complete, img.naturalWidth]).toEqual([false, 0]);
     fire(rt, img, "load", 640, 480, 0, 0, "blob:app://x/1");
@@ -345,7 +345,7 @@ describe("<img> load and error", () => {
     expect([div.naturalWidth, div.complete]).toEqual([undefined, undefined]);
     div.src = "kept";
     expect(div.src).toBe("kept");
-    expect(srcWrites(rt, div.id)).toEqual([]);
+    expect(srcWrites(rt, div.__vnId)).toEqual([]);
   });
 });
 

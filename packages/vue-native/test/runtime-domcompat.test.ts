@@ -73,7 +73,7 @@ describe("useCssVars", () => {
     });
     rt.createApp(Comp).mount();
     await nextTick();
-    const styleOf = (key: string) => rt.host.styles.filter((s) => s.id === el.id && s.key === key).at(-1)?.value;
+    const styleOf = (key: string) => rt.host.styles.filter((s) => s.id === el.__vnId && s.key === key).at(-1)?.value;
     expect(styleOf("--abc123-color")).toBe("red");
     expect(styleOf("--abc123-size")).toBe("4");
 
@@ -90,8 +90,8 @@ describe("useCssVars", () => {
       setup() {
         rt.useCssVars(() => ({ "f-gap": null }));
         return () => [
-          h("i", { ref: (e: any) => e && ids.push(e.id) }),
-          h("b", { ref: (e: any) => e && ids.push(e.id) }),
+          h("i", { ref: (e: any) => e && ids.push(e.__vnId) }),
+          h("b", { ref: (e: any) => e && ids.push(e.__vnId) }),
         ];
       },
     });
@@ -160,10 +160,10 @@ describe("IntersectionObserver samples the painted bounds", () => {
     const rt = createRuntime();
     rt.createApp({ render: () => null }).mount();
     const root = rt.global.document.documentElement;
-    rt.host.boundsById.set(root.id, "0,0,800,600");
+    rt.host.boundsById.set(root.__vnId, "0,0,800,600");
     const el = rt.nodeOps.createElement("div");
     rt.nodeOps.insert(el, root, null);
-    rt.host.boundsById.set(el.id, bounds);
+    rt.host.boundsById.set(el.__vnId, bounds);
     return { rt, root, el };
   }
 
@@ -184,7 +184,7 @@ describe("IntersectionObserver samples the painted bounds", () => {
     await frames(2);
     expect(seen.length).toBe(1);
     // Scrolled out below the viewport.
-    rt.host.boundsById.set(el.id, "100,700,200,100");
+    rt.host.boundsById.set(el.__vnId, "100,700,200,100");
     await frames(2);
     expect(seen.length).toBe(2);
     expect(seen[1].isIntersecting).toBe(false);
@@ -203,11 +203,11 @@ describe("IntersectionObserver samples the painted bounds", () => {
     expect(seen[0].intersectionRatio).toBeCloseTo(0.5);
     expect(seen[0].intersectionRect).toMatchObject({ y: 550, height: 50, width: 100 });
     // 60% visible: still between 0.5 and 0.75 -> same threshold index, no entry.
-    rt.host.boundsById.set(el.id, "0,540,100,100");
+    rt.host.boundsById.set(el.__vnId, "0,540,100,100");
     await frames(2);
     expect(seen.length).toBe(1);
     // 80%: past 0.75 -> one entry.
-    rt.host.boundsById.set(el.id, "0,520,100,100");
+    rt.host.boundsById.set(el.__vnId, "0,520,100,100");
     await frames(2);
     expect(seen.length).toBe(2);
     ob.disconnect();
@@ -232,10 +232,10 @@ describe("IntersectionObserver samples the painted bounds", () => {
     const { rt, root, el } = world("0,0,100,100");
     const scroller = rt.nodeOps.createElement("section");
     rt.nodeOps.insert(scroller, root, null);
-    rt.host.boundsById.set(scroller.id, "0,0,300,300");
+    rt.host.boundsById.set(scroller.__vnId, "0,0,300,300");
     const inside = rt.nodeOps.createElement("p");
     rt.nodeOps.insert(inside, scroller, null);
-    rt.host.boundsById.set(inside.id, "0,400,100,50"); // inside the window, below the scroller's box
+    rt.host.boundsById.set(inside.__vnId, "0,400,100,50"); // inside the window, below the scroller's box
     const seen: any[] = [];
     const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { root: scroller });
     ob.observe(inside);
@@ -243,7 +243,7 @@ describe("IntersectionObserver samples the painted bounds", () => {
     await frames(2);
     expect(seen.find((e) => e.target === inside).isIntersecting).toBe(false);
     expect(seen.find((e) => e.target === el).isIntersecting).toBe(false);
-    rt.host.boundsById.set(inside.id, "0,200,100,50");
+    rt.host.boundsById.set(inside.__vnId, "0,200,100,50");
     await frames(2);
     expect(seen.filter((e) => e.target === inside).at(-1).isIntersecting).toBe(true);
     ob.disconnect();
@@ -256,7 +256,7 @@ describe("IntersectionObserver samples the painted bounds", () => {
     const tick = () => queue.splice(0).forEach((cb) => cb());
     rt.createApp({ render: () => null }).mount();
     const root = rt.global.document.documentElement;
-    rt.host.boundsById.set(root.id, "0,0,800,600");
+    rt.host.boundsById.set(root.__vnId, "0,0,800,600");
     const late = rt.nodeOps.createElement("div");
     rt.nodeOps.insert(late, root, null);
     const hidden = rt.nodeOps.createElement("div"); // detached: never painted
@@ -267,7 +267,7 @@ describe("IntersectionObserver samples the painted bounds", () => {
     tick();
     tick();
     expect(seen).toEqual([]); // both still within their grace frames
-    rt.host.boundsById.set(late.id, "10,10,50,50"); // its first layout lands
+    rt.host.boundsById.set(late.__vnId, "10,10,50,50"); // its first layout lands
     tick();
     expect(seen.map((e) => [e.target === late, e.isIntersecting])).toEqual([[true, true]]);
     tick();

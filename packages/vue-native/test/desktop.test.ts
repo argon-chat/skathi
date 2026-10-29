@@ -472,13 +472,13 @@ function fileWorld(attrs: Record<string, string> = {}) {
     rt.patchProp(root, `on${t[0].toUpperCase()}${t.slice(1)}`, null, (e: any) => seen.push(`${t}:${e.bubbles}:${e.target === input}`));
   }
   const host = (node: { id: number }, name: "click" | "keydown" | "keyup" | "mousedown", key?: string) =>
-    rt.host.dispatcher(node.id, rt.EV_CODES[name], 5, 6, 0, 0, key);
+    rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], 5, 6, 0, 0, key);
   /** A user's click: the mousedown that activates, then the click. */
   const userClick = (node: { id: number }) => {
     host(node, "mousedown");
     host(node, "click");
   };
-  const label = () => rt.host.props.filter((p: { id: number; key: string }) => p.id === input.id && p.key === ":file-label").at(-1)?.value;
+  const label = () => rt.host.props.filter((p: { id: number; key: string }) => p.id === input.__vnId && p.key === ":file-label").at(-1)?.value;
   return { rt, root, input: input as Record<string, any>, seen, host, userClick, label };
 }
 
@@ -486,7 +486,7 @@ describe("<input type=file> (HTML)", () => {
   test("arms click, Enter and Space, and starts empty: a FileList, no value, 'No file chosen'", () => {
     const { rt, input, label } = fileWorld();
     for (const code of [rt.EV_CODES.click, rt.EV_CODES.keydown, rt.EV_CODES.keyup]) {
-      expect(rt.flagsFor(code)).toEqual([{ id: input.id, code, on: true }]);
+      expect(rt.flagsFor(code)).toEqual([{ id: input.__vnId, code, on: true }]);
     }
     expect(label()).toBe("No file chosen");
     expect(input.files).toBeInstanceOf(FakeFileList);
@@ -572,7 +572,7 @@ describe("<input type=file> (HTML)", () => {
     expect((calls(rt, "dialogOpen")[0].args[0] as any).kind).toBe("folder");
     input.multiple = true;
     input.accept = "image/*";
-    expect(rt.host.props.filter((p: any) => p.id === input.id && ["multiple", "accept"].includes(p.key)).map((p: any) => [p.key, p.value]))
+    expect(rt.host.props.filter((p: any) => p.id === input.__vnId && ["multiple", "accept"].includes(p.key)).map((p: any) => [p.key, p.value]))
       .toEqual([["multiple", ""], ["accept", "image/*"]]);
     rt.patchProp(input, "disabled", null, "");
     userClick(input);
@@ -639,7 +639,7 @@ describe("<label> activation (HTML)", () => {
 
   test("is armed for clicks at creation, and clicks the control its `for` names", () => {
     const { rt, label, span, userClick } = labelWorld();
-    expect(rt.flagsFor(rt.EV_CODES.click).some((f: any) => f.id === label.id && f.on)).toBe(true);
+    expect(rt.flagsFor(rt.EV_CODES.click).some((f: any) => f.id === label.__vnId && f.on)).toBe(true);
     rt.patchProp(label, "for", null, "pick");
     userClick(span);
     expect(calls(rt, "dialogOpen").length).toBe(1);
@@ -656,8 +656,8 @@ describe("<label> activation (HTML)", () => {
     let clicks = 0;
     rt.patchProp(input, "onClick", null, () => clicks++);
     const user = (n: { id: number }) => {
-      rt.host.dispatcher(n.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
-      rt.host.dispatcher(n.id, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
+      rt.host.dispatcher(n.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+      rt.host.dispatcher(n.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
     };
     user(text);
     expect([clicks, calls(rt, "dialogOpen").length]).toEqual([1, 1]);
@@ -673,10 +673,10 @@ describe("<label> activation (HTML)", () => {
     rt.nodeOps.insert(input, label, null);
     let clicked = 0;
     rt.patchProp(input, "onClick", null, () => clicked++);
-    rt.host.dispatcher(label.id, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
-    rt.host.dispatcher(label.id, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(label.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(label.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
     expect(clicked).toBe(2);
-    expect(rt.host.focus.calls).toEqual([{ id: input.id, op: 0 }, { id: input.id, op: 0 }]);
+    expect(rt.host.focus.calls).toEqual([{ id: input.__vnId, op: 0 }, { id: input.__vnId, op: 0 }]);
     expect(rt.global.document.activeElement).toBe(input);
     expect(rt.advisories().filter((l: string) => l.includes("D-F23"))).toEqual([]);
   });

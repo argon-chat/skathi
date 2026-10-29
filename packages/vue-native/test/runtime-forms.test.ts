@@ -41,8 +41,8 @@ function formWorld(options: { button?: string | null; fields?: number; novalidat
     submits.push({ submitter: e.submitter, cancelable: e.cancelable, bubbles: e.bubbles, type: e.type });
     if (cancel) e.preventDefault();
   });
-  const click = (n: Node) => rt.host.dispatcher(n.id, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
-  const enter = (n: Node) => rt.host.dispatcher(n.id, rt.EV_CODES.keydown, 0, 0, 0, 0, "Enter");
+  const click = (n: Node) => rt.host.dispatcher(n.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
+  const enter = (n: Node) => rt.host.dispatcher(n.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Enter");
   const navigations = () => rt.advisories().filter((l: string) => l.includes("no document to navigate")).length;
   return {
     rt, root, form, fields, field: fields[0], button, submits, click, enter, navigations,
@@ -53,7 +53,7 @@ function formWorld(options: { button?: string | null; fields?: number; novalidat
 }
 
 /** A submit log entry's submitter, by node id (mirror nodes are cyclic; never deep-compare them). */
-const who = (s: { submitter: unknown }) => (s.submitter as Node | null)?.id ?? null;
+const who = (s: { submitter: unknown }) => (s.submitter as Node | null)?.__vnId ?? null;
 
 const lastFlag = (rt: Rt, code: number, id: number) =>
   rt.host.listeners.filter((l: { id: number; code: number }) => l.code === code && l.id === id).at(-1)?.on;
@@ -66,18 +66,18 @@ describe("forms: what the host is asked to deliver", () => {
 
   test("a <button> listens for its own click; type=button stops it, type=submit restarts it", () => {
     const { rt, button } = formWorld();
-    expect(lastFlag(rt, rt.EV_CODES.click, button!.id)).toBe(true);
+    expect(lastFlag(rt, rt.EV_CODES.click, button!.__vnId)).toBe(true);
     rt.patchProp(button!, "type", null, "button");
-    expect(lastFlag(rt, rt.EV_CODES.click, button!.id)).toBe(false);
+    expect(lastFlag(rt, rt.EV_CODES.click, button!.__vnId)).toBe(false);
     rt.patchProp(button!, "type", "button", "submit");
-    expect(lastFlag(rt, rt.EV_CODES.click, button!.id)).toBe(true);
+    expect(lastFlag(rt, rt.EV_CODES.click, button!.__vnId)).toBe(true);
   });
 
   test("a text-like <input> hears Enter; a checkbox does not", () => {
     const { rt, field } = formWorld();
-    expect(lastFlag(rt, rt.EV_CODES.keydown, field.id)).toBe(true);
+    expect(lastFlag(rt, rt.EV_CODES.keydown, field.__vnId)).toBe(true);
     rt.patchProp(field, "type", "email", "checkbox");
-    expect(lastFlag(rt, rt.EV_CODES.keydown, field.id)).toBe(false);
+    expect(lastFlag(rt, rt.EV_CODES.keydown, field.__vnId)).toBe(false);
   });
 });
 
@@ -85,7 +85,7 @@ describe("forms: a submit button's activation", () => {
   test("a host click submits the form owner with the button as submitter: a cancelable, bubbling SubmitEvent", () => {
     const { rt, button, submits, click } = formWorld();
     click(button!);
-    expect(submits.map(who)).toEqual([button!.id]);
+    expect(submits.map(who)).toEqual([button!.__vnId]);
     expect(submits[0]).toMatchObject({ cancelable: true, bubbles: true, type: "submit" });
     expect(rt.global.SubmitEvent).toBeFunction();
   });
@@ -128,7 +128,7 @@ describe("forms: a submit button's activation", () => {
     click(button!);
     expect(submits).toEqual([]);
     click(inLegend);
-    expect(submits.map(who)).toEqual([inLegend.id]);
+    expect(submits.map(who)).toEqual([inLegend.__vnId]);
     expect(rt.advisories().filter((l: string) => l.includes("<fieldset disabled>")).length).toBe(1);
   });
 
@@ -152,12 +152,12 @@ describe("forms: a submit button's activation", () => {
     const { rt, root, form, submits } = formWorld({ button: null });
     const outside = rt.nodeOps.createElement("button");
     rt.nodeOps.insert(outside, root, null);
-    rt.host.dispatcher(outside.id, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(outside.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
     expect(submits).toEqual([]);
     rt.patchProp(form, "id", null, "login");
     rt.patchProp(outside, "form", null, "login");
-    rt.host.dispatcher(outside.id, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
-    expect(submits.map(who)).toEqual([outside.id]);
+    rt.host.dispatcher(outside.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
+    expect(submits.map(who)).toEqual([outside.__vnId]);
   });
 });
 
@@ -168,7 +168,7 @@ describe("forms: implicit submission (Enter)", () => {
     rt.patchProp(button!, "onClick", null, () => clicks++);
     enter(field);
     expect(clicks).toBe(1);
-    expect(submits.map(who)).toEqual([button!.id]);
+    expect(submits.map(who)).toEqual([button!.__vnId]);
   });
 
   test("a disabled default button means Enter does nothing at all", () => {
@@ -184,7 +184,7 @@ describe("forms: implicit submission (Enter)", () => {
     rt.patchProp(plain, "type", null, "button");
     rt.nodeOps.insert(plain, form, field as never);
     enter(field);
-    expect(submits.map(who)).toEqual([button!.id]);
+    expect(submits.map(who)).toEqual([button!.__vnId]);
   });
 
   test("no submit button: one field submits the form itself (submitter null), two fields do nothing", () => {
@@ -200,7 +200,7 @@ describe("forms: implicit submission (Enter)", () => {
     const { rt, root, field, submits, enter } = formWorld();
     rt.patchProp(field, "onKeydown", null, (e: { preventDefault(): void }) => e.preventDefault());
     enter(field);
-    rt.host.dispatcher(field.id, rt.EV_CODES.keydown, 0, 0, 0, 0, "a");
+    rt.host.dispatcher(field.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "a");
     const loose = rt.nodeOps.createElement("input");
     rt.nodeOps.insert(loose, root, null);
     enter(loose);
@@ -213,7 +213,7 @@ describe("forms: requestSubmit(), submit(), reset()", () => {
     const { form, button, submits } = formWorld();
     (form as unknown as { requestSubmit(s?: unknown): void }).requestSubmit();
     (form as unknown as { requestSubmit(s?: unknown): void }).requestSubmit(button);
-    expect(submits.map(who)).toEqual([null, button!.id]);
+    expect(submits.map(who)).toEqual([null, button!.__vnId]);
   });
 
   test("requestSubmit's TypeError and NotFoundError, and only a form has it", () => {
@@ -301,7 +301,7 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
 
   test("a synchronous move fires blur, focusout, focus, focusin, with relatedTarget, before focus() returns", () => {
     const { rt, a, b, log } = focusWorld();
-    rt.host.focus.answer = (id: number) => (id === a.id ? "moved:0" : `moved:${a.id}`);
+    rt.host.focus.answer = (id: number) => (id === a.__vnId ? "moved:0" : `moved:${a.__vnId}`);
     focus(a);
     expect(rt.global.document.activeElement).toBe(a);
     log.length = 0;
@@ -334,16 +334,16 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
     expect(log).toEqual([]);
     expect(rt.advisories().filter((l: string) => l.includes("next frame")).length).toBe(1);
     expect(rt.global.document.activeElement).toBe(null);
-    rt.host.dispatcher(a.id, rt.EV_CODES.focus, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(a.__vnId, rt.EV_CODES.focus, 0, 0, 0, 0, undefined);
     expect(rt.global.document.activeElement).toBe(a);
     expect(log).toEqual(["focus@a(null)", "focusin@a(null)", "focusin^root:a"]);
-    rt.host.dispatcher(a.id, rt.EV_CODES.blur, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(a.__vnId, rt.EV_CODES.blur, 0, 0, 0, 0, undefined);
     expect(rt.global.document.activeElement).toBe(null);
   });
 
   test("blur() on the focused element fires blur and focusout; on another one, nothing", () => {
     const { rt, a, b, log } = focusWorld();
-    rt.host.focus.answer = (id: number, op: number) => (op === 0 ? "moved:0" : id === a.id ? "blurred" : "");
+    rt.host.focus.answer = (id: number, op: number) => (op === 0 ? "moved:0" : id === a.__vnId ? "blurred" : "");
     focus(a);
     log.length = 0;
     blur(b);

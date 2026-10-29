@@ -15,7 +15,7 @@ function setup(options: { styleAccepts?: boolean } = {}) {
   const hostStyle = () => {
     const out: [string, string][] = [];
     for (const { id, key, value } of rt.host.styles) {
-      if (id !== el.id) continue;
+      if (id !== el.__vnId) continue;
       const i = out.findIndex(([k]) => k === key);
       if (value === "") {
         if (i >= 0) out.splice(i, 1);
@@ -234,7 +234,7 @@ describe("the style attribute is the inline declaration block", () => {
     el.style.cssText = "color: red; width: 1px";
     const before = rt.host.styles.length;
     el.style.cssText = "color: red; width: 2px";
-    expect(rt.host.styles.slice(before)).toEqual([{ id: el.id, key: "width", value: "2px" }]);
+    expect(rt.host.styles.slice(before)).toEqual([{ id: el.__vnId, key: "width", value: "2px" }]);
   });
 
   test("a block re-set in another order is re-sent, so the host's order is the block's", () => {
@@ -257,7 +257,7 @@ describe("the style attribute is the inline declaration block", () => {
     const root = doc.documentElement;
     expect(root.style.fontSize).toBe("14px");
     expect(root.style.getPropertyValue("--radius")).toBe("1rem");
-    expect(rt.host.styles.filter((s) => s.id === root.id).map((s) => s.key)).toEqual(["font-size", "--radius"]);
+    expect(rt.host.styles.filter((s) => s.id === root.__vnId).map((s) => s.key)).toEqual(["font-size", "--radius"]);
   });
 });
 
@@ -279,7 +279,7 @@ describe(":style is runtime-dom's patchStyle", () => {
     rt.createApp({ render: () => h("div", { ref: (e: unknown) => (el = e), style: "display:flex;gap:4px" }) }).mount();
     expect(el.style.display).toBe("flex");
     expect(el.getAttribute("style")).toBe("display: flex; gap: 4px;");
-    expect(rt.host.styles.filter((s) => s.id === el.id).map((s) => `${s.key}=${s.value}`)).toEqual([
+    expect(rt.host.styles.filter((s) => s.id === el.__vnId).map((s) => `${s.key}=${s.value}`)).toEqual([
       "display=flex",
       "gap=4px",
     ]);

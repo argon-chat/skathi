@@ -51,7 +51,7 @@ describe("the reka bubble-input pattern", () => {
       input.dispatchEvent(changeEvent);
     }
 
-    expect(lastValue(rt, el.id)).toBe("true");
+    expect(lastValue(rt, el.__vnId)).toBe("true");
     expect(el.value).toBe("true");
     expect(seen).toEqual(["input:true:true", "change:true", "change@form"]);
     expect(descriptor.get!.call(el)).toBe("true");
@@ -65,7 +65,7 @@ describe("the reka bubble-input pattern", () => {
     const setValue = Object.getOwnPropertyDescriptor(proto(rt, "HTMLSelectElement"), "value")!.set!;
     setValue.call(select, "apple");
     select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(lastValue(rt, select.id)).toBe("apple");
+    expect(lastValue(rt, select.__vnId)).toBe("apple");
     expect(seen).toEqual(["change:apple"]);
   });
 
@@ -78,7 +78,7 @@ describe("the reka bubble-input pattern", () => {
     expect(() => d.get!.call(Object.create(proto(rt, "HTMLInputElement")))).toThrow("Illegal invocation");
     const ta = rt.nodeOps.createElement("textarea") as unknown as El;
     Object.getOwnPropertyDescriptor(proto(rt, "HTMLTextAreaElement"), "value")!.set!.call(ta, "hi");
-    expect(lastValue(rt, ta.id)).toBe("hi");
+    expect(lastValue(rt, ta.__vnId)).toBe("hi");
   });
 });
 
@@ -92,7 +92,7 @@ describe("value", () => {
     el.value = "a";
     el.value = "a";
     el.value = null;
-    const writes = rt.host.props.filter((p: { id: number; key: string }) => p.id === el.id && p.key === "value");
+    const writes = rt.host.props.filter((p: { id: number; key: string }) => p.id === el.__vnId && p.key === "value");
     expect(writes.map((p: { value: unknown }) => p.value)).toEqual(["a", "a", ""]);
     expect(el.value).toBe("");
     expect(events).toEqual([]);
@@ -102,12 +102,12 @@ describe("value", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("input") as unknown as El;
     // The host delivers `input` to a text control on its own account…
-    expect(rt.flagsFor(rt.EV_CODES.input).at(-1)).toEqual({ id: el.id, code: rt.EV_CODES.input, on: true });
+    expect(rt.flagsFor(rt.EV_CODES.input).at(-1)).toEqual({ id: el.__vnId, code: rt.EV_CODES.input, on: true });
     // …and the payload is the field's new value.
-    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
+    rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
     expect(el.value).toBe("typed");
     // The echo is not pushed back to the field it came from.
-    expect(lastValue(rt, el.id)).toBeUndefined();
+    expect(lastValue(rt, el.__vnId)).toBeUndefined();
   });
 
   test(":value from the template still goes through the host once", () => {
@@ -115,7 +115,7 @@ describe("value", () => {
     const el = rt.nodeOps.createElement("input") as unknown as El;
     rt.patchProp(el, "value", null, "x");
     expect(el.value).toBe("x");
-    expect(rt.host.props.filter((p: { id: number; key: string }) => p.id === el.id && p.key === "value").length).toBe(1);
+    expect(rt.host.props.filter((p: { id: number; key: string }) => p.id === el.__vnId && p.key === "value").length).toBe(1);
   });
 
   test("v-model: typing updates the model, and a model reset reaches the field", () => {
@@ -124,12 +124,12 @@ describe("value", () => {
     let model: unknown = null;
     rt.vModelText.created(el, { modifiers: {} }, { props: { "onUpdate:modelValue": (v: unknown) => (model = v) } });
     rt.vModelText.mounted(el, { value: "" });
-    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "abc");
+    rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "abc");
     expect(model).toBe("abc");
     expect(el.value).toBe("abc");
     // The model is cleared: the field held "abc", so "" is written.
     rt.vModelText.beforeUpdate(el, { value: "" }, { props: { "onUpdate:modelValue": () => {} } });
-    expect(lastValue(rt, el.id)).toBe("");
+    expect(lastValue(rt, el.__vnId)).toBe("");
     expect(el.value).toBe("");
   });
 
@@ -139,7 +139,7 @@ describe("value", () => {
     const obj = { a: 1 };
     div.value = obj;
     expect(div.value).toBe(obj);
-    expect(rt.host.props.some((p: { id: number; key: string }) => p.id === div.id && p.key === "value")).toBe(false);
+    expect(rt.host.props.some((p: { id: number; key: string }) => p.id === div.__vnId && p.key === "value")).toBe(false);
 
     const file = rt.nodeOps.createElement("input") as unknown as El;
     rt.patchProp(file, "type", null, "file");
@@ -162,7 +162,7 @@ describe("checked, defaultValue, defaultChecked", () => {
     expect(box.checked).toBe(true);
     Object.getOwnPropertyDescriptor(proto(rt, "HTMLInputElement"), "checked")!.set!.call(box, false);
     expect(box.checked).toBe(false);
-    expect(lastValue(rt, box.id, "checked")).toBe("false");
+    expect(lastValue(rt, box.__vnId, "checked")).toBe("false");
     expect(box.defaultChecked).toBe(true);
   });
 

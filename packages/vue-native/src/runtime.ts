@@ -35,6 +35,10 @@ import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/
 // tier-2 surface to re-export, so it is installed here rather than re-exported.
 import { installDesktop } from "./desktop";
 import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWire } from "./desktop";
+// `<canvas>`'s bitmap and its 2D context, keyed by the host node id (the
+// host+media stream's module). `nodeOps.createElement` adopts every canvas,
+// the renderer's and `document.createElement`'s alike.
+import { adoptCanvas } from "./canvas";
 
 // ---- the realm a reload keeps (m26 client sweep #3) ------------------------
 //
@@ -244,7 +248,13 @@ interface InlineStyleState {
 
 /** The members every mirror node has — elements and text/comment alike. */
 interface MirrorNodeBase {
-  id: VnNodeId;
+  /**
+   * The host node id (`VnNodeId`), under a name of its own: `el.id` is the
+   * `id` ATTRIBUTE, as in a browser. Fixed for the life of the host node, and
+   * 0 once the node is freed (`forgetDeep`): host ids are recycled, so a
+   * reference that outlives its node must not name the next one.
+   */
+  __vnId: VnNodeId;
   kind: MirrorKind;
   tag: string;
   /** A parent is always an element; the root's is null. */
@@ -673,6 +683,125 @@ const MEDIA_EVENTS = new Set<string>([
 ]);
 const nodesById = new Map<VnNodeId, MirrorNode>();
 
+// ---- loose nodes: the ones only script holds (m26 client sweep #5a) --------
+//
+// A node the renderer made is held by the renderer (`vnode.el`) or by the tree
+// it is in, and `nodesById` holds it strongly until Vue's `remove` frees it.
+// A node SCRIPT made (`document.createElement`, `createTextNode`, `new
+// DocumentFragment()`) or took out of the tree (`removeChild`, `remove()`,
+// `textContent =`) is a different thing: in a browser it lives exactly as long
+// as script can reach it, and a strong map would keep it, and its host node,
+// forever. So a LOOSE subtree is held weakly here, and once the collector has
+// taken its root (a loose subtree dies whole: `parentNode` and `childNodes`
+// tie it together) `sweepLoose` frees its host nodes with the renderer's own
+// `__vn_remove`.
+//
+// The host has no "detach" op, and none is needed: a removed subtree is
+// `__vn_insert`ed into a container of its own that is never attached (its
+// "box"), the way <KeepAlive> parks a deactivated subtree in its storage
+// container. It is not painted, and the box goes when the subtree is inserted
+// again or freed.
+//
+// Invariant: a node is loose exactly when its topmost ancestor is in
+// `looseRoots`; `nodeOps.insert` moves a subtree between the two registries
+// when it changes sides.
+const looseById = new Map<VnNodeId, WeakRef<MirrorNode>>();
+/** The root of each loose subtree, and the box a removed one is parked in (0: none, it never had a parent). */
+const looseRoots = new Map<VnNodeId, { ref: WeakRef<MirrorNode>; box: VnNodeId }>();
+/** A mirror node by id: the renderer's, or a loose one script still holds. */
+function nodeById(id: VnNodeId): MirrorNode | undefined {
+  return nodesById.get(id) ?? (looseById.size ? looseById.get(id)?.deref() : undefined);
+}
+const isLoose = (n: MirrorNode): boolean => looseById.size !== 0 && looseById.get(n.__vnId)?.deref() === n;
+/** `n`'s subtree is now held only by script. */
+function loosen(n: MirrorNode): void {
+  forEachDeep(n, (d) => {
+    if (nodesById.get(d.__vnId) === d) nodesById.delete(d.__vnId);
+    looseById.set(d.__vnId, new WeakRef(d));
+  });
+}
+/** `n`'s subtree joined one the renderer or the document holds. */
+function tighten(n: MirrorNode): void {
+  forEachDeep(n, (d) => {
+    looseById.delete(d.__vnId);
+    nodesById.set(d.__vnId, d);
+  });
+}
+let sweepQueued = false;
+/** Asks for a sweep once the collector has taken a loose root. */
+const looseFinalizer: FinalizationRegistry<VnNodeId> | null =
+  typeof FinalizationRegistry === "function"
+    ? new FinalizationRegistry<VnNodeId>(() => {
+        if (sweepQueued) return;
+        sweepQueued = true;
+        queueMicrotask(sweepLoose);
+      })
+    : null;
+/** Without a FinalizationRegistry the sweep runs every this many new loose roots. */
+let rootsSinceSweep = 0;
+function addLooseRoot(n: MirrorNode, box: VnNodeId): void {
+  looseRoots.set(n.__vnId, { ref: new WeakRef(n), box });
+  if (looseFinalizer) looseFinalizer.register(n, n.__vnId, n);
+  else if (++rootsSinceSweep >= 256) {
+    rootsSinceSweep = 0;
+    sweepLoose();
+  }
+}
+/** `n` stops being a loose root (inserted, or freed). Answers the box it was parked in, 0 for none. */
+function dropLooseRoot(n: MirrorNode): VnNodeId {
+  if (looseRoots.size === 0) return 0;
+  const r = looseRoots.get(n.__vnId);
+  if (!r || r.ref.deref() !== n) return 0;
+  looseRoots.delete(n.__vnId);
+  looseFinalizer?.unregister(n);
+  return r.box;
+}
+/** Frees the host nodes of every loose subtree the collector has taken. */
+function sweepLoose(): void {
+  sweepQueued = false;
+  for (const [id, r] of looseRoots) {
+    if (r.ref.deref()) continue;
+    looseRoots.delete(id);
+    __vn_remove(r.box || id);
+  }
+  for (const [id, ref] of looseById) if (!ref.deref()) looseById.delete(id);
+}
+/** A node script made: a loose subtree of its own, with no box (it never had a parent). */
+function looseCreated<T extends MirrorNode>(n: T): T {
+  loosen(n);
+  addLooseRoot(n, 0);
+  return n;
+}
+/**
+ * Takes `child` out of its parent WITHOUT freeing it, as a browser's removal
+ * does: a script may insert it again. Its subtree becomes loose, parked in a box.
+ */
+function detachNode(child: MirrorNode, notify = true): void {
+  const p = child.parentNode;
+  if (!p) return;
+  const i = p.childNodes.indexOf(child);
+  if (i >= 0) p.childNodes.splice(i, 1);
+  child.parentNode = null;
+  const box = __vn_create_element(I("vn-detached"));
+  __vn_insert(child.__vnId, box, 0);
+  if (!isLoose(child)) loosen(child);
+  addLooseRoot(child, box);
+  if (notify) notifyMutation(p, "childList", { addedNodes: [], removedNodes: [child] });
+}
+/**
+ * Forgets a subtree whose host nodes are being freed: every registry, every
+ * handler, and its ids, which become 0. Host ids are recycled, so a reference
+ * that outlives its node must not go on naming whatever gets the id next.
+ */
+function forgetDeep(n: MirrorNode): void {
+  forEachDeep(n, (d) => {
+    handlers.delete(d);
+    if (nodesById.get(d.__vnId) === d) nodesById.delete(d.__vnId);
+    else if (looseById.size) looseById.delete(d.__vnId);
+    d.__vnId = 0;
+  });
+}
+
 // ---- JS mirror nodes ------------------------------------------------------
 // Vue writes symbol props onto host nodes and needs parentNode/nextSibling
 // synchronously — both served from this mirror, zero host calls.
@@ -725,7 +854,7 @@ function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode {
   // `MirrorNodeInit` is the one place the two shapes are held open at once: the
   // node is neither an element nor a text node until `kind` is written.
   const n = Object.create(kind === 1 ? ElementProto : TextProto) as MirrorNodeInit;
-  n.id = id;
+  n.__vnId = id;
   n.kind = kind;
   n.tag = tag;
   n.parentNode = null;
@@ -764,7 +893,10 @@ function forEachDeep(n: MirrorNode, f: (n: MirrorNode) => void) {
   for (const c of n.childNodes) forEachDeep(c, f);
 }
 
-const handlers = new Map<VnNodeId, HandlerMap>(); // node id -> { click: fn }
+// node -> { click: fn }. Keyed by the NODE, weakly: a loose node script dropped
+// must not be kept alive by its own listeners (`addEventListener("load", () =>
+// use(img))` closes over the node it is registered on).
+const handlers = new WeakMap<MirrorNode, HandlerMap>();
 
 // Typed by Vue's own `RendererOptions`, minus the `patchProp` that is defined
 // separately below: every hook's parameter types come from the renderer that
@@ -776,12 +908,13 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
     // host must deliver its clicks (desktop-apis-design §4.2). So does a
     // `<button>` (submit is its default type: it submits its form), and an
     // `<input>` hears Enter for implicit submission (text is its default).
-    if (type === "label" || type === "button") syncListenerFlag(el.id, "click");
-    if (type === "input") syncListenerFlag(el.id, "keydown");
+    if (type === "label" || type === "button") syncListenerFlag(el, "click");
+    if (type === "input") syncListenerFlag(el, "keydown");
     // A text control hears its own `input`: that event is what carries the
     // typed text into the mirror's `value`, so `el.value` reads what the user
     // typed with no `@input` anywhere.
-    if (type === "input" || type === "textarea") syncListenerFlag(el.id, "input");
+    if (type === "input" || type === "textarea") syncListenerFlag(el, "input");
+    if (type === "canvas") adoptCanvas(el);
     return el;
   },
   createText: (text) => {
@@ -789,46 +922,29 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
     // The mirror keeps the string too — `textContent` and `Node.data` read it
     // back, and a host round trip for that would be absurd.
     n.text = String(text);
-    __vn_set_text(n.id, n.text);
+    __vn_set_text(n.__vnId, n.text);
     return n;
   },
   createComment: () => mk(__vn_create_anchor(), 3, "#comment"),
   setText: (node, text) => {
     node.text = String(text);
-    __vn_set_text(node.id, node.text);
+    __vn_set_text(node.__vnId, node.text);
   },
   setElementText: (node, text) => {
-    for (const c of node.childNodes) {
-      c.parentNode = null;
-      forEachDeep(c, (n) => {
-        handlers.delete(n.id);
-        nodesById.delete(n.id);
-      });
-    }
-    node.childNodes.length = 0;
+    // The children are DETACHED, not freed, as `el.textContent = text` does in
+    // a browser. Normally there are none (Vue unmounts them first), but a
+    // leaving <Transition> child is still here until its leave ends, and Vue
+    // removes it then; one a script appended is still the script's. Freeing
+    // either here left a mirror over a host id that was recycled under it.
+    const kids = node.childNodes.length ? node.childNodes.slice() : null;
+    if (kids) for (const c of kids) detachNode(c, false);
     // The element's OWN text (exclusive with children, exactly as in the host
     // tree) — `textContent` reads it back.
     node.ownText = String(text);
-    __vn_set_element_text(node.id, String(text));
-    notifyMutation(node, "childList");
+    __vn_set_element_text(node.__vnId, String(text));
+    notifyMutation(node, "childList", { addedNodes: [], removedNodes: kids ?? [] });
   },
-  insert: (child, parent, anchor) => {
-    // insert is also move: detach from the old mirror parent first.
-    if (child.parentNode) {
-      const cs = child.parentNode.childNodes;
-      const i = cs.indexOf(child);
-      if (i >= 0) cs.splice(i, 1);
-    }
-    let idx = parent.childNodes.length;
-    if (anchor != null) {
-      const i = parent.childNodes.indexOf(anchor);
-      if (i >= 0) idx = i;
-    }
-    parent.childNodes.splice(idx, 0, child);
-    child.parentNode = parent;
-    __vn_insert(child.id, parent.id, anchor ? anchor.id : 0);
-    notifyMutation(parent, "childList", { addedNodes: [child], removedNodes: [] });
-  },
+  insert: (child, parent, anchor) => insertNode(child, parent, anchor ?? null, true),
   remove: (child) => {
     const p = child.parentNode;
     if (p) {
@@ -837,11 +953,12 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
       child.parentNode = null;
       notifyMutation(p, "childList", { addedNodes: [], removedNodes: [child] });
     }
-    forEachDeep(child, (n) => {
-      handlers.delete(n.id);
-      nodesById.delete(n.id);
-    });
-    __vn_remove(child.id);
+    // Already freed (its id is 0 now): nothing to free.
+    if (nodeById(child.__vnId) !== child) return;
+    const id = child.__vnId;
+    const box = dropLooseRoot(child);
+    forgetDeep(child);
+    __vn_remove(box || id);
   },
   parentNode: (node) => node.parentNode,
   nextSibling: (node) => {
@@ -852,7 +969,7 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
   },
   // <style scoped>: Vue stamps every element a scoped component renders (and
   // child component roots) with its data-v id — the Rust matcher buckets on it.
-  setScopeId: (el, id) => __vn_add_scope(el.id, id),
+  setScopeId: (el, id) => __vn_add_scope(el.__vnId, id),
   // Vue's `<Teleport>` resolves a STRING `to` through this hook. Without it
   // `<Teleport to="body">` — reka-ui's default for EVERY portal — warns
   // "Current renderer does not support string target" and renders nothing.
@@ -861,9 +978,43 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
   // here; anything else goes through the real matcher.
   querySelector: (sel) => {
     if (sel === "body" || sel === "html" || sel === ":root" || sel === "#app") return appRoot;
-    return queryOne(sel, appRoot ? appRoot.id : 0);
+    return queryOne(sel, appRoot ? appRoot.__vnId : 0);
   },
 };
+
+/**
+ * The renderer's insert, which is also a move, and the DOM methods' too.
+ * `notifyAdd: false` leaves the addition record to the caller (one record for
+ * a whole fragment); the old parent always hears the removal, as DOM "insert"
+ * removes the node from its parent first.
+ */
+function insertNode(child: MirrorNode, parent: MirrorElement, anchor: MirrorNode | null, notifyAdd: boolean): void {
+  const old = child.parentNode;
+  if (old) {
+    const cs = old.childNodes;
+    const i = cs.indexOf(child);
+    if (i >= 0) cs.splice(i, 1);
+  }
+  let idx = parent.childNodes.length;
+  if (anchor != null) {
+    const i = parent.childNodes.indexOf(anchor);
+    if (i >= 0) idx = i;
+  }
+  parent.childNodes.splice(idx, 0, child);
+  child.parentNode = parent;
+  // The host drops an element's own text when it gains a child; so does the mirror.
+  if (parent.ownText) parent.ownText = "";
+  __vn_insert(child.__vnId, parent.__vnId, anchor ? anchor.__vnId : 0);
+  if (looseById.size) {
+    // A loose root that was parked: it left its box, which goes now.
+    const box = dropLooseRoot(child);
+    if (box) __vn_remove(box);
+    const now = isLoose(parent);
+    if (now !== isLoose(child)) (now ? loosen : tighten)(child);
+  }
+  if (old) notifyMutation(old, "childList", { addedNodes: [], removedNodes: [child] });
+  if (notifyAdd) notifyMutation(parent, "childList", { addedNodes: [child], removedNodes: [] });
+}
 
 // @vue/shared's hyphenate, verbatim: `\B` so a leading capital is only
 // lowercased, never prefixed. Style keys are camelCase either way, but
@@ -971,7 +1122,7 @@ function setInlineDecl(el: MirrorElement, name: string, value: string, important
   const before = styleBefore(el);
   const d = { value, important };
   st.decls.set(name, d);
-  __vn_set_style(el.id, I(name), hostDecl(d));
+  __vn_set_style(el.__vnId, I(name), hostDecl(d));
   styleTouched(el, st, before);
   return true;
 }
@@ -982,7 +1133,7 @@ function removeInlineDecl(el: MirrorElement, name: string): string | null {
   if (!st || !prev) return null;
   const before = styleBefore(el);
   st.decls.delete(name);
-  __vn_set_style(el.id, I(name), "");
+  __vn_set_style(el.__vnId, I(name), "");
   styleTouched(el, st, before);
   return prev.value;
 }
@@ -1080,11 +1231,11 @@ function replaceInline(el: MirrorElement, text: string, asAttribute: boolean): v
       break;
     }
   }
-  for (const k of old.keys()) if (!inPlace || !next.has(k)) __vn_set_style(el.id, I(k), "");
+  for (const k of old.keys()) if (!inPlace || !next.has(k)) __vn_set_style(el.__vnId, I(k), "");
   for (const [k, d] of next) {
     const p = old.get(k);
     if (inPlace && p && p.value === d.value && p.important === d.important) continue;
-    __vn_set_style(el.id, I(k), hostDecl(d));
+    __vn_set_style(el.__vnId, I(k), hostDecl(d));
   }
   st.decls = next;
   styleTouched(el, st, before);
@@ -1221,7 +1372,7 @@ function clearInline(el: MirrorElement): void {
   const st = el._inline;
   if (!st || !st.present) return;
   const before = styleBefore(el);
-  for (const k of st.decls.keys()) __vn_set_style(el.id, I(k), "");
+  for (const k of st.decls.keys()) __vn_set_style(el.__vnId, I(k), "");
   st.decls = new Map();
   st.present = false;
   st.raw = null;
@@ -1294,10 +1445,10 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
       }
       return;
     }
-    let m = handlers.get(el.id);
+    let m = handlers.get(el);
     if (!m) {
       m = {};
-      handlers.set(el.id, m);
+      handlers.set(el, m);
     }
     let buckets = ensureBuckets(m, name);
     if (capture) {
@@ -1307,15 +1458,15 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
       buckets.bubble = (next as EventHandlerOrList) || null;
       buckets.onceB = once;
     }
-    syncListenerFlag(el.id, name);
+    syncListenerFlag(el, name);
   } else if (key === "key" || key === "ref") {
     // stripped by the vnode layer; never reaches here — but be safe
   } else {
     // DOM-compat attribute channel: standard-ish props flow to the host as
     // strings (native widgets read what they understand); null clears.
-    if (next == null) __vn_set_prop(el.id, I(key), undefined);
+    if (next == null) __vn_set_prop(el.__vnId, I(key), undefined);
     else if (typeof next === "string" || typeof next === "number" || typeof next === "boolean")
-      __vn_set_prop(el.id, I(key), String(next));
+      __vn_set_prop(el.__vnId, I(key), String(next));
     else
       warnCompat(
         `prop:${key}`,
@@ -1340,14 +1491,14 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
     // listens: following the link is what a click on it means. The host only
     // delivers a click to a node whose click bit is on, so the bit follows the
     // href (`syncListenerFlag` ORs it in). docs/SHELL.md §1.
-    if (key === "href" && el.tag === "a") syncListenerFlag(el.id, "click");
+    if (key === "href" && el.tag === "a") syncListenerFlag(el, "click");
     // …and so does `<input type=file>`'s, which also takes Enter and Space.
     if (key === "type" && el.tag === "input") syncFileInput(el);
     // …and a submit button's and a text field's (forms, below): the type
     // decides whether a click submits and whether Enter does.
     if (key === "type" && (el.tag === "input" || el.tag === "button")) {
-      syncListenerFlag(el.id, "click");
-      if (el.tag === "input") syncListenerFlag(el.id, "keydown");
+      syncListenerFlag(el, "click");
+      if (el.tag === "input") syncListenerFlag(el, "keydown");
     }
     // F-4 (docs/RUNTIME.md §5.2): the runtime honours a disabled fieldset;
     // the host's native widgets read only their own `disabled`.
@@ -1369,7 +1520,7 @@ function writeClass(el: MirrorElement): void {
   const base = el.className || "";
   const extra = el._vtc;
   const value = extra && extra.size ? [base, ...extra].filter(Boolean).join(" ") : base;
-  __vn_set_class(el.id, value);
+  __vn_set_class(el.__vnId, value);
 }
 
 function ensureBuckets(m: HandlerMap, name: string): Buckets {
@@ -1395,15 +1546,16 @@ function bucketsAlive(b: Buckets): boolean {
 /// switching a `pointerdown` listener off must not silence a `mousedown` one.
 /// A custom event name has no host code at all and needs no flag: it is
 /// dispatched from JS.
-function syncListenerFlag(id: VnNodeId, name: string): void {
+function syncListenerFlag(self: MirrorNode, name: string): void {
   const code = hostCode(name);
   if (!code) return;
-  const m = handlers.get(id);
+  const id = self.__vnId;
+  const m = handlers.get(self);
   let on = NAMES_BY_CODE[code].some((n) => m?.[n] && bucketsAlive(m[n]!));
   // Document- and window-level listeners ride the APP ROOT's bit: the host
   // delivers events to nodes, and the root is the node that stands in for the
   // document. See `globalHandlers` below.
-  if (!on && appRoot && id === appRoot.id) {
+  if (!on && appRoot && id === appRoot.__vnId) {
     on = NAMES_BY_CODE[code].some((n) =>
       [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)),
     );
@@ -1415,17 +1567,17 @@ function syncListenerFlag(id: VnNodeId, name: string): void {
   // A submit or reset button submits or resets its form, and a text-like
   // `<input>` submits its form on Enter (implicit submission).
   if (!on && code === EV_CODES.click) {
-    const n = nodesById.get(id);
+    const n = self;
     if (n && (isLabel(n) || isFileInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n))) on = true;
   }
   if (!on && (code === EV_CODES.keydown || code === EV_CODES.keyup)) {
-    const n = nodesById.get(id);
+    const n = self;
     if (isFileInput(n) || (code === EV_CODES.keydown && blocksImplicitSubmission(n))) on = true;
   }
   // …and a text control hears its own `input`, which is how its `value` keeps
   // up with what the user types (the dispatcher writes it before propagating).
   if (!on && code === EV_CODES.input) {
-    const n = nodesById.get(id);
+    const n = self;
     if (n && n.kind === 1 && (n.tag === "input" || n.tag === "textarea")) on = true;
   }
   // …and only tell the host when the ANSWER CHANGED.
@@ -1438,7 +1590,8 @@ function syncListenerFlag(id: VnNodeId, name: string): void {
   // TEXT NODE in a hundred-row list crossed the boundary a hundred times to
   // re-announce a `click` bit that was already set. See
   // `scripts/host-calls.ts`, which is how that was found.
-  const node = nodesById.get(id);
+  // (Only a live mirror carries the cache; a stand-in the tests pass does not.)
+  const node = isMirrorNode(self) ? self : null;
   if (node) {
     const known = node._listenerOn;
     if (on) {
@@ -1471,8 +1624,8 @@ const globalHandlers = new Map<object, HandlerMap>(); // target object -> { [eve
  */
 const isMirrorNode = (n: unknown): n is MirrorNode =>
   !!n &&
-  typeof (n as MirrorNode).id === "number" &&
-  nodesById.get((n as MirrorNode).id) === (n as MirrorNode);
+  typeof (n as MirrorNode).__vnId === "number" &&
+  nodeById((n as MirrorNode).__vnId) === (n as MirrorNode);
 
 /** The two option spellings, as an object. `true` means `{ capture: true }`. */
 type ListenerOptionsObject = { capture?: boolean; once?: boolean };
@@ -1496,7 +1649,7 @@ function addGlobalListener(
   const buckets = ensureBuckets(m, name);
   const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
   (capture ? buckets.extraC : buckets.extraB).push({ fn, once: !!(opts && (opts as ListenerOptionsObject).once) });
-  if (appRoot) syncListenerFlag(appRoot.id, name);
+  if (appRoot) syncListenerFlag(appRoot, name);
   // `load` and `error` are ALSO the window's own events (the page's load, an
   // uncaught error), which the engine would fire at its EventTarget: the
   // listener goes to both, and hears an element's (capture phase) and the
@@ -1517,7 +1670,7 @@ function removeGlobalListener(
   const arr = capture ? buckets.extraC : buckets.extraB;
   const i = arr.findIndex((e) => e.fn === fn);
   if (i >= 0) arr.splice(i, 1);
-  if (appRoot) syncListenerFlag(appRoot.id, name);
+  if (appRoot) syncListenerFlag(appRoot, name);
   return !ALSO_NATIVE.has(name);
 }
 
@@ -1640,16 +1793,16 @@ function addExtraListener(
     );
     return;
   }
-  let m = handlers.get(node.id);
+  let m = handlers.get(node);
   if (!m) {
     m = {};
-    handlers.set(node.id, m);
+    handlers.set(node, m);
   }
   const buckets = ensureBuckets(m, name);
   const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
   const entry = { fn, once: !!(opts && (opts as ListenerOptionsObject).once) };
   (capture ? buckets.extraC : buckets.extraB).push(entry);
-  syncListenerFlag(node.id, name);
+  syncListenerFlag(node, name);
 }
 
 function removeExtraListener(
@@ -1659,13 +1812,13 @@ function removeExtraListener(
   opts: ListenerOptions,
 ): void {
   const name = canonicalEvent(rawName);
-  const buckets = handlers.get(node.id)?.[name];
+  const buckets = handlers.get(node)?.[name];
   if (!buckets) return;
   const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
   const arr = capture ? buckets.extraC : buckets.extraB;
   const i = arr.findIndex((e) => e.fn === fn);
   if (i >= 0) arr.splice(i, 1);
-  syncListenerFlag(node.id, name);
+  syncListenerFlag(node, name);
 }
 
 // ---- the DOM surface on mirror nodes (compat roadmap G2) ------------------
@@ -1733,7 +1886,7 @@ function hostQuery(selector: string, rootId: VnNodeId, mode: VnQueryMode): Mirro
   }
   const out: MirrorElement[] = [];
   for (const part of raw.split(",")) {
-    const node = nodesById.get(Number(part));
+    const node = nodeById(Number(part));
     // The cascade's matcher only ever answers with ELEMENTS — text and comment
     // nodes are not selectable — so the narrowing is the host's guarantee, not
     // an assumption of ours.
@@ -1769,7 +1922,7 @@ function viewportRect(): MirrorRect {
   return { x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height };
 }
 function rectOf(node: MirrorNode): MirrorRect {
-  const raw = node.id ? __vn_bounds(node.id) : "";
+  const raw = node.__vnId ? __vn_bounds(node.__vnId) : "";
   // A node that was not painted (detached, `display: none`, parked in a
   // <KeepAlive> cache) reports nothing — and an all-zero rect is exactly what a
   // browser reports for those, so no advisory is warranted.
@@ -1954,22 +2107,25 @@ defineDomGet(
     return out;
   },
   function (this: MirrorElement, value: unknown) {
+    // The engine's detached elements share this prototype and have no tree:
+    // the text is theirs to keep (a `<style>` from it is read on insertion).
+    if (!isMirrorNode(this)) return ownExpando(this, "textContent", value == null ? "" : String(value));
     nodeOps.setElementText(this, value == null ? "" : String(value));
-  },
+  } as (value: never) => void,
 );
 
 // -- selector matching, through the real cascade matcher
 defineDom("matches", function (this: MirrorElement, selector: string) {
-  return hostQuery(selector, this.id, 1).length > 0;
+  return hostQuery(selector, this.__vnId, 1).length > 0;
 });
 defineDom("closest", function (this: MirrorElement, selector: string) {
-  return queryOne(selector, this.id, 2);
+  return queryOne(selector, this.__vnId, 2);
 });
 defineDom("querySelector", function (this: MirrorElement, selector: string) {
-  return queryOne(selector, this.id, 0);
+  return queryOne(selector, this.__vnId, 0);
 });
 defineDom("querySelectorAll", function (this: MirrorElement, selector: string) {
-  return hostQuery(selector, this.id, 0);
+  return hostQuery(selector, this.__vnId, 0);
 });
 
 // -- layout, off the bounds gpui recorded for the last painted frame
@@ -2069,8 +2225,8 @@ function hostScroll(
   y = NaN,
   sizeMatters = false,
 ): ScrollPos | null {
-  if (!node.id) return null;
-  const raw = __vn_scroll(node.id, op, x, y);
+  if (!node.__vnId) return null;
+  const raw = __vn_scroll(node.__vnId, op, x, y);
   if (!raw) return null;
   const [left, top, scrollWidth, scrollHeight, stale] = raw.split(",").map(Number);
   if (stale && sizeMatters) noteStale();
@@ -2178,7 +2334,7 @@ const SCROLL_ALIGN: Record<string, VnScrollAlign> = {
 };
 
 defineDom("scrollIntoView", function (this: MirrorElement, arg: unknown) {
-  if (!this.id) return;
+  if (!this.__vnId) return;
   // The three spellings a browser takes: nothing / `true` is
   // `{block: "start", inline: "nearest"}`, `false` is `{block: "end"}`, and an
   // object names either axis.
@@ -2195,7 +2351,7 @@ defineDom("scrollIntoView", function (this: MirrorElement, arg: unknown) {
   // mode (horizontal-tb, ltr), so block is vertical and inline horizontal.
   // That is stated rather than assumed because `direction: rtl` would flip the
   // inline axis and nothing here would notice.
-  const out = __vn_scroll_into_view(this.id, block, inline);
+  const out = __vn_scroll_into_view(this.__vnId, block, inline);
   if (out.charCodeAt(0) === 33 /* ! */) warnCompat("scrollIntoView", out.slice(1));
   else if (out === "stale") noteStale();
 });
@@ -2235,6 +2391,19 @@ defineDom("removeAttribute", function (this: MirrorElement, name: unknown) {
   }
   patchProp(this, String(name), undefined, null);
 });
+// `el.id` reflects the `id` attribute, as in a browser. (The host node id is
+// `__vnId`; `id` named it until m26 client sweep #5a, so a library's
+// `el.id = "x"` used to overwrite the node's address.)
+defineDomGet(
+  "id",
+  function (this: MirrorElement) {
+    return isMirrorEl(this) ? (this.attrs.id ?? "") : undefined;
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this)) return ownExpando(this, "id", v);
+    this.setAttribute("id", String(v));
+  } as (value: never) => void,
+);
 defineDom("toggleAttribute", function (this: MirrorElement, name: string, force?: boolean) {
   const on = force === undefined ? !this.hasAttribute(name) : !!force;
   if (on) this.setAttribute(name, "");
@@ -2682,7 +2851,7 @@ function syncFileInput(el: MirrorElement): void {
   if (file && !had) {
     const state: FileState = { files: null, changed: () => {} };
     state.changed = () =>
-      __vn_set_prop(el.id, I(":file-label"), fileStatus(state.files as ArrayLike<{ name?: unknown }> | null));
+      __vn_set_prop(el.__vnId, I(":file-label"), fileStatus(state.files as ArrayLike<{ name?: unknown }> | null));
     fileStates.set(el, state);
     const acc = fileAccessors(state, () => isFileInput(el));
     const flag = (k: string) => ({
@@ -2716,9 +2885,9 @@ function syncFileInput(el: MirrorElement): void {
     fileStates.delete(el);
     for (const k of ["files", "value", "accept", "multiple", "webkitdirectory"]) delete (el as unknown as Record<string, unknown>)[k];
     el._value = "";
-    __vn_set_prop(el.id, I(":file-label"), undefined);
+    __vn_set_prop(el.__vnId, I(":file-label"), undefined);
   }
-  for (const n of ["click", "keydown", "keyup"]) syncListenerFlag(el.id, n);
+  for (const n of ["click", "keydown", "keyup"]) syncListenerFlag(el, n);
 }
 
 /** What the picker flow needs from a file input, whichever kind it is. */
@@ -3288,7 +3457,7 @@ function fireFocusEvents(target: MirrorElement, base: "focus" | "blur", related:
 
 /** What `focus()` / `blur()` work on: a connected mirror element. */
 const focusable = (el: MirrorElement): boolean =>
-  isMirrorNode(el) && el.kind === 1 && nodesById.get(el.id) === el && !isDisabledControl(el);
+  isMirrorNode(el) && el.kind === 1 && nodeById(el.__vnId) === el && !isDisabledControl(el);
 
 defineDom("focus", function (this: MirrorElement) {
   if (!focusable(this)) return;
@@ -3296,9 +3465,9 @@ defineDom("focus", function (this: MirrorElement) {
     warnCompat("focus", "element.focus() is a no-op: this host has no programmatic focus (__vn_focus)");
     return;
   }
-  const answer = __vn_focus(this.id, 0);
+  const answer = __vn_focus(this.__vnId, 0);
   if (answer.startsWith("moved:")) {
-    const old = nodesById.get(Number(answer.slice(6))) as MirrorElement | undefined;
+    const old = nodeById(Number(answer.slice(6))) as MirrorElement | undefined;
     focusedNode = this;
     if (old && old !== this) fireFocusEvents(old, "blur", this);
     fireFocusEvents(this, "focus", old && old !== this ? old : null);
@@ -3313,7 +3482,7 @@ defineDom("focus", function (this: MirrorElement) {
 });
 defineDom("blur", function (this: MirrorElement) {
   if (!isMirrorNode(this) || typeof __vn_focus !== "function") return;
-  if (__vn_focus(this.id, 1) === "blurred") {
+  if (__vn_focus(this.__vnId, 1) === "blurred") {
     if (focusedNode === this) focusedNode = null;
     fireFocusEvents(this, "blur", null);
   }
@@ -3321,7 +3490,7 @@ defineDom("blur", function (this: MirrorElement) {
 
 /** `document.activeElement`: the focused element, else the root (which is `body` here). */
 function activeElement(): MirrorElement | null {
-  if (focusedNode && nodesById.get(focusedNode.id) === focusedNode) return focusedNode;
+  if (focusedNode && nodeById(focusedNode.__vnId) === focusedNode) return focusedNode;
   return appRoot;
 }
 
@@ -3543,21 +3712,305 @@ defineDom("releasePointerCapture", function (this: MirrorElement, pointerId: num
   this._pointerCaptures?.delete(pointerId);
 });
 
-defineDom("insertAdjacentElement", function (_where: string, el: MirrorElement) {
-  warnCompat(
-    "insertAdjacentElement",
-    "insertAdjacentElement() is a no-op — nodes injected outside the Vue renderer are not part of " +
-      "the retained tree and are never painted",
-  );
-  return el;
+// ---- imperative tree mutation (DOM §4.2.3–§4.2.8) — m26 client sweep #5a
+//
+// `appendChild`, `insertBefore`, `removeChild`, `replaceChild`, ChildNode's
+// `remove`/`before`/`after`/`replaceWith`, ParentNode's `append`/`prepend`/
+// `replaceChildren`, and `insertAdjacentElement`/`insertAdjacentText`, with
+// the DOM's validity checks, exceptions and return values. They run through
+// the renderer's own `nodeOps.insert` (which is also a move), so the host sees
+// exactly the ops a Vue patch sends. A removal DETACHES (see `detachNode`): the
+// node keeps its listeners and its state and can be inserted again.
+//
+// One thing a script can hand in is not a tree node at all: the engine's own
+// detached `document.createElement("a" | "input" | "style" | …)` objects
+// (`ENGINE_TAGS`). A `<style>` / `<link>` one joins the stylesheet as it would
+// in `<head>` (`foreignNode`); any other is left out of the tree, with an
+// advisory.
+
+/** Tags `document.createElement` leaves to the engine (see there). */
+const ENGINE_TAGS = new Set(["a", "input", "style", "link", "script", "meta", "title", "base"]);
+/** DOM's "valid element local name" (the 2025 relaxed rule): no whitespace, NUL, `/` or `>`, and a letter, `:`, `_` or non-ASCII first. */
+const VALID_ELEMENT_NAME = /^[A-Za-z:_\u0080-￿][^\t\n\f\r \/>\0]*$/;
+/** The head-style bookkeeping's hook (set below): an engine `<style>`/`<link>` inserted or removed anywhere. */
+let foreignStyle: ((n: object, inserted: boolean) => boolean) | null = null;
+/** `new DocumentFragment()` / `createDocumentFragment()` mirrors. Inserting one inserts its children. */
+const fragments = new WeakSet<MirrorNode>();
+
+const domError = (method: string, iface: string, name: string, msg: string): Error =>
+  new DOMException(`Failed to execute '${method}' on '${iface}': ${msg}`, name);
+
+/**
+ * A Node argument: a live mirror, or `null` for something that is a node in a
+ * browser but not one of ours (an engine element, or a mirror the renderer has
+ * freed), which `foreignNode` deals with. Anything else is WebIDL's TypeError.
+ */
+function nodeArg(x: unknown, method: string, iface: string, pos: number, type = "Node"): MirrorNode | null {
+  if (isMirrorNode(x)) {
+    if (type === "Element" && x.kind !== 1) throw new TypeError(`Failed to execute '${method}' on '${iface}': parameter ${pos} is not of type 'Element'.`);
+    return x;
+  }
+  if (x && typeof x === "object" && (typeof (x as { tagName?: unknown }).tagName === "string" || "__vnId" in x)) return null;
+  throw new TypeError(`Failed to execute '${method}' on '${iface}': parameter ${pos} is not of type '${type}'.`);
+}
+
+/** Inserting or removing a node that is not in the tree: a stylesheet, or an advisory. */
+function foreignNode(x: object, inserted: boolean, method: string): void {
+  if (foreignStyle?.(x, inserted)) return;
+  if ("__vnId" in x) {
+    warnCompat(
+      "dom:freed",
+      `${method}() was given a node the Vue renderer already freed (its component unmounted), so it is not ` +
+        "inserted again — in a browser it would be. Keep a node you move by hand out of the renderer's own subtrees",
+    );
+    return;
+  }
+  if (inserted) {
+    const tag = String((x as { tagName?: unknown }).tagName).toLowerCase();
+    warnCompat(
+      `dom:engine-${tag}`,
+      `${method}() — a <${tag}> from document.createElement("${tag}") is the engine's detached element, ` +
+        "not a node of the retained tree, so it is not inserted and never painted (its click, href and files still work)",
+    );
+  }
+}
+
+/** DOM "ensure pre-insertion validity", for one node into `parent`. */
+function preInsertCheck(parent: MirrorNode, node: MirrorNode, method: string): void {
+  if (parent.kind !== 1) throw domError(method, "Node", "HierarchyRequestError", "This node type does not support this method.");
+  for (let a: MirrorNode | null = parent; a; a = a.parentNode) {
+    if (a === node) throw domError(method, "Node", "HierarchyRequestError", "The new child element contains the parent.");
+  }
+}
+
+/** An element's own text becomes a real Text child before it gains a sibling, so the text is kept, as in a browser. */
+function materializeOwnText(el: MirrorElement): void {
+  if (!el.ownText || el.childNodes.length) return;
+  const t = nodeOps.createText(el.ownText);
+  el.ownText = "";
+  insertNode(t, el, null, false);
+}
+
+/** Inserts `items` (mirrors, fragments expanded, or engine elements) before `ref` in `parent`, in order: one record. */
+function insertAll(parent: MirrorElement, items: (MirrorNode | object)[], ref: MirrorNode | null): void {
+  const added: MirrorNode[] = [];
+  for (const it of items) {
+    if (!isMirrorNode(it)) {
+      foreignNode(it, true, "insert");
+      continue;
+    }
+    for (const n of fragments.has(it) ? it.childNodes.slice() : [it]) {
+      if (!added.length) materializeOwnText(parent);
+      insertNode(n, parent, ref, false);
+      added.push(n);
+    }
+  }
+  if (added.length) notifyMutation(parent, "childList", { addedNodes: added, removedNodes: [] });
+}
+
+/** DOM "pre-insert": checks, then the insertion. Answers `node`. */
+function preInsert(parent: MirrorNode, node: unknown, child: unknown, method: string): unknown {
+  const n = nodeArg(node, method, "Node", 1);
+  const c = child == null ? null : nodeArg(child, method, "Node", 2);
+  if (!n) {
+    foreignNode(node as object, true, method);
+    return node;
+  }
+  preInsertCheck(parent, n, method);
+  if (child != null && (!c || c.parentNode !== parent)) {
+    throw domError(method, "Node", "NotFoundError", "The node before which the new node is to be inserted is not a child of this node.");
+  }
+  insertAll(parent as MirrorElement, [n], c === n ? n.nextSibling : c);
+  return n;
+}
+
+/** DOM "convert nodes into a node": strings (and any non-Node) become Text; every node is checked against `parent` first. */
+function convertNodes(parent: MirrorNode, args: unknown[], method: string, iface: string): (MirrorNode | object)[] {
+  const items = args.map((a) => {
+    if (isMirrorNode(a)) return a;
+    if (a && typeof a === "object" && (typeof (a as { tagName?: unknown }).tagName === "string" || "__vnId" in a)) return a;
+    return looseCreated(nodeOps.createText(String(a)));
+  });
+  for (const it of items) if (isMirrorNode(it)) preInsertCheckAs(parent, it, method, iface);
+  return items;
+}
+function preInsertCheckAs(parent: MirrorNode, node: MirrorNode, method: string, iface: string): void {
+  try {
+    preInsertCheck(parent, node, method);
+  } catch (e) {
+    throw domError(method, iface, (e as { name: string }).name, String((e as Error).message).replace(/^.*?': /, ""));
+  }
+}
+
+/** The first of `from`, `from.next`, … that is not one of `items` (DOM's "viable" sibling). */
+function viable(from: MirrorNode | null, items: unknown[], step: 1 | -1): MirrorNode | null {
+  let n = from;
+  while (n && items.includes(n)) n = siblingOf(n, step);
+  return n;
+}
+
+// -- Node
+defineDom(
+  "appendChild",
+  function (this: MirrorNode, node: unknown) {
+    if (!isMirrorNode(this)) return node;
+    return preInsert(this, node, null, "appendChild");
+  },
+  NODE_MEMBERS,
+);
+defineDom(
+  "insertBefore",
+  function (this: MirrorNode, node: unknown, child: unknown) {
+    if (!isMirrorNode(this)) return node;
+    if (arguments.length < 2) {
+      throw new TypeError("Failed to execute 'insertBefore' on 'Node': 2 arguments required, but only 1 present.");
+    }
+    return preInsert(this, node, child, "insertBefore");
+  },
+  NODE_MEMBERS,
+);
+defineDom(
+  "removeChild",
+  function (this: MirrorNode, child: unknown) {
+    const c = nodeArg(child, "removeChild", "Node", 1);
+    if (!c || !isMirrorNode(this)) {
+      foreignNode(child as object, false, "removeChild");
+      return child;
+    }
+    if (c.parentNode !== this) {
+      throw domError("removeChild", "Node", "NotFoundError", "The node to be removed is not a child of this node.");
+    }
+    detachNode(c);
+    return c;
+  },
+  NODE_MEMBERS,
+);
+defineDom(
+  "replaceChild",
+  function (this: MirrorNode, node: unknown, child: unknown) {
+    const n = nodeArg(node, "replaceChild", "Node", 1);
+    const c = nodeArg(child, "replaceChild", "Node", 2);
+    if (!isMirrorNode(this) || !n || !c) {
+      if (!n) foreignNode(node as object, true, "replaceChild");
+      if (!c) foreignNode(child as object, false, "replaceChild");
+      return child;
+    }
+    preInsertCheck(this, n, "replaceChild");
+    if (c.parentNode !== this) {
+      throw domError("replaceChild", "Node", "NotFoundError", "The node to be replaced is not a child of this node.");
+    }
+    if (n === c) return c;
+    let ref = c.nextSibling;
+    if (ref === n) ref = n.nextSibling;
+    detachNode(c);
+    insertAll(this as MirrorElement, [n], ref);
+    return c;
+  },
+  NODE_MEMBERS,
+);
+
+// -- ChildNode (Element and CharacterData)
+defineDom(
+  "remove",
+  function (this: MirrorNode) {
+    if (!isMirrorNode(this)) return void foreignNode(this, false, "remove");
+    if (this.parentNode) detachNode(this);
+  },
+  NODE_MEMBERS,
+);
+defineDom(
+  "before",
+  function (this: MirrorNode, ...nodes: unknown[]) {
+    const parent = this.parentNode;
+    if (!isMirrorNode(this) || !parent) return;
+    const prev = viable(siblingOf(this, -1), nodes, -1);
+    const items = convertNodes(parent, nodes, "before", "Element");
+    insertAll(parent, items, viable(prev ? siblingOf(prev, 1) : (parent.childNodes[0] ?? null), nodes, 1));
+  },
+  NODE_MEMBERS,
+);
+defineDom(
+  "after",
+  function (this: MirrorNode, ...nodes: unknown[]) {
+    const parent = this.parentNode;
+    if (!isMirrorNode(this) || !parent) return;
+    const next = viable(siblingOf(this, 1), nodes, 1);
+    insertAll(parent, convertNodes(parent, nodes, "after", "Element"), next);
+  },
+  NODE_MEMBERS,
+);
+defineDom(
+  "replaceWith",
+  function (this: MirrorNode, ...nodes: unknown[]) {
+    const parent = this.parentNode;
+    if (!isMirrorNode(this) || !parent) return;
+    const next = viable(siblingOf(this, 1), nodes, 1);
+    const items = convertNodes(parent, nodes, "replaceWith", "Element");
+    if (items.includes(this)) return insertAll(parent, items, next);
+    insertAll(parent, items, this);
+    detachNode(this);
+  },
+  NODE_MEMBERS,
+);
+
+// -- ParentNode (Element and DocumentFragment)
+defineDom("append", function (this: MirrorElement, ...nodes: unknown[]) {
+  if (!isMirrorNode(this)) return;
+  insertAll(this, convertNodes(this, nodes, "append", "Element"), null);
 });
-defineDom("append", function () {});
-defineDom("remove", function () {
-  warnCompat(
-    "remove",
-    "element.remove() is a no-op — the retained tree is owned by the Vue renderer; use v-if/v-for",
-  );
+defineDom("prepend", function (this: MirrorElement, ...nodes: unknown[]) {
+  if (!isMirrorNode(this)) return;
+  const items = convertNodes(this, nodes, "prepend", "Element");
+  insertAll(this, items, viable(this.childNodes[0] ?? null, nodes, 1));
 });
+defineDom("replaceChildren", function (this: MirrorElement, ...nodes: unknown[]) {
+  if (!isMirrorNode(this)) return;
+  const items = convertNodes(this, nodes, "replaceChildren", "Element");
+  const gone = this.childNodes.filter((c) => !items.includes(c));
+  for (const c of gone) detachNode(c, false);
+  if (this.ownText) nodeOps.setElementText(this, "");
+  if (gone.length) notifyMutation(this, "childList", { addedNodes: [], removedNodes: gone });
+  insertAll(this, items, null);
+});
+
+// -- insertAdjacent* (Element)
+const ADJACENT = ["beforebegin", "afterbegin", "beforeend", "afterend"] as const;
+/** Where `insertAdjacent*` puts a node: `[parent, ref]`, or null when there is no parent. */
+function adjacentSlot(el: MirrorElement, where: unknown, method: string): [MirrorElement, MirrorNode | null] | null {
+  const w = String(where).toLowerCase();
+  if (!(ADJACENT as readonly string[]).includes(w)) {
+    throw domError(
+      method,
+      "Element",
+      "SyntaxError",
+      `The value provided ('${String(where)}') is not one of 'beforeBegin', 'afterBegin', 'beforeEnd', or 'afterEnd'.`,
+    );
+  }
+  if (w === "afterbegin") return [el, el.childNodes[0] ?? null];
+  if (w === "beforeend") return [el, null];
+  const parent = el.parentNode;
+  if (!parent) return null;
+  return [parent, w === "beforebegin" ? el : siblingOf(el, 1)];
+}
+defineDom("insertAdjacentElement", function (this: MirrorElement, where: unknown, element: unknown) {
+  const n = nodeArg(element, "insertAdjacentElement", "Element", 2, "Element");
+  if (!isMirrorNode(this)) return element;
+  const slot = adjacentSlot(this, where, "insertAdjacentElement");
+  if (!slot) return null;
+  if (!n) {
+    foreignNode(element as object, true, "insertAdjacentElement");
+    return element;
+  }
+  preInsertCheckAs(slot[0], n, "insertAdjacentElement", "Element");
+  insertAll(slot[0], [n], slot[1] === n ? n.nextSibling : slot[1]);
+  return n;
+});
+defineDom("insertAdjacentText", function (this: MirrorElement, where: unknown, data: unknown) {
+  if (!isMirrorNode(this)) return;
+  const slot = adjacentSlot(this, where, "insertAdjacentText");
+  if (slot) insertAll(slot[0], [looseCreated(nodeOps.createText(String(data)))], slot[1]);
+});
+
 defineDom("cloneNode", function () {
   warnCompat(
     "cloneNode",
@@ -3597,8 +4050,8 @@ const isMediaEl = (n: MirrorNode | null | undefined): n is MirrorElement =>
   !!n && MEDIA_TAGS.has((n as MirrorElement).tagName);
 /** `name=value` lines -> object; `{}` for a node the host knows nothing about. */
 function mediaState(node: MirrorNode | null | undefined): Record<string, string> | null {
-  if (!isMediaEl(node) || !node.id) return null;
-  const raw = __vn_media_state(node.id);
+  if (!isMediaEl(node) || !node.__vnId) return null;
+  const raw = __vn_media_state(node.__vnId);
   if (!raw) return null;
   const out: Record<string, string> = {};
   for (const line of raw.split("\n")) {
@@ -3609,7 +4062,7 @@ function mediaState(node: MirrorNode | null | undefined): Record<string, string>
   return out;
 }
 const mediaCall = (node: MirrorNode, verb: VnMediaVerb, arg = 0): boolean =>
-  isMediaEl(node) && node.id ? __vn_media_call(node.id, verb, arg) : false;
+  isMediaEl(node) && node.__vnId ? __vn_media_call(node.__vnId, verb, arg) : false;
 /** `"1.5:3,8:9"` -> the TimeRanges shape everything in the wild indexes. */
 function timeRanges(raw: string | undefined): MirrorTimeRanges {
   const list = raw
@@ -3704,10 +4157,10 @@ defineDom("load", function (this: MirrorElement) {
   }
 });
 defineDom("canPlayType", function (this: MirrorElement, type: unknown) {
-  if (!isMediaEl(this) || !this.id) return "";
+  if (!isMediaEl(this) || !this.__vnId) return "";
   // A live probe of THIS machine's decoder registry, not a table — a Store
   // codec package installed after we shipped is picked up on the next launch.
-  return __vn_media_can_play(this.id, String(type));
+  return __vn_media_can_play(this.__vnId, String(type));
 });
 
 // -- HTMLImageElement: `src`, `complete`, `naturalWidth` / `naturalHeight`,
@@ -4176,8 +4629,8 @@ function invoke(
     }
     callListener(entry.fn, node, ev);
   }
-  if (isMirrorNode(node)) syncListenerFlag(node.id, name);
-  else if (appRoot) syncListenerFlag(appRoot.id, name);
+  if (isMirrorNode(node)) syncListenerFlag(node, name);
+  else if (appRoot) syncListenerFlag(appRoot, name);
 }
 
 function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
@@ -4204,7 +4657,7 @@ function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
   };
   const at = (node: PropagationTarget, phase: Phase) => {
     const buckets = isMirrorNode(node)
-      ? handlers.get(node.id)?.[name]
+      ? handlers.get(node)?.[name]
       : globalHandlers.get(node)?.[name];
     const eventPhase =
       node === target ? EVENT_PHASE.atTarget : phase === "capture" ? EVENT_PHASE.capturing : EVENT_PHASE.bubbling;
@@ -4261,7 +4714,7 @@ const CODE_TO_NAME: Record<number, string | undefined> = Object.fromEntries(
  */
 function hasListener(target: MirrorNode, name: string): boolean {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
-    const buckets = handlers.get(n.id)?.[name];
+    const buckets = handlers.get(n)?.[name];
     if (buckets && bucketsAlive(buckets)) return true;
   }
   // …and the document/window registry, which sits one level above the root.
@@ -4289,7 +4742,7 @@ function activatableOnPath(target: MirrorNode): boolean {
 
 __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
   const name = CODE_TO_NAME[evCode];
-  const target = nodesById.get(nodeId);
+  const target = nodeById(nodeId);
   if (!name || !target) return true;
   // `document.activeElement` follows the host's focus moves (a click, Tab, a
   // queued `el.focus()`): blur arrives before the next focus.
@@ -4493,7 +4946,7 @@ export function createApp(
       } catch (e) {
         __vn_log("teardown: " + e);
       }
-      __vn_remove(root.id);
+      __vn_remove(root.__vnId);
       // Detached-but-live nodes: <KeepAlive> creates its cache container with
       // createElement and NEVER inserts or removes it (Vue moves subtrees in
       // and out of it), so nothing above ever tells us to free it. After
@@ -4501,8 +4954,18 @@ export function createApp(
       // is left is exactly that kind of orphan — free it or the host arena
       // grows by one node per KeepAlive on every hot restart.
       for (const id of Array.from(nodesById.keys())) __vn_remove(id);
+      // …and every loose subtree, whether or not script still holds it: the
+      // old app is going, and the next one's nodes will reuse these ids.
+      for (const [id, r] of looseRoots) __vn_remove(r.box || id);
+      for (const n of nodesById.values()) n.__vnId = 0;
+      for (const ref of looseById.values()) {
+        const n = ref.deref();
+        if (n) n.__vnId = 0;
+      }
+      root.__vnId = 0;
       nodesById.clear();
-      handlers.clear();
+      looseById.clear();
+      looseRoots.clear();
       globalThis.__VN_CSS__ = [];
       globalThis.__VN_TEARDOWN__ = undefined;
       appRoot = null;
@@ -5040,7 +5503,7 @@ defineGlobal(
       this._targets = new Map(); // node -> last reported {w, h}
     }
     observe(node: MirrorElement) {
-      if (!node || typeof node.id !== "number") return;
+      if (!node || typeof node.__vnId !== "number") return;
       // `null` = "no size reported yet", so the first poll always fires —
       // which is what a browser does on `observe()` too.
       this._targets.set(node, null);
@@ -5210,7 +5673,7 @@ class VnIntersectionObserver {
   _rootBounds(): MirrorRect | null {
     let r: MirrorRect;
     if (this.root) {
-      if (!this.root.id || !__vn_bounds(this.root.id)) return null;
+      if (!this.root.__vnId || !__vn_bounds(this.root.__vnId)) return null;
       r = rectOf(this.root);
     } else {
       if (!appRoot) return null;
@@ -5227,7 +5690,7 @@ class VnIntersectionObserver {
   _update(time: number) {
     const rootBounds = this._rootBounds();
     for (const [target, state] of this._targets) {
-      const painted = !!target.id && !!__vn_bounds(target.id);
+      const painted = !!target.__vnId && !!__vn_bounds(target.__vnId);
       // Never painted yet: give the first layout a few frames (see the header).
       if (!painted && state.prevIndex === -1 && state.waited < 3) {
         state.waited++;
@@ -5326,19 +5789,31 @@ for (const [name, value] of [
 //    setup. Ours is a detached mirror element, so a Teleport into it renders
 //    into the retained tree without being painted, which is what a browser's
 //    off-document fragment does too.
-defineGlobal(
-  "DocumentFragment",
+//    Script holds it (it is loose, see `looseCreated`), and inserting it
+//    inserts its children instead (`insertAll`), leaving it empty.
+{
   class DocumentFragment {
     constructor() {
       const node = mk(__vn_create_element(I("fragment")), 1, "fragment");
-      Object.defineProperty(node, "nodeType", { value: 11, configurable: true });
+      Object.setPrototypeOf(node, DocumentFragment.prototype);
+      fragments.add(node);
       // A constructor that hands back a DIFFERENT object — `new
       // DocumentFragment()` really is a detached mirror element, which is the
       // whole point. The double cast is what says so.
-      return node as unknown as DocumentFragment;
+      return looseCreated(node) as unknown as DocumentFragment;
     }
-  },
-);
+  }
+  // The element surface (querySelector, append, childNodes…) through the
+  // chain, so `instanceof DocumentFragment` holds as well.
+  Object.setPrototypeOf(DocumentFragment.prototype, ElementProto);
+  for (const [k, v] of [
+    ["nodeType", 11],
+    ["nodeName", "#document-fragment"],
+  ] as const) {
+    Object.defineProperty(DocumentFragment.prototype, k, { get: () => v, configurable: true });
+  }
+  defineGlobal("DocumentFragment", DocumentFragment);
+}
 
 // -- NodeFilter. `document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, …)`
 //    is what reka's FocusScope walks with; the missing GLOBAL is what throws
@@ -5370,6 +5845,7 @@ const TAG_CLASSES = {
   HTMLSpanElement: "SPAN",
   HTMLImageElement: "IMG",
   HTMLIFrameElement: "IFRAME",
+  HTMLCanvasElement: "CANVAS",
 };
 // -- Form-control `value` / `checked` are real accessors.
 //
@@ -5403,7 +5879,7 @@ const VALUE_TAGS = new Set(["input", "textarea", "select"]);
 function writeControlValue(el: MirrorElement, v: unknown): void {
   const s = v == null && el.tag !== "select" ? "" : String(v);
   el._value = s;
-  __vn_set_prop(el.id, I("value"), s);
+  __vn_set_prop(el.__vnId, I("value"), s);
 }
 
 /** Not a mirror: the plain own property it would have had with no accessor here. */
@@ -5445,7 +5921,7 @@ defineDomGet(
     // Every input renders as a text field today (no native checkbox), so the
     // host keeps this for whatever reads it; the mirror is what JS sees.
     this._checked = !!v;
-    __vn_set_prop(this.id, I("checked"), String(!!v));
+    __vn_set_prop(this.__vnId, I("checked"), String(!!v));
   } as (value: never) => void,
 );
 
@@ -5613,10 +6089,10 @@ const mirrorKind = (x: unknown) =>
   !!x && typeof x === "object" && Object.getPrototypeOf(x) === TextProto ? (x as MirrorNode).kind : 0;
 const CharacterDataIface = defineInterface("CharacterData", (x) => mirrorKind(x) === 2 || mirrorKind(x) === 3, null);
 defineInterface("Text", (x) => mirrorKind(x) === 2, CharacterDataIface ?? null, (data) =>
-  nodeOps.createText(data === undefined ? "" : String(data)),
+  looseCreated(nodeOps.createText(data === undefined ? "" : String(data))),
 );
 defineInterface("Comment", (x) => mirrorKind(x) === 3, CharacterDataIface ?? null, (data) => {
-  const c = nodeOps.createComment(data === undefined ? "" : String(data));
+  const c = looseCreated(nodeOps.createComment(data === undefined ? "" : String(data)));
   c.text = data === undefined ? "" : String(data);
   return c;
 });
@@ -5675,7 +6151,7 @@ const computedCache = new WeakMap<object, unknown>();
 function computedStyleFor(node: unknown) {
   // `document.body` / `documentElement` are not nodes in the retained tree;
   // they stand for the app root, so that is whose style they report.
-  const id = typeof (node as MirrorNode)?.id === "number" ? (node as MirrorNode).id : appRoot?.id;
+  const id = typeof (node as MirrorNode)?.__vnId === "number" ? (node as MirrorNode).__vnId : appRoot?.__vnId;
   const raw = id ? __vn_computed_style(id) : "";
   /**
    * One property, scanned out of the answer — NOT a parsed map.
@@ -5763,16 +6239,19 @@ if (doc) {
   // "requires a DialogTitle" accessibility warning.
   const forceDoc = (name: string, value: unknown) =>
     Object.defineProperty(doc, name, { value, configurable: true, writable: true });
-  const rootId = () => (appRoot ? appRoot.id : 0);
+  const rootId = () => (appRoot ? appRoot.__vnId : 0);
   forceDoc("querySelector", (sel: string) => queryOne(sel, rootId()));
   forceDoc("querySelectorAll", (sel: string) => hostQuery(sel, rootId(), 0));
   forceDoc("getElementById", (id: unknown) =>
     queryOne(`[id=${JSON.stringify(String(id))}]`, rootId()),
   );
-  // `document.createElement("a" | "input")` stays the engine's detached
-  // element, given the attribute map and the file-input state the download
-  // and pick idioms need (FileSaver.js, VueUse `useFileDialog`; see
-  // `wrapDetached`). Every other tag is untouched.
+  // `document.createElement(tag)` is a mirror element: a host node made by
+  // the renderer's own `nodeOps.createElement`, loose until it is inserted, so
+  // a script can build a subtree and append it anywhere (m26 client sweep
+  // #5a). The `ENGINE_TAGS` stay the engine's detached elements: `<a>` and
+  // `<input>` carry the download and pick idioms (FileSaver.js, VueUse
+  // `useFileDialog`; see `wrapDetached`), and the head-only ones are not boxes
+  // (a `<style>` joins the sheet wherever it is inserted).
   // The engine's, not a previous runtime's wrapper (`original`): a reload would
   // otherwise wrap the old wrapper, and every reload would add a layer.
   const engineCreate = original(doc, "createElement", (doc as { createElement?: unknown }).createElement);
@@ -5780,14 +6259,40 @@ if (doc) {
     typeof engineCreate === "function"
       ? (engineCreate as (tag: unknown, opts?: unknown) => unknown).bind(doc)
       : null;
-  if (nativeCreate) {
-    forceDoc("createElement", (tag: unknown, opts?: unknown) => {
+  forceDoc("createElement", (tag: unknown, opts?: unknown) => {
+    const name = String(tag);
+    if (!VALID_ELEMENT_NAME.test(name)) {
+      throw domError("createElement", "Document", "InvalidCharacterError", `The tag name provided ('${name}') is not a valid name.`);
+    }
+    const t = name.toLowerCase();
+    if (nativeCreate && ENGINE_TAGS.has(t)) {
       const el = nativeCreate(tag, opts);
-      const t = String(tag).toLowerCase();
       if ((t === "a" || t === "input") && el && typeof el === "object") wrapDetached(el as Detached, t);
       return el;
-    });
-  }
+    }
+    return looseCreated(nodeOps.createElement(t));
+  });
+  // The SVG namespace keeps the name's case (`linearGradient`), as the
+  // renderer's SVG elements do; the HTML one is `createElement`.
+  defDoc("createElementNS", (ns: unknown, qualifiedName: unknown) => {
+    const name = String(qualifiedName);
+    const local = name.slice(name.indexOf(":") + 1);
+    if (!VALID_ELEMENT_NAME.test(local)) {
+      throw domError("createElementNS", "Document", "InvalidCharacterError", `The qualified name provided ('${name}') contains the invalid name-start character '${local[0] ?? ""}'.`);
+    }
+    if (ns === "http://www.w3.org/1999/xhtml") return (doc.createElement as (t: string) => unknown)(local);
+    return looseCreated(nodeOps.createElement(local, ns === "http://www.w3.org/2000/svg" ? "svg" : undefined));
+  });
+  // A browser's Text node, here a mirror text node: Vue-created and
+  // library-created text are the same kind of object, so either can be
+  // inserted anywhere in the tree. Replaced after a reload as well: the old
+  // one made nodes in the OLD mirror.
+  defDoc("createTextNode", (data: unknown) => looseCreated(nodeOps.createText(String(data))));
+  defDoc("createComment", (data: unknown) => {
+    const c = looseCreated(nodeOps.createComment(String(data)));
+    c.text = String(data);
+    return c;
+  });
   // `DocumentFragment` is installed on the global by `defineGlobal` above, so
   // it is not part of the engine's declared surface — hence the cast.
   defDoc("createDocumentFragment", () =>
@@ -6187,17 +6692,14 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
       Object.defineProperty(head, "childNodes", { get: mark(() => injected.map((s) => s.el)), configurable: true });
     }
 
-    // A browser's Text node, here a mirror text node: Vue-created and
-    // library-created text are the same kind of object, so either can be
-    // inserted anywhere in the tree.
-    // Replaced after a reload as well: the old one made nodes in the OLD mirror.
-    if (vacant(d, "createTextNode")) {
-      Object.defineProperty(d, "createTextNode", {
-        value: mark((data: unknown) => nodeOps.createText(data == null ? "" : String(data))),
-        configurable: true,
-        writable: true,
-      });
-    }
+    // A `<style>` / `<link>` from the engine inserted anywhere else (a
+    // browser applies a `<style>` in `<body>` too), and taken out again.
+    foreignStyle = (n, inserted) => {
+      if (!isStyle(n) && !isLink(n)) return false;
+      if (inserted) adopt(n);
+      else untrack(n);
+      return true;
+    };
     // An ARRAY, not a live HTMLCollection: it is a snapshot, which every
     // `getElementsByTagName("head")[0]` and one-shot scan reads the same.
     if (vacant(d, "getElementsByTagName")) {
@@ -7955,7 +8457,7 @@ export const TransitionGroup = /*@__PURE__*/ defineComponent({
 // `<VnWindow>` — a second OS window painting part of this tree
 // (docs/MULTIWINDOW.md). Tier 3, so it is a NAMESPACED import an app opts into
 // by name: `import { VnWindow } from "vue-native"`. Nothing in the renderer
-// above knows about it — a pop-out is addressed by `mirrorNode.id`, which every
+// above knows about it — a pop-out is addressed by `mirrorNode.__vnId`, which every
 // template ref already hands you, so the component is a leaf of this module
 // rather than a change to it.
 export { VnWindow, VN_WINDOW_CREATION_TIME_PROPS } from "./vnwindow";

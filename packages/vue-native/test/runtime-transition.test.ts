@@ -93,7 +93,7 @@ describe("the class pipeline", () => {
   test("the end of a phase is timed from the element's computed transition-duration", async () => {
     const rt = createRuntime();
     const node = el(rt);
-    rt.host.computedById.set(node.id, "transition-duration=0.05s\ntransition-delay=0s\n");
+    rt.host.computedById.set(node.__vnId, "transition-duration=0.05s\ntransition-delay=0s\n");
     const hooks = rt.resolveTransitionProps({ name: "fade" });
     let done = false;
     hooks.onEnter(node, () => (done = true));
@@ -117,7 +117,7 @@ describe("the class pipeline", () => {
   test("a real transitionend ends the phase before the timer would", async () => {
     const rt = createRuntime();
     const node = el(rt);
-    rt.host.computedById.set(node.id, "transition-duration=5s\ntransition-delay=0s\n");
+    rt.host.computedById.set(node.__vnId, "transition-duration=5s\ntransition-delay=0s\n");
     const hooks = rt.resolveTransitionProps({ name: "fade" });
     let done = false;
     hooks.onEnter(node, () => (done = true));
@@ -132,7 +132,7 @@ describe("the class pipeline", () => {
   test("an explicit `duration` wins over the computed one", async () => {
     const rt = createRuntime();
     const node = el(rt);
-    rt.host.computedById.set(node.id, "transition-duration=10s\n");
+    rt.host.computedById.set(node.__vnId, "transition-duration=10s\n");
     const hooks = rt.resolveTransitionProps({ name: "fade", duration: 10 });
     let done = false;
     hooks.onEnter(node, () => (done = true));
@@ -143,7 +143,7 @@ describe("the class pipeline", () => {
   test("a hook with an explicit `done` argument suppresses the automatic timing", async () => {
     const rt = createRuntime();
     const node = el(rt);
-    rt.host.computedById.set(node.id, "transition-duration=0.05s\n");
+    rt.host.computedById.set(node.__vnId, "transition-duration=0.05s\n");
     // Two-argument hook = "I will call done myself" (runtime-dom's rule).
     const hooks = rt.resolveTransitionProps({ name: "fade", onEnter: (_el, _done) => {} });
     let done = false;

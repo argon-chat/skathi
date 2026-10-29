@@ -44,7 +44,7 @@ describe("a same-realm reload", () => {
     const OldRO = g.ResizeObserver;
     // The old app observes something, so its poll is queued on a frame...
     const a = first.nodeOps.createElement("div");
-    first.host.boundsById.set(a.id, "0,0,50,10");
+    first.host.boundsById.set(a.__vnId, "0,0,50,10");
     new OldRO(() => {}).observe(a);
     expect(raf.size).toBe(1);
     // ...which the unload cancels.
@@ -54,7 +54,7 @@ describe("a same-realm reload", () => {
     const second = createRuntime({ realm: first.global });
     expect(g.ResizeObserver).not.toBe(OldRO);
     const b = second.nodeOps.createElement("div");
-    second.host.boundsById.set(b.id, "0,0,120,30");
+    second.host.boundsById.set(b.__vnId, "0,0,120,30");
     const seen: number[] = [];
     new g.ResizeObserver((entries) => seen.push(...entries.map((e) => e.contentRect.width))).observe(b);
     raf.run();
@@ -102,20 +102,20 @@ describe("a same-realm reload", () => {
     expect(g.constructor).toBe(g.Window);
     // `new Text()` builds a node in the NEW mirror tree.
     const t = new (g.Text as new (s: string) => { id: number })("hi");
-    expect(second.nodesById.get(t.id)).toBe(t);
-    expect(first.nodesById.get(t.id)).toBeUndefined();
+    expect(second.nodeById(t.__vnId)).toBe(t);
+    expect(first.nodeById(t.__vnId)).toBeUndefined();
   });
 
   test("document.createTextNode and head.childNodes are the new runtime's", () => {
     const doc = { head: {} as Record<string, unknown> } as Record<string, unknown>;
     const first = createRuntime({ globals: { document: doc } });
     const create = doc.createTextNode as (s: string) => { id: number };
-    expect(first.nodesById.has(create("a").id)).toBe(true);
+    expect(first.nodeById(create("a").__vnId)).toBeDefined();
     (first.global.__VN_UNLOAD__ as () => void)();
     const second = createRuntime({ realm: first.global });
     const created = (doc.createTextNode as (s: string) => { id: number })("b");
     expect(doc.createTextNode).not.toBe(create);
-    expect(second.nodesById.get(created.id)).toBe(created);
+    expect(second.nodeById(created.__vnId)).toBe(created);
     // A <style> the new app puts in <head> is what head.childNodes lists.
     const style = second.nodeOps.createElement("style");
     (doc.head.appendChild as (n: unknown) => unknown)(style);

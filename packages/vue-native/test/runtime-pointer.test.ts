@@ -65,7 +65,7 @@ describe("dispatch", () => {
     const order = [];
     rt.patchProp(inner, "onPointerdown", null, (e) => order.push(`pointerdown:${e.type}`));
     rt.patchProp(inner, "onMousedown", null, (e) => order.push(`mousedown:${e.type}`));
-    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 12, 34, 0, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 12, 34, 0, 0, undefined);
     expect(order).toEqual(["pointerdown:pointerdown", "mousedown:mousedown"]);
   });
 
@@ -74,7 +74,7 @@ describe("dispatch", () => {
     const { inner } = tree(rt);
     let seen;
     rt.patchProp(inner, "onPointerdown", null, (e) => (seen = e));
-    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 12, 34, 0, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 12, 34, 0, 0, undefined);
     expect(seen.clientX).toBe(12);
     expect(seen.clientY).toBe(34);
     expect(seen.pointerType).toBe("mouse");
@@ -90,8 +90,8 @@ describe("dispatch", () => {
     rt.patchProp(outer, "onPointerenter", null, () => seen.push("enter@outer"));
     rt.patchProp(inner, "onPointerenter", null, () => seen.push("enter@inner"));
 
-    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
-    rt.host.dispatcher(inner.id, rt.EV_CODES.mouseenter, 0, 0, -1, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mouseenter, 0, 0, -1, 0, undefined);
     // The press bubbles to the ancestor; the enter does NOT — which is what
     // keeps a menu from closing as the pointer crosses its own items.
     expect(seen).toEqual(["down@outer", "enter@inner"]);
@@ -103,7 +103,7 @@ describe("dispatch", () => {
     const order = [];
     rt.patchProp(inner, "onMouseenter", null, () => order.push("mouseenter"));
     rt.patchProp(inner, "onPointerenter", null, () => order.push("pointerenter"));
-    rt.host.dispatcher(inner.id, rt.EV_CODES.mouseenter, 0, 0, -1, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mouseenter, 0, 0, -1, 0, undefined);
     expect(order).toEqual(["pointerenter", "mouseenter"]);
   });
 
@@ -115,7 +115,7 @@ describe("dispatch", () => {
     rt.patchProp(inner, "onFocusin", null, () => order.push("focusin@inner"));
     rt.patchProp(outer, "onFocus", null, () => order.push("focus@outer"));
     rt.patchProp(outer, "onFocusin", null, () => order.push("focusin@outer"));
-    rt.host.dispatcher(inner.id, rt.EV_CODES.focus, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.focus, 0, 0, 0, 0, undefined);
     expect(order).toEqual(["focus@inner", "focusin@inner", "focusin@outer"]);
   });
 
@@ -123,7 +123,7 @@ describe("dispatch", () => {
     const rt = createRuntime();
     const { inner } = tree(rt);
     rt.patchProp(inner, "onPointerdown", null, (e) => e.preventDefault());
-    const proceed = rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    const proceed = rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
     expect(proceed).toBe(false);
   });
 
@@ -148,7 +148,7 @@ describe("only what someone listens for is built", () => {
     const seen = [];
     rt.patchProp(outer, "onPointerdown", null, (e) => seen.push(e.type));
     // Nothing on `inner` listens for anything; the event is delivered there.
-    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
     expect(seen).toEqual(["pointerdown"]);
   });
 
@@ -157,7 +157,7 @@ describe("only what someone listens for is built", () => {
     const { outer, inner } = tree(rt);
     const seen = [];
     rt.patchProp(outer, "onMousedown", null, (e) => seen.push(e.type));
-    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
     expect(seen).toEqual(["mousedown"]);
   });
 
@@ -169,7 +169,7 @@ describe("only what someone listens for is built", () => {
     rt.createApp({ render: () => null }); // no mount: appRoot stays null…
     const seen = [];
     rt.global.document.addEventListener("pointerdown", (e) => seen.push(e.type));
-    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
     expect(seen).toEqual(["pointerdown"]);
     expect(root).toBeTruthy();
   });
@@ -180,7 +180,7 @@ describe("only what someone listens for is built", () => {
     const order = [];
     rt.patchProp(inner, "onMousedown", null, (e) => order.push(e.type));
     rt.patchProp(inner, "onPointerdown", null, (e) => order.push(e.type));
-    rt.host.dispatcher(inner.id, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
+    rt.host.dispatcher(inner.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
     expect(order).toEqual(["pointerdown", "mousedown"]);
   });
 });

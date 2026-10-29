@@ -147,9 +147,9 @@ describe("selector matching goes to the host's real matcher", () => {
   test("matches / closest / querySelector(All) call __vn_query with the right mode", () => {
     const rt = createRuntime();
     const { root, section, button } = tree(rt);
-    rt.host.queryAnswers.set(".x|1", String(button.id));
-    rt.host.queryAnswers.set(".x|2", String(section.id));
-    rt.host.queryAnswers.set(".x|0", `${section.id},${button.id}`);
+    rt.host.queryAnswers.set(".x|1", String(button.__vnId));
+    rt.host.queryAnswers.set(".x|2", String(section.__vnId));
+    rt.host.queryAnswers.set(".x|0", `${section.__vnId},${button.__vnId}`);
 
     expect(button.matches(".x")).toBe(true);
     expect(button.closest(".x")).toBe(section);
@@ -157,7 +157,7 @@ describe("selector matching goes to the host's real matcher", () => {
     expect(root.querySelectorAll(".x")).toEqual([section, button]);
 
     expect(rt.host.queryCalls.map((c) => c.mode)).toEqual([1, 2, 0, 0]);
-    expect(rt.host.queryCalls[0].root).toBe(button.id);
+    expect(rt.host.queryCalls[0].root).toBe(button.__vnId);
     // No advisory: these are answered for real, not stubbed.
     expect(rt.advisories()).toEqual([]);
   });
@@ -180,16 +180,16 @@ describe("selector matching goes to the host's real matcher", () => {
     // share of that is passing the right root id; `vn_css::query_all_in`
     // answers the rest. Two calls with the same selector and different subjects
     // must therefore reach the host with different roots.
-    rt.host.queryAnswers.set(":scope > button|0", String(button.id));
+    rt.host.queryAnswers.set(":scope > button|0", String(button.__vnId));
     expect(section.querySelector(":scope > button")).toBe(button);
     expect(rt.host.queryCalls.at(-1)).toMatchObject({
       selector: ":scope > button",
-      root: section.id,
+      root: section.__vnId,
       mode: 0,
     });
 
     root.querySelectorAll(":scope > button");
-    expect(rt.host.queryCalls.at(-1).root).toBe(root.id);
+    expect(rt.host.queryCalls.at(-1).root).toBe(root.__vnId);
 
     // …and it is no longer a compat advisory: the engine runs it now.
     expect(rt.advisories()).toEqual([]);
@@ -207,7 +207,7 @@ describe("layout comes from the host's painted bounds", () => {
   test("getBoundingClientRect reports the real rectangle", () => {
     const rt = createRuntime();
     const { button } = tree(rt);
-    rt.host.boundsById.set(button.id, "10,20,100,40");
+    rt.host.boundsById.set(button.__vnId, "10,20,100,40");
     const r = button.getBoundingClientRect();
     expect(r).toMatchObject({ x: 10, y: 20, width: 100, height: 40, left: 10, top: 20, right: 110, bottom: 60 });
     expect(button.offsetWidth).toBe(100);
@@ -228,7 +228,7 @@ describe("layout comes from the host's painted bounds", () => {
   test("offsetTop/offsetLeft are window-relative and say so", () => {
     const rt = createRuntime();
     const { button } = tree(rt);
-    rt.host.boundsById.set(button.id, "10,20,100,40");
+    rt.host.boundsById.set(button.__vnId, "10,20,100,40");
     expect(button.offsetTop).toBe(20);
     expect(rt.advisories().some((a) => a.includes("offsetParent"))).toBe(true);
   });
@@ -237,7 +237,7 @@ describe("layout comes from the host's painted bounds", () => {
 describe("programmatic scrolling drives the host's ScrollHandle", () => {
   /** A scroll container: 300×200 viewport with 1 000 px of content below it. */
   function scroller(rt, node, extra = {}) {
-    rt.host.scrollById.set(node.id, {
+    rt.host.scrollById.set(node.__vnId, {
       left: 0,
       top: 0,
       maxLeft: 0,
@@ -310,7 +310,7 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
-    rt.host.boundsById.set(section.id, "0,0,300,200");
+    rt.host.boundsById.set(section.__vnId, "0,0,300,200");
 
     expect(section.clientHeight).toBe(200);
     expect(section.scrollHeight).toBe(1000);
@@ -323,7 +323,7 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     // A browser's behaviour exactly, so no advisory is warranted.
     const rt = createRuntime();
     const { button } = tree(rt);
-    rt.host.boundsById.set(button.id, "0,0,100,40");
+    rt.host.boundsById.set(button.__vnId, "0,0,100,40");
     expect(button.scrollTop).toBe(0);
     expect(button.scrollLeft).toBe(0);
     // …and `scrollWidth` falls back to the border box, which is what a browser
@@ -340,7 +340,7 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
 
     button.scrollIntoView();
     // CSSOM-View's defaults: block "start", inline "nearest".
-    expect(rt.host.intoViewCalls.at(-1)).toEqual({ id: button.id, block: 0, inline: 3 });
+    expect(rt.host.intoViewCalls.at(-1)).toEqual({ id: button.__vnId, block: 0, inline: 3 });
 
     button.scrollIntoView(false);
     expect(rt.host.intoViewCalls.at(-1)).toMatchObject({ block: 2, inline: 3 });
@@ -384,7 +384,7 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
     // …and the ordinary spellings say nothing at all.
     const quiet = createRuntime();
     const t2 = tree(quiet);
-    quiet.host.scrollById.set(t2.section.id, { left: 0, top: 0, maxLeft: 0, maxTop: 800, width: 300, height: 200 });
+    quiet.host.scrollById.set(t2.section.__vnId, { left: 0, top: 0, maxLeft: 0, maxTop: 800, width: 300, height: 200 });
     t2.section.scrollTo({ top: 10, behavior: "auto" });
     t2.section.scrollTo({ top: 20 });
     expect(quiet.advisories()).toEqual([]);
@@ -434,7 +434,7 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
 
     const seen = [];
     section.addEventListener("scroll", (e) => seen.push(e.target.scrollTop));
-    rt.host.dispatcher(section.id, rt.EV_CODES.scroll, 0, 120, 0, 0, null);
+    rt.host.dispatcher(section.__vnId, rt.EV_CODES.scroll, 0, 120, 0, 0, null);
 
     expect(seen).toEqual([120]);
     // …and the only `__vn_scroll` writes are the ones the test made.
@@ -465,9 +465,9 @@ describe("the attribute channel", () => {
     const { button } = tree(rt);
     button.setAttribute("data-side", "top");
     expect(button.getAttribute("data-side")).toBe("top");
-    expect(rt.host.props.at(-1)).toEqual({ id: button.id, key: "data-side", value: "top" });
+    expect(rt.host.props.at(-1)).toEqual({ id: button.__vnId, key: "data-side", value: "top" });
     button.removeAttribute("data-side");
-    expect(rt.host.props.at(-1)).toEqual({ id: button.id, key: "data-side", value: undefined });
+    expect(rt.host.props.at(-1)).toEqual({ id: button.__vnId, key: "data-side", value: undefined });
   });
 
   test("setAttribute('style', …) goes through the style body, not the :style object path", () => {
@@ -475,8 +475,8 @@ describe("the attribute channel", () => {
     const { button } = tree(rt);
     button.setAttribute("style", "color: red; --x: 3");
     expect(rt.host.styles).toEqual([
-      { id: button.id, key: "color", value: "red" },
-      { id: button.id, key: "--x", value: "3" },
+      { id: button.__vnId, key: "color", value: "red" },
+      { id: button.__vnId, key: "--x", value: "3" },
     ]);
   });
 });
@@ -488,8 +488,8 @@ describe("inline style writes through — custom properties included", () => {
     button.style.setProperty("--reka-popper-available-width", "320px");
     button.style.zIndex = "50";
     expect(rt.host.styles).toEqual([
-      { id: button.id, key: "--reka-popper-available-width", value: "320px" },
-      { id: button.id, key: "z-index", value: "50" },
+      { id: button.__vnId, key: "--reka-popper-available-width", value: "320px" },
+      { id: button.__vnId, key: "z-index", value: "50" },
     ]);
     // …and reads back what was written.
     expect(button.style.getPropertyValue("--reka-popper-available-width")).toBe("320px");
@@ -567,7 +567,7 @@ describe("custom events and dispatchEvent", () => {
     inner.addEventListener("focusScope.autoFocusOnMount", () => {});
     // The one bit set is the <button>'s own click, armed at creation for its
     // activation behaviour (it submits its form; m26 phase 2), not the event's.
-    expect(rt.host.listeners).toEqual([{ id: inner.id, code: rt.EV_CODES.click, on: true }]);
+    expect(rt.host.listeners).toEqual([{ id: inner.__vnId, code: rt.EV_CODES.click, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -588,7 +588,7 @@ describe("custom events and dispatchEvent", () => {
       const { button: inner } = tree(rt);
       inner.addEventListener(name, () => {});
       expect(rt.advisories()).toEqual([]);
-      expect(rt.flagsFor(rt.EV_CODES[name])).toEqual([{ id: inner.id, code: rt.EV_CODES[name], on: true }]);
+      expect(rt.flagsFor(rt.EV_CODES[name])).toEqual([{ id: inner.__vnId, code: rt.EV_CODES[name], on: true }]);
     }
   });
 
@@ -666,14 +666,14 @@ describe("document- and window-level listeners", () => {
     const app = rt.createApp({ render: () => null });
     app.mount();
     const node = rt.nodeOps.createElement("div");
-    rt.nodeOps.insert(node, rt.nodesById.get(rt.host.listeners[0]?.id ?? 1) ?? node, null);
+    rt.nodeOps.insert(node, rt.nodesById.get(rt.host.listeners[0]?.__vnId ?? 1) ?? node, null);
 
     const order = [];
     node.addEventListener("keydown", () => order.push("node"));
     rt.global.document.addEventListener("keydown", () => order.push("document"));
     globalThis.addEventListener?.call?.(globalThis, "keydown", () => {});
 
-    rt.host.dispatcher(node.id, rt.EV_CODES.keydown, 0, 0, 0, 0, "Escape");
+    rt.host.dispatcher(node.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Escape");
     expect(order).toEqual(["node", "document"]);
   });
 });
@@ -682,7 +682,7 @@ describe("ResizeObserver samples the host's layout", () => {
   test("it fires once for the first size and again only when the size changes", async () => {
     const rt = createRuntime();
     const { button } = tree(rt);
-    rt.host.boundsById.set(button.id, "0,0,100,40");
+    rt.host.boundsById.set(button.__vnId, "0,0,100,40");
     const seen = [];
     const ob = new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.width)));
     ob.observe(button);
@@ -694,7 +694,7 @@ describe("ResizeObserver samples the host's layout", () => {
     await frame();
     expect(seen).toEqual([[100]]);
     // A real change -> exactly one more.
-    rt.host.boundsById.set(button.id, "0,0,250,40");
+    rt.host.boundsById.set(button.__vnId, "0,0,250,40");
     await frame();
     await frame();
     expect(seen).toEqual([[100], [250]]);
@@ -802,7 +802,7 @@ describe("missing globals (G5)", () => {
     const rt = createRuntime();
     const { button } = tree(rt);
     rt.host.computedById.set(
-      button.id,
+      button.__vnId,
       "display=flex\nposition=fixed\ntransition-duration=0.15s\n--primary=240 5.9% 10%\n",
     );
     const cs = rt.global.getComputedStyle(button);

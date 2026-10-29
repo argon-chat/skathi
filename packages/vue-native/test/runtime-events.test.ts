@@ -163,7 +163,7 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
 
   const video = (rt) => {
     const node = rt.nodeOps.createElement("video");
-    rt.host.mediaById.set(node.id, STATE);
+    rt.host.mediaById.set(node.__vnId, STATE);
     return node;
   };
 
@@ -190,7 +190,7 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     const node = video(rt);
     const seen = [];
     node.addEventListener("timeupdate", (e) => seen.push(e));
-    rt.host.dispatcher(node.id, rt.EV_CODES.timeupdate, 3.5, 12, 4, 2, "");
+    rt.host.dispatcher(node.__vnId, rt.EV_CODES.timeupdate, 3.5, 12, 4, 2, "");
     expect(seen.length).toBe(1);
     expect(seen[0].currentTime).toBe(3.5);
     expect(seen[0].detail.duration).toBe(12);
@@ -210,7 +210,7 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     expect(node.buffered.end(0)).toBe(6.25);
     expect(node.error).toBe(null);
     // Live: the host moved, and so does the property. No cache to invalidate.
-    rt.host.mediaById.set(node.id, STATE.replace("currentTime=3.5", "currentTime=9"));
+    rt.host.mediaById.set(node.__vnId, STATE.replace("currentTime=3.5", "currentTime=9"));
     expect(node.currentTime).toBe(9);
   });
 
@@ -222,10 +222,10 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     node.muted = false;
     node.pause();
     expect(rt.host.mediaCalls).toEqual([
-      { id: node.id, verb: 0, arg: 0 },
-      { id: node.id, verb: 2, arg: 8 },
-      { id: node.id, verb: 4, arg: 0 },
-      { id: node.id, verb: 1, arg: 0 },
+      { id: node.__vnId, verb: 0, arg: 0 },
+      { id: node.__vnId, verb: 2, arg: 8 },
+      { id: node.__vnId, verb: 4, arg: 0 },
+      { id: node.__vnId, verb: 1, arg: 0 },
     ]);
   });
 
@@ -233,7 +233,7 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     const rt = createRuntime();
     const node = video(rt);
     rt.host.mediaById.set(
-      node.id,
+      node.__vnId,
       "error=4\nerrorMessage=this machine has no HEVC decoder; re-encode to H.264",
     );
     expect(node.error.code).toBe(4);
@@ -262,7 +262,7 @@ describe("the listener flag is only written when it changes", () => {
     const rt = createRuntime();
     const el = rt.nodeOps.createElement("div");
     rt.patchProp(el, "onClick", null, () => {});
-    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: el.id, code: 1, on: true }]);
+    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: el.__vnId, code: 1, on: true }]);
 
     // A fresh inline arrow every render is the ordinary case, not a pathology:
     // it is what `@click="() => pick(i)"` inside a `v-for` compiles to.
@@ -276,8 +276,8 @@ describe("the listener flag is only written when it changes", () => {
     rt.patchProp(el, "onClick", null, () => {});
     rt.patchProp(el, "onClick", () => {}, null);
     expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([
-      { id: el.id, code: 1, on: true },
-      { id: el.id, code: 1, on: false },
+      { id: el.__vnId, code: 1, on: true },
+      { id: el.__vnId, code: 1, on: false },
     ]);
     // Nothing is armed now, so clearing again has nothing to say.
     rt.patchProp(el, "onClick", null, null);
@@ -292,7 +292,7 @@ describe("the listener flag is only written when it changes", () => {
     const el = rt.nodeOps.createElement("div");
     rt.patchProp(el, "onMousedown", null, () => {});
     rt.patchProp(el, "onPointerdown", null, () => {});
-    expect(rt.flagsFor(rt.EV_CODES.mousedown)).toEqual([{ id: el.id, code: 2, on: true }]);
+    expect(rt.flagsFor(rt.EV_CODES.mousedown)).toEqual([{ id: el.__vnId, code: 2, on: true }]);
   });
 
   test("each node keeps its own record", () => {
@@ -304,8 +304,8 @@ describe("the listener flag is only written when it changes", () => {
     // The record lives on the node object, not in a map keyed by id — which is
     // what makes it safe against the host recycling an id after `__vn_remove`.
     expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([
-      { id: a.id, code: 1, on: true },
-      { id: b.id, code: 1, on: true },
+      { id: a.__vnId, code: 1, on: true },
+      { id: b.__vnId, code: 1, on: true },
     ]);
   });
 });
@@ -325,7 +325,7 @@ describe("v-model", () => {
     const el = rt.nodeOps.createElement("input");
     let model = null;
     bind(rt, el, {}, (v) => (model = v));
-    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
+    rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
     expect(model).toBe("typed");
     expect(rt.advisories()).toEqual([]);
   });
@@ -335,7 +335,7 @@ describe("v-model", () => {
     const el = rt.nodeOps.createElement("input");
     let model = null;
     bind(rt, el, { lazy: true }, (v) => (model = v));
-    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
+    rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "typed");
     // Before m20 this was `null`: the listener was bound to `change`, which the
     // host never delivers, so the model stayed untouched forever.
     expect(model).toBe("typed");
@@ -350,7 +350,7 @@ describe("v-model", () => {
     const el = rt.nodeOps.createElement("input");
     let model = null;
     bind(rt, el, { number: true, trim: true }, (v) => (model = v));
-    rt.host.dispatcher(el.id, rt.EV_CODES.input, 0, 0, 0, 0, "  42  ");
+    rt.host.dispatcher(el.__vnId, rt.EV_CODES.input, 0, 0, 0, 0, "  42  ");
     expect(model).toBe(42);
   });
 });

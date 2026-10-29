@@ -30,7 +30,7 @@ function world() {
   rt.nodeOps.insert(input, box, null);
   /** What the host does: one dispatch, `data` riding the eighth argument. */
   const fire = (node: { id: number }, name: "copy" | "cut" | "paste", data: unknown): boolean =>
-    rt.host.dispatcher(node.id, rt.EV_CODES[name], 0, 0, 0, 0, undefined, data);
+    rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], 0, 0, 0, 0, undefined, data);
   return { rt, body, box, input, fire };
 }
 
@@ -43,7 +43,7 @@ describe("ClipboardEvent", () => {
     expect([rt.EV_CODES.paste, rt.EV_CODES.copy, rt.EV_CODES.cut]).toEqual([39, 40, 41]);
     rt.host.listeners.length = 0;
     rt.patchProp(input, "onPaste", null, () => {});
-    expect(rt.flagsFor(rt.EV_CODES.paste)).toEqual([{ id: input.id, code: 39, on: true }]);
+    expect(rt.flagsFor(rt.EV_CODES.paste)).toEqual([{ id: input.__vnId, code: 39, on: true }]);
     expect(rt.advisories()).toEqual([]);
   });
 
@@ -68,7 +68,7 @@ describe("ClipboardEvent", () => {
   test("it bubbles to an ancestor, then to document and window", () => {
     const { rt, input, box, fire } = world();
     const order: string[] = [];
-    rt.patchProp(box, "onCopy", null, (e: Ev) => order.push(`box:${(e.target as { id: number }).id === input.id}`));
+    rt.patchProp(box, "onCopy", null, (e: Ev) => order.push(`box:${(e.target as { __vnId: number }).__vnId === input.__vnId}`));
     rt.global.document.addEventListener("copy", (e: Ev) => order.push(`document:${e.clipboardData !== null}`));
     expect(fire(input, "copy", store())).toBe(true);
     expect(order).toEqual(["box:true", "document:true"]);
@@ -87,7 +87,7 @@ describe("ClipboardEvent", () => {
     rt.host.listeners.length = 0;
     const got: Ev[] = [];
     rt.global.document.addEventListener("paste", (e: Ev) => got.push(e));
-    expect(rt.flagsFor(rt.EV_CODES.paste)).toEqual([{ id: body.id, code: 39, on: true }]);
+    expect(rt.flagsFor(rt.EV_CODES.paste)).toEqual([{ id: body.__vnId, code: 39, on: true }]);
     fire(body, "paste", store());
     expect(got.length).toBe(1);
     expect(got[0].target).toBe(body);

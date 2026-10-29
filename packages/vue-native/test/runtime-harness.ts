@@ -56,6 +56,22 @@ function loadInstallDesktop(): unknown {
   return installDesktopFn;
 }
 
+export const CANVAS_PATH = join(HERE, "../src/canvas.ts");
+/**
+ * src/canvas.ts's `adoptCanvas`, the same way: runtime.ts imports it, the
+ * import line goes, and the function comes back in as a parameter. Its own
+ * imports go too (anything it needs from the host is ambient, read lazily).
+ */
+let adoptCanvasFn: unknown = null;
+function loadAdoptCanvas(): unknown {
+  if (adoptCanvasFn) return adoptCanvasFn;
+  const body = readTsSource(CANVAS_PATH)
+    .replace(/^\s*import\s[^;]*;[^\S\n]*$/gm, "")
+    .replace(/^export\s+(function|const|let|class)\s/gm, "$1 ");
+  adoptCanvasFn = new Function(`${body}\nreturn adoptCanvas;`)();
+  return adoptCanvasFn;
+}
+
 /** The W3C names `vn-permissions` knows — kept in step with `Capability::ALL`. */
 export const PERMISSION_NAMES = [
   "microphone",
@@ -552,8 +568,89 @@ export function createRuntime(
     // — bun has a `navigator`, but not that.
     "navigator",
     "__vn_style_accepts",
+    // canvas.ts's one export (see `loadAdoptCanvas`).
+    "adoptCanvas",
   ];
   let nextId = 1;
+  /**
+   * The retained tree, as `crates/vn-tree/src/tree.rs` keeps it: insert is
+   * also move, remove frees the whole subtree, setElementText frees the
+   * children. Ids are not recycled here (the real host does recycle them), so
+   * an op on a freed id is recorded in `errors` instead of corrupting a
+   * neighbour: a test asserts `host.tree.errors` is empty.
+   */
+  const tree = {
+    parent: new Map<number, number>(),
+    children: new Map<number, number[]>(),
+    tag: new Map<number, string>(),
+    text: new Map<number, string>(),
+    live: new Set<number>(),
+    freed: [] as number[],
+    errors: [] as string[],
+    create(tag: string): number {
+      const id = nextId++;
+      tree.live.add(id);
+      tree.tag.set(id, tag);
+      tree.children.set(id, []);
+      tree.parent.set(id, 0);
+      return id;
+    },
+    check(op: string, ...ids: number[]): boolean {
+      for (const id of ids) {
+        if (!tree.live.has(id)) {
+          tree.errors.push(`${op}(${ids.join(",")}): ${id} is not a live node`);
+          return false;
+        }
+      }
+      return true;
+    },
+    setText(id: number, text: string) {
+      if (tree.check("set_text", id)) tree.text.set(id, String(text));
+    },
+    detach(id: number) {
+      const p = tree.parent.get(id) ?? 0;
+      if (p) tree.children.set(p, tree.children.get(p)!.filter((c) => c !== id));
+      tree.parent.set(id, 0);
+    },
+    free(id: number) {
+      for (const c of tree.children.get(id) ?? []) tree.free(c);
+      tree.live.delete(id);
+      tree.children.delete(id);
+      tree.parent.delete(id);
+      tree.freed.push(id);
+    },
+    setElementText(id: number, text: string) {
+      if (!tree.check("set_element_text", id)) return;
+      for (const c of tree.children.get(id)!) tree.free(c);
+      tree.children.set(id, []);
+      tree.text.set(id, String(text));
+    },
+    insert(child: number, parent: number, anchor: number) {
+      if (!tree.check("insert", child, parent)) return;
+      if (child === anchor) return;
+      for (let a = parent; a; a = tree.parent.get(a) ?? 0) {
+        if (a === child) return void tree.errors.push(`insert(${child},${parent}): a cycle`);
+      }
+      tree.detach(child);
+      const kids = tree.children.get(parent)!;
+      const i = anchor ? kids.indexOf(anchor) : -1;
+      kids.splice(i < 0 ? kids.length : i, 0, child);
+      tree.parent.set(child, parent);
+      tree.text.delete(parent);
+    },
+    remove(id: number) {
+      if (!tree.check("remove", id)) return;
+      tree.detach(id);
+      tree.free(id);
+    },
+    /** The host's children of `id`, as tags (or `#text:data`), for assertions. */
+    shape(id: number): string[] {
+      return (tree.children.get(id) ?? []).map((c) =>
+        tree.tag.get(c) === "#text" ? `#text:${tree.text.get(c) ?? ""}` : tree.tag.get(c)!,
+      );
+    },
+  };
+  (host as Record<string, unknown>).tree = tree;
   /** Exactly the object `devtools::state_json` writes. */
   const devtoolsState = () => ({
     enabled: host.devtools.enabled,
@@ -592,20 +689,20 @@ export function createRuntime(
       error: (m) => host.logs.push(String(m)),
     },
     intern,
-    () => nextId++,
-    () => nextId++,
-    () => nextId++,
-    () => {},
-    () => {},
-    () => {},
-    () => {},
+    (tag) => tree.create(nameOf(tag)),
+    () => tree.create("#text"),
+    () => tree.create("#comment"),
+    (id, text) => tree.setText(id, text),
+    (id, text) => tree.setElementText(id, text),
+    (child, parent, anchor) => tree.insert(child, parent, anchor),
+    (id) => tree.remove(id),
     (id, key, value) => host.styles.push({ id, key: nameOf(key), value }),
     (id, value) => host.classes.push({ id, value }),
     (id, key, value) => host.props.push({ id, key: nameOf(key), value }),
     () => {},
     (css) => host.sheets.push(String(css)),
     (id, code, on) => host.listeners.push({ id, code, on }),
-    () => nextId++,
+    () => tree.create("root"),
     (fn) => {
       host.dispatcher = fn;
     },
@@ -813,6 +910,7 @@ export function createRuntime(
           host.acceptCalls.push(`${nameOf(key)}: ${value}`);
           return !host.styleRejects.has(`${nameOf(key)}: ${value}`);
         },
+    loadAdoptCanvas(),
   ];
 
   if (!withStorage) {
@@ -839,7 +937,7 @@ export function createRuntime(
   const exports = new Function(
     ...params,
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
-       createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
+       createApp, handlers, nodesById, nodeById, looseById, looseRoots, sweepLoose, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
        appDevtools, appShell, appLaunch, vModelText, vShow, desktopApi, activation, noteActivation,
        render, useCssVars, useCssModule, VueElement, defineCustomElement, createSSRApp, hydrate,
@@ -853,7 +951,7 @@ export function createRuntime(
     /** The private global runtime.js installed its DOM shims on. */
     global: fakeGlobal,
     /** A stand-in host element: enough surface for patchProp. */
-    el: (id = 1) => ({ id, value: "", attrs: Object.create(null), className: "" }),
+    el: (id = 1) => ({ __vnId: id, value: "", attrs: Object.create(null), className: "" }),
     /** Advisories only (warnCompat prefixes every one of them). */
     advisories: () => host.logs.filter((l) => l.startsWith("[vue-native compat]")),
     /** Listener flag writes for one event code. */

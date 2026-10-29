@@ -43,11 +43,11 @@ import type { PropType } from "@vue/runtime-core";
  *
  * Structurally typed rather than imported: `runtime.ts`'s `MirrorElement` is
  * internal, and importing it here would make the module graph circular
- * (`runtime.ts` re-exports this file). `id` is the retained-tree node id, which
+ * (`runtime.ts` re-exports this file). `__vnId` is the retained-tree node id, which
  * is the whole address the host needs (MULTIWINDOW.md §3.2 invariant 1).
  */
 export interface VnWindowTarget {
-  readonly id: number;
+  readonly __vnId: number;
 }
 
 /** `<VnWindow :bounds>` — every field optional; absent means "let the OS pick". */
@@ -212,7 +212,7 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       // Un-painting, though, is immediate: the main window's very next draw is
       // already without this subtree, because a node in two element trees for
       // one frame aliases gpui's scroll state and hitboxes (§3.2 invariant 3).
-      __vn_window_open(node.id, options(), () => {
+      __vn_window_open(node.__vnId, options(), () => {
         closed = true;
         windowId.value = 0;
         emit("close");
@@ -224,7 +224,7 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
     // `__vn_remove` and the host would refuse an id that is gone (§3.3).
     onBeforeUnmount(() => {
       if (closed || !el.value) return;
-      __vn_window_close(el.value.id);
+      __vn_window_close(el.value.__vnId);
     });
 
     // The LIVE props. `title` renames the window; `alwaysOnTop` re-stacks it.
@@ -234,7 +234,7 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       () => [props.title, props.alwaysOnTop, props.chrome, props.resizable] as const,
       () => {
         if (closed || !el.value) return;
-        __vn_window_set_options(el.value.id, options());
+        __vn_window_set_options(el.value.__vnId, options());
       },
     );
 
