@@ -2925,7 +2925,7 @@ export function createApp(
     // SFC styles collected at module-eval time (see build.ts) become the
     // stylesheet, installed before first mount so the first paint is styled.
     if (globalThis.__VN_CSS__?.length) {
-      __vn_set_stylesheet(__VN_CSS__!.join("\n"));
+      installStylesheet(globalThis.__VN_CSS__.join("\n"));
     }
     // `HTML`, not `ROOT`. The retained tree has one root box and it answers to
     // `document.documentElement` AND `document.body` (see the block that
@@ -4215,6 +4215,174 @@ if (doc) {
       if (!("ownerDocument" in head)) {
         Object.defineProperty(head, "ownerDocument", { get: () => doc, configurable: true });
       }
+    }
+  }
+}
+
+// ---- <style> injected into document.head, createTextNode, getElementsByTagName
+// The runtime-CSS idiom of half the npm ecosystem (style-inject, which
+// vue3-spinners runs at MODULE SCOPE; css-in-js; toast libraries):
+//
+//     const s = document.createElement("style");
+//     document.getElementsByTagName("head")[0].appendChild(s);   // or insertBefore
+//     s.appendChild(document.createTextNode(css));               // AFTER insertion
+//
+// `document.head` is not a box (see above), so a `<style>` there is not a
+// node of the tree. It IS a stylesheet: its text joins the app's sheet, after
+// the bundle's CSS, in insertion order, and follows later edits to the
+// element (appendChild of text, `textContent =`, removal). Injection before
+// mount, the usual case, costs nothing extra because it rides the first
+// `__vn_set_stylesheet`. After mount, each change re-sets the whole sheet once
+// per microtask. A `<link rel=stylesheet>` appended to head is not fetched;
+// that is an advisory.
+/** What `mount()` installs the stylesheet through: the host's, or the head-style-aware one below. */
+let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css);
+{
+  const d = globalThis.document as unknown as Record<string, unknown> | undefined;
+  const head = d?.head as Record<string, unknown> | undefined;
+  const hostSetSheet = typeof __vn_set_stylesheet === "function" ? __vn_set_stylesheet : null;
+  if (d && head && typeof head === "object" && hostSetSheet) {
+    /** `<style>` elements in head, insertion order, with the text each one holds. */
+    const injected: { el: Record<string, unknown>; text: string }[] = [];
+    /** The last sheet anyone else installed (the bundle's, or the dev loader's). */
+    let base: string | null = null;
+    let queued = false;
+    const injectedCss = () => injected.map((s) => s.text).filter(Boolean).join("\n");
+    const install = (css: string) => {
+      base = String(css);
+      const extra = injectedCss();
+      hostSetSheet(extra ? `${base}\n${extra}` : base);
+    };
+    // Every installer goes through this — the mount below by name, loader.ts's
+    // flushCss through the global — so the injected sheets survive a hot
+    // reload's re-aggregation.
+    installStylesheet = install;
+    try {
+      Object.defineProperty(globalThis, "__vn_set_stylesheet", { value: install, configurable: true, writable: true });
+    } catch {
+      warnCompat("head-style:install", "the dev loader's stylesheet updates will drop <style> elements added to document.head");
+    }
+    const refresh = () => {
+      if (base === null || queued) return; // before the first sheet: the mount's install carries them
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        if (base !== null) install(base);
+      });
+    };
+    const textOf = (n: unknown): string => {
+      if (n == null) return "";
+      if (typeof n === "string") return n;
+      const o = n as { text?: unknown; data?: unknown; textContent?: unknown; nodeValue?: unknown };
+      const v = o.text ?? o.data ?? o.textContent ?? o.nodeValue;
+      return v == null ? "" : String(v);
+    };
+    const isStyle = (n: unknown) =>
+      !!n && typeof n === "object" && String((n as { tagName?: unknown }).tagName ?? "").toUpperCase() === "STYLE";
+    const isLink = (n: unknown) =>
+      !!n && typeof n === "object" && String((n as { tagName?: unknown }).tagName ?? "").toUpperCase() === "LINK";
+    /** Makes a head `<style>` follow its own text from now on. */
+    const track = (el: Record<string, unknown>) => {
+      const entry = { el, text: textOf(el) };
+      injected.push(entry);
+      const set = (v: unknown) => {
+        entry.text = v == null ? "" : String(v);
+        refresh();
+      };
+      try {
+        for (const prop of ["textContent", "innerHTML", "innerText"]) {
+          Object.defineProperty(el, prop, { get: () => entry.text, set, configurable: true });
+        }
+        const append = (child: unknown) => {
+          entry.text += textOf(child);
+          refresh();
+          return child;
+        };
+        Object.defineProperty(el, "appendChild", { value: append, configurable: true, writable: true });
+        Object.defineProperty(el, "append", {
+          value: (...kids: unknown[]) => kids.forEach(append),
+          configurable: true,
+          writable: true,
+        });
+        // `style.remove()` and `style.parentNode.removeChild(style)` both take it out.
+        Object.defineProperty(el, "remove", { value: () => untrack(el), configurable: true, writable: true });
+        Object.defineProperty(el, "parentNode", {
+          get: () => (injected.includes(entry) ? head : null),
+          configurable: true,
+        });
+      } catch {
+        warnCompat("head-style:track", "a <style> in document.head will not follow later edits to its text");
+      }
+      refresh();
+    };
+    const untrack = (el: unknown) => {
+      const i = injected.findIndex((s) => s.el === el);
+      if (i >= 0) {
+        injected.splice(i, 1);
+        refresh();
+      }
+    };
+    const adopt = (n: unknown) => {
+      if (isStyle(n)) {
+        if (!injected.some((s) => s.el === n)) track(n as Record<string, unknown>);
+      } else if (isLink(n)) {
+        const rel = String((n as { rel?: unknown }).rel ?? (n as { getAttribute?(k: string): unknown }).getAttribute?.("rel") ?? "");
+        if (/stylesheet/i.test(rel)) {
+          warnCompat(
+            "head-link",
+            "a <link rel=stylesheet> added to document.head is not loaded — vue-native has no network stylesheets; import the CSS instead",
+          );
+        }
+      }
+      return n;
+    };
+    const def = (name: string, value: unknown) =>
+      Object.defineProperty(head, name, { value, configurable: true, writable: true });
+    def("appendChild", adopt);
+    def("insertBefore", (n: unknown) => adopt(n));
+    def("append", (...kids: unknown[]) => void kids.forEach(adopt));
+    def("prepend", (...kids: unknown[]) => void kids.forEach(adopt));
+    // style-inject's own spelling ("afterbegin" for `prepend: true`). The
+    // position is not honoured: an injected sheet always lands after the
+    // bundle's CSS, where an append would put it.
+    def("insertAdjacentElement", (_where: unknown, n: unknown) => adopt(n));
+    def("removeChild", (n: unknown) => {
+      untrack(n);
+      return n;
+    });
+    if (!("tagName" in head)) def("tagName", "HEAD");
+    if (!("childNodes" in head)) {
+      Object.defineProperty(head, "childNodes", { get: () => injected.map((s) => s.el), configurable: true });
+    }
+
+    // A browser's Text node, here a mirror text node: Vue-created and
+    // library-created text are the same kind of object, so either can be
+    // inserted anywhere in the tree.
+    if (typeof d.createTextNode !== "function") {
+      Object.defineProperty(d, "createTextNode", {
+        value: (data: unknown) => nodeOps.createText(data == null ? "" : String(data)),
+        configurable: true,
+        writable: true,
+      });
+    }
+    // An ARRAY, not a live HTMLCollection: it is a snapshot, which every
+    // `getElementsByTagName("head")[0]` and one-shot scan reads the same.
+    if (typeof d.getElementsByTagName !== "function") {
+      Object.defineProperty(d, "getElementsByTagName", {
+        value: (tag: unknown) => {
+          const t = String(tag).toLowerCase();
+          let out: unknown[];
+          if (t === "head") out = [head];
+          else if (t === "html" || t === "body") out = [d.documentElement];
+          else {
+            const qsa = d.querySelectorAll as ((s: string) => ArrayLike<unknown>) | undefined;
+            out = qsa ? Array.from(qsa.call(d, t === "*" ? "*" : t)) : [];
+          }
+          return Object.assign(out, { item: (i: number) => out[i] ?? null });
+        },
+        configurable: true,
+        writable: true,
+      });
     }
   }
 }

@@ -103,6 +103,57 @@ describe("useCssVars", () => {
   });
 });
 
+describe("a <style> injected into document.head", () => {
+  // style-inject's exact sequence (vue3-spinners runs it at module scope):
+  // insert the empty <style>, THEN append the text node.
+  function inject(rt: any, css: string) {
+    const d = rt.global.document;
+    const s = d.createElement("style");
+    s.setAttribute?.("type", "text/css");
+    d.getElementsByTagName("head")[0].insertAdjacentElement("beforeend", s);
+    s.appendChild(d.createTextNode(css));
+    return s;
+  }
+
+  test("before mount it rides the first stylesheet, after the bundle's CSS", async () => {
+    const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
+    inject(rt, ".spinner{}");
+    expect(rt.host.sheets).toEqual([]);
+    rt.createApp({ render: () => null }).mount();
+    expect(rt.host.sheets).toEqual([".bundle{}\n.spinner{}"]);
+  });
+
+  test("after mount: an edit re-sets the sheet once per microtask, and removal takes it out", async () => {
+    const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
+    rt.createApp({ render: () => null }).mount();
+    const s = inject(rt, ".a{}");
+    s.appendChild(rt.global.document.createTextNode(".b{}"));
+    await Promise.resolve();
+    expect(rt.host.sheets.at(-1)).toBe(".bundle{}\n.a{}.b{}");
+    expect(rt.host.sheets.length).toBe(2); // the mount's, then ONE for both edits
+    s.textContent = ".c{}";
+    await Promise.resolve();
+    expect(rt.host.sheets.at(-1)).toBe(".bundle{}\n.c{}");
+    expect(s.parentNode).toBe(rt.global.document.head);
+    s.parentNode.removeChild(s);
+    await Promise.resolve();
+    expect(rt.host.sheets.at(-1)).toBe(".bundle{}");
+    expect(s.parentNode).toBeNull();
+  });
+
+  test("getElementsByTagName and createTextNode are there, and a <link> stylesheet is an advisory", () => {
+    const rt = createRuntime();
+    const d = rt.global.document;
+    expect(d.getElementsByTagName("head")[0]).toBe(d.head);
+    expect(d.getElementsByTagName("head").item(1)).toBeNull();
+    const t = d.createTextNode("hi");
+    expect(t.textContent).toBe("hi");
+    const link = Object.assign(d.createElement("link"), { rel: "stylesheet", href: "https://x.invalid/a.css" });
+    d.head.appendChild(link);
+    expect(rt.advisories().join("\n")).toContain("not loaded");
+  });
+});
+
 describe("IntersectionObserver samples the painted bounds", () => {
   /** An app root painted at 800x600, and one element in it at `bounds`. */
   function world(bounds: string) {

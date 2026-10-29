@@ -165,6 +165,8 @@ export function createRuntime(
     props: [], // { id, key, value }
     styles: [],
     classes: [],
+    /** Every `__vn_set_stylesheet(css)`, in order: the last one is the sheet in force. */
+    sheets: [] as string[],
     logs: [],
     dispatcher: null,
     /** `__vn_query` answers: selector -> ids (or a `!advisory` string). */
@@ -574,7 +576,7 @@ export function createRuntime(
     (id, value) => host.classes.push({ id, value }),
     (id, key, value) => host.props.push({ id, key: nameOf(key), value }),
     () => {},
-    () => {},
+    (css) => host.sheets.push(String(css)),
     (id, code, on) => host.listeners.push({ id, code, on }),
     () => nextId++,
     (fn) => {
