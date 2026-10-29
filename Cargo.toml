@@ -38,6 +38,14 @@ exclude = ["vendor", "crates/vn-thorvg-sys/tools/regen-bindings"]
 # futures were woken over and over).
 [patch.crates-io]
 async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
+# m26: taffy 0.13.0 (gpui pins `=0.13.0`, vendor/zed/Cargo.toml) with ONE
+# backported fix: `justify-content` no longer also distributes the free space
+# auto margins already took (a `mx-auto` item in a `justify-center` row moved
+# twice as far). Upstream fixed it in taffy 0.14.0; the vendored copy is the
+# 0.13.0 crate as published plus that change, marked in
+# vendor/taffy/src/compute/flexbox.rs. Drop this line when gpui moves to a
+# taffy >= 0.14.
+taffy = { path = "vendor/taffy" }
 
 # vendor/redjs is a git submodule (https://github.com/argon-chat/redjs) consumed as a
 # path dep (vendor/redjs/redjs). NOTE: it currently path-depends on `../../redcss`
