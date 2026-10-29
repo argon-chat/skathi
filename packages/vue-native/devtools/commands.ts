@@ -476,7 +476,8 @@ export const COMMANDS: CommandSpec[] = [
       "Every fetch(), XMLHttpRequest and WebSocket the app opened, from BOOT — a bounded ring of " +
       "300 summary rows. `kind` is fetch, xhr or ws; a socket's `phase` is open-requested / open / " +
       "error / close and its messages are COUNTED rather than logged. The ring outlives " +
-      "location.reload(): the host puts a `kind: reload` marker row (`cause` says why) between " +
+      "location.reload() and a dev host's cold restart: the host puts a `kind: reload` marker row " +
+      "(`cause` says which) between " +
       "the runs, and the rows before it are the previous run's. " +
       "Page with `since`. A row " +
       "that came off the network carries `proto` (h2 / http/1.1), `conn` (connection id; equal ids " +

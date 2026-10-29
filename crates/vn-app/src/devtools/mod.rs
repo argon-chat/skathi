@@ -703,10 +703,12 @@ fn install_tees_once() {
 }
 
 /// The host is about to run the app again in the same JS realm. Called from
-/// `crate::reload::run` (`location.reload()`) between the old app's unload and
-/// the new bundle. It puts a `kind: "reload"` marker in the Network ring
-/// (`net::mark_reload`) with `cause` saying why. Nothing is recorded while the
-/// tees are off: a ring that holds no requests needs no divider.
+/// `crate::reload::run` (`location.reload()`) and from the dev host's
+/// `crate::dev::cold_restart` (vendor.js changed), between the old app's unload
+/// or teardown and the new bundle. It puts a `kind: "reload"` marker in the
+/// Network ring (`net::mark_reload`) with `cause` saying why. Nothing is
+/// recorded while the tees are off: a ring that holds no requests needs no
+/// divider.
 pub fn mark_reload(cause: &str) {
     if TEES_INSTALLED.load(Ordering::SeqCst) {
         net::mark_reload(cause);

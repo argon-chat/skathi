@@ -428,6 +428,9 @@ fn cold_restart(rt: &JsRuntime) {
     ) {
         eprintln!("[dev] teardown: {}\n{}", e.header, e.stack);
     }
+    // The Network panel's divider between the two runs (devtools/net.rs).
+    #[cfg(vn_devtools)]
+    crate::devtools::mark_reload("cold restart: vendor.js changed");
     boot(rt);
 }
 

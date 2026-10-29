@@ -118,7 +118,8 @@ const pool = computed(() => {
 // ---- reload markers -------------------------------------------------------------
 //
 // A `kind: "reload"` row is not an exchange. The target's host puts it where it
-// ran the app again in the same realm, and `cause` says why (`location.reload()`).
+// ran the app again in the same realm, and `cause` says why: `location.reload()`,
+// or a dev host's cold restart.
 // The ring outlives that, so the rows above the marker are the previous run's.
 // It is a divider, so it cannot be selected or opened.
 

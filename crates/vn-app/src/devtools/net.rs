@@ -40,10 +40,10 @@
 //! `location.reload()` and the dev host's cold restart run the app again in the
 //! same JS realm (`crate::reload`), and the runtime evaluated next puts its own
 //! classes on the global (1a84b39). The ring is the host's, so it simply goes
-//! on: seqs keep counting, and for `location.reload()` the host puts a
-//! `kind: "reload"` marker row ([`mark_reload`]) between the old app's unload
-//! and the new bundle. The tee itself is installed once per process and has to
-//! stay underneath what each new runtime installs:
+//! on: seqs keep counting, and the host puts a `kind: "reload"` marker row
+//! ([`mark_reload`]) between the old app's unload and the new bundle. The tee
+//! itself is installed once per process and has to stay underneath what each
+//! new runtime installs:
 //!
 //! - `fetch`: the runtime does not wrap it, and the unload keeps globals that
 //!   predate the first runtime, so the teed `fetch` stays.
