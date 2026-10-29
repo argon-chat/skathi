@@ -42,6 +42,8 @@ const excluded = ["LabPage"];
         <RouterLink class="tab" to="/permissions">Perms</RouterLink>
         <RouterLink class="tab" to="/storage">Storage</RouterLink>
         <RouterLink class="tab" to="/lab">Lab</RouterLink>
+        <!-- After Lab, so the specs' tab indices (hello, hover, engine) still hold. -->
+        <RouterLink class="tab" to="/desktop">Files</RouterLink>
       </div>
       <!-- Live store read, visible on EVERY tab. -->
       <div class="store">pinia · session · {{ session.badge }}</div>

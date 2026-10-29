@@ -5,6 +5,7 @@
 import { createRouter, createMemoryHistory, type RouteRecordRaw } from "vue-router";
 
 import AudioPage from "./pages/AudioPage.vue";
+import FilesPage from "./pages/FilesPage.vue";
 import FormsPage from "./pages/FormsPage.vue";
 import ListPage from "./pages/ListPage.vue";
 import MediaPage from "./pages/MediaPage.vue";
@@ -30,6 +31,7 @@ const routes = [
   { path: "/permissions", name: "permissions", component: PermissionsPage },
   { path: "/storage", name: "storage", component: StoragePage },
   { path: "/lab", name: "lab", component: LabPage },
+  { path: "/desktop", name: "desktop", component: FilesPage },
 ] satisfies RouteRecordRaw[];
 
 // `VN_SCENARIO=<route name>` pins the app to one page at boot, so a soak or a

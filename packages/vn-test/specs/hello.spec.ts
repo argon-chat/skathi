@@ -30,8 +30,8 @@ const FORMS = 0;
 const MOTION = 2;
 
 describe("hello", () => {
-  test("the shell mounted with all eleven tabs", async () => {
-    await expect(app.locator(".tab")).toHaveCount(11);
+  test("the shell mounted with all twelve tabs", async () => {
+    await expect(app.locator(".tab")).toHaveCount(12);
     // The two tabs the rest of this file addresses by position — asserted by
     // NAME once, so a reordered nav fails here with a readable message instead
     // of three tests failing for a reason none of them mentions.
