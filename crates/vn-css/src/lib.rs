@@ -520,14 +520,38 @@ impl Engine {
         // currently installed actually resolves a viewport unit.
         mapper::reset_viewport_units_seen();
         let src: &'static str = Box::leak(css.to_string().into_boxed_str());
-        let sheet: &'static StyleSheet<'static> =
-            match StyleSheet::parse(src, ParserOptions::default()) {
-                Ok(s) => Box::leak(Box::new(s)),
-                Err(e) => {
-                    engine.diagnostics.push(format!("stylesheet parse error: {e}"));
-                    return engine;
-                }
-            };
+        // CSS's own error handling (CSS Syntax §2.2: an invalid rule or
+        // declaration is dropped and parsing resumes), which every browser
+        // applies. Without it, ONE stray `}` anywhere — the Argon client ships
+        // one after a `@keyframes` — failed the whole sheet, and the app
+        // painted unstyled. A sheet with no error parses exactly as before.
+        let warnings = std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
+        let options = ParserOptions {
+            error_recovery: true,
+            warnings: Some(warnings.clone()),
+            ..ParserOptions::default()
+        };
+        let sheet: &'static StyleSheet<'static> = match StyleSheet::parse(src, options) {
+            Ok(s) => Box::leak(Box::new(s)),
+            Err(e) => {
+                engine.diagnostics.push(format!("stylesheet parse error: {e}"));
+                return engine;
+            }
+        };
+        if let Ok(skipped) = warnings.read() {
+            const SHOWN: usize = 20;
+            for e in skipped.iter().take(SHOWN) {
+                engine
+                    .diagnostics
+                    .push(format!("stylesheet: {e} — skipped, as a browser skips it"));
+            }
+            if skipped.len() > SHOWN {
+                engine.diagnostics.push(format!(
+                    "stylesheet: {} more invalid rules or declarations skipped",
+                    skipped.len() - SHOWN
+                ));
+            }
+        }
         let mut order = 0u32;
         engine.collect(&sheet.rules.0, None, &mut order);
         engine
@@ -2568,6 +2592,31 @@ mod tests {
     fn transitions(css: &str) -> Vec<TransitionSpec> {
         let engine = Engine::compile(css);
         (*engine.compute(box_node(), None, &Env::default()).transitions).clone()
+    }
+
+    /// CSS error recovery: a stray `}` (the Argon client ships one after a
+    /// `@keyframes`) costs what it costs in a browser, not the whole sheet. It
+    /// becomes part of the NEXT rule's prelude, so that one rule is dropped,
+    /// and parsing goes on after it.
+    #[test]
+    fn a_syntax_error_skips_one_rule_not_the_sheet() {
+        let css = "@keyframes pulse { 0% { opacity: 0 } 100% { opacity: 1 } }\n\
+                   }\n\
+                   .eaten { opacity: 0 }\n\
+                   .box { transition: opacity 200ms linear }";
+        let engine = Engine::compile(css);
+        assert!(
+            !engine.diagnostics.iter().any(|d| d.starts_with("stylesheet parse error")),
+            "the sheet failed as a whole: {:?}",
+            engine.diagnostics
+        );
+        assert!(
+            engine.diagnostics.iter().any(|d| d.contains("skipped, as a browser skips it")),
+            "the skipped rule is named: {:?}",
+            engine.diagnostics
+        );
+        assert!(engine.keyframes.contains_key("pulse"), "the @keyframes before the stray brace survives");
+        assert_eq!(transitions(css).len(), 1, "parsing resumed: the rule after the damage applies");
     }
 
     #[test]
