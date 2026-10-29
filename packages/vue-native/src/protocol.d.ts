@@ -80,8 +80,18 @@ declare function __vn_insert(child: VnNodeId, parent: VnNodeId, anchor: VnNodeId
 /** Destroys `id` AND ITS WHOLE SUBTREE. The ids are recycled afterwards. */
 declare function __vn_remove(id: VnNodeId): void;
 
-/** One inline declaration. `""` REMOVES the property (it does not set empty). */
+/**
+ * One inline declaration. `""` REMOVES the property (it does not set empty).
+ * A value may end in `!important`; the host keeps the list in order, an
+ * updated key in place and a new one appended.
+ */
 declare function __vn_set_style(id: VnNodeId, key: VnNameId, value: string): void;
+/**
+ * Does the engine apply `key: value` as one declaration
+ * (`vn_css::accepts_declaration`)? For the array form of `:style`, which keeps
+ * the last value the engine accepts. Absent on an older host.
+ */
+declare function __vn_style_accepts(key: VnNameId, value: string): boolean;
 /** The element's whole class attribute, space-joined. Not additive. */
 declare function __vn_set_class(id: VnNodeId, classes: string): void;
 /**

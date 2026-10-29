@@ -3,10 +3,11 @@
 // change reaches the host through `__vn_set_style` (docs/RUNTIME.md §5.3).
 
 import { describe, expect, test } from "bun:test";
+import { defineComponent, h, nextTick, ref } from "@vue/runtime-core";
 import { createRuntime } from "./runtime-harness";
 
-function setup() {
-  const rt = createRuntime();
+function setup(options: { styleAccepts?: boolean } = {}) {
+  const rt = createRuntime(options);
   const root = rt.nodeOps.createElement("div");
   const el = rt.nodeOps.createElement("div");
   rt.nodeOps.insert(el, root, null);
@@ -257,5 +258,221 @@ describe("the style attribute is the inline declaration block", () => {
     expect(root.style.fontSize).toBe("14px");
     expect(root.style.getPropertyValue("--radius")).toBe("1rem");
     expect(rt.host.styles.filter((s) => s.id === root.id).map((s) => s.key)).toEqual(["font-size", "--radius"]);
+  });
+});
+
+describe(":style is runtime-dom's patchStyle", () => {
+  test("a string style is the declaration body, not a record read character by character", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, "display:flex;gap:4px");
+    expect(hostStyle()).toEqual([
+      ["display", "flex"],
+      ["gap", "4px"],
+    ]);
+    expect(rt.host.styles.some((s) => /^\d+$/.test(s.key))).toBe(false);
+    expect(el.style.cssText).toBe("display: flex; gap: 4px;");
+  });
+
+  test("h('div', { style: '…' }) renders the string style", () => {
+    const rt = createRuntime();
+    let el: any = null;
+    rt.createApp({ render: () => h("div", { ref: (e: unknown) => (el = e), style: "display:flex;gap:4px" }) }).mount();
+    expect(el.style.display).toBe("flex");
+    expect(el.getAttribute("style")).toBe("display: flex; gap: 4px;");
+    expect(rt.host.styles.filter((s) => s.id === el.id).map((s) => `${s.key}=${s.value}`)).toEqual([
+      "display=flex",
+      "gap=4px",
+    ]);
+  });
+
+  test("string → string replaces the block", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, "color: red; width: 1px");
+    rt.patchProp(el, "style", "color: red; width: 1px", "width: 2px");
+    expect(hostStyle()).toEqual([["width", "2px"]]);
+  });
+
+  test("record → record diffs per property; a missing key or a null value removes it", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, { color: "red", width: "1px", height: "2px" });
+    const before = rt.host.styles.length;
+    rt.patchProp(el, "style", { color: "red", width: "1px", height: "2px" }, { color: "red", width: null, opacity: 0.5 });
+    expect(hostStyle()).toEqual([
+      ["color", "red"],
+      ["opacity", "0.5"],
+    ]);
+    // The unchanged `color` cost no host call.
+    expect(rt.host.styles.slice(before).some((s) => s.key === "color")).toBe(false);
+  });
+
+  test("record → string clears the record's properties", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, { color: "red", width: "1px" });
+    rt.patchProp(el, "style", { color: "red", width: "1px" }, "height: 3px");
+    expect(hostStyle()).toEqual([["height", "3px"]]);
+    expect(el.getAttribute("style")).toBe("height: 3px;");
+  });
+
+  test("string → record clears what the string declared and the record lacks", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, "color: red; width: 1px; background-color: blue");
+    rt.patchProp(el, "style", "color: red; width: 1px; background-color: blue", { width: "2px", backgroundColor: "green" });
+    expect(hostStyle()).toEqual([
+      ["width", "2px"],
+      ["background-color", "green"],
+    ]);
+  });
+
+  test("null or undefined after a style removes the attribute and every declaration", () => {
+    for (const gone of [null, undefined]) {
+      const { rt, el, hostStyle } = setup();
+      rt.patchProp(el, "style", null, { color: "red" });
+      rt.patchProp(el, "style", { color: "red" }, gone);
+      expect(hostStyle()).toEqual([]);
+      expect(el.hasAttribute("style")).toBe(false);
+      const s = setup();
+      s.rt.patchProp(s.el, "style", null, "color: red");
+      s.rt.patchProp(s.el, "style", "color: red", gone);
+      expect(s.hostStyle()).toEqual([]);
+      expect(s.el.getAttribute("style")).toBe(null);
+    }
+  });
+
+  test("custom properties keep their case, through a record and a string", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, { "--rekaPopperWidth": "320px", "--gap": 4 });
+    expect(hostStyle()).toEqual([
+      ["--rekaPopperWidth", "320px"],
+      ["--gap", "4"],
+    ]);
+    rt.patchProp(el, "style", { "--rekaPopperWidth": "320px", "--gap": 4 }, "--Mixed: 1");
+    expect(hostStyle()).toEqual([["--Mixed", "1"]]);
+  });
+
+  test("`!important` in a record value is the priority (runtime-dom's setProperty(…, 'important'))", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, { color: "red !important", width: "1px" });
+    expect(el.style.getPropertyPriority("color")).toBe("important");
+    expect(el.style.color).toBe("red");
+    expect(el.getAttribute("style")).toBe("color: red !important; width: 1px;");
+    expect(hostStyle()).toEqual([
+      ["color", "red !important"],
+      ["width", "1px"],
+    ]);
+    // Dropping the priority is a change.
+    rt.patchProp(el, "style", { color: "red !important", width: "1px" }, { color: "red", width: "1px" });
+    expect(el.style.getPropertyPriority("color")).toBe("");
+    expect(hostStyle()[0]).toEqual(["color", "red"]);
+  });
+
+  test("an array is vendor fallbacks: the last entry the engine accepts wins", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.host.styleRejects.add("display: -ms-flexbox");
+    rt.patchProp(el, "style", null, { display: ["-webkit-box", "-ms-flexbox", "flex"] });
+    expect(hostStyle()).toEqual([["display", "flex"]]);
+    // The last one was accepted, so nothing earlier was even asked about.
+    expect(rt.host.acceptCalls).toEqual(["display: flex"]);
+    expect(rt.advisories().some((a) => a.includes("style ") || a.includes(":style"))).toBe(false);
+  });
+
+  test("an array whose last entries the engine rejects uses an earlier one, and says so", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.host.styleRejects.add("display: -webkit-box");
+    rt.host.styleRejects.add("display: grid-lanes");
+    rt.patchProp(el, "style", null, { display: ["flex", "-webkit-box", "grid-lanes"] });
+    expect(hostStyle()).toEqual([["display", "flex"]]);
+    const said = rt.advisories().filter((a) => a.includes(":style display"));
+    expect(said.length).toBe(1);
+    expect(said[0]).toContain('uses "flex"');
+  });
+
+  test("an array: an empty entry removes, nothing accepted leaves the declaration as it was", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, { width: "1px" });
+    rt.host.styleRejects.add("width: nope");
+    rt.patchProp(el, "style", { width: "1px" }, { width: ["nope"] });
+    expect(hostStyle()).toEqual([["width", "1px"]]);
+    rt.patchProp(el, "style", { width: ["nope"] }, { width: ["2px", null] });
+    expect(hostStyle()).toEqual([]);
+    rt.patchProp(el, "style", { width: ["2px", null] }, { width: ["3px", ["4px !important"]] });
+    expect(el.style.width).toBe("4px");
+    expect(el.style.getPropertyPriority("width")).toBe("important");
+  });
+
+  test("on a host without __vn_style_accepts an array keeps its last entry, with an advisory", () => {
+    const { rt, el, hostStyle } = setup({ styleAccepts: false });
+    rt.patchProp(el, "style", null, { display: ["-webkit-box", "flex"] });
+    expect(hostStyle()).toEqual([["display", "flex"]]);
+    expect(rt.advisories().some((a) => a.includes("__vn_style_accepts is missing"))).toBe(true);
+  });
+
+  test("a string style keeps the variables useCssVars set", async () => {
+    const rt = createRuntime();
+    const style = ref<string>("color: red");
+    let el: any = null;
+    const Comp = defineComponent({
+      setup() {
+        rt.useCssVars(() => ({ "abc-gap": "4px" }));
+        return () => h("div", { ref: (e: unknown) => (el = e), style: style.value });
+      },
+    });
+    rt.createApp(Comp).mount();
+    await nextTick();
+    expect(el.style.getPropertyValue("--abc-gap")).toBe("4px");
+    style.value = "color: blue";
+    await nextTick();
+    await nextTick();
+    expect(el.style.color).toBe("blue");
+    expect(el.style.getPropertyValue("--abc-gap")).toBe("4px");
+  });
+});
+
+describe("v-show keeps its display handling", () => {
+  test("hide and show restore the element's own display", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.patchProp(el, "style", null, { display: "flex", gap: "4px" });
+    rt.vShow.beforeMount(el, { value: false });
+    expect(el.style.display).toBe("none");
+    rt.vShow.updated(el, { value: true, oldValue: false });
+    expect(el.style.display).toBe("flex");
+    expect(hostStyle()).toEqual([
+      ["display", "flex"],
+      ["gap", "4px"],
+    ]);
+  });
+
+  test("v-show under a <Transition> says the phases are not run (S-5)", () => {
+    const { rt, el } = setup();
+    rt.vShow.beforeMount(el, { value: true }, { transition: {} });
+    expect(rt.advisories().some((a) => a.includes("v-show inside <Transition>"))).toBe(true);
+  });
+
+  test("an element without an inline display shows by removing it", () => {
+    const { rt, el, hostStyle } = setup();
+    rt.vShow.beforeMount(el, { value: false });
+    expect(hostStyle()).toEqual([["display", "none"]]);
+    rt.vShow.updated(el, { value: true, oldValue: false });
+    expect(hostStyle()).toEqual([]);
+    // An unchanged truthiness is no work at all.
+    const n = rt.host.styles.length;
+    rt.vShow.updated(el, { value: 1, oldValue: true });
+    expect(rt.host.styles.length).toBe(n);
+  });
+
+  test("a :style change while hidden keeps it hidden, and the new display is what shows", () => {
+    const { rt, el } = setup();
+    rt.patchProp(el, "style", null, { display: "flex" });
+    rt.vShow.beforeMount(el, { value: false });
+    rt.patchProp(el, "style", { display: "flex" }, { display: "grid", color: "red" });
+    expect(el.style.display).toBe("none");
+    expect(el.style.color).toBe("red");
+    rt.vShow.updated(el, { value: true, oldValue: false });
+    expect(el.style.display).toBe("grid");
+    // A string style while hidden, too.
+    rt.vShow.updated(el, { value: false, oldValue: true });
+    rt.patchProp(el, "style", { display: "grid", color: "red" }, "display: block; color: blue");
+    expect(el.style.display).toBe("none");
+    rt.vShow.updated(el, { value: true, oldValue: false });
+    expect(el.style.display).toBe("block");
   });
 });

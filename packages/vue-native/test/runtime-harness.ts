@@ -140,6 +140,7 @@ export function createRuntime(
     MouseEvent?: unknown;
     globals?: Record<string, unknown>;
     launch?: Record<string, unknown>;
+    styleAccepts?: boolean;
   } = {},
 ) {
   const withStorage = options.storage !== false;
@@ -196,6 +197,10 @@ export function createRuntime(
      * `crates/vn-tree/src/scroll.rs` and `noteStale` in runtime.ts.
      */
     scrollStale: false,
+    /** `"prop: value"` declarations the fake engine does not apply (`__vn_style_accepts`). */
+    styleRejects: new Set<string>(),
+    /** Every `__vn_style_accepts` question, as `"prop: value"`. */
+    acceptCalls: [] as string[],
     /**
      * `__vn_focus(id, op)`, faked: every call, and what the host answers
      * (`"moved:<old>"`, `"already"`, `"pending"`, `"refused"`; `"blurred"` or
@@ -538,6 +543,7 @@ export function createRuntime(
     // `appPermissions` a `navigator.permissions` to re-broadcast `change` from
     // — bun has a `navigator`, but not that.
     "navigator",
+    "__vn_style_accepts",
   ];
   let nextId = 1;
   /** Exactly the object `devtools::state_json` writes. */
@@ -790,6 +796,15 @@ export function createRuntime(
     options.MouseEvent ?? globalThis.MouseEvent,
     globalThis.URL,
     fakeNavigator,
+    // `__vn_style_accepts` — the fake engine accepts every declaration except
+    // the `"prop: value"` strings in `host.styleRejects`. `styleAccepts:
+    // false` makes it absent, which is an older host.
+    options.styleAccepts === false
+      ? undefined
+      : (key, value) => {
+          host.acceptCalls.push(`${nameOf(key)}: ${value}`);
+          return !host.styleRejects.has(`${nameOf(key)}: ${value}`);
+        },
   ];
 
   if (!withStorage) {

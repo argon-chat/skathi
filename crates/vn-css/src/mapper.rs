@@ -1038,6 +1038,42 @@ impl InlineStyle {
     }
 }
 
+/// Does this engine take `name: value` as one declaration it applies?
+///
+/// It is what the array form of Vue's `:style` needs. runtime-dom sets each
+/// value of `display: ["-webkit-box", "flex"]` in turn and the browser keeps
+/// the last one its parser accepts; here the last one THIS engine accepts is
+/// kept, which is the same choice wherever both accept the same values. A
+/// value is accepted when it parses as one declaration of a typed value the
+/// mapper folds without a diagnostic. An untyped value (lightningcss's
+/// `Unparsed`) is accepted only when it composes `var()`/`env()`, which a
+/// browser also takes at parse time, or is a CSS-wide keyword. A custom
+/// property takes any value.
+pub fn accepts_declaration(name: &str, value: &str) -> bool {
+    let name = name.trim();
+    if name.starts_with("--") {
+        return !value.contains(';');
+    }
+    let body = format!("{name}: {value}");
+    let Ok(block) = DeclarationBlock::parse_string(&body, ParserOptions::default()) else {
+        return false;
+    };
+    if block.len() != 1 {
+        return false;
+    }
+    let p = block.declarations.iter().chain(block.important_declarations.iter()).next();
+    if let Some(Property::Unparsed(u)) = p {
+        return has_substitution(&u.value)
+            || matches!(
+                single_ident_raw(&u.value).map(str::to_ascii_lowercase).as_deref(),
+                Some("inherit" | "initial" | "unset" | "revert" | "revert-layer")
+            );
+    }
+    let mut diagnostics = Vec::new();
+    let style = parse_inline_style(&body, &mut diagnostics);
+    diagnostics.is_empty() && !style.is_empty()
+}
+
 /// Parses an inline `style` body into everything it contributes.
 pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineStyle {
     let mut r = StyleRefinement::default();
@@ -1047,7 +1083,23 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     let mut custom: Decls = Vec::new();
     let mut dynamic: Decls = Vec::new();
     let mut styled = false;
-    match DeclarationBlock::parse_string(body, ParserOptions::default()) {
+    // CSS's error handling, as for the stylesheet (`Engine::compile`): a
+    // malformed declaration (`0: d`, a stray `}`) is dropped and the rest of
+    // the body still applies. Without it one bad declaration cost the element
+    // its whole inline style.
+    let warnings = std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
+    let options = ParserOptions {
+        error_recovery: true,
+        warnings: Some(warnings.clone()),
+        ..ParserOptions::default()
+    };
+    let parsed = DeclarationBlock::parse_string(body, options);
+    if let Ok(skipped) = warnings.read() {
+        for e in skipped.iter() {
+            diagnostics.push(format!("inline style: {e} in {body:?} — skipped, as a browser skips it"));
+        }
+    }
+    match parsed {
         Ok(block) => {
             for p in block.declarations.iter().chain(block.important_declarations.iter()) {
                 match channel(p, diagnostics) {
@@ -6695,5 +6747,36 @@ mod scrollbar_tests {
         assert!(OverscrollBehavior::Auto.chains());
         assert!(!OverscrollBehavior::Contain.chains());
         assert!(!OverscrollBehavior::None.chains());
+    }
+
+    /// One malformed declaration in an inline body costs that declaration, as
+    /// in a browser, not the element's whole inline style. The string `:style`
+    /// bug fed the host `0: d; 1: i; …`, and nothing of the body applied.
+    #[test]
+    fn a_malformed_inline_declaration_is_skipped_and_the_rest_applies() {
+        let mut d = Vec::new();
+        let inline = parse_inline_style("0: d; display: flex; }; gap: 4px", &mut d);
+        let r = inline.refinement.expect("the valid declarations still apply");
+        assert_eq!(r.display, Some(gpui::Display::Flex));
+        assert!(r.gap.width.is_some(), "gap after the bad declarations applies too");
+        assert!(d.iter().any(|m| m.contains("skipped")), "{d:?}");
+    }
+
+    #[test]
+    fn accepts_declaration_is_what_the_engine_applies() {
+        assert!(accepts_declaration("display", "flex"));
+        assert!(accepts_declaration("width", "10px"));
+        assert!(accepts_declaration("width", "var(--w)"));
+        assert!(accepts_declaration("color", "inherit"));
+        assert!(accepts_declaration("--anything", "at all"));
+        // Not a value of the property, so not a declaration a browser keeps.
+        assert!(!accepts_declaration("width", "abc"));
+        assert!(!accepts_declaration("width", "10qq"));
+        assert!(!accepts_declaration("color", "notacolor"));
+        assert!(!accepts_declaration("display", ""));
+        // One declaration only: a `;` cannot smuggle a second one in.
+        assert!(!accepts_declaration("display", "flex; color: red"));
+        // A property the mapper does not fold is not applied, so not accepted.
+        assert!(!accepts_declaration("-ms-flex-pack", "center"));
     }
 }

@@ -130,6 +130,17 @@ host_fn!(fn vn_set_style(g, args) {
     UNDEF
 });
 
+// Does the engine take `name: value` as a declaration it applies
+// (`vn_css::accepts_declaration`)? The array form of `:style`
+// (`display: ["-webkit-box", "flex"]`) keeps the last value the browser
+// accepts, and only the engine can say which one that is here.
+host_fn!(fn vn_style_accepts(g, args) {
+    let key = arg_id(args.arg(0));
+    let value = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    let name = tree::with_tree(|t| t.name(key).to_string());
+    Value::boolean(vn_css::accepts_declaration(&name, &value)).0
+});
+
 host_fn!(fn vn_set_class(g, args) {
     let id = arg_id(args.arg(0));
     let classes = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
@@ -378,6 +389,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_insert", 3, vn_insert as *const _),
         ("__vn_remove", 1, vn_remove as *const _),
         ("__vn_set_style", 3, vn_set_style as *const _),
+        ("__vn_style_accepts", 2, vn_style_accepts as *const _),
         ("__vn_set_class", 2, vn_set_class as *const _),
         ("__vn_set_prop", 3, vn_set_prop as *const _),
         ("__vn_add_scope", 2, vn_add_scope as *const _),

@@ -950,6 +950,131 @@ function replaceInline(el: MirrorElement, text: string, asAttribute: boolean): v
   if (asAttribute) st.raw = String(text);
 }
 
+// ---- `:style`: runtime-dom's `patchStyle`, over the declaration block -------
+
+/** runtime-dom's `vShowOriginalDisplay` / `vShowHidden`: what `v-show` restores, and whether it is hiding. */
+const vShowOriginalDisplay = Symbol("_vod");
+const vShowHidden = Symbol("_vsh");
+/** runtime-dom's `displayRE` and `importantRE`, verbatim. */
+const DISPLAY_RE = /(^|;)\s*display\s*:/;
+const RD_IMPORTANT_RE = /\s*!important$/;
+
+/**
+ * `:style`, as runtime-dom's `patchStyle` does it, line for line:
+ *
+ * - a STRING is the whole block (`style.cssText = next`), with the variables
+ *   `useCssVars` set appended so a string style does not wipe them;
+ * - a RECORD is diffed per property. A key the new record lacks (or holds
+ *   `null`/`undefined` in) is removed, and that includes a key a previous
+ *   STRING declared, which is how a record replacing a string clears it;
+ * - `null`/`undefined` after a style removes the attribute and every
+ *   declaration with it;
+ * - under `v-show`, a `display` the style controls becomes the one it shows,
+ *   and a hidden element stays `display: none`.
+ */
+function patchStyle(el: MirrorElement, prev: unknown, next: unknown): void {
+  const isCssString = typeof next === "string";
+  let hasControlledDisplay = false;
+  if (next && !isCssString) {
+    const n = next as Record<string, unknown>;
+    if (prev) {
+      if (typeof prev !== "string") {
+        for (const key in prev as Record<string, unknown>) if (n[key] == null) setStyleValue(el, key, "");
+      } else {
+        for (const prevStyle of prev.split(";")) {
+          const key = prevStyle.slice(0, prevStyle.indexOf(":")).trim();
+          if (key && n[key] == null) setStyleValue(el, key, "");
+        }
+      }
+    }
+    for (const key in n) {
+      if (key === "display") hasControlledDisplay = true;
+      setStyleValue(el, key, n[key]);
+    }
+  } else if (isCssString) {
+    if (prev !== next) {
+      const vars = el._inline?.cssVarText;
+      replaceInline(el, vars ? `${next};${vars}` : next, false);
+      hasControlledDisplay = DISPLAY_RE.test(next);
+    }
+  } else if (prev) {
+    clearInline(el);
+  }
+  if (vShowOriginalDisplay in el) {
+    el[vShowOriginalDisplay] = hasControlledDisplay ? (el._inline?.decls.get("display")?.value ?? "") : "";
+    if (el[vShowHidden]) setInlineDecl(el, "display", "none", false);
+  }
+}
+
+/**
+ * runtime-dom's `setStyle`: one `:style` entry. A custom property goes
+ * through `setProperty`; a value ending in `!important` is set with that
+ * priority; anything else is the attribute setter. `null`/`undefined` (and
+ * `""`) remove the property. An ARRAY is the vendor-fallback form.
+ */
+function setStyleValue(el: MirrorElement, name: string, val: unknown): void {
+  if (Array.isArray(val)) {
+    setStyleFallbacks(el, name, val);
+    return;
+  }
+  const v = val == null ? "" : String(val);
+  const prop = cssPropName(name);
+  if (v === "") {
+    removeInlineDecl(el, prop);
+  } else if (prop.startsWith("--")) {
+    setInlineDecl(el, prop, inlineValue(v, true), false);
+  } else if (RD_IMPORTANT_RE.test(v)) {
+    const bare = v.replace(RD_IMPORTANT_RE, "");
+    if (bare.trim() === "") removeInlineDecl(el, prop);
+    else setInlineDecl(el, prop, inlineValue(bare, false), true);
+  } else {
+    setInlineDecl(el, prop, inlineValue(v, false), false);
+  }
+}
+
+/**
+ * `{ display: ["-webkit-box", "-ms-flexbox", "flex"] }`. runtime-dom sets each
+ * entry in turn: the browser keeps a value it accepts, ignores one it does
+ * not, and an empty entry removes the property. So the outcome is the LAST
+ * entry that is empty or accepted, and with none of those the declaration is
+ * left as it was. "Accepted" is the engine's answer (`__vn_style_accepts`),
+ * because only the engine knows what it applies.
+ */
+function setStyleFallbacks(el: MirrorElement, name: string, list: unknown[]): void {
+  const flat: unknown[] = list.flat(Infinity);
+  const prop = cssPropName(name);
+  for (let i = flat.length - 1; i >= 0; i--) {
+    const v = flat[i] == null ? "" : String(flat[i]);
+    const bare = v.replace(RD_IMPORTANT_RE, "");
+    if (bare.trim() === "" || styleAccepts(prop, bare.trim())) {
+      if (i < flat.length - 1) {
+        warnCompat(
+          `style-array:${prop}`,
+          `:style ${prop}: [${flat.map((x) => JSON.stringify(x)).join(", ")}] uses ${JSON.stringify(flat[i])}: ` +
+            `the engine does not apply the later ${flat.length - 1 - i === 1 ? "entry" : "entries"}. A browser keeps ` +
+            `the last entry IT accepts, so one that supports a later entry would use that one`,
+        );
+      }
+      setStyleValue(el, name, flat[i]);
+      return;
+    }
+  }
+}
+
+/** Does the engine apply `prop: value`? Custom properties take any value. */
+function styleAccepts(prop: string, value: string): boolean {
+  if (prop.startsWith("--")) return true;
+  if (typeof __vn_style_accepts !== "function") {
+    warnCompat(
+      "style-array:host",
+      "an array :style value keeps its LAST entry here: this host cannot say which values the engine " +
+        "accepts (__vn_style_accepts is missing), where a browser keeps the last entry it accepts",
+    );
+    return true;
+  }
+  return __vn_style_accepts(I(prop), value);
+}
+
 /** `removeAttribute("style")`: the declarations go with the attribute. */
 function clearInline(el: MirrorElement): void {
   const st = el._inline;
@@ -971,20 +1096,11 @@ function clearInline(el: MirrorElement): void {
  */
 function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown): void {
   if (key === "style") {
-    const p = (prev || {}) as Record<string, unknown>;
-    const n = (next || {}) as Record<string, unknown>;
-    for (const k in p) if (!(k in n)) removeInlineDecl(el, cssPropName(k));
-    for (const k in n) {
-      if (p[k] === n[k]) continue;
-      // runtime-dom's `setStyle` rule: a null/undefined value CLEARS the
-      // property. Stringifying it instead writes the literal text "undefined",
-      // which makes the whole declaration block unparseable — and
-      // `:style="{ transform: maybeUndefined }"` is an extremely common shape
-      // (it is what @floating-ui/vue's `floatingStyles` produces before its
-      // first measurement).
-      const v = n[k] == null ? "" : String(n[k]);
-      setInlineDecl(el, cssPropName(k), v === "" ? "" : inlineValue(v, k.startsWith("--")), false);
-    }
+    // A string is `cssText`, a record is diffed, `null` clears: runtime-dom's
+    // `patchStyle`. A null/undefined VALUE in a record clears its property
+    // (`:style="{ transform: maybeUndefined }"` is what @floating-ui/vue's
+    // `floatingStyles` produces before its first measurement).
+    patchStyle(el, prev, next);
   } else if (key === "class") {
     if (prev !== next) {
       el.className = next == null ? "" : String(next);
@@ -4037,7 +4153,15 @@ function setVarsOnVNode(vnode: VNode, vars: Record<string, unknown>): void {
 }
 function setVarsOnNode(el: MirrorElement, vars: Record<string, unknown>): void {
   if (el.nodeType !== 1) return;
-  for (const key in vars) el.style.setProperty(`--${key}`, normalizeCssVarValue(vars[key]));
+  // runtime-dom's `CSS_VAR_TEXT`: `patchStyle` appends this to a string
+  // `:style`, so a component's `v-bind()` variables survive it.
+  let cssText = "";
+  for (const key in vars) {
+    const value = normalizeCssVarValue(vars[key]);
+    el.style.setProperty(`--${key}`, value);
+    cssText += `--${key}: ${value};`;
+  }
+  inlineOf(el).cssVarText = cssText;
 }
 /** @vue/shared's `normalizeCssVarValue`. */
 function normalizeCssVarValue(value: unknown): string {
@@ -5432,15 +5556,36 @@ export const vModelCheckbox = modelFallback("checkbox");
 export const vModelRadio = modelFallback("radio");
 export const vModelSelect = modelFallback("select");
 
+// runtime-dom's `vShow`: the element's own inline `display` is remembered
+// before the first hide and restored on show, so `<div v-show="x"
+// style="display: flex">` shows as flex again. `patchStyle` keeps the two in
+// step when `:style` changes `display` while it is hidden. (`<Transition>`
+// around `v-show` is not wired: the display flips without the phases.)
+function setVShowDisplay(el: MirrorElement, value: unknown): void {
+  const d = value ? String(el[vShowOriginalDisplay] ?? "") : "none";
+  if (d === "") removeInlineDecl(el, "display");
+  else setInlineDecl(el, "display", d, false);
+  el[vShowHidden] = !value;
+}
 export const vShow = {
-  mounted(el: MirrorElement, { value }: DirectiveBindingLike) {
-    if (value) removeInlineDecl(el, "display");
-    else setInlineDecl(el, "display", "none", false);
+  beforeMount(el: MirrorElement, { value }: DirectiveBindingLike, vnode?: { transition?: unknown }) {
+    if (vnode?.transition) {
+      warnCompat(
+        "v-show:transition",
+        "v-show inside <Transition> flips display without the enter/leave phases here; " +
+          "use v-if for an animated show/hide",
+      );
+    }
+    const d = el._inline?.decls.get("display")?.value ?? "";
+    el[vShowOriginalDisplay] = d === "none" ? "" : d;
+    setVShowDisplay(el, value);
   },
   updated(el: MirrorElement, { value, oldValue }: DirectiveBindingLike) {
     if (!value === !oldValue) return;
-    if (value) removeInlineDecl(el, "display");
-    else setInlineDecl(el, "display", "none", false);
+    setVShowDisplay(el, value);
+  },
+  beforeUnmount(el: MirrorElement, { value }: DirectiveBindingLike) {
+    setVShowDisplay(el, value);
   },
 };
 
