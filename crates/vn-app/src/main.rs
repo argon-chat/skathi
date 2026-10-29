@@ -28,6 +28,8 @@ use gpui_platform::application;
 use vn_runtime::{JsRuntime, Phase, host_fn, with_app, with_published, with_published_app};
 use vn_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 
+// The JS event loop while the window draws no frames (minimised, hidden).
+mod background;
 #[cfg(not(feature = "prod"))]
 mod dev;
 // The automation surface (docs/DEVTOOLS.md) and the inspector it feeds
@@ -578,6 +580,8 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // One `Instant` read per frame when VN_PERF is on, an atomic load when it
     // is off. `on_next_frame` re-arms every frame, so this IS the frame clock.
     perf::frame();
+    // The background tick stands down while frames arrive (src/background.rs).
+    background::note_frame();
     // Before the poison gate: what a libwebrtc/livekit worker logged is exactly
     // what an agent wants to read when the JS side has already given up.
     drain_log_tee();
@@ -597,17 +601,58 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // below: `cx` is borrowed by it, and a quit has nothing to do with JS.
     #[cfg(vn_devtools)]
     inspector::poll_frame(cx);
+    js_wave(window, cx, Wave::Frame);
+    // The `@media` environment (viewport, colour scheme, reduced motion, DPI
+    // scale, chrome mode) is published inside `window::pump` above, next to the
+    // snapshot the same numbers come from — one source, so JS and CSS can never
+    // disagree about the viewport.
+    //
+    // The fallback titlebar retires here rather than in `render`: this runs
+    // after the frame that painted, so "did the app declare a drag region" has
+    // an answer (docs/WINDOWING.md §4.2 mode 2).
+    window::note_painted_frame();
+    after_wave(window, cx);
+    window.on_next_frame(pump_frame);
+    // The wave may have been long; the background tick measures the stall
+    // from its end, so a slow frame is not mistaken for a parked one.
+    background::note_frame();
+    // Closes the `pump` bucket: everything after this is gpui's — its decision
+    // to draw, the draw itself, the present, and the wait for the next vsync.
+    perf::pump_done();
+}
+
+/// Which clock drives a JS wave.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Wave {
+    /// The window's own frame ([`pump_frame`]): everything, the animation
+    /// frames included.
+    Frame,
+    /// The background tick, while the window draws no frames (minimised,
+    /// hidden): timers, I/O, the host queues and microtasks, but no
+    /// `requestAnimationFrame`, as in a browser's hidden page
+    /// (src/background.rs).
+    Background,
+}
+
+/// One JS wave inside ONE `Phase::Commit` publication: the reload, the window
+/// funnel, the redjs scheduler, then every host queue that settles promises.
+/// Shared by the frame and the background tick, so the two can never drift
+/// apart in what they deliver.
+pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
     with_published(window, cx, Phase::Commit, || {
         // Dev loop: poll dist/changes.json and apply HMR BEFORE the pump, so
         // everything Vue schedules while patching (its post-flush queue, the
         // reload path's queueJob) drains in this frame. In prod this is an
-        // empty inline fn.
-        let n = FRAME_NO.with(|f| {
-            let n = f.get().wrapping_add(1);
-            f.set(n);
-            n
-        });
-        boot_mode::poll_frame(n);
+        // empty inline fn. Frames only: it counts frames, and a hot reload of
+        // a minimised window can wait for it to be shown.
+        if wave == Wave::Frame {
+            let n = FRAME_NO.with(|f| {
+                let n = f.get().wrapping_add(1);
+                f.set(n);
+                n
+            });
+            boot_mode::poll_frame(n);
+        }
         // `location.reload()` asked during the last frame: unload, tear down
         // and re-run the app now, before the pump, so the new app's first
         // wave drains in this frame (src/reload.rs).
@@ -624,8 +669,14 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         // 144 Hz window does not give away 58% of every frame for the latency
         // a 60 Hz one gets at 25% (vn_runtime::runtime::delivery_budget_us).
         vn_runtime::runtime::set_frame_budget_ms(window::frame_budget_ms());
+        // No animation frames (nor the idle callbacks redjs runs after them)
+        // on the background tick: a hidden page's rAF does not run.
+        let flags = match wave {
+            Wave::Frame => PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS,
+            Wave::Background => PUMP_TIMERS | PUMP_MICROTASKS,
+        };
         JsRuntime::with(|rt| {
-            rt.pump(PUMP_TIMERS | PUMP_RAF | PUMP_MICROTASKS);
+            rt.pump(flags);
             for err in rt.drain_errors() {
                 eprintln!("[js uncaught] {}\n{}", err.header, err.stack);
                 vn_tree::log::record(
@@ -666,15 +717,12 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
         #[cfg(feature = "storages")]
         vn_storage::pump();
     });
-    // The `@media` environment (viewport, colour scheme, reduced motion, DPI
-    // scale, chrome mode) is published inside `window::pump` above, next to the
-    // snapshot the same numbers come from — one source, so JS and CSS can never
-    // disagree about the viewport.
-    //
-    // The fallback titlebar retires here rather than in `render`: this runs
-    // after the frame that painted, so "did the app declare a drag region" has
-    // an answer (docs/WINDOWING.md §4.2 mode 2).
-    window::note_painted_frame();
+}
+
+/// What follows a JS wave, on both clocks: the media tick, the tree flush and
+/// the repaint request, and the devtools push. On the background tick the
+/// repaint request only marks the window dirty; it is drawn once it is shown.
+pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
     // Everything that needs a `Window` and could not run from a host fn: the
     // `<lottie>` transport is advanced by this frame's wall-clock delta (and its
     // `complete`/`loopComplete`/`enterFrame` events dispatched), every `<video>`
@@ -717,10 +765,6 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // about a revision the tree has not reached.
     #[cfg(vn_devtools)]
     devtools::ws::broadcast_frame();
-    window.on_next_frame(pump_frame);
-    // Closes the `pump` bucket: everything after this is gpui's — its decision
-    // to draw, the draw itself, the present, and the wait for the next vsync.
-    perf::pump_done();
 }
 
 impl Render for Shell {
@@ -1341,6 +1385,9 @@ fn main() {
         )
         .map(|handle| MAIN_WINDOW.with(|w| w.set(Some(handle.into()))))
         .unwrap();
+        // Timers, sockets and devtools keep running while the window is
+        // minimised: a gpui timer pumps the JS event loop whenever frames stop.
+        background::start(cx);
 
         // A DOM layout read lays out, the way a browser's does. Installed
         // before any JS runs, because the very first thing that needs it is the

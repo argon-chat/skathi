@@ -112,9 +112,9 @@ describe("hello", () => {
   test("minimise → restore fires visibilitychange both ways", async () => {
     // A minimised window paints no frames, and the event used to come from a
     // per-frame diff — so `hidden` was never delivered at all. It now comes
-    // from gpui's visibility observer, out of band. JS cannot restore a window
-    // whose pump is parked (nor answer devtools while it is), so the restore
-    // comes from outside, without activating anything.
+    // from gpui's visibility observer, out of band. The restore comes from
+    // outside, without activating anything. (JS and devtools keep running
+    // while minimised on the background tick: specs/minimized.spec.ts.)
     const user32 = dlopen("user32.dll", {
       ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
       IsIconic: { args: [FFIType.u64], returns: FFIType.i32 },
