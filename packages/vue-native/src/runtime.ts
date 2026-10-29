@@ -110,11 +110,38 @@ interface MirrorClassList {
  * variables reach the cascade.
  */
 interface MirrorStyle {
-  setProperty(key: string, value: string | number | null | undefined): void;
+  setProperty(key: string, value: string | number | null | undefined, priority?: string): void;
   removeProperty(key: string): string;
   getPropertyValue(key: string): string;
+  getPropertyPriority(key: string): string;
+  item(i: number): string;
+  readonly length: number;
   cssText: string;
   [property: string]: unknown;
+}
+
+/** One declaration of an element's inline style, as CSSOM keeps it. */
+interface InlineDecl {
+  value: string;
+  important: boolean;
+}
+
+/**
+ * The CSS declaration block behind `el.style` AND the `style` attribute. It is
+ * one object, so `:style`, `el.style.x = …`, `style.cssText`,
+ * `setAttribute("style", …)` and `getAttribute("style")` all read and write
+ * the same declarations, and every change reaches the host through
+ * `__vn_set_style`, the call `:style` has always made.
+ */
+interface InlineStyleState {
+  /** CSS-spelled name → declaration, in declaration order. A Map keeps an updated key in place, as CSSOM does. */
+  decls: Map<string, InlineDecl>;
+  /** The `style` attribute exists. It can exist and be empty, as in a browser. */
+  present: boolean;
+  /** The text `setAttribute("style", …)` wrote, verbatim, until a CSSOM change re-serializes it. */
+  raw: string | null;
+  /** runtime-dom's `CSS_VAR_TEXT`: what `useCssVars` set, kept across a string `:style`. */
+  cssVarText: string;
 }
 
 /** The members every mirror node has — elements and text/comment alike. */
@@ -282,6 +309,8 @@ interface MirrorElement extends MirrorNodeBase {
   canPlayType(type: string): string;
 
   // -- private bookkeeping, every field of it also present in runtime-dom
+  /** The inline style's declarations (runtime-dom keeps them in the real `el.style`). */
+  _inline?: InlineStyleState;
   /** The transition classes layered on top of `className`. */
   _vtc?: Set<string>;
   _isLeaving?: boolean;
@@ -701,9 +730,238 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
 // not "-enter", or every `@keydown.enter` silently stops matching.
 const hyphenate = (s: string): string => s.replace(/\B([A-Z])/g, "-$1").toLowerCase();
 
-/// A `:style` key as CSS spells it. Custom properties are already CSS-cased and
-/// are CASE-SENSITIVE, so hyphenating `--rekaPopperWidth` would rename it.
-const styleKey = (k: string): string => (k.startsWith("--") ? k : hyphenate(k));
+// ---- the inline style: one CSSOM declaration block per element -------------
+//
+// `el.style`, `:style`, `style.cssText` and the `style` attribute are four views
+// of ONE thing in a browser, and here they are too (`InlineStyleState`). The
+// host keeps the same list (`Tree::set_style`: an updated key stays in place, a
+// new one is appended), so the mirror's declaration order is the order the
+// engine cascades them in.
+
+/**
+ * A `:style` key or a `CSSStyleDeclaration` attribute name, as CSS spells the
+ * property: `backgroundColor` and `background-color` are `background-color`,
+ * `webkitTransform` / `WebkitTransform` are `-webkit-transform`, `cssFloat` is
+ * `float`. Custom properties are CASE-SENSITIVE and stay as written, so
+ * `--rekaPopperWidth` is not renamed.
+ */
+function cssPropName(k: string): string {
+  if (k.startsWith("--")) return k;
+  if (k === "cssFloat") return "float";
+  if (k.includes("-")) return k.toLowerCase();
+  const h = hyphenate(k);
+  return /^(webkit|moz|ms)-/.test(h) ? "-" + h : h;
+}
+/** `setProperty`/`getPropertyValue`'s argument: already a CSS name, ASCII-lowercased unless custom. */
+const cssomName = (k: string): string => (k.startsWith("--") ? k : k.toLowerCase());
+const IMPORTANT_RE = /\s*!\s*important\s*$/i;
+/** A CSS property name, or a custom property (`--*`). "0" is not one. */
+const PROP_NAME_RE = /^(?:--[^\s:;]+|-?[A-Za-z_\u0080-￿][\w\u0080-￿-]*)$/;
+
+/**
+ * A declaration's value as stored: trimmed, as CSS Syntax trims it. An EMPTY
+ * custom property is valid CSS (`--x: ;`, and `normalizeCssVarValue` turns ""
+ * into " " to keep one), but "" is "remove" on the host channel, so an empty
+ * custom property is kept as one space.
+ */
+const inlineValue = (v: string, custom: boolean): string => {
+  const t = v.trim();
+  return t === "" && custom ? " " : t;
+};
+
+function inlineOf(el: MirrorElement): InlineStyleState {
+  return (el._inline ??= { decls: new Map(), present: false, raw: null, cssVarText: "" });
+}
+/** What the host stores for one declaration: the value, with its priority. */
+const hostDecl = (d: InlineDecl): string => (d.important ? `${d.value} !important` : d.value);
+/** CSSOM "serialize a CSS declaration block": `prop: value;`, joined by one space. */
+function serializeInline(st: InlineStyleState | undefined): string {
+  let out = "";
+  if (st) {
+    for (const [name, d] of st.decls) {
+      out += `${out ? " " : ""}${name}: ${d.value}${d.important ? " !important" : ""};`;
+    }
+  }
+  return out;
+}
+/**
+ * The serialization is from the declarations as written. A browser re-spells
+ * each value (`#f00` → `rgb(255, 0, 0)`, `0` → `0px`), folds longhands into
+ * shorthands and drops a value it rejects; this has no parser of its own on
+ * the JS side, so it does none of that. Said once, at the first read.
+ */
+function noteInlineSerialization(): void {
+  warnCompat(
+    "inline-style-serialize",
+    "el.style.cssText / getAttribute('style') serialize the inline declarations as they were written: " +
+      "values are not re-spelled (`#f00` stays `#f00`), a shorthand is not expanded into its longhands " +
+      "(after `margin: 0`, `el.style.marginTop` reads \"\"), and a value the engine rejects is still listed",
+  );
+}
+/** `getAttribute("style")`: the attribute's text, or null when there is no attribute. */
+function styleAttribute(el: MirrorElement): string | null {
+  const st = el._inline;
+  if (!st || !st.present) return null;
+  if (st.raw !== null) return st.raw;
+  const text = serializeInline(st);
+  if (text) noteInlineSerialization();
+  return text;
+}
+/** The attribute's old value, for a MutationObserver that asked for one; nothing is serialized otherwise. */
+const styleBefore = (el: MirrorElement): string | null => (observers.size ? styleAttribute(el) : null);
+/** "Update style attribute": the attribute now exists, and its text is the serialization again. */
+function styleTouched(el: MirrorElement, st: InlineStyleState, before: string | null): void {
+  st.present = true;
+  st.raw = null;
+  if (el.attrs) el.attrs.style = "";
+  notifyMutation(el, "attributes", { attributeName: "style", oldValue: before });
+}
+
+/**
+ * CSSOM "set a CSS declaration", then "update style attribute" when it changed.
+ * An empty value removes the declaration (`setProperty`'s own rule). Answers
+ * whether anything changed.
+ */
+function setInlineDecl(el: MirrorElement, name: string, value: string, important: boolean): boolean {
+  if (value === "") return removeInlineDecl(el, name) !== null;
+  const st = inlineOf(el);
+  const prev = st.decls.get(name);
+  if (prev && prev.value === value && prev.important === important) return false;
+  const before = styleBefore(el);
+  const d = { value, important };
+  st.decls.set(name, d);
+  __vn_set_style(el.id, I(name), hostDecl(d));
+  styleTouched(el, st, before);
+  return true;
+}
+/** `removeProperty`: the old value, or null when there was no such declaration. */
+function removeInlineDecl(el: MirrorElement, name: string): string | null {
+  const st = el._inline;
+  const prev = st?.decls.get(name);
+  if (!st || !prev) return null;
+  const before = styleBefore(el);
+  st.decls.delete(name);
+  __vn_set_style(el.id, I(name), "");
+  styleTouched(el, st, before);
+  return prev.value;
+}
+
+/**
+ * CSS's "parse a list of declarations" for an inline body. A `;` ends a
+ * declaration only outside a string, a comment and `()`/`[]`/`{}`, so
+ * `background: url("data:image/png;base64,…")` is one declaration. A
+ * declaration without a property name (`0: d`) or without a value is dropped,
+ * as a browser drops it. A repeated property keeps its LAST occurrence, at that
+ * position, except that a normal one does not override an earlier
+ * `!important` one.
+ */
+function parseInlineDecls(text: string): Map<string, InlineDecl> {
+  const out = new Map<string, InlineDecl>();
+  const s = String(text);
+  let seg = "";
+  let depth = 0;
+  let quote = "";
+  const flush = () => {
+    const colon = seg.indexOf(":");
+    if (colon > 0) {
+      const raw = seg.slice(0, colon).trim();
+      let value = seg.slice(colon + 1);
+      const m = IMPORTANT_RE.exec(value);
+      const important = !!m;
+      if (m) value = value.slice(0, m.index);
+      // CSS Syntax "consume a declaration" trims the value at both ends.
+      value = value.trim();
+      const custom = raw.startsWith("--");
+      if (PROP_NAME_RE.test(raw) && (value !== "" || custom)) {
+        const name = cssomName(raw);
+        value = inlineValue(value, custom);
+        const prev = out.get(name);
+        if (!(prev?.important && !important)) {
+          out.delete(name);
+          out.set(name, { value, important });
+        }
+      }
+    }
+    seg = "";
+  };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      seg += c;
+      if (c === "\\" && i + 1 < s.length) seg += s[++i];
+      else if (c === quote) quote = "";
+      continue;
+    }
+    if (c === "/" && s[i + 1] === "*") {
+      const end = s.indexOf("*/", i + 2);
+      i = end < 0 ? s.length : end + 1;
+      seg += " ";
+      continue;
+    }
+    if (c === "\\" && i + 1 < s.length) {
+      seg += c + s[++i];
+      continue;
+    }
+    if (c === '"' || c === "'") quote = c;
+    else if (c === "(" || c === "[" || c === "{") depth++;
+    else if ((c === ")" || c === "]" || c === "}") && depth > 0) depth--;
+    else if (c === ";" && depth === 0) {
+      flush();
+      continue;
+    }
+    seg += c;
+  }
+  flush();
+  return out;
+}
+
+/**
+ * `style.cssText = text` (`asAttribute` false) or `setAttribute("style", text)`
+ * (true, which also keeps `text` verbatim as the attribute's value): the block
+ * is emptied and refilled from `text`. A declaration that stays with the same
+ * value costs no host call, as long as the host's order (the surviving keys in
+ * their old order, then the new ones) is the new block's order; otherwise the
+ * block is re-sent from scratch, because the order decides a shorthand against
+ * its longhand.
+ */
+function replaceInline(el: MirrorElement, text: string, asAttribute: boolean): void {
+  const st = inlineOf(el);
+  const before = styleBefore(el);
+  const next = parseInlineDecls(text);
+  const old = st.decls;
+  const order = [...old.keys()].filter((k) => next.has(k));
+  for (const k of next.keys()) if (!old.has(k)) order.push(k);
+  let i = 0;
+  let inPlace = true;
+  for (const k of next.keys()) {
+    if (order[i++] !== k) {
+      inPlace = false;
+      break;
+    }
+  }
+  for (const k of old.keys()) if (!inPlace || !next.has(k)) __vn_set_style(el.id, I(k), "");
+  for (const [k, d] of next) {
+    const p = old.get(k);
+    if (inPlace && p && p.value === d.value && p.important === d.important) continue;
+    __vn_set_style(el.id, I(k), hostDecl(d));
+  }
+  st.decls = next;
+  styleTouched(el, st, before);
+  if (asAttribute) st.raw = String(text);
+}
+
+/** `removeAttribute("style")`: the declarations go with the attribute. */
+function clearInline(el: MirrorElement): void {
+  const st = el._inline;
+  if (!st || !st.present) return;
+  const before = styleBefore(el);
+  for (const k of st.decls.keys()) __vn_set_style(el.id, I(k), "");
+  st.decls = new Map();
+  st.present = false;
+  st.raw = null;
+  if (el.attrs) delete el.attrs.style;
+  notifyMutation(el, "attributes", { attributeName: "style", oldValue: before });
+}
 
 /**
  * The renderer's single prop hook, and also what `setAttribute` /
@@ -715,7 +973,7 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
   if (key === "style") {
     const p = (prev || {}) as Record<string, unknown>;
     const n = (next || {}) as Record<string, unknown>;
-    for (const k in p) if (!(k in n)) __vn_set_style(el.id, I(styleKey(k)), "");
+    for (const k in p) if (!(k in n)) removeInlineDecl(el, cssPropName(k));
     for (const k in n) {
       if (p[k] === n[k]) continue;
       // runtime-dom's `setStyle` rule: a null/undefined value CLEARS the
@@ -724,7 +982,8 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
       // `:style="{ transform: maybeUndefined }"` is an extremely common shape
       // (it is what @floating-ui/vue's `floatingStyles` produces before its
       // first measurement).
-      __vn_set_style(el.id, I(styleKey(k)), n[k] == null ? "" : String(n[k]));
+      const v = n[k] == null ? "" : String(n[k]);
+      setInlineDecl(el, cssPropName(k), v === "" ? "" : inlineValue(v, k.startsWith("--")), false);
     }
   } else if (key === "class") {
     if (prev !== next) {
@@ -1669,11 +1928,18 @@ defineDom("scrollIntoView", function (this: MirrorElement, arg: unknown) {
 });
 
 // -- the attribute channel (`patchProp` is the writer; see `mk`)
+// `style` is the one attribute whose value is not stored as text: it IS the
+// inline declaration block (`InlineStyleState`), so `getAttribute("style")`
+// reads what `:style` and `el.style` wrote. `attrs.style` is only a marker
+// that keeps `hasAttribute` / `getAttributeNames` (and their order) honest.
+const isStyleAttr = (name: unknown): boolean => String(name).toLowerCase() === "style";
 defineDom("getAttribute", function (this: MirrorElement, name: unknown) {
+  if (isStyleAttr(name)) return styleAttribute(this);
   const v = this.attrs?.[String(name)];
   return v === undefined ? null : v;
 });
 defineDom("hasAttribute", function (this: MirrorElement, name: unknown) {
+  if (isStyleAttr(name)) return !!this._inline?.present;
   return this.attrs ? String(name) in this.attrs : false;
 });
 defineDom("getAttributeNames", function (this: MirrorElement) {
@@ -1681,15 +1947,19 @@ defineDom("getAttributeNames", function (this: MirrorElement) {
 });
 defineDom("setAttribute", function (this: MirrorElement, name: unknown, value: unknown) {
   const key = String(name);
-  // `style` is a declaration BODY as an attribute, not the object `patchProp`'s
-  // `:style` path expects.
-  if (key === "style") {
-    this.style.cssText = value == null ? "" : String(value);
+  // `style` is a declaration BODY as an attribute: the block is replaced by
+  // its parse, and the attribute keeps the text verbatim, as in a browser.
+  if (isStyleAttr(key)) {
+    replaceInline(this, String(value), true);
     return;
   }
   patchProp(this, key, undefined, value == null ? "" : String(value));
 });
 defineDom("removeAttribute", function (this: MirrorElement, name: unknown) {
+  if (isStyleAttr(name)) {
+    clearInline(this);
+    return;
+  }
   patchProp(this, String(name), undefined, null);
 });
 defineDom("toggleAttribute", function (this: MirrorElement, name: string, force?: boolean) {
@@ -1757,53 +2027,117 @@ defineDomGet("classList", function (this: MirrorElement) {
   return list;
 });
 
-// -- inline style: writes go through the same host call `:style` makes, so this
-//    is genuinely functional — CUSTOM PROPERTIES INCLUDED, which is how
-//    reka-ui's `--reka-popper-*` sizing variables reach the cascade.
+// -- inline style: `el.style` is a CSSStyleDeclaration over the element's
+//    `InlineStyleState`, so it reads what `:style` and `setAttribute("style")`
+//    wrote, and its writes go through the same host call `:style` makes —
+//    CUSTOM PROPERTIES INCLUDED, which is how reka-ui's `--reka-popper-*`
+//    sizing variables reach the cascade.
+
+/**
+ * `style.backgroundColor = v`, the IDL attribute setter. `null` is the empty
+ * string ([LegacyNullToEmptyString]), which removes the declaration. A browser
+ * ignores a value it cannot parse, and two are knowable here without a parser:
+ * `undefined` (the text "undefined" is no property's value) and a value that
+ * carries `!important` (a priority is only `setProperty`'s third argument).
+ *
+ * `style["--x"] = v` sets the custom property. In a browser a custom property
+ * is not an attribute of the declaration and the write is an expando; here it
+ * is kept as the cascade write it has always been (docs/RUNTIME.md §5.3).
+ */
+function assignInlineProperty(node: MirrorElement, key: string, v: unknown): void {
+  if (v === undefined) return;
+  const name = cssPropName(key);
+  const custom = name.startsWith("--");
+  if (custom) {
+    warnCompat(
+      "style-custom-assign",
+      `el.style["${name}"] = … sets the custom property here, but in a browser it is only an expando on ` +
+        `the declaration object and changes nothing; use el.style.setProperty("${name}", …), which works in both`,
+    );
+  }
+  const value = v === null ? "" : String(v);
+  if (value === "") {
+    removeInlineDecl(node, name);
+    return;
+  }
+  if (!custom && IMPORTANT_RE.test(value)) return;
+  setInlineDecl(node, name, inlineValue(value, custom), false);
+}
+
 defineDomGet("style", function (this: MirrorElement) {
   const node = this;
-  const own: Record<string, string> = Object.create(null);
-  const write = (k: string | symbol, v: unknown) => {
-    const key = String(k);
-    const css = key.startsWith("--") ? key : hyphenate(key);
-    own[key] = v == null ? "" : String(v);
-    __vn_set_style(node.id, I(css), v == null ? "" : String(v));
-  };
+  const decls = () => node._inline?.decls;
   // The target carries the REAL members; the handler routes everything else
-  // into `write`. `as MirrorStyle` is the one place the two halves are joined:
-  // a Proxy's type is its target's, and the target deliberately does not carry
-  // the open-ended `[property: string]` half that the handler serves.
-  const style = new Proxy(
-    {
-      setProperty: (k: string, v: unknown) => write(k, v),
-      removeProperty: (k: string) => {
-        const prev = own[String(k)] ?? "";
-        write(k, "");
-        return prev;
-      },
-      getPropertyValue: (k: string) => own[String(k)] ?? "",
-      get cssText() {
-        return Object.keys(own)
-          .filter((k) => own[k] !== "")
-          .map((k) => `${k.startsWith("--") ? k : hyphenate(k)}: ${own[k]}`)
-          .join("; ");
-      },
-      set cssText(v: string) {
-        for (const decl of String(v).split(";")) {
-          const i = decl.indexOf(":");
-          if (i > 0) write(decl.slice(0, i).trim(), decl.slice(i + 1).trim());
-        }
-      },
-    } as MirrorStyle,
-    {
-      get: (t, k) => (k in t ? t[k as string] : (own[k as string] ?? "")),
-      set: (t, k, v) => {
-        if (!(k in t)) write(k, v);
-        else t[k as string] = v;
-        return true;
-      },
+  // to the declarations. `as MirrorStyle` is the one place the two halves are
+  // joined: a Proxy's type is its target's, and the target deliberately does
+  // not carry the open-ended `[property: string]` half that the handler serves.
+  const target = {
+    /** CSSOM `setProperty(property, value, priority)`. */
+    setProperty(k: unknown, v: unknown, priority?: unknown) {
+      const name = cssomName(String(k));
+      const custom = name.startsWith("--");
+      if (v === undefined && !custom) return;
+      const value = v === null ? "" : String(v);
+      if (value === "") {
+        removeInlineDecl(node, name);
+        return;
+      }
+      const p = priority == null ? "" : String(priority);
+      if (p !== "" && p.toLowerCase() !== "important") return;
+      if (!custom && IMPORTANT_RE.test(value)) return;
+      setInlineDecl(node, name, inlineValue(value, custom), p !== "");
     },
-  );
+    removeProperty(k: unknown) {
+      return removeInlineDecl(node, cssomName(String(k))) ?? "";
+    },
+    getPropertyValue(k: unknown) {
+      return decls()?.get(cssomName(String(k)))?.value ?? "";
+    },
+    getPropertyPriority(k: unknown) {
+      return decls()?.get(cssomName(String(k)))?.important ? "important" : "";
+    },
+    item(i: unknown) {
+      return [...(decls()?.keys() ?? [])][Number(i)] ?? "";
+    },
+    get length() {
+      return decls()?.size ?? 0;
+    },
+    get cssText() {
+      const text = serializeInline(node._inline);
+      if (text) noteInlineSerialization();
+      return text;
+    },
+    set cssText(v: unknown) {
+      replaceInline(node, v == null ? "" : String(v), false);
+    },
+    get cssFloat() {
+      return decls()?.get("float")?.value ?? "";
+    },
+    set cssFloat(v: unknown) {
+      assignInlineProperty(node, "float", v);
+    },
+    parentRule: null,
+    [Symbol.iterator]() {
+      return [...(decls()?.keys() ?? [])][Symbol.iterator]();
+    },
+  };
+  const style = new Proxy(target as unknown as MirrorStyle, {
+    get: (t, k) => {
+      if (typeof k === "symbol" || k in t) return Reflect.get(t, k);
+      // The indexed getter: a declared name, `undefined` past the end.
+      if (/^\d+$/.test(k)) {
+        const n = Number(k);
+        return n < (decls()?.size ?? 0) ? t.item(n) : undefined;
+      }
+      return decls()?.get(cssPropName(k))?.value ?? "";
+    },
+    set: (t, k, v) => {
+      if (typeof k === "symbol" || k in t) return Reflect.set(t, k, v);
+      if (/^\d+$/.test(k)) return true; // the indices are read-only
+      assignInlineProperty(node, k, v);
+      return true;
+    },
+  });
   Object.defineProperty(this, "style", { value: style, configurable: true });
   return style;
 });
@@ -4731,26 +5065,30 @@ if (doc) {
         item: (i: number) => pending.classes[i] ?? null,
         toString: () => pending.classes.join(" "),
       },
+      // Keyed by the CSS spelling, as the real block is, so the replay below
+      // is `setProperty` with names it accepts (`documentElement.style.fontSize`
+      // is `font-size`), and `getPropertyValue("font-size")` reads it back.
       style: new Proxy(
         {
           setProperty(k: unknown, v: unknown) {
-            pending.style[String(k)] = v == null ? "" : String(v);
+            pending.style[cssomName(String(k))] = v == null ? "" : String(v);
           },
           removeProperty(k: unknown) {
-            const prev = pending.style[String(k)] ?? "";
-            delete pending.style[String(k)];
+            const prev = pending.style[cssomName(String(k))] ?? "";
+            delete pending.style[cssomName(String(k))];
             return prev;
           },
-          getPropertyValue: (k: unknown) => pending.style[String(k)] ?? "",
+          getPropertyValue: (k: unknown) => pending.style[cssomName(String(k))] ?? "",
           getPropertyPriority: () => "",
         },
         {
           set(t, k, v) {
-            if (k in t) return Reflect.set(t, k, v);
-            pending.style[String(k)] = v == null ? "" : String(v);
+            if (typeof k === "symbol" || k in t) return Reflect.set(t, k, v);
+            pending.style[cssPropName(k)] = v == null ? "" : String(v);
             return true;
           },
-          get: (t, k) => (k in t ? t[k as keyof typeof t] : pending.style[String(k)] ?? ""),
+          get: (t, k) =>
+            typeof k === "symbol" || k in t ? t[k as keyof typeof t] : (pending.style[cssPropName(k)] ?? ""),
         },
       ),
       getAttribute: (k: unknown) => pending.attrs[String(k)] ?? null,
@@ -5096,11 +5434,13 @@ export const vModelSelect = modelFallback("select");
 
 export const vShow = {
   mounted(el: MirrorElement, { value }: DirectiveBindingLike) {
-    __vn_set_style(el.id, I("display"), value ? "" : "none");
+    if (value) removeInlineDecl(el, "display");
+    else setInlineDecl(el, "display", "none", false);
   },
   updated(el: MirrorElement, { value, oldValue }: DirectiveBindingLike) {
     if (!value === !oldValue) return;
-    __vn_set_style(el.id, I("display"), value ? "" : "none");
+    if (value) removeInlineDecl(el, "display");
+    else setInlineDecl(el, "display", "none", false);
   },
 };
 
