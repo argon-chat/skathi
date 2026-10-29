@@ -177,3 +177,23 @@ describe("#14 background-image: url()", () => {
     bunExpect(near(got[0], LIME)).toBe(true);
   }, T);
 });
+
+describe("#18 backdrop-filter under a transform", () => {
+  test("the blur is drawn where the box is drawn, and nowhere else", async () => {
+    // `.bd-glass` is laid out at the stage's top-left and DRAWN 100px right
+    // and 50px down (`transform: translate(100px, 50px)` on its parent). The
+    // stage is 10px black/white stripes; a blur turns them grey.
+    const stage = await app.locator("#bd-stage").boundingBox();
+    const shot = readPng(await app.screenshot());
+    const grey = (luma: number) => luma > 50 && luma < 205;
+    const region = (dx: number, dy: number) => ({ x: stage.x + dx, y: stage.y + dy, w: 40, h: 20 });
+    // Where it is drawn: blurred. (Inset from the edges, where the blur
+    // reaches past the box.)
+    const drawn = shot.count(region(110, 60), grey);
+    bunExpect(drawn).toBeGreaterThan(40 * 20 * 0.8);
+    // Where it was laid out: the stripes, sharp — no ghost. Before the fix
+    // the blur was drawn here instead.
+    const ghost = shot.count(region(10, 10), grey);
+    bunExpect(ghost).toBeLessThan(40 * 20 * 0.2);
+  }, T);
+});

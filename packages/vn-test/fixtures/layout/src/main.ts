@@ -95,6 +95,15 @@ const backgrounds = () =>
     h("div", { id: "bg-over", class: "bg bg-over" }),
   ]);
 
+/** #18: a `backdrop-filter` panel inside a box moved by `transform`, the way
+ *  a popper is positioned (UserProfilePopover's `.glass-body`), over stripes
+ *  a blur turns grey. */
+const backdrop = () =>
+  h("div", { id: "bd-stage", class: "bd-stage" }, [
+    h("div", { class: "bd-move" }, [h("div", { id: "bd-glass", class: "bd-glass" })]),
+  ]);
+
 createApp({
-  render: () => h("div", { id: "root" }, [messages(), bubble(), track(), ...grids(), backgrounds()]),
+  render: () =>
+    h("div", { id: "root" }, [messages(), bubble(), track(), ...grids(), backgrounds(), backdrop()]),
 }).mount();
