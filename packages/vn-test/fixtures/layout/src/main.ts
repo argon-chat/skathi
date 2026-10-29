@@ -4,10 +4,10 @@
 //
 // One section per finding, each laid out where the spec can hit it. The class
 // names spell out the Tailwind utilities the client wrote, so a rule maps back
-// to `apps/client` (MessageItem.vue, MentionSegment.vue, reka's Slider). Render
-// functions rather than an SFC: this package is `"type": "module"`, and the
-// dev builder's CommonJS interop hands such an importer a `.vue` module's
-// NAMESPACE as its default export.
+// to `apps/client` (MessageItem.vue, MentionSegment.vue, reka's Slider,
+// InventoryView.vue). Render functions rather than an SFC: this package is
+// `"type": "module"`, and the dev builder's CommonJS interop hands such an
+// importer a `.vue` module's NAMESPACE as its default export.
 import { createApp, h } from "vue-native";
 import "./layout.css";
 
@@ -70,6 +70,19 @@ const track = () =>
     h("div", { id: "calc-w", class: "calc-w" }),
   ]);
 
+/** #15: `repeat(auto-fill, …)` and `repeat(auto-fit, …)` grids. */
+const grids = () => [
+  h(
+    "div",
+    { id: "grid-fill", class: "grid grid-fill" },
+    range(7).map((i) => h("div", { id: `fill-${i}`, key: i, class: "cell" }, String(i))),
+  ),
+  h("div", { id: "grid-fit", class: "grid grid-fit" }, [
+    h("div", { id: "fit-1", class: "cell" }, "a"),
+    h("div", { id: "fit-2", class: "cell" }, "b"),
+  ]),
+];
+
 createApp({
-  render: () => h("div", { id: "root" }, [messages(), bubble(), track()]),
+  render: () => h("div", { id: "root" }, [messages(), bubble(), track(), ...grids()]),
 }).mount();

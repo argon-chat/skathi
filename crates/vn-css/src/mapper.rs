@@ -1738,36 +1738,78 @@ fn track_size(s: &lightningcss::properties::grid::TrackSize) -> Option<gpui::Gri
     }
 }
 
-/// A full `grid-template-*` track list, with integer `repeat()` expanded.
+/// "No `repeat(auto-fill | auto-fit, …)` in this list" — written whenever a
+/// list is, because a refinement cannot UNSET a field: without it an earlier
+/// rule's run would outlive a later rule's plain list. An empty run is what
+/// gpui ignores.
+const NO_AUTO_REPEAT: gpui::GridAutoRepeat = gpui::GridAutoRepeat { fit: false, start: 0, len: 0 };
+
+/// A full `grid-template-*` track list, with integer `repeat()` expanded, and
+/// its one `repeat(auto-fill | auto-fit, …)` run if it has one.
 ///
-/// `repeat(auto-fill|auto-fit, …)` returns `None`: the count depends on the
-/// container's resolved size, which is not known at cascade time and which
-/// taffy would need a different code path to answer.
-fn grid_tracks(v: &lightningcss::properties::grid::TrackSizing) -> Option<Vec<gpui::GridTrack>> {
+/// The auto run is not expanded here: its count depends on the container's
+/// resolved size. gpui hands it to taffy as a repetition (`GridAutoRepeat`),
+/// and taffy counts it at layout time — Inventory, Emoji & Stickers and the
+/// Connections grids are all `repeat(auto-fill, minmax(<len>, 1fr))` (m26
+/// client sweep #15). CSS allows one auto repetition per list, and only with
+/// FIXED-size tracks everywhere in the list (css-grid §7.2.3.2); anything else
+/// is invalid CSS and returns `None`.
+fn grid_tracks(
+    v: &lightningcss::properties::grid::TrackSizing,
+) -> Option<(Vec<gpui::GridTrack>, gpui::GridAutoRepeat)> {
     use lightningcss::properties::grid::{RepeatCount, TrackListItem, TrackSizing};
     let TrackSizing::TrackList(list) = v else {
         return None; // `none`
     };
     let mut out: Vec<gpui::GridTrack> = Vec::new();
+    let mut auto: Option<gpui::GridAutoRepeat> = None;
     for item in &list.items {
         match item {
             TrackListItem::TrackSize(s) => out.push(track_size(s)?),
             TrackListItem::TrackRepeat(rep) => {
-                let RepeatCount::Number(count) = rep.count else {
-                    return None; // auto-fill / auto-fit
-                };
-                if count < 0 || count > 1024 {
-                    return None;
-                }
                 let one: Vec<gpui::GridTrack> =
                     rep.track_sizes.iter().map(track_size).collect::<Option<_>>()?;
-                for _ in 0..count {
-                    out.extend(one.iter().copied());
+                let fit = match rep.count {
+                    RepeatCount::Number(count) => {
+                        if count < 0 || count > 1024 {
+                            return None;
+                        }
+                        for _ in 0..count {
+                            out.extend(one.iter().copied());
+                        }
+                        continue;
+                    }
+                    RepeatCount::AutoFill => false,
+                    RepeatCount::AutoFit => true,
+                };
+                if auto.is_some() || one.is_empty() || out.len() + one.len() > u16::MAX as usize {
+                    return None;
                 }
+                auto = Some(gpui::GridAutoRepeat {
+                    fit,
+                    start: out.len() as u16,
+                    len: one.len() as u16,
+                });
+                out.extend(one);
             }
         }
     }
-    (!out.is_empty()).then_some(out)
+    if out.is_empty() {
+        return None;
+    }
+    if auto.is_some() && !out.iter().all(fixed_track) {
+        return None;
+    }
+    Some((out, auto.unwrap_or(NO_AUTO_REPEAT)))
+}
+
+/// A `<fixed-size>` track (css-grid §7.2.3.1): one end a length or percentage,
+/// and not a flexible minimum — the only kind a list with an auto repetition
+/// may hold, since the repetition count is worked out from them.
+fn fixed_track(t: &gpui::GridTrack) -> bool {
+    use gpui::GridTrackSize as G;
+    let fixed = |s: G| matches!(s, G::Px(_) | G::Percent(_));
+    fixed(t.min) || (fixed(t.max) && !matches!(t.min, G::Fr(_)))
 }
 
 /// `grid-row-start` &c. `None` = a NAMED line or area, which needs the named
@@ -3872,26 +3914,34 @@ fn apply_property(
         GridTemplateColumns(v) => match grid_template(v) {
             Some(t) => r.grid_cols = Some(t),
             None => match grid_tracks(v) {
-                Some(tracks) => r.vn_grid_cols = Some(tracks),
+                Some((tracks, auto)) => {
+                    r.vn_grid_cols = Some(tracks);
+                    r.vn_grid_cols_auto = Some(auto);
+                }
                 None => unsupported(
                     diagnostics,
-                    "grid-template-columns — `repeat(auto-fill|auto-fit, …)`, `fit-content()`, \
-                     named lines and a `calc()` breadth with a percentage in it are not \
-                     modelled; every explicit track list of lengths, percentages, `auto`, \
-                     `min-content`, `max-content`, `<flex>` and `minmax()` is",
+                    "grid-template-columns — `fit-content()`, named lines, a `calc()` breadth \
+                     with a percentage in it, and a `repeat(auto-fill|auto-fit, …)` next to a \
+                     track that is not fixed-size (invalid CSS) are not modelled; every track \
+                     list of lengths, percentages, `auto`, `min-content`, `max-content`, \
+                     `<flex>`, `minmax()` and `repeat()` (counted or auto) is",
                 ),
             },
         },
         GridTemplateRows(v) => match grid_template(v) {
             Some(t) => r.grid_rows = Some(t),
             None => match grid_tracks(v) {
-                Some(tracks) => r.vn_grid_rows = Some(tracks),
+                Some((tracks, auto)) => {
+                    r.vn_grid_rows = Some(tracks);
+                    r.vn_grid_rows_auto = Some(auto);
+                }
                 None => unsupported(
                     diagnostics,
-                    "grid-template-rows — `repeat(auto-fill|auto-fit, …)`, `fit-content()`, named \
-                     lines and a `calc()` breadth with a percentage in it are not modelled; \
-                     every explicit track list of lengths, percentages, `auto`, `min-content`, \
-                     `max-content`, `<flex>` and `minmax()` is",
+                    "grid-template-rows — `fit-content()`, named lines, a `calc()` breadth with \
+                     a percentage in it, and a `repeat(auto-fill|auto-fit, …)` next to a track \
+                     that is not fixed-size (invalid CSS) are not modelled; every track list of \
+                     lengths, percentages, `auto`, `min-content`, `max-content`, `<flex>`, \
+                     `minmax()` and `repeat()` (counted or auto) is",
                 ),
             },
         },
@@ -5489,13 +5539,46 @@ mod tests {
         );
     }
 
+    /// `repeat(auto-fill | auto-fit, …)` reaches taffy as a repetition that
+    /// taffy counts against the container at layout time (m26 client sweep
+    /// #15: Inventory and the emoji grid collapsed to one column).
+    #[test]
+    fn an_auto_repeat_is_counted_by_the_layout() {
+        use gpui::{GridAutoRepeat, GridTrack, GridTrackSize as G};
+        let r = clean("grid-template-columns: repeat(auto-fill, minmax(120px, 1fr))");
+        assert_eq!(r.grid_cols, None);
+        assert_eq!(r.vn_grid_cols, Some(vec![GridTrack { min: G::Px(120.0), max: G::Fr(1.0) }]));
+        assert_eq!(r.vn_grid_cols_auto, Some(GridAutoRepeat { fit: false, start: 0, len: 1 }));
+
+        // Fixed tracks around it; `auto-fit`; a two-track repetition.
+        let r = clean("grid-template-rows: 40px repeat(auto-fit, 10px 20%) 1rem");
+        assert_eq!(
+            r.vn_grid_rows,
+            Some(vec![
+                GridTrack::fixed(G::Px(40.0)),
+                GridTrack::fixed(G::Px(10.0)),
+                GridTrack::fixed(G::Percent(0.2)),
+                GridTrack::fixed(G::Px(16.0)),
+            ])
+        );
+        assert_eq!(r.vn_grid_rows_auto, Some(GridAutoRepeat { fit: true, start: 1, len: 2 }));
+
+        // A plain list says "no auto run" out loud, so an earlier rule's run
+        // cannot survive it in the cascade.
+        assert_eq!(
+            clean("grid-template-columns: 1fr auto").vn_grid_cols_auto,
+            Some(GridAutoRepeat { fit: false, start: 0, len: 0 })
+        );
+    }
+
     /// The track lists that genuinely have no model still advise rather than
-    /// laying out wrongly: the count of an `auto-fill` repeat depends on the
-    /// resolved container size, and `fit-content()` has no `GridTrackSize`.
+    /// laying out wrongly: `fit-content()` has no `GridTrackSize`, and an auto
+    /// repetition beside a flexible track is invalid CSS.
     #[test]
     fn an_unmodelable_track_list_is_an_advisory_not_a_wrong_grid() {
         for body in [
-            "grid-template-columns: repeat(auto-fill, minmax(120px, 1fr))",
+            "grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)) 1fr",
+            "grid-template-columns: repeat(auto-fill, auto)",
             "grid-template-columns: fit-content(200px) 1fr",
         ] {
             let (r, d) = map(body);

@@ -146,3 +146,24 @@ button {
   width: calc(100% - 40px);
   background: #6c6;
 }
+
+/* #15 */
+.grid {
+  position: absolute;
+  left: 10px;
+  width: 450px;
+  display: grid;
+}
+.grid-fill {
+  top: 240px;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+}
+.grid-fit {
+  top: 320px;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+}
+.cell {
+  height: 30px;
+  background: #444;
+  outline: 1px solid #222;
+}

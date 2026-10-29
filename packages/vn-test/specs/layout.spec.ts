@@ -104,3 +104,23 @@ describe("#12 calc() mixing a percentage and a length", () => {
     bunExpect(Math.abs(w.w - 260)).toBeLessThanOrEqual(1);
   });
 });
+
+describe("#15 repeat(auto-fill | auto-fit, …)", () => {
+  test("auto-fill makes as many columns as fit, and wraps the rest", async () => {
+    const cells = await Promise.all([1, 2, 3, 4, 5].map((i) => app.locator(`#fill-${i}`).boundingBox()));
+    // 450 px / 100 px minimum → 4 columns, each 112.5 px.
+    for (let i = 0; i < 4; i++) {
+      bunExpect(Math.abs(cells[i].w - 112.5)).toBeLessThanOrEqual(1);
+      bunExpect(cells[i].y).toBe(cells[0].y);
+    }
+    bunExpect(cells[4].y).toBeGreaterThan(cells[0].y);
+    bunExpect(cells[4].x).toBe(cells[0].x);
+  });
+
+  test("auto-fit collapses the empty columns, so two items share the row", async () => {
+    const a = await app.locator("#fit-1").boundingBox();
+    const b = await app.locator("#fit-2").boundingBox();
+    bunExpect(Math.abs(a.w - 225)).toBeLessThanOrEqual(1);
+    bunExpect(Math.abs(b.x - a.x - 225)).toBeLessThanOrEqual(1);
+  });
+});
