@@ -48,6 +48,7 @@ mod perf;
 mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWINDOW.md)
 #[cfg(feature = "prod")]
 mod prod;
+mod quiet; // VN_WINDOW_FOCUS=never: test hosts open behind and never take the foreground
 mod reload; // `location.reload()`: the restart path, on request
 mod slot; // which dist slot this process is — the one thing dev, prod and devtools all ask
 // TEMPORARY (m26): the Argon client's `ArgonSecure` cookie, opt-in. One file,
@@ -1351,10 +1352,13 @@ fn main() {
                 // without taking the caret out of whatever you were typing.
                 // An ordinary app is unaffected (`focus: true` is gpui's own
                 // default and what every other host here has always used).
-                focus: !devtools_mode,
+                focus: !devtools_mode && !quiet::never_focus(),
                 ..Default::default()
             },
             |window, cx| {
+                // Before the first frame is presented, so a test host is never
+                // seen in front of the person's windows (src/quiet.rs).
+                quiet::send_to_back(window);
                 // The renderer's device now exists (the window created it), so
                 // this is the first moment `<video>` can be told to decode onto
                 // it rather than onto a second, private one. Before it, and on
@@ -1482,7 +1486,7 @@ fn main() {
         });
         // An inspector never comes to the front on its own — see
         // `inspector::install_hotkey`. Everything else does, exactly as before.
-        if !devtools_mode {
+        if !devtools_mode && !quiet::never_focus() {
             cx.activate(true);
         }
         #[cfg(vn_devtools)]

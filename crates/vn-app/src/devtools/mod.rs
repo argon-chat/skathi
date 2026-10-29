@@ -2511,6 +2511,13 @@ fn cmd_windows() -> String {
 /// command here that deliberately takes focus — because a person just asked for
 /// it by pressing a key.
 fn cmd_raise() -> String {
+    // A test host stays behind the person's windows (src/quiet.rs).
+    if crate::quiet::never_focus() {
+        return ok(Json::obj(vec![
+            ("raised", Json::Bool(false)),
+            ("why", Json::s("VN_WINDOW_FOCUS=never")),
+        ]));
+    }
     let done = with_target(|window, _| {
         window.activate_window();
         true

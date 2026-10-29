@@ -677,7 +677,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             is_resizable: opts.resizable,
             // See `Options::activate`: a pop-out appears without stealing the
             // keyboard unless the app asks for it.
-            focus: opts.activate,
+            focus: opts.activate && !crate::quiet::never_focus(),
             window_min_size: match (opts.min_width, opts.min_height) {
                 (None, None) => None,
                 (w, h) => Some(size(px(w.unwrap_or(0.0)), px(h.unwrap_or(0.0)))),
@@ -689,7 +689,8 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             inactive_frame_interval: None,
             ..Default::default()
         },
-        |_window, cx| {
+        |window, cx| {
+            crate::quiet::send_to_back(window);
             cx.new(|_| PopoutShell { node })
         },
     );

@@ -544,6 +544,12 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
   // (docs/DEVTOOLS.md, `dialog`). A real dialog would block the run on a
   // window nobody is there to answer, and steal the foreground from whoever is.
   if (env.VN_DIALOGS === undefined) env.VN_DIALOGS = "scripted";
+  // A test window opens BEHIND the person's windows and never takes the
+  // foreground: no activation at open, no `window.focus()` raise or taskbar
+  // flash (crates/vn-app/src/quiet.rs). It still paints every frame, and a
+  // screenshot reads gpui's own scene, so nothing a spec sees changes — only
+  // OS activation does. A spec about activation passes its own value in `env`.
+  if (env.VN_WINDOW_FOCUS === undefined) env.VN_WINDOW_FOCUS = "never";
   Object.assign(env, options.env ?? {});
   // A test never opens the machine's microphone, whatever the app or a spec
   // asks for: getUserMedia is a NotAllowedError for the whole run

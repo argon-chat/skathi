@@ -1369,7 +1369,16 @@ fn snapshot_json(s: &Snapshot) -> String {
                 ("bottom", Json::n(s.content_inset.3)),
             ]),
         ),
-        ("focusPolicy", Json::s(if cfg.focus_raise { "raise" } else { "attention" })),
+        (
+            "focusPolicy",
+            Json::s(if crate::quiet::never_focus() {
+                "never"
+            } else if cfg.focus_raise {
+                "raise"
+            } else {
+                "attention"
+            }),
+        ),
         (
             "screen",
             Json::obj(vec![
@@ -1693,6 +1702,9 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
                 window.toggle_fullscreen();
             }
         }
+        // A test host neither raises nor flashes its taskbar button
+        // (src/quiet.rs).
+        Op::Activate(_) if crate::quiet::never_focus() => {}
         Op::Activate(raise) => {
             if raise {
                 window.activate_window();
