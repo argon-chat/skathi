@@ -209,8 +209,17 @@ interface MirrorText extends MirrorNodeBase {
 interface MirrorElement extends MirrorNodeBase {
   kind: 1;
   tagName: string;
-  /** `<input>`'s value, mirrored so `e.target.value` reads like the browser. */
+  /**
+   * `<input>`'s value, mirrored so `e.target.value` reads like the browser. An
+   * accessor on the prototype (see `writeControlValue`): assigning it on an
+   * `<input>` / `<textarea>` / `<select>` reaches the host, as `el.value = x`
+   * reaches the widget in a browser.
+   */
   value: string;
+  /** The `value` accessor's storage. Internal writers (patchProp, the `input` dispatch) use it directly. */
+  _value: string;
+  /** `checked` once something assigned it; until then it follows the `checked` attribute. */
+  _checked?: boolean;
   /** Browser-visible attribute state; `patchProp` is the only writer. */
   attrs: Record<string, string>;
   /** The class VUE assigned, kept apart from `<Transition>`'s `_vtc`. */
@@ -603,7 +612,9 @@ function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode {
   n.childNodes = [];
   if (kind === 1) {
     n.tagName = String(tag).toUpperCase();
-    n.value = "";
+    // The storage under the prototype's `value` accessor; its being OWN is
+    // also what tells a mirror element from a detached engine one.
+    n._value = "";
     // Browser-visible attribute state. `patchProp` is the only writer that Vue
     // drives; reka-ui's roving focus and its Collection read `data-*`/`aria-*`
     // back off candidate nodes, so the mirror has to remember what was written
@@ -647,6 +658,10 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
     // `<input>` hears Enter for implicit submission (text is its default).
     if (type === "label" || type === "button") syncListenerFlag(el.id, "click");
     if (type === "input") syncListenerFlag(el.id, "keydown");
+    // A text control hears its own `input`: that event is what carries the
+    // typed text into the mirror's `value`, so `el.value` reads what the user
+    // typed with no `@input` anywhere.
+    if (type === "input" || type === "textarea") syncListenerFlag(el.id, "input");
     return el;
   },
   createText: (text) => {
@@ -1197,7 +1212,10 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
         notifyMutation(el, "attributes", { attributeName: key, oldValue: before ?? null });
       }
     }
-    if (key === "value") el.value = next == null ? "" : String(next);
+    // The host has the value already (the generic channel, above); only the
+    // mirror's storage follows, so the accessor does not push it twice.
+    if (key === "value") el._value = next == null ? "" : String(next);
+    if (key === "checked") el._checked = next === "" || (!!next && next !== "false");
     // An `<a href>` has an ACTIVATION BEHAVIOUR whether or not anything
     // listens: following the link is what a click on it means. The host only
     // delivers a click to a node whose click bit is on, so the bit follows the
@@ -1283,6 +1301,12 @@ function syncListenerFlag(id: VnNodeId, name: string): void {
   if (!on && (code === EV_CODES.keydown || code === EV_CODES.keyup)) {
     const n = nodesById.get(id);
     if (isFileInput(n) || (code === EV_CODES.keydown && blocksImplicitSubmission(n))) on = true;
+  }
+  // …and a text control hears its own `input`, which is how its `value` keeps
+  // up with what the user types (the dispatcher writes it before propagating).
+  if (!on && code === EV_CODES.input) {
+    const n = nodesById.get(id);
+    if (n && n.kind === 1 && (n.tag === "input" || n.tag === "textarea")) on = true;
   }
   // …and only tell the host when the ANSWER CHANGED.
   //
@@ -1823,7 +1847,7 @@ defineDom("querySelectorAll", function (this: MirrorElement, selector: string) {
 
 // -- layout, off the bounds gpui recorded for the last painted frame
 defineDom("getBoundingClientRect", function (this: MirrorElement) {
-  return rectOf(this);
+  return asDomRect(rectOf(this));
 });
 defineDom("getClientRects", function (this: MirrorElement) {
   const r = rectOf(this);
@@ -2261,6 +2285,7 @@ defineDomGet("style", function (this: MirrorElement) {
     },
   });
   Object.defineProperty(this, "style", { value: style, configurable: true });
+  styleDecls.add(style);
   return style;
 });
 
@@ -2563,7 +2588,7 @@ function syncFileInput(el: MirrorElement): void {
   } else if (!file && had) {
     fileStates.delete(el);
     for (const k of ["files", "value", "accept", "multiple", "webkitdirectory"]) delete (el as unknown as Record<string, unknown>)[k];
-    el.value = "";
+    el._value = "";
     __vn_set_prop(el.id, I(":file-label"), undefined);
   }
   for (const n of ["click", "keydown", "keyup"]) syncListenerFlag(el.id, n);
@@ -3935,7 +3960,9 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
   // .test.ts` is what will notice the code arriving. See `vModelText`, which is
   // the directive that wanted it.
   if ((name === "input" || name === "change") && key != null)
-    (target as MirrorElement).value = key;
+    // The storage, not the accessor: the host already holds this value, and
+    // the accessor would push it straight back.
+    (target as MirrorElement)._value = key;
   // `scroll` used to write the position onto the node here, because that was
   // the only way `e.target.scrollTop` could answer anything. It is now an
   // accessor over the host's live `ScrollHandle`, so writing it back would
@@ -4955,6 +4982,123 @@ const TAG_CLASSES = {
   HTMLImageElement: "IMG",
   HTMLIFrameElement: "IFRAME",
 };
+// -- Form-control `value` / `checked` are real accessors.
+//
+// reka-ui's VisuallyHiddenInputBubble (Checkbox, Switch, RadioGroup inside a
+// form) and BubbleSelect do what React taught a generation of libraries:
+//
+//   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v)
+//
+// and then dispatch `input` and `change` themselves. Against tag classes with
+// no `value` member that is `undefined.set`, and the Argon client died right
+// after sign-in. Two halves: a mirror element's own `value` is an accessor
+// that reaches the host (below), and the tag classes carry OWN accessors that
+// delegate to it (`TAG_ACCESSORS`), refusing a receiver of the wrong kind with
+// the browser's "Illegal invocation".
+
+/** Is `x` a mirror element (not a detached engine element, not a stranger)? */
+function isMirrorEl(x: unknown): x is MirrorElement {
+  return !!x && typeof x === "object" && Object.prototype.hasOwnProperty.call(x, "_value");
+}
+
+/** Tags whose `value` is the live value of a control the host draws. */
+const VALUE_TAGS = new Set(["input", "textarea", "select"]);
+
+/**
+ * `el.value = v` on a form control: the mirror and the host, on EVERY
+ * assignment. The host ticks a write counter even for the same string, so an
+ * assignment re-forces a field the user has typed over since, as in a
+ * browser. No `input` / `change` fires (HTML: setting the IDL attribute is not
+ * a user edit). `<input>` / `<textarea>` take null as "" ([LegacyNullToEmptyString]).
+ */
+function writeControlValue(el: MirrorElement, v: unknown): void {
+  const s = v == null && el.tag !== "select" ? "" : String(v);
+  el._value = s;
+  __vn_set_prop(el.id, I("value"), s);
+}
+
+/** Not a mirror: the plain own property it would have had with no accessor here. */
+function ownExpando(self: object, key: string, v: unknown): void {
+  Object.defineProperty(self, key, { value: v, writable: true, enumerable: true, configurable: true });
+}
+
+defineDomGet(
+  "value",
+  function (this: MirrorElement) {
+    return isMirrorEl(this) ? this._value : undefined;
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this)) return ownExpando(this, "value", v);
+    if (VALUE_TAGS.has(this.tag)) writeControlValue(this, v);
+    // Any other element: an expando, kept as given, as on a browser's <div>.
+    else this._value = v as string;
+  } as (value: never) => void,
+);
+
+/** `defaultChecked`: the `checked` attribute's presence ("false" is Vue's spelling of absent). */
+function attrChecked(el: MirrorElement): boolean {
+  const a = el.attrs?.checked;
+  return a != null && a !== "false";
+}
+
+defineDomGet(
+  "checked",
+  function (this: MirrorElement) {
+    if (!isMirrorEl(this) || this.tag !== "input") return isMirrorEl(this) ? this._checked : undefined;
+    return this._checked ?? attrChecked(this);
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this)) return ownExpando(this, "checked", v);
+    if (this.tag !== "input") {
+      this._checked = v as boolean;
+      return;
+    }
+    // Every input renders as a text field today (no native checkbox), so the
+    // host keeps this for whatever reads it; the mirror is what JS sees.
+    this._checked = !!v;
+    __vn_set_prop(this.id, I("checked"), String(!!v));
+  } as (value: never) => void,
+);
+
+defineDomGet(
+  "defaultValue",
+  function (this: MirrorElement) {
+    if (!isMirrorEl(this)) return undefined;
+    if (this.tag === "input") return this.attrs.value ?? "";
+    if (this.tag === "textarea") return (this as unknown as { textContent: string }).textContent ?? "";
+    return undefined;
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this) || (this.tag !== "input" && this.tag !== "textarea")) return ownExpando(this, "defaultValue", v);
+    if (this.tag === "input") this.setAttribute("value", v == null ? "" : String(v));
+    else (this as unknown as { textContent: string }).textContent = v == null ? "" : String(v);
+  } as (value: never) => void,
+);
+
+defineDomGet(
+  "defaultChecked",
+  function (this: MirrorElement) {
+    return isMirrorEl(this) && this.tag === "input" ? attrChecked(this) : undefined;
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this) || this.tag !== "input") return ownExpando(this, "defaultChecked", v);
+    if (v) this.setAttribute("checked", "");
+    else this.removeAttribute("checked");
+  } as (value: never) => void,
+);
+
+/**
+ * The members each tag class's PROTOTYPE carries as own accessors, for
+ * `Object.getOwnPropertyDescriptor(X.prototype, name).get/.set.call(el)`.
+ * Each delegates to the element's own path (the accessors above, or a file
+ * input's own `value`), so there is one behaviour however it is reached.
+ */
+const TAG_ACCESSORS: Record<string, readonly string[]> = {
+  INPUT: ["value", "checked", "defaultValue", "defaultChecked"],
+  TEXTAREA: ["value", "defaultValue"],
+  SELECT: ["value"],
+};
+
 for (const [name, tag] of Object.entries(TAG_CLASSES)) {
   if (typeof (globalThis as Record<string, unknown>)[name] !== "undefined") continue;
   // Mirror nodes are all plain HTMLElement, so `instanceof` is answered by the
@@ -4965,7 +5109,148 @@ for (const [name, tag] of Object.entries(TAG_CLASSES)) {
   Object.defineProperty(klass, Symbol.hasInstance, {
     value: (x: unknown) => !!x && typeof x === "object" && (x as MirrorElement).tagName === tag,
   });
+  for (const prop of TAG_ACCESSORS[tag] ?? []) {
+    // The wrong receiver throws, as in a browser. So does an object that
+    // inherits from this prototype: delegating would land right back here.
+    const check = (self: unknown, verb: string): Record<string, unknown> => {
+      if (!self || typeof self !== "object" || (self as MirrorElement).tagName !== tag || klass.prototype.isPrototypeOf(self)) {
+        throw new TypeError(`Failed to ${verb} the '${prop}' property on '${name}': Illegal invocation`);
+      }
+      return self as Record<string, unknown>;
+    };
+    Object.defineProperty(klass.prototype, prop, {
+      get(this: unknown) {
+        return check(this, "read")[prop];
+      },
+      set(this: unknown, v: unknown) {
+        check(this, "set")[prop] = v;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+  }
   defineGlobal(name, klass);
+}
+
+// -- WebIDL interface objects the realm lacks.
+//
+// Code names these interfaces without constructing them, and a missing one is
+// a ReferenceError at CLASS DEFINITION: tsyringe-style DI emits
+// `__metadata("design:paramtypes", [Window])` for a constructor parameter typed
+// `Window` (the Xsolla pay SDK's `psdk-*` elements), and the Argon home screen
+// died on "Window is not defined". Each one here is what a browser's is: an
+// interface object whose constructor throws "Illegal constructor" (unless the
+// browser lets you construct it), with a prototype on the right parent, and an
+// `instanceof` that is true for the objects this realm already has — which it
+// never built, so the answer is by identity or by kind (`Symbol.hasInstance`).
+
+type Iface = { prototype: object };
+
+function defineInterface(
+  name: string,
+  is: (x: unknown) => boolean,
+  parent: Iface | null,
+  construct?: (...args: unknown[]) => object,
+): Iface | undefined {
+  const existing = (globalThis as Record<string, unknown>)[name];
+  if (typeof existing !== "undefined") return existing as Iface;
+  const iface = function (this: unknown, ...args: unknown[]): object {
+    if (construct && new.target) return construct(...args);
+    throw new TypeError(
+      construct
+        ? `Failed to construct '${name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`
+        : "Illegal constructor",
+    );
+  };
+  Object.defineProperty(iface, "name", { value: name });
+  const proto = Object.create(parent?.prototype ?? Object.prototype, {
+    constructor: { value: iface, writable: true, configurable: true },
+  });
+  Object.defineProperty(iface, "prototype", { value: proto });
+  Object.defineProperty(iface, Symbol.hasInstance, {
+    value: (x: unknown) => is(x) || (!!x && typeof x === "object" && proto.isPrototypeOf(x)),
+  });
+  defineGlobal(name, iface);
+  return iface as unknown as Iface;
+}
+
+const theGlobal = (k: string) => (globalThis as Record<string, unknown>)[k];
+const ET: Iface | null = typeof EventTarget === "function" ? (EventTarget as unknown as Iface) : null;
+
+// `window` is the global (or the global's proxy, which is what `window` names).
+const WindowIface = defineInterface("Window", (x) => x != null && (x === globalThis || x === theGlobal("window")), ET);
+if (WindowIface) {
+  try {
+    // `window.constructor === Window`, which is how some code spots a window.
+    if (!Object.prototype.hasOwnProperty.call(globalThis, "constructor") || theGlobal("constructor") === Object)
+      Object.defineProperty(globalThis, "constructor", { value: WindowIface, writable: true, configurable: true });
+  } catch {
+    /* a global that refuses the property keeps Object's */
+  }
+}
+const isDocument = (x: unknown) => x != null && x === theGlobal("document");
+const DocumentIface = defineInterface("Document", isDocument, ET);
+defineInterface("HTMLDocument", isDocument, DocumentIface ?? ET);
+defineInterface("Location", (x) => x != null && x === theGlobal("location"), null);
+defineInterface("History", (x) => x != null && x === theGlobal("history"), null);
+defineInterface("Screen", (x) => x != null && x === theGlobal("screen"), ET);
+
+// Text and comment mirrors share a prototype; `kind` tells them apart.
+const mirrorKind = (x: unknown) =>
+  !!x && typeof x === "object" && Object.getPrototypeOf(x) === TextProto ? (x as MirrorNode).kind : 0;
+const CharacterDataIface = defineInterface("CharacterData", (x) => mirrorKind(x) === 2 || mirrorKind(x) === 3, null);
+defineInterface("Text", (x) => mirrorKind(x) === 2, CharacterDataIface ?? null, (data) =>
+  nodeOps.createText(data === undefined ? "" : String(data)),
+);
+defineInterface("Comment", (x) => mirrorKind(x) === 3, CharacterDataIface ?? null, (data) => {
+  const c = nodeOps.createComment(data === undefined ? "" : String(data));
+  c.text = data === undefined ? "" : String(data);
+  return c;
+});
+// No shadow DOM here, so nothing is a ShadowRoot.
+defineInterface("ShadowRoot", () => false, theGlobal("DocumentFragment") as Iface | null);
+// `el.style` and `getComputedStyle()` answers register themselves.
+const styleDecls = new WeakSet<object>();
+defineInterface("CSSStyleDeclaration", (x) => !!x && typeof x === "object" && styleDecls.has(x), null);
+
+// -- DOMRectReadOnly / DOMRect: constructible, with OWN data members (so a
+//    `{ ...rect }` spread keeps them, as the rects built here already do), and
+//    `getBoundingClientRect()` answers are DOMRects.
+class DOMRectReadOnlyImpl {
+  declare x: number;
+  declare y: number;
+  declare width: number;
+  declare height: number;
+  declare top: number;
+  declare left: number;
+  declare right: number;
+  declare bottom: number;
+  constructor(x: unknown = 0, y: unknown = 0, width: unknown = 0, height: unknown = 0) {
+    const [nx, ny, nw, nh] = [x, y, width, height].map(Number);
+    Object.assign(this, {
+      x: nx, y: ny, width: nw, height: nh,
+      top: Math.min(ny, ny + nh), left: Math.min(nx, nx + nw),
+      right: Math.max(nx, nx + nw), bottom: Math.max(ny, ny + nh),
+    });
+  }
+  static fromRect(r: { x?: number; y?: number; width?: number; height?: number } = {}) {
+    return new this(r.x ?? 0, r.y ?? 0, r.width ?? 0, r.height ?? 0);
+  }
+  toJSON() {
+    const { x, y, width, height, top, right, bottom, left } = this;
+    return { x, y, width, height, top, right, bottom, left };
+  }
+}
+Object.defineProperty(DOMRectReadOnlyImpl, "name", { value: "DOMRectReadOnly" });
+class DOMRectImpl extends DOMRectReadOnlyImpl {}
+Object.defineProperty(DOMRectImpl, "name", { value: "DOMRect" });
+defineGlobal("DOMRectReadOnly", DOMRectReadOnlyImpl);
+defineGlobal("DOMRect", DOMRectImpl);
+/** The rect a host answer makes, as a DOMRect when the realm's is ours. */
+function asDomRect<T extends object>(r: T): T {
+  const C = theGlobal("DOMRect");
+  if (C === DOMRectImpl) Object.setPrototypeOf(r, DOMRectImpl.prototype);
+  return r;
 }
 
 // -- getComputedStyle. The values come from the REAL cascade (see
@@ -5041,6 +5326,7 @@ defineGlobal("getComputedStyle", (node: unknown) => {
       },
     );
     if (node && typeof node === "object") computedCache.set(node, cached);
+    styleDecls.add(cached as object);
   }
   return cached;
 });
@@ -5530,9 +5816,10 @@ interface VNodeLike {
 
 function setElValue(el: MirrorElement, value: unknown): void {
   const v = value == null ? "" : String(value);
-  if (el.value === v) return;
-  el.value = v;
-  __vn_set_prop(el.id, I("value"), v);
+  // Compared with what the field holds now — typing keeps `_value` current —
+  // so a model reset to the string the user has since typed over still lands.
+  if (el._value === v) return;
+  writeControlValue(el, v);
 }
 
 export const vModelText = {
