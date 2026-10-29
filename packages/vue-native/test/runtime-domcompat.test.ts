@@ -1,0 +1,231 @@
+// runtime-dom's names that are not in runtime-core (render, useCssVars, the
+// custom-element and SSR entry points) and the IntersectionObserver sampled
+// from painted bounds — research/reports/m26/client-gap.md §3.2.
+//
+//   bun test test/runtime-domcompat.test.ts      (from packages/vue-native)
+
+import { describe, expect, test } from "bun:test";
+import { defineComponent, h, nextTick, ref } from "@vue/runtime-core";
+import { createRuntime } from "./runtime-harness";
+
+const frame = () => new Promise((r) => setTimeout(r, 4));
+const frames = async (n: number) => {
+  for (let i = 0; i < n; i++) await frame();
+};
+
+describe("runtime-dom's exports", () => {
+  test("every name runtime-dom adds over runtime-core is exported", () => {
+    const rt = createRuntime();
+    for (const name of [
+      "render",
+      "useCssVars",
+      "useCssModule",
+      "VueElement",
+      "defineCustomElement",
+      "createSSRApp",
+      "hydrate",
+      "useHost",
+      "useShadowRoot",
+      "initDirectivesForSSR",
+      "nodeOps",
+      "patchProp",
+    ]) {
+      expect(rt[name]).toBeDefined();
+    }
+  });
+
+  test("render() mounts a vnode into a mirror container and unmounts it with null", () => {
+    const rt = createRuntime();
+    const container = rt.nodeOps.createElement("div");
+    rt.render(h("span", { class: "x" }, "hi"), container);
+    expect(container.childNodes.length).toBe(1);
+    expect(container.childNodes[0].tagName).toBe("SPAN");
+    rt.render(null, container);
+    expect(container.childNodes.length).toBe(0);
+  });
+
+  test("the custom-element and SSR entry points say what they are instead of failing to build", () => {
+    const rt = createRuntime();
+    const El = rt.defineCustomElement({ render: () => null });
+    expect(() => new El()).toThrow(/custom elements/);
+    expect(rt.useHost()).toBeNull();
+    expect(rt.useShadowRoot()).toBeNull();
+    const app = rt.createSSRApp({ render: () => null });
+    expect(typeof app.mount).toBe("function");
+    rt.initDirectivesForSSR();
+    const advisories = rt.advisories().join("\n");
+    expect(advisories).toContain("defineCustomElement");
+    expect(advisories).toContain("createSSRApp");
+  });
+});
+
+describe("useCssVars", () => {
+  test("writes the v-bind() custom properties onto the component's root and follows the state", async () => {
+    const rt = createRuntime();
+    const color = ref("red");
+    let el: any = null;
+    const Comp = defineComponent({
+      setup() {
+        // What compileScript emits for `color: v-bind(color)` in a <style>.
+        rt.useCssVars(() => ({ "abc123-color": color.value, "abc123-size": 4 }));
+        return () => h("div", { ref: (e: unknown) => (el = e) }, "x");
+      },
+    });
+    rt.createApp(Comp).mount();
+    await nextTick();
+    const styleOf = (key: string) => rt.host.styles.filter((s) => s.id === el.id && s.key === key).at(-1)?.value;
+    expect(styleOf("--abc123-color")).toBe("red");
+    expect(styleOf("--abc123-size")).toBe("4");
+
+    color.value = "blue";
+    await nextTick();
+    await nextTick();
+    expect(styleOf("--abc123-color")).toBe("blue");
+  });
+
+  test("a fragment root gets the variables on every element child; null becomes `initial`", async () => {
+    const rt = createRuntime();
+    const ids: number[] = [];
+    const Comp = defineComponent({
+      setup() {
+        rt.useCssVars(() => ({ "f-gap": null }));
+        return () => [
+          h("i", { ref: (e: any) => e && ids.push(e.id) }),
+          h("b", { ref: (e: any) => e && ids.push(e.id) }),
+        ];
+      },
+    });
+    rt.createApp(Comp).mount();
+    await nextTick();
+    for (const id of new Set(ids)) {
+      expect(rt.host.styles.find((s) => s.id === id && s.key === "--f-gap")?.value).toBe("initial");
+    }
+  });
+});
+
+describe("IntersectionObserver samples the painted bounds", () => {
+  /** An app root painted at 800x600, and one element in it at `bounds`. */
+  function world(bounds: string) {
+    const rt = createRuntime();
+    rt.createApp({ render: () => null }).mount();
+    const root = rt.global.document.documentElement;
+    rt.host.boundsById.set(root.id, "0,0,800,600");
+    const el = rt.nodeOps.createElement("div");
+    rt.nodeOps.insert(el, root, null);
+    rt.host.boundsById.set(el.id, bounds);
+    return { rt, root, el };
+  }
+
+  test("replaces redjs's inert observer, and reports once on observe and again only on a change", async () => {
+    const { rt, el } = world("100,100,200,100");
+    const seen: any[] = [];
+    const ob = new rt.global.IntersectionObserver((entries: any[]) => seen.push(...entries));
+    ob.observe(el);
+    await frames(2);
+    expect(seen.length).toBe(1);
+    expect(seen[0].isIntersecting).toBe(true);
+    expect(seen[0].intersectionRatio).toBe(1);
+    expect(seen[0].target).toBe(el);
+    expect(seen[0].boundingClientRect).toMatchObject({ x: 100, y: 100, width: 200, height: 100 });
+    expect(seen[0].rootBounds).toMatchObject({ x: 0, y: 0, width: 800, height: 600 });
+    expect(seen[0]).toBeInstanceOf(rt.global.IntersectionObserverEntry);
+    // No change -> no callback.
+    await frames(2);
+    expect(seen.length).toBe(1);
+    // Scrolled out below the viewport.
+    rt.host.boundsById.set(el.id, "100,700,200,100");
+    await frames(2);
+    expect(seen.length).toBe(2);
+    expect(seen[1].isIntersecting).toBe(false);
+    expect(seen[1].intersectionRatio).toBe(0);
+    ob.disconnect();
+  });
+
+  test("intersectionRatio and thresholds: half visible crosses 0.5 but not 0.75", async () => {
+    const { rt, el } = world("0,550,100,100"); // 50 of 100 px inside a 600-high viewport
+    const seen: any[] = [];
+    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { threshold: [0.75, 0, 0.5] });
+    expect(ob.thresholds).toEqual([0, 0.5, 0.75]);
+    ob.observe(el);
+    await frames(2);
+    expect(seen.length).toBe(1);
+    expect(seen[0].intersectionRatio).toBeCloseTo(0.5);
+    expect(seen[0].intersectionRect).toMatchObject({ y: 550, height: 50, width: 100 });
+    // 60% visible: still between 0.5 and 0.75 -> same threshold index, no entry.
+    rt.host.boundsById.set(el.id, "0,540,100,100");
+    await frames(2);
+    expect(seen.length).toBe(1);
+    // 80%: past 0.75 -> one entry.
+    rt.host.boundsById.set(el.id, "0,520,100,100");
+    await frames(2);
+    expect(seen.length).toBe(2);
+    ob.disconnect();
+  });
+
+  test("rootMargin grows the root, in px and %, and is reported normalized", async () => {
+    const { rt, el } = world("0,650,100,40"); // 50 px below the viewport
+    const seen: any[] = [];
+    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { rootMargin: "0px 0px 10%" });
+    expect(ob.rootMargin).toBe("0px 0px 10% 0px");
+    ob.observe(el);
+    await frames(2);
+    // 10% of 600 = 60 px of margin below: the element at 650..690 is inside 0..660.
+    expect(seen[0].isIntersecting).toBe(true);
+    expect(seen[0].rootBounds).toMatchObject({ height: 660 });
+    expect(() => new rt.global.IntersectionObserver(() => {}, { rootMargin: "10em" })).toThrow(/pixels or percent/);
+    expect(() => new rt.global.IntersectionObserver(() => {}, { threshold: 2 })).toThrow(RangeError);
+    ob.disconnect();
+  });
+
+  test("an element root clips to its own box, and a target outside it never intersects", async () => {
+    const { rt, root, el } = world("0,0,100,100");
+    const scroller = rt.nodeOps.createElement("section");
+    rt.nodeOps.insert(scroller, root, null);
+    rt.host.boundsById.set(scroller.id, "0,0,300,300");
+    const inside = rt.nodeOps.createElement("p");
+    rt.nodeOps.insert(inside, scroller, null);
+    rt.host.boundsById.set(inside.id, "0,400,100,50"); // inside the window, below the scroller's box
+    const seen: any[] = [];
+    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { root: scroller });
+    ob.observe(inside);
+    ob.observe(el); // not a descendant of the root
+    await frames(2);
+    expect(seen.find((e) => e.target === inside).isIntersecting).toBe(false);
+    expect(seen.find((e) => e.target === el).isIntersecting).toBe(false);
+    rt.host.boundsById.set(inside.id, "0,200,100,50");
+    await frames(2);
+    expect(seen.filter((e) => e.target === inside).at(-1).isIntersecting).toBe(true);
+    ob.disconnect();
+  });
+
+  test("a not-yet-painted target gets grace frames; one that never paints reports not-intersecting", () => {
+    // rAF driven by hand, so "frames" are exact.
+    const queue: (() => void)[] = [];
+    const rt = createRuntime({ globals: { requestAnimationFrame: (cb: () => void) => queue.push(cb) } });
+    const tick = () => queue.splice(0).forEach((cb) => cb());
+    rt.createApp({ render: () => null }).mount();
+    const root = rt.global.document.documentElement;
+    rt.host.boundsById.set(root.id, "0,0,800,600");
+    const late = rt.nodeOps.createElement("div");
+    rt.nodeOps.insert(late, root, null);
+    const hidden = rt.nodeOps.createElement("div"); // detached: never painted
+    const seen: any[] = [];
+    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e));
+    ob.observe(late);
+    ob.observe(hidden);
+    tick();
+    tick();
+    expect(seen).toEqual([]); // both still within their grace frames
+    rt.host.boundsById.set(late.id, "10,10,50,50"); // its first layout lands
+    tick();
+    expect(seen.map((e) => [e.target === late, e.isIntersecting])).toEqual([[true, true]]);
+    tick();
+    tick();
+    expect(seen.map((e) => [e.target === late, e.isIntersecting])).toEqual([
+      [true, true],
+      [false, false],
+    ]);
+    expect(ob.takeRecords()).toEqual([]);
+    ob.disconnect();
+  });
+});

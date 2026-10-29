@@ -22,11 +22,17 @@ import {
   getCurrentInstance,
   getTransitionRawChildren,
   h,
+  onBeforeUpdate,
+  onMounted,
+  onUnmounted,
+  queuePostFlushCb,
   resolveTransitionHooks,
   setTransitionHooks,
+  Static,
   toRaw,
   useTransitionState,
   version,
+  watch,
 } from "@vue/runtime-core";
 import { readTsSource } from "./ts-source";
 
@@ -77,6 +83,12 @@ const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
  * (packages/vn-test drives it against a real host instead).
  */
 const NAMED_REEXPORT = /^\s*export\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
+/**
+ * `export { nodeOps, patchProp };` — a LOCAL export list (runtime-dom exports
+ * its renderer options, so runtime.ts exports its own). The names are already
+ * declarations in the body, so dropping the list loses nothing.
+ */
+const LOCAL_EXPORT = /^\s*export\s+\{[^}]*\};?[^\S\n]*$/gm;
 
 /**
  * `FileList`, as much of it as an input's `files` needs (redjs has the real
@@ -141,9 +153,10 @@ export function createRuntime(
     .replace(IMPORT_LINE, "")
     .replace(STAR_REEXPORT, "")
     .replace(NAMED_REEXPORT, "")
+    .replace(LOCAL_EXPORT, "")
     // `export function foo` / `export const foo` become plain declarations, so
     // the whole module body is valid inside a function.
-    .replace(/^export\s+(function|const|let)\s/gm, "$1 ");
+    .replace(/^export\s+(function|const|let|class)\s/gm, "$1 ");
 
   const host = {
     /** interned name -> id, and back */
@@ -423,6 +436,12 @@ export function createRuntime(
     "BaseTransition",
     "BaseTransitionPropsValidators",
     "version",
+    "onBeforeUpdate",
+    "onMounted",
+    "onUnmounted",
+    "queuePostFlushCb",
+    "Static",
+    "watch",
     "globalThis",
     "console",
     "__vn_intern",
@@ -531,6 +550,12 @@ export function createRuntime(
     BaseTransition,
     BaseTransitionPropsValidators,
     version,
+    onBeforeUpdate,
+    onMounted,
+    onUnmounted,
+    queuePostFlushCb,
+    Static,
+    watch,
     fakeGlobal,
     {
       log: (m) => host.logs.push(String(m)),
@@ -770,7 +795,9 @@ export function createRuntime(
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
-       appDevtools, appShell, appLaunch, vModelText, vShow, desktopApi, activation, noteActivation };`,
+       appDevtools, appShell, appLaunch, vModelText, vShow, desktopApi, activation, noteActivation,
+       render, useCssVars, useCssModule, VueElement, defineCustomElement, createSSRApp, hydrate,
+       useHost, useShadowRoot, initDirectivesForSSR };`,
   )(...args);
   worldExports = exports;
 

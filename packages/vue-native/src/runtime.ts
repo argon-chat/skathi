@@ -13,11 +13,17 @@ import {
   getCurrentInstance,
   getTransitionRawChildren,
   h,
+  onBeforeUpdate,
+  onMounted,
+  onUnmounted,
+  queuePostFlushCb,
   resolveTransitionHooks,
   setTransitionHooks,
+  Static,
   toRaw,
   useTransitionState,
   version,
+  watch,
 } from "@vue/runtime-core";
 // Type-only, so it is erased before the bundler ever sees it. `RendererOptions`
 // is what makes `nodeOps` below self-typing: every hook's parameters come from
@@ -2989,6 +2995,174 @@ export function createApp(
   return app as VnApp;
 }
 
+// ---- runtime-dom's other exports ------------------------------------------
+// `import { … } from "vue"` resolves to THIS module, and `vue` is runtime-dom
+// plus runtime-core. runtime-core arrives by `export *` at the bottom; these are
+// the thirteen names runtime-dom adds on top (research/reports/m26/client-gap/
+// B-build-ui.md §1.2 #22). A missing one is a BUILD error in every app that
+// names it — `useCssVars` is what the SFC compiler emits for `v-bind()` in a
+// `<style>`, so any library using that is unbuildable — so each one exists:
+// the real thing where vue-native can do it, an advisory where it cannot.
+
+/** `render(vnode, container)` — this renderer's, exactly as runtime-dom exports its own. */
+export const render = renderer.render;
+
+/** runtime-dom's renderer options are its exports too; these are ours. */
+export { nodeOps, patchProp };
+
+/**
+ * The `--hash-name` custom properties a `v-bind()` in `<style>` reads, written
+ * onto the component's root element(s) — runtime-dom's `useCssVars`, line for
+ * line (runtime-dom.esm-bundler.js `useCssVars` / `setVarsOnVNode`). vn-css
+ * inherits custom properties down the tree (crates/vn-css/src/vars.rs), so the
+ * rule `color: var(--abc-color)` under that root resolves as in a browser.
+ * Teleported children are found by the `data-v-owner` attribute runtime-core's
+ * Teleport stamps, as in the browser.
+ */
+export function useCssVars(getter: (ctx: unknown) => Record<string, unknown>): void {
+  const instance = getCurrentInstance() as unknown as CssVarsInstance | null;
+  if (!instance) return;
+  const doc = (globalThis as { document?: { querySelectorAll?(s: string): ArrayLike<MirrorElement> } }).document;
+  const updateTeleports = (instance.ut = (vars: Record<string, unknown> = getter(instance.proxy)) => {
+    const owned = doc?.querySelectorAll?.(`[data-v-owner="${instance.uid}"]`) ?? [];
+    Array.from(owned).forEach((node) => setVarsOnNode(node, vars));
+  });
+  const setVars = () => {
+    const vars = getter(instance.proxy);
+    if (instance.ce) setVarsOnNode(instance.ce as MirrorElement, vars);
+    else setVarsOnVNode(instance.subTree, vars);
+    updateTeleports(vars);
+  };
+  onBeforeUpdate(() => {
+    queuePostFlushCb(setVars);
+  });
+  onMounted(() => {
+    watch(setVars, () => {}, { flush: "post" });
+    const MO = (globalThis as { MutationObserver?: new (cb: () => void) => { observe(n: unknown, o: unknown): void; disconnect(): void } })
+      .MutationObserver;
+    const parent = (instance.subTree?.el as MirrorNode | null)?.parentNode;
+    if (MO && parent) {
+      const ob = new MO(setVars);
+      ob.observe(parent, { childList: true });
+      onUnmounted(() => ob.disconnect());
+    }
+  });
+}
+/** The instance fields `useCssVars` reads — Vue's internal `ComponentInternalInstance`, narrowed. */
+interface CssVarsInstance {
+  uid: number;
+  proxy: unknown;
+  ce?: unknown;
+  subTree: VNode;
+  ut?: (vars?: Record<string, unknown>) => void;
+}
+function setVarsOnVNode(vnode: VNode, vars: Record<string, unknown>): void {
+  if (vnode.shapeFlag & 128 /* SUSPENSE */) {
+    const suspense = vnode.suspense as unknown as {
+      activeBranch: VNode;
+      pendingBranch: VNode | null;
+      isHydrating: boolean;
+      effects: (() => void)[];
+    };
+    vnode = suspense.activeBranch;
+    if (suspense.pendingBranch && !suspense.isHydrating) {
+      suspense.effects.push(() => setVarsOnVNode(suspense.activeBranch, vars));
+    }
+  }
+  while (vnode.component) vnode = vnode.component.subTree;
+  if (vnode.shapeFlag & 1 /* ELEMENT */ && vnode.el) {
+    setVarsOnNode(vnode.el as MirrorElement, vars);
+  } else if (vnode.type === Fragment) {
+    (vnode.children as VNode[]).forEach((c) => setVarsOnVNode(c, vars));
+  } else if (vnode.type === Static) {
+    let el = vnode.el as MirrorNode | null;
+    const anchor = vnode.anchor as MirrorNode | null;
+    while (el) {
+      setVarsOnNode(el as MirrorElement, vars);
+      if (el === anchor) break;
+      el = nodeOps.nextSibling(el);
+    }
+  }
+}
+function setVarsOnNode(el: MirrorElement, vars: Record<string, unknown>): void {
+  if (el.nodeType !== 1) return;
+  for (const key in vars) el.style.setProperty(`--${key}`, normalizeCssVarValue(vars[key]));
+}
+/** @vue/shared's `normalizeCssVarValue`. */
+function normalizeCssVarValue(value: unknown): string {
+  if (value == null) return "initial";
+  if (typeof value === "string") return value === "" ? " " : value;
+  return String(value);
+}
+
+/** `<style module>` classes, by name — runtime-dom's `useCssModule`. */
+export function useCssModule(name = "$style"): Record<string, string> {
+  const instance = getCurrentInstance();
+  if (!instance) return {};
+  const modules = (instance.type as { __cssModules?: Record<string, Record<string, string>> }).__cssModules;
+  const mod = modules?.[name];
+  if (!mod) {
+    warnCompat(
+      `cssModule:${name}`,
+      `useCssModule(${JSON.stringify(name)}) — no CSS module of that name: vue-native's builders do not ` +
+        `compile <style module> yet, so this answers {} and every class lookup is undefined`,
+    );
+    return {};
+  }
+  return mod;
+}
+
+/** A NotSupportedError, as close to the DOM's as the engine allows. */
+function notSupported(msg: string): Error {
+  return typeof DOMException === "function"
+    ? new DOMException(msg, "NotSupportedError")
+    : Object.assign(new Error(msg), { name: "NotSupportedError" });
+}
+const NO_CUSTOM_ELEMENTS =
+  "vue-native has no custom elements (no customElements registry, no shadow DOM) — " +
+  "use the component directly instead of defining an element for it";
+
+/** runtime-dom's custom-element base class. Constructing one is not possible here. */
+export class VueElement {
+  constructor() {
+    warnCompat("customElement", `VueElement — ${NO_CUSTOM_ELEMENTS}`);
+    throw notSupported(`VueElement: ${NO_CUSTOM_ELEMENTS}`);
+  }
+}
+/** Returns an element class, as in the browser; constructing it throws a named error. */
+export function defineCustomElement(options: unknown, extraOptions?: unknown): typeof VueElement {
+  warnCompat("defineCustomElement", `defineCustomElement() — ${NO_CUSTOM_ELEMENTS}`);
+  const def = defineComponent(options as never, extraOptions as never);
+  return class VueCustomElement extends VueElement {
+    static def = def;
+  };
+}
+export const defineSSRCustomElement = (options: unknown, extraOptions?: unknown): typeof VueElement =>
+  defineCustomElement(options, extraOptions);
+/** Only a custom element has a host; outside one runtime-dom answers null too. */
+export function useHost(): null {
+  warnCompat("useHost", `useHost() — ${NO_CUSTOM_ELEMENTS}; it answers null`);
+  return null;
+}
+export function useShadowRoot(): null {
+  warnCompat("useShadowRoot", `useShadowRoot() — ${NO_CUSTOM_ELEMENTS}; it answers null`);
+  return null;
+}
+/** There is no server-rendered markup in a vue-native window: `createApp`, said out loud. */
+export function createSSRApp(rootComponent: unknown, rootProps: Record<string, unknown> | null = null): VnApp {
+  warnCompat(
+    "createSSRApp",
+    "createSSRApp() — a vue-native window has no server-rendered markup to hydrate; it behaves as createApp()",
+  );
+  return createApp(rootComponent, rootProps);
+}
+export const hydrate: typeof render = (vnode, container) => {
+  warnCompat("hydrate", "hydrate() — nothing to hydrate in a vue-native window; it renders from scratch, as render() does");
+  render(vnode, container);
+};
+/** SSR's directive hooks: there is no SSR here, so there is nothing to initialize. */
+export const initDirectivesForSSR = (): void => {};
+
 // ---- missing globals (compat roadmap G5) ----------------------------------
 // Each of these is a ReferenceError today, i.e. strictly worse than a wrong
 // answer: reka-ui's FocusScope constructs a MutationObserver inside a
@@ -3351,6 +3525,270 @@ defineGlobal(
     }
   },
 );
+
+// -- IntersectionObserver, sampled from the host's painted bounds.
+//
+// redjs ships an INERT one ("nothing intersects in a game host"), and an inert
+// IntersectionObserver is not a harmless one in an app: every `visible` /
+// `visibleOnce` variant of @vueuse/motion waits for `isIntersecting` before it
+// animates in, so an element that starts at `opacity: 0` (the Argon client's
+// whole login card, research/reports/m26/client-gap.md §1 #12) stays invisible
+// forever; lazy loaders never load; off-screen animations never pause.
+//
+// This one is the W3C algorithm ("run the update intersection observations
+// steps") over the same per-frame `__vn_bounds` sample the ResizeObserver
+// above uses: each frame, for each target, the painted rectangle is intersected
+// with the root's (the viewport, or the `root` element's box, grown by
+// `rootMargin`), the ratio is mapped onto `thresholds`, and an entry is queued
+// when the threshold index or `isIntersecting` moves — so the first poll always
+// reports, as `observe()` does in a browser.
+//
+// Divergences, both deliberate: (1) the intersection is clipped by the ROOT
+// only, not by every scrolling ancestor between target and root, because
+// answering "which ancestors clip" per target per frame would cost a host call
+// per ancestor; a target scrolled out of an inner scroller that is still inside
+// the window reads as intersecting. (2) A target that has never been painted is
+// given three frames to get its first layout before it is reported as not
+// intersecting — a browser computes after layout, and our rAF can run before
+// the first paint of a freshly mounted node.
+interface IntersectionTargetState {
+  prevIndex: number;
+  prevIntersecting: boolean;
+  waited: number;
+}
+interface IntersectionEntryInit {
+  time: number;
+  target: MirrorElement;
+  rootBounds: MirrorRect | null;
+  boundingClientRect: MirrorRect;
+  intersectionRect: MirrorRect;
+  isIntersecting: boolean;
+  intersectionRatio: number;
+}
+const intersectionObservers = new Set<VnIntersectionObserver>();
+let intersectionPollQueued = false;
+
+function scheduleIntersectionPoll() {
+  if (intersectionPollQueued) return;
+  const raf = globalThis.requestAnimationFrame;
+  if (typeof raf !== "function") return;
+  intersectionPollQueued = true;
+  raf(pollIntersectionObservers);
+}
+
+function pollIntersectionObservers() {
+  intersectionPollQueued = false;
+  let observing = false;
+  const now = (globalThis as { performance?: { now(): number } }).performance?.now() ?? Date.now();
+  for (const ob of [...intersectionObservers]) {
+    if (!ob._targets.size) continue;
+    observing = true;
+    ob._update(now);
+  }
+  if (observing) scheduleIntersectionPoll();
+}
+
+const ioRect = (x: number, y: number, width: number, height: number): MirrorRect => ({
+  x, y, width, height, top: y, left: x, right: x + width, bottom: y + height,
+  toJSON() { return this; },
+});
+
+/** `rootMargin` / `scrollMargin`: one to four `<n>px` / `<n>%`, CSS margin order. */
+function parseIntersectionMargin(text: unknown, what: string): { v: number; pct: boolean }[] {
+  const parts = String(text ?? "0px").trim().split(/\s+/).filter(Boolean);
+  const out = parts.map((p) => {
+    const m = /^(-?\d*\.?\d+)(px|%)?$/.exec(p);
+    if (!m || (!m[2] && Number(m[1]) !== 0)) {
+      throw new DOMException(
+        `Failed to construct 'IntersectionObserver': ${what} must be specified in pixels or percent.`,
+        "SyntaxError",
+      );
+    }
+    return { v: Number(m[1]), pct: m[2] === "%" };
+  });
+  if (out.length < 1 || out.length > 4) {
+    throw new DOMException(`Failed to construct 'IntersectionObserver': ${what} must have 1 to 4 values.`, "SyntaxError");
+  }
+  const [t, r = t, b = t, l = r] = out as [{ v: number; pct: boolean }, ...{ v: number; pct: boolean }[]];
+  return [t, r!, b!, l!];
+}
+
+class VnIntersectionObserver {
+  declare _callback: (entries: unknown[], ob: VnIntersectionObserver) => void;
+  declare _targets: Map<MirrorElement, IntersectionTargetState>;
+  declare _records: unknown[];
+  declare _margin: { v: number; pct: boolean }[];
+  declare root: MirrorElement | null;
+  declare rootMargin: string;
+  declare scrollMargin: string;
+  declare thresholds: readonly number[];
+  declare delay: number;
+  declare trackVisibility: boolean;
+  constructor(callback: (entries: unknown[], ob: VnIntersectionObserver) => void, options: Record<string, unknown> = {}) {
+    if (typeof callback !== "function") {
+      throw new TypeError("Failed to construct 'IntersectionObserver': parameter 1 is not of type 'Function'.");
+    }
+    const opts = options ?? {};
+    const root = opts.root ?? null;
+    // A Document root is the implicit root's document, i.e. the viewport.
+    const isDocument = !!root && (root === (globalThis as { document?: unknown }).document || (root as { nodeType?: number }).nodeType === 9);
+    if (root !== null && !isDocument && typeof (root as { nodeType?: number }).nodeType !== "number") {
+      throw new TypeError("Failed to construct 'IntersectionObserver': root must be an Element, a Document or null.");
+    }
+    const raw = opts.threshold === undefined ? [0] : Array.isArray(opts.threshold) ? opts.threshold : [opts.threshold];
+    const thresholds = (raw as unknown[]).map(Number);
+    for (const t of thresholds) {
+      if (!(t >= 0 && t <= 1)) {
+        throw new RangeError("Failed to construct 'IntersectionObserver': Threshold values must be numbers between 0 and 1");
+      }
+    }
+    thresholds.sort((a, b) => a - b);
+    this._callback = callback;
+    this._targets = new Map();
+    this._records = [];
+    this._margin = parseIntersectionMargin(opts.rootMargin ?? "0px", "rootMargin");
+    this.root = isDocument ? null : (root as MirrorElement | null);
+    this.rootMargin = this._margin.map((m) => `${m.v}${m.pct ? "%" : "px"}`).join(" ");
+    this.scrollMargin = parseIntersectionMargin(opts.scrollMargin ?? "0px", "scrollMargin")
+      .map((m) => `${m.v}${m.pct ? "%" : "px"}`)
+      .join(" ");
+    this.thresholds = Object.freeze(thresholds.length ? thresholds : [0]);
+    this.delay = Number(opts.delay ?? 0) || 0;
+    this.trackVisibility = !!opts.trackVisibility;
+  }
+  observe(target: MirrorElement) {
+    if (!target || typeof target !== "object") {
+      throw new TypeError("Failed to execute 'observe' on 'IntersectionObserver': parameter 1 is not of type 'Element'.");
+    }
+    if (this._targets.has(target)) return;
+    this._targets.set(target, { prevIndex: -1, prevIntersecting: false, waited: 0 });
+    intersectionObservers.add(this);
+    scheduleIntersectionPoll();
+  }
+  unobserve(target: MirrorElement) {
+    this._targets.delete(target);
+  }
+  disconnect() {
+    this._targets.clear();
+    intersectionObservers.delete(this);
+  }
+  takeRecords(): unknown[] {
+    return this._records.splice(0, this._records.length);
+  }
+  /** The root intersection rectangle, `rootMargin` applied; null when the root has no box. */
+  _rootBounds(): MirrorRect | null {
+    let r: MirrorRect;
+    if (this.root) {
+      if (!this.root.id || !__vn_bounds(this.root.id)) return null;
+      r = rectOf(this.root);
+    } else {
+      if (!appRoot) return null;
+      r = viewportRect();
+    }
+    const [t, rt, b, l] = this._margin as [{ v: number; pct: boolean }, { v: number; pct: boolean }, { v: number; pct: boolean }, { v: number; pct: boolean }];
+    const px = (m: { v: number; pct: boolean }, of: number) => (m.pct ? (m.v / 100) * of : m.v);
+    const top = r.top - px(t, r.height);
+    const left = r.left - px(l, r.width);
+    const right = r.right + px(rt, r.width);
+    const bottom = r.bottom + px(b, r.height);
+    return ioRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
+  }
+  _update(time: number) {
+    const rootBounds = this._rootBounds();
+    for (const [target, state] of this._targets) {
+      const painted = !!target.id && !!__vn_bounds(target.id);
+      // Never painted yet: give the first layout a few frames (see the header).
+      if (!painted && state.prevIndex === -1 && state.waited < 3) {
+        state.waited++;
+        continue;
+      }
+      let isIntersecting = false;
+      let thresholdIndex = 0;
+      let ratio = 0;
+      let targetRect = ioRect(0, 0, 0, 0);
+      let intersectionRect = ioRect(0, 0, 0, 0);
+      const descendant = (() => {
+        if (!this.root) return true;
+        for (let n: MirrorNode | null | undefined = target.parentNode; n; n = n.parentNode) if (n === this.root) return true;
+        return false;
+      })();
+      if (painted && rootBounds && descendant) {
+        targetRect = rectOf(target);
+        const l = Math.max(targetRect.left, rootBounds.left);
+        const t = Math.max(targetRect.top, rootBounds.top);
+        const r = Math.min(targetRect.right, rootBounds.right);
+        const b = Math.min(targetRect.bottom, rootBounds.bottom);
+        // Edge-adjacent counts: a zero-area overlap still intersects (spec).
+        isIntersecting = r >= l && b >= t;
+        if (isIntersecting) intersectionRect = ioRect(l, t, Math.max(0, r - l), Math.max(0, b - t));
+        const targetArea = targetRect.width * targetRect.height;
+        const area = intersectionRect.width * intersectionRect.height;
+        ratio = targetArea > 0 ? area / targetArea : isIntersecting ? 1 : 0;
+        const at = this.thresholds.findIndex((th) => th > ratio);
+        thresholdIndex = at < 0 ? this.thresholds.length : at;
+      }
+      if (thresholdIndex === state.prevIndex && isIntersecting === state.prevIntersecting) continue;
+      state.prevIndex = thresholdIndex;
+      state.prevIntersecting = isIntersecting;
+      this._records.push(
+        new VnIntersectionObserverEntry({
+          time,
+          target,
+          rootBounds,
+          boundingClientRect: targetRect,
+          intersectionRect,
+          isIntersecting,
+          intersectionRatio: ratio,
+        }),
+      );
+    }
+    const records = this.takeRecords();
+    if (!records.length) return;
+    try {
+      this._callback.call(this, records, this);
+    } catch (e) {
+      console.error(`[vue-native] IntersectionObserver callback threw: ${e}`);
+    }
+  }
+}
+
+class VnIntersectionObserverEntry {
+  declare time: number;
+  declare target: MirrorElement;
+  declare rootBounds: MirrorRect | null;
+  declare boundingClientRect: MirrorRect;
+  declare intersectionRect: MirrorRect;
+  declare isIntersecting: boolean;
+  declare intersectionRatio: number;
+  /** IntersectionObserver v2: visibility is never tracked here. */
+  declare isVisible: boolean;
+  constructor(init: IntersectionEntryInit) {
+    this.time = init.time;
+    this.target = init.target;
+    this.rootBounds = init.rootBounds;
+    this.boundingClientRect = init.boundingClientRect;
+    this.intersectionRect = init.intersectionRect;
+    this.isIntersecting = init.isIntersecting;
+    this.intersectionRatio = init.intersectionRatio;
+    this.isVisible = false;
+  }
+}
+
+// OVER redjs's inert pair, not beside it — `defineGlobal` only fills a hole.
+for (const [name, value] of [
+  ["IntersectionObserver", VnIntersectionObserver],
+  ["IntersectionObserverEntry", VnIntersectionObserverEntry],
+] as const) {
+  try {
+    Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+  } catch {
+    try {
+      (globalThis as Record<string, unknown>)[name] = value;
+    } catch {
+      warnCompat(`global:${name}`, `${name} could not be installed over the engine's own; it stays inert`);
+    }
+  }
+}
 
 // -- DocumentFragment. Vue's Teleport accepts one as a target, and reka-ui's
 //    Select CONSTRUCTS one even while closed — a missing class kills it at
