@@ -196,7 +196,8 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
 
   // ---- FileReader and ProgressEvent (File API) — host or no host -----------
 
-  /** `ProgressEvent`, which redjs does not ship. */
+  /** `ProgressEvent`, for an engine without one. redjs ships its own (with
+   * `XMLHttpRequest`, since m26), and `PE` below prefers it. */
   class ProgressEvent extends Event {
     declare readonly lengthComputable: boolean;
     declare readonly loaded: number;
