@@ -684,6 +684,47 @@ impl Tree {
         }
     }
 
+    /// The viewport basis moved: every inline `style` body that names a
+    /// viewport unit is re-parsed, and its subtree re-cascaded.
+    ///
+    /// vn-css flattens `vw`/`vh`/`svw`/`svh`/… to px when it PARSES, and an
+    /// inline body is parsed only when its text changes (`set_style`). The
+    /// sheet has [`restyle_all`]'s recompile for this. Inline styles had
+    /// nothing, so a Vue-bound `width: 100svw` stayed at the size the window
+    /// had when it was first written: the Argon client's AppShell measured
+    /// 1652x633 in a 1700x800 window (m26).
+    ///
+    /// The subtree is marked as well as the node, which covers the
+    /// `var()`-composed values: a custom property declared inline
+    /// (`--h: 100svh`) is resolved where a descendant's `var(--h)` is
+    /// cascaded, so those descendants are re-cascaded with it.
+    ///
+    /// A scan of the slab, but only on a basis change, which is a resize.
+    /// Returns how many nodes were marked.
+    pub(crate) fn invalidate_viewport_inline(&mut self) -> usize {
+        let hits: Vec<u32> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| {
+                let n = n.as_ref()?;
+                n.style.iter().any(|(_, v)| has_viewport_unit(v)).then_some(i as u32)
+            })
+            .collect();
+        for &id in &hits {
+            if let Some(n) = self.node_mut(id) {
+                n.inline_dirty = true;
+            }
+            self.inline_dirty_nodes.push(id);
+            self.mark_restyle(id);
+            self.touch(id);
+        }
+        if !hits.is_empty() {
+            self.dirty = true;
+        }
+        hits.len()
+    }
+
     /// The restyle pass: re-parse dirty inline styles, then run the cascade
     /// for every element node. Runs once per JS wave that touched the tree —
     /// never during a draw.
@@ -1614,13 +1655,18 @@ pub fn restyle_all() {
     // completely correct today. When it is true and a pop-out is open, the
     // conditions are still per-window (above); only the LENGTHS come from the
     // primary window's viewport.
-    if vn_css::set_viewport_basis(env.viewport_width, env.viewport_height)
-        && vn_css::uses_viewport_units()
-    {
+    let basis_moved = vn_css::set_viewport_basis(env.viewport_width, env.viewport_height);
+    if basis_moved && vn_css::uses_viewport_units() {
         recompile_sheet(&format!(
             "viewport basis is now {}x{}px — recompiling the stylesheet (it uses vh/vw units)",
             env.viewport_width, env.viewport_height
         ));
+    }
+    // …and the INLINE styles, which no recompile reaches: each body that names
+    // a viewport unit is re-parsed against the new basis (m26; see
+    // `Tree::invalidate_viewport_inline`).
+    if basis_moved {
+        with_tree(|t| t.invalidate_viewport_inline());
     }
     if vn_css::uses_viewport_units() && crate::windows::any_secondary() {
         crate::render::warn_compat(
@@ -1671,6 +1717,45 @@ pub fn restyle_all() {
         let eng = eng.borrow();
         with_tree(|t| t.restyle(eng.as_ref(), &env));
     });
+}
+
+/// Does this CSS value text use a viewport-relative unit (`100vw`, `85svh`,
+/// `calc(100vh - 2rem)`, `-.5vmin`)? A dimension token is a number directly
+/// followed by its unit; the unit set is vn-css's (`viewport_unit_px`).
+fn has_viewport_unit(value: &str) -> bool {
+    const UNITS: [&str; 24] = [
+        "vw", "vh", "vi", "vb", "vmin", "vmax", "svw", "svh", "svi", "svb", "svmin", "svmax", "lvw", "lvh",
+        "lvi", "lvb", "lvmin", "lvmax", "dvw", "dvh", "dvi", "dvb", "dvmin", "dvmax",
+    ];
+    let b = value.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_digit() || (b[i] == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+            while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.') {
+                i += 1;
+            }
+            let start = i;
+            while i < b.len() && b[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            let unit = value[start..i].to_ascii_lowercase();
+            if UNITS.contains(&unit.as_str()) {
+                return true;
+            }
+        } else if b[i].is_ascii_alphabetic()
+            || b[i] == b'_'
+            || (b[i] == b'-' && b.get(i + 1).is_some_and(|c| c.is_ascii_alphabetic() || *c == b'-' || *c == b'_'))
+        {
+            // An identifier (`var(--x9vw)`, `abc12vh`): its digits are not a
+            // number. A `-` before a digit is a sign, not an identifier.
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'-' || b[i] == b'_') {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    false
 }
 
 /// A FORCED STYLE FLUSH: run the pending restyle now, because JS is about to
@@ -1994,6 +2079,82 @@ mod tests {
         with_tree(|t| t.set_element_text(sheet, String::new()));
         restyle_all();
         assert_eq!(opacity(probe), Some(0.25), "removing the rules restores the build's sheet");
+    }
+
+    #[test]
+    fn a_viewport_unit_is_a_dimension_token_not_a_substring() {
+        for yes in ["100vw", "100svh", "calc(100vh - 2rem)", "-5vh", "-.5vmin", "85DVH", "min(50vw, 40rem)", "1.5lvmax"] {
+            assert!(has_viewport_unit(yes), "{yes:?}");
+        }
+        for no in ["10px", "var(--x9vw)", "abc12vh", "2rem", "", "50%", "url(a1vw.png)", "100v", "3vws"] {
+            assert!(!has_viewport_unit(no), "{no:?}");
+        }
+    }
+
+    /// m26 6c: an INLINE `100svw` is flattened to px when it is parsed, and it
+    /// is parsed only when its text changes, so a resize left it at the old
+    /// window size (the Argon client's AppShell: 1652x633 in a 1700x800
+    /// window). A basis change now re-parses every inline body that names a
+    /// viewport unit and re-cascades its subtree, which also re-resolves a
+    /// custom property declared inline and composed by a descendant's `var()`.
+    #[test]
+    fn inline_viewport_units_and_var_composed_ones_follow_the_viewport() {
+        fn px(l: Option<gpui::Length>) -> Option<f32> {
+            match l? {
+                gpui::Length::Definite(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(p))) => Some(f32::from(p)),
+                _ => None,
+            }
+        }
+        let size = |id: u32| {
+            read_tree(|t| {
+                let cs = t.node(id)?.computed.as_ref()?;
+                Some((px(cs.base.size.width), px(cs.base.size.height)))
+            })
+        };
+        let resize = |w: f32, h: f32| {
+            if set_env(vn_css::Env { viewport_width: w, viewport_height: h, ..vn_css::Env::default() }) {
+                // What the host does with a `true` (see `set_env`).
+                with_tree(|t| t.mark_dirty());
+            }
+            restyle_all();
+        };
+        resize(1652.0, 633.0);
+        let (shell, child, plain) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let (width, height, var) = (t.intern("width"), t.intern("height"), t.intern("--w"));
+            let shell = t.create_element(div);
+            t.insert(shell, root, 0);
+            t.set_style(shell, width, "100svw".into());
+            t.set_style(shell, height, "100svh".into());
+            let parent = t.create_element(div);
+            t.insert(parent, root, 1);
+            t.set_style(parent, var, "50vw".into());
+            let child = t.create_element(div);
+            t.insert(child, parent, 0);
+            t.set_style(child, width, "var(--w)".into());
+            let plain = t.create_element(div);
+            t.insert(plain, root, 2);
+            t.set_style(plain, width, "40px".into());
+            (shell, child, plain)
+        });
+        restyle_all();
+        assert_eq!(size(shell), Some((Some(1652.0), Some(633.0))));
+        assert_eq!(size(child).and_then(|s| s.0), Some(826.0));
+
+        resize(1700.0, 800.0);
+        assert_eq!(size(shell), Some((Some(1700.0), Some(800.0))), "the inline svw/svh re-resolved");
+        assert_eq!(size(child).and_then(|s| s.0), Some(850.0), "and the var()-composed vw with it");
+        assert_eq!(size(plain).and_then(|s| s.0), Some(40.0));
+
+        // Without the host's full invalidation (a scoped pass), the marks
+        // alone still reach both.
+        assert!(vn_css::set_viewport_basis(1000.0, 500.0));
+        let marked = with_tree(|t| t.invalidate_viewport_inline());
+        assert_eq!(marked, 2, "the shell and the --w parent; never the px-only node");
+        ENGINE.with(|eng| with_tree(|t| t.restyle(eng.borrow().as_ref(), &env())));
+        assert_eq!(size(shell), Some((Some(1000.0), Some(500.0))));
+        assert_eq!(size(child).and_then(|s| s.0), Some(500.0));
     }
 
     /// **A `rem` recompile is the engine correcting its own basis, not the
