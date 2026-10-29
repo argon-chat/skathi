@@ -112,6 +112,7 @@ use vn_runtime::redjs::webapi::storage::{self as api, StorageHost};
 use vn_runtime::redjs::webapi::util::read_string;
 use vn_runtime::{host_fn, JsRuntime};
 
+pub mod cookies;
 pub mod crypt;
 pub mod file;
 pub mod folders;
@@ -516,6 +517,8 @@ pub fn flush() -> Result<bool, String> {
 /// `vn_permissions::pump`, and is NOT dev-gated: remembering a preference is
 /// application work.
 pub fn pump() {
+    // The cookie jar's write, on the same clock (src/cookies.rs).
+    cookies::pump();
     // The common case is "nothing changed", and it must cost one uncontended
     // lock and a bool read.
     let s = storage();
@@ -607,9 +610,10 @@ host_fn!(fn vn_storage_info(_g, _args) {
     let indexed_db = idb::info_json(&folder);
     #[cfg(not(feature = "indexeddb"))]
     let indexed_db = "null";
+    let cookie_jar = cookies::info_json();
     let json = format!(
         "{{\"folder\":\"{}\",\"file\":\"{}\",\"encrypted\":{},\"bytes\":{},\"loaded\":{},\
-          \"pending\":{},\"provider\":\"{}\",\"kinds\":[{}],\"error\":{},\"indexedDB\":{}}}",
+          \"pending\":{},\"provider\":\"{}\",\"kinds\":[{}],\"error\":{},\"indexedDB\":{},\"cookies\":{}}}",
         json_escape(&folder.display().to_string()),
         json_escape(&path.display().to_string()),
         st.encrypted,
@@ -623,6 +627,7 @@ host_fn!(fn vn_storage_info(_g, _args) {
             None => String::from("null"),
         },
         indexed_db,
+        cookie_jar,
     );
     JsRuntime::with(|rt| rt.ctx().string(&json).0)
 });
@@ -665,6 +670,9 @@ pub fn install(rt: &JsRuntime, app_name: Option<String>) {
         }
     }
     api::set_host(storage());
+    // The cookie jar's file, in the folder as of NOW (src/cookies.rs, "Which
+    // folder"), loaded into redjs's jar before anything can set a cookie.
+    cookies::install(current_folder());
     // …and the same folder (its `indexeddb\` subfolder) for IndexedDB, BEFORE
     // app code: redjs reads its host once, at the first `indexedDB` use, and a
     // host installed after that would leave the run in memory.

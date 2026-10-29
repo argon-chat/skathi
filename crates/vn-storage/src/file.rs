@@ -69,7 +69,16 @@ pub fn sealed_path(folder: &Path) -> PathBuf {
 /// The area, as the bytes that go into the file (plaintext or, once sealed,
 /// ciphertext).
 pub fn encode(entries: &[(String, String)]) -> String {
-    let mut s = String::from("{\n  \"format\": \"vue-native/storage\",\n  \"version\": 1,\n  \"entries\": [");
+    encode_as("vue-native/storage", entries)
+}
+
+/// [`encode`] under another `format` name: the same file shape for another
+/// list of pairs (`cookies.sealed` is `"vue-native/cookies"`). [`decode`]
+/// reads either.
+pub fn encode_as(format: &str, entries: &[(String, String)]) -> String {
+    let mut s = String::from("{\n  \"format\": ");
+    write_json_string(&mut s, format);
+    s.push_str(",\n  \"version\": 1,\n  \"entries\": [");
     for (i, (k, v)) in entries.iter().enumerate() {
         s.push_str(if i == 0 { "\n    " } else { ",\n    " });
         s.push('[');

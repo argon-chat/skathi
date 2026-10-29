@@ -1117,6 +1117,16 @@ fn main() {
         // A kill skips this, and loses nothing committed either (the WAL is
         // replayed at the next open — redjs tests/idb_crash.rs). A no-op when
         // the app never touched IndexedDB.
+        // The cookie jar's last staged change (a `Set-Cookie` in the final
+        // frame — a sign-out's, say) is on disk before the process ends. Its
+        // writes are otherwise one per frame, like `localStorage`'s.
+        #[cfg(feature = "storages")]
+        std::mem::forget(cx.on_app_quit(|_| {
+            if let Err(e) = vn_storage::cookies::flush() {
+                eprintln!("[storage] cookies: the last change was not written: {e}");
+            }
+            std::future::ready(())
+        }));
         #[cfg(feature = "indexeddb")]
         std::mem::forget(cx.on_app_quit(|_| {
             let t = std::time::Instant::now();

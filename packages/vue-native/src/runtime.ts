@@ -4820,6 +4820,22 @@ interface IndexedDbInfo {
   error: string | null;
 }
 
+/**
+ * The cookie jar's half of `appStorage.info()` (crates/vn-storage/src/cookies.rs):
+ * `<folder at startup>\cookies.sealed`, always sealed whatever `encrypted` says
+ * (cookies are credentials). `persisted` counts the persistent cookies last
+ * loaded or staged; session cookies are never written. `file` is null when the
+ * host has no jar backend.
+ */
+interface CookieJarInfo {
+  file: string | null;
+  sealed: true;
+  bytes: number;
+  persisted: number;
+  pending: boolean;
+  error: string | null;
+}
+
 /** Everything `appStorage.info()` reports. `error` is the LAST failure, or null. */
 interface StorageInfo {
   folder: string;
@@ -4832,6 +4848,8 @@ interface StorageInfo {
   kinds: string[];
   error: string | null;
   indexedDB: IndexedDbInfo | null;
+  /** Absent from an inert `appStorage` (no host). */
+  cookies?: CookieJarInfo;
 }
 
 /** The tier-2 surface, in both its live and its inert spelling. */
