@@ -133,6 +133,17 @@ interface MirrorNodeBase {
   readonly nodeType: 1 | 3 | 8 | 11;
   readonly nodeName: string;
   readonly isConnected: boolean;
+  /** The parent when it is an Element, else null (DOM §4.4). */
+  readonly parentElement: MirrorElement | null;
+  readonly firstChild: MirrorNode | null;
+  readonly lastChild: MirrorNode | null;
+  readonly nextSibling: MirrorNode | null;
+  readonly previousSibling: MirrorNode | null;
+  /** NonDocumentTypeChildNode: Element and CharacterData both have these. */
+  readonly nextElementSibling: MirrorElement | null;
+  readonly previousElementSibling: MirrorElement | null;
+  hasChildNodes(): boolean;
+  getRootNode(): unknown;
   dispatchEvent(ev: VnEvent): boolean;
   /**
    * The event codes whose `__vn_set_listener` bit is currently ON in the host,
@@ -183,12 +194,10 @@ interface MirrorElement extends MirrorNodeBase {
   removeEventListener(name: string, fn: EventHandler, opts?: ListenerOptions): void;
 
   // -- the tree, truthfully (the mirror IS the tree)
-  readonly children: MirrorElement[];
+  readonly children: MirrorElement[] & { item(i: number): MirrorElement | null };
   readonly firstElementChild: MirrorElement | null;
   readonly lastElementChild: MirrorElement | null;
   readonly childElementCount: number;
-  readonly nextElementSibling: MirrorElement | null;
-  readonly previousElementSibling: MirrorElement | null;
   textContent: string;
 
   // -- selector matching, through the real cascade matcher
@@ -1303,6 +1312,54 @@ defineDomGet(
   },
   [TextProto],
 );
+// `parentElement` is `parentNode` when that parent is an Element, else null
+// (DOM §4.4). A mirror's parent is always an element; the one parent that is
+// not a mirror is `document.head`, the property bag a `<style>` injected there
+// reports, and head IS an element in a browser. So the test is "an element
+// node, or an object shaped like one" rather than `kind === 1`.
+defineDomGet(
+  "parentElement",
+  function (this: MirrorNode) {
+    const p = this.parentNode as unknown as { nodeType?: unknown; tagName?: unknown } | null;
+    if (!p) return null;
+    return p.nodeType === 1 || (p.nodeType === undefined && typeof p.tagName === "string") ? p : null;
+  },
+  undefined,
+  NODE_MEMBERS,
+);
+// The Node-level walk (`for (let n = el.firstChild; n; n = n.nextSibling)`),
+// from the same lists the renderer's own `nodeOps.nextSibling` reads.
+function siblingOf(node: MirrorNode, step: 1 | -1): MirrorNode | null {
+  const p = node.parentNode;
+  if (!p || !p.childNodes) return null;
+  const i = p.childNodes.indexOf(node);
+  return i >= 0 ? (p.childNodes[i + step] ?? null) : null;
+}
+defineDomGet("nextSibling", function (this: MirrorNode) { return siblingOf(this, 1); }, undefined, NODE_MEMBERS);
+defineDomGet("previousSibling", function (this: MirrorNode) { return siblingOf(this, -1); }, undefined, NODE_MEMBERS);
+defineDomGet("firstChild", function (this: MirrorNode) { return this.childNodes?.[0] ?? null; }, undefined, NODE_MEMBERS);
+defineDomGet(
+  "lastChild",
+  function (this: MirrorNode) {
+    const kids = this.childNodes;
+    return kids && kids.length ? kids[kids.length - 1] : null;
+  },
+  undefined,
+  NODE_MEMBERS,
+);
+defineDom("hasChildNodes", function (this: MirrorNode) { return !!this.childNodes?.length; }, NODE_MEMBERS);
+// `getRootNode()`: the document when connected (the root's parent is the
+// document in a browser), otherwise the topmost ancestor. There is no shadow
+// DOM here, so `{ composed }` changes nothing.
+defineDom(
+  "getRootNode",
+  function (this: MirrorNode) {
+    let n: MirrorNode = this;
+    while (n.parentNode) n = n.parentNode;
+    return n === appRoot ? (globalThis.document ?? n) : n;
+  },
+  NODE_MEMBERS,
+);
 // `childNodes` is the renderer's own list: every child node, in order.
 // `children` is the DOM's ELEMENT-only view of it, and the distinction is
 // load-bearing — `aria-hidden` (which reka's Dialog uses to hide the rest of
@@ -1310,8 +1367,11 @@ defineDomGet(
 // handing it text and comment mirrors made it log one failure per node.
 const elementChildren = (n: MirrorNode): MirrorElement[] =>
   (n.childNodes || []).filter((c): c is MirrorElement => c.kind === 1);
+// A snapshot array, not a live HTMLCollection, with the collection's `item()`
+// (as `getElementsByTagName` answers).
 defineDomGet("children", function (this: MirrorElement) {
-  return elementChildren(this);
+  const out = elementChildren(this);
+  return Object.defineProperty(out, "item", { value: (i: number) => out[i] ?? null });
 });
 defineDomGet("firstElementChild", function (this: MirrorElement) {
   return elementChildren(this)[0] ?? null;
@@ -1331,12 +1391,24 @@ function elementSibling(node: MirrorNode, step: number): MirrorElement | null {
   }
   return null;
 }
-defineDomGet("nextElementSibling", function (this: MirrorElement) {
-  return elementSibling(this, 1);
-});
-defineDomGet("previousElementSibling", function (this: MirrorElement) {
-  return elementSibling(this, -1);
-});
+// NonDocumentTypeChildNode: on Element AND CharacterData, so a text node's
+// `nextElementSibling` is the element after it.
+defineDomGet(
+  "nextElementSibling",
+  function (this: MirrorNode) {
+    return elementSibling(this, 1);
+  },
+  undefined,
+  NODE_MEMBERS,
+);
+defineDomGet(
+  "previousElementSibling",
+  function (this: MirrorNode) {
+    return elementSibling(this, -1);
+  },
+  undefined,
+  NODE_MEMBERS,
+);
 defineDomGet(
   "textContent",
   function (this: MirrorElement) {

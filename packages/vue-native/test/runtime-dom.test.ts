@@ -55,6 +55,85 @@ describe("tree queries answered from the mirror", () => {
     expect(button.children).toEqual([]);
   });
 
+  test("parentElement is the parent element, and null at the root and when detached", () => {
+    const rt = createRuntime();
+    const { root, section, button, span, text } = tree(rt);
+    expect(button.parentElement).toBe(section);
+    expect(section.parentElement).toBe(root);
+    // A text node's parent is an element too.
+    expect(text.parentElement).toBe(button);
+    expect(root.parentElement).toBe(null);
+    rt.nodeOps.remove(span);
+    expect(span.parentElement).toBe(null);
+    expect(span.parentNode).toBe(null);
+    // `parentNode` and `parentElement` agree wherever the parent is an element.
+    expect(button.parentNode).toBe(button.parentElement);
+  });
+
+  test("parentElement is not a writable own field", () => {
+    const rt = createRuntime();
+    const { button } = tree(rt);
+    expect(Object.prototype.hasOwnProperty.call(button, "parentElement")).toBe(false);
+    expect(() => {
+      "use strict";
+      (button as { parentElement: unknown }).parentElement = null;
+    }).toThrow();
+  });
+
+  test("the Node walk: firstChild / lastChild / nextSibling / previousSibling / hasChildNodes", () => {
+    const rt = createRuntime();
+    const { section, button, span, text } = tree(rt);
+    const comment = rt.nodeOps.createComment("");
+    rt.nodeOps.insert(comment, section, span);
+    expect(section.firstChild).toBe(button);
+    expect(section.lastChild).toBe(span);
+    expect(button.nextSibling).toBe(comment);
+    expect(comment.nextSibling).toBe(span);
+    expect(span.previousSibling).toBe(comment);
+    expect(button.previousSibling).toBe(null);
+    expect(span.nextSibling).toBe(null);
+    expect(text.firstChild).toBe(null);
+    expect(button.hasChildNodes()).toBe(true);
+    expect(span.hasChildNodes()).toBe(false);
+    const walked = [];
+    for (let n = section.firstChild; n; n = n.nextSibling) walked.push(n);
+    expect(walked).toEqual([button, comment, span]);
+  });
+
+  test("a text or comment node has element siblings (NonDocumentTypeChildNode)", () => {
+    const rt = createRuntime();
+    const { section, button, span } = tree(rt);
+    const comment = rt.nodeOps.createComment("");
+    rt.nodeOps.insert(comment, section, span);
+    expect(comment.nextElementSibling).toBe(span);
+    expect(comment.previousElementSibling).toBe(button);
+    expect(button.nextElementSibling).toBe(span);
+  });
+
+  test("children has item(), and getRootNode is the document once connected", () => {
+    const rt = createRuntime();
+    const { root, section, button, span } = tree(rt);
+    expect(section.children.item(1)).toBe(span);
+    expect(section.children.item(5)).toBe(null);
+    expect(section.children.length).toBe(2);
+    // Not mounted: the topmost ancestor.
+    expect(button.getRootNode()).toBe(root);
+    rt.nodeOps.remove(span);
+    expect(span.getRootNode()).toBe(span);
+  });
+
+  test("a node under the mounted root is connected, its root node is the document", () => {
+    const rt = createRuntime();
+    rt.createApp({ render: () => null }).mount();
+    const body = rt.global.document.body;
+    const node = rt.nodeOps.createElement("div");
+    rt.nodeOps.insert(node, body, null);
+    expect(node.isConnected).toBe(true);
+    expect(node.parentElement).toBe(body);
+    expect(node.getRootNode()).toBe(rt.global.document);
+    expect(body.contains(node)).toBe(true);
+  });
+
   test("setElementText is readable back through textContent", () => {
     const rt = createRuntime();
     const { button } = tree(rt);
@@ -688,6 +767,9 @@ describe("missing globals (G5)", () => {
     rt.nodeOps.insert(child, frag, null);
     expect(frag.children).toEqual([child]);
     expect(frag.childNodes).toEqual([child]);
+    // A fragment is a parent NODE but not a parent ELEMENT.
+    expect(child.parentNode).toBe(frag);
+    expect(child.parentElement).toBe(null);
     // Detached: it hangs off no root, so it is not painted.
     expect(child.isConnected).toBe(false);
   });
