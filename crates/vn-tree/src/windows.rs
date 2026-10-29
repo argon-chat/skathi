@@ -125,17 +125,34 @@ pub struct WindowState {
     /// The one `mousemove` THIS window is allowed to deliver this frame.
     /// Simultaneous moves in two windows used to drop one.
     pub pending_mouse_move: Option<PendingMouseMove>,
-    /// Has a node already taken THIS mouse-up's `click`? gpui fires `on_click`
-    /// on every listening box under the pointer, innermost first; the browser
-    /// has one target. Reset in the capture phase of every mouse-up (which
-    /// runs before any bubble-phase click), claimed by the first click
-    /// listener — see `bind_events`.
-    pub click_claimed: bool,
+    /// Has a node already taken THIS mouse-down? gpui runs
+    /// `on_any_mouse_down` on every listening box under the pointer, innermost
+    /// first; the browser has one target. Without the claim an outer
+    /// `@mousedown` (or a `document` pointerdown listener, which rides the
+    /// root's bit) ran once as the inner box's ancestor and again as a target
+    /// of its own. Reset in the capture phase of every mouse-down.
+    pub down_claimed: bool,
+    /// The mouse-up waves not yet delivered to JS (`render::UpWave`). One
+    /// physical mouse-up is a `mouseup`, a `click` and (right button) a
+    /// `contextmenu`, each at its own innermost listening box (the same "one
+    /// target" claim as `down_claimed`) — and gpui calls those boxes
+    /// innermost-first, and a box's click listener before its own mouse-up
+    /// listener. So the listeners only CLAIM, into the wave the build root
+    /// opened in the capture phase, and one deferred flush delivers every wave
+    /// in DOM order.
+    pub up_waves: Vec<crate::render::UpWave>,
+    /// The press in progress: its `mousedown` target and button, until its
+    /// `mouseup` (`render::Press`).
+    pub press: Option<crate::render::Press>,
+    /// This window's activation observer — a press the window loses
+    /// activation in the middle of is cancelled (`pointercancel`).
+    pub activation: Option<Subscription>,
     /// Did a JS `keydown` handler cancel THE keystroke being dispatched? Reset
     /// in the root's capture phase (the first listener every keystroke
     /// meets), set by `bind_events`' keydown listener, and read by the root's
     /// clipboard listener (the last one), because a cancelled Ctrl+C has no
-    /// `copy` event (`crate::clipboard`).
+    /// `copy` event (`crate::clipboard`). `keyup` uses it the same way: a
+    /// cancelled Menu-key `keyup` has no `contextmenu`.
     pub key_prevented: bool,
 
     // --- chrome (§5.2, §7.6) -----------------------------------------------

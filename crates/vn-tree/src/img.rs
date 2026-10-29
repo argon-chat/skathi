@@ -256,6 +256,156 @@ pub(crate) fn source_for(id: u32, src: &str) -> Option<ImageSource> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// `load` / `error` — the image's half of the HTML "update the image data" steps
+// ---------------------------------------------------------------------------
+//
+// Every `<img>` whose `src` was written is probed once per `src`, attached or
+// not: `new Image()` and a detached `document.createElement("img")` are how
+// code measures a picked file (`naturalWidth` in `onload`), and they are never
+// painted. The answer reaches JS as `load` (a/b = the natural size, `key` = the
+// src) or `error` (`key` = the src) from the frame tick — after the script that
+// set the src, as in a browser, where both are queued as tasks.
+//
+// What "loaded" means is what a browser's `load` means: the bytes are there
+// and the format's header says how big the picture is ("completely
+// available"). That is a header read, not a decode — gpui decodes for the
+// paint, and the probe does not hold a second full-size copy of a photo a
+// script only wanted to measure. An http(s) image is the exception: its bytes
+// arrive through gpui's own loader, the one the element paints from, so the
+// probe waits on that decode and shares it.
+
+thread_local! {
+    /// `<img>` nodes whose current `src` has not been answered yet.
+    static LOADS: RefCell<std::collections::HashSet<u32>> = RefCell::new(std::collections::HashSet::new());
+}
+
+/// `src` was written (or removed) on an `<img>`: answer it on the next tick.
+pub(crate) fn note_src(id: u32) {
+    LOADS.with(|l| l.borrow_mut().insert(id));
+}
+
+/// What the probe of one `src` found.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Probe {
+    /// Still on its way (an http(s) fetch).
+    Pending,
+    /// The natural size, in CSS px.
+    Loaded(f64, f64),
+    /// Broken: not fetchable, not an image, or not one this renderer decodes.
+    Failed,
+}
+
+/// Answers every `<img>` whose `src` changed: `load` or `error`, at the node.
+/// Called once per frame from [`crate::frame_tick`].
+pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) {
+    let pending: Vec<u32> = LOADS.with(|l| l.borrow().iter().copied().collect());
+    for id in pending {
+        // The node's current `src`, if the node still exists.
+        let Some(src) = crate::tree::read_tree(|t| t.node(id).map(|_| t.prop(id, "src").map(str::to_string))) else {
+            LOADS.with(|l| l.borrow_mut().remove(&id));
+            continue;
+        };
+        // No `src` attribute at all: no request, no event (`complete` is true).
+        let Some(src) = src else {
+            LOADS.with(|l| l.borrow_mut().remove(&id));
+            continue;
+        };
+        let probe = probe(id, &src, cx);
+        let (event, a, b) = match probe {
+            Probe::Pending => continue,
+            Probe::Loaded(w, h) => (crate::tree::EV_LOAD, w, h),
+            Probe::Failed => (crate::tree::EV_ERROR, 0.0, 0.0),
+        };
+        LOADS.with(|l| l.borrow_mut().remove(&id));
+        let payload = crate::EventPayload { a, b, key: Some(&src), ..Default::default() };
+        crate::render::js_dispatch_app(id, event, &payload, window, cx);
+    }
+}
+
+/// One `src`, answered as far as it can be right now.
+fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
+    // HTML: an empty `src` fires `error` (it is not "no src").
+    if src.trim().is_empty() {
+        return Probe::Failed;
+    }
+    let svg_named = names_svg(src);
+    match source_for(id, src) {
+        // Unresolvable (bad scheme, missing file in a package, …): already
+        // advised by the resolver.
+        None => Probe::Failed,
+        Some(ImageSource::Resource(Resource::Uri(uri))) => {
+            match cx.fetch_asset::<gpui::ImgResourceLoader>(&Resource::Uri(uri)) {
+                None => Probe::Pending,
+                Some(Err(_)) => Probe::Failed,
+                Some(Ok(image)) => {
+                    let size = image.size(0);
+                    // gpui rasterises an SVG at twice its size for smoothness.
+                    let scale = if svg_named { gpui::SMOOTH_SVG_SCALE_FACTOR as f64 } else { 1.0 };
+                    Probe::Loaded(size.width.0 as f64 / scale, size.height.0 as f64 / scale)
+                }
+            }
+        }
+        Some(ImageSource::Resource(Resource::Path(path))) => file_natural_size(path.as_ref()),
+        Some(ImageSource::Resource(Resource::Embedded(key))) => {
+            match asset_store().and_then(|store| store(key.as_ref())) {
+                Some(bytes) => natural_size(bytes),
+                None => Probe::Failed,
+            }
+        }
+        Some(ImageSource::Image(image)) => natural_size(&image.bytes),
+        Some(_) => Probe::Failed,
+    }
+}
+
+/// Does the URL's path end in `.svg` (the query and fragment cut)? The one
+/// thing that says a decoded http(s) image was an SVG.
+fn names_svg(src: &str) -> bool {
+    let path = src.split(['?', '#']).next().unwrap_or(src).trim();
+    path.len() > 4 && path.is_char_boundary(path.len() - 4) && path[path.len() - 4..].eq_ignore_ascii_case(".svg")
+}
+
+/// A file's natural size: only the header is read for a raster image (a
+/// picked photo is measured, not loaded); an SVG is read whole.
+fn file_natural_size(path: &Path) -> Probe {
+    let Ok(reader) = image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) else {
+        return Probe::Failed;
+    };
+    if reader.format().is_some() {
+        return match reader.into_dimensions() {
+            Ok((w, h)) if w > 0 && h > 0 => Probe::Loaded(w as f64, h as f64),
+            _ => Probe::Failed,
+        };
+    }
+    match std::fs::read(path) {
+        Ok(bytes) => svg_size(&bytes),
+        Err(_) => Probe::Failed,
+    }
+}
+
+/// The natural size a format's header declares: the raster formats gpui
+/// decodes (through the same `image` crate, so the set cannot drift — the
+/// format is sniffed from the bytes, as gpui does), or an SVG's own size.
+pub(crate) fn natural_size(bytes: &[u8]) -> Probe {
+    if let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format() {
+        if reader.format().is_some() {
+            return match reader.into_dimensions() {
+                Ok((w, h)) if w > 0 && h > 0 => Probe::Loaded(w as f64, h as f64),
+                _ => Probe::Failed,
+            };
+        }
+    }
+    // Not a raster this renderer knows: an SVG, or nothing.
+    svg_size(bytes)
+}
+
+fn svg_size(bytes: &[u8]) -> Probe {
+    match usvg::Tree::from_data(bytes, &usvg::Options::default()) {
+        Ok(tree) => Probe::Loaded(tree.size().width() as f64, tree.size().height() as f64),
+        Err(_) => Probe::Failed,
+    }
+}
+
 /// The raw FILE bytes behind a `src`, for elements that need the document
 /// rather than a decoded image — `<lottie>` parses Bodymovin JSON (or a gzipped
 /// `.tgs`) itself, so `ImageSource` is no use to it.
@@ -887,6 +1037,46 @@ mod tests {
             Some(ImageSource::Resource(Resource::Path(p))) => Some(p.to_path_buf()),
             _ => None,
         }
+    }
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::new(w, h).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    /// `load`'s natural size is the header's, for a raster and an SVG alike;
+    /// anything else is `error`.
+    #[test]
+    fn the_probe_reads_the_natural_size_off_the_header() {
+        assert_eq!(natural_size(&png(7, 3)), Probe::Loaded(7.0, 3.0));
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="24"></svg>"#;
+        assert_eq!(natural_size(svg), Probe::Loaded(40.0, 24.0));
+        assert_eq!(natural_size(b"not an image"), Probe::Failed);
+        // A PNG cut off inside its header is broken.
+        assert_eq!(natural_size(&png(4, 4)[..12]), Probe::Failed);
+    }
+
+    #[test]
+    fn a_file_is_measured_from_its_header() {
+        let dir = std::env::temp_dir().join(format!("vn-img-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let raster = dir.join("a.png");
+        std::fs::write(&raster, png(9, 4)).unwrap();
+        assert_eq!(file_natural_size(&raster), Probe::Loaded(9.0, 4.0));
+        let svg = dir.join("b.svg");
+        std::fs::write(&svg, br#"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="2"/>"#).unwrap();
+        assert_eq!(file_natural_size(&svg), Probe::Loaded(3.0, 2.0));
+        assert_eq!(file_natural_size(&dir.join("missing.png")), Probe::Failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_svg_url_is_known_by_its_path() {
+        assert!(names_svg("https://cdn.example/icons/a.svg"));
+        assert!(names_svg("https://cdn.example/a.SVG?v=2#frag"));
+        assert!(!names_svg("https://cdn.example/a.png?x=.svg"));
+        assert!(!names_svg("svg"));
     }
 
     #[test]

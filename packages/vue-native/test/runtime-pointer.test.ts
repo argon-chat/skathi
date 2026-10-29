@@ -129,9 +129,9 @@ describe("dispatch", () => {
 
   test("an unheard pointer name still warns — the set is finite and named", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(), "onPointercancel", null, () => {});
+    rt.patchProp(rt.el(), "onPointerover", null, () => {});
     expect(rt.advisories().length).toBe(1);
-    expect(rt.advisories()[0]).toContain("@pointercancel");
+    expect(rt.advisories()[0]).toContain("@pointerover");
   });
 });
 

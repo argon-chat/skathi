@@ -68,7 +68,7 @@ pub const EV_EMPTIED: u32 = 34;
 // These four were 17-20 on the compat track and were RENUMBERED to 35-38 at the
 // m12 integration merge, because the `<video>` track had independently taken
 // 17-34 for the media block. `Node::listeners` is a `u64`, so the space is
-// there; bits 42-63 remain free.
+// there; bits 45-63 remain free.
 pub const EV_TRANSITIONEND: u32 = 35;
 pub const EV_ANIMATIONSTART: u32 = 36;
 pub const EV_ANIMATIONEND: u32 = 37;
@@ -80,6 +80,21 @@ pub const EV_ANIMATIONCANCEL: u32 = 38;
 pub const EV_PASTE: u32 = 39;
 pub const EV_COPY: u32 = 40;
 pub const EV_CUT: u32 = 41;
+
+// m26 fixes: the events the Argon client binds that the host never delivered.
+// (`dblclick` has no code: it rides `click`'s bit, and the JS runtime fires it
+// after the click whose `detail` is 2 — `render::bind_events`.)
+/// A MouseEvent: after the right button's `mouseup` (Chromium on Windows), or
+/// from the Menu key / Shift+F10 at the focused element. Payload as for a
+/// mouse event (`crate::render`'s up wave and `crate::render::bind_menu_keys`).
+pub const EV_CONTEXTMENU: u32 = 42;
+/// `<img>` decoded its `src` (`crate::img::tick`): `a`/`b` = naturalWidth /
+/// naturalHeight, `key` = the `src` it was for. A failure is [`EV_ERROR`] with
+/// the same `key`.
+pub const EV_LOAD: u32 = 43;
+/// The host gave up on a press (the window lost activation mid-press): the
+/// press's `mousedown` target hears it, and nothing more of that press does.
+pub const EV_POINTERCANCEL: u32 = 44;
 
 /// Every host event code with the name JS knows it by — the ONE table, so a
 /// listing (devtools) can never lag the codes again. It did: `event_names` in
@@ -131,6 +146,9 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_PASTE, "paste"),
     (EV_COPY, "copy"),
     (EV_CUT, "cut"),
+    (EV_CONTEXTMENU, "contextmenu"),
+    (EV_LOAD, "load"),
+    (EV_POINTERCANCEL, "pointercancel"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -726,6 +726,13 @@ fn dom_key(k: &str) -> String {
         "pageup" => "PageUp".into(),
         "pagedown" => "PageDown".into(),
         "insert" => "Insert".into(),
+        // The Menu key is VK_APPS, which gpui names "menu"; the DOM's name is
+        // "ContextMenu". The function keys are "F1"…"F24" in the DOM, and gpui
+        // spells them in lower case.
+        "menu" => "ContextMenu".into(),
+        f if f.len() > 1 && f.starts_with('f') && f[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)) => {
+            f.to_ascii_uppercase()
+        }
         other => other.into(),
     }
 }
@@ -783,6 +790,210 @@ fn mouse_payload(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers
         d: mods_bits(m),
         key: None,
     }
+}
+
+/// [`mouse_payload`] for the events whose `detail` is the click count
+/// (`mousedown`, `mouseup`, `click`; UI Events §3.5): it rides `d` above the
+/// four modifier bits, so the hot path still crosses with four doubles.
+fn mouse_payload_n(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers, detail: usize) -> EventPayload<'static> {
+    let mut p = mouse_payload(position, button, m);
+    p.d += (detail.min(255) as f64) * 16.0;
+    p
+}
+
+/// A mouse payload kept past its listener (an [`UpWave`] slot). No `key`, so
+/// no lifetime.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MousePt {
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+}
+
+impl MousePt {
+    fn of(p: &EventPayload) -> Self {
+        MousePt { a: p.a, b: p.b, c: p.c, d: p.d }
+    }
+    fn payload(&self) -> EventPayload<'static> {
+        EventPayload { a: self.a, b: self.b, c: self.c, d: self.d, key: None }
+    }
+}
+
+/// One physical mouse-up, as the DOM sees it: a `mouseup`, then a `click`
+/// (left button, released on the box it was pressed on), then — the right
+/// button, Chromium on Windows — a `contextmenu`. Each slot is claimed by the
+/// innermost listening box for that event, the browser's target as far as the
+/// host can see one. Why they are claimed and delivered later rather than
+/// dispatched in place: `WindowState::up_waves`.
+#[derive(Default)]
+pub struct UpWave {
+    mouseup: Option<(u32, MousePt)>,
+    click: Option<(u32, MousePt)>,
+    menu: Option<(u32, MousePt)>,
+    scheduled: bool,
+    /// The release of a press the host cancelled: nothing is delivered.
+    cancelled: bool,
+}
+
+/// The press in progress in one window (`WindowState::press`).
+pub struct Press {
+    /// The `mousedown` target — where a `pointercancel` goes.
+    target: u32,
+    button: f64,
+    position: Point<gpui::Pixels>,
+    /// The host gave up on it ([`cancel_press`]): its mouse-up delivers nothing.
+    cancelled: bool,
+}
+
+/// The capture phase of EVERY mouse-up opens its wave, from the build root —
+/// the first box painted, so the first capture listener gpui runs — whether
+/// the pointer is over it or not ([`bind_root_mouse`]). The release also ends
+/// the press in progress, if it is that press's button.
+fn open_up_wave(ev: &MouseUpEvent, window: &mut Window) {
+    let button = button_code(ev.button);
+    windows::here(window, |w| {
+        let cancelled = match &w.press {
+            Some(p) if p.button == button => w.press.take().is_some_and(|p| p.cancelled),
+            _ => false,
+        };
+        // A wave nobody claimed a share of is never flushed: drop it here.
+        w.up_waves.retain(|wave| wave.scheduled);
+        w.up_waves.push(UpWave { cancelled, ..Default::default() });
+    });
+}
+
+/// The root's share of every press: it opens each mouse-up's wave. See
+/// [`open_up_wave`]; the `_out` variants are what make "every" true when
+/// something that blocks the mouse covers the root under the pointer.
+fn bind_root_mouse<E: gpui::InteractiveElement>(mut e: E) -> E {
+    e = e.capture_any_mouse_up(|ev, window, _| open_up_wave(ev, window));
+    for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
+        e = e.on_mouse_up_out(button, |ev, window, _| open_up_wave(ev, window));
+    }
+    e
+}
+
+/// Bubble phase: the first (= innermost) box to ask gets the slot, and the
+/// wave's first claim schedules the one flush that delivers it.
+fn claim_up(
+    window: &mut Window,
+    cx: &mut App,
+    slot: fn(&mut UpWave) -> &mut Option<(u32, MousePt)>,
+    id: u32,
+    payload: &EventPayload,
+) {
+    let schedule = windows::here(window, |w| {
+        let Some(wave) = w.up_waves.last_mut() else { return false };
+        let s = slot(wave);
+        if s.is_none() {
+            *s = Some((id, MousePt::of(payload)));
+        }
+        !std::mem::replace(&mut wave.scheduled, true)
+    });
+    if schedule {
+        window.defer(cx, flush_up_waves);
+    }
+}
+
+/// Delivers every claimed wave, in DOM order. Runs at the end of gpui's
+/// dispatch of the mouse-up, so every listener has claimed what it will.
+fn flush_up_waves(window: &mut Window, cx: &mut App) {
+    loop {
+        let Some(wave) = windows::here(window, |w| (!w.up_waves.is_empty()).then(|| w.up_waves.remove(0))) else {
+            return;
+        };
+        // A press the host cancelled delivers nothing more: Pointer Events
+        // §10, no events for a pointer after its `pointercancel` until its
+        // buttons are released.
+        if wave.cancelled {
+            continue;
+        }
+        if let Some((id, p)) = wave.mouseup {
+            js_dispatch_app(id, tree::EV_MOUSEUP, &p.payload(), window, cx);
+        }
+        if let Some((id, p)) = wave.click {
+            js_dispatch_app(id, tree::EV_CLICK, &p.payload(), window, cx);
+        }
+        if let Some((id, p)) = wave.menu {
+            js_dispatch_app(id, tree::EV_CONTEXTMENU, &p.payload(), window, cx);
+        }
+    }
+}
+
+/// The host gives up on the press in progress: `pointercancel` at its
+/// `mousedown` target, and its release will deliver nothing (see
+/// [`flush_up_waves`]). Called when the window loses activation mid-press —
+/// the case where the release goes to some other window, or nowhere.
+fn cancel_press(window: &mut Window, cx: &mut App) {
+    let Some((target, position)) = windows::here(window, |w| match &mut w.press {
+        Some(p) if !p.cancelled => {
+            p.cancelled = true;
+            Some((p.target, p.position))
+        }
+        _ => None,
+    }) else {
+        return;
+    };
+    if tree::read_tree(|t| t.node(target).is_none()) {
+        return;
+    }
+    let payload = mouse_payload(position, -1.0, &gpui::Modifiers::default());
+    js_dispatch_app(target, tree::EV_POINTERCANCEL, &payload, window, cx);
+}
+
+/// Subscribes this window's activation observer once ([`cancel_press`]).
+fn watch_activation<V: 'static>(window: &mut Window, cx: &mut Context<V>) {
+    let k = windows::key(window);
+    if windows::of(k, |w| w.activation.is_some()) {
+        return;
+    }
+    let sub = cx.observe_window_activation(window, |_, window, cx| {
+        if !window.is_window_active() {
+            cancel_press(window, cx);
+        }
+    });
+    windows::of(k, |w| w.activation = Some(sub));
+}
+
+/// The keyboard's `contextmenu`, as Chromium sources it on Windows
+/// (`WebFrameWidgetImpl::HandleKeyEvent`): the UNMODIFIED Menu key fires it on
+/// its key-UP and Shift+F10 on its key-DOWN, each only when no handler
+/// cancelled that key event. Bound on the build root after every key listener
+/// it could run behind, so `key_prevented` holds that answer.
+fn bind_menu_keys<E: gpui::InteractiveElement>(e: E, root: u32) -> E {
+    e.capture_key_up(|_, window, _| windows::here(window, |w| w.key_prevented = false))
+        .on_key_down(move |ev: &KeyDownEvent, window, cx| {
+            let m = &ev.keystroke.modifiers;
+            let shift_f10 = ev.keystroke.key == "f10" && m.shift && m.number_of_modifiers() == 1;
+            if shift_f10 && !windows::here(window, |w| w.key_prevented) {
+                fire_keyboard_menu(root, window, cx);
+            }
+        })
+        .on_key_up(move |ev: &KeyUpEvent, window, cx| {
+            if ev.keystroke.key == "menu"
+                && !ev.keystroke.modifiers.modified()
+                && !windows::here(window, |w| std::mem::take(&mut w.key_prevented))
+            {
+                fire_keyboard_menu(root, window, cx);
+            }
+        })
+}
+
+/// A keyboard `contextmenu` (Chromium's `ShowNonLocatedContextMenu`): at the
+/// focused element, positioned at the centre of its box; with nothing focused,
+/// at the document, 1 px in from the corner. No button (`button` 0, `buttons`
+/// 0), no modifiers.
+fn fire_keyboard_menu(root: u32, window: &mut Window, cx: &mut App) {
+    let k = windows::key(window);
+    let focused = windows::focused_node(k);
+    let target = if focused != 0 && tree::read_tree(|t| t.node(focused).is_some()) { focused } else { root };
+    let (x, y) = windows::of(k, |w| w.bounds.get(&target).copied())
+        .filter(|_| target != root || focused == root)
+        .map(|(x, y, w, h)| (x + w / 2.0, y + h / 2.0))
+        .unwrap_or((1.0, 1.0));
+    let payload = EventPayload { a: f64::from(x), b: f64::from(y), ..Default::default() };
+    js_dispatch_app(target, tree::EV_CONTEXTMENU, &payload, window, cx);
 }
 
 /// Publish → dispatch → flush; the shape every listener shares. Returns
@@ -1736,6 +1947,11 @@ fn build_node<V: 'static>(
             // one, so it runs after every keydown handler) is the last stop.
             if id == root {
                 d = crate::clipboard::bind_root(d, id);
+                // Every mouse-up's wave (`bind_events`), and the keyboard's
+                // `contextmenu`: the Menu key and Shift+F10, bound after the
+                // clipboard keys so they too run after every key handler.
+                d = bind_root_mouse(d);
+                d = bind_menu_keys(d, id);
             }
 
             // `scroll` reports the position *after* the move. gpui installs its
@@ -2997,6 +3213,7 @@ fn extras_of(node: &crate::tree::Node) -> vn_css::Extras {
 const POINTER_BITS: u64 = (1 << tree::EV_CLICK)
     | (1 << tree::EV_MOUSEDOWN)
     | (1 << tree::EV_MOUSEUP)
+    | (1 << tree::EV_CONTEXTMENU)
     | (1 << tree::EV_MOUSEMOVE)
     | (1 << tree::EV_MOUSEENTER)
     | (1 << tree::EV_MOUSELEAVE)
@@ -3378,27 +3595,46 @@ where
     V: 'static,
 {
     let bit = move |ev: u32| mask & (1u64 << ev) != 0;
+    // ONE event per press, at the innermost listening box — the browser's
+    // target. gpui runs a mouse listener on EVERY listening box under the
+    // pointer (innermost first, in the bubble phase), and the JS side already
+    // walks the ancestors itself, so without a claim an outer `@click` ran
+    // twice for one press: once bubbled from the inner target, once as a target
+    // of its own. (An `<a href>` listens for its own activation, which is how
+    // this surfaced for `click`: desktop-a-impl.md. `mousedown` and `mouseup`
+    // had the same double delivery until m26.)
+    //
+    // The three events of a mouse-up (`mouseup`, `click`, `contextmenu`) are
+    // claimed into one wave and delivered together, in DOM order, when gpui's
+    // dispatch is over (`WindowState::up_waves`): gpui calls a box's click
+    // listener BEFORE its own mouse-up listener, and an inner box's listeners
+    // before an outer box's, so dispatching in place put `click` before
+    // `mouseup` and could put `contextmenu` first of all. The build root opens
+    // every wave ([`bind_root_mouse`]).
     if bit(tree::EV_CLICK) {
-        // ONE click per press, at the innermost listening box — the browser's
-        // target. gpui fires `on_click` on EVERY listening box under the
-        // pointer (innermost first, in the bubble phase), and the JS side
-        // already walks the ancestors itself, so without the claim an outer
-        // `@click` ran twice for one press: once bubbled from the inner
-        // target, once as a target of its own. (An `<a href>` listens for its
-        // own activation, which is how this surfaced: desktop-a-impl.md.)
-        // Every mouse-up's capture phase runs before any bubble-phase click,
-        // so it is where the claim is released. Keyboard clicks (Enter/Space
-        // on the focused box) reach one element only and never consult it.
-        e = e.capture_any_mouse_up(|_, window, _| windows::here(window, |w| w.click_claimed = false));
-        e = e.on_click(cx.listener(move |_, ev: &ClickEvent, window, cx| {
-            if matches!(ev, ClickEvent::Mouse(_))
-                && windows::here(window, |w| std::mem::replace(&mut w.click_claimed, true))
-            {
-                return;
+        e = e.on_click(cx.listener(move |_, ev: &ClickEvent, window, cx| match ev {
+            // `detail` is the click count (UI Events §3.5): the second click
+            // of a double-click says 2, and the JS runtime fires `dblclick`
+            // after it.
+            ClickEvent::Mouse(m) => {
+                let payload = mouse_payload_n(m.up.position, 0.0, &m.up.modifiers, m.up.click_count);
+                claim_up(window, &mut **cx, |w| &mut w.click, id, &payload);
             }
-            let payload = mouse_payload(ev.position(), 0.0, &ev.modifiers());
-            js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
+            // Enter/Space on the focused box reaches that box only, and is no
+            // part of a mouse-up. `detail` 0 is how a page tells a keyboard
+            // click from a mouse one (Chromium).
+            ClickEvent::Keyboard(_) => {
+                let payload = mouse_payload_n(ev.position(), 0.0, &ev.modifiers(), 0);
+                js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
+            }
+            ClickEvent::Touch(_) => {
+                let payload = mouse_payload_n(ev.position(), 0.0, &ev.modifiers(), ev.click_count());
+                js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
+            }
         }));
+    }
+    if bit(tree::EV_MOUSEDOWN) {
+        e = e.capture_any_mouse_down(|_, window, _| windows::here(window, |w| w.down_claimed = false));
     }
     if bit(tree::EV_MOUSEDOWN) || focusable {
         let handle = click_focus;
@@ -3408,8 +3644,13 @@ where
                 // events come out of the subscription.
                 claim_press_focus(id, h, window, &mut **cx);
             }
-            if bit(tree::EV_MOUSEDOWN) {
-                let payload = mouse_payload(ev.position, button_code(ev.button), &ev.modifiers);
+            if bit(tree::EV_MOUSEDOWN) && !windows::here(window, |w| std::mem::replace(&mut w.down_claimed, true)) {
+                let button = button_code(ev.button);
+                windows::here(window, |w| {
+                    w.press = Some(Press { target: id, button, position: ev.position, cancelled: false })
+                });
+                watch_activation(window, cx);
+                let payload = mouse_payload_n(ev.position, button, &ev.modifiers, ev.click_count);
                 js_dispatch(id, tree::EV_MOUSEDOWN, &payload, window, cx);
             }
         }));
@@ -3421,11 +3662,23 @@ where
             e = e.on_mouse_up(
                 button,
                 cx.listener(move |_, ev: &MouseUpEvent, window, cx| {
-                    let payload = mouse_payload(ev.position, button_code(ev.button), &ev.modifiers);
-                    js_dispatch(id, tree::EV_MOUSEUP, &payload, window, cx);
+                    let payload = mouse_payload_n(ev.position, button_code(ev.button), &ev.modifiers, ev.click_count);
+                    claim_up(window, &mut **cx, |w| &mut w.mouseup, id, &payload);
                 }),
             );
         }
+    }
+    if bit(tree::EV_CONTEXTMENU) {
+        // Chromium on Windows opens the menu on the right button's RELEASE
+        // (`ShowContextMenuOnMouseUp`), after `mouseup`. `button` is 2;
+        // `buttons` is 0, because the button is already up; `detail` is 0.
+        e = e.on_mouse_up(
+            MouseButton::Right,
+            cx.listener(move |_, ev: &MouseUpEvent, window, cx| {
+                let payload = mouse_payload(ev.position, 2.0, &ev.modifiers);
+                claim_up(window, &mut **cx, |w| &mut w.menu, id, &payload);
+            }),
+        );
     }
     // The pointer family (compat roadmap G4). gpui sources exactly two things
     // here — "the mouse moved while over me" and "the mouse entered/left me" —
@@ -3515,7 +3768,11 @@ where
                 key: Some(&key),
                 ..Default::default()
             };
-            js_dispatch(id, tree::EV_KEYUP, &payload, window, cx);
+            if !js_dispatch(id, tree::EV_KEYUP, &payload, window, cx) {
+                // A cancelled Menu-key keyup has no `contextmenu`
+                // (`bind_menu_keys`, the last listener it reaches).
+                windows::here(window, |w| w.key_prevented = true);
+            }
         }));
     }
     e
@@ -3893,9 +4150,9 @@ fn build_img<V: 'static>(
         .unwrap_or(gpui::ObjectFit::Fill);
     e = e.object_fit(fit);
 
-    // gpui runs this only when the load actually failed, which makes it the
-    // one place that knows a `src` is broken — there is no decode callback to
-    // hang a DOM `error` event on (see research/reports/m10/images.md).
+    // gpui runs this only when the decode for the paint actually failed. The
+    // DOM `load` / `error` events are not decided here but by the probe
+    // (`img_src::tick`), which also answers images that are never painted.
     // A data: URL is its own content — printing all of it buries the log.
     let failed_src: String = if src.chars().count() > 64 {
         format!(
@@ -3912,8 +4169,9 @@ fn build_img<V: 'static>(
             &format!("img-load:{failed_src}"),
             &format!(
                 "<img src=\"{failed_src}\"> could not be loaded or decoded — painting the alt \
-                 text instead (a browser would also fire an `error` event; vue-native does not \
-                 yet)"
+                 text instead (the element's `error` event fired, unless its header read as an \
+                 image and only the picture itself is corrupt: then `load` fired, as in a \
+                 browser, which also paints what it can)"
             ),
         );
         alt_element(&failed_alt)
@@ -4662,7 +4920,13 @@ fn build_input<V: 'static>(
                 key: Some(&key),
                 ..Default::default()
             };
-            js_dispatch_app(id, tree::EV_KEYDOWN, &payload, window, cx)
+            let proceed = js_dispatch_app(id, tree::EV_KEYDOWN, &payload, window, cx);
+            if !proceed {
+                // The root's key listeners (clipboard, Shift+F10) run after
+                // the field's and read this.
+                windows::here(window, |w| w.key_prevented = true);
+            }
+            proceed
         }) as vn_elements::OnKeyDown
     });
     let on_key_up: Option<vn_elements::OnKeyUp> = bit(tree::EV_KEYUP).then(|| {
@@ -4673,7 +4937,9 @@ fn build_input<V: 'static>(
                 key: Some(&key),
                 ..Default::default()
             };
-            js_dispatch_app(id, tree::EV_KEYUP, &payload, window, cx);
+            if !js_dispatch_app(id, tree::EV_KEYUP, &payload, window, cx) {
+                windows::here(window, |w| w.key_prevented = true);
+            }
         }) as vn_elements::OnKeyUp
     });
 
@@ -5164,6 +5430,30 @@ mod tests {
             assert!(inline_row_applies(t, t.node(row).unwrap(), None));
             assert_eq!(centred(t, run), (None, None));
         });
+    }
+
+    /// The Menu key and the function keys reach JS under the DOM's names.
+    #[test]
+    fn keys_reach_js_under_their_dom_names() {
+        assert_eq!(dom_key("menu"), "ContextMenu");
+        assert_eq!(dom_key("f10"), "F10");
+        assert_eq!(dom_key("f1"), "F1");
+        assert_eq!(dom_key("f24"), "F24");
+        // Not a function key: a letter, and a key name that only starts with f.
+        assert_eq!(dom_key("f"), "f");
+        assert_eq!(dom_key("f25"), "f25");
+        assert_eq!(dom_key("fn"), "fn");
+    }
+
+    /// `detail` rides `d` above the modifier bits, so the mods still read.
+    #[test]
+    fn the_click_count_rides_above_the_modifiers() {
+        use gpui::px;
+        let m = gpui::Modifiers { shift: true, ..Default::default() };
+        let p = mouse_payload_n(Point::new(px(1.0), px(2.0)), 0.0, &m, 2);
+        assert_eq!(p.d as u32 & 0xf, 2, "shift");
+        assert_eq!(p.d as u32 >> 4, 2, "detail");
+        assert_eq!(mouse_payload_n(Point::new(px(0.0), px(0.0)), 0.0, &m, 9999).d as u32 >> 4, 255);
     }
 
     #[test]

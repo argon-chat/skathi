@@ -574,9 +574,9 @@ describe("custom events and dispatchEvent", () => {
   test("…but a PLATFORM event the host cannot deliver still says so", () => {
     const rt = createRuntime();
     const { button: inner } = tree(rt);
-    inner.addEventListener("contextmenu", () => {});
+    inner.addEventListener("mouseover", () => {});
     expect(rt.advisories().length).toBe(1);
-    expect(rt.advisories()[0]).toContain("contextmenu");
+    expect(rt.advisories()[0]).toContain("mouseover");
   });
 
   // m12 items 3 and 6: these four used to belong in the test above. vn-css's

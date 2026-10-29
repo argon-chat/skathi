@@ -118,12 +118,15 @@ interface VnMouseEventInit extends VnEventInit, VnModifierInit {
   clientY?: number;
   button?: number;
   buttons?: number;
+  /** UIEventInit's: the click count for the press/release/click family. */
+  detail?: number;
 }
 interface VnMouseEvent extends VnEvent, Required<VnModifierInit> {
   readonly clientX: number;
   readonly clientY: number;
   readonly button: number;
   readonly buttons: number;
+  readonly detail: number;
 }
 declare var MouseEvent: {
   new (type: string, init?: VnMouseEventInit): VnMouseEvent;

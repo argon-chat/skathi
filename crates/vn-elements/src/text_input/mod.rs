@@ -374,6 +374,13 @@ pub fn text_input(
         element = element.on_mouse_down(MouseButton::Left, move |event, window, cx| {
             mouse_state.update(cx, |this, cx| this.on_mouse_down(event, window, cx));
         });
+        // The secondary button's own rule (Chromium on Windows): it never
+        // starts a drag-selection, and it keeps a selection it lands inside —
+        // the context menu is about that selection.
+        let menu_state = state.clone();
+        element = element.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+            menu_state.update(cx, |this, cx| this.on_secondary_mouse_down(event, window, cx));
+        });
     }
     element
         .child(TextElement {

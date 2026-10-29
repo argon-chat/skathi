@@ -41,19 +41,21 @@ pub use render::{
 };
 pub use windows::WinKey;
 pub use tree::{
-    with_tree, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH, EV_CLICK, EV_COMPLETE, EV_COPY, EV_CUT,
-    EV_DURATIONCHANGE, EV_PASTE,
+    with_tree, EV_BLUR, EV_CANPLAY, EV_CANPLAYTHROUGH, EV_CLICK, EV_COMPLETE, EV_CONTEXTMENU,
+    EV_COPY, EV_CUT, EV_DURATIONCHANGE, EV_PASTE,
     EV_EMPTIED, EV_ENDED, EV_ENTERFRAME, EV_ERROR, EV_FOCUS, EV_INPUT, EV_KEYDOWN, EV_KEYUP,
-    EV_LOADEDDATA, EV_LOADEDMETADATA, EV_LOADSTART, EV_LOOPCOMPLETE, EV_MOUSEDOWN, EV_MOUSEENTER,
-    EV_MOUSELEAVE, EV_MOUSEMOVE, EV_MOUSEUP, EV_PAUSE, EV_PLAY, EV_PLAYING, EV_RATECHANGE,
-    EV_SCROLL, EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE, EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL,
-    EVENT_NAMES,
+    EV_LOAD, EV_LOADEDDATA, EV_LOADEDMETADATA, EV_LOADSTART, EV_LOOPCOMPLETE, EV_MOUSEDOWN,
+    EV_MOUSEENTER, EV_MOUSELEAVE, EV_MOUSEMOVE, EV_MOUSEUP, EV_PAUSE, EV_PLAY, EV_PLAYING,
+    EV_POINTERCANCEL, EV_RATECHANGE, EV_SCROLL, EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE,
+    EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL, EVENT_NAMES,
 };
 
 /// The numeric payload a native input event carries into JS. Meaning by event:
-/// mouse: a=x b=y c=button d=modifier bits; wheel: a=deltaX b=deltaY d=mods;
-/// key: d=mods + `key` (DOM name); input: `key` = the new text value;
-/// scroll: a=scrollLeft b=scrollTop (CSS convention — positive px).
+/// mouse: a=x b=y c=button d=modifier bits, plus `detail` (the click count) in
+/// the bits above them (`d = mods | detail << 4`, see `render::mouse_payload`);
+/// wheel: a=deltaX b=deltaY d=mods; key: d=mods + `key` (DOM name); input:
+/// `key` = the new text value; scroll: a=scrollLeft b=scrollTop (CSS
+/// convention — positive px); `<img>` load: a/b = natural size, `key` = src.
 /// Modifier bits: 1 ctrl, 2 shift, 4 alt, 8 meta.
 #[derive(Default)]
 pub struct EventPayload<'a> {
@@ -158,7 +160,15 @@ host_fn!(fn vn_set_prop(g, args) {
     } else {
         unsafe { read_string(g, args.arg(2).0) }
     };
-    tree::with_tree(|t| t.set_prop(id, key, value));
+    let img_src = tree::with_tree(|t| {
+        t.set_prop(id, key, value);
+        t.name(key) == "src" && t.node(id).is_some_and(|n| t.name(n.tag) == "img")
+    });
+    // An `<img>`'s `src` is answered with `load` / `error` (`img::tick`),
+    // whether or not the element is ever painted.
+    if img_src {
+        img::note_src(id);
+    }
     UNDEF
 });
 
@@ -569,6 +579,8 @@ pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // frame must be pulled even on a tick where a `<lottie>` also moved, and an
     // animation event must be dispatched even on a tick where both did.
     let anim = render::dispatch_anim_events(window, cx);
+    // `<img>` `load` / `error`, for every `src` written since the last tick.
+    img::tick(window, cx);
     let lottie_moved = lottie::tick(window, cx);
     let video_moved = video::tick(window, cx);
     // `el.scrollTop = n`, `scrollTo`, `scrollBy`, `scrollIntoView()`: the write

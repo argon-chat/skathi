@@ -961,6 +961,23 @@ impl TextInputState {
         }
     }
 
+    /// A right-button press: focus, and the caret moves to the press unless
+    /// the press is inside the selection, which then stays for the context
+    /// menu to act on (Chromium on Windows, in an editable field). No drag
+    /// selection starts, and neither double- nor triple-click selects.
+    pub(crate) fn on_secondary_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus_handle, cx);
+        let index = self.index_for_position(event.position);
+        if !secondary_press_keeps(&self.selected_range, index) {
+            self.move_to(index, cx);
+        }
+    }
+
     /// Registered window-wide during paint, so a drag that leaves the input
     /// keeps extending the selection.
     pub(crate) fn on_mouse_drag(
@@ -1452,9 +1469,27 @@ impl EntityInputHandler for TextInputState {
     }
 }
 
+/// Does a right-button press at `index` keep `selection`? Only a press inside
+/// a non-empty selection does (its edges included: a press there is on the
+/// selected text's own glyph half).
+fn secondary_press_keeps(selection: &Range<usize>, index: usize) -> bool {
+    !selection.is_empty() && selection.start <= index && index <= selection.end
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_right_press_keeps_only_the_selection_it_lands_in() {
+        assert!(secondary_press_keeps(&(2..6), 4));
+        assert!(secondary_press_keeps(&(2..6), 2));
+        assert!(secondary_press_keeps(&(2..6), 6));
+        assert!(!secondary_press_keeps(&(2..6), 7));
+        assert!(!secondary_press_keeps(&(2..6), 0));
+        // A caret is no selection: the press moves it.
+        assert!(!secondary_press_keeps(&(3..3), 3));
+    }
 
     #[test]
     fn ime_offsets_are_relative_to_the_replacement_text() {

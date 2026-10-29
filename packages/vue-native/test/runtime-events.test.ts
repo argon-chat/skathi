@@ -15,11 +15,11 @@ describe("patchProp: on* props", () => {
 
   test("an event the host does not deliver warns instead of vanishing", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(), "onContextmenu", null, () => {});
+    rt.patchProp(rt.el(), "onMouseover", null, () => {});
     const advisories = rt.advisories();
     expect(advisories.length).toBe(1);
     // Same shape as the addEventListener advisory next to it.
-    expect(advisories[0]).toContain("@contextmenu");
+    expect(advisories[0]).toContain("@mouseover");
     expect(advisories[0]).toContain("not delivered by the native host yet");
     expect(advisories[0]).toContain("will never fire");
     // …and no listener flag was set, because there is no code to set it under.
@@ -28,20 +28,20 @@ describe("patchProp: on* props", () => {
 
   test("the advisory is one per event name per session, not one per patch", () => {
     const rt = createRuntime();
-    for (let i = 0; i < 5; i++) rt.patchProp(rt.el(i), "onContextmenu", null, () => {});
-    rt.patchProp(rt.el(), "onDblclick", null, () => {});
+    for (let i = 0; i < 5; i++) rt.patchProp(rt.el(i), "onMouseover", null, () => {});
+    rt.patchProp(rt.el(), "onAuxclick", null, () => {});
     expect(rt.advisories().length).toBe(2);
     // A *different* world starts over — the dedup set is per module instance.
     const other = createRuntime();
-    other.patchProp(other.el(), "onContextmenu", null, () => {});
+    other.patchProp(other.el(), "onMouseover", null, () => {});
     expect(other.advisories().length).toBe(1);
   });
 
   test("addEventListener and the prop path share one dedup key", () => {
     const rt = createRuntime();
-    rt.patchProp(rt.el(3), "onContextmenu", null, () => {});
+    rt.patchProp(rt.el(3), "onMouseover", null, () => {});
     const node = rt.nodeOps.createElement("div");
-    node.addEventListener("contextmenu", () => {});
+    node.addEventListener("mouseover", () => {});
     expect(rt.advisories().length).toBe(1);
   });
 
@@ -68,7 +68,7 @@ describe("patchProp: on* props", () => {
     }
     expect(rt.advisories()).toEqual([]);
     // An element event the host really cannot deliver still speaks.
-    node.addEventListener("contextmenu", () => {});
+    node.addEventListener("mouseover", () => {});
     expect(rt.advisories().length).toBe(1);
   });
 

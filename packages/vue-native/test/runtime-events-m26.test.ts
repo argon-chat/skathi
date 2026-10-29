@@ -1,0 +1,387 @@
+// The events the Argon client binds that the host never delivered (m26 fixes):
+// `contextmenu`, `dblclick` (and `detail` on the click family), `pointercancel`,
+// and an `<img>`'s `load` / `error` — with `complete`, `naturalWidth` and the
+// `on<event>` handler attributes they are read through. (`new Image()` is the
+// engine's own offscreen image, redjs webapi/image.rs, and is not this.)
+//
+// The host half (which box is the target, when each one fires) is
+// crates/vn-tree/src/render.rs and img.rs, exercised by
+// packages/vn-test/specs/events.spec.ts; this file pins what JS makes of the
+// payloads.
+
+import { describe, expect, test } from "bun:test";
+import { createRuntime } from "./runtime-harness";
+
+/** A MouseEvent the way an engine's reads: every init member kept. */
+class FakeMouseEvent extends Event {
+  clientX: number;
+  clientY: number;
+  button: number;
+  buttons: number;
+  detail: number;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  constructor(type: string, init: Record<string, unknown> = {}) {
+    super(type, init as EventInit);
+    this.clientX = (init.clientX as number) ?? 0;
+    this.clientY = (init.clientY as number) ?? 0;
+    this.button = (init.button as number) ?? 0;
+    this.buttons = (init.buttons as number) ?? 0;
+    this.detail = (init.detail as number) ?? 0;
+    this.ctrlKey = !!init.ctrlKey;
+    this.shiftKey = !!init.shiftKey;
+  }
+}
+
+type Ev = FakeMouseEvent & { pointerType?: string; pointerId?: number; isPrimary?: boolean; pressure?: number };
+type Rt = ReturnType<typeof createRuntime>;
+type El = {
+  id: number;
+  attrs: Record<string, string>;
+  addEventListener(t: string, f: (e: Ev) => void, o?: unknown): void;
+  removeEventListener(t: string, f: (e: Ev) => void): void;
+  setAttribute(k: string, v: string): void;
+  [k: string]: unknown;
+};
+
+function tree(rt: Rt) {
+  const root = rt.nodeOps.createElement("root") as unknown as El;
+  const outer = rt.nodeOps.createElement("div") as unknown as El;
+  const inner = rt.nodeOps.createElement("span") as unknown as El;
+  rt.nodeOps.insert(outer as never, root as never, null);
+  rt.nodeOps.insert(inner as never, outer as never, null);
+  return { root, outer, inner };
+}
+const fire = (rt: Rt, el: El, name: string, a = 0, b = 0, c = 0, d = 0, key?: string) =>
+  rt.host.dispatcher(el.id, (rt.EV_CODES as Record<string, number>)[name], a, b, c, d, key);
+
+describe("contextmenu", () => {
+  test("a listener arms the host's own code", () => {
+    const rt = createRuntime();
+    rt.patchProp(rt.el(4), "onContextmenu", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.contextmenu)).toEqual([{ id: 4, code: 42, on: true }]);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("a right-click's: a MouseEvent that bubbles and is cancelable, button 2, buttons 0, detail 0", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { outer, inner } = tree(rt);
+    let seen: Ev | undefined;
+    const path: string[] = [];
+    inner.addEventListener("contextmenu", () => path.push("inner"));
+    outer.addEventListener("contextmenu", (e) => {
+      seen = e;
+      path.push("outer");
+    });
+    fire(rt, inner, "contextmenu", 30, 40, 2, 1 /* ctrl */);
+    expect(path).toEqual(["inner", "outer"]);
+    expect(seen).toBeInstanceOf(FakeMouseEvent);
+    expect([seen!.type, seen!.bubbles, seen!.cancelable]).toEqual(["contextmenu", true, true]);
+    expect([seen!.clientX, seen!.clientY, seen!.button, seen!.buttons, seen!.detail]).toEqual([30, 40, 2, 0, 0]);
+    expect(seen!.ctrlKey).toBe(true);
+  });
+
+  test("the reka trigger: preventDefault, open its own menu — and the host hears the cancel", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    // ContextMenuTrigger.vue: `@contextmenu="(e) => { …; e.preventDefault(); open(e.clientX, e.clientY) }"`.
+    let open: { x: number; y: number } | null = null;
+    rt.patchProp(inner as never, "onContextmenu", null, (e: Ev) => {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      open = { x: e.clientX, y: e.clientY };
+    });
+    expect(fire(rt, inner, "contextmenu", 12, 34, 2)).toBe(false);
+    expect(open).toEqual({ x: 12, y: 34 });
+    // Cancelled: the default is the page's own, so nothing to say.
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("an uncancelled one says, once, that no native menu opens", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    inner.addEventListener("contextmenu", () => {});
+    expect(fire(rt, inner, "contextmenu", 0, 0, 2)).toBe(true);
+    fire(rt, inner, "contextmenu", 0, 0, 2);
+    expect(rt.advisories().length).toBe(1);
+    expect(rt.advisories()[0]).toContain("context menu");
+  });
+
+  test("from the keyboard: no button, at the coordinates the host chose", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    let seen: Ev | undefined;
+    inner.addEventListener("contextmenu", (e) => (seen = e));
+    fire(rt, inner, "contextmenu", 50, 10, 0);
+    expect([seen!.button, seen!.buttons, seen!.clientX, seen!.clientY]).toEqual([0, 0, 50, 10]);
+  });
+
+  test("the handler attribute works too", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    inner.oncontextmenu = () => false;
+    expect(fire(rt, inner, "contextmenu", 0, 0, 2)).toBe(false);
+  });
+});
+
+describe("dblclick and detail", () => {
+  test("@dblclick arms the click bit — it has no code of its own", () => {
+    const rt = createRuntime();
+    rt.patchProp(rt.el(8), "onDblclick", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: 8, code: 1, on: true }]);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("the second click of a pair fires dblclick after it; detail rides the click", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { outer, inner } = tree(rt);
+    const seen: string[] = [];
+    outer.addEventListener("click", (e) => seen.push(`click:${e.detail}`));
+    outer.addEventListener("dblclick", (e) => seen.push(`dblclick:${e.detail}:${e.bubbles}:${e.button}`));
+    fire(rt, inner, "click", 5, 5, 0, 1 << 4);
+    fire(rt, inner, "click", 5, 5, 0, 2 << 4);
+    // A triple click is a third click, not a second dblclick.
+    fire(rt, inner, "click", 5, 5, 0, 3 << 4);
+    expect(seen).toEqual(["click:1", "click:2", "dblclick:2:true:0", "click:3"]);
+  });
+
+  test("a keyboard click is detail 0, and never a dblclick", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    const seen: string[] = [];
+    inner.addEventListener("click", (e) => seen.push(`click:${e.detail}`));
+    inner.addEventListener("dblclick", () => seen.push("dblclick"));
+    fire(rt, inner, "click", 0, 0, 0, 0);
+    expect(seen).toEqual(["click:0"]);
+  });
+
+  test("the modifier bits are still read off the low bits", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    let seen: Ev | undefined;
+    inner.addEventListener("mousedown", (e) => (seen = e));
+    fire(rt, inner, "mousedown", 0, 0, 0, (2 << 4) | 2 /* shift */);
+    expect([seen!.detail, seen!.shiftKey, seen!.ctrlKey]).toEqual([2, true, false]);
+  });
+});
+
+describe("button and buttons", () => {
+  test("a press has its button down; a release, a click or a menu has none", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    const seen: string[] = [];
+    for (const t of ["mousedown", "pointerdown", "mouseup", "pointerup"])
+      inner.addEventListener(t, (e) => seen.push(`${t}:${e.button}/${e.buttons}`));
+    fire(rt, inner, "mousedown", 0, 0, 2);
+    fire(rt, inner, "mouseup", 0, 0, 2);
+    fire(rt, inner, "mousedown", 0, 0, 1);
+    // The DOM's bit order is not the index order: right is 2, middle is 4.
+    expect(seen).toEqual([
+      "pointerdown:2/2",
+      "mousedown:2/2",
+      "pointerup:2/0",
+      "mouseup:2/0",
+      "pointerdown:1/4",
+      "mousedown:1/4",
+    ]);
+  });
+
+  test("a move changes no button: 0 on the mouse event, -1 on the pointer event; buttons is what is held", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    const seen: string[] = [];
+    inner.addEventListener("mousemove", (e) => seen.push(`mouse:${e.button}/${e.buttons}`));
+    inner.addEventListener("pointermove", (e) => seen.push(`pointer:${e.button}/${e.buttons}`));
+    fire(rt, inner, "mousemove", 0, 0, -1);
+    fire(rt, inner, "mousemove", 0, 0, 0);
+    expect(seen).toEqual(["pointer:-1/0", "mouse:0/0", "pointer:-1/1", "mouse:0/1"]);
+  });
+});
+
+describe("pointercancel", () => {
+  test("its own code; a PointerEvent that bubbles to the window and cannot be cancelled", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    rt.createApp({ render: () => null });
+    let seen: Ev | undefined;
+    (rt.global as unknown as El).addEventListener("pointercancel", (e) => (seen = e));
+    rt.patchProp(rt.el(3), "onPointercancel", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.pointercancel)).toEqual([{ id: 3, code: 44, on: true }]);
+    fire(rt, inner, "pointercancel", 7, 8, -1);
+    expect(seen?.type).toBe("pointercancel");
+    expect([seen!.bubbles, seen!.cancelable]).toEqual([true, false]);
+    expect([seen!.pointerType, seen!.pointerId, seen!.isPrimary]).toEqual(["mouse", 1, true]);
+    expect([seen!.button, seen!.buttons, seen!.clientX, seen!.clientY]).toEqual([-1, 0, 7, 8]);
+    expect(rt.advisories()).toEqual([]);
+  });
+});
+
+describe("<img> load and error", () => {
+  const srcWrites = (rt: Rt, id: number) =>
+    rt.host.props.filter((p: { id: number; key: string }) => p.id === id && p.key === "src").map((p: { value: unknown }) => p.value);
+
+  const newImg = (rt: Rt) => rt.nodeOps.createElement("img") as unknown as El;
+
+  test("src reaches the host; onload sees the natural size; complete follows the answer", () => {
+    const rt = createRuntime();
+    const img = newImg(rt);
+    const seen: string[] = [];
+    img.onload = function (this: El, e: Ev) {
+      seen.push(`load:${this === img}:${e.bubbles}:${img.complete}:${img.naturalWidth}x${img.naturalHeight}`);
+    };
+    expect(img.complete).toBe(true); // no src yet
+    img.src = "blob:app://x/1";
+    expect(srcWrites(rt, img.id)).toEqual(["blob:app://x/1"]);
+    expect(img.src).toBe("blob:app://x/1");
+    expect([img.complete, img.naturalWidth]).toEqual([false, 0]);
+    fire(rt, img, "load", 640, 480, 0, 0, "blob:app://x/1");
+    expect(seen).toEqual(["load:true:false:true:640x480"]);
+    expect(img.currentSrc).toBe("blob:app://x/1");
+  });
+
+  test("the reka/Argon idiom: @load reads e.target.naturalWidth", () => {
+    const rt = createRuntime();
+    const img = newImg(rt);
+    let aspect = 0;
+    // LinkPreviewCard.vue's onImageLoad.
+    rt.patchProp(img as never, "onLoad", null, (e: { target: El }) => {
+      aspect = (e.target.naturalWidth as number) / (e.target.naturalHeight as number);
+    });
+    rt.patchProp(img as never, "src", null, "https://cdn.example/p.png");
+    fire(rt, img, "load", 1200, 630, 0, 0, "https://cdn.example/p.png");
+    expect(aspect).toBeCloseTo(1200 / 630);
+  });
+
+  test("an <img> in the tree is instanceof the ENGINE's HTMLImageElement too", () => {
+    class EngineImage {}
+    const rt = createRuntime({ globals: { HTMLImageElement: EngineImage } });
+    expect(newImg(rt) instanceof EngineImage).toBe(true);
+    expect(new EngineImage() instanceof EngineImage).toBe(true);
+    expect(rt.nodeOps.createElement("div") instanceof EngineImage).toBe(false);
+  });
+
+  test("error: complete and broken, no size; onerror runs; the event is a plain Event", () => {
+    const rt = createRuntime();
+    const img = newImg(rt);
+    let seen: Ev | undefined;
+    img.onerror = (e: Ev) => (seen = e);
+    img.src = "nope.png";
+    fire(rt, img, "error", 0, 0, 0, 0, "nope.png");
+    expect(seen?.type).toBe("error");
+    expect(seen).not.toHaveProperty("currentTime"); // not a media error's payload
+    expect([seen!.bubbles, seen!.cancelable]).toEqual([false, false]);
+    expect([img.complete, img.naturalWidth, img.currentSrc]).toEqual([true, 0, ""]);
+  });
+
+  test("an answer for a src the element has since dropped is stale, and ignored", () => {
+    const rt = createRuntime();
+    const img = newImg(rt);
+    const seen: string[] = [];
+    img.addEventListener("load", () => seen.push("load"));
+    img.src = "a.png";
+    img.src = "b.png";
+    fire(rt, img, "load", 1, 1, 0, 0, "a.png");
+    expect(seen).toEqual([]);
+    expect(img.complete).toBe(false);
+    fire(rt, img, "load", 2, 3, 0, 0, "b.png");
+    expect(seen).toEqual(["load"]);
+    expect([img.naturalWidth, img.naturalHeight]).toEqual([2, 3]);
+  });
+
+  test("load does not bubble; a capture listener above still hears it", () => {
+    const rt = createRuntime();
+    const { outer } = tree(rt);
+    const img = rt.nodeOps.createElement("img") as unknown as El;
+    rt.nodeOps.insert(img as never, outer as never, null);
+    const seen: string[] = [];
+    outer.addEventListener("load", () => seen.push("bubble"));
+    outer.addEventListener("load", () => seen.push("capture"), true);
+    rt.patchProp(img as never, "src", null, "x.png");
+    fire(rt, img, "load", 1, 1, 0, 0, "x.png");
+    expect(seen).toEqual(["capture"]);
+  });
+
+  test("@load is delivered now, not advised", () => {
+    const rt = createRuntime();
+    const img = rt.nodeOps.createElement("img");
+    rt.patchProp(img, "onLoad", null, () => {});
+    expect(rt.advisories()).toEqual([]);
+    expect(rt.flagsFor(rt.EV_CODES.load).at(-1)?.on).toBe(true);
+  });
+
+  test("decode() settles with the answer", async () => {
+    const rt = createRuntime();
+    const img = newImg(rt) as El & { decode(): Promise<void> };
+    img.src = "ok.png";
+    const ok = img.decode();
+    fire(rt, img, "load", 4, 4, 0, 0, "ok.png");
+    await expect(ok).resolves.toBeUndefined();
+    img.src = "bad.png";
+    const bad = img.decode();
+    fire(rt, img, "error", 0, 0, 0, 0, "bad.png");
+    await expect(bad).rejects.toThrow("cannot be decoded");
+  });
+
+  test("an empty src is complete, and its answer is an error", () => {
+    const rt = createRuntime();
+    const img = newImg(rt);
+    const seen: string[] = [];
+    img.onerror = () => seen.push("error");
+    img.src = "";
+    expect(img.complete).toBe(true);
+    fire(rt, img, "error", 0, 0, 0, 0, "");
+    expect(seen).toEqual(["error"]);
+  });
+
+  test("HTMLImageElement.prototype carries the accessors, and refuses another element", () => {
+    const rt = createRuntime();
+    const proto = (rt.global as unknown as { HTMLImageElement: { prototype: object } }).HTMLImageElement.prototype;
+    const d = Object.getOwnPropertyDescriptor(proto, "naturalWidth")!;
+    const img = rt.nodeOps.createElement("img");
+    expect(d.get!.call(img)).toBe(0);
+    expect(() => d.get!.call(rt.nodeOps.createElement("div"))).toThrow("Illegal invocation");
+    // …and on a <div> the names are what they are in a browser: absent.
+    const div = rt.nodeOps.createElement("div") as unknown as El;
+    expect([div.naturalWidth, div.complete]).toEqual([undefined, undefined]);
+    div.src = "kept";
+    expect(div.src).toBe("kept");
+    expect(srcWrites(rt, div.id)).toEqual([]);
+  });
+});
+
+describe("on<event> handler attributes", () => {
+  test("one listener, kept in its place while the handler changes; null removes it", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    const seen: string[] = [];
+    inner.addEventListener("click", () => seen.push("first"));
+    inner.onclick = () => seen.push("handler-a");
+    inner.addEventListener("click", () => seen.push("last"));
+    fire(rt, inner, "click");
+    inner.onclick = () => seen.push("handler-b");
+    fire(rt, inner, "click");
+    expect(inner.onclick).toBeInstanceOf(Function);
+    inner.onclick = null;
+    fire(rt, inner, "click");
+    expect(inner.onclick).toBe(null);
+    expect(seen).toEqual(["first", "handler-a", "last", "first", "handler-b", "last", "first", "last"]);
+  });
+
+  test("a non-object is null; returning false cancels", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    inner.onmousedown = "alert(1)";
+    expect(inner.onmousedown).toBe(null);
+    inner.onmousedown = () => false;
+    expect(fire(rt, inner, "mousedown")).toBe(false);
+  });
+
+  test("on something that is not a mirror element it stays a plain property", () => {
+    const rt = createRuntime();
+    const proto = Object.getPrototypeOf(rt.nodeOps.createElement("div"));
+    const stranger = Object.create(proto) as El;
+    const fn = () => {};
+    stranger.onchange = fn;
+    expect(Object.getOwnPropertyDescriptor(stranger, "onchange")?.value).toBe(fn);
+  });
+});

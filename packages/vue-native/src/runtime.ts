@@ -220,6 +220,10 @@ interface MirrorElement extends MirrorNodeBase {
   _value: string;
   /** `checked` once something assigned it; until then it follows the `checked` attribute. */
   _checked?: boolean;
+  /** `<img>`: the host's answer for `src` (`load` / `error`), which `complete` and `naturalWidth` read. */
+  _img?: { src: string; ok: boolean; w: number; h: number };
+  /** `on<event>` IDL handlers: the function, and the listener that calls it (`defineHandlerAttr`). */
+  _on?: Record<string, { fn: unknown; listener: (ev: VnEvent) => void }>;
   /** Browser-visible attribute state; `patchProp` is the only writer. */
   attrs: Record<string, string>;
   /** The class VUE assigned, kept apart from `<Transition>`'s `_vtc`. */
@@ -425,6 +429,14 @@ const EV_CODES = {
   paste: 39,
   copy: 40,
   cut: 41,
+  // m26 fixes. `contextmenu`: the right button's release (after `mouseup`,
+  // Chromium on Windows), or the Menu key / Shift+F10 at the focused element.
+  // `load`: an `<img>` has its picture (a/b = natural size, `key` = the src;
+  // a failure is `error` with the same `key`). `pointercancel`: the host gave
+  // up on a press — the window lost activation in the middle of it.
+  contextmenu: 42,
+  load: 43,
+  pointercancel: 44,
 } as const;
 
 /** Every event name the HOST delivers under a code of its own. */
@@ -447,6 +459,11 @@ const DERIVED = {
   pointerleave: { from: "mouseleave", pre: true },
   focusin: { from: "focus", pre: false },
   focusout: { from: "blur", pre: false },
+  // After the click whose `detail` is 2, with the primary button (UI Events
+  // §3.5; Chromium fires it from the click's own dispatch). A `@dblclick`
+  // therefore arms the click bit, and only the second click of a pair makes
+  // one — a triple click does not make a second.
+  dblclick: { from: "click", pre: false },
 } as const satisfies Record<string, { from: HostEventName; pre: boolean }>;
 
 /** Every event name SYNTHESIZED in JS from one the host does deliver. */
@@ -478,7 +495,10 @@ const POINTER_EVENTS = new Set<string>([
   "pointermove",
   "pointerenter",
   "pointerleave",
+  "pointercancel",
 ]);
+/** Bubbles, but cannot be cancelled (Pointer Events §5: pointercancel). */
+const NOT_CANCELABLE = new Set<string>(["pointercancel"]);
 // Vue hyphenates an `@camelCase` listener prop (`onLoopComplete` becomes
 // "loop-complete"), which is the well-known reason `@loopComplete` silently
 // misses a web component's camelCase event in a browser. We accept BOTH
@@ -529,6 +549,8 @@ const NO_BUBBLE = new Set<string>([
   "ended",
   "error",
   "emptied",
+  // …and an image's `load` (its `error` is the one above).
+  "load",
 ]);
 /** The EV_CODES names that come off a media element, in code order. */
 const MEDIA_EVENTS = new Set<string>([
@@ -1357,6 +1379,9 @@ const isMirrorNode = (n: unknown): n is MirrorNode =>
 /** The two option spellings, as an object. `true` means `{ capture: true }`. */
 type ListenerOptionsObject = { capture?: boolean; once?: boolean };
 
+/** Host event names a window/document listener must hear from the engine too. */
+const ALSO_NATIVE = new Set<string>(["load", "error"]);
+
 function addGlobalListener(
   target: object,
   rawName: string,
@@ -1374,7 +1399,11 @@ function addGlobalListener(
   const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
   (capture ? buckets.extraC : buckets.extraB).push({ fn, once: !!(opts && (opts as ListenerOptionsObject).once) });
   if (appRoot) syncListenerFlag(appRoot.id, name);
-  return true;
+  // `load` and `error` are ALSO the window's own events (the page's load, an
+  // uncaught error), which the engine would fire at its EventTarget: the
+  // listener goes to both, and hears an element's (capture phase) and the
+  // window's.
+  return !ALSO_NATIVE.has(name);
 }
 
 function removeGlobalListener(
@@ -1391,7 +1420,7 @@ function removeGlobalListener(
   const i = arr.findIndex((e) => e.fn === fn);
   if (i >= 0) arr.splice(i, 1);
   if (appRoot) syncListenerFlag(appRoot.id, name);
-  return true;
+  return !ALSO_NATIVE.has(name);
 }
 
 /// Installs the interception on one EventTarget-ish global. Events the host CAN
@@ -3572,6 +3601,149 @@ defineDom("canPlayType", function (this: MirrorElement, type: unknown) {
   return __vn_media_can_play(this.id, String(type));
 });
 
+// -- HTMLImageElement: `src`, `complete`, `naturalWidth` / `naturalHeight`,
+//    `currentSrc`, `decode()`.
+//
+//    The host answers every `src` with `load` or `error` (crates/vn-tree/src/
+//    img.rs), painted or not — `new Image()` measuring a picked file is the
+//    case that matters — and the dispatcher records the answer on the element
+//    before the event runs (`_img`). A stale answer (for a `src` the element
+//    has since dropped) is discarded there.
+const isImgEl = (x: unknown): x is MirrorElement => isMirrorEl(x) && x.tag === "img";
+/** The answer for the element's CURRENT `src`, if it has come. */
+const imgAnswer = (el: MirrorElement) => (el._img && el._img.src === el.attrs.src ? el._img : undefined);
+/** Elements whose `src` IDL attribute reflects the content attribute the host loads from. */
+const SRC_TAGS = new Set(["img", "video", "audio", "source", "iframe", "lottie"]);
+
+defineDomGet(
+  "src",
+  function (this: MirrorElement) {
+    // A reflected URL attribute. A browser resolves it against the document
+    // URL; the attribute's own text is returned here (docs/RUNTIME.md §5.6).
+    if (!isMirrorEl(this) || !SRC_TAGS.has(this.tag)) return undefined;
+    return this.attrs.src ?? "";
+  },
+  function (this: MirrorElement, v: unknown) {
+    // Anything else keeps `src` as a plain expando, as a browser's <div> does.
+    if (!isMirrorEl(this) || !SRC_TAGS.has(this.tag)) return ownExpando(this, "src", v);
+    patchProp(this, "src", undefined, String(v));
+  } as (value: never) => void,
+);
+defineDomGet(
+  "currentSrc",
+  function (this: MirrorElement) {
+    if (!isImgEl(this)) return undefined;
+    return imgAnswer(this)?.ok ? this.attrs.src : "";
+  },
+);
+defineDomGet(
+  "complete",
+  function (this: MirrorElement) {
+    if (!isImgEl(this)) return undefined;
+    // HTML: true with no src (or an empty one), and once the request is
+    // completely available or broken; false while it is on its way.
+    const src = this.attrs.src;
+    return src == null || src === "" || !!imgAnswer(this);
+  },
+);
+defineDomGet(
+  "naturalWidth",
+  function (this: MirrorElement) {
+    if (!isImgEl(this)) return undefined;
+    return imgAnswer(this)?.w ?? 0;
+  },
+);
+defineDomGet(
+  "naturalHeight",
+  function (this: MirrorElement) {
+    if (!isImgEl(this)) return undefined;
+    return imgAnswer(this)?.h ?? 0;
+  },
+);
+defineDom("decode", function (this: MirrorElement) {
+  if (!isImgEl(this)) return Promise.resolve();
+  const el = this;
+  const settled = (): Promise<void> | null => {
+    const answer = imgAnswer(el);
+    if (answer?.ok) return Promise.resolve();
+    if (answer || !el.attrs.src)
+      return Promise.reject(new DOMException("The source image cannot be decoded.", "EncodingError"));
+    return null;
+  };
+  return (
+    settled() ??
+    new Promise<void>((resolve, reject) => {
+      const done = () => {
+        el.removeEventListener("load", done);
+        el.removeEventListener("error", done);
+        (settled() ?? Promise.reject(new DOMException("The source image cannot be decoded.", "EncodingError"))).then(resolve, reject);
+      };
+      el.addEventListener("load", done);
+      el.addEventListener("error", done);
+    })
+  );
+});
+
+// -- `on<event>` IDL handler attributes (`img.onload = fn`, `el.onclick = …`).
+//
+//    One listener per element and type, added the first time a handler is set
+//    and kept in its place in the listener order while the handler changes
+//    (HTML "event handler attributes"); `null` removes it. A handler returning
+//    `false` cancels the event. On something that is not a mirror element the
+//    property stays a plain one, as it always was here (a detached engine
+//    `<input>`'s `onchange` is read back by `fireDetached`).
+const HANDLER_ATTRS = [
+  "abort", "animationcancel", "animationend", "animationiteration", "animationstart", "auxclick",
+  "beforeinput", "blur", "cancel", "canplay", "canplaythrough", "change", "click", "close",
+  "contextmenu", "copy", "cut", "dblclick", "durationchange", "emptied", "ended", "error", "focus",
+  "input", "invalid", "keydown", "keypress", "keyup", "load", "loadeddata", "loadedmetadata",
+  "loadstart", "mousedown", "mouseenter", "mouseleave", "mousemove", "mouseout", "mouseover",
+  "mouseup", "paste", "pause", "play", "playing", "pointercancel", "pointerdown", "pointerenter",
+  "pointerleave", "pointermove", "pointerout", "pointerover", "pointerup", "progress", "ratechange",
+  "reset", "scroll", "scrollend", "seeked", "seeking", "select", "submit", "timeupdate", "toggle",
+  "transitioncancel", "transitionend", "transitionrun", "transitionstart", "volumechange", "waiting",
+  "wheel",
+];
+for (const type of HANDLER_ATTRS) {
+  const prop = `on${type}`;
+  defineDomGet(
+    prop,
+    function (this: MirrorElement) {
+      if (!isMirrorEl(this)) return undefined;
+      return this._on?.[type]?.fn ?? null;
+    },
+    function (this: MirrorElement, v: unknown) {
+      if (!isMirrorEl(this)) return ownExpando(this, prop, v);
+      // [LegacyTreatNonObjectAsNull]: anything that is not an object is null.
+      const fn = v !== null && (typeof v === "function" || typeof v === "object") ? v : null;
+      const on = this._on ?? (this._on = {});
+      const slot = on[type];
+      if (!fn) {
+        if (slot) {
+          this.removeEventListener(type, slot.listener);
+          delete on[type];
+        }
+        return;
+      }
+      if (slot) {
+        slot.fn = fn;
+        return;
+      }
+      const el = this;
+      const entry = {
+        fn,
+        listener: (ev: VnEvent) => {
+          if (typeof entry.fn !== "function") return;
+          const r = (entry.fn as (this: unknown, ev: VnEvent) => unknown).call(el, ev);
+          if (r === false) ev.preventDefault?.();
+        },
+      };
+      on[type] = entry;
+      this.addEventListener(type, entry.listener);
+    } as (value: never) => void,
+  );
+}
+
 // ---- W3C event synthesis + propagation ------------------------------------
 // The host sends ONE compact payload per input event targeted at the deepest
 // hit node; the mirror tree provides the ancestor path. Events are real redjs
@@ -3595,6 +3767,64 @@ const POINTER_INIT = {
   height: 1,
 };
 
+/** `MouseEvent.buttons` bit for a `button` index: left 1, right 2, middle 4, back 8, forward 16. */
+const BUTTON_BITS = [1, 4, 2, 8, 16];
+/**
+ * `buttons` — which buttons are DOWN as the event fires. Only the host's press
+ * and the moves made while one is held have one down: by a `mouseup`, a
+ * `click`, a `dblclick` or a `contextmenu` (Chromium on Windows opens the
+ * menu on the release) the button is already up. Other buttons held at the
+ * same time are not tracked.
+ */
+function buttonsFor(name: string, c: number): number {
+  switch (name) {
+    case "mousedown":
+    case "pointerdown":
+    case "mousemove":
+    case "pointermove":
+    case "mouseenter":
+    case "mouseleave":
+    case "pointerenter":
+    case "pointerleave":
+      return c >= 0 && c < BUTTON_BITS.length ? BUTTON_BITS[c] : 0;
+    default:
+      return 0;
+  }
+}
+/**
+ * `button`: the button whose state CHANGED. A move or an enter/leave changes
+ * none — 0 for a MouseEvent (UI Events §3.5), -1 for a PointerEvent (Pointer
+ * Events §4.1.1, and `pointercancel` too). The host passes the HELD button in
+ * `c` for a move, which is what `buttons` reads.
+ */
+function buttonFor(name: string, c: number): number {
+  switch (name) {
+    case "mousemove":
+    case "mouseenter":
+    case "mouseleave":
+      return 0;
+    case "pointermove":
+    case "pointerenter":
+    case "pointerleave":
+    case "pointercancel":
+      return -1;
+    case "dblclick":
+      return 0;
+    default:
+      return c < 0 ? 0 : c;
+  }
+}
+/**
+ * `detail` — the click count (UI Events §3.5): the host's `mousedown` /
+ * `mouseup` / `click` carry it above the four modifier bits of `d`;
+ * `dblclick` is 2 by definition; everything else is 0, `contextmenu` included
+ * (Blink counts only the press, release and click family).
+ */
+function detailFor(name: string, d: number): number {
+  if (name === "click" || name === "mousedown" || name === "mouseup") return (d >>> 4) & 0xff;
+  return name === "dblclick" ? 2 : 0;
+}
+
 function synthesize(
   name: string,
   a: number,
@@ -3603,24 +3833,29 @@ function synthesize(
   d: number,
   key: string | undefined,
   data?: unknown,
+  tag?: string,
 ): VnEvent {
-  const common = { bubbles: !NO_BUBBLE.has(name), cancelable: !NO_BUBBLE.has(name) };
+  const common = { bubbles: !NO_BUBBLE.has(name), cancelable: !NO_BUBBLE.has(name) && !NOT_CANCELABLE.has(name) };
   const M = mods(d);
   try {
     // copy / cut / paste: bubbling, cancelable and composed, carrying the
     // host's DataTransfer (read-only for paste, read/write for copy and cut).
     if ((name === "copy" || name === "cut" || name === "paste") && ClipboardEventClass)
       return new ClipboardEventClass(name, { ...common, composed: true, clipboardData: data ?? null });
+    // An image's `load` and `error` are plain Events at the element, neither
+    // bubbling nor cancelable; the picture's size is read off the element.
+    if (tag === "img" && (name === "load" || name === "error")) return new Event(name, common);
     if (POINTER_EVENTS.has(name)) {
+      const buttons = buttonsFor(name, c);
       const init = {
         ...common,
         ...M,
         ...POINTER_INIT,
         clientX: a,
         clientY: b,
-        button: c,
-        buttons: c >= 0 ? 1 << c : 0,
-        pressure: c >= 0 ? 0.5 : 0,
+        button: buttonFor(name, c),
+        buttons,
+        pressure: buttons ? 0.5 : 0,
       };
       if (typeof PointerEvent === "function") return new PointerEvent(name, init);
       // No PointerEvent class in this engine: a MouseEvent carrying the pointer
@@ -3629,12 +3864,24 @@ function synthesize(
     }
     switch (name) {
       case "click":
+      case "dblclick":
+      case "contextmenu":
       case "mousedown":
       case "mouseup":
       case "mousemove":
       case "mouseenter":
       case "mouseleave":
-        return new MouseEvent(name, { ...common, ...M, clientX: a, clientY: b, button: c });
+        return new MouseEvent(name, {
+          ...common,
+          ...M,
+          clientX: a,
+          clientY: b,
+          button: buttonFor(name, c),
+          buttons: buttonsFor(name, c),
+          detail: detailFor(name, d),
+        });
+      case "load":
+        return new Event(name, common);
       case "focusin":
       case "focusout":
         if (typeof FocusEvent === "function") return new FocusEvent(name, common);
@@ -3708,11 +3955,20 @@ function synthesize(
             ? {}
             : name === "complete" || name === "loopComplete" || name === "enterFrame"
               ? lottieDetail(name, a, b, c, d)
-              : MEDIA_EVENTS.has(name)
+              : MEDIA_EVENTS.has(name) && !(tag === "img" && name === "error")
               ? mediaDetail(a, b, c, d)
+              : name === "load" || name === "error"
+                ? {}
               : POINTER_EVENTS.has(name)
-                ? { clientX: a, clientY: b, button: c, ...POINTER_INIT, ...M }
-                : { clientX: a, clientY: b, button: c, ...M };
+                ? { clientX: a, clientY: b, button: buttonFor(name, c), buttons: buttonsFor(name, c), ...POINTER_INIT, ...M }
+                : {
+                    clientX: a,
+                    clientY: b,
+                    button: buttonFor(name, c),
+                    buttons: buttonsFor(name, c),
+                    detail: detailFor(name, d),
+                    ...M,
+                  };
   for (const k in extra) Object.defineProperty(ev, k, { value: (extra as ExtraProps)[k], configurable: true });
   return ev;
 }
@@ -3963,6 +4219,15 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
     // The storage, not the accessor: the host already holds this value, and
     // the accessor would push it straight back.
     (target as MirrorElement)._value = key;
+  // An image's answer: the state `complete` / `naturalWidth` read, BEFORE the
+  // event, so `onload` sees the size. An answer for a `src` the element no
+  // longer has is stale — a browser would have aborted that request.
+  const isImg = target.kind === 1 && (target as MirrorElement).tag === "img";
+  if (isImg && (name === "load" || name === "error")) {
+    const img = target as MirrorElement;
+    if (key !== img.attrs.src) return true;
+    img._img = { src: key, ok: name === "load", w: name === "load" ? a : 0, h: name === "load" ? b : 0 };
+  }
   // `scroll` used to write the position onto the node here, because that was
   // the only way `e.target.scrollTop` could answer anything. It is now an
   // accessor over the host's live `ScrollHandle`, so writing it back would
@@ -3992,10 +4257,19 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
   // learn that.
   const link = name === "click" && activatableOnPath(target);
   if (link || hasListener(target, name)) {
-    const ev = synthesize(name, a, b, c, d, key, data);
+    const ev = synthesize(name, a, b, c, d, key, data, isImg ? "img" : undefined);
     if (!proceed && ev.preventDefault) ev.preventDefault();
     proceed = propagate(target, name, ev) && proceed;
     if (link && proceed) activate(target, true);
+    // A browser opens its context menu now. There is none here, by design —
+    // say so once, the first time a page leaves the default to happen.
+    if (name === "contextmenu" && proceed) {
+      warnCompat(
+        "contextmenu:default",
+        "an uncancelled `contextmenu` — a browser would open its own context menu here; vue-native has " +
+          "none (not even in a text field), so nothing opens. Call e.preventDefault() and show your own",
+      );
+    }
   }
   // A focused file input clicks itself on Enter (keydown; Chromium's
   // keypress) and on Space (keyup), unless the key event was cancelled —
@@ -4012,6 +4286,9 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
   if (derived) {
     for (const dn of derived) {
       if (DERIVED[dn as DerivedEventName].pre) continue;
+      // `dblclick` follows only the second click of a pair (detail 2), and
+      // only the primary button's — the host's click is always that one.
+      if (dn === "dblclick" && detailFor("click", d) !== 2) continue;
       if (!hasListener(target, dn)) continue;
       propagate(target, dn, synthesize(dn, a, b, c, d, key));
     }
@@ -5097,10 +5374,30 @@ const TAG_ACCESSORS: Record<string, readonly string[]> = {
   INPUT: ["value", "checked", "defaultValue", "defaultChecked"],
   TEXTAREA: ["value", "defaultValue"],
   SELECT: ["value"],
+  IMG: ["src", "currentSrc", "complete", "naturalWidth", "naturalHeight"],
 };
 
 for (const [name, tag] of Object.entries(TAG_CLASSES)) {
-  if (typeof (globalThis as Record<string, unknown>)[name] !== "undefined") continue;
+  const existing = (globalThis as Record<string, unknown>)[name];
+  if (typeof existing === "function") {
+    // The ENGINE's class — redjs ships HTMLImageElement, the offscreen image
+    // `new Image()` and `document.createElement("img")` make (and a canvas
+    // draws). It knows nothing of mirror elements, so `<img>` in the tree was
+    // not `instanceof HTMLImageElement`; it is now, as well as the engine's own.
+    try {
+      const own = Function.prototype[Symbol.hasInstance];
+      Object.defineProperty(existing, Symbol.hasInstance, {
+        value(this: unknown, x: unknown) {
+          return (isMirrorEl(x) && x.tagName === tag) || own.call(this, x);
+        },
+        configurable: true,
+      });
+    } catch {
+      /* a class that refuses the property keeps its own answer */
+    }
+    continue;
+  }
+  if (typeof existing !== "undefined") continue;
   // Mirror nodes are all plain HTMLElement, so `instanceof` is answered by the
   // tag name instead of by the prototype chain — which is the ONLY way to make
   // `el instanceof HTMLInputElement` true for a real `<input>` here.

@@ -147,7 +147,11 @@ type VnDispatcher = (
  *
  * | family                    | a            | b           | c           | d          | key             |
  * |---------------------------|--------------|-------------|-------------|------------|-----------------|
- * | mouse (click/down/up/…)   | clientX      | clientY     | button      | mods       | —               |
+ * | mouse (click/down/up/…)   | clientX      | clientY     | button      | mods \| detail<<4 | —        |
+ * | contextmenu               | clientX      | clientY     | 2 (mouse) / 0 (keys) | mods | —              |
+ * | pointercancel             | clientX      | clientY     | -1          | —          | —               |
+ * | `<img>` load              | naturalWidth | naturalHeight | —         | —          | the src         |
+ * | `<img>` error             | —            | —           | —           | —          | the src         |
  * | wheel                     | deltaX       | deltaY      | —           | mods       | —               |
  * | keydown/keyup             | —            | —           | —           | mods       | `KeyboardEvent.key` |
  * | input                     | —            | —           | —           | —          | the new value   |
@@ -161,7 +165,8 @@ type VnDispatcher = (
  * | animation{start,end,cancel} | elapsedTime | —          | —           | —          | @keyframes name |
  * | copy / cut / paste        | —            | —           | —           | —          | —  (`data` is the DataTransfer) |
  *
- * `mods` is a bitfield: 1 ctrl, 2 shift, 4 alt, 8 meta.
+ * `mods` is a bitfield: 1 ctrl, 2 shift, 4 alt, 8 meta. `mousedown` /
+ * `mouseup` / `click` carry the click count (`MouseEvent.detail`) above it.
  */
 interface VnEventPayload {
   a: number;
@@ -225,7 +230,10 @@ type VnEventCode =
   | 38 // animationcancel
   | 39 // paste               (ClipboardEvent, crates/vn-tree/src/clipboard.rs)
   | 40 // copy
-  | 41; // cut
+  | 41 // cut
+  | 42 // contextmenu         (the right button's release, or Menu key / Shift+F10)
+  | 43 // load                (<img>, crates/vn-tree/src/img.rs)
+  | 44; // pointercancel      (the window lost activation mid-press)
 
 // ---------------------------------------------------------------------------
 // the DOM surface — crates/vn-tree/src/dom.rs

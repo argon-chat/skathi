@@ -22,9 +22,8 @@ vn-payload = { path = "../vn-payload" }
 # hands a screenshot over as a DIB). The version and the decoders are the ones
 # gpui already builds (vendor/zed/Cargo.toml), so nothing new is compiled.
 image = { version = "0.25", default-features = false, features = ["png", "bmp", "jpeg", "gif", "webp", "tiff", "ico"] }
-
-[dev-dependencies]
-# The parser gpui feeds our serialized `<svg>` documents to. Pinned to the same
-# version gpui resolves (vendor/zed/Cargo.toml), so the test asserts against the
-# EXACT parser that will see the bytes at runtime and nothing new is compiled.
+# The parser gpui feeds SVGs to — `<img src="x.svg">`'s natural size for its
+# `load` event (crate::img::natural_size), and the parser the `<svg>` tests
+# assert against. Pinned to the version gpui resolves (vendor/zed/Cargo.toml),
+# so nothing new is compiled.
 usvg = { version = "0.46.0", default-features = false }
