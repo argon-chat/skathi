@@ -10,9 +10,8 @@
 // `createImageBitmap(canvasElement)` go through.
 //
 // The bitmap is published under the element's host node id (`__vnId`), which
-// is how the host finds it to paint. Until the host paints canvases, an
-// on-screen `<canvas>` draws correctly and reads back correctly, but shows
-// nothing (advised once).
+// is how the host finds it to paint (crates/vn-tree/src/canvas.rs): a draw
+// repaints the element on the next frame.
 //
 // runtime.ts calls `adoptCanvas` on every mirror `<canvas>`
 // (`nodeOps.createElement`, which the renderer and `document.createElement`
@@ -88,11 +87,6 @@ function contextOf(el: CanvasElement, options?: unknown): Context2D | null {
   if (!n) return null;
   ctx = n.__rjs_canvas_context(el, dimension(el, "width"), dimension(el, "height"), options, el.__vnId);
   contexts.set(el, ctx);
-  advise(
-    "canvas:present",
-    "<canvas> draws and reads back (getImageData, toDataURL, toBlob, drawImage) but is not shown on screen yet: " +
-      "the host does not paint canvas bitmaps in this build",
-  );
   return ctx;
 }
 

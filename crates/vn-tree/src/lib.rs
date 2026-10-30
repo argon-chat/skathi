@@ -588,6 +588,7 @@ pub fn flush_changes() -> bool {
     if dirty {
         tree::restyle_all();
         render::gc_node_state();
+        render::canvas::gc(|id| tree::read_tree(|t| t.node(id).is_some()));
         tree::animator_gc();
         FLUSHED_AT_BUILD.with(|c| c.set(Some(render::build_count())));
     }
@@ -645,7 +646,7 @@ pub fn video_device_changed() -> usize {
 /// Call it once per frame from the pump, BEFORE the draw; returns `true` when
 /// something moved and the window must repaint.
 ///
-/// Five jobs today:
+/// Six jobs today:
 /// * `blob:` image decodes that no node shows any more, or that belong to a
 ///   file picked again after it changed, are handed back to gpui's asset
 ///   cache (`img::evict_pending`);
@@ -654,6 +655,7 @@ pub fn video_device_changed() -> usize {
 ///   back to gpui, since `flush_changes` has no `Window` to hand them to;
 /// * every `<video>` is pulled for a frame and its media events are dispatched
 ///   (`crates/vn-video/CONTRACT.md` §3);
+/// * a `<canvas>` that drew since the last frame asks for a repaint;
 /// * the CSS animation clock is advanced and `transitionend` /
 ///   `animationstart` / `animationend` / `animationcancel` are dispatched;
 /// * a node that was focused when it got detached from the painted tree loses
@@ -683,6 +685,9 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     img::tick(window, cx);
     let lottie_moved = lottie::tick(window, cx);
     let video_moved = video::tick(window, cx);
+    // A `<canvas>` that drew since the last frame repaints, as a mutation
+    // would; an idle one costs this one atomic swap (render::canvas).
+    let canvas_moved = render::canvas::tick();
     // `el.scrollTop = n`, `scrollTo`, `scrollBy`, `scrollIntoView()`: the write
     // itself happened synchronously inside the host fn (a `ScrollHandle` is an
     // `Rc`, so the getter sees it on the next line), but the DOM `scroll` event
@@ -690,7 +695,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // hook that fires it, and the `true` is what repaints a scroll no
     // `@scroll` listener was watching.
     let scrolled = scroll::dispatch_pending(window, cx);
-    anim | lottie_moved | video_moved | scrolled
+    anim | lottie_moved | video_moved | canvas_moved | scrolled
 }
 
 /// The per-frame work a SECONDARY window has to do for itself, because the

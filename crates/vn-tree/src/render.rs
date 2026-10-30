@@ -1954,6 +1954,12 @@ fn build_node<V: 'static>(
             &extras,
             probe(id, build_video(t, id, node, window, cx, now, control_area)),
         ),
+        // The bitmap the page drew, painted into the box (`canvas` below).
+        Kind::Element if t.name(node.tag) == "canvas" => stack(
+            z_priority,
+            &extras,
+            probe(id, canvas::build(t, id, node, window, cx, now, control_area)),
+        ),
         // Inline `<svg>` is a LEAF: the subtree is serialized into a document
         // resvg rasterises, so its children must not also become taffy nodes
         // (see crate::svg).
@@ -4897,6 +4903,15 @@ fn build_lottie<V: 'static>(
     let style_hover = wants_style_hover(t, id, node);
     bind_events(d, id, mask, click_focus, focusable, true, style_hover, cx).into_any_element()
 }
+
+// ---------------------------------------------------------------------------
+// <canvas>
+// ---------------------------------------------------------------------------
+
+/// `<canvas>` lives in its own file, as a child of this module so that it
+/// builds with the replaced-element helpers `<img>` and `<video>` use.
+#[path = "canvas.rs"]
+pub(crate) mod canvas;
 
 // ---------------------------------------------------------------------------
 // <video>
