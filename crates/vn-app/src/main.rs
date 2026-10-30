@@ -1217,6 +1217,14 @@ fn main() {
             }
             std::future::ready(())
         }));
+        // Voice rooms are left while their engine threads are still alive.
+        // Left to `vn_voice`'s thread-local destructor, the engines would be
+        // dropped after `ExitProcess` killed those threads: nobody sees the
+        // leave until the server times the peer out. Bounded like IndexedDB's.
+        std::mem::forget(cx.on_app_quit(|_| {
+            vn_voice::shutdown_all(std::time::Duration::from_secs(2));
+            std::future::ready(())
+        }));
         // Before the runtime exists, so the log ring is already recording when
         // the first advisory fires — and before the window config is read, for
         // the same reason. This is only the RECORDING half; whether a listener
