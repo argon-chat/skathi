@@ -333,6 +333,9 @@ interface MirrorElement extends MirrorNodeBase {
   _value: string;
   /** `checked` once something assigned it; until then it follows the `checked` attribute. */
   _checked?: boolean;
+  /** `:true-value` / `:false-value`, kept as given for v-model's checkbox, as runtime-dom keeps them. */
+  _trueValue?: unknown;
+  _falseValue?: unknown;
   /** `<img>`: the host's answer for `src` (`load` / `error`), which `complete` and `naturalWidth` read. */
   _img?: { src: string; ok: boolean; w: number; h: number };
   /** `on<event>` IDL handlers: the function, and the listener that calls it (`defineHandlerAttr`). */
@@ -1385,13 +1388,76 @@ function clearInline(el: MirrorElement): void {
   notifyMutation(el, "attributes", { attributeName: "style", oldValue: before });
 }
 
+// -- Reflected IDL attributes (m26 client sweep #10, #32)
+//
+// A browser element carries most of its content attributes twice: as
+// attributes, and as typed DOM properties that reflect them (`el.hidden`,
+// `input.placeholder`, `el.tabIndex`). This table is the subset vue-native
+// reflects: which property, on which tags (`null`: every HTML element), as
+// which attribute, and of which IDL type. It drives two things:
+// `attributeOf` (what runtime-dom's `patchProp` leaves in the attribute when it
+// assigns the property) and the accessors on the element prototype
+// (`defineReflected`), which used to be missing: `input.placeholder` read
+// `undefined` while `getAttribute("placeholder")` worked.
+type ReflectKind = "bool" | "string" | "long";
+interface Reflected {
+  attr: string;
+  kind: ReflectKind;
+  tags: ReadonlySet<string> | null;
+}
+const REFLECTED: Record<string, Reflected> = Object.create(null);
+/** `names`: space-separated properties, `prop=attr` where the attribute is not the lowercased name. */
+function reflect(kind: ReflectKind, names: string, tags: string | null): void {
+  const set = tags ? new Set(tags.split(" ")) : null;
+  for (const n of names.split(" ")) {
+    const [prop, attr = prop.toLowerCase()] = n.split("=");
+    REFLECTED[prop] = { attr, kind, tags: set };
+  }
+}
+reflect("bool", "hidden inert autofocus", null);
+reflect("bool", "disabled", "button fieldset input link optgroup option select textarea");
+reflect("bool", "required", "input select textarea");
+reflect("bool", "multiple", "input select");
+reflect("bool", "readOnly", "input textarea");
+reflect("bool", "open", "details dialog");
+reflect("bool", "noValidate", "form");
+reflect("bool", "formNoValidate", "button input");
+reflect("bool", "reversed", "ol");
+reflect("bool", "allowFullscreen", "iframe");
+reflect("bool", "isMap", "img");
+reflect("bool", "autoplay controls loop", "audio video"); // `loop`'s getter is the media state's (`defineMediaGet`)
+reflect("bool", "playsInline", "video");
+reflect("bool", "webkitdirectory", "input");
+reflect("bool", "defaultSelected=selected", "option");
+reflect("string", "title lang accessKey", null);
+reflect("string", "placeholder", "input textarea");
+reflect("string", "name", "button fieldset form iframe input map meta object output select slot textarea");
+reflect("string", "alt", "area img input");
+reflect("string", "accept min max step pattern", "input");
+reflect("string", "htmlFor=for", "label output");
+reflect("long", "tabIndex", null);
+reflect("long", "maxLength minLength", "input textarea");
+
+/** The reflected property `key` names on this element, if it has one. */
+function reflectedOf(el: MirrorElement, key: string): Reflected | null {
+  const r = REFLECTED[key];
+  return r && (!r.tags || r.tags.has(el.tag)) ? r : null;
+}
+
+/** WebIDL `long`: ToNumber, then truncated into 32 bits; NaN and the infinities are 0. */
+function toLong(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) | 0 : 0;
+}
+
 /**
- * The renderer's single prop hook, and also what `setAttribute` /
- * `removeAttribute` route through — so `prev`/`next` really are `unknown`: a
- * template can bind any value at all, and the five branches below are exactly
- * the five things that can be done with one.
+ * The renderer's single prop hook — so `prev`/`next` really are `unknown`: a
+ * template can bind any value at all. `namespace` is what Vue passes for an
+ * element inside `<svg>` / `<math>`, where every key is an attribute.
+ * (`setAttribute` / `removeAttribute` write the attribute itself: see
+ * `writeAttribute`.)
  */
-function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown): void {
+function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown, namespace?: unknown): void {
   if (key === "style") {
     // A string is `cssText`, a record is diffed, `null` clears: runtime-dom's
     // `patchStyle`. A null/undefined VALUE in a record clears its property
@@ -1477,55 +1543,120 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
     syncListenerFlag(el, name);
   } else if (key === "key" || key === "ref") {
     // stripped by the vnode layer; never reaches here — but be safe
+  } else if (key === "textContent" && !foreignNamespace(namespace)) {
+    // `v-text` compiles to this DOM property; runtime-dom assigns it, and
+    // ignores a null.
+    if (next != null) (el as { textContent: unknown }).textContent = next;
   } else {
-    // DOM-compat attribute channel: standard-ish props flow to the host as
-    // strings (native widgets read what they understand); null clears.
-    if (next == null) __vn_set_prop(el.__vnId, I(key), undefined);
-    else if (typeof next === "string" || typeof next === "number" || typeof next === "boolean")
-      __vn_set_prop(el.__vnId, I(key), String(next));
-    else
-      warnCompat(
-        `prop:${key}`,
-        `prop "${key}" with a non-primitive value is not supported by the native host yet; ` +
-          `it was dropped — pass a string/number/boolean or handle it in the component`,
-      );
-    // …and stays readable from JS, which is what `getAttribute`/`dataset`/the
-    // Collection ordering in reka-ui need.
-    if (el.attrs) {
-      const before = el.attrs[key];
-      if (next == null) delete el.attrs[key];
-      else if (typeof next !== "object" && typeof next !== "function") el.attrs[key] = String(next);
-      if (before !== el.attrs[key]) {
-        notifyMutation(el, "attributes", { attributeName: key, oldValue: before ?? null });
-      }
-    }
-    // The host has the value already (the generic channel, above); only the
-    // mirror's storage follows, so the accessor does not push it twice.
-    if (key === "value") el._value = next == null ? "" : String(next);
-    if (key === "checked") el._checked = next === "" || (!!next && next !== "false");
-    // An `<a href>` has an ACTIVATION BEHAVIOUR whether or not anything
-    // listens: following the link is what a click on it means. The host only
-    // delivers a click to a node whose click bit is on, so the bit follows the
-    // href (`syncListenerFlag` ORs it in). docs/SHELL.md §1.
-    if (key === "href" && el.tag === "a") syncListenerFlag(el, "click");
-    // …and so does `<input type=file>`'s, which also takes Enter and Space.
-    if (key === "type" && el.tag === "input") syncFileInput(el);
-    // …and a submit button's and a text field's (forms, below): the type
-    // decides whether a click submits and whether Enter does.
-    if (key === "type" && (el.tag === "input" || el.tag === "button")) {
-      syncListenerFlag(el, "click");
-      if (el.tag === "input") syncListenerFlag(el, "keydown");
-    }
-    // F-4 (docs/RUNTIME.md §5.2): the runtime honours a disabled fieldset;
-    // the host's native widgets read only their own `disabled`.
-    if (key === "disabled" && el.tag === "fieldset" && next != null && next !== false && next !== "false") {
-      warnCompat(
-        "fieldset:disabled",
-        "<fieldset disabled>: clicks, focus() and form submission treat the controls inside as disabled, " +
-          "as a browser does, but the native <input>s inside still accept typing; disable each one as well",
-      );
+    // runtime-dom keeps these two as properties for v-model's checkbox.
+    if (key === "true-value") el._trueValue = next;
+    else if (key === "false-value") el._falseValue = next;
+    // `:checked` assigns the PROPERTY (and, below, the boolean attribute).
+    else if (key === "checked" && el.tag === "input" && !foreignNamespace(namespace)) el._checked = next === "" || !!next;
+    patchAttribute(el, ...attributeOf(el, key, next, namespace));
+  }
+}
+
+/** `<svg>` / `<math>` content: runtime-dom's `shouldSetAsProp` is false for (nearly) every key there. */
+const foreignNamespace = (ns: unknown): boolean => ns === "svg" || ns === "mathml";
+
+/**
+ * runtime-dom's `patchProp` for a key that is not style, class or a listener,
+ * reduced to the one thing that reaches this host: the attribute it leaves.
+ * Where the element has a DOM property of that name (`shouldSetAsProp`), a
+ * browser assigns the PROPERTY, and the attribute is what the property
+ * reflects, which is not always the value written:
+ *
+ * - a boolean property (`hidden`, `disabled`, `open`…) is present as `""` or
+ *   absent, so `:hidden="false"` REMOVES the attribute. Writing the string
+ *   "false" made it present: Tailwind's `[hidden]` rule then hid every reka
+ *   `TabsContent`, and `[disabled]` matched enabled controls (m26 #10);
+ * - so is `checked` / `selected`, which runtime-dom also writes as a boolean
+ *   attribute, and the attribute-only booleans of `isSpecialBooleanAttr`
+ *   (`readonly`, `novalidate`…), on any element;
+ * - a camelCase property names a different attribute (`tabIndex` → tabindex,
+ *   `htmlFor` → for), and a `long` one is written as an integer.
+ *
+ * Everything else is the attribute verbatim, which is also what a string
+ * property reflects. Returns `[attribute, value]`; `null` removes.
+ */
+function attributeOf(el: MirrorElement, key: string, next: unknown, namespace: unknown): [string, unknown] {
+  const on = (): string | null => (next === "" || !!next ? "" : null); // runtime-dom's includeBooleanAttr
+  if (SPECIAL_BOOLEAN_ATTRS.has(key)) return [key, on()];
+  if (foreignNamespace(namespace)) return [key, next];
+  if ((key === "checked" && el.tag === "input") || (key === "selected" && el.tag === "option")) return [key, on()];
+  const r = reflectedOf(el, key);
+  if (!r) return [key, next];
+  if (r.kind === "bool") return [r.attr, on()];
+  if (r.attr === key || next == null) return [r.attr, next];
+  return [r.attr, r.kind === "long" ? String(toLong(next)) : String(next)];
+}
+
+/** runtime-dom's `isSpecialBooleanAttr`: boolean attributes no DOM property of the same name reflects. */
+const SPECIAL_BOOLEAN_ATTRS = new Set(["itemscope", "allowfullscreen", "formnovalidate", "ismap", "nomodule", "novalidate", "readonly"]);
+
+/**
+ * Writes one attribute, verbatim: the host's string channel (its native
+ * widgets read what they understand; `null` clears), the mirror's `attrs`,
+ * and the bookkeeping some attributes carry. `setAttribute` lands here, so
+ * `setAttribute("hidden", "false")` keeps the attribute, as it does in a
+ * browser.
+ */
+function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
+  // DOM-compat attribute channel: standard-ish props flow to the host as
+  // strings (native widgets read what they understand); null clears.
+  if (next == null) __vn_set_prop(el.__vnId, I(key), undefined);
+  else if (typeof next === "string" || typeof next === "number" || typeof next === "boolean")
+    __vn_set_prop(el.__vnId, I(key), String(next));
+  else
+    warnCompat(
+      `prop:${key}`,
+      `prop "${key}" with a non-primitive value is not supported by the native host yet; ` +
+        `it was dropped — pass a string/number/boolean or handle it in the component`,
+    );
+  // …and stays readable from JS, which is what `getAttribute`/`dataset`/the
+  // Collection ordering in reka-ui need.
+  if (el.attrs) {
+    const before = el.attrs[key];
+    if (next == null) delete el.attrs[key];
+    else if (typeof next !== "object" && typeof next !== "function") el.attrs[key] = String(next);
+    if (before !== el.attrs[key]) {
+      notifyMutation(el, "attributes", { attributeName: key, oldValue: before ?? null });
     }
   }
+  // The host has the value already (the generic channel, above); only the
+  // mirror's storage follows, so the accessor does not push it twice.
+  if (key === "value") el._value = next == null ? "" : String(next);
+  // (`checked` is the other way round: the attribute is `defaultChecked`, and
+  // the `checked` getter follows it until something assigns the property.)
+  // An `<a href>` has an ACTIVATION BEHAVIOUR whether or not anything
+  // listens: following the link is what a click on it means. The host only
+  // delivers a click to a node whose click bit is on, so the bit follows the
+  // href (`syncListenerFlag` ORs it in). docs/SHELL.md §1.
+  if (key === "href" && el.tag === "a") syncListenerFlag(el, "click");
+  // …and so does `<input type=file>`'s, which also takes Enter and Space.
+  if (key === "type" && el.tag === "input") syncFileInput(el);
+  // …and a submit button's and a text field's (forms, below): the type
+  // decides whether a click submits and whether Enter does.
+  if (key === "type" && (el.tag === "input" || el.tag === "button")) {
+    syncListenerFlag(el, "click");
+    if (el.tag === "input") syncListenerFlag(el, "keydown");
+  }
+  // F-4 (docs/RUNTIME.md §5.2): the runtime honours a disabled fieldset;
+  // the host's native widgets read only their own `disabled`.
+  if (key === "disabled" && el.tag === "fieldset" && next != null && next !== false && next !== "false") {
+    warnCompat(
+      "fieldset:disabled",
+      "<fieldset disabled>: clicks, focus() and form submission treat the controls inside as disabled, " +
+        "as a browser does, but the native <input>s inside still accept typing; disable each one as well",
+    );
+  }
+}
+
+/** `setAttribute` / `removeAttribute`: `class` and `on*` keep their own paths, everything else is verbatim. */
+function writeAttribute(el: MirrorElement, key: string, value: string | null): void {
+  if (key === "class" || (key.startsWith("on") && key.length > 2)) patchProp(el, key, undefined, value);
+  else patchAttribute(el, key, value);
 }
 
 /// The element's class attribute = what Vue assigned + whatever `<Transition>`
@@ -2461,14 +2592,14 @@ defineDom("setAttribute", function (this: MirrorElement, name: unknown, value: u
     replaceInline(this, String(value), true);
     return;
   }
-  patchProp(this, key, undefined, value == null ? "" : String(value));
+  writeAttribute(this, key, value == null ? "" : String(value));
 });
 defineDom("removeAttribute", function (this: MirrorElement, name: unknown) {
   if (isStyleAttr(name)) {
     clearInline(this);
     return;
   }
-  patchProp(this, String(name), undefined, null);
+  writeAttribute(this, String(name), null);
 });
 // `el.id` reflects the `id` attribute, as in a browser. (The host node id is
 // `__vnId`; `id` named it until m26 client sweep #5a, so a library's
@@ -2481,6 +2612,123 @@ defineDomGet(
   function (this: MirrorElement, v: unknown) {
     if (!isMirrorEl(this)) return ownExpando(this, "id", v);
     this.setAttribute("id", String(v));
+  } as (value: never) => void,
+);
+
+// The reflected properties of `REFLECTED` (above `patchProp`) as accessors:
+// each reads and writes its attribute, so `el.hidden = true`,
+// `input.placeholder` and `el.tabIndex` behave as a browser's (m26 #32). An
+// element whose tag does not have the property reads `undefined` and keeps an
+// assignment as an expando, as a browser's `<div>` keeps `div.placeholder`.
+/** HTML: tabIndex defaults to 0 on these, -1 elsewhere (and on a summary that summarizes its details). */
+const TAB_INDEX_ZERO = new Set(["a", "area", "button", "frame", "iframe", "input", "object", "select", "textarea"]);
+/** HTML's "rules for parsing integers", or `null` for an error. */
+function parseHtmlInt(s: string | undefined): number | null {
+  const m = s === undefined ? null : /^[\t\n\f\r ]*([-+]?\d+)/.exec(s);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n >= -2147483648 && n <= 2147483647 ? n : null;
+}
+function isDetailsSummary(el: MirrorElement): boolean {
+  const p = el.parentNode as MirrorElement | null;
+  if (el.tag !== "summary" || !p || p.kind !== 1 || p.tag !== "details") return false;
+  return p.childNodes.find((c) => c.kind === 1 && (c as MirrorElement).tag === "summary") === el;
+}
+function readReflected(el: MirrorElement, prop: string, r: Reflected): unknown {
+  const raw = el.attrs[r.attr];
+  if (r.kind === "bool") return raw !== undefined;
+  if (r.kind === "string") return raw ?? "";
+  const n = parseHtmlInt(raw);
+  if (prop === "tabIndex") return n ?? (TAB_INDEX_ZERO.has(el.tag) || isDetailsSummary(el) ? 0 : -1);
+  // maxLength / minLength: "limited to only non-negative numbers", default -1.
+  return n !== null && n >= 0 ? n : -1;
+}
+function writeReflected(el: MirrorElement, prop: string, r: Reflected, v: unknown): void {
+  if (r.kind === "bool") {
+    if (!v) el.removeAttribute(r.attr);
+    else if (el.attrs[r.attr] === undefined) el.setAttribute(r.attr, "");
+    return;
+  }
+  if (r.kind === "string") return el.setAttribute(r.attr, String(v));
+  const n = toLong(v);
+  if (n < 0 && prop !== "tabIndex") {
+    throw new DOMException(`Failed to set the '${prop}' property: The value provided (${n}) is negative.`, "IndexSizeError");
+  }
+  el.setAttribute(r.attr, String(n));
+}
+for (const [prop, r] of Object.entries(REFLECTED)) {
+  defineDomGet(
+    prop,
+    function (this: MirrorElement) {
+      return isMirrorEl(this) && (!r.tags || r.tags.has(this.tag)) ? readReflected(this, prop, r) : undefined;
+    },
+    function (this: MirrorElement, v: unknown) {
+      if (!isMirrorEl(this) || (r.tags && !r.tags.has(this.tag))) return ownExpando(this, prop, v);
+      writeReflected(this, prop, r, v);
+    } as (value: never) => void,
+  );
+}
+// `hidden` is a boolean that may also be "until-found" (HTML).
+defineDomGet(
+  "hidden",
+  function (this: MirrorElement) {
+    if (!isMirrorEl(this)) return undefined;
+    const a = this.attrs.hidden;
+    return a === undefined ? false : a.toLowerCase() === "until-found" ? "until-found" : true;
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this)) return ownExpando(this, "hidden", v);
+    if (typeof v === "string" && v.toLowerCase() === "until-found") this.setAttribute("hidden", "until-found");
+    else writeReflected(this, "hidden", REFLECTED.hidden, v);
+  } as (value: never) => void,
+);
+/** `<input type>`'s keywords; anything else, or none, reads "text". */
+const INPUT_TYPES = new Set(
+  ("hidden text search tel url email password date month week time datetime-local number range color " +
+    "checkbox radio file submit image reset button").split(" "),
+);
+const TYPE_STRING_TAGS = new Set(["a", "link", "ol", "li", "source", "embed", "object", "script", "style"]);
+// `type`: an enumerated attribute on <input> and <button>, read-only and
+// derived on <select> / <textarea>, a plain string on the rest.
+defineDomGet(
+  "type",
+  function (this: MirrorElement) {
+    if (!isMirrorEl(this)) return undefined;
+    const a = this.attrs.type;
+    const low = a?.toLowerCase();
+    switch (this.tag) {
+      case "input":
+        return low && INPUT_TYPES.has(low) ? low : "text";
+      case "button":
+        return low === "reset" || low === "button" ? low : "submit";
+      case "select":
+        return this.attrs.multiple !== undefined ? "select-multiple" : "select-one";
+      case "textarea":
+      case "fieldset":
+      case "output":
+        return this.tag;
+      default:
+        return TYPE_STRING_TAGS.has(this.tag) ? (a ?? "") : undefined;
+    }
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this)) return ownExpando(this, "type", v);
+    if (this.tag === "input" || this.tag === "button" || TYPE_STRING_TAGS.has(this.tag)) this.setAttribute("type", String(v));
+    else if (!["select", "textarea", "fieldset", "output"].includes(this.tag)) ownExpando(this, "type", v);
+    // (read-only on those four: the assignment is ignored, as in sloppy-mode JS)
+  } as (value: never) => void,
+);
+// `dir`: enumerated, "" for anything but ltr / rtl / auto.
+defineDomGet(
+  "dir",
+  function (this: MirrorElement) {
+    if (!isMirrorEl(this)) return undefined;
+    const low = this.attrs.dir?.toLowerCase();
+    return low === "ltr" || low === "rtl" || low === "auto" ? low : "";
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this)) return ownExpando(this, "dir", v);
+    this.setAttribute("dir", String(v));
   } as (value: never) => void,
 );
 defineDom("toggleAttribute", function (this: MirrorElement, name: string, force?: boolean) {

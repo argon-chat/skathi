@@ -7,6 +7,7 @@
 // wrong answer.
 
 import { describe, expect, test } from "bun:test";
+import { h } from "@vue/runtime-core";
 import { createRuntime } from "./runtime-harness";
 
 /** A small mounted-ish tree: root > section > (button, span). */
@@ -509,6 +510,210 @@ describe("the attribute channel", () => {
       { id: button.__vnId, key: "color", value: "red" },
       { id: button.__vnId, key: "--x", value: "3" },
     ]);
+  });
+});
+
+// m26 client sweep #10 / #32: runtime-dom assigns a DOM PROPERTY where the
+// element has one (`shouldSetAsProp`), and the attribute is what that property
+// reflects. `:hidden="false"` used to leave `hidden="false"`, which Tailwind's
+// `[hidden]` rule hides: every reka TabsContent was invisible.
+describe("props that are DOM properties, as runtime-dom sets them", () => {
+  /** The last value the host was given for `key` on `el` (`undefined`: removed or never set). */
+  const hostProp = (rt, el, key: string) => rt.host.props.filter((p) => p.id === el.__vnId && p.key === key).at(-1)?.value;
+  const make = (rt, tag: string) => rt.nodeOps.createElement(tag);
+
+  test("a boolean property is present as '' or absent, never the string 'false'", () => {
+    const rt = createRuntime();
+    const panel = make(rt, "div");
+    rt.patchProp(panel, "hidden", null, false);
+    expect(panel.hasAttribute("hidden")).toBe(false);
+    expect(hostProp(rt, panel, "hidden")).toBeUndefined();
+    rt.patchProp(panel, "hidden", false, true);
+    expect(panel.getAttribute("hidden")).toBe("");
+    expect(hostProp(rt, panel, "hidden")).toBe("");
+    // `hidden` with no value compiles to "", which is true.
+    rt.patchProp(panel, "hidden", true, "");
+    expect(panel.getAttribute("hidden")).toBe("");
+    rt.patchProp(panel, "hidden", "", null);
+    expect(panel.hasAttribute("hidden")).toBe(false);
+
+    const button = make(rt, "button");
+    rt.patchProp(button, "disabled", null, false);
+    expect(button.hasAttribute("disabled")).toBe(false);
+    rt.patchProp(button, "disabled", false, "disabled");
+    expect(button.getAttribute("disabled")).toBe("");
+    expect(button.disabled).toBe(true);
+  });
+
+  test("where the element has no such property, the value is the attribute, verbatim", () => {
+    const rt = createRuntime();
+    const div = make(rt, "div");
+    // No `disabled` on a <div>: runtime-dom writes the attribute, "false" and all.
+    rt.patchProp(div, "disabled", null, false);
+    expect(div.getAttribute("disabled")).toBe("false");
+    rt.patchProp(div, "aria-hidden", null, false);
+    expect(div.getAttribute("aria-hidden")).toBe("false");
+    rt.patchProp(div, "data-open", null, false);
+    expect(div.getAttribute("data-open")).toBe("false");
+    // Inside <svg> every key is an attribute.
+    const g = make(rt, "g");
+    rt.patchProp(g, "hidden", null, false, "svg");
+    expect(g.getAttribute("hidden")).toBe("false");
+  });
+
+  test("attribute-only booleans, camelCase properties and integers name the right attribute", () => {
+    const rt = createRuntime();
+    const input = make(rt, "input");
+    rt.patchProp(input, "readonly", null, false); // isSpecialBooleanAttr
+    expect(input.hasAttribute("readonly")).toBe(false);
+    rt.patchProp(input, "readOnly", null, true);
+    expect(input.getAttribute("readonly")).toBe("");
+    expect(input.readOnly).toBe(true);
+    rt.patchProp(input, "tabIndex", null, "2");
+    expect(input.getAttribute("tabindex")).toBe("2");
+    rt.patchProp(input, "maxLength", null, 8.7);
+    expect(input.getAttribute("maxlength")).toBe("8");
+    rt.patchProp(input, "tabIndex", "2", null);
+    expect(input.hasAttribute("tabindex")).toBe(false);
+    const label = make(rt, "label");
+    rt.patchProp(label, "htmlFor", null, "email");
+    expect(label.getAttribute("for")).toBe("email");
+  });
+
+  test(":checked sets the property and the boolean attribute; setAttribute keeps its text", () => {
+    const rt = createRuntime();
+    const box = make(rt, "input");
+    rt.patchProp(box, "type", null, "checkbox");
+    rt.patchProp(box, "checked", null, false);
+    expect(box.checked).toBe(false);
+    expect(box.hasAttribute("checked")).toBe(false);
+    rt.patchProp(box, "checked", false, true);
+    expect(box.checked).toBe(true);
+    expect(box.getAttribute("checked")).toBe("");
+    rt.patchProp(box, "true-value", null, "yes");
+    expect(box._trueValue).toBe("yes");
+
+    // setAttribute is the attribute, as written: a present `hidden="false"`
+    // hides in a browser too.
+    const div = make(rt, "div");
+    div.setAttribute("hidden", "false");
+    expect(div.getAttribute("hidden")).toBe("false");
+    expect(hostProp(rt, div, "hidden")).toBe("false");
+    expect(div.hidden).toBe(true);
+    div.removeAttribute("hidden");
+    expect(div.hidden).toBe(false);
+  });
+
+  test("v-text's textContent is the property", () => {
+    const rt = createRuntime();
+    const p = make(rt, "p");
+    rt.patchProp(p, "textContent", null, "hello");
+    expect(p.textContent).toBe("hello");
+    expect(p.hasAttribute("textContent")).toBe(false);
+  });
+
+  test("a component's :hidden=false leaves no attribute (reka TabsContent)", () => {
+    const rt = createRuntime();
+    rt.createApp({ render: () => h("section", { id: "panel", hidden: false, "data-state": "active" }) }).mount();
+    const panel = [...rt.nodesById.values()].find((n) => n.tag === "section");
+    expect(panel.hasAttribute("hidden")).toBe(false);
+    expect(panel.getAttribute("data-state")).toBe("active");
+    expect(hostProp(rt, panel, "hidden")).toBeUndefined();
+  });
+});
+
+describe("reflected IDL attributes", () => {
+  const make = (rt, tag: string) => rt.nodeOps.createElement(tag);
+
+  test("input.placeholder, input.type, el.title and el.hidden read and write their attributes", () => {
+    const rt = createRuntime();
+    const input = make(rt, "input");
+    expect(input.placeholder).toBe("");
+    expect(input.type).toBe("text");
+    rt.patchProp(input, "placeholder", null, "Email");
+    rt.patchProp(input, "type", null, "EMAIL");
+    expect(input.placeholder).toBe("Email");
+    expect(input.type).toBe("email");
+    input.type = "bogus";
+    expect(input.getAttribute("type")).toBe("bogus");
+    expect(input.type).toBe("text");
+    input.placeholder = "Name";
+    expect(input.getAttribute("placeholder")).toBe("Name");
+
+    const div = make(rt, "div");
+    expect(div.title).toBe("");
+    div.title = "Tip";
+    expect(div.getAttribute("title")).toBe("Tip");
+    expect(div.hidden).toBe(false);
+    div.hidden = true;
+    expect(div.getAttribute("hidden")).toBe("");
+    div.hidden = "until-found";
+    expect(div.hidden).toBe("until-found");
+    div.hidden = "";
+    expect(div.hasAttribute("hidden")).toBe(false);
+    // Not a <div> property: undefined, and an assignment is an expando.
+    expect(div.placeholder).toBeUndefined();
+    div.placeholder = "x";
+    expect(div.placeholder).toBe("x");
+    expect(div.hasAttribute("placeholder")).toBe(false);
+  });
+
+  test("button.type, select.type and dir are enumerated", () => {
+    const rt = createRuntime();
+    const button = make(rt, "button");
+    expect(button.type).toBe("submit");
+    button.setAttribute("type", "Reset");
+    expect(button.type).toBe("reset");
+    const select = make(rt, "select");
+    expect(select.type).toBe("select-one");
+    select.multiple = true;
+    expect(select.type).toBe("select-multiple");
+    const div = make(rt, "div");
+    expect(div.dir).toBe("");
+    div.setAttribute("dir", "RTL");
+    expect(div.dir).toBe("rtl");
+    div.dir = "sideways";
+    expect(div.dir).toBe("");
+  });
+
+  test("tabIndex: 0 on what is focusable by default, -1 elsewhere, the parsed attribute when set", () => {
+    const rt = createRuntime();
+    expect(make(rt, "div").tabIndex).toBe(-1);
+    expect(make(rt, "button").tabIndex).toBe(0);
+    expect(make(rt, "a").tabIndex).toBe(0);
+    expect(make(rt, "input").tabIndex).toBe(0);
+    const details = make(rt, "details");
+    const summary = make(rt, "summary");
+    rt.nodeOps.insert(summary, details, null);
+    expect(summary.tabIndex).toBe(0);
+    const div = make(rt, "div");
+    div.setAttribute("tabindex", " 3");
+    expect(div.tabIndex).toBe(3);
+    div.setAttribute("tabindex", "x");
+    expect(div.tabIndex).toBe(-1);
+    div.tabIndex = 0;
+    expect(div.getAttribute("tabindex")).toBe("0");
+    const input = make(rt, "input");
+    expect(input.maxLength).toBe(-1);
+    expect(() => (input.maxLength = -2)).toThrow();
+    input.maxLength = 4;
+    expect(input.getAttribute("maxlength")).toBe("4");
+  });
+
+  test("disabled, required, open and readOnly are booleans over their attributes", () => {
+    const rt = createRuntime();
+    const field = make(rt, "textarea");
+    field.disabled = true;
+    field.required = 1;
+    field.readOnly = true;
+    expect(field.getAttributeNames().sort()).toEqual(["disabled", "readonly", "required"]);
+    field.disabled = false;
+    expect(field.disabled).toBe(false);
+    expect(field.hasAttribute("disabled")).toBe(false);
+    const details = make(rt, "details");
+    details.setAttribute("open", "");
+    expect(details.open).toBe(true);
+    expect(make(rt, "div").disabled).toBeUndefined();
   });
 });
 
