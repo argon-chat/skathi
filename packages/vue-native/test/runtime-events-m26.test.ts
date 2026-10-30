@@ -239,6 +239,105 @@ describe("a cancelled press (docs/RUNTIME.md §5.8)", () => {
   });
 });
 
+describe("keyboard clicks (docs/RUNTIME.md §5.11)", () => {
+  const keyClick = (rt: Rt, el: El, key: string) =>
+    rt.host.dispatcher(el.__vnId as number, rt.EV_CODES.click, 0, 0, 0, 0, key);
+
+  test("a keyboard click is detail 0, and one on a button or a link says nothing", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { outer } = tree(rt);
+    const button = rt.nodeOps.createElement("button") as unknown as El;
+    const link = rt.nodeOps.createElement("a") as unknown as El;
+    link.setAttribute("href", "#x");
+    const box = rt.nodeOps.createElement("input") as unknown as El;
+    box.setAttribute("type", "checkbox");
+    for (const el of [button, link, box]) rt.nodeOps.insert(el as never, outer as never, null);
+    const seen: number[] = [];
+    for (const el of [button, link, box]) el.addEventListener("click", (e) => seen.push(e.detail));
+    keyClick(rt, button, "Enter");
+    keyClick(rt, button, " ");
+    keyClick(rt, link, "Enter");
+    keyClick(rt, box, " ");
+    expect(seen).toEqual([0, 0, 0, 0]);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("one on an element with no activation behaviour for that key is advised once (K-1)", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    inner.addEventListener("click", () => {});
+    keyClick(rt, inner, "Enter");
+    keyClick(rt, inner, " ");
+    expect(rt.advisories().filter((a) => a.includes("K-1")).length).toBe(1);
+  });
+
+  test("a mouse click carries no key and is not advised", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    inner.addEventListener("click", () => {});
+    fire(rt, inner, "click", 5, 5, 0, 1 << 4);
+    fire(rt, inner, "click", 5, 5, 0, 0);
+    expect(rt.advisories()).toEqual([]);
+  });
+});
+
+describe("passive listeners (a cancelled wheel scrolls nothing: docs/RUNTIME.md §5.8)", () => {
+  test("@wheel.passive is delivered, and its preventDefault() does nothing", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    const seen: boolean[] = [];
+    rt.patchProp(inner as never, "onWheelPassive", null, (e: Ev) => {
+      e.preventDefault();
+      seen.push(e.defaultPrevented);
+    });
+    expect(rt.flagsFor(rt.EV_CODES.wheel)).toEqual([{ id: inner.__vnId as number, code: rt.EV_CODES.wheel, on: true }]);
+    expect(fire(rt, inner, "wheel", 0, 40)).toBe(true);
+    expect(seen).toEqual([false]);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("an element's wheel listener cancels; one added with { passive: true } does not", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner, outer } = tree(rt);
+    inner.addEventListener("wheel", (e) => e.preventDefault(), { passive: true });
+    expect(fire(rt, inner, "wheel", 0, 40)).toBe(true);
+    outer.addEventListener("wheel", (e) => e.preventDefault());
+    expect(fire(rt, inner, "wheel", 0, 40)).toBe(false);
+  });
+
+  test("on document, window and <body> a wheel listener is passive unless it says { passive: false }", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    rt.createApp({ render: () => null }).mount();
+    const doc = rt.global.document as unknown as El;
+    doc.addEventListener("wheel", (e) => e.preventDefault());
+    (rt.global as unknown as El).addEventListener("wheel", (e) => e.preventDefault());
+    (doc.body as El).addEventListener("wheel", (e) => e.preventDefault());
+    expect(fire(rt, inner, "wheel", 0, 40)).toBe(true);
+    doc.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
+    expect(fire(rt, inner, "wheel", 0, 40)).toBe(false);
+  });
+
+  test("a cancelled wheel on a <textarea> is advised once (W-1): the widget has already scrolled", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { outer } = tree(rt);
+    const ta = rt.nodeOps.createElement("textarea") as unknown as El;
+    rt.nodeOps.insert(ta as never, outer as never, null);
+    ta.addEventListener("wheel", (e) => e.preventDefault());
+    expect(fire(rt, ta, "wheel", 0, 40)).toBe(false);
+    fire(rt, ta, "wheel", 0, 40);
+    expect(rt.advisories().filter((a) => a.includes("W-1")).length).toBe(1);
+  });
+
+  test("the default applies to wheel and touch only: a document mousedown listener still cancels", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    rt.createApp({ render: () => null }).mount();
+    (rt.global.document as unknown as El).addEventListener("mousedown", (e) => e.preventDefault());
+    expect(fire(rt, inner, "mousedown", 0, 0, 0)).toBe(false);
+  });
+});
+
 describe("pointercancel", () => {
   test("its own code; a PointerEvent that bubbles to the window and cannot be cancelled", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });

@@ -1274,6 +1274,9 @@ fn scrollbar_for<V: 'static>(
     let _ = cx;
     let sb = if wheel_listener_above(t, id) {
         sb.on_wheel(move |delta, window, cx| {
+            if !claim_wheel(cx) {
+                return false;
+            }
             let payload = EventPayload {
                 a: f32::from(delta.x) as f64,
                 b: f32::from(delta.y) as f64,
@@ -1289,7 +1292,91 @@ fn scrollbar_for<V: 'static>(
         sb
     };
     let scroll = handle.clone();
-    sb.on_scrolled(move |window, cx| report_scroll(id, &scroll, window, cx))
+    sb.on_scrolled(move |window, cx| report_scroll_later(id, &scroll, window, cx))
+}
+
+/// [`report_scroll`] once gpui's dispatch is over, from the window the scroll
+/// happened in, off input. In a browser `scroll` is asynchronous: it follows
+/// the `wheel` that caused it, and a cancelled `wheel` causes none. Here
+/// gpui's own wheel listener moves a box before the box's `wheel` listener
+/// runs, and a cancelled `wheel` puts the box back
+/// (`vn_elements::undo_wheel_scroll`). Reporting later fires `scroll` after
+/// `wheel`, and for a box put back, not at all: the report is deduplicated
+/// against the last position. Off input, a handler that measures can lay out.
+fn report_scroll_later(id: u32, handle: &ScrollHandle, window: &mut Window, cx: &mut App) {
+    let handle = handle.clone();
+    window.defer(cx, move |window, cx| {
+        crate::off_input(|| report_scroll(id, &handle, window, cx));
+    });
+}
+
+thread_local! {
+    /// The DOM `wheel` of the wheel event being dispatched has been fired.
+    /// gpui runs every listening box's wheel listener, innermost first, and the
+    /// JS side propagates from the target itself, so without the claim an
+    /// outer `@wheel` ran once per listening box under the pointer. Cleared by
+    /// an effect at the end of the dispatch.
+    static WHEEL_CLAIMED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// What a key event owes the focused box, once all of its handlers have run.
+#[derive(Clone, Copy, Debug)]
+pub enum KeyClick {
+    /// A keyboard `click` (`detail` 0, which is how a page tells it from a
+    /// mouse click). `armed`: a Space release, which also needs its press to
+    /// have been armed. `key` (`"Enter"` / `" "`) rides in the payload's `key`,
+    /// which a mouse click leaves empty, so the runtime can tell the two apart.
+    Click { id: u32, at: Point<gpui::Pixels>, modifiers: gpui::Modifiers, armed: bool, key: &'static str },
+    /// A Space press, which arms the click of its release.
+    Arm(u32),
+}
+
+/// Owes `step` for the key event being dispatched. A browser clicks as the
+/// DEFAULT action of the key event, after every handler and only if none
+/// cancelled it, and the ancestors' key handlers run after the focused box's
+/// listener. So the root's last key listener settles it
+/// ([`resolve_key_click`]), and a deferred effect does it for a window whose
+/// root has none.
+fn owe_key_click(step: KeyClick, window: &mut Window, cx: &mut App) {
+    windows::here(window, |w| w.key_click = Some(step));
+    window.defer(cx, |window, cx| crate::off_input(|| resolve_key_click(window, cx)));
+}
+
+/// Settles the key event's owed [`KeyClick`] against `key_prevented`.
+fn resolve_key_click(window: &mut Window, cx: &mut App) {
+    let Some(step) = windows::here(window, |w| w.key_click.take()) else { return };
+    let prevented = windows::here(window, |w| w.key_prevented);
+    match step {
+        KeyClick::Arm(id) => {
+            if !prevented {
+                windows::here(window, |w| w.space_armed = Some(id));
+            }
+        }
+        KeyClick::Click { id, at, modifiers, armed, key } => {
+            let go = windows::here(window, |w| !armed || w.space_armed.take() == Some(id)) && !prevented;
+            if go {
+                let payload = EventPayload { key: Some(key), ..mouse_payload_n(at, 0.0, &modifiers, 0) };
+                js_dispatch_app(id, tree::EV_CLICK, &payload, window, cx);
+            }
+        }
+    }
+}
+
+/// The root's last key listeners: the keyboard click a key event owes is
+/// settled there, after every handler of that event (see [`owe_key_click`]).
+fn bind_root_key_clicks<E: gpui::InteractiveElement>(e: E) -> E {
+    e.on_key_down(|_: &KeyDownEvent, window, cx| resolve_key_click(window, cx))
+        .on_key_up(|_: &KeyUpEvent, window, cx| resolve_key_click(window, cx))
+}
+
+/// Claims this wheel event's one DOM `wheel`; `false` if a box nearer the
+/// pointer (or the scroll router) already fired it.
+fn claim_wheel(cx: &mut App) -> bool {
+    if WHEEL_CLAIMED.with(|c| c.replace(true)) {
+        return false;
+    }
+    cx.defer(|_| WHEEL_CLAIMED.with(|c| c.set(false)));
+    true
 }
 
 /// Does this node, or any ancestor, listen for `wheel`? A DOM `wheel` event
@@ -1311,26 +1398,26 @@ fn wheel_listener_above(t: &Tree, id: u32) -> bool {
 }
 
 /// The DOM `scroll` event for a node whose offset just moved, deduplicated
-/// against the last position reported for it.
+/// against the last position seen for it. A box starts at the origin, so a
+/// wheel cancelled on a box that never scrolled reports nothing. A move seen
+/// while nothing listened is still recorded.
 pub(crate) fn report_scroll(id: u32, handle: &ScrollHandle, window: &mut Window, cx: &mut App) {
-    if !tree::read_tree(|t| {
-        t.node(id).is_some_and(|n| n.listeners & (1u64 << tree::EV_SCROLL) != 0)
-    }) {
-        return;
-    }
     // gpui offsets are <= 0 (content shifted up/left); CSS scrollTop/scrollLeft
     // count down/right as positive.
     let offset = handle.offset();
     let (left, top) = (-f32::from(offset.x), -f32::from(offset.y));
     let moved = SCROLL_REPORTED.with(|m| {
         let mut m = m.borrow_mut();
-        if m.get(&id) == Some(&(left, top)) {
+        if m.get(&id).copied().unwrap_or((0.0, 0.0)) == (left, top) {
             return false;
         }
         m.insert(id, (left, top));
         true
     });
-    if moved {
+    let listens = tree::read_tree(|t| {
+        t.node(id).is_some_and(|n| n.listeners & (1u64 << tree::EV_SCROLL) != 0)
+    });
+    if moved && listens {
         let payload = EventPayload { a: left as f64, b: top as f64, ..Default::default() };
         js_dispatch_app(id, tree::EV_SCROLL, &payload, window, cx);
     }
@@ -2029,35 +2116,16 @@ fn build_node<V: 'static>(
                 // clipboard keys so they too run after every key handler.
                 d = bind_root_mouse(d);
                 d = bind_menu_keys(d, id);
+                // …and the keyboard click a key event owes, last of all.
+                d = bind_root_key_clicks(d);
             }
 
-            // `scroll` reports the position *after* the move. gpui installs its
-            // own wheel listener that advances the offset during
-            // `Interactivity::paint`, i.e. after ours; mouse listeners bubble
-            // in reverse registration order, so gpui's runs first and the
-            // handle already holds the new offset when this one reads it.
+            // `scroll` reports the position *after* the move, once the wheel's
+            // dispatch is over (`report_scroll_later`): after the `wheel`, and
+            // not at all when a cancelled `wheel` put the box back.
             if let Some(scroll) = scroll_handle.clone().filter(|_| bit(tree::EV_SCROLL)) {
                 d = d.on_scroll(cx.listener(move |_, _: &ScrollEvent, window, cx| {
-                    // gpui offsets are <= 0 (content shifted up/left); CSS
-                    // scrollTop/scrollLeft count down/right as positive.
-                    let offset = scroll.offset();
-                    let (left, top) = (-f32::from(offset.x), -f32::from(offset.y));
-                    let moved = SCROLL_REPORTED.with(|m| {
-                        let mut m = m.borrow_mut();
-                        if m.get(&id) == Some(&(left, top)) {
-                            return false;
-                        }
-                        m.insert(id, (left, top));
-                        true
-                    });
-                    if moved {
-                        let payload = EventPayload {
-                            a: left as f64,
-                            b: top as f64,
-                            ..Default::default()
-                        };
-                        js_dispatch(id, tree::EV_SCROLL, &payload, window, cx);
-                    }
+                    report_scroll_later(id, &scroll, window, &mut **cx);
                 }));
             }
 
@@ -3784,18 +3852,53 @@ where
                 let payload = mouse_payload_n(m.up.position, 0.0, &m.up.modifiers, m.up.click_count);
                 claim_up(window, &mut **cx, |w| &mut w.click, id, &payload);
             }
-            // Enter/Space on the focused box reaches that box only, and is no
-            // part of a mouse-up. `detail` 0 is how a page tells a keyboard
-            // click from a mouse one (Chromium).
-            ClickEvent::Keyboard(_) => {
-                let payload = mouse_payload_n(ev.position(), 0.0, &ev.modifiers(), 0);
-                js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
+            // Space on the focused box reaches that box only, and is no part of
+            // a mouse-up. gpui clicks on the key's RELEASE, which is
+            // Chromium's rule for Space, but before the `keyup` handlers: the
+            // click waits for them (`keyboard_click_later`). Enter clicks on
+            // its press, below.
+            ClickEvent::Keyboard(k) => {
+                if k.button == gpui::KeyboardButton::Space {
+                    let (at, modifiers) = (ev.position(), ev.modifiers());
+                    let step = KeyClick::Click { id, at, modifiers, armed: true, key: " " };
+                    owe_key_click(step, window, &mut **cx);
+                }
             }
             ClickEvent::Touch(_) => {
                 let payload = mouse_payload_n(ev.position(), 0.0, &ev.modifiers(), ev.click_count());
                 js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
             }
         }));
+        // Enter clicks the focused box on its PRESS (Chromium dispatches the
+        // click from the keypress), after every `keydown` handler and only if
+        // none cancelled it. gpui would click on the release, after `keyup`. A
+        // held key repeats it, as a repeated keypress does. A Space press
+        // only ARMS the click its release makes, and a cancelled one does not.
+        if let Some(focus) = click_focus.clone() {
+            e = e.on_key_down(cx.listener(move |_, ev: &KeyDownEvent, window, cx| {
+                let k = &ev.keystroke;
+                if k.modifiers.modified() || !focus.is_focused(window) {
+                    return;
+                }
+                match k.key.as_str() {
+                    "enter" => {
+                        // Where gpui's keyboard click says it is: the box's
+                        // bottom left.
+                        let at = windows::peek(windows::key(window), |w| w.bounds.get(&id).copied())
+                            .flatten()
+                            .map(|(x, y, _, h)| gpui::point(gpui::px(x), gpui::px(y + h)))
+                            .unwrap_or_default();
+                        let step = KeyClick::Click { id, at, modifiers: k.modifiers, armed: false, key: "Enter" };
+                        owe_key_click(step, window, &mut **cx);
+                    }
+                    "space" => {
+                        windows::here(window, |w| w.space_armed = None);
+                        owe_key_click(KeyClick::Arm(id), window, &mut **cx);
+                    }
+                    _ => {}
+                }
+            }));
+        }
     }
     if bit(tree::EV_MOUSEDOWN) {
         e = e.capture_any_mouse_down(|_, window, _| windows::here(window, |w| w.down_claimed = false));
@@ -3900,6 +4003,10 @@ where
     }
     if bit(tree::EV_WHEEL) {
         e = e.on_scroll(cx.listener(move |_, ev: &ScrollEvent, window, cx| {
+            // One `wheel` per wheel event, at the innermost listening box.
+            if !claim_wheel(&mut **cx) {
+                return;
+            }
             let (dx, dy) = dom_wheel_delta(ev.delta.pixel_delta(gpui::px(16.0)));
             let payload = EventPayload {
                 a: dx,
@@ -3908,7 +4015,14 @@ where
                 d: mods_bits(&ev.modifiers),
                 key: None,
             };
-            js_dispatch(id, tree::EV_WHEEL, &payload, window, cx);
+            if !js_dispatch(id, tree::EV_WHEEL, &payload, window, cx) {
+                // Cancelled: a browser scrolls nothing. gpui's own listener has
+                // already moved this box, if it scrolls, and any scroll
+                // container inside it: put them back, and keep the outer ones
+                // from moving.
+                vn_elements::undo_wheel_scroll();
+                cx.stop_propagation();
+            }
         }));
     }
     if bit(tree::EV_KEYDOWN) && keys_here {

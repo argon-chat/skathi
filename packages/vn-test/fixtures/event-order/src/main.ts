@@ -38,6 +38,7 @@ function rec(name: string, cancel = false, stop = false) {
 document.addEventListener("copy", rec("copy", true));
 
 const box = { width: "120px", height: "40px", background: "#2a3440", margin: "4px" };
+const scroller = { height: "60px", width: "140px", overflow: "auto", background: "#202020" };
 
 createApp({
   setup() {
@@ -69,19 +70,52 @@ createApp({
         ),
         // 4. a text field: its keydown, then its own copy action
         h("textarea", { id: "ta", rows: 2, onKeydown: rec("keydown-ta"), onCopy: rec("copy-ta", true, true) }),
-        // 6. Enter's keyup, then gpui's keyboard click
-        h("button", { id: "btn", onKeyup: rec("keyup-btn"), onClick: rec("click-btn") }, "btn"),
-        // 7. one wheel: the container's scroll, then the wheel
-        h(
-          "div",
-          {
-            id: "scroller",
-            style: { height: "60px", width: "200px", overflow: "auto", background: "#202020" },
-            onScroll: rec("scroll"),
-            onWheel: rec("wheel"),
-          },
-          [h("div", { style: { height: "400px" } }, "tall")],
-        ),
+        // 6. a keyboard click: Enter clicks on the press (before its keyup),
+        // Space on the release (after its keyup)
+        h("div", { style: { display: "flex" } }, [
+          h("button", { id: "btn", onKeyup: rec("keyup-btn"), onClick: rec("click-btn") }, "btn"),
+          // …and a cancelled key clicks nothing: Enter's keydown, Space's keyup
+          h(
+            "button",
+            {
+              id: "btn-x",
+              onKeydown: (e: KeyboardEvent) => e.key === "Enter" && rec("keydown-x", true)(e),
+              onKeyup: (e: KeyboardEvent) => e.key === " " && rec("keyup-x", true)(e),
+              onClick: rec("click-x"),
+            },
+            "btn-x",
+          ),
+        ]),
+        // 7. one wheel: the wheel, then the container's scroll
+        h("div", { style: { display: "flex", gap: "4px" } }, [
+          h(
+            "div",
+            {
+              id: "scroller",
+              style: scroller,
+              onScroll: rec("scroll"),
+              onWheel: rec("wheel"),
+            },
+            [h("div", { style: { height: "400px" } }, "tall")],
+          ),
+          // A cancelled wheel scrolls nothing: on the container itself…
+          h(
+            "div",
+            {
+              id: "scroller-x",
+              style: scroller,
+              onScroll: rec("scroll-x"),
+              onWheel: rec("wheel-x", true),
+            },
+            [h("div", { style: { height: "400px" } }, "tall")],
+          ),
+          // …or on a box around it.
+          h("div", { id: "guard", onWheel: rec("wheel-guard", true) }, [
+            h("div", { id: "scroller-in", style: scroller, onScroll: rec("scroll-in") }, [
+              h("div", { style: { height: "400px" } }, "tall"),
+            ]),
+          ]),
+        ]),
       ]);
   },
 }).mount();

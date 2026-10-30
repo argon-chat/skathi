@@ -170,6 +170,8 @@ type VnDispatcher = (
  *
  * `mods` is a bitfield: 1 ctrl, 2 shift, 4 alt, 8 meta. `mousedown` /
  * `mouseup` / `click` carry the click count (`MouseEvent.detail`) above it.
+ * A keyboard `click` (detail 0) carries the key that made it in `key`:
+ * `"Enter"` or `" "`. A mouse click leaves `key` empty.
  */
 interface VnEventPayload {
   a: number;

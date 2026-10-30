@@ -159,6 +159,12 @@ pub struct WindowState {
     /// `copy` event (`crate::clipboard`). `keyup` uses it the same way: a
     /// cancelled Menu-key `keyup` has no `contextmenu`.
     pub key_prevented: bool,
+    /// The keyboard click the key event being dispatched owes, decided once
+    /// every handler of that event has run (`render::resolve_key_click`).
+    pub key_click: Option<crate::render::KeyClick>,
+    /// The focused box whose Space `keydown` no handler cancelled: its keyup
+    /// clicks it, unless the `keyup` is cancelled.
+    pub space_armed: Option<u32>,
 
     // --- chrome (§5.2, §7.6) -----------------------------------------------
     /// Whether the frame this window is currently building painted any

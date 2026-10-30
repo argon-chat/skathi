@@ -26,7 +26,7 @@ pub mod scrollbar;
 pub mod tab_nav;
 pub mod text_input;
 
-pub use scrollbar::{ChainSpan, Overscroll, Scrollbar, ScrollbarStyle};
+pub use scrollbar::{ChainSpan, Overscroll, Scrollbar, ScrollbarStyle, undo_wheel_scroll};
 pub use tab_nav::{FocusNext, FocusPrev};
 pub use text_input::{
     ClipboardCommand, ControlledValue, DEFAULT_ROWS, InputAttributes, KEY_CONTEXT,

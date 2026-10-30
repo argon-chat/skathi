@@ -243,6 +243,35 @@ thread_local! {
     /// propagation — so a wheel over a nested box scrolls the box AND the page.
     /// A browser scrolls one of them.
     static CHAIN: std::cell::RefCell<Vec<ChainEntry>> = const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Every scroll container under the pointer, with its offset as the
+    /// CAPTURE phase of the wheel event being dispatched found it: before gpui's
+    /// own bubble-phase listener moved anything. Cleared by an effect at the
+    /// end of the dispatch. [`undo_wheel_scroll`] puts them back.
+    static BEFORE_WHEEL: std::cell::RefCell<Vec<(gpui::HitboxId, ScrollHandle, Point<Pixels>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Puts every scroll container under the pointer back where the wheel event
+/// being dispatched found it, and says whether one had moved.
+///
+/// A browser fires the DOM `wheel` event BEFORE it scrolls, and a cancelled one
+/// scrolls nothing. Here gpui's own listener on a scroll container runs in the
+/// bubble phase before the listener on the same box that fires `wheel`, and the
+/// listeners of any container inside it run earlier still. So the embedder
+/// calls this when `wheel` was cancelled, and stops propagation so that no
+/// outer container moves. Only meaningful during that wheel event's dispatch.
+pub fn undo_wheel_scroll() -> bool {
+    BEFORE_WHEEL.with(|b| {
+        let mut moved = false;
+        for (_, handle, offset) in b.borrow().iter() {
+            if handle.offset() != *offset {
+                handle.set_offset(*offset);
+                moved = true;
+            }
+        }
+        moved
+    })
 }
 
 thread_local! {
@@ -774,6 +803,17 @@ impl Element for Scrollbar {
                 if !phase.capture() || !hitbox_id.should_handle_scroll(window) {
                     return;
                 }
+                // Where this box stood before anything moved it (see
+                // `undo_wheel_scroll`), once per container per event.
+                BEFORE_WHEEL.with(|b| {
+                    let mut b = b.borrow_mut();
+                    if b.is_empty() {
+                        cx.defer(|_| BEFORE_WHEEL.with(|b| b.borrow_mut().clear()));
+                    }
+                    if !b.iter().any(|(id, _, _)| *id == hitbox_id) {
+                        b.push((hitbox_id, handle.clone(), handle.offset()));
+                    }
+                });
                 let now = Instant::now();
                 let raw = event.delta.pixel_delta(line_height);
                 let mut s = state.get();

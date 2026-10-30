@@ -154,12 +154,14 @@ type EventHandler = (ev: VnEvent) => void;
 /** …and what Vue passes for `@click="[a, b]"` — several, in order. */
 type EventHandlerOrList = EventHandler | EventHandler[];
 /** The third argument to add/removeEventListener, in both spellings. */
-type ListenerOptions = boolean | { capture?: boolean; once?: boolean } | undefined;
+type ListenerOptions = boolean | { capture?: boolean; once?: boolean; passive?: boolean } | undefined;
 
 /** One `addEventListener` registration; `once` is consumed on dispatch. */
 interface ExtraListener {
   fn: EventHandler;
   once: boolean;
+  /** `{ passive: true }`, or the passive default (`passiveOf`). */
+  passive?: boolean;
 }
 
 /**
@@ -173,6 +175,9 @@ interface Buckets {
   capture: EventHandlerOrList | null;
   onceB: boolean;
   onceC: boolean;
+  /** `@wheel.passive`: Vue's `onWheelPassive` prop (`passiveOf`). */
+  passiveB?: boolean;
+  passiveC?: boolean;
   extraB: ExtraListener[];
   extraC: ExtraListener[];
 }
@@ -1408,12 +1413,18 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
     let rest = key.slice(2);
     let capture = false;
     let once = false;
+    let passive = false;
     for (;;) {
       if (rest.endsWith("Once")) {
         once = true;
         rest = rest.slice(0, -4);
       } else if (rest.endsWith("Capture")) {
         capture = true;
+        rest = rest.slice(0, -7);
+      } else if (rest.endsWith("Passive")) {
+        // `@wheel.passive`: before this, "wheel-passive", an event nothing
+        // fires, so the handler never ran.
+        passive = true;
         rest = rest.slice(0, -7);
       } else break;
     }
@@ -1451,12 +1462,17 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown)
       handlers.set(el, m);
     }
     let buckets = ensureBuckets(m, name);
+    // runtime-dom hands `{ passive: true }` to `addEventListener`, so a prop
+    // with no `.passive` gets the browser's passive default as well.
+    const pass = passiveOf(passive ? { passive } : undefined, el, name);
     if (capture) {
       buckets.capture = (next as EventHandlerOrList) || null;
       buckets.onceC = once;
+      buckets.passiveC = pass;
     } else {
       buckets.bubble = (next as EventHandlerOrList) || null;
       buckets.onceB = once;
+      buckets.passiveB = pass;
     }
     syncListenerFlag(el, name);
   } else if (key === "key" || key === "ref") {
@@ -1628,7 +1644,26 @@ const isMirrorNode = (n: unknown): n is MirrorNode =>
   nodeById((n as MirrorNode).__vnId) === (n as MirrorNode);
 
 /** The two option spellings, as an object. `true` means `{ capture: true }`. */
-type ListenerOptionsObject = { capture?: boolean; once?: boolean };
+type ListenerOptionsObject = { capture?: boolean; once?: boolean; passive?: boolean };
+
+/** The events whose listeners on `window`, `document` and `<body>` are passive unless they say otherwise. */
+const PASSIVE_BY_DEFAULT = new Set(["wheel", "mousewheel", "touchstart", "touchmove"]);
+
+/**
+ * Is this listener passive? A passive listener's `preventDefault()` does
+ * nothing (DOM §2.10). An explicit `passive` decides. Without one, a `wheel`,
+ * `mousewheel`, `touchstart` or `touchmove` listener on `window`, `document`
+ * or `<body>` (the root here) is passive. That is the DOM's "default passive
+ * value", which every engine applies, so that a page-level listener cannot
+ * hold up scrolling. Before the host honoured a cancelled `wheel`
+ * (docs/RUNTIME.md §5.8), nothing could tell the difference.
+ */
+function passiveOf(opts: ListenerOptions | undefined, target: object, name: string): boolean {
+  if (opts && typeof opts === "object" && typeof (opts as ListenerOptionsObject).passive === "boolean")
+    return (opts as ListenerOptionsObject).passive!;
+  if (!PASSIVE_BY_DEFAULT.has(name)) return false;
+  return target === globalThis || target === globalThis.document || (appRoot != null && target === appRoot);
+}
 
 /** Host event names a window/document listener must hear from the engine too. */
 const ALSO_NATIVE = new Set<string>(["load", "error"]);
@@ -1648,7 +1683,11 @@ function addGlobalListener(
   if (!m) globalHandlers.set(target, (m = {}));
   const buckets = ensureBuckets(m, name);
   const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
-  (capture ? buckets.extraC : buckets.extraB).push({ fn, once: !!(opts && (opts as ListenerOptionsObject).once) });
+  (capture ? buckets.extraC : buckets.extraB).push({
+    fn,
+    once: !!(opts && (opts as ListenerOptionsObject).once),
+    passive: passiveOf(opts, target, name),
+  });
   if (appRoot) syncListenerFlag(appRoot, name);
   // `load` and `error` are ALSO the window's own events (the page's load, an
   // uncaught error), which the engine would fire at its EventTarget: the
@@ -1800,7 +1839,11 @@ function addExtraListener(
   }
   const buckets = ensureBuckets(m, name);
   const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
-  const entry = { fn, once: !!(opts && (opts as ListenerOptionsObject).once) };
+  const entry = {
+    fn,
+    once: !!(opts && (opts as ListenerOptionsObject).once),
+    passive: passiveOf(opts, node, name),
+  };
   (capture ? buckets.extraC : buckets.extraB).push(entry);
   syncListenerFlag(node, name);
 }
@@ -2790,6 +2833,23 @@ function isFileInput(n: unknown): boolean {
 function isTextWidget(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;
   return !!e && e.kind === 1 && (e.tag === "textarea" || (e.tag === "input" && !isFileInput(e)));
+}
+
+/** The `<input>` types a key clicks: Enter and Space the buttons, Space alone the checkable ones. */
+const ENTER_CLICK_INPUTS = new Set(["button", "submit", "reset", "image", "file", "color"]);
+const SPACE_CLICK_INPUTS = new Set([...ENTER_CLICK_INPUTS, "checkbox", "radio"]);
+
+/**
+ * Does a browser click this element from `key` (`"Enter"` or `" "`)? A
+ * `<button>` and a `<summary>` for both keys, a link for Enter only, and the
+ * button-like `<input>`s, plus a checkbox or radio for Space.
+ */
+function clicksFromKey(n: unknown, key: string): boolean {
+  const e = n as MirrorElement | null | undefined;
+  if (!e || e.kind !== 1) return false;
+  if (e.tag === "button" || e.tag === "summary") return true;
+  if (key === "Enter" && isLink(e)) return true;
+  return e.tag === "input" && (key === "Enter" ? ENTER_CLICK_INPUTS : SPACE_CLICK_INPUTS).has(typeOf(e));
 }
 
 /** Is this a mirror `<label>`? */
@@ -4620,13 +4680,27 @@ const EVENT_PHASE = { none: 0, capturing: 1, atTarget: 2, bubbling: 3 } as const
  * out of a host callback always did (`[js uncaught]` in the log and the
  * devtools console), after the walk instead of in place of the rest of it.
  */
-function callListener(fn: (this: unknown, ev: VnEvent) => unknown, self: unknown, ev: VnEvent): void {
+function callListener(
+  fn: (this: unknown, ev: VnEvent) => unknown,
+  self: unknown,
+  ev: VnEvent,
+  passive = false,
+): void {
+  // A passive listener's `preventDefault()` does nothing (`passiveOf`). An own
+  // no-op shadows the prototype's for the length of the call.
+  const own = passive ? Object.getOwnPropertyDescriptor(ev, "preventDefault") : undefined;
+  if (passive) Object.defineProperty(ev, "preventDefault", { value: () => {}, configurable: true, writable: true });
   try {
     fn.call(self, ev);
   } catch (e) {
     (globalThis.queueMicrotask ?? queueMicrotask)(() => {
       throw e;
     });
+  } finally {
+    if (passive) {
+      if (own) Object.defineProperty(ev, "preventDefault", own);
+      else delete (ev as { preventDefault?: unknown }).preventDefault;
+    }
   }
 }
 
@@ -4646,6 +4720,7 @@ function invoke(
   Object.defineProperty(ev, "eventPhase", { value: eventPhase, configurable: true });
   const fn = phase === "capture" ? buckets.capture : buckets.bubble;
   if (fn) {
+    const passive = !!buckets[phase === "capture" ? "passiveC" : "passiveB"];
     if (buckets[phase === "capture" ? "onceC" : "onceB"]) {
       if (phase === "capture") buckets.capture = null;
       else buckets.bubble = null;
@@ -4653,9 +4728,9 @@ function invoke(
     if (Array.isArray(fn)) {
       for (const f of fn) {
         if (state.immediate) break;
-        callListener(f, undefined, ev);
+        callListener(f, undefined, ev, passive);
       }
-    } else callListener(fn, undefined, ev);
+    } else callListener(fn, undefined, ev, passive);
   }
   const extra = phase === "capture" ? buckets.extraC : buckets.extraB;
   // snapshot: spec semantics — listeners added during dispatch don't fire now
@@ -4665,7 +4740,7 @@ function invoke(
       const i = extra.indexOf(entry);
       if (i >= 0) extra.splice(i, 1);
     }
-    callListener(entry.fn, node, ev);
+    callListener(entry.fn, node, ev, !!entry.passive);
   }
   if (isMirrorNode(node)) syncListenerFlag(node, name);
   else if (appRoot) syncListenerFlag(appRoot, name);
@@ -4900,6 +4975,26 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
       "mousedown-prevent:text-field",
       "`mousedown.preventDefault()` on an <input> or <textarea> — a browser leaves the focus where it was; " +
         "vue-native's text field has already focused itself and placed the caret (docs/RUNTIME.md §5.8 L-2)",
+    );
+  }
+  // K-1 (docs/RUNTIME.md §5.11): the host clicks any focused box with a click
+  // listener from Enter or Space (`key` says which). A browser clicks only an
+  // element with an activation behaviour for that key.
+  if (name === "click" && key && !clicksFromKey(target, key)) {
+    warnCompat(
+      "keyboard-click:no-activation",
+      `a keyboard click (${key === " " ? "Space" : key}) on a <${(target as MirrorElement).tag}> — a browser clicks ` +
+        "only a button, a link (Enter), a summary or a button-like input from the keyboard; vue-native " +
+        "clicks any focused element with a click listener (docs/RUNTIME.md §5.11 K-1). Use a <button>, or " +
+        "handle the key yourself",
+    );
+  }
+  // W-1 (docs/RUNTIME.md §5.9): a textarea scrolls itself inside the widget.
+  if (!proceed && name === "wheel" && (target as MirrorElement).tag === "textarea") {
+    warnCompat(
+      "wheel-prevent:textarea",
+      "`wheel.preventDefault()` on a <textarea> — a browser does not scroll it; vue-native's textarea has " +
+        "already scrolled its own content (the boxes around it stay put) (docs/RUNTIME.md §5.9 W-1)",
     );
   }
   return proceed;
