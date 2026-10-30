@@ -1,5 +1,5 @@
 //! `<canvas>` on screen: the bitmap a page draws, painted into the element's
-//! box (docs/RUNTIME.md §5.10, C-1).
+//! box (docs/RUNTIME.md §5.10, CV-1).
 //!
 //! The 2D context is redjs's (vendor/redjs `webapi/canvas2d`), and
 //! packages/vue-native/src/canvas.ts publishes each element's bitmap under the
@@ -102,6 +102,7 @@ impl PixelSource for CpuBitmap {
             return Fetch::Changed(generation, None);
         }
         if image.width > ATLAS_MAX_SIDE || image.height > ATLAS_MAX_SIDE {
+            // CV-1 (docs/RUNTIME.md §5.10).
             warn_compat(
                 "canvas:atlas-size",
                 &format!(

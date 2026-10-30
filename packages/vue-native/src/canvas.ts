@@ -100,6 +100,7 @@ function resolveSource(v: unknown): unknown {
   if (isCanvas(v)) return contextOf(v);
   const tag = tagOf(v);
   if (tag === "VIDEO" || tag === "IMG") {
+    // CV-4 (docs/RUNTIME.md §5.10).
     advise(
       `canvas:source-${tag.toLowerCase()}`,
       `drawImage(<${tag.toLowerCase()}>) draws nothing yet: the host's ${tag === "VIDEO" ? "video frames" : "decoded <img> pixels"} ` +
@@ -133,6 +134,7 @@ function getContext(this: CanvasElement, type: unknown, options?: unknown): Cont
     if (!ctx) advise("canvas:engine", "getContext('2d'): this engine has no canvas support; it returns null");
     return ctx;
   }
+  // CV-10 (docs/RUNTIME.md §5.10).
   advise(`canvas:${kind}`, `getContext('${kind}') is not available in this runtime (only '2d'); it returns null`);
   return null;
 }

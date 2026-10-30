@@ -7,7 +7,7 @@
 // mirror <canvas> and read back with toDataURL (the taskbar icons,
 // desktopTaskbar.ts), a tint by source-atop (custom emoji), a thumbhash-style
 // getImageData over an OffscreenCanvas, and toBlob. Then the screen
-// (crates/vn-tree/src/canvas.rs, C-1): the box takes the bitmap's size, CSS
+// (crates/vn-tree/src/canvas.rs, CV-1): the box takes the bitmap's size, CSS
 // scales the bitmap, and a draw with no DOM change repaints it.
 // Any fixture will do; this one borrows `events`.
 
