@@ -15,6 +15,7 @@ import {
   SFC_FS,
   appDefines,
   assetKey,
+  devEsmInterop,
   expandGlobs,
   frameworkDep,
   inlineCssImports,
@@ -22,6 +23,7 @@ import {
   stubWorkerUrls,
   svgAsSfc,
   svgDefaultOf,
+  tagModuleNamespaces,
   takeDefineArgs,
 } from "../vitecompat";
 import { collectAssets } from "../cli/assets";
@@ -165,6 +167,54 @@ describe("workers and svg", () => {
     expect(svgDefaultOf(null)).toBe("url");
     const sfc = svgAsSfc(`<?xml version="1.0"?><!-- c --><svg><style>.a{}</style><rect/></svg>`);
     expect(sfc).toBe(`<template><svg><component is="style">.a{}</component><rect/></svg></template>`);
+  });
+});
+
+// m26 client sweep #2: lazy components rendered nothing (see vitecompat.ts).
+describe("module namespaces", () => {
+  const MINIFIED =
+    "var p=Object.defineProperty;var s=(o)=>o;function x(o,t){this[o]=s.bind(null,t)}" +
+    "var n=(o,t)=>{for(var e in t)p(o,e,{get:t[e],enumerable:!0,configurable:!0,set:x.bind(t,e)})};" +
+    'var c={};n(c,{default:()=>u});var u={name:"B"};globalThis.__nsUnit=c;';
+
+  test("Bun's __export helper gives every namespace the Module tag and a null prototype", () => {
+    const r = tagModuleNamespaces(MINIFIED);
+    expect(r.count).toBe(1);
+    new Function(r.code)();
+    const ns = (globalThis as any).__nsUnit;
+    expect(ns[Symbol.toStringTag]).toBe("Module");
+    expect(Object.getPrototypeOf(ns)).toBe(null);
+    expect(ns.default.name).toBe("B");
+    // Unminified, as Bun writes it without `minify`.
+    const plain =
+      "var __export = (target, all) => {\n  for (var name in all)\n    __defProp(target, name, {\n" +
+      "      get: all[name],\n      enumerable: true,\n      configurable: true,\n      set: __exportSetter.bind(all, name)\n    });\n};";
+    expect(tagModuleNamespaces(plain).count).toBe(1);
+  });
+
+  test("a helper in a shape it does not know fails the build; a bundle with none passes", () => {
+    const changed = MINIFIED.replace("for(var e in t)", "for(const e of Object.keys(t))");
+    expect(() => tagModuleNamespaces(changed)).toThrow(/__export helper/);
+    expect(tagModuleNamespaces("console.log(1)")).toEqual({ code: "console.log(1)", count: 0 });
+  });
+
+  test("dev: Node's interop flag is dropped, and import() goes through require", () => {
+    const body =
+      'var import_App = __toESM(require("./App.vue"), 1);\n' +
+      "var lazy = () => import(\"./Lazy.vue\");\nvar other = x.import('y');\nvar dyn = (p) => import(p);\n";
+    const r = devEsmInterop(body);
+    expect(r.code).toContain('__toESM(require("./App.vue"));');
+    expect(r.code).toContain('Promise.resolve().then(() => __vnImportNs(require("./Lazy.vue")))');
+    expect(r.code).toContain("x.import('y')");
+    expect(r.code).toContain("function __vnImportNs(m)");
+    expect(r.unresolved).toBe(1);
+    // A CommonJS module's exports become a namespace with `default`, as Vite gives one.
+    const helper = r.code.slice(r.code.indexOf("function __vnImportNs"));
+    const ns = new Function(`${helper}\nreturn __vnImportNs;`)()({ a: 1 });
+    expect(ns[Symbol.toStringTag]).toBe("Module");
+    expect(ns.default).toEqual({ a: 1 });
+    expect(ns.a).toBe(1);
+    expect(devEsmInterop("var a = 1;")).toEqual({ code: "var a = 1;", unresolved: 0 });
   });
 });
 

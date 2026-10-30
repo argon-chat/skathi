@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createLoader } from "./loader-harness";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = resolve(HERE, "..");
@@ -302,5 +303,69 @@ ${proc.stderr.toString()}`);
     // The loader aggregates CSS in first-setCss order, which is manifest order,
     // so a global stylesheet has to be registered before any component <style>.
     expect(modules.indexOf(CSS_ID)).toBeLessThan(modules.indexOf(id("css-app", "App.vue")));
+  });
+});
+
+// m26 client sweep #2. In a "type": "module" package (the Argon client is
+// one) Bun's CJS output imports with Node's rule, `__toESM(require(x), 1)`:
+// `default` became the whole exports object, so `createApp(App)` got
+// `{ __esModule, default }`. And `import()` was left as a native dynamic
+// import, which the host's classic scripts cannot run.
+describe('a "type": "module" app, in dev', () => {
+  const out = build("esm-app");
+  const MAIN = id("esm-app", "main.ts");
+  /** Every module script, evaluated into a fresh loader world, as the host evaluates them. */
+  const world = () => {
+    const w = createLoader();
+    for (const mod of out.manifest.modules) {
+      new Function("__VN__", "__VUE_HMR_RUNTIME__", out.script(mod))(w.VN, w.sandbox.__VUE_HMR_RUNTIME__);
+    }
+    return w;
+  };
+
+  test("a default import is the module's default export, as in Vite", () => {
+    expect(out.script(MAIN)).not.toMatch(/__toESM\(require\([^)]*\),\s*1\)/);
+    const main = world().VN.require(MAIN);
+    expect(main.app.name).toBe("EsmApp");
+    expect(main.ns.default("x")).toBe("hello x");
+    expect(main.ns.answer).toBe(42);
+  });
+
+  test("import() resolves through the registry, and defineAsyncComponent unwraps it", async () => {
+    expect(out.script(MAIN)).not.toMatch(/(?<![\w$.])import\(/);
+    expect(out.manifest.deps[MAIN]).toContain(id("esm-app", "Lazy.vue"));
+    const ns = await world().VN.require(MAIN).lazy();
+    // runtime-core's own test, verbatim.
+    expect(!!(ns && (ns.__esModule || ns[Symbol.toStringTag] === "Module"))).toBe(true);
+    expect(ns.default.name).toBe("LazyPane");
+  });
+});
+
+describe("module namespaces in a prod bundle", () => {
+  const dir = mkdtempSync(join(FIXTURES, "ns-app-"));
+  tmpDirs.push(dir);
+
+  test("import() and import * are Module-tagged, null-prototype namespaces", async () => {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src/pane.ts"), 'export default { name: "Pane" };\nexport const extra = 1;\n');
+    writeFileSync(
+      join(dir, "src/main.ts"),
+      'import * as all from "./pane";\n' +
+        '(globalThis as any).__nsProbe = { all, lazy: () => import("./pane") };\n',
+    );
+    const out = join(mkdtempSync(join(tmpdir(), "vn-prod-ns-")), "app.prod.js");
+    tmpDirs.push(dirname(out));
+    const proc = Bun.spawnSync(["bun", "prod.ts", join(dir, "src/main.ts"), out], { cwd: PKG_DIR });
+    if (proc.exitCode !== 0) throw new Error(`prod.ts exited ${proc.exitCode}\n${proc.stderr.toString()}`);
+    new Function(readFileSync(out, "utf8"))();
+    const probe = (globalThis as any).__nsProbe;
+    const lazy = await probe.lazy();
+    for (const ns of [probe.all, lazy]) {
+      expect(Object.prototype.toString.call(ns)).toBe("[object Module]");
+      expect(Object.getPrototypeOf(ns)).toBe(null);
+      expect(ns.default.name).toBe("Pane");
+      expect(ns.extra).toBe(1);
+    }
+    expect(lazy).toBe(probe.all);
   });
 });

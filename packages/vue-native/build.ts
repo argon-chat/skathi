@@ -100,7 +100,7 @@ import {
   generate as generateTailwind,
   needsTailwindPass,
 } from "./tailwind";
-import { GLOB_TRIPWIRE, SFC_FS, appDefines, inlineCssImports, takeDefineArgs } from "./vitecompat";
+import { GLOB_TRIPWIRE, SFC_FS, appDefines, devEsmInterop, inlineCssImports, takeDefineArgs } from "./vitecompat";
 
 // ---- paths ----------------------------------------------------------------
 
@@ -845,7 +845,16 @@ async function buildModule(absPath: string, ids: Set<string>) {
     for (const log of result.logs) console.error(log);
     throw new Error(`module build failed: ${id}`);
   }
-  const body = await result.outputs[0].text();
+  // A bundler's ESM semantics, not Node's: `import App from "./App.vue"` in a
+  // "type": "module" package, and `import()` (vitecompat.ts `devEsmInterop`).
+  const interop = devEsmInterop(await result.outputs[0].text());
+  const body = interop.code;
+  if (interop.unresolved) {
+    console.warn(
+      `${stamp()} ${id}: ${interop.unresolved} import(…) with a computed specifier — the dev loader resolves ` +
+        `only a string literal, so that promise rejects (prod.ts bundles it)`,
+    );
+  }
   if (/\bcreateStaticVNode\b/.test(body)) {
     throw new Error(`${id}: emitted createStaticVNode — hoistStatic leaked back on (F7)`);
   }

@@ -69,6 +69,7 @@ import {
   liftIndexHtml,
   readPackageJson,
   svgDefaultOf,
+  tagModuleNamespaces,
   takeDefineArgs,
   transformSource,
   viteShapesPlugin,
@@ -560,7 +561,9 @@ async function build() {
     for (const log of result.logs) console.error(log);
     throw new Error("prod build failed");
   }
-  const body = await result.outputs[0].text();
+  // Namespace objects that say they are (`import()` → defineAsyncComponent):
+  // vitecompat.ts `tagModuleNamespaces`.
+  const body = tagModuleNamespaces(await result.outputs[0].text()).code;
 
   // (The F7 createStaticVNode tripwire now runs per-SFC inside compileVue —
   // see the comment there for why the finished bundle is the wrong place.)

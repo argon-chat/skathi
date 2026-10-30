@@ -780,6 +780,100 @@ export function viteShapesPlugin(o: ShapesOptions) {
 export const GLOB_TRIPWIRE = "__vn_import_meta_glob_unexpanded";
 
 // ---------------------------------------------------------------------------
+// Module namespace objects (m26 client sweep #2)
+// ---------------------------------------------------------------------------
+//
+// A browser's (and Vite's) `import * as ns` and `await import("./X.vue")`
+// give a MODULE NAMESPACE OBJECT: null prototype, `Symbol.toStringTag` =
+// "Module", one getter per export. Vue's `defineAsyncComponent` unwraps
+// `.default` only from something that says it is one:
+//
+//   if (comp && (comp.__esModule || comp[Symbol.toStringTag] === "Module")) comp = comp.default
+//
+// Bun's bundle builds each namespace as a plain `{}` that its `__export`
+// helper fills with getters, with neither mark. So every
+// `defineAsyncComponent(() => import(…))` mounted the namespace object itself,
+// which renders nothing: each pane of the Argon client's Settings was blank.
+
+/** Bun's `__export(target, all)`, minified or not: `(o,t)=>{for(var e in t)p(o,e,{get:t[e],enumerable:!0,configurable:!0,…`. */
+const BUN_EXPORT_HELPER =
+  /(\(\s*([\w$]+)\s*,\s*([\w$]+)\s*\)\s*=>\s*\{)(\s*for\s*\(\s*var\s+([\w$]+)\s+in\s+\3\s*\)\s*[\w$]+\(\s*\2\s*,\s*\5\s*,\s*\{\s*get\s*:\s*\3\[\5\]\s*,\s*enumerable\s*:\s*(?:!0|true)\s*,\s*configurable\s*:\s*(?:!0|true))/g;
+/** The descriptor only that helper writes (`set: __exportSetter.bind(all, name)`): the tripwire for a new shape. */
+const BUN_EXPORT_SIGNATURE =
+  /get\s*:\s*([\w$]+)\[([\w$]+)\]\s*,\s*enumerable\s*:\s*(?:!0|true)\s*,\s*configurable\s*:\s*(?:!0|true)\s*,\s*set\s*:\s*[\w$]+\.bind\(\s*\1\s*,\s*\2\s*\)/;
+
+/**
+ * Makes every namespace object a bundle builds look like a module namespace:
+ * Bun's `__export` helper now starts by giving its target a null prototype and
+ * `Symbol.toStringTag` "Module". Throws when the bundle has the helper in a
+ * shape this does not recognise, so a Bun upgrade fails the build instead of
+ * blanking every lazy component again.
+ */
+export function tagModuleNamespaces(bundle: string): { code: string; count: number } {
+  let count = 0;
+  const code = bundle.replace(BUN_EXPORT_HELPER, (_m, head: string, target: string, _all: string, loop: string) => {
+    count++;
+    return (
+      `${head}Object.setPrototypeOf(${target},null),` +
+      `Object.defineProperty(${target},Symbol.toStringTag,{value:"Module"});${loop}`
+    );
+  });
+  if (count === 0 && BUN_EXPORT_SIGNATURE.test(bundle)) {
+    throw new Error(
+      "the bundle's __export helper is not in the shape vitecompat.ts tagModuleNamespaces knows: " +
+        "namespace objects would lack Symbol.toStringTag \"Module\", and defineAsyncComponent(() => import(…)) " +
+        "would render nothing — update BUN_EXPORT_HELPER for this Bun version",
+    );
+  }
+  return { code, count };
+}
+
+/** `import("<literal>")` in a module body, but not `x.import(…)`. */
+const DYNAMIC_IMPORT = /(?<![\w$.])import\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\)/g;
+/** An `import(` whose argument is not a string literal. */
+const DYNAMIC_IMPORT_ANY = /(?<![\w$.])import\(\s*(?!["'])/g;
+/** `__toESM(require("…"), 1)`: Bun's Node-mode interop. */
+const NODE_MODE_TO_ESM = /\b__toESM\((require\(\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*\))\s*,\s*1\s*\)/g;
+
+/**
+ * The dev builder's per-module CJS (build.ts `buildModule`), corrected to a
+ * bundler's ESM semantics, which are what a Vite app is written against:
+ *
+ * - In a `"type": "module"` package Bun emits `__toESM(require(x), 1)`. The `1`
+ *   is Node's rule for importing CommonJS: `default` is the whole
+ *   `module.exports`, even when that object says `__esModule`. Every module
+ *   here is ESM compiled to CJS, so `import App from "./App.vue"` got
+ *   `{ __esModule, default }` instead of the component, and the app failed to
+ *   mount. Without the `1`, `default` is the module's own default export, as in
+ *   Vite.
+ * - `import("./X.vue")` is left as a native dynamic import, which the host's
+ *   classic scripts cannot run. It becomes a promise of the module's exports,
+ *   loaded through the same registry `require` uses. A CJS module's exports are
+ *   wrapped as Vite wraps them, with `default` = `module.exports`.
+ *
+ * Returns the rewritten body and the specifier-less `import(…)` count, which
+ * the caller reports (those still reject at runtime).
+ */
+export function devEsmInterop(body: string): { code: string; unresolved: number } {
+  let code = body.replace(NODE_MODE_TO_ESM, "__toESM($1)");
+  let dynamic = false;
+  code = code.replace(DYNAMIC_IMPORT, (_m, spec: string) => {
+    dynamic = true;
+    return `Promise.resolve().then(() => __vnImportNs(require(${spec})))`;
+  });
+  // A function declaration, appended: hoisted, and never ahead of a directive.
+  if (dynamic) {
+    code +=
+      "\nfunction __vnImportNs(m) {\n" +
+      '  return m && (m.__esModule || m[Symbol.toStringTag] === "Module") ? m : ' +
+      'Object.defineProperty(Object.assign(Object.create(null), m, { default: m }), Symbol.toStringTag, { value: "Module" });\n' +
+      "}\n";
+  }
+  const unresolved = (code.match(DYNAMIC_IMPORT_ANY) ?? []).length;
+  return { code, unresolved };
+}
+
+// ---------------------------------------------------------------------------
 // CSS: `@import` inlining (postcss-import, the part Vite always applies)
 // ---------------------------------------------------------------------------
 
