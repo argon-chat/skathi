@@ -124,6 +124,19 @@ declare function __vn_set_listener(id: VnNodeId, code: VnEventCode, on: boolean)
 declare function __vn_set_dispatcher(fn: VnDispatcher): void;
 
 /**
+ * Installs the hook the host calls when a parked layout sampler should look
+ * again (m26 client sweep #27). ResizeObserver and IntersectionObserver sample
+ * layout, and layout only changes in a frame the host builds.
+ */
+declare function __vn_set_layout_hook(fn: () => void): void;
+
+/**
+ * Parks the layout samplers. The host calls the hook once, from the first
+ * frame tick after it next builds a frame in any window, and forgets the park.
+ */
+declare function __vn_layout_watch(): void;
+
+/**
  * `(nodeId, code, a, b, c, d, key, data) -> proceed`.
  *
  * The four numbers and the optional string are ONE payload shape reused for
@@ -284,7 +297,8 @@ type VnScrollOp = 0 | 1 | 2;
  *
  * `stale` is `1` when the CONTENT half of the answer (and the clamp derived
  * from it) is from the last painted frame, because the tree changed in this
- * same JS wave and a layout could not be forced. The offset half is never
+ * same JS wave and a layout could not be forced (only under a gpui listener:
+ * key, mousedown, wheel, clipboard, focus/blur). The offset half is never
  * stale. The runtime turns it into one advisory.
  *
  * `""` for a node the cascade never gave `overflow: scroll|auto`. That is not

@@ -183,8 +183,9 @@ describe("IntersectionObserver samples the painted bounds", () => {
     // No change -> no callback.
     await frames(2);
     expect(seen.length).toBe(1);
-    // Scrolled out below the viewport.
+    // Scrolled out below the viewport, in a frame the host built.
     rt.host.boundsById.set(el.__vnId, "100,700,200,100");
+    rt.host.layout.built();
     await frames(2);
     expect(seen.length).toBe(2);
     expect(seen[1].isIntersecting).toBe(false);
@@ -204,10 +205,12 @@ describe("IntersectionObserver samples the painted bounds", () => {
     expect(seen[0].intersectionRect).toMatchObject({ y: 550, height: 50, width: 100 });
     // 60% visible: still between 0.5 and 0.75 -> same threshold index, no entry.
     rt.host.boundsById.set(el.__vnId, "0,540,100,100");
+    rt.host.layout.built();
     await frames(2);
     expect(seen.length).toBe(1);
     // 80%: past 0.75 -> one entry.
     rt.host.boundsById.set(el.__vnId, "0,520,100,100");
+    rt.host.layout.built();
     await frames(2);
     expect(seen.length).toBe(2);
     ob.disconnect();
@@ -244,6 +247,7 @@ describe("IntersectionObserver samples the painted bounds", () => {
     expect(seen.find((e) => e.target === inside).isIntersecting).toBe(false);
     expect(seen.find((e) => e.target === el).isIntersecting).toBe(false);
     rt.host.boundsById.set(inside.__vnId, "0,200,100,50");
+    rt.host.layout.built();
     await frames(2);
     expect(seen.filter((e) => e.target === inside).at(-1).isIntersecting).toBe(true);
     ob.disconnect();
@@ -277,6 +281,41 @@ describe("IntersectionObserver samples the painted bounds", () => {
       [false, false],
     ]);
     expect(ob.takeRecords()).toEqual([]);
+    ob.disconnect();
+  });
+
+  test("it parks while nothing moves and a build wakes it (m26 #27)", () => {
+    const queue: (() => void)[] = [];
+    let requested = 0;
+    const rt = createRuntime({
+      globals: { requestAnimationFrame: (cb: () => void) => (requested++, queue.push(cb)) },
+    });
+    const tick = (n: number) => {
+      for (let i = 0; i < n; i++) queue.splice(0).forEach((cb) => cb());
+    };
+    rt.createApp({ render: () => null }).mount();
+    const root = rt.global.document.documentElement;
+    rt.host.boundsById.set(root.__vnId, "0,0,800,600");
+    const el = rt.nodeOps.createElement("div");
+    rt.nodeOps.insert(el, root, null);
+    rt.host.boundsById.set(el.__vnId, "100,100,200,100");
+    const seen: any[] = [];
+    const ob = new rt.global.IntersectionObserver((entries: any[]) => seen.push(...entries));
+    ob.observe(el);
+    tick(10);
+    expect(seen.length).toBe(1);
+    expect(queue.length).toBe(0);
+    expect(rt.host.layout.watching).toBe(true);
+    const idle = requested;
+    tick(50);
+    expect(requested).toBe(idle);
+    // Scrolled out, in a frame the host built: reported from the hook.
+    rt.host.boundsById.set(el.__vnId, "100,700,200,100");
+    rt.host.layout.built();
+    expect(seen.map((e) => e.isIntersecting)).toEqual([true, false]);
+    tick(10);
+    expect(requested - idle).toBe(2);
+    expect(rt.host.layout.watching).toBe(true);
     ob.disconnect();
   });
 });

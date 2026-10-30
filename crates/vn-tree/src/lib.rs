@@ -209,6 +209,78 @@ host_fn!(fn vn_set_dispatcher(g, args) {
 });
 
 // ---------------------------------------------------------------------------
+// the layout signal (m26 client sweep #27)
+// ---------------------------------------------------------------------------
+//
+// ResizeObserver and IntersectionObserver sample layout, and layout only
+// changes in a frame the host builds. Polling every frame regardless kept an
+// idle app with an observer running JS at the display's rate. So once a poll
+// finds nothing changed, the runtime parks it (`__vn_layout_watch`), and the
+// host calls the runtime's hook (`__vn_set_layout_hook`) once, from the first
+// frame tick after the next build.
+
+thread_local! {
+    /// The runtime's layout hook, a protected JS function; 0 = none.
+    static LAYOUT_HOOK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The build count the parked runtime has seen; `None` = not parked.
+    static LAYOUT_WATCH: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+host_fn!(fn vn_set_layout_hook(g, args) {
+    let f = args.arg(0);
+    unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
+    let old = LAYOUT_HOOK.with(|c| c.replace(f.0));
+    if old != 0 {
+        unsafe { vn_runtime::redjs::ffi::redjs_unprotect(g, old) };
+    }
+    UNDEF
+});
+
+host_fn!(fn vn_layout_watch(_g, _args) {
+    watch_layout();
+    UNDEF
+});
+
+/// Parks the runtime's samplers until the next build in any window.
+fn watch_layout() {
+    LAYOUT_WATCH.with(|c| c.set(Some(render::layout_count())));
+}
+
+/// `true` once per park, on the first call after a build: the watch is taken.
+fn take_layout_watch() -> bool {
+    let Some(seen) = LAYOUT_WATCH.with(|c| c.get()) else { return false };
+    if render::layout_count() == seen {
+        return false;
+    }
+    LAYOUT_WATCH.with(|c| c.set(None));
+    true
+}
+
+/// Calls the runtime's layout hook if it is parked and a frame has been built
+/// since. Once per park: the runtime parks again when its polls go quiet.
+fn wake_layout_watchers(window: &mut gpui::Window, cx: &mut gpui::App) {
+    if !take_layout_watch() {
+        return;
+    }
+    let f = LAYOUT_HOOK.with(|c| c.get());
+    if f == 0 {
+        return;
+    }
+    render::js_wave_app(window, cx, || {
+        JsRuntime::with(|rt| {
+            if let Err(vn_runtime::redjs::api::Error::Exception(e)) =
+                rt.ctx().call(Value(f), Value::undefined(), &[])
+            {
+                let err = rt.describe(e);
+                log::record("js", format!("[layout hook] {}\n{}", err.header, err.stack));
+            }
+            rt.ctx().drain_microtasks();
+        });
+        true
+    });
+}
+
+// ---------------------------------------------------------------------------
 // the DOM surface (compat roadmap G2) — see `dom.rs` for the semantics
 // ---------------------------------------------------------------------------
 
@@ -413,6 +485,8 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_set_listener", 3, vn_set_listener as *const _),
         ("__vn_create_root", 0, vn_create_root as *const _),
         ("__vn_set_dispatcher", 1, vn_set_dispatcher as *const _),
+        ("__vn_set_layout_hook", 1, vn_set_layout_hook as *const _),
+        ("__vn_layout_watch", 0, vn_layout_watch as *const _),
         ("__vn_query", 3, vn_query as *const _),
         ("__vn_bounds", 1, vn_bounds as *const _),
         ("__vn_computed_style", 1, vn_computed_style as *const _),
@@ -695,6 +769,8 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // hook that fires it, and the `true` is what repaints a scroll no
     // `@scroll` listener was watching.
     let scrolled = scroll::dispatch_pending(window, cx);
+    // ResizeObserver and IntersectionObserver, parked until a frame is built.
+    wake_layout_watchers(window, cx);
     anim | lottie_moved | video_moved | canvas_moved | scrolled
 }
 
@@ -926,6 +1002,22 @@ mod tests {
         let other = mounted_child();
         assert_eq!(dom::bounds(other), (None, false));
         assert!(flush_changes(), "a forced layout that drew still repaints every window");
+    }
+
+    /// m26 client sweep #27. A parked runtime is woken once, by the first
+    /// frame tick after a build, and not again until it parks again: an idle
+    /// window runs no observer JS at all.
+    #[test]
+    fn a_parked_layout_watch_wakes_once_after_a_build() {
+        assert!(!take_layout_watch(), "nothing parked");
+        watch_layout();
+        assert!(!take_layout_watch(), "no build yet");
+        assert!(!take_layout_watch(), "still none");
+        render::note_build();
+        assert!(take_layout_watch(), "a build wakes it");
+        assert!(!take_layout_watch(), "once");
+        render::note_build();
+        assert!(!take_layout_watch(), "not parked again, so not woken again");
     }
 
     /// What may draw: a dispatch under `off_input` (the pump, a deferred wave)

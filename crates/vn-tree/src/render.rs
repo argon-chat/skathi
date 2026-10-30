@@ -78,6 +78,12 @@ thread_local! {
     /// update, i.e. every event handler — and a caller that has to report a
     /// stale answer has no other way to tell (`crate::dom::layout_if_stale`).
     static BUILDS: Cell<u64> = const { Cell::new(0) };
+    /// Builds in ANY window, a pop-out's included: when layout can have moved.
+    /// It is what parks ResizeObserver and IntersectionObserver
+    /// (`crate::wake_layout_watchers`). [`BUILDS`] stays the primary window's
+    /// alone, because a pop-out's build is not the forced layout a DOM read on
+    /// the main window asked for.
+    static LAYOUTS: Cell<u64> = const { Cell::new(0) };
     /// Nodes that are being painted by SOME OTHER window (docs/MULTIWINDOW.md).
     /// A popped-out node stays in the retained tree — it keeps its id, its
     /// listeners, its computed style and its Vue reactivity — but it generates
@@ -348,10 +354,16 @@ pub(crate) fn build_count() -> u64 {
     BUILDS.with(|c| c.get())
 }
 
+/// Builds in any window since the process started — see [`LAYOUTS`].
+pub(crate) fn layout_count() -> u64 {
+    LAYOUTS.with(|c| c.get())
+}
+
 /// A build, for a test that has no window to build in.
 #[cfg(test)]
 pub(crate) fn note_build() {
     BUILDS.with(|c| c.set(c.get().wrapping_add(1)));
+    LAYOUTS.with(|c| c.set(c.get().wrapping_add(1)));
 }
 
 /// The [`ScrollHandle`] a scroll container owns, or `None` for anything the
@@ -1687,6 +1699,7 @@ fn with_control_area<E: gpui::InteractiveElement>(
 /// and the two do the same per-window bookkeeping against their own window.
 pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyElement {
     BUILDS.with(|c| c.set(c.get().wrapping_add(1)));
+    LAYOUTS.with(|c| c.set(c.get().wrapping_add(1)));
     // ONE clock read per frame: nodes animating together must sample the same
     // instant or they skew.
     let now = std::time::Instant::now();
@@ -1750,6 +1763,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
 ///   fake the first two and could not fake the third at all, which is why a
 ///   pop-out could not hold keyboard focus.
 pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<V>) -> AnyElement {
+    LAYOUTS.with(|c| c.set(c.get().wrapping_add(1)));
     let now = std::time::Instant::now();
     // Per WINDOW, and a pop-out is a window of its own.
     arm_pick_hitboxes(window);

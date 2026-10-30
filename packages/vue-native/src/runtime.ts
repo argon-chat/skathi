@@ -2309,12 +2309,17 @@ function hostScroll(
  * The one honest gap in this surface, named once per session.
  *
  * A browser lays out on read, so `list.append(row); list.scrollTop =
- * list.scrollHeight` sees the row. Here layout is a frame, and the host can
- * only force one where a second `Window::draw` is legal — during boot, module
- * evaluation and `onMounted`, and NOWHERE inside an event handler or a timer,
- * because those already run inside the window's own update. So a content-size
- * read (or the clamp that uses it) in the same JS wave as a DOM change answers
- * the last painted frame, and "scroll to bottom" lands one item short.
+ * list.scrollHeight` sees the row. Here layout is a frame, and the host forces
+ * one wherever a draw is legal: boot, timers, rAF, fetch/XHR/WebSocket
+ * callbacks, mousemove, mouseup, a mouse click, contextmenu and a text field's
+ * `input` all lay out on read (m26 #8). The exception is a handler that a gpui
+ * listener calls directly — keydown/keyup (and the click Enter or Space
+ * makes), mousedown, wheel, the clipboard events, and focus/blur, which run
+ * inside gpui's own draw — because a draw there would
+ * swap or nest the frame gpui is dispatching from (`vn_tree::
+ * in_input_dispatch`). Only there does a content-size read (or the clamp that
+ * uses it) in the same JS wave as a DOM change answer the last painted frame,
+ * so "scroll to bottom" from a keydown lands one item short.
  *
  * The offset itself is never stale — `el.scrollTop` is exact at all times, and
  * so is a scroll to a position the app computed itself. This is only about
@@ -2324,10 +2329,12 @@ function noteStale(): void {
   warnCompat(
     "scroll-layout",
     "scrollWidth/scrollHeight (and the clamp on a scroll) answered from the LAST PAINTED frame: " +
-      "the DOM changed in this same wave and a layout cannot be forced from inside an event " +
-      "handler here (it can during boot/onMounted). `el.scrollTop = el.scrollHeight` right after " +
-      "adding content therefore stops one item short — do it inside requestAnimationFrame(), " +
-      "which runs after the frame that laid the new content out",
+      "the DOM changed in this same wave, and a layout cannot be forced inside a keydown/keyup " +
+      "(or the click Enter/Space makes), mousedown, wheel, clipboard or focus/blur handler here " +
+      "(it can everywhere else: timers, rAF, fetch callbacks, mouseup/click, input). " +
+      "`el.scrollTop = el.scrollHeight` right after adding content from such a handler therefore " +
+      "stops one item short — do it inside requestAnimationFrame(), which runs after the frame " +
+      "that laid the new content out",
   );
 }
 
@@ -3765,6 +3772,9 @@ const realm = (() => {
       __vn_log("reload: teardown: " + e);
     }
     realm.close();
+    // The host keeps calling the layout hook it was given until the next
+    // runtime installs its own; with nothing parked, the old one does nothing.
+    parkedSamplers.clear();
     // Last: the teardown and the realm hygiene above still call through the
     // globals they are about to lose.
     const kept = resetGlobals();
@@ -5550,10 +5560,11 @@ defineGlobal(
 //
 // gpui recomputes layout every frame and publishes no per-element resize
 // SIGNAL, but it does publish the resulting rectangle (`__vn_bounds`) — so the
-// observer polls its targets once per animation frame and reports the frames on
+// observer polls its targets on animation frames and reports the frames on
 // which a size actually changed. That is a frame of latency against a browser's
-// notification, and it costs one host call per observed element per frame while
-// anything is observed (nothing is, until something floats).
+// notification, and it costs one host call per observed element per polled
+// frame. Polls stop when they go quiet and resume after the host's next build
+// (`parkSampler`, below), so an idle window polls nothing.
 //
 // It has to be real: @floating-ui's `autoUpdate` positions an element ONCE and
 // then waits for a ResizeObserver to tell it the element has been laid out. An
@@ -5575,8 +5586,60 @@ interface ResizeObserverLike {
   _targets: Map<MirrorElement, { w: number; h: number } | null>;
 }
 
+// -- Parking the layout samplers (m26 client sweep #27).
+//
+// Layout only moves in a frame the host builds, and an idle window builds
+// none. Polling every animation frame regardless meant that one observed
+// element (every mounted popover anchor, every `visible` motion) requested a
+// rAF on every frame, so an idle app ran JS at the display's rate and never
+// stopped redrawing. A sampler therefore keeps polling only while its polls
+// find something: after `QUIET_POLLS` polls in a row that report nothing, it
+// PARKS, and the host calls `wakeSamplers` from the first frame tick after its
+// next build in any window (`__vn_layout_watch`, `crates/vn-tree` `LAYOUTS`).
+// Any change that can move a box goes through a build: a tree mutation, a
+// style or class write, a viewport resize, a font load, hover, scrolling, an
+// animation frame. So a parked sampler misses nothing; it costs the one
+// frame of latency that polling already had. `observe()` un-parks at once,
+// because a browser reports a target's first state without waiting for a
+// change.
+const QUIET_POLLS = 2;
+const parkedSamplers = new Set<() => void>();
+let layoutHookSet = false;
+let layoutSafetyTimer: unknown = null;
+const layoutTimers = globalThis as { setTimeout?: (cb: () => void, ms: number) => unknown; clearTimeout?: (id: unknown) => void };
+
+/** The host's call: a frame was built since the samplers parked. */
+function wakeSamplers() {
+  if (layoutSafetyTimer != null) layoutTimers.clearTimeout?.(layoutSafetyTimer);
+  layoutSafetyTimer = null;
+  const woken = [...parkedSamplers];
+  parkedSamplers.clear();
+  for (const poll of woken) poll();
+}
+
+/** Parks `poll` until the host has built a frame. */
+function parkSampler(poll: () => void) {
+  parkedSamplers.add(poll);
+  if (typeof __vn_layout_watch === "function" && typeof __vn_set_layout_hook === "function") {
+    if (!layoutHookSet) {
+      __vn_set_layout_hook(wakeSamplers);
+      layoutHookSet = true;
+    }
+    __vn_layout_watch();
+    return;
+  }
+  // A SAFETY NET, not the mechanism: only a host without the layout signal
+  // (an older shell, a test harness that leaves it out) gets here, and a slow
+  // re-poll keeps such an observer working at a quarter-second's latency
+  // instead of going deaf.
+  if (layoutSafetyTimer == null && typeof layoutTimers.setTimeout === "function") {
+    layoutSafetyTimer = layoutTimers.setTimeout(wakeSamplers, 250);
+  }
+}
+
 const resizeObservers = new Set<ResizeObserverLike>();
 let resizePollQueued = false;
+let resizeQuiet = 0;
 
 function scheduleResizePoll() {
   if (resizePollQueued) return;
@@ -5588,7 +5651,13 @@ function scheduleResizePoll() {
 
 function pollResizeObservers() {
   resizePollQueued = false;
+  sampleResizes();
+}
+
+/** One poll; keeps polling while it finds changes, then parks (`parkSampler`). */
+function sampleResizes() {
   let observing = false;
+  let changed = false;
   for (const ob of [...resizeObservers]) {
     if (!ob._targets.size) continue;
     observing = true;
@@ -5601,6 +5670,7 @@ function pollResizeObservers() {
       entries.push({ target: node, contentRect: r, borderBoxSize: box, contentBoxSize: box, devicePixelContentBoxSize: box });
     }
     if (entries.length) {
+      changed = true;
       try {
         ob._callback(entries, ob);
       } catch (e) {
@@ -5608,7 +5678,10 @@ function pollResizeObservers() {
       }
     }
   }
-  if (observing) scheduleResizePoll();
+  if (!observing) return;
+  resizeQuiet = changed ? 0 : resizeQuiet + 1;
+  if (resizeQuiet < QUIET_POLLS) scheduleResizePoll();
+  else parkSampler(sampleResizes);
 }
 
 defineGlobal(
@@ -5626,6 +5699,7 @@ defineGlobal(
       // which is what a browser does on `observe()` too.
       this._targets.set(node, null);
       resizeObservers.add(this);
+      resizeQuiet = 0;
       scheduleResizePoll();
     }
     unobserve(node: MirrorElement) {
@@ -5690,14 +5764,25 @@ function scheduleIntersectionPoll() {
 
 function pollIntersectionObservers() {
   intersectionPollQueued = false;
+  sampleIntersections();
+}
+
+let intersectionQuiet = 0;
+
+/** One poll; keeps polling while it finds changes, then parks (`parkSampler`). */
+function sampleIntersections() {
   let observing = false;
+  let busy = false;
   const now = (globalThis as { performance?: { now(): number } }).performance?.now() ?? Date.now();
   for (const ob of [...intersectionObservers]) {
     if (!ob._targets.size) continue;
     observing = true;
-    ob._update(now);
+    if (ob._update(now)) busy = true;
   }
-  if (observing) scheduleIntersectionPoll();
+  if (!observing) return;
+  intersectionQuiet = busy ? 0 : intersectionQuiet + 1;
+  if (intersectionQuiet < QUIET_POLLS) scheduleIntersectionPoll();
+  else parkSampler(sampleIntersections);
 }
 
 const ioRect = (x: number, y: number, width: number, height: number): MirrorRect => ({
@@ -5775,6 +5860,7 @@ class VnIntersectionObserver {
     if (this._targets.has(target)) return;
     this._targets.set(target, { prevIndex: -1, prevIntersecting: false, waited: 0 });
     intersectionObservers.add(this);
+    intersectionQuiet = 0;
     scheduleIntersectionPoll();
   }
   unobserve(target: MirrorElement) {
@@ -5805,13 +5891,16 @@ class VnIntersectionObserver {
     const bottom = r.bottom + px(b, r.height);
     return ioRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
   }
-  _update(time: number) {
+  /** One sample. `true` while it is not quiet: it reported, or a target is still waiting for its first layout. */
+  _update(time: number): boolean {
     const rootBounds = this._rootBounds();
+    let busy = false;
     for (const [target, state] of this._targets) {
       const painted = !!boundsOf(target);
       // Never painted yet: give the first layout a few frames (see the header).
       if (!painted && state.prevIndex === -1 && state.waited < 3) {
         state.waited++;
+        busy = true;
         continue;
       }
       let isIntersecting = false;
@@ -5855,12 +5944,13 @@ class VnIntersectionObserver {
       );
     }
     const records = this.takeRecords();
-    if (!records.length) return;
+    if (!records.length) return busy;
     try {
       this._callback.call(this, records, this);
     } catch (e) {
       console.error(`[vue-native] IntersectionObserver callback threw: ${e}`);
     }
+    return true;
   }
 }
 

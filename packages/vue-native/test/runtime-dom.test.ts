@@ -422,9 +422,10 @@ describe("programmatic scrolling drives the host's ScrollHandle", () => {
 
   test("a content-size answer the host calls STALE becomes one advisory", () => {
     // The honest gap: a browser lays out on read, and here layout is a frame.
-    // The host can force one during boot/onMounted and nowhere inside an event
-    // handler, so `el.scrollTop = el.scrollHeight` right after adding content
-    // stops one item short — and must say so rather than be quietly wrong.
+    // The host forces one on read everywhere except under a gpui listener
+    // (keydown/keyup, mousedown, wheel, clipboard, focus/blur), so there
+    // `el.scrollTop = el.scrollHeight` right after adding content stops one
+    // item short — and must say so rather than be quietly wrong.
     const rt = createRuntime();
     const { section } = tree(rt);
     scroller(rt, section);
@@ -723,12 +724,110 @@ describe("ResizeObserver samples the host's layout", () => {
     // No change -> no callback.
     await frame();
     expect(seen).toEqual([[100]]);
-    // A real change -> exactly one more.
+    // A real change -> exactly one more. A box only moves in a frame the host
+    // builds, and the build is what wakes the parked poll.
     rt.host.boundsById.set(button.__vnId, "0,0,250,40");
+    rt.host.layout.built();
     await frame();
     await frame();
     expect(seen).toEqual([[100], [250]]);
     ob.disconnect();
+  });
+});
+
+// m26 client sweep #27: one observed element used to request an animation
+// frame on every frame for as long as it was observed, so an idle app never
+// stopped running JS and redrawing. The poll now parks after two quiet polls
+// and the host wakes it after its next build (`host.layout.built()` here).
+describe("the layout samplers park while nothing changes", () => {
+  /** Animation frames run by hand, counting every request. */
+  function handFrames(globals: Record<string, unknown> = {}, layoutWatch = true) {
+    const queue: (() => void)[] = [];
+    const counter = { requested: 0 };
+    const rt = createRuntime({
+      globals: {
+        requestAnimationFrame: (cb: () => void) => {
+          counter.requested++;
+          return queue.push(cb);
+        },
+        ...globals,
+      },
+      layoutWatch,
+    });
+    const tick = (n = 1) => {
+      for (let i = 0; i < n; i++) queue.splice(0).forEach((cb) => cb());
+    };
+    return { rt, tick, counter, queue };
+  }
+
+  test("no frame is requested after the quiet polls, and a build wakes it again", () => {
+    const { rt, tick, counter, queue } = handFrames();
+    const { button, span } = tree(rt);
+    rt.host.boundsById.set(button.__vnId, "0,0,100,40");
+    const seen: number[][] = [];
+    const ob = new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.width)));
+    const r0 = counter.requested;
+    ob.observe(button);
+    tick(10);
+    expect(seen).toEqual([[100]]);
+    // observe, the poll that reported, two quiet polls; then parked.
+    expect(counter.requested - r0).toBe(3);
+    expect(queue.length).toBe(0);
+    expect(rt.host.layout.watching).toBe(true);
+
+    // An idle stretch: not one frame requested.
+    const idle = counter.requested;
+    tick(50);
+    expect(counter.requested).toBe(idle);
+
+    // A build that moved nothing it watches: one poll from the host's hook,
+    // parked again at once, still no frame.
+    rt.host.layout.built();
+    expect(counter.requested).toBe(idle);
+    expect(rt.host.layout.watching).toBe(true);
+
+    // A mutation that resizes it: the build wakes the poll, which reports in
+    // that same tick and polls on until it is quiet again.
+    rt.host.boundsById.set(button.__vnId, "0,0,250,40");
+    rt.host.layout.built();
+    expect(seen).toEqual([[100], [250]]);
+    tick(10);
+    expect(counter.requested - idle).toBe(2);
+    expect(rt.host.layout.watching).toBe(true);
+
+    // observe() while parked reports the new target's first size at once,
+    // without waiting for a build, as a browser does.
+    rt.host.boundsById.set(span.__vnId, "0,0,30,10");
+    ob.observe(span);
+    tick();
+    expect(seen.at(-1)).toEqual([30]);
+    ob.disconnect();
+  });
+
+  test("a host without the layout signal re-polls on a slow timer, as a safety net", () => {
+    const timers = new Map<number, { cb: () => void; ms: number }>();
+    let nextTimer = 1;
+    const { rt, tick, queue } = handFrames(
+      {
+        setTimeout: (cb: () => void, ms: number) => (timers.set(nextTimer, { cb, ms }), nextTimer++),
+        clearTimeout: (id: number) => timers.delete(id),
+      },
+      false,
+    );
+    const { button } = tree(rt);
+    rt.host.boundsById.set(button.__vnId, "0,0,100,40");
+    const seen: number[][] = [];
+    new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.width))).observe(button);
+    tick(10);
+    expect(seen).toEqual([[100]]);
+    expect(queue.length).toBe(0);
+    const slow = [...timers].filter(([, t]) => t.ms === 250);
+    expect(slow.length).toBe(1);
+    rt.host.boundsById.set(button.__vnId, "0,0,250,40");
+    const [id, t] = slow[0];
+    timers.delete(id);
+    t.cb();
+    expect(seen).toEqual([[100], [250]]);
   });
 });
 

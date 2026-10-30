@@ -157,6 +157,8 @@ export function createRuntime(
     globals?: Record<string, unknown>;
     launch?: Record<string, unknown>;
     styleAccepts?: boolean;
+    /** `false`: no `__vn_layout_watch` / `__vn_set_layout_hook` (an older host). */
+    layoutWatch?: boolean;
     /**
      * Evaluate into an EXISTING world's global (`rt.global`) instead of a
      * fresh one: what `location.reload()` and the dev host's cold restart
@@ -199,6 +201,22 @@ export function createRuntime(
     queryCalls: [],
     /** `__vn_bounds` answers: node id -> "x,y,w,h". */
     boundsById: new Map(),
+    /**
+     * The layout signal (`crates/vn-tree` `wake_layout_watchers`), faked: the
+     * hook the runtime installed, whether it is parked (`watching`), and how
+     * many times it parked. `host.layout.built()` is a frame built in some
+     * window followed by the next frame tick — it wakes a parked runtime, once.
+     */
+    layout: {
+      hook: null as (() => void) | null,
+      watching: false,
+      watches: 0,
+      built() {
+        if (!this.watching) return;
+        this.watching = false;
+        this.hook?.();
+      },
+    },
     /** `__vn_computed_style` answers: node id -> "k=v\n…". */
     computedById: new Map(),
     /**
@@ -570,6 +588,8 @@ export function createRuntime(
     "__vn_style_accepts",
     // canvas.ts's one export (see `loadAdoptCanvas`).
     "adoptCanvas",
+    "__vn_set_layout_hook",
+    "__vn_layout_watch",
   ];
   let nextId = 1;
   /**
@@ -911,6 +931,19 @@ export function createRuntime(
           return !host.styleRejects.has(`${nameOf(key)}: ${value}`);
         },
     loadAdoptCanvas(),
+    // `__vn_set_layout_hook` / `__vn_layout_watch`. `layoutWatch: false` makes
+    // them absent, which is an older host: the runtime's safety-net timer.
+    options.layoutWatch === false
+      ? undefined
+      : (fn: () => void) => {
+          host.layout.hook = fn;
+        },
+    options.layoutWatch === false
+      ? undefined
+      : () => {
+          host.layout.watching = true;
+          host.layout.watches++;
+        },
   ];
 
   if (!withStorage) {
