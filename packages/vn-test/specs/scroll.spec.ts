@@ -87,23 +87,45 @@ describe("el.scrollTop / scrollLeft", () => {
     expect(last).toBeLessThan(1000);
   }, T);
 
-  test("a content size read in the same wave as a DOM change SAYS it is a frame old", async () => {
-    // The one honest gap, pinned so it cannot become silent. A browser lays
-    // out on read; here layout is a frame, and the host can only force one
-    // where a second `Window::draw` is legal — boot, module evaluation and
-    // `onMounted`, and nowhere inside an event handler. So a `scrollHeight`
-    // read in the same wave as a DOM change answers the last painted frame,
-    // and `list.scrollTop = list.scrollHeight` would stop one item short.
-    // That is a divergence, so it leaves an advisory rather than a wrong
-    // number nobody is told about.
+  test("a content size read in the same wave as a DOM change lays out; under a gpui listener it SAYS it is a frame old", async () => {
+    // A browser lays out on read. The host forces a layout wherever no gpui
+    // dispatch is under the wave (docs/RUNTIME.md §5.8), and a devtools
+    // command runs in the frame pump, so a read there is exact. Under a gpui
+    // listener (`keydown`, `mousedown`, `wheel`, …) it cannot draw, so a
+    // `scrollHeight` read in the same wave as a DOM change answers the last
+    // painted frame, and `list.scrollTop = list.scrollHeight` would stop one
+    // item short. That is the one honest gap, pinned so it cannot become
+    // silent: it leaves an advisory rather than a wrong number nobody is told
+    // about.
+    //
+    // Row 0 also gets `flex-shrink: 0`. It is an item of the column-flex
+    // `#list`, so with the default `flex-shrink: 1` and `min-height: auto` a
+    // `height: 4000px` shrinks back to its content, ~25 px. Chrome does the
+    // same (CSS Flexbox §4.5, §9.7), so without it the row never grows.
+    const row0 = `document.querySelector('[data-row="0"]').style`;
     await reset();
     const before = (await onList("l.scrollHeight")) as number;
-    const sameWave = (await app.eval(
-      `(() => { const l = document.querySelector(${JSON.stringify(LIST)});
-        document.querySelector('[data-row="0"]').style.setProperty("height", "4000px");
-        return l.scrollHeight; })()`,
+    const grown = (await onList(
+      `(${row0}.setProperty("height", "4000px"), ${row0}.setProperty("flex-shrink", "0"), l.scrollHeight)`,
     )) as number;
-    expect(sameWave).toBe(before); // a frame old, as advertised
+    expect(grown).toBeGreaterThan(before + 3000); // laid out on read
+
+    // Under a keydown listener: shrink the row back and read in the handler.
+    await onList(
+      `(globalThis.__vnSameWave = null, l.addEventListener("keydown", (e) => {
+        if (e.key !== "x" || globalThis.__vnSameWave !== null) return;
+        ${row0}.removeProperty("height");
+        globalThis.__vnSameWave = l.scrollHeight;
+      }), 0)`,
+    );
+    await app.locator(LIST).focus();
+    await app.locator(LIST).press("x");
+    let sameWave: unknown = null;
+    for (let i = 0; i < 40 && sameWave === null; i++) {
+      sameWave = await app.eval("globalThis.__vnSameWave");
+      if (sameWave === null) await settle(50);
+    }
+    expect(sameWave).toBe(grown); // a frame old, as advertised
 
     const { entries } = await app.logs();
     const advised = entries.filter(
@@ -115,11 +137,8 @@ describe("el.scrollTop / scrollLeft", () => {
     // …and after the frame the number is exact, which is what the advisory
     // tells the app to wait for.
     await settle();
-    expect((await onList("l.scrollHeight")) as number).toBeGreaterThan(before + 3000);
-
-    await app.eval(`document.querySelector('[data-row="0"]').style.removeProperty("height")`);
-    await settle();
     expect(await onList("l.scrollHeight")).toBe(before);
+    await onList(`(${row0}.removeProperty("flex-shrink"), 0)`);
   }, T);
 
   test("the DOM `scroll` event fires — once, on the next frame", async () => {
