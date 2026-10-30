@@ -2835,23 +2835,6 @@ function isTextWidget(n: unknown): boolean {
   return !!e && e.kind === 1 && (e.tag === "textarea" || (e.tag === "input" && !isFileInput(e)));
 }
 
-/** The `<input>` types a key clicks: Enter and Space the buttons, Space alone the checkable ones. */
-const ENTER_CLICK_INPUTS = new Set(["button", "submit", "reset", "image", "file", "color"]);
-const SPACE_CLICK_INPUTS = new Set([...ENTER_CLICK_INPUTS, "checkbox", "radio"]);
-
-/**
- * Does a browser click this element from `key` (`"Enter"` or `" "`)? A
- * `<button>` and a `<summary>` for both keys, a link for Enter only, and the
- * button-like `<input>`s, plus a checkbox or radio for Space.
- */
-function clicksFromKey(n: unknown, key: string): boolean {
-  const e = n as MirrorElement | null | undefined;
-  if (!e || e.kind !== 1) return false;
-  if (e.tag === "button" || e.tag === "summary") return true;
-  if (key === "Enter" && isLink(e)) return true;
-  return e.tag === "input" && (key === "Enter" ? ENTER_CLICK_INPUTS : SPACE_CLICK_INPUTS).has(typeOf(e));
-}
-
 /** Is this a mirror `<label>`? */
 function isLabel(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;
@@ -4975,18 +4958,6 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
       "mousedown-prevent:text-field",
       "`mousedown.preventDefault()` on an <input> or <textarea> — a browser leaves the focus where it was; " +
         "vue-native's text field has already focused itself and placed the caret (docs/RUNTIME.md §5.8 L-2)",
-    );
-  }
-  // K-1 (docs/RUNTIME.md §5.11): the host clicks any focused box with a click
-  // listener from Enter or Space (`key` says which). A browser clicks only an
-  // element with an activation behaviour for that key.
-  if (name === "click" && key && !clicksFromKey(target, key)) {
-    warnCompat(
-      "keyboard-click:no-activation",
-      `a keyboard click (${key === " " ? "Space" : key}) on a <${(target as MirrorElement).tag}> — a browser clicks ` +
-        "only a button, a link (Enter), a summary or a button-like input from the keyboard; vue-native " +
-        "clicks any focused element with a click listener (docs/RUNTIME.md §5.11 K-1). Use a <button>, or " +
-        "handle the key yourself",
     );
   }
   // W-1 (docs/RUNTIME.md §5.9): a textarea scrolls itself inside the widget.

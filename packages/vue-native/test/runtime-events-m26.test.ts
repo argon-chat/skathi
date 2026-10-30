@@ -243,6 +243,8 @@ describe("keyboard clicks (docs/RUNTIME.md §5.11)", () => {
   const keyClick = (rt: Rt, el: El, key: string) =>
     rt.host.dispatcher(el.__vnId as number, rt.EV_CODES.click, 0, 0, 0, 0, key);
 
+  // Which elements the host clicks from a key is the host's rule
+  // (vn-tree `render::keyboard_activates`, and its Rust test).
   test("a keyboard click is detail 0, and one on a button or a link says nothing", () => {
     const rt = createRuntime({ MouseEvent: FakeMouseEvent });
     const { outer } = tree(rt);
@@ -260,15 +262,6 @@ describe("keyboard clicks (docs/RUNTIME.md §5.11)", () => {
     keyClick(rt, box, " ");
     expect(seen).toEqual([0, 0, 0, 0]);
     expect(rt.advisories()).toEqual([]);
-  });
-
-  test("one on an element with no activation behaviour for that key is advised once (K-1)", () => {
-    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
-    const { inner } = tree(rt);
-    inner.addEventListener("click", () => {});
-    keyClick(rt, inner, "Enter");
-    keyClick(rt, inner, " ");
-    expect(rt.advisories().filter((a) => a.includes("K-1")).length).toBe(1);
   });
 
   test("a mouse click carries no key and is not advised", () => {

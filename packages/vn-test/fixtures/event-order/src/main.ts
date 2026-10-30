@@ -85,6 +85,19 @@ createApp({
             },
             "btn-x",
           ),
+          // …and a box that is no button handles its own keys (reka's menu
+          // items): no click from Enter or Space, so its action runs once.
+          h(
+            "div",
+            {
+              id: "role-btn",
+              role: "button",
+              tabindex: 0,
+              onKeydown: (e: KeyboardEvent) => (e.key === "Enter" || e.key === " ") && rec("act-role")(e),
+              onClick: rec("click-role"),
+            },
+            "role",
+          ),
         ]),
         // 7. one wheel: the wheel, then the container's scroll
         h("div", { style: { display: "flex", gap: "4px" } }, [

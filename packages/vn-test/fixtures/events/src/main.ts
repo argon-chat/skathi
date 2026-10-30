@@ -99,7 +99,9 @@ createApp({
           },
           "pad2",
         ),
-        h("div", { id: "key", tabindex: 0, style: box, onClick: mouse("key") }, "key"),
+        // A <button>: only an element with an activation behaviour clicks from
+        // a key (docs/RUNTIME.md §5.11).
+        h("button", { id: "key", tabindex: 0, style: box, onClick: mouse("key") }, "key"),
         // Drawn in a corner rather than at the pointer, so it never covers a
         // box the spec aims at next; it says where the pointer was.
         menu.value

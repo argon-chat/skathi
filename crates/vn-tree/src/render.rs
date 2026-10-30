@@ -1331,6 +1331,36 @@ pub enum KeyClick {
     Arm(u32),
 }
 
+/// Does a browser click this element from Enter (`space` false) or Space? Only
+/// an element with an activation behaviour for that key does (Chromium's
+/// `DefaultEventHandler`s):
+/// - a `<button>` and a `<summary>`, for both keys;
+/// - an `<a href>` or `<area href>`, for Enter only;
+/// - a button-like `<input>` (`button`, `submit`, `reset`, `image`, `color`), for
+///   both keys;
+/// - a checkbox or a radio, for Space only.
+///
+/// A `<label>` has none, and a `<div role="button" tabindex="0">` has none: it
+/// handles its keys itself, and a click from the host would run its action
+/// twice. An `<input type=file>` is clicked by the runtime, from the key events
+/// it hears.
+fn keyboard_activates(id: u32, space: bool) -> bool {
+    tree::read_tree(|t| {
+        let Some(node) = t.node(id) else { return false };
+        let ty = || t.prop(id, "type").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
+        match t.name(node.tag) {
+            "button" | "summary" => true,
+            "a" | "area" => !space && t.prop(id, "href").is_some(),
+            "input" => match ty().as_str() {
+                "button" | "submit" | "reset" | "image" | "color" => true,
+                "checkbox" | "radio" => space,
+                _ => false,
+            },
+            _ => false,
+        }
+    })
+}
+
 /// Owes `step` for the key event being dispatched. A browser clicks as the
 /// DEFAULT action of the key event, after every handler and only if none
 /// cancelled it, and the ancestors' key handlers run after the focused box's
@@ -3858,6 +3888,7 @@ where
             // click waits for them (`keyboard_click_later`). Enter clicks on
             // its press, below.
             ClickEvent::Keyboard(k) => {
+                // Only a box whose Space press armed it (`keyboard_activates`).
                 if k.button == gpui::KeyboardButton::Space {
                     let (at, modifiers) = (ev.position(), ev.modifiers());
                     let step = KeyClick::Click { id, at, modifiers, armed: true, key: " " };
@@ -3874,6 +3905,8 @@ where
         // none cancelled it. gpui would click on the release, after `keyup`. A
         // held key repeats it, as a repeated keypress does. A Space press
         // only ARMS the click its release makes, and a cancelled one does not.
+        // Only an element with an activation behaviour for the key is clicked
+        // (`keyboard_activates`).
         if let Some(focus) = click_focus.clone() {
             e = e.on_key_down(cx.listener(move |_, ev: &KeyDownEvent, window, cx| {
                 let k = &ev.keystroke;
@@ -3881,7 +3914,7 @@ where
                     return;
                 }
                 match k.key.as_str() {
-                    "enter" => {
+                    "enter" if keyboard_activates(id, false) => {
                         // Where gpui's keyboard click says it is: the box's
                         // bottom left.
                         let at = windows::peek(windows::key(window), |w| w.bounds.get(&id).copied())
@@ -3891,7 +3924,7 @@ where
                         let step = KeyClick::Click { id, at, modifiers: k.modifiers, armed: false, key: "Enter" };
                         owe_key_click(step, window, &mut **cx);
                     }
-                    "space" => {
+                    "space" if keyboard_activates(id, true) => {
                         windows::here(window, |w| w.space_armed = None);
                         owe_key_click(KeyClick::Arm(id), window, &mut **cx);
                     }
@@ -5471,6 +5504,49 @@ mod tests {
         assert_eq!(s.enter(Layer::Positioned).0, None);
         assert_eq!(s.enter(Layer::Z(3)).0, None);
         assert_eq!(s.enter(Layer::Fixed).0, None);
+    }
+
+    /// Enter and Space click only what a browser clicks from the keyboard. A
+    /// `div role=button tabindex=0` handles its own keys (reka's menu items,
+    /// shadcn's toggles), and a click from the host would run its action twice.
+    #[test]
+    fn only_an_element_with_an_activation_behaviour_clicks_from_a_key() {
+        let el = |tag: &str, attrs: &[(&str, &str)]| {
+            with_tree(|t| {
+                let tag = t.intern(tag);
+                let id = t.create_element(tag);
+                for (name, value) in attrs {
+                    let key = t.intern(name);
+                    t.set_prop(id, key, Some((*value).to_string()));
+                }
+                id
+            })
+        };
+        // (element, Enter clicks, Space clicks)
+        let cases = [
+            (el("button", &[]), true, true),
+            (el("button", &[("type", "reset")]), true, true),
+            (el("summary", &[]), true, true),
+            (el("a", &[("href", "#x")]), true, false),
+            (el("a", &[]), false, false),
+            (el("area", &[("href", "#x")]), true, false),
+            (el("input", &[("type", "submit")]), true, true),
+            (el("input", &[("type", " Image ")]), true, true),
+            (el("input", &[("type", "color")]), true, true),
+            (el("input", &[("type", "checkbox")]), false, true),
+            (el("input", &[("type", "radio")]), false, true),
+            (el("input", &[("type", "file")]), false, false),
+            (el("input", &[]), false, false),
+            (el("label", &[]), false, false),
+            (el("div", &[("role", "button"), ("tabindex", "0")]), false, false),
+        ];
+        for (i, (id, enter, space)) in cases.into_iter().enumerate() {
+            assert_eq!(
+                (keyboard_activates(id, false), keyboard_activates(id, true)),
+                (enter, space),
+                "case {i}"
+            );
+        }
     }
 
     /// `<div class="flex gap-2">` with three components in it. Vue anchors each

@@ -86,6 +86,16 @@ test("Enter on a button clicks on the press, Space on the release", async () => 
   expectCheckpointed(space, ["keyup-btn", "click-btn"]);
 }, T);
 
+test("a div role=button that handles its own keys acts once, with no click", async () => {
+  // A browser clicks only an element with an activation behaviour; a click
+  // here as well would run a menu item's action twice.
+  const enter = await logOf(() => app.locator("#role-btn").press("Enter"), ["act-role"]);
+  const space = await logOf(() => app.locator("#role-btn").press("Space"), ["act-role"]);
+  await Bun.sleep(150);
+  expect([enter, space].map((l) => l.filter((e) => !e.endsWith(":mt")))).toEqual([["act-role"], ["act-role"]]);
+  expect((await readLog()).filter((e) => e.startsWith("click"))).toEqual([]);
+}, T);
+
 test("a cancelled Enter keydown or Space keyup clicks nothing", async () => {
   const enter = await logOf(() => app.locator("#btn-x").press("Enter"), ["keydown-x"]);
   const space = await logOf(() => app.locator("#btn-x").press("Space"), ["keyup-x"]);
