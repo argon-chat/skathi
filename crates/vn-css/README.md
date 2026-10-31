@@ -375,6 +375,23 @@ project's browser-compat-first policy.
     element's own width; and a `url()` background is not masked (advisory).
     Every other mask (a fade, an icon `url()`) paints the element unmasked,
     with the advisory "`mask` is not applied (v1)".
+13. **`border-radius` corners are circles** (m26). A corner of one length goes
+    in gpui's `corner_radii`. A percentage, a linear `calc()` with one, or an
+    elliptical `a / b` corner goes in the fork's `vn_corner_radii`, which gpui
+    resolves against the box at paint: the horizontal radius against the
+    width, the vertical against the height (`gpui::vn_resolve_corner_radii`).
+    CSS's overlap rule scales radii whose sum overruns a side, which is what
+    makes `rounded-full` (9999px) a pill. What differs:
+    - gpui draws circular corners, so a corner whose two radii differ takes
+      the smaller one. `50%` on a box that is not square is a pill where a
+      browser draws an ellipse. vn-tree advises once when that happens.
+    - Each radius is then clamped to half the box's shorter side, because the
+      shaders pick a corner by quadrant. CSS lets a lone large corner reach
+      past the middle.
+    - A transition does not interpolate such a corner. Toward one it snaps;
+      from one to a length it runs from 0.
+    The same radii clip `overflow` (docs/ARCHITECTURE.md, fork items 33 and
+    34).
 
 ---
 

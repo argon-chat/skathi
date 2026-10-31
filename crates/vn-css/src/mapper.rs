@@ -1634,9 +1634,9 @@ fn lp_leaf_px(lp: &LengthPercentage) -> Option<f32> {
 }
 
 /// [`calc_px`] over a `<length-percentage>` for a property whose percentage is
-/// NOT resolved at layout here (a background position, a gradient stop, a
-/// radius, a translation): a calc() that mixes one in is dropped, and
-/// [`calc_dropped`] says so.
+/// NOT resolved at layout or paint here (a background position, a gradient
+/// stop, a translation): a calc() that mixes one in is dropped, and
+/// [`calc_dropped`] says so. A radius resolves at paint (`corner`).
 fn lp_calc_px(c: &lightningcss::values::calc::Calc<LengthPercentage>) -> Option<f32> {
     let v = calc_px(c, &lp_leaf_px);
     if v.is_none() {
@@ -1732,6 +1732,35 @@ fn max_size_length(v: &lightningcss::properties::size::MaxSize) -> Option<Length
         MaxSize::None => Some(Length::Auto),
         MaxSize::LengthPercentage(lp) => lp_definite(lp).map(Length::Definite),
         _ => None,
+    }
+}
+
+/// One `border-*-radius` corner, horizontal and vertical radius.
+///
+/// A circle of one length goes in gpui's `corner_radii`. A percentage, a
+/// linear calc() with one, or an elliptical `a / b` corner goes in the fork's
+/// `vn_corner_radii`, which gpui resolves against the box at paint (with
+/// CSS's overlap rule, and as a circle of the smaller radius:
+/// `gpui::vn_resolve_corner_radii`). Each writes both fields, so whichever
+/// declaration comes later in the cascade wins the corner. A calc() that is
+/// not linear leaves the corner alone and is advised ([`calc_dropped`]).
+fn corner(
+    length: &mut Option<AbsoluteLength>,
+    relative: &mut Option<Option<gpui::VnCornerRadius>>,
+    radius: &lightningcss::values::size::Size2D<LengthPercentage>,
+) {
+    let (Some(x), Some(y)) = (lp_definite(&radius.0), lp_definite(&radius.1)) else {
+        return;
+    };
+    match (x, y) {
+        (DefiniteLength::Absolute(a), DefiniteLength::Absolute(b)) if a == b => {
+            *length = Some(a);
+            *relative = Some(None);
+        }
+        (x, y) => {
+            *length = Some(px(0.).into());
+            *relative = Some(Some(gpui::VnCornerRadius { x, y }));
+        }
     }
 }
 
@@ -3461,8 +3490,8 @@ fn apply(p: &Property, r: &mut StyleRefinement, x: &mut Extras, diagnostics: &mu
             format!(
                 "`{}`: this calc() is dropped (v1) — a calc() that mixes a percentage with a \
                  length is resolved at layout only by the sizing properties (width/height and \
-                 their min/max, inset, margin, padding, gap, flex-basis), and only in its \
-                 linear form (sums and scalings; min()/max()/clamp() over a percentage are \
+                 their min/max, inset, margin, padding, gap, flex-basis) and at paint by \
+                 border-radius, and only in its linear form (sums and scalings; min()/max()/clamp() over a percentage are \
                  not). Here the declaration is ignored, as if it were invalid. Write the \
                  length or the percentage alone, or move the offset into a sizing property",
                 p.property_id().name()
@@ -4158,16 +4187,32 @@ fn apply_property(
             set_border_style(r, *v, diagnostics);
         }
         BorderRadius(v, _) => {
-            r.corner_radii.top_left = lp_absolute(&v.top_left.0);
-            r.corner_radii.top_right = lp_absolute(&v.top_right.0);
-            r.corner_radii.bottom_left = lp_absolute(&v.bottom_left.0);
-            r.corner_radii.bottom_right = lp_absolute(&v.bottom_right.0);
+            corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, &v.top_left);
+            corner(&mut r.corner_radii.top_right, &mut r.vn_corner_radii.top_right, &v.top_right);
+            corner(
+                &mut r.corner_radii.bottom_right,
+                &mut r.vn_corner_radii.bottom_right,
+                &v.bottom_right,
+            );
+            corner(
+                &mut r.corner_radii.bottom_left,
+                &mut r.vn_corner_radii.bottom_left,
+                &v.bottom_left,
+            );
         }
         // `rounded-t` / `rounded-tl-lg` never use the shorthand.
-        BorderTopLeftRadius(v, _) => r.corner_radii.top_left = lp_absolute(&v.0),
-        BorderTopRightRadius(v, _) => r.corner_radii.top_right = lp_absolute(&v.0),
-        BorderBottomRightRadius(v, _) => r.corner_radii.bottom_right = lp_absolute(&v.0),
-        BorderBottomLeftRadius(v, _) => r.corner_radii.bottom_left = lp_absolute(&v.0),
+        BorderTopLeftRadius(v, _) => {
+            corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, v)
+        }
+        BorderTopRightRadius(v, _) => {
+            corner(&mut r.corner_radii.top_right, &mut r.vn_corner_radii.top_right, v)
+        }
+        BorderBottomRightRadius(v, _) => {
+            corner(&mut r.corner_radii.bottom_right, &mut r.vn_corner_radii.bottom_right, v)
+        }
+        BorderBottomLeftRadius(v, _) => {
+            corner(&mut r.corner_radii.bottom_left, &mut r.vn_corner_radii.bottom_left, v)
+        }
         // `grid-cols-N` / `grid-rows-N` -> `repeat(N, minmax(0, 1fr))`, which is
         // exactly (and only) what gpui's GridTemplate models.
         // Two shapes, cheapest first: `repeat(N, minmax(0, 1fr))` is what every
@@ -5718,6 +5763,41 @@ mod tests {
         assert_eq!(r.corner_radii.top_left, Some(px(8.0).into()));
         assert_eq!(r.corner_radii.bottom_right, Some(px(2.0).into()));
         assert_eq!(r.corner_radii.top_right, None);
+        // A length clears a percentage an earlier rule may have set.
+        assert_eq!(r.vn_corner_radii.top_left, Some(None));
+        assert_eq!(r.vn_corner_radii.top_right, None);
+    }
+
+    /// A percentage, a linear calc() and an elliptical corner go in the fork's
+    /// `vn_corner_radii`, resolved against the box at paint.
+    #[test]
+    fn relative_and_elliptical_radii_resolve_at_paint() {
+        let half = gpui::VnCornerRadius { x: relative(0.5), y: relative(0.5) };
+        let r = clean("border-radius: 50%");
+        for (length, relative) in [
+            (r.corner_radii.top_left, r.vn_corner_radii.top_left),
+            (r.corner_radii.top_right, r.vn_corner_radii.top_right),
+            (r.corner_radii.bottom_right, r.vn_corner_radii.bottom_right),
+            (r.corner_radii.bottom_left, r.vn_corner_radii.bottom_left),
+        ] {
+            assert_eq!(length, Some(px(0.).into()));
+            assert_eq!(relative, Some(Some(half)));
+        }
+
+        let r = clean("border-top-left-radius: calc(50% - 2px)");
+        let calc = DefiniteLength::Calc { fraction: 0.5, pixels: px(-2.) };
+        assert_eq!(r.vn_corner_radii.top_left, Some(Some(gpui::VnCornerRadius { x: calc, y: calc })));
+
+        let r = clean("border-radius: 10px / 20px");
+        assert_eq!(
+            r.vn_corner_radii.bottom_left,
+            Some(Some(gpui::VnCornerRadius { x: px(10.).into(), y: px(20.).into() }))
+        );
+
+        // A circle of one length stays on gpui's own field.
+        let r = clean("border-radius: 6px / 6px");
+        assert_eq!(r.corner_radii.top_right, Some(px(6.).into()));
+        assert_eq!(r.vn_corner_radii.top_right, Some(None));
     }
 
     // ---- flex shorthand / basis / wrap -----------------------------------
@@ -6119,8 +6199,9 @@ mod tests {
         advised("width: min(100%, 10px)", "width");
         advised("left: clamp(0px, 50%, 100px)", "left");
         // A property whose percentage is resolved before layout here.
-        advised("border-radius: calc(50% - 1px)", "border-radius");
         advised("background-position: calc(100% - 4px) 0", "background-position");
+        // A radius resolves at paint, but only a linear calc().
+        advised("border-radius: max(50%, 10px)", "border-radius");
         let (r, _) = map("width: min(100%, 10px)");
         assert_eq!(r.size.width, None);
     }

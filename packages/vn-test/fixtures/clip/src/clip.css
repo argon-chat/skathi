@@ -27,8 +27,24 @@
   top: 20px;
   width: 64px;
   height: 64px;
-  /* A length: vn-css does not map a percentage radius yet. */
-  border-radius: 32px;
+  border-radius: 50%;
+}
+/* `50%` on a box that is not square: CSS draws 60x22 elliptical corners;
+   gpui's are circles, so this is a 22px pill (crates/vn-css/README.md §5
+   item 13). */
+.oval {
+  position: absolute;
+  left: 20px;
+  top: 468px;
+  width: 120px;
+  height: 44px;
+  border-radius: 50%;
+  overflow: hidden;
+}
+.oval-fill {
+  width: 100%;
+  height: 100%;
+  background: red;
 }
 
 .card-a {

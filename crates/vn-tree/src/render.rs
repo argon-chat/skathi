@@ -1779,6 +1779,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     crate::aria::reset_frame();
     // …and the scroll-chain registry the wheel router walks (`vn_elements`).
     vn_elements::scrollbar::reset_frame();
+    advise_elliptical_corners();
     let win = windows::key(window);
     // The window that paints `Tree::root` is the primary one by definition, and
     // this is the only place that knows it — declared here rather than passed
@@ -2474,19 +2475,81 @@ fn apply_background_layers(
     }
 }
 
-/// The corner radii of an element's PADDING box — its border radii, less the
-/// border each corner sits in — which is where `crate::bgimage` paints.
-fn padding_box_radii(style: &gpui::StyleRefinement, rem: gpui::Pixels) -> gpui::Corners<gpui::Pixels> {
+/// The corner radii of an element's PADDING box, which is where
+/// `crate::bgimage` paints and what `clip_replaced` clips to.
+///
+/// A length corner is its border radius less the border it sits in. A
+/// relative corner (a percentage, a calc() with one, an `a / b` ellipse) is
+/// kept as written and measured against the padding box it is painted on
+/// ([`PaddingRadii::resolve`], or gpui's paint for a styled box). CSS measures
+/// it against the border box and then takes the border off. For `50%` the two
+/// agree exactly, and any other percentage lands within one border width.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PaddingRadii {
+    lengths: gpui::Corners<gpui::AbsoluteLength>,
+    relative: gpui::Corners<Option<gpui::VnCornerRadius>>,
+}
+
+impl PaddingRadii {
+    /// The radii a padding box of `size` paints, CSS's overlap rule included.
+    pub(crate) fn resolve(&self, size: gpui::Size<gpui::Pixels>, rem: gpui::Pixels) -> gpui::Corners<gpui::Pixels> {
+        gpui::vn_resolve_corner_radii(&self.lengths, &self.relative, size, rem)
+    }
+
+    fn is_square(&self) -> bool {
+        let zero = gpui::AbsoluteLength::from(gpui::px(0.));
+        let l = &self.lengths;
+        self.relative == gpui::Corners::default()
+            && [l.top_left, l.top_right, l.bottom_right, l.bottom_left].iter().all(|c| *c == zero)
+    }
+
+    /// Gives `style` these corners.
+    fn apply(&self, style: &mut gpui::StyleRefinement) {
+        let c = &mut style.corner_radii;
+        (c.top_left, c.top_right) = (Some(self.lengths.top_left), Some(self.lengths.top_right));
+        (c.bottom_right, c.bottom_left) =
+            (Some(self.lengths.bottom_right), Some(self.lengths.bottom_left));
+        let v = &mut style.vn_corner_radii;
+        (v.top_left, v.top_right) = (Some(self.relative.top_left), Some(self.relative.top_right));
+        (v.bottom_right, v.bottom_left) =
+            (Some(self.relative.bottom_right), Some(self.relative.bottom_left));
+    }
+}
+
+fn padding_box_radii(style: &gpui::StyleRefinement, rem: gpui::Pixels) -> PaddingRadii {
     let radius = |v: Option<gpui::AbsoluteLength>| v.map_or(0.0, |v| f32::from(v.to_pixels(rem)));
     let border = |v: Option<gpui::AbsoluteLength>| v.map_or(0.0, |v| f32::from(v.to_pixels(rem)));
     let (top, right) = (border(style.border_widths.top), border(style.border_widths.right));
     let (bottom, left) = (border(style.border_widths.bottom), border(style.border_widths.left));
-    let inner = |r: f32, a: f32, b: f32| gpui::px((r - a.max(b)).max(0.0));
-    gpui::Corners {
-        top_left: inner(radius(style.corner_radii.top_left), top, left),
-        top_right: inner(radius(style.corner_radii.top_right), top, right),
-        bottom_right: inner(radius(style.corner_radii.bottom_right), bottom, right),
-        bottom_left: inner(radius(style.corner_radii.bottom_left), bottom, left),
+    let inner = |r: f32, a: f32, b: f32| gpui::px((r - a.max(b)).max(0.0)).into();
+    let v = &style.vn_corner_radii;
+    PaddingRadii {
+        lengths: gpui::Corners {
+            top_left: inner(radius(style.corner_radii.top_left), top, left),
+            top_right: inner(radius(style.corner_radii.top_right), top, right),
+            bottom_right: inner(radius(style.corner_radii.bottom_right), bottom, right),
+            bottom_left: inner(radius(style.corner_radii.bottom_left), bottom, left),
+        },
+        relative: gpui::Corners {
+            top_left: v.top_left.flatten(),
+            top_right: v.top_right.flatten(),
+            bottom_right: v.bottom_right.flatten(),
+            bottom_left: v.bottom_left.flatten(),
+        },
+    }
+}
+
+/// gpui draws corners as circles. When it had to draw one where CSS asks for
+/// an ellipse (`50%` on a box that is not square, or an `a / b` radius), it
+/// says so, and this passes it on once.
+fn advise_elliptical_corners() {
+    if gpui::vn_take_ellipse_drawn_as_circle() {
+        warn_compat(
+            "elliptical-border-radius",
+            "an elliptical corner (`border-radius: 50%` on a box that is not square, or an \
+             `a / b` radius) is drawn as a circle of the smaller radius: a pill where a \
+             browser draws an ellipse. Square boxes and equal radii are exact",
+        );
     }
 }
 
@@ -2506,16 +2569,11 @@ pub(crate) fn clip_replaced(
     rem: gpui::Pixels,
 ) -> gpui::AnyElement {
     let radii = padding_box_radii(outer, rem);
-    if radii == gpui::Corners::default() {
+    if radii.is_square() {
         return picture;
     }
     let mut clip = gpui::div().size_full().overflow_hidden().child(picture);
-    clip.style().corner_radii = gpui::CornersRefinement {
-        top_left: Some(radii.top_left.into()),
-        top_right: Some(radii.top_right.into()),
-        bottom_right: Some(radii.bottom_right.into()),
-        bottom_left: Some(radii.bottom_left.into()),
-    };
+    radii.apply(clip.style());
     clip.into_any_element()
 }
 

@@ -44,11 +44,19 @@ use vn_css::{BackgroundSize, PaintLayer, TileLength};
 const MAX_TILES: usize = 4096;
 
 /// The child that paints `stack` over the padding box of node `id`.
-/// `radii` are the padding box's corner radii.
-pub(crate) fn layer_element(id: u32, stack: Vec<PaintLayer>, radii: Corners<Pixels>) -> AnyElement {
+/// `radii` are the padding box's corner radii, resolved against the box it
+/// paints (a percentage needs its size).
+pub(crate) fn layer_element(
+    id: u32,
+    stack: Vec<PaintLayer>,
+    radii: crate::render::PaddingRadii,
+) -> AnyElement {
     let mut c = canvas(
         |_, _, _| (),
-        move |bounds, (), window, cx| paint_stack(id, &stack, bounds, radii, window, cx),
+        move |bounds, (), window, cx| {
+            let radii = radii.resolve(bounds.size, window.rem_size());
+            paint_stack(id, &stack, bounds, radii, window, cx)
+        },
     );
     let style = c.style();
     style.position = Some(gpui::Position::Absolute);

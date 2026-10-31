@@ -3,7 +3,8 @@
 // avatars (reka's AvatarRoot, `rounded-full overflow-hidden` around an <img>)
 // came out square, and its rounded cards showed their lists' rows in the
 // corners. The fork's masks carry corner radii now (docs/ARCHITECTURE.md,
-// fork item 33).
+// fork item 33), and a percentage radius resolves against the box at paint
+// (fork item 34).
 //
 //   bun test packages/vn-test/specs/clip.spec.ts
 //
@@ -87,11 +88,35 @@ describe("a round avatar (reka's AvatarRoot around an <img>)", () => {
     bunExpect(red(s.at(b.x + 32, b.y + 2))).toBe(true);
   }, T);
 
-  test("an <img> rounded by its own border-radius is a disc too", async () => {
+  test("an <img> with `border-radius: 50%` is a disc too", async () => {
     const b = await box("#round-img");
     const s = await until(shoot, (s) => s.count(b, red) > 1000);
+    bunExpect(s.count(b, red)).toBeGreaterThan(3050);
     bunExpect(s.count(b, red)).toBeLessThan(3400);
     for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
+  }, T);
+
+  test("`50%` on a box that is not square clips to a pill", async () => {
+    // 120x44: CSS draws 60x22 elliptical corners (area pi*60*22 = 4147).
+    // gpui's corners are circles, so the smaller radius makes a 22px pill:
+    // 76*44 + pi*22^2 = 4865. The square box was 5280. This pins the
+    // documented divergence (crates/vn-css/README.md §5 item 13).
+    const b = await box("#oval");
+    bunExpect(b).toMatchObject({ w: 120, h: 44 });
+    const s = await until(shoot, (s) => s.count(b, red) > 1000);
+    bunExpect(s.count(b, red)).toBeGreaterThan(4750);
+    bunExpect(s.count(b, red)).toBeLessThan(5000);
+    for (const [x, y] of corners(b, 2)) bunExpect(white(s.at(x, y))).toBe(true);
+    bunExpect(red(s.at(b.x + 60, b.y + 1))).toBe(true);
+    bunExpect(red(s.at(b.x + 1, b.y + 22))).toBe(true);
+    // The advisory goes out on the build after the paint that drew the
+    // circle; nudge a frame in case the page has gone idle.
+    await app.eval(`document.getElementById("tick").style.right = "3px"`);
+    const said = await until(
+      async () => JSON.stringify((await app.logs()).entries),
+      (text) => text.includes("elliptical corner"),
+    );
+    bunExpect(said).toContain("elliptical corner");
   }, T);
 });
 

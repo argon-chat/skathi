@@ -23,8 +23,10 @@ const bands = (n: number) =>
 const avatars = () => [
   // reka's AvatarRoot + AvatarImage.
   h("span", { id: "avatar", class: "avatar" }, [h("img", { class: "avatar-img", src: RED, alt: "" })]),
-  // An <img> rounded by its own border-radius.
+  // An <img> rounded by its own `border-radius: 50%`.
   h("img", { id: "round-img", class: "round-img", src: RED, alt: "" }),
+  // `50%` on a box that is not square, clipping its child.
+  h("div", { id: "oval", class: "oval" }, [h("div", { class: "oval-fill" })]),
 ];
 
 const cards = () => [
