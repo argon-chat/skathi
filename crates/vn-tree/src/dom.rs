@@ -208,11 +208,28 @@ pub fn bounds(id: u32) -> (Option<(f32, f32, f32, f32)>, bool) {
     (bounds_now(id), stale)
 }
 
+/// Where CSS `transform` drew the node, in the same space as [`bounds`]: the
+/// bounding box of its border box under its own transform and its ancestors'.
+/// `getBoundingClientRect()` reports this in a browser, while `offsetWidth`,
+/// `clientWidth` and ResizeObserver keep the layout box. `None` when no
+/// transform moved it (the layout box is the answer) or it was not painted.
+/// Call it after [`bounds`], which forces the layout this reads.
+pub fn transformed(id: u32) -> Option<(f32, f32, f32, f32)> {
+    let (x, y, w, h) = crate::render::transformed_of(id)?;
+    let (ox, oy) = root_origin();
+    let (sx, sy) = crate::scroll::unpainted_shift(id);
+    Some((x - ox + sx, y - oy + sy, w, h))
+}
+
+fn root_origin() -> (f32, f32) {
+    crate::render::bounds_of(tree::read_tree(|t| t.root))
+        .map(|(rx, ry, _, _)| (rx, ry))
+        .unwrap_or((0.0, 0.0))
+}
+
 fn bounds_now(id: u32) -> Option<(f32, f32, f32, f32)> {
     let (x, y, w, h) = crate::render::bounds_of(id)?;
-    let (ox, oy) = crate::render::bounds_of(tree::read_tree(|t| t.root))
-        .map(|(rx, ry, _, _)| (rx, ry))
-        .unwrap_or((0.0, 0.0));
+    let (ox, oy) = root_origin();
     // A scroll that no frame has painted yet moved this rectangle and nothing
     // told the map. `row.scrollIntoView(); row.getBoundingClientRect()` answers
     // the NEW position in a browser, on the same line, and a forced layout

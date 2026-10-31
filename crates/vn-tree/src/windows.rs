@@ -120,6 +120,14 @@ pub struct WindowState {
     /// can read is last frame's. `<lottie>` and `<video>` need it to rasterise
     /// into a box whose size CSS expresses relatively.
     pub prev_bounds: HashMap<u32, Rect>,
+    /// Where CSS `transform` put a node, for the nodes it moved: the bounding
+    /// box of its border box under its own transform and its ancestors'. What
+    /// a browser's `getBoundingClientRect()` reports. A node absent here was
+    /// painted where it laid out, at its [`Self::bounds`].
+    pub transformed: HashMap<u32, Rect>,
+    /// The previous frame's [`Self::transformed`], rotated with
+    /// [`Self::prev_bounds`].
+    pub prev_transformed: HashMap<u32, Rect>,
 
     // --- input (§5.2) ------------------------------------------------------
     /// The one `mousemove` THIS window is allowed to deliver this frame.

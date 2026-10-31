@@ -224,21 +224,53 @@ fn reset_bounds(win: WinKey) {
     windows::of(win, |w| {
         let last = std::mem::take(&mut w.bounds);
         w.prev_bounds = last;
+        let last = std::mem::take(&mut w.transformed);
+        w.prev_transformed = last;
     });
 }
 
-fn record_bounds(id: u32, bounds: gpui::Bounds<gpui::Pixels>, window: &Window) {
-    let rect = (
+fn rect_of(bounds: gpui::Bounds<gpui::Pixels>) -> Rect {
+    (
         f32::from(bounds.origin.x),
         f32::from(bounds.origin.y),
         f32::from(bounds.size.width),
         f32::from(bounds.size.height),
-    );
+    )
+}
+
+/// `matrix` is the node's whole CSS `transform`, its ancestors' composed with
+/// its own: where the picture of the box is, which is what
+/// `getBoundingClientRect()` reports in a browser. The layout box stays the
+/// rectangle offsetWidth, ResizeObserver and hit-testing-by-rect read.
+fn record_bounds(
+    id: u32,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    matrix: gpui::TransformationMatrix,
+    window: &Window,
+) {
+    let rect = rect_of(bounds);
+    let moved = (!matrix.is_unit()).then(|| rect_of(window.transformed_bounds(matrix, bounds)));
     // Which window's prepaint recursion are we inside? gpui just told us: this
     // is the `&mut Window` it is running the recursion with. The spike had to
     // infer it from a `SubtreeScope` element that bracketed the recursion,
     // because the map was keyed by painted root rather than by window.
-    windows::here(window, |w| w.bounds.insert(id, rect));
+    windows::here(window, |w| {
+        w.bounds.insert(id, rect);
+        match moved {
+            Some(t) => w.transformed.insert(id, t),
+            // A prepaint can run twice in one frame (gpui's `transact`).
+            None => w.transformed.remove(&id),
+        };
+    });
+}
+
+/// Where CSS `transform` put the node, in the window [`bounds_of`] finds it
+/// in: `None` when nothing moved it, and its layout box is the answer.
+pub fn transformed_of(id: u32) -> Option<Rect> {
+    let k = windows::keys()
+        .into_iter()
+        .find(|&k| windows::peek(k, |w| w.bounds.contains_key(&id)) == Some(true))?;
+    windows::peek(k, |w| w.transformed.get(&id).copied()).flatten()
 }
 
 /// `(x, y, width, height)` in CSS pixels, **relative to the window that painted
@@ -445,23 +477,28 @@ impl gpui::Element for BoundsProbe {
         window: &mut Window,
         cx: &mut App,
     ) {
-        record_bounds(self.id, bounds, window);
+        // Recorded before the subtree prepaints, which may read it, as where
+        // the ancestors' transforms put the box; its own transform is only
+        // known once its element has prepainted, and amends it below.
+        let ancestors = window.element_transform();
+        record_bounds(self.id, bounds, ancestors, window);
         // Every hitbox gpui inserts from here down is tagged with this node id
         // until a descendant's own probe overrides it — which is how a node
         // gets back the hitbox gpui made for IT, under the transform and
         // content mask it made it under (see [`pick_hitbox`]). The previous tag
         // is restored on the way out, so the parent's boxes stay the parent's.
-        let tag = window.set_hitbox_tag(self.id);
-        if !self.root {
-            self.inner.prepaint(window, cx);
-            window.set_hitbox_tag(tag);
-            return;
+        let span = self.root.then(|| {
+            crate::perf::note_taffy_gap();
+            crate::perf::Span::start()
+        });
+        let (_, own) =
+            window.with_hitbox_tag(self.id, |window| self.inner.prepaint(window, cx));
+        if let Some(span) = span {
+            crate::perf::note_prepaint(span.ms());
         }
-        crate::perf::note_taffy_gap();
-        let span = crate::perf::Span::start();
-        self.inner.prepaint(window, cx);
-        window.set_hitbox_tag(tag);
-        crate::perf::note_prepaint(span.ms());
+        if let Some(matrix) = own {
+            record_bounds(self.id, bounds, matrix, window);
+        }
     }
 
     fn paint(
@@ -516,6 +553,8 @@ pub(crate) fn gc_node_state() {
     windows::each(|_, w| {
         w.bounds.retain(|&id, _| live(id));
         w.prev_bounds.retain(|&id, _| live(id));
+        w.transformed.retain(|&id, _| live(id));
+        w.prev_transformed.retain(|&id, _| live(id));
         w.focus_subs.retain(|&id, _| live(id));
     });
     // The browser rule: **detaching the focused element blurs it.** A node can

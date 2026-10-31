@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/transform-rects.spec.ts: getBoundingClientRect under CSS transforms (a popper moved by translate with a nested popper, a dialog centred with translate(-50%, -50%) with a select inside, a scale(0.95) open animation, an IntersectionObserver target translated off-screen). See ../README.md.",
+
+  "name": "vn-test-transform-rects",
+
+  "window": {
+    "title": "vue-native — transform rects (fixture)",
+    "width": 720,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -41,6 +41,9 @@ type VnIdList = string;
 /**
  * `"x,y,w,h"` as f32s, `""` when the node was not painted, or `"stale"` when it
  * has not been laid out YET and the host could not force a layout. See `__vn_bounds`.
+ * When a CSS `transform` (the node's or an ancestor's) moved the picture, four
+ * more follow, `"x,y,w,h,tx,ty,tw,th"`: the bounding box it was drawn at, which
+ * is getBoundingClientRect()'s answer; the first four stay the layout box.
  */
 type VnRect = string;
 /** `name=value` lines, `\n`-separated. `""` when there is nothing to report. */

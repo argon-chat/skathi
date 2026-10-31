@@ -2168,13 +2168,34 @@ function boundsOf(node: MirrorNode, kind?: string): VnRect {
   }
   return "";
 }
+/**
+ * The node's LAYOUT box: where it was laid out, before any CSS `transform`.
+ * What `offsetWidth`, `clientWidth`, `scrollWidth` and ResizeObserver report in
+ * a browser, which all ignore transforms. `getBoundingClientRect()` is
+ * {@link paintedRectOf}.
+ */
 function rectOf(node: MirrorNode, kind?: string): MirrorRect {
-  const raw = boundsOf(node, kind);
+  return rectFrom(boundsOf(node, kind), 0);
+}
+/**
+ * Where the node was DRAWN: the bounding box of its border box under its own
+ * `transform` and its ancestors'. `getBoundingClientRect()`, `getClientRects()`
+ * and IntersectionObserver report this in a browser. A popper is laid out at
+ * (0, 0) and moved by `transform: translate()`, and a dialog is centred with
+ * `translate(-50%, -50%)`: their contents measured from the layout box put
+ * anything anchored to them in the window's corner. The host appends these four
+ * numbers to `__vn_bounds` only when a transform moved the box.
+ */
+function paintedRectOf(node: MirrorNode, kind?: string): MirrorRect {
+  return rectFrom(boundsOf(node, kind), 4);
+}
+function rectFrom(raw: VnRect, at: 0 | 4): MirrorRect {
   // A node that was not painted (detached, `display: none`, parked in a
   // <KeepAlive> cache) reports nothing — and an all-zero rect is exactly what a
   // browser reports for those, so no advisory is warranted.
   if (!raw) return { ...ZERO_RECT, toJSON() { return this; } };
-  const [x, y, w, h] = raw.split(",").map(Number);
+  const n = raw.split(",").map(Number);
+  const [x, y, w, h] = n.length >= at + 4 ? n.slice(at, at + 4) : n;
   return {
     x, y, width: w, height: h,
     top: y, left: x, right: x + w, bottom: y + h,
@@ -2375,12 +2396,14 @@ defineDom("querySelectorAll", function (this: MirrorElement, selector: string) {
   return hostQuery(selector, this.__vnId, 0);
 });
 
-// -- layout, off the bounds gpui recorded for the last painted frame
+// -- layout, off the bounds gpui recorded for the last painted frame. The two
+// rect methods answer where the box was DRAWN (transforms applied); the size
+// and scroll accessors below answer the layout box, as in a browser.
 defineDom("getBoundingClientRect", function (this: MirrorElement) {
-  return asDomRect(rectOf(this, "getBoundingClientRect()"));
+  return asDomRect(paintedRectOf(this, "getBoundingClientRect()"));
 });
 defineDom("getClientRects", function (this: MirrorElement) {
-  const r = rectOf(this, "getClientRects()");
+  const r = paintedRectOf(this, "getClientRects()");
   return r.width || r.height ? [r] : [];
 });
 for (const [name, pick] of [
@@ -6031,6 +6054,10 @@ defineGlobal(
 // when the threshold index or `isIntersecting` moves — so the first poll always
 // reports, as `observe()` does in a browser.
 //
+// The rectangles are where the boxes were DRAWN, transforms applied: the spec
+// takes the target's from getBoundingClientRect() ("getting the bounding box"),
+// not from its layout box as ResizeObserver does.
+//
 // Divergences, both deliberate: (1) the intersection is clipped by the ROOT
 // only, not by every scrolling ancestor between target and root, because
 // answering "which ancestors clip" per target per frame would cost a host call
@@ -6180,7 +6207,7 @@ class VnIntersectionObserver {
     let r: MirrorRect;
     if (this.root) {
       if (!boundsOf(this.root)) return null;
-      r = rectOf(this.root);
+      r = paintedRectOf(this.root);
     } else {
       if (!appRoot) return null;
       r = viewportRect();
@@ -6216,7 +6243,7 @@ class VnIntersectionObserver {
         return false;
       })();
       if (painted && rootBounds && descendant) {
-        targetRect = rectOf(target);
+        targetRect = paintedRectOf(target);
         const l = Math.max(targetRect.left, rootBounds.left);
         const t = Math.max(targetRect.top, rootBounds.top);
         const r = Math.min(targetRect.right, rootBounds.right);

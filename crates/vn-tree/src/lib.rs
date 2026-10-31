@@ -319,7 +319,12 @@ host_fn!(fn vn_query(g, args) {
 host_fn!(fn vn_bounds(_g, args) {
     let id = arg_id(args.arg(0));
     let out = match dom::bounds(id) {
-        (Some((x, y, w, h)), _) => format!("{x},{y},{w},{h}"),
+        // The layout box, then — when a CSS `transform` moved the picture —
+        // where it was drawn, which is getBoundingClientRect()'s answer.
+        (Some((x, y, w, h)), _) => match dom::transformed(id) {
+            Some((tx, ty, tw, th)) => format!("{x},{y},{w},{h},{tx},{ty},{tw},{th}"),
+            None => format!("{x},{y},{w},{h}"),
+        },
         (None, true) => "stale".to_string(),
         (None, false) => String::new(),
     };

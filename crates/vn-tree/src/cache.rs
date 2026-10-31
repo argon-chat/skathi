@@ -682,6 +682,9 @@ fn carry_bounds(id: u32, win: WinKey) {
                 if let Some(r) = w.prev_bounds.get(id).copied() {
                     w.bounds.insert(*id, r);
                 }
+                if let Some(r) = w.prev_transformed.get(id).copied() {
+                    w.transformed.insert(*id, r);
+                }
             }
         });
     });

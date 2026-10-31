@@ -1,0 +1,105 @@
+#root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+}
+
+/* A popover trigger, and reka's PopperContent wrapper: laid out at (0, 0) and
+   moved by the `transform: translate()` floating-ui computes. */
+.trigger {
+  position: absolute;
+  left: 520px;
+  top: 20px;
+  width: 120px;
+  height: 32px;
+  background: #888;
+}
+.popper {
+  position: fixed;
+  left: 0;
+  top: 0;
+  min-width: max-content;
+}
+.pop-body {
+  display: flex;
+  width: 160px;
+  height: 100px;
+  background: #eee;
+}
+/* The profile popover's three-dot menu button. */
+.menu-btn {
+  margin-left: 110px;
+  margin-top: 10px;
+  width: 30px;
+  height: 30px;
+  background: blue;
+}
+.menu-body {
+  width: 60px;
+  height: 40px;
+  background: red;
+}
+
+/* shadcn's DialogContent: `fixed left-[50%] top-[50%] translate-x-[-50%]
+   translate-y-[-50%]`, with a SelectTrigger inside. */
+.dialog {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 300px;
+  height: 200px;
+  transform: translate(-50%, -50%);
+  background: #ddd;
+}
+.select-trigger {
+  margin-left: 20px;
+  margin-top: 20px;
+  width: 120px;
+  height: 28px;
+  background: #555;
+}
+.select-body {
+  width: 120px;
+  height: 60px;
+  background: lime;
+}
+
+/* tailwindcss-animate's `zoom-in-95`, slowed down so a test can sample it. */
+.zoom {
+  position: absolute;
+  left: 40px;
+  top: 420px;
+  width: 200px;
+  height: 80px;
+  background: #fa0;
+}
+.zoom.zooming {
+  animation: zoom-open 3s linear both;
+}
+@keyframes zoom-open {
+  from {
+    transform: scale(0.95);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+/* An IntersectionObserver target laid out inside the window and translated
+   out of it, and a control that stays. */
+.far,
+.near {
+  position: absolute;
+  top: 330px;
+  width: 40px;
+  height: 40px;
+  background: #0aa;
+}
+.far {
+  left: 40px;
+  transform: translateX(800px);
+}
+.near {
+  left: 100px;
+}

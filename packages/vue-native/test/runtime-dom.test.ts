@@ -216,6 +216,20 @@ describe("layout comes from the host's painted bounds", () => {
     expect(button.getClientRects().length).toBe(1);
   });
 
+  // A popper laid out at (0, 0) and moved by `transform: translate(300px, 200px)`:
+  // the host appends the box it was DRAWN at. The rect methods report that; the
+  // size and offset accessors keep the layout box, as a browser's do.
+  test("getBoundingClientRect reports the transformed box, offsetWidth the layout one", () => {
+    const rt = createRuntime();
+    const { button } = tree(rt);
+    rt.host.boundsById.set(button.__vnId, "0,0,100,40,290,195,120,50");
+    expect(button.getBoundingClientRect()).toMatchObject({ x: 290, y: 195, width: 120, height: 50, right: 410, bottom: 245 });
+    expect(button.getClientRects()[0]).toMatchObject({ left: 290, top: 195, width: 120 });
+    expect(button.offsetWidth).toBe(100);
+    expect(button.clientHeight).toBe(40);
+    expect(button.offsetLeft).toBe(0);
+  });
+
   test("a node that was never painted reads all zeros, exactly like a detached one in a browser", () => {
     const rt = createRuntime();
     const { span } = tree(rt);
