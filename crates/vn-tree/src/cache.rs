@@ -356,8 +356,12 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     // the paint into gpui's deferred layer and an absolutely positioned box is
     // placed by its containing block rather than by its parent's flow, so
     // neither the pinned size nor the parent-rectangle check means what it says.
+    // It also keeps every deferred draw, and so every stacking key, out of a
+    // recording: a key holds tree-order ordinals that move whenever anything
+    // earlier in the document does, and a negative `z-index` has to be SEEN
+    // while its context's children are built (`render::Stacking`).
     if cs.base.position == Some(gpui::Position::Absolute)
-        || cs.extras.deferred_priority().is_some()
+        || cs.extras.may_defer()
     {
         return true;
     }
@@ -427,7 +431,7 @@ pub(crate) struct CachedSubtree {
 
 impl gpui::Render for CachedSubtree {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (id, root, ctx) = (self.id, self.root, self.ctx);
+        let (id, root, ctx) = (self.id, self.root, self.ctx.clone());
         let prev = IN_RENDER.replace(id);
         let el = render::build_cached(id, root, ctx, window, cx);
         IN_RENDER.set(prev);
@@ -475,7 +479,7 @@ pub(crate) fn boundary<V: 'static>(
         let e = m.entry(id).or_insert_with(|| Entry {
             entity: None,
             sub_rev,
-            ctx,
+            ctx: ctx.clone(),
             parent_rect,
             // NOT `Some(size)`: the first sighting must not compare equal to
             // itself and offer on one frame's measurement — see [`Entry::size`].
@@ -517,7 +521,7 @@ pub(crate) fn boundary<V: 'static>(
             // we no longer believe — and it is cheaper than rendering through
             // the boundary only to throw the recording away.
             e.sub_rev = sub_rev;
-            e.ctx = ctx;
+            e.ctx = ctx.clone();
             e.parent_rect = parent_rect;
             e.size = Some(size);
             e.ids.clear();

@@ -336,7 +336,7 @@ pub fn computed_style(id: u32) -> Option<String> {
         put("opacity", format!("{}", cs.base.opacity.unwrap_or(1.0)));
         put(
             "z-index",
-            cs.extras.z_index.map(|z| z.to_string()).unwrap_or_else(|| "auto".into()),
+            cs.extras.z().map(|z| z.to_string()).unwrap_or_else(|| "auto".into()),
         );
         put(
             "pointer-events",

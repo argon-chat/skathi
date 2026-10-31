@@ -276,16 +276,19 @@ pub fn overlay_bounds(id: u32) -> Option<(f32, f32, f32, f32)> {
 ///   answers "not hittable" for `scale(0)`. Comparing rectangles could only
 ///   ever be right for a translation.
 /// * **paint order.** An element lifted out of document order by a deferred
-///   paint (`position: fixed`, a positive `z-index`) has its hitbox inserted
-///   later, so it is in FRONT — which is what the picker has to say, and what
-///   "deeper or later in document order" only sometimes agreed with.
+///   paint (`position: fixed`, a `z-index`) is hit-tested in the order it
+///   paints (fork item 37), so it is in FRONT — which is what the picker has
+///   to say, and what "deeper or later in document order" only sometimes
+///   agreed with.
 ///
 /// Content masks come along too: a node scrolled out of its clipping container
 /// is no longer hit, exactly as in a browser.
 ///
 /// What is left is the tie-break between the several hitboxes a point is inside
 /// (a node and all of its ancestors): the DEEPEST wins, and among equals the
-/// last in document order, which is paint order.
+/// last in document order, which is paint order. Across two overlays over one
+/// point that is not paint order: a node nested deeper in the one painted
+/// under can win the pick (docs/DEVTOOLS.md).
 pub fn hit_test(x: f32, y: f32, window: &Window) -> Vec<u32> {
     hit_test_in(0, x, y, window)
 }

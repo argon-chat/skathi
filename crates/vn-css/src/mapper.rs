@@ -193,14 +193,24 @@ pub struct Extras {
     /// depends on whether anything above the element actually scrolls, which
     /// only the renderer knows (`vn_tree::render::advise_out_of_flow`).
     pub sticky: Option<bool>,
-    /// `z-index`. gpui has no per-element z, so a POSITIVE z-index becomes a
-    /// deferred draw with that priority (which is a real "paints above
-    /// everything else"); a negative one cannot be expressed at all.
+    /// `z-index`: `None` = not declared, `Some(None)` = `auto`, `Some(Some(n))`
+    /// = an integer. [`Self::z`] is the integer, if there is one.
+    ///
+    /// `auto` and `0` are different values. Both paint in the same layer
+    /// (CSS 2.1 Appendix E, step 8), but where it applies an integer — `0`
+    /// included — makes the box a STACKING CONTEXT, which keeps its
+    /// descendants' own `z-index`es inside it, and `auto` does not. The
+    /// renderer turns the value into a paint order (`vn_tree::render::Stacking`).
     ///
     /// Recorded wherever it is declared. Whether it APPLIES is the renderer's
     /// question (`vn_tree::render::z_applies`). It needs [`Self::positioned`]
     /// and the parent's display, and the mapper sees neither.
-    pub z_index: Option<i32>,
+    pub z_index: Option<Option<i32>>,
+    /// `isolation`: `Some(true)` for `isolate`, `Some(false)` for `auto`. An
+    /// isolated box is a stacking context (CSS Compositing 1 §3.4.1), the
+    /// lever an author pulls to keep a `z-index: -1` layer from sinking behind
+    /// the box's own background (Tailwind's `isolate`).
+    pub isolate: Option<bool>,
     /// The element DECLARED a `position` other than `static`: `Some(true)` for
     /// `relative` / `absolute` / `fixed` / `sticky`, `Some(false)` for
     /// `static`, `None` for no declaration (static too). gpui's own `position`
@@ -598,6 +608,9 @@ impl Extras {
         if other.z_index.is_some() {
             self.z_index = other.z_index;
         }
+        if other.isolate.is_some() {
+            self.isolate = other.isolate;
+        }
         if other.positioned.is_some() {
             self.positioned = other.positioned;
         }
@@ -770,21 +783,21 @@ impl Extras {
         background
     }
 
-    /// `Some` when this node MAY be painted in gpui's deferred layer:
-    /// `position: fixed`, or a positive `z-index` that was declared. A superset
+    /// The declared integer `z-index`; `None` for `auto` and for no
+    /// declaration, which are the same thing.
+    pub fn z(&self) -> Option<i32> {
+        self.z_index.flatten()
+    }
+
+    /// True when this node MAY be painted in gpui's deferred layer:
+    /// `position: fixed`, or a non-zero `z-index` that was declared. A superset
     /// of what the renderer defers, because whether a `z-index` applies depends
     /// on the parent's display, which only the renderer sees
     /// (`vn_tree::render::layer_of`). vn-tree's cache uses it to refuse a
-    /// boundary, where being conservative is safe.
-    pub fn deferred_priority(&self) -> Option<usize> {
-        let z = self.z_index.unwrap_or(0);
-        if z > 0 {
-            Some(z as usize)
-        } else if self.fixed == Some(true) {
-            Some(0)
-        } else {
-            None
-        }
+    /// boundary, where being conservative is safe. (`position: absolute`, the
+    /// other deferred box, the cache refuses on its own.)
+    pub fn may_defer(&self) -> bool {
+        self.z().is_some_and(|z| z != 0) || self.fixed == Some(true)
     }
 }
 
@@ -3827,20 +3840,15 @@ fn apply_property(
                 _ => gpui::Position::Relative,
             });
         }
-        // gpui has no per-element z. A POSITIVE z-index becomes a deferred draw
-        // with that priority — a real "paints (and hit-tests) above everything
-        // else", which is what every overlay uses it for. A NEGATIVE one has to
-        // paint below its siblings, which the renderer does by moving the
-        // element to the front of its parent's child list — legal only when the
-        // element is out of flow, because that list is also taffy's. Only the
-        // renderer knows which, so the advisory lives there
-        // (`render::advise_negative_z`), the same split `transform` used to
-        // have.
+        // gpui has no per-element z. The renderer turns the value into a place
+        // in the paint order, its stacking context's path included
+        // (`vn_tree::render::Stacking`), so the value is recorded as written:
+        // `auto` is NOT `0`, because only an integer makes a context.
         ZIndex(v) => {
             use lightningcss::properties::position::ZIndex as Z;
             match v {
-                Z::Integer(n) => x.z_index = Some(*n),
-                Z::Auto => x.z_index = Some(0),
+                Z::Integer(n) => x.z_index = Some(Some(*n)),
+                Z::Auto => x.z_index = Some(None),
             }
         }
         // `transform` is a PAINT-level property now (gpui's
@@ -5083,6 +5091,21 @@ fn apply_property(
             // runtime `<style>` beside the two real properties above.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if name.0.as_ref() == "-ms-overflow-style" => {}
+            // `isolation` — a real property lightningcss has no typed
+            // representation for. `isolate` makes the box a stacking context;
+            // that is all it does here, as there is no `mix-blend-mode` for it
+            // to contain.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref() == "isolation" =>
+            {
+                if single_ident_is(&c.value, "isolate") {
+                    x.isolate = Some(true);
+                } else if single_ident_is(&c.value, "auto") {
+                    x.isolate = Some(false);
+                } else if !is_css_wide_keyword(&c.value) {
+                    unsupported(diagnostics, "isolation (expected `auto` or `isolate`)");
+                }
+            }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
                 if matches!(
                     name.0.as_ref(),
@@ -6371,12 +6394,12 @@ mod tests {
     fn fixed_is_absolute_plus_a_deferred_layer_and_no_advisory() {
         let (x, d) = extras("position: fixed");
         assert_eq!(x.fixed, Some(true));
-        assert_eq!(x.deferred_priority(), Some(0));
+        assert!(x.may_defer());
         assert!(d.is_empty(), "{d:?}");
         // …and a later `relative` really undoes it.
         let (x, _) = extras("position: fixed; position: relative");
         assert_eq!(x.fixed, Some(false));
-        assert_eq!(x.deferred_priority(), None);
+        assert!(!x.may_defer());
     }
 
     /// Same for `sticky`: the flag is recorded, the advisory belongs to the
@@ -6412,19 +6435,46 @@ mod tests {
     }
 
     #[test]
-    fn a_positive_z_index_becomes_a_deferred_priority() {
+    fn a_non_zero_z_index_may_be_deferred() {
         let (x, d) = extras("z-index: 50");
         assert!(d.is_empty(), "{d:?}");
-        assert_eq!(x.z_index, Some(50));
-        assert_eq!(x.deferred_priority(), Some(50));
+        assert_eq!(x.z(), Some(50));
+        assert!(x.may_defer());
 
-        // A negative one computes and takes NO deferred layer (it paints
-        // below, not above). Whether it can be honoured is a renderer question
-        // — out-of-flow yes, in-flow no — so there is no advisory here.
+        // A negative one is a deferred draw too: it paints before its
+        // context's in-flow content, wherever its box is.
         let (x, d) = extras("z-index: -1");
-        assert_eq!(x.z_index, Some(-1));
-        assert_eq!(x.deferred_priority(), None);
+        assert_eq!(x.z(), Some(-1));
+        assert!(x.may_defer());
         assert!(d.is_empty(), "{d:?}");
+
+        // `0` makes a stacking context and paints in flow.
+        assert!(!extras("z-index: 0").0.may_defer());
+    }
+
+    /// `auto` and `0` are different values: only an integer makes a stacking
+    /// context. A later `auto` still undoes an earlier integer.
+    #[test]
+    fn z_index_auto_is_not_zero() {
+        assert_eq!(extras("z-index: auto").0.z_index, Some(None));
+        assert_eq!(extras("z-index: 0").0.z_index, Some(Some(0)));
+        assert_eq!(extras("color: red").0.z_index, None);
+        let mut folded = extras("z-index: 10").0;
+        folded.refine(&extras("z-index: auto").0);
+        assert_eq!(folded.z(), None);
+        folded.refine(&extras("color: red").0);
+        assert_eq!(folded.z_index, Some(None), "a block that says nothing keeps it");
+    }
+
+    #[test]
+    fn isolation_maps_both_keywords() {
+        let (x, d) = extras("isolation: isolate");
+        assert_eq!(x.isolate, Some(true));
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(extras("isolation: auto").0.isolate, Some(false));
+        let mut folded = extras("isolation: isolate").0;
+        folded.refine(&extras("isolation: auto").0);
+        assert_eq!(folded.isolate, Some(false));
     }
 
     #[test]

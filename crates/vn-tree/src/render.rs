@@ -1836,6 +1836,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     });
     arm_pick_hitboxes(window);
     crate::cache::begin_frame(window);
+    reset_stacking();
     let el = tree::read_tree(|t| {
         if t.root == 0 {
             Empty.into_any_element()
@@ -1891,6 +1892,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
         w.control_hitboxes.clear();
     });
     crate::cache::begin_frame(window);
+    reset_stacking();
     tree::read_tree(|t| {
         if t.node(id).is_none() {
             return Empty.into_any_element();
@@ -1908,13 +1910,28 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
 /// has to compare it: a cached subtree is lowered from its node id and this, so
 /// a change to any of them at an ancestor changes the subtree's pixels without
 /// touching a single node inside it (`crate::cache`).
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Default)]
 pub(crate) struct Inherited {
     pub(crate) drag: Option<WindowDrag>,
     pub(crate) case: Option<vn_css::TextTransform>,
     pub(crate) ws: Option<vn_css::WhiteSpaceMode>,
     pub(crate) align: Option<gpui::TextAlign>,
     pub(crate) stack: Stacking,
+}
+
+impl PartialEq for Inherited {
+    fn eq(&self, other: &Self) -> bool {
+        self.drag == other.drag
+            && self.case == other.case
+            && self.ws == other.ws
+            && self.align == other.align
+            // The stacking KEY is left out on purpose. A boundary's subtree
+            // holds no deferred draw (`cache::node_blocks`), so no key inside
+            // it is ever used — and its ordinals change whenever anything
+            // earlier in the document does, which would make every boundary
+            // after an insertion stale.
+            && self.stack.deferred == other.stack.deferred
+    }
 }
 
 /// Lowers ONE cache boundary's subtree — `crate::cache::CachedSubtree`'s
@@ -1931,6 +1948,9 @@ pub(crate) fn build_cached<V: 'static>(
     let now = std::time::Instant::now();
     let span = crate::perf::Span::start();
     let before = BUILT.with(|c| c.get());
+    // A boundary renders inside gpui's prepaint, after the build that placed
+    // it: no context of that build is open any more.
+    let open = OPEN_CONTEXTS.with(|c| std::mem::take(&mut *c.borrow_mut()));
     let (el, ids) = tree::read_tree(|t| {
         let el =
             build_node(t, id, root, window, cx, now, ctx.drag, ctx.case, ctx.ws, ctx.align, ctx.stack);
@@ -1942,6 +1962,7 @@ pub(crate) fn build_cached<V: 'static>(
         crate::cache::subtree_ids(t, id, &mut ids);
         (el, ids)
     });
+    OPEN_CONTEXTS.with(|c| *c.borrow_mut() = open);
     crate::cache::note_rendered(id, ids);
     // The build cost lands in the `build` bucket wherever it is paid, so the
     // VN_PERF partition still adds up: a boundary's render runs inside gpui's
@@ -1983,7 +2004,7 @@ fn build_node<V: 'static>(
             case: parent_case,
             ws: parent_ws,
             align: parent_align,
-            stack: parent_stack,
+            stack: parent_stack.clone(),
         };
         if let Some(cached) = crate::cache::boundary(t, id, node, root, inherited, win, cx) {
             return cached;
@@ -2013,22 +2034,33 @@ fn build_node<V: 'static>(
         .as_ref()
         .and_then(|cs| cs.base.text.text_align)
         .or(parent_align);
-    // `position: fixed` / an applying `z-index` open a stacking context; the
-    // children are built with it so their own z-indices sort INSIDE it. A
-    // z-auto `absolute` box is deferred in the context it is in (see
-    // `Stacking`).
+    // Where the box paints (`Stacking`): a stacking context's children are
+    // built inside it, so their own z-indices sort INSIDE it; a z-auto
+    // `absolute` box is deferred in the context it is in. The root of the
+    // build IS the root context, and paints first.
     let parent_display = t.node(node.parent).and_then(|p| p.computed.as_ref()).and_then(|cs| cs.base.display);
     let own_position = node.computed.as_ref().and_then(|cs| cs.base.position);
-    let layer = layer_of(&extras, own_position, parent_display);
-    let (z_priority, stacking) = parent_stack.enter(layer);
-    advise_relative_tree_order(&extras, layer);
+    let effect = node.computed.as_ref().is_some_and(|cs| effect_context(&extras, &cs.base));
+    let layer = if id == root {
+        Layer::InFlow
+    } else {
+        layer_of(&extras, own_position, effect, parent_display)
+    };
+    let Entered { own, inside: stacking, opens, negative } =
+        parent_stack.enter(layer, next_stack_ordinal());
+    if negative {
+        note_negative_z();
+    }
+    // The root context's children, and a context's, are built with the context
+    // open, so a negative z among them is seen (`split_in_flow`).
+    let opens = opens || id == root;
+    advise_relative_tree_order(&extras, own_position, layer);
     let (drag, control_area) = window_control_of(&extras, parent_drag);
     advise_interactive_in_drag_region(t, node, &extras, drag);
     advise_double_action(t, node, &extras);
-    if z_applies(&extras, parent_display) {
-        advise_negative_z(t, id, &extras);
-    }
     advise_out_of_flow(t, id, node, &extras, windows::key(window));
+    // Set once the children are built, if they had to split (`split_in_flow`).
+    let split = Cell::new(false);
     match node.kind {
         // An empty text node takes no space in a browser, but gpui lays a text
         // element out as a full line box — and Vue anchors every Fragment
@@ -2059,29 +2091,29 @@ fn build_node<V: 'static>(
         // nothing are two different things, and only the first is the browser's
         // behaviour — which is why the advisory that used to stand here is gone.
         Kind::Element if is_metadata(t.name(node.tag)) => Empty.into_any_element(),
-        // `stack` moves the PAINT into gpui's deferred layer for `position:
-        // fixed` / positive `z-index`; the window-control hitbox rides the
-        // inner element either way, and a deferred paint puts it *above* the
-        // content it escaped — which is the order the fork's topmost-first
-        // resolution (F-01) already wants.
+        // `stack` moves the PAINT into gpui's deferred layer for the boxes
+        // `Layer` defers (`position: fixed`, a `z-index`, …); the
+        // window-control hitbox rides the inner element either way, and the
+        // hit test follows the paint (`Stacking`) — which is the order the
+        // fork's topmost-first resolution (F-01) already wants.
         Kind::Element if t.name(node.tag) == "img" => stack(
-            z_priority,
+            own.clone(),
             &extras,
             probe(id, build_img(t, id, node, window, cx, now, control_area)),
         ),
         Kind::Element if t.name(node.tag) == "lottie" => stack(
-            z_priority,
+            own.clone(),
             &extras,
             probe(id, build_lottie(t, id, node, window, cx, now, control_area)),
         ),
         Kind::Element if t.name(node.tag) == "video" => stack(
-            z_priority,
+            own.clone(),
             &extras,
             probe(id, build_video(t, id, node, window, cx, now, control_area)),
         ),
         // The bitmap the page drew, painted into the box (`canvas` below).
         Kind::Element if t.name(node.tag) == "canvas" => stack(
-            z_priority,
+            own.clone(),
             &extras,
             probe(id, canvas::build(t, id, node, window, cx, now, control_area)),
         ),
@@ -2089,11 +2121,11 @@ fn build_node<V: 'static>(
         // resvg rasterises, so its children must not also become taffy nodes
         // (see crate::svg).
         Kind::Element if t.name(node.tag) == "svg" => stack(
-            z_priority,
+            own.clone(),
             &extras,
             probe(id, build_svg(t, id, node, window, cx, now, control_area)),
         ),
-        Kind::Element => stack(z_priority, &extras, probe_at(id, id == root, {
+        Kind::Element => stack_box(own, &split, id == root, &stacking, &extras, probe_at(id, id == root, {
             // Every mirrored node gets a stable ElementId — hover/active/
             // scroll state in gpui is keyed by it.
             let mut d = with_control_area(div().id(id as usize), id, control_area, win);
@@ -2353,16 +2385,21 @@ fn build_node<V: 'static>(
                 };
                 let own_display = node.computed.as_ref().and_then(|cs| cs.base.display);
                 let mut kids: Vec<AnyElement> = Vec::new();
+                if opens {
+                    open_context();
+                }
                 // FIRST, so it paints under every real child (`crate::bgimage`).
                 if let (Some(stack), Some(radii)) = (bg_stack, bg_radii) {
                     kids.push(crate::bgimage::layer_element(id, stack, radii));
                 }
+                // The background, which stays in the box's own paint.
+                let background_kids = kids.len();
                 if let Some(marker) = list_marker_for(t, id, node, &extras) {
                     kids.push(marker);
                 }
                 if let Some(pb) = before {
                     crate::fonts::want_for_pseudo(t, id, &pb);
-                    kids.push(pseudo_element(&pb, case, stacking, own_display));
+                    kids.push(pseudo_element(&pb, case, &stacking, own_display));
                 }
                 if is_file_input {
                     kids.push(file_input_children(t, id, node, case));
@@ -2385,14 +2422,15 @@ fn build_node<V: 'static>(
                             .into_iter()
                             .map(|c| {
                                 build_node(
-                                    t, c, root, window, cx, now, drag, case, ws, align, stacking,
+                                    t, c, root, window, cx, now, drag, case, ws, align,
+                                    stacking.clone(),
                                 )
                             }),
                     );
                 }
                 if let Some(pb) = after {
                     crate::fonts::want_for_pseudo(t, id, &pb);
-                    kids.push(pseudo_element(&pb, case, stacking, own_display));
+                    kids.push(pseudo_element(&pb, case, &stacking, own_display));
                 }
                 // The overlay scrollbar, and the wheel routing that goes with
                 // it. LAST child, so its hitboxes sit above the content's and
@@ -2405,6 +2443,12 @@ fn build_node<V: 'static>(
                     kids.push(
                         scrollbar_for(t, id, node, h, window, auto_hide, cx).into_any_element(),
                     );
+                }
+                // A negative z landed in this context: its in-flow content
+                // paints apart from its background, after the negative ones.
+                if opens && close_context() {
+                    split.set(true);
+                    kids = split_in_flow(kids, background_kids, &stacking);
                 }
                 d.children(kids).into_any_element()
             }
@@ -3116,7 +3160,7 @@ fn advise_drop_shadow_shape(at: &str) {
 fn pseudo_element(
     pb: &vn_css::PseudoBox,
     parent_case: Option<vn_css::TextTransform>,
-    stacking: Stacking,
+    stacking: &Stacking,
     // The ORIGINATING element's display: a generated box is its child, so a
     // flex or grid container makes it an item, which `z-index` applies to.
     parent_display: Option<gpui::Display>,
@@ -3133,8 +3177,13 @@ fn pseudo_element(
     } else {
         d.child(transformed_text(&pb.content, case)).into_any_element()
     };
-    let layer = layer_of(&pb.extras, pb.style.position, parent_display);
-    stack(stacking.enter(layer).0, &pb.extras, e)
+    let effect = effect_context(&pb.extras, &pb.style);
+    let layer = layer_of(&pb.extras, pb.style.position, effect, parent_display);
+    let entered = stacking.enter(layer, next_stack_ordinal());
+    if entered.negative {
+        note_negative_z();
+    }
+    stack(entered.own, &pb.extras, e)
 }
 
 /// The marker box an `<li>` gets from the `list-style-type` in force.
@@ -3411,59 +3460,10 @@ fn generates_a_box(t: &Tree, id: u32) -> bool {
 
 /// The children of `node` that become layout nodes, in document order.
 fn laid_out_children(t: &Tree, node: &crate::tree::Node) -> Vec<u32> {
-    let mut kids: Vec<u32> = node
-        .children
-        .iter()
-        .copied()
-        .filter(|&c| generates_a_box(t, c))
-        .collect();
-    // Negative `z-index`, for the case where it is expressible.
-    //
-    // CSS 2.1 Appendix E paints a negative-z child AFTER its parent's own
-    // background and border and BEFORE the parent's in-flow content — it goes
-    // behind its SIBLINGS, not behind its parent. gpui paints a `Div`'s
-    // children in the order they were added, so moving such a child to the
-    // front IS that rule, exactly.
-    //
-    // The catch is that the same order is taffy's, so reordering an IN-FLOW
-    // child would move its box. An out-of-flow child (`position: absolute` or
-    // `fixed`) is laid out against the container regardless of where it sits
-    // among its siblings, so for those — which is every real use of a negative
-    // z-index: a decorative layer under the content — the reorder is free.
-    // `advise_negative_z` covers the in-flow case, which stays unexpressible.
-    //
-    // `sort_by_key` is stable, so ties keep document order, which is what CSS
-    // says happens within a z-level.
-    if kids.iter().any(|&c| paint_first_z(t, c).is_some()) {
-        kids.sort_by_key(|&c| paint_first_z(t, c).unwrap_or(0));
-    }
-    kids
-}
-
-/// The negative `z-index` of an out-of-flow child, i.e. one that can be moved
-/// to the front of the paint order without moving its box. `None` for
-/// everything else, which sorts as 0 and keeps its place.
-fn paint_first_z(t: &Tree, id: u32) -> Option<i32> {
-    let node = t.node(id)?;
-    let computed = node.computed.as_ref()?;
-    let z = computed.extras.z_index?;
-    if z >= 0 {
-        return None;
-    }
-    let out_of_flow = computed.extras.fixed == Some(true)
-        || matches!(computed.base.position, Some(gpui::Position::Absolute));
-    out_of_flow.then_some(z)
-}
-
-/// A negative `z-index` on an IN-FLOW element — the half that has no lever.
-fn advise_negative_z(t: &Tree, id: u32, extras: &vn_css::Extras) {
-    if extras.z_index.is_none_or(|z| z >= 0) || paint_first_z(t, id).is_some() {
-        return;
-    }
-    warn_compat(
-        "z-index-negative-in-flow",
-        "a negative `z-index` on an IN-FLOW element cannot paint below its siblings (v1) —          gpui paints a container's children in the order they were added, which is also the          order taffy lays them out in, so moving one would move its box. It works on an          out-of-flow element (`position: absolute` / `fixed`), which is what a decorative          layer under the content should be; otherwise reorder the elements",
-    );
+    // Document order, negative `z-index` included: a negative-z box is a
+    // deferred draw that sorts before its context's in-flow content
+    // (`Stacking`), so this list, which is also taffy's, never has to move.
+    node.children.iter().copied().filter(|&c| generates_a_box(t, c)).collect()
 }
 
 /// `display: inline-*` — the ONE shape where mapping an inline-level box onto
@@ -3941,56 +3941,80 @@ fn group_name(id: u32) -> gpui::SharedString {
     format!("vn-g{id}").into()
 }
 
-/// The enclosing STACKING CONTEXTS, packed into the one `usize` gpui sorts
+/// Where a box paints: the STACKING CONTEXT it is in, as the key gpui sorts
 /// deferred draws by.
 ///
-/// A `z-index` is not a document-wide rank: CSS says it orders an element among
-/// its siblings *inside its stacking context*, and the whole subtree of a
-/// context paints together, between the contexts on either side of it. gpui has
-/// one flat priority, so a naive `priority = z` inverts every nested case — and
-/// on apps/meet-probe it inverted the loudest one there is. reka's dialog is
-/// `fixed z-50`, and the header inside it is `sticky top-0 bg-background z-10`:
-/// 10 sorts before 50, so the dialog's own background painted OVER its title
-/// bar and the dialog came up as a black slab.
+/// CSS paints a stacking context ATOMICALLY (CSS 2.1 Appendix E). Inside one,
+/// in this order: the context's own background and border; its negative
+/// `z-index` child contexts, lowest first; its in-flow content; its positioned
+/// `z-index: auto` boxes and its `z-index: 0` contexts, in tree order; its
+/// positive `z-index` child contexts, lowest first, tree order breaking ties.
+/// Each child context is painted the same way, whole, in its one slot, so
+/// NOTHING inside an earlier context, its own `z-50` descendants included,
+/// paints over a later sibling context of the same z, and nothing inside a
+/// `z-10` context paints over a `z-20` sibling whatever its own z is.
 ///
-/// So the priority is a fixed-width digit string instead — one digit per
-/// nesting level, most significant first — which compares exactly the way CSS
-/// orders the tree: an element sorts after the context that contains it, and
-/// before anything that outranks that context.
+/// So the key is a PATH: one slot per enclosing context, outermost first, and
+/// each slot is `(z, tree-order ordinal)` of that context within its parent.
+/// gpui compares keys lexicographically (`gpui::Deferred::with_stack_key`),
+/// a key sorts after every key it is a prefix of, and that comparison is the
+/// order above, exactly. A z-auto `position: absolute` box opens no context:
+/// it is one more slot at z 0 in the context it is in, and its positioned
+/// descendants keep sorting in that same context, after it in tree order, as
+/// CSS says. The hit test walks the same order (the fork's
+/// `Frame::vn_hit_order`), so a click lands on what is painted on top.
 ///
-/// **What gets a priority** is [`Layer`], decided by [`layer_of`] (m26):
+/// The packed `usize` this replaced kept a context's level in its digits but
+/// left equal digits to gpui's prepaint ROUNDS, and a draw nested one round
+/// deeper was painted after every draw of the round before. The Argon profile
+/// popover is that shape: two portalled `fixed z-50` overlays, the popover
+/// first, with `z-index: 0 / 1 / 2` layers inside it. The layers sorted after
+/// the menu the popover opens, and painted, and took clicks, over its items.
+///
+/// **What is a context and what is deferred** is [`Layer`], from [`layer_of`]:
 ///
 /// - **A `z-index` counts only where it applies:** on a positioned box, or on
 ///   a flex or grid item even when static. `z-10` on a static block in a
 ///   block parent is inert in a browser and inert here. The Argon client's
 ///   sign-in `<Input class="z-10">` used to lift over the error badge beside
 ///   it.
-/// - **A `position: absolute` box with `z-index: auto` or `0`** is deferred at
-///   its context's own priority, without opening a context. CSS 2.1 Appendix
-///   E paints positioned descendants after all the in-flow content of their
-///   stacking context (step 8), in tree order. gpui's stable sort keeps that
-///   tree order among them, a positive z in the same context still sorts after
-///   them, and a z>0 descendant still sorts in the OUTER context, because z
-///   auto creates none.
-/// - **`relative` and `sticky` with z auto paint in tree order.** That is a
-///   stated limit, with an advisory (`position-relative-tree-order`).
-///   `relative` wrappers hold whole subtrees (an app shell's root, a card),
-///   and lifting them would move most of a page into the deferred layer for
-///   the rare case where a later in-flow sibling overlaps one.
-/// - **`z-index: 0`** opens no context of its own: it is treated as `auto`,
-///   so its z>0 descendants sort in the outer context.
-/// - **Equal priorities nested a round deeper** keep gpui's round order,
-///   not tree order: a `fixed` overlay EARLIER in the document has its
-///   absolute children paint over a later absolute z-auto box. Overlays are
-///   portalled to the end of `<body>`, which is where this cannot arise.
+/// - **An integer `z-index` that applies makes a context; `auto` does not.**
+///   So do `position: fixed` and `sticky`, and, at z auto, `opacity < 1`, a
+///   `transform`, a `filter` (`blur()`, `drop-shadow()`), `backdrop-filter`
+///   and `isolation: isolate`. A non-zero z, `fixed`, and a context on an
+///   `absolute` box are deferred into their slot.
+/// - **A NEGATIVE `z-index` paints between its context's background and its
+///   context's in-flow content.** The background and the content are one
+///   gpui element, so when a context has a negative-z box in it (seen while
+///   its children are built, [`OPEN_CONTEXTS`]), its children are each
+///   deferred into the in-flow slot of its key, after the negative ones;
+///   layout does not move, because a deferred element keeps its place in
+///   taffy. The background stays in the context's own paint. An in-flow box
+///   is as good as an out-of-flow one here.
+/// - **A context that is not deferred paints in tree order** — `relative` /
+///   `sticky` at z 0 or auto, and the effect contexts on boxes that are not
+///   `absolute` — instead of after its context's in-flow content (step 8).
+///   That is a stated limit, with an advisory for the positioned ones
+///   (`position-relative-tree-order`): such boxes wrap whole subtrees (an app
+///   shell's root, a card, every `opacity-50` button), and lifting them would
+///   move most of a page into the deferred layer for the rare case where a
+///   later in-flow sibling overlaps one. It is still a context, and its own
+///   z-indexed descendants sort inside it, at its place in step 8. One that
+///   has to split for a negative z is deferred to that place whole.
+/// - **The effect contexts are read off the declared style**, not the
+///   animated one: a transition through `opacity: 0.5` does not open a
+///   context mid-flight, and a `transform` that moves nothing (the `none` of
+///   gpui's `TransformSpec`) is not one. `mix-blend-mode`, `mask`,
+///   `will-change` and `contain` make no context here; none is modelled.
 ///
 /// Deferral nests: every deferred box inside another is one more prepaint
-/// round, and gpui asserts at ten. Past [`MAX_DEFERRED_NESTING`] a box paints
-/// in flow, with an advisory.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// round. Past [`MAX_DEFERRED_NESTING`] a box paints in flow, with an
+/// advisory; a context stays a context.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Stacking {
-    prefix: usize,
-    depth: u32,
+    /// The context's path, one slot per enclosing context ([`slot`]),
+    /// outermost first. Empty = the root context.
+    key: std::rc::Rc<[u128]>,
     /// How many deferred boxes enclose this one. Bounds gpui's deferred rounds.
     deferred: u32,
 }
@@ -3998,21 +4022,27 @@ pub(crate) struct Stacking {
 /// How one box takes part in painting, by CSS 2.1 Appendix E. See [`Stacking`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Layer {
-    /// Painted where it is, in tree order: an in-flow box, a `z-index` that
-    /// does not apply, a negative one, or z auto on `relative` / `sticky`.
+    /// Painted where it is, in tree order, in the context it is in.
     InFlow,
-    /// `position: absolute` with `z-index: auto` / `0`: after the in-flow
-    /// content of its stacking context, opening none.
+    /// Painted where it is, in tree order, but a stacking context: its
+    /// descendants' z-indices sort inside it. `relative` / `sticky` at z 0,
+    /// `sticky` at z auto, or an effect context (`opacity < 1`, …) on a box
+    /// that is not `absolute`.
+    InFlowContext,
+    /// `position: absolute` with `z-index: auto`: deferred after the in-flow
+    /// content of the context it is in (step 8), opening none.
     Positioned,
-    /// `position: fixed` without a positive `z-index`: a context at level 0.
-    Fixed,
-    /// A positive `z-index` that applies: a context at that level.
-    Z(usize),
+    /// Deferred, and a context at this z: an integer `z-index` that applies
+    /// (`0` only on an `absolute` box), `position: fixed`, or an effect
+    /// context on an `absolute` box.
+    Context(i32),
 }
 
 /// Nested deferred boxes allowed before one paints in flow. gpui runs one
-/// prepaint round per nesting level and asserts below ten.
-const MAX_DEFERRED_NESTING: u32 = 8;
+/// prepaint round per nesting level and asserts at 64 (fork item 37); the
+/// margin is for the in-flow splits, which [`Stacking::enter`] cannot count
+/// because they are decided once the children are built.
+const MAX_DEFERRED_NESTING: u32 = 32;
 
 /// Does `z-index` apply to a box? Only to a positioned one (a declared
 /// `position` other than `static`, CSS 2.1 §9.9.1) or to a flex or grid item,
@@ -4024,104 +4054,212 @@ pub(crate) fn z_applies(extras: &vn_css::Extras, parent_display: Option<gpui::Di
         || matches!(parent_display, Some(gpui::Display::Flex) | Some(gpui::Display::Grid))
 }
 
+/// Does a box's declared style make it a stacking context at `z-index:
+/// auto`? `opacity < 1`, a `transform` that moves something, a `filter` we
+/// model, `backdrop-filter`, `isolation: isolate`. (`fixed` and `sticky` are
+/// [`layer_of`]'s.)
+pub(crate) fn effect_context(extras: &vn_css::Extras, style: &gpui::StyleRefinement) -> bool {
+    style.opacity.is_some_and(|o| o < 1.0)
+        || style.vn_transform.as_ref().is_some_and(|t| !t.is_identity())
+        || style.backdrop_blur.is_some_and(|r| r > gpui::px(0.0))
+        || extras.blur.is_some_and(|b| b > 0.0)
+        || extras.drop_shadow.is_some()
+        || extras.isolate == Some(true)
+}
+
 /// The [`Layer`] of a box: its extras, its own `position` as gpui has it
-/// (`Absolute` for both `absolute` and `fixed`), and its parent's display.
+/// (`Absolute` for both `absolute` and `fixed`), whether its style makes it
+/// an [`effect_context`], and its parent's display.
 pub(crate) fn layer_of(
     extras: &vn_css::Extras,
     position: Option<gpui::Position>,
+    effect: bool,
     parent_display: Option<gpui::Display>,
 ) -> Layer {
-    let z = if z_applies(extras, parent_display) { extras.z_index.unwrap_or(0) } else { 0 };
-    if z > 0 {
-        Layer::Z(z as usize)
-    } else if extras.fixed == Some(true) {
-        Layer::Fixed
-    } else if z == 0 && position == Some(gpui::Position::Absolute) {
-        Layer::Positioned
-    } else {
-        Layer::InFlow
+    let z = if z_applies(extras, parent_display) { extras.z() } else { None };
+    let out_of_flow = position == Some(gpui::Position::Absolute);
+    match z {
+        Some(z) if z != 0 => Layer::Context(z),
+        Some(_) if out_of_flow => Layer::Context(0),
+        Some(_) => Layer::InFlowContext,
+        None if extras.fixed == Some(true) => Layer::Context(0),
+        None if out_of_flow && effect => Layer::Context(0),
+        None if out_of_flow => Layer::Positioned,
+        None if effect || extras.sticky == Some(true) => Layer::InFlowContext,
+        None => Layer::InFlow,
     }
 }
 
-/// The stated limit of [`Stacking`]: a `relative` / `sticky` box with z auto
-/// keeps its tree-order paint. Said once.
-fn advise_relative_tree_order(extras: &vn_css::Extras, layer: Layer) {
-    if layer != Layer::InFlow || extras.positioned != Some(true) || extras.z_index.unwrap_or(0) != 0 {
+/// The stated limit of [`Stacking`]: a `relative` / `sticky` box at z auto or
+/// 0 keeps its tree-order paint. Said once.
+fn advise_relative_tree_order(
+    extras: &vn_css::Extras,
+    position: Option<gpui::Position>,
+    layer: Layer,
+) {
+    if !matches!(layer, Layer::InFlow | Layer::InFlowContext)
+        || extras.positioned != Some(true)
+        || position == Some(gpui::Position::Absolute)
+        || extras.z().is_some_and(|z| z != 0)
+    {
         return;
     }
     warn_compat(
         "position-relative-tree-order",
-        "`position: relative` / `sticky` with `z-index: auto` paints in TREE ORDER (v1). CSS paints \
-         a positioned box after the in-flow content of its stacking context (CSS 2.1 Appendix E, \
-         step 8), so a LATER in-flow sibling that overlaps it paints under it in a browser and over \
-         it here. `position: absolute` boxes are painted in that layer; `relative` ones are not, \
-         because relative wrappers hold whole subtrees and lifting them would move most of a page \
-         into the deferred layer. A positive `z-index` lifts the box",
+        "`position: relative` / `sticky` with `z-index: auto` or `0` paints in TREE ORDER (v1). CSS \
+         paints a positioned box after the in-flow content of its stacking context (CSS 2.1 \
+         Appendix E, step 8), so a LATER in-flow sibling that overlaps it paints under it in a \
+         browser and over it here. `position: absolute` boxes are painted in that layer; \
+         `relative` ones are not, because relative wrappers hold whole subtrees and lifting them \
+         would move most of a page into the deferred layer. A positive `z-index` lifts the box",
     );
 }
 
-/// Bits per level. 0..=16383 covers every `z-index` a real sheet writes (the
-/// `z-9999` idiom included) and leaves room for four levels in a `usize`.
-const Z_BITS: u32 = 14;
-const Z_MAX: i32 = (1 << Z_BITS) - 1;
-/// How many nested stacking contexts stay distinguishable. A fifth would not
-/// fit; beyond it a descendant simply shares its context's priority, which
-/// still keeps it above everything the context outranks.
-const Z_LEVELS: u32 = 4;
+/// One slot of a [`Stacking`] key: a box's z, then its tree-order ordinal.
+/// The in-flow content of a context ([`IN_FLOW`]) ranks between its negative
+/// z and its z 0, which is where Appendix E paints it.
+fn slot(rank: u64, ordinal: u64) -> u128 {
+    ((rank as u128) << 64) | ordinal as u128
+}
+
+/// The rank of a context at `z`: odd, so that [`IN_FLOW`] fits between -1
+/// and 0.
+fn z_rank(z: i32) -> u64 {
+    ((i64::from(z) + (1 << 31)) as u64) * 2 + 1
+}
+
+/// The rank of a context's in-flow content, when it has to be painted apart
+/// from the context's background (a negative `z-index` in between).
+const IN_FLOW: u64 = 1 << 32;
+
+thread_local! {
+    /// The tree-order ordinal of the next box to enter a [`Stacking`]. Reset
+    /// per build: a key only has to order the draws of the frame it is in.
+    static STACK_ORDINAL: Cell<u64> = const { Cell::new(0) };
+    /// One entry per stacking context whose children are being built,
+    /// innermost last: has a negative-z box landed in it? See [`Stacking`].
+    static OPEN_CONTEXTS: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The next tree-order ordinal.
+fn next_stack_ordinal() -> u64 {
+    STACK_ORDINAL.with(|c| {
+        let n = c.get();
+        c.set(n + 1);
+        n
+    })
+}
+
+/// A new build: ordinals start over, and no context is open.
+fn reset_stacking() {
+    STACK_ORDINAL.with(|c| c.set(0));
+    OPEN_CONTEXTS.with(|c| c.borrow_mut().clear());
+}
+
+/// What [`Stacking::enter`] decides for one box.
+pub(crate) struct Entered {
+    /// The box's own deferred-draw key; `None` = it paints where it is.
+    pub(crate) own: Option<std::rc::Rc<[u128]>>,
+    /// The context the box's children are in.
+    pub(crate) inside: Stacking,
+    /// The box is a stacking context (`inside` is its own), deferred or not.
+    pub(crate) opens: bool,
+    /// The box is a deferred NEGATIVE-z context: its context has to paint its
+    /// in-flow content apart from its background.
+    pub(crate) negative: bool,
+}
 
 impl Stacking {
-    /// This node's own deferred priority (`None` = paints in flow), and the
+    /// `self`'s key with one more slot.
+    fn with_slot(&self, slot: u128) -> std::rc::Rc<[u128]> {
+        self.key.iter().copied().chain(std::iter::once(slot)).collect()
+    }
+
+    /// The key of this context's in-flow content, painted apart: one wrapper
+    /// per child, in tree order.
+    fn in_flow_key(&self) -> std::rc::Rc<[u128]> {
+        self.with_slot(slot(IN_FLOW, next_stack_ordinal()))
+    }
+
+    /// Where a box of `layer`, `ordinal`-th in tree order, paints, and the
     /// context its children see.
-    fn enter(self, layer: Layer) -> (Option<usize>, Stacking) {
-        let z = match layer {
-            Layer::InFlow => return (None, self),
-            Layer::Positioned => None,
-            Layer::Fixed => Some(0),
-            Layer::Z(z) => Some(z),
+    fn enter(&self, layer: Layer, ordinal: u64) -> Entered {
+        let (z, defer, opens) = match layer {
+            Layer::InFlow => {
+                return Entered { own: None, inside: self.clone(), opens: false, negative: false }
+            }
+            Layer::InFlowContext => (0, false, true),
+            Layer::Positioned => (0, true, false),
+            Layer::Context(z) => (z, true, true),
         };
-        if self.deferred >= MAX_DEFERRED_NESTING {
-            warn_compat(
-                "deferred-paint-nesting",
-                "more than eight nested out-of-flow layers (`position: absolute` / `fixed` / a \
-                 `z-index`, each inside the last) — the ninth and deeper paint in tree order \
-                 instead of above their in-flow siblings (gpui's deferred paint nests at most ten \
-                 rounds deep)",
-            );
-            return (None, self);
-        }
-        let deferred = self.deferred + 1;
-        // z auto: this context's own priority, and the SAME context for the
-        // children — a positioned z-auto box creates none.
-        let Some(z) = z else {
-            return (Some(self.prefix), Stacking { deferred, ..self });
+        let key = self.with_slot(slot(z_rank(z), ordinal));
+        let defer = defer && {
+            let room = self.deferred < MAX_DEFERRED_NESTING;
+            if !room {
+                warn_compat(
+                    "deferred-paint-nesting",
+                    "more than 32 nested out-of-flow layers (`position: absolute` / `fixed` / a \
+                     `z-index`, each inside the last) — the deeper ones paint in tree order \
+                     instead of above their in-flow siblings (each is one more of gpui's deferred \
+                     prepaint rounds). A stacking context stays one",
+                );
+            }
+            room
         };
-        if self.depth >= Z_LEVELS {
-            warn_compat(
-                "z-index-nesting-depth",
-                "more than four nested stacking contexts (`position: fixed` / `z-index`) — \
-                 beyond the fourth a descendant shares its context's paint priority instead of \
-                 sorting inside it. It still paints above everything that context outranks",
-            );
-            return (Some(self.prefix), Stacking { deferred, ..self });
-        }
-        let shift = Z_BITS * (Z_LEVELS - 1 - self.depth);
-        let priority = self.prefix | ((z.min(Z_MAX as usize)) << shift);
-        (Some(priority), Stacking { prefix: priority, depth: self.depth + 1, deferred })
+        let deferred = self.deferred + u32::from(defer);
+        let inside = Stacking { key: if opens { key.clone() } else { self.key.clone() }, deferred };
+        Entered { own: defer.then_some(key), inside, opens, negative: defer && z < 0 }
     }
 }
 
-/// Wraps a node that has to escape its siblings' paint order — `position:
-/// fixed`, a positive `z-index` that applies, or a z-auto `position: absolute`
-/// box (see [`Layer`]) — in gpui's deferred layer.
+/// The open context gets a negative-z box: it will paint its in-flow content
+/// apart (see [`Stacking`]).
+fn note_negative_z() {
+    OPEN_CONTEXTS.with(|c| {
+        if let Some(top) = c.borrow_mut().last_mut() {
+            *top = true;
+        }
+    });
+}
+
+/// A context's children are about to be built.
+fn open_context() {
+    OPEN_CONTEXTS.with(|c| c.borrow_mut().push(false));
+}
+
+/// A context's children are built: did a negative-z box land in it?
+fn close_context() -> bool {
+    OPEN_CONTEXTS.with(|c| c.borrow_mut().pop()).unwrap_or(false)
+}
+
+/// Paints a context's in-flow children APART from its background, after its
+/// negative-z boxes: each child deferred into the context's in-flow slot, in
+/// tree order. `keep` leading children stay in the context's own paint — the
+/// background layer, which is the background.
+fn split_in_flow(kids: Vec<AnyElement>, keep: usize, inside: &Stacking) -> Vec<AnyElement> {
+    kids.into_iter()
+        .enumerate()
+        .map(|(i, kid)| {
+            if i < keep {
+                return kid;
+            }
+            gpui::deferred(kid)
+                .with_stack_key(inside.in_flow_key())
+                .clip_to_ancestors(true)
+                .into_any_element()
+        })
+        .collect()
+}
+
+/// Wraps a node that paints out of tree order — see [`Layer`] — in gpui's
+/// deferred layer, at its [`Stacking`] key.
 ///
 /// `Deferred` keeps the child's LAYOUT where it is (it returns the child's own
-/// `LayoutId`) and only moves the PAINT to after every ancestor, ordered by
-/// priority; gpui sorts those stably, so two elements with the same `z-index`
-/// keep document order, exactly as CSS says they should.
-fn stack(priority: Option<usize>, extras: &vn_css::Extras, el: AnyElement) -> AnyElement {
-    match priority {
-        Some(priority) => gpui::deferred(el)
-            .with_priority(priority)
+/// `LayoutId`) and only moves the PAINT, and the hit test with it.
+fn stack(key: Option<std::rc::Rc<[u128]>>, extras: &vn_css::Extras, el: AnyElement) -> AnyElement {
+    match key {
+        Some(key) => gpui::deferred(el)
+            .with_stack_key(key)
             // A `z-index`ed element escapes its siblings' PAINT ORDER, not its
             // ancestors' `overflow` — CSS clips it to the scroll container it is
             // laid out inside. `position: fixed` is the exception CSS makes, and
@@ -4136,6 +4274,23 @@ fn stack(priority: Option<usize>, extras: &vn_css::Extras, el: AnyElement) -> An
             .into_any_element(),
         None => el,
     }
+}
+
+/// [`stack`], for an element whose children are built. A context whose
+/// children had to `split` (a negative z in it, [`split_in_flow`]) and that is
+/// not deferred already is deferred whole, to its own slot (`inside.key`): its
+/// background has to go under the negative-z boxes that paint over it. The
+/// root of a build never is; it paints first.
+fn stack_box(
+    own: Option<std::rc::Rc<[u128]>>,
+    split: &Cell<bool>,
+    is_root: bool,
+    inside: &Stacking,
+    extras: &vn_css::Extras,
+    el: AnyElement,
+) -> AnyElement {
+    let own = own.or_else(|| (split.get() && !is_root).then(|| inside.key.clone()));
+    stack(own, extras, el)
 }
 
 /// The listener half every element shares. `keys_here` is false for `<input>`,
@@ -5694,7 +5849,7 @@ mod tests {
     /// A POSITIONED box with this `z-index` (the dialog's `fixed z-50`, its
     /// header's `sticky z-10`): positioned, so the z applies.
     fn z(z_index: i32) -> vn_css::Extras {
-        vn_css::Extras { z_index: Some(z_index), positioned: Some(true), ..Default::default() }
+        vn_css::Extras { z_index: Some(Some(z_index)), positioned: Some(true), ..Default::default() }
     }
 
     fn fixed() -> vn_css::Extras {
@@ -5704,55 +5859,246 @@ mod tests {
     /// The layer of a box in a BLOCK parent; `fixed` is gpui's `Absolute`.
     fn layer(x: &vn_css::Extras) -> Layer {
         let position = (x.fixed == Some(true)).then_some(gpui::Position::Absolute);
-        layer_of(x, position, None)
+        layer_of(x, position, false, None)
     }
 
-    /// A `z-index` orders an element among its siblings INSIDE its stacking
-    /// context — a descendant of a `z-50` context paints above it whatever its
-    /// own z is, and below the next context that outranks 50.
-    ///
-    /// gpui sorts deferred draws by one flat priority, so the context chain is
-    /// packed into that integer, most significant level first. Without it
-    /// reka's `z-50` dialog painted its own background over its `z-10` sticky
-    /// header — 10 sorts before 50 — and the dialog came up as a black slab.
+    /// One box of the paint-order model: its name stands for its own
+    /// background, its children are its content.
+    struct B {
+        name: &'static str,
+        layer: Layer,
+        kids: Vec<B>,
+    }
+
+    fn b(name: &'static str, layer: Layer, kids: Vec<B>) -> B {
+        B { name, layer, kids }
+    }
+
+    /// What a box lowers to: painted in its parent's paint, or a deferred draw.
+    enum Item {
+        Paint(&'static str),
+        Inline(Vec<Item>),
+        Deferred(std::rc::Rc<[u128]>, Vec<Item>),
+    }
+
+    /// `build_node`'s stacking calls, for one box of the model: enter, the
+    /// open context, the in-flow split and the lift of a split context.
+    fn lower(node: &B, parent: &Stacking, is_root: bool) -> Item {
+        let layer = if is_root { Layer::InFlow } else { node.layer };
+        let Entered { own, inside, opens, negative } = parent.enter(layer, next_stack_ordinal());
+        if negative {
+            note_negative_z();
+        }
+        let opens = opens || is_root;
+        if opens {
+            open_context();
+        }
+        let mut kids: Vec<Item> = node.kids.iter().map(|k| lower(k, &inside, false)).collect();
+        let mut split = false;
+        if opens && close_context() {
+            split = true;
+            kids = kids.into_iter().map(|k| Item::Deferred(inside.in_flow_key(), vec![k])).collect();
+        }
+        let own = own.or_else(|| (split && !is_root).then(|| inside.key.clone()));
+        let mut body = vec![Item::Paint(node.name)];
+        body.extend(kids);
+        match own {
+            Some(key) => Item::Deferred(key, body),
+            None => Item::Inline(body),
+        }
+    }
+
+    fn flatten(
+        item: Item,
+        painted: &mut Vec<&'static str>,
+        draws: &mut Vec<(std::rc::Rc<[u128]>, Vec<&'static str>)>,
+    ) {
+        match item {
+            Item::Paint(name) => painted.push(name),
+            Item::Inline(items) => items.into_iter().for_each(|i| flatten(i, painted, draws)),
+            Item::Deferred(key, items) => {
+                let mut own = Vec::new();
+                items.into_iter().for_each(|i| flatten(i, &mut own, draws));
+                draws.push((key, own));
+            }
+        }
+    }
+
+    /// The order gpui paints a tree of boxes in: the root pass, then every
+    /// deferred draw, whatever round it was prepainted in, by key (a stable
+    /// sort, as gpui's), each painting what is not deferred inside it. The
+    /// hit test walks the same order backwards (the fork's `vn_hit_order`).
+    fn paint_order(root: &B) -> Vec<&'static str> {
+        reset_stacking();
+        let (mut painted, mut draws) = (Vec::new(), Vec::new());
+        flatten(lower(root, &Stacking::default(), true), &mut painted, &mut draws);
+        draws.sort_by(|a, b| a.0.cmp(&b.0));
+        painted.extend(draws.into_iter().flat_map(|(_, names)| names));
+        painted
+    }
+
+    /// The Argon profile popover: two portalled `fixed z-50` overlays, the
+    /// popover FIRST, with `z-index: 0 / 1 / 2` layers inside it, and the
+    /// menu it opens after it. The popover is painted whole, layers included,
+    /// before the menu — the layers used to paint (and take clicks) over the
+    /// menu's items, because they were deferred one round deeper.
     #[test]
-    fn a_nested_stacking_context_sorts_inside_its_parent() {
-        let root = Stacking::default();
-        let (dialog, inside_dialog) = root.enter(layer(&z(50)));
-        let (header, _) = inside_dialog.enter(layer(&z(10)));
-        let (overlay, _) = root.enter(layer(&z(50)));
-        let (toast, _) = root.enter(layer(&z(60)));
-
-        let dialog = dialog.unwrap();
-        let header = header.unwrap();
-        assert!(header > dialog, "a z-10 header paints above its z-50 dialog");
-        assert!(header < toast.unwrap(), "…and below a z-60 sibling of the dialog");
-        assert_eq!(overlay.unwrap(), dialog, "same z, same priority: document order decides");
+    fn a_context_paints_whole_before_a_later_sibling_of_the_same_z() {
+        let tree = b("root", Layer::InFlow, vec![
+            b("app", Layer::InFlow, vec![b("page", Layer::InFlow, vec![])]),
+            b("popover", layer(&z(50)), vec![b("inner", Layer::InFlow, vec![
+                b("card-bg", Layer::Context(0), vec![]),
+                b("hero", layer(&z(1)), vec![]),
+                b("glass", layer(&z(2)), vec![b("glass-body", Layer::InFlow, vec![])]),
+            ])]),
+            b("menu", layer(&z(50)), vec![b("item", Layer::InFlow, vec![])]),
+        ]);
+        assert_eq!(
+            paint_order(&tree),
+            ["root", "app", "page", "popover", "inner", "card-bg", "hero", "glass", "glass-body", "menu", "item"]
+        );
     }
 
-    /// `position: fixed` with no `z-index` still opens a level, so a z-indexed
+    /// A negative `z-index` paints over its context's own background and
+    /// under its context's in-flow content — wherever it is in the tree, and
+    /// in flow or not. Lower first; the context's later siblings are not
+    /// touched, and neither is the root's background.
+    #[test]
+    fn a_negative_z_paints_between_its_contexts_background_and_content() {
+        let tree = b("root", Layer::InFlow, vec![
+            b("card", layer(&z(1)), vec![
+                b("text", Layer::InFlow, vec![]),
+                b("glow", Layer::Context(-1), vec![]),
+                b("box", Layer::InFlow, vec![b("deep", layer(&z(-2)), vec![])]),
+            ]),
+            b("after", Layer::InFlow, vec![]),
+        ]);
+        assert_eq!(paint_order(&tree), ["root", "after", "card", "deep", "glow", "text", "box"]);
+
+        // In the ROOT context: over the root's background, under the page.
+        let tree = b("root", Layer::InFlow, vec![
+            b("page", Layer::InFlow, vec![b("backdrop", layer(&z(-1)), vec![])]),
+            b("footer", Layer::InFlow, vec![]),
+        ]);
+        assert_eq!(paint_order(&tree), ["root", "backdrop", "page", "footer"]);
+
+        // An `isolate` (or `opacity`, …) box that paints in flow keeps a
+        // negative z inside it: it is lifted whole to its own slot, and the
+        // decoration goes behind its content and no further.
+        let tree = b("root", Layer::InFlow, vec![
+            b("avatar", Layer::InFlowContext, vec![
+                b("face", Layer::InFlow, vec![]),
+                b("frame", layer(&z(-1)), vec![]),
+            ]),
+            b("name", Layer::InFlow, vec![]),
+        ]);
+        assert_eq!(paint_order(&tree), ["root", "name", "avatar", "frame", "face"]);
+    }
+
+    /// Three contexts deep, with z-indices that would interleave if they were
+    /// one flat rank: `a1x`'s z 100 stays inside `a` (z 1), so it paints
+    /// under `c`, a LATER z-1 sibling of `a`, and under `b` (z 2).
+    #[test]
+    fn nested_contexts_sort_by_their_path() {
+        let tree = b("root", Layer::InFlow, vec![
+            b("a", layer(&z(1)), vec![
+                b("a1", layer(&z(3)), vec![
+                    b("a1x", layer(&z(100)), vec![]),
+                    b("a1y", layer(&z(-5)), vec![]),
+                    b("a1-text", Layer::InFlow, vec![]),
+                ]),
+                b("a2", layer(&z(2)), vec![]),
+            ]),
+            b("b", layer(&z(2)), vec![
+                b("b1", layer(&z(-1)), vec![]),
+                b("b-text", Layer::InFlow, vec![]),
+            ]),
+            b("c", layer(&z(1)), vec![]),
+        ]);
+        assert_eq!(
+            paint_order(&tree),
+            ["root", "a", "a2", "a1", "a1y", "a1-text", "a1x", "c", "b", "b1", "b-text"]
+        );
+    }
+
+    /// `opacity < 1` or a `transform` makes a stacking context at z auto. A
+    /// z-100 box inside it sorts INSIDE it, so it paints under a later z-10
+    /// sibling of the faded box. In flow the box itself keeps its tree-order
+    /// paint (the stated limit); on an `absolute` box it is deferred at z 0.
+    #[test]
+    fn an_effect_makes_a_context_at_z_auto() {
+        let style = |f: &dyn Fn(&mut gpui::StyleRefinement)| {
+            let mut s = gpui::StyleRefinement::default();
+            f(&mut s);
+            s
+        };
+        let none = vn_css::Extras::default();
+        assert!(!effect_context(&none, &style(&|_| {})));
+        assert!(effect_context(&none, &style(&|s| s.opacity = Some(0.5))));
+        assert!(!effect_context(&none, &style(&|s| s.opacity = Some(1.0))));
+        let mut moved = gpui::TransformSpec::IDENTITY;
+        moved.scale = (0.95, 0.95);
+        assert!(effect_context(&none, &style(&|s| s.vn_transform = Some(moved))));
+        assert!(!effect_context(&none, &style(&|s| s.vn_transform = Some(gpui::TransformSpec::IDENTITY))));
+        assert!(effect_context(&none, &style(&|s| s.backdrop_blur = Some(gpui::px(8.0)))));
+        let isolated = vn_css::Extras { isolate: Some(true), ..Default::default() };
+        assert!(effect_context(&isolated, &style(&|_| {})));
+
+        let abs = Some(gpui::Position::Absolute);
+        assert_eq!(layer_of(&none, None, true, None), Layer::InFlowContext);
+        assert_eq!(layer_of(&none, abs, true, None), Layer::Context(0));
+        assert_eq!(layer_of(&none, abs, false, None), Layer::Positioned);
+
+        let tree = b("root", Layer::InFlow, vec![
+            b("faded", Layer::InFlowContext, vec![b("lifted", layer(&z(100)), vec![])]),
+            b("later", layer(&z(10)), vec![]),
+        ]);
+        assert_eq!(paint_order(&tree), ["root", "faded", "lifted", "later"]);
+
+        let tree = b("root", Layer::InFlow, vec![
+            b("moved", layer_of(&none, abs, true, None), vec![b("inner", layer(&z(5)), vec![])]),
+            b("badge", Layer::Positioned, vec![]),
+            b("later", layer(&z(1)), vec![]),
+        ]);
+        assert_eq!(paint_order(&tree), ["root", "moved", "inner", "badge", "later"]);
+    }
+
+    /// `position: fixed` with no `z-index` is still a context, so a z-indexed
     /// descendant of a portalled overlay sorts inside it rather than against
-    /// the document.
+    /// the document; `z-index: 0` is one too, and `auto` is not.
     #[test]
-    fn fixed_opens_a_level_even_at_z_zero() {
-        let root = Stacking::default();
-        let (outer, inside) = root.enter(layer(&fixed()));
-        let (inner, _) = inside.enter(layer(&z(1)));
-        assert_eq!(outer, Some(0));
-        assert!(inner.unwrap() > 0);
-        // …and still below anything the document ranks above the overlay.
-        assert!(inner.unwrap() < root.enter(layer(&z(1))).0.unwrap());
+    fn fixed_and_z_zero_are_contexts_and_auto_is_not() {
+        assert_eq!(layer(&fixed()), Layer::Context(0));
+        let zero_rel = z(0);
+        assert_eq!(layer(&zero_rel), Layer::InFlowContext);
+        assert_eq!(layer_of(&zero_rel, Some(gpui::Position::Absolute), false, None), Layer::Context(0));
+        let auto = vn_css::Extras { z_index: Some(None), positioned: Some(true), ..Default::default() };
+        assert_eq!(layer(&auto), Layer::InFlow);
+        let sticky = vn_css::Extras { sticky: Some(true), ..auto.clone() };
+        assert_eq!(layer(&sticky), Layer::InFlowContext);
+
+        let tree = b("root", Layer::InFlow, vec![
+            b("overlay", layer(&fixed()), vec![b("inside", layer(&z(1)), vec![])]),
+            b("document-z1", layer(&z(1)), vec![]),
+        ]);
+        assert_eq!(paint_order(&tree), ["root", "overlay", "inside", "document-z1"]);
+        let tree = b("root", Layer::InFlow, vec![
+            b("zero", layer(&zero_rel), vec![b("inside", layer(&z(9)), vec![])]),
+            b("auto", layer(&auto), vec![b("escapes", layer(&z(8)), vec![])]),
+            b("document-z1", layer(&z(1)), vec![]),
+        ]);
+        assert_eq!(paint_order(&tree), ["root", "zero", "auto", "inside", "document-z1", "escapes"]);
     }
 
-    /// An element that is not out of flow neither defers nor opens a level, so
-    /// an ordinary subtree costs nothing.
+    /// An element that is not out of flow neither defers nor opens a context,
+    /// so an ordinary subtree costs nothing.
     #[test]
     fn an_in_flow_element_changes_nothing() {
         let root = Stacking::default();
-        let (priority, child) = root.enter(layer(&vn_css::Extras::default()));
-        assert_eq!(priority, None);
-        assert_eq!(child.depth, root.depth);
-        assert_eq!(child.prefix, root.prefix);
+        let e = root.enter(layer(&vn_css::Extras::default()), 0);
+        assert!(e.own.is_none() && !e.opens);
+        assert_eq!(e.inside.key, root.key);
+        assert_eq!(e.inside.deferred, root.deferred);
     }
 
     /// m26 6d, rule 1: `z-index` applies to a positioned box, or to a flex or
@@ -5763,7 +6109,7 @@ mod tests {
     #[test]
     fn z_index_applies_only_to_positioned_boxes_and_flex_or_grid_items() {
         let z10 = |positioned: Option<bool>| vn_css::Extras {
-            z_index: Some(10),
+            z_index: Some(Some(10)),
             positioned,
             ..Default::default()
         };
@@ -5771,76 +6117,91 @@ mod tests {
         let flex = Some(gpui::Display::Flex);
         let grid = Some(gpui::Display::Grid);
 
-        assert_eq!(layer_of(&z10(None), None, block), Layer::InFlow, "static (undeclared) in a block");
-        assert_eq!(layer_of(&z10(Some(false)), None, block), Layer::InFlow, "`position: static`");
-        assert_eq!(layer_of(&z10(Some(false)), None, Some(gpui::Display::Block)), Layer::InFlow);
-        assert_eq!(layer_of(&z10(None), None, flex), Layer::Z(10), "a static flex item");
-        assert_eq!(layer_of(&z10(None), None, grid), Layer::Z(10), "a static grid item");
-        assert_eq!(layer_of(&z10(Some(true)), None, block), Layer::Z(10), "relative in a block");
+        let at = |x: &vn_css::Extras, parent| layer_of(x, None, false, parent);
+        assert_eq!(at(&z10(None), block), Layer::InFlow, "static (undeclared) in a block");
+        assert_eq!(at(&z10(Some(false)), block), Layer::InFlow, "`position: static`");
+        assert_eq!(at(&z10(Some(false)), Some(gpui::Display::Block)), Layer::InFlow);
+        assert_eq!(at(&z10(None), flex), Layer::Context(10), "a static flex item");
+        assert_eq!(at(&z10(None), grid), Layer::Context(10), "a static grid item");
+        assert_eq!(at(&z10(Some(true)), block), Layer::Context(10), "relative in a block");
         assert!(!z_applies(&z10(None), block) && z_applies(&z10(None), flex));
 
         // An inert z opens no context, so the subtree's own z-indices keep
         // sorting in the outer one.
         let root = Stacking::default();
-        let (p, inside) = root.enter(layer_of(&z10(None), None, block));
-        assert_eq!(p, None);
-        assert_eq!(inside, root);
+        let e = root.enter(at(&z10(None), block), 0);
+        assert!(e.own.is_none() && !e.opens);
+        assert_eq!(e.inside.key, root.key);
     }
 
     /// m26 6d, rule 2: a `position: absolute` box with `z-index: auto` paints
     /// after ALL the in-flow content of its stacking context (CSS 2.1
-    /// Appendix E, step 8): it is deferred at its context's own priority, and
-    /// it opens no context. So:
-    ///
-    /// - the badge (before the `<Input>` in tree order) paints over it;
-    /// - a z>0 box of the same context still paints above the badge;
-    /// - a z>0 DESCENDANT of the badge sorts in the outer context, as if the
-    ///   badge were not there;
-    /// - inside reka's dialog (`fixed z-50`) the same holds one level down,
-    ///   below the dialog's `sticky z-10` header.
+    /// Appendix E, step 8), in tree order with the other positioned boxes, and
+    /// it opens no context. So the badge (before the `<Input>` in tree order)
+    /// paints over it, a z>0 box of the same context still paints above the
+    /// badge, and a z>0 DESCENDANT of the badge sorts in the outer context.
     #[test]
     fn an_absolute_z_auto_box_paints_after_in_flow_content_and_opens_no_context() {
         let absolute = vn_css::Extras { positioned: Some(true), ..Default::default() };
         let abs = Some(gpui::Position::Absolute);
-        assert_eq!(layer_of(&absolute, abs, None), Layer::Positioned);
-        let zero = vn_css::Extras { z_index: Some(0), ..absolute.clone() };
-        assert_eq!(layer_of(&zero, abs, None), Layer::Positioned, "z-index: 0 is treated as auto");
-        let behind = vn_css::Extras { z_index: Some(-1), ..absolute.clone() };
-        assert_eq!(layer_of(&behind, abs, None), Layer::InFlow, "negative z is `paint_first_z`'s");
-        assert_eq!(layer_of(&absolute, None, None), Layer::InFlow, "relative/sticky: the stated limit");
+        assert_eq!(layer_of(&absolute, abs, false, None), Layer::Positioned);
+        assert_eq!(layer_of(&absolute, None, false, None), Layer::InFlow, "relative: the stated limit");
 
-        let root = Stacking::default();
-        let (badge, inside_badge) = root.enter(Layer::Positioned);
-        assert_eq!(badge, Some(root.prefix), "deferred, at the context's own priority");
-        assert_eq!((inside_badge.prefix, inside_badge.depth), (root.prefix, root.depth), "no new context");
-        assert!(root.enter(Layer::Z(1)).0.unwrap() > badge.unwrap(), "a z-1 sibling paints above it");
+        let tree = b("root", Layer::InFlow, vec![
+            b("field", Layer::InFlow, vec![
+                b("badge", Layer::Positioned, vec![
+                    b("badge-text", Layer::InFlow, vec![]),
+                    b("badge-dot", Layer::Positioned, vec![]),
+                    b("badge-tip", layer(&z(5)), vec![]),
+                ]),
+                b("input", Layer::InFlow, vec![]),
+            ]),
+            b("z1-box", layer(&z(1)), vec![]),
+            b("later-abs", Layer::Positioned, vec![]),
+        ]);
         assert_eq!(
-            inside_badge.enter(Layer::Z(5)).0,
-            root.enter(Layer::Z(5)).0,
-            "a z-5 descendant sorts in the OUTER context"
+            paint_order(&tree),
+            ["root", "field", "input", "badge", "badge-text", "badge-dot", "later-abs", "z1-box", "badge-tip"]
         );
-
-        let (dialog, inside_dialog) = root.enter(layer(&z(50)));
-        let (in_dialog, _) = inside_dialog.enter(Layer::Positioned);
-        let (header, _) = inside_dialog.enter(layer(&z(10)));
-        assert_eq!(in_dialog, dialog, "the dialog's own level, after its in-flow content (a later round)");
-        assert!(header.unwrap() > in_dialog.unwrap(), "below the dialog's z-10 header");
-        assert!(in_dialog.unwrap() > root.enter(Layer::Z(49)).0.unwrap(), "and above a z-49 document box");
     }
 
-    /// Each deferred box inside another costs gpui one more prepaint round,
-    /// and gpui asserts below ten. Past eight, a box paints in flow.
+    /// The cache compares `Inherited`, and must not see a stacking KEY: its
+    /// ordinals move whenever anything earlier in the document does.
+    #[test]
+    fn the_cache_does_not_compare_stacking_keys() {
+        let root = Stacking::default();
+        let a = Inherited { stack: root.enter(layer(&z(1)), 3).inside, ..Default::default() };
+        let b = Inherited { stack: root.enter(layer(&z(1)), 7).inside, ..Default::default() };
+        assert_ne!(a.stack.key, b.stack.key);
+        assert!(a == b);
+    }
+
+    /// Each deferred box inside another costs gpui one more prepaint round.
+    /// Past the limit a box paints in flow, and a context stays a context.
     #[test]
     fn deferred_nesting_stops_below_gpuis_round_limit() {
         let mut s = Stacking::default();
         for level in 0..MAX_DEFERRED_NESTING {
-            let (p, inside) = s.enter(Layer::Positioned);
-            assert!(p.is_some(), "level {level} defers");
-            s = inside;
+            let e = s.enter(Layer::Positioned, u64::from(level));
+            assert!(e.own.is_some(), "level {level} defers");
+            s = e.inside;
         }
-        assert_eq!(s.enter(Layer::Positioned).0, None);
-        assert_eq!(s.enter(Layer::Z(3)).0, None);
-        assert_eq!(s.enter(Layer::Fixed).0, None);
+        assert!(s.enter(Layer::Positioned, 99).own.is_none());
+        assert!(s.enter(Layer::Context(-1), 99).own.is_none());
+        assert!(!s.enter(Layer::Context(-1), 99).negative, "painted in flow: nothing to split");
+        let e = s.enter(Layer::Context(3), 99);
+        assert!(e.own.is_none() && e.opens && e.inside.key.len() == s.key.len() + 1);
+    }
+
+    /// The ranks: every negative z, then a context's in-flow content, then z
+    /// 0 and up — and the ordinal only breaks a tie of z.
+    #[test]
+    fn slots_order_z_then_tree_order() {
+        assert!(z_rank(i32::MIN) < z_rank(-1));
+        assert!(z_rank(-1) < IN_FLOW && IN_FLOW < z_rank(0));
+        assert!(z_rank(0) < z_rank(1) && z_rank(1) < z_rank(i32::MAX));
+        assert!(slot(z_rank(1), 9) < slot(z_rank(2), 0));
+        assert!(slot(z_rank(1), 0) < slot(z_rank(1), 1));
     }
 
     /// Enter and Space click only what a browser clicks from the keyboard. A
@@ -5912,63 +6273,6 @@ mod tests {
             assert_eq!(node.children.len(), 9, "the retained tree keeps all nine");
             let laid_out: Vec<u32> = laid_out_children(t, node);
             assert_eq!(laid_out, boxes, "only the three elements are flex items");
-        });
-    }
-
-    /// A negative `z-index` on an OUT-OF-FLOW child paints first, which is
-    /// CSS 2.1 Appendix E's rule (after the parent's background, before the
-    /// parent's in-flow content) and costs nothing, because taffy lays an
-    /// absolutely positioned box out against the container regardless of where
-    /// it sits among its siblings.
-    ///
-    /// An IN-FLOW one keeps its place: moving it would move its box, which is
-    /// worse than not honouring the declaration.
-    #[test]
-    fn a_negative_z_index_paints_first_only_when_it_costs_no_layout() {
-        fn styled(z: i32, absolute: bool) -> vn_css::ComputedStates {
-            let mut base = gpui::StyleRefinement::default();
-            if absolute {
-                base.position = Some(gpui::Position::Absolute);
-            }
-            vn_css::ComputedStates {
-                base: std::rc::Rc::new(base),
-                extras: vn_css::Extras { z_index: Some(z), ..Default::default() },
-                ..Default::default()
-            }
-        }
-
-        with_tree(|t| {
-            let div = t.intern("div");
-            let parent = t.create_element(div);
-            let plain = t.create_element(div);
-            t.insert(plain, parent, 0);
-            let in_flow_behind = t.create_element(div);
-            t.insert(in_flow_behind, parent, 0);
-            let behind = t.create_element(div);
-            t.insert(behind, parent, 0);
-            let far_behind = t.create_element(div);
-            t.insert(far_behind, parent, 0);
-
-            t.node_mut(in_flow_behind).unwrap().computed = Some(styled(-1, false));
-            t.node_mut(behind).unwrap().computed = Some(styled(-1, true));
-            t.node_mut(far_behind).unwrap().computed = Some(styled(-5, true));
-
-            let node = t.node(parent).unwrap();
-            assert_eq!(
-                node.children,
-                vec![plain, in_flow_behind, behind, far_behind],
-                "document order is unchanged in the retained tree"
-            );
-            assert_eq!(
-                laid_out_children(t, node),
-                vec![far_behind, behind, plain, in_flow_behind],
-                "the two out-of-flow ones move to the front, most negative first; the in-flow                  one keeps its place"
-            );
-            // …and the in-flow one is the case that gets the advisory.
-            assert!(paint_first_z(t, behind).is_some());
-            assert!(paint_first_z(t, far_behind).is_some());
-            assert!(paint_first_z(t, in_flow_behind).is_none());
-            assert!(paint_first_z(t, plain).is_none());
         });
     }
 
