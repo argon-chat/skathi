@@ -61,7 +61,7 @@ use gpui::{effect_id, EffectSpec, EFFECT_FLAG_NEEDS_BACKDROP};
 /// same number into every manifest it writes; a mismatch means the artifacts
 /// were produced by a different toolchain generation and must be regenerated
 /// rather than half-understood.
-pub const MANIFEST_SCHEMA: u32 = 4;
+pub const MANIFEST_SCHEMA: u32 = 5;
 
 /// The environment variable pointing at an app's compiled effects — the
 /// directory `bun shaders.ts --app … --out <dir>` wrote, holding `effects.json`
@@ -498,7 +498,7 @@ mod tests {
     /// A hand-written manifest standing in for one an app's `bun shaders.ts`
     /// would emit — the shape the dynamic path has to survive.
     const USER_MANIFEST: &str = r#"{
-      "schema": 4,
+      "schema": 5,
       "slangc": "2026.12",
       "kind": "user",
       "effects": [
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn a_manifest_from_the_future_is_refused_by_schema() {
-        let json = USER_MANIFEST.replace("\"schema\": 4", "\"schema\": 99");
+        let json = USER_MANIFEST.replace("\"schema\": 5", "\"schema\": 99");
         let error = parse_manifest(&json, 3, false, "<test>").unwrap_err();
         assert!(error.contains("schema 99"), "{error}");
         assert!(error.contains("bun shaders.ts"), "{error}");

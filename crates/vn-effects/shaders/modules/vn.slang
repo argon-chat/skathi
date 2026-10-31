@@ -198,6 +198,8 @@ public struct VnEffectQuad
     public uint effect_id;
     public VnBounds bounds;
     public VnBounds content_mask;
+    /// The content mask's rounded corners; see `vn_content_mask_coverage`.
+    public VnCorners content_mask_radii;
     public VnCorners corner_radii;
     public float4 params0;
     public float4 params1;
@@ -207,7 +209,6 @@ public struct VnEffectQuad
     public float backdrop_blur_radius;
     public float scale;
     public uint flags;
-    public uint4 pad;
 };
 
 public StructuredBuffer<VnEffectQuad> vn_effect_quads : register(t1);
@@ -276,6 +277,11 @@ public struct EffectInput
     /// applies after `shade` — exposed because an effect may want to fade a
     /// component of its own by the same amount.
     public float opacity;
+    /// The coverage of the content mask, the rounded clip of an `overflow`
+    /// ancestor with a `border-radius`: 1 inside it, and everywhere for a
+    /// square one. Folded into the coverage the engine applies after `shade`,
+    /// like `opacity`.
+    public float clip;
     /// Whether this effect asked for the backdrop.
     public bool hasBackdrop;
     /// Parameter slots 0..3 — the raw packing behind the named fields on your
@@ -360,6 +366,20 @@ public float vn_quad_sdf(float2 point, VnBounds bounds, VnCorners radii)
         - radius;
 }
 
+/// The coverage of the quad's content mask, the rounded clip an `overflow`
+/// ancestor with a `border-radius` pushes. All-zero radii are the plain rect
+/// the clip distances already cut, so they return 1 before any SDF math.
+/// Mirrors `content_mask_coverage` in gpui_windows/src/shaders.hlsl.
+public float vn_content_mask_coverage(float2 position, VnBounds mask, VnCorners radii)
+{
+    if (radii.top_left == 0.0 && radii.top_right == 0.0 &&
+        radii.bottom_right == 0.0 && radii.bottom_left == 0.0)
+    {
+        return 1.0;
+    }
+    return saturate(0.5 - vn_quad_sdf(position, mask, radii));
+}
+
 /// The DirectComposition swap chain is premultiplied; keep rgb <= a so the
 /// compositor never sees an out-of-gamut pixel. Applied by `vn_finish`, never
 /// by effect code, precisely so an effect cannot skip it.
@@ -409,6 +429,7 @@ public EffectInput vn_begin(VnFragmentInput frag)
     i.scale = q.scale;
     i.bleed = q.bleed;
     i.opacity = q.opacity;
+    i.clip = vn_content_mask_coverage(position, q.content_mask, q.content_mask_radii);
     i.hasBackdrop = has_backdrop;
     i.params0 = q.params0;
     i.params1 = q.params1;
@@ -430,7 +451,7 @@ public float4 vn_finish<T : IEffect>(T material, EffectInput i)
     shaded = vn_clamp_premultiplied(shaded);
 
     float sd_draw = i.sd - i.bleed;
-    float coverage = saturate(0.5 - sd_draw) * saturate(i.opacity);
+    float coverage = saturate(0.5 - sd_draw) * saturate(i.opacity) * i.clip;
 
     // Single exit on purpose — an early `return` inside the branch makes fxc
     // lose track of `shaded` and warn about it.

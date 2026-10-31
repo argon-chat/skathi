@@ -646,7 +646,7 @@ impl Element for Scrollbar {
             && max.x > px(0.5);
 
         let hitbox = window
-            .with_content_mask(Some(ContentMask { bounds: viewport }), |window| {
+            .with_content_mask(Some(ContentMask::rect(viewport)), |window| {
                 window.insert_hitbox(viewport, HitboxBehavior::Normal)
             });
 
@@ -734,7 +734,7 @@ impl Element for Scrollbar {
                 };
 
                 let track_hitbox = window
-                    .with_content_mask(Some(ContentMask { bounds: viewport }), |window| {
+                    .with_content_mask(Some(ContentMask::rect(viewport)), |window| {
                         window.insert_hitbox(track, HitboxBehavior::Normal)
                     });
                 axes.push(AxisPaint {
@@ -954,7 +954,7 @@ impl Element for Scrollbar {
             return;
         }
 
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        window.with_content_mask(Some(ContentMask::rect(bounds)), |window| {
             for ax in prepaint.axes.iter() {
                 let axis = ax.axis;
                 // A titlebar that declared `window-drag: move` and happens to

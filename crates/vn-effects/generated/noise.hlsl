@@ -5,7 +5,7 @@
 //   source:     crates/vn-effects/shaders/noise.slang+wrapper
 //   signature:  noise(<number:amount>, <length:scale>?, <number:speed>?)
 //   slangc:     2026.12
-//   schema:     4
+//   schema:     5
 //   src-sha256: 89176f16b2c98b843657eb1b850bb4abb49b10ffc70849f03e0747bf8eed23d3
 //
 // Compiled at ps_5_0 (effects only — the core gpui shaders stay at ps_4_1).
@@ -47,6 +47,7 @@ struct VnEffectQuad_0
     uint effect_id_0;
     VnBounds_0 bounds_0;
     VnBounds_0 content_mask_0;
+    VnCorners_0 content_mask_radii_0;
     VnCorners_0 corner_radii_0;
     float4 params0_0;
     float4 params1_0;
@@ -56,8 +57,8 @@ struct VnEffectQuad_0
     float backdrop_blur_radius_0;
     float scale_0;
     uint flags_0;
-    uint4 pad_0;
 };
+
 
 StructuredBuffer<VnEffectQuad_0 > vn_effect_quads_0 : register(t1);
 
@@ -75,19 +76,19 @@ struct SLANG_ParameterGroup_GlobalParams_0
 };
 
 
-#line 218
+#line 219
 cbuffer GlobalParams_0 : register(b0)
 {
     SLANG_ParameterGroup_GlobalParams_0 GlobalParams_0;
 }
 
-#line 214
+#line 215
 Texture2D<float4 > vn_backdrop_input_0 : register(t0);
 
 SamplerState vn_clamp_sampler_0 : register(s1);
 
 
-#line 215
+#line 216
 Texture2D<float4 > vn_backdrop_original_0 : register(t2);
 
 
@@ -100,7 +101,7 @@ struct Noise_0
 };
 
 
-#line 246 "Y:/vue-native/crates/vn-effects/shaders/modules/vn.slang"
+#line 247 "Y:/vue-native/crates/vn-effects/shaders/modules/vn.slang"
 struct EffectInput_0
 {
     float2 uv_0;
@@ -114,18 +115,19 @@ struct EffectInput_0
     float scale_2;
     float bleed_1;
     float opacity_1;
+    float clip_0;
     bool hasBackdrop_0;
     float4 params0_1;
     float4 params1_1;
 };
 
 
-#line 468
+#line 489
 float vn_hash12_0(float2 p_0)
 {
     float _S1 = p_0.x;
 
-#line 470
+#line 491
     float3 p3_0 = frac(float3(_S1, p_0.y, _S1) * 0.1031000018119812f);
     float3 p3_1 = p3_0 + dot(p3_0, float3(p3_0.y + 33.3300018310546875f, p3_0.z + 33.3300018310546875f, p3_0.x + 33.3300018310546875f));
     return frac((p3_1.x + p3_1.y) * p3_1.z);
@@ -167,39 +169,39 @@ bool Noise_straightAlpha_0()
 }
 
 
-#line 366 "Y:/vue-native/crates/vn-effects/shaders/modules/vn.slang"
+#line 386 "Y:/vue-native/crates/vn-effects/shaders/modules/vn.slang"
 float4 vn_clamp_premultiplied_0(float4 color_0)
 {
 
-#line 372
+#line 392
     float a_0 = saturate(color_0.w);
     return float4(clamp(color_0.xyz, (float3)0.0f, float3(a_0, a_0, a_0)), a_0);
 }
 
 
-#line 423
+#line 444
 float4 vn_finish_0(Noise_0 material_0, EffectInput_0 i_0)
 {
     float4 shaded_0 = Noise_shade_0(material_0, i_0);
 
-#line 425
+#line 446
     float4 shaded_1;
     if(Noise_straightAlpha_0())
     {
         float _S4 = shaded_0.w;
 
-#line 428
+#line 449
         shaded_1 = float4(shaded_0.xyz * _S4, _S4);
 
-#line 426
+#line 447
     }
     else
     {
 
-#line 426
+#line 447
         shaded_1 = shaded_0;
 
-#line 426
+#line 447
     }
 
 
@@ -207,95 +209,95 @@ float4 vn_finish_0(Noise_0 material_0, EffectInput_0 i_0)
     float4 shaded_2 = vn_clamp_premultiplied_0(shaded_1);
 
 
-    float coverage_1 = saturate(0.5f - (i_0.sd_0 - i_0.bleed_1)) * saturate(i_0.opacity_1);
+    float coverage_1 = saturate(0.5f - (i_0.sd_0 - i_0.bleed_1)) * saturate(i_0.opacity_1) * i_0.clip_0;
 
-#line 433
+#line 454
     float4 result_0;
 
-#line 438
+#line 459
     if(i_0.hasBackdrop_0)
     {
 
-#line 438
+#line 459
         result_0 = lerp(vn_backdrop_original_0.SampleLevel(vn_clamp_sampler_0, i_0.uv_0, 0.0f), shaded_2, (float4)coverage_1);
 
-#line 438
+#line 459
     }
     else
     {
 
-#line 438
+#line 459
         result_0 = shaded_2 * coverage_1;
 
-#line 438
+#line 459
     }
 
-#line 448
+#line 469
     return vn_clamp_premultiplied_0(result_0);
 }
 
 
-#line 336
+#line 342
 float vn_pick_corner_radius_0(float2 center_to_point_0, VnCorners_0 radii_0)
 {
 
-#line 342
+#line 348
     bool _S5 = (center_to_point_0.x) < 0.0f;
 
-#line 342
+#line 348
     float top_0;
 
-#line 342
+#line 348
     if(_S5)
     {
 
-#line 342
+#line 348
         top_0 = radii_0.top_left_0;
 
-#line 342
+#line 348
     }
     else
     {
 
-#line 342
+#line 348
         top_0 = radii_0.top_right_0;
 
-#line 342
+#line 348
     }
 
-#line 342
+#line 348
     float bottom_0;
     if(_S5)
     {
 
-#line 343
+#line 349
         bottom_0 = radii_0.bottom_left_0;
 
-#line 343
+#line 349
     }
     else
     {
 
-#line 343
+#line 349
         bottom_0 = radii_0.bottom_right_0;
 
-#line 343
+#line 349
     }
     if((center_to_point_0.y) < 0.0f)
     {
 
-#line 344
+#line 350
     }
     else
     {
 
-#line 344
+#line 350
         top_0 = bottom_0;
 
-#line 344
+#line 350
     }
 
-#line 344
+#line 350
     return top_0;
 }
 
@@ -314,25 +316,93 @@ float vn_quad_sdf_0(float2 point_0, VnBounds_0 bounds_1, VnCorners_0 radii_1)
 }
 
 
-#line 235
+#line 373
+float vn_content_mask_coverage_0(float2 position_0, VnBounds_0 mask_0, VnCorners_0 radii_2)
+{
+
+#line 373
+    bool _S6;
+
+    if((radii_2.top_left_0) == 0.0f)
+    {
+
+#line 375
+        _S6 = (radii_2.top_right_0) == 0.0f;
+
+#line 375
+    }
+    else
+    {
+
+#line 375
+        _S6 = false;
+
+#line 375
+    }
+
+#line 375
+    if(_S6)
+    {
+
+#line 375
+        _S6 = (radii_2.bottom_right_0) == 0.0f;
+
+#line 375
+    }
+    else
+    {
+
+#line 375
+        _S6 = false;
+
+#line 375
+    }
+    if(_S6)
+    {
+
+#line 376
+        _S6 = (radii_2.bottom_left_0) == 0.0f;
+
+#line 376
+    }
+    else
+    {
+
+#line 376
+        _S6 = false;
+
+#line 376
+    }
+
+#line 375
+    if(_S6)
+    {
+
+        return 1.0f;
+    }
+    return saturate(0.5f - vn_quad_sdf_0(position_0, mask_0, radii_2));
+}
+
+
+#line 236
 struct VnFragmentInput_0
 {
     nointerpolation uint id_0 : TEXCOORD0;
-    float4 position_0 : SV_Position;
+    float4 position_1 : SV_Position;
 };
 
 
-#line 377
+#line 397
 EffectInput_0 vn_begin_0(VnFragmentInput_0 frag_0)
 {
     VnEffectQuad_0 q_0 = vn_effect_quads_0.Load(frag_0.id_0);
-    float2 position_1 = frag_0.position_0.xy;
+    float2 position_2 = frag_0.position_1.xy;
 
 
-    float2 uv_1 = position_1 / GlobalParams_0.vn_viewport_size_0;
+    float2 uv_1 = position_2 / GlobalParams_0.vn_viewport_size_0;
 
-#line 391
-    float sd_element_0 = vn_quad_sdf_0(position_1, q_0.bounds_0, q_0.corner_radii_0) + q_0.bleed_0;
+#line 411
+    float sd_element_0 = vn_quad_sdf_0(position_2, q_0.bounds_0, q_0.corner_radii_0) + q_0.bleed_0;
 
     float2 element_origin_0 = q_0.bounds_0.origin_0 + q_0.bleed_0;
     float2 element_size_0 = max(q_0.bounds_0.size_0 - 2.0f * q_0.bleed_0, float2(1.0f, 1.0f));
@@ -341,35 +411,35 @@ EffectInput_0 vn_begin_0(VnFragmentInput_0 frag_0)
 
     EffectInput_0 i_1;
     i_1.uv_0 = uv_1;
-    float2 _S6 = position_1 - element_origin_0;
+    float2 _S7 = position_2 - element_origin_0;
 
-#line 400
-    i_1.px_0 = _S6;
+#line 420
+    i_1.px_0 = _S7;
     i_1.size_1 = element_size_0;
-    i_1.local_0 = _S6 / element_size_0;
+    i_1.local_0 = _S7 / element_size_0;
 
-#line 402
-    float4 _S7;
+#line 422
+    float4 _S8;
 
     if(has_backdrop_0)
     {
 
-#line 404
-        _S7 = vn_backdrop_input_0.SampleLevel(vn_clamp_sampler_0, uv_1, 0.0f);
+#line 424
+        _S8 = vn_backdrop_input_0.SampleLevel(vn_clamp_sampler_0, uv_1, 0.0f);
 
-#line 404
+#line 424
     }
     else
     {
 
-#line 404
-        _S7 = float4(0.0f, 0.0f, 0.0f, 0.0f);
+#line 424
+        _S8 = float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-#line 404
+#line 424
     }
 
-#line 403
-    i_1.backdrop_0 = _S7;
+#line 423
+    i_1.backdrop_0 = _S8;
 
 
     i_1.sd_0 = sd_element_0;
@@ -378,6 +448,7 @@ EffectInput_0 vn_begin_0(VnFragmentInput_0 frag_0)
     i_1.scale_2 = q_0.scale_0;
     i_1.bleed_1 = q_0.bleed_0;
     i_1.opacity_1 = q_0.opacity_0;
+    i_1.clip_0 = vn_content_mask_coverage_0(position_2, q_0.content_mask_0, q_0.content_mask_radii_0);
     i_1.hasBackdrop_0 = has_backdrop_0;
     i_1.params0_1 = q_0.params0_0;
     i_1.params1_1 = q_0.params1_0;

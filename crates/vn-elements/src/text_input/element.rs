@@ -257,7 +257,7 @@ impl Element for TextElement {
         let scrollbar = prepaint.scrollbar.take();
         let state = self.state.clone();
 
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        window.with_content_mask(Some(ContentMask::rect(bounds)), |window| {
             for quad in selection {
                 window.paint_quad(quad);
             }

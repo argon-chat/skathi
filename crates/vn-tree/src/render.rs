@@ -2490,6 +2490,35 @@ fn padding_box_radii(style: &gpui::StyleRefinement, rem: gpui::Pixels) -> gpui::
     }
 }
 
+/// A replaced element's picture, clipped to the element's rounded corners.
+///
+/// A `<video>` frame, a `<canvas>` bitmap and a video poster are an `img`
+/// child of the element's box, and CSS clips a replaced element's content to
+/// its rounded edge. A full-size `overflow: hidden` wrapper with the
+/// padding-box radii pushes that rounded content mask. Making the element's
+/// own box `overflow: hidden` would also zero its automatic minimum size in a
+/// flex row, so the wrapper sits inside it. Without a radius the picture goes
+/// in unwrapped. (`<img>` needs none of this: it is the gpui `img` itself, and
+/// its sprite takes the radii.)
+pub(crate) fn clip_replaced(
+    picture: gpui::AnyElement,
+    outer: &gpui::StyleRefinement,
+    rem: gpui::Pixels,
+) -> gpui::AnyElement {
+    let radii = padding_box_radii(outer, rem);
+    if radii == gpui::Corners::default() {
+        return picture;
+    }
+    let mut clip = gpui::div().size_full().overflow_hidden().child(picture);
+    clip.style().corner_radii = gpui::CornersRefinement {
+        top_left: Some(radii.top_left.into()),
+        top_right: Some(radii.top_right.into()),
+        bottom_right: Some(radii.bottom_right.into()),
+        bottom_left: Some(radii.bottom_left.into()),
+    };
+    clip.into_any_element()
+}
+
 /// The HTML elements whose UA `display` is inline-level.
 ///
 /// vue-native has no UA stylesheet — a tag carries no default style, everything
@@ -5199,23 +5228,24 @@ fn build_video<V: 'static>(
         if let Some(child) =
             crate::video::with_state(id, |s| vn_video::video(s, &options, window, &mut **cx))
         {
+            let child = clip_replaced(child, d.style(), window.rem_size());
             d = d.child(child);
         }
     } else if let Some(poster) = t.prop(id, "poster").filter(|p| !p.trim().is_empty()) {
         // Before `loadeddata` — and forever, for a `src` that failed — the
         // poster is what a browser paints.
         if let Some(source) = img_src::source_for(id, poster.trim()) {
-            d = d.child(
-                gpui::img(source)
-                    .object_fit(gpui_object_fit(
-                        node.computed
-                            .as_ref()
-                            .and_then(|cs| cs.extras.object_fit)
-                            .unwrap_or(vn_css::ObjectFit::Contain),
-                    ))
-                    .size_full()
-                    .into_any_element(),
-            );
+            let poster = gpui::img(source)
+                .object_fit(gpui_object_fit(
+                    node.computed
+                        .as_ref()
+                        .and_then(|cs| cs.extras.object_fit)
+                        .unwrap_or(vn_css::ObjectFit::Contain),
+                ))
+                .size_full()
+                .into_any_element();
+            let poster = clip_replaced(poster, d.style(), window.rem_size());
+            d = d.child(poster);
         }
     }
 

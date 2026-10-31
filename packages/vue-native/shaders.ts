@@ -101,7 +101,8 @@ const GENERATED = join(REPO, "crates/vn-effects/generated");
 /// every effects.json, so a wrapper edit busts every artifact even when the
 /// `.slang` sources are untouched — PEWPEW's `SHADER_COMPILER_SCHEMA` trick.
 /// Rust refuses to load an effects.json whose schema it does not know.
-const SCHEMA = 4;
+/// 5: `VnEffectQuad` carries the content mask's corner radii where its padding was.
+const SCHEMA = 5;
 
 /// Pinned by sha256 in `crates/vn-effects/tools/slang.manifest.json`; see
 /// `fetch-slang.ts`. 2026.12 deliberately matches PEWPEW so there is one set of

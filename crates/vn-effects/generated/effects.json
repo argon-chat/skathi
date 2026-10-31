@@ -1,8 +1,8 @@
 {
-  "schema": 4,
+  "schema": 5,
   "slangc": "2026.12",
   "kind": "builtin",
-  "preludeSha256": "8c46d6cadf38cd81a78bde8b17e1e1c9853e1e3a2a3a5ba60953b48af31b6712",
+  "preludeSha256": "965c14c5075699a570ce6465b7bdb24e6cd4559b799c5ca2fccc89f3980df4d7",
   "effects": [
     {
       "id": 0,
@@ -13,7 +13,7 @@
       "hlsl": "frost.hlsl",
       "source": "crates/vn-effects/shaders/frost.slang",
       "sourceSha256": "d4229d4a505a8ceccbd09ad0c06488bbaa0b70581735441a8b491dd649af286e",
-      "generatedSha256": "93237b89d8ac81318d44f4259ad4ecf9c890777c4dceb59c1cdc1ee5e5dcb971",
+      "generatedSha256": "da851562d06c9a20ca42c4d5c03a5f9216190f99b2dd297488647b0b3a4aca6a",
       "signature": "frost(<number:strength>, <length:radius>?, <color:tint>?)",
       "backdropRadiusParam": 1,
       "bleedParam": null,
@@ -102,7 +102,7 @@
       "hlsl": "noise.hlsl",
       "source": "crates/vn-effects/shaders/noise.slang",
       "sourceSha256": "89176f16b2c98b843657eb1b850bb4abb49b10ffc70849f03e0747bf8eed23d3",
-      "generatedSha256": "1a51c818a09e09dc41599fe35f2255020847baa6447ae88e60016eada2e13685",
+      "generatedSha256": "9a92e7251289574f28423ac1e95944122454bafd5e6ac690aba853426392ecbd",
       "signature": "noise(<number:amount>, <length:scale>?, <number:speed>?)",
       "backdropRadiusParam": null,
       "bleedParam": null,
@@ -194,7 +194,7 @@
       "hlsl": "glow.hlsl",
       "source": "crates/vn-effects/shaders/glow.slang",
       "sourceSha256": "5ef4ed9e9d32330127493b32041a56edd7add0ddf7d2a76dd910f719b9bdbe17",
-      "generatedSha256": "872bc0910d447c30bf32b01a1aed5cf63b13a1b63be90b1beedb02cc53198a8f",
+      "generatedSha256": "d7b1983c29f89cd4c168312d2afa70f70280b30507d50a11d250e9bb2c9e2bb3",
       "signature": "glow(<color>?, <length:radius>, <number:strength>)",
       "backdropRadiusParam": null,
       "bleedParam": 0,

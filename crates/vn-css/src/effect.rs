@@ -499,7 +499,7 @@ mod tests {
     /// slangc's reflection. Registering it is all it takes for the grammar
     /// below to accept `ripple(…)`: this module has no per-effect code.
     const USER_MANIFEST: &str = r#"{
-      "schema": 4,
+      "schema": 5,
       "kind": "user",
       "effects": [
         {

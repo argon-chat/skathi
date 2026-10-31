@@ -289,12 +289,13 @@ pub(super) fn build<V: 'static>(
             .map(gpui_object_fit)
             // The CSS initial value, as for `<img>`.
             .unwrap_or(gpui::ObjectFit::Fill);
-        d = d.child(
-            gpui::img(ImageSource::Render(image))
-                .object_fit(fit)
-                .size_full()
-                .into_any_element(),
-        );
+        let bitmap = gpui::img(ImageSource::Render(image))
+            .object_fit(fit)
+            .size_full()
+            .into_any_element();
+        // Clipped to the canvas's own rounded corners, as CSS does.
+        let bitmap = super::clip_replaced(bitmap, d.style(), window.rem_size());
+        d = d.child(bitmap);
     }
 
     let mask = pointer_mask(node);

@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/clip.spec.ts: `overflow` clipping under a border-radius (round avatars, rounded cards with a scrolling list inside), and the perf probe's scene of rounded scrollers. See ../README.md.",
+
+  "name": "vn-test-clip",
+
+  "window": {
+    "title": "vue-native — clip (fixture)",
+    "width": 720,
+    "height": 520,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
