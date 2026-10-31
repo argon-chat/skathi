@@ -72,6 +72,23 @@ function loadAdoptCanvas(): unknown {
   return adoptCanvasFn;
 }
 
+export const FONTS_PATH = join(HERE, "../src/fonts.ts");
+/**
+ * src/fonts.ts's `installFonts`, the same way. It reads the host's natives
+ * off the global it is handed, which here is the world's fake global: without
+ * `__vn_fonts_*` on it, it installs nothing (test/runtime-fonts.test.ts drives
+ * it against a fake loader directly).
+ */
+let installFontsFn: unknown = null;
+function loadInstallFonts(): unknown {
+  if (installFontsFn) return installFontsFn;
+  const body = readTsSource(FONTS_PATH)
+    .replace(/^\s*import\s[^;]*;[^\S\n]*$/gm, "")
+    .replace(/^export\s+(function|const|let|class|interface)\s/gm, "$1 ");
+  installFontsFn = new Function(`${body}\nreturn installFonts;`)();
+  return installFontsFn;
+}
+
 /** The W3C names `vn-permissions` knows — kept in step with `Capability::ALL`. */
 export const PERMISSION_NAMES = [
   "microphone",
@@ -588,6 +605,8 @@ export function createRuntime(
     "__vn_style_accepts",
     // canvas.ts's one export (see `loadAdoptCanvas`).
     "adoptCanvas",
+    // fonts.ts's one export (see `loadInstallFonts`).
+    "installFonts",
     "__vn_set_layout_hook",
     "__vn_layout_watch",
   ];
@@ -931,6 +950,7 @@ export function createRuntime(
           return !host.styleRejects.has(`${nameOf(key)}: ${value}`);
         },
     loadAdoptCanvas(),
+    loadInstallFonts(),
     // `__vn_set_layout_hook` / `__vn_layout_watch`. `layoutWatch: false` makes
     // them absent, which is an older host: the runtime's safety-net timer.
     options.layoutWatch === false

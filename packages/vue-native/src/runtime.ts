@@ -39,6 +39,9 @@ import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWir
 // host+media stream's module). `nodeOps.createElement` adopts every canvas,
 // the renderer's and `document.createElement`'s alike.
 import { adoptCanvas } from "./canvas";
+// `FontFace` and `document.fonts` over the host's `@font-face` loader (the
+// host+media stream's module; crates/vn-tree/src/fonts.rs).
+import { installFonts } from "./fonts";
 
 // ---- the realm a reload keeps (m26 client sweep #3) ------------------------
 //
@@ -7068,6 +7071,11 @@ if (doc) {
     }
   }
 }
+
+// -- web fonts: `FontFace`, `FontFaceSet` and `document.fonts` (src/fonts.ts).
+//    Inert without the host's loader. A reload installs a fresh set over the
+//    old one and takes over the host's listener.
+installFonts(globalThis as unknown as Record<string, unknown>, doc);
 
 // ---- <style> injected into document.head, createTextNode, getElementsByTagName
 // The runtime-CSS idiom of half the npm ecosystem (style-inject, which
