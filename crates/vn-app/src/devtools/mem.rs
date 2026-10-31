@@ -751,6 +751,18 @@ struct Jsc {
 fn jsc_stats() -> Jsc {
     JsRuntime::with(|rt| {
         let s = rt.ctx().heap_stats();
+        // What the pump's between-wave memory work costs (redjs web.rs): the
+        // RunLoop turns that fire JSC's GC / sweeper timers, and the JS
+        // thread's mimalloc idle sweeps.
+        let w = vn_runtime::redjs::web::idle_work_stats();
+        let ms = |us: u64| Json::n((us as f64 / 1000.0 * 10.0).round() / 10.0);
+        let idle_work = Json::obj(vec![
+            ("runLoopMs", ms(w.run_loop_us)),
+            ("runLoopMaxMs", ms(w.run_loop_max_us)),
+            ("sweeps", Json::n(w.sweeps as f64)),
+            ("sweepMs", ms(w.sweep_us)),
+            ("sweepMaxMs", ms(w.sweep_max_us)),
+        ]);
         Jsc {
             size: s.heap_size as f64,
             capacity: s.heap_capacity as f64,
@@ -762,6 +774,7 @@ fn jsc_stats() -> Jsc {
                 ("objects", Json::n(s.object_count as f64)),
                 ("protected", Json::n(s.protected_object_count as f64)),
                 ("globals", Json::n(s.global_object_count as f64)),
+                ("idleWork", idle_work),
             ]),
         }
     })
@@ -1276,15 +1289,24 @@ fn breakdown(i: &Inputs) -> Json {
     ])
 }
 
-/// The whole report. `gc`: run `release_memory` first and report before/after.
+/// The whole report. `gc`: run `release_memory` first and report before/after;
+/// `code`: the same, after deleting all compiled code that is not running
+/// (`redjs_release_memory_and_code`), which tells code from data.
 /// `regions`: also walk the process heap (locked meanwhile), so the address
 /// walk can tell its reservations from the unattributed ones, and list the
 /// biggest of those.
-pub(crate) fn report(gc: bool, regions: bool, window: &mut Window, cx: &mut App) -> Json {
+pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, cx: &mut App) -> Json {
+    let gc = gc || code;
     let before = if gc { Some((process(), jsc_stats())) } else { None };
     let gc_ms = if gc {
         let t = std::time::Instant::now();
-        JsRuntime::with(|rt| unsafe { vn_runtime::redjs::ffi::redjs_release_memory(rt.raw()) });
+        JsRuntime::with(|rt| unsafe {
+            if code {
+                vn_runtime::redjs::ffi::redjs_release_memory_and_code(rt.raw())
+            } else {
+                vn_runtime::redjs::ffi::redjs_release_memory(rt.raw())
+            }
+        });
         Some(ms(t))
     } else {
         None

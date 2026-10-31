@@ -71,7 +71,7 @@ function splitArgs(argv: string[]): { positional: string[]; flags: Flags } {
     }
     const name = a.slice(2);
     // Booleans; everything else takes a value.
-    if (name === "json" || name === "help" || name === "clear" || name === "gc" || name === "regions" || name === "frames") flags[name] = true;
+    if (name === "json" || name === "help" || name === "clear" || name === "gc" || name === "code" || name === "regions" || name === "frames") flags[name] = true;
     else flags[name] = argv[++i] ?? "";
   }
   return { positional, flags };

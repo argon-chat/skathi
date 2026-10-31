@@ -1219,7 +1219,8 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
         "mem" => {
             let gc = req.get("gc").and_then(Json::as_bool).unwrap_or(false);
             let regions = req.get("regions").and_then(Json::as_bool).unwrap_or(false);
-            match with_target(|window, cx| mem::report(gc, regions, window, cx)) {
+            let code = req.get("code").and_then(Json::as_bool).unwrap_or(false);
+            match with_target(|window, cx| mem::report(gc, code, regions, window, cx)) {
                 Some(data) => ok(data),
                 None => err("no such window"),
             }

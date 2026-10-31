@@ -482,21 +482,25 @@ export const COMMANDS: CommandSpec[] = [
       "VN_MEMSTATS=0/1 overrides), JSC's GC heap and mimalloc, GPU per adapter LUID, gpui's sprite " +
       "atlas and decoded-image cache, the painted-image registry, the retained tree per node, the " +
       "devtools' own rings. `gc` first runs two full synchronous JSC collections and returns free " +
-      "pages to the OS (it changes state) and reports what that freed.",
+      "pages to the OS (it changes state) and reports what that freed; `code` does the same after deleting " +
+      "all compiled code that is not running (it recompiles on demand), which tells code from data.",
     usage: [
-      "  mem      [--gc] [--regions]        where the process's memory is (--gc: a full JSC",
+      "  mem      [--gc] [--code] [--regions]  where the process's memory is (--gc: a full JSC",
       "                                     collection first, before/after reported;",
+      "                                     --code: also delete compiled code first;",
       "                                     --regions: walk the heap too, list the biggest",
       "                                     unattributed reservations)",
     ],
     args: {
       gc: bool("run two full JSC collections first and report before/after (changes state)"),
+      code: bool("like gc, after deleting all compiled code that is not running (bytecode, JIT): what is left is data"),
       regions: bool(
         "also walk the process heap (it is locked meanwhile — tens of ms on a big heap) so the " +
           "address walk can tell the heap's reservations apart, and list the biggest unattributed ones",
       ),
     },
-    cli: (_rest, flags) => compact({ gc: flags.gc ? true : undefined, regions: flags.regions ? true : undefined }),
+    cli: (_rest, flags) =>
+      compact({ gc: flags.gc ? true : undefined, code: flags.code ? true : undefined, regions: flags.regions ? true : undefined }),
   },
   {
     cmd: "trace",
