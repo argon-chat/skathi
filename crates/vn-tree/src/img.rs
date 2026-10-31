@@ -215,7 +215,8 @@ pub(crate) fn evict_pending(window: &mut gpui::Window, cx: &mut gpui::App) {
 //
 // gpui keeps every decode until told otherwise. Left alone, an Argon session
 // keeps every avatar it ever showed, each at the full size it was uploaded
-// at (perf-mem-1 §2.4: 33 decodes, 57.6 MB, drawn at sizes worth 4.2 MB).
+// at (research/reports/m26/perf-mem-2.md §3: 33 decodes, 57.6 MB,
+// drawn at sizes worth 4.2 MB).
 // Once a second, from the frame tick, [`residency_tick`]:
 //
 // * **evicts** a source no node has shown for [`EVICT_AFTER`]: its decode and
