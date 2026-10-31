@@ -65,6 +65,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=VN_DEVTOOLS_BUNDLE");
     suppress_release_pdb();
     no_identical_code_folding();
+    thread_stack_commit();
     host_identity();
 
     // The opt-OUT. Cargo features are additive across a graph, so this is the
@@ -201,6 +202,35 @@ fn suppress_release_pdb() {
 /// something this line does.
 fn no_identical_code_folding() {
     println!("cargo:rustc-link-arg-bins=/OPT:NOICF");
+}
+
+/// `/STACK:8388608,4096`: an 8 MiB stack RESERVE, one page of COMMIT, in the
+/// executable's PE header.
+///
+/// `.cargo/config.toml` sets `/STACK:8388608,1048576` for every binary of the
+/// workspace, and the reserve half of that is what JSC needs (~45k JS frames
+/// before `RangeError` instead of ~8k). The commit half had a cost nobody had
+/// asked for: the header's `SizeOfStackCommit` is not a main-thread setting. A
+/// thread created with `STACK_SIZE_PARAM_IS_A_RESERVATION` — every Rust
+/// `std::thread`, and the GPU driver's workers — gets the header's commit, so
+/// each one committed 1 MiB up front. Measured on `apps/hello`
+/// (research/reports/m26/binary-size-1.md §5): 122 threads, 103 of them
+/// NVIDIA driver workers, 135 MB of stack commit with ~8 MB of it ever touched.
+/// One page of commit took that to 8 MB, and the process's commit charge from
+/// 374 to 244 MB, with the same private working set. A stack still grows on
+/// demand through its guard page, and the reserve (what JSC and stacker read
+/// as the stack's size) is unchanged — deep recursion, warmed-JIT recursion,
+/// 32 KB JIT frames and a 500k-argument `apply` all hit the same limits.
+///
+/// Why here and not in `.cargo/config.toml`: rustflags are part of every
+/// crate's fingerprint, so editing them rebuilds every crate of every profile;
+/// a build-script link arg relinks this one binary. It also lands AFTER the
+/// rustflags on link.exe's command line, and link.exe takes the last `/STACK`
+/// (both checked, not assumed). The commit must be spelled out: a later
+/// `/STACK:<reserve>` with no commit keeps the earlier commit. Test binaries
+/// keep the config's 1 MiB commit, which costs them nothing that matters.
+fn thread_stack_commit() {
+    println!("cargo:rustc-link-arg-bins=/STACK:8388608,4096");
 }
 
 /// What `vn-app --vn-host-info` reports and a payload is checked against

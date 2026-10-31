@@ -6,7 +6,12 @@
 #
 # /STACK 8 MiB reserve, 1 MiB commit: the PE default 1 MiB gives JSC only ~8k JS frames
 #   before RangeError; 8 MiB gives ~45k. Vue's patch/unmount recursion needs the headroom.
-#   The reserve is address space, not RAM.
+#   The reserve is address space, not RAM. The 1 MiB COMMIT is not main-thread-only: every
+#   thread created with STACK_SIZE_PARAM_IS_A_RESERVATION (all Rust threads, the GPU
+#   driver's workers) takes the header's commit — ~130 MB of commit charge on apps/hello.
+#   vn-app.exe overrides it to one page from crates/vn-app/build.rs (`thread_stack_commit`);
+#   the value here is left alone because editing rustflags rebuilds every crate, and only
+#   test binaries still carry it (research/reports/m26/binary-size-1.md §5).
 #
 # Build scripts and proc macros must be compiled for the host WITHOUT these
 # rustflags — which only happens when the target is EXPLICIT. `build.target`
