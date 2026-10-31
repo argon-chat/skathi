@@ -6693,11 +6693,22 @@ function computedStyleFor(node: unknown) {
     const css = key.startsWith("--") ? key : hyphenate(key);
     const value = lookup(css);
     if (value !== undefined) return value;
+    // No answer at all: the node is not in the tree (removed, or a stale
+    // reference after an unmount) or there is no root yet. CSSOM gives an
+    // element that is not connected an EMPTY declaration list, so every
+    // property reads "" in a browser too, and that is not a gap to advise on.
+    // A late floating-ui or <Presence> read on an unmounted node is what made
+    // width, position, animationName and the rest look missing (m26 client
+    // sweep #30).
+    if (!raw) return "";
+    // A custom property nothing declared is "" in a browser as well.
+    if (css.startsWith("--")) return "";
     warnCompat(
       `getComputedStyle:${css}`,
       `getComputedStyle().${key} reads "" — vue-native's computed style publishes the properties ` +
-        `a reused component actually reads (transition-*, transform, display, position, ` +
-        `overflow-*, width/height, direction) plus every custom property, not all 340 longhands`,
+        `a reused component actually reads (transition-*, animation-*, transform, display, position, ` +
+        `overflow-*, width/height, direction, font-size, color) plus every custom property, ` +
+        `not all 340 longhands`,
     );
     return "";
   };

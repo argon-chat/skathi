@@ -367,9 +367,39 @@ const CONSOLE_TEE_JS: &str = r#"
 
   // One argument, printed the way a console prints a value that is not part of
   // a format string.
+  //
+  // An Error is its header and its stack, as a browser console shows it, and
+  // never `JSON.stringify`'s `{}`: an Error's fields are own NON-enumerable
+  // properties, so `[error-boundary] captured render error: {}` was all the
+  // ring ever said about the most important line in it (m26 client sweep
+  // #28). JSC's `stack` is frames only, without V8's "Name: message" line, so
+  // the header is written here. Inside an object or array it is the header
+  // alone. A BigInt, which makes JSON.stringify throw, prints as `1n`.
+  var isError = function (v) {
+    if (!v || typeof v !== "object") return false;
+    if (v instanceof Error) return true;
+    var tag = Object.prototype.toString.call(v);
+    return tag === "[object Error]" || tag === "[object DOMException]";
+  };
+  var errorHead = function (e) {
+    var name = String(e.name || "Error");
+    return e.message ? name + ": " + e.message : name;
+  };
   var show = function (v) {
     if (typeof v === "string") return v;
-    try { var s = JSON.stringify(v); return s === undefined ? String(v) : s; }
+    if (isError(v)) {
+      var head = errorHead(v);
+      var stack = typeof v.stack === "string" ? v.stack : "";
+      // A V8-shaped stack already starts with the header.
+      return !stack ? head : stack.indexOf(head) === 0 ? stack : head + "\n" + stack;
+    }
+    try {
+      var s = JSON.stringify(v, function (_k, x) {
+        if (typeof x === "bigint") return x + "n";
+        return isError(x) ? errorHead(x) : x;
+      });
+      return s === undefined ? String(v) : s;
+    }
     catch (e) { return String(v); }
   };
 

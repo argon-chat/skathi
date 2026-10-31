@@ -466,6 +466,26 @@ describe("what the inspector found in the framework", () => {
     bunExpect(entries.some((e) => e.text === "100% sure today")).toBe(true);
     bunExpect(entries.some((e) => e.text === 'plain 1 {"a":2}')).toBe(true);
   }, T);
+
+  test("an Error in the ring is its header and stack, not `{}`", async () => {
+    // m26 client sweep #28: `[error-boundary] captured render error: {}`. An
+    // Error's fields are non-enumerable, so JSON.stringify said nothing.
+    // `warn`, not `error`: the last test of this file asserts the run logged no error.
+    const marker = `err-${Date.now()}`;
+    await app.eval(
+      `console.warn("%cwarn%c ${marker}:", "background:#c0392b", "", new TypeError("bad thing")); ` +
+        `console.log("${marker}-nested", { cause: new RangeError("deep"), n: 2n }); 0`,
+    );
+    const line = await until(
+      "the error line",
+      async () => (await app.logs(0)).entries.find((e) => e.text.includes(`${marker}:`)),
+      6000,
+    );
+    bunExpect(line.text.startsWith(`warn ${marker}: TypeError: bad thing`)).toBe(true);
+    bunExpect(line.text).not.toContain("{}");
+    const { entries } = await app.logs(0);
+    bunExpect(entries.some((e) => e.text === `${marker}-nested {"cause":"RangeError: deep","n":"2n"}`)).toBe(true);
+  }, T);
 });
 
 describe("the new commands", () => {

@@ -401,6 +401,32 @@ pub fn computed_style(id: u32) -> Option<String> {
         put("height", format!("{h}px"));
         // gpui lays out left-to-right unconditionally; floating-ui asks.
         put("direction", "ltr".into());
+        // The two INHERITED text properties a component reads to match its
+        // surroundings: an inline custom emoji sizes itself off its parent's
+        // `fontSize`, an overlay tints itself with `color`. Both inherit, so the
+        // answer is the nearest declaration up the parent chain — what the
+        // painter inherits too — and, with none, the root's: the rem basis
+        // (which IS the root font-size, `probe_root_font_size`) and the window's
+        // default text colour.
+        let (mut font_size, mut color) = (None, None);
+        let mut at = id;
+        while let Some(n) = t.node(at) {
+            if let Some(c) = n.computed.as_ref() {
+                font_size = font_size.or(c.base.text.font_size);
+                color = color.or(c.base.text.color);
+            }
+            if (font_size.is_some() && color.is_some()) || n.parent == 0 || n.parent == at {
+                break;
+            }
+            at = n.parent;
+        }
+        let px = match font_size {
+            Some(gpui::AbsoluteLength::Pixels(p)) => f32::from(p),
+            Some(gpui::AbsoluteLength::Rems(r)) => r.0 * vn_css::rem_basis(),
+            None => vn_css::rem_basis(),
+        };
+        put("font-size", format!("{px}px"));
+        put("color", css_rgb(color.unwrap_or_else(gpui::black)));
         for (name, value) in cs.vars.iter() {
             put(name, value.to_string());
         }
@@ -410,6 +436,21 @@ pub fn computed_style(id: u32) -> Option<String> {
 
 fn secs(d: std::time::Duration) -> String {
     format!("{}s", d.as_secs_f32())
+}
+
+/// A colour as a browser serialises a computed one: `rgb(r, g, b)`, or
+/// `rgba(r, g, b, a)` when it is not opaque.
+fn css_rgb(c: gpui::Hsla) -> String {
+    let c = gpui::Rgba::from(c);
+    let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let (r, g, b) = (ch(c.r), ch(c.g), ch(c.b));
+    if c.a >= 1.0 {
+        format!("rgb({r}, {g}, {b})")
+    } else {
+        // Two decimals at most, as browsers print it (0.5, not 0.500000).
+        let a = (c.a.clamp(0.0, 1.0) * 100.0).round() / 100.0;
+        format!("rgba({r}, {g}, {b}, {a})")
+    }
 }
 
 fn css_len(v: gpui::TransformLength) -> String {
@@ -443,4 +484,49 @@ fn transform_text(t: Option<gpui::TransformSpec>) -> String {
         parts.push(format!("scale({}, {})", t.scale.0, t.scale.1));
     }
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prop(id: u32, name: &str) -> String {
+        let head = format!("{name}=");
+        computed_style(id)
+            .unwrap_or_default()
+            .lines()
+            .find_map(|l| l.strip_prefix(head.as_str()).map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    /// m26 client sweep #30. `font-size` and `color` inherit, so a child that
+    /// declares neither reports its ancestor's, as a browser computes them; a
+    /// CustomEmojiSegment sized itself off `parentElement.fontSize` and got "".
+    #[test]
+    fn computed_style_reports_the_inherited_font_size_and_color() {
+        let (outer, inner, bare) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let outer = t.create_element(div);
+            t.insert(outer, root, 0);
+            t.set_class(outer, "outer");
+            let inner = t.create_element(div);
+            t.insert(inner, outer, 0);
+            let bare = t.create_element(div);
+            t.insert(bare, root, 1);
+            (outer, inner, bare)
+        });
+        tree::set_engine(vn_css::Engine::compile(".outer { font-size: 20px; color: rgba(255, 0, 0, 0.5) }"));
+        tree::restyle_all();
+        assert_eq!(prop(outer, "font-size"), "20px");
+        assert_eq!(prop(inner, "font-size"), "20px", "inherited from .outer");
+        assert_eq!(prop(inner, "color"), "rgba(255, 0, 0, 0.5)");
+        // Nothing declared up the chain: the root's, i.e. the initial values.
+        assert_eq!(prop(bare, "font-size"), format!("{}px", vn_css::rem_basis()));
+        assert_eq!(prop(bare, "color"), "rgb(0, 0, 0)");
+        // The ones the sweep saw read "" are in the published set.
+        for name in ["width", "height", "position", "direction", "animation-name", "transition-delay", "transition-duration"] {
+            assert!(!prop(inner, name).is_empty(), "{name}");
+        }
+    }
 }

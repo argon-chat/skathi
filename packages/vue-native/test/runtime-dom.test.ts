@@ -1219,6 +1219,27 @@ describe("missing globals (G5)", () => {
     expect(rt.advisories().some((a) => a.includes("getComputedStyle"))).toBe(true);
   });
 
+  // m26 client sweep #30: width, position, animationName, --chat-width… "read
+  // """ with an advisory each, although the host publishes all of them. The
+  // reads were of nodes the host has no answer for, which a browser answers
+  // with "" as well, and of a custom property nothing declared.
+  test("getComputedStyle: a node the host has no style for reads \"\" for everything, without an advisory", () => {
+    const rt = createRuntime();
+    const { button } = tree(rt);
+    // No `computedById` entry: removed from the tree, or never connected.
+    const cs = rt.global.getComputedStyle(button);
+    for (const k of ["width", "height", "position", "direction", "animationName", "transitionDelay", "transitionDuration"]) {
+      expect(cs[k]).toBe("");
+    }
+    expect(cs.getPropertyValue("--chat-width")).toBe("");
+    expect(rt.advisories()).toEqual([]);
+
+    // An undeclared custom property on a node that has a style: "" too, silently.
+    rt.host.computedById.set(button.__vnId, "display=block\n");
+    expect(cs.getPropertyValue("--undeclared")).toBe("");
+    expect(rt.advisories()).toEqual([]);
+  });
+
   test("document.querySelectorAll goes through the same host matcher", () => {
     const rt = createRuntime();
     const { root, button } = tree(rt);
