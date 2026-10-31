@@ -587,6 +587,25 @@ impl MediaEngineBackend {
     }
 }
 
+/// `IMFMediaEngine::Shutdown` before the last reference goes, as the API
+/// requires ("call this method when you are done using the Media Engine,
+/// before calling Release").
+///
+/// Without it, releasing the engine frees almost nothing. Its pipeline (the
+/// media source, the decoder MFTs, their work-queue threads and buffers) holds
+/// references back to it, so the cycle outlives every reference we drop. In
+/// the Argon client each channel switch unmounts and mounts `<video>`s, and
+/// every one left behind ~3.5 MB of process heap and two to three threads:
+/// 145 → 283 threads and +176 MB of C/C++ heap over 40 switches, and then
+/// the process exited (research/reports/m26/perf-mem-3.md §1).
+impl Drop for MediaEngineBackend {
+    fn drop(&mut self) {
+        if let Err(e) = unsafe { self.engine.Shutdown() } {
+            trace(format_args!("Shutdown failed: {e}"));
+        }
+    }
+}
+
 /// `VN_VIDEO_LOG=1` — a trace of the load handshake, on stderr.
 ///
 /// Kept because the failure it exists for is invisible otherwise: `SetSource`

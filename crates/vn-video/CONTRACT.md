@@ -194,6 +194,14 @@ gpui's existing `PaintSurface` / `CVPixelBuffer` path.
   most likely a media source or byte stream the engine does not release when a
   new `SetSource` replaces it.
 * Retired `RenderImage`s go back through `Window::drop_image`. See §3.
+* **A `<video>` that is destroyed shuts its engine down.** `MediaEngineBackend`'s
+  `Drop` calls `IMFMediaEngine::Shutdown` before the last release, as the API
+  requires. Without it the pipeline (media source, decoders, their work-queue
+  threads) keeps the engine alive through its own references. Until m26 every
+  destroyed element leaked that way: tests/engine_lifetime.rs went from 57 to
+  293 threads over six elements, and the Argon client grew by ~18 MB and ~12
+  threads per round of channel switches until it exited after ~40 switches
+  (research/reports/m26/perf-mem-3.md §1).
 
 ---
 
