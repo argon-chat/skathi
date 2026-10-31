@@ -209,8 +209,13 @@ export function createRuntime(
     props: [], // { id, key, value }
     styles: [],
     classes: [],
-    /** Every `__vn_set_stylesheet(css)`, in order: the last one is the sheet in force. */
+    /**
+     * Every `__vn_set_stylesheet(css, extra)`, in order, as the one cascade it
+     * installs (`css`, then each head `<style>`): the last one is the sheet in force.
+     */
     sheets: [] as string[],
+    /** The same calls as the host receives them: `[css, ...extra]`. */
+    sheetParts: [] as string[][],
     logs: [],
     dispatcher: null,
     /** `__vn_query` answers: selector -> ids (or a `!advisory` string). */
@@ -739,7 +744,11 @@ export function createRuntime(
     (id, value) => host.classes.push({ id, value }),
     (id, key, value) => host.props.push({ id, key: nameOf(key), value }),
     () => {},
-    (css) => host.sheets.push(String(css)),
+    (css, extra) => {
+      const parts = [String(css), ...((extra as string[] | undefined) ?? []).map(String)];
+      host.sheetParts.push(parts);
+      host.sheets.push(parts.join("\n"));
+    },
     (id, code, on) => host.listeners.push({ id, code, on }),
     () => tree.create("root"),
     (fn) => {

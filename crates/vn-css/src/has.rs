@@ -67,10 +67,17 @@ thread_local! {
     /// pseudo-class name the rewrite produced.
     ///
     /// Thread-local and append-only for the life of the process: a `Selector`
-    /// borrowed out of a leaked stylesheet is `'static`, sheets are compiled a
-    /// handful of times (boot, plus a rem/viewport recompile), and an entry from
-    /// a replaced sheet is simply never named again.
+    /// borrowed out of a leaked stylesheet is `'static`, and an entry from a
+    /// replaced sheet is simply never named again.
     static REGISTRY: RefCell<Vec<Entry>> = const { RefCell::new(Vec::new()) };
+    /// Each argument's registry index, by its text. A sheet is compiled again
+    /// whenever a basis it flattens moves (every step of a window resize, for
+    /// a sheet with `vh` in it), and the same argument must come back under the
+    /// same index: then the rewritten selector text is the same too, and
+    /// `reparse_selector` hands back the selector it already has instead of
+    /// leaking a new registry entry and a new one-rule sheet per compile.
+    static BY_ARGUMENT: RefCell<std::collections::HashMap<String, Option<usize>>> =
+        RefCell::new(std::collections::HashMap::new());
 }
 
 /// The prefix the rewrite gives a custom pseudo-class. `--` is what makes it a
@@ -132,9 +139,19 @@ fn balanced_end(text: &str) -> Option<usize> {
     None
 }
 
-/// Compiles one `:has()` argument and files it, returning its registry index.
+/// Compiles one `:has()` argument and files it, returning its registry index —
+/// once per distinct argument text ([`BY_ARGUMENT`]).
 fn compile(argument: &str) -> Option<usize> {
     let argument = argument.trim();
+    if let Some(hit) = BY_ARGUMENT.with(|b| b.borrow().get(argument).copied()) {
+        return hit;
+    }
+    let index = compile_new(argument);
+    BY_ARGUMENT.with(|b| b.borrow_mut().insert(argument.to_string(), index));
+    index
+}
+
+fn compile_new(argument: &str) -> Option<usize> {
     let (anchor, body) = match argument.strip_prefix('>') {
         Some(rest) => (Anchor::Child, rest),
         None => match argument.strip_prefix('+').or_else(|| argument.strip_prefix('~')) {
@@ -179,6 +196,11 @@ fn compile(argument: &str) -> Option<usize> {
         registry.push(Entry { anchor, selectors });
         registry.len() - 1
     }))
+}
+
+#[cfg(test)]
+pub(crate) fn registry_len() -> usize {
+    REGISTRY.with(|r| r.borrow().len())
 }
 
 /// Answers one rewritten `:has()` against an element.

@@ -107,8 +107,13 @@ declare function __vn_set_class(id: VnNodeId, classes: string): void;
 declare function __vn_set_prop(id: VnNodeId, key: VnNameId, value: string | undefined): void;
 /** Adds a `<style scoped>` data-v id to an element. Additive, never replaces. */
 declare function __vn_add_scope(id: VnNodeId, scope: string): void;
-/** Replaces the whole stylesheet and marks every node for a fresh cascade. */
-declare function __vn_set_stylesheet(css: string): void;
+/**
+ * Replaces the whole stylesheet and marks every node for a fresh cascade.
+ * `extra` are the `<style>` texts injected into `document.head`, in order: they
+ * cascade after `css`, and the host parses each on its own, so an injected
+ * sheet that changes does not make the bundle's sheet parse again.
+ */
+declare function __vn_set_stylesheet(css: string, extra?: string[]): void;
 
 /**
  * Arms or disarms one event bit on one node (`Node::listeners` is a u64, so

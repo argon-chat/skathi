@@ -412,8 +412,11 @@ pub(crate) const UA_SHEET: &str = ":where([hidden]) { display: none }";
 /// declaration blocks, specificity and state classification.
 ///
 /// The source is intentionally leaked: `lightningcss::StyleSheet` borrows it,
-/// and a stylesheet set lives until replaced (a few KB per HMR swap — the
-/// documented tradeoff until `into_owned` is wired).
+/// and the rules borrow `'static` selectors out of the sheet. It is leaked once
+/// per DISTINCT text ([`parse_author_sheet`]), so recompiling the same text
+/// under a new viewport / rem / font basis retains nothing; a new text (an HMR
+/// edit, a new `<style>` text) still leaves its parse behind — the documented
+/// tradeoff until `into_owned` is wired.
 pub struct Engine {
     rules: Vec<RuleEntry>,
     /// The rule index — see [`RuleIndex`].
@@ -604,8 +607,100 @@ fn rule_index_enabled() -> bool {
     }
 }
 
+/// One author sheet as parsed: the sheet itself (or why it failed) and the
+/// advisories its error recovery produced. See [`parse_author_sheet`].
+#[derive(Clone)]
+struct ParsedSheet {
+    sheet: Option<&'static StyleSheet<'static>>,
+    diagnostics: Vec<String>,
+}
+
+thread_local! {
+    /// Every author sheet ever parsed, by its text. See [`parse_author_sheet`].
+    static PARSED_SHEETS: std::cell::RefCell<std::collections::HashMap<&'static str, ParsedSheet>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The UA defaults, parsed once (per thread — the cascade runs on one).
+    static UA_PARSED: std::cell::OnceCell<Option<&'static StyleSheet<'static>>> =
+        const { std::cell::OnceCell::new() };
+    /// [`reparse_selector`]'s answers, by the rewritten selector's text.
+    static REPARSED: std::cell::RefCell<std::collections::HashMap<String, Option<&'static Selector<'static>>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Parses one author sheet, or hands back the parse of the same text from an
+/// earlier compile.
+///
+/// The rules borrow `&'static` selectors out of the parsed sheet, so a sheet
+/// and its source are leaked for the life of the process. That used to happen
+/// on EVERY compile, and the engine is compiled again whenever a basis it
+/// flattens moves — the viewport (`vh`/`vw`), the root font-size (`rem`), the
+/// installed web fonts — none of which changes a byte of the text. The Argon
+/// client's 1.27 MB sheet left ~21.5 MB behind per compile: 159 MB after boot,
+/// and another 21.5 MB on every step of a window resize, forever
+/// (research/reports/m26/perf-mem-1.md §3).
+///
+/// Parsing is a pure function of the text — the bases only enter in
+/// [`Engine::collect`], which runs again on every compile — so the same text
+/// can share one parse. What is leaked is now bounded by the DISTINCT texts a
+/// process ever compiles: one per sheet, plus one per `<style>` text and per
+/// HMR edit, instead of one per compile.
+fn parse_author_sheet(css: &str) -> ParsedSheet {
+    if let Some(hit) = PARSED_SHEETS.with(|p| p.borrow().get(css).cloned()) {
+        return hit;
+    }
+    let src: &'static str = Box::leak(css.to_string().into_boxed_str());
+    // CSS's own error handling (CSS Syntax §2.2: an invalid rule or
+    // declaration is dropped and parsing resumes), which every browser
+    // applies. Without it, ONE stray `}` anywhere — the Argon client ships
+    // one after a `@keyframes` — failed the whole sheet, and the app
+    // painted unstyled. A sheet with no error parses exactly as before.
+    let warnings = std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
+    let options = ParserOptions {
+        error_recovery: true,
+        warnings: Some(warnings.clone()),
+        ..ParserOptions::default()
+    };
+    let mut diagnostics = Vec::new();
+    let sheet = match StyleSheet::parse(src, options) {
+        Ok(s) => Some(&*Box::leak(Box::new(s))),
+        Err(e) => {
+            diagnostics.push(format!("stylesheet parse error: {e}"));
+            None
+        }
+    };
+    if sheet.is_some() {
+        if let Ok(skipped) = warnings.read() {
+            const SHOWN: usize = 20;
+            for e in skipped.iter().take(SHOWN) {
+                diagnostics.push(format!("stylesheet: {e} — skipped, as a browser skips it"));
+            }
+            if skipped.len() > SHOWN {
+                diagnostics.push(format!(
+                    "stylesheet: {} more invalid rules or declarations skipped",
+                    skipped.len() - SHOWN
+                ));
+            }
+        }
+    }
+    let parsed = ParsedSheet { sheet, diagnostics };
+    PARSED_SHEETS.with(|p| p.borrow_mut().insert(src, parsed.clone()));
+    parsed
+}
+
 impl Engine {
     pub fn compile(css: &str) -> Engine {
+        Engine::compile_sheets(&[css])
+    }
+
+    /// Compiles several author sheets as ONE cascade, in order: a later
+    /// sheet's rules come later, so at equal specificity they win.
+    ///
+    /// Each sheet is parsed on its own, the way a browser parses each
+    /// `<style>`: a stray brace in one cannot swallow the next. And each is
+    /// parsed once per distinct text ([`parse_author_sheet`]), so a host that
+    /// keeps a big build sheet and a few small `<style>` texts apart does not
+    /// re-parse — or re-leak — the big one when a small one changes.
+    pub fn compile_sheets(sheets: &[&str]) -> Engine {
         let mut engine = Engine {
             rules: Vec::new(),
             index: RuleIndex { enabled: rule_index_enabled(), ..RuleIndex::default() },
@@ -622,51 +717,28 @@ impl Engine {
         // UA defaults first, so they hold even when the author's sheet fails.
         let mut order = 0u32;
         engine.collect_ua(&mut order);
-        let src: &'static str = Box::leak(css.to_string().into_boxed_str());
-        // CSS's own error handling (CSS Syntax §2.2: an invalid rule or
-        // declaration is dropped and parsing resumes), which every browser
-        // applies. Without it, ONE stray `}` anywhere — the Argon client ships
-        // one after a `@keyframes` — failed the whole sheet, and the app
-        // painted unstyled. A sheet with no error parses exactly as before.
-        let warnings = std::sync::Arc::new(std::sync::RwLock::new(Vec::new()));
-        let options = ParserOptions {
-            error_recovery: true,
-            warnings: Some(warnings.clone()),
-            ..ParserOptions::default()
-        };
-        let sheet: &'static StyleSheet<'static> = match StyleSheet::parse(src, options) {
-            Ok(s) => Box::leak(Box::new(s)),
-            Err(e) => {
-                engine.diagnostics.push(format!("stylesheet parse error: {e}"));
-                return engine;
-            }
-        };
-        if let Ok(skipped) = warnings.read() {
-            const SHOWN: usize = 20;
-            for e in skipped.iter().take(SHOWN) {
-                engine
-                    .diagnostics
-                    .push(format!("stylesheet: {e} — skipped, as a browser skips it"));
-            }
-            if skipped.len() > SHOWN {
-                engine.diagnostics.push(format!(
-                    "stylesheet: {} more invalid rules or declarations skipped",
-                    skipped.len() - SHOWN
-                ));
+        for css in sheets {
+            let parsed = parse_author_sheet(css);
+            engine.diagnostics.extend(parsed.diagnostics);
+            if let Some(sheet) = parsed.sheet {
+                engine.collect(&sheet.rules.0, None, &mut order);
             }
         }
-        engine.collect(&sheet.rules.0, None, &mut order);
         engine
     }
 
     /// The UA defaults, collected before the author's sheet (see [`UA_SHEET`]).
+    /// Parsed once: the text is a constant.
     fn collect_ua(&mut self, order: &mut u32) {
-        match StyleSheet::parse(UA_SHEET, ParserOptions::default()) {
-            Ok(sheet) => {
-                let sheet: &'static StyleSheet<'static> = Box::leak(Box::new(sheet));
-                self.collect(&sheet.rules.0, None, order);
-            }
-            Err(e) => self.diagnostics.push(format!("vue-native's UA defaults did not parse: {e}")),
+        let parsed = UA_PARSED.with(|ua| {
+            *ua.get_or_init(|| match StyleSheet::parse(UA_SHEET, ParserOptions::default()) {
+                Ok(sheet) => Some(&*Box::leak(Box::new(sheet))),
+                Err(_) => None,
+            })
+        });
+        match parsed {
+            Some(sheet) => self.collect(&sheet.rules.0, None, order),
+            None => self.diagnostics.push("vue-native's UA defaults did not parse".into()),
         }
     }
 
@@ -1751,10 +1823,11 @@ fn supports_condition(condition: &lightningcss::rules::supports::SupportsConditi
             if text.contains(['{', '}']) {
                 return false;
             }
-            // Leaked, like every other sheet the compiler holds: a `Selector`
-            // borrowed out of it has to outlive the rewrite below.
-            let src: &'static str = Box::leak(format!("{text}{{color:red}}").into_boxed_str());
-            let Ok(sheet) = StyleSheet::parse(src, ParserOptions::default()) else {
+            // Nothing parsed here outlives the answer (a rewritten `:has()`
+            // comes back from `reparse_selector`, which keeps its own), so the
+            // probe sheet is a local and is dropped with it.
+            let src = format!("{text}{{color:red}}");
+            let Ok(sheet) = StyleSheet::parse(&src, ParserOptions::default()) else {
                 return false;
             };
             let mut probe = Vec::new();
@@ -1763,21 +1836,22 @@ fn supports_condition(condition: &lightningcss::rules::supports::SupportsConditi
                     // Same rewrite the cascade does, and for the same reason:
                     // asking parcel about a raw `Component::Has` aborts the
                     // process rather than answering.
-                    let rewritten;
-                    let sel = if has::present(&sel_text(sel)) {
+                    // (Two calls, not one rebinding: `Selector` is invariant in
+                    // its lifetime, so the `'static` rewrite and this local
+                    // parse cannot share a binding.)
+                    fn runs(sel: &Selector<'_>, probe: &mut Vec<String>) -> bool {
+                        classify_states(sel, probe).is_some()
+                            && probe_runnable(sel)
+                            && audit_selector(sel, probe)
+                    }
+                    if has::present(&sel_text(sel)) {
                         match has::rewrite(&sel_text(sel)).and_then(|t| reparse_selector(&t)) {
-                            Some(s) => {
-                                rewritten = s;
-                                rewritten
-                            }
-                            None => return false,
+                            Some(s) => runs(s, &mut probe),
+                            None => false,
                         }
                     } else {
-                        sel
-                    };
-                    classify_states(sel, &mut probe).is_some()
-                        && probe_runnable(sel)
-                        && audit_selector(sel, &mut probe)
+                        runs(sel, &mut probe)
+                    }
                 }),
                 _ => false,
             })
@@ -2369,19 +2443,28 @@ fn extras_names(e: &Extras) -> String {
 }
 
 /// Re-parses one rewritten selector back into the `'static` form the rule
-/// table holds. Leaks, like the sheet it stands in for: a compiled sheet lives
-/// for the life of the process and there are a handful of them.
+/// table holds. Leaks, like the sheet it stands in for — but once per distinct
+/// text: every recompile of the same sheet rewrites to the same text
+/// ([`has::rewrite`] files each `:has()` argument once), so it gets the same
+/// selector back instead of leaking another one-rule sheet.
 fn reparse_selector(text: &str) -> Option<&'static Selector<'static>> {
     if text.contains(['{', '}']) {
         return None;
     }
-    let source: &'static str = Box::leak(format!("{text}{{color:red}}").into_boxed_str());
-    let sheet: &'static StyleSheet<'static> =
-        Box::leak(Box::new(StyleSheet::parse(source, ParserOptions::default()).ok()?));
-    match sheet.rules.0.first() {
-        Some(CssRule::Style(style)) => style.selectors.0.first(),
-        _ => None,
+    if let Some(hit) = REPARSED.with(|r| r.borrow().get(text).copied()) {
+        return hit;
     }
+    let parsed = (|| {
+        let source: &'static str = Box::leak(format!("{text}{{color:red}}").into_boxed_str());
+        let sheet: &'static StyleSheet<'static> =
+            Box::leak(Box::new(StyleSheet::parse(source, ParserOptions::default()).ok()?));
+        match sheet.rules.0.first() {
+            Some(CssRule::Style(style)) => style.selectors.0.first(),
+            _ => None,
+        }
+    })();
+    REPARSED.with(|r| r.borrow_mut().insert(text.to_string(), parsed));
+    parsed
 }
 
 fn sel_text(sel: &Selector<'_>) -> String {
@@ -2714,6 +2797,50 @@ mod tests {
             class: "box",
             attrs: &[],
         }
+    }
+
+    /// Recompiling the same text — what every viewport / rem / font basis move
+    /// does — must retain nothing new: no parsed sheet, no re-parsed `:has()`
+    /// selector, no `:has()` registry entry (perf-mem-1 §3: it used to leave
+    /// ~21.5 MB per compile of the Argon client's sheet). The caches are
+    /// per-thread and each test runs on its own thread, so the counts are this
+    /// test's alone.
+    #[test]
+    fn recompiling_the_same_text_retains_nothing_new() {
+        let css = ".box { height: 10vh } .box:has(> .c) { opacity: 0.5 } \
+                   @supports selector(:has(a)) { .box { width: 1px } }";
+        let counts = || {
+            (
+                PARSED_SHEETS.with(|p| p.borrow().len()),
+                REPARSED.with(|r| r.borrow().len()),
+                has::registry_len(),
+            )
+        };
+        let first = Engine::compile(css);
+        let after_first = counts();
+        assert_eq!(after_first.0, 1, "one sheet parsed");
+        assert!(after_first.2 >= 1, "the :has() argument was filed");
+        // (The basis itself is process-global and other tests read it, so it
+        // is not moved here; what a basis move triggers is this same call.)
+        for _ in 0..5 {
+            let again = Engine::compile(css);
+            assert_eq!(again.rules.len(), first.rules.len());
+        }
+        assert_eq!(counts(), after_first);
+    }
+
+    /// Several sheets compile as one cascade in order (a later `<style>` wins
+    /// at equal specificity), each parsed on its own: a stray brace in one does
+    /// not swallow the next, and the shared text is parsed once.
+    #[test]
+    fn compile_sheets_is_one_ordered_cascade_of_separate_parses() {
+        let engine = Engine::compile_sheets(&[".box { opacity: 0.1 }", ".box { opacity: 0.5 }"]);
+        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.opacity, Some(0.5));
+        let engine = Engine::compile_sheets(&[".box { opacity: 0.1 } }", ".box { opacity: 0.6 }"]);
+        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.opacity, Some(0.6));
+        let before = PARSED_SHEETS.with(|p| p.borrow().len());
+        let _ = Engine::compile_sheets(&[".box { opacity: 0.1 }", ".box { opacity: 0.7 }"]);
+        assert_eq!(PARSED_SHEETS.with(|p| p.borrow().len()), before + 1, "only the new text parses");
     }
 
     fn node_with(attrs: &'static [(&'static str, &'static str)]) -> Node {

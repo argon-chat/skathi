@@ -141,6 +141,20 @@ describe("a <style> injected into document.head", () => {
     expect(s.parentNode).toBeNull();
   });
 
+  test("each injected sheet reaches the host as its own text, not glued onto the bundle's", async () => {
+    // The host parses (and keeps) one parse per distinct text: a concatenation
+    // re-parsed the whole bundle sheet whenever an injected one changed.
+    const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
+    inject(rt, ".a{}");
+    rt.createApp({ render: () => null }).mount();
+    inject(rt, ".b{}");
+    await Promise.resolve();
+    expect(rt.host.sheetParts).toEqual([
+      [".bundle{}", ".a{}"],
+      [".bundle{}", ".a{}", ".b{}"],
+    ]);
+  });
+
   test("getElementsByTagName and createTextNode are there, and a <link> stylesheet is an advisory", () => {
     const rt = createRuntime();
     const d = rt.global.document;

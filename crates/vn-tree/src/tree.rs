@@ -1430,14 +1430,18 @@ thread_local! {
     /// time (an unresolvable `var()`, a reference cycle) and are therefore
     /// per-element, so a page with 200 buttons must not print 200 lines.
     /// The CSS every `<style>` element in the tree is carrying right now,
-    /// concatenated in document order — see [`sync_runtime_sheets`].
-    static RUNTIME_CSS: RefCell<String> = const { RefCell::new(String::new()) };
+    /// one text per element, in document order — see [`sync_runtime_sheets`].
+    static RUNTIME_CSS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static CSS_WARNED: RefCell<std::collections::HashSet<String>> =
         RefCell::new(std::collections::HashSet::new());
     static ENGINE: RefCell<Option<vn_css::Engine>> = const { RefCell::new(None) };
     /// The text the current engine was compiled from, kept so the sheet can be
     /// compiled AGAIN against a different `rem` basis — see [`restyle_all`].
     static SHEET_SOURCE: RefCell<String> = const { RefCell::new(String::new()) };
+    /// The `<style>` texts the runtime keeps for `document.head`, which are not
+    /// nodes of the tree: they come with the sheet ([`set_stylesheet_with_head`])
+    /// and cascade right after it.
+    static HEAD_SHEETS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static ANIMATOR: RefCell<vn_css::Animator> = RefCell::new(vn_css::Animator::new());
     /// The `@media` environment the cascade is evaluated against **for
     /// everything the PRIMARY window paints** — the native stand-in for a
@@ -1698,12 +1702,15 @@ pub fn set_reduce_motion(on: bool) {
 ///
 /// The runtime half comes LAST, so at equal specificity it wins — which is
 /// where a `<style>` appended to the document sits in a browser's cascade too.
-fn full_source() -> String {
-    let base = SHEET_SOURCE.with(|s| s.borrow().clone());
-    RUNTIME_CSS.with(|r| {
-        let r = r.borrow();
-        if r.is_empty() { base } else { format!("{base}\n{r}") }
-    })
+///
+/// One text per sheet, not one concatenation: vn-css parses each on its own and
+/// once per distinct text, so a `<style>` that changes does not make the
+/// build's sheet parse — and leak — again (`vn_css::Engine::compile_sheets`).
+fn sheet_sources() -> Vec<String> {
+    let mut out = vec![SHEET_SOURCE.with(|s| s.borrow().clone())];
+    HEAD_SHEETS.with(|h| out.extend(h.borrow().iter().cloned()));
+    RUNTIME_CSS.with(|r| out.extend(r.borrow().iter().cloned()));
+    out
 }
 
 /// Collects every `<style>` element's text and, if it has changed, recompiles.
@@ -1728,7 +1735,7 @@ fn sync_runtime_sheets() {
         // Creation order stands in for document order: Vue creates a node
         // before it inserts it, and a sheet appended later has to win.
         ids.sort_unstable();
-        let mut out = String::new();
+        let mut sheets = Vec::new();
         for id in ids {
             if t.node(id).is_none() {
                 continue;
@@ -1740,10 +1747,11 @@ fn sync_runtime_sheets() {
                     walk(t, c, out);
                 }
             }
+            let mut out = String::new();
             walk(t, id, &mut out);
-            out.push('\n');
+            sheets.push(out);
         }
-        out
+        sheets
     });
     if RUNTIME_CSS.with(|r| *r.borrow() == next) {
         return;
@@ -1762,33 +1770,55 @@ fn sync_runtime_sheets() {
 }
 
 pub fn set_stylesheet(css: String) {
+    set_stylesheet_with_head(css, Vec::new());
+}
+
+/// [`set_stylesheet`], with the `<style>` texts `document.head` holds, each its
+/// own sheet after `css` (see [`sheet_sources`]).
+///
+/// Returns `false`, and compiles nothing, when the sheet and the head texts are
+/// exactly what is installed already. The runtime re-sends the sheet whenever a
+/// head `<style>` is touched, empty ones included: the Argon client re-sent the
+/// identical text during boot, one of its six boot compiles and a full restyle
+/// that changed nothing (research/reports/m26/perf-mem-2.md §1).
+pub fn set_stylesheet_with_head(css: String, head: Vec<String>) -> bool {
+    let same = ENGINE.with(|e| e.borrow().is_some())
+        && SHEET_SOURCE.with(|s| *s.borrow() == css)
+        && HEAD_SHEETS.with(|h| *h.borrow() == head);
+    if same {
+        return false;
+    }
     // A genuinely NEW sheet is a new set of gaps: an advisory suppressed
     // against the old one must be free to speak again (this is the HMR path).
     // Recompiling the SAME text under a new rem/viewport basis is not that —
     // see [`recompile_sheet`], which is why the clear lives here and not in
-    // [`set_engine`].
+    // [`set_engine`]. Nor is a head `<style>` changing: like one in the tree
+    // ([`sync_runtime_sheets`]), what it says new speaks on its own.
     let fresh = SHEET_SOURCE.with(|s| *s.borrow() != css);
     if fresh {
         CSS_WARNED.with(|w| w.borrow_mut().clear());
     }
     let before = crate::perf::live_bytes();
     SHEET_SOURCE.with(|s| *s.borrow_mut() = css);
+    HEAD_SHEETS.with(|h| *h.borrow_mut() = head);
     let span = crate::perf::Span::start();
     let took = std::time::Instant::now();
-    let source = full_source();
-    let engine = compile(&source);
+    let sources = sheet_sources();
+    let engine = compile(&sources);
     crate::perf::note_recompile(span.ms());
     set_engine(engine);
-    let len = source.len();
-    drop(source);
+    let len = sources.iter().map(String::len).sum();
+    drop(sources);
     crate::perf::note_sheet_compile(took.elapsed().as_secs_f32() * 1000.0, len, before, crate::perf::live_bytes());
+    true
 }
 
-/// Compiles the sheet, after handing its `@font-face` rules to
+/// Compiles the sheets, after handing their `@font-face` rules to
 /// [`crate::fonts`] (which vn-css itself does not keep).
-fn compile(css: &str) -> vn_css::Engine {
-    crate::fonts::note_sheet(css);
-    vn_css::Engine::compile(css)
+fn compile(sources: &[String]) -> vn_css::Engine {
+    crate::fonts::note_sheet(&sources.join("\n"));
+    let sheets: Vec<&str> = sources.iter().map(String::as_str).collect();
+    vn_css::Engine::compile_sheets(&sheets)
 }
 
 /// Web fonts were registered: vn-css chose every `font-family` when it
@@ -2032,19 +2062,19 @@ fn recompile_sheet(reason: crate::perf::FullReason, why: &str) -> bool {
     // real divergence — was written to keep out. The line still prints and is
     // still in the ring; it is on the channel that says "state trace".
     crate::log::record("dev", format!("[css] {why}"));
-    let css = full_source();
-    if css.trim().is_empty() {
+    let sources = sheet_sources();
+    if sources.iter().all(|s| s.trim().is_empty()) {
         return false;
     }
     let before = crate::perf::live_bytes();
     let span = crate::perf::Span::start();
     let took = std::time::Instant::now();
-    let engine = compile(&css);
+    let engine = compile(&sources);
     crate::perf::note_recompile(span.ms());
     crate::perf::note_full(reason);
     set_engine(engine);
-    let len = css.len();
-    drop(css);
+    let len = sources.iter().map(String::len).sum();
+    drop(sources);
     crate::perf::note_sheet_compile(took.elapsed().as_secs_f32() * 1000.0, len, before, crate::perf::live_bytes());
     with_tree(|t| t.mark_dirty());
     true
@@ -2465,6 +2495,21 @@ mod tests {
         ENGINE.with(|eng| with_tree(|t| t.restyle(eng.borrow().as_ref(), &env())));
         assert_eq!(size(shell), Some((Some(1000.0), Some(500.0))));
         assert_eq!(size(child).and_then(|s| s.0), Some(500.0));
+    }
+
+    /// The runtime re-sends the sheet whenever a head `<style>` is touched; the
+    /// same sheet and head texts again compile nothing, and any change does.
+    #[test]
+    fn an_unchanged_sheet_resent_compiles_nothing() {
+        assert!(set_stylesheet_with_head(".a { opacity: 0.5 }".into(), vec![".b {}".into()]));
+        assert!(!set_stylesheet_with_head(".a { opacity: 0.5 }".into(), vec![".b {}".into()]));
+        assert!(set_stylesheet_with_head(".a { opacity: 0.5 }".into(), vec![".b {}".into(), ".c {}".into()]));
+        assert!(set_stylesheet_with_head(".a { opacity: 0.6 }".into(), vec![".b {}".into(), ".c {}".into()]));
+        assert_eq!(
+            sheet_sources(),
+            vec![".a { opacity: 0.6 }".to_string(), ".b {}".into(), ".c {}".into()],
+            "the build's sheet, then each head text on its own"
+        );
     }
 
     /// **A `rem` recompile is the engine correcting its own basis, not the

@@ -7135,11 +7135,14 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
     /** The last sheet anyone else installed (the bundle's, or the dev loader's). */
     let base: string | null = null;
     let queued = false;
-    const injectedCss = () => injected.map((s) => s.text).filter(Boolean).join("\n");
+    // Each injected sheet goes to the host as its OWN text, not concatenated
+    // onto the bundle's: the host parses (and keeps) one parse per distinct
+    // text, so a concatenation would re-parse the whole bundle sheet — and
+    // keep another copy of it — every time an injected one changed
+    // (research/reports/m26/perf-mem-1.md §3).
     const install = (css: string) => {
       base = String(css);
-      const extra = injectedCss();
-      hostSetSheet(extra ? `${base}\n${extra}` : base);
+      hostSetSheet(base, injected.map((s) => s.text).filter(Boolean));
     };
     // Every installer goes through this — the mount below by name, loader.ts's
     // flushCss through the global — so the injected sheets survive a hot

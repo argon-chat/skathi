@@ -196,10 +196,24 @@ host_fn!(fn vn_add_scope(g, args) {
 
 host_fn!(fn vn_set_stylesheet(g, args) {
     let css = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    tree::set_stylesheet(css);
-    // Every node needs a fresh cascade under the new sheet.
-    perf::note_full(perf::FullReason::Stylesheet);
-    tree::with_tree(|t| t.mark_dirty());
+    // `document.head`'s injected `<style>` texts, each on its own (runtime.ts).
+    // A runtime that predates the argument passes none, and its concatenation
+    // in `css` compiles exactly as before.
+    let extra = args.arg(1).0;
+    let head: Vec<String> = if vn_runtime::redjs::webapi::util::is_cell(extra) {
+        unsafe {
+            use vn_runtime::redjs::webapi::util::{array_len, get_i};
+            (0..array_len(g, extra)).filter_map(|i| read_string(g, get_i(g, extra, i))).collect()
+        }
+    } else {
+        Vec::new()
+    };
+    // Every node needs a fresh cascade under a new sheet — and under the one
+    // already installed, re-sent unchanged, nothing does.
+    if tree::set_stylesheet_with_head(css, head) {
+        perf::note_full(perf::FullReason::Stylesheet);
+        tree::with_tree(|t| t.mark_dirty());
+    }
     UNDEF
 });
 
