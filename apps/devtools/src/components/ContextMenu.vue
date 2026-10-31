@@ -11,6 +11,14 @@
 //
 // Dismissal is a full-window shield under the menu (any press outside closes
 // it, as in every OS menu) and Escape, which the shell owns (App.vue).
+//
+// The menu box swallows its own `mousedown` (`@mousedown.stop`). In a browser
+// that listener changes nothing — the shield is a sibling, not an ancestor, so
+// a press on an item never reaches it. Here it is load-bearing: the engine
+// hands a press to the TOPMOST box that LISTENS for it, and an item listens
+// only for `click`, so the shield under it took the press, closed the menu,
+// and the item's click never came ("Copy message" copied nothing). The
+// menu's own listener is painted above the shield and claims the press first.
 import { computed } from "vue";
 import { MENU_ITEM_H, viewport } from "../layout";
 import { closeMenu, ui } from "../store";
@@ -39,7 +47,11 @@ function run(item: MenuItem): void {
 <template>
   <template v-if="ui.menu">
     <div class="menu-shield" @mousedown="closeMenu()"></div>
-    <div class="menu" :style="{ left: at.left + 'px', top: at.top + 'px', width: WIDTH + 'px' }">
+    <div
+      class="menu"
+      :style="{ left: at.left + 'px', top: at.top + 'px', width: WIDTH + 'px' }"
+      @mousedown.stop
+    >
       <div
         v-for="(item, i) in ui.menu.items"
         :key="i"
