@@ -1201,6 +1201,11 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             num("y"),
             arg("kind").as_deref(),
             num("button"),
+            MouseExtras {
+                held: req.get("held").and_then(Json::as_bool).unwrap_or(false),
+                clicks: num("clicks").map_or(1, |n| n.clamp(1.0, 3.0) as usize),
+                shift: req.get("shift").and_then(Json::as_bool).unwrap_or(false),
+            },
         ),
         "eval" => match arg("js") {
             None => err("eval needs `js`"),
@@ -1998,6 +2003,15 @@ fn cmd_focus(selector: &str, index: Option<f64>) -> String {
 ///
 /// No cursor moves and no window is activated: gpui's `mouse_position` is
 /// window state, not the platform's.
+/// What a `mouse` gesture carries besides where and which button: a move with
+/// the button HELD (a drag, which a text selection follows), the click count
+/// of a press (2 and 3 select a word and a paragraph) and Shift.
+struct MouseExtras {
+    held: bool,
+    clicks: usize,
+    shift: bool,
+}
+
 fn cmd_mouse(
     selector: Option<&str>,
     index: Option<f64>,
@@ -2005,6 +2019,7 @@ fn cmd_mouse(
     y: Option<f64>,
     kind: Option<&str>,
     button: Option<f64>,
+    extras: MouseExtras,
 ) -> String {
     // Which window the gesture is about, decided ONCE and used for both the aim
     // and the dispatch — they must be the same window or the coordinate and the
@@ -2061,6 +2076,7 @@ fn cmd_mouse(
         other => return err(format!("unknown mouse button {other} — 0 left, 1 middle, 2 right")),
     };
     let position = gpui::Point::new(gpui::px(point.0), gpui::px(point.1));
+    let modifiers = gpui::Modifiers { shift: extras.shift, ..Default::default() };
     // Not `with_commit`: a window coordinate is meaningless without the window
     // it is in, and a pop-out paints a different subtree in a different client
     // space (docs/MULTIWINDOW.md). This is what makes the spike's
@@ -2070,11 +2086,13 @@ fn cmd_mouse(
         // A move always comes first: gpui recomputes `mouse_hit_test` from the
         // window's own `mouse_position`, and a press that arrives without one
         // would be tested against wherever the pointer was last.
+        // `held`: the move of a drag, with the button down, as the OS reports
+        // one (the release that follows is a `kind: "up"`).
         window.dispatch_event(
             gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
                 position,
-                pressed_button: None,
-                modifiers: gpui::Modifiers::default(),
+                pressed_button: extras.held.then_some(button),
+                modifiers,
             }),
             app,
         );
@@ -2083,8 +2101,8 @@ fn cmd_mouse(
                 gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
                     button,
                     position,
-                    modifiers: gpui::Modifiers::default(),
-                    click_count: 1,
+                    modifiers,
+                    click_count: extras.clicks,
                     first_mouse: false,
                 }),
                 app,
@@ -2095,8 +2113,8 @@ fn cmd_mouse(
                 gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
                     button,
                     position,
-                    modifiers: gpui::Modifiers::default(),
-                    click_count: 1,
+                    modifiers,
+                    click_count: extras.clicks,
                 }),
                 app,
             );

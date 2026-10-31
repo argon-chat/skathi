@@ -315,6 +315,7 @@ export const COMMANDS: CommandSpec[] = [
       "which node holds focus afterwards. No cursor moves and no window is activated.",
     usage: [
       "  mouse    [selector] [--x N --y N] [--kind move|down|up|click] [--button N]",
+      "           [--held] [--clicks N] [--shift]",
       "                                     a REAL pointer event through gpui's hit",
       "                                     test (hover, z-order, pointer-events all",
       "                                     apply); reports which node has focus after",
@@ -326,6 +327,9 @@ export const COMMANDS: CommandSpec[] = [
       y: int("window y, when no selector is given"),
       kind: str("move (default) | down | up | click"),
       button: int("0 left, 1 middle, 2 right"),
+      held: bool("the move is a drag: the button is down during it (a text selection follows it)"),
+      clicks: int("the press's click count: 2 selects a word, 3 a paragraph"),
+      shift: bool("Shift is held (Shift+click extends a text selection)"),
     },
     cli: (rest, flags) => {
       // Unlike `click`, which synthesizes into the app's dispatcher from a node
@@ -334,6 +338,9 @@ export const COMMANDS: CommandSpec[] = [
       const base = compact({
         kind: flags.kind ? String(flags.kind) : "move",
         button: num(flags.button),
+        held: flags.held ? true : undefined,
+        clicks: num(flags.clicks),
+        shift: flags.shift ? true : undefined,
       });
       if (rest[0]) return withIndex({ ...base, selector: rest[0] }, flags);
       const x = num(flags.x);
