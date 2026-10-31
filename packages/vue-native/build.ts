@@ -40,13 +40,15 @@
 // churn (no rerender, no reload, no state loss).
 //
 // npm DEPENDENCIES ride the same transport as SHARED SYNTHETIC MODULES, one
-// per bare specifier the app imports (`reka-ui`, `clsx`, `@vueuse/core`, …).
-// Each is a full Bun bundle of that package — its own transitive npm graph
-// inlined — emitted as `dist/modules/<spec>.js` under the bare specifier as its
-// module id, which is exactly what `require("reka-ui")` resolves to in the
-// loader (bare ids are registry keys, used verbatim). `vue`, `vue-native`,
-// `vue-router` and `pinia` stay EXTERNAL inside those bundles, so a library's
-// own `import { ref } from "vue"` lands on our runtime, not a second copy.
+// per package entry the app reaches (`reka-ui`, `clsx`, `@vueuse/core`, …),
+// directly or through another package. Each is a Bun bundle of that package's
+// own code, with every OTHER package it imports left external as a module of
+// its own (see "npm dependencies" below), emitted as `dist/modules/<id>.js`
+// under its id — the bare specifier, which is exactly what `require("reka-ui")`
+// resolves to in the loader (bare ids are registry keys, used verbatim).
+// `vue`, `vue-native`, `vue-router` and `pinia` stay EXTERNAL inside those
+// bundles, so a library's own `import { ref } from "vue"` lands on our
+// runtime, not a second copy.
 //
 // ONE SHARED COPY, NOT ONE PER IMPORTER. Inlining a package into every module
 // that imports it is simpler, but it is also wrong for any library that keeps
@@ -81,7 +83,7 @@
 import { parse, compileScript, compileTemplate, compileStyle, registerTS } from "@vue/compiler-sfc";
 import type { SFCDescriptor } from "@vue/compiler-sfc";
 import { createRequire } from "module";
-import { resolve, dirname, join, relative, sep } from "path";
+import { resolve, dirname, isAbsolute, join, relative, sep } from "path";
 import {
   existsSync,
   mkdirSync,
@@ -102,12 +104,15 @@ import {
 } from "./tailwind";
 import {
   GLOB_TRIPWIRE,
+  LEAF_IMPORT,
   SFC_FS,
   appDefines,
   devEsmInterop,
   devImportsPlugin,
+  importerDir,
   inlineCssImports,
   readPackageJson,
+  resolveImport,
   svgDefaultOf,
   tagModuleNamespaces,
   takeDefineArgs,
@@ -297,25 +302,69 @@ function resolveFromApp(spec: string): string {
  *   assignment. `reka-ui` bundles clean from `dist/index.cjs` and throws
  *   `ReferenceError: import_Primitive is not defined` from `dist/index.js`.
  *
- * So: prefer the CJS entry, which is the one whose *output* is known-good, and
- * fall back to the ESM/browser one when the CJS build actually FAILS. The
- * failure is a Bun.build error, not a guess — an unresolvable Node builtin is
- * exactly how the axios case announces itself.
+ * * A Node build can also BUILD clean and fail only when it runs: consola's
+ *   `lib/index.cjs` reads `process` at load ("process is not defined").
+ *
+ * So: first what a bundler picks for a BROWSER build (`bundlerResolve`, the
+ * conditions prod's bundle and Vite resolve with), the `require` form before
+ * the `import` one: reka-ui's `require` entry is its `dist/index.cjs`, axios's
+ * is `dist/browser/axios.cjs`, consola's is `dist/browser.cjs`. Then Node's
+ * CJS entry, then Bun's own. A candidate whose build FAILS falls through to
+ * the next — a Bun.build error, not a guess.
  */
-function entryCandidates(spec: string): string[] {
+async function entryCandidates(spec: string, from = APP_ROOT): Promise<string[]> {
   const out: string[] = [];
+  for (const kind of ["require", "import"] as const) {
+    const hit = await bundlerResolve(spec, from, kind);
+    if (hit && !out.includes(hit)) out.push(hit);
+  }
   try {
-    out.push(appRequire.resolve(spec));
+    const req = from === APP_ROOT ? appRequire : createRequire(join(from, "package.json"));
+    const cjs = req.resolve(spec);
+    // A Node builtin (`crypto`) resolves to its own name: nothing to bundle.
+    if (isAbsolute(cjs) && !out.includes(cjs)) out.push(cjs);
   } catch {
     /* ESM-only, or no `main` — Bun's resolver is the answer */
   }
   try {
-    const esm = Bun.resolveSync(spec, APP_ROOT);
-    if (!out.includes(esm)) out.push(esm);
+    const esm = Bun.resolveSync(spec, from);
+    if (isAbsolute(esm) && !out.includes(esm)) out.push(esm);
   } catch {
     /* nothing more to try */
   }
   return out;
+}
+
+/**
+ * The file Bun's bundler resolves `spec` to from `from` for a browser build,
+ * as a `require()` or an `import`. A one-line build whose every other module
+ * loads as empty, so it costs a millisecond or two, and the answer is the
+ * bundler's own (exports conditions, `browser` field), not a second resolver.
+ */
+async function bundlerResolve(spec: string, from: string, kind: "require" | "import"): Promise<string | null> {
+  const probe = join(from, "__vn_resolve_probe__.js"); // never written: onLoad answers for it
+  let hit: string | null = null;
+  await Bun.build({
+    entrypoints: [probe],
+    target: "browser",
+    format: "cjs" as any,
+    plugins: [
+      {
+        name: "vn-resolve-probe",
+        setup(b: any) {
+          b.onResolve({ filter: /__vn_resolve_probe__\.js$/ }, () => ({ path: probe }));
+          b.onLoad({ filter: /.*/ }, (args: any) => {
+            if (args.path === probe) {
+              return { contents: kind === "require" ? `require(${J(spec)});` : `import ${J(spec)};`, loader: "js" };
+            }
+            hit ??= args.path;
+            return { contents: "", loader: "js" };
+          });
+        },
+      },
+    ],
+  }).catch(() => null);
+  return hit && isAbsolute(hit) ? hit : null;
 }
 
 // ---- <script lang="ts"> across files ---------------------------------------
@@ -668,8 +717,13 @@ const DEV_SHAPES = shapesOptions(true);
 const devShapesPlugin = viteShapesPlugin(DEV_SHAPES);
 /** An npm package is bundled whole, so the plugin works on it exactly as in prod. */
 const npmShapesPlugin = viteShapesPlugin(shapesOptions(false));
-/** `@/…` aliases and data/asset files (vitecompat.ts `devImportsPlugin`). */
-const devImports = devImportsPlugin({ srcDir: APP_SRC_DIR, preseeded: isPreseeded, inlined: noteInlined });
+/** `@/…` aliases, data/asset files and npm ids (vitecompat.ts `devImportsPlugin`). */
+const devImports = devImportsPlugin({
+  srcDir: APP_SRC_DIR,
+  preseeded: isPreseeded,
+  inlined: noteInlined,
+  npmId: (spec, abs, from) => npmIdOf(spec, abs, from),
+});
 
 /**
  * An APP module (`buildModule`): the SFC compile above, then the rewrites prod
@@ -770,7 +824,7 @@ function bareOf(body: string, skip: Set<string>): string[] {
 }
 
 const moduleDeps = new Map<string, string[]>(); // id -> dep ids
-const moduleBare = new Map<string, string[]>(); // id -> npm specifiers it requires
+const moduleBare = new Map<string, string[]>(); // app module id -> npm module ids it requires
 
 // ---- CSS entries: `import "./index.css"` from a JS/TS module ---------------
 // A Vite app's global stylesheet is imported from its entry module, not linked
@@ -991,29 +1045,132 @@ async function buildModule(absPath: string, ids: Set<string>) {
   writeAtomic(join(MODULES_DIR, encId(id)), out.join("\n"));
 }
 
-// ---- npm dependencies: one shared module per bare specifier ----------------
+// ---- npm dependencies: one shared module per package entry -----------------
 // Absent any npm import (apps/hello), `npmBuilt` stays empty and every line
 // below is inert — the emitted manifest and module set are byte-identical to a
 // pre-npm build.
+//
+// A module is one package ENTRY: the package directory an import resolves to,
+// plus the subpath it names (`reka-ui` is `<dir>|.`, `@argon/ui/popover` is
+// `<dir>|./popover`). It is keyed on that resolved directory, never on the
+// name, so:
+// - every importer that reaches the same directory shares the module: the
+//   app, and every package that depends on it (as one bundle, or Vite's
+//   optimizeDeps, would give). A package's own npm imports are external
+//   (`npmSharePlugin`), so they are modules of their own, not copies inlined
+//   into it. Inlined, `@argon/glue` registered its formatters in a private
+//   `@argon-chat/ion.webcore` that the app never read ("Formatter not found:
+//   IArgonEvent"), and each `@argon/ui/*` provided a context from its own
+//   reka-ui, which the app's reka-ui could not inject;
+// - a nested node_modules copy at another version is another directory, so
+//   another module, as in a bundle.
+// The id is the specifier when the app itself resolves it to that directory,
+// and `<spec>~<hash of the directory>` otherwise. Both are stable across
+// rebuilds, so an HMR pass re-requires the live instance.
 
-/** specifier -> emitted body size, for the log and for change detection. */
+/** module id -> emitted body size, for the log and for change detection. */
 const npmBuilt = new Map<string, number>();
-/** Specifiers we already complained about, so watch mode says it once. */
+/** Ids we already complained about, so watch mode says it once. */
 const npmFailed = new Set<string>();
+/** module id -> the specifier and the directory it is resolved from. */
+const npmEntries = new Map<string, { spec: string; from: string }>();
+/** npm module id -> the npm module ids its bundle requires. */
+const npmBare = new Map<string, string[]>();
 
-/** Bundles one npm package into a classic module script. False = unresolvable. */
-async function buildNpmModule(spec: string): Promise<boolean> {
-  // Resolved from the APP root, not ours: the app owns its dependencies.
-  const candidates = entryCandidates(spec);
+/** `@scope/pkg/sub` -> ["@scope/pkg", "./sub"]; `pkg` -> ["pkg", "."]. */
+function splitSpec(spec: string): [string, string] {
+  const parts = spec.split("/");
+  const n = spec.startsWith("@") ? 2 : 1;
+  const rest = parts.slice(n).join("/");
+  return [parts.slice(0, n).join("/"), rest ? `./${rest}` : "."];
+}
+
+const pkgNameAt = new Map<string, string | null>();
+/** The directory of the nearest package.json named `name` above `file` (a nested `{"type":"module"}` one does not count). */
+function packageRootOf(file: string, name: string): string | null {
+  for (let dir = dirname(file); ; ) {
+    let found = pkgNameAt.get(dir);
+    if (found === undefined) {
+      found = null;
+      try {
+        const n = JSON.parse(readFileSync(join(dir, "package.json"), "utf-8")).name;
+        if (typeof n === "string") found = n;
+      } catch {}
+      pkgNameAt.set(dir, found);
+    }
+    if (found === name) return dir;
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+}
+
+/** What makes two imports one module: the package directory and the subpath, or the file when no package claims it. */
+function npmKey(spec: string, abs: string): string {
+  const [name, sub] = splitSpec(spec);
+  const root = packageRootOf(abs, name);
+  return root ? `${toId(root)}|${sub}` : toId(abs);
+}
+
+/** spec -> the key of the app's own resolution of it (null: the app cannot import it). */
+const appKeys = new Map<string, string | null>();
+
+/** The registry id of the npm module `spec` (resolved to `abs` from `from`) loads. */
+function npmIdOf(spec: string, abs: string, from: string): string {
+  const key = npmKey(spec, abs);
+  let appKey = appKeys.get(spec);
+  if (appKey === undefined) {
+    let appAbs: string | null = null;
+    try {
+      appAbs = resolveFromApp(spec);
+    } catch {}
+    appKey = appAbs && isAbsolute(appAbs) ? npmKey(spec, appAbs) : null;
+    appKeys.set(spec, appKey);
+  }
+  const id = key === appKey ? spec : `${spec}~${Bun.hash(key).toString(16).slice(0, 8)}`;
+  if (!npmEntries.has(id)) npmEntries.set(id, { spec, from: id === spec ? APP_ROOT : from });
+  return id;
+}
+
+/**
+ * Inside an npm bundle: another package's import is EXTERNAL, under its id
+ * (`npmIdOf`), and recorded in `found`. The package's own entry, stylesheets
+ * and data files stay in the bundle, as before.
+ */
+function npmSharePlugin(selfKey: string, found: Set<string>) {
+  return {
+    name: "vn-dev-npm-share",
+    setup(build: any) {
+      // `node:` stays out of the filter (see vitecompat.ts devImportsPlugin).
+      build.onResolve({ filter: /^(?!node:)[^./\\]/ }, (args: any) => {
+        if (args.kind === "entry-point-build" || isAbsolute(args.path) || isPreseeded(args.path)) return undefined;
+        const from = importerDir(args, APP_ROOT);
+        const abs = resolveImport(args.path, from);
+        if (abs === null || !isAbsolute(abs) || /\.css$/i.test(abs) || LEAF_IMPORT.test(abs)) return undefined;
+        if (npmKey(args.path, abs) === selfKey) return undefined;
+        const id = npmIdOf(args.path, abs, from);
+        found.add(id);
+        return { path: id, external: true };
+      });
+    },
+  };
+}
+
+/** Bundles one npm package entry into a classic module script. False = unresolvable. */
+async function buildNpmModule(id: string): Promise<boolean> {
+  // Resolved from the APP root, not ours: the app owns its dependencies. An
+  // entry only another package reaches is resolved from that package.
+  const { spec, from } = npmEntries.get(id) ?? { spec: id, from: APP_ROOT };
+  const candidates = await entryCandidates(spec, from);
   if (!candidates.length) {
-    if (!npmFailed.has(spec)) {
-      npmFailed.add(spec);
+    if (!npmFailed.has(id)) {
+      npmFailed.add(id);
       // `@/x`, `~/x`, `#x`: no npm package is named like that, so it is an
       // alias neither builder knows. Both read tsconfig `paths` only.
       const alias = !/^(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$)/i.test(spec);
       console.warn(
-        `${stamp()} cannot resolve ${J(spec)} from ${toId(APP_ROOT)} — ` +
-          `require(${J(spec)}) will throw at runtime ` +
+        `${stamp()} cannot resolve ${J(spec)} from ${toId(from)} — ` +
+          `require(${J(id)}) will throw at runtime ` +
           (alias
             ? "(an import alias resolves through tsconfig.json compilerOptions.paths, as in vn build; " +
               "a vite.config resolve.alias is not read — docs/PACKAGING.md §3.1)"
@@ -1022,16 +1179,19 @@ async function buildNpmModule(spec: string): Promise<boolean> {
     }
     return false;
   }
+  const selfKey = npmKey(spec, candidates[0]);
+  const requires = new Set<string>();
   let result: Awaited<ReturnType<typeof Bun.build>> | null = null;
   let entry = candidates[0];
   for (const [i, candidate] of candidates.entries()) {
     entry = candidate;
+    requires.clear();
     result = await Bun.build({
       entrypoints: [candidate],
       format: "cjs" as any,
       target: "browser", // picks the browser/ESM conditions, not node builtins
-      // The ONLY externals: everything else (the package's own transitive npm
-      // graph) is inlined, because nothing outside this bundle can require it.
+      // The pre-seeded ids, plus every other package's entry (npmSharePlugin):
+      // what is left in the bundle is this package's own code.
       external: PRESEEDED,
       // A dependency can ship RAW `.vue` SOURCE — a vendored component library
       // (`@argon/ui`: 208 SFCs) is the normal case, not an exotic one. Without
@@ -1041,30 +1201,32 @@ async function buildNpmModule(spec: string): Promise<boolean> {
       // nothing — which is the worst failure mode a compat-first builder can
       // have. Vite's import shapes (`.svg`, `?raw`, assets, …) go first, as in
       // prod.ts, where they apply to every package in the bundle.
-      plugins: [npmShapesPlugin, vuePlugin],
+      plugins: [npmShapesPlugin, npmSharePlugin(selfKey, requires), vuePlugin],
       define: DEFINES,
     }).catch(() => null);
     if (result?.success) break;
     if (i + 1 < candidates.length) {
       console.warn(
-        `${stamp()} npm ${spec}: ${toId(candidate)} did not build — retrying with ` +
+        `${stamp()} npm ${id}: ${toId(candidate)} did not build — retrying with ` +
           `${toId(candidates[i + 1])}`,
       );
     }
   }
   if (!result?.success) {
     for (const log of result?.logs ?? []) console.error(log);
-    throw new Error(`npm module build failed: ${spec}`);
+    throw new Error(`npm module build failed: ${id}`);
   }
   const body = tagModuleNamespaces(await result.outputs[0].text()).code;
-  moduleDeps.set(spec, []);
-  moduleBare.set(spec, []);
+  moduleDeps.set(id, []);
+  // What the plugin made external, not a scan of the body: a package's own
+  // guarded `require("crypto")` is not a module to build.
+  npmBare.set(id, Array.from(requires).sort());
   writeAtomic(
-    join(MODULES_DIR, encId(spec)),
+    join(MODULES_DIR, encId(id)),
     [
-      `// vue-native module: ${spec} (npm dependency, bundled from ${toId(entry)})`,
-      `__VN__.setDeps && __VN__.setDeps(${J(spec)}, []);`,
-      `__VN__.define(${J(spec)}, function (require, module, exports) {`,
+      `// vue-native module: ${id} (npm dependency, bundled from ${toId(entry)})`,
+      `__VN__.setDeps && __VN__.setDeps(${J(id)}, []);`,
+      `__VN__.define(${J(id)}, function (require, module, exports) {`,
       body,
       // Constant across rebuilds unless the package itself changes, so a
       // rebuild never invalidates the live exports (and with them every
@@ -1072,43 +1234,61 @@ async function buildNpmModule(spec: string): Promise<boolean> {
       `}, ${J(Bun.hash(body).toString(16))});`,
     ].join("\n"),
   );
-  npmBuilt.set(spec, body.length);
+  npmBuilt.set(id, body.length);
   return true;
 }
 
 /** Emitted npm module ids, sorted — manifest order. */
 const npmIds = () => Array.from(npmBuilt.keys()).sort();
 
+/** Every npm module the app's modules require, and every one those require in turn. */
+function wantedNpm(): Set<string> {
+  const wanted = new Set<string>();
+  const queue: string[] = [];
+  for (const list of moduleBare.values()) queue.push(...list);
+  for (let id = queue.pop(); id !== undefined; id = queue.pop()) {
+    if (wanted.has(id)) continue;
+    wanted.add(id);
+    queue.push(...(npmBare.get(id) ?? []));
+  }
+  return wanted;
+}
+
 /**
- * Reconciles the emitted npm modules with what the app currently imports.
- * Returns the specifiers ADDED by this pass (they need a change entry so the
- * running host evaluates their scripts before hmrApply re-requires importers).
+ * Reconciles the emitted npm modules with what the app currently imports,
+ * directly or through another package. Returns the ids ADDED by this pass
+ * (they need a change entry so the running host evaluates their scripts
+ * before hmrApply re-requires importers).
  */
 async function syncNpmModules(): Promise<string[]> {
-  const wanted = new Set<string>();
-  for (const list of moduleBare.values()) for (const spec of list) wanted.add(spec);
+  const added: string[] = [];
+  const tried = new Set<string>();
+  // A package's build finds the packages it requires: build until none is new.
+  for (;;) {
+    const todo = Array.from(wantedNpm())
+      .filter((id) => !npmBuilt.has(id) && !tried.has(id))
+      .sort();
+    if (!todo.length) break;
+    for (const id of todo) {
+      tried.add(id);
+      const t0 = Date.now();
+      if (!(await buildNpmModule(id))) continue;
+      added.push(id);
+      console.log(`${stamp()} npm ${id}: ${((npmBuilt.get(id) ?? 0) / 1024) | 0} KB in ${Date.now() - t0} ms`);
+    }
+  }
 
-  for (const spec of Array.from(npmBuilt.keys())) {
-    if (wanted.has(spec)) continue;
-    npmBuilt.delete(spec);
-    moduleDeps.delete(spec);
-    moduleBare.delete(spec);
+  const wanted = wantedNpm();
+  for (const id of Array.from(npmBuilt.keys())) {
+    if (wanted.has(id)) continue;
+    npmBuilt.delete(id);
+    npmBare.delete(id);
+    moduleDeps.delete(id);
     try {
-      rmSync(join(MODULES_DIR, encId(spec)));
+      rmSync(join(MODULES_DIR, encId(id)));
     } catch {}
   }
-
-  const added: string[] = [];
-  for (const spec of Array.from(wanted).sort()) {
-    if (npmBuilt.has(spec)) continue;
-    const t0 = Date.now();
-    if (!(await buildNpmModule(spec))) continue;
-    added.push(spec);
-    console.log(
-      `${stamp()} npm ${spec}: ${((npmBuilt.get(spec) ?? 0) / 1024) | 0} KB in ${Date.now() - t0} ms`,
-    );
-  }
-  return added;
+  return added.filter((id) => npmBuilt.has(id));
 }
 
 // ---- tailwind: the synthetic css-only module -------------------------------
@@ -1272,6 +1452,10 @@ async function fullBuild(reason: string) {
   moduleDeps.clear();
   moduleBare.clear();
   npmBuilt.clear(); // force a rewrite: the module files may not exist yet
+  npmBare.clear();
+  npmEntries.clear();
+  appKeys.clear();
+  pkgNameAt.clear();
   cssModules.clear();
   cssEmitted.clear();
   moduleInlined.clear();

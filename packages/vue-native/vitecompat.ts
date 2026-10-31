@@ -683,7 +683,7 @@ export function resolveImport(spec: string, fromDir: string): string | null {
 }
 
 /** The directory an `onResolve` call resolves from. */
-const importerDir = (args: { resolveDir?: string; importer?: string }, fallback: string) =>
+export const importerDir = (args: { resolveDir?: string; importer?: string }, fallback: string) =>
   args.resolveDir || (args.importer ? dirname(args.importer) : fallback);
 
 const NS = "vn-vite";
@@ -824,7 +824,7 @@ export function viteShapesPlugin(o: ShapesOptions) {
 }
 
 /** A specifier naming a file an import builds INTO its importer: data, `.svg`, `.wasm` and Vite's asset types. */
-const LEAF_IMPORT = new RegExp(`\\.(?:json|svg|wasm)$|${ASSET_EXT.source}`, "i");
+export const LEAF_IMPORT = new RegExp(`\\.(?:json|svg|wasm)$|${ASSET_EXT.source}`, "i");
 
 export interface DevImportsOptions {
   /** The directory whose files the dev builder emits as modules (the app's source root). */
@@ -833,6 +833,12 @@ export interface DevImportsOptions {
   preseeded: (spec: string) => boolean;
   /** Called with each data or asset file an import builds into its importer. */
   inlined?: (absPath: string) => void;
+  /**
+   * The registry id of the npm module a bare import outside the source root
+   * loads (build.ts `npmIdOf`): one per package entry, keyed on where it
+   * resolves. Undefined leaves the specifier as written.
+   */
+  npmId?: (spec: string, absPath: string, fromDir: string) => string | undefined;
 }
 
 /**
@@ -850,6 +856,8 @@ export interface DevImportsOptions {
  *   built into the importer, as prod's bundle builds them, through Bun's JSON
  *   loader and `viteShapesPlugin`'s loaders. Register that plugin first: its
  *   `?query` resolution must see a query import before this one does.
+ * - An npm import gets the id `npmId` gives it, so every importer of one
+ *   package entry loads one module.
  *
  * Anything else is left to the build's `external`.
  */
@@ -876,8 +884,13 @@ export function devImportsPlugin(o: DevImportsOptions) {
         if (args.kind === "entry-point-build" || isAbsolute(args.path) || o.preseeded(args.path)) return undefined;
         const from = importerDir(args, o.srcDir);
         const abs = resolveImport(args.path, from);
-        // `node:fs` resolves to itself; a package resolves outside the source root.
-        if (abs === null || !isAbsolute(abs) || !inSrc(abs)) return undefined;
+        if (abs === null || !isAbsolute(abs)) return undefined;
+        if (!inSrc(abs)) {
+          // A package. A stylesheet stays as written: build.ts keys it by specifier.
+          if (/\.css$/i.test(abs)) return undefined;
+          const id = o.npmId?.(args.path, abs, from);
+          return id === undefined ? undefined : { path: id, external: true };
+        }
         const rel = posix(relative(from, abs));
         return { path: rel.startsWith("../") ? rel : `./${rel}`, external: true };
       });

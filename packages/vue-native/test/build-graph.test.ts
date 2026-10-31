@@ -4,7 +4,7 @@
 //   bun test           (from packages/vue-native)
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -381,6 +381,135 @@ describe('a "type": "module" app, in dev', () => {
     expect(ns[Symbol.toStringTag]).toBe("Module");
     expect(ns.default).toBe(main.worker);
   });
+});
+
+// The Argon client in dev: `@argon/glue` registered its formatters in a copy of
+// `@argon-chat/ion.webcore` inlined into its own bundle, and the app read the
+// standalone one ("Formatter not found"); each `@argon/ui/*` provided a context
+// from its own reka-ui. A package entry is one module, keyed on the directory
+// it resolves to. The packages are written at test time (no .js is checked in).
+describe("build.ts (dev): npm packages share the packages they import", () => {
+  const dir = mkdtempSync(join(FIXTURES, "npm-share-"));
+  tmpDirs.push(dir);
+  const rel = "packages/vue-native/test/fixtures/" + dir.split(/[\\/]/).pop();
+  const MAIN = `${rel}/src/main.ts`;
+  const put = (path, text) => {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  };
+  const pkg = (path, name, version, code) => {
+    put(`${path}/package.json`, JSON.stringify({ name, version, type: "module", exports: "./index.js" }));
+    put(`${path}/index.js`, code);
+  };
+  put("package.json", JSON.stringify({ name: "npm-share-fixture", private: true }));
+  // The shared one: a context key and a registry, as reka-ui and ion.webcore keep.
+  const core = (tag) =>
+    `export const KEY = Symbol(${JSON.stringify(tag)});\n` +
+    "export const formatters = new Map();\n" +
+    "export const provide = (scope, value) => ((scope[KEY] = value), scope);\n" +
+    "export const inject = (scope) => scope[KEY];\n";
+  pkg("node_modules/ctx-core", "ctx-core", "2.0.0", core("ctx"));
+  // A workspace package, linked as the client's @argon/* are: its realpath is outside node_modules.
+  pkg(
+    "packages/ctx-provider",
+    "ctx-provider",
+    "1.0.0",
+    'import { provide, formatters } from "ctx-core";\n' +
+      'formatters.set("IArgonEvent", "fmt");\n' +
+      "export const providing = (value) => provide({}, value);\n",
+  );
+  mkdirSync(join(dir, "node_modules"), { recursive: true });
+  symlinkSync(join(dir, "packages/ctx-provider"), join(dir, "node_modules/ctx-provider"), "junction");
+  pkg("node_modules/ctx-consumer", "ctx-consumer", "1.0.0", 'import { inject } from "ctx-core";\nexport const injecting = (scope) => inject(scope);\n');
+  // Another version, nested: another directory, so another module.
+  pkg("node_modules/old-user", "old-user", "1.0.0", 'import { KEY } from "ctx-core";\nexport const oldKey = KEY;\n');
+  pkg("node_modules/old-user/node_modules/ctx-core", "ctx-core", "1.0.0", core("old"));
+  // A package with a Node build and a browser one (consola's shape): the browser one, as a bundler picks.
+  put(
+    "node_modules/env-pick/package.json",
+    JSON.stringify({ name: "env-pick", version: "1.0.0", exports: { ".": { node: "./node.cjs", default: "./browser.cjs" } } }),
+  );
+  put("node_modules/env-pick/node.cjs", 'exports.which = "node";\n');
+  put("node_modules/env-pick/browser.cjs", 'exports.which = "browser";\n');
+  put(
+    "src/main.ts",
+    'import { providing } from "ctx-provider";\n' +
+      'import { injecting } from "ctx-consumer";\n' +
+      'import { formatters, KEY } from "ctx-core";\n' +
+      'import { oldKey } from "old-user";\n' +
+      'import { which } from "env-pick";\n' +
+      "export const env = which;\n" +
+      'export const injected = injecting(providing("ctx-value"));\n' +
+      'export const registered = formatters.get("IArgonEvent");\n' +
+      "export const keys = { app: KEY, old: oldKey };\n",
+  );
+
+  const dist = mkdtempSync(join(tmpdir(), "vn-build-npm-"));
+  tmpDirs.push(dist);
+  const read = (f) => {
+    try {
+      return readFileSync(join(dist, f), "utf8");
+    } catch {
+      return "";
+    }
+  };
+  const script = (id) => read(join("modules", id.split("/").join("__") + ".js"));
+  const until = async (ok) => {
+    for (let i = 0; i < 150 && !ok(); i++) await Bun.sleep(100);
+    return ok();
+  };
+  const world = (manifest) => {
+    const w = createLoader();
+    for (const mod of manifest.modules) {
+      new Function("__VN__", "__VUE_HMR_RUNTIME__", script(mod))(w.VN, w.sandbox.__VUE_HMR_RUNTIME__);
+    }
+    return w;
+  };
+
+  test("one instance across packages and the app; another version stays its own; an HMR pass keeps it", async () => {
+    const proc = Bun.spawn(["bun", "build.ts", join(dir, "src/main.ts"), dist, "--watch"], {
+      cwd: PKG_DIR,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      expect(await until(() => read("manifest.json").includes(MAIN))).toBe(true);
+      const manifest = JSON.parse(read("manifest.json"));
+      const npm = manifest.modules.filter((m) => !m.startsWith(rel));
+      expect(npm.filter((m) => m === "ctx-core")).toEqual(["ctx-core"]);
+      expect(npm.filter((m) => m.startsWith("ctx-core~"))).toHaveLength(1); // old-user's nested 1.0.0
+      expect(script("ctx-provider")).toContain('require("ctx-core")');
+      expect(script("ctx-provider")).not.toContain('Symbol("ctx")');
+
+      const w = world(manifest);
+      const main = w.VN.require(MAIN);
+      expect(main.injected).toBe("ctx-value"); // provided in one package, injected in another
+      expect(main.registered).toBe("fmt"); // registered by a package, read by the app
+      expect(main.keys.old).not.toBe(main.keys.app);
+      expect(main.keys.old.description).toBe("old");
+      expect(main.env).toBe("browser");
+      const core = w.VN.require("ctx-core");
+
+      // An app edit: only the app module changes, the package keeps its instance.
+      const coreScript = script("ctx-core");
+      await Bun.sleep(300);
+      writeFileSync(join(dir, "src/main.ts"), readFileSync(join(dir, "src/main.ts"), "utf8") + "export const edited = 1;\n");
+      expect(await until(() => script(MAIN).includes("edited"))).toBe(true);
+      const changes = JSON.parse(read("changes.json"));
+      expect(changes.changed).toContainEqual({ id: MAIN, kind: "reload" });
+      expect(changes.changed.filter((c) => npm.includes(c.id))).toEqual([]);
+      expect(script("ctx-core")).toBe(coreScript);
+      new Function("__VN__", "__VUE_HMR_RUNTIME__", script("ctx-core"))(w.VN, w.sandbox.__VUE_HMR_RUNTIME__);
+      new Function("__VN__", "__VUE_HMR_RUNTIME__", script(MAIN))(w.VN, w.sandbox.__VUE_HMR_RUNTIME__);
+      expect(w.VN.require("ctx-core")).toBe(core);
+      const again = w.VN.require(MAIN);
+      expect(again.edited).toBe(1);
+      expect(again.injected).toBe("ctx-value");
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, 30000);
 });
 
 describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () => {
