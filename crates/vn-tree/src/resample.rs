@@ -529,8 +529,15 @@ mod tests {
         }
     }
 
+    /// A new frame's [`SYNC_BUDGET`], as `tick` renews it: a debug build or a
+    /// busy machine can spend the whole of it on one copy.
+    fn new_frame() {
+        CACHE.with(|c| c.borrow_mut().sync_spent = Duration::ZERO);
+    }
+
     #[test]
     fn the_first_copy_is_made_at_once_and_reused() {
+        new_frame();
         let img = image(checker(200, 200), 200, 200);
         assert!(resampler(&img, 0, device(200, 200)).is_none());
         assert!(resampler(&img, 0, device(180, 180)).is_none(), "0.9 of its size: drawn as it is");
@@ -552,6 +559,7 @@ mod tests {
         assert_eq!(CACHE.with(|c| c.borrow().waiting[&key].1), since);
 
         // Only one axis small: only that axis is resampled.
+        new_frame();
         let wide = image(checker(400, 2), 400, 2);
         let copy = resampler(&wide, 0, device(40, 2)).unwrap();
         assert_eq!((copy.size(0).height.0, copy.size(0).width.0 >= 40), (2, true));
