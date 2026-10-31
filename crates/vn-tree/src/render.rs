@@ -1483,6 +1483,75 @@ fn tab_index_of(t: &Tree, id: u32) -> Option<isize> {
     }
 }
 
+/// HTML's focusable-by-default elements, which take tab index 0 with no
+/// `tabindex` attribute:
+/// - `<button>`, `<select>`;
+/// - `<a href>`, `<area href>`;
+/// - the `<summary>` that summarizes its `<details>`;
+/// - an editing host (`contenteditable`).
+///
+/// `<input>` and `<textarea>` are the native widget's business (`build_input`).
+/// An actually-disabled control is excluded here too: see
+/// [`actually_disabled`].
+fn default_tab_index(t: &Tree, id: u32) -> Option<isize> {
+    let n = t.node(id)?;
+    let focusable = match t.name(n.tag) {
+        "button" | "select" => true,
+        "a" | "area" => t.prop(id, "href").is_some(),
+        "summary" => summarizes_details(t, id),
+        _ => false,
+    } || t.prop(id, "contenteditable").is_some_and(|v| !v.eq_ignore_ascii_case("false"));
+    focusable.then_some(0)
+}
+
+/// Is `id` the first `<summary>` child of a `<details>`?
+fn summarizes_details(t: &Tree, id: u32) -> bool {
+    let Some(parent) = t.node(id).and_then(|n| t.node(n.parent)) else { return false };
+    t.name(parent.tag) == "details"
+        && parent
+            .children
+            .iter()
+            .copied()
+            .find(|&c| t.node(c).is_some_and(|k| k.kind == Kind::Element && t.name(k.tag) == "summary"))
+            == Some(id)
+}
+
+/// HTML's "actually disabled": a `<button>`, `<input>`, `<select>`,
+/// `<textarea>`, `<optgroup>`, `<option>` or `<fieldset>` with `disabled`, or
+/// a form control inside a disabled `<fieldset>` but not inside its first
+/// `<legend>`. Such an element is not focusable at all, whatever its
+/// `tabindex`, and neither a click nor `el.focus()` focuses it.
+fn actually_disabled(t: &Tree, id: u32) -> bool {
+    let disabled = |id: u32| t.prop(id, "disabled").is_some_and(|v| v != "false");
+    let Some(n) = t.node(id) else { return false };
+    let tag = t.name(n.tag);
+    if !matches!(tag, "button" | "input" | "select" | "textarea" | "optgroup" | "option" | "fieldset") {
+        return false;
+    }
+    if disabled(id) {
+        return true;
+    }
+    if tag == "optgroup" || tag == "option" {
+        return false;
+    }
+    // A disabled fieldset disables its descendants, except those in its first
+    // legend.
+    let (mut child, mut cur) = (id, n.parent);
+    for _ in 0..256 {
+        let Some(p) = t.node(cur) else { return false };
+        if t.name(p.tag) == "fieldset" && disabled(cur) {
+            let first_legend = p
+                .children
+                .iter()
+                .copied()
+                .find(|&c| t.node(c).is_some_and(|k| k.kind == Kind::Element && t.name(k.tag) == "legend"));
+            return first_legend != Some(child);
+        }
+        (child, cur) = (cur, p.parent);
+    }
+    false
+}
+
 fn focus_handle_for<V: 'static>(id: u32, tab_index: Option<isize>, cx: &mut Context<V>) -> FocusHandle {
     FOCUS_HANDLES.with(|m| {
         let mut map = m.borrow_mut();
@@ -2108,12 +2177,21 @@ fn build_node<V: 'static>(
             // Both are tabbable by default in HTML; a plain <div> is not. A
             // disabled file input is not focusable at all.
             let file_tab = is_file_input && !t.prop(id, "disabled").is_some_and(|v| v != "false");
-            let tab_index = tab_index_of(t, id).or((is_input || file_tab).then_some(0));
+            // So are a <button>, a <select>, a link and the rest of HTML's
+            // focusable-by-default list, and an actually-disabled control is
+            // not focusable whatever its tabindex (m26 #10: reka's FocusScope
+            // could not focus a dialog's first button).
+            let disabled = !is_input && actually_disabled(t, id);
+            let tab_index = tab_index_of(t, id)
+                .or((is_input || file_tab).then_some(0))
+                .or_else(|| default_tab_index(t, id))
+                .filter(|_| !disabled);
 
             // Keyboard/focus events and tab navigation need a persistent
             // FocusHandle. `<input>` owns its own focus handle inside the
             // native widget — it is decorated through TextInputOptions instead.
             let focusable = !is_input
+                && !disabled
                 && (tab_index.is_some()
                     || bit(tree::EV_KEYDOWN)
                     || bit(tree::EV_KEYUP)
@@ -4162,7 +4240,10 @@ pub(crate) fn focus_node(id: u32, window: &mut Window, cx: &mut App) -> Result<(
 // `old == new`), so nothing is reported twice.
 //
 // A node that cannot take focus yet because it has not been built (an
-// `<input>` mounted in the same wave, `nextTick(() => input.focus())`) is
+// `<input>` mounted in the same wave, `nextTick(() => input.focus())`) makes
+// `__vn_focus` lay out first, where a layout can be forced (docs/RUNTIME.md
+// §5.8; `focus_wants_build`); the node then has its handle and the move is
+// synchronous. Where it cannot (under a gpui listener), the node is
 // queued instead. The queue holds ONE node, because the last `focus()` wins.
 // It is applied from the frame tick once the node has a handle, for up to
 // `PENDING_FOCUS_FRAMES` frames. Its events then come from the observers,
@@ -4190,13 +4271,34 @@ pub(crate) enum FocusAnswer {
 }
 
 /// Could `id` get a focus handle once it is built? An `<input>` or
-/// `<textarea>`, a `tabindex`, or a key/focus listener: the renderer's own
-/// rules (see `bind_events` and `build_input`).
+/// `<textarea>`, a `tabindex`, an element HTML makes focusable by default, or
+/// a key/focus listener, and never an actually-disabled control: the
+/// renderer's own rules (see `bind_events` and `build_input`).
 fn could_take_focus(t: &Tree, id: u32) -> bool {
     let Some(n) = t.node(id) else { return false };
     let tag = t.name(n.tag);
+    if tag != "input" && tag != "textarea" && actually_disabled(t, id) {
+        return false;
+    }
     let bits = (1u64 << tree::EV_KEYDOWN) | (1 << tree::EV_KEYUP) | (1 << tree::EV_FOCUS) | (1 << tree::EV_BLUR);
-    tag == "input" || tag == "textarea" || t.prop(id, "tabindex").is_some() || n.listeners & bits != 0
+    tag == "input"
+        || tag == "textarea"
+        || t.prop(id, "tabindex").is_some()
+        || default_tab_index(t, id).is_some()
+        || n.listeners & bits != 0
+}
+
+/// Does `el.focus()` on `id` need a build first? It could take focus but has
+/// no handle yet, because it has not been built: mounted in this same update,
+/// as reka's FocusScope does from `onMounted` when a dialog opens. `__vn_focus`
+/// then forces a layout where one is legal (`crate::sync_layout`, docs/RUNTIME.md
+/// §5.8), so `focus()` is synchronous, as in a browser: reka's `focusFirst`
+/// checks `document.activeElement` straight after each call and moves on to
+/// the next candidate when it did not change.
+pub(crate) fn focus_wants_build(id: u32) -> bool {
+    let built = INPUT_STATES.with(|m| m.borrow().contains_key(&id))
+        || FOCUS_HANDLES.with(|m| m.borrow().contains_key(&id));
+    !built && tree::read_tree(|t| t.node(id).is_some() && could_take_focus(t, id))
 }
 
 /// Queues `id` for the frame tick (the last call wins).
@@ -5774,6 +5876,64 @@ mod tests {
             let mut style3 = gpui::StyleRefinement::default();
             apply_inline_row(&mut style3, t, t.node(declared).unwrap(), None);
             assert_eq!(style3.display, Some(gpui::Display::Flex));
+        });
+    }
+
+    /// m26 #10: HTML's focusable-by-default elements take tab index 0 with no
+    /// `tabindex`, and an actually-disabled control is not focusable at all.
+    #[test]
+    fn html_focusable_by_default_and_disabled_controls() {
+        with_tree(|t| {
+            let root = t.create_root();
+            let el = |t: &mut Tree, tag: &str, parent: u32, props: &[(&str, &str)]| {
+                let tag = t.intern(tag);
+                let id = t.create_element(tag);
+                for (k, v) in props {
+                    let key = t.intern(k);
+                    t.set_prop(id, key, Some((*v).to_string()));
+                }
+                t.insert(id, parent, 0);
+                id
+            };
+            let button = el(t, "button", root, &[]);
+            let select = el(t, "select", root, &[]);
+            let link = el(t, "a", root, &[("href", "#x")]);
+            let anchor = el(t, "a", root, &[]);
+            let editable = el(t, "div", root, &[("contenteditable", "true")]);
+            let not_editable = el(t, "div", root, &[("contenteditable", "false")]);
+            let div = el(t, "div", root, &[]);
+            for (id, want, what) in [
+                (button, Some(0), "button"),
+                (select, Some(0), "select"),
+                (link, Some(0), "a[href]"),
+                (anchor, None, "a without href"),
+                (editable, Some(0), "contenteditable"),
+                (not_editable, None, "contenteditable=false"),
+                (div, None, "div"),
+            ] {
+                assert_eq!(default_tab_index(t, id), want, "{what}");
+                assert_eq!(could_take_focus(t, id), want.is_some(), "{what}");
+            }
+
+            // Only the summary that summarizes its details.
+            let details = el(t, "details", root, &[]);
+            let first = el(t, "summary", details, &[]);
+            let second = el(t, "summary", details, &[]);
+            assert_eq!(default_tab_index(t, first), Some(0));
+            assert_eq!(default_tab_index(t, second), None);
+
+            // Disabled, directly or by a fieldset, except in its first legend.
+            let off = el(t, "button", root, &[("disabled", ""), ("tabindex", "0")]);
+            let on = el(t, "button", root, &[("disabled", "false")]);
+            assert!(actually_disabled(t, off) && !could_take_focus(t, off), "disabled, tabindex or not");
+            assert!(!actually_disabled(t, on), "Vue's :disabled=\"false\"");
+            let fieldset = el(t, "fieldset", root, &[("disabled", "")]);
+            let inside = el(t, "button", fieldset, &[]);
+            let legend = el(t, "legend", fieldset, &[]);
+            let in_legend = el(t, "button", legend, &[]);
+            assert!(actually_disabled(t, inside), "inside a disabled fieldset");
+            assert!(!actually_disabled(t, in_legend), "inside its first legend");
+            assert!(!actually_disabled(t, div), "a div is never disabled");
         });
     }
 

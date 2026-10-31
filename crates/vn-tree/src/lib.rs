@@ -403,6 +403,12 @@ host_fn!(fn vn_scroll_into_view(_g, args) {
 host_fn!(fn vn_focus(_g, args) {
     let id = arg_id(args.arg(0));
     let op = arg_id(args.arg(1));
+    // A node mounted in this same update has no handle yet: lay out first
+    // where that is legal, so the focus is synchronous (render::focus_wants_build).
+    // Under a gpui listener this draws nothing and the focus is queued (FO-1).
+    if op == 0 && layout_owed() && render::focus_wants_build(id) {
+        sync_layout();
+    }
     let out = vn_runtime::with_commit(|window, cx| {
         if op == 1 {
             return if render::js_blur(id, window, cx) { "blurred".to_string() } else { String::new() };

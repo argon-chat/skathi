@@ -122,6 +122,14 @@ if (!uiaSupported()) {
       expect(names).toContain("Confirm");
       expect(names).toContain("Close");
 
+      // reka's FocusScope focused the first tabbable button, as in a browser.
+      // A <button> is focusable with no tabindex (HTML); before m26 #10 the
+      // host refused it and focus fell back to the dialog container.
+      const active = await app.eval(
+        "document.activeElement ? [document.activeElement.tagName, document.activeElement.textContent.trim()] : null",
+      );
+      expect(active).toEqual(["BUTTON", "Confirm"]);
+
       // The trigger says it opened something.
       expect(one(nodes, (n) => n.name === "Open dialog", "the dialog trigger").expand).toBe(
         "Expanded",
