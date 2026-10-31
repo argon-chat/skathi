@@ -95,6 +95,12 @@ pub const EV_LOAD: u32 = 43;
 /// The host gave up on a press (the window lost activation mid-press): the
 /// press's `mousedown` target hears it, and nothing more of that press does.
 pub const EV_POINTERCANCEL: u32 = 44;
+/// Document text selection (`crate::selection`): a press that starts one
+/// fires `selectstart` at the element under it (cancelable, bubbles), and
+/// every change owes `document` one `selectionchange`, delivered from the
+/// frame tick at the root (the JS side retargets it to `document`).
+pub const EV_SELECTSTART: u32 = 45;
+pub const EV_SELECTIONCHANGE: u32 = 46;
 
 /// Every host event code with the name JS knows it by — the ONE table, so a
 /// listing (devtools) can never lag the codes again. It did: `event_names` in
@@ -149,6 +155,8 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_CONTEXTMENU, "contextmenu"),
     (EV_LOAD, "load"),
     (EV_POINTERCANCEL, "pointercancel"),
+    (EV_SELECTSTART, "selectstart"),
+    (EV_SELECTIONCHANGE, "selectionchange"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -528,6 +528,9 @@ impl gpui::Element for BoundsProbe {
             self.inner.paint(window, cx);
             return;
         }
+        // A text selection being dragged hears every move and the release
+        // from here, wherever the pointer is (`crate::selection`).
+        crate::selection::paint_listeners(window);
         let span = crate::perf::Span::start();
         self.inner.paint(window, cx);
         crate::perf::note_paint(span.ms());
@@ -559,6 +562,9 @@ pub(crate) fn gc_node_state() {
     crate::lottie::gc(live);
     crate::video::gc(live);
     crate::svg::gc(live);
+    // A selection boundary in a node that went away, or past the end of a
+    // shortened text (`crate::selection::gc`).
+    tree::with_tree(crate::selection::gc);
     // This function runs off a JS WAVE, not off a frame, so it has no `Window`
     // and cannot ask which one it is standing in — one of exactly two such
     // paths (docs/MULTIWINDOW.md §5.6). It iterates every window instead, which
@@ -1119,6 +1125,16 @@ pub fn set_repaint_all(f: fn(&mut App)) {
     REPAINT_ALL.with(|c| c.set(Some(f)));
 }
 
+/// Asks for a frame in every window that paints this tree, the way a JS wave
+/// does ([`js_wave_app`]): the cached subtrees nothing touched stay
+/// replayable. For a change made from an input listener that no wave carries
+/// (the text selection's).
+pub(crate) fn request_repaint(window: &mut Window, cx: &mut App) {
+    if !repaint_other_windows(cx) {
+        window.refresh();
+    }
+}
+
 fn repaint_other_windows(cx: &mut App) -> bool {
     match REPAINT_ALL.with(|c| c.get()) {
         Some(f) => {
@@ -1219,6 +1235,9 @@ fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Co
         return;
     }
     windows::set_focused_node(k, new_focus);
+    if new_focus != 0 {
+        crate::selection::focus_moved(new_focus);
+    }
     if old != 0 {
         js_dispatch(old, tree::EV_BLUR, &EventPayload::default(), window, cx);
     }
@@ -2090,7 +2109,12 @@ fn build_node<V: 'static>(
                 // A text node that is nothing but the white space at the end
                 // of a line renders nothing, exactly as in a browser.
                 "" => Empty.into_any_element(),
-                text => transformed_text(text, case).into_any_element(),
+                // The plain text element unless a selection paints on it or a
+                // drag is recording (`crate::selection`).
+                text => {
+                    let lead = text.as_ptr() as usize - collapsed.as_ptr() as usize;
+                    crate::selection::text_element(t, id, &node.text, ws, lead, text, case)
+                }
             }
         }
         Kind::Anchor => Empty.into_any_element(),
@@ -2333,6 +2357,8 @@ fn build_node<V: 'static>(
                 // `contextmenu`: the Menu key and Shift+F10, bound after the
                 // clipboard keys so they too run after every key handler.
                 d = bind_root_mouse(d);
+                // A press that may start a text selection, and Ctrl+A.
+                d = crate::selection::bind_root(d);
                 d = bind_menu_keys(d, id);
                 // …and the keyboard click a key event owes, last of all.
                 d = bind_root_key_clicks(d);
@@ -2427,7 +2453,8 @@ fn build_node<V: 'static>(
                     crate::fonts::want_for_text(t, id, &collapsed);
                     let text = trim_own_edges(t, node, &collapsed, ws);
                     if !text.is_empty() {
-                        kids.push(transformed_text(text, case).into_any_element());
+                        let lead = text.as_ptr() as usize - collapsed.as_ptr() as usize;
+                        kids.push(crate::selection::text_element(t, id, &node.text, ws, lead, text, case));
                     }
                 } else {
                     kids.extend(
@@ -2698,7 +2725,7 @@ pub(crate) fn clip_replaced(
 /// appear inside a sentence, and deliberately NOT `div`, `p`, `h1`-`h6`, `ul`,
 /// `li`, `section`, … : a block child of a block genuinely does start a new
 /// line, and that is the case this must not touch.
-const INLINE_LEVEL_TAGS: &[&str] = &[
+pub(crate) const INLINE_LEVEL_TAGS: &[&str] = &[
     "a", "abbr", "b", "bdi", "bdo", "br", "button", "cite", "code", "data", "dfn", "em", "i",
     "img", "input", "kbd", "label", "mark", "output", "q", "rp", "rt", "ruby", "s", "samp",
     "select", "small", "span", "strong", "sub", "sup", "svg", "textarea", "time", "u", "var",
@@ -3280,7 +3307,7 @@ fn list_marker_for(
 /// gpui's `TextStyle` has no case field — the shaper is handed a string — so
 /// the transform is applied to the string, which is also the only place it
 /// could be applied without a second shaping pass.
-fn transformed_text(text: &str, case: Option<vn_css::TextTransform>) -> SharedString {
+pub(crate) fn transformed_text(text: &str, case: Option<vn_css::TextTransform>) -> SharedString {
     match case.and_then(|c| c.apply(text)) {
         Some(changed) => SharedString::from(changed),
         None => SharedString::from(text.to_string()),
@@ -3334,7 +3361,7 @@ fn transformed_text(text: &str, case: Option<vn_css::TextTransform>) -> SharedSt
 ///
 /// Returns a `Cow` so the overwhelmingly common case — text with no run of two
 /// collapsible characters in it — keeps borrowing the tree's own string.
-fn processed_text(raw: &str, mode: vn_css::WhiteSpaceMode) -> std::borrow::Cow<'_, str> {
+pub(crate) fn processed_text(raw: &str, mode: vn_css::WhiteSpaceMode) -> std::borrow::Cow<'_, str> {
     const COLLAPSIBLE: [char; 5] = [' ', '\t', '\n', '\r', '\u{c}'];
     let collapses = mode.collapses_spaces();
     let keeps_newlines = mode.preserves_newlines();
@@ -3378,7 +3405,7 @@ fn processed_text(raw: &str, mode: vn_css::WhiteSpaceMode) -> std::borrow::Cow<'
     std::borrow::Cow::Owned(out)
 }
 
-fn trim_edges<'a>(
+pub(crate) fn trim_edges<'a>(
     t: &Tree,
     node: &crate::tree::Node,
     id: u32,
@@ -3411,7 +3438,7 @@ fn trim_edges<'a>(
 /// element's entire content, so both ends are line ends; the exception is an
 /// inline-level element sharing a line with something else, where an edge space
 /// separates words rather than padding a line.
-fn trim_own_edges<'a>(
+pub(crate) fn trim_own_edges<'a>(
     t: &Tree,
     node: &crate::tree::Node,
     text: &'a str,
@@ -3742,7 +3769,7 @@ fn scrolling_ancestor(t: &Tree, node: &crate::tree::Node) -> bool {
 
 /// HTML metadata content: elements that carry instructions, not a box. A
 /// browser gives all of these `display: none` from its UA stylesheet.
-fn is_metadata(tag: &str) -> bool {
+pub(crate) fn is_metadata(tag: &str) -> bool {
     matches!(tag, "style" | "script" | "template" | "head" | "meta" | "link" | "title" | "base")
 }
 
@@ -4420,6 +4447,8 @@ where
                 let payload = mouse_payload_n(ev.position, button, &ev.modifiers, ev.click_count);
                 if !js_dispatch(id, tree::EV_MOUSEDOWN, &payload, window, cx) {
                     cancel_press_focus(window);
+                    // …and a cancelled press starts no text selection.
+                    crate::selection::note_press_prevented();
                 }
             }
         }));

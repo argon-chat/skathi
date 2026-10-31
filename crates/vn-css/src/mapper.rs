@@ -99,6 +99,23 @@ pub enum WindowControl {
     None,
 }
 
+/// `user-select`, as declared. `auto`'s used value is the parent's, which
+/// `vn_tree::selection` finds by walking up (CSS UI 4 §6.1). `contain`
+/// selects as `text` does, with an advisory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UserSelect {
+    /// Declared `auto`: kept apart from "not declared" so that it can
+    /// override an earlier rule's `none` in the cascade.
+    Auto,
+    /// No selection starts here, and a selection passing over the element
+    /// neither paints on it nor copies its text.
+    None,
+    /// Selectable text: the explicit spelling of what `auto` usually means.
+    Text,
+    /// A selection that reaches into the element takes the element whole.
+    All,
+}
+
 /// One `filter: drop-shadow()`, resolved.
 ///
 /// CSS's `drop-shadow()` blurs the ALPHA of whatever the element painted and
@@ -230,6 +247,10 @@ pub struct Extras {
     /// before the states are stored, so everything downstream (the renderer, the
     /// devtools' `getComputedStyle`) reads one answer.
     pub pointer_events_none: Option<bool>,
+    /// `user-select`; `None` when nothing declared it. NOT folded down the
+    /// tree: `auto` defers to the parent at the moment a selection asks
+    /// (`vn_tree::selection`), which is the used-value rule.
+    pub user_select: Option<UserSelect>,
     /// The element's `display` had an INLINE outer type (`inline`,
     /// `inline-block`, `inline-flex`, `inline-grid`).
     ///
@@ -616,6 +637,9 @@ impl Extras {
         }
         if other.pointer_events_none.is_some() {
             self.pointer_events_none = other.pointer_events_none;
+        }
+        if other.user_select.is_some() {
+            self.user_select = other.user_select;
         }
         if other.inline_level.is_some() {
             self.inline_level = other.inline_level;
@@ -5259,16 +5283,24 @@ fn apply_property(
         }
         UserSelect(v, _) => {
             use lightningcss::properties::ui::UserSelect as U;
-            // Text painted by gpui is not selectable at all, so `none` — which
-            // is what `select-none` and every drag-handle reset asks for — is
-            // already the behaviour. The other values ask for selection that
-            // does not exist, which IS a divergence and is still said.
-            if !matches!(v, U::None) {
-                warn_once(
-                    diagnostics,
-                    "`user-select` is not applied (v1) — text in a gpui box is painted, not                      selectable, so `none` is already the effective behaviour everywhere and                      `text` cannot turn it on",
-                );
-            }
+            use crate::mapper::UserSelect as S;
+            // Page text is selectable (vn_tree::selection), so each value is
+            // applied as written — except `contain`, which keeps no selection
+            // inside the element here and is said once.
+            x.user_select = Some(match v {
+                U::Auto => S::Auto,
+                U::None => S::None,
+                U::Text => S::Text,
+                U::All => S::All,
+                U::Contain => {
+                    warn_once(
+                        diagnostics,
+                        "`user-select: contain` selects like `text` here: a selection that starts \
+                         inside the element is not kept inside it",
+                    );
+                    S::Text
+                }
+            });
         }
         // `appearance` switches a native OS control skin on or off. No element
         // here carries one under any value, so every value produces the same
@@ -6477,6 +6509,29 @@ mod tests {
         assert_eq!(folded.isolate, Some(false));
     }
 
+    /// `user-select` reaches the selection code (vn_tree::selection) as
+    /// declared: the prefixed spelling is the same property, a declared
+    /// `auto` overrides an earlier `none` in the fold, and only `contain`
+    /// says anything.
+    #[test]
+    fn user_select_is_carried_to_the_selection() {
+        assert_eq!(extras("user-select: none").0.user_select, Some(UserSelect::None));
+        assert_eq!(extras("-webkit-user-select: none").0.user_select, Some(UserSelect::None));
+        assert_eq!(extras("user-select: text").0.user_select, Some(UserSelect::Text));
+        assert_eq!(extras("user-select: all").0.user_select, Some(UserSelect::All));
+        assert_eq!(extras("user-select: auto").0.user_select, Some(UserSelect::Auto));
+        assert_eq!(extras("color: red").0.user_select, None);
+        let mut folded = extras("user-select: none").0;
+        folded.refine(&extras("user-select: auto").0);
+        assert_eq!(folded.user_select, Some(UserSelect::Auto));
+        let (x, d) = extras("user-select: contain");
+        assert_eq!(x.user_select, Some(UserSelect::Text));
+        assert!(d.iter().any(|m| m.contains("user-select: contain")), "{d:?}");
+        for quiet in ["user-select: none", "user-select: text", "user-select: auto", "user-select: all"] {
+            assert!(extras(quiet).1.is_empty(), "{quiet}: {:?}", extras(quiet).1);
+        }
+    }
+
     #[test]
     fn pointer_events_maps_both_keywords() {
         assert_eq!(extras("pointer-events: none").0.pointer_events_none, Some(true));
@@ -7248,7 +7303,7 @@ mod tests {
             ("text-indent: 2em", "text-indent"),
             ("list-style-image: url(dot.png)", "this list marker is not generated"),
             ("resize: both", "resize"),
-            ("user-select: text", "user-select"),
+            ("user-select: contain", "user-select"),
             ("overflow-wrap: break-word", "overflow-wrap"),
             // `blur()` alone is recorded rather than advised (see `apply_filter`),
             // so the advisory this sweep is about needs a filter that is not it.
@@ -7280,9 +7335,11 @@ mod tests {
     #[test]
     fn a_property_with_no_divergence_says_nothing() {
         for body in [
-            // Selection does not exist in a gpui box, so `none` — what every
-            // drag handle and `select-none` asks for — is already true.
+            // Page text is selectable, and these are applied as written.
             "user-select: none",
+            "user-select: text",
+            "user-select: auto",
+            "user-select: all",
             // No element carries a native control skin under any value.
             "appearance: none",
             "appearance: textfield",

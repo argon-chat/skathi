@@ -28,6 +28,7 @@ pub mod perf;
 mod render;
 mod resample;
 mod scroll;
+mod selection;
 mod svg;
 mod tree;
 mod video;
@@ -633,6 +634,8 @@ pub fn install(rt: &JsRuntime) {
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
     }
+    // `getSelection()` / `Range` (crate::selection).
+    selection::install(rt);
 }
 
 // ---------------------------------------------------------------------------
@@ -939,7 +942,11 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // when drawn large (`img::residency_tick`). After the resample tick: it
     // takes the copies that tick kept.
     let restored = img::residency_tick(window, cx);
-    anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved | resampled | restored
+    // A text selection being dragged: what waited for this frame resolves, a
+    // drag past its scroll container's edge scrolls it, and an owed
+    // `selectionchange` goes to `document`. One flag read otherwise.
+    let selecting = selection::tick(window, cx);
+    anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved | resampled | restored | selecting
 }
 
 /// The per-frame work a SECONDARY window has to do for itself, because the

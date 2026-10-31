@@ -13,10 +13,11 @@
 //!   every keystroke meets (the root tracks focus, so it is on every focus
 //!   path), and it fires at the focused node, or at the root
 //!   (`document.body`) when nothing is focused. A `keydown` cancelled on the
-//!   way (`WindowState::key_prevented`) cancels it. There is no selection
-//!   outside a text field here, so the default action of an uncancelled `copy`
-//!   / `cut` copies nothing (advisory `clipboard-no-selection`), and a `paste`
-//!   inserts nothing, as on any non-editable element.
+//!   way (`WindowState::key_prevented`) cancels it. The default action of an
+//!   uncancelled `copy` copies the document's text selection
+//!   (`crate::selection`); with nothing selected it copies nothing, as in a
+//!   browser. A `cut` deletes and copies nothing and a `paste` inserts
+//!   nothing, as on any non-editable element.
 //! * There is no host context menu, so no Cut / Copy / Paste menu items.
 //!
 //! # `clipboardData`
@@ -319,15 +320,17 @@ pub(crate) fn bind_root<E: InteractiveElement>(e: E, root: u32) -> E {
             }
             let focused = windows::focused_node(windows::key(window));
             let target = if focused != 0 && tree::read_tree(|t| t.node(focused).is_some()) { focused } else { root };
-            let dispatched = tree::read_tree(|t| listened(t, target, verb));
-            if fire(target, verb, window, cx) && dispatched && verb != Verb::Paste {
-                warn_compat(
-                    "clipboard-no-selection",
-                    "a `copy`/`cut` outside a text field was not cancelled. A browser would copy the \
-                     selected text; there is no text selection outside <input>/<textarea> here, so \
-                     nothing is copied. Set the data yourself: e.clipboardData.setData(\"text/plain\", \
-                     …) and e.preventDefault()",
-                );
+            if !fire(target, verb, window, cx) {
+                return;
+            }
+            // The default action of an uncancelled copy: the document's
+            // selection (`crate::selection`); with nothing selected, nothing,
+            // as in a browser. A cut outside an editable field deletes nothing
+            // and copies nothing, as in a browser.
+            if verb == Verb::Copy {
+                if let Some(text) = crate::selection::text_for_copy(focused) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
             }
         })
 }

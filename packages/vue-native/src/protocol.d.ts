@@ -259,7 +259,27 @@ type VnEventCode =
   | 41 // cut
   | 42 // contextmenu         (the right button's release, or Menu key / Shift+F10)
   | 43 // load                (<img>, crates/vn-tree/src/img.rs)
-  | 44; // pointercancel      (the window lost activation mid-press)
+  | 44 // pointercancel      (the window lost activation mid-press)
+  | 45 // selectstart        (a press that starts a text selection, cancelable)
+  | 46; // selectionchange   (at the root, for `document`, crates/vn-tree/src/selection.rs)
+
+// ---------------------------------------------------------------------------
+// the text selection — crates/vn-tree/src/selection.rs (src/selection.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * The document selection: `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"`
+ * (DOM boundary points, UTF-16 offsets in a text), or `""` for none. `own` 1 is
+ * an offset into an element's OWN text, which the runtime turns into a Text
+ * child before it hands the node out.
+ */
+declare function __vn_selection_get(): string;
+/** Sets anchor and focus; anchor 0 empties it. Answers whether both named live, attached nodes. */
+declare function __vn_selection_set(anchor: VnNodeId, anchorOffset: number, focus: VnNodeId, focusOffset: number): boolean;
+/** `Selection.toString()`: the selected text as shown — line breaks between blocks, `user-select: none` left out. */
+declare function __vn_selection_text(): string;
+/** `element`'s own text became the Text child `text`: a boundary in it moves with it. */
+declare function __vn_selection_rebase(element: VnNodeId, text: VnNodeId): void;
 
 // ---------------------------------------------------------------------------
 // the DOM surface — crates/vn-tree/src/dom.rs

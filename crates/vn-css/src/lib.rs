@@ -50,7 +50,7 @@ pub use mapper::{
     viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl, PaintLayer,
     CurrentColorTargets, Decls, Extras, InlineStyle, ListMarker, MaskClips, MaskCompositing,
     MaskImages, ObjectFit, OverscrollBehavior, RadiusInherit, ScrollbarWidth, SvgPaint, TextTransform,
-    TileLength, WhiteSpaceMode, WindowControl, WindowDrag,
+    TileLength, UserSelect, WhiteSpaceMode, WindowControl, WindowDrag,
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
 pub use media::{match_media, DisplayMode, Env};

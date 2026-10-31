@@ -42,6 +42,9 @@ import { adoptCanvas } from "./canvas";
 // `FontFace` and `document.fonts` over the host's `@font-face` loader (the
 // host+media stream's module; crates/vn-tree/src/fonts.rs).
 import { installFonts } from "./fonts";
+// `getSelection()`, `Selection` and `Range` over the host's document text
+// selection (crates/vn-tree/src/selection.rs).
+import { installSelection } from "./selection";
 
 // ---- the realm a reload keeps (m26 client sweep #3) ------------------------
 //
@@ -558,6 +561,13 @@ const EV_CODES = {
   contextmenu: 42,
   load: 43,
   pointercancel: 44,
+  // The document text selection (crates/vn-tree/src/selection.rs, and
+  // src/selection.ts for `getSelection()`). `selectstart`: a press that is
+  // about to start one, at the press target, cancelable. `selectionchange`:
+  // the selection moved; the host delivers it at the ROOT and the dispatcher
+  // retargets it to `document`, where a browser fires it.
+  selectstart: 45,
+  selectionchange: 46,
 } as const;
 
 /** Every event name the HOST delivers under a code of its own. */
@@ -639,6 +649,8 @@ const NO_BUBBLE = new Set<string>([
   "focus",
   "blur",
   "scroll",
+  // Fired at `document`, neither bubbling nor cancelable (Selection API §6).
+  "selectionchange",
   "complete",
   "loopComplete",
   "enterFrame",
@@ -1995,6 +2007,13 @@ function addExtraListener(
   const name = canonicalEvent(rawName);
   const code = hostCode(name);
   if (!code && WINDOW_ONLY_EVENTS.has(name)) return;
+  if (name === "selectionchange") {
+    warnCompat(
+      "event:selectionchange:element",
+      `addEventListener("${rawName}") on an element — vue-native fires selectionchange at document only ` +
+        "(a text field's own selection does not fire it); listen on document",
+    );
+  }
   if (!code && RUNTIME_FIRED_EVENTS.has(name)) {
     // `submit` / `reset`: kept; the runtime's form submission fires them.
   } else if (!code && JS_SOURCED_EVENTS.has(name)) {
@@ -4205,6 +4224,8 @@ function materializeOwnText(el: MirrorElement): void {
   const t = nodeOps.createText(el.ownText);
   el.ownText = "";
   insertNode(t, el, null, false);
+  // A selection boundary in the own text moves into the Text child.
+  if (typeof __vn_selection_rebase === "function") __vn_selection_rebase(el.__vnId, t.__vnId);
 }
 
 /** Inserts `items` (mirrors, fragments expanded, or engine elements) before `ref` in `parent`, in order: one record. */
@@ -4678,7 +4699,8 @@ const HANDLER_ATTRS = [
   "loadstart", "mousedown", "mouseenter", "mouseleave", "mousemove", "mouseout", "mouseover",
   "mouseup", "paste", "pause", "play", "playing", "pointercancel", "pointerdown", "pointerenter",
   "pointerleave", "pointermove", "pointerout", "pointerover", "pointerup", "progress", "ratechange",
-  "reset", "scroll", "scrollend", "seeked", "seeking", "select", "submit", "timeupdate", "toggle",
+  "reset", "scroll", "scrollend", "seeked", "seeking", "select", "selectionchange", "selectstart",
+  "submit", "timeupdate", "toggle",
   "transitioncancel", "transitionend", "transitionrun", "transitionstart", "volumechange", "waiting",
   "wheel",
 ];
@@ -4859,6 +4881,8 @@ function synthesize(
           detail: detailFor(name, d),
         });
       case "load":
+      case "selectstart":
+      case "selectionchange":
         return new Event(name, common);
       case "focusin":
       case "focusout":
@@ -5116,6 +5140,44 @@ function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
   return !ev.defaultPrevented;
 }
 
+/**
+ * An event whose TARGET is the document (`selectionchange`): the window's
+ * capture listeners, then the document's own, then — for one that bubbles —
+ * the window's bubble listeners. No element is on its path.
+ */
+function propagateAtDocument(name: string, ev: VnEvent): boolean {
+  const doc = globalThis.document as object | undefined;
+  if (!doc) return true;
+  Object.defineProperty(ev, "target", { value: doc, configurable: true });
+  const state = { stopped: false, immediate: false };
+  const origStop = ev.stopPropagation?.bind(ev);
+  const origStopIm = ev.stopImmediatePropagation?.bind(ev);
+  ev.stopPropagation = () => {
+    state.stopped = true;
+    origStop?.();
+  };
+  ev.stopImmediatePropagation = () => {
+    state.stopped = true;
+    state.immediate = true;
+    origStopIm?.();
+  };
+  const composed = [doc, globalThis];
+  Object.defineProperty(ev, "composedPath", { value: () => composed.slice(), configurable: true });
+  const win = globalHandlers.get(globalThis)?.[name];
+  const at = globalHandlers.get(doc)?.[name];
+  try {
+    if (win) invoke(win, "capture", EVENT_PHASE.capturing, ev, globalThis, name, state);
+    if (at && !state.stopped) invoke(at, "capture", EVENT_PHASE.atTarget, ev, doc, name, state);
+    if (at && !state.stopped) invoke(at, "bubble", EVENT_PHASE.atTarget, ev, doc, name, state);
+    if (ev.bubbles && win && !state.stopped) invoke(win, "bubble", EVENT_PHASE.bubbling, ev, globalThis, name, state);
+  } finally {
+    Object.defineProperty(ev, "currentTarget", { value: null, configurable: true });
+    Object.defineProperty(ev, "eventPhase", { value: EVENT_PHASE.none, configurable: true });
+    Object.defineProperty(ev, "composedPath", { value: () => [], configurable: true });
+  }
+  return !ev.defaultPrevented;
+}
+
 const CODE_TO_NAME: Record<number, string | undefined> = Object.fromEntries(
   Object.entries(EV_CODES).map(([k, v]) => [v, k]),
 );
@@ -5175,6 +5237,9 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
   const name = CODE_TO_NAME[evCode];
   const target = nodeById(nodeId);
   if (!name || !target) return true;
+  // The host delivers `selectionchange` at the root, whose listener bit the
+  // document's listeners arm; a browser fires it AT the document.
+  if (name === "selectionchange") return propagateAtDocument(name, synthesize(name, a, b, c, d, key));
   // `document.activeElement` follows the host's focus moves (a click, Tab, a
   // queued `el.focus()`): blur arrives before the next focus.
   if (name === "focus") focusedNode = target as MirrorElement;
@@ -7103,6 +7168,63 @@ if (doc) {
 //    Inert without the host's loader. A reload installs a fresh set over the
 //    old one and takes over the host's listener.
 installFonts(globalThis as unknown as Record<string, unknown>, doc);
+
+// -- the text selection: `getSelection()`, `Selection`, `Range`,
+//    `document.createRange()` (src/selection.ts) over the host's selection
+//    (crates/vn-tree/src/selection.rs). Inert without the host's half.
+installSelection({
+  host:
+    typeof __vn_selection_get === "function"
+      ? { get: __vn_selection_get, set: __vn_selection_set, text: __vn_selection_text }
+      : null,
+  nodeById: (id) => nodeById(id),
+  isNode: (x): x is MirrorNode => isMirrorNode(x),
+  root: () => appRoot,
+  materialize: (el) => {
+    materializeOwnText(el as MirrorElement);
+    return el.childNodes[0] ?? null;
+  },
+  rect: (el) => (el as MirrorElement).getBoundingClientRect(),
+  makeRect: (x, y, w, h) => new DOMRectImpl(x, y, w, h),
+  createText: (data) => looseCreated(nodeOps.createText(data)),
+  createFragment: () => new (globalThis as unknown as { DocumentFragment: new () => MirrorElement }).DocumentFragment(),
+  warn: warnCompat,
+  error: domError,
+  defineGlobal,
+  defineDoc: (name, value) => {
+    if (doc && vacant(doc, name)) Object.defineProperty(doc, name, { value: mark(value), configurable: true, writable: true });
+  },
+});
+// `document.onselectionchange` / `onselectstart`: the IDL handler over the
+// document's listener registry (an element's are `HANDLER_ATTRS`).
+for (const type of ["selectionchange", "selectstart"]) {
+  const prop = `on${type}`;
+  if (!doc || !vacant(doc, prop)) continue;
+  let slot: { fn: unknown; listener: (ev: VnEvent) => void } | null = null;
+  Object.defineProperty(doc, prop, {
+    get: mark(() => slot?.fn ?? null),
+    set: mark((v: unknown) => {
+      const fn = v !== null && (typeof v === "function" || typeof v === "object") ? v : null;
+      if (slot && !fn) {
+        doc.removeEventListener?.(type, slot.listener as EventHandler);
+        slot = null;
+      } else if (slot) slot.fn = fn;
+      else if (fn) {
+        const entry = {
+          fn,
+          listener: (ev: VnEvent) => {
+            if (typeof entry.fn !== "function") return;
+            const r = (entry.fn as (this: unknown, ev: VnEvent) => unknown).call(doc, ev);
+            if (r === false) ev.preventDefault?.();
+          },
+        };
+        slot = entry;
+        doc.addEventListener?.(type, entry.listener as EventHandler);
+      }
+    }),
+    configurable: true,
+  });
+}
 
 // ---- <style> injected into document.head, createTextNode, getElementsByTagName
 // The runtime-CSS idiom of half the npm ecosystem (style-inject, which

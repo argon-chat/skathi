@@ -89,6 +89,22 @@ function loadInstallFonts(): unknown {
   return installFontsFn;
 }
 
+export const SELECTION_PATH = join(HERE, "../src/selection.ts");
+/**
+ * src/selection.ts's `installSelection`, the same way. It reads nothing
+ * ambient: the host's `__vn_selection_*` reach it through the runtime, which
+ * binds them as parameters like every other host function.
+ */
+let installSelectionFn: unknown = null;
+function loadInstallSelection(): unknown {
+  if (installSelectionFn) return installSelectionFn;
+  const body = readTsSource(SELECTION_PATH)
+    .replace(/^\s*import\s[^;]*;[^\S\n]*$/gm, "")
+    .replace(/^export\s+(function|const|let|class|interface)\s/gm, "$1 ");
+  installSelectionFn = new Function(`${body}\nreturn installSelection;`)();
+  return installSelectionFn;
+}
+
 /** The W3C names `vn-permissions` knows — kept in step with `Capability::ALL`. */
 export const PERMISSION_NAMES = [
   "microphone",
@@ -176,6 +192,8 @@ export function createRuntime(
     styleAccepts?: boolean;
     /** `false`: no `__vn_layout_watch` / `__vn_set_layout_hook` (an older host). */
     layoutWatch?: boolean;
+    /** `false`: no `__vn_selection_*` (an older host): no `getSelection`. */
+    selection?: boolean;
     /**
      * Evaluate into an EXISTING world's global (`rt.global`) instead of a
      * fresh one: what `location.reload()` and the dev host's cold restart
@@ -261,6 +279,17 @@ export function createRuntime(
      * `crates/vn-tree/src/scroll.rs` and `noteStale` in runtime.ts.
      */
     scrollStale: false,
+    /**
+     * The document selection (`__vn_selection_*`): `sel` as the host keeps
+     * it, `[anchor, anchorOffset, anchorOwn, focus, focusOffset, focusOwn]`,
+     * every set and rebase, and the text `toString()` answers.
+     */
+    selection: {
+      sel: null as number[] | null,
+      sets: [] as number[][],
+      rebases: [] as number[][],
+      text: "",
+    },
     /** `"prop: value"` declarations the fake engine does not apply (`__vn_style_accepts`). */
     styleRejects: new Set<string>(),
     /** Every `__vn_style_accepts` question, as `"prop: value"`. */
@@ -614,6 +643,13 @@ export function createRuntime(
     "installFonts",
     "__vn_set_layout_hook",
     "__vn_layout_watch",
+    // selection.ts's one export (see `loadInstallSelection`), and the host's
+    // half of the text selection (`host.selection`).
+    "installSelection",
+    "__vn_selection_get",
+    "__vn_selection_set",
+    "__vn_selection_text",
+    "__vn_selection_rebase",
   ];
   let nextId = 1;
   /**
@@ -973,7 +1009,31 @@ export function createRuntime(
           host.layout.watching = true;
           host.layout.watches++;
         },
+    loadInstallSelection(),
+    // The selection, faked at the seam (crates/vn-tree/src/selection.rs owns
+    // the real one): `host.selection.sel` is `[anchor, offset, own, focus,
+    // offset, own]` or null; a set naming a node the fake tree does not hold
+    // empties it, as the host's does. `text` is what `toString()` answers.
+    () => (host.selection.sel ? host.selection.sel.join(",") : ""),
+    (a: number, ao: number, f: number, fo: number) => {
+      host.selection.sets.push([a, ao, f, fo]);
+      const ok = a !== 0 && tree.live.has(a) && tree.live.has(f);
+      host.selection.sel = ok ? [a, ao, 0, f, fo, 0] : null;
+      return ok || a === 0;
+    },
+    () => host.selection.text,
+    (el: number, text: number) => {
+      host.selection.rebases.push([el, text]);
+      const s = host.selection.sel;
+      if (!s) return;
+      for (const at of [0, 3]) if (s[at + 2] && s[at] === el) [s[at], s[at + 2]] = [text, 0];
+    },
   ];
+  if (options.selection === false) {
+    // A host without the selection: `getSelection` stays undefined.
+    const first = params.indexOf("__vn_selection_get");
+    for (let i = first; i < first + 4; i++) args[i] = undefined;
+  }
 
   if (!withStorage) {
     // Four `undefined`s in the storage slots: `typeof __vn_storage_info` is
