@@ -349,6 +349,81 @@ describe('a "type": "module" app, in dev', () => {
     expect(!!(ns && (ns.__esModule || ns[Symbol.toStringTag] === "Module"))).toBe(true);
     expect(ns.default.name).toBe("LazyPane");
   });
+
+  // The blockers that kept apps/client from dev-building.
+  const ALIAS = id("esm-app", "alias.ts");
+  const UTIL = id("esm-app", "util.ts");
+
+  test("a tsconfig paths alias is the module's relative path: a graph edge and one instance", () => {
+    expect(out.script(ALIAS)).toContain('require("./util.ts")');
+    expect(out.script(ALIAS)).not.toContain("@/");
+    expect(out.manifest.deps[ALIAS]).toEqual([UTIL]);
+    // Not built as an npm package (a second copy, or a failed build).
+    expect(out.manifest.modules.some((m) => m.startsWith("@/"))).toBe(false);
+    expect(world().VN.require(MAIN).sameInstance).toBe(true);
+  });
+
+  test("JSON in src/, outside it and through an alias, as Vite gives it", () => {
+    const { json } = world().VN.require(MAIN);
+    expect(json.config).toEqual({ title: "esm", list: [1, 2] });
+    expect(json.title).toBe("esm");
+    expect(json.meta).toEqual({ outside: "src" });
+    expect(json.aliasedJson).toEqual({ title: "esm", list: [1, 2] });
+    expect(out.stderr).not.toContain("resolves to no built module");
+  });
+
+  test("?raw and a query glob give the text; ?worker is the stub prod gives", async () => {
+    const main = world().VN.require(MAIN);
+    expect(main.raw).toBe("a note, read with ?raw\n");
+    expect(main.texts).toEqual({ "./data/note.txt": "a note, read with ?raw\n" });
+    expect(() => new main.worker()).toThrow("work.ts?worker): vue-native has no Web Workers");
+    const ns = await main.lazyWorker();
+    expect(ns[Symbol.toStringTag]).toBe("Module");
+    expect(ns.default).toBe(main.worker);
+  });
+});
+
+describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () => {
+  const dir = mkdtempSync(join(FIXTURES, "inline-app-"));
+  tmpDirs.push(dir);
+  const rel = "packages/vue-native/test/fixtures/" + dir.split(/[\\/]/).pop() + "/src/main.ts";
+
+  test("a .json the module inlined", async () => {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src/data.json"), '{ "v": 1 }\n');
+    writeFileSync(join(dir, "src/main.ts"), 'import data from "./data.json";\nexport const v = data.v;\n');
+    const dist = mkdtempSync(join(tmpdir(), "vn-build-inline-"));
+    tmpDirs.push(dist);
+    const proc = Bun.spawn(["bun", "build.ts", join(dir, "src/main.ts"), dist, "--watch"], {
+      cwd: PKG_DIR,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const read = (f) => {
+      try {
+        return readFileSync(join(dist, f), "utf8");
+      } catch {
+        return "";
+      }
+    };
+    const until = async (ok) => {
+      for (let i = 0; i < 150 && !ok(); i++) await Bun.sleep(100);
+      return ok();
+    };
+    try {
+      expect(await until(() => read("manifest.json").includes(rel))).toBe(true);
+      const script = () => read(join("modules", rel.split("/").join("__") + ".js"));
+      expect(script()).toMatch(/v:\s*1\b/);
+      await Bun.sleep(300); // past the watcher's first events
+      writeFileSync(join(dir, "src/data.json"), '{ "v": 2 }\n');
+      expect(await until(() => /v:\s*2\b/.test(script()))).toBe(true);
+      const changes = JSON.parse(read("changes.json"));
+      expect(changes.changed).toContainEqual({ id: rel, kind: "reload" });
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, 30000);
 });
 
 describe("module namespaces in a prod bundle", () => {

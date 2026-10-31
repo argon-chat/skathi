@@ -389,19 +389,68 @@ describe("build.ts (dev) over test/fixtures/vite-dev-app", () => {
   });
 
   test("an import.meta.glob it cannot expand fails the build with a sentence, not at eval", () => {
-    // A plain glob expands in dev now (test/build-graph.test.ts, esm-app); a
-    // `query` one needs ?raw / ?url modules, which only prod has.
+    // Every literal call expands in dev, `query` ones included
+    // (test/build-graph.test.ts, esm-app). A mention that is not a call is left
+    // for the define, whose tripwire names it.
     // Inside the workspace, as an app is: module ids are workspace-relative.
-    const root = mkdtempSync(join(HERE, "fixtures", "glob-query-"));
+    const root = mkdtempSync(join(HERE, "fixtures", "glob-mention-"));
     tmpDirs.push(root);
-    mkdirSync(join(root, "src/data"), { recursive: true });
-    writeFileSync(join(root, "src/data/a.txt"), "a");
-    writeFileSync(
-      join(root, "src/main.ts"),
-      'const texts = import.meta.glob("./data/*.txt", { query: "?raw", eager: true });\nconsole.log(texts);\n',
-    );
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src/main.ts"), "const glob = import.meta.glob;\nconsole.log(glob);\n");
     const glob = Bun.spawnSync(["bun", "build.ts", join(root, "src/main.ts"), join(dist, "glob")], { cwd: PKG_DIR });
     expect(glob.exitCode).not.toBe(0);
-    expect(glob.stdout.toString() + glob.stderr.toString()).toContain("is expanded by the production builder only");
+    expect(glob.stdout.toString() + glob.stderr.toString()).toContain("an import.meta.glob the expansion did not see");
+  });
+});
+
+// The same fixture prod.ts is tested on above: dev gives each shape the value
+// prod gives it, through the same plugin.
+describe("build.ts (dev) over test/fixtures/vite-app", () => {
+  const dist = mkdtempSync(join(tmpdir(), "vn-viteapp-dev-"));
+  tmpDirs.push(dist);
+  const proc = Bun.spawnSync(["bun", "build.ts", join(FIXTURE, "src/main.ts"), dist], { cwd: PKG_DIR });
+  const log = proc.stdout.toString() + proc.stderr.toString();
+  const main = proc.exitCode === 0
+    ? readFileSync(join(dist, "modules", "packages__vue-native__test__fixtures__vite-app__src__main.ts.js"), "utf8")
+    : "";
+  const has = (s: string) => main.includes(s);
+
+  test("builds, with every import resolved", () => {
+    if (proc.exitCode !== 0) throw new Error(log);
+    expect(log).not.toContain("resolves to no built module");
+    expect(log).not.toContain("cannot resolve");
+  });
+
+  test("?raw, asset URLs, ?url and .svg as a component", () => {
+    expect(has("hello from a ?raw import")).toBe(true);
+    expect(has(`"/src/assets/logo.png"`)).toBe(true);
+    expect(has(`"/src/assets/icon.svg"`)).toBe(true);
+    expect(log).toContain(".svg as a component: 1");
+  });
+
+  test("an .svg component compiled inside an SFC's build leaves that SFC's <style> alone", () => {
+    const root = mkdtempSync(join(HERE, "fixtures", "svg-sfc-"));
+    tmpDirs.push(root);
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, devDependencies: { "vite-svg-loader": "*" } }));
+    writeFileSync(join(root, "src/i.svg"), '<svg viewBox="0 0 1 1"><path d="M0 0h1"/></svg>');
+    writeFileSync(
+      join(root, "src/App.vue"),
+      '<script setup>\nimport Icon from "./i.svg";\n</script>\n<template><Icon class="mark" /></template>\n<style>\n.mark { color: red; }\n</style>\n',
+    );
+    writeFileSync(join(root, "src/main.ts"), 'import App from "./App.vue";\nexport default App;\n');
+    const out = join(dist, "svg-sfc");
+    const p = Bun.spawnSync(["bun", "build.ts", join(root, "src/main.ts"), out], { cwd: PKG_DIR });
+    if (p.exitCode !== 0) throw new Error(p.stdout.toString() + p.stderr.toString());
+    const name = "packages/vue-native/test/fixtures/" + root.split(/[\\/]/).pop() + "/src/App.vue";
+    const app = readFileSync(join(out, "modules", name.split("/").join("__") + ".js"), "utf8");
+    expect(app).toContain('d: "M0 0h1"');
+    expect(/__VN__\.setCss\([^)]*\.mark \{/.test(app)).toBe(true);
+  });
+
+  test("workers and wasm are the named failures prod gives", () => {
+    expect(has("work.ts?worker): vue-native has no Web Workers")).toBe(true);
+    expect(has(`new Worker(new URL("./work.ts", import.meta.url)) in packages/vue-native/test/fixtures/vite-app/src/main.ts`)).toBe(true);
+    expect(has("vn-unsupported:wasm/packages/vue-native/test/fixtures/vite-app/src/mod.wasm")).toBe(true);
   });
 });

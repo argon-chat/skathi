@@ -1,0 +1,6 @@
+{
+  "$comment": "test/build-graph.test.ts: the `@/*` alias the dev builder resolves as prod's bundle does (Bun's resolver reads `paths`).",
+  "compilerOptions": {
+    "paths": { "@/*": ["./src/*"] }
+  }
+}

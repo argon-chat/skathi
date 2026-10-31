@@ -105,10 +105,14 @@ import {
   SFC_FS,
   appDefines,
   devEsmInterop,
-  expandGlobs,
+  devImportsPlugin,
   inlineCssImports,
-  loaderOf,
+  readPackageJson,
+  svgDefaultOf,
+  tagModuleNamespaces,
   takeDefineArgs,
+  transformSource,
+  viteShapesPlugin,
 } from "./vitecompat";
 
 // ---- paths ----------------------------------------------------------------
@@ -421,7 +425,7 @@ const DEFINES: Record<string, string> = {
   "import.meta.hot": "undefined",
   "import.meta.url": '"vn://module"',
   // `import.meta.glob(…)` calls are expanded before this applies
-  // (`appModulePlugin`, vitecompat.ts `expandGlobs`). Anything left is defined
+  // (the shapes plugin and `appModulePlugin`, vitecompat.ts `transformSource`). Anything left is defined
   // to a findable name, so buildModule can fail with a sentence instead of
   // the module dying at eval with `{env,url}.glob is not a function`.
   "import.meta.glob": GLOB_TRIPWIRE,
@@ -511,7 +515,15 @@ async function viteCss(text: string, from: string, label: string): Promise<strin
   }
 }
 
-async function compileVue(absPath: string, source: string): Promise<{ contents: string; loader: "js" | "ts" }> {
+/**
+ * `captureCss` false: an SFC compiled INSIDE another module's build (an `.svg`
+ * as a component) must not replace that module's captured `<style>`.
+ */
+async function compileVue(
+  absPath: string,
+  source: string,
+  captureCss = true,
+): Promise<{ contents: string; loader: "js" | "ts" }> {
   const id = toId(absPath);
   const { descriptor, errors } = parse(source, { filename: absPath });
   if (errors.length) {
@@ -611,7 +623,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
     if (out.errors.length) throw new Error(`${id} <style>: ${out.errors.join("; ")}`);
     cssChunks.push(out.code);
   }
-  capturedCss = cssChunks.length ? cssChunks.join("\n") : null;
+  if (captureCss) capturedCss = cssChunks.length ? cssChunks.join("\n") : null;
 
   return { contents: chunks.join("\n"), loader: isTS ? "ts" : "js" };
 }
@@ -626,25 +638,51 @@ const vuePlugin = {
   },
 };
 
+// ---- Vite's import shapes (vitecompat.ts) ----------------------------------
+// The plugin prod.ts bundles with, so `?raw`, `?url`, assets, `.svg`,
+// `?worker`, `new Worker(new URL(…))`, `.wasm` and `import.meta.glob` mean the
+// same thing in both builders. What the plugin answers is built INTO the
+// importer, as in prod's bundle. In dev, `import.meta.glob` imports by
+// importer-relative path (what the module registry resolves; lazy entries are
+// `() => import(…)`, which `devEsmInterop` routes through require), and the
+// asset URLs are not packed: the dev host serves `/<key>` from the app root.
+
+const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
+/** What the shapes plugin did during a full build: printed after it, as prod.ts prints its own. */
+const SHAPE_NOTES = new Map<string, number>();
+/** The files the module being built inlined (`?raw`, `.json`, `.svg`, …), for `buildModule`. */
+let inlinedNow: Set<string> | null = null;
+const noteInlined = (abs: string) => void inlinedNow?.add(abs);
+
+const shapesOptions = (dev: boolean) => ({
+  docRoot: VN_CONFIG_DIR,
+  wsRoot: WS_ROOT,
+  svgDefault: svgDefaultOf(APP_PKG),
+  compileSfc: (absPath: string, source: string) => compileVue(absPath, source, false),
+  assets: new Map<string, string>(),
+  notes: SHAPE_NOTES,
+  dev,
+  inlined: dev ? noteInlined : undefined,
+});
+const DEV_SHAPES = shapesOptions(true);
+const devShapesPlugin = viteShapesPlugin(DEV_SHAPES);
+/** An npm package is bundled whole, so the plugin works on it exactly as in prod. */
+const npmShapesPlugin = viteShapesPlugin(shapesOptions(false));
+/** `@/…` aliases and data/asset files (vitecompat.ts `devImportsPlugin`). */
+const devImports = devImportsPlugin({ srcDir: APP_SRC_DIR, preseeded: isPreseeded, inlined: noteInlined });
+
 /**
- * An APP module (`buildModule`): the SFC compile above, plus `import.meta.glob`
- * expanded as prod.ts expands it (vitecompat.ts `expandGlobs`), into imports
- * by relative path, which is what the module registry resolves. Lazy entries
- * are `() => import(…)`, which `devEsmInterop` then routes through require.
+ * An APP module (`buildModule`): the SFC compile above, then the rewrites prod
+ * applies to a component's compiled `<script>` (`transformSource`). A plain
+ * source gets the same through the shapes plugin.
  */
-const globCtx = (file: string) => ({ file, docRoot: VN_CONFIG_DIR, relativeSpecs: true });
 const appModulePlugin = {
   name: "vn-dev-app-module",
   setup(build: any) {
     build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
       const out = await compileVue(args.path, await Bun.file(args.path).text());
-      const g = expandGlobs(out.contents, globCtx(args.path));
-      return g ? { ...out, contents: g.code } : out;
-    });
-    build.onLoad({ filter: /\.(m?[jt]s|[jt]sx)$/ }, async (args: any) => {
-      const src = await Bun.file(args.path).text();
-      const g = expandGlobs(src, globCtx(args.path));
-      return g ? { contents: g.code, loader: loaderOf(args.path) } : undefined;
+      const code = transformSource(out.contents, args.path, DEV_SHAPES);
+      return code === null ? out : { ...out, contents: code };
     });
   },
 };
@@ -652,7 +690,9 @@ const appModulePlugin = {
 // ---- module dependency graph ----------------------------------------------
 // We build every module with external:"*", so each import survives the CJS
 // transform as a literal `require("<spec>")` — the specifiers are recoverable
-// straight from the emitted body, no second parse of the source needed.
+// straight from the emitted body, no second parse of the source needed. A
+// tsconfig `paths` alias is already rewritten to its relative path there
+// (vitecompat.ts `devImportsPlugin`), so it is an edge like any other.
 //
 // Bare specifiers are split two ways: PRESEEDED ones ("vue", "vue-native",
 // "vue-router", "pinia") live in vendor.js and are deliberately kept OUT of the
@@ -861,25 +901,58 @@ const appOwnsUtilities = () =>
     return !!abs && declaresUtilities(readFileSync(abs, "utf-8"));
   });
 
+// ---- inlined files ---------------------------------------------------------
+// A `?raw` text, a `.json` or an `.svg` component is built INTO its importer,
+// so an edit to it changes no module source. `incrementalBuild` rebuilds the
+// importer when one of these moves, as Vite's HMR updates the importer.
+
+/** module abs path -> the files its build inlined -> their mtime then. */
+const moduleInlined = new Map<string, Map<string, number>>();
+
+const mtimeOf = (abs: string) => {
+  try {
+    return statSync(abs).mtimeMs;
+  } catch {
+    return -1;
+  }
+};
+
+/** True when a file `abs`'s build inlined has changed since. */
+function inlinedMoved(abs: string): boolean {
+  for (const [file, mtime] of moduleInlined.get(abs) ?? []) if (mtimeOf(file) !== mtime) return true;
+  return false;
+}
+
 /** ESM -> CJS for one file, everything else external, wrapped in __VN__.define. */
 async function buildModule(absPath: string, ids: Set<string>) {
   const id = toId(absPath);
   capturedCss = null;
-  const result = await Bun.build({
-    entrypoints: [absPath],
-    format: "cjs" as any,
-    target: "node",
-    external: ["*"], // transform, don't bundle: imports stay as require() calls
-    plugins: [appModulePlugin],
-    define: DEFINES,
-  });
+  const inlined = (inlinedNow = new Set());
+  let result: Awaited<ReturnType<typeof Bun.build>>;
+  try {
+    result = await Bun.build({
+      entrypoints: [absPath],
+      format: "cjs" as any,
+      target: "node",
+      // Transform, don't bundle: imports stay as require() calls, except what
+      // the plugins resolve (an alias, rewritten) or build in (data, assets,
+      // `?query` imports). The shapes plugin goes first: see devImportsPlugin.
+      external: ["*"],
+      plugins: [devShapesPlugin, devImports, appModulePlugin],
+      define: DEFINES,
+    });
+  } finally {
+    inlinedNow = null;
+  }
   if (!result.success) {
     for (const log of result.logs) console.error(log);
     throw new Error(`module build failed: ${id}`);
   }
+  moduleInlined.set(absPath, new Map(Array.from(inlined, (f) => [f, mtimeOf(f)])));
   // A bundler's ESM semantics, not Node's: `import App from "./App.vue"` in a
   // "type": "module" package, and `import()` (vitecompat.ts `devEsmInterop`).
-  const interop = devEsmInterop(await result.outputs[0].text());
+  // A namespace an inlined `import()` gives is Module-tagged, as in prod.
+  const interop = devEsmInterop(tagModuleNamespaces(await result.outputs[0].text()).code);
   const body = interop.code;
   if (interop.unresolved) {
     console.warn(
@@ -935,9 +1008,16 @@ async function buildNpmModule(spec: string): Promise<boolean> {
   if (!candidates.length) {
     if (!npmFailed.has(spec)) {
       npmFailed.add(spec);
+      // `@/x`, `~/x`, `#x`: no npm package is named like that, so it is an
+      // alias neither builder knows. Both read tsconfig `paths` only.
+      const alias = !/^(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(?:\/|$)/i.test(spec);
       console.warn(
         `${stamp()} cannot resolve ${J(spec)} from ${toId(APP_ROOT)} — ` +
-          `require(${J(spec)}) will throw at runtime (is it installed?)`,
+          `require(${J(spec)}) will throw at runtime ` +
+          (alias
+            ? "(an import alias resolves through tsconfig.json compilerOptions.paths, as in vn build; " +
+              "a vite.config resolve.alias is not read — docs/PACKAGING.md §3.1)"
+            : "(is it installed?)"),
       );
     }
     return false;
@@ -959,8 +1039,9 @@ async function buildNpmModule(spec: string): Promise<boolean> {
       // becomes a FILE-PATH STRING: `var Alert_default = "./Alert-7e55.vue"`.
       // That is a silent corruption — no error, the component renders as
       // nothing — which is the worst failure mode a compat-first builder can
-      // have.
-      plugins: [vuePlugin],
+      // have. Vite's import shapes (`.svg`, `?raw`, assets, …) go first, as in
+      // prod.ts, where they apply to every package in the bundle.
+      plugins: [npmShapesPlugin, vuePlugin],
       define: DEFINES,
     }).catch(() => null);
     if (result?.success) break;
@@ -975,7 +1056,7 @@ async function buildNpmModule(spec: string): Promise<boolean> {
     for (const log of result?.logs ?? []) console.error(log);
     throw new Error(`npm module build failed: ${spec}`);
   }
-  const body = await result.outputs[0].text();
+  const body = tagModuleNamespaces(await result.outputs[0].text()).code;
   moduleDeps.set(spec, []);
   moduleBare.set(spec, []);
   writeAtomic(
@@ -1193,6 +1274,8 @@ async function fullBuild(reason: string) {
   npmBuilt.clear(); // force a rewrite: the module files may not exist yet
   cssModules.clear();
   cssEmitted.clear();
+  moduleInlined.clear();
+  SHAPE_NOTES.clear();
   twCss = null; // ditto
   await buildTailwind();
   for (const abs of files) {
@@ -1218,6 +1301,8 @@ async function fullBuild(reason: string) {
       (TS_AVAILABLE ? " [ts type resolution on]" : "") +
       ` in ${Date.now() - t0} ms`,
   );
+  for (const [what, n] of SHAPE_NOTES) console.log(`${stamp()} ${what}: ${n}`);
+  SHAPE_NOTES.clear(); // an incremental pass rebuilds one file: its counts would mislead
 }
 
 async function incrementalBuild() {
@@ -1231,7 +1316,8 @@ async function incrementalBuild() {
     const src = await Bun.file(abs).text();
     const next = blocksOf(abs, src);
     const isNew = !prevBlocks.has(abs);
-    const kind = classify(prevBlocks.get(abs), next);
+    // An unchanged source whose inlined `.json` / `?raw` / `.svg` moved is rebuilt.
+    const kind = classify(prevBlocks.get(abs), next) ?? (inlinedMoved(abs) ? "reload" : null);
     prevBlocks.set(abs, next);
     if (!kind) continue;
     if (isNew) structural = true;
@@ -1250,6 +1336,7 @@ async function incrementalBuild() {
     prevBlocks.delete(abs);
     moduleDeps.delete(toId(abs));
     moduleBare.delete(toId(abs));
+    moduleInlined.delete(abs);
     try {
       rmSync(join(MODULES_DIR, encId(toId(abs))));
     } catch {}

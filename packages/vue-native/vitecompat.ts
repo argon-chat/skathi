@@ -480,12 +480,6 @@ export function expandGlobs(src: string, ctx: GlobContext): { code: string; coun
         throw new Error(`${where}: ${(e as Error).message}`);
       }
     })();
-    if (ctx.relativeSpecs && qs) {
-      throw new Error(
-        `${where}: import.meta.glob with "query" or "as" (${qs}) is expanded by the production builder only ` +
-          `(prod.ts, \`vn build\`): the dev builder has no ?raw / ?url modules (docs/PACKAGING.md §3.1)`,
-      );
-    }
     const eager = opts.eager === true;
     const exhaustive = opts.exhaustive === true;
     const positive = (list as string[]).filter((x) => !x.startsWith("!"));
@@ -509,8 +503,10 @@ export function expandGlobs(src: string, ctx: GlobContext): { code: string; coun
       const rel = posix(relative(keyBase, f));
       const key = rooted && opts.base === undefined ? `/${rel}` : rel.startsWith("../") ? rel : `./${rel}`;
       if (!ctx.relativeSpecs) return { key, spec: posix(f) + qs };
+      // A `query` entry is a `?raw` / `?url` import, which the dev builder's
+      // plugins build into the importer as prod's do (viteShapesPlugin).
       const near = posix(relative(dirname(ctx.file), f));
-      return { key, spec: near.startsWith("../") ? near : `./${near}` };
+      return { key, spec: (near.startsWith("../") ? near : `./${near}`) + qs };
     });
     keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const entries = keyed.map(({ key, spec }, n) => {
@@ -656,7 +652,39 @@ export interface ShapesOptions {
   assets: Map<string, string>;
   /** Filled: one line per thing this plugin did that a build log should say. */
   notes: Map<string, number>;
+  /**
+   * The dev builder (build.ts), which builds one module per file and leaves the
+   * imports to its module registry: `import.meta.glob` imports by
+   * importer-relative path, and an asset URL the dev host cannot serve is
+   * named in the notes.
+   */
+  dev?: boolean;
+  /** Called with each file a `?query` import builds into its importer, so a watcher can rebuild the importer when it changes. */
+  inlined?: (absPath: string) => void;
 }
+
+/**
+ * Resolves an import specifier as the bundler does. This is Bun's resolver,
+ * which reads the `compilerOptions.paths` of the importer's nearest
+ * tsconfig.json (`"@/*": ["./src/*"]`), plus package `exports` and the browser
+ * field. prod.ts's bundle resolves every import this way inside Bun.build.
+ * build.ts calls it directly (`devImportsPlugin`), because an import its
+ * per-module builds leave external is never resolved by the bundler.
+ *
+ * A vite.config `resolve.alias` is not read by either builder (docs/PACKAGING.md
+ * §3.1).
+ */
+export function resolveImport(spec: string, fromDir: string): string | null {
+  try {
+    return Bun.resolveSync(spec, fromDir);
+  } catch {
+    return null;
+  }
+}
+
+/** The directory an `onResolve` call resolves from. */
+const importerDir = (args: { resolveDir?: string; importer?: string }, fallback: string) =>
+  args.resolveDir || (args.importer ? dirname(args.importer) : fallback);
 
 const NS = "vn-vite";
 const KINDS = ["raw", "url", "inline", "worker", "sharedworker", "component", "init"];
@@ -678,10 +706,14 @@ export function loaderOf(path: string): "ts" | "tsx" | "js" | "jsx" {
  * The source-level rewrites: `import.meta.glob` and `new Worker(new URL(...))`.
  * Exported so the SFC path can run it over a component's compiled script.
  */
-export function transformSource(code: string, file: string, o: Pick<ShapesOptions, "docRoot" | "wsRoot" | "notes">): string | null {
+export function transformSource(
+  code: string,
+  file: string,
+  o: Pick<ShapesOptions, "docRoot" | "wsRoot" | "notes" | "dev">,
+): string | null {
   let changed = false;
   const add = (what: string, n: number) => o.notes.set(what, (o.notes.get(what) ?? 0) + n);
-  const g = expandGlobs(code, { file, docRoot: o.docRoot });
+  const g = expandGlobs(code, { file, docRoot: o.docRoot, relativeSpecs: o.dev });
   if (g) {
     code = g.code;
     changed = true;
@@ -703,6 +735,11 @@ export function viteShapesPlugin(o: ShapesOptions) {
   const urlModule = (abs: string) => {
     const { key, url } = assetKey(abs, o.docRoot);
     o.assets.set(key, abs);
+    if (o.dev && key.startsWith("_vn/fs/")) {
+      // The dev host reads `<app root>/<key>` from disk; a URL cannot climb
+      // above the app root (docs/PACKAGING.md §4).
+      note(o, `asset outside the app root, which the dev host does not serve (404 in dev; packed by vn build): ${idOf(abs)}`);
+    }
     return `export default ${J(url)};\n`;
   };
   return {
@@ -717,13 +754,9 @@ export function viteShapesPlugin(o: ShapesOptions) {
         const bare = args.path.slice(0, q);
         const params = new Set(args.path.slice(q + 1).split("&").map((p: string) => p.split("=")[0]));
         if (![...params].some((p) => KINDS.includes(p as string))) return undefined;
-        const from = args.resolveDir || (args.importer ? dirname(args.importer) : o.docRoot);
-        let real: string;
-        try {
-          real = Bun.resolveSync(bare, from);
-        } catch {
-          return undefined; // let Bun report the unresolvable import itself
-        }
+        const real = resolveImport(bare, importerDir(args, o.docRoot));
+        if (real === null) return undefined; // let Bun report the unresolvable import itself
+        o.inlined?.(real);
         return { path: `${real}?${args.path.slice(q + 1)}`, namespace: NS };
       });
       build.onLoad({ filter: /.*/, namespace: NS }, async (args: any) => {
@@ -785,6 +818,68 @@ export function viteShapesPlugin(o: ShapesOptions) {
         if (!src.includes("import.meta.glob") && !src.includes("new URL")) return undefined;
         const code = transformSource(src, args.path, o);
         return code === null ? undefined : { contents: code, loader: loaderOf(args.path) };
+      });
+    },
+  };
+}
+
+/** A specifier naming a file an import builds INTO its importer: data, `.svg`, `.wasm` and Vite's asset types. */
+const LEAF_IMPORT = new RegExp(`\\.(?:json|svg|wasm)$|${ASSET_EXT.source}`, "i");
+
+export interface DevImportsOptions {
+  /** The directory whose files the dev builder emits as modules (the app's source root). */
+  srcDir: string;
+  /** Bare specifiers vendor.js provides (build.ts PRESEEDED): left as written. */
+  preseeded: (spec: string) => boolean;
+  /** Called with each data or asset file an import builds into its importer. */
+  inlined?: (absPath: string) => void;
+}
+
+/**
+ * The dev builder's resolution (build.ts `buildModule`). Each app file is built
+ * on its own with every import external, so the bundler never resolves an
+ * import, and the module registry is keyed by relative path. Two things need
+ * the resolver prod's bundle uses (`resolveImport`):
+ *
+ * - An import that resolves into the app's source root under another name, a
+ *   tsconfig `paths` alias (`@/store/x`), becomes the importer-relative path of
+ *   that file. It is then a graph edge and loads the one module instance, as in
+ *   prod and Vite. Left bare, it was built as an npm package: a second copy of
+ *   the module, or a failed build.
+ * - Data and asset files (`.json`, `.svg`, Vite's asset types, `.wasm`) are
+ *   built into the importer, as prod's bundle builds them, through Bun's JSON
+ *   loader and `viteShapesPlugin`'s loaders. Register that plugin first: its
+ *   `?query` resolution must see a query import before this one does.
+ *
+ * Anything else is left to the build's `external`.
+ */
+export function devImportsPlugin(o: DevImportsOptions) {
+  const inSrc = (abs: string) => {
+    const rel = relative(o.srcDir, abs);
+    return !!rel && !rel.startsWith("..") && !isAbsolute(rel);
+  };
+  return {
+    name: "vn-dev-imports",
+    setup(build: any) {
+      build.onResolve({ filter: LEAF_IMPORT }, (args: any) => {
+        if (args.kind === "entry-point-build") return undefined;
+        const abs = resolveImport(args.path, importerDir(args, o.srcDir));
+        if (abs === null || !isAbsolute(abs)) return undefined; // external: build.ts reports the miss
+        o.inlined?.(abs);
+        return { path: abs };
+      });
+      // Bare specifiers only. An absolute path is the entry point (Windows'
+      // `C:\…` starts with a letter too) and must never be marked external.
+      // `node:` stays out of the FILTER: a plugin that so much as sees Bun's
+      // own `node:module` import makes it a real `require("node:module")`.
+      build.onResolve({ filter: /^(?!node:)[^./\\]/ }, (args: any) => {
+        if (args.kind === "entry-point-build" || isAbsolute(args.path) || o.preseeded(args.path)) return undefined;
+        const from = importerDir(args, o.srcDir);
+        const abs = resolveImport(args.path, from);
+        // `node:fs` resolves to itself; a package resolves outside the source root.
+        if (abs === null || !isAbsolute(abs) || !inSrc(abs)) return undefined;
+        const rel = posix(relative(from, abs));
+        return { path: rel.startsWith("../") ? rel : `./${rel}`, external: true };
       });
     },
   };
@@ -918,7 +1013,7 @@ export function inlineCssImports(
     try {
       if (clean.startsWith("/")) target = join(docRoot, clean);
       else if (clean.startsWith(".")) target = resolve(dirname(from), clean);
-      else target = Bun.resolveSync(clean, dirname(from));
+      else target = resolveImport(clean, dirname(from));
     } catch {
       target = null;
     }
