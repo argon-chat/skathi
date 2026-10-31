@@ -7,3 +7,6 @@ import * as util from "./util";
 export const app = App;
 export const ns = util;
 export const lazy = () => import("./Lazy.vue");
+// import.meta.glob, expanded by the dev builder as prod.ts expands it.
+export const eagerNames = import.meta.glob("./kinds/*.ts", { eager: true, import: "name" });
+export const lazyKinds = import.meta.glob(["./kinds/*.ts", "!./kinds/b.ts"]);

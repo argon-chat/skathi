@@ -331,6 +331,16 @@ describe('a "type": "module" app, in dev', () => {
     expect(main.ns.answer).toBe(42);
   });
 
+  test("import.meta.glob expands as in prod, in a module and in an SFC, and stays in the graph", async () => {
+    const main = world().VN.require(MAIN);
+    expect(main.eagerNames).toEqual({ "./kinds/a.ts": "a", "./kinds/b.ts": "b" });
+    expect(Object.keys(main.lazyKinds)).toEqual(["./kinds/a.ts"]);
+    expect((await main.lazyKinds["./kinds/a.ts"]()).name).toBe("a");
+    expect(main.app.parts).toEqual(["./kinds/a.ts", "./kinds/b.ts"]);
+    expect(out.manifest.deps[MAIN]).toContain(id("esm-app", "kinds/a.ts"));
+    expect(out.manifest.deps[id("esm-app", "App.vue")]).toContain(id("esm-app", "kinds/b.ts"));
+  });
+
   test("import() resolves through the registry, and defineAsyncComponent unwraps it", async () => {
     expect(out.script(MAIN)).not.toMatch(/(?<![\w$.])import\(/);
     expect(out.manifest.deps[MAIN]).toContain(id("esm-app", "Lazy.vue"));

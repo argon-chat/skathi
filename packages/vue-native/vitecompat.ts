@@ -345,6 +345,12 @@ export interface GlobContext {
   file: string;
   /** Where a `/`-rooted pattern starts: the app's document root. */
   docRoot: string;
+  /**
+   * The dev builder's form: each matched file is imported by a path relative
+   * to the importer (`./kinds/a.ts`), the shape its module registry resolves.
+   * Prod bundles, and imports by absolute path.
+   */
+  relativeSpecs?: boolean;
 }
 
 /** Splits `../dir/sub/*.ts` into the static directory (`../dir/sub`) and the glob (`*.ts`). */
@@ -474,6 +480,12 @@ export function expandGlobs(src: string, ctx: GlobContext): { code: string; coun
         throw new Error(`${where}: ${(e as Error).message}`);
       }
     })();
+    if (ctx.relativeSpecs && qs) {
+      throw new Error(
+        `${where}: import.meta.glob with "query" or "as" (${qs}) is expanded by the production builder only ` +
+          `(prod.ts, \`vn build\`): the dev builder has no ?raw / ?url modules (docs/PACKAGING.md §3.1)`,
+      );
+    }
     const eager = opts.eager === true;
     const exhaustive = opts.exhaustive === true;
     const positive = (list as string[]).filter((x) => !x.startsWith("!"));
@@ -496,7 +508,9 @@ export function expandGlobs(src: string, ctx: GlobContext): { code: string; coun
     const keyed = [...matched].map((f) => {
       const rel = posix(relative(keyBase, f));
       const key = rooted && opts.base === undefined ? `/${rel}` : rel.startsWith("../") ? rel : `./${rel}`;
-      return { key, spec: posix(f) + qs };
+      if (!ctx.relativeSpecs) return { key, spec: posix(f) + qs };
+      const near = posix(relative(dirname(ctx.file), f));
+      return { key, spec: near.startsWith("../") ? near : `./${near}` };
     });
     keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const entries = keyed.map(({ key, spec }, n) => {

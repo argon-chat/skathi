@@ -100,7 +100,16 @@ import {
   generate as generateTailwind,
   needsTailwindPass,
 } from "./tailwind";
-import { GLOB_TRIPWIRE, SFC_FS, appDefines, devEsmInterop, inlineCssImports, takeDefineArgs } from "./vitecompat";
+import {
+  GLOB_TRIPWIRE,
+  SFC_FS,
+  appDefines,
+  devEsmInterop,
+  expandGlobs,
+  inlineCssImports,
+  loaderOf,
+  takeDefineArgs,
+} from "./vitecompat";
 
 // ---- paths ----------------------------------------------------------------
 
@@ -411,10 +420,10 @@ const DEFINES: Record<string, string> = {
   // guards on it, and `undefined` is the "not a dev server" answer.
   "import.meta.hot": "undefined",
   "import.meta.url": '"vn://module"',
-  // The dev builder does not expand `import.meta.glob` (prod.ts does,
-  // vitecompat.ts `expandGlobs`). Defined to a findable name so buildModule
-  // can fail with a sentence instead of the module dying at eval with
-  // `{env,url}.glob is not a function`.
+  // `import.meta.glob(…)` calls are expanded before this applies
+  // (`appModulePlugin`, vitecompat.ts `expandGlobs`). Anything left is defined
+  // to a findable name, so buildModule can fail with a sentence instead of
+  // the module dying at eval with `{env,url}.glob is not a function`.
   "import.meta.glob": GLOB_TRIPWIRE,
   "import.meta": JSON.stringify({ env: VITE_ENV_DEV, url: "vn://module" }),
   ...APP_DEFINES.defines,
@@ -613,6 +622,29 @@ const vuePlugin = {
     build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
       const source = await Bun.file(args.path).text();
       return compileVue(args.path, source);
+    });
+  },
+};
+
+/**
+ * An APP module (`buildModule`): the SFC compile above, plus `import.meta.glob`
+ * expanded as prod.ts expands it (vitecompat.ts `expandGlobs`), into imports
+ * by relative path, which is what the module registry resolves. Lazy entries
+ * are `() => import(…)`, which `devEsmInterop` then routes through require.
+ */
+const globCtx = (file: string) => ({ file, docRoot: VN_CONFIG_DIR, relativeSpecs: true });
+const appModulePlugin = {
+  name: "vn-dev-app-module",
+  setup(build: any) {
+    build.onLoad({ filter: /\.vue$/ }, async (args: any) => {
+      const out = await compileVue(args.path, await Bun.file(args.path).text());
+      const g = expandGlobs(out.contents, globCtx(args.path));
+      return g ? { ...out, contents: g.code } : out;
+    });
+    build.onLoad({ filter: /\.(m?[jt]s|[jt]sx)$/ }, async (args: any) => {
+      const src = await Bun.file(args.path).text();
+      const g = expandGlobs(src, globCtx(args.path));
+      return g ? { contents: g.code, loader: loaderOf(args.path) } : undefined;
     });
   },
 };
@@ -838,7 +870,7 @@ async function buildModule(absPath: string, ids: Set<string>) {
     format: "cjs" as any,
     target: "node",
     external: ["*"], // transform, don't bundle: imports stay as require() calls
-    plugins: [vuePlugin],
+    plugins: [appModulePlugin],
     define: DEFINES,
   });
   if (!result.success) {
@@ -860,8 +892,8 @@ async function buildModule(absPath: string, ids: Set<string>) {
   }
   if (new RegExp(`\\b${GLOB_TRIPWIRE}\\b`).test(body)) {
     throw new Error(
-      `${id}: import.meta.glob is expanded by the production builder only (prod.ts, \`vn build\`) — ` +
-        `the dev builder would emit a call that throws at eval (docs/PACKAGING.md)`,
+      `${id}: an import.meta.glob the expansion did not see (not a call with literal arguments) — ` +
+        `the dev builder would emit a call that throws at eval (docs/PACKAGING.md §3.1)`,
     );
   }
 

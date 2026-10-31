@@ -389,8 +389,19 @@ describe("build.ts (dev) over test/fixtures/vite-dev-app", () => {
   });
 
   test("an import.meta.glob it cannot expand fails the build with a sentence, not at eval", () => {
-    const glob = Bun.spawnSync(["bun", "build.ts", join(FIXTURE, "src/main.ts"), join(dist, "glob")], { cwd: PKG_DIR });
+    // A plain glob expands in dev now (test/build-graph.test.ts, esm-app); a
+    // `query` one needs ?raw / ?url modules, which only prod has.
+    // Inside the workspace, as an app is: module ids are workspace-relative.
+    const root = mkdtempSync(join(HERE, "fixtures", "glob-query-"));
+    tmpDirs.push(root);
+    mkdirSync(join(root, "src/data"), { recursive: true });
+    writeFileSync(join(root, "src/data/a.txt"), "a");
+    writeFileSync(
+      join(root, "src/main.ts"),
+      'const texts = import.meta.glob("./data/*.txt", { query: "?raw", eager: true });\nconsole.log(texts);\n',
+    );
+    const glob = Bun.spawnSync(["bun", "build.ts", join(root, "src/main.ts"), join(dist, "glob")], { cwd: PKG_DIR });
     expect(glob.exitCode).not.toBe(0);
-    expect(glob.stdout.toString() + glob.stderr.toString()).toContain("import.meta.glob is expanded by the production builder only");
+    expect(glob.stdout.toString() + glob.stderr.toString()).toContain("is expanded by the production builder only");
   });
 });
