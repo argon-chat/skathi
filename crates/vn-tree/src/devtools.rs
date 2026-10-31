@@ -119,6 +119,14 @@ pub fn image_stats() -> ImageStats {
     crate::resample::image_stats()
 }
 
+pub use crate::img::{KeptFull, ResidencyStats};
+
+/// What the image residency sweep did since boot: decodes reduced to the copy
+/// they are drawn from, restored, evicted (`crate::img`, "residency").
+pub fn residency_stats() -> ResidencyStats {
+    crate::img::residency_stats()
+}
+
 /// Arms the painted-image registry (`VN_MEMSTATS=1`).
 pub fn set_image_tracking(on: bool) {
     crate::resample::set_tracking(on);

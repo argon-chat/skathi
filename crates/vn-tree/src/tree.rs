@@ -1769,12 +1769,14 @@ fn sync_runtime_sheets() {
     );
 }
 
-pub fn set_stylesheet(css: String) {
+/// The tests' shorthand: `css` with no head `<style>` texts.
+#[cfg(test)]
+pub(crate) fn set_stylesheet(css: String) {
     set_stylesheet_with_head(css, Vec::new());
 }
 
-/// [`set_stylesheet`], with the `<style>` texts `document.head` holds, each its
-/// own sheet after `css` (see [`sheet_sources`]).
+/// Installs the app's stylesheet, with the `<style>` texts `document.head`
+/// holds, each its own sheet after `css` (see [`sheet_sources`]).
 ///
 /// Returns `false`, and compiles nothing, when the sheet and the head texts are
 /// exactly what is installed already. The runtime re-sends the sheet whenever a

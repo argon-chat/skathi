@@ -209,6 +209,316 @@ pub(crate) fn evict_pending(window: &mut gpui::Window, cx: &mut gpui::App) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// residency — what gpui's asset cache keeps of the images this tree showed
+// ---------------------------------------------------------------------------
+//
+// gpui keeps every decode until told otherwise. Left alone, an Argon session
+// keeps every avatar it ever showed, each at the full size it was uploaded
+// at (perf-mem-1 §2.4: 33 decodes, 57.6 MB, drawn at sizes worth 4.2 MB).
+// Once a second, from the frame tick, [`residency_tick`]:
+//
+// * **evicts** a source no node has shown for [`EVICT_AFTER`]: its decode and
+//   its atlas tiles go. A node showing it again loads it again (an http(s)
+//   image is fetched again: there is no HTTP cache under gpui's loader). The
+//   grace keeps a channel switched away from and back to warm;
+// * **reduces** a decode drawn only well below its size: the copy it is drawn
+//   from takes its place in the cache (`crate::resample::reduced_copy`);
+// * **restores** a reduced decode drawn larger again, or whose pixels a
+//   canvas reads: the full decode is loaded afresh off the render thread and
+//   swapped back in, the element drawing the copy meanwhile.
+//
+// A browser does the same with its decoded-image cache, which it drops and
+// re-decodes at will; what this adds over it is the re-fetch of an evicted
+// http(s) image, which a browser serves from its disk cache.
+
+/// How long a source nobody shows keeps its decode.
+const EVICT_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+/// How often the sweep runs.
+const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// What gpui's cache keys a source by.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum SourceKey {
+    Resource(Resource),
+    Image(u64),
+}
+
+fn source_key(source: &ImageSource) -> Option<SourceKey> {
+    match source {
+        ImageSource::Resource(r) => Some(SourceKey::Resource(r.clone())),
+        ImageSource::Image(img) => Some(SourceKey::Image(img.id)),
+        _ => None,
+    }
+}
+
+#[derive(Default)]
+struct Residency {
+    /// Every source a node showed, and when one last did.
+    known: HashMap<SourceKey, (ImageSource, std::time::Instant)>,
+    /// Sources whose full decode is being loaded back.
+    restoring: std::collections::HashSet<SourceKey>,
+    /// Sources a canvas read the pixels of: their decode stays full.
+    keep_full: std::collections::HashSet<SourceKey>,
+    /// Reduced decodes replaced by their full decode, whose tiles go next tick.
+    replaced: Vec<std::sync::Arc<gpui::RenderImage>>,
+    /// A restore landed: repaint.
+    restored: bool,
+    last_sweep: Option<std::time::Instant>,
+    stats: ResidencyStats,
+}
+
+/// What the residency sweep did since boot (devtools `mem`).
+#[derive(Default, Clone, Copy, Debug)]
+pub struct ResidencyStats {
+    pub reduced: usize,
+    /// Pixel bytes the reductions freed.
+    pub reduced_freed: usize,
+    pub restored: usize,
+    pub evicted: usize,
+    /// Pixel bytes the evictions freed (decodes that were loaded).
+    pub evicted_freed: usize,
+    /// Sources known now (shown by a node, or within [`EVICT_AFTER`] of it).
+    pub known: usize,
+    /// Shown sources whose decode the latest sweep left full, by reason.
+    pub kept_full: KeptFull,
+}
+
+/// Why shown decodes stay full (`crate::resample::KeepFull`), counted.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct KeptFull {
+    pub not_still: usize,
+    pub undrawn: usize,
+    pub young: usize,
+    pub drawn_large: usize,
+    pub no_copy: usize,
+    pub small_saving: usize,
+    /// A canvas read its pixels.
+    pub canvas_read: usize,
+}
+
+impl KeptFull {
+    fn count(&mut self, why: crate::resample::KeepFull) {
+        use crate::resample::KeepFull as K;
+        *match why {
+            K::NotStill => &mut self.not_still,
+            K::Undrawn => &mut self.undrawn,
+            K::Young => &mut self.young,
+            K::DrawnLarge => &mut self.drawn_large,
+            K::NoCopy => &mut self.no_copy,
+            K::SmallSaving => &mut self.small_saving,
+        } += 1;
+    }
+}
+
+thread_local! {
+    static RESIDENCY: RefCell<Residency> = RefCell::new(Residency::default());
+}
+
+/// A node was handed `source`: the sweep knows it from now on, so its decode
+/// goes [`EVICT_AFTER`] after the last node showing it does — also when that
+/// node was gone before the next sweep (a channel switched away from while
+/// its avatars were still loading).
+fn note_known(source: Option<&ImageSource>) {
+    let Some(source) = source else { return };
+    let Some(key) = source_key(source) else { return };
+    let now = std::time::Instant::now();
+    RESIDENCY.with(|r| r.borrow_mut().known.insert(key, (source.clone(), now)));
+}
+
+/// The sweep's counters.
+pub fn residency_stats() -> ResidencyStats {
+    RESIDENCY.with(|r| {
+        let r = r.borrow();
+        ResidencyStats { known: r.known.len(), ..r.stats }
+    })
+}
+
+fn pixel_bytes(image: &gpui::RenderImage) -> usize {
+    (0..image.frame_count())
+        .map(|i| {
+            let s = image.size(i);
+            s.width.0.max(0) as usize * s.height.0.max(0) as usize * 4
+        })
+        .sum()
+}
+
+/// The sources nodes show right now: `<img>` (and `poster`) memos, CSS
+/// background layers.
+fn shown_sources() -> Vec<ImageSource> {
+    let mut out: Vec<ImageSource> = RESOLVED.with(|m| m.borrow().values().filter_map(|memo| memo.source.clone()).collect());
+    BACKGROUNDS.with(|b| {
+        for layers in b.borrow().values() {
+            out.extend(layers.iter().filter_map(|(_, s)| s.clone()));
+        }
+    });
+    out
+}
+
+/// The residency sweep (see the section comment). `true` when the window
+/// should repaint: a full decode came back.
+pub(crate) fn residency_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
+    let now = std::time::Instant::now();
+    let wanted = crate::resample::take_wanted_full();
+    let (replaced, restored, due) = RESIDENCY.with(|r| {
+        let mut r = r.borrow_mut();
+        let due = r.last_sweep.is_none_or(|t| now.duration_since(t) >= SWEEP_EVERY);
+        if due {
+            r.last_sweep = Some(now);
+        }
+        (std::mem::take(&mut r.replaced), std::mem::replace(&mut r.restored, false), due)
+    });
+    let mut moved_tiles = !replaced.is_empty();
+    for image in replaced {
+        cx.drop_image(image, Some(window));
+    }
+    if !wanted.is_empty() {
+        restore(&wanted, cx);
+    }
+    if due {
+        moved_tiles |= sweep(now, window, cx);
+    }
+    if moved_tiles {
+        crate::resample::hold_replays_too();
+    }
+    restored
+}
+
+/// Starts loading the full decode of every shown source whose reduced decode
+/// is one of `wanted`.
+fn restore(wanted: &std::collections::HashSet<gpui::ImageId>, cx: &mut gpui::App) {
+    let shown = shown_sources();
+    for source in shown {
+        let Some(key) = source_key(&source) else { continue };
+        let Some(cached) = source.cached(cx) else { continue };
+        if !cached.is_reduced() || !wanted.contains(&cached.id) {
+            continue;
+        }
+        if !RESIDENCY.with(|r| r.borrow_mut().restoring.insert(key.clone())) {
+            continue; // already on its way
+        }
+        let Some(task) = source.load_detached(cx) else {
+            RESIDENCY.with(|r| r.borrow_mut().restoring.remove(&key));
+            continue;
+        };
+        cx.spawn(async move |cx| {
+            let loaded = task.await;
+            cx.update(|cx| {
+                RESIDENCY.with(|r| r.borrow_mut().restoring.remove(&key));
+                let Ok(full) = loaded else { return };
+                // Still the reduced decode? (It may have been evicted, or its
+                // node may show another source by now.)
+                let Some(reduced) = source.cached(cx).filter(|c| c.is_reduced()) else { return };
+                if source.replace_cached(full, cx) {
+                    RESIDENCY.with(|r| {
+                        let mut r = r.borrow_mut();
+                        r.replaced.push(reduced);
+                        r.restored = true;
+                        r.stats.restored += 1;
+                    });
+                }
+            });
+        })
+        .detach();
+    }
+}
+
+/// The once-a-second half: evictions and reductions. `true` when an atlas
+/// tile went.
+fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
+    let shown = shown_sources();
+    crate::resample::prune_uses();
+    let mut moved = false;
+    // Who shows what, now.
+    RESIDENCY.with(|r| {
+        let mut r = r.borrow_mut();
+        for source in &shown {
+            if let Some(key) = source_key(source) {
+                r.known.insert(key, (source.clone(), now));
+            }
+        }
+    });
+    // Evict what nobody has shown for EVICT_AFTER.
+    let stale: Vec<(SourceKey, ImageSource)> = RESIDENCY.with(|r| {
+        let mut r = r.borrow_mut();
+        let keys: Vec<SourceKey> = r
+            .known
+            .iter()
+            .filter(|(_, (_, seen))| now.duration_since(*seen) >= EVICT_AFTER)
+            .map(|(k, _)| k.clone())
+            .collect();
+        keys.into_iter().filter_map(|k| r.known.remove(&k).map(|(s, _)| (k, s))).collect()
+    });
+    for (key, source) in stale {
+        if let Some(image) = source.cached(cx) {
+            let bytes = pixel_bytes(&image);
+            RESIDENCY.with(|r| {
+                let mut r = r.borrow_mut();
+                r.stats.evicted += 1;
+                r.stats.evicted_freed += bytes;
+            });
+            cx.drop_image(image, Some(window));
+            moved = true;
+        }
+        source.remove_asset(cx);
+        RESIDENCY.with(|r| r.borrow_mut().keep_full.remove(&key));
+    }
+    // Reduce what is drawn only well below its size; count why the rest stay.
+    let mut kept = KeptFull::default();
+    let mut seen = std::collections::HashSet::new();
+    for source in &shown {
+        let Some(key) = source_key(source) else { continue };
+        if !seen.insert(key.clone()) {
+            continue; // several nodes show it
+        }
+        let Some(full) = source.cached(cx) else { continue };
+        if full.is_reduced() {
+            continue;
+        }
+        let (canvas_read, restoring) = RESIDENCY.with(|r| {
+            let r = r.borrow();
+            (r.keep_full.contains(&key), r.restoring.contains(&key))
+        });
+        if canvas_read || restoring {
+            kept.canvas_read += usize::from(canvas_read);
+            continue;
+        }
+        let copy = match crate::resample::reduced_copy(&full, now) {
+            Ok(copy) => copy,
+            Err(why) => {
+                kept.count(why);
+                continue;
+            }
+        };
+        let freed = pixel_bytes(&full).saturating_sub(pixel_bytes(&copy));
+        if source.replace_cached(copy, cx) {
+            RESIDENCY.with(|r| {
+                let mut r = r.borrow_mut();
+                r.stats.reduced += 1;
+                r.stats.reduced_freed += freed;
+            });
+            // The full decode's own tile, if it was ever drawn as it is.
+            cx.drop_image(full, Some(window));
+            moved = true;
+        }
+    }
+    RESIDENCY.with(|r| r.borrow_mut().stats.kept_full = kept);
+    moved
+}
+
+/// A canvas is about to read `source`'s pixels: they must be the full decode.
+/// `true` when they are; otherwise the full decode is on its way back and the
+/// source stays full from now on.
+fn keep_full(source: &ImageSource, image: &gpui::RenderImage) -> bool {
+    let Some(key) = source_key(source) else { return true };
+    RESIDENCY.with(|r| r.borrow_mut().keep_full.insert(key));
+    if image.is_reduced() {
+        crate::resample::want_full(image.id);
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 fn take_evictions() -> Vec<ImageSource> {
     EVICT.with(|e| std::mem::take(&mut *e.borrow_mut()))
@@ -297,6 +607,7 @@ pub(crate) fn background_source(id: u32, url: &str) -> Option<ImageSource> {
             return source.clone();
         }
         let source = resolve(url);
+        note_known(source.as_ref());
         // A node whose background URL keeps changing (an animated sprite
         // sheet swapping sheets) must not grow this without bound.
         if list.len() >= 8 {
@@ -321,6 +632,7 @@ pub(crate) fn source_for(id: u32, src: &str) -> Option<ImageSource> {
             }
         }
         let source = resolve(src);
+        note_known(source.as_ref());
         let blob = src.trim().get(..5).is_some_and(|s| s.eq_ignore_ascii_case("blob:"));
         let old = map.insert(id, Memo { src: src.to_string(), source: source.clone(), blob });
         if let Some(old) = old {
@@ -413,7 +725,9 @@ fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
                 None => Probe::Pending,
                 Some(Err(_)) => Probe::Failed,
                 Some(Ok(image)) => {
-                    let size = image.size(0);
+                    // The picture's size, also when the cache holds a smaller
+                    // copy of it (see "residency").
+                    let size = image.natural_size(0);
                     // gpui rasterises an SVG at twice its size for smoothness.
                     let scale = if svg_named { gpui::SMOOTH_SVG_SCALE_FACTOR as f64 } else { 1.0 };
                     Probe::Loaded(size.width.0 as f64 / scale, size.height.0 as f64 / scale)
@@ -544,12 +858,21 @@ pub(crate) fn pixels(id: u32, cx: Option<&mut gpui::App>) -> Pixels {
         let Some(cx) = cx else { return Pixels::NotYet };
         // The memo is keyed by the attribute's own text, as the paint and
         // the probe ask for it.
-        let Some(Ok(image)) = (match source_for(id, &raw) {
-            Some(ImageSource::Resource(r @ Resource::Uri(_))) => cx.fetch_asset::<gpui::ImgResourceLoader>(&r),
+        let source = source_for(id, &raw);
+        let Some(Ok(image)) = (match &source {
+            Some(ImageSource::Resource(r @ Resource::Uri(_))) => cx.fetch_asset::<gpui::ImgResourceLoader>(r),
             _ => return Pixels::Broken(format!("<img src=\"{}\">: not a URL gpui loads", head(src))),
         }) else {
             return Pixels::NotYet;
         };
+        // A canvas reads every pixel: the residency sweep must not have the
+        // smaller copy stand in for this decode, and one that already does
+        // brings the full decode back (a frame or two; NotYet meanwhile).
+        if let Some(source) = &source {
+            if !keep_full(source, &image) {
+                return Pixels::NotYet;
+            }
+        }
         let size = image.size(0);
         let (w, h) = (size.width.0.max(0) as u32, size.height.0.max(0) as u32);
         let Some(bgra) = image.as_bytes(0).filter(|b| w > 0 && h > 0 && b.len() >= (w * h * 4) as usize) else {

@@ -112,7 +112,9 @@ fn paint_stack(
                     }
                     Load::Ready(image) => image,
                 };
-                let raw = image.size(0);
+                // The picture's size, also when the cache holds a smaller copy
+                // of it (crate::img "residency").
+                let raw = image.natural_size(0);
                 let scale = if is_svg(&source, url) { gpui::SMOOTH_SVG_SCALE_FACTOR } else { 1.0 };
                 let natural = (raw.width.0 as f32 / scale, raw.height.0 as f32 / scale);
                 let natural = (natural.0 > 0.0 && natural.1 > 0.0).then_some(natural);

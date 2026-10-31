@@ -49,6 +49,19 @@
 //! Frames of a moving picture (`<video>`, `<lottie>`, a canvas that is being
 //! redrawn) are `RenderImage::dynamic` and never reach this module.
 //!
+//! # The copy instead of the decode
+//!
+//! A copy that covers every size an image is drawn at makes the full decode
+//! dead weight: a 1080 px avatar drawn at 36 px keeps 4.4 MB of pixels to
+//! draw from a 23 KB copy (research/reports/m26/perf-mem-2.md §3). So this
+//! module also records how each image is drawn ([`note_use`]), and
+//! `crate::img`'s residency sweep asks [`reduced_copy`] for a copy to put in
+//! the decode's place in gpui's asset cache. A copy carries the picture's
+//! natural size (`RenderImage::with_natural_size`), so layout, `object-fit`
+//! and `naturalWidth` cannot tell. A reduced image drawn larger than its
+//! pixels asks for the full decode back ([`take_wanted_full`]); it is drawn
+//! from the copy, softer, until the decode lands.
+//!
 //! **Divergence (IMG-1, docs/RUNTIME.md §5.16):** the size is the box's, not
 //! the one a CSS `transform: scale()` gives it on screen.
 
@@ -75,6 +88,20 @@ const SYNC_BUDGET: Duration = Duration::from_millis(4);
 const SETTLE: Duration = Duration::from_millis(100);
 /// The bytes of copies kept.
 const BUDGET_BYTES: usize = 64 << 20;
+/// How long an image must have been painted before a copy may stand in for
+/// its decode: long enough for the sizes it is drawn at to settle and their
+/// copies to exist.
+const REDUCE_AFTER: Duration = Duration::from_secs(2);
+/// The span of each of the two windows the largest drawn size is kept over: a
+/// large draw (a profile card, a lightbox) holds the full decode for 15–30 s
+/// after it ends, so opening it again soon does not load the image again.
+const USE_WINDOW: Duration = Duration::from_secs(15);
+/// A copy stands in for a decode only when that frees at least this much and
+/// at least three quarters of the decode.
+const MIN_SAVING: usize = 256 << 10;
+/// How much larger than its pixels a reduced image may be drawn before the
+/// full decode is wanted back (the quarter-octave step a copy is rounded up to).
+const UPSCALE_TOLERANCE: f32 = 1.2;
 
 /// A copy's key: the image, its frame, and the size step on each axis (0 = the
 /// natural size on that axis, -1 = 2^(-1/4) of it, …).
@@ -107,6 +134,161 @@ struct Cache {
 thread_local! {
     static CACHE: RefCell<Cache> = RefCell::new(Cache::default());
     static HOLD_REPLAYS: Cell<bool> = const { Cell::new(false) };
+    /// How each painted image has been drawn lately ([`note_use`]).
+    static USES: RefCell<HashMap<ImageId, Use>> = RefCell::new(HashMap::new());
+    /// Reduced images drawn larger than their pixels since the last sweep.
+    static WANT_FULL: RefCell<HashSet<ImageId>> = RefCell::new(HashSet::new());
+}
+
+/// The sizes one image was drawn at, in device pixels.
+struct Use {
+    image: Weak<RenderImage>,
+    /// When it was first drawn.
+    first: Instant,
+    /// The largest size drawn in the current window and in the one before it.
+    cur: (i32, i32),
+    prev: (i32, i32),
+    rotated: Instant,
+    /// The size of the latest draw: what an image stands for once a retained
+    /// subtree replays it (a replay draws without asking this module).
+    last: (i32, i32),
+}
+
+/// Records a draw of `image` at `device` pixels, and a reduced image drawn
+/// well above its pixels as wanting its full decode back.
+fn note_use(image: &Arc<RenderImage>, device: Size<DevicePixels>, now: Instant) {
+    let d = (device.width.0, device.height.0);
+    if image.is_reduced() {
+        let px = image.size(0);
+        let over = |d: i32, p: i32| d as f32 > p as f32 * UPSCALE_TOLERANCE;
+        if over(d.0, px.width.0) || over(d.1, px.height.0) {
+            WANT_FULL.with(|w| w.borrow_mut().insert(image.id));
+        }
+    }
+    USES.with(|u| {
+        let mut u = u.borrow_mut();
+        let e = u.entry(image.id).or_insert_with(|| Use {
+            image: Arc::downgrade(image),
+            first: now,
+            cur: (0, 0),
+            prev: (0, 0),
+            rotated: now,
+            last: d,
+        });
+        let since = now.duration_since(e.rotated);
+        if since >= USE_WINDOW {
+            // A window that ended more than a window ago holds nothing recent.
+            e.prev = if since >= USE_WINDOW * 2 { (0, 0) } else { e.cur };
+            e.cur = (0, 0);
+            e.rotated = now;
+        }
+        e.cur = (e.cur.0.max(d.0), e.cur.1.max(d.1));
+        e.last = d;
+    });
+}
+
+/// The largest size `id` was drawn at lately, and how long it has been drawn.
+fn recent_use(id: ImageId, now: Instant) -> Option<((i32, i32), Duration)> {
+    USES.with(|u| {
+        let u = u.borrow();
+        let e = u.get(&id)?;
+        // Windows that ended with no draw since count as empty.
+        let since = now.duration_since(e.rotated);
+        let (cur, prev) = if since >= USE_WINDOW * 2 {
+            ((0, 0), (0, 0))
+        } else if since >= USE_WINDOW {
+            ((0, 0), e.cur)
+        } else {
+            (e.cur, e.prev)
+        };
+        let w = cur.0.max(prev.0).max(e.last.0);
+        let h = cur.1.max(prev.1).max(e.last.1);
+        Some(((w, h), now.duration_since(e.first)))
+    })
+}
+
+/// Why [`reduced_copy`] left a decode full.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeepFull {
+    /// Already a copy, or not a still picture (an animation, a moving frame).
+    NotStill,
+    /// Not drawn since it was decoded (a preload, a hidden element).
+    Undrawn,
+    /// Drawn for less than [`REDUCE_AFTER`].
+    Young,
+    /// Drawn at 0.8 of its size or more along an axis lately.
+    DrawnLarge,
+    /// No copy covers the largest size it was drawn at (yet).
+    NoCopy,
+    /// The copy would free less than [`MIN_SAVING`] or a quarter of it.
+    SmallSaving,
+}
+
+/// A copy of `full` that covers every size it was drawn at lately, taken out
+/// of the copy cache (its atlas tile stays: it is drawn from next) for the
+/// caller to put in the decode's place — or why the decode has to stay.
+pub(crate) fn reduced_copy(full: &Arc<RenderImage>, now: Instant) -> Result<Arc<RenderImage>, KeepFull> {
+    if full.is_reduced() || full.is_dynamic() || full.frame_count() != 1 {
+        return Err(KeepFull::NotStill);
+    }
+    let (drawn, age) = recent_use(full.id, now).ok_or(KeepFull::Undrawn)?;
+    if drawn.0 <= 0 || drawn.1 <= 0 {
+        return Err(KeepFull::Undrawn);
+    }
+    if age < REDUCE_AFTER {
+        return Err(KeepFull::Young);
+    }
+    let natural = full.size(0);
+    let (nw, nh) = (natural.width.0, natural.height.0);
+    if nw <= 0 || nh <= 0 {
+        return Err(KeepFull::NotStill);
+    }
+    let need = (step(drawn.0 as f32 / nw as f32), step(drawn.1 as f32 / nh as f32));
+    if need.0 == 0 || need.1 == 0 {
+        return Err(KeepFull::DrawnLarge);
+    }
+    let full_bytes = nw as usize * nh as usize * 4;
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        // The smallest copy at least as large as the largest draw: steps at or
+        // above the needed ones, the lowest of those.
+        let key = c
+            .copies
+            .keys()
+            .filter(|k| k.0 == full.id && k.1 == 0 && k.2 >= need.0 && k.3 >= need.1)
+            .min_by_key(|k| (k.2 + k.3, k.2))
+            .copied()
+            .ok_or(KeepFull::NoCopy)?;
+        let bytes = c.copies.get(&key).ok_or(KeepFull::NoCopy)?.bytes;
+        if bytes.saturating_mul(4) > full_bytes || full_bytes - bytes < MIN_SAVING {
+            return Err(KeepFull::SmallSaving);
+        }
+        let copy = c.copies.remove(&key).ok_or(KeepFull::NoCopy)?;
+        c.bytes -= copy.bytes;
+        Ok(copy.image)
+    })
+}
+
+/// The ids of reduced images drawn larger than their pixels since the last call.
+pub(crate) fn take_wanted_full() -> HashSet<ImageId> {
+    WANT_FULL.with(|w| std::mem::take(&mut *w.borrow_mut()))
+}
+
+/// Marks a reduced image as wanting its full decode back (an `<img>` whose
+/// pixels a canvas reads).
+pub(crate) fn want_full(id: ImageId) {
+    WANT_FULL.with(|w| w.borrow_mut().insert(id));
+}
+
+/// Forgets the draws of images that are gone.
+pub(crate) fn prune_uses() {
+    USES.with(|u| u.borrow_mut().retain(|_, e| e.image.strong_count() > 0));
+}
+
+/// Something other than this module swapped or freed an atlas tile this
+/// frame: no retained-render boundary may replay (see [`holds_replays`]).
+pub(crate) fn hold_replays_too() {
+    HOLD_REPLAYS.with(|h| h.set(true));
 }
 
 /// One copy to make on the resampling thread.
@@ -181,6 +363,7 @@ pub(crate) fn stepped(natural: u32, step: i32) -> u32 {
 /// `gpui::ImageResampler`: the copy to draw `image`'s `frame` from at
 /// `device` pixels, or `None` to draw it as it is.
 fn resampler(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) -> Option<Arc<RenderImage>> {
+    note_use(image, device, Instant::now());
     let out = choose(image, frame, device);
     if TRACK.load(std::sync::atomic::Ordering::Relaxed) {
         note_seen(image, device, out.is_none());
@@ -414,7 +597,9 @@ fn make(image: &RenderImage, frame: usize, target: (u32, u32), premultiplied: bo
     let bytes = image.as_bytes(frame)?;
     let out = downscale(bytes, size.width.0 as u32, size.height.0 as u32, target.0, target.1, premultiplied);
     let buffer = image::RgbaImage::from_raw(target.0, target.1, out)?;
-    Some(RenderImage::new(vec![image::Frame::new(buffer)]))
+    // The picture's size rides along, so the copy can stand in for the
+    // decode ([`reduced_copy`]).
+    Some(RenderImage::new(vec![image::Frame::new(buffer)]).with_natural_size(image.natural_size(frame)))
 }
 
 fn submit(job: Job) {
@@ -745,5 +930,58 @@ mod tests {
             insert(&mut c, key, Arc::new(made), source, 0);
         });
         assert!(resampler(&img, 0, device(60, 60)).is_some());
+    }
+
+    /// Past [`REDUCE_AFTER`], seen from a draw made just now.
+    fn settled() -> Instant {
+        Instant::now() + REDUCE_AFTER + Duration::from_millis(50)
+    }
+
+    #[test]
+    fn a_copy_stands_in_for_a_decode_drawn_only_small() {
+        new_frame();
+        let img = image(checker(600, 600), 600, 600);
+        let copy = resampler(&img, 0, device(40, 40)).expect("the first copy, on the spot");
+        assert_eq!(copy.natural_size(0), img.size(0), "a copy carries the picture's size");
+        assert_eq!(reduced_copy(&img, Instant::now()).err(), Some(KeepFull::Young), "drawn for less than REDUCE_AFTER: the decode stays");
+
+        let reduced = reduced_copy(&img, settled()).expect("drawn only at 40 px: the copy stands in");
+        assert!(Arc::ptr_eq(&reduced, &copy));
+        assert!(reduced.is_reduced());
+        // Out of the copy cache and NOT retired: its atlas tile is what is
+        // drawn from next.
+        CACHE.with(|c| {
+            let c = c.borrow();
+            assert!(c.copies.values().all(|v| !Arc::ptr_eq(&v.image, &reduced)));
+            assert!(c.retired.iter().all(|r| !Arc::ptr_eq(r, &reduced)));
+        });
+
+        // Drawn at about its own size: as it is, wanting nothing.
+        let _ = take_wanted_full();
+        assert!(resampler(&reduced, 0, device(40, 40)).is_none());
+        assert!(take_wanted_full().is_empty());
+        // A reduced decode is never reduced again.
+        assert_eq!(reduced_copy(&reduced, settled()).err(), Some(KeepFull::NotStill));
+        // Drawn large: the full decode is wanted back.
+        let _ = resampler(&reduced, 0, device(300, 300));
+        assert!(take_wanted_full().contains(&reduced.id));
+    }
+
+    #[test]
+    fn a_decode_stays_when_a_copy_would_save_little() {
+        new_frame();
+        // Drawn large as well as small: no copy covers the large draw.
+        let big = image(checker(600, 600), 600, 600);
+        let _ = resampler(&big, 0, device(40, 40));
+        let _ = resampler(&big, 0, device(400, 400));
+        assert_eq!(reduced_copy(&big, settled()).err(), Some(KeepFull::NoCopy));
+        // A small image: a copy would free less than MIN_SAVING.
+        new_frame();
+        let small = image(checker(120, 120), 120, 120);
+        assert!(resampler(&small, 0, device(20, 20)).is_some());
+        assert_eq!(reduced_copy(&small, settled()).err(), Some(KeepFull::SmallSaving));
+        // Never drawn: nothing says what size it is needed at.
+        let unseen = image(checker(600, 600), 600, 600);
+        assert_eq!(reduced_copy(&unseen, settled()).err(), Some(KeepFull::Undrawn));
     }
 }

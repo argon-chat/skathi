@@ -934,7 +934,12 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let fonts_moved = fonts::tick(window, cx);
     // Image copies for downscaled draws (#22): the ones that landed repaint.
     let resampled = resample::tick(window, cx);
-    anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved | resampled
+    // What gpui's asset cache keeps of the images: decodes nobody shows go,
+    // decodes drawn only small give way to their copy, and come back full
+    // when drawn large (`img::residency_tick`). After the resample tick: it
+    // takes the copies that tick kept.
+    let restored = img::residency_tick(window, cx);
+    anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved | resampled | restored
 }
 
 /// The per-frame work a SECONDARY window has to do for itself, because the

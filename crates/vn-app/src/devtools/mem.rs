@@ -932,6 +932,7 @@ struct Images {
 fn images(cx: &App) -> Images {
     let (entries, image_entries, decoded, decoded_bytes) = cx.image_asset_stats();
     let r = vn_tree::devtools::image_stats();
+    let res = vn_tree::devtools::residency_stats();
     let largest: Vec<Json> = r
         .largest
         .iter()
@@ -980,6 +981,31 @@ fn images(cx: &App) -> Images {
                     ("copies", Json::n(r.copies as f64)),
                     ("MB", mb(r.copies_bytes as f64)),
                     ("inFlight", Json::n(r.copies_in_flight as f64)),
+                ]),
+            ),
+            (
+                // vn-tree img.rs "residency": since boot.
+                "residency",
+                Json::obj(vec![
+                    ("known", Json::n(res.known as f64)),
+                    ("reduced", Json::n(res.reduced as f64)),
+                    ("reducedFreedMB", mb(res.reduced_freed as f64)),
+                    ("restored", Json::n(res.restored as f64)),
+                    ("evicted", Json::n(res.evicted as f64)),
+                    ("evictedFreedMB", mb(res.evicted_freed as f64)),
+                    (
+                        // Shown decodes the latest sweep left full, by reason.
+                        "keptFull",
+                        Json::obj(vec![
+                            ("notStill", Json::n(res.kept_full.not_still as f64)),
+                            ("undrawn", Json::n(res.kept_full.undrawn as f64)),
+                            ("young", Json::n(res.kept_full.young as f64)),
+                            ("drawnLarge", Json::n(res.kept_full.drawn_large as f64)),
+                            ("noCopy", Json::n(res.kept_full.no_copy as f64)),
+                            ("smallSaving", Json::n(res.kept_full.small_saving as f64)),
+                            ("canvasRead", Json::n(res.kept_full.canvas_read as f64)),
+                        ]),
+                    ),
                 ]),
             ),
         ]),
@@ -1150,7 +1176,7 @@ fn breakdown(i: &Inputs) -> Json {
         Some(live) => {
             let parts = [
                 ("retained tree (nodes, styles, vars) — estimate", i.tree_bytes),
-                ("decoded images (gpui asset cache, full resolution)", i.images.decoded),
+                ("decoded images (gpui asset cache; a reduced one is its copy's size)", i.images.decoded),
                 ("downscaled image copies (resample LRU)", i.images.copies),
                 ("canvas surfaces (host copies)", side("canvasHostCopyBytes")),
                 ("SVG colour rasters", side("svgColourRasterBytes")),
