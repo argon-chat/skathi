@@ -120,6 +120,18 @@ pub fn is_enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
+/// `(entries in the ring, bytes of their text and style runs)` — devtools `mem`.
+pub fn mem_stats() -> (usize, usize) {
+    RING.with(|r| {
+        let r = r.borrow();
+        let bytes = r
+            .iter()
+            .map(|e| std::mem::size_of::<Entry>() + e.text.capacity() + e.styles.as_ref().map_or(0, String::capacity))
+            .sum();
+        (r.len(), bytes)
+    })
+}
+
 /// Appends one line. Cheap no-op while disabled.
 ///
 /// The ring is thread-local because everything that records lives on the VM /

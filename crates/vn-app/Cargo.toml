@@ -166,6 +166,11 @@ gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    # `IDXGIAdapter3::QueryVideoMemoryInfo` — the GPU memory DXGI attributes to
+    # this process, for the devtools `mem` command (src/devtools/mem.rs). Both
+    # are already compiled for the graph (gpui_windows, vn-video).
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Storage_Xps",
     # `FindResourceW` / `LoadResource` / `LockResource` — the stamped payload,

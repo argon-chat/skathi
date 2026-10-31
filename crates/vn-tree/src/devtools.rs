@@ -105,6 +105,66 @@ pub fn node_count() -> u32 {
     tree::read_tree(|t| t.live_count())
 }
 
+pub use crate::resample::ImageStats;
+pub use crate::tree::TreeMem;
+
+/// The retained tree's memory, estimated from its live structures
+/// (`Tree::mem_estimate`) — devtools `mem`.
+pub fn tree_mem() -> TreeMem {
+    tree::read_tree(|t| t.mem_estimate())
+}
+
+/// The painted-image registry and the downscaled-copy cache (`crate::resample`).
+pub fn image_stats() -> ImageStats {
+    crate::resample::image_stats()
+}
+
+/// Arms the painted-image registry (`VN_MEMSTATS=1`).
+pub fn set_image_tracking(on: bool) {
+    crate::resample::set_tracking(on);
+}
+
+/// Everything else vn-tree holds that is worth a line in `mem`, as named
+/// counters: `(name, value)`. Byte counts end in `Bytes`.
+pub fn side_stats() -> Vec<(&'static str, u64)> {
+    let (memos, src_bytes, images, image_bytes, backgrounds) = crate::img::mem_stats();
+    let (canvases, canvas_bytes) = crate::render::canvas::mem_stats();
+    let (svg_docs, svg_rasters, svg_bytes) = crate::svg::mem_stats();
+    let (log_entries, log_bytes) = crate::log::mem_stats();
+    let (declared, waiting, waiting_bytes, registered, registered_bytes) = crate::fonts::mem_stats();
+    let (boundaries, entities, cached_ids) = crate::cache::mem_stats();
+    let (focus, inputs, scrolls, bounds) = crate::render::side_state_counts();
+    let u = |v: usize| v as u64;
+    vec![
+        ("imgMemos", u(memos)),
+        ("imgSrcBytes", u(src_bytes)),
+        ("imgEncodedInMemory", u(images)),
+        ("imgEncodedInMemoryBytes", u(image_bytes)),
+        ("cssBackgroundLayers", u(backgrounds)),
+        ("canvases", u(canvases)),
+        ("canvasHostCopyBytes", u(canvas_bytes)),
+        ("svgDocs", u(svg_docs)),
+        ("svgColourRasters", u(svg_rasters)),
+        ("svgColourRasterBytes", u(svg_bytes)),
+        ("videos", u(crate::video::count())),
+        ("lotties", u(crate::lottie::count())),
+        ("logRingEntries", u(log_entries)),
+        ("logRingBytes", u(log_bytes)),
+        ("fontFacesDeclared", u(declared)),
+        ("fontFacesLoadedNotRegistered", u(waiting)),
+        ("fontFacesLoadedNotRegisteredBytes", u(waiting_bytes)),
+        ("fontFacesRegistered", registered),
+        ("fontFacesRegisteredBytes", registered_bytes),
+        ("cacheBoundaries", u(boundaries)),
+        ("cacheBoundaryEntities", u(entities)),
+        ("cacheBoundaryNodeIds", u(cached_ids)),
+        ("focusHandles", u(focus)),
+        ("inputStates", u(inputs)),
+        ("scrollHandles", u(scrolls)),
+        ("boundsEntries", u(bounds)),
+    ]
+}
+
 /// How many scroll containers registered with the wheel router in the frame
 /// just painted.
 ///

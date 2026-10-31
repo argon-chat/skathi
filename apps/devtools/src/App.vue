@@ -47,8 +47,10 @@ import {
   closeMenu,
   closeNetDetail,
   highlight,
+  MEM_POLL_MS,
   pickStep,
   pollFallback,
+  refreshMem,
   refreshTargets,
   refreshWindows,
   setTab,
@@ -176,6 +178,11 @@ onMounted(async () => {
   });
   // Only ever runs when the socket is not live; see `store.pollFallback`.
   every(1000, () => pollFallback());
+  // The memory breakdown is a command (`store.refreshMem`), polled only while
+  // the panel that shows it is open.
+  every(MEM_POLL_MS, () => {
+    if (state.status === "attached" && state.tab === "performance") void refreshMem();
+  });
 });
 
 onUnmounted(() => {

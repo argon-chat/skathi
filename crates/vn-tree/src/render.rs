@@ -386,6 +386,19 @@ pub(crate) fn build_count() -> u64 {
     BUILDS.with(|c| c.get())
 }
 
+/// Per-node side state the renderer keeps (devtools `mem`): `(focus handles,
+/// text-input states, scroll handles, bounds entries over every window)`.
+pub(crate) fn side_state_counts() -> (usize, usize, usize, usize) {
+    let focus = FOCUS_HANDLES.with(|m| m.borrow().len());
+    let inputs = INPUT_STATES.with(|m| m.borrow().len());
+    let scrolls = SCROLL_HANDLES.with(|m| m.borrow().len());
+    let bounds = windows::keys()
+        .into_iter()
+        .filter_map(|k| windows::peek(k, |w| w.bounds.len() + w.prev_bounds.len()))
+        .sum();
+    (focus, inputs, scrolls, bounds)
+}
+
 /// Builds in any window since the process started — see [`LAYOUTS`].
 pub(crate) fn layout_count() -> u64 {
     LAYOUTS.with(|c| c.get())

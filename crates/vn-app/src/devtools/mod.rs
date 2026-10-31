@@ -29,6 +29,8 @@
 //! The whole module is compiled out under `--features prod`.
 
 mod net; // the Network panel's feed (a JS-side fetch/XHR/WebSocket tee) and `net_detail`
+mod mem; // `mem`: where the process's memory is (m26 perf work)
+pub(crate) mod trace; // `trace`: a frame-by-frame record of where the time went (m26 perf work)
 mod screenshot;
 pub mod ws; // the PUSH channel: a WebSocket server on this same port
 
@@ -1214,6 +1216,20 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             Some(seq) => cmd_net_detail(seq),
         },
         "perf" => ok(perf_data()),
+        "mem" => {
+            let gc = req.get("gc").and_then(Json::as_bool).unwrap_or(false);
+            let regions = req.get("regions").and_then(Json::as_bool).unwrap_or(false);
+            match with_target(|window, cx| mem::report(gc, regions, window, cx)) {
+                Some(data) => ok(data),
+                None => err("no such window"),
+            }
+        }
+        "trace" => cmd_trace(
+            arg("op").as_deref(),
+            req.get("frames").and_then(Json::as_bool).unwrap_or(false),
+            arg("label").as_deref(),
+            num("cap"),
+        ),
         "windows" => cmd_windows(),
         "raise" => cmd_raise(),
         "storage" => cmd_storage(
@@ -2558,6 +2574,24 @@ fn cmd_raise() -> String {
     }
 }
 
+/// `trace start|stop|peek|mark` — see `trace.rs`.
+fn cmd_trace(op: Option<&str>, frames: bool, label: Option<&str>, cap: Option<f64>) -> String {
+    let result = match op.unwrap_or("peek") {
+        "start" => trace::start(cap.map(|c| c.max(0.0) as usize)),
+        "stop" => trace::report(true, frames),
+        "peek" => trace::report(false, frames),
+        "mark" => {
+            trace::mark(label.unwrap_or(""));
+            Ok(Json::obj(vec![("marked", Json::Bool(true))]))
+        }
+        other => Err(format!("trace: unknown op `{other}` — start, stop, peek or mark")),
+    };
+    match result {
+        Ok(data) => ok(data),
+        Err(e) => err(e),
+    }
+}
+
 /// The samples a `perf` reply carries: the last of the rolling ring rather than
 /// all of it. The panel draws a sparkline, the push channel sends this four
 /// times a second, and 600 floats a message would be 40 KB/s to draw a line
@@ -2632,7 +2666,7 @@ fn perf_data() -> Json {
         // The detailed phase breakdown belongs to `VN_PERF`, which OWNS those
         // counters (it clears them when it reports). Saying whether it is on
         // beats showing zeros that read as "nothing costs anything".
-        ("phases", Json::Bool(vn_tree::perf::enabled())),
+        ("phases", Json::Bool(vn_tree::perf::env_enabled())),
     ])
 }
 

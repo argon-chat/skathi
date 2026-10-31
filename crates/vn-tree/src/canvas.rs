@@ -192,6 +192,22 @@ struct Entry {
     moving: bool,
 }
 
+/// `(canvases with a presented bitmap, its BGRA bytes)` — the host copies
+/// (devtools `mem`); redjs's own bitmap is the other copy.
+pub(crate) fn mem_stats() -> (usize, usize) {
+    CANVASES.with(|c| {
+        let c = c.borrow();
+        let bytes = c
+            .values()
+            .filter_map(|e| match &e.pixels {
+                Some(Pixels::Atlas(img)) => Some(img.as_bytes(0).map_or(0, <[u8]>::len)),
+                None => None,
+            })
+            .sum();
+        (c.len(), bytes)
+    })
+}
+
 thread_local! {
     static CANVASES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
     /// When the last animating canvas is due to be still ([`STILL`]): the

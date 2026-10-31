@@ -344,6 +344,17 @@ struct Ring {
     evicted: u64,
 }
 
+/// What the network tee holds (devtools `mem`): `(summary rows, their JSON
+/// bytes, detail records, body bytes held, metadata bytes, bodies evicted
+/// since boot)`.
+pub(crate) fn mem_stats() -> (usize, usize, usize, usize, usize, u64) {
+    let ring = RING.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(r) = ring.as_ref() else { return (0, 0, 0, 0, 0, 0) };
+    let row_bytes = r.entries.iter().map(|(_, s)| s.capacity()).sum();
+    let meta: usize = r.records.iter().map(|x| x.meta_bytes).sum();
+    (r.entries.len(), row_bytes, r.records.len(), r.held, meta, r.evicted)
+}
+
 impl Ring {
     fn new() -> Ring {
         Ring {

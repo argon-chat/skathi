@@ -325,6 +325,8 @@ fn boot_js_line(boot_ms: f32) -> String {
 #[inline]
 pub fn frame() {
     #[cfg(vn_devtools)]
+    crate::devtools::trace::frame_start();
+    #[cfg(vn_devtools)]
     roll_frame(Instant::now());
     if !enabled() {
         // The record closes at the first frame whether or not anybody prints it.
@@ -390,17 +392,23 @@ fn stamp(f: impl FnOnce(&mut State, f32)) {
 /// The JS pump (host fns, HMR poll, timers/rAF/microtasks, the tree flush)
 /// finished; gpui is about to decide whether to draw.
 pub fn pump_done() {
+    #[cfg(vn_devtools)]
+    crate::devtools::trace::pump_done();
     stamp(|st, dt| st.pump_ms += dt);
 }
 
 /// gpui reached the hosting view's `render()` — everything between here and
 /// [`pump_done`] is gpui's own per-frame setup for a draw it decided to do.
 pub fn render_begin() {
+    #[cfg(vn_devtools)]
+    crate::devtools::trace::render_begin();
     stamp(|st, dt| st.setup_ms += dt);
 }
 
 /// The element tree for this frame is built; layout and paint follow.
 pub fn render_done() {
+    #[cfg(vn_devtools)]
+    crate::devtools::trace::render_done();
     stamp(|st, dt| {
         st.render_ms += dt;
         st.draws += 1;
@@ -410,6 +418,8 @@ pub fn render_done() {
 
 /// Labels the scenario the numbers belong to; flushes the window in progress.
 pub fn mark(tag: &str) {
+    #[cfg(vn_devtools)]
+    crate::devtools::trace::mark(tag);
     if !enabled() {
         return;
     }

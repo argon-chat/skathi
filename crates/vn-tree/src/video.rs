@@ -99,6 +99,11 @@ thread_local! {
     static VIDEO_STATES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
 }
 
+/// Live `<video>` elements (devtools `mem`).
+pub(crate) fn count() -> usize {
+    VIDEO_STATES.with(|m| m.borrow().len())
+}
+
 /// Frames whose node was GC'd, queued against the window whose atlas holds
 /// their tiles — see `lottie::queue_drops` for why the key is the window.
 fn queue_drops(win: crate::windows::WinKey, images: impl IntoIterator<Item = Arc<RenderImage>>) {

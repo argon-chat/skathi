@@ -77,6 +77,11 @@ thread_local! {
     static LAST_TICK: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
+/// Live `<lottie>` elements (devtools `mem`).
+pub(crate) fn count() -> usize {
+    LOTTIE_STATES.with(|m| m.borrow().len())
+}
+
 /// Rasters whose node was GC'd. `gc_node_state` has no `Window`, and dropping a
 /// `RenderImage` without `Window::drop_image` leaks its atlas tiles
 /// (CONTRACT.md §3) — so they wait for the next frame that does.

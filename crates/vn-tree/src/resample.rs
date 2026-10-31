@@ -181,6 +181,146 @@ pub(crate) fn stepped(natural: u32, step: i32) -> u32 {
 /// `gpui::ImageResampler`: the copy to draw `image`'s `frame` from at
 /// `device` pixels, or `None` to draw it as it is.
 fn resampler(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) -> Option<Arc<RenderImage>> {
+    let out = choose(image, frame, device);
+    if TRACK.load(std::sync::atomic::Ordering::Relaxed) {
+        note_seen(image, device, out.is_none());
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// the painted-image registry (devtools `mem`, VN_MEMSTATS)
+// ---------------------------------------------------------------------------
+//
+// gpui keeps every decoded image in its asset cache and gives nobody outside
+// it a way to list them. Every one that is PAINTED passes through the hook
+// above, though, with the size it is drawn at — which is the number the
+// "decoded at full size, drawn at 40 px" question needs. So, while armed, the
+// hook records each image it sees: a `Weak` (which keeps no pixels alive), its
+// natural size, the largest size it was drawn at, and whether it was ever
+// drawn from the full-size image itself (which puts the full image into the
+// polychrome atlas, where it stays until gpui is told to drop it).
+
+static TRACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct Seen {
+    image: Weak<RenderImage>,
+    /// Decoded bytes over all frames (BGRA, 4 B/px).
+    bytes: usize,
+    natural: (i32, i32),
+    /// The largest device-pixel size any frame was drawn at.
+    drawn: (i32, i32),
+    /// Drawn at least once from the full-size image (no copy).
+    full_drawn: bool,
+}
+
+thread_local! {
+    static SEEN: RefCell<HashMap<ImageId, Seen>> = RefCell::new(HashMap::new());
+}
+
+/// Arms the registry (`VN_MEMSTATS=1`, read by the host at boot).
+pub fn set_tracking(on: bool) {
+    TRACK.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn note_seen(image: &Arc<RenderImage>, device: Size<DevicePixels>, full: bool) {
+    SEEN.with(|s| {
+        let mut s = s.borrow_mut();
+        let e = s.entry(image.id).or_insert_with(|| {
+            let natural = image.size(0);
+            let bytes = (0..image.frame_count())
+                .map(|i| {
+                    let z = image.size(i);
+                    (z.width.0.max(0) as usize) * (z.height.0.max(0) as usize) * 4
+                })
+                .sum();
+            Seen {
+                image: Arc::downgrade(image),
+                bytes,
+                natural: (natural.width.0, natural.height.0),
+                drawn: (0, 0),
+                full_drawn: false,
+            }
+        });
+        e.drawn = (e.drawn.0.max(device.width.0), e.drawn.1.max(device.height.0));
+        e.full_drawn |= full;
+    });
+}
+
+/// What the painted-image registry and the copy cache hold right now.
+#[derive(Default, Debug, Clone)]
+pub struct ImageStats {
+    /// Is the registry armed at all? (Everything below except `copies*` is 0 when not.)
+    pub tracking: bool,
+    /// Painted images whose decode is still alive (something — gpui's asset
+    /// cache, a node's memo — still holds the `Arc`).
+    pub live: usize,
+    pub live_bytes: usize,
+    /// The same images, if each were decoded at the largest size it was drawn
+    /// at (no smaller than 1×1, never larger than its natural size).
+    pub live_bytes_at_drawn: usize,
+    /// Live images at least 4× the pixels they are drawn at.
+    pub oversized: usize,
+    pub oversized_bytes: usize,
+    /// Images drawn at least once from the full-size decode — each of those put
+    /// the full image into the polychrome atlas (estimate: a later
+    /// `drop_image` is not seen here).
+    pub full_in_atlas: usize,
+    pub full_in_atlas_bytes: usize,
+    /// Painted images whose decode has gone since.
+    pub gone: usize,
+    /// The downscaled copies this module keeps, and their bytes (budget
+    /// [`BUDGET_BYTES`]).
+    pub copies: usize,
+    pub copies_bytes: usize,
+    pub copies_in_flight: usize,
+    /// The five largest live decodes: (natural w, h, drawn w, h, bytes).
+    pub largest: Vec<(i32, i32, i32, i32, usize)>,
+}
+
+/// The registry and copy-cache totals (devtools `mem`). Prunes nothing: a
+/// gone image stays counted under `gone`.
+pub fn image_stats() -> ImageStats {
+    let mut out = ImageStats { tracking: TRACK.load(std::sync::atomic::Ordering::Relaxed), ..Default::default() };
+    CACHE.with(|c| {
+        let c = c.borrow();
+        out.copies = c.copies.len();
+        out.copies_bytes = c.bytes;
+        out.copies_in_flight = c.in_flight.len();
+    });
+    SEEN.with(|s| {
+        let s = s.borrow();
+        let mut largest: Vec<(i32, i32, i32, i32, usize)> = Vec::new();
+        for e in s.values() {
+            if e.full_drawn {
+                out.full_in_atlas += 1;
+                out.full_in_atlas_bytes += e.bytes;
+            }
+            if e.image.strong_count() == 0 {
+                out.gone += 1;
+                continue;
+            }
+            out.live += 1;
+            out.live_bytes += e.bytes;
+            let (nw, nh) = (e.natural.0.max(1) as usize, e.natural.1.max(1) as usize);
+            let (dw, dh) = (e.drawn.0.clamp(1, nw as i32) as usize, e.drawn.1.clamp(1, nh as i32) as usize);
+            // Scaled per frame by the same ratio as frame 0.
+            let ratio = (dw * dh) as f64 / (nw * nh) as f64;
+            out.live_bytes_at_drawn += (e.bytes as f64 * ratio) as usize;
+            if nw * nh >= 4 * dw * dh {
+                out.oversized += 1;
+                out.oversized_bytes += e.bytes;
+            }
+            largest.push((e.natural.0, e.natural.1, e.drawn.0, e.drawn.1, e.bytes));
+        }
+        largest.sort_by(|a, b| b.4.cmp(&a.4));
+        largest.truncate(5);
+        out.largest = largest;
+    });
+    out
+}
+
+fn choose(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) -> Option<Arc<RenderImage>> {
     let natural = image.size(frame);
     let (nw, nh) = (natural.width.0, natural.height.0);
     if nw <= 0 || nh <= 0 || device.width.0 <= 0 || device.height.0 <= 0 {
@@ -214,10 +354,12 @@ fn resampler(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>)
                     let t = Instant::now();
                     let made = Arc::new(make(image, frame, target, premultiplied)?);
                     c.sync_spent += t.elapsed();
+                    crate::perf::note_resample(Some(t.elapsed().as_secs_f32() * 1000.0));
                     insert(&mut c, key, made.clone(), Arc::downgrade(image), clock);
                     Some(made)
                 } else {
                     c.in_flight.insert(key);
+                    crate::perf::note_resample(None);
                     submit(Job { key, source: image.clone(), target, premultiplied });
                     None
                 }

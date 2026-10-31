@@ -102,6 +102,43 @@ thread_local! {
 
 type Snapshot = (u64, Option<std::time::SystemTime>);
 
+/// What this module holds (devtools `mem`): `(per-node memos, bytes of their
+/// src strings, distinct in-memory encoded images (data:/blob: bytes),
+/// their encoded bytes, CSS background entries)`. The DECODES are gpui's.
+pub(crate) fn mem_stats() -> (usize, usize, usize, usize, usize) {
+    let mut seen = std::collections::HashSet::new();
+    let (mut memos, mut src_bytes, mut images, mut image_bytes) = (0, 0, 0, 0);
+    let mut count = |source: &ImageSource| {
+        if let ImageSource::Image(img) = source {
+            if seen.insert(img.id) {
+                images += 1;
+                image_bytes += img.bytes.capacity();
+            }
+        }
+    };
+    RESOLVED.with(|m| {
+        for memo in m.borrow().values() {
+            memos += 1;
+            src_bytes += memo.src.capacity();
+            if let Some(s) = &memo.source {
+                count(s);
+            }
+        }
+    });
+    let backgrounds = BACKGROUNDS.with(|b| {
+        let b = b.borrow();
+        for layers in b.values() {
+            for (_, s) in layers {
+                if let Some(s) = s {
+                    count(s);
+                }
+            }
+        }
+        b.values().map(Vec::len).sum::<usize>()
+    });
+    (memos, src_bytes, images, image_bytes, backgrounds)
+}
+
 /// One node's memo entry.
 struct Memo {
     src: String,

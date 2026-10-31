@@ -222,6 +222,36 @@ pub struct Node {
     pub computed: Option<vn_css::ComputedStates>,
 }
 
+/// [`Tree::mem_estimate`]'s answer.
+#[derive(Default, Debug, Clone)]
+pub struct TreeMem {
+    pub slots: usize,
+    pub nodes: usize,
+    pub elements: usize,
+    pub texts: usize,
+    pub anchors: usize,
+    pub computed: usize,
+    /// The slab itself (`Vec<Option<Node>>`, capacity).
+    pub slot_bytes: usize,
+    /// Heap a node owns directly: children, text, inline-style text, classes,
+    /// attributes, scope hashes.
+    pub owned_bytes: usize,
+    /// `ComputedStates` structs, inline in each node.
+    pub computed_bytes: usize,
+    /// Distinct `Rc<StyleRefinement>`s the computed styles point at.
+    pub refinements: usize,
+    pub refinement_bytes: usize,
+    /// Distinct custom-property maps, and their entries.
+    pub vars_maps: usize,
+    pub var_entries: usize,
+    pub vars_bytes: usize,
+    /// Distinct parsed inline styles.
+    pub inlines: usize,
+    pub inline_bytes: usize,
+    pub names: usize,
+    pub total_bytes: usize,
+}
+
 /// Above this many separately-marked nodes, scoping stops paying: the
 /// bookkeeping (ancestor checks, per-root walks, repeated visits where two
 /// marks overlap) costs more than one straight pass over the document. A Vue
@@ -657,6 +687,68 @@ impl Tree {
         self.nodes.iter().filter(|n| n.is_some()).count() as u32
     }
 
+    /// What the retained tree holds, estimated from the live structures
+    /// (devtools `mem`). Shallow sizes plus the heap capacity of every
+    /// container a node owns; an `Rc` shared between nodes is counted once (by
+    /// pointer). The estimate leaves out allocator overhead and the inside of
+    /// a `StyleRefinement` (its few boxed fields), so it is a floor.
+    pub(crate) fn mem_estimate(&self) -> TreeMem {
+        use std::collections::HashSet;
+        use std::mem::size_of;
+        let mut m = TreeMem { slots: self.nodes.len(), slot_bytes: self.nodes.capacity() * size_of::<Option<Node>>(), ..TreeMem::default() };
+        let mut refinements: HashSet<*const gpui::StyleRefinement> = HashSet::new();
+        let mut vars: HashSet<*const vn_css::Vars> = HashSet::new();
+        let mut inlines: HashSet<*const vn_css::InlineStyle> = HashSet::new();
+        let note_ref = |r: &std::rc::Rc<gpui::StyleRefinement>, set: &mut HashSet<*const gpui::StyleRefinement>| {
+            set.insert(std::rc::Rc::as_ptr(r));
+        };
+        for n in self.nodes.iter().flatten() {
+            m.nodes += 1;
+            match n.kind {
+                Kind::Element => m.elements += 1,
+                Kind::Text => m.texts += 1,
+                Kind::Anchor => m.anchors += 1,
+            }
+            let mut own = n.children.capacity() * 4 + n.text.capacity() + n.class_attr.capacity();
+            own += n.style.capacity() * size_of::<(u32, String)>() + n.style.iter().map(|(_, v)| v.capacity()).sum::<usize>();
+            own += n.classes.capacity() * size_of::<String>() + n.classes.iter().map(|c| c.capacity()).sum::<usize>();
+            own += n.props.capacity() * size_of::<(u32, String, u32)>() + n.props.iter().map(|(_, v, _)| v.capacity()).sum::<usize>();
+            own += n.scopes.capacity() * size_of::<String>() + n.scopes.iter().map(|s| s.capacity()).sum::<usize>();
+            m.owned_bytes += own;
+            if let Some(i) = &n.inline {
+                inlines.insert(std::rc::Rc::as_ptr(i));
+            }
+            if let Some(cs) = &n.computed {
+                m.computed += 1;
+                note_ref(&cs.base, &mut refinements);
+                for r in [&cs.hover, &cs.active, &cs.focus, &cs.focus_visible, &cs.focus_within, &cs.placeholder, &cs.selection, &cs.file_selector_button]
+                    .into_iter()
+                    .flatten()
+                {
+                    note_ref(r, &mut refinements);
+                }
+                for (_, r) in [&cs.group_hover, &cs.group_active].into_iter().flatten() {
+                    note_ref(r, &mut refinements);
+                }
+                if vars.insert(std::rc::Rc::as_ptr(&cs.vars)) {
+                    m.var_entries += cs.vars.len();
+                }
+            }
+        }
+        m.computed_bytes = m.computed * size_of::<vn_css::ComputedStates>();
+        m.refinements = refinements.len();
+        m.refinement_bytes = refinements.len() * (size_of::<gpui::StyleRefinement>() + 16);
+        m.vars_maps = vars.len();
+        // An entry is two `Rc<str>` fat pointers; the strings themselves are
+        // shared down the tree and not counted.
+        m.vars_bytes = vars.len() * (size_of::<vn_css::Vars>() + 16) + m.var_entries * 2 * size_of::<std::rc::Rc<str>>();
+        m.inlines = inlines.len();
+        m.inline_bytes = inlines.len() * (size_of::<vn_css::InlineStyle>() + 16);
+        m.names = self.names.len();
+        m.total_bytes = m.slot_bytes + m.owned_bytes + m.computed_bytes + m.refinement_bytes + m.vars_bytes + m.inline_bytes;
+        m
+    }
+
     /// Marks one subtree for a re-cascade — the scoped half of [`mark_dirty`].
     /// A pop-out resizing changes the `@media` answers for the subtree IT
     /// paints and for nothing else (docs/MULTIWINDOW.md §6.3).
@@ -721,6 +813,7 @@ impl Tree {
             // document pass is cheaper than the bookkeeping.
             self.dirty_nodes.clear();
             self.dirty_all = true;
+            crate::perf::note_full(crate::perf::FullReason::ScopedLimit);
             return;
         }
         if !self.dirty_nodes.contains(&id) {
@@ -1028,6 +1121,7 @@ impl Tree {
         // container is never inserted, and its contents still need styles for
         // the frame they are re-attached in).
         let mut diagnostics: Vec<String> = Vec::new();
+        let full = self.dirty_all;
         let roots = self.restyle_roots(engine);
         let cascaded_anything = !roots.is_empty();
         let computed: Vec<(u32, vn_css::ComputedStates)> = {
@@ -1278,6 +1372,7 @@ impl Tree {
         for d in keyframe_diagnostics.into_inner() {
             warn_css(&format!("[css] {d}"));
         }
+        crate::perf::note_restyle_shape(full, restyled.len() as u64);
         for id in restyled {
             self.touch(id);
         }
@@ -1660,7 +1755,10 @@ fn sync_runtime_sheets() {
     // gave re-print once per step, which is the exact noise `set_stylesheet`'s
     // freshness check exists to prevent. Whatever the new text says that has
     // not been said is a new string and speaks on its own.
-    recompile_sheet("a <style> element in the tree changed — recompiling the stylesheet");
+    recompile_sheet(
+        crate::perf::FullReason::StyleElement,
+        "a <style> element in the tree changed — recompiling the stylesheet",
+    );
 }
 
 pub fn set_stylesheet(css: String) {
@@ -1673,8 +1771,17 @@ pub fn set_stylesheet(css: String) {
     if fresh {
         CSS_WARNED.with(|w| w.borrow_mut().clear());
     }
+    let before = crate::perf::live_bytes();
     SHEET_SOURCE.with(|s| *s.borrow_mut() = css);
-    set_engine(compile(&full_source()));
+    let span = crate::perf::Span::start();
+    let took = std::time::Instant::now();
+    let source = full_source();
+    let engine = compile(&source);
+    crate::perf::note_recompile(span.ms());
+    set_engine(engine);
+    let len = source.len();
+    drop(source);
+    crate::perf::note_sheet_compile(took.elapsed().as_secs_f32() * 1000.0, len, before, crate::perf::live_bytes());
 }
 
 /// Compiles the sheet, after handing its `@font-face` rules to
@@ -1690,7 +1797,7 @@ fn compile(css: &str) -> vn_css::Engine {
 /// Called from [`crate::fonts`]'s frame tick, after its new installed-font
 /// list is in place.
 pub(crate) fn recompile_for_fonts() {
-    recompile_sheet("web fonts were registered — recompiling the stylesheet");
+    recompile_sheet(crate::perf::FullReason::Fonts, "web fonts were registered — recompiling the stylesheet");
     with_tree(|t| {
         t.invalidate_font_inline();
         t.mark_dirty();
@@ -1769,7 +1876,7 @@ pub fn restyle_all() {
     // primary window's viewport.
     let basis_moved = vn_css::set_viewport_basis(env.viewport_width, env.viewport_height);
     if basis_moved && vn_css::uses_viewport_units() {
-        recompile_sheet(&format!(
+        recompile_sheet(crate::perf::FullReason::ViewportBasis, &format!(
             "viewport basis is now {}x{}px — recompiling the stylesheet (it uses vh/vw units)",
             env.viewport_width, env.viewport_height
         ));
@@ -1819,7 +1926,7 @@ pub fn restyle_all() {
         if !vn_css::set_rem_basis(root_font_size) {
             break;
         }
-        if !recompile_sheet(&format!(
+        if !recompile_sheet(crate::perf::FullReason::RemBasis, &format!(
             "rem basis is now {root_font_size}px (the root element's font-size) — recompiling \n             the stylesheet"
         )) {
             break;
@@ -1904,6 +2011,7 @@ pub fn flush_pending_style() {
         true
     });
     if pending {
+        crate::perf::note_style_flush();
         restyle_all();
         crate::render::gc_node_state();
         animator_gc();
@@ -1914,7 +2022,7 @@ pub fn flush_pending_style() {
 /// and marks the tree for a full restyle. `false` = there was no source to
 /// recompile (before the first `__vn_set_stylesheet`), so the caller should
 /// stop.
-fn recompile_sheet(why: &str) -> bool {
+fn recompile_sheet(reason: crate::perf::FullReason, why: &str) -> bool {
     // `dev`, not `css`. Nothing here describes a divergence from a browser:
     // it says the engine flattened `rem`/`vh` at compile time and has just
     // re-flattened them against a number that moved. A developer counting CSS
@@ -1928,7 +2036,16 @@ fn recompile_sheet(why: &str) -> bool {
     if css.trim().is_empty() {
         return false;
     }
-    set_engine(compile(&css));
+    let before = crate::perf::live_bytes();
+    let span = crate::perf::Span::start();
+    let took = std::time::Instant::now();
+    let engine = compile(&css);
+    crate::perf::note_recompile(span.ms());
+    crate::perf::note_full(reason);
+    set_engine(engine);
+    let len = css.len();
+    drop(css);
+    crate::perf::note_sheet_compile(took.elapsed().as_secs_f32() * 1000.0, len, before, crate::perf::live_bytes());
     with_tree(|t| t.mark_dirty());
     true
 }

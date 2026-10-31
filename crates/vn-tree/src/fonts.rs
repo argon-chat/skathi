@@ -920,6 +920,24 @@ fn start_wanted(cx: &mut App) -> bool {
     true
 }
 
+thread_local! {
+    /// Web fonts handed to the text system since boot: `(faces, bytes)`.
+    /// DirectWrite keeps its own copy of each for the life of the process.
+    static REGISTERED: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+}
+
+/// `(faces declared, faces loaded and waiting, bytes waiting, faces
+/// registered since boot, bytes registered since boot)` — devtools `mem`.
+pub(crate) fn mem_stats() -> (usize, usize, usize, u64, u64) {
+    let (declared, waiting, waiting_bytes) = FONTS.with(|f| {
+        let f = f.borrow();
+        let waiting: Vec<usize> = f.faces.iter().filter_map(|x| x.ready.as_ref().map(Vec::len)).collect();
+        (f.faces.len(), waiting.len(), waiting.iter().sum())
+    });
+    let (reg, reg_bytes) = REGISTERED.with(Cell::get);
+    (declared, waiting, waiting_bytes, reg, reg_bytes)
+}
+
 /// Folds finished loads into the faces and hands every loaded face that is in
 /// the set to the text system, in one `add_fonts`. A face loaded outside the
 /// set (a script's `load()` before `document.fonts.add`) is registered on the
@@ -966,6 +984,9 @@ fn register_finished(cx: &mut App) {
     if fresh.is_empty() {
         return;
     }
+    let bytes: u64 = fresh.iter().map(|b| b.len() as u64).sum();
+    REGISTERED.with(|r| r.set((r.get().0 + fresh.len() as u64, r.get().1 + bytes)));
+    crate::perf::note_fonts(fresh.len() as u32, bytes);
     // DirectWrite copies the bytes (an in-memory font file reference without
     // an owner), so nothing has to outlive this call.
     if let Err(e) = cx.text_system().add_fonts(fresh) {

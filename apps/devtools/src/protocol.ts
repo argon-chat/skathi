@@ -248,6 +248,57 @@ export interface PerfReply {
   phases: boolean;
 }
 
+/** One line of a memory category (`crates/vn-app/src/devtools/mem.rs`, `breakdown`). */
+export interface MemItem {
+  label: string;
+  bytes: number;
+  /**
+   * Not a slice of its category: a figure from another accountant shown beside
+   * the slices it overlaps (JSC's own GC heap count, inside mimalloc's pages).
+   */
+  info?: boolean;
+}
+
+export interface MemCategory {
+  /** `images` | `mapped` | `jsc` | `rust` | `other` — stable, the colour key. */
+  key: string;
+  label: string;
+  bytes: number;
+  note: string;
+  items: MemItem[];
+  /**
+   * Only from `mem {regions: true}`: the category's pages in the working set
+   * (RAM), and the private ones among them (Task Manager's "Memory" counts those).
+   */
+  residentBytes?: number;
+  residentPrivateBytes?: number;
+}
+
+/** `mem`'s `breakdown`: categories that SUM to `totalBytes`. All in bytes. */
+export interface MemBreakdown {
+  basis: string;
+  /** Committed address space: private + mapped + image. */
+  totalBytes: number;
+  /** The commit charge (Task Manager's "Commit size"). */
+  privateBytes: number;
+  workingSetBytes: number;
+  /** Task Manager's "Memory" column. */
+  privateWorkingSetBytes: number;
+  /** Is the Rust heap being counted (`VN_MEMSTATS`, on by default in a dev build)? */
+  rustCounting: boolean;
+  categories: MemCategory[];
+  /** NOT part of `totalBytes`: GPU memory lives outside the address space. */
+  gpu: { dedicatedBytes: number; sharedBytes: number; items: MemItem[] };
+}
+
+export interface MemReply {
+  breakdown: MemBreakdown;
+  /** How long the host took to compute the reply. */
+  collectMs: number;
+  /** Present for `mem {gc: true}`. */
+  gc?: { ms: number; freedPrivateBytes: number; freedJscHeapBytes: number };
+}
+
 /** One exchange the network tee recorded (`crates/vn-app/src/devtools/net.rs`). */
 export interface NetEntry {
   seq: number;

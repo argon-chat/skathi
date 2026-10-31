@@ -25,6 +25,7 @@
 import { reactive } from "vue";
 import { Push, devtoolsArgs, listTargets, message, send } from "./wire";
 import { nodeLabel, rowVisible } from "./dump";
+import { gcSummary, sampleOf, type MemSample } from "./memfmt";
 import type {
   ConsoleLine,
   EvalReply,
@@ -36,6 +37,8 @@ import type {
   NetTab,
   NodeId,
   PoolStats,
+  MemBreakdown,
+  MemReply,
   PerfReply,
   PickReply,
   PingReply,
@@ -65,6 +68,10 @@ const LOG_LIMIT = 1000;
 const NET_LIMIT = 400;
 /** How many frame samples the Performance panel keeps for its chart. */
 const PERF_HISTORY = 240;
+/** …and how many memory samples (one per `mem` poll, every 2 s: four minutes). */
+const MEM_HISTORY = 120;
+/** The memory poll's period while the Performance panel is open. */
+export const MEM_POLL_MS = 2000;
 
 /** The console's severity buckets, in the order the filter bar shows them. */
 export const LEVELS = ["error", "warn", "info", "debug"] as const;
@@ -161,6 +168,19 @@ interface State {
   // -- performance
   perf: PerfReply | null;
   perfHistory: number[];
+  /** `mem`'s breakdown, polled every 2 s while the Performance panel is open. */
+  mem: MemBreakdown | null;
+  memHistory: MemSample[];
+  memError: string;
+  memCollectMs: number;
+  /** A `Force GC` is running (it is a full synchronous collection in the target). */
+  memGcBusy: boolean;
+  /**
+   * The last `mem {regions}` — the RAM (working set) per category, which needs
+   * a walk of the target's heap and so is taken on request, not polled.
+   */
+  memResident: { at: number; breakdown: MemBreakdown } | null;
+  memResidentBusy: boolean;
 
   // -- network
   net: NetEntry[];
@@ -243,6 +263,13 @@ export const state = reactive<State>({
 
   perf: null,
   perfHistory: [],
+  mem: null,
+  memHistory: [],
+  memError: "",
+  memCollectMs: 0,
+  memGcBusy: false,
+  memResident: null,
+  memResidentBusy: false,
 
   net: [],
   netCursor: 0,
@@ -397,6 +424,10 @@ function resetInspection(): void {
   state.window = null;
   state.perf = null;
   state.perfHistory = [];
+  state.mem = null;
+  state.memHistory = [];
+  state.memError = "";
+  state.memResident = null;
   state.net = [];
   state.netCursor = 0;
   state.netSelected = null;
@@ -961,6 +992,73 @@ export async function refreshPerf(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// memory
+// ---------------------------------------------------------------------------
+//
+// `mem` is a COMMAND, not a push: it walks the target's address space and asks
+// three allocators, which is a few milliseconds of the target's frame — worth
+// it every 2 s while somebody is looking at the panel, not 4×/s for everyone.
+// A poll that finds the previous one still in flight is skipped.
+
+let memInFlight = false;
+
+function applyMem(reply: MemReply): void {
+  state.mem = reply.breakdown;
+  state.memCollectMs = reply.collectMs;
+  state.memError = "";
+  state.memHistory.push(sampleOf(reply.breakdown, Date.now()));
+  if (state.memHistory.length > MEM_HISTORY) state.memHistory.splice(0, state.memHistory.length - MEM_HISTORY);
+}
+
+export async function refreshMem(): Promise<void> {
+  if (!state.target || memInFlight || state.memGcBusy) return;
+  memInFlight = true;
+  try {
+    applyMem(await cmd<MemReply>("mem"));
+  } catch (e) {
+    // A host older than `mem` answers "unknown command" — said once, in the
+    // panel, rather than as the inspector-wide error banner.
+    state.memError = message(e);
+  } finally {
+    memInFlight = false;
+  }
+}
+
+/**
+ * Where the RAM is: `mem {regions}` walks the target's process heap (locked
+ * meanwhile — tens of ms on a big heap) so every working-set page can be put
+ * in its category. On request only.
+ */
+export async function measureResident(): Promise<void> {
+  if (!state.target || state.memResidentBusy) return;
+  state.memResidentBusy = true;
+  try {
+    const reply = await cmd<MemReply>("mem", { regions: true }, 60_000);
+    applyMem(reply);
+    state.memResident = { at: Date.now(), breakdown: reply.breakdown };
+  } catch (e) {
+    flash(`RAM breakdown failed: ${message(e)}`, true);
+  } finally {
+    state.memResidentBusy = false;
+  }
+}
+
+/** Two full synchronous JSC collections in the target, then the breakdown. */
+export async function forceGc(): Promise<void> {
+  if (!state.target || state.memGcBusy) return;
+  state.memGcBusy = true;
+  try {
+    const reply = await cmd<MemReply>("mem", { gc: true }, 60_000);
+    applyMem(reply);
+    if (reply.gc) flash(gcSummary(reply.gc));
+  } catch (e) {
+    flash(`Force GC failed: ${message(e)}`, true);
+  } finally {
+    state.memGcBusy = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // network
 // ---------------------------------------------------------------------------
 
@@ -1203,7 +1301,10 @@ export function setTab(tab: Tab): void {
   state.tab = tab;
   resubscribe();
   if (tab === "storage") void refreshStorage();
-  if (tab === "performance") void refreshPerf();
+  if (tab === "performance") {
+    void refreshPerf();
+    void refreshMem();
+  }
   if (tab === "network") void refreshNet();
   if (tab === "targets") void refreshWindows();
   if (tab === "elements" && state.treeRev !== state.seenRev) void refreshTree();

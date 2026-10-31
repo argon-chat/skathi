@@ -515,6 +515,16 @@ pub(crate) fn raster_count() -> usize {
     RASTERS.with(|m| m.borrow().len())
 }
 
+/// `(parsed documents, colour rasters, their BGRA bytes)` — devtools `mem`.
+pub(crate) fn mem_stats() -> (usize, usize, usize) {
+    let docs = CACHE.with(|c| c.borrow().len());
+    let (n, bytes) = RASTERS.with(|m| {
+        let m = m.borrow();
+        (m.len(), m.values().map(|r| r.image.as_bytes(0).map_or(0, <[u8]>::len)).sum())
+    });
+    (docs, n, bytes)
+}
+
 /// Paints `doc` in full colour into `bounds`. Runs inside the element's style
 /// paint, so its transform, opacity and clip apply to the image.
 fn paint_colour(

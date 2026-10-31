@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// Performance: the target's frame clock, live.
+// Performance: the target's frame clock and its memory, live.
 //
-// ## Where the numbers come from
+// ## Where the frame numbers come from
 //
 // `crates/vn-app/src/perf.rs` has had a frame profiler since milestone 11, but
 // it is a REPORT: `VN_PERF=1` prints a summary to stderr every second, and you
@@ -21,9 +21,30 @@
 // (`vn_tree::perf::take`). Reading them here would silently break the stderr
 // report of a host somebody is profiling. So the panel says whether the probe
 // is on and points at the environment variable instead of showing zeros that
-// read as "nothing costs anything".
-import { computed } from "vue";
-import { refreshPerf, state } from "../store";
+// read as "nothing costs anything". (`trace`, m26, is the per-frame record of
+// an interaction; it is a protocol command, not a panel yet.)
+//
+// ## Memory (m26)
+//
+// `mem`'s `breakdown`, polled every 2 s while this panel is open
+// (`store.refreshMem`): categories that SUM to the committed address space —
+// loaded images, mapped files, JSC, the Rust heap, and "other private", which is
+// whatever no allocator we can see accounts for, said as such. The bar is that
+// sum; the table opens each category into its slices; the history is the same
+// stack over the last four minutes. GPU memory is not in the bar: it is not in
+// the address space, and adding it would double-count nothing and explain
+// nothing — it gets its own block.
+import { computed, reactive } from "vue";
+import { forceGc, measureResident, refreshPerf, state } from "../store";
+import {
+  GPU_COLOR,
+  formatMem,
+  historyColumns,
+  itemsOf,
+  memColor,
+  percent,
+  segments,
+} from "../memfmt";
 
 const props = defineProps<{ height: number }>();
 
@@ -65,6 +86,34 @@ function seconds(ms: number | null | undefined): string {
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
   return `${Math.floor(ms / 60_000)} m ${Math.round((ms % 60_000) / 1000)} s`;
 }
+
+// ---- memory ---------------------------------------------------------------
+
+const mem = computed(() => state.mem);
+const bar = computed(() => (mem.value ? segments(mem.value) : []));
+const keys = computed(() => (mem.value ? mem.value.categories.map((c) => c.key) : []));
+const history = computed(() => historyColumns(state.memHistory, keys.value));
+const gpuTotal = computed(() => (mem.value ? mem.value.gpu.dedicatedBytes + mem.value.gpu.sharedBytes : 0));
+/** Which categories (and the GPU block) are opened into their slices. */
+const open = reactive<Record<string, boolean>>({});
+
+function toggle(key: string): void {
+  open[key] = !open[key];
+}
+
+/** The category's RAM from the last `Measure RAM`, or nothing. */
+function residentCat(key: string) {
+  return state.memResident?.breakdown.categories.find((c) => c.key === key);
+}
+function residentOf(key: string): string {
+  const c = residentCat(key);
+  return c?.residentBytes === undefined ? "" : formatMem(c.residentBytes);
+}
+function residentTitle(key: string): string {
+  const c = residentCat(key);
+  if (c?.residentBytes === undefined) return "";
+  return `in RAM: ${formatMem(c.residentBytes)}, of which private ${formatMem(c.residentPrivateBytes)}`;
+}
 </script>
 
 <template>
@@ -82,79 +131,238 @@ function seconds(ms: number | null | undefined): string {
       <div class="btn" @click="refreshPerf()">↻</div>
     </header>
 
-    <div v-if="!perf" class="empty">
-      Waiting for the first frame sample. If this stays empty the push channel is not connected —
-      the titlebar says <b>polling</b> when that happens.
-    </div>
+    <div class="body scroll" :style="{ height: Math.max(0, props.height - 27) + 'px' }">
+      <div v-if="!perf" class="empty">
+        Waiting for the first frame sample. If this stays empty the push channel is not connected —
+        the titlebar says <b>polling</b> when that happens.
+      </div>
 
-    <div v-else class="body">
-      <div class="stats">
-        <div class="stat big">
-          <span class="v">{{ perf.fps.toFixed(1) }}</span><span class="u">fps</span>
-          <span class="k">average over the ring</span>
+      <template v-else>
+        <div class="stats">
+          <div class="stat big">
+            <span class="v">{{ perf.fps.toFixed(1) }}</span><span class="u">fps</span>
+            <span class="k">average over the ring</span>
+          </div>
+          <div class="stat">
+            <span class="v">{{ perf.p50Ms.toFixed(2) }}</span><span class="u">ms</span>
+            <span class="k">p50 frame</span>
+          </div>
+          <div v-if="perf.budgetMs" class="stat">
+            <span class="v">{{ perf.budgetMs.toFixed(2) }}</span><span class="u">ms</span>
+            <span class="k">frame budget · display</span>
+          </div>
+          <div class="stat">
+            <span class="v" :class="{ warn: perf.p95Ms > reference * 1.6 }">{{
+              perf.p95Ms.toFixed(2)
+            }}</span
+            ><span class="u">ms</span>
+            <span class="k">p95 frame</span>
+          </div>
+          <div class="stat">
+            <span class="v" :class="{ bad: perf.maxMs > reference * 3 }">{{
+              perf.maxMs.toFixed(2)
+            }}</span
+            ><span class="u">ms</span>
+            <span class="k">worst frame</span>
+          </div>
+          <div class="stat">
+            <span class="v">{{ perf.nodes }}</span>
+            <span class="k">live tree nodes</span>
+          </div>
+          <div class="stat">
+            <span class="v">{{ perf.windows }}</span>
+            <span class="k">OS windows</span>
+          </div>
+          <div class="stat">
+            <span class="v">{{ seconds(perf.bootMs) }}</span>
+            <span class="k">boot → first frame</span>
+          </div>
+          <div class="stat">
+            <span class="v">{{ seconds(perf.uptimeMs) }}</span>
+            <span class="k">uptime · {{ perf.frames }} frames</span>
+          </div>
         </div>
-        <div class="stat">
-          <span class="v">{{ perf.p50Ms.toFixed(2) }}</span><span class="u">ms</span>
-          <span class="k">p50 frame</span>
+
+        <div class="chart">
+          <div class="axis">
+            <span class="tick">{{ ceiling }} ms</span>
+            <span class="tick mid">{{ Math.round(ceiling / 2) }}</span>
+            <span class="tick">0</span>
+          </div>
+          <div class="bars">
+            <div
+              v-for="(ms, i) in samples"
+              :key="i"
+              class="bar"
+              :class="barClass(ms)"
+              :style="{ height: barHeight(ms) + '%' }"
+              :title="ms.toFixed(2) + ' ms'"
+            ></div>
+            <div v-if="!samples.length" class="empty">collecting…</div>
+          </div>
         </div>
-        <div v-if="perf.budgetMs" class="stat">
-          <span class="v">{{ perf.budgetMs.toFixed(2) }}</span><span class="u">ms</span>
-          <span class="k">frame budget · display</span>
+        <div class="legend">
+          one bar per push · four a second · a bar is amber past 1.6× the median frame and red past
+          3×, because a hitch is relative to what this machine has been managing
         </div>
-        <div class="stat">
-          <span class="v" :class="{ warn: perf.p95Ms > reference * 1.6 }">{{
-            perf.p95Ms.toFixed(2)
-          }}</span
-          ><span class="u">ms</span>
-          <span class="k">p95 frame</span>
+      </template>
+
+      <!-- memory -->
+      <div class="mem-head">
+        <span class="label">Memory</span>
+        <template v-if="mem">
+          <span class="chip" :title="mem.basis">committed {{ formatMem(mem.totalBytes) }}</span>
+          <span class="chip" title="The commit charge (Task Manager: Commit size)"
+            >private {{ formatMem(mem.privateBytes) }}</span
+          >
+          <span class="chip" title="Task Manager: the Memory column"
+            >private working set {{ formatMem(mem.privateWorkingSetBytes) }}</span
+          >
+          <span class="chip">working set {{ formatMem(mem.workingSetBytes) }}</span>
+          <span
+            v-if="!mem.rustCounting"
+            class="chip warn"
+            title="The Rust heap is counted by default in a dev build; set VN_MEMSTATS=1 in the target's environment to count it here"
+            >Rust heap: off · VN_MEMSTATS=1</span
+          >
+        </template>
+        <div class="spacer"></div>
+        <span v-if="mem" class="chip" title="How long the target took to compute the breakdown"
+          >{{ state.memCollectMs.toFixed(1) }} ms · every 2 s</span
+        >
+        <div
+          class="btn"
+          :class="{ on: state.memResidentBusy }"
+          title="Put every working-set page (RAM) in its category: mem --regions. Walks the target's heap, so it is taken on request, not every 2 s."
+          @click="measureResident()"
+        >
+          {{ state.memResidentBusy ? "measuring…" : "Measure RAM" }}
         </div>
-        <div class="stat">
-          <span class="v" :class="{ bad: perf.maxMs > reference * 3 }">{{
-            perf.maxMs.toFixed(2)
-          }}</span
-          ><span class="u">ms</span>
-          <span class="k">worst frame</span>
-        </div>
-        <div class="stat">
-          <span class="v">{{ perf.nodes }}</span>
-          <span class="k">live tree nodes</span>
-        </div>
-        <div class="stat">
-          <span class="v">{{ perf.windows }}</span>
-          <span class="k">OS windows</span>
-        </div>
-        <div class="stat">
-          <span class="v">{{ seconds(perf.bootMs) }}</span>
-          <span class="k">boot → first frame</span>
-        </div>
-        <div class="stat">
-          <span class="v">{{ seconds(perf.uptimeMs) }}</span>
-          <span class="k">uptime · {{ perf.frames }} frames</span>
+        <div
+          class="btn"
+          :class="{ on: state.memGcBusy }"
+          title="Two full synchronous JSC collections, then free pages back to the OS (mem --gc). Changes the target's state."
+          @click="forceGc()"
+        >
+          {{ state.memGcBusy ? "collecting…" : "Force GC" }}
         </div>
       </div>
 
-      <div class="chart">
-        <div class="axis">
-          <span class="tick">{{ ceiling }} ms</span>
-          <span class="tick mid">{{ Math.round(ceiling / 2) }}</span>
-          <span class="tick">0</span>
-        </div>
-        <div class="bars">
+      <div v-if="state.memError && !mem" class="empty">
+        The target did not answer <b>mem</b>: {{ state.memError }}. A host older than m26 has no
+        memory breakdown.
+      </div>
+      <div v-else-if="!mem" class="empty">Asking the target where its memory is…</div>
+
+      <template v-else>
+        <div class="stack">
           <div
-            v-for="(ms, i) in samples"
-            :key="i"
-            class="bar"
-            :class="barClass(ms)"
-            :style="{ height: barHeight(ms) + '%' }"
-            :title="ms.toFixed(2) + ' ms'"
+            v-for="s in bar"
+            :key="s.key"
+            class="seg"
+            :style="{ width: s.pct + '%', background: s.color }"
+            :title="`${s.label} · ${formatMem(s.bytes)} · ${s.pct.toFixed(1)} %`"
           ></div>
-          <div v-if="!samples.length" class="empty">collecting…</div>
         </div>
-      </div>
-      <div class="legend">
-        one bar per push · four a second · a bar is amber past 1.6× the median frame and red past
-        3×, because a hitch is relative to what this machine has been managing
-      </div>
+
+        <div class="mem-grid">
+          <div class="table">
+            <div class="row head">
+              <span class="tw"></span><span class="name"></span>
+              <span class="num" title="Committed: the commit charge's view">committed</span>
+              <span class="pct">share</span>
+              <span
+                class="num res"
+                :title="
+                  state.memResident
+                    ? 'In RAM (working set), measured at ' +
+                      new Date(state.memResident.at).toLocaleTimeString() +
+                      ' — the private part is what Task Manager\'s Memory column counts'
+                    : 'Press Measure RAM'
+                "
+                >{{ state.memResident ? "in RAM" : "" }}</span
+              >
+            </div>
+            <template v-for="c in mem.categories" :key="c.key">
+              <div class="row cat" @click="toggle(c.key)">
+                <span class="tw">{{ c.items.length ? (open[c.key] ? "▾" : "▸") : "" }}</span>
+                <span class="sw" :style="{ background: memColor(c.key) }"></span>
+                <span class="name">{{ c.label }}</span>
+                <span class="num">{{ formatMem(c.bytes) }}</span>
+                <span class="pct">{{ percent(c.bytes, mem.totalBytes) }}</span>
+                <span class="num res" :title="residentTitle(c.key)">{{ residentOf(c.key) }}</span>
+              </div>
+              <template v-if="open[c.key]">
+                <div class="row note">
+                  <span class="tw"></span><span class="name">{{ c.note }}</span>
+                </div>
+                <div
+                  v-for="(it, j) in itemsOf(c)"
+                  :key="j"
+                  class="row sub"
+                  :class="{ info: it.info }"
+                  :title="it.info ? 'Not a slice: another accountant\'s figure, inside the slices above' : ''"
+                >
+                  <span class="tw"></span>
+                  <span class="name">{{ it.label }}</span>
+                  <span class="num">{{ formatMem(it.bytes) }}</span>
+                  <span class="pct">{{ it.info ? "" : percent(it.bytes, c.bytes) }}</span>
+                  <span class="num res"></span>
+                </div>
+              </template>
+              <div v-else-if="c.key === 'other'" class="row note">
+                <span class="tw"></span><span class="name">{{ c.note }}</span>
+              </div>
+            </template>
+
+            <div class="row cat gpu" @click="toggle('gpu')">
+              <span class="tw">{{ open.gpu ? "▾" : "▸" }}</span>
+              <span class="sw" :style="{ background: GPU_COLOR }"></span>
+              <span class="name">GPU (not in the bar: outside the address space)</span>
+              <span class="num">{{ formatMem(gpuTotal) }}</span>
+              <span class="pct"></span><span class="num res"></span>
+            </div>
+            <template v-if="open.gpu">
+              <div class="row sub">
+                <span class="tw"></span><span class="name">dedicated (VRAM)</span>
+                <span class="num">{{ formatMem(mem.gpu.dedicatedBytes) }}</span><span class="pct"></span><span class="num res"></span>
+              </div>
+              <div class="row sub">
+                <span class="tw"></span><span class="name">shared (system memory)</span>
+                <span class="num">{{ formatMem(mem.gpu.sharedBytes) }}</span><span class="pct"></span><span class="num res"></span>
+              </div>
+              <div v-for="(it, j) in mem.gpu.items" :key="'g' + j" class="row sub info">
+                <span class="tw"></span><span class="name">{{ it.label }}</span>
+                <span class="num">{{ formatMem(it.bytes) }}</span><span class="pct"></span><span class="num res"></span>
+              </div>
+            </template>
+          </div>
+
+          <div class="history">
+            <div class="hchart">
+              <div class="axis">
+                <span class="tick">{{ formatMem(history.ceiling) }}</span>
+                <span class="tick">0</span>
+              </div>
+              <div class="cols">
+                <div v-for="(col, i) in history.columns" :key="i" class="hcol" :title="col.title">
+                  <div
+                    v-for="p in [...col.parts].reverse()"
+                    :key="p.key"
+                    class="hpart"
+                    :style="{ height: p.pct + '%', background: p.color }"
+                  ></div>
+                </div>
+                <div v-if="history.columns.length < 2" class="empty">collecting…</div>
+              </div>
+            </div>
+            <div class="legend">
+              committed memory by category, one column per sample · every 2 s while this panel is
+              open · the last four minutes
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
   </section>
 </template>
@@ -167,9 +375,12 @@ function seconds(ms: number | null | undefined): string {
 .spacer {
   flex: 1;
 }
-.body {
-  flex: 1;
+.scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
+}
+.body {
   display: flex;
   flex-direction: column;
   padding: 12px;
@@ -222,8 +433,8 @@ function seconds(ms: number | null | undefined): string {
   margin-top: 3px;
 }
 .chart {
-  flex: 1;
-  min-height: 80px;
+  height: 120px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: row;
   gap: 6px;
@@ -237,7 +448,8 @@ function seconds(ms: number | null | undefined): string {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  width: 44px;
+  width: 52px;
+  flex-shrink: 0;
 }
 .tick {
   font-size: 9px;
@@ -268,5 +480,156 @@ function seconds(ms: number | null | undefined): string {
   font-size: 10px;
   color: #5c6b80;
   line-height: 15px;
+}
+
+/* ---- memory ------------------------------------------------------------- */
+
+.mem-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 8px;
+  border-top-width: 1px;
+  border-color: #1e2733;
+}
+.stack {
+  height: 16px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: row;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #0c1119;
+  border-width: 1px;
+  border-color: #1e2733;
+}
+.seg {
+  height: 100%;
+}
+.mem-grid {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  align-items: flex-start;
+}
+.table {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  height: 20px;
+  gap: 6px;
+  font-size: 11px;
+  color: #b9c6d6;
+}
+.row.cat {
+  border-radius: 3px;
+}
+.row.cat:hover {
+  background: #171e29;
+}
+.row.sub {
+  color: #8494a8;
+  padding-left: 18px;
+}
+.row.sub.info {
+  color: #5c6b80;
+  font-style: italic;
+}
+.row.note {
+  color: #5c6b80;
+  font-size: 10px;
+  padding-left: 18px;
+}
+.tw {
+  width: 10px;
+  flex-shrink: 0;
+  font-size: 9px;
+  color: #5c6b80;
+}
+.sw {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.num {
+  width: 72px;
+  flex-shrink: 0;
+  text-align: right;
+  font-family: "Cascadia Mono", "Consolas", monospace;
+}
+.num.res {
+  color: #76e3ea;
+}
+.row.head {
+  height: 16px;
+  font-size: 9px;
+  color: #5c6b80;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.row.head .num,
+.row.head .pct {
+  font-family: inherit;
+  color: #5c6b80;
+}
+.pct {
+  width: 54px;
+  flex-shrink: 0;
+  text-align: right;
+  color: #5c6b80;
+  font-family: "Cascadia Mono", "Consolas", monospace;
+}
+.history {
+  width: 40%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hchart {
+  height: 140px;
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #0c1119;
+  border-width: 1px;
+  border-color: #1e2733;
+}
+.cols {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 0;
+}
+.hcol {
+  flex: 1;
+  min-width: 1px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.hpart {
+  width: 100%;
 }
 </style>

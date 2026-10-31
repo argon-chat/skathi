@@ -471,6 +471,65 @@ export const COMMANDS: CommandSpec[] = [
     cli: () => ({}),
   },
   {
+    cmd: "mem",
+    description:
+      "Where the process's memory is, computed on demand. `breakdown` (BYTES) has categories that " +
+      "SUM to the committed address space — loaded images (exe + DLLs), mapped files, JSC " +
+      "(mimalloc + JIT), the Rust heap (the process heap, split by subsystem when counted), and " +
+      "'other private' (driver heaps, stacks: what no allocator accounts for) — plus GPU memory " +
+      "beside them. The other sections (MB; `…Bytes` fields are bytes): OS counters, the " +
+      "address-space walk, heap summaries, the Rust heap count (on by default in a dev build, " +
+      "VN_MEMSTATS=0/1 overrides), JSC's GC heap and mimalloc, GPU per adapter LUID, gpui's sprite " +
+      "atlas and decoded-image cache, the painted-image registry, the retained tree per node, the " +
+      "devtools' own rings. `gc` first runs two full synchronous JSC collections and returns free " +
+      "pages to the OS (it changes state) and reports what that freed.",
+    usage: [
+      "  mem      [--gc] [--regions]        where the process's memory is (--gc: a full JSC",
+      "                                     collection first, before/after reported;",
+      "                                     --regions: walk the heap too, list the biggest",
+      "                                     unattributed reservations)",
+    ],
+    args: {
+      gc: bool("run two full JSC collections first and report before/after (changes state)"),
+      regions: bool(
+        "also walk the process heap (it is locked meanwhile — tens of ms on a big heap) so the " +
+          "address walk can tell the heap's reservations apart, and list the biggest unattributed ones",
+      ),
+    },
+    cli: (_rest, flags) => compact({ gc: flags.gc ? true : undefined, regions: flags.regions ? true : undefined }),
+  },
+  {
+    cmd: "trace",
+    description:
+      "A frame-by-frame record of where the host's time went during an interaction. `start` arms " +
+      "every phase counter; `stop` disarms and returns the summary (and, with `frames`, every " +
+      "non-idle frame: pump / JS / DOM ops and the span between the first and last one / layout " +
+      "and style reads / FORCED synchronous layouts and their callers / restyles, whole-document " +
+      "ones and why / sheet recompiles / build / gpui layout-request, taffy, prepaint, paint / " +
+      "text shaping misses / image resample copies / web fonts registered). `peek` reports " +
+      "without stopping; `mark` labels the frame in progress. Refused while VN_PERF is on.",
+    usage: [
+      "  trace    start [--cap N] | stop [--frames] | peek [--frames] | mark <label>",
+      "                                     a frame-by-frame record of an interaction",
+    ],
+    args: {
+      op: str('"start", "stop", "peek" (default) or "mark"'),
+      frames: bool("include every stored frame, not only the summary"),
+      label: str("for op=mark: the label"),
+      cap: int("for op=start: the most active frames kept (default 20000)"),
+    },
+    cli: (rest, flags) => {
+      const op = rest[0] || "peek";
+      if (op === "mark" && !rest[1] && typeof flags.label !== "string") die("trace mark needs a label");
+      return compact({
+        op,
+        frames: flags.frames ? true : undefined,
+        label: op === "mark" ? (typeof flags.label === "string" ? flags.label : rest.slice(1).join(" ")) : undefined,
+        cap: num(flags.cap),
+      });
+    },
+  },
+  {
     cmd: "net",
     description:
       "Every fetch(), XMLHttpRequest and WebSocket the app opened, from BOOT — a bounded ring of " +

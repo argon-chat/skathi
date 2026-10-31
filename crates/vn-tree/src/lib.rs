@@ -92,20 +92,24 @@ host_fn!(fn vn_intern(g, args) {
 
 host_fn!(fn vn_create_element(_g, args) {
     let tag = arg_id(args.arg(0));
+    perf::note_dom(perf::DomOp::Create);
     ret_id(tree::with_tree(|t| t.create_element(tag)))
 });
 
 host_fn!(fn vn_create_text(_g, _args) {
+    perf::note_dom(perf::DomOp::Create);
     ret_id(tree::with_tree(|t| t.create_text()))
 });
 
 host_fn!(fn vn_create_anchor(_g, _args) {
+    perf::note_dom(perf::DomOp::Create);
     ret_id(tree::with_tree(|t| t.create_anchor()))
 });
 
 host_fn!(fn vn_set_text(g, args) {
     let id = arg_id(args.arg(0));
     let text = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    perf::note_dom(perf::DomOp::Text);
     tree::with_tree(|t| t.set_text(id, text));
     UNDEF
 });
@@ -113,18 +117,21 @@ host_fn!(fn vn_set_text(g, args) {
 host_fn!(fn vn_set_element_text(g, args) {
     let id = arg_id(args.arg(0));
     let text = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    perf::note_dom(perf::DomOp::Text);
     tree::with_tree(|t| t.set_element_text(id, text));
     UNDEF
 });
 
 host_fn!(fn vn_insert(_g, args) {
     let (child, parent, anchor) = (arg_id(args.arg(0)), arg_id(args.arg(1)), arg_id(args.arg(2)));
+    perf::note_dom(perf::DomOp::Insert);
     tree::with_tree(|t| t.insert(child, parent, anchor));
     UNDEF
 });
 
 host_fn!(fn vn_remove(_g, args) {
     let id = arg_id(args.arg(0));
+    perf::note_dom(perf::DomOp::Remove);
     tree::with_tree(|t| t.remove(id));
     UNDEF
 });
@@ -133,6 +140,7 @@ host_fn!(fn vn_set_style(g, args) {
     let id = arg_id(args.arg(0));
     let key = arg_id(args.arg(1));
     let value = unsafe { read_string(g, args.arg(2).0) }.unwrap_or_default();
+    perf::note_dom(perf::DomOp::Style);
     tree::with_tree(|t| t.set_style(id, key, value));
     UNDEF
 });
@@ -151,6 +159,7 @@ host_fn!(fn vn_style_accepts(g, args) {
 host_fn!(fn vn_set_class(g, args) {
     let id = arg_id(args.arg(0));
     let classes = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    perf::note_dom(perf::DomOp::Class);
     tree::with_tree(|t| t.set_class(id, &classes));
     UNDEF
 });
@@ -163,6 +172,7 @@ host_fn!(fn vn_set_prop(g, args) {
     } else {
         unsafe { read_string(g, args.arg(2).0) }
     };
+    perf::note_dom(perf::DomOp::Prop);
     let img_src = tree::with_tree(|t| {
         t.set_prop(id, key, value);
         t.name(key) == "src" && t.node(id).is_some_and(|n| t.name(n.tag) == "img")
@@ -170,6 +180,7 @@ host_fn!(fn vn_set_prop(g, args) {
     // An `<img>`'s `src` is answered with `load` / `error` (`img::tick`),
     // whether or not the element is ever painted.
     if img_src {
+        perf::note_img_src();
         img::note_src(id);
     }
     UNDEF
@@ -178,6 +189,7 @@ host_fn!(fn vn_set_prop(g, args) {
 host_fn!(fn vn_add_scope(g, args) {
     let id = arg_id(args.arg(0));
     let scope = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    perf::note_dom(perf::DomOp::Other);
     tree::with_tree(|t| t.add_scope(id, scope));
     UNDEF
 });
@@ -186,6 +198,7 @@ host_fn!(fn vn_set_stylesheet(g, args) {
     let css = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     tree::set_stylesheet(css);
     // Every node needs a fresh cascade under the new sheet.
+    perf::note_full(perf::FullReason::Stylesheet);
     tree::with_tree(|t| t.mark_dirty());
     UNDEF
 });
@@ -195,6 +208,7 @@ host_fn!(fn vn_set_listener(g, args) {
     let event = arg_id(args.arg(1));
     let on = args.arg(2).as_bool().unwrap_or(false);
     let _ = g;
+    perf::note_dom(perf::DomOp::Other);
     tree::with_tree(|t| t.set_listener(id, event, on));
     UNDEF
 });
@@ -300,6 +314,7 @@ fn ret_string(s: &str) -> u64 {
 host_fn!(fn vn_query(g, args) {
     let selector = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
     let root = arg_id(args.arg(1));
+    perf::note_read(perf::Read::Query);
     let mode = match arg_id(args.arg(2)) {
         1 => dom::QueryMode::SelfOnly,
         2 => dom::QueryMode::Closest,
@@ -318,6 +333,7 @@ host_fn!(fn vn_query(g, args) {
 // input listener is on the stack; see `dom::bounds`).
 host_fn!(fn vn_bounds(_g, args) {
     let id = arg_id(args.arg(0));
+    perf::note_read(perf::Read::Layout);
     let out = match dom::bounds(id) {
         // The layout box, then — when a CSS `transform` moved the picture —
         // where it was drawn, which is getBoundingClientRect()'s answer.
@@ -334,6 +350,7 @@ host_fn!(fn vn_bounds(_g, args) {
 // `getComputedStyle(el)` — `name=value` lines; see `dom::computed_style`.
 host_fn!(fn vn_computed_style(_g, args) {
     let id = arg_id(args.arg(0));
+    perf::note_read(perf::Read::Style);
     ret_string(&dom::computed_style(id).unwrap_or_default())
 });
 
@@ -360,6 +377,7 @@ host_fn!(fn vn_scroll(_g, args) {
     let x = args.arg(2).as_number().unwrap_or(f64::NAN);
     let y = args.arg(3).as_number().unwrap_or(f64::NAN);
     let axis = |v: f64| (!v.is_nan()).then_some(v as f32);
+    perf::note_read(perf::Read::Scroll);
     let out = match op {
         1 => scroll::set(id, axis(x), axis(y)),
         2 => scroll::by(id, axis(x).unwrap_or(0.0), axis(y).unwrap_or(0.0)),
@@ -414,7 +432,7 @@ host_fn!(fn vn_focus(_g, args) {
     // where that is legal, so the focus is synchronous (render::focus_wants_build).
     // Under a gpui listener this draws nothing and the focus is queued (FO-1).
     if op == 0 && layout_owed() && render::focus_wants_build(id) {
-        sync_layout();
+        sync_layout_by(perf::SyncCaller::Focus);
     }
     let out = vn_runtime::with_commit(|window, cx| {
         if op == 1 {
@@ -744,6 +762,27 @@ pub fn sync_layout() {
     if IN_SYNC_LAYOUT.with(|c| c.get()) {
         return;
     }
+    sync_layout_inner();
+}
+
+/// [`sync_layout`], counted for the devtools frame trace by the DOM read that
+/// asked: whether it drew (a build happened) and the wall time of the whole
+/// call — the restyle it flushes and gpui's full window draw.
+pub(crate) fn sync_layout_by(caller: perf::SyncCaller) {
+    if IN_SYNC_LAYOUT.with(|c| c.get()) {
+        return;
+    }
+    if !perf::enabled() {
+        sync_layout_inner();
+        return;
+    }
+    let before = render::build_count();
+    let span = perf::Span::start();
+    sync_layout_inner();
+    perf::note_sync_layout(caller, render::build_count() != before, span.ms());
+}
+
+fn sync_layout_inner() {
     let Some(f) = SYNC_LAYOUT.with(|c| c.get()) else { return };
     IN_SYNC_LAYOUT.with(|c| c.set(true));
     // The frame is about to paint from `node.computed`, so the cascade owes it
@@ -945,6 +984,7 @@ pub fn set_reduce_motion(on: bool) {
 pub fn set_env(env: vn_css::Env) -> bool {
     let changed = tree::set_env(env);
     if changed {
+        perf::note_full(perf::FullReason::Env);
         tree::with_tree(|t| t.mark_dirty());
     }
     changed

@@ -144,7 +144,7 @@ fn force_layout_if_unpainted(id: u32) -> bool {
         return false;
     }
     let before = crate::render::build_count();
-    crate::sync_layout();
+    crate::sync_layout_by(crate::perf::SyncCaller::Bounds);
     crate::render::build_count() == before && crate::render::bounds_of(id).is_none()
 }
 
@@ -178,7 +178,7 @@ pub(crate) fn layout_if_stale(id: u32) -> bool {
         return false;
     }
     let before = crate::render::build_count();
-    crate::sync_layout();
+    crate::sync_layout_by(crate::perf::SyncCaller::Scroll);
     crate::render::build_count() == before
 }
 

@@ -38,6 +38,13 @@ mod dev;
 // asked for its own inspector by name.
 #[cfg(vn_devtools)]
 mod devtools;
+// Live Rust heap bytes for the devtools `mem` command; counts by default in a
+// dev build, not in a `prod` one, `VN_MEMSTATS=0/1` either way (src/heapcount.rs).
+#[cfg(vn_devtools)]
+mod heapcount;
+#[cfg(vn_devtools)]
+#[global_allocator]
+static GLOBAL: heapcount::Counting = heapcount::Counting;
 mod dialogs; // the window a file dialog belongs to, and closing it safely
 #[cfg(vn_devtools)]
 mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child registry
@@ -701,7 +708,11 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
             Wave::Background => PUMP_TIMERS | PUMP_MICROTASKS,
         };
         JsRuntime::with(|rt| {
+            #[cfg(vn_devtools)]
+            let pumped = std::time::Instant::now();
             rt.pump(flags);
+            #[cfg(vn_devtools)]
+            devtools::trace::note_js(pumped.elapsed().as_secs_f32() * 1000.0);
             for err in rt.drain_errors() {
                 eprintln!("[js uncaught] {}\n{}", err.header, err.stack);
                 vn_tree::log::record(
@@ -1156,6 +1167,13 @@ fn main() {
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
     perf::boot();
+    // The Rust heap is being counted (src/heapcount.rs: a dev build, or `VN_MEMSTATS=1`), and
+    // the painted-image registry the `mem` command reports is armed with it.
+    #[cfg(vn_devtools)]
+    if heapcount::on() {
+        vn_tree::perf::set_live_bytes_probe(|| heapcount::snapshot().map(|s| s.0));
+        vn_tree::devtools::set_image_tracking(true);
+    }
     let app = install_http_client(application());
     // gpui reads `Resource::Embedded(key)` — what an `<img>` resolves to in a
     // packaged exe — through this, straight out of the mapped payload.

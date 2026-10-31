@@ -709,6 +709,15 @@ pub(crate) fn subtree_ids(t: &Tree, id: u32, out: &mut Vec<u32>) {
 
 /// Records the ids one boundary's render covers — called by `build_cached`
 /// once the subtree is built.
+/// `(cache boundaries tracked, those holding an entity, node ids they carry)`
+/// — devtools `mem`. The recorded scene spans themselves live in gpui.
+pub(crate) fn mem_stats() -> (usize, usize, usize) {
+    ENTRIES.with(|m| {
+        let m = m.borrow();
+        (m.len(), m.values().filter(|e| e.entity.is_some()).count(), m.values().map(|e| e.ids.len()).sum())
+    })
+}
+
 pub(crate) fn note_rendered(id: u32, ids: Vec<u32>) {
     ENTRIES.with(|m| {
         if let Some(e) = m.borrow_mut().get_mut(&id) {
