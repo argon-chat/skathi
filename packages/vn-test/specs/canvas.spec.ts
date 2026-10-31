@@ -8,18 +8,40 @@
 // desktopTaskbar.ts), a tint by source-atop (custom emoji), a thumbhash-style
 // getImageData over an OffscreenCanvas, and toBlob. Then the screen
 // (crates/vn-tree/src/canvas.rs, CV-1): the box takes the bitmap's size, CSS
-// scales the bitmap, and a draw with no DOM change repaints it.
+// scales the bitmap, and a draw with no DOM change repaints it. And a mirror
+// <img> drawn into a canvas (CV-4's img half): the pixels the host decoded,
+// from a data: URL, a blob: URL (a picked file) and a loopback http server.
 // Any fixture will do; this one borrows `events`.
 
 import { afterAll, expect, test } from "bun:test";
 import { launch, readPng } from "../src/index";
+
+/** A 2x1 PNG, red | blue. */
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8AAQv8BD/kD/YURmXYAAAAASUVORK5CYII=", "base64");
+/** A 4x2 SVG, red | blue: gpui rasterises it at twice that. */
+const SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">' +
+  '<rect width="2" height="2" fill="#f00"/><rect x="2" width="2" height="2" fill="#00f"/></svg>';
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path.startsWith("/a.png")) return new Response(PNG, { headers: { "content-type": "image/png" } });
+    if (path === "/a.svg") return new Response(SVG, { headers: { "content-type": "image/svg+xml" } });
+    return new Response("no", { status: 404 });
+  },
+});
 
 const app = await launch({
   app: "packages/vn-test/fixtures/events/src/main.ts",
   window: [480, 320],
   label: "canvas",
 });
-afterAll(() => app.close());
+afterAll(async () => {
+  await app.close();
+  server.stop(true);
+});
 
 const T = 60_000;
 
@@ -157,6 +179,70 @@ test("a draw with no DOM change repaints the canvas on the next frame", async ()
   expect(g > 200 && r < 60 && bl < 60).toBe(true);
 }, T);
 
+test("a mirror <img> draws its decoded pixels: data:, blob: and http(s), origin recorded", async () => {
+  const base = `http://127.0.0.1:${server.port}`;
+  const got = await inPage(`
+    const load = (src, attrs) => new Promise((res, rej) => {
+      const i = document.createElement('img');
+      for (const k in attrs || {}) i.setAttribute(k, attrs[k]);
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error('did not load: ' + src.slice(0, 48)));
+      i.src = src;
+    });
+    const draw = (img) => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const px = (x) => Array.from(ctx.getImageData(x, 0, 1, 1).data).join();
+      return [img.naturalWidth + 'x' + img.naturalHeight, px(0), px(c.width - 1), __rjs_canvas_info(ctx).originClean];
+    };
+    const src = document.createElement('canvas');
+    src.width = 2; src.height = 1;
+    const sx = src.getContext('2d');
+    sx.fillStyle = '#f00'; sx.fillRect(0, 0, 1, 1);
+    sx.fillStyle = '#00f'; sx.fillRect(1, 0, 1, 1);
+    const blob = await new Promise(r => src.toBlob(r, 'image/png'));
+    const out = {
+      data: draw(await load(src.toDataURL('image/png'))),
+      blob: draw(await load(URL.createObjectURL(blob))),
+      http: draw(await load('${base}/a.png')),
+      cors: draw(await load('${base}/a.png?c', { crossorigin: 'anonymous' })),
+      svg: draw(await load('${base}/a.svg')),
+    };
+    const bmp = await createImageBitmap(await load('${base}/a.png?b'));
+    out.bitmap = [bmp.width, bmp.height];
+    // Still loading: nothing drawn, nothing thrown.
+    const pending = document.createElement('img');
+    pending.src = '${base}/a.png?p';
+    const pc = document.createElement('canvas').getContext('2d');
+    pc.drawImage(pending, 0, 0);
+    out.pending = Array.from(pc.getImageData(0, 0, 1, 1).data).join();
+    // Broken: InvalidStateError.
+    const broken = await load('${base}/missing.png').then(() => 'loaded', (e) => e.message);
+    const b = document.createElement('img');
+    b.src = '${base}/missing.png';
+    await new Promise(r => { b.onerror = r; });
+    try { pc.drawImage(b, 0, 0); out.broken = [broken, 'drew']; } catch (e) { out.broken = [broken, e.name]; }
+    return out;
+  `);
+  const RED = "255,0,0,255";
+  const BLUE = "0,0,255,255";
+  expect(got).toEqual({
+    ok: {
+      data: ["2x1", RED, BLUE, true],
+      blob: ["2x1", RED, BLUE, true],
+      http: ["2x1", RED, BLUE, false],
+      cors: ["2x1", RED, BLUE, true],
+      svg: ["4x2", RED, BLUE, false],
+      bitmap: [2, 1],
+      pending: "0,0,0,0",
+      broken: [`did not load: ${base}/missing.png`, "InvalidStateError"],
+    },
+  });
+}, T);
+
 test("the app logged nothing broken", async () => {
-  await app.expectNoErrors();
+  // The 404 is the broken-image case above, which a browser logs too.
+  await app.expectNoErrors({ ignore: [/missing\.png/] });
 }, T);

@@ -13,6 +13,11 @@
 // is how the host finds it to paint (crates/vn-tree/src/canvas.rs): a draw
 // repaints the element on the next frame.
 //
+// A mirror `<img>` is drawn from the pixels the host decoded for it
+// (`__vn_img_bitmap`, crates/vn-tree/src/img.rs `pixels`), as an ImageBitmap
+// kept per element and `src`: a cropper that redraws on every pointer move
+// decodes once.
+//
 // runtime.ts calls `adoptCanvas` on every mirror `<canvas>`
 // (`nodeOps.createElement`, which the renderer and `document.createElement`
 // share). It must stay importable on its own: test/runtime-harness.ts
@@ -32,6 +37,27 @@ interface CanvasNatives {
   __rjs_canvas_source_hook(resolve: (value: unknown) => unknown): void;
 }
 
+/** The host's half (crates/vn-tree/src/lib.rs `vn_img_bitmap`). */
+interface HostNatives {
+  /** The `<img>`'s pixels as an ImageBitmap, `null` for nothing yet, or why not. */
+  __vn_img_bitmap(id: number, originClean: boolean): ImageBitmapLike | null | string;
+}
+
+/** An ImageBitmap, as far as this module touches one. */
+interface ImageBitmapLike {
+  close(): void;
+}
+
+/** The slice of a mirror `<img>` read here: its DOM state, which runtime.ts keeps. */
+interface ImageElement {
+  __vnId: number;
+  attrs: Record<string, string>;
+  complete: boolean;
+  currentSrc: string;
+  naturalWidth: number;
+  naturalHeight: number;
+}
+
 /** The slice of a mirror element this module reads and extends. */
 interface CanvasElement {
   __vnId: number;
@@ -46,6 +72,12 @@ interface CanvasElement {
 function natives(): CanvasNatives | null {
   const g = globalThis as unknown as Partial<CanvasNatives>;
   return typeof g.__rjs_canvas_context === "function" ? (g as CanvasNatives) : null;
+}
+
+/** The host's natives, looked up per call (absent under bun). */
+function host(): HostNatives | null {
+  const g = globalThis as unknown as Partial<HostNatives>;
+  return typeof g.__vn_img_bitmap === "function" ? (g as HostNatives) : null;
 }
 
 const warned = new Set<string>();
@@ -90,22 +122,67 @@ function contextOf(el: CanvasElement, options?: unknown): Context2D | null {
   return ctx;
 }
 
+/** An `<img>`'s decoded pixels, for the `src` (and natural size) they were made for. */
+const decoded = new WeakMap<object, { src: string; w: number; h: number; bitmap: ImageBitmapLike }>();
+
+/**
+ * HTML's origin-clean flag for an image: false for one fetched over http(s)
+ * without a `crossorigin` attribute, which a browser's page origin never
+ * shares with this runtime's `app://`. Recorded on the canvas that draws it,
+ * not enforced (redjs canvas2d `Surface::readable` advises instead).
+ */
+function originClean(el: ImageElement, src: string): boolean {
+  if (!/^https?:/i.test(src.trim())) return true;
+  return el.attrs.crossorigin != null || el.attrs.crossOrigin != null;
+}
+
+/**
+ * HTML "check the usability of the image argument" for an `<img>`, and its
+ * pixels: still loading (or no `src`) draws nothing; a broken one throws
+ * InvalidStateError, worded as Chromium words it; a loaded one is the bitmap
+ * the host decoded for it.
+ */
+function imageSource(el: ImageElement): unknown {
+  const src = el.attrs.src ?? "";
+  if (src.trim() === "" || !el.complete) return null;
+  // Complete with a src but no current one: the request answered `error`.
+  if (el.currentSrc === "") {
+    throw new DOMException("The HTMLImageElement provided is in the 'broken' state.", "InvalidStateError");
+  }
+  const w = el.naturalWidth;
+  const h = el.naturalHeight;
+  if (w === 0 || h === 0) return null;
+  const hit = decoded.get(el);
+  if (hit && hit.src === src && hit.w === w && hit.h === h) return hit.bitmap;
+  const n = host();
+  if (!n) return null;
+  const got = n.__vn_img_bitmap(el.__vnId, originClean(el, src));
+  if (typeof got === "string") {
+    advise("canvas:img-decode", `drawImage(<img>) draws nothing: ${got}`);
+    return null;
+  }
+  if (got === null) return null;
+  hit?.bitmap.close();
+  decoded.set(el, { src, w, h, bitmap: got });
+  return got;
+}
+
 /**
  * What `drawImage` / `createImageBitmap` make of a mirror element: a canvas is
- * its context; a `<video>` or `<img>` mirror has no pixels on this side yet
- * (`null`: a valid source with nothing to draw); anything else is not an image
- * source (`undefined`: the engine's TypeError).
+ * its context; an `<img>` is its decoded pixels (`imageSource`); a `<video>`
+ * has no frames on this side yet (`null`: a valid source with nothing to
+ * draw); anything else is not an image source (`undefined`: the engine's
+ * TypeError).
  */
 function resolveSource(v: unknown): unknown {
   if (isCanvas(v)) return contextOf(v);
   const tag = tagOf(v);
-  if (tag === "VIDEO" || tag === "IMG") {
+  if (tag === "IMG" && typeof v === "object" && v !== null && "__vnId" in v) return imageSource(v as ImageElement);
+  if (tag === "VIDEO") {
     // CV-4 (docs/RUNTIME.md §5.10).
     advise(
-      `canvas:source-${tag.toLowerCase()}`,
-      `drawImage(<${tag.toLowerCase()}>) draws nothing yet: the host's ${tag === "VIDEO" ? "video frames" : "decoded <img> pixels"} ` +
-        `are not readable from a canvas in this build` +
-        (tag === "IMG" ? "; draw a `new Image()` with the same src instead" : ""),
+      "canvas:source-video",
+      "drawImage(<video>) draws nothing yet: the host's video frames are not readable from a canvas in this build",
     );
     return null;
   }

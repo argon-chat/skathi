@@ -471,6 +471,26 @@ host_fn!(fn vn_media_events(_g, args) {
     ret_string(&video::drain_recent(id))
 });
 
+// `drawImage(img)` / `createImageBitmap(img)` (packages/vue-native/src/canvas.ts):
+// the `<img>`'s pixels at its natural size as an ImageBitmap, `null` when there
+// is nothing to draw yet, or a string saying why the image cannot be drawn.
+// Argument 1 is HTML's origin-clean flag for the image, which the bitmap
+// carries into the canvas that draws it.
+host_fn!(fn vn_img_bitmap(g, args) {
+    let id = arg_id(args.arg(0));
+    let clean = args.arg(1).as_bool().unwrap_or(true);
+    let found = vn_runtime::with_app(|cx| img::pixels(id, Some(cx))).unwrap_or_else(|| img::pixels(id, None));
+    match found {
+        img::Pixels::Ready { width, height, rgba } => {
+            let mut data = vn_runtime::redjs::webapi::image::BitmapData::new(width, height, rgba);
+            data.origin_clean = clean;
+            unsafe { vn_runtime::redjs::webapi::image::create_bitmap(g, data) }
+        }
+        img::Pixels::NotYet => Value::null().0,
+        img::Pixels::Broken(why) => ret_string(&why),
+    }
+});
+
 /// Registers the whole `__vn_*` protocol surface on the JS global.
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
@@ -503,6 +523,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_media_call", 3, vn_media_call as *const _),
         ("__vn_media_can_play", 2, vn_media_can_play as *const _),
         ("__vn_media_events", 1, vn_media_events as *const _),
+        ("__vn_img_bitmap", 2, vn_img_bitmap as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);

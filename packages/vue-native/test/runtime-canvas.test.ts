@@ -163,3 +163,106 @@ describe("the source hook", () => {
     expect(hook(doc.createElement("div"))).toBeUndefined();
   });
 });
+
+describe("drawImage of an <img>", () => {
+  /** A fake `__vn_img_bitmap` that hands out numbered bitmaps and records each ask. */
+  function fakeHost(answer: (id: number) => unknown = () => undefined) {
+    const asks: Any[] = [];
+    const closed: number[] = [];
+    let next = 0;
+    (globalThis as Any).__vn_img_bitmap = (id: number, clean: boolean) => {
+      asks.push([id, clean]);
+      const given = answer(id);
+      if (given !== undefined) return given;
+      const n = ++next;
+      return { n, close: () => closed.push(n) };
+    };
+    return { asks, closed };
+  }
+  afterEach(() => delete (globalThis as Any).__vn_img_bitmap);
+
+  /** The hook, which the first canvas installs. */
+  const hookOf = (doc: Any) => (doc.createElement("canvas"), natives.hook()!);
+
+  /** The host's `load` (or `error`) answer for the element's src, as the dispatcher delivers it. */
+  const answer = (rt: Any, img: Any, name: "load" | "error", w = 0, h = 0) =>
+    rt.host.dispatcher(img.__vnId, rt.EV_CODES[name], w, h, 0, 0, img.getAttribute("src"));
+
+  test("a loaded image is the host's bitmap, decoded once per src", () => {
+    const { rt, doc } = world();
+    const host = fakeHost();
+    const hook = hookOf(doc);
+    const img = doc.createElement("img");
+    img.src = "blob:app://x/1";
+    expect(hook(img)).toBeNull(); // still loading: nothing to draw, nothing asked
+    expect(host.asks).toEqual([]);
+    answer(rt, img, "load", 64, 48);
+    const first = hook(img) as Any;
+    expect(first.n).toBe(1);
+    expect(hook(img)).toBe(first);
+    expect(host.asks).toEqual([[img.__vnId, true]]);
+    img.src = "blob:app://x/2";
+    expect(hook(img)).toBeNull();
+    answer(rt, img, "load", 10, 10);
+    expect((hook(img) as Any).n).toBe(2);
+    expect(host.closed).toEqual([1]); // the old src's pixels go
+  });
+
+  test("a broken image throws InvalidStateError; no src draws nothing", () => {
+    const { rt, doc } = world();
+    fakeHost();
+    const hook = hookOf(doc);
+    const img = doc.createElement("img");
+    expect(hook(img)).toBeNull();
+    img.src = "nope.png";
+    answer(rt, img, "error");
+    let thrown: Any;
+    try {
+      hook(img);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown?.name).toBe("InvalidStateError");
+    expect(String(thrown?.message)).toContain("'broken' state");
+  });
+
+  test("an http(s) image without crossorigin is not origin-clean", () => {
+    const { rt, doc } = world();
+    const host = fakeHost();
+    const hook = hookOf(doc);
+    const remote = doc.createElement("img");
+    remote.src = "https://cdn.example/a.png";
+    answer(rt, remote, "load", 1, 1);
+    hook(remote);
+    const cors = doc.createElement("img");
+    cors.setAttribute("crossorigin", "anonymous");
+    cors.src = "https://cdn.example/a.png";
+    answer(rt, cors, "load", 1, 1);
+    hook(cors);
+    const local = doc.createElement("img");
+    local.src = "assets/a.png";
+    answer(rt, local, "load", 1, 1);
+    hook(local);
+    expect(host.asks.map((a: Any) => a[1])).toEqual([false, true, true]);
+  });
+
+  test("a src the host cannot decode draws nothing, with one advisory", () => {
+    const { rt, doc } = world();
+    const host = fakeHost(() => "the bytes are not an image");
+    const hook = hookOf(doc);
+    const warn = console.warn;
+    const said: string[] = [];
+    console.warn = (m: string) => said.push(m);
+    try {
+      const img = doc.createElement("img");
+      img.src = "data:image/png;base64,AAAA";
+      answer(rt, img, "load", 2, 2);
+      expect(hook(img)).toBeNull();
+      expect(hook(img)).toBeNull();
+    } finally {
+      console.warn = warn;
+    }
+    expect(host.asks.length).toBe(2); // not cached: it may decode later
+    expect(said.filter((m) => m.includes("drawImage(<img>) draws nothing: the bytes are not an image"))).toHaveLength(1);
+  });
+});

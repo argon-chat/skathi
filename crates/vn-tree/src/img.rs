@@ -409,10 +409,7 @@ fn file_natural_size(path: &Path) -> Probe {
         return Probe::Failed;
     };
     if reader.format().is_some() {
-        return match reader.into_dimensions() {
-            Ok((w, h)) if w > 0 && h > 0 => Probe::Loaded(w as f64, h as f64),
-            _ => Probe::Failed,
-        };
+        return upright_size(reader);
     }
     match std::fs::read(path) {
         Ok(bytes) => svg_size(&bytes),
@@ -426,14 +423,36 @@ fn file_natural_size(path: &Path) -> Probe {
 pub(crate) fn natural_size(bytes: &[u8]) -> Probe {
     if let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format() {
         if reader.format().is_some() {
-            return match reader.into_dimensions() {
-                Ok((w, h)) if w > 0 && h > 0 => Probe::Loaded(w as f64, h as f64),
-                _ => Probe::Failed,
-            };
+            return upright_size(reader);
         }
     }
     // Not a raster this renderer knows: an SVG, or nothing.
     svg_size(bytes)
+}
+
+/// A raster's natural size as it is painted and drawn: upright, its EXIF
+/// orientation applied (CSS `image-orientation: from-image`, which gpui's
+/// decoder and the `drawImage` pixels below both follow), so a phone photo
+/// taken sideways measures as it shows. A header read; no pixels are decoded.
+fn upright_size<R: std::io::BufRead + std::io::Seek>(reader: image::ImageReader<R>) -> Probe {
+    use image::metadata::Orientation;
+    use image::ImageDecoder;
+    let Ok(mut decoder) = reader.into_decoder() else {
+        return Probe::Failed;
+    };
+    let (w, h) = decoder.dimensions();
+    if w == 0 || h == 0 {
+        return Probe::Failed;
+    }
+    let turned = matches!(
+        decoder.orientation(),
+        Ok(Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH)
+    );
+    if turned {
+        Probe::Loaded(h as f64, w as f64)
+    } else {
+        Probe::Loaded(w as f64, h as f64)
+    }
 }
 
 fn svg_size(bytes: &[u8]) -> Probe {
@@ -441,6 +460,112 @@ fn svg_size(bytes: &[u8]) -> Probe {
         Ok(tree) => Probe::Loaded(tree.size().width() as f64, tree.size().height() as f64),
         Err(_) => Probe::Failed,
     }
+}
+
+// ---------------------------------------------------------------------------
+// `drawImage(img)` — an `<img>`'s pixels, for a canvas
+// ---------------------------------------------------------------------------
+//
+// HTML draws an image element at its natural size, upright (EXIF orientation
+// applied, as `image-orientation: from-image` paints it), first frame of an
+// animation. Where the pixels come from:
+//
+// * http(s): gpui's decode, the one the element paints from and the load probe
+//   waited on (so after `load` it is there). It is BGRA, straight alpha; an
+//   SVG is rasterised at twice its size and is halved back here.
+// * everything else (data:, blob:, a file, the packaged store): the bytes,
+//   read and decoded now by redjs's decoder, which uses the same `image` crate
+//   and applies the orientation the same way. That is the synchronous decode a
+//   browser does for a `drawImage` of an image it has not decoded yet. It is
+//   not taken from gpui's cache: gpui gives no way to look without starting a
+//   load, and an image a script only draws is never painted.
+//
+// The caller (packages/vue-native/src/canvas.ts) keeps the result per element
+// and `src`, so a cropper redrawing on every pointer move decodes once.
+
+/// What [`pixels`] found for an `<img>`.
+pub(crate) enum Pixels {
+    /// Straight RGBA at the natural size.
+    Ready { width: u32, height: u32, rgba: Vec<u8> },
+    /// Nothing to draw now: no `src`, an http(s) decode still on its way, or
+    /// no gpui `App` to ask (`cx` was `None`).
+    NotYet,
+    /// The bytes are not an image this build decodes, or cannot be read.
+    Broken(String),
+}
+
+/// The pixels of `<img id>`'s current `src` (see the section comment).
+pub(crate) fn pixels(id: u32, cx: Option<&mut gpui::App>) -> Pixels {
+    let Some(raw) = crate::tree::read_tree(|t| t.prop(id, "src").map(str::to_string)) else {
+        return Pixels::NotYet;
+    };
+    let src = raw.trim();
+    if src.is_empty() {
+        return Pixels::NotYet;
+    }
+    if matches!(scheme_of(src).as_str(), "http" | "https") {
+        let Some(cx) = cx else { return Pixels::NotYet };
+        // The memo is keyed by the attribute's own text, as the paint and
+        // the probe ask for it.
+        let Some(Ok(image)) = (match source_for(id, &raw) {
+            Some(ImageSource::Resource(r @ Resource::Uri(_))) => cx.fetch_asset::<gpui::ImgResourceLoader>(&r),
+            _ => return Pixels::Broken(format!("<img src=\"{}\">: not a URL gpui loads", head(src))),
+        }) else {
+            return Pixels::NotYet;
+        };
+        let size = image.size(0);
+        let (w, h) = (size.width.0.max(0) as u32, size.height.0.max(0) as u32);
+        let Some(bgra) = image.as_bytes(0).filter(|b| w > 0 && h > 0 && b.len() >= (w * h * 4) as usize) else {
+            return Pixels::Broken(format!("<img src=\"{}\">: the decoded image has no pixels", head(src)));
+        };
+        let mut rgba = bgra[..(w * h * 4) as usize].to_vec();
+        for px in rgba.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+        if names_svg(src) {
+            let (rgba, w, h) = halve(&rgba, w, h);
+            return Pixels::Ready { width: w, height: h, rgba };
+        }
+        return Pixels::Ready { width: w, height: h, rgba };
+    }
+    let bytes = match read_bytes("img", src) {
+        Ok(b) => b,
+        Err(why) => return Pixels::Broken(why),
+    };
+    match redjs::webapi::image::decode(&bytes, None) {
+        Some(b) => Pixels::Ready { width: b.width, height: b.height, rgba: b.rgba },
+        None => Pixels::Broken(format!("<img src=\"{}\">: the bytes are not an image this build decodes", head(src))),
+    }
+}
+
+/// Straight-alpha RGBA scaled to half size by 2×2 averaging (weighted by
+/// alpha, so a transparent pixel adds no colour): gpui's SVG raster, which is
+/// drawn at twice the natural size, back at the natural size.
+fn halve(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
+    let (ow, oh) = ((w / 2).max(1), (h / 2).max(1));
+    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    for y in 0..oh {
+        for x in 0..ow {
+            let (mut c, mut a) = ([0u32; 3], 0u32);
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let (sx, sy) = ((x * 2 + dx).min(w - 1), (y * 2 + dy).min(h - 1));
+                let p = &rgba[((sy * w + sx) * 4) as usize..][..4];
+                let pa = p[3] as u32;
+                for i in 0..3 {
+                    c[i] += p[i] as u32 * pa;
+                }
+                a += pa;
+            }
+            let o = &mut out[((y * ow + x) * 4) as usize..][..4];
+            if a > 0 {
+                for i in 0..3 {
+                    o[i] = ((c[i] + a / 2) / a) as u8;
+                }
+            }
+            o[3] = ((a + 2) / 4) as u8;
+        }
+    }
+    (out, ow, oh)
 }
 
 /// The raw FILE bytes behind a `src`, for elements that need the document
@@ -1080,6 +1205,89 @@ mod tests {
         let mut out = std::io::Cursor::new(Vec::new());
         image::RgbaImage::new(w, h).write_to(&mut out, image::ImageFormat::Png).unwrap();
         out.into_inner()
+    }
+
+    /// `drawImage(img)`: a file `<img>` decodes now, at its natural size; an
+    /// http(s) one waits for gpui's decode (there is no `App` here); bytes that
+    /// are no image and a missing `src` are told apart.
+    #[test]
+    fn an_img_hands_a_canvas_its_pixels() {
+        let dir = std::env::temp_dir().join(format!("vn-img-pixels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("a.png");
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 255]))
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(&good, out.into_inner()).unwrap();
+        let bad = dir.join("b.png");
+        std::fs::write(&bad, b"not a png").unwrap();
+        let node = |src: Option<&str>| {
+            crate::tree::with_tree(|t| {
+                let tag = t.intern("img");
+                let id = t.create_element(tag);
+                let key = t.intern("src");
+                t.set_prop(id, key, src.map(str::to_string));
+                id
+            })
+        };
+        match pixels(node(Some(&good.to_string_lossy())), None) {
+            Pixels::Ready { width, height, rgba } => {
+                assert_eq!((width, height), (3, 2));
+                assert_eq!(&rgba[..4], &[10, 20, 30, 255]);
+            }
+            _ => panic!("a PNG file did not decode"),
+        }
+        // A photo taken sideways (EXIF orientation 6) measures and draws upright.
+        let turned = dir.join("c.jpg");
+        std::fs::write(&turned, sideways_jpeg()).unwrap();
+        assert_eq!(file_natural_size(&turned), Probe::Loaded(16.0, 32.0));
+        assert_eq!(natural_size(&sideways_jpeg()), Probe::Loaded(16.0, 32.0));
+        assert!(matches!(
+            pixels(node(Some(&turned.to_string_lossy())), None),
+            Pixels::Ready { width: 16, height: 32, .. }
+        ));
+        assert!(matches!(pixels(node(Some(&bad.to_string_lossy())), None), Pixels::Broken(_)));
+        assert!(matches!(pixels(node(Some("https://cdn.example/a.png")), None), Pixels::NotYet));
+        assert!(matches!(pixels(node(None), None), Pixels::NotYet));
+        assert!(matches!(pixels(node(Some("  ")), None), Pixels::NotYet));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A 32×16 JPEG whose APP1 Exif segment says orientation 6 (turn 90°
+    /// clockwise to show it): upright it is 16×32.
+    fn sideways_jpeg() -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(32, 16, image::Rgb([200, 0, 0]))
+            .write_to(&mut out, image::ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = out.into_inner();
+        // TIFF, big-endian: one IFD entry, Orientation (0x0112), SHORT, 1, = 6.
+        let tiff = [0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0];
+        let len = (2 + 6 + tiff.len()) as u16;
+        let mut with = jpeg[..2].to_vec();
+        with.extend_from_slice(&[0xFF, 0xE1, (len >> 8) as u8, len as u8]);
+        with.extend_from_slice(b"Exif\0\0");
+        with.extend_from_slice(&tiff);
+        with.extend_from_slice(&jpeg[2..]);
+        with
+    }
+
+    /// gpui's SVG raster (twice the size) back at the natural size: a 2×2
+    /// block averages by alpha, so a transparent pixel adds no colour.
+    #[test]
+    fn halving_weighs_colour_by_alpha() {
+        let px = [
+            [255, 0, 0, 255], [0, 0, 255, 0],
+            [255, 0, 0, 255], [0, 0, 255, 0],
+        ]
+        .concat();
+        let (out, w, h) = halve(&px, 2, 2);
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(out, vec![255, 0, 0, 128]);
+        // An odd edge reuses the last row/column rather than reading past it.
+        let (out, w, h) = halve(&[9, 9, 9, 255].repeat(3), 3, 1);
+        assert_eq!((w, h, out), (1, 1, vec![9, 9, 9, 255]));
     }
 
     /// `load`'s natural size is the header's, for a raster and an SVG alike;
