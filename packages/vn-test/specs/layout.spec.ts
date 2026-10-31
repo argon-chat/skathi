@@ -231,6 +231,37 @@ describe("#36 a radio's dot", () => {
   }, T);
 });
 
+describe("the gradient-border mask (the Ultima price card)", () => {
+  test("paints the lime in the padding ring and leaves the text uncovered", async () => {
+    // `.ring-border` covers the 80x50 card and is lime, masked to its 3px
+    // padding ring. Before the fix the mask was dropped, and the lime covered
+    // the whole card, text included.
+    const b = await app.locator("#ring-card").boundingBox();
+    const lime = ([r, g, bl]: [number, number, number]) => g > 200 && r < 100 && bl < 100;
+    const read = async () => {
+      const shot = readPng(await app.screenshot());
+      let inner = 0;
+      let ring = 0;
+      for (let y = Math.ceil(b.y); y < b.y + b.h; y++) {
+        for (let x = Math.ceil(b.x); x < b.x + b.w; x++) {
+          if (!lime(shot.at(x, y))) continue;
+          // In a 12px corner the 3px ring's inner edge comes within 5.7px of
+          // both sides, so "inner" starts beyond 7.
+          const edge = Math.min(x - b.x, b.x + b.w - x, y - b.y, b.y + b.h - y);
+          if (edge > 7) inner++;
+          else ring++;
+        }
+      }
+      return { inner, ring };
+    };
+    const got = await until(read, (g) => g.ring > 100);
+    // The straight runs of the ring alone are 2 * ((80 - 24) + (50 - 24)) * 3
+    // = 492 px.
+    bunExpect(got.ring).toBeGreaterThan(300);
+    bunExpect(got.inner).toBe(0);
+  }, T);
+});
+
 describe("#10 (b) the hidden attribute", () => {
   test("hides the box, until-found too, unless the author sets a display", async () => {
     // The author's `.hid-flex { display: flex }` is shown, which means the UA

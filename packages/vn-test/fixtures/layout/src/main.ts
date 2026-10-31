@@ -139,6 +139,16 @@ const hiddens = () =>
     h("div", { id: "hid-flex", class: "hid-box hid-flex", hidden: true }),
   ]);
 
+/** The Ultima price card's border: an absolutely positioned box over the
+ *  card, painted lime and masked down to its padding ring with the
+ *  gradient-border idiom. Before the fix the mask was dropped and the lime
+ *  covered the card's text. */
+const maskRing = () =>
+  h("div", { id: "ring-card", class: "ring-card" }, [
+    h("div", { class: "ring-border" }),
+    h("span", { class: "ring-text" }, "ANNUAL"),
+  ]);
+
 createApp({
   render: () =>
     h("div", { id: "root" }, [
@@ -150,5 +160,6 @@ createApp({
       backdrop(),
       radio(),
       hiddens(),
+      maskRing(),
     ]),
 }).mount();

@@ -2085,6 +2085,9 @@ fn build_node<V: 'static>(
                 node.computed.as_ref().and_then(|cs| cs.color),
                 &node_prefix(t, id),
             );
+            apply_mask_ring(d.style(), &extras, bg_stack.is_some(), paints_children(t, node), || {
+                node_prefix(t, id)
+            });
             apply_inline_row(d.style(), t, node, align);
             apply_inline_align(d.style(), t, node, &extras, align);
             apply_button_content_box(d.style(), t, node);
@@ -2894,6 +2897,58 @@ fn apply_drop_shadow(
     });
 }
 
+/// CSS `mask` as the gradient-border idiom: the background paints only in the
+/// padding and border ring (`gpui::Style::vn_mask_ring`, vn-css's
+/// `Extras::mask_ring`). The two cases the ring does not cover say so:
+/// - a `url()` background, which `crate::bgimage` paints from a child the
+///   ring does not reach;
+/// - children, which a browser masks with the element and gpui does not.
+fn apply_mask_ring(
+    style: &mut gpui::StyleRefinement,
+    extras: &vn_css::Extras,
+    painted_by_child: bool,
+    has_children: bool,
+    at: impl Fn() -> String,
+) {
+    if !extras.mask_ring() {
+        return;
+    }
+    if painted_by_child {
+        warn_compat_at(
+            "mask-ring-url",
+            &at(),
+            "a gradient-border `mask` over a `url()` background is not applied (v1). The \
+             image stack paints from a child box the ring does not reach, so the whole box \
+             shows",
+        );
+        return;
+    }
+    style.vn_mask_ring = Some(true);
+    if has_children {
+        warn_compat_at(
+            "mask-ring-children",
+            &at(),
+            "the children of an element with a gradient-border `mask` are not masked (v1). \
+             Its background paints only in the padding and border ring, as in a browser, but \
+             its content paints whole, where a browser cuts it to the ring too",
+        );
+    }
+}
+
+/// Does this element paint anything of its own inside it: an element child,
+/// or text? Vue's empty anchors and empty text nodes do not count.
+fn paints_children(t: &Tree, node: &crate::tree::Node) -> bool {
+    fn paints(t: &Tree, id: u32) -> bool {
+        let Some(n) = t.node(id) else { return false };
+        match n.kind {
+            crate::tree::Kind::Element => true,
+            crate::tree::Kind::Text => !n.text.is_empty(),
+            crate::tree::Kind::Anchor => n.children.iter().any(|&c| paints(t, c)),
+        }
+    }
+    node.children.iter().any(|&c| paints(t, c))
+}
+
 /// The `drop-shadow()` this engine cannot draw, said once. Shared by
 /// [`apply_drop_shadow`] and by `build_svg`, which does not go through it.
 fn advise_drop_shadow_shape(at: &str) {
@@ -2926,6 +2981,10 @@ fn pseudo_element(
 ) -> AnyElement {
     let mut d = div();
     *d.style() = (*pb.style).clone();
+    // The gradient-border `mask`, most often written on a `::before`.
+    if pb.extras.mask_ring() {
+        d.style().vn_mask_ring = Some(true);
+    }
     let case = pb.extras.text_transform.or(parent_case);
     let e = if pb.content.is_empty() {
         d.into_any_element()

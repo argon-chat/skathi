@@ -333,6 +333,51 @@ pub struct Extras {
     pub overscroll_x: Option<OverscrollBehavior>,
     /// `overscroll-behavior-y`.
     pub overscroll_y: Option<OverscrollBehavior>,
+    /// `mask-image` (or the `mask` shorthand's images). The three `mask_*`
+    /// fields are kept apart because they cascade apart, and
+    /// [`Extras::mask_ring`] reads them together.
+    pub mask_images: Option<MaskImages>,
+    /// `mask-clip` (or the shorthand's boxes).
+    pub mask_clips: Option<MaskClips>,
+    /// `mask-composite` / `-webkit-mask-composite` (or the shorthand's), for
+    /// the top layer, which is the only one composited onto anything.
+    pub mask_composite: Option<MaskCompositing>,
+}
+
+/// `mask-image`, as far as the paint path can tell layers apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskImages {
+    /// `none`: no mask.
+    None,
+    /// Exactly two layers, each a gradient whose every stop is opaque, so it
+    /// covers its whole box: the `linear-gradient(#fff 0 0)` pair of the
+    /// gradient-border idiom.
+    TwoOpaque,
+    /// Anything else (a `url()`, a fade, one layer, three).
+    Other,
+}
+
+/// `mask-clip`, as far as the gradient-border idiom needs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskClips {
+    /// The top layer clipped to the content box, the second to the border box
+    /// (the initial value).
+    ContentThenBorder,
+    /// Anything else.
+    Other,
+}
+
+/// The top mask layer's compositing operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskCompositing {
+    /// `add` / `source-over`, the initial value: the layers' union.
+    Add,
+    /// `exclude` / `xor`, and `destination-out` (the layers below, minus this
+    /// one). Over the idiom's pair, all three leave the border box minus the
+    /// content box.
+    Exclude,
+    /// Anything else.
+    Other,
 }
 
 /// CSS `scrollbar-width`.
@@ -569,9 +614,29 @@ impl Extras {
         if other.overscroll_y.is_some() {
             self.overscroll_y = other.overscroll_y;
         }
+        if other.mask_images.is_some() {
+            self.mask_images = other.mask_images;
+        }
+        if other.mask_clips.is_some() {
+            self.mask_clips = other.mask_clips;
+        }
+        if other.mask_composite.is_some() {
+            self.mask_composite = other.mask_composite;
+        }
         // A bitmask, not a last-wins value: two rules can each contribute a
         // different `currentColor` property to the same element.
         self.current_color.0 |= other.current_color.0;
+    }
+
+    /// The `mask` this element ends up with is the gradient-border idiom: two
+    /// opaque layers, the top one clipped to the content box, composited with
+    /// `exclude`. What it leaves visible is the ring of padding and border,
+    /// which gpui paints with `Style::vn_mask_ring`. Any other mask is not
+    /// applied (v1), and the mapper says so where it is declared.
+    pub fn mask_ring(&self) -> bool {
+        self.mask_images == Some(MaskImages::TwoOpaque)
+            && self.mask_clips == Some(MaskClips::ContentThenBorder)
+            && self.mask_composite == Some(MaskCompositing::Exclude)
     }
 
     /// Folds the `background-image` stack together with the three geometry
@@ -2370,6 +2435,94 @@ fn band_stops(stops: &[Stop]) -> Vec<Vec<Stop>> {
     bands
 }
 
+/// A `mask-image` list, as [`MaskImages`] tells layers apart.
+fn mask_images<'a>(
+    images: impl Iterator<Item = &'a lightningcss::values::image::Image<'a>>,
+) -> MaskImages {
+    use lightningcss::values::image::Image;
+    let images: Vec<_> = images.collect();
+    if images.iter().all(|i| matches!(i, Image::None)) {
+        MaskImages::None
+    } else if images.len() == 2 && images.iter().all(|i| opaque_mask_layer(i)) {
+        MaskImages::TwoOpaque
+    } else {
+        MaskImages::Other
+    }
+}
+
+/// Does this mask layer cover its whole box? A gradient whose every stop is an
+/// opaque colour does, at any size and angle: the ends extend.
+fn opaque_mask_layer(image: &lightningcss::values::image::Image<'_>) -> bool {
+    use lightningcss::values::gradient::{Gradient, GradientItem};
+    use lightningcss::values::image::Image;
+    fn opaque<D>(items: &[GradientItem<D>]) -> bool {
+        items.iter().all(|item| match item {
+            GradientItem::ColorStop(stop) => color(&stop.color).is_some_and(|c| c.a >= 1.0),
+            GradientItem::Hint(_) => true,
+        })
+    }
+    let Image::Gradient(gradient) = image else {
+        return false;
+    };
+    match gradient.as_ref() {
+        Gradient::Linear(g) | Gradient::RepeatingLinear(g) => opaque(&g.items),
+        Gradient::Radial(g) | Gradient::RepeatingRadial(g) => opaque(&g.items),
+        Gradient::Conic(g) | Gradient::RepeatingConic(g) => opaque(&g.items),
+        Gradient::WebKitGradient(_) => false,
+    }
+}
+
+/// A `mask-clip` list, as [`MaskClips`] tells it apart.
+fn mask_clips<'a>(
+    clips: impl Iterator<Item = &'a lightningcss::properties::masking::MaskClip>,
+) -> MaskClips {
+    use lightningcss::properties::masking::{GeometryBox as B, MaskClip as C};
+    let clips: Vec<_> = clips.collect();
+    match clips.as_slice() {
+        [C::GeometryBox(B::ContentBox), C::GeometryBox(B::BorderBox)] => MaskClips::ContentThenBorder,
+        _ => MaskClips::Other,
+    }
+}
+
+fn mask_compositing(c: lightningcss::properties::masking::MaskComposite) -> MaskCompositing {
+    use lightningcss::properties::masking::MaskComposite as C;
+    match c {
+        C::Add => MaskCompositing::Add,
+        C::Exclude => MaskCompositing::Exclude,
+        C::Subtract | C::Intersect => MaskCompositing::Other,
+    }
+}
+
+/// One `-webkit-mask-composite` keyword. The top layer is the source and the
+/// layers below are the destination, so `destination-out` (below minus this
+/// one) leaves the same ring as `xor` over the gradient-border pair.
+fn webkit_mask_compositing(keyword: &str) -> MaskCompositing {
+    match keyword.to_ascii_lowercase().as_str() {
+        "source-over" => MaskCompositing::Add,
+        "xor" | "destination-out" => MaskCompositing::Exclude,
+        _ => MaskCompositing::Other,
+    }
+}
+
+/// Says once that a mask is not applied, for the declaration just recorded in
+/// `x` (one rule's declarations, not the element's cascade). The
+/// gradient-border idiom says nothing: its parts are each supported.
+fn advise_mask(x: &Extras, diagnostics: &mut Vec<String>) {
+    let unsupported = x.mask_images == Some(MaskImages::Other)
+        || x.mask_composite == Some(MaskCompositing::Other)
+        || (x.mask_images == Some(MaskImages::TwoOpaque) && x.mask_clips == Some(MaskClips::Other));
+    if unsupported {
+        warn_once(
+            diagnostics,
+            "`mask` is not applied (v1), and the element paints unmasked. gpui has no \
+             per-element alpha mask. The one mask vue-native cuts is the gradient-border ring: \
+             two opaque layers, the top one clipped to `content-box`, with `mask-composite: \
+             exclude` (or `-webkit-mask-composite: xor`). That paints the background in the \
+             padding and border only",
+        );
+    }
+}
+
 /// Maps a `background-image` list onto [`Extras::background_images`], keeping
 /// each gpui background next to the CSS layer index that placed it.
 fn collect_background_images<'a>(
@@ -3886,6 +4039,35 @@ fn apply_property(
                 );
             }
         }
+        // CSS `mask`. The paint path cuts one shape, the ring of the
+        // gradient-border idiom (`Extras::mask_ring`). Each property records
+        // its part, because they cascade apart. Whatever is not that idiom is
+        // advised where it is declared.
+        Mask(layers, _) => {
+            x.mask_images = Some(mask_images(layers.iter().map(|l| &l.image)));
+            x.mask_clips = Some(mask_clips(layers.iter().map(|l| &l.clip)));
+            x.mask_composite =
+                Some(layers.first().map_or(MaskCompositing::Add, |l| mask_compositing(l.composite)));
+            advise_mask(x, diagnostics);
+        }
+        MaskImage(images, _) => {
+            x.mask_images = Some(mask_images(images.iter()));
+            advise_mask(x, diagnostics);
+        }
+        MaskClip(clips, _) => x.mask_clips = Some(mask_clips(clips.iter())),
+        MaskComposite(list) => {
+            x.mask_composite = Some(list.first().map_or(MaskCompositing::Add, |c| mask_compositing(*c)));
+            advise_mask(x, diagnostics);
+        }
+        // Typed, in case a lightningcss release parses it. This one arrives as
+        // a custom property (see the `-webkit-mask-composite` arm there).
+        WebKitMaskComposite(list) => {
+            use lightningcss::traits::ToCss;
+            let first = list.first().and_then(|c| c.to_css_string(Default::default()).ok());
+            x.mask_composite =
+                Some(webkit_mask_compositing(first.as_deref().unwrap_or("source-over")));
+            advise_mask(x, diagnostics);
+        }
         BorderColor(v) => {
             // gpui has one border color for all four sides — take the top.
             match &v.top {
@@ -4775,6 +4957,22 @@ fn apply_property(
                          box clips for real",
                     );
                 }
+            }
+            // lightningcss has a `-webkit-mask-composite` property, but its name
+            // lookup strips the prefix first, finds the unprefixed
+            // `mask-composite` (which takes no prefix), and gives up. So the
+            // declaration arrives here as raw tokens. The first keyword is the
+            // top layer's, the only one composited onto anything.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref().eq_ignore_ascii_case("-webkit-mask-composite") =>
+            {
+                use lightningcss::properties::custom::{Token, TokenOrValue};
+                let first = c.value.0.iter().find_map(|t| match t {
+                    TokenOrValue::Token(Token::Ident(id)) => Some(id.as_ref()),
+                    _ => None,
+                });
+                x.mask_composite = Some(webkit_mask_compositing(first.unwrap_or("source-over")));
+                advise_mask(x, diagnostics);
             }
             lightningcss::properties::custom::CustomPropertyName::Unknown(name) => {
                 once(
@@ -7014,6 +7212,53 @@ mod tests {
             map_full("filter: drop-shadow(1px 1px 1px red) drop-shadow(2px 2px 2px blue)");
         assert!(x.drop_shadow.is_some(), "the first one is still honoured");
         assert!(d.iter().any(|m| m.contains("a second drop-shadow()")), "{d:?}");
+    }
+
+    /// The gradient-border idiom (the Argon client's Ultima price card, its
+    /// profile frame and BorderTrace): a mask that leaves the padding and
+    /// border ring. Its parts are recorded without a word, and only the whole
+    /// cascade makes the ring. Any other mask is advised.
+    #[test]
+    fn the_gradient_border_mask_is_a_ring_and_others_are_advised() {
+        let ring = "-webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+                    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+                    -webkit-mask-composite: xor;
+                    mask-composite: exclude";
+        let (_, x, d) = map_full(ring);
+        assert!(d.is_empty(), "{d:?}");
+        assert!(x.mask_ring());
+        for composite in ["-webkit-mask-composite: xor", "-webkit-mask-composite: destination-out"] {
+            let (_, x, d) = map_full(&format!(
+                "mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); {composite}"
+            ));
+            assert!(d.is_empty() && x.mask_ring(), "{composite}: {d:?}");
+        }
+        // The shorthand alone composites with `add`: the union is the whole
+        // border box, so the element paints as if unmasked, which is right.
+        let (_, x, d) = map_full("mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)");
+        assert!(d.is_empty(), "{d:?}");
+        assert!(!x.mask_ring());
+        // The longhands spell it too.
+        let (_, x, d) = map_full(
+            "mask-image: linear-gradient(red, blue), linear-gradient(#fff 0 0);
+             mask-clip: content-box, border-box; mask-composite: exclude",
+        );
+        assert!(d.is_empty() && x.mask_ring(), "{d:?}");
+        // A shorthand AFTER the composite resets it to `add`.
+        let (_, x, _) = map_full(&format!("{ring}; mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)"));
+        assert!(!x.mask_ring());
+
+        for other in [
+            "mask-image: linear-gradient(to right, black 90%, transparent)",
+            "mask-image: url(icon.svg)",
+            "mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask-composite: intersect",
+        ] {
+            let (_, x, d) = map_full(other);
+            assert!(!x.mask_ring(), "{other}");
+            assert!(d.iter().any(|m| m.contains("`mask` is not applied")), "{other}: {d:?}");
+        }
+        let (_, x, d) = map_full("mask: none");
+        assert!(d.is_empty() && !x.mask_ring(), "{d:?}");
     }
 
     /// `clip-path: inset(50%)` is the screen-reader-only idiom: the insets meet

@@ -362,6 +362,19 @@ project's browser-compat-first policy.
     `display: none` here. A browser keeps that box (`content-visibility:
     hidden`) so find-in-page can reveal it. vue-native has no find-in-page,
     so the difference shows only in layout reads: the box measures zero here.
+12. **`mask` is applied in one shape only, the gradient-border ring** (m26). That
+    is two opaque layers, the top one clipped to `content-box`, composited with
+    `mask-composite: exclude` (`-webkit-mask-composite: xor` or
+    `destination-out`): `mask: linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0)`. The shorthand, `mask-image` + `mask-clip`, and
+    either composite property all spell it, and each cascades on its own.
+    gpui then paints the element's background only in its padding and border
+    (`Style::vn_mask_ring`). What differs: the element's children are not
+    masked (advisory); its outer and inset shadows, outline, backdrop blur and
+    `--shading` are not painted; a percentage padding resolves against the
+    element's own width; and a `url()` background is not masked (advisory).
+    Every other mask (a fade, an icon `url()`) paints the element unmasked,
+    with the advisory "`mask` is not applied (v1)".
 
 ---
 
