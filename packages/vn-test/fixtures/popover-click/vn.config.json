@@ -1,0 +1,13 @@
+{
+  "$comment": "A real click that opens a reka-style popover which focuses itself and measures on mount: the Argon member-click crash — see ../README.md and packages/vn-test/specs/popover-click.spec.ts.",
+
+  "name": "popover-click",
+
+  "window": {
+    "title": "vue-native — popover from a real click (fixture)",
+    "width": 480,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -48,14 +48,42 @@ thread_local! {
 /// and keeps it until the checkpoint is settled: JSC drains the microtask
 /// queue by itself whenever the OUTERMOST API lock is released, which, for a
 /// call made without the lock, is the end of that call (redjs `web::checkpoint`).
-pub fn owe_drain() {
-    if DRAIN_OWED.with(|c| c.replace(true)) {
-        return;
+///
+/// Returns `false`, and owes nothing, when JS is already running below the
+/// dispatch: a gpui listener that a forced layout's draw ran from inside a
+/// script (`getBoundingClientRect` → `sync_layout` → `Window::draw` → a focus
+/// observer). That dispatch is nested, so it gets no checkpoint of its own, as
+/// in a browser, where one runs only once the script stack is empty: the
+/// enclosing script's checkpoint runs its microtasks. Owing there would also
+/// break the engine. The enclosing script may be a microtask that JSC's own
+/// drain runs from `JSLock::willReleaseLock`, after that unlock has decided it
+/// is the last one. A lock taken there and kept outlives the release of the
+/// heap access, so the API lock stays held WITHOUT heap access; the next
+/// release aborts the process: "FATAL: Attempting to release access but the
+/// mutator does not have access" (a member click in the Argon client, whose
+/// popover focuses and measures on mount).
+pub fn owe_drain() -> bool {
+    if DRAIN_OWED.with(|c| c.get()) {
+        return true;
     }
-    // SAFETY: the context is live and this is its VM thread.
-    if crate::JsRuntime::try_with(|rt| unsafe { redjs::ffi::redjs_lock(rt.raw()) }).is_none() {
-        DRAIN_OWED.with(|c| c.set(false));
-    }
+    let owed = crate::JsRuntime::try_with(|rt| {
+        let g = rt.raw();
+        // SAFETY: the context is live and this is its VM thread. `rjs_in_js`
+        // runs under the lock just taken, so its own lock holder is nested and
+        // cannot drain. With JS on the stack the lock was already held, so the
+        // unlock only counts down and releases nothing.
+        unsafe {
+            redjs::ffi::redjs_lock(g);
+            if redjs::glue::rjs_in_js(g) != 0 {
+                redjs::ffi::redjs_unlock(g);
+                return false;
+            }
+        }
+        true
+    })
+    .unwrap_or(false);
+    DRAIN_OWED.with(|c| c.set(owed));
+    owed
 }
 
 /// Is a checkpoint owed ([`owe_drain`])?
@@ -200,4 +228,68 @@ pub fn panic_to_js(g: *mut c_void, payload: Box<dyn Any + Send>) -> u64 {
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or(msg);
     throw_error(g, 0, &format!("native panic at {loc}: {text}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::JsRuntime;
+    use redjs::api::Value;
+
+    /// `owe()` stands for a listener's dispatch: it owes the checkpoint as
+    /// vn-tree's `dispatch_event` does under a gpui listener, and answers
+    /// whether it did.
+    fn install_owe(rt: &JsRuntime) {
+        let f = rt.ctx().function("owe", 0, |_g, _frame| Value::boolean(owe_drain()).0).unwrap();
+        rt.ctx().global_set("owe", f).unwrap();
+    }
+
+    fn read(rt: &JsRuntime, src: &str) -> String {
+        let v = rt.ctx().eval(src).unwrap();
+        rt.ctx().to_rust_string(v).unwrap()
+    }
+
+    /// The Argon member-click crash. A call made without the lock ends in
+    /// JSC's own drain, inside `JSLock::willReleaseLock`, after that unlock has
+    /// decided it is the last one; there a microtask (Vue's flush, a popover's
+    /// onMounted that focuses and measures) reached a listener's dispatch
+    /// through a forced layout's draw. Owing there kept a lock that outlived
+    /// the heap access, and the next release aborted the process: "FATAL:
+    /// Attempting to release access but the mutator does not have access".
+    #[test]
+    fn a_dispatch_inside_running_js_owes_nothing() {
+        JsRuntime::init();
+        JsRuntime::with(|rt| {
+            install_owe(rt);
+            // No explicit drain anywhere: the reaction runs from the eval's
+            // final unlock, which is the case under test.
+            rt.ctx().eval("globalThis.seen = []; Promise.resolve().then(() => seen.push(owe()))").unwrap();
+        });
+        assert!(!drain_owed(), "a dispatch nested in running JS owes nothing");
+        // With a lock kept from inside that drain, this release aborted.
+        settle_owed_drain();
+        JsRuntime::with(|rt| {
+            unsafe { redjs::ffi::redjs_gc(rt.raw(), 0) };
+            assert_eq!(read(rt, "String(seen)"), "false", "the reaction ran in JSC's drain, and owed nothing");
+        });
+    }
+
+    /// Outside JS, the dispatch still owes: the end of the next call does not
+    /// drain, and the settle runs the checkpoint and gives the lock back.
+    #[test]
+    fn a_dispatch_outside_js_owes_its_checkpoint_until_it_is_settled() {
+        JsRuntime::init();
+        assert!(owe_drain());
+        assert!(owe_drain(), "owing twice is one owed checkpoint");
+        JsRuntime::with(|rt| {
+            rt.ctx().eval("globalThis.ran = false; Promise.resolve().then(() => { ran = true; })").unwrap();
+            assert_eq!(read(rt, "String(ran)"), "false", "a call's end does not drain while the checkpoint is owed");
+        });
+        settle_owed_drain();
+        assert!(!drain_owed());
+        JsRuntime::with(|rt| {
+            unsafe { redjs::ffi::redjs_gc(rt.raw(), 0) };
+            assert_eq!(read(rt, "String(ran)"), "true", "the settle ran the checkpoint");
+        });
+    }
 }

@@ -1522,6 +1522,9 @@ fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, d
     vn_runtime::bridge::settle_owed_drain();
     // Under a gpui listener, owe this dispatch's checkpoint (see above). Before
     // the call: owing holds the engine lock, or JSC drains when the call ends.
+    // A listener a forced layout's draw ran from inside a script (a focus
+    // observer) is nested: `owe_drain` owes nothing there, and nothing drains
+    // here either, because the script's own checkpoint runs these microtasks.
     let owe = in_input_dispatch();
     if owe {
         vn_runtime::bridge::owe_drain();
