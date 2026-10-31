@@ -308,6 +308,24 @@ struct RuleEntry {
     decls: Option<Rc<Vec<(String, String, bool)>>>,
 }
 
+/// The few user-agent defaults vue-native supplies, collected ahead of every
+/// author sheet.
+///
+/// A browser's UA sheet is its own cascade origin, which ANY author
+/// declaration beats, whatever its specificity. Wrapping each selector in
+/// `:where()` (specificity 0) and collecting it first (the earliest order) is
+/// the same thing for normal declarations: every author rule that sets the
+/// property is at least as specific and comes later. vn-css models no
+/// `@layer`, so no author rule can sort below these.
+///
+/// - `[hidden]` is `display: none` (HTML's rendering section). Without it a
+///   `hidden` element stayed visible unless the app's own CSS hid it.
+///   `hidden="until-found"` is hidden the same way: a browser keeps its box and
+///   hides only its content (`content-visibility: hidden`) until find-in-page
+///   or a fragment reveals it, and neither exists here (crates/vn-css/README.md
+///   §5 item 11).
+pub(crate) const UA_SHEET: &str = ":where([hidden]) { display: none }";
+
 /// A compiled stylesheet: rules with matchable selectors, pre-converted
 /// declaration blocks, specificity and state classification.
 ///
@@ -519,6 +537,9 @@ impl Engine {
         // The flag describes THIS sheet: a resize only recompiles when the sheet
         // currently installed actually resolves a viewport unit.
         mapper::reset_viewport_units_seen();
+        // UA defaults first, so they hold even when the author's sheet fails.
+        let mut order = 0u32;
+        engine.collect_ua(&mut order);
         let src: &'static str = Box::leak(css.to_string().into_boxed_str());
         // CSS's own error handling (CSS Syntax §2.2: an invalid rule or
         // declaration is dropped and parsing resumes), which every browser
@@ -552,9 +573,19 @@ impl Engine {
                 ));
             }
         }
-        let mut order = 0u32;
         engine.collect(&sheet.rules.0, None, &mut order);
         engine
+    }
+
+    /// The UA defaults, collected before the author's sheet (see [`UA_SHEET`]).
+    fn collect_ua(&mut self, order: &mut u32) {
+        match StyleSheet::parse(UA_SHEET, ParserOptions::default()) {
+            Ok(sheet) => {
+                let sheet: &'static StyleSheet<'static> = Box::leak(Box::new(sheet));
+                self.collect(&sheet.rules.0, None, order);
+            }
+            Err(e) => self.diagnostics.push(format!("vue-native's UA defaults did not parse: {e}")),
+        }
     }
 
     /// Does any selector in the sheet use `+` or `~`?
@@ -3093,6 +3124,29 @@ mod tests {
             r#"[aria-expanded="true"]"#,
             &[("aria-expanded", "true")]
         ));
+    }
+
+    /// m26 #10 (b): `[hidden]` is `display: none` from the UA defaults, and
+    /// any author `display` beats it whatever its specificity, as the UA
+    /// cascade origin does in a browser.
+    #[test]
+    fn hidden_is_display_none_below_every_author_rule() {
+        use gpui::Display::{Flex, Grid, None as Gone};
+        let display = |css: &str, attrs: &'static [(&'static str, &'static str)]| {
+            let engine = Engine::compile(css);
+            assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+            engine.compute(node_with(attrs), None, &Env::default()).base.display
+        };
+        assert_eq!(display("", &[("hidden", "")]), Some(Gone));
+        assert_eq!(display("", &[("hidden", "until-found")]), Some(Gone), "treated as hidden");
+        assert_eq!(display("", &[]), None, "no attribute, no rule");
+        assert_eq!(display("div { display: flex }", &[("hidden", "")]), Some(Flex), "a type selector");
+        assert_eq!(display("* { display: grid }", &[("hidden", "")]), Some(Grid), "even `*`");
+        assert_eq!(
+            display(".box[hidden] { display: none } .box { display: flex }", &[("hidden", "")]),
+            Some(Gone),
+            "the author's own [hidden] rule is an ordinary rule"
+        );
     }
 
     #[test]

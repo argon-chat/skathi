@@ -352,6 +352,16 @@ project's browser-compat-first policy.
     `image-set()` is still not painted (advisory); and a layer needing more than
     4096 tiles is skipped (advisory). A URL that fails to load paints nothing,
     with an advisory.
+11. **The user-agent sheet is one rule, `[hidden] { display: none }`** (m26).
+    `Engine::compile` collects it ahead of the author's sheet as
+    `:where([hidden])`. Specificity 0 and the earliest order put it below every
+    author declaration, as the UA origin is, so `[hidden]` with an author
+    `display: flex` shows the element, as it does in a browser. An author
+    `!important` beats it too. That holds in a browser as well, because the UA
+    rule is normal and not `!important`. `hidden="until-found"` is
+    `display: none` here. A browser keeps that box (`content-visibility:
+    hidden`) so find-in-page can reveal it. vue-native has no find-in-page,
+    so the difference shows only in layout reads: the box measures zero here.
 
 ---
 

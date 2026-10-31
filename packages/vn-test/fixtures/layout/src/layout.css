@@ -273,3 +273,18 @@ button {
   fill: lime;
   transform: translate(-50%, -50%);
 }
+
+/* #10 (b): hidden boxes. Only the author's `display: flex` shows one. */
+.hid-at {
+  position: absolute;
+  left: 60px;
+  top: 400px;
+}
+.hid-box {
+  width: 20px;
+  height: 20px;
+  background-color: teal;
+}
+.hid-flex {
+  display: flex;
+}

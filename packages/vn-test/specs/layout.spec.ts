@@ -230,3 +230,14 @@ describe("#36 a radio's dot", () => {
     bunExpect(Math.abs(got.cy - (b.y + b.h / 2))).toBeLessThanOrEqual(1);
   }, T);
 });
+
+describe("#10 (b) the hidden attribute", () => {
+  test("hides the box, until-found too, unless the author sets a display", async () => {
+    // The author's `.hid-flex { display: flex }` is shown, which means the UA
+    // rule held for the other two and the author rule beat it here.
+    const flex = await until(() => box("#hid-flex"), shown);
+    bunExpect(flex).toMatchObject({ w: 20, h: 20 });
+    bunExpect(shown(await box("#hid"))).toBe(false);
+    bunExpect(shown(await box("#hid-found"))).toBe(false);
+  }, T);
+});

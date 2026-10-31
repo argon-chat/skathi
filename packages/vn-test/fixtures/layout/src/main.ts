@@ -130,7 +130,25 @@ const radio = () =>
     ]),
   ]);
 
+/** #10 (b): the `hidden` attribute, under the UA rule `[hidden] { display:
+ *  none }`, which an author `display` beats. */
+const hiddens = () =>
+  h("div", { class: "hid-at" }, [
+    h("div", { id: "hid", class: "hid-box", hidden: true }),
+    h("div", { id: "hid-found", class: "hid-box", hidden: "until-found" }),
+    h("div", { id: "hid-flex", class: "hid-box hid-flex", hidden: true }),
+  ]);
+
 createApp({
   render: () =>
-    h("div", { id: "root" }, [messages(), bubble(), track(), ...grids(), backgrounds(), backdrop(), radio()]),
+    h("div", { id: "root" }, [
+      messages(),
+      bubble(),
+      track(),
+      ...grids(),
+      backgrounds(),
+      backdrop(),
+      radio(),
+      hiddens(),
+    ]),
 }).mount();
