@@ -175,7 +175,9 @@ impl Presenter {
         // a colour-space claim — same as on the readback path.
         let pixels = vec![0u8; size.0 as usize * size.1 as usize * 4];
         let buffer = RgbaImage::from_raw(size.0, size.1, pixels)?;
-        self.placeholder = Some(Arc::new(RenderImage::new(vec![Frame::new(buffer)])));
+        // `dynamic`: the GPU fills its tile, so its own (zeroed) pixels must
+        // never be resampled into a smaller copy (gpui `ImageResampler`).
+        self.placeholder = Some(Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic()));
         self.target = target;
         self.slots.clear();
         self.write = 0;
@@ -382,6 +384,6 @@ impl Presenter {
         // `RgbaImage` is a byte container here, not a colour-space claim: the
         // bytes are BGRA, which is what gpui's atlas uploads.
         let buffer = RgbaImage::from_raw(size.0, size.1, pixels)?;
-        Some((Arc::new(RenderImage::new(vec![Frame::new(buffer)])), frame_pts))
+        Some((Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic()), frame_pts))
     }
 }

@@ -26,6 +26,7 @@ pub mod log;
 mod lottie;
 pub mod perf;
 mod render;
+mod resample;
 mod scroll;
 mod svg;
 mod tree;
@@ -814,7 +815,7 @@ pub fn video_device_changed() -> usize {
 /// Call it once per frame from the pump, BEFORE the draw; returns `true` when
 /// something moved and the window must repaint.
 ///
-/// Seven jobs today:
+/// Eight jobs today:
 /// * `blob:` image decodes that no node shows any more, or that belong to a
 ///   file picked again after it changed, are handed back to gpui's asset
 ///   cache (`img::evict_pending`);
@@ -830,7 +831,10 @@ pub fn video_device_changed() -> usize {
 ///   gpui focus, which is the browser's rule and what makes a `<KeepAlive>`
 ///   page stop swallowing keystrokes after it deactivates;
 /// * web fonts that finished loading are handed to gpui's text system and the
-///   stylesheet is compiled against them (`fonts::tick`).
+///   stylesheet is compiled against them (`fonts::tick`);
+/// * smaller copies of images drawn well below their size that finished on
+///   the resampling thread are taken in, and the ones evicted go back to the
+///   atlases (`resample::tick`).
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // The pump's, not an input listener's: a layout read in one of these
     // handlers (an `<img>` `load` measuring the picture) may force a frame.
@@ -870,7 +874,9 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // Web fonts: loads started, finished ones registered with the text system
     // (and the sheet recompiled against them), `FontFace` statuses delivered.
     let fonts_moved = fonts::tick(window, cx);
-    anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved
+    // Image copies for downscaled draws (#22): the ones that landed repaint.
+    let resampled = resample::tick(window, cx);
+    anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved | resampled
 }
 
 /// The per-frame work a SECONDARY window has to do for itself, because the

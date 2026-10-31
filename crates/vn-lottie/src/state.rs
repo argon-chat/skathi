@@ -620,7 +620,7 @@ impl LottieState {
         // `RgbaImage` is a byte container here, not a colour-space claim: the
         // bytes are already BGRA, which is what gpui's atlas uploads.
         let buffer = RgbaImage::from_raw(raster.width, raster.height, raster.bgra)?;
-        let image = Arc::new(RenderImage::new(vec![Frame::new(buffer)]));
+        let image = Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic());
 
         // Retire the frame *before* last: the scene that painted it has been
         // presented by now, so its atlas tile is safe to release.

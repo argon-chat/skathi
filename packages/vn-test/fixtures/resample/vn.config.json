@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/resample.spec.ts: one-pixel checkerboards drawn far below their size (<img>, background-image, a still <canvas>), m26 client sweep #22. See ../README.md.",
+
+  "name": "vn-test-resample",
+
+  "window": {
+    "title": "vue-native — resample (fixture)",
+    "width": 360,
+    "height": 100,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

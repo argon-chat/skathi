@@ -267,13 +267,15 @@ fn min_nodes() -> u32 {
 /// the frame and is not part of the prepaint/paint spans gpui replays, so a
 /// cached subtree would simply not exist for Narrator. Everything animating is
 /// re-sampled from one `Instant` per build, so a replayed subtree would freeze
-/// mid-transition.
+/// mid-transition. And a frame on which an image's smaller copy landed or was
+/// evicted (`crate::resample`) must repaint the scenes that name its tile.
 pub(crate) fn begin_frame(window: &Window) {
     let on = enabled()
         && !window.is_a11y_active()
         && !crate::animating()
         && !crate::lotties_animating()
-        && !crate::videos_playing();
+        && !crate::videos_playing()
+        && !crate::resample::holds_replays();
     ACTIVE.with(|c| c.set(on));
 }
 

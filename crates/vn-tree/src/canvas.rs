@@ -19,6 +19,12 @@
 //!   reuses the image it uploaded. A canvas that drew costs one snapshot (the
 //!   queued commands rasterized), a swizzle to BGRA and one atlas upload; the
 //!   image it replaces goes back to the atlas on the next frame.
+//! * **Drawn smaller than its bitmap.** A still canvas is drawn from a
+//!   filtered copy at the size it is shown (`crate::resample`, #22), as an
+//!   `<img>` is. A canvas that draws again within [`MOVING`] of its last
+//!   change is animating: its frames are `RenderImage::dynamic` and drawn as
+//!   they are, so an animation never pays for copies; once it has been still
+//!   for [`STILL`], its last frame is re-wrapped as a still image and gets one.
 //! * **Not honoured:** `image-rendering` (gpui samples sprites linearly, so a
 //!   `pixelated` canvas scaled up is smoothed). Doc line, no advisory: vn-css
 //!   does not parse the property.
@@ -37,9 +43,10 @@
 //! variant the element paints without a copy). The element, the generation
 //! check and the repaint signal stay as they are.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{div, AnyElement, Context, ImageSource, RenderImage, Window, WindowControlArea};
@@ -124,6 +131,38 @@ impl PixelSource for CpuBitmap {
     }
 }
 
+/// A canvas that changes again within this of its last change is animating.
+const MOVING: Duration = Duration::from_millis(250);
+/// An animating canvas that has not changed for this long is still again.
+const STILL: Duration = Duration::from_millis(300);
+
+/// `pixels` as an animating canvas (`moving`) or a still one paints them: a
+/// frame of a moving picture, which the resampler leaves alone, or a
+/// premultiplied still image it may draw from a smaller copy.
+fn as_painted(pixels: Pixels, moving: bool) -> Pixels {
+    match pixels {
+        Pixels::Atlas(image) if moving => {
+            // Fresh from `fetch`, so the only reference.
+            Pixels::Atlas(Arc::try_unwrap(image).map(|i| Arc::new(i.dynamic())).unwrap_or_else(|a| a))
+        }
+        Pixels::Atlas(image) => {
+            crate::resample::mark_premultiplied(&image);
+            Pixels::Atlas(image)
+        }
+    }
+}
+
+/// The still image an animating canvas's last frame becomes: the same bytes
+/// under a new id that is not `dynamic`.
+fn still_copy(image: &RenderImage) -> Option<Arc<RenderImage>> {
+    let size = image.size(0);
+    let bytes = image.as_bytes(0)?.to_vec();
+    let buffer = image::RgbaImage::from_raw(size.width.0 as u32, size.height.0 as u32, bytes)?;
+    let still = RenderImage::new(vec![image::Frame::new(buffer)]);
+    crate::resample::mark_premultiplied(&still);
+    Some(Arc::new(still))
+}
+
 /// Premultiplied RGBA (redjs) to premultiplied BGRA (gpui's atlas).
 fn to_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut out = rgba.to_vec();
@@ -147,35 +186,70 @@ struct Entry {
     /// The window whose atlas holds `pixels`, recorded when it was fetched:
     /// a tile goes back to the atlas it is in (docs/MULTIWINDOW.md §5.1).
     window: WinKey,
+    /// When the bitmap last changed.
+    changed: Instant,
+    /// Was it animating then ([`MOVING`])? Its pixels are `dynamic` while so.
+    moving: bool,
 }
 
 thread_local! {
     static CANVASES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
+    /// When the last animating canvas is due to be still ([`STILL`]): the
+    /// frame that re-wraps its last frame has to be asked for.
+    static STILL_AT: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
-/// Hands an entry's image back to its window's atlas, on that window's next
-/// frame (the scene that painted it has been presented by then).
-fn retire(entry: Entry) {
-    if let Some(Pixels::Atlas(image)) = entry.pixels {
-        windows::queue_drops(entry.window, [image]);
+/// Hands an image back to its window's atlas, on that window's next frame
+/// (the scene that painted it has been presented by then), its resampled
+/// copies with it.
+fn retire_pixels(pixels: Option<Pixels>, window: WinKey) {
+    if let Some(Pixels::Atlas(image)) = pixels {
+        crate::resample::forget(&image);
+        windows::queue_drops(window, [image]);
     }
+}
+
+fn retire(entry: Entry) {
+    retire_pixels(entry.pixels, entry.window);
 }
 
 /// What node `id` paints this frame: the image it painted last, unless the
 /// bitmap moved since.
 fn current(id: u32, win: WinKey) -> Option<Pixels> {
+    current_at(id, win, Instant::now())
+}
+
+fn current_at(id: u32, win: WinKey, now: Instant) -> Option<Pixels> {
     CANVASES.with(|m| {
         let mut m = m.borrow_mut();
         let since = m.get(&id).map_or(0, |e| e.generation);
         match Source::fetch(id as u64, since) {
-            Fetch::Unchanged => {}
+            Fetch::Unchanged => {
+                if let Some(e) = m.get_mut(&id).filter(|e| e.moving && now.duration_since(e.changed) >= STILL) {
+                    e.moving = false;
+                    let still = match &e.pixels {
+                        Some(Pixels::Atlas(image)) => still_copy(image),
+                        None => None,
+                    };
+                    if let Some(still) = still {
+                        let old = e.pixels.replace(Pixels::Atlas(still));
+                        let old_window = std::mem::replace(&mut e.window, win);
+                        retire_pixels(old, old_window);
+                    }
+                }
+            }
             Fetch::Unpublished => {
                 if let Some(old) = m.remove(&id) {
                     retire(old);
                 }
             }
             Fetch::Changed(generation, pixels) => {
-                if let Some(old) = m.insert(id, Entry { generation, pixels, window: win }) {
+                let moving = m.get(&id).is_some_and(|e| now.duration_since(e.changed) < MOVING);
+                if moving {
+                    STILL_AT.with(|s| s.set(Some(now + STILL)));
+                }
+                let pixels = pixels.map(|p| as_painted(p, moving));
+                if let Some(old) = m.insert(id, Entry { generation, pixels, window: win, changed: now, moving }) {
                     retire(old);
                 }
             }
@@ -196,9 +270,18 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 
 /// The pump's per-frame question: did any on-screen canvas draw, resize, or
 /// get its context since the last frame? `true` repaints, the same as a tree
-/// mutation would. One atomic swap.
+/// mutation would. One atomic swap — plus, after an animation stopped, the
+/// one repaint that re-wraps its last frame as a still image.
 pub(crate) fn tick() -> bool {
-    rjs::take_presented_changed()
+    let presented = rjs::take_presented_changed();
+    let still = STILL_AT.with(|s| match s.get() {
+        Some(at) if Instant::now() >= at => {
+            s.set(None);
+            true
+        }
+        _ => false,
+    });
+    presented | still
 }
 
 // ---------------------------------------------------------------------------
@@ -407,5 +490,39 @@ mod tests {
 
         rjs::unregister_present(key);
         assert!(matches!(CpuBitmap::fetch(key, g2), Fetch::Unpublished));
+    }
+
+    /// A canvas that keeps drawing paints frames the resampler leaves alone,
+    /// and once it stops, its last frame becomes a still image that it may
+    /// draw from a smaller copy (#22).
+    #[test]
+    fn an_animating_canvas_is_dynamic_until_it_is_still() {
+        let id: u32 = 0xC0FF_EE01;
+        let surface: SurfaceRef = Arc::new(Mutex::new(Surface::new(2, 1, rjs::Options::default())));
+        rjs::register_present(id as u64, &surface);
+        let put = |rgba: [u8; 4]| Cmd::Put { x: 0, y: 0, image: Arc::new(Image::from_premul(1, 1, rgba.to_vec(), true)) };
+        let atlas = |p: Option<Pixels>| match p {
+            Some(Pixels::Atlas(image)) => image,
+            None => panic!("a bitmap"),
+        };
+        let t0 = Instant::now();
+
+        surface.lock().unwrap().push(put([255, 0, 0, 255]));
+        let first = atlas(current_at(id, windows::UNBOUND, t0));
+        assert!(!first.is_dynamic(), "a canvas that drew once is a still image");
+
+        surface.lock().unwrap().push(put([0, 255, 0, 255]));
+        let frame = atlas(current_at(id, windows::UNBOUND, t0 + Duration::from_millis(100)));
+        assert!(frame.is_dynamic(), "drawing again within MOVING: a frame of an animation");
+        let again = atlas(current_at(id, windows::UNBOUND, t0 + Duration::from_millis(200)));
+        assert!(Arc::ptr_eq(&frame, &again), "unchanged and not yet still: the same frame");
+
+        let still = atlas(current_at(id, windows::UNBOUND, t0 + Duration::from_millis(100) + STILL));
+        assert!(!still.is_dynamic(), "still again: re-wrapped");
+        assert_ne!(still.id, frame.id);
+        assert_eq!(still.as_bytes(0), frame.as_bytes(0), "the same pixels");
+
+        rjs::unregister_present(id as u64);
+        assert!(current_at(id, windows::UNBOUND, t0 + Duration::from_secs(1)).is_none());
     }
 }

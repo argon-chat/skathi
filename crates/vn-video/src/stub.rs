@@ -207,7 +207,7 @@ impl VideoBackend for StubBackend {
         self.frames += 1;
         let buffer = RgbaImage::from_raw(w, h, buf)?;
         Some(VideoFrame {
-            image: Arc::new(RenderImage::new(vec![Frame::new(buffer)])),
+            image: Arc::new(RenderImage::new(vec![Frame::new(buffer)]).dynamic()),
             pts: self.time,
             size,
             // No OS and no GPU: the synthetic backend is the CPU path by
