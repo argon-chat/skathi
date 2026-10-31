@@ -195,14 +195,12 @@ pub enum FullReason {
     ViewportBasis = 4,
     /// The root font-size (`rem` basis) changed.
     RemBasis = 5,
-    /// More than `SCOPED_RESTYLE_LIMIT` separate subtrees were marked.
-    ScopedLimit = 6,
 }
 
 impl FullReason {
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 6;
     pub const NAMES: [&'static str; Self::COUNT] =
-        ["stylesheet", "env", "style-element", "fonts", "viewport-basis", "rem-basis", "scoped-limit"];
+        ["stylesheet", "env", "style-element", "fonts", "viewport-basis", "rem-basis"];
 }
 
 /// Which DOM read forced a synchronous layout.

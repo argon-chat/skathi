@@ -1422,8 +1422,9 @@ mod tests {
     }
 
     /// A structural pseudo reads the parent's child list, so an insert has to
-    /// recascade the siblings around it — which is why every insert/remove
-    /// marks the PARENT rather than the moved node.
+    /// recascade the siblings around it. The cascade recorded that `only`
+    /// asked for its next sibling (`tree::sel::NEXT_EDGE`), and that is what
+    /// the insert marks; it no longer marks the whole parent.
     #[test]
     fn inserting_a_child_recascades_the_siblings_a_structural_pseudo_reads() {
         let (parent, only) = tree::with_tree(|t| {
@@ -1454,11 +1455,178 @@ mod tests {
         assert_eq!(opacity_of(only), Some(0.3));
     }
 
-    /// Past the mark limit the pass falls back to one straight document walk.
-    /// The cliff must be invisible: everything still ends up correct, including
-    /// the nodes whose marks were dropped on the way over the edge.
+    /// `:nth-child()` counts every earlier sibling, so an insert at the front
+    /// moves the index of everything after it, including elements far from
+    /// the insert. Removing it again moves them back.
     #[test]
-    fn a_wave_that_marks_more_than_the_limit_still_restyles_everything() {
+    fn a_prepend_moves_the_nth_child_answer_of_every_later_sibling() {
+        let (parent, items) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            t.insert(parent, root, 0);
+            let items: Vec<u32> = (0..4)
+                .map(|_| {
+                    let id = t.create_element(div);
+                    t.insert(id, parent, 0);
+                    t.set_class(id, "item");
+                    id
+                })
+                .collect();
+            (parent, items)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".item { opacity: 0.3 } .item:nth-child(4) { opacity: 0.7 }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(items[3]), Some(0.7));
+
+        let first = tree::with_tree(|t| {
+            let div = t.intern("div");
+            let first = t.create_element(div);
+            t.insert(first, parent, items[0]);
+            first
+        });
+        flush_changes();
+        assert_eq!(opacity_of(items[2]), Some(0.7), "third item is the fourth child now");
+        assert_eq!(opacity_of(items[3]), Some(0.3), "and the last one the fifth");
+
+        tree::with_tree(|t| t.remove(first));
+        flush_changes();
+        assert_eq!(opacity_of(items[2]), Some(0.3));
+        assert_eq!(opacity_of(items[3]), Some(0.7));
+    }
+
+    /// `:empty` is a question about the child list too: the element that was
+    /// matched against it is restyled when an insert or a remove flips the
+    /// answer, and a text child gaining its first character flips it as well.
+    #[test]
+    fn empty_follows_inserts_removes_and_text() {
+        let boxed = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let boxed = t.create_element(div);
+            t.insert(boxed, root, 0);
+            t.set_class(boxed, "box");
+            boxed
+        });
+        tree::set_engine(vn_css::Engine::compile(".box { opacity: 0.3 } .box:empty { opacity: 0.7 }"));
+        tree::restyle_all();
+        assert_eq!(opacity_of(boxed), Some(0.7));
+
+        let child = tree::with_tree(|t| {
+            let span = t.intern("span");
+            let child = t.create_element(span);
+            t.insert(child, boxed, 0);
+            child
+        });
+        flush_changes();
+        assert_eq!(opacity_of(boxed), Some(0.3), "an element child");
+
+        tree::with_tree(|t| t.remove(child));
+        flush_changes();
+        assert_eq!(opacity_of(boxed), Some(0.7), "removed again");
+
+        let text = tree::with_tree(|t| {
+            let text = t.create_text();
+            t.insert(text, boxed, 0);
+            text
+        });
+        flush_changes();
+        assert_eq!(opacity_of(boxed), Some(0.7), "an empty text node is still empty");
+        tree::with_tree(|t| t.set_text(text, "hi".into()));
+        flush_changes();
+        assert_eq!(opacity_of(boxed), Some(0.3), "text with data");
+    }
+
+    /// `:has()` reads DOWN, so a change anywhere under the anchor has to
+    /// re-match it: a child inserted and removed, and an attribute written
+    /// two levels below.
+    #[test]
+    fn has_follows_changes_anywhere_under_the_anchor() {
+        let (card, inner) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let card = t.create_element(div);
+            let inner = t.create_element(div);
+            t.insert(card, root, 0);
+            t.insert(inner, card, 0);
+            t.set_class(card, "card");
+            (card, inner)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".card { opacity: 0.3 } .card:has(> .icon) { opacity: 0.6 } .card:has([data-on]) { opacity: 0.9 }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(card), Some(0.3));
+
+        let icon = tree::with_tree(|t| {
+            let i = t.intern("i");
+            let icon = t.create_element(i);
+            t.set_class(icon, "icon");
+            t.insert(icon, card, 0);
+            icon
+        });
+        flush_changes();
+        assert_eq!(opacity_of(card), Some(0.6), "a direct child arrived");
+
+        tree::with_tree(|t| t.remove(icon));
+        flush_changes();
+        assert_eq!(opacity_of(card), Some(0.3), "and left");
+
+        let deep = tree::with_tree(|t| {
+            let span = t.intern("span");
+            let deep = t.create_element(span);
+            t.insert(deep, inner, 0);
+            deep
+        });
+        flush_changes();
+        let on = tree::with_tree(|t| t.intern("data-on"));
+        tree::with_tree(|t| t.set_prop(deep, on, Some(String::new())));
+        flush_changes();
+        assert_eq!(opacity_of(card), Some(0.9), "an attribute two levels down");
+    }
+
+    /// A `:has()` further left in the selector makes a DESCENDANT's match read
+    /// the anchor's subtree, so the change has to reach the descendant, not
+    /// only the anchor.
+    #[test]
+    fn has_left_of_a_combinator_reaches_the_descendants_that_read_it() {
+        let (panel, title, slot) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let panel = t.create_element(div);
+            let title = t.create_element(div);
+            let slot = t.create_element(div);
+            t.insert(panel, root, 0);
+            t.insert(title, panel, 0);
+            t.insert(slot, panel, 0);
+            t.set_class(panel, "panel");
+            t.set_class(title, "title");
+            (panel, title, slot)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".title { opacity: 0.3 } .panel:has(.editor) .title { opacity: 0.8 }",
+        ));
+        tree::restyle_all();
+        assert_eq!(opacity_of(title), Some(0.3));
+
+        tree::with_tree(|t| {
+            let div = t.intern("div");
+            let editor = t.create_element(div);
+            t.set_class(editor, "editor");
+            t.insert(editor, slot, 0);
+        });
+        flush_changes();
+        assert_eq!(opacity_of(title), Some(0.8), "the editor arrived next door to the title");
+        let _ = panel;
+    }
+
+    /// A wave of hundreds of separate marks stays a scoped pass (there used to
+    /// be a limit of 64, past which the whole document was walked instead), and
+    /// every marked node still ends up restyled.
+    #[test]
+    fn a_wave_of_hundreds_of_separate_marks_restyles_every_one() {
         let ids = tree::with_tree(|t| {
             let root = t.create_root();
             let div = t.intern("div");
@@ -1474,7 +1642,7 @@ mod tests {
         tree::set_engine(vn_css::Engine::compile(".on { opacity: 0.6 }"));
         tree::restyle_all();
 
-        // 200 separate class writes — well past SCOPED_RESTYLE_LIMIT.
+        // 200 separate class writes, each its own walk root.
         tree::with_tree(|t| {
             for &id in &ids {
                 t.set_class(id, "on");
