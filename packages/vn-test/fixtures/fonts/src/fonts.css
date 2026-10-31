@@ -1,0 +1,45 @@
+/* A fixture for packages/vn-test/specs/fonts.spec.ts: web fonts (m26 client
+   sweep #29, docs/RUNTIME.md §5.15). Spelled as the Argon client's
+   packages/assets/fonts/fonts.css spells its faces: url()s relative to this
+   file, a WOFF2 variable font limited to the Private Use Area that leads a
+   stack, and families the files do not name themselves by. Both fonts are
+   OFL (the licences are next to them). */
+
+@font-face {
+  font-family: "VN Pixel";
+  /* `local()` is not consulted (FONT-3): the url() loads. */
+  src: local("VN Pixel Nowhere"), url("./fonts/PressStart2P-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "VN Tengwar";
+  src: url("./fonts/AlcarinTengwarVF.woff2") format("woff2-variations");
+  font-weight: 400 700;
+  font-display: swap;
+  unicode-range: U+E000-E0FF;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  height: 24px;
+}
+
+/* Press Start 2P advances 1em for every glyph: eight at 16px are 128px wide,
+   where any fallback measures "WWWWiiii" otherwise. */
+.probe {
+  flex: none;
+  font-size: 16px;
+  line-height: 16px;
+}
+
+#pixel {
+  font-family: "VN Pixel", serif;
+}
+
+/* The client's `"Alcarin Tengwar", Inter, …`: the PUA-only family leads, the
+   next one draws the Latin text (FONT-2). */
+#stack {
+  font-family: "VN Tengwar", "VN Pixel", serif;
+}

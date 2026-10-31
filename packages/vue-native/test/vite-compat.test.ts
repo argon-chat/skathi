@@ -19,6 +19,7 @@ import {
   expandGlobs,
   frameworkDep,
   inlineCssImports,
+  rebaseCssUrls,
   liftIndexHtml,
   stubWorkerUrls,
   svgAsSfc,
@@ -234,6 +235,29 @@ describe("CSS @import inlining", () => {
     expect(warned).toEqual([]);
     inlineCssImports(`@import "./nope.css";`, join(root, "a.css"), root, (m) => warned.push(m));
     expect(warned[0]).toContain("does not resolve");
+  });
+
+  test("a sheet's relative url()s are rebased against its own file, an imported sheet's against its own", () => {
+    const root = scratch({
+      "packages/assets/fonts/fonts.css": [
+        `@font-face { font-family: Lato; src: url('./Lato/Lato-Bold.ttf') format('truetype'); }`,
+        `@font-face { font-family: Tengwar; src: url(AlcarinTengwar/a.woff2?v=2#x); }`,
+        `.k { background: url("../img/k.png"), url(data:image/png;base64,AA==), url(/rooted.png), url(#f), url(var(--u)); }`,
+        `@import url("./more.css");`,
+      ].join("\n"),
+      "packages/assets/fonts/more.css": `.m { background: url(./m.png) }`,
+    });
+    const from = join(root, "packages/assets/fonts/fonts.css");
+    const css = inlineCssImports(readFileSync(from, "utf8"), from, root, () => {});
+    expect(css).toContain(`url('/packages/assets/fonts/Lato/Lato-Bold.ttf') format('truetype')`);
+    expect(css).toContain(`url("/packages/assets/fonts/AlcarinTengwar/a.woff2?v=2#x")`);
+    expect(css).toContain(`url("/packages/assets/img/k.png")`);
+    expect(css).toContain(`url(data:image/png;base64,AA==), url(/rooted.png), url(#f), url(var(--u))`);
+    // The imported sheet was inlined, and its url() is relative to it.
+    expect(css).toContain(`.m { background: url("/packages/assets/fonts/m.png") }`);
+    // Above the root: a file: URL.
+    const out = rebaseCssUrls(`a{b:url(../up.png)}`, join(root, "x.css"), root);
+    expect(out).toMatch(/^a\{b:url\("file:\/\/\/.*\/up\.png"\)\}$/);
   });
 });
 

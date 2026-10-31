@@ -769,6 +769,39 @@ impl Tree {
         hits.len()
     }
 
+    /// A web font was registered: every inline `style` body that sets
+    /// `font-family` (or the `font` shorthand) is re-parsed, because vn-css
+    /// picks the family it draws with when it PARSES, from the fonts installed
+    /// then — the inline half of [`recompile_for_fonts`]. Returns how many
+    /// nodes were marked.
+    pub(crate) fn invalidate_font_inline(&mut self) -> usize {
+        let keys: Vec<u32> = ["font", "font-family"].iter().filter_map(|k| self.name_ids.get(*k).copied()).collect();
+        if keys.is_empty() {
+            return 0;
+        }
+        let hits: Vec<u32> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| {
+                let n = n.as_ref()?;
+                n.style.iter().any(|(k, _)| keys.contains(k)).then_some(i as u32)
+            })
+            .collect();
+        for &id in &hits {
+            if let Some(n) = self.node_mut(id) {
+                n.inline_dirty = true;
+            }
+            self.inline_dirty_nodes.push(id);
+            self.mark_restyle(id);
+            self.touch(id);
+        }
+        if !hits.is_empty() {
+            self.dirty = true;
+        }
+        hits.len()
+    }
+
     /// The restyle pass: re-parse dirty inline styles, then run the cascade
     /// for every element node. Runs once per JS wave that touched the tree —
     /// never during a draw.
@@ -1626,7 +1659,27 @@ pub fn set_stylesheet(css: String) {
         CSS_WARNED.with(|w| w.borrow_mut().clear());
     }
     SHEET_SOURCE.with(|s| *s.borrow_mut() = css);
-    set_engine(vn_css::Engine::compile(&full_source()));
+    set_engine(compile(&full_source()));
+}
+
+/// Compiles the sheet, after handing its `@font-face` rules to
+/// [`crate::fonts`] (which vn-css itself does not keep).
+fn compile(css: &str) -> vn_css::Engine {
+    crate::fonts::note_sheet(css);
+    vn_css::Engine::compile(css)
+}
+
+/// Web fonts were registered: vn-css chose every `font-family` when it
+/// compiled the sheet and parsed the inline styles, against the fonts
+/// installed THEN, so both are done again and the document is restyled.
+/// Called from [`crate::fonts`]'s frame tick, after its new installed-font
+/// list is in place.
+pub(crate) fn recompile_for_fonts() {
+    recompile_sheet("web fonts were registered — recompiling the stylesheet");
+    with_tree(|t| {
+        t.invalidate_font_inline();
+        t.mark_dirty();
+    });
 }
 
 /// Installs a compiled engine WITHOUT recording a source to recompile from.
@@ -1860,7 +1913,7 @@ fn recompile_sheet(why: &str) -> bool {
     if css.trim().is_empty() {
         return false;
     }
-    set_engine(vn_css::Engine::compile(&css));
+    set_engine(compile(&css));
     with_tree(|t| t.mark_dirty());
     true
 }

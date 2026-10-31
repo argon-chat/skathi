@@ -1002,6 +1002,43 @@ export function devEsmInterop(body: string): { code: string; unresolved: number 
 /** `@import "x";`, `@import 'x' screen;`, `@import url(x);`, `@import url("x") print;` */
 const IMPORT_RULE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)\3)\s*([^;]*);/g;
 
+/** `url(x)`, `url('x')`, `url("x")` — group 2 is the URL. */
+const CSS_URL = /\burl\(\s*(['"]?)([^'")]*)\1\s*\)/gi;
+
+/**
+ * A sheet's relative `url()`s, rewritten to say what they mean once the sheet
+ * is one piece of the app's stylesheet, as Vite rewrites them: resolved
+ * against the sheet's own file and made root-relative (`/packages/assets/fonts/
+ * Lato/Lato-Bold.ttf`), which the host resolves against the app root as it
+ * does an `<img src>`. Outside the root, a `file:` URL. Absolute, rooted,
+ * `data:`, `#fragment` and aliased (`~`, `@`) URLs are left alone, and so are
+ * `@import url(…)`s, which inlining resolves.
+ *
+ * Without this, `@font-face { src: url('./Lato/Lato-Bold.ttf') }` in
+ * `packages/assets/fonts/fonts.css` named a file next to `index.html`.
+ */
+export function rebaseCssUrls(css: string, from: string, docRoot: string): string {
+  if (!/url\(/i.test(css)) return css;
+  const dir = dirname(from.replace(/\?.*$/, ""));
+  return css.replace(CSS_URL, (whole, q: string, url: string, at: number, all: string) => {
+    const u = url.trim();
+    if (!u || u.includes("(") || /^([a-z][a-z0-9+.-]*:|[/#~@]|%23)/i.test(u)) return whole;
+    // `@import url(x)` is inlining's to resolve (a package path included).
+    if (/@import\s*$/i.test(all.slice(Math.max(0, at - 16), at))) return whole;
+    const [path, tail] = (() => {
+      const i = u.search(/[?#]/);
+      return i < 0 ? [u, ""] : [u.slice(0, i), u.slice(i)];
+    })();
+    const abs = resolve(dir, path);
+    const rel = relative(resolve(docRoot), abs);
+    const out =
+      rel && !rel.startsWith("..") && !isAbsolute(rel)
+        ? `/${rel.split(sep).join("/")}`
+        : `file:///${abs.split(sep).join("/").replace(/^\/+/, "")}`;
+    return `url(${q || '"'}${out}${tail}${q || '"'})`;
+  });
+}
+
 /**
  * Inlines every LOCAL `@import` in `css` (relative, root-relative or a package
  * path), recursively, the way postcss-import does inside Vite's CSS pipeline —
@@ -1009,6 +1046,9 @@ const IMPORT_RULE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)
  * reaches the stylesheet instead of being dropped by vn-css as an at-rule it
  * does not know. A media list wraps the imported rules in `@media`. Remote
  * imports are left in place (vn-css drops them with its own advisory).
+ *
+ * Every sheet's relative `url()`s are rebased on the way ([`rebaseCssUrls`]),
+ * each against its own file.
  */
 export function inlineCssImports(
   css: string,
@@ -1017,6 +1057,7 @@ export function inlineCssImports(
   warn: (m: string) => void,
   seen: Set<string> = new Set([resolve(from)]),
 ): string {
+  css = rebaseCssUrls(css, from, docRoot);
   if (!css.includes("@import")) return css;
   return css.replace(IMPORT_RULE, (whole, _q1, urlSpec: string | undefined, _q2, strSpec: string | undefined, media: string) => {
     const spec = (urlSpec ?? strSpec ?? "").trim();

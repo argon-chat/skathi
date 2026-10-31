@@ -27,3 +27,14 @@ image = { version = "0.25", default-features = false, features = ["png", "bmp", 
 # assert against. Pinned to the version gpui resolves (vendor/zed/Cargo.toml),
 # so nothing new is compiled.
 usvg = { version = "0.46.0", default-features = false }
+# `@font-face` blocks are parsed by the parser vn-css compiles the sheet with
+# (crate::fonts), at the version vn-css pins, so nothing new is compiled.
+lightningcss = { version = "1.0.0-alpha.72", default-features = false }
+# Reading an https font's body off gpui's HTTP client (crate::fonts). The
+# version gpui builds.
+futures = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+# WOFF and WOFF2 fonts are unpacked by DirectWrite (`UnpackFontFile`), the text
+# stack that then shapes them. The version and feature gpui_windows builds.
+windows = { version = "0.62", features = ["Win32_Graphics_DirectWrite"] }

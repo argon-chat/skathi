@@ -2386,25 +2386,36 @@ fn build_node<V: 'static>(
 /// does. The misses are recorded where the list is mapped
 /// (`vn_css::take_font_misses`) and drained here, one-shot per family name, so
 /// a page asking for a missing font on 300 nodes reports it once.
+///
+/// Since m26 (#29) a stylesheet's `@font-face` and a script's `FontFace` are
+/// loaded (`crate::fonts`), so a miss is handed to [`crate::fonts::hold_miss`]
+/// first: a family a face declares, now or within a short grace (a script
+/// that builds its `FontFace` after the first paint), is not reported, and a
+/// load that fails says so itself. What is left comes back through
+/// [`warn_missing_font`].
 fn advise_missing_font() {
     for (family, used) in vn_css::take_font_misses() {
-        let used = match used.as_deref() {
-            Some(".SystemUIFont") => "the platform UI font".to_string(),
-            Some(u) => format!("`{u}`, the first installed family in the list"),
-            None => "the platform default (nothing in the list is installed)".to_string(),
-        };
-        warn_compat(
-            &format!("missing-font:{family}"),
-            &format!(
-                "no font installed for `font-family: {family}` — using {used}, which has \
-                 different metrics, so text measures and wraps differently than where \
-                 `{family}` exists. vue-native loads no `@font-face` and no \
-                 `<link rel=stylesheet>`: the stylesheet is the SFC <style> blocks plus \
-                 Tailwind, so a webfont the app ships is never fetched. Install the family on \
-                 the host, or pick one that is"
-            ),
-        );
+        crate::fonts::hold_miss(family, used);
     }
+}
+
+/// The missing-font advisory for one family nothing declared.
+pub(crate) fn warn_missing_font(family: &str, used: Option<&str>) {
+    let used = match used {
+        Some(".SystemUIFont") => "the platform UI font".to_string(),
+        Some(u) => format!("`{u}`, the first installed family in the list"),
+        None => "the platform default (nothing in the list is installed)".to_string(),
+    };
+    warn_compat(
+        &format!("missing-font:{family}"),
+        &format!(
+            "no font installed for `font-family: {family}` — using {used}, which has \
+             different metrics, so text measures and wraps differently than where \
+             `{family}` exists. No `@font-face` in the stylesheet or `FontFace` in \
+             `document.fonts` declares it either. Install the family on the host, ship it \
+             with an `@font-face` rule, or pick one that is installed"
+        ),
+    );
 }
 
 /// `background-clip: text` — paint the TEXT, not a box.

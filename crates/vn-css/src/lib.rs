@@ -1603,7 +1603,10 @@ impl Engine {
 /// an author an afternoon.
 fn at_rule_ignored(rule: &CssRule<'_>, diagnostics: &mut Vec<String>) {
     let msg = match rule {
-        CssRule::FontFace(_) => "@font-face is dropped (v1) — only system fonts resolve".to_string(),
+        // Not the engine's to apply: the host reads `@font-face` off the same
+        // source, loads the fonts and compiles the sheet again once they are
+        // installed (vn-tree's `fonts.rs`, m26 #29).
+        CssRule::FontFace(_) => return,
         other => format!("at-rule ignored (v1): {other:?}")
             .chars()
             .take(120)

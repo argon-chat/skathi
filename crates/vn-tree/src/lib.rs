@@ -20,6 +20,7 @@ mod bgimage;
 mod cache;
 mod clipboard;
 mod dom;
+mod fonts;
 mod img;
 pub mod log;
 mod lottie;
@@ -491,6 +492,66 @@ host_fn!(fn vn_img_bitmap(g, args) {
     }
 });
 
+// ---------------------------------------------------------------------------
+// web fonts (m26 client sweep #29) — see `fonts.rs`; the JS half is
+// packages/vue-native/src/fonts.ts (`FontFace`, `document.fonts`)
+// ---------------------------------------------------------------------------
+
+// The page's `(id, status, message)` callback for face status changes.
+host_fn!(fn vn_fonts_set_listener(g, args) {
+    let f = args.arg(0);
+    unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
+    let old = fonts::listener();
+    fonts::set_listener(f.0);
+    if old != 0 {
+        unsafe { vn_runtime::redjs::ffi::redjs_unprotect(g, old) };
+    }
+    UNDEF
+});
+
+// Every face, as JSON (`fonts::list_json`).
+host_fn!(fn vn_fonts_list(_g, _args) {
+    ret_string(&fonts::list_json())
+});
+
+// `new FontFace(family, source, descriptors)`: (family, CSS src text, the
+// descriptors packed as "style|weight|stretch|unicodeRange|display", load
+// now?) -> the face's id, or a string saying why it is a SyntaxError.
+host_fn!(fn vn_font_create(g, args) {
+    let family = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
+    let source = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    let packed = unsafe { read_string(g, args.arg(2).0) }.unwrap_or_default();
+    let now = args.arg(3).as_bool().unwrap_or(false);
+    match fonts::descriptors(&family, &packed).and_then(|d| fonts::create(d, &source, now)) {
+        Ok(id) => ret_id(id),
+        Err(why) => ret_string(&why),
+    }
+});
+
+// `FontFace.load()`.
+host_fn!(fn vn_font_load(_g, args) {
+    fonts::load(arg_id(args.arg(0)));
+    UNDEF
+});
+
+// `document.fonts.add(face)` / `.delete(face)`.
+host_fn!(fn vn_font_set(_g, args) {
+    fonts::set_in_set(arg_id(args.arg(0)), args.arg(1).as_bool().unwrap_or(false));
+    UNDEF
+});
+
+// `document.fonts.load(font, text)` / `.check(font, text)`: the ids of the
+// faces in the set that the `font` shorthand and the text select, comma-joined
+// ("" for none), or null when `font` is not a valid shorthand.
+host_fn!(fn vn_fonts_match(g, args) {
+    let font = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
+    let text = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    match fonts::matching(&font, &text) {
+        Some(ids) => ret_string(&ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")),
+        None => Value::null().0,
+    }
+});
+
 /// Registers the whole `__vn_*` protocol surface on the JS global.
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
@@ -524,6 +585,12 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_media_can_play", 2, vn_media_can_play as *const _),
         ("__vn_media_events", 1, vn_media_events as *const _),
         ("__vn_img_bitmap", 2, vn_img_bitmap as *const _),
+        ("__vn_fonts_set_listener", 1, vn_fonts_set_listener as *const _),
+        ("__vn_fonts_list", 0, vn_fonts_list as *const _),
+        ("__vn_font_create", 4, vn_font_create as *const _),
+        ("__vn_font_load", 1, vn_font_load as *const _),
+        ("__vn_font_set", 2, vn_font_set as *const _),
+        ("__vn_fonts_match", 2, vn_fonts_match as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
@@ -747,7 +814,7 @@ pub fn video_device_changed() -> usize {
 /// Call it once per frame from the pump, BEFORE the draw; returns `true` when
 /// something moved and the window must repaint.
 ///
-/// Six jobs today:
+/// Seven jobs today:
 /// * `blob:` image decodes that no node shows any more, or that belong to a
 ///   file picked again after it changed, are handed back to gpui's asset
 ///   cache (`img::evict_pending`);
@@ -761,7 +828,9 @@ pub fn video_device_changed() -> usize {
 ///   `animationstart` / `animationend` / `animationcancel` are dispatched;
 /// * a node that was focused when it got detached from the painted tree loses
 ///   gpui focus, which is the browser's rule and what makes a `<KeepAlive>`
-///   page stop swallowing keystrokes after it deactivates.
+///   page stop swallowing keystrokes after it deactivates;
+/// * web fonts that finished loading are handed to gpui's text system and the
+///   stylesheet is compiled against them (`fonts::tick`).
 pub fn frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // The pump's, not an input listener's: a layout read in one of these
     // handlers (an `<img>` `load` measuring the picture) may force a frame.
@@ -798,7 +867,10 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let scrolled = scroll::dispatch_pending(window, cx);
     // ResizeObserver and IntersectionObserver, parked until a frame is built.
     wake_layout_watchers(window, cx);
-    anim | lottie_moved | video_moved | canvas_moved | scrolled
+    // Web fonts: loads started, finished ones registered with the text system
+    // (and the sheet recompiled against them), `FontFace` statuses delivered.
+    let fonts_moved = fonts::tick(window, cx);
+    anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved
 }
 
 /// The per-frame work a SECONDARY window has to do for itself, because the

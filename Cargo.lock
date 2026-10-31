@@ -7939,8 +7939,10 @@ dependencies = [
 name = "vn-tree"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gpui",
  "image",
+ "lightningcss",
  "usvg",
  "vn-css",
  "vn-elements",
@@ -7948,6 +7950,7 @@ dependencies = [
  "vn-payload",
  "vn-runtime",
  "vn-video",
+ "windows 0.62.2",
 ]
 
 [[package]]
