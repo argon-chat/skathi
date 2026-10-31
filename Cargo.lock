@@ -7914,6 +7914,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vn-resample"
+version = "0.1.0"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "vn-runtime"
 version = "0.1.0"
 dependencies = [
@@ -7949,6 +7956,7 @@ dependencies = [
  "vn-elements",
  "vn-lottie",
  "vn-payload",
+ "vn-resample",
  "vn-runtime",
  "vn-video",
  "windows 0.62.2",

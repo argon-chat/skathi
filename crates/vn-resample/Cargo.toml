@@ -1,0 +1,18 @@
+[package]
+name = "vn-resample"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The pixel kernel behind vn-tree's downscaled image copies, in a crate of its own so the dev profile can optimise it"
+
+# Its own crate for one reason: the dev profile. The kernel reads every source
+# pixel, and `image::imageops::resize` is generic, so it is compiled in the
+# crate that calls it. Inside vn-tree it ran unoptimised in every debug build
+# (one image took 659 ms, research/reports/m26/perf-mem-1.md). The workspace
+# root gives this crate `opt-level = 3` in dev; vn-tree keeps its fast
+# incremental rebuilds.
+
+[dependencies]
+# The version and decoders gpui already builds (vendor/zed/Cargo.toml), so
+# nothing new is compiled. No decoder is needed here: this crate only resizes.
+image = { version = "0.25", default-features = false }

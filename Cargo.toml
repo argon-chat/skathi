@@ -15,6 +15,7 @@ members = [
     "crates/vn-thorvg-sys", # vendored ThorVG C++ + checked-in FFI (vn-lottie's `thorvg` feature)
     "crates/vn-payload",    # VNPK v1 (a packaged exe's app payload) + the one URL→asset-key normaliser
     "crates/vn-desktop",    # argv parser, shell (open/reveal/trash), single instance, custom protocols
+    "crates/vn-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
     # "crates/vn-window",   # window chrome: backdrops, dark mode, titlebar
     "crates/vn-app",        # host binary shell
 ]
@@ -135,3 +136,12 @@ debug = true
 # clean`), because every dependency, gpui included, is rebuilt.
 [profile.dev.package."*"]
 opt-level = 2
+
+# The one workspace crate that is optimised in dev: the downscaled image copies'
+# pixel kernel. It reads every source pixel, and `image::imageops::resize` is
+# generic, so it compiles at the calling crate's level. Inside vn-tree that was
+# opt-level 0: one image took 659 ms on the painting thread in a debug build
+# (research/reports/m26/perf-mem-1.md). Nobody steps through it, and it is
+# small, so the rebuild cost is nothing.
+[profile.dev.package.vn-resample]
+opt-level = 3

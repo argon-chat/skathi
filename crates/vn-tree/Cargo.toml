@@ -18,6 +18,9 @@ vn-runtime = { path = "../vn-runtime" }
 # relative URL names — and, in a packaged exe, the key the payload store is
 # searched with. No dependencies of its own.
 vn-payload = { path = "../vn-payload" }
+# The pixel kernel of the downscaled image copies (crate::resample), optimised
+# in dev builds too (the root Cargo.toml's [profile.dev.package.vn-resample]).
+vn-resample = { path = "../vn-resample" }
 # A pasted bitmap is offered as image.png, as Chromium offers it (Windows
 # hands a screenshot over as a DIB). The version and the decoders are the ones
 # gpui already builds (vendor/zed/Cargo.toml), so nothing new is compiled.
