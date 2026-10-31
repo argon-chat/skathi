@@ -18,8 +18,8 @@
 // the panel, Chromium-style: headers, payload, response body, timing. The
 // details are fetched on demand (`net_detail`), one command per click.
 //
-// Copying is explicit (the right-click menu, Ctrl+C for the selected row's URL)
-// because painted text cannot be selected yet — see the INTERIM note in
+// The table copies explicitly (the right-click menu, Ctrl+C for the selected
+// row's URL); the details pane's text is drag-selectable — see the note in
 // ../store.ts.
 import { computed, onMounted, onUnmounted, watch } from "vue";
 import { onKeydown } from "../keys";
@@ -250,6 +250,8 @@ function onKey(event: VnKeyboardEvent): void {
   if (state.tab !== "network" || ui.typing || ui.menu) return;
   const ctrl = event.ctrlKey || event.metaKey;
   if (ctrl && event.key.toLowerCase() === "c" && !event.shiftKey) {
+    // Text selected in the details pane is the engine's to copy.
+    if (window.getSelection?.()?.toString()) return;
     if (ui.copyTarget !== "network" || state.netSelected === null) return;
     const entry = state.net.find((e) => e.seq === state.netSelected);
     if (!entry) return;

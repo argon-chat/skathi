@@ -1157,13 +1157,13 @@ export function detailFor(seq: number): Promise<NetDetail> {
 // the clipboard, the right-click menu, the status-bar acknowledgement
 // ---------------------------------------------------------------------------
 //
-// INTERIM. vue-native cannot select painted text yet
-// (crates/vn-css/src/mapper.rs: "text painted by gpui is not selectable"), so
-// every panel that shows text a developer will want to paste somewhere — a
-// console message, a URL, a response body — offers an explicit copy instead:
-// a hover icon, the right-click menu, and Ctrl+C on the selected rows. When
-// real text selection lands, drag-select should work in these panes too, and
-// these become the shortcuts they are in a browser rather than the only way.
+// The panes a developer copies from — console messages, the request details,
+// a response body — are drag-selectable (the engine's text selection,
+// docs/RUNTIME.md §5.17; the rest of the chrome is `user-select: none`, App.vue).
+// The explicit copies stay as the shortcuts they are in a browser: a hover
+// icon, the right-click menu, and Ctrl+C on the selected rows when no text is
+// selected. They also reach what a drag cannot: a whole message behind its
+// ellipsis, a body past what the virtual list has on screen.
 
 let flashTimer: ReturnType<typeof setTimeout> | null = null;
 

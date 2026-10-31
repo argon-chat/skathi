@@ -768,10 +768,13 @@ function reload(): void {
 .mini.busy {
   color: #6cb6ff;
 }
+/* The details are text to copy from (a header value, a timing); the section
+ * heads, which fold, are not. */
 .scroll {
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
+  user-select: text;
 }
 .col {
   display: flex;
@@ -784,6 +787,7 @@ function reload(): void {
   padding-bottom: 4px;
 }
 .sec-head {
+  user-select: none;
   height: 24px;
   display: flex;
   flex-direction: row;

@@ -17,15 +17,15 @@
 // filters, a text filter, clear, preserve-on-reattach, an eval history and
 // completion of the target's own globals.
 //
-// ## Copying (m26) — INTERIM
+// ## Copying (m26)
 //
-// Painted text cannot be selected in this engine yet (see the note in
-// ../store.ts), so a message is copied explicitly: the ⧉ that appears on a
-// hovered or selected line, the right-click menu ("Copy message", "Copy all
-// visible"), and Ctrl+C over the selected lines. A click selects a line,
-// Ctrl+click adds or removes one, Shift+click selects the range from the last
-// one. When real text selection lands, drag-select should work here as well —
-// these stay as the shortcuts they are in a browser.
+// A drag over the messages selects their text, as in a browser (the engine's
+// text selection, docs/RUNTIME.md §5.17), and Ctrl+C or the menu's "Copy"
+// copies it. The row shortcuts stay: the ⧉ on a hovered or selected line, the
+// right-click menu ("Copy message", "Copy all visible"), and Ctrl+C over the
+// selected rows when no text is selected. A click selects a row, Ctrl+click
+// adds or removes one, Shift+click selects the range from the last one; the
+// click that ends a text drag leaves the rows alone.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { onKeydown } from "../keys";
 import { LOG_H, PANE_HEAD_H, PROMPT_H } from "../layout";
@@ -111,6 +111,10 @@ function selectedLines(): ConsoleLine[] {
 
 function onLineClick(line: ConsoleLine, event: VnMouseEvent): void {
   ui.copyTarget = "console";
+  // The release of a drag that selected text: the text is what was wanted,
+  // not the row (a plain click clears the text selection on its press, so
+  // only a drag gets here with one).
+  if (selectedText()) return;
   const uid = uidOf(line);
   if (event.ctrlKey || event.metaKey) {
     // Add or remove one line; nothing else changes.
@@ -152,9 +156,13 @@ function onLineDown(line: ConsoleLine, event: VnMouseEvent): void {
   }
   const picked = selectedLines();
   const visible = lines.value;
-  const items: MenuItem[] = [{ label: "Copy message", hint: picked.length === 1 ? "Ctrl+C" : undefined, run: () => copyLine(line) }];
+  const text = selectedText();
+  const items: MenuItem[] = [];
+  // Text selected by a drag comes first, as a browser's "Copy" does.
+  if (text) items.push({ label: "Copy", hint: "Ctrl+C", run: () => void copyText(text, "the selection") });
+  items.push({ label: "Copy message", hint: !text && picked.length === 1 ? "Ctrl+C" : undefined, run: () => copyLine(line) });
   if (picked.length > 1) {
-    items.push({ label: `Copy selected (${picked.length})`, hint: "Ctrl+C", run: () => copyLines(picked) });
+    items.push({ label: `Copy selected (${picked.length})`, hint: text ? undefined : "Ctrl+C", run: () => copyLines(picked) });
   }
   items.push({ label: `Copy all visible (${visible.length})`, run: () => copyLines(visible) });
   items.push({
@@ -167,6 +175,11 @@ function onLineDown(line: ConsoleLine, event: VnMouseEvent): void {
   items.push({ label: "Select all", hint: "Ctrl+A", run: selectAll });
   items.push({ label: "Clear console", hint: "Ctrl+L", divider: true, run: clearConsole });
   openMenu(event.clientX, event.clientY, items);
+}
+
+/** The text a drag selected, anywhere in the window ("" for none). */
+function selectedText(): string {
+  return window.getSelection?.()?.toString() ?? "";
 }
 
 function selectAll(): void {
@@ -259,6 +272,9 @@ function onKey(event: VnKeyboardEvent): void {
   // the filter), and to this list only when it was the last thing clicked.
   if (!ctrl || event.shiftKey || ui.typing || ui.menu || !state.consoleOpen || ui.copyTarget !== "console") return;
   if (key === "c") {
+    // Selected text is the engine's to copy (the default action of this
+    // keydown); the selected rows only when there is none.
+    if (selectedText()) return;
     const picked = selectedLines();
     if (!picked.length) return;
     event.preventDefault();
@@ -445,7 +461,7 @@ function glyph(kind: string): string {
           <span v-else class="text plain" :class="{ wrap: expanded[uidOf(row.line)] }">{{
             row.line.text
           }}</span>
-          <!-- INTERIM: the explicit copy, until painted text can be selected. -->
+          <!-- The whole message in one click, however much of it is shown. -->
           <span class="copy" title="Copy message" @click.stop="copyLine(row.line)">⧉</span>
         </div>
       </div>
@@ -616,6 +632,10 @@ function glyph(kind: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 17px;
+  /* The message is selectable; the glyph, the kind and the ⧉ are not (the
+   * app's `none`), so a drag over several rows copies the messages, one per
+   * line. */
+  user-select: text;
 }
 .text.plain {
   display: block;

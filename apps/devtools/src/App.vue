@@ -253,6 +253,10 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* The chrome (tabs, toolbars, buttons, labels) is not text to select, as in a
+ * browser's devtools: a drag across it must not paint a highlight. The panes a
+ * developer copies FROM — console messages, the request details, a response
+ * body — opt back in with `user-select: text`. */
 .app {
   position: relative;
   display: flex;
@@ -262,6 +266,7 @@ onUnmounted(() => {
   background: #0a0e16d9;
   color: #d7e0ea;
   font-family: "Segoe UI", sans-serif;
+  user-select: none;
 }
 .banner {
   height: 22px;

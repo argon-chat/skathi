@@ -202,10 +202,13 @@ function copy(): void {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The body's lines are selectable — the part the virtual list has on screen;
+ * "⧉ copy" takes the whole body. */
 .list {
   position: relative;
   overflow: hidden;
   min-height: 0;
+  user-select: text;
 }
 .viewport {
   display: flex;
