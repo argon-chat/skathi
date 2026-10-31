@@ -47,6 +47,19 @@ test("the classes are there, tagged as a browser tags them", async () => {
   expect(got).toEqual({
     ok: "[object MediaStream],[object MediaStreamTrack],[object MediaStreamAudioSourceNode],[object MediaStreamAudioDestinationNode]",
   });
+  // The nodes themselves too (fixes-host-media-1 §4: every node said
+  // [object AudioNode]).
+  const nodes = await inPage(`
+    const ctx = new AudioContext();
+    const dest = ctx.createMediaStreamDestination();
+    const tags = [dest, ctx.createMediaStreamSource(dest.stream), ctx.createGain(), ctx.destination]
+      .map(v => Object.prototype.toString.call(v)).join();
+    await ctx.close();
+    return tags;
+  `);
+  expect(nodes).toEqual({
+    ok: "[object MediaStreamAudioDestinationNode],[object MediaStreamAudioSourceNode],[object GainNode],[object AudioDestinationNode]",
+  });
 }, T);
 
 test("getUserMedia refuses with NotAllowedError, and no input is named", async () => {
@@ -54,13 +67,14 @@ test("getUserMedia refuses with NotAllowedError, and no input is named", async (
   expect(String((refused as { err: string }).err)).toContain("NotAllowedError");
   const inputs = await inPage(
     "return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput')" +
-      ".map(d => d.deviceId + '|' + d.label);",
+      ".map(d => [d.deviceId, d.label, d instanceof InputDeviceInfo, JSON.stringify(d.getCapabilities())].join('|'));",
   );
   // At most one anonymous entry (a microphone exists, unnamed): never a device
-  // the page could offer and then fail to open.
+  // the page could offer and then fail to open. It is an InputDeviceInfo with
+  // nothing to describe.
   const list = (inputs as { ok: string[] }).ok;
   expect(list.length).toBeLessThanOrEqual(1);
-  for (const row of list) expect(row).toBe("|");
+  for (const row of list) expect(row).toBe("||true|{}");
 }, T);
 
 test("a destination node's track plays into a source node in the same graph", async () => {
