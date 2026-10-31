@@ -157,6 +157,14 @@ livekit-api = { version = "0.6", default-features = false, features = ["access-t
 # This is the fork's own client (vendor/zed/crates/reqwest_client), so it is
 # the one Zed ships and the one gpui's asset loader was written against.
 reqwest_client = { path = "../../vendor/zed/crates/reqwest_client" }
+# Inflates the embedded inspector bundle, which `build.rs` deflates
+# (src/inspector.rs). Not a new crate in the image: redjs already links flate2
+# with the same miniz_oxide backend.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[build-dependencies]
+# Deflates the inspector bundle before it is embedded. Host-side only.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # `<video>` decodes onto the renderer's own D3D11 device, and this is the only

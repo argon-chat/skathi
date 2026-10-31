@@ -2,8 +2,10 @@
 //!
 //! ```text
 //!   apps/devtools/**  ──bun prod.ts──▶  $OUT_DIR/devtools/app.prod.js
+//!                                                │ deflate (`deflate_bundle`)
+//!                                       $OUT_DIR/devtools/app.prod.js.deflate
 //!                                       $OUT_DIR/devtools/window.json
-//!                                                │ include_str!
+//!                                                │ include_bytes! / include_str!
 //!                                                ▼
 //!                                       crates/vn-app/src/inspector.rs
 //! ```
@@ -111,6 +113,7 @@ fn main() {
         let beside = prebuilt.with_file_name("window.json");
         let cfg = std::fs::read_to_string(&beside).unwrap_or_else(|_| "{}\n".into());
         std::fs::write(&window_json, cfg).expect("cannot write window.json into OUT_DIR");
+        deflate_bundle(&bundle);
         return;
     }
 
@@ -139,6 +142,27 @@ fn main() {
     if !window_json.is_file() {
         std::fs::write(&window_json, "{}\n").expect("cannot write a placeholder window.json");
     }
+    deflate_bundle(&bundle);
+}
+
+/// `<bundle>.deflate`: the inspector bundle as raw deflate, which is what
+/// `src/inspector.rs` embeds.
+///
+/// Only the inspector process ever evaluates the bundle (F12 re-spawns this
+/// exe with `--devtools`), yet every vue-native binary carried it as ~340 KB
+/// of plain JS. Deflated it is about a quarter of that, and inflating it once
+/// when an inspector boots costs a few milliseconds. `window.json` stays plain:
+/// it is 1 KB, and its window title is the marker
+/// `packages/vn-test/specs/devtools-optout.spec.ts` looks for in the image.
+fn deflate_bundle(bundle: &Path) {
+    use std::io::Write;
+    let js = std::fs::read(bundle).expect("cannot read the inspector bundle back from OUT_DIR");
+    let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+    enc.write_all(&js).expect("deflate into memory cannot fail");
+    let packed = enc.finish().expect("deflate into memory cannot fail");
+    let mut out = bundle.as_os_str().to_owned();
+    out.push(".deflate");
+    std::fs::write(PathBuf::from(out), packed).expect("cannot write the deflated inspector bundle");
 }
 
 /// `/DEBUG:NONE` for the `release` profile, so a shipped build stops writing a

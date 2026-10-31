@@ -7,8 +7,8 @@
 //!  │  intercept_keystrokes ───────┼──────────▶│   --target <slot>            │
 //!  │                              │  (no      │   --window <id>              │
 //!  │ devtools listener :49xxx ◀───┼───────────│   --parent <pid>             │
-//!  └──────────────────────────────┘  focus)   │ runs the bundle include_str!'d
-//!                                             │ out of THIS executable       │
+//!  └──────────────────────────────┘  focus)   │ inflates and runs the bundle │
+//!                                             │ embedded in THIS executable  │
 //!                                             └──────────────────────────────┘
 //! ```
 //!
@@ -54,8 +54,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use gpui::App;
 use vn_runtime::JsRuntime;
 
-/// The inspector, prod-bundled by `build.rs` out of `apps/devtools`.
-const INSPECTOR_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/devtools/app.prod.js"));
+/// The inspector, prod-bundled by `build.rs` out of `apps/devtools` and
+/// stored as raw deflate (`build.rs` `deflate_bundle`): ~340 KB of JS that
+/// only an inspector process ever runs, in every binary that has devtools.
+const INSPECTOR_JS_DEFLATE: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/devtools/app.prod.js.deflate"));
+
+/// The bundle's source, inflated for the one eval that needs it and dropped
+/// after it.
+fn inspector_js() -> std::io::Result<String> {
+    use std::io::Read;
+    let mut js = String::with_capacity(INSPECTOR_JS_DEFLATE.len() * 4);
+    flate2::read::DeflateDecoder::new(INSPECTOR_JS_DEFLATE).read_to_string(&mut js)?;
+    Ok(js)
+}
 
 /// Its `vn.config.json` window block, emitted beside the bundle by `prod.ts`.
 const INSPECTOR_WINDOW_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/devtools/window.json"));
@@ -168,7 +180,14 @@ pub fn boot(rt: &JsRuntime) {
     if let Err(e) = rt.eval(&js, "vn://devtools-args.js") {
         eprintln!("[devtools-host] args: {}\n{}", e.header, e.stack);
     }
-    if let Err(e) = rt.eval(INSPECTOR_JS, "vn://devtools.prod.js") {
+    let js = match inspector_js() {
+        Ok(js) => js,
+        Err(e) => {
+            eprintln!("[devtools-host] inspector bundle: cannot inflate the embedded copy: {e}");
+            return;
+        }
+    };
+    if let Err(e) = rt.eval(&js, "vn://devtools.prod.js") {
         eprintln!("[devtools-host] inspector bundle: {}\n{}", e.header, e.stack);
     }
 }
