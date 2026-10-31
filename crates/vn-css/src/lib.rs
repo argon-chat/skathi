@@ -49,7 +49,7 @@ pub use mapper::{
     set_font_source, set_rem_basis, set_viewport_basis, take_font_misses, uses_viewport_units,
     viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl, PaintLayer,
     CurrentColorTargets, Decls, Extras, InlineStyle, ListMarker, MaskClips, MaskCompositing,
-    MaskImages, ObjectFit, OverscrollBehavior, ScrollbarWidth, SvgPaint, TextTransform,
+    MaskImages, ObjectFit, OverscrollBehavior, RadiusInherit, ScrollbarWidth, SvgPaint, TextTransform,
     TileLength, WhiteSpaceMode, WindowControl, WindowDrag,
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };
@@ -220,6 +220,88 @@ pub struct PseudoBox {
     /// `object-fit` and friends off the same rules — chiefly `position`,
     /// `z-index` and `pointer-events`, which decorative pseudo boxes use.
     pub extras: Extras,
+}
+
+/// The corner radii an element hands to a child's `border-radius: inherit`:
+/// its computed ones, which are 0 where it declared none. `Copy`, so it rides
+/// down `vn_tree`'s restyle walk beside the custom-property map.
+///
+/// A percentage stays a percentage, as CSS's computed value does, so the child
+/// resolves it against its OWN box.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InheritedRadii {
+    /// top-left, top-right, bottom-right, bottom-left, as gpui orders corners.
+    lengths: [Option<gpui::AbsoluteLength>; 4],
+    relative: [Option<Option<gpui::VnCornerRadius>>; 4],
+}
+
+impl InheritedRadii {
+    /// What an element whose computed base style is `style` hands down.
+    pub fn of(style: &StyleRefinement) -> Self {
+        let (c, v) = (&style.corner_radii, &style.vn_corner_radii);
+        Self {
+            lengths: [c.top_left, c.top_right, c.bottom_right, c.bottom_left],
+            relative: [v.top_left, v.top_right, v.bottom_right, v.bottom_left],
+        }
+    }
+
+    fn fill(&self, style: &mut StyleRefinement, corners: u8) {
+        let (c, v) = (&mut style.corner_radii, &mut style.vn_corner_radii);
+        let slots = [
+            (&mut c.top_left, &mut v.top_left),
+            (&mut c.top_right, &mut v.top_right),
+            (&mut c.bottom_right, &mut v.bottom_right),
+            (&mut c.bottom_left, &mut v.bottom_left),
+        ];
+        for (i, (length, relative)) in slots.into_iter().enumerate() {
+            if corners & (1 << i) != 0 {
+                *length = Some(self.lengths[i].unwrap_or(gpui::px(0.).into()));
+                *relative = Some(self.relative[i].flatten());
+            }
+        }
+    }
+}
+
+/// Undoes what a :hover/:focus/:active (or `group-`) rule did to
+/// [`Extras::radius_inherit`], which is shared by every rung while the inherited
+/// radius is filled into the BASE style only: `.x:hover { border-radius: 8px }`
+/// must not cancel `.x { border-radius: inherit }` outside the hover, nor a
+/// hover's `inherit` apply where the pointer is not. The second is advised.
+fn keep_base_radius_inherit(extras: &mut Extras, before: RadiusInherit, diagnostics: &mut Vec<String>) {
+    if extras.radius_inherit.inherit & !before.inherit != 0 {
+        mapper::once(
+            diagnostics,
+            "`border-radius: inherit` in a :hover/:focus/:active (or group-) rule is not \
+             applied (v1): the parent's radius is inherited into the element's base style \
+             only. Declare the inherit without the state"
+                .to_string(),
+        );
+    }
+    extras.radius_inherit = before;
+}
+
+/// Fills in `border-radius: inherit` ([`mapper::RadiusInherit`]) once the
+/// parent's radii are known: the element's base style from `parent`, then its
+/// `::before`/`::after` boxes from the element itself. Answers what the element
+/// hands its own children.
+///
+/// The renderer's restyle walk calls this, parent first, so a chain of
+/// `inherit`s (`.zone` from `.card`, `.body` from `.zone`) resolves top-down.
+/// A transition or animation on the parent's radius is not followed: the child
+/// takes the parent's cascaded value, not the frame being drawn.
+pub fn resolve_inherited_radii(states: &mut ComputedStates, parent: InheritedRadii) -> InheritedRadii {
+    let corners = states.extras.radius_inherit.inherit;
+    if corners != 0 {
+        parent.fill(Rc::make_mut(&mut states.base), corners);
+    }
+    let own = InheritedRadii::of(&states.base);
+    for slot in [&mut states.before, &mut states.after].into_iter().flatten() {
+        let corners = slot.extras.radius_inherit.inherit;
+        if corners != 0 {
+            own.fill(Rc::make_mut(&mut Rc::make_mut(slot).style), corners);
+        }
+    }
+    own
 }
 
 impl ComputedStates {
@@ -1226,11 +1308,21 @@ impl Engine {
                     }
                     continue;
                 }
+                // `border-radius: inherit` is filled into the BASE style after
+                // the cascade, so only a base rule may say which corners
+                // inherit: `.x:hover { border-radius: 8px }` must not cancel
+                // `.x { border-radius: inherit }` outside the hover, nor a
+                // hover's `inherit` apply when the pointer is elsewhere.
+                let state_rule = r.states != 0 || r.ancestor.is_some();
+                let radius_inherit = extras.radius_inherit;
                 extras.refine(if important_pass {
                     &r.important_extras
                 } else {
                     &r.normal_extras
                 });
+                if state_rule {
+                    keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
+                }
                 if r.states == 0 {
                     let declared = if important_pass {
                         &r.important_transitions
@@ -1296,6 +1388,7 @@ impl Engine {
                                 name, raw, &vars, env, bucket, &mut extras, diagnostics,
                             );
                         }
+                        keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                     }
                     continue;
                 }
@@ -1340,8 +1433,12 @@ impl Engine {
                     let scope = rung
                         .and_then(|i| state_vars[i].as_ref())
                         .unwrap_or(&vars);
+                    let radius_inherit = extras.radius_inherit;
                     for (name, raw) in list.iter() {
                         mapper::apply_dynamic(name, raw, scope, env, bucket, &mut extras, diagnostics);
+                    }
+                    if rung.is_some() {
+                        keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                     }
                 }
             }
@@ -4684,6 +4781,127 @@ mod tests {
         let own = compute(3, Some(red));
         assert_ne!(own.base.border_color, Some(red));
         assert_eq!(own.base.border_color, own.color);
+    }
+
+    /// The profile card's layers round themselves with `border-radius:
+    /// inherit` (Argon's UserProfilePopover): a background under `overflow:
+    /// hidden`, and a glass zone and body that take the bottom corners down two
+    /// levels. Dropping the keyword left all three square.
+    #[test]
+    fn border_radius_inherit_takes_the_parents_radius() {
+        use gpui::{AbsoluteLength, DefiniteLength, VnCornerRadius};
+        let engine = Engine::compile(
+            ".card { border-radius: 16px } \
+             .bg { border-radius: inherit } \
+             .zone { border-bottom-left-radius: inherit; border-bottom-right-radius: inherit } \
+             .body { border-bottom-left-radius: inherit; border-bottom-right-radius: inherit } \
+             .pct { border-radius: 50% 4px } \
+             .late { border-radius: inherit } .late.flat { border-radius: 2px } \
+             .hov { border-radius: inherit } .hov:hover { border-radius: 8px } \
+             .ring { border-radius: 10px } .ring::after { content: ''; border-radius: inherit }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let doc = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "card", 0, vec![]),
+                ("div", "bg", 1, vec![]),
+                ("div", "zone", 1, vec![]),
+                ("div", "body", 3, vec![]),
+                ("div", "pct", 0, vec![]),
+                ("div", "bg", 5, vec![]),
+                ("div", "late flat", 1, vec![]),
+                ("div", "hov", 1, vec![]),
+                ("div", "ring", 0, vec![]),
+            ],
+        };
+        // The renderer's walk, parent first: each element resolves against
+        // what its parent handed down.
+        let mut handed: Vec<InheritedRadii> = vec![InheritedRadii::default(); doc.nodes.len()];
+        let mut computed = Vec::new();
+        for i in 1..doc.nodes.len() {
+            let mut d = Vec::new();
+            let mut states = engine.compute_node(
+                DocRef { doc: &doc, i },
+                None,
+                &Rc::new(Vars::default()),
+                None,
+                &Env::default(),
+                &mut d,
+            );
+            assert!(d.is_empty(), "{d:?}");
+            let parent = doc.nodes[i].2;
+            let parent = if parent == 0 { InheritedRadii::default() } else { handed[parent] };
+            handed[i] = resolve_inherited_radii(&mut states, parent);
+            computed.push(states);
+        }
+        let px = |v: f32| Some(AbsoluteLength::Pixels(gpui::px(v)));
+        let at = |i: usize| &computed[i - 1];
+
+        // Every corner of the background, from the card.
+        let bg = &at(2).base;
+        assert_eq!(
+            [bg.corner_radii.top_left, bg.corner_radii.bottom_right],
+            [px(16.), px(16.)]
+        );
+        assert_eq!(bg.vn_corner_radii.top_left, Some(None), "a length, not a percentage");
+        // Two corners of the zone, and through it, the body's.
+        let zone = &at(3).base;
+        assert_eq!(zone.corner_radii.bottom_left, px(16.));
+        assert_eq!(zone.corner_radii.top_left, None, "an undeclared corner stays undeclared");
+        let body = &at(4).base;
+        assert_eq!(
+            [body.corner_radii.bottom_left, body.corner_radii.bottom_right],
+            [px(16.), px(16.)]
+        );
+        // A percentage stays one, for the child to resolve against its own box.
+        let from_pct = &at(6).base;
+        assert_eq!(
+            from_pct.vn_corner_radii.top_left,
+            Some(Some(VnCornerRadius {
+                x: DefiniteLength::Fraction(0.5),
+                y: DefiniteLength::Fraction(0.5),
+            }))
+        );
+        assert_eq!(from_pct.corner_radii.top_right, px(4.));
+        assert_eq!(from_pct.vn_corner_radii.top_right, Some(None));
+        // A later length wins over an earlier inherit.
+        assert_eq!(at(7).base.corner_radii.top_left, px(2.));
+        // A state rule neither cancels the base's inherit nor adds one.
+        let hov = at(8);
+        assert_eq!(hov.base.corner_radii.top_left, px(16.));
+        assert_eq!(hov.hover.as_ref().unwrap().corner_radii.top_left, px(8.));
+        // `::after` inherits from the element it belongs to.
+        let ring = at(9).after.as_ref().expect("an ::after box");
+        assert_eq!(ring.style.corner_radii.bottom_right, px(10.));
+        // A parent with no radius hands down 0, which is CSS's initial value.
+        let mut orphan = engine.compute_node(
+            DocRef { doc: &doc, i: 2 },
+            None,
+            &Rc::new(Vars::default()),
+            None,
+            &Env::default(),
+            &mut Vec::new(),
+        );
+        resolve_inherited_radii(&mut orphan, InheritedRadii::default());
+        assert_eq!(orphan.base.corner_radii.top_left, px(0.));
+    }
+
+    #[test]
+    fn border_radius_inherit_on_a_state_rule_is_advised() {
+        let engine = Engine::compile(".x:hover { border-radius: inherit }");
+        let doc = Doc { nodes: vec![("", "", 0, vec![]), ("div", "x", 0, vec![])] };
+        let mut d = Vec::new();
+        let states = engine.compute_node(
+            DocRef { doc: &doc, i: 1 },
+            None,
+            &Rc::new(Vars::default()),
+            None,
+            &Env::default(),
+            &mut d,
+        );
+        assert_eq!(states.extras.radius_inherit, RadiusInherit::default());
+        assert!(d.iter().any(|m| m.contains("border-radius: inherit")), "{d:?}");
     }
 
     // ---- @keyframes / animation (m12 item 3) -----------------------------

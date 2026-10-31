@@ -27,6 +27,18 @@ const avatars = () => [
   h("img", { id: "round-img", class: "round-img", src: RED, alt: "" }),
   // `50%` on a box that is not square, clipping its child.
   h("div", { id: "oval", class: "oval" }, [h("div", { class: "oval-fill" })]),
+  // Argon's ArgonAvatar: a round wrapper WITHOUT `overflow: hidden`, whose
+  // <img> rounds itself with an inline `border-radius: inherit`.
+  h("span", { id: "inh-img", class: "inh-img" }, [
+    h("img", { src: RED, alt: "", style: "width: 100%; height: 100%; border-radius: inherit" }),
+  ]),
+  // Argon's profile card (UserProfilePopover): an `overflow: visible` card
+  // whose background layer rounds itself (`border-radius: inherit; overflow:
+  // hidden`), and whose glass body takes the bottom corners down two levels.
+  h("div", { id: "pcard", class: "pcard-x" }, [
+    h("div", { class: "pc-bg" }, [h("div", { class: "pc-fill" })]),
+    h("div", { class: "pc-zone" }, [h("div", { class: "pc-body" })]),
+  ]),
 ];
 
 const cards = () => [

@@ -120,6 +120,31 @@ describe("a round avatar (reka's AvatarRoot around an <img>)", () => {
   }, T);
 });
 
+describe("`border-radius: inherit` (the Argon client's avatars and profile card)", () => {
+  test("an inline `inherit` on an <img> takes its round wrapper's radius", async () => {
+    const b = await box("#inh-img");
+    bunExpect(b).toMatchObject({ w: 64, h: 64 });
+    const s = await until(shoot, (s) => s.count(b, red) > 1000);
+    bunExpect(s.count(b, red)).toBeGreaterThan(3050);
+    bunExpect(s.count(b, red)).toBeLessThan(3400);
+    for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
+  }, T);
+
+  test("a card's layers round themselves from it, two levels down", async () => {
+    // radius 16 on an 88x46 card: (2, 2) from a corner is outside the curve.
+    const b = await box("#pcard");
+    bunExpect(b).toMatchObject({ w: 88, h: 46 });
+    const s = await until(shoot, (s) => red(s.at(b.x + 44, b.y + 6)));
+    // The red background clips at the inherited curve; the blue body, two
+    // `inherit`s down, paints its bottom corners round. Square, either one
+    // showed in the corners.
+    for (const [x, y] of corners(b, 2)) bunExpect(white(s.at(x, y))).toBe(true);
+    const [tl, tr, bl, br] = corners(b, 8);
+    for (const [x, y] of [tl, tr]) bunExpect(red(s.at(x, y))).toBe(true);
+    for (const [x, y] of [bl, br]) bunExpect(blue(s.at(x, y))).toBe(true);
+  }, T);
+});
+
 describe("a rounded card around a list that scrolls", () => {
   const banded = (rgb: Rgb) => lime(rgb) || blue(rgb);
 

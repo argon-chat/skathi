@@ -122,6 +122,46 @@ pub struct DropShadow {
     pub color: Option<gpui::Hsla>,
 }
 
+/// Which corners' `border-*-radius` is `inherit`, in cascade order.
+///
+/// `border-radius` does not inherit, so `inherit` asks for the PARENT's
+/// computed radius, which the mapper cannot know. The value is filled in after
+/// the cascade, from the parent (`vn_tree`'s restyle walk calls
+/// [`crate::resolve_inherited_radii`]) or, for `::before`/`::after`, from the
+/// element the box belongs to. `declared` keeps the cascade honest: a later
+/// concrete radius on a corner cancels an earlier `inherit`, and a later
+/// `inherit` beats an earlier length.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RadiusInherit {
+    /// Corners some declaration wrote, length or `inherit`.
+    pub declared: u8,
+    /// Of those, the ones whose last declaration was `inherit`.
+    pub inherit: u8,
+}
+
+impl RadiusInherit {
+    pub const TOP_LEFT: u8 = 1;
+    pub const TOP_RIGHT: u8 = 2;
+    pub const BOTTOM_RIGHT: u8 = 4;
+    pub const BOTTOM_LEFT: u8 = 8;
+    pub const ALL: u8 = 15;
+
+    pub(crate) fn write(&mut self, corners: u8, inherit: bool) {
+        self.declared |= corners;
+        if inherit {
+            self.inherit |= corners;
+        } else {
+            self.inherit &= !corners;
+        }
+    }
+
+    /// Later-wins per corner.
+    pub(crate) fn refine(&mut self, later: &RadiusInherit) {
+        self.inherit = (self.inherit & !later.declared) | (later.inherit & later.declared);
+        self.declared |= later.declared;
+    }
+}
+
 /// Computed values that a `gpui::StyleRefinement` has nowhere to carry.
 ///
 /// The refinement is the cascade's whole payload for every other property, so
@@ -342,6 +382,8 @@ pub struct Extras {
     /// `mask-composite` / `-webkit-mask-composite` (or the shorthand's), for
     /// the top layer, which is the only one composited onto anything.
     pub mask_composite: Option<MaskCompositing>,
+    /// `border-radius: inherit` and its longhands — see [`RadiusInherit`].
+    pub radius_inherit: RadiusInherit,
 }
 
 /// `mask-image`, as far as the paint path can tell layers apart.
@@ -626,6 +668,7 @@ impl Extras {
         // A bitmask, not a last-wins value: two rules can each contribute a
         // different `currentColor` property to the same element.
         self.current_color.0 |= other.current_color.0;
+        self.radius_inherit.refine(&other.radius_inherit);
     }
 
     /// The `mask` this element ends up with is the gradient-border idiom: two
@@ -1744,13 +1787,15 @@ fn max_size_length(v: &lightningcss::properties::size::MaxSize) -> Option<Length
 /// `gpui::vn_resolve_corner_radii`). Each writes both fields, so whichever
 /// declaration comes later in the cascade wins the corner. A calc() that is
 /// not linear leaves the corner alone and is advised ([`calc_dropped`]).
+/// Answers whether the corner was written, which is what cancels an earlier
+/// `inherit` on it ([`RadiusInherit`]).
 fn corner(
     length: &mut Option<AbsoluteLength>,
     relative: &mut Option<Option<gpui::VnCornerRadius>>,
     radius: &lightningcss::values::size::Size2D<LengthPercentage>,
-) {
+) -> bool {
     let (Some(x), Some(y)) = (lp_definite(&radius.0), lp_definite(&radius.1)) else {
-        return;
+        return false;
     };
     match (x, y) {
         (DefiniteLength::Absolute(a), DefiniteLength::Absolute(b)) if a == b => {
@@ -1762,6 +1807,7 @@ fn corner(
             *relative = Some(Some(gpui::VnCornerRadius { x, y }));
         }
     }
+    true
 }
 
 fn lp_absolute(lp: &LengthPercentage) -> Option<AbsoluteLength> {
@@ -4187,31 +4233,50 @@ fn apply_property(
             set_border_style(r, *v, diagnostics);
         }
         BorderRadius(v, _) => {
-            corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, &v.top_left);
-            corner(&mut r.corner_radii.top_right, &mut r.vn_corner_radii.top_right, &v.top_right);
-            corner(
+            let mut wrote = 0;
+            if corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, &v.top_left) {
+                wrote |= RadiusInherit::TOP_LEFT;
+            }
+            if corner(&mut r.corner_radii.top_right, &mut r.vn_corner_radii.top_right, &v.top_right)
+            {
+                wrote |= RadiusInherit::TOP_RIGHT;
+            }
+            if corner(
                 &mut r.corner_radii.bottom_right,
                 &mut r.vn_corner_radii.bottom_right,
                 &v.bottom_right,
-            );
-            corner(
+            ) {
+                wrote |= RadiusInherit::BOTTOM_RIGHT;
+            }
+            if corner(
                 &mut r.corner_radii.bottom_left,
                 &mut r.vn_corner_radii.bottom_left,
                 &v.bottom_left,
-            );
+            ) {
+                wrote |= RadiusInherit::BOTTOM_LEFT;
+            }
+            x.radius_inherit.write(wrote, false);
         }
         // `rounded-t` / `rounded-tl-lg` never use the shorthand.
         BorderTopLeftRadius(v, _) => {
-            corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, v)
+            if corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, v) {
+                x.radius_inherit.write(RadiusInherit::TOP_LEFT, false);
+            }
         }
         BorderTopRightRadius(v, _) => {
-            corner(&mut r.corner_radii.top_right, &mut r.vn_corner_radii.top_right, v)
+            if corner(&mut r.corner_radii.top_right, &mut r.vn_corner_radii.top_right, v) {
+                x.radius_inherit.write(RadiusInherit::TOP_RIGHT, false);
+            }
         }
         BorderBottomRightRadius(v, _) => {
-            corner(&mut r.corner_radii.bottom_right, &mut r.vn_corner_radii.bottom_right, v)
+            if corner(&mut r.corner_radii.bottom_right, &mut r.vn_corner_radii.bottom_right, v) {
+                x.radius_inherit.write(RadiusInherit::BOTTOM_RIGHT, false);
+            }
         }
         BorderBottomLeftRadius(v, _) => {
-            corner(&mut r.corner_radii.bottom_left, &mut r.vn_corner_radii.bottom_left, v)
+            if corner(&mut r.corner_radii.bottom_left, &mut r.vn_corner_radii.bottom_left, v) {
+                x.radius_inherit.write(RadiusInherit::BOTTOM_LEFT, false);
+            }
         }
         // `grid-cols-N` / `grid-rows-N` -> `repeat(N, minmax(0, 1fr))`, which is
         // exactly (and only) what gpui's GridTemplate models.
@@ -5241,7 +5306,22 @@ fn apply_property(
             // every app reports five or six "still unresolved after var()"
             // advisories that name a property nothing is wrong with — noise
             // that buries the real ones.
+            //
+            // Except for `border-radius`, which does not inherit: there
+            // `inherit` asks for the parent's radius, and dropping it left the
+            // card layers that round themselves with it (`.card-bg { overflow:
+            // hidden; border-radius: inherit }`) square. It is recorded here and
+            // filled in after the cascade ([`RadiusInherit`]).
             if matches!(single_ident_raw(&u.value), Some("inherit")) {
+                let corners = match u.property_id {
+                    PropertyId::BorderRadius(_) => RadiusInherit::ALL,
+                    PropertyId::BorderTopLeftRadius(_) => RadiusInherit::TOP_LEFT,
+                    PropertyId::BorderTopRightRadius(_) => RadiusInherit::TOP_RIGHT,
+                    PropertyId::BorderBottomRightRadius(_) => RadiusInherit::BOTTOM_RIGHT,
+                    PropertyId::BorderBottomLeftRadius(_) => RadiusInherit::BOTTOM_LEFT,
+                    _ => 0,
+                };
+                x.radius_inherit.write(corners, true);
                 return;
             }
             once(
@@ -6978,6 +7058,39 @@ mod tests {
             let (_, d) = map(body);
             assert!(d.is_empty(), "{body:?} should be silent, said {d:?}");
         }
+    }
+
+    /// `border-radius` does not inherit, so its `inherit` is not a no-op: it is
+    /// recorded per corner, in cascade order, for the renderer to fill in.
+    #[test]
+    fn border_radius_inherit_is_recorded_per_corner() {
+        // `inherit` has no typed value, so it travels the dynamic channel (the
+        // one `var()` uses) and is mapped when the cascade applies it.
+        let inherit = |name: &str| {
+            let (mut r, mut x, mut d) = (StyleRefinement::default(), Extras::default(), Vec::new());
+            apply_dynamic(name, "inherit", &Vars::default(), &crate::Env::default(), &mut r, &mut x, &mut d);
+            assert!(d.is_empty(), "{name}: {d:?}");
+            (r, x)
+        };
+        let (r, x) = inherit("border-radius");
+        assert_eq!(x.radius_inherit, RadiusInherit { declared: 15, inherit: 15 });
+        assert_eq!(r.corner_radii.top_left, None, "nothing to write until the parent is known");
+        let (_, x) = inherit("border-bottom-left-radius");
+        let bl = RadiusInherit::BOTTOM_LEFT;
+        assert_eq!(x.radius_inherit, RadiusInherit { declared: bl, inherit: bl });
+        // Not a radius: still the silent no-op it always was.
+        assert_eq!(inherit("color").1.radius_inherit, RadiusInherit::default());
+
+        // A length declares its corners as not inheriting…
+        let (_, x, d) = map_full("border-radius: 4px; border-top-left-radius: 50%");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(x.radius_inherit, RadiusInherit { declared: 15, inherit: 0 });
+        // …so across rules the later one wins each corner it declares.
+        let mut folded = inherit("border-radius").1;
+        folded.refine(&map_full("border-top-right-radius: 2px").1);
+        assert_eq!(folded.radius_inherit.inherit, RadiusInherit::ALL & !RadiusInherit::TOP_RIGHT);
+        folded.refine(&inherit("border-top-right-radius").1);
+        assert_eq!(folded.radius_inherit.inherit, RadiusInherit::ALL);
     }
 
     // ---- line-clamp ------------------------------------------------------

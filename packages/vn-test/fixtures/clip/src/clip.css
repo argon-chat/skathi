@@ -46,6 +46,51 @@
   height: 100%;
   background: red;
 }
+/* `border-radius: inherit`, the way the Argon client spells it. */
+.inh-img {
+  position: absolute;
+  left: 176px;
+  top: 20px;
+  display: flex;
+  width: 64px;
+  height: 64px;
+  border-radius: 9999px;
+}
+.pcard-x {
+  position: absolute;
+  left: 152px;
+  top: 466px;
+  width: 88px;
+  height: 46px;
+  border-radius: 16px;
+  overflow: visible;
+}
+.pc-bg {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+}
+.pc-fill {
+  width: 100%;
+  height: 100%;
+  background: red;
+}
+.pc-zone {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22px;
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
+}
+.pc-body {
+  height: 100%;
+  background: blue;
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
+}
 
 .card-a {
   position: absolute;

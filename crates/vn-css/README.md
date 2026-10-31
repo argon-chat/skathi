@@ -390,6 +390,12 @@ project's browser-compat-first policy.
       past the middle.
     - A transition does not interpolate such a corner. Toward one it snaps;
       from one to a length it runs from 0.
+    - `border-radius: inherit` (and per corner) takes the parent's computed
+      radius, filled in by vn-tree's restyle walk after the cascade
+      (`resolve_inherited_radii`); a `::before`/`::after` takes its element's.
+      Only a base rule can declare it: in a `:hover`/`:focus`/`:active` or
+      `group-` rule it is ignored and advised. It follows the parent's
+      cascaded radius, not a transition's current frame.
     The same radii clip `overflow` (docs/ARCHITECTURE.md, fork items 33 and
     34).
 

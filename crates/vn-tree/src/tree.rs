@@ -1051,11 +1051,15 @@ impl Tree {
             // because it changes at exactly one kind of node — a painted root —
             // and `windows::env_at_root` is the O(1) test for that, where
             // `env_for_node`'s ancestor walk is O(depth).
+            //
+            // And the parent's corner radii, for a `border-radius: inherit`
+            // (`vn_css::resolve_inherited_radii`).
             let mut stack: Vec<(
                 u32,
                 std::rc::Rc<vn_css::Vars>,
                 bool,
                 Option<gpui::Hsla>,
+                vn_css::InheritedRadii,
                 vn_css::Env,
             )> = Vec::new();
             // Free for a single-window app: `ROOTS` is empty until a pop-out
@@ -1099,14 +1103,17 @@ impl Tree {
                 // `color`, which is inherited when it declares none — so the
                 // effective colour rides down the walk beside the vars map.
                 let inherited_color = parent_computed.and_then(|c| c.color);
-                stack.push((r, inherited, inherited_inert, inherited_color, root_env));
-                while let Some((id, parent_vars, parent_inert, parent_color, here_env)) =
+                let inherited_radii = parent_computed
+                    .map(|c| vn_css::InheritedRadii::of(&c.base))
+                    .unwrap_or_default();
+                stack.push((r, inherited, inherited_inert, inherited_color, inherited_radii, root_env));
+                while let Some((id, parent_vars, parent_inert, parent_color, parent_radii, here_env)) =
                     stack.pop()
                 {
                     let Some(n) = this.node(id) else { continue };
                     // Text and anchor nodes have no cascade of their own; they
                     // simply pass the map down to whatever hangs under them.
-                    let (child_vars, child_inert, child_color) = if n.kind == Kind::Element {
+                    let (child_vars, child_inert, child_color, child_radii) = if n.kind == Kind::Element {
                         let mut states = engine.compute_node(
                             NodeRef { tree: this, id },
                             n.inline.as_deref(),
@@ -1122,12 +1129,13 @@ impl Tree {
                         // overlay relies on.
                         let inert = states.extras.pointer_events_none.unwrap_or(parent_inert);
                         states.extras.pointer_events_none = Some(inert);
+                        let radii = vn_css::resolve_inherited_radii(&mut states, parent_radii);
                         let vars = states.vars.clone();
                         let color = states.color;
                         out.push((id, states));
-                        (vars, inert, color)
+                        (vars, inert, color, radii)
                     } else {
-                        (parent_vars, parent_inert, parent_color)
+                        (parent_vars, parent_inert, parent_color, parent_radii)
                     };
                     for &c in n.children.iter().rev() {
                         // **The window boundary.** A popped-out node is painted
@@ -1146,7 +1154,14 @@ impl Tree {
                         } else {
                             here_env
                         };
-                        stack.push((c, child_vars.clone(), child_inert, child_color, child_env));
+                        stack.push((
+                            c,
+                            child_vars.clone(),
+                            child_inert,
+                            child_color,
+                            child_radii,
+                            child_env,
+                        ));
                     }
                 }
             }
