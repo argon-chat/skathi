@@ -171,6 +171,9 @@ pub struct Node {
     /// the inline-style transport; parsed lazily into `inline_cache`.
     pub style: Vec<(u32, String)>,
     pub classes: Vec<String>,
+    /// The `class` attribute's text as written, for attribute selectors
+    /// (`[class*="group/msg"]`): `classes` is the token list `.x` matches.
+    pub class_attr: String,
     /// Generic element properties/attributes (interned name, string value,
     /// write counter) — the DOM-compat channel (`value`, `placeholder`,
     /// `disabled`, ...). Native widgets (text input etc.) read what they
@@ -385,6 +388,7 @@ impl Tree {
             text: String::new(),
             style: Vec::new(),
             classes: Vec::new(),
+            class_attr: String::new(),
             props: Vec::new(),
             scopes: Vec::new(),
             listeners: 0,
@@ -604,6 +608,7 @@ impl Tree {
     pub fn set_class(&mut self, id: u32, classes: &str) {
         if let Some(n) = self.node_mut(id) {
             n.classes = classes.split_whitespace().map(str::to_string).collect();
+            n.class_attr = classes.to_string();
             self.dirty = true;
             self.mark_restyle(id);
             self.touch(id);
@@ -1959,6 +1964,13 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
     /// selector asks for that JS has never written has no id at all, which is
     /// the cheap "absent" answer.
     fn attr(&self, name: &str) -> Option<&str> {
+        // `class` rides its own channel (`set_class`), not the property map.
+        // An empty one reads as absent: the channel cannot tell `class=""`
+        // from no attribute (docs/RUNTIME.md §5.13).
+        if name == "class" {
+            let raw = self.node().class_attr.as_str();
+            return (!raw.is_empty()).then_some(raw);
+        }
         let key = *self.tree.name_ids.get(name)?;
         self.node()
             .props

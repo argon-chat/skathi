@@ -342,8 +342,10 @@ interface MirrorElement extends MirrorNodeBase {
   _on?: Record<string, { fn: unknown; listener: (ev: VnEvent) => void }>;
   /** Browser-visible attribute state; `patchProp` is the only writer. */
   attrs: Record<string, string>;
-  /** The class VUE assigned, kept apart from `<Transition>`'s `_vtc`. */
+  /** The `class` attribute: an accessor over `_class` and `_vtc` (`writeClass`). */
   className: string;
+  /** The class Vue or a script assigned, kept apart from `<Transition>`'s `_vtc`. */
+  _class: string;
   /** The element's OWN text — exclusive with children, as in the host tree. */
   ownText?: string;
   addEventListener(name: string, fn: EventHandler, opts?: ListenerOptions): void;
@@ -877,10 +879,11 @@ function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode {
     // back off candidate nodes, so the mirror has to remember what was written
     // rather than answering "absent" for everything.
     n.attrs = Object.create(null);
-    // The `class` Vue assigned, kept separately from the transition classes
-    // `<Transition>` layers on top (runtime-dom keeps the same split, for the
-    // same reason: a re-render must not wipe an in-flight `v-enter-active`).
-    n.className = "";
+    // The `class` Vue (or a script) assigned, kept separately from the
+    // transition classes `<Transition>` layers on top (runtime-dom keeps the
+    // same split, for the same reason: a re-render must not wipe an in-flight
+    // `v-enter-active`). `className` is the prototype's accessor over both.
+    n._class = "";
     // `scrollTop` / `scrollLeft` are NOT initialised here any more: they are
     // accessors on the prototype now, reading and writing the host's real
     // `ScrollHandle` (see `defineDomGet("scrollTop", …)`). An own data property
@@ -1465,9 +1468,11 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
     // `floatingStyles` produces before its first measurement).
     patchStyle(el, prev, next);
   } else if (key === "class") {
+    // runtime-dom's `patchClass`: Vue's class, with the transition classes
+    // merged on top; `null` removes the attribute.
     if (prev !== next) {
-      el.className = next == null ? "" : String(next);
-      writeClass(el);
+      el._class = next == null ? "" : String(next);
+      writeClass(el, next == null);
     }
   } else if (key.startsWith("on") && key.length > 2) {
     // runtime-dom's `parseName`, same order: strip the option suffixes, then
@@ -1655,7 +1660,12 @@ function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
 
 /** `setAttribute` / `removeAttribute`: `class` and `on*` keep their own paths, everything else is verbatim. */
 function writeAttribute(el: MirrorElement, key: string, value: string | null): void {
-  if (key === "class" || (key.startsWith("on") && key.length > 2)) patchProp(el, key, undefined, value);
+  if (key === "class") {
+    if (value != null) return setClassText(el, value);
+    el._class = "";
+    el._vtc = undefined;
+    writeClass(el, true);
+  } else if (key.startsWith("on") && key.length > 2) patchProp(el, key, undefined, value);
   else patchAttribute(el, key, value);
 }
 
@@ -1663,11 +1673,42 @@ function writeAttribute(el: MirrorElement, key: string, value: string | null): v
 /// has layered on top. runtime-dom does exactly this (its `patchClass` merges
 /// `el._vtc`); without it a re-render during a transition drops the phase class
 /// and the animation stops halfway.
-function writeClass(el: MirrorElement): void {
-  const base = el.className || "";
+///
+/// The merged value is also the ATTRIBUTE (m26 client sweep #19): it is what
+/// `getAttribute("class")`, `className` and `classList` read, and the host
+/// keeps it for `[class*=…]` selectors. A change is an `attributes` mutation.
+/// `remove`: the attribute goes away when nothing is left (`:class="null"`,
+/// `removeAttribute("class")`); otherwise an empty class stays present.
+function writeClass(el: MirrorElement, remove = false): void {
+  const base = el._class || "";
   const extra = el._vtc;
   const value = extra && extra.size ? [base, ...extra].filter(Boolean).join(" ") : base;
   __vn_set_class(el.__vnId, value);
+  if (!el.attrs) return;
+  const before = el.attrs.class;
+  if (remove && !value) delete el.attrs.class;
+  else el.attrs.class = value;
+  if (before !== el.attrs.class) notifyMutation(el, "attributes", { attributeName: "class", oldValue: before ?? null });
+}
+
+/**
+ * The class attribute becomes `text`, as `el.className = text`,
+ * `setAttribute("class", text)` and `classList` make it in a browser. A
+ * transition class `text` still names stays a transition class (so a
+ * read-modify-write does not bake `v-enter-active` in for good); one it drops
+ * is dropped, as removing it from a browser's attribute drops it.
+ */
+function setClassText(el: MirrorElement, text: string): void {
+  const vtc = el._vtc;
+  if (vtc && vtc.size) {
+    const tokens = text.split(/\s+/).filter(Boolean);
+    for (const c of [...vtc]) if (!tokens.includes(c)) vtc.delete(c);
+    if (!vtc.size) el._vtc = undefined;
+    el._class = tokens.filter((c) => !vtc.has(c)).join(" ");
+  } else {
+    el._class = text;
+  }
+  writeClass(el);
 }
 
 function ensureBuckets(m: HandlerMap, name: string): Buckets {
@@ -2761,14 +2802,24 @@ defineDomGet("dataset", function (this: MirrorElement) {
   return proxy;
 });
 
-// -- classList, over the class Vue assigned (transition classes ride `_vtc`)
+// -- className and classList, over the class ATTRIBUTE: what Vue assigned plus
+//    the transition classes (`writeClass`), as a browser's are (m26 #19).
+//    `className` was a plain field: a script's `el.className = …` changed the
+//    mirror only, and `getAttribute("class")` read null.
+defineDomGet(
+  "className",
+  function (this: MirrorElement) {
+    return isMirrorEl(this) ? (this.attrs.class ?? "") : undefined;
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isMirrorEl(this)) return ownExpando(this, "className", v);
+    setClassText(this, String(v));
+  } as (value: never) => void,
+);
 defineDomGet("classList", function (this: MirrorElement) {
   const node = this;
-  const parts = () => (node.className ? node.className.split(/\s+/).filter(Boolean) : []);
-  const commit = (list: string[]) => {
-    node.className = list.join(" ");
-    writeClass(node);
-  };
+  const parts = () => (node.attrs.class ?? "").split(/\s+/).filter(Boolean);
+  const commit = (list: string[]) => setClassText(node, list.join(" "));
   const list: MirrorClassList = {
     add(...names: string[]) {
       const cur = parts();
@@ -8644,6 +8695,10 @@ function removeTransitionClass(el: MirrorElement, cls: string): void {
     el._vtc.delete(cls);
     if (!el._vtc.size) el._vtc = undefined;
   }
+  // runtime-dom's `classList.remove(cls)` takes it out of the whole attribute,
+  // so a copy a script wrote back into the class goes too.
+  const base = (el._class || "").split(/\s+/);
+  if (base.includes(cls)) el._class = base.filter((c) => c && c !== cls).join(" ");
   writeClass(el);
 }
 

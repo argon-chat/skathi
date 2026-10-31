@@ -961,6 +961,28 @@ mod tests {
         assert_eq!(opacity_of(child), Some(1.0));
     }
 
+    /// m26 client sweep #19. `[class*="group/msg"]` matched nothing: the class
+    /// rides `set_class`, and attribute selectors read only the property map.
+    #[test]
+    fn attribute_selectors_see_the_class_attribute() {
+        let (root, child) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let child = t.create_element(div);
+            t.insert(child, root, 0);
+            t.set_class(child, "row group/msg  hover:x");
+            (root, child)
+        });
+        let q = |sel: &str| dom::query(sel, root, dom::QueryMode::Descendants).unwrap();
+        assert_eq!(q(r#"[class*="group/msg"]"#), vec![child]);
+        assert_eq!(q(r#"[class~="row"]"#), vec![child]);
+        assert_eq!(q(r#"[class^="row "]"#), vec![child]);
+        assert_eq!(q("[class]"), vec![child]);
+        assert_eq!(q(".row"), vec![child], "the token list is unchanged");
+        tree::with_tree(|t| t.set_class(child, ""));
+        assert!(q("[class]").is_empty());
+    }
+
     fn mounted_child() -> u32 {
         tree::with_tree(|t| {
             let root = t.create_root();

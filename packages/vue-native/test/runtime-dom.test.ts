@@ -763,6 +763,74 @@ describe("classList and the transition-class merge", () => {
   });
 });
 
+// m26 client sweep #19: `className` was a plain field, so a script's write
+// changed the mirror only, and getAttribute("class") read null.
+describe("className, classList and the class attribute are one thing", () => {
+  test("className and setAttribute write through; getAttribute and className read the attribute", () => {
+    const rt = createRuntime();
+    const { button } = tree(rt);
+    expect(button.getAttribute("class")).toBe(null);
+    expect(button.className).toBe("");
+    button.className = "row group/msg";
+    expect(rt.host.classes.at(-1)).toEqual({ id: button.__vnId, value: "row group/msg" });
+    expect(button.getAttribute("class")).toBe("row group/msg");
+    expect(button.hasAttribute("class")).toBe(true);
+    expect(button.classList.contains("group/msg")).toBe(true);
+    button.setAttribute("class", "a b");
+    expect(button.className).toBe("a b");
+    expect(rt.host.classes.at(-1).value).toBe("a b");
+    button.removeAttribute("class");
+    expect(button.getAttribute("class")).toBe(null);
+    expect(rt.host.classes.at(-1).value).toBe("");
+    // Vue's `:class="null"` removes it too; `class=""` keeps it, empty.
+    rt.patchProp(button, "class", null, "");
+    expect(button.getAttribute("class")).toBe("");
+    rt.patchProp(button, "class", "", null);
+    expect(button.hasAttribute("class")).toBe(false);
+  });
+
+  test("a transition class is part of the attribute, and a read-modify-write does not keep it for good", () => {
+    const rt = createRuntime();
+    const { button } = tree(rt);
+    rt.patchProp(button, "class", null, "card");
+    button._vtc = new Set(["v-enter-active"]);
+    rt.writeClass(button);
+    expect(button.className).toBe("card v-enter-active");
+    expect(button.classList.contains("v-enter-active")).toBe(true);
+    button.className += " lit";
+    expect(rt.host.classes.at(-1).value).toBe("card lit v-enter-active");
+    // The transition ends: the phase class goes, the script's class stays.
+    button._vtc = undefined;
+    rt.writeClass(button);
+    expect(button.className).toBe("card lit");
+    // classList.remove of a transition class drops it, as from a browser's attribute.
+    button._vtc = new Set(["v-leave-active"]);
+    button.classList.remove("v-leave-active");
+    expect(button._vtc).toBeUndefined();
+    expect(button.className).toBe("card lit");
+  });
+
+  test("a class change is an attributes mutation", async () => {
+    const rt = createRuntime();
+    const { section, button } = tree(rt);
+    const seen = [];
+    new rt.global.MutationObserver((records) => seen.push(...records)).observe(section, {
+      attributes: true,
+      attributeFilter: ["class"],
+      attributeOldValue: true,
+      subtree: true,
+    });
+    rt.patchProp(button, "class", null, "x");
+    button.classList.add("y");
+    button.classList.add("y"); // no change, no record
+    await Promise.resolve();
+    expect(seen.map((r) => [r.attributeName, r.oldValue])).toEqual([
+      ["class", null],
+      ["class", "x"],
+    ]);
+  });
+});
+
 describe("mirror nodes are not reactive state", () => {
   test("a node carries Vue's markRaw flag, as a real DOM node effectively does", () => {
     // In a browser `reactive(divElement)` hands the element straight back —
