@@ -1,16 +1,18 @@
 // A fixture for packages/vn-test/specs/fonts.spec.ts: web fonts (m26 client
 // sweep #29, docs/RUNTIME.md §5.15).
 //
-// Five probes, each "WWWWiiii" at 16px in its own shrink-wrapped box, so a
-// probe's width says which font drew it (Press Start 2P: 128px exactly):
-// `#pixel` (the sheet's face), `#stack` (behind a PUA-only family), `#inline`
-// (the face named by an inline style), `#script` (a face a script adds, by
-// `__VN_TEST_FONTS__.run("script")`) and `#plain` (serif, never a web font).
+// Probes, each "WWWWiiii" at 16px in its own shrink-wrapped box, so a probe's
+// width says which font drew it (Press Start 2P: 128px exactly): `#pixel` (the
+// sheet's face), `#stack` (behind a PUA-only family), `#inline` (the face named
+// by an inline style), `#script` (a face a script adds, by
+// `__VN_TEST_FONTS__.run("script")`), `#plain` (serif, never a web font) and
+// `#late` (rendered by the `late` scenario: its face loads only then). An
+// empty `.unused` box names `VN Unused` and draws no text with it.
 //
 // `__VN_TEST_FONTS__.events` records the set's loading events; `run(name)`
 // settles into `results[name]`, because a promise does not survive the eval
 // round trip. Render functions rather than an SFC, as fixtures/layout says why.
-import { createApp, h } from "vue-native";
+import { createApp, h, nextTick, ref } from "vue-native";
 import "./fonts.css";
 
 const TEXT = "WWWWiiii";
@@ -19,6 +21,8 @@ const fonts = (document as Any).fonts;
 
 const events: string[] = [];
 const results: Record<string, unknown> = {};
+const showLate = ref(false);
+const face = (family: string) => [...fonts].find((f: Any) => f.family === family);
 for (const type of ["loading", "loadingdone", "loadingerror"]) {
   fonts.addEventListener(type, (e: Any) => events.push(`${type}:${[...e.fontfaces].map((f: Any) => f.family).join(",")}`));
 }
@@ -50,6 +54,17 @@ const scenarios: Record<string, () => Promise<unknown>> = {
         }
       })(),
     };
+  },
+  /** Lazy loading: `VN Late` waits, unloaded, until `#late` draws text with
+   *  it; that frame draws the fallback, and the face then loads. */
+  async late() {
+    const late = face("VN Late");
+    const before = late.status;
+    showLate.value = true;
+    await nextTick();
+    const fallback = document.getElementById("late")!.getBoundingClientRect().width;
+    await late.loaded;
+    return { before, fallback, status: late.status, unused: face("VN Unused").status };
   },
   /** A face whose file is not there: `error`, and `loaded` rejects. */
   async missing() {
@@ -84,13 +99,19 @@ createApp({
       probe("inline", { fontFamily: "'VN Pixel', serif" }),
       probe("script", { fontFamily: "'VN Script', serif" }),
       probe("plain", { fontFamily: "serif" }),
+      showLate.value ? probe("late") : null,
+      h("div", { class: "unused" }),
     ]),
 }).mount();
 
 // Right after mount, which installs the sheet: what the set and `ready` say
-// before any face has loaded. (Before mount there is no sheet: a vue-native
-// app's CSS joins the stylesheet on mount.)
-results.boot = { status: fonts.status, size: fonts.size, families: [...fonts].map((f: Any) => f.family) };
+// before any text has asked for a face. (Before mount there is no sheet: a
+// vue-native app's CSS joins the stylesheet on mount.)
+results.boot = {
+  status: fonts.status,
+  size: fonts.size,
+  faces: [...fonts].map((f: Any) => `${f.family}:${f.status}`),
+};
 fonts.ready.then((s: Any) => {
   results.ready = { same: s === fonts, status: s.status, faces: [...s].map((f: Any) => `${f.family}:${f.status}`) };
 });

@@ -338,6 +338,14 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     }
   };
 
+  /**
+   * The host laid out a frame with nothing loading and nothing new asked for
+   * (crates/vn-tree/src/fonts.rs `tick`). Faces load lazily, when text drawn
+   * with them asks, so until then the page's text may still ask: `ready`
+   * waits for it, as a browser's waits for pending layout.
+   */
+  let hostQuiet = false;
+
   /** Moves the set between `loading` and `loaded`, firing what the spec fires. */
   const state = (): void => {
     const loading = members().some((f) => f.status === "loading");
@@ -352,7 +360,9 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
       failedSince = [];
       fire("loadingdone", ok);
       if (bad.length) fire("loadingerror", bad);
-      resolveReady?.(set);
+    }
+    if (!loading && hostQuiet && resolveReady) {
+      resolveReady(set);
       resolveReady = null;
     }
   };
@@ -461,6 +471,11 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
   host.__vn_fonts_set_listener((id: number, status: string, message: string) => {
     if (id === 0) {
       if (status === "list") syncCss();
+      else if (status === "quiet") hostQuiet = true;
+      else if (status === "busy") {
+        hostQuiet = false;
+        if (!resolveReady) freshReady();
+      }
     } else {
       const f = byId.get(id);
       if (f) apply(f, status, message);
@@ -468,16 +483,11 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     state();
   });
 
-  // Ready at once unless a face of the sheet is already loading (`state()`
-  // made the set `loading` then, and resolves this promise when it is done).
+  // Pending until the host's first quiet frame: the first frame's text has
+  // not asked for its faces yet.
   syncCss();
   freshReady();
-  const settleNow = resolveReady as ((s: FontFaceSetImpl) => void) | null;
   state();
-  if (setStatus === "loaded" && settleNow) {
-    settleNow(set);
-    resolveReady = null;
-  }
 
   const define = (target: object, name: string, value: unknown) =>
     Object.defineProperty(target, name, { value, configurable: true, writable: true });

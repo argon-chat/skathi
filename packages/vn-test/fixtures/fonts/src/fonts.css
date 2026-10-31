@@ -20,6 +20,19 @@
   unicode-range: U+E000-E0FF;
 }
 
+/* Faces load lazily, when text drawn with them asks. `VN Late` is drawn only
+   by the `late` scenario's `#late`; `VN Unused` is never drawn, and stays
+   unloaded. */
+@font-face {
+  font-family: "VN Late";
+  src: url("./fonts/PressStart2P-Regular.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "VN Unused";
+  src: url("./fonts/PressStart2P-Regular.ttf") format("truetype");
+}
+
 .row {
   display: flex;
   align-items: flex-start;
@@ -42,4 +55,12 @@
    next one draws the Latin text (FONT-2). */
 #stack {
   font-family: "VN Tengwar", "VN Pixel", serif;
+}
+
+#late {
+  font-family: "VN Late", serif;
+}
+
+.unused {
+  font-family: "VN Unused", serif;
 }

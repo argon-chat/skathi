@@ -317,6 +317,15 @@ pub struct Extras {
     pub list_marker: Option<ListMarker>,
     /// `list-style-position: inside`. Also inherited.
     pub list_marker_inside: Option<bool>,
+    /// The web fonts this element's `font-family` asks for that are not loaded
+    /// yet: the families of the list, up to the one used, that
+    /// [`set_web_font_families`] named, in order. The host loads the faces of
+    /// the first one that covers the text drawn with them, then the next for
+    /// what it leaves (fonts load lazily, as in a browser). INHERITED with
+    /// `font-family`: `None` means this element declared no `font-family`, and
+    /// an empty list that it declared one that asks for nothing to load.
+    /// Always `None` while no web font is waiting.
+    pub web_font: Option<Rc<[String]>>,
     /// `text-underline-offset`, in px.
     ///
     /// The offset lands on the decoration itself (gpui's `UnderlineStyle`
@@ -640,6 +649,9 @@ impl Extras {
         }
         if other.list_marker_inside.is_some() {
             self.list_marker_inside = other.list_marker_inside;
+        }
+        if other.web_font.is_some() {
+            self.web_font = other.web_font.clone();
         }
         if other.underline_offset.is_some() {
             self.underline_offset = other.underline_offset;
@@ -1320,6 +1332,44 @@ thread_local! {
     /// See [`take_font_misses`].
     static FONT_MISSES: std::cell::RefCell<Vec<(String, Option<String>)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// See [`set_web_font_families`]; lowercase.
+    static WEB_FONTS: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// The web font families that have a face still waiting to load (the host's
+/// `@font-face` rules, which load lazily). A `font-family` naming one of them
+/// before the family it is drawn with records it in [`Extras::web_font`].
+/// Takes effect on the next compile, which the host runs when a face lands.
+pub fn set_web_font_families(families: impl IntoIterator<Item = String>) {
+    let set = families.into_iter().map(|f| f.to_lowercase()).collect();
+    WEB_FONTS.with(|w| *w.borrow_mut() = set);
+}
+
+/// [`Extras::web_font`] for a `font-family` list: its waiting web fonts, in
+/// order, up to the first family installed (or a generic). A waiting family
+/// that is installed already (a face of it is) ends the list too.
+fn waiting_web_font(families: &[CssFontFamily]) -> Option<Rc<[String]>> {
+    use lightningcss::traits::ToCss;
+    WEB_FONTS.with(|w| {
+        let w = w.borrow();
+        if w.is_empty() {
+            return None;
+        }
+        let mut out = Vec::new();
+        for f in families {
+            let CssFontFamily::FamilyName(name) = f else { break };
+            let Ok(css) = name.to_css_string(Default::default()) else { continue };
+            let clean = css.trim_matches('"');
+            if w.contains(&clean.to_lowercase()) {
+                out.push(clean.to_string());
+            }
+            if font_installed(clean) != Some(false) {
+                break;
+            }
+        }
+        Some(Rc::from(out))
+    })
 }
 
 /// Where the installed font families come from — the host's text system
@@ -4550,6 +4600,7 @@ fn apply_property(
             r.box_shadow = Some(out);
         }
         FontFamily(families) => {
+            x.web_font = waiting_web_font(families);
             if let Some(family) = first_available_family(families) {
                 r.text.font_family = Some(gpui::SharedString::from(family));
             }
@@ -6808,6 +6859,36 @@ mod tests {
             "{misses:?}"
         );
         assert!(take_font_misses().is_empty());
+    }
+
+    /// The families with a web font face still to load are recorded for the
+    /// host, which loads them for the text drawn with them; the text is drawn
+    /// with the next family meanwhile.
+    #[test]
+    fn waiting_web_fonts_are_recorded_for_the_host() {
+        let web = |css: &str| extras(css).0.web_font.map(|f| f.join("|"));
+        set_font_source(|| vec!["Arial".into(), "VN Half".into()]);
+        // No web font waiting: nothing recorded, nothing to clear.
+        assert_eq!(web("font-family: \"VN Web\", Arial"), None);
+
+        set_web_font_families(["VN Web".to_string(), "vn half".to_string(), "VN PUA".to_string()]);
+        assert_eq!(web("font-family: \"VN Web\", Arial").as_deref(), Some("VN Web"));
+        assert_eq!(clean("font-family: \"VN Web\", Arial").text.font_family.as_deref(), Some("Arial"));
+        // A family not declared anywhere is passed over, as for drawing.
+        assert_eq!(web("font-family: Nowhere, vn web, sans-serif").as_deref(), Some("vn web"));
+        // Every waiting family before the one used: a face limited to some
+        // characters leaves the rest of the text to the next one.
+        assert_eq!(web("font-family: \"VN PUA\", \"VN Web\", serif").as_deref(), Some("VN PUA|VN Web"));
+        // An installed family (or a generic) first: nothing to load, and the
+        // empty list stops an ancestor's web fonts being inherited.
+        assert_eq!(web("font-family: Arial, \"VN Web\"").as_deref(), Some(""));
+        assert_eq!(web("font-family: sans-serif, \"VN Web\"").as_deref(), Some(""));
+        // Installed with a face still waiting (another weight): still asked
+        // for, and it ends the list.
+        assert_eq!(web("font-family: \"VN Half\", \"VN Web\"").as_deref(), Some("VN Half"));
+        // No `font-family` at all: inherited.
+        assert_eq!(web("color: red"), None);
+        set_web_font_families(Vec::new());
     }
 
     /// The screen-reader-only idiom is a box clipped to an EMPTY rectangle,

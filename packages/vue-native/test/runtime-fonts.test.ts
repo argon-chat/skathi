@@ -44,7 +44,8 @@ function fakeHost(css: Partial<Rec>[] = []) {
     inSet: false,
     ...r,
   });
-  for (const c of css) faces.push(rec({ css: true, inSet: true, status: "loading", ...c }));
+  // A sheet's faces wait, unloaded, until text drawn with them asks.
+  for (const c of css) faces.push(rec({ css: true, inSet: true, ...c }));
   const blobs = new Map<string, unknown>();
   const g: Any = {
     EventTarget,
@@ -101,7 +102,24 @@ function fakeHost(css: Partial<Rec>[] = []) {
     if (f && status !== "list") f.status = status;
     listener!(id, status, message);
   };
-  return { g, doc, set, faces, calls, emit, blobs, declare: (r: Partial<Rec>) => faces.push(rec({ css: true, inSet: true, status: "loading", ...r })) };
+  /** Text drawn with face `id` asked for it: the frame tick's events. */
+  const asked = (id: number) => {
+    emit(0, "busy");
+    emit(id, "loading");
+  };
+  return {
+    g,
+    doc,
+    set,
+    faces,
+    calls,
+    emit,
+    asked,
+    /** A frame laid out with nothing loading and nothing new asked for. */
+    quiet: () => emit(0, "quiet"),
+    blobs,
+    declare: (r: Partial<Rec>) => faces.push(rec({ css: true, inSet: true, ...r })),
+  };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -113,7 +131,7 @@ describe("web fonts (src/fonts.ts)", () => {
     expect(g.FontFace).toBeUndefined();
   });
 
-  test("the sheet's faces are document.fonts, and ready waits for them", async () => {
+  test("the sheet's faces are document.fonts, load when text asks, and ready waits for that", async () => {
     const h = fakeHost([{ family: "Lato", weight: "700" }, { family: "Alcarin Tengwar", unicodeRange: "U+E000-E0FF", range: [0xe000, 0xe0ff] }]);
     expect(h.doc.fonts).toBe(h.set);
     expect(String(h.set)).toBe("[object FontFaceSet]");
@@ -121,26 +139,39 @@ describe("web fonts (src/fonts.ts)", () => {
     expect(h.set.size).toBe(2);
     const [lato, tengwar] = [...h.set];
     expect(lato instanceof h.g.FontFace).toBe(true);
-    expect([lato.family, lato.weight, lato.status]).toEqual(["Lato", "700", "loading"]);
+    // Lazy, as in a browser: nothing has drawn text with them yet.
+    expect([lato.family, lato.weight, lato.status]).toEqual(["Lato", "700", "unloaded"]);
     expect(tengwar.unicodeRange).toBe("U+E000-E0FF");
-    expect(h.set.status).toBe("loading");
+    expect(h.set.status).toBe("loaded");
 
+    // `ready` waits for the first frame's text to ask for its faces.
     let ready = false;
     h.set.ready.then((s: Any) => {
       expect(s).toBe(h.set);
       ready = true;
     });
-    const done: Any[] = [];
-    h.set.addEventListener("loadingdone", (e: Any) => done.push(e.fontfaces.map((f: Any) => f.family)));
-    h.emit(1, "loaded");
+    const events: Any[] = [];
+    for (const type of ["loading", "loadingdone"]) {
+      h.set.addEventListener(type, (e: Any) => events.push([type, e.fontfaces.map((f: Any) => f.family)]));
+    }
     await tick();
     expect(ready).toBe(false);
+    h.asked(1);
+    expect(h.set.status).toBe("loading");
+    h.emit(1, "loaded");
+    await tick();
     expect(lato.status).toBe("loaded");
-    h.emit(2, "loaded");
+    expect(ready).toBe(false);
+    h.quiet();
     await tick();
     expect(ready).toBe(true);
     expect(h.set.status).toBe("loaded");
-    expect(done).toEqual([["Lato", "Alcarin Tengwar"]]);
+    expect(events).toEqual([
+      ["loading", ["Lato"]],
+      ["loadingdone", ["Lato"]],
+    ]);
+    // Latin text never asked for the Private Use Area face.
+    expect(tengwar.status).toBe("unloaded");
     expect(await lato.loaded).toBe(lato);
   });
 
@@ -212,22 +243,28 @@ describe("web fonts (src/fonts.ts)", () => {
     expect(() => new h.g.FontFace("only one")).toThrow(TypeError);
   });
 
-  test("a sheet installed since the last event is the set's at once, and ready waits for it", async () => {
-    // The mount installs the sheet; its `list` event comes with the next frame.
+  test("a sheet installed since the last event is the set's at once, and ready waits for its text", async () => {
     const h = fakeHost();
     let ready = false;
     h.set.ready.then(() => (ready = true));
     await tick();
+    expect(ready).toBe(false);
+    h.quiet();
+    await tick();
     expect(ready).toBe(true);
+    // The mount installs the sheet; its `list` event comes with the next frame.
     h.declare({ family: "Lato" });
     expect(h.set.size).toBe(1);
-    expect(h.set.status).toBe("loading");
+    expect(h.set.status).toBe("loaded");
+    // Its text asks for the face: a new `ready`, settled once that frame is quiet.
+    h.asked(1);
     let again = false;
     h.set.ready.then(() => (again = true));
-    await tick();
-    expect(again).toBe(false);
     h.emit(0, "list");
     h.emit(1, "loaded");
+    await tick();
+    expect(again).toBe(false);
+    h.quiet();
     await tick();
     expect(again).toBe(true);
   });

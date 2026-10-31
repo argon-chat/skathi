@@ -7,11 +7,16 @@
 //!    sheet is compiled ([`note_sheet`]); a script's `new FontFace(…)` arrives
 //!    through `__vn_font_create`. Either way it becomes a [`Face`] with the
 //!    descriptors it was declared with.
-//! 2. **Loaded.** A CSS face is loaded as soon as it is declared, which is
-//!    eager where a browser waits for text that uses the family: the sheet is
-//!    the app's own and local, and loading the faces nobody uses costs memory,
-//!    not a network round trip. A script face loads on `load()` (or at once
-//!    for a binary source). The first `src` entry this build can use wins:
+//! 2. **Loaded.** Lazily, as in a browser: a face of the set loads when text is
+//!    drawn with it ([`want_for_text`]), or on `FontFace.load()` /
+//!    `document.fonts.load()` (and a script's binary source at once). vn-css
+//!    records on each element the waiting web fonts its `font-family` names
+//!    before the family it is drawn with ([`publish_waiting`],
+//!    `vn_css::Extras::web_font`); the renderer asks for them with the text's
+//!    weight, style and characters, and [`want`] picks the faces CSS's font
+//!    matching would (style, then weight, then `unicode-range`, falling through
+//!    the list for the characters a family does not cover). A face nothing is
+//!    drawn with stays `unloaded`. The first `src` entry this build can use wins:
 //!    `url()` to the app's files (dev and packaged alike, through
 //!    [`crate::img`]'s URL grammar), `data:`, `blob:`, or http(s) through
 //!    gpui's HTTP client. WOFF and WOFF2 are unpacked by DirectWrite.
@@ -22,8 +27,13 @@
 //! 4. **Used.** vn-css picks a family when the sheet is compiled (CSS's first
 //!    available font), so the sheet is compiled again, and the inline styles
 //!    that name a font are parsed again ([`crate::tree::recompile_for_fonts`]).
-//!    Text drawn before that used the fallback: `font-display: swap`, whatever
-//!    the rule says (docs/RUNTIME.md §5.15, FONT-1).
+//!    The document is restyled, and the text swaps to the face on the next
+//!    frame. Text drawn before that used the fallback: `font-display: swap`,
+//!    whatever the rule says (docs/RUNTIME.md §5.15, FONT-1).
+//!
+//! `document.fonts.ready` waits for a frame that was laid out with nothing
+//! loading and asked for nothing new ([`tick`]'s `quiet`): until then, the
+//! page's text may still ask for a face.
 //!
 //! # `unicode-range`
 //!
@@ -142,14 +152,35 @@ struct Fonts {
     /// Status changes the page has not heard about: `(id, status, message)`.
     events: Vec<(u32, &'static str, String)>,
     /// When a face was registered that the stylesheet has not been compiled
-    /// against yet.
+    /// against yet (or a family started waiting that it does not know of).
     changed_since: Option<Instant>,
+    /// [`want`]'s face choices: per family as the element spelled it, per
+    /// `(weight, italic)`, the indices into `faces` of the best match. Cleared
+    /// whenever `faces` or a face's membership of the set changes.
+    choice: std::collections::HashMap<String, Vec<((u16, bool), Vec<usize>)>>,
+    /// The last frame was laid out with nothing loading and nothing new asked
+    /// for (`document.fonts.ready`; see [`tick`]).
+    quiet: bool,
 }
 
 thread_local! {
     static FONTS: RefCell<Fonts> = RefCell::new(Fonts::default());
     /// `__vn_fonts_set_listener`'s function (protected), or 0.
     static LISTENER: Cell<u64> = const { Cell::new(0) };
+    /// The families last given to `vn_css::set_web_font_families`, lowercase.
+    static WAITING: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// What each element's text is drawn with, as far as [`want`] cares:
+    /// filled by [`want_for_text`]'s walk, emptied every frame.
+    static EFFECTIVE: RefCell<std::collections::HashMap<u32, Drawn>> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// The inherited font of an element, as [`want`] needs it.
+#[derive(Clone)]
+struct Drawn {
+    /// `vn_css::Extras::web_font`, inherited: the waiting families, in order.
+    families: Option<std::rc::Rc<[String]>>,
+    weight: f32,
+    italic: bool,
 }
 
 /// Registrations are folded into one recompile when they arrive this close
@@ -161,9 +192,10 @@ const SETTLE: Duration = Duration::from_millis(120);
 // ---------------------------------------------------------------------------
 
 /// The stylesheet about to be compiled: its `@font-face` blocks become the CSS
-/// faces. A face that is still declared keeps its state; a new one is queued to
-/// load. A font already registered stays registered (DirectWrite has no way to
-/// remove one), but leaves `document.fonts`.
+/// faces. A face that is still declared keeps its state; a new one is
+/// `unloaded` until text asks for it, and its family is handed to vn-css
+/// before the sheet compiles. A font already registered stays registered
+/// (DirectWrite has no way to remove one), but leaves `document.fonts`.
 pub(crate) fn note_sheet(css: &str) {
     let blocks = font_face_blocks(css);
     let key = blocks.join("\n");
@@ -194,22 +226,248 @@ pub(crate) fn note_sheet(css: &str) {
             }
             let id = f.next_id + 1;
             f.next_id = id;
-            // `loading` from the start: the load is certain, and
-            // `document.fonts.ready` read during boot has to wait for it.
             f.faces.push(Face {
                 id,
                 desc,
                 sources,
                 css: true,
                 in_set: true,
-                wanted: true,
-                status: Status::Loading,
+                wanted: false,
+                status: Status::Unloaded,
                 ready: None,
                 registered: false,
             });
         }
+        f.choice.clear();
         f.events.push((0, "list", String::new()));
     });
+    publish_waiting();
+}
+
+/// Hands vn-css the families with a face in the set that has not been asked
+/// for yet, so a `font-family` naming one records it for the renderer
+/// (`vn_css::Extras::web_font`). `true` when a family joined: elements
+/// compiled before that cannot ask for it until the sheet compiles again.
+fn publish_waiting() -> bool {
+    let mut families: Vec<String> = FONTS.with(|f| {
+        f.borrow()
+            .faces
+            .iter()
+            .filter(|x| x.in_set && x.status == Status::Unloaded && !x.wanted)
+            .map(|x| x.desc.family.to_lowercase())
+            .collect()
+    });
+    families.sort();
+    families.dedup();
+    WAITING.with(|w| {
+        let mut w = w.borrow_mut();
+        if *w == families {
+            return false;
+        }
+        let joined = families.iter().any(|x| !w.contains(x));
+        *w = families.clone();
+        vn_css::set_web_font_families(families);
+        joined
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Wanted: the text drawn with a face asks for it
+// ---------------------------------------------------------------------------
+
+/// A text node of element `parent` is about to be drawn: asks for the waiting
+/// web faces it is drawn with. The first waiting family gets the text, the
+/// next one the characters that family's faces leave (a `unicode-range`), and
+/// so on, as a browser falls back through the list. One `RefCell` read while
+/// no face waits.
+pub(crate) fn want_for_text(t: &crate::tree::Tree, parent: u32, text: &str) {
+    // White space between elements (a template's indentation) asks for nothing.
+    if WAITING.with(|w| w.borrow().is_empty()) || text.trim().is_empty() {
+        return;
+    }
+    ask(effective(t, parent), text);
+}
+
+/// [`want`] down the waiting families, each for what the ones before leave.
+fn ask(drawn: Drawn, text: &str) {
+    let Some(families) = drawn.families else { return };
+    let mut rest = std::borrow::Cow::Borrowed(text);
+    for family in families.iter() {
+        if rest.is_empty() {
+            break;
+        }
+        rest = std::borrow::Cow::Owned(want(family, drawn.weight, drawn.italic, &rest));
+    }
+}
+
+/// A `::before` / `::after` box of element `id` is about to be drawn: its
+/// `content` asks as text does, with the box's own `font-family`, weight and
+/// style over the element's (an icon font is usually named right there).
+pub(crate) fn want_for_pseudo(t: &crate::tree::Tree, id: u32, pb: &vn_css::PseudoBox) {
+    if WAITING.with(|w| w.borrow().is_empty()) || pb.content.trim().is_empty() {
+        return;
+    }
+    let mut drawn = effective(t, id);
+    if let Some(families) = &pb.extras.web_font {
+        drawn.families = (!families.is_empty()).then(|| families.clone());
+    }
+    if let Some(w) = pb.style.text.font_weight {
+        drawn.weight = w.0;
+    }
+    if let Some(s) = pb.style.text.font_style {
+        drawn.italic = !matches!(s, gpui::FontStyle::Normal);
+    }
+    ask(drawn, &pb.content);
+}
+
+/// Element `id`'s inherited web font, weight and style: `font-family`,
+/// `font-weight` and `font-style` all inherit, and vn-css folds no inherited
+/// property, so the nearest declaration up the tree wins. Memoized per frame,
+/// so a build walks each ancestor once.
+fn effective(t: &crate::tree::Tree, id: u32) -> Drawn {
+    EFFECTIVE.with(|m| {
+        let mut m = m.borrow_mut();
+        let mut chain = Vec::new();
+        let mut at = id;
+        let mut drawn = Drawn { families: None, weight: 400.0, italic: false };
+        while at != 0 {
+            if let Some(hit) = m.get(&at) {
+                drawn = hit.clone();
+                break;
+            }
+            chain.push(at);
+            at = t.node(at).map_or(0, |n| n.parent);
+        }
+        for &n in chain.iter().rev() {
+            if let Some(cs) = t.node(n).and_then(|n| n.computed.as_ref()) {
+                if let Some(families) = &cs.extras.web_font {
+                    drawn.families = (!families.is_empty()).then(|| families.clone());
+                }
+                if let Some(w) = cs.base.text.font_weight {
+                    drawn.weight = w.0;
+                }
+                if let Some(s) = cs.base.text.font_style {
+                    drawn.italic = !matches!(s, gpui::FontStyle::Normal);
+                }
+            }
+            m.insert(n, drawn.clone());
+        }
+        drawn
+    })
+}
+
+/// Asks for the faces of `family` that CSS's font matching picks for text of
+/// `weight` and style (`italic`), among those whose `unicode-range` covers a
+/// character of `text`. They start loading on the next frame tick. Returns the
+/// characters of `text` none of those faces covers, for the next family.
+pub(crate) fn want(family: &str, weight: f32, italic: bool, text: &str) -> String {
+    let key = (weight.round().clamp(1.0, 1000.0) as u16, italic);
+    let (asked, rest) = FONTS.with(|f| {
+        let mut f = f.borrow_mut();
+        let f = &mut *f;
+        let picks = match f.choice.get(family).and_then(|v| v.iter().find(|(k, _)| *k == key)) {
+            Some((_, picks)) => picks.clone(),
+            None => {
+                let picks = best_faces(&f.faces, family, key.0 as f32, italic);
+                f.choice.entry(family.to_string()).or_default().push((key, picks.clone()));
+                picks
+            }
+        };
+        let mut asked = false;
+        for &i in &picks {
+            let x = &mut f.faces[i];
+            if x.status == Status::Unloaded && !x.wanted && covers(&x.desc, text) {
+                x.wanted = true;
+                asked = true;
+            }
+        }
+        let rest: String = text
+            .chars()
+            .filter(|&c| !picks.iter().any(|&i| in_range(&f.faces[i].desc, c)))
+            .collect();
+        (asked, rest)
+    });
+    if asked {
+        publish_waiting();
+    }
+    rest
+}
+
+/// Does `text` have a character in the face's `unicode-range`?
+fn covers(desc: &Descriptors, text: &str) -> bool {
+    text.chars().any(|c| in_range(desc, c))
+}
+
+fn in_range(desc: &Descriptors, c: char) -> bool {
+    desc.unicode_range.is_empty() || desc.unicode_range.iter().any(|&(s, e)| s <= c as u32 && c as u32 <= e)
+}
+
+/// The indices of `family`'s faces in the set that CSS Fonts 4 §5.2 matches
+/// for `weight` and `italic`: the nearest style first (italic, then oblique,
+/// then normal for italic text; the reverse for upright), then the weight
+/// (within a face's range, else the nearest by the spec's search order). All
+/// faces that tie are returned: the `unicode-range` subsets of one face.
+fn best_faces(faces: &[Face], family: &str, weight: f32, italic: bool) -> Vec<usize> {
+    let of_family: Vec<usize> = (0..faces.len())
+        .filter(|&i| faces[i].in_set && faces[i].desc.family.eq_ignore_ascii_case(family))
+        .collect();
+    // 0 normal, 1 italic, 2 oblique.
+    let style_class = |s: &str| {
+        let s = s.trim().to_ascii_lowercase();
+        if s.starts_with("italic") {
+            1
+        } else if s.starts_with("oblique") {
+            2
+        } else {
+            0
+        }
+    };
+    let style_rank = |class: u8| match (italic, class) {
+        (true, 1) | (false, 0) => 0,
+        (_, 2) => 1,
+        _ => 2,
+    };
+    let Some(best_style) = of_family.iter().map(|&i| style_rank(style_class(&faces[i].desc.style))).min() else {
+        return Vec::new();
+    };
+    let styled: Vec<usize> =
+        of_family.into_iter().filter(|&i| style_rank(style_class(&faces[i].desc.style)) == best_style).collect();
+    let rank = |i: usize| {
+        let (lo, hi) = weight_range(&faces[i].desc.weight);
+        let d = weight;
+        if lo <= d && d <= hi {
+            (0u8, 0u32)
+        } else if (400.0..=500.0).contains(&d) {
+            if lo > d && lo <= 500.0 {
+                (1, (lo - d) as u32)
+            } else if hi < d {
+                (2, (d - hi) as u32)
+            } else {
+                (3, (lo - d) as u32)
+            }
+        } else if d < 400.0 {
+            if hi < d { (1, (d - hi) as u32) } else { (2, (lo - d) as u32) }
+        } else if lo > d {
+            (1, (lo - d) as u32)
+        } else {
+            (2, (d - hi) as u32)
+        }
+    };
+    let Some(best) = styled.iter().map(|&i| rank(i)).min() else { return Vec::new() };
+    styled.into_iter().filter(|&i| rank(i) == best).collect()
+}
+
+/// A `font-weight` descriptor as a range: `normal`, `bold`, `N` or `N M`.
+fn weight_range(w: &str) -> (f32, f32) {
+    let one = |t: &str| match t.to_ascii_lowercase().as_str() {
+        "normal" => Some(400.0),
+        "bold" => Some(700.0),
+        t => t.parse::<f32>().ok(),
+    };
+    let mut parts = w.split_whitespace().filter_map(one);
+    let lo = parts.next().unwrap_or(400.0);
+    let hi = parts.next().unwrap_or(lo);
+    (lo.min(hi), lo.max(hi))
 }
 
 /// A script's `new FontFace(family, source, descriptors)`. `source` is a CSS
@@ -251,6 +509,7 @@ pub(crate) fn load(id: u32) {
             }
         }
     });
+    publish_waiting();
 }
 
 /// `document.fonts.add` / `delete` for a script face.
@@ -270,7 +529,15 @@ pub(crate) fn set_in_set(id: u32, on: bool) {
             }
             x.in_set = on;
         }
+        f.choice.clear();
     });
+    // A family that starts waiting reaches the elements that name it once the
+    // sheet compiles against it: on the next tick, as for a registration.
+    if publish_waiting() {
+        FONTS.with(|f| {
+            f.borrow_mut().changed_since.get_or_insert_with(Instant::now);
+        });
+    }
 }
 
 /// Every face, for `document.fonts` (packages/vue-native/src/fonts.ts): a JSON
@@ -535,8 +802,17 @@ fn split_families(list: &str) -> Vec<&str> {
 
 /// Once per frame (`crate::frame_tick`). Returns `true` when the stylesheet
 /// was compiled again for new fonts.
+///
+/// Also tells the page when the set goes `quiet` (and `busy` again):
+/// `document.fonts.ready` resolves only on a quiet frame, one laid out after
+/// the last restyle, in which the drawn text asked for no face, none of the
+/// set's is loading, and no recompile is owed. Without that, a `ready` read
+/// right after `mount()` would resolve before the first frame's text asked
+/// for its fonts.
 pub(crate) fn tick(window: &mut gpui::Window, cx: &mut App) -> bool {
-    start_wanted(cx);
+    // A new frame's walk: restyles since the last one may have moved fonts.
+    EFFECTIVE.with(|m| m.borrow_mut().clear());
+    let started = start_wanted(cx);
     register_finished(cx);
     // One recompile for a batch: when nothing is loading any more, or
     // [`SETTLE`] after the first registration of the batch.
@@ -556,15 +832,37 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut App) -> bool {
     for (family, used) in due_misses(Instant::now()) {
         crate::render::warn_missing_font(&family, used.as_deref());
     }
+    let laid_out = crate::render::layout_count() > 0 && !crate::layout_owed();
+    note_quiet(started || due, laid_out);
     deliver_events(window, cx);
     due
 }
 
-/// Starts every wanted load. In-memory sources (`data:`, an in-memory `blob:`
-/// such as a script's `ArrayBuffer`, the packaged store) are read here and
-/// unpacked in the background; a file and an http(s) URL are read on gpui's
-/// background executor too.
-fn start_wanted(cx: &mut App) {
+/// [`tick`]'s `quiet` verdict; a change is queued for the page. The set is
+/// busy from a frame that started a load or recompiled for fonts, or while a
+/// face of the set is wanted or loading or a recompile is owed; it is quiet
+/// again on the first frame after that which was laid out since its last
+/// restyle. Layout alone never makes it busy: new text that needs a face asks
+/// for it, and that is what does.
+fn note_quiet(moved: bool, laid_out: bool) {
+    FONTS.with(|f| {
+        let mut f = f.borrow_mut();
+        let busy = moved
+            || f.changed_since.is_some()
+            || f.faces.iter().any(|x| x.in_set && (x.wanted || x.status == Status::Loading));
+        let quiet = if busy { false } else { f.quiet || laid_out };
+        if quiet != f.quiet {
+            f.quiet = quiet;
+            f.events.push((0, if quiet { "quiet" } else { "busy" }, String::new()));
+        }
+    });
+}
+
+/// Starts every wanted load, and says whether there was one. In-memory sources
+/// (`data:`, an in-memory `blob:` such as a script's `ArrayBuffer`, the
+/// packaged store) are read here and unpacked in the background; a file and
+/// an http(s) URL are read on gpui's background executor too.
+fn start_wanted(cx: &mut App) -> bool {
     let starts: Vec<(u32, Vec<Src>)> = FONTS.with(|f| {
         let mut f = f.borrow_mut();
         let mut out = Vec::new();
@@ -581,8 +879,9 @@ fn start_wanted(cx: &mut App) {
         out
     });
     if starts.is_empty() {
-        return;
+        return false;
     }
+    publish_waiting();
     let done = FONTS.with(|f| f.borrow().done.clone());
     for (id, sources) in starts {
         let fetch = plan(&sources);
@@ -618,6 +917,7 @@ fn start_wanted(cx: &mut App) {
             }
         }
     }
+    true
 }
 
 /// Folds finished loads into the faces and hands every loaded face that is in
@@ -1235,8 +1535,7 @@ mod tests {
         )
         .unwrap();
         assert!(list_json().contains("\"family\":\"Brand\""));
-        // Not in the set until added, and not loading until asked (a sheet's
-        // face is loading from the start).
+        // Not in the set until added, and not loading until asked.
         assert!(!declared("Brand"));
         assert!(list_json().contains("\"status\":\"unloaded\""));
         load(id);
@@ -1244,6 +1543,203 @@ mod tests {
         set_in_set(id, true);
         assert!(declared("Brand"));
         assert!(create(Descriptors::default(), "nonsense(", false).is_err());
+    }
+
+    const FAMILY: &str = r#"
+@font-face { font-family: VN; src: url(r.ttf); font-weight: 400; }
+@font-face { font-family: VN; src: url(b.ttf); font-weight: 700; }
+@font-face { font-family: VN; src: url(i.ttf); font-weight: 400; font-style: italic; }
+@font-face { font-family: VN; src: url(l-latin.ttf); font-weight: 300; unicode-range: U+0-FF; }
+@font-face { font-family: VN; src: url(l-cyr.ttf); font-weight: 300; unicode-range: U+400-4FF; }
+@font-face { font-family: Unused; src: url(u.ttf); }
+"#;
+
+    fn status_of(url: &str) -> (Status, bool) {
+        FONTS.with(|f| {
+            let f = f.borrow();
+            let x = f
+                .faces
+                .iter()
+                .find(|x| matches!(&x.sources[0], Src::Url { url: u, .. } if u == url))
+                .unwrap();
+            (x.status.clone(), x.wanted)
+        })
+    }
+
+    /// Lazy loading: a sheet's faces wait, `unloaded`, until text drawn with
+    /// them asks; the face asked for is the one font matching picks, and a
+    /// family nothing is drawn with never loads.
+    #[test]
+    fn a_sheets_faces_wait_until_text_drawn_with_them_asks() {
+        note_sheet(FAMILY);
+        assert!(list_json().matches("\"status\":\"unloaded\"").count() == 6);
+        assert_eq!(WAITING.with(|w| w.borrow().clone()), vec!["unused".to_string(), "vn".to_string()]);
+
+        // Bold upright Latin text: the 700 face only.
+        want("VN", 700.0, false, "Hello");
+        assert_eq!(status_of("b.ttf"), (Status::Unloaded, true));
+        assert_eq!(status_of("r.ttf"), (Status::Unloaded, false));
+        // Asked for once is enough; the family keeps waiting for its others.
+        want("VN", 700.0, false, "Hello");
+        assert_eq!(WAITING.with(|w| w.borrow().clone()), vec!["unused".to_string(), "vn".to_string()]);
+
+        // 300 has two `unicode-range` subsets: only the one the text needs.
+        want("vn", 300.0, false, "abc");
+        assert_eq!(status_of("l-latin.ttf"), (Status::Unloaded, true));
+        assert_eq!(status_of("l-cyr.ttf"), (Status::Unloaded, false));
+        want("vn", 300.0, false, "абв");
+        assert_eq!(status_of("l-cyr.ttf"), (Status::Unloaded, true));
+
+        // Italic: the italic face, not a synthesized upright one.
+        want("VN", 400.0, true, "x");
+        assert_eq!(status_of("i.ttf"), (Status::Unloaded, true));
+        assert_eq!(status_of("r.ttf"), (Status::Unloaded, false));
+        want("VN", 400.0, false, "x");
+        // Every VN face asked for: VN stops waiting, Unused never started.
+        assert_eq!(WAITING.with(|w| w.borrow().clone()), vec!["unused".to_string()]);
+        assert_eq!(status_of("u.ttf"), (Status::Unloaded, false));
+    }
+
+    /// End to end through the cascade: the text of a styled element asks for
+    /// the face its inherited family, weight and style pick; once that face is
+    /// registered the sheet compiles again and the element's font becomes the
+    /// web family (the text swaps), and the family stops being asked for.
+    #[test]
+    fn text_asks_for_its_face_and_swaps_to_it_once_registered() {
+        use crate::tree::{read_tree, recompile_for_fonts, restyle_all, set_stylesheet, with_tree};
+        vn_css::set_font_source(|| vec!["Arial".into()]);
+        set_stylesheet(format!(
+            "{FAMILY} @font-face {{ font-family: PUA; src: url(p.ttf); unicode-range: U+E000-E0FF; }} \
+             .a {{ font-family: VN, Arial; font-weight: 700 }} .b {{ font-style: italic }} \
+             .c {{ font-family: PUA, VN, Arial }}"
+        ));
+        let (a, b, c, text) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let a = t.create_element(div);
+            let b = t.create_element(div);
+            let c = t.create_element(div);
+            let text = t.create_text();
+            t.set_class(a, "a");
+            t.set_class(b, "b");
+            t.set_class(c, "c");
+            t.set_text(text, "Hello".into());
+            t.insert(a, root, 0);
+            t.insert(b, a, 0);
+            t.insert(text, b, 0);
+            t.insert(c, root, 0);
+            (a, b, c, text)
+        });
+        restyle_all();
+        let family = |id: u32| {
+            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.text.font_family.clone()))
+                .map(|f| f.to_string())
+        };
+        assert_eq!(family(a).as_deref(), Some("Arial"), "drawn with the fallback while VN waits");
+        read_tree(|t| assert_eq!(t.node(text).map(|n| n.parent), Some(b)));
+
+        // `.b`'s text: VN inherited from `.a`, 700 inherited, italic its own.
+        // VN has no bold italic, so the italic face (style before weight).
+        read_tree(|t| want_for_text(t, b, "Hello"));
+        assert_eq!(status_of("i.ttf"), (Status::Unloaded, true));
+        assert_eq!(status_of("b.ttf"), (Status::Unloaded, false));
+        // Template white space asks for nothing.
+        read_tree(|t| want_for_text(t, a, "\n   "));
+        assert_eq!(status_of("b.ttf"), (Status::Unloaded, false));
+
+        // `.c` leads with a Private Use Area family: Latin text falls through
+        // to VN's regular face, and only a PUA character asks for PUA.
+        read_tree(|t| want_for_text(t, c, "Hi"));
+        assert_eq!(status_of("p.ttf"), (Status::Unloaded, false));
+        assert_eq!(status_of("r.ttf"), (Status::Unloaded, true));
+        read_tree(|t| want_for_text(t, c, "\u{E010}"));
+        assert_eq!(status_of("p.ttf"), (Status::Unloaded, true));
+
+        // The face is registered (what `register_finished` and
+        // `refresh_font_source` do with a text system), and the frame tick
+        // compiles again.
+        FONTS.with(|f| {
+            let mut f = f.borrow_mut();
+            for x in f.faces.iter_mut().filter(|x| x.wanted) {
+                x.wanted = false;
+                x.status = Status::Loaded;
+                x.registered = true;
+            }
+        });
+        publish_waiting();
+        vn_css::set_font_source(|| vec!["Arial".into(), "VN".into()]);
+        recompile_for_fonts();
+        restyle_all();
+        assert_eq!(family(a).as_deref(), Some("VN"), "the text swaps to the web font");
+        // VN still has unloaded faces (regular, bold, light), so `.a` still
+        // records it; a bold upright text now asks for the bold face.
+        EFFECTIVE.with(|m| m.borrow_mut().clear());
+        read_tree(|t| want_for_text(t, a, "Hi"));
+        assert_eq!(status_of("b.ttf"), (Status::Unloaded, true));
+        set_stylesheet(String::new());
+    }
+
+    /// CSS Fonts 4 §5.2: style first, then weight in the spec's search order.
+    #[test]
+    fn font_matching_picks_the_style_then_the_nearest_weight() {
+        note_sheet(FAMILY);
+        let urls = |weight: f32, italic: bool| -> Vec<String> {
+            FONTS.with(|f| {
+                let f = f.borrow();
+                best_faces(&f.faces, "VN", weight, italic)
+                    .into_iter()
+                    .map(|i| match &f.faces[i].sources[0] {
+                        Src::Url { url, .. } => url.clone(),
+                        Src::Local(l) => l.clone(),
+                    })
+                    .collect()
+            })
+        };
+        assert_eq!(urls(400.0, false), vec!["r.ttf"]);
+        // 500: heavier up to 500 first (none), then lighter: 400.
+        assert_eq!(urls(500.0, false), vec!["r.ttf"]);
+        // 600 (above 500): heavier first.
+        assert_eq!(urls(600.0, false), vec!["b.ttf"]);
+        assert_eq!(urls(900.0, false), vec!["b.ttf"]);
+        // 200 (below 400): lighter first (none), then heavier: both 300 subsets.
+        assert_eq!(urls(200.0, false), vec!["l-latin.ttf", "l-cyr.ttf"]);
+        // Italic at 700: the only italic face, whatever its weight.
+        assert_eq!(urls(700.0, true), vec!["i.ttf"]);
+        assert_eq!(weight_range("100 900"), (100.0, 900.0));
+        assert_eq!(weight_range("bold"), (700.0, 700.0));
+    }
+
+    /// `document.fonts.ready` waits for a frame laid out with nothing loading
+    /// and nothing new asked for.
+    #[test]
+    fn the_set_is_quiet_only_after_a_frame_that_asked_for_nothing() {
+        note_sheet(FAMILY);
+        let take = || FONTS.with(|f| std::mem::take(&mut f.borrow_mut().events));
+        take();
+        // Not before the first laid-out frame.
+        note_quiet(false, false);
+        assert!(take().is_empty());
+        note_quiet(false, true);
+        assert_eq!(take(), vec![(0, "quiet", String::new())]);
+        // Layout alone (a DOM change) keeps it quiet.
+        note_quiet(false, false);
+        assert!(take().is_empty());
+        // Text asks for a face: busy until a laid-out frame asks for nothing.
+        want("VN", 400.0, false, "x");
+        note_quiet(false, true);
+        assert_eq!(take(), vec![(0, "busy", String::new())]);
+        FONTS.with(|f| {
+            for x in f.borrow_mut().faces.iter_mut().filter(|x| x.wanted) {
+                x.wanted = false;
+                x.status = Status::Loaded;
+            }
+        });
+        // The frame that recompiled for it, then one not laid out yet.
+        note_quiet(true, true);
+        note_quiet(false, false);
+        assert!(take().is_empty());
+        note_quiet(false, true);
+        assert_eq!(take(), vec![(0, "quiet", String::new())]);
     }
 
     #[test]

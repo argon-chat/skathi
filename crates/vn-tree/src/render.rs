@@ -2039,6 +2039,8 @@ fn build_node<V: 'static>(
             // COLLAPSE first, then trim the block's edges: the two halves of
             // CSS's whitespace processing, in the order the spec applies them.
             let collapsed = processed_text(&node.text, ws.unwrap_or(vn_css::WhiteSpaceMode::Normal));
+            // Web fonts load lazily: text drawn with a waiting face asks for it.
+            crate::fonts::want_for_text(t, node.parent, &collapsed);
             match trim_edges(t, node, id, &collapsed, ws) {
                 // A text node that is nothing but the white space at the end
                 // of a line renders nothing, exactly as in a browser.
@@ -2359,6 +2361,7 @@ fn build_node<V: 'static>(
                     kids.push(marker);
                 }
                 if let Some(pb) = before {
+                    crate::fonts::want_for_pseudo(t, id, &pb);
                     kids.push(pseudo_element(&pb, case, stacking, own_display));
                 }
                 if is_file_input {
@@ -2371,6 +2374,7 @@ fn build_node<V: 'static>(
                     // then trim, exactly as the text-node arm does.
                     let collapsed =
                         processed_text(&node.text, ws.unwrap_or(vn_css::WhiteSpaceMode::Normal));
+                    crate::fonts::want_for_text(t, id, &collapsed);
                     let text = trim_own_edges(t, node, &collapsed, ws);
                     if !text.is_empty() {
                         kids.push(transformed_text(text, case).into_any_element());
@@ -2387,6 +2391,7 @@ fn build_node<V: 'static>(
                     );
                 }
                 if let Some(pb) = after {
+                    crate::fonts::want_for_pseudo(t, id, &pb);
                     kids.push(pseudo_element(&pb, case, stacking, own_display));
                 }
                 // The overlay scrollbar, and the wheel routing that goes with
@@ -5444,6 +5449,10 @@ fn build_input<V: 'static>(
     });
 
     let multiline = t.name(node.tag) == "textarea";
+    // Web fonts load lazily: the field's value and placeholder ask for theirs.
+    for shown in [t.prop(id, "value"), t.prop(id, "placeholder"), Some(node.text.as_str())].into_iter().flatten() {
+        crate::fonts::want_for_text(t, id, shown);
+    }
 
     // Controlled value: the write counter, not the string, is what tells the
     // widget an assignment happened (`v-model` re-forcing "" after the user
