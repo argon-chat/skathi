@@ -1652,6 +1652,23 @@ mod tests {
         assert_eq!(opacity_of(leaf), Some(0.9));
     }
 
+    /// The class list is a set, as `classList` is: the rule index offers a
+    /// class's rules once per entry, so a repeated class would run them twice.
+    /// The attribute keeps the string as written.
+    #[test]
+    fn a_repeated_class_is_one_entry_of_the_class_list() {
+        tree::with_tree(|t| {
+            let root = t.create_root();
+            let tag = t.intern("svg");
+            let svg = t.create_element(tag);
+            t.insert(svg, root, 0);
+            t.set_class(svg, "lucide w-4 h-4 lucide-plus w-4 h-4");
+            let n = t.node(svg).unwrap();
+            assert_eq!(n.classes, ["lucide", "w-4", "h-4", "lucide-plus"]);
+            assert_eq!(n.class_attr, "lucide w-4 h-4 lucide-plus w-4 h-4");
+        });
+    }
+
     /// The same, through the custom-property channel: an inherited `--x`
     /// redefined on an ancestor has to re-resolve every `var(--x)` beneath it.
     #[test]

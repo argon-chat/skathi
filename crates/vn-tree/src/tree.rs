@@ -1039,7 +1039,17 @@ impl Tree {
             if n.class_attr == classes {
                 return; // `el.className = el.className`: nothing moved.
             }
-            let next: Vec<String> = classes.split_whitespace().map(str::to_string).collect();
+            // An ordered set, as `classList` is (DOM §7.1, DOMTokenList); the
+            // raw string stays in `class_attr` for `[class*=…]`. Lucide's icons
+            // arrive as `lucide w-4 h-4 … w-4 h-4`, and the rule index offers a
+            // class's rules once per entry (`MatchDom::each_class`), so a
+            // repeat would match and fold them twice.
+            let mut next: Vec<String> = Vec::new();
+            for c in classes.split_whitespace() {
+                if !next.iter().any(|x| x == c) {
+                    next.push(c.to_string());
+                }
+            }
             // Only the names that came or went can move a match, plus the
             // attribute itself for `[class*=…]`.
             let reach = {
