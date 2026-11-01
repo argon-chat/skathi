@@ -65,7 +65,18 @@
   globalThis.resizeBy = (dw, dh) => setBounds({ width: S.innerWidth + (dw || 0), height: S.innerHeight + (dh || 0) }, true);
   globalThis.moveTo = (x, y) => setBounds({ x, y }, false);
   globalThis.moveBy = (dx, dy) => setBounds({ x: S.outer.x + (dx || 0), y: S.outer.y + (dy || 0) }, false);
-  globalThis.close = () => __vn_window_verb("close");
+  let pageHidden = false;
+  const hidePage = () => {
+    if (pageHidden)
+      return;
+    pageHidden = true;
+    globalThis.dispatchEvent(new Event("pagehide"));
+  };
+  const closeWindow = () => {
+    hidePage();
+    __vn_window_verb("close");
+  };
+  globalThis.close = closeWindow;
   globalThis.focus = () => {
     const raise = S.focusPolicy === "raise";
     if (!raise) {
@@ -215,7 +226,7 @@
   appWindow.unmaximize = verb("unmaximize");
   appWindow.toggleMaximize = verb("toggleMaximize");
   appWindow.restore = verb("unmaximize");
-  appWindow.close = verb("close");
+  appWindow.close = closeWindow;
   appWindow.center = verb("center");
   appWindow.startDragging = verb("startDragging");
   appWindow.setFullscreen = (on) => __vn_window_set_fullscreen(!!on);
@@ -347,7 +358,7 @@
       globalThis.dispatchEvent(ev);
       const vetoed = sticky && ev.defaultPrevented;
       if (!vetoed) {
-        emit(globalThis, "pagehide");
+        hidePage();
         return true;
       }
       if (closeRequestedListeners === 0) {

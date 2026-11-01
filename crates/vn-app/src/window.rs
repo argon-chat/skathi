@@ -1705,8 +1705,17 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
                 window.zoom_window();
             }
         }
-        // After a file dialog this window owns has closed (dialogs.rs).
+        // `appWindow` is the primary window, so this closes the app: the
+        // windows go now and the teardown runs behind them (src/shutdown.rs).
+        // Its pop-outs go with it, as on a WM_CLOSE (docs/MULTIWINDOW.md
+        // §7.8): left open, they would keep the app running with no window
+        // on screen. Removed after a file dialog this window owns has closed
+        // (dialogs.rs).
         Op::Close => {
+            crate::shutdown::begin("close()");
+            if crate::popout::count() > 0 {
+                crate::popout::close_all(cx);
+            }
             if !vn_desktop::dialog::owner_closing(vn_tree::windows::key(window)) {
                 window.remove_window();
             } else {

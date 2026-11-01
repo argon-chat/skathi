@@ -57,6 +57,7 @@ mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWIN
 mod prod;
 mod quiet; // VN_WINDOW_FOCUS=never: test hosts open behind and never take the foreground
 mod reload; // `location.reload()`: the restart path, on request
+mod shutdown; // a close hides the windows at once; the teardown runs under a deadline
 mod slot; // which dist slot this process is — the one thing dev, prod and devtools all ask
 // TEMPORARY (m26): the Argon client's `ArgonSecure` cookie, opt-in. One file,
 // one call below; delete both to remove it.
@@ -1208,6 +1209,14 @@ fn main() {
         let devtools_mode = false;
         vn_elements::init(cx); // key bindings for the native <input> widget
         publish_app_root();
+        // The FIRST quit hook (they run in the order they were added): a quit
+        // that no accepted close announced — the session ending, say — hides
+        // the windows and arms the deadline here (src/shutdown.rs). A no-op
+        // after a close, which already did.
+        std::mem::forget(cx.on_app_quit(|_| {
+            shutdown::begin("quit");
+            std::future::ready(())
+        }));
         #[cfg(vn_devtools)]
         {
             // F12, in EVERY window of this process, ahead of every element's
@@ -1217,7 +1226,7 @@ fn main() {
             // explain. (The child watches us too, for the case where this
             // never runs — a crash.)
             std::mem::forget(cx.on_app_quit(|_| {
-                inspector::close_children();
+                shutdown::step("inspector", inspector::close_children);
                 std::future::ready(())
             }));
         }
@@ -1233,17 +1242,22 @@ fn main() {
         // The cookie jar's last staged change (a `Set-Cookie` in the final
         // frame — a sign-out's, say) is on disk before the process ends. Its
         // writes are otherwise one per frame, like `localStorage`'s.
+        // So is `localStorage`'s: a `setItem` in a `pagehide` handler is in
+        // the final wave, after the last frame's write.
         #[cfg(feature = "storages")]
         std::mem::forget(cx.on_app_quit(|_| {
-            if let Err(e) = vn_storage::cookies::flush() {
-                eprintln!("[storage] cookies: the last change was not written: {e}");
-            }
+            shutdown::step("storage", || {
+                vn_storage::pump();
+                if let Err(e) = vn_storage::cookies::flush() {
+                    eprintln!("[storage] cookies: the last change was not written: {e}");
+                }
+            });
             std::future::ready(())
         }));
         #[cfg(feature = "indexeddb")]
         std::mem::forget(cx.on_app_quit(|_| {
             let t = std::time::Instant::now();
-            let done = vn_runtime::redjs::ffi::redjs_idb_shutdown(2_000);
+            let done = shutdown::step("indexeddb", || vn_runtime::redjs::ffi::redjs_idb_shutdown(2_000));
             if done == 0 {
                 eprintln!(
                     "[vn] IndexedDB did not finish closing within {} ms; the next start recovers from its WAL",
@@ -1257,9 +1271,10 @@ fn main() {
         // dropped after `ExitProcess` killed those threads: nobody sees the
         // leave until the server times the peer out. Bounded like IndexedDB's.
         std::mem::forget(cx.on_app_quit(|_| {
-            vn_voice::shutdown_all(std::time::Duration::from_secs(2));
+            shutdown::step("voice", || vn_voice::shutdown_all(std::time::Duration::from_secs(2)));
             std::future::ready(())
         }));
+        shutdown::install_test_delay(cx);
         // Before the runtime exists, so the log ring is already recording when
         // the first advisory fires — and before the window config is read, for
         // the same reason. This is only the RECORDING half; whether a listener
@@ -1427,6 +1442,11 @@ fn main() {
                 // boolean, which is precisely the web event's shape.
                 window.on_window_should_close(cx, |window, cx| {
                     let closing = window::should_close();
+                    // Accepted: the windows go NOW, and the teardown runs
+                    // behind them under a deadline (src/shutdown.rs).
+                    if closing {
+                        shutdown::begin("a close request (WM_CLOSE)");
+                    }
                     // **D-M16 / docs/MULTIWINDOW.md §7.8.** The primary window
                     // owns the JS pump (D-M07 option 1), so closing it while a
                     // pop-out is open would leave that pop-out painted and
@@ -1537,4 +1557,7 @@ fn main() {
             inspector::watch_parent();
         }
     });
+    // gpui has quit and its hooks have run: say how the close went, and end
+    // the process without the C runtime's exit path (src/shutdown.rs).
+    shutdown::finish();
 }

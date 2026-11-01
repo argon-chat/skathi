@@ -146,7 +146,23 @@
     setBounds({ x: S.outer.x + (dx || 0), y: S.outer.y + (dy || 0) }, false);
 
   // ---- close / focus / blur (§1.4) ----------------------------------------
-  globalThis.close = () => __vn_window_verb("close");
+  // `pagehide` fires once per close, whichever way it came: a WM_CLOSE the app
+  // did not veto (the host observer below), or `close()` — the titlebar X a
+  // frameless app draws. A browser fires it on every unload, and code that
+  // leaves a call or saves a draft on it (LiveKit's leave on `pagehide`)
+  // relies on that. `beforeunload` is not asked again here: `close()` is what
+  // an app calls once it has decided, after a veto included (D-27).
+  let pageHidden = false;
+  const hidePage = () => {
+    if (pageHidden) return;
+    pageHidden = true;
+    globalThis.dispatchEvent(new Event("pagehide"));
+  };
+  const closeWindow = () => {
+    hidePage();
+    __vn_window_verb("close");
+  };
+  globalThis.close = closeWindow;
   // HTML says the UA *may* bring the window to the front, and every real UA has
   // a policy — Chrome's, for a background tab, is precisely "flash the taskbar
   // button instead". This host forbids stealing focus outright, so `focus()`
@@ -398,7 +414,7 @@
   appWindow.unmaximize = verb("unmaximize");
   appWindow.toggleMaximize = verb("toggleMaximize");
   appWindow.restore = verb("unmaximize");
-  appWindow.close = verb("close");
+  appWindow.close = closeWindow;
   appWindow.center = verb("center");
   appWindow.startDragging = verb("startDragging");
   appWindow.setFullscreen = (on) => __vn_window_set_fullscreen(!!on);
@@ -573,7 +589,7 @@
       globalThis.dispatchEvent(ev);
       const vetoed = sticky && ev.defaultPrevented;
       if (!vetoed) {
-        emit(globalThis, "pagehide");
+        hidePage();
         return true;
       }
       if (closeRequestedListeners === 0) {
