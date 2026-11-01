@@ -609,6 +609,44 @@ fn expand(id: &PropertyId) -> Expansion {
     }
 }
 
+/// Does the animator interpolate the property `name` (a CSS name, shorthands
+/// included)? The same expansion `transition-property` uses, so a script
+/// animation and a transition agree on what moves.
+pub(crate) fn animates(name: &str) -> bool {
+    match expand(&PropertyId::from(name)) {
+        Expansion::None => false,
+        Expansion::Props(list) => list
+            .iter()
+            // `--shading` is transitionable but outside `animatable()`, which
+            // is the list a script animation samples.
+            .any(|p| {
+                !matches!(
+                    p,
+                    TransitionProperty::All | TransitionProperty::Other(_) | TransitionProperty::Shading
+                )
+            }),
+    }
+}
+
+/// One `<easing-function>` from text, as `Element.animate()` hands it over
+/// (`"ease-out"`, `"cubic-bezier(0.34, 1.56, 0.64, 1)"`, `"steps(4, end)"`).
+/// `None` for anything the cascade would not take as an
+/// `animation-timing-function` either — `linear(…)` among them, which the
+/// lightningcss in use does not parse, so `CSS.supports` answers no for it and
+/// `animate()` refuses it the way a browser without it does.
+pub fn parse_easing(text: &str) -> Option<Easing> {
+    use lightningcss::stylesheet::ParserOptions;
+    let id = PropertyId::from("animation-timing-function");
+    match Property::parse_string(id, text.trim(), ParserOptions::default()).ok()? {
+        Property::AnimationTimingFunction(list, _) if list.len() == 1 => {
+            let mut diagnostics = Vec::new();
+            let easing = easing_of(&list[0], &mut diagnostics);
+            diagnostics.is_empty().then_some(easing)
+        }
+        _ => None,
+    }
+}
+
 /// One `<time>` value. Shared with `keyframes.rs` — `animation-duration` and
 /// `transition-duration` parse identically.
 pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -> Duration {

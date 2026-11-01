@@ -539,6 +539,120 @@ host_fn!(fn vn_fonts_match(g, args) {
     }
 });
 
+// ---------------------------------------------------------------------------
+// script animations: `Element.animate()` (vn-css animator/script.rs; the JS
+// half is packages/vue-native/src/waapi.ts)
+// ---------------------------------------------------------------------------
+//
+// The JS half runs the `Animation` state machine and sends only what painting
+// needs: the effect, once per change, and the clock, once per state change.
+// Nothing crosses per frame.
+
+/// `frames`: keyframes split by U+001E, each `offset ␟ easing ␟ decls`, the
+/// declarations split by U+001C and each `name ␝ value` (CSS names). The
+/// separators are control characters no CSS value contains.
+fn anim_frames(text: &str) -> Result<Vec<vn_css::ScriptFrame>, String> {
+    let mut out = Vec::new();
+    for frame in text.split('\u{1e}').filter(|f| !f.is_empty()) {
+        let mut parts = frame.splitn(3, '\u{1f}');
+        let offset: f32 = parts.next().unwrap_or("").parse().map_err(|_| format!("bad keyframe offset in {frame:?}"))?;
+        let easing = match parts.next().unwrap_or("").trim() {
+            "" | "linear" => None,
+            text => Some(vn_css::parse_easing(text).ok_or_else(|| format!("'{text}' is not a valid easing"))?),
+        };
+        let decls = parts
+            .next()
+            .unwrap_or("")
+            .split('\u{1c}')
+            .filter_map(|d| d.split_once('\u{1d}'))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        out.push(vn_css::ScriptFrame { offset, easing, decls });
+    }
+    Ok(out)
+}
+
+/// `timing`: `delay,endDelay,duration,iterations,iterationStart,direction,fill`
+/// (milliseconds; direction 0–3 = normal, reverse, alternate,
+/// alternate-reverse; fill 0–3 = none, forwards, backwards, both).
+fn anim_timing(text: &str, easing: &str) -> Result<vn_css::ScriptTiming, String> {
+    let n: Vec<f64> = text.split(',').map(|v| v.trim().parse::<f64>().unwrap_or(f64::NAN)).collect();
+    if n.len() != 7 || n.iter().any(|v| v.is_nan()) {
+        return Err(format!("bad timing {text:?}"));
+    }
+    let easing = match easing.trim() {
+        "" | "linear" => vn_css::Easing::Linear,
+        text => vn_css::parse_easing(text).ok_or_else(|| format!("'{text}' is not a valid easing"))?,
+    };
+    Ok(vn_css::ScriptTiming {
+        delay: n[0],
+        end_delay: n[1],
+        duration: n[2],
+        iterations: n[3],
+        iteration_start: n[4],
+        direction: match n[5] as u32 {
+            1 => vn_css::AnimationDirection::Reverse,
+            2 => vn_css::AnimationDirection::Alternate,
+            3 => vn_css::AnimationDirection::AlternateReverse,
+            _ => vn_css::AnimationDirection::Normal,
+        },
+        fill: match n[6] as u32 {
+            1 => vn_css::FillMode::Forwards,
+            2 => vn_css::FillMode::Backwards,
+            3 => vn_css::FillMode::Both,
+            _ => vn_css::FillMode::None,
+        },
+        easing,
+    })
+}
+
+// (id, node, frames, timing, easing) -> notes, one per line: `E<why>` when
+// the effect was refused (nothing was set), `W<property>` for a property that
+// does not animate here, `D<diagnostic>` for what the parser said.
+host_fn!(fn vn_anim_set(g, args) {
+    let id = arg_id(args.arg(0));
+    let node = arg_id(args.arg(1));
+    let frames = unsafe { read_string(g, args.arg(2).0) }.unwrap_or_default();
+    let timing = unsafe { read_string(g, args.arg(3).0) }.unwrap_or_default();
+    let easing = unsafe { read_string(g, args.arg(4).0) }.unwrap_or_default();
+    let parsed = anim_frames(&frames).and_then(|f| anim_timing(&timing, &easing).map(|t| (f, t)));
+    let out = match parsed {
+        Err(why) => format!("E{why}"),
+        Ok((frames, timing)) => {
+            let notes = tree::script_anim_set(id, node, &frames, timing);
+            let mut lines: Vec<String> = notes.ignored.iter().map(|p| format!("W{p}")).collect();
+            lines.extend(notes.diagnostics.iter().map(|d| format!("D{d}")));
+            lines.join("\n")
+        }
+    };
+    ret_string(&out)
+});
+
+// (id, start, hold, rate): the clock. NaN is "unresolved".
+host_fn!(fn vn_anim_clock(_g, args) {
+    let id = arg_id(args.arg(0));
+    let num = |i: u32| args.arg(i).as_number().filter(|v| !v.is_nan());
+    let clock = vn_css::ScriptClock { start: num(1), hold: num(2), rate: num(3).unwrap_or(1.0) };
+    tree::script_anim_clock(id, clock);
+    UNDEF
+});
+
+host_fn!(fn vn_anim_drop(_g, args) {
+    tree::script_anim_drop(arg_id(args.arg(0)));
+    UNDEF
+});
+
+// `commitStyles()`: `name ␝ value` pairs split by U+001C, or null when the
+// animation paints nothing here.
+host_fn!(fn vn_anim_values(_g, args) {
+    match tree::script_anim_values(arg_id(args.arg(0))) {
+        Some(values) => ret_string(
+            &values.iter().map(|(k, v)| format!("{k}\u{1d}{v}")).collect::<Vec<_>>().join("\u{1c}"),
+        ),
+        None => Value::null().0,
+    }
+});
+
 /// Registers the whole `__vn_*` protocol surface on the JS global.
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
@@ -577,6 +691,10 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_font_load", 1, vn_font_load as *const _),
         ("__vn_font_set", 2, vn_font_set as *const _),
         ("__vn_fonts_match", 2, vn_fonts_match as *const _),
+        ("__vn_anim_set", 5, vn_anim_set as *const _),
+        ("__vn_anim_clock", 4, vn_anim_clock as *const _),
+        ("__vn_anim_drop", 1, vn_anim_drop as *const _),
+        ("__vn_anim_values", 1, vn_anim_values as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
@@ -909,6 +1027,10 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // frame must be pulled even on a tick where a `<lottie>` also moved, and an
     // animation event must be dispatched even on a tick where both did.
     let anim = render::dispatch_anim_events(window, cx);
+    // A script animation created, moved or dropped since the last tick
+    // (`Element.animate()`): a seek on a paused one is not "animating", and
+    // nothing else would draw it.
+    let scripted = tree::take_script_dirty();
     // `<img>` `load` / `error`, for every `src` written since the last tick.
     img::tick(window, cx);
     let lottie_moved = lottie::tick(window, cx);
@@ -940,8 +1062,8 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // `selectionchange` goes to `document`. One flag read otherwise.
     let selecting = selection::tick(window, cx);
     let draw =
-        anim | lottie_moved | video_moved | stickers_moved | canvas_moved | scrolled | fonts_moved | resampled
-            | restored | selecting;
+        anim | scripted | lottie_moved | video_moved | stickers_moved | canvas_moved | scrolled | fonts_moved
+            | resampled | restored | selecting;
     // A frame written into the tile the last drawn scene samples is shown by a
     // present, with no build (`crate::live`); one that needs a draw is folded
     // into the answer, and a frame that draws anyway presents what it drew.

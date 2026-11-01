@@ -303,6 +303,26 @@ declare function __vn_selection_rebase(element: VnNodeId, text: VnNodeId): void;
 declare function __vn_hit_at(x: number, y: number, all: 0 | 1): string;
 
 // ---------------------------------------------------------------------------
+// script animations — crates/vn-tree/src/lib.rs (src/waapi.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * `Element.animate()`'s effect: animation `id` paints `node`. `frames` are the
+ * keyframes split by U+001E, each `offset ␟ easing ␟ decls` with the
+ * declarations split by U+001C as `css-name ␝ value`; `timing` is
+ * `delay,endDelay,duration,iterations,iterationStart,direction,fill` (ms;
+ * direction and fill as indices). Answers notes, one per line: `E<why>` (the
+ * effect was refused), `W<property>` (does not animate here), `D<diagnostic>`.
+ */
+declare function __vn_anim_set(id: number, node: VnNodeId, frames: string, timing: string, easing: string): string;
+/** Animation `id`'s clock: start time on the document timeline, hold time, playback rate. NaN = unresolved. */
+declare function __vn_anim_clock(id: number, start: number, hold: number, rate: number): void;
+/** Forgets animation `id` (cancelled, finished without a fill, replaced). */
+declare function __vn_anim_drop(id: number): void;
+/** `commitStyles()`: the animation's own values now, `css-name ␝ value` joined by U+001C; null when it paints nothing. */
+declare function __vn_anim_values(id: number): string | null;
+
+// ---------------------------------------------------------------------------
 // the DOM surface — crates/vn-tree/src/dom.rs
 // ---------------------------------------------------------------------------
 

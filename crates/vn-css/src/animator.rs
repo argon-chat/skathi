@@ -622,10 +622,22 @@ pub struct Animator {
     /// thing still holding the hovered value on screen. Cleared when the state
     /// goes back to base, where the base itself is the answer again.
     states: HashMap<u32, StyleRefinement>,
+    /// Script animations (`Element.animate()`), per node, in the order they
+    /// were created — which is their composite order. See [`script`].
+    scripts: HashMap<u32, Vec<script::ScriptAnim>>,
+    /// Which node each script animation's effect targets, by animation id.
+    script_nodes: HashMap<u32, u32>,
+    /// The `Instant` the document timeline's zero stands for: the host's
+    /// `performance.now()` origin. A script animation's clock is in timeline
+    /// milliseconds, so without it nothing a script started can be sampled.
+    timeline_origin: Option<Instant>,
     warned: HashSet<String>,
     diagnostics: Vec<String>,
     reduce_motion: bool,
 }
+
+mod script;
+pub use script::{script_keyframes, ScriptClock, ScriptFrame, ScriptKeyframeNotes, ScriptTiming};
 
 impl Animator {
     /// A fresh animator with no running transitions.
@@ -925,6 +937,9 @@ impl Animator {
                 install(out, base, &track.property, track.value(now));
             }
         }
+        // Script animations last, so above both: Web Animations sorts script
+        // animations after CSS animations and transitions in the effect stack.
+        self.script_overlay(node, base, now, &mut r);
         r
     }
 
@@ -982,6 +997,11 @@ impl Animator {
         self.anims.retain(|&id, _| alive(id));
         self.states.retain(|&id, _| alive(id));
         self.events.retain(|e| alive(e.node));
+        // A script animation outlives its target in a browser (its clock and
+        // its promises are the script's), and that half lives in JS; only the
+        // painting half goes with the node.
+        self.scripts.retain(|&id, _| alive(id));
+        self.script_nodes.retain(|_, node| alive(*node));
     }
 
     /// Forgets everything (e.g. on a stylesheet swap that resets the tree).
@@ -994,11 +1014,13 @@ impl Animator {
         // HMR path; a browser restarts CSS animations on a sheet swap too.
         self.anims.clear();
         self.events.clear();
+        // Script animations stay: nothing in a sheet defines them, and the
+        // script that started one still holds its `Animation`.
     }
 
     /// Whether any node has transition state at all.
     pub fn is_idle(&self) -> bool {
-        self.nodes.is_empty() && self.anims.is_empty()
+        self.nodes.is_empty() && self.anims.is_empty() && self.scripts.is_empty()
     }
 
     /// Drains the advisories accumulated since the last call. Each distinct
@@ -2146,17 +2168,27 @@ impl Animator {
                 })
             })
             .map(|(&node, _)| node);
-        tracks.chain(runs)
+        let timeline = self.timeline_ms(now);
+        let scripts = self
+            .scripts
+            .iter()
+            .filter(move |(_, list)| list.iter().any(|a| a.running(timeline)))
+            .map(|(&node, _)| node);
+        tracks.chain(runs).chain(scripts)
     }
 
     /// Is any animation still running (or holding a `forwards` fill)?
     pub fn any_animation(&self, now: Instant) -> bool {
-        self.anims.values().flatten().any(|run| match run.phase(now) {
+        let css = self.anims.values().flatten().any(|run| match run.phase(now) {
             Phase::Finished { .. } => false,
             // A paused animation is not a reason to keep repainting; its value
             // is frozen and the frame that froze it already painted.
             Phase::Delayed | Phase::Running { .. } => run.paused_at.is_none(),
-        })
+        });
+        css || {
+            let timeline = self.timeline_ms(now);
+            self.scripts.values().flatten().any(|a| a.running(timeline))
+        }
     }
 
     /// The interpolated animation values for `node` this frame.

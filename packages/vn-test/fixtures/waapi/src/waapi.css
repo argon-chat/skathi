@@ -1,0 +1,70 @@
+/* The shapes test/specs/waapi.spec.ts animates with `el.animate()`. */
+
+*,
+::before,
+::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+#root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+}
+
+/* Argon's counter digit (Digit.vue): a 40px window on a strip of 30 cells. */
+.wrap {
+  position: absolute;
+  left: 40px;
+  top: 40px;
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+}
+
+.strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.cell {
+  height: 40px;
+}
+
+/* Every other cell red, the rest blue, so a pixel tells the strip's offset apart. */
+.c0 {
+  background: #ff0000;
+}
+
+.c1 {
+  background: #0000ff;
+}
+
+.box {
+  position: absolute;
+  top: 40px;
+  width: 40px;
+  height: 40px;
+  background: #00a000;
+}
+
+#fade {
+  left: 120px;
+}
+
+#seek {
+  left: 200px;
+}
+
+#cancel {
+  left: 280px;
+}

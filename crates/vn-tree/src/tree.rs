@@ -2426,6 +2426,103 @@ pub fn take_anim_events() -> Vec<vn_css::AnimEvent> {
     ANIMATOR.with(|a| a.borrow_mut().take_events())
 }
 
+// ---------------------------------------------------------------------------
+// script animations: `Element.animate()`
+// ---------------------------------------------------------------------------
+//
+// The painting half lives in vn-css (animator/script.rs) and the object model
+// in packages/vue-native/src/waapi.ts; these are the four doors between them,
+// called from the `__vn_anim_*` host functions. Each one moves what a node
+// paints without moving its style, so each touches the node (the render cache
+// must not replay it) and asks for a draw ([`take_script_dirty`]) — a paused
+// animation that is seeked is not "animating", and nothing else would.
+
+thread_local! {
+    static SCRIPT_DIRTY: Cell<bool> = const { Cell::new(false) };
+    /// The instant `performance.now()` reads 0 at, taken once.
+    static TIMELINE_ORIGIN: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+}
+
+/// Hands the animator the document timeline's zero, the first time a script
+/// animation needs it. redjs keeps ONE clock for `performance.now()`, rAF
+/// timestamps and `redjs_now`, so its origin is a fixed `Instant`.
+fn ensure_timeline_origin(animator: &mut vn_css::Animator) {
+    if TIMELINE_ORIGIN.with(|o| o.get()).is_some() {
+        return;
+    }
+    let now = std::time::Instant::now();
+    let ms = unsafe { vn_runtime::redjs::ffi::redjs_now() };
+    let origin = now
+        .checked_sub(std::time::Duration::from_secs_f64(ms.max(0.0) / 1000.0))
+        .unwrap_or(now);
+    TIMELINE_ORIGIN.with(|o| o.set(Some(origin)));
+    animator.set_timeline_origin(origin);
+}
+
+fn script_touched(node: Option<u32>) {
+    if let Some(node) = node {
+        with_tree(|t| t.touch(node));
+    }
+    SCRIPT_DIRTY.with(|d| d.set(true));
+}
+
+/// Creates or re-targets script animation `id`'s effect. The keyframes are
+/// compiled against `node`'s custom properties (a value may be `var(--x)`).
+pub(crate) fn script_anim_set(
+    id: u32,
+    node: u32,
+    frames: &[vn_css::ScriptFrame],
+    timing: vn_css::ScriptTiming,
+) -> vn_css::ScriptKeyframeNotes {
+    let vars = read_tree(|t| t.node(node).and_then(|n| n.computed.as_ref().map(|c| c.vars.clone())))
+        .unwrap_or_default();
+    let (keyframes, notes) = vn_css::script_keyframes(frames, &vars, &env());
+    let previous = ANIMATOR.with(|a| {
+        let mut a = a.borrow_mut();
+        ensure_timeline_origin(&mut a);
+        let previous = a.script_node(id);
+        a.script_set(id, node, keyframes, timing);
+        previous
+    });
+    // A new target (`effect.target = other`): the old one stops painting it.
+    if previous.is_some_and(|p| p != node) {
+        script_touched(previous);
+    }
+    script_touched(Some(node));
+    notes
+}
+
+/// Moves animation `id`'s clock (play, pause, seek, rate, finish, cancel).
+pub(crate) fn script_anim_clock(id: u32, clock: vn_css::ScriptClock) {
+    let node = ANIMATOR.with(|a| a.borrow_mut().script_clock(id, clock));
+    script_touched(node);
+}
+
+/// Forgets animation `id`: cancelled, replaced, or collected.
+pub(crate) fn script_anim_drop(id: u32) {
+    let node = ANIMATOR.with(|a| a.borrow_mut().script_drop(id));
+    script_touched(node);
+}
+
+/// Animation `id`'s own values right now, for `commitStyles()`; `None` when
+/// it has no target here.
+pub(crate) fn script_anim_values(id: u32) -> Option<Vec<(String, String)>> {
+    let now = std::time::Instant::now();
+    ANIMATOR.with(|a| {
+        let a = a.borrow();
+        let node = a.script_node(id)?;
+        let base = read_tree(|t| t.node(node).and_then(|n| n.computed.as_ref().map(|c| c.base.clone())))
+            .unwrap_or_default();
+        a.script_values(id, &base, now)
+    })
+}
+
+/// Did a script animation change what some node paints since the last call?
+/// Read once per frame by [`crate::frame_tick`].
+pub(crate) fn take_script_dirty() -> bool {
+    SCRIPT_DIRTY.with(|d| d.replace(false))
+}
+
 pub fn animator_gc() {
     ANIMATOR.with(|a| {
         a.borrow_mut()

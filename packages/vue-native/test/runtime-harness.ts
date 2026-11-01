@@ -89,6 +89,22 @@ function loadInstallFonts(): unknown {
   return installFontsFn;
 }
 
+export const WAAPI_PATH = join(HERE, "../src/waapi.ts");
+/**
+ * src/waapi.ts's `installWaapi`, the same way. Its host arrives as an
+ * argument (the runtime passes the `__vn_anim_*` parameters bound below), so
+ * one evaluation serves every world.
+ */
+let installWaapiFn: unknown = null;
+function loadInstallWaapi(): unknown {
+  if (installWaapiFn) return installWaapiFn;
+  const body = readTsSource(WAAPI_PATH)
+    .replace(/^\s*import\s[^;]*;[^\S\n]*$/gm, "")
+    .replace(/^export\s+(function|const|let|class|interface)\s/gm, "$1 ");
+  installWaapiFn = new Function(`${body}\nreturn installWaapi;`)();
+  return installWaapiFn;
+}
+
 export const SELECTION_PATH = join(HERE, "../src/selection.ts");
 /**
  * src/selection.ts's `installSelection`, the same way. It reads nothing
@@ -194,6 +210,8 @@ export function createRuntime(
     layoutWatch?: boolean;
     /** `false`: no `__vn_selection_*` (an older host): no `getSelection`. */
     selection?: boolean;
+    /** `false`: no `__vn_anim_*` (an older host): no `el.animate`. */
+    anim?: boolean;
     /**
      * Evaluate into an EXISTING world's global (`rt.global`) instead of a
      * fresh one: what `location.reload()` and the dev host's cold restart
@@ -320,6 +338,15 @@ export function createRuntime(
     hit: {
       answer: (_x: number, _y: number, _all: number) => "",
       calls: [] as number[][],
+    },
+    /**
+     * Script animations (`__vn_anim_*`): every call as `[op, ...args]`, the
+     * notes `set` answers, and what `values` (commitStyles) answers.
+     */
+    anim: {
+      calls: [] as unknown[][],
+      notes: "",
+      values: null as string | null,
     },
     /** `"prop: value"` declarations the fake engine does not apply (`__vn_style_accepts`). */
     styleRejects: new Set<string>(),
@@ -688,6 +715,13 @@ export function createRuntime(
     "__vn_selection_rebase",
     // `document.elementFromPoint` / `elementsFromPoint` (`host.hit`).
     "__vn_hit_at",
+    // waapi.ts's one export (see `loadInstallWaapi`), and the host's half of
+    // `el.animate()` (`host.anim`).
+    "installWaapi",
+    "__vn_anim_set",
+    "__vn_anim_clock",
+    "__vn_anim_drop",
+    "__vn_anim_values",
   ];
   let nextId = 1;
   /**
@@ -1084,6 +1118,19 @@ export function createRuntime(
     (x: number, y: number, all: number) => {
       host.hit.calls.push([x, y, all]);
       return host.hit.answer(x, y, all);
+    },
+    loadInstallWaapi(),
+    options.anim === false
+      ? undefined
+      : (id: number, node: number, frames: string, timing: string, easing: string) => {
+          host.anim.calls.push(["set", id, node, frames, timing, easing]);
+          return host.anim.notes;
+        },
+    (id: number, start: number, hold: number, rate: number) => host.anim.calls.push(["clock", id, start, hold, rate]),
+    (id: number) => host.anim.calls.push(["drop", id]),
+    (id: number) => {
+      host.anim.calls.push(["values", id]);
+      return host.anim.values;
     },
   ];
   if (options.selection === false) {

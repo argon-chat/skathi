@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/waapi.spec.ts: el.animate() on Argon's counter-digit strip and three boxes (fill, seek, cancel). See ../README.md.",
+
+  "name": "vn-test-waapi",
+
+  "window": {
+    "title": "vue-native — waapi (fixture)",
+    "width": 400,
+    "height": 160,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

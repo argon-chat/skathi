@@ -430,6 +430,26 @@ project's browser-compat-first policy.
     `-webkit-text-fill-color` paints the glyphs in its colour over `color`;
     beside `background-clip: text` it is the `transparent` half of that idiom,
     whose key colour (`Extras::background_clip_text`) already stands in for it.
+16. **Script animations (`el.animate()`) paint the transition set only** (m26,
+    `src/animator/script.rs`). The JS half (packages/vue-native/src/waapi.ts)
+    runs the `Animation` state machine. It hands over the effect
+    (`script_set`) and the clock (`script_clock`: a start time on the document
+    timeline or a held time, plus the rate). `overlay` samples the effect from
+    that clock above `@keyframes` runs and transitions. The timing model is Web
+    Animations Level 1: delay, end delay, iterations, iteration start,
+    direction, fill, and the effect's easing over the whole iteration with a
+    keyframe's easing (default `linear`) over its interval. An eased progress
+    outside 0..1 extrapolates the first or last interval, so a back-out curve
+    overshoots, which the `@keyframes` path clamps. A keyframe may use
+    `var()`; it resolves against the target's custom properties when the
+    effect is set. Not supported:
+    - properties outside `TransitionProperty::animatable` (`filter`,
+      `clip-path`, custom properties): the JS half advises once each;
+    - composite `add` and `accumulate`;
+    - `linear(…)`, which `parse_easing` refuses, as the cascade does.
+
+    A script animation is not cancelled by `display: none`, by reduced motion
+    or by `clear()` (a sheet swap).
 
 ---
 

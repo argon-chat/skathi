@@ -43,7 +43,10 @@ use parcel_selectors::context::{MatchingContext, MatchingMode, QuirksMode};
 use parcel_selectors::matching::matches_selector;
 use parcel_selectors::parser::Component;
 
-pub use animator::{AnimEvent, AnimEventKind, Animator, strip_transitioned};
+pub use animator::{
+    script_keyframes, strip_transitioned, AnimEvent, AnimEventKind, Animator, ScriptClock, ScriptFrame,
+    ScriptKeyframeNotes, ScriptTiming,
+};
 pub use element::MatchDom;
 pub use mapper::{
     accepts_declaration, parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
@@ -61,7 +64,7 @@ pub use keyframes::{
 };
 pub use vars::Vars;
 pub use transition::{
-    covered, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec, ANIMATABLE_COUNT,
+    covered, parse_easing, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec, ANIMATABLE_COUNT,
 };
 
 /// Interaction-state buckets. These are exactly the states gpui's own

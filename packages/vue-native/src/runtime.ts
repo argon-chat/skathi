@@ -45,6 +45,9 @@ import { installFonts } from "./fonts";
 // `getSelection()`, `Selection` and `Range` over the host's document text
 // selection (crates/vn-tree/src/selection.rs).
 import { installSelection } from "./selection";
+// `Element.animate()`, `Animation`, `KeyframeEffect` and `document.timeline`
+// over the host's script-animation layer (crates/vn-css/src/animator/script.rs).
+import { installWaapi } from "./waapi";
 
 // ---- the realm a reload keeps (m26 client sweep #3) ------------------------
 //
@@ -7849,6 +7852,35 @@ if (doc) {
 //    Inert without the host's loader. A reload installs a fresh set over the
 //    old one and takes over the host's listener.
 installFonts(globalThis as unknown as Record<string, unknown>, doc);
+
+// -- Web Animations: `el.animate()` (src/waapi.ts). On HTMLElement.prototype
+//    and SVGElement.prototype only — not Element.prototype, so motion /
+//    framer-motion keep their JS animations (docs/RUNTIME.md §5.23). Inert
+//    without the host's `__vn_anim_*`.
+if (typeof __vn_anim_set === "function") {
+  const g = globalThis as unknown as Record<string, unknown>;
+  const svg = (g.SVGElement as { prototype?: object } | undefined)?.prototype;
+  installWaapi({
+    host: { set: __vn_anim_set, clock: __vn_anim_clock, drop: __vn_anim_drop, values: __vn_anim_values },
+    protos: svg && svg !== ElementProto ? [ElementProto, svg] : [ElementProto],
+    nodeOf: (t) => (isMirrorEl(t) ? t.__vnId : 0),
+    setStyle: (t, name, value) => (t as MirrorElement).style.setProperty(name, value),
+    contains: (root, node) => isMirrorNode(root) && isMirrorNode(node) && (root as MirrorElement).contains(node as MirrorNode),
+    warn: warnCompat,
+    now: () => (g.performance as { now(): number } | undefined)?.now() ?? Date.now(),
+    frame: (cb) => {
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(cb);
+      else setTimeout(() => cb((g.performance as { now(): number } | undefined)?.now() ?? Date.now()), 16);
+    },
+    setTimer: (cb, ms) => setTimeout(cb, ms),
+    clearTimer: (h) => clearTimeout(h as number),
+    defineGlobal,
+    doc: doc as unknown as Record<string, unknown> | null,
+    EventTarget: g.EventTarget as (new () => object) | undefined,
+    Event: g.Event as (new (type: string, init?: object) => object) | undefined,
+    DOMException: g.DOMException as (new (message: string, name: string) => Error) | undefined,
+  });
+}
 
 // -- the text selection: `getSelection()`, `Selection`, `Range`,
 //    `document.createRange()` (src/selection.ts) over the host's selection
