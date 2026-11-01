@@ -53,6 +53,7 @@ import { resolve, dirname, join, relative, sep } from "path";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 
 import { asciiOnly, checkAscii, nonAsciiCount } from "./ascii";
+import { pruneVendorPrefixes } from "./css-prefixes";
 import {
   TW_ID,
   declaresUtilities,
@@ -704,13 +705,15 @@ async function build() {
     cssById.set(TW_ID, await generateTailwind(TW_CONFIG));
     tailwindMs = Date.now() - t;
   }
+  // The vendor-prefixed declarations vn-css would drop are dropped here, so
+  // they are not shipped either (css-prefixes.ts).
   const sheets = [
     ...headCss,
     ...Array.from(cssById.keys())
       .sort()
       .map((id) => cssById.get(id)!),
     ...bodyCss,
-  ];
+  ].map(pruneVendorPrefixes);
   const css = sheets.map((text) => `(globalThis.__VN_CSS__ ??= []).push(${J(text)});`).join("\n");
 
   const out = asciiBundle(

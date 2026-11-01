@@ -408,6 +408,28 @@ project's browser-compat-first policy.
     attribute of that name, and resvg parses them there. What differs: a rule
     that matches a shape inside the `<svg>` (`.icon path { stroke-width: 3 }`)
     is not read, and a transition does not animate them.
+15. **A vendor-prefixed declaration is applied only when it is a `-webkit-`
+    spelling Chromium honours** (m26, `src/prefix.rs`). `WEBKIT_APPLIED` lists
+    them: the aliases of standard properties (`-webkit-transform`,
+    `-webkit-user-select`, `-webkit-mask-*`, `-webkit-backdrop-filter`), the
+    ones handled by name (`-webkit-app-region`, `-webkit-line-clamp` and the
+    legacy box longhands beside it, `-webkit-text-fill-color`,
+    `-webkit-mask-composite`), and a few Chromium draws and this engine does
+    not (`-webkit-text-stroke`, `-webkit-box-reflect`), which keep their "not
+    mapped" advisory. Every other `-webkit-`, `-moz-`, `-ms-` and `-o-`
+    declaration is dropped with NO advisory, in sheets, `@keyframes`, inline
+    styles and CSSOM writes alike: `-moz-osx-font-smoothing`,
+    `-webkit-touch-callout`, `-ms-overflow-style` and Tailwind's
+    `-moz-tab-size` do nothing in Chromium on Windows either, so there is
+    nothing to diverge from. An unprefixed property that is not mapped still
+    advises. `prod.ts` and `build.ts` drop the same declarations from the CSS
+    they ship (`packages/vue-native/css-prefixes.ts`, whose copy of the list
+    `test/css-prefixes.test.ts` checks against this one). Prefixed selectors
+    (`::-webkit-scrollbar`), at-rules and values (`display: -webkit-box`) are
+    not affected.
+    `-webkit-text-fill-color` paints the glyphs in its colour over `color`;
+    beside `background-clip: text` it is the `transparent` half of that idiom,
+    whose key colour (`Extras::background_clip_text`) already stands in for it.
 
 ---
 

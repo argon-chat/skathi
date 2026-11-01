@@ -330,6 +330,13 @@ pub struct Extras {
     /// gradient — which is the honest version of the divergence, and reads
     /// correctly at the size anyone uses this at.
     pub background_clip_text: Option<bool>,
+    /// `-webkit-text-fill-color`: the colour glyphs are filled with, over
+    /// `color`. Chromium honours it, and apps write it in exactly one idiom,
+    /// `-webkit-background-clip: text; -webkit-text-fill-color: transparent`,
+    /// where [`Extras::background_clip_text`] already gives the glyphs their
+    /// colour and this one is ignored. On its own it replaces the text colour
+    /// of the element it is declared on (`crate::render` in vn-tree).
+    pub text_fill_color: Option<TextFill>,
     /// The one colour that stands in for this element's background when it has
     /// to be collapsed to a single value — see [`Extras::background_clip_text`],
     /// its only consumer. A solid background contributes itself; a gradient
@@ -596,6 +603,15 @@ impl TextTransform {
     }
 }
 
+/// `-webkit-text-fill-color`'s value (see [`Extras::text_fill_color`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TextFill {
+    /// `currentcolor`, the initial value: the glyphs take `color`.
+    CurrentColor,
+    /// A colour that replaces `color` for the glyphs.
+    Color(Hsla),
+}
+
 /// An SVG paint, reduced to the only distinction gpui can express.
 ///
 /// gpui rasterises an SVG into a **single-colour alpha mask** and tints the
@@ -686,6 +702,9 @@ impl Extras {
         }
         if other.background_clip_text.is_some() {
             self.background_clip_text = other.background_clip_text;
+        }
+        if other.text_fill_color.is_some() {
+            self.text_fill_color = other.text_fill_color;
         }
         if let Some(theirs) = &other.svg_presentation {
             self.svg_presentation = Some(match self.svg_presentation.take() {
@@ -1035,6 +1054,11 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
         let mut dynamic: Decls = Vec::new();
         let mut styled = false;
         for p in props {
+            // `-moz-osx-font-smoothing`, `-webkit-touch-callout`: dropped
+            // without a word, as Chromium drops them (`crate::prefix`).
+            if crate::prefix::property_dropped(p) {
+                continue;
+            }
             match channel(p, diagnostics) {
                 Channel::Custom(name, value) => custom.push((name, value)),
                 Channel::Dynamic(name, value) => dynamic.push((name, value)),
@@ -1292,6 +1316,9 @@ pub fn accepts_declaration(name: &str, value: &str) -> bool {
         return false;
     }
     let p = block.declarations.iter().chain(block.important_declarations.iter()).next();
+    if p.is_some_and(crate::prefix::property_dropped) {
+        return false;
+    }
     if let Some(Property::Unparsed(u)) = p {
         return has_substitution(&u.value)
             || matches!(
@@ -1332,6 +1359,9 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     match parsed {
         Ok(block) => {
             for p in block.declarations.iter().chain(block.important_declarations.iter()) {
+                if crate::prefix::property_dropped(p) {
+                    continue;
+                }
                 match channel(p, diagnostics) {
                     Channel::Custom(name, value) => custom.push((name, value)),
                     Channel::Dynamic(name, value) => dynamic.push((name, value)),
@@ -4980,6 +5010,35 @@ fn apply_property(
                     ),
                 }
             }
+            // `-webkit-text-fill-color` (see `Extras::text_fill_color`). A
+            // named colour arrives as a bare ident, as in `scrollbar-color`.
+            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
+                if name.0.as_ref().eq_ignore_ascii_case("-webkit-text-fill-color") =>
+            {
+                use lightningcss::properties::custom::{Token, TokenOrValue};
+                let mut tokens = c
+                    .value
+                    .0
+                    .iter()
+                    .filter(|t| !matches!(t, TokenOrValue::Token(Token::WhiteSpace(_))));
+                let fill = match (tokens.next(), tokens.next()) {
+                    (Some(TokenOrValue::Color(cc)), None) => color(cc).map(TextFill::Color),
+                    (Some(TokenOrValue::Token(Token::Ident(id))), None)
+                        if id.as_ref().eq_ignore_ascii_case("currentcolor") =>
+                    {
+                        Some(TextFill::CurrentColor)
+                    }
+                    (Some(TokenOrValue::Token(Token::Ident(id))), None) => {
+                        named_color(id.as_ref()).map(TextFill::Color)
+                    }
+                    _ => None,
+                };
+                match fill {
+                    Some(f) => x.text_fill_color = Some(f),
+                    None if is_css_wide_keyword(&c.value) => {}
+                    None => unsupported(diagnostics, "-webkit-text-fill-color (a <color> is expected)"),
+                }
+            }
             // `text-underline-offset` moves the line down from where the
             // font's metrics put it, which is one number on the decoration the
             // paint already reads.
@@ -5100,25 +5159,16 @@ fn apply_property(
                      from the font size",
                 )
             }
-            // Glyph rasterisation belongs to the platform text system, which
-            // already antialiases. These are hints a browser is free to ignore
-            // too, and the rendered result does not change under any value.
+            // `-webkit-font-smoothing`, `-moz-osx-font-smoothing`,
+            // `-webkit-tap-highlight-color`, `-webkit-overflow-scrolling` and
+            // `-ms-overflow-style` never get here: `crate::prefix` drops them
+            // (desktop Chromium on Windows draws none of them either).
+            //
+            // There is no touch scroller here, so every value of these
+            // produces the same behaviour and none of them has anything to
+            // diverge from.
             lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if matches!(
-                    name.0.as_ref(),
-                    "-webkit-font-smoothing" | "-moz-osx-font-smoothing"
-                ) => {}
-            // There is no touch scroller, no rubber-banding and no tap
-            // highlight here, so every value of these produces the same
-            // behaviour and none of them has anything to diverge from.
-            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if matches!(
-                    name.0.as_ref(),
-                    "touch-action"
-                        | "-webkit-tap-highlight-color"
-                        | "-webkit-overflow-scrolling"
-                        | "scroll-behavior"
-                ) => {}
+                if matches!(name.0.as_ref(), "touch-action" | "scroll-behavior") => {}
             // `scrollbar-width` / `scrollbar-color` are real CSS properties
             // lightningcss has no typed representation for. They mattered to
             // nobody while we drew no scrollbars; now they decide whether the
@@ -5168,12 +5218,6 @@ fn apply_property(
                     }
                 }
             }
-            // `-ms-overflow-style` is an IE property that does not exist in
-            // the Chromium these apps are compared against either, so no value
-            // of it can diverge from anything. It arrives through reka-ui's
-            // runtime `<style>` beside the two real properties above.
-            lightningcss::properties::custom::CustomPropertyName::Unknown(name)
-                if name.0.as_ref() == "-ms-overflow-style" => {}
             // `isolation` — a real property lightningcss has no typed
             // representation for. `isolate` makes the box a stacking context;
             // that is all it does here, as there is no `mix-blend-mode` for it
@@ -7938,5 +7982,102 @@ mod scrollbar_tests {
         assert!(!accepts_declaration("display", "flex; color: red"));
         // A property the mapper does not fold is not applied, so not accepted.
         assert!(!accepts_declaration("-ms-flex-pack", "center"));
+        // A prefix Chromium ignores is not accepted, a `var()` value included;
+        // the `-webkit-` alias it honours is.
+        assert!(!accepts_declaration("-moz-appearance", "none"));
+        assert!(!accepts_declaration("-moz-transition", "var(--t)"));
+        assert!(accepts_declaration("-webkit-user-select", "none"));
+    }
+}
+
+/// Vendor prefixes (`crate::prefix`) and `-webkit-text-fill-color`.
+#[cfg(test)]
+mod prefix_tests {
+    use super::*;
+
+    fn extras(body: &str) -> (Extras, Vec<String>) {
+        let mut d = Vec::new();
+        let inline = parse_inline_style(body, &mut d);
+        (inline.extras, d)
+    }
+
+    #[test]
+    fn a_prefixed_declaration_the_engine_does_not_apply_is_dropped_without_a_word() {
+        // What the Argon client, its libraries and Tailwind's preflight carry.
+        for body in [
+            "-moz-osx-font-smoothing: grayscale",
+            "-webkit-font-smoothing: antialiased",
+            "-webkit-touch-callout: none",
+            "-webkit-tap-highlight-color: transparent",
+            "-webkit-overflow-scrolling: touch",
+            "-ms-overflow-style: none",
+            "-moz-tab-size: 4",
+            "-moz-user-select: none",
+            "-moz-appearance: none",
+            "-ms-flex: 1",
+            "-o-transition: opacity 1s",
+            "-webkit-text-decoration: underline dotted",
+            "-moz-transition: var(--t)",
+            "-WEBKIT-TOUCH-CALLOUT: none",
+        ] {
+            let mut d = Vec::new();
+            let inline = parse_inline_style(body, &mut d);
+            assert!(d.is_empty(), "{body:?} said {d:?}");
+            assert!(inline.is_empty(), "{body:?} applied something");
+        }
+    }
+
+    #[test]
+    fn a_dropped_prefix_never_reaches_a_rule_and_an_honoured_one_does() {
+        // Chromium ignores `-moz-user-select` and honours `-webkit-user-select`.
+        assert_eq!(extras("-moz-user-select: none").0.user_select, None);
+        assert_eq!(extras("-webkit-user-select: none").0.user_select, Some(UserSelect::None));
+        // Through the stylesheet path too, which `@keyframes` share.
+        fn block(body: &str) -> DeclarationBlock<'_> {
+            DeclarationBlock::parse_string(body, ParserOptions::default()).expect("parses")
+        }
+        let c = convert_block(&block(
+            "-moz-transition: opacity 1s; -ms-transform: scale(2); -webkit-touch-callout: none",
+        ));
+        assert!(c.normal.is_none() && c.normal_transitions.is_none());
+        assert!(c.diagnostics.is_none(), "{:?}", c.diagnostics);
+        let c = convert_block(&block("-webkit-transition: opacity 1s; -webkit-transform: scale(2)"));
+        assert!(c.normal.is_some() && c.normal_transitions.is_some());
+        assert!(c.diagnostics.is_none(), "{:?}", c.diagnostics);
+        // A `-webkit-` property Chromium draws and this engine does not is
+        // still heard about.
+        let (_, d) = extras("-webkit-text-stroke: 1px red");
+        assert!(d.iter().any(|m| m.contains("not mapped")), "{d:?}");
+    }
+
+    #[test]
+    fn webkit_text_fill_color_is_a_glyph_colour() {
+        let is_red = |f: Option<TextFill>| match f {
+            Some(TextFill::Color(c)) => c.h.abs() < 1e-3 && (c.s - 1.0).abs() < 1e-3 && (c.l - 0.5).abs() < 1e-3,
+            _ => false,
+        };
+        assert!(is_red(extras("-webkit-text-fill-color: #ff0000").0.text_fill_color));
+        assert!(is_red(extras("-webkit-text-fill-color: red").0.text_fill_color));
+        assert_eq!(
+            extras("-webkit-text-fill-color: currentColor").0.text_fill_color,
+            Some(TextFill::CurrentColor)
+        );
+        match extras("-webkit-text-fill-color: transparent").0.text_fill_color {
+            Some(TextFill::Color(c)) => assert_eq!(c.a, 0.0),
+            other => panic!("{other:?}"),
+        }
+        // The gradient-text idiom, every half of it applied and none advised
+        // beyond what `background-clip: text` itself says.
+        let (x, d) = extras(
+            "background-image: linear-gradient(90deg, #f00, #00f); -webkit-background-clip: text; \
+             background-clip: text; -webkit-text-fill-color: transparent",
+        );
+        assert_eq!(x.background_clip_text, Some(true));
+        assert!(x.text_fill_color.is_some());
+        assert!(!d.iter().any(|m| m.contains("not mapped")), "{d:?}");
+        // Not a colour: said, not applied.
+        let (x, d) = extras("-webkit-text-fill-color: 3px");
+        assert_eq!(x.text_fill_color, None);
+        assert!(!d.is_empty());
     }
 }

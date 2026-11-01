@@ -27,6 +27,7 @@ mod has;
 mod keyframes;
 mod mapper;
 mod media;
+mod prefix;
 pub mod perf;
 mod transition;
 mod vars;
@@ -49,7 +50,7 @@ pub use mapper::{
     set_font_source, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses, uses_viewport_units,
     viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl, PaintLayer,
     CurrentColorTargets, Decls, Extras, InlineStyle, ListMarker, MaskClips, MaskCompositing,
-    MaskImages, ObjectFit, OverscrollBehavior, RadiusInherit, ScrollbarWidth, SvgPaint, TextTransform,
+    MaskImages, ObjectFit, OverscrollBehavior, RadiusInherit, ScrollbarWidth, SvgPaint, TextFill, TextTransform,
     TileLength, UserSelect, WhiteSpaceMode, WindowControl, WindowDrag,
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
 };

@@ -102,6 +102,7 @@ import {
   generate as generateTailwind,
   needsTailwindPass,
 } from "./tailwind";
+import { pruneVendorPrefixes } from "./css-prefixes";
 import {
   GLOB_TRIPWIRE,
   LEAF_IMPORT,
@@ -688,7 +689,7 @@ async function compileVue(
     if (out.errors.length) throw new Error(`${id} <style>: ${out.errors.join("; ")}`);
     cssChunks.push(out.code);
   }
-  if (captureCss) capturedCss = cssChunks.length ? cssChunks.join("\n") : null;
+  if (captureCss) capturedCss = cssChunks.length ? pruneVendorPrefixes(cssChunks.join("\n")) : null;
 
   return { contents: chunks.join("\n"), loader: isTS ? "ts" : "js" };
 }
@@ -933,6 +934,8 @@ async function buildCssModule(id: string): Promise<boolean> {
   } else {
     console.log(`${stamp()} css ${id}: ${(css.length / 1024).toFixed(1)} KB`);
   }
+  // Without the prefixed declarations vn-css would drop (css-prefixes.ts).
+  css = pruneVendorPrefixes(css);
   moduleDeps.set(id, []);
   if (cssEmitted.get(id) === css) return false;
   cssEmitted.set(id, css);
@@ -1321,7 +1324,7 @@ const TW_HASH = Bun.hash("").toString(16);
 async function buildTailwind(): Promise<boolean> {
   if (!TW_CONFIG) return false;
   const t0 = Date.now();
-  const css = await generateTailwind(TW_CONFIG);
+  const css = pruneVendorPrefixes(await generateTailwind(TW_CONFIG));
   moduleDeps.set(TW_ID, []);
   if (css === twCss) return false;
   twCss = css;
