@@ -49,7 +49,10 @@
 //!   (`.group(name)` is registered during the paint walk);
 //! * a subtree holding a node whose transition or animation is moving this
 //!   frame — and only that subtree: the moving node and its ancestors are
-//!   refused, every other boundary still replays (see [`begin_frame`]);
+//!   refused, every other boundary still replays (see [`begin_frame`]). A
+//!   boundary below a fading or sliding node is gpui's to refuse: its view
+//!   cache key holds the opacity and transform the ancestors composed (fork
+//!   item 44), so it renders while they change;
 //! * anything at all while a screen reader is attached — the AccessKit tree
 //!   is built during the frame and is not part of the replayed spans.
 //!
