@@ -146,8 +146,7 @@ const Menu = {
     const el = ref<HTMLElement | null>(null);
     useLayer("menu", () => closeMenu());
     // floating-ui measures the anchor on mount, before the FocusScope reads
-    // `document.activeElement`. Here that read lays out, and the frame reports
-    // the press's focus on `#tag` first (docs/RUNTIME.md §5.8).
+    // `document.activeElement`.
     onMounted(() => document.getElementById("row")?.getBoundingClientRect());
     useFocusScope("menu", () => el.value, () => el.value, false);
     return () =>

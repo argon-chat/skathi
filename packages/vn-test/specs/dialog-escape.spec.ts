@@ -44,12 +44,10 @@ const sinceDialog = (log: string[]) => log.slice(log.findIndex((l) => l.startsWi
  * The context menu from the keyboard on the focused tooltip trigger, then
  * Report: the dialog is open and the menu gone.
  *
- * In Argon a right press opens the menu. A press's focus is reported here on
- * the next frame, after the `contextmenu` (a browser focuses during
- * `mousedown`), so the menu would remember `body`, not the trigger, and the
- * path under test would not run. The Menu key on a node that already has the
- * focus opens the same menu with the same remembered node, here and in a
- * browser.
+ * In Argon a right press opens the menu. The Menu key on a node that already
+ * has the focus opens the same menu with the same remembered node, here and
+ * in a browser, and does not depend on when a press's focus is reported
+ * (that is `specs/focus-press.spec.ts`, docs/RUNTIME.md §5.22).
  */
 async function openDialog(): Promise<void> {
   await app.eval("__VN_TEST_ESCAPE__.log.length = 0");

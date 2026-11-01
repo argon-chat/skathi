@@ -1,0 +1,213 @@
+// A press's focus (docs/RUNTIME.md §5.22, crates/vn-tree/src/render.rs
+// `apply_press_focus`; FO-3 in §5.2).
+//
+// In a browser a press moves the focus as its `mousedown`'s default action,
+// in the same task: the old element hears `blur` and `focusout`, the new one
+// `focus` and `focusin`, and only then come `pointerup`, `mouseup` and
+// `click`, or `contextmenu` for the right button. Here the focus events used
+// to come from the next frame, after a quick right click's `contextmenu`, so
+// a menu that mounted from it remembered `body`.
+//
+// What a press focuses is the nearest focusable area on the target's path, by
+// HTML's rules. A `<span>` with a `focus` listener or a `<div>` with a
+// `keydown` listener is not one, and here it used to be (FO-3): with nothing
+// focusable on the path, the press blurs the focused element to `body` and
+// nothing hears `focus`.
+//
+// The expectations are Chrome 156's own logs of the same page, taken with
+// real presses over CDP (research/reports/m26/hit-target-2.md §10).
+//
+//   bun test packages/vn-test/specs/focus-press.spec.ts
+//
+// Real presses through gpui (devtools `mouse`).
+
+import { afterAll, describe, expect as bunExpect, test } from "bun:test";
+import { launch } from "../src/index";
+
+const app = await launch({
+  app: "packages/vn-test/fixtures/focus-press/src/main.ts",
+  window: [520, 420],
+  label: "focus-press",
+});
+afterAll(async () => {
+  await app.close();
+});
+
+const T = 30_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type Result = { log: string[]; active: string };
+
+/** A real press on `#id` with `#field` focused, and what it logged. */
+async function press(id: string, button: 0 | 2 = 0): Promise<Result> {
+  bunExpect(await app.eval("__VN_TEST_PRESS__.reset()")).toBe("field");
+  await app.locator(`#${id}`).click({ real: true, button });
+  // The mouse-up's events are delivered once gpui's dispatch is over.
+  await sleep(150);
+  return JSON.parse(
+    String(await app.eval("JSON.stringify({ log: __VN_TEST_PRESS__.log, active: __VN_TEST_PRESS__.active() })")),
+  ) as Result;
+}
+
+/**
+ * Chrome's log for a press on `target`, from `#field`, that focuses `to`:
+ * `null` when nothing on the path can take focus, `"kept"` when the
+ * `mousedown` was cancelled. Every case Chrome logged has this shape, except
+ * those written out below.
+ */
+function chrome(target: string, to: string | null | "kept", last: "click" | "contextmenu" = "click"): string[] {
+  const down = [`pointerdown:${target} active=field`, `mousedown:${target} active=field`];
+  const now = to === "kept" ? "field" : (to ?? "BODY");
+  const moved =
+    to === "kept"
+      ? []
+      : [
+          `blur:field rel=${to} active=BODY`,
+          `focusout:field rel=${to} active=BODY`,
+          ...(to ? [`focus:${to} rel=field active=${to}`, `focusin:${to} rel=field active=${to}`] : []),
+        ];
+  return [...down, ...moved, `pointerup:${target} active=${now}`, `mouseup:${target} active=${now}`, `${last}:${target} active=${now}`];
+}
+
+describe("a press focuses the nearest focusable area, before its mouseup", () => {
+  const left: [string, string | null | "kept", string][] = [
+    ["tag", null, "a <span> with a focus listener is not focusable"],
+    ["keys", null, "nor is a <div> with key listeners"],
+    ["plain", null, "a plain <div> blurs to body"],
+    ["nolink", null, "an <a> without href is not focusable"],
+    ["role-btn", null, "role=button without tabindex is not focusable"],
+    ["minus", "minus", "tabindex=-1 takes a press's focus"],
+    ["inner", "outer", "a press on an inner <span> focuses its focusable ancestor"],
+    ["btn", "btn", "a <button>"],
+    ["link", "link", "an <a href>"],
+    ["ce", "ce", "contenteditable"],
+    ["sum", "sum", "a <details>'s <summary>"],
+    ["prevent", "kept", "a cancelled mousedown moves nothing"],
+    ["steal", "steal", "a mousedown that focuses the focused field changes nothing"],
+  ];
+  for (const [id, to, what] of left) {
+    test(
+      `left press on #${id}: ${what}`,
+      async () => {
+        const { log, active } = await press(id);
+        bunExpect(log).toEqual(chrome(id, to));
+        bunExpect(active).toBe(to === "kept" ? "field" : (to ?? "BODY"));
+      },
+      T,
+    );
+  }
+
+  test(
+    "a mousedown handler's focus() is overridden by the press's own",
+    async () => {
+      const { log, active } = await press("steal2");
+      bunExpect(log).toEqual([
+        "pointerdown:steal2 active=field",
+        "mousedown:steal2 active=field",
+        "blur:field rel=btn active=BODY",
+        "focusout:field rel=btn active=BODY",
+        "focus:btn rel=field active=btn",
+        "focusin:btn rel=field active=btn",
+        "blur:btn rel=steal2 active=BODY",
+        "focusout:btn rel=steal2 active=BODY",
+        "focus:steal2 rel=btn active=steal2",
+        "focusin:steal2 rel=btn active=steal2",
+        "pointerup:steal2 active=steal2",
+        "mouseup:steal2 active=steal2",
+        "click:steal2 active=steal2",
+      ]);
+      bunExpect(active).toBe("steal2");
+    },
+    T,
+  );
+
+  test(
+    "a target its mousedown's microtask removes gives the focus to its focusable ancestor, or to body",
+    async () => {
+      try {
+        // Chrome: the press's node becomes its parent when it is removed. The
+        // mouse-up after that lands on whatever is under the pointer then, so
+        // only the press half is compared.
+        const gone = await press("gone");
+        bunExpect(gone.log.slice(0, 5)).toEqual([
+          "pointerdown:gone active=field",
+          "mousedown:gone active=field",
+          "removed:gone",
+          "blur:field rel=null active=BODY",
+          "focusout:field rel=null active=BODY",
+        ]);
+        bunExpect(gone.log.filter((l) => l.startsWith("focus:"))).toEqual([]);
+        bunExpect(gone.active).toBe("BODY");
+
+        const gone2 = await press("gone2");
+        bunExpect(gone2.log.slice(0, 7)).toEqual([
+          "pointerdown:gone2 active=field",
+          "mousedown:gone2 active=field",
+          "removed:gone2",
+          "blur:field rel=wrapper active=BODY",
+          "focusout:field rel=wrapper active=BODY",
+          "focus:wrapper rel=field active=wrapper",
+          "focusin:wrapper rel=field active=wrapper",
+        ]);
+        bunExpect(gone2.active).toBe("wrapper");
+      } finally {
+        await app.eval("__VN_TEST_PRESS__.restore()");
+      }
+    },
+    T,
+  );
+});
+
+describe("a right press focuses before its contextmenu", () => {
+  const right: [string, string | null, string[]][] = [
+    ["btn", "btn", []],
+    ["minus", "minus", []],
+    // The row's own listener runs after the document's capture listener.
+    ["menu-row", null, ["row-menu"]],
+    ["tag", null, []],
+  ];
+  for (const [id, to, after] of right) {
+    test(
+      `right press on #${id}`,
+      async () => {
+        const { log, active } = await press(id, 2);
+        bunExpect(log).toEqual([...chrome(id, to, "contextmenu"), ...after]);
+        bunExpect(active).toBe(to ?? "BODY");
+      },
+      T,
+    );
+  }
+});
+
+describe("what a listener does not make focusable (FO-3)", () => {
+  test(
+    "focus() takes what Chrome takes",
+    async () => {
+      bunExpect(JSON.parse(String(await app.eval("__VN_TEST_PRESS__.programmatic()")))).toEqual({
+        tag: "field",
+        keys: "field",
+        minus: "minus",
+        plain: "field",
+        nolink: "field",
+        link: "link",
+        ce: "ce",
+        sum: "sum",
+        "role-btn": "field",
+        lbl: "field",
+      });
+    },
+    T,
+  );
+
+  test(
+    "after a press on a <div> with a keydown listener, a key goes to the document, not to it",
+    async () => {
+      const { active } = await press("keys");
+      bunExpect(active).toBe("BODY");
+      await app.press("x");
+      await sleep(100);
+      bunExpect(await app.eval("__VN_TEST_PRESS__.log.includes('keys-listener')")).toBe(false);
+    },
+    T,
+  );
+});

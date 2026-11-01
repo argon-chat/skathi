@@ -69,6 +69,24 @@ pub const UNBOUND: WinKey = 0;
 /// A rectangle in ONE window's client space, CSS px: `(x, y, width, height)`.
 pub type Rect = (f32, f32, f32, f32);
 
+/// One mouse-down's focus, its `mousedown`'s default action
+/// (`render::claim_press_focus`, `render::apply_press_focus`).
+#[derive(Default)]
+pub struct PressFocus {
+    /// The step that applies it is scheduled for the end of this dispatch.
+    pub pending: bool,
+    /// The nodes on the target's path that HTML lets take focus, nearest
+    /// first, with their handles. The first still in the document takes it;
+    /// with none, the press blurs to `body`.
+    pub claims: Vec<(u32, gpui::FocusHandle)>,
+    /// The `mousedown` was cancelled: the press moves no focus.
+    pub cancelled: bool,
+    /// The press reached the root's bubble listener. A native widget that took
+    /// it (a scrollbar's thumb or track stops its propagation) moves no focus
+    /// unless something focusable on the path claimed it first.
+    pub reached: bool,
+}
+
 /// Everything one OS window knows that another one disagrees about.
 ///
 /// Fields are grouped by the §5 classification they came from, and each carries
@@ -141,10 +159,10 @@ pub struct WindowState {
     /// of its own. Reset in the capture phase of every mouse-down.
     pub down_claimed: bool,
     /// The focus THIS mouse-down will give, once its `mousedown` has been
-    /// dispatched and checkpointed (`render::claim_press_focus`). A cancelled
+    /// dispatched and checkpointed (`render::apply_press_focus`). A cancelled
     /// `mousedown` takes it back, as a browser's `preventDefault()` cancels the
     /// press's default focus.
-    pub press_focus: Option<(u32, gpui::FocusHandle)>,
+    pub press_focus: PressFocus,
     /// The mouse-up waves not yet delivered to JS (`render::UpWave`). One
     /// physical mouse-up is a `mouseup`, a `click` and (right button) a
     /// `contextmenu`, each claimed by the first listening box on its target's

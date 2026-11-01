@@ -541,10 +541,9 @@ pub(super) fn build<V: 'static>(
     }
 
     let mask = pointer_mask(node);
-    let bit = |ev: u32| mask & (1u64 << ev) != 0;
     let tab_index = tab_index_of(t, id);
-    let focusable =
-        tab_index.is_some() || bit(tree::EV_KEYDOWN) || bit(tree::EV_KEYUP) || bit(tree::EV_FOCUS) || bit(tree::EV_BLUR);
+    // A key or focus listener makes nothing focusable (FO-3).
+    let focusable = tab_index.is_some();
     let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {

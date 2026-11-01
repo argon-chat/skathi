@@ -962,10 +962,13 @@ fn open_up_wave(ev: &MouseUpEvent, window: &mut Window) {
     });
 }
 
-/// The root's share of every press: it opens each mouse-up's wave. See
+/// The root's share of every press: it starts each mouse-down's focus step
+/// ([`begin_press_focus`]), and opens each mouse-up's wave. See
 /// [`open_up_wave`]; the `_out` variants are what make "every" true when
 /// something that blocks the mouse covers the root under the pointer.
 fn bind_root_mouse<E: gpui::InteractiveElement>(mut e: E) -> E {
+    e = e.capture_any_mouse_down(|_, window, cx| begin_press_focus(window, cx));
+    e = e.on_any_mouse_down(|_, window, _| windows::here(window, |w| w.press_focus.reached = true));
     e = e.capture_any_mouse_up(|ev, window, _| open_up_wave(ev, window));
     for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
         e = e.on_mouse_up_out(button, |ev, window, _| open_up_wave(ev, window));
@@ -1251,15 +1254,31 @@ fn settle_before_default(window: &mut Window, cx: &mut App) {
 /// this move: the new node hears nothing. This is Chromium's
 /// `Document::SetFocusedElement` ("handler shifted focus"); the JS half of the
 /// same rule is the runtime's `focusMoved`.
+///
+/// The window's root is where gpui's focus rests when nothing is focused (see
+/// [`ensure_root_focus`]), which is `body` having it: no node of the page.
+/// Focus moving there is a blur with no `focus` after it, as in a browser.
 fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Context<V>) {
     // gpui calls focus listeners from inside `Window::draw`, after its frame
     // swap: a forced layout must not draw under them (`crate::in_input_dispatch`).
     let _in_draw = crate::InputDispatch::inside_gpui();
+    focus_transition_app(new_focus, window, cx);
+    // A focus move can change what `:focus` / `:focus-visible` paint even when
+    // no JS handler ran (an `<input>` folds its focus rungs at build time), so
+    // the repaint cannot be left to `flush_changes`.
+    cx.notify();
+}
+
+/// [`focus_transition`]'s events, for a caller with no view: a press's focus
+/// ([`apply_press_focus`]) reports its move here, before the next platform
+/// event, rather than from the observer a frame later.
+fn focus_transition_app(new_focus: u32, window: &mut Window, cx: &mut App) {
     // Per window (docs/MULTIWINDOW.md §5.2): with one slot, window B focusing
     // an input fired `blur` on window A's — a wrong DOM event, not a wrong
     // pixel. gpui hands the observer the window the focus moved in, so "which
     // window" is not inferred here either.
     let k = windows::key(window);
+    let new_focus = if new_focus != 0 && new_focus == window_root(k) { 0 } else { new_focus };
     let old = windows::focused_node(k);
     if old == new_focus {
         return;
@@ -1267,11 +1286,10 @@ fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Co
     if old != 0 {
         windows::set_focused_node(k, 0);
         let payload = EventPayload { a: new_focus as f64, ..Default::default() };
-        js_dispatch(old, tree::EV_BLUR, &payload, window, cx);
+        js_dispatch_app(old, tree::EV_BLUR, &payload, window, cx);
         // `el.focus()` from a handler set the slot (`js_focus`); `el.blur()`
         // cannot have, since nothing is focused.
         if windows::focused_node(k) != 0 {
-            cx.notify();
             return;
         }
     }
@@ -1279,12 +1297,17 @@ fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Co
     if new_focus != 0 {
         crate::selection::focus_moved(new_focus);
         let payload = EventPayload { a: old as f64, ..Default::default() };
-        js_dispatch(new_focus, tree::EV_FOCUS, &payload, window, cx);
+        js_dispatch_app(new_focus, tree::EV_FOCUS, &payload, window, cx);
     }
-    // A focus move can change what `:focus` / `:focus-visible` paint even when
-    // no JS handler ran (an `<input>` folds its focus rungs at build time), so
-    // the repaint cannot be left to `flush_changes`.
-    cx.notify();
+}
+
+/// The root this window paints: where gpui's focus rests when the page has
+/// none ([`ensure_root_focus`]).
+fn window_root(k: windows::WinKey) -> u32 {
+    match windows::root_of(k) {
+        0 => tree::read_tree(|t| t.root),
+        popped => popped,
+    }
 }
 
 /// Subscribes `id` to its handle's focus changes, once. gpui fires these from
@@ -2279,7 +2302,12 @@ fn build_node<V: 'static>(
                 // [`ensure_root_focus`] is what keeps something on it when the
                 // app has focused nothing of its own (the browser's "the body
                 // has focus by default").
-                d = d.track_focus(&focus_handle_for(id, None, cx));
+                let h = focus_handle_for(id, None, cx);
+                d = d.track_focus(&h);
+                // Watched with no `tabindex` too: gpui's focus coming back here
+                // is `body` getting it, the blur of whatever had it
+                // (`focus_transition`).
+                watch_focus(id, &h, window, cx);
             } else if id == crate::cache::boundary_root() {
                 // A cache boundary is laid out AS A ROOT inside the box its
                 // wrapper reserved (`Entity::cached` → `layout_as_root`), and a
@@ -2345,16 +2373,15 @@ fn build_node<V: 'static>(
                 .or_else(|| default_tab_index(t, id))
                 .filter(|_| !disabled);
 
-            // Keyboard/focus events and tab navigation need a persistent
-            // FocusHandle. `<input>` owns its own focus handle inside the
-            // native widget — it is decorated through TextInputOptions instead.
-            let focusable = !is_input
-                && !disabled
-                && (tab_index.is_some()
-                    || bit(tree::EV_KEYDOWN)
-                    || bit(tree::EV_KEYUP)
-                    || bit(tree::EV_FOCUS)
-                    || bit(tree::EV_BLUR));
+            // Focus and tab navigation need a persistent FocusHandle.
+            // `<input>` owns its own focus handle inside the native widget —
+            // it is decorated through TextInputOptions instead. Only HTML's
+            // focusable areas take focus: a `tabindex`, or an element focusable
+            // by default. A key or focus LISTENER makes nothing focusable (FO-3,
+            // docs/RUNTIME.md §5.2): a `<span @focus>` never takes focus in a
+            // browser, and a container's `@keydown` hears its focused
+            // descendants' keys by bubbling.
+            let focusable = !is_input && !disabled && tab_index.is_some();
             // gpui's `.focus()` / `.focus_visible()` rungs are keyed on a
             // TRACKED focus handle, so a node with a `:focus` rule needs one
             // even with no listeners and no `tabindex`. It must not become
@@ -3891,54 +3918,136 @@ where
 /// `<input>` focused the editor and then the root's automatic listener focused
 /// the root instead: the caret vanished and the keystrokes went to `document`.
 ///
-/// The focus itself waits until gpui's dispatch is over (`press_focus`). A
-/// browser focuses as the mousedown's DEFAULT action, after its listeners and
+/// The focus itself waits until gpui's dispatch is over ([`apply_press_focus`]).
+/// A browser focuses as the mousedown's DEFAULT action, after its listeners and
 /// their microtask checkpoint. So a `preventDefault()` in any of them cancels it
 /// ([`cancel_press_focus`]); Vue's `@mousedown.prevent` on a mention list or a
-/// toolbar button is how a composer keeps its caret. And a target the
-/// checkpoint removed is left unfocused. The `mousedown` is dispatched by the
-/// innermost box on the target's path that LISTENS, which may be an ancestor
-/// whose listener runs after this one, so the claim waits for it. Only boxes
-/// on that path run at all (`crate::pointer`), so the focus goes to the
-/// target's nearest focusable ancestor, as in a browser — never to a field the
-/// target is painted over.
+/// toolbar button is how a composer keeps its caret. The `mousedown` is
+/// dispatched by the innermost box on the target's path that LISTENS, which may
+/// be an ancestor whose listener runs after this one, so the claim waits for
+/// it. Only boxes on that path run at all (`crate::pointer`), so the focus goes
+/// to the target's nearest focusable ancestor, as in a browser — never to a
+/// field the target is painted over. Only a node HTML lets take focus claims
+/// (FO-3, docs/RUNTIME.md §5.2): with none on the path, the press blurs to
+/// `body`.
 ///
 /// One log line per real focus move, at `dev` kind — this is the exact failure
-/// the meet app's "typing does nothing" turned out to be, and it is invisible
-/// from JS (`focus` events do not fire while the window is inactive: gpui
-/// reports empty focus paths then).
+/// the meet app's "typing does nothing" turned out to be.
 fn claim_press_focus(id: u32, handle: &FocusHandle, window: &mut Window, cx: &mut App) {
-    // Somebody nearer the pointer already took it. Mouse listeners run
-    // TOPMOST-FIRST, so this is the ancestor half of the same gesture — and
-    // without the check the outermost focusable wins every press, which on this
-    // tree is always the document root.
-    if window.default_prevented() {
-        return;
-    }
-    // gpui's own focus-on-press (`track_focus`) backs off from this too.
+    begin_press_focus(window, cx);
+    // gpui's own focus-on-press (`track_focus`, the root's included) backs off:
+    // the press's focus is decided by the claim. An inner box tracked only for
+    // a `:focus-within` rule may already have taken it that way; the step
+    // below puts it where the claim says.
     window.prevent_default();
-    windows::here(window, |w| w.press_focus = Some((id, handle.clone())));
-    window.defer(cx, |window, cx| {
-        let Some((id, handle)) = windows::here(window, |w| w.press_focus.take()) else {
-            return; // the mousedown was cancelled
-        };
-        // The mousedown's checkpoint first, as in a browser (the one
-        // `settle_owed_later` queued finds nothing owed after this).
-        if vn_runtime::bridge::drain_owed() {
-            crate::off_input(|| js_wave_app(window, cx, || true));
-        }
-        if !handle.is_focused(window) {
-            window.focus(&handle, cx);
-            crate::log::record("dev", format!("[focus] press focused node {id}"));
+    // Mouse listeners run TOPMOST-FIRST, so the first claim is the nearest
+    // focusable ancestor of the target, and the rest are its ancestors.
+    windows::here(window, |w| {
+        if !w.press_focus.claims.iter().any(|(c, _)| *c == id) {
+            w.press_focus.claims.push((id, handle.clone()));
         }
     });
+}
+
+/// Starts a mouse-down's focus step, once per press: the build root's capture
+/// listener ([`bind_root_mouse`]) calls this first, and a claim does if that
+/// one did not run.
+fn begin_press_focus(window: &mut Window, cx: &mut App) {
+    let schedule = windows::here(window, |w| {
+        if w.press_focus.pending {
+            return false;
+        }
+        w.press_focus = windows::PressFocus { pending: true, ..Default::default() };
+        true
+    });
+    if schedule {
+        // Deferred: every listener of this mouse-down has claimed, or
+        // cancelled, by the time it runs, and no gpui listener is under it.
+        window.defer(cx, |window, cx| crate::off_input(|| apply_press_focus(window, cx)));
+    }
 }
 
 /// A cancelled `mousedown`: the press focuses nothing, neither the box that
 /// claimed it nor a focusable ancestor nor gpui's own focus-on-press.
 fn cancel_press_focus(window: &mut Window) {
-    windows::here(window, |w| w.press_focus = None);
+    windows::here(window, |w| w.press_focus.cancelled = true);
     window.prevent_default();
+}
+
+/// A mouse-down's default action, when its dispatch is over: the `mousedown`'s
+/// microtask checkpoint, then the focus move, then that move's `blur` /
+/// `focusout` / `focus` / `focusin`, all before the next platform event, so
+/// before `mouseup`, `click` and `contextmenu` (docs/RUNTIME.md §5.22). They
+/// used to come from gpui's focus observer on the next draw: after the
+/// `contextmenu` of a quick right click, so a menu that mounted from it
+/// remembered `body` as the focused element.
+///
+/// - Claimed: the nearest claiming node still in the document takes the focus.
+///   Chromium moves a press's node to its parent when it is removed, so a
+///   button the checkpoint removed gives the focus to its focusable ancestor.
+/// - Nothing on the path can take focus: the root takes gpui's focus, which is
+///   `body` having it, and the old node blurs.
+/// - Cancelled, or taken by a native widget before the root heard it (a
+///   scrollbar): the focus stays. A text field's editor focuses itself on its
+///   own press before any listener runs, and keeps it (L-2, §5.8).
+fn apply_press_focus(window: &mut Window, cx: &mut App) {
+    let press = windows::here(window, |w| std::mem::take(&mut w.press_focus));
+    // The mousedown's checkpoint first, as in a browser (the one
+    // `settle_owed_later` queued finds nothing owed after this).
+    if vn_runtime::bridge::drain_owed() {
+        js_wave_app(window, cx, || true);
+    }
+    let k = windows::key(window);
+    let root = window_root(k);
+    let root_handle = || FOCUS_HANDLES.with(|m| m.borrow().get(&root).cloned());
+    if !press.cancelled && (!press.claims.is_empty() || press.reached) {
+        let in_document = |id: u32| tree::read_tree(|t| t.node(id).is_some() && reaches_painted_root(t, id));
+        let target = match press.claims.into_iter().find(|(id, _)| in_document(*id)) {
+            Some(claim) => Some(claim),
+            None => root_handle().map(|h| (root, h)),
+        };
+        if let Some((id, h)) = target {
+            if !h.is_focused(window) {
+                window.focus(&h, cx);
+                if id != root {
+                    crate::log::record("dev", format!("[focus] press focused node {id}"));
+                }
+            }
+        }
+    } else if let Some(now) = focused_node(window, cx) {
+        // gpui's own focus-on-press may have moved the focus to an inner box
+        // tracked only for a `:focus-within` rule, which HTML never focuses:
+        // put it back.
+        if now != root && !windows::of(k, |w| w.focus_subs.contains_key(&now)) {
+            let slot = windows::focused_node(k);
+            let back = if slot != 0 { focus_target_of(slot, cx) } else { root_handle() };
+            if let Some(h) = back {
+                window.focus(&h, cx);
+            }
+        }
+    }
+    sync_focus_events(window, cx);
+}
+
+/// Reports gpui's focus to JS now, if it moved past what JS was last told:
+/// the `blur` / `focus` events the observer would send on the next draw.
+fn sync_focus_events(window: &mut Window, cx: &mut App) {
+    let k = windows::key(window);
+    let now = match focused_node(window, cx) {
+        None => 0,
+        Some(id) if id == window_root(k) => 0,
+        Some(id) if windows::of(k, |w| w.focus_subs.contains_key(&id)) => id,
+        // A box that reports no focus (see above): nothing to say.
+        Some(_) => return,
+    };
+    if now == windows::focused_node(k) {
+        return;
+    }
+    focus_transition_app(now, window, cx);
+    // `:focus` / `:focus-visible` paint from the new state.
+    if !repaint_other_windows(cx) {
+        window.refresh();
+    }
 }
 
 /// The gpui group name for an element: its node id, which is unique in the
@@ -4592,20 +4701,21 @@ fn focus_target_of(id: u32, cx: &App) -> Option<FocusHandle> {
     FOCUS_HANDLES.with(|m| m.borrow().get(&id).cloned())
 }
 
-/// `el.focus()`, host-side. Only a node the renderer already decided is
-/// focusable has a handle — a plain `<div>` with no `tabindex`, no key/focus
-/// listener and no `:focus` rule has none, which is exactly the set a browser
-/// refuses to focus too.
+/// The devtools' focus, host-side. Only a focusable area by HTML's rules
+/// ([`could_take_focus`]) that has been built has a handle to focus — a plain
+/// `<div>` with no `tabindex` is refused, as a browser refuses `el.focus()` on
+/// it, whatever listeners or `:focus` rules it carries.
 ///
 /// The `focus`/`blur` events are NOT synthesized here: they come out of the
 /// gpui focus observers ([`watch_focus`]), so programmatic focus reports
 /// identically to a click or a `Tab` — the invariant the module header states.
 pub(crate) fn focus_node(id: u32, window: &mut Window, cx: &mut App) -> Result<(), String> {
-    let Some(handle) = focus_target_of(id, cx) else {
+    let handle = focus_target_of(id, cx).filter(|_| tree::read_tree(|t| could_take_focus(t, id)));
+    let Some(handle) = handle else {
         return Err(format!(
-            "node {id} is not focusable — it has no tabindex, no key/focus listener and no \
-             `:focus` rule, so the renderer never gave it a focus handle (a browser would refuse \
-             `el.focus()` on it for the same reason)"
+            "node {id} is not focusable — it has no tabindex and is not a form control, a link \
+             with href, a summary or contenteditable (a browser would refuse `el.focus()` on it \
+             too; a key or focus listener does not make an element focusable)"
         ));
     };
     window.focus(&handle, cx);
@@ -4658,22 +4768,21 @@ pub(crate) enum FocusAnswer {
     Refused,
 }
 
-/// Could `id` get a focus handle once it is built? An `<input>` or
-/// `<textarea>`, a `tabindex`, an element HTML makes focusable by default, or
-/// a key/focus listener, and never an actually-disabled control: the
-/// renderer's own rules (see `bind_events` and `build_input`).
+/// Is `id` a focusable area by HTML's rules? An `<input>` or `<textarea>`, a
+/// `tabindex`, or an element HTML makes focusable by default, and never an
+/// actually-disabled control: the renderer's own rules (see `bind_events` and
+/// `build_input`). A listener counts for nothing (FO-3), and neither does a
+/// `:focus` rule, which gives a node a handle for gpui's style rungs only.
 fn could_take_focus(t: &Tree, id: u32) -> bool {
     let Some(n) = t.node(id) else { return false };
     let tag = t.name(n.tag);
     if tag != "input" && tag != "textarea" && actually_disabled(t, id) {
         return false;
     }
-    let bits = (1u64 << tree::EV_KEYDOWN) | (1 << tree::EV_KEYUP) | (1 << tree::EV_FOCUS) | (1 << tree::EV_BLUR);
-    tag == "input"
-        || tag == "textarea"
-        || t.prop(id, "tabindex").is_some()
-        || default_tab_index(t, id).is_some()
-        || n.listeners & bits != 0
+    // A `tabindex` that is not an integer is ignored, as the build ignores it
+    // (`tab_index_of`).
+    let tab_index = t.prop(id, "tabindex").is_some_and(|v| v.trim().parse::<isize>().is_ok());
+    tag == "input" || tag == "textarea" || tab_index || default_tab_index(t, id).is_some()
 }
 
 /// Is the CSS `visibility` of `id` `visible`? The nearest DECLARED value on it
@@ -4749,7 +4858,9 @@ pub(crate) fn js_focus(id: u32, window: &mut Window, cx: &mut App) -> FocusAnswe
     let k = windows::key(window);
     let (in_document, could) =
         tree::read_tree(|t| (t.node(id).is_some() && reaches_painted_root(t, id), could_take_focus(t, id)));
-    if !in_document {
+    // Not a focusable area: a node with only a `:focus` rule has a handle, but
+    // a browser refuses to focus it.
+    if !in_document || !could {
         return FocusAnswer::Refused;
     }
     // Another window paints it: that window's tick applies it.
@@ -4758,11 +4869,8 @@ pub(crate) fn js_focus(id: u32, window: &mut Window, cx: &mut App) -> FocusAnswe
         return FocusAnswer::Pending;
     }
     let Some(handle) = focus_target_of(id, cx) else {
-        if could {
-            queue_focus(id);
-            return FocusAnswer::Pending;
-        }
-        return FocusAnswer::Refused;
+        queue_focus(id);
+        return FocusAnswer::Pending;
     };
     PENDING_FOCUS.with(|p| p.set((0, 0)));
     let old = windows::focused_node(k);
@@ -5062,14 +5170,10 @@ fn build_img<V: 'static>(
     });
 
     let mask = pointer_mask(node);
-    let bit = |ev: u32| mask & (1u64 << ev) != 0;
     // `<img>` is not focusable in HTML without `tabindex`.
     let tab_index = tab_index_of(t, id);
-    let focusable = tab_index.is_some()
-        || bit(tree::EV_KEYDOWN)
-        || bit(tree::EV_KEYUP)
-        || bit(tree::EV_FOCUS)
-        || bit(tree::EV_BLUR);
+    // A key or focus listener makes nothing focusable (FO-3).
+    let focusable = tab_index.is_some();
     let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
@@ -5266,15 +5370,11 @@ where
     presentational_size(t, id, e.style());
 
     let mask = pointer_mask(node);
-    let bit = |ev: u32| mask & (1 << ev) != 0;
     // Not focusable in HTML without `tabindex` (an inline <svg> is not a
     // control), same as <img>.
     let tab_index = tab_index_of(t, id);
-    let focusable = tab_index.is_some()
-        || bit(tree::EV_KEYDOWN)
-        || bit(tree::EV_KEYUP)
-        || bit(tree::EV_FOCUS)
-        || bit(tree::EV_BLUR);
+    // A key or focus listener makes nothing focusable (FO-3).
+    let focusable = tab_index.is_some();
     let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
@@ -5446,14 +5546,10 @@ fn build_lottie<V: 'static>(
     }
 
     let mask = pointer_mask(node);
-    let bit = |ev: u32| mask & (1u64 << ev) != 0;
     // Like `<img>`: not focusable in HTML without `tabindex`.
     let tab_index = tab_index_of(t, id);
-    let focusable = tab_index.is_some()
-        || bit(tree::EV_KEYDOWN)
-        || bit(tree::EV_KEYUP)
-        || bit(tree::EV_FOCUS)
-        || bit(tree::EV_BLUR);
+    // A key or focus listener makes nothing focusable (FO-3).
+    let focusable = tab_index.is_some();
     let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
@@ -5617,16 +5713,12 @@ fn build_video<V: 'static>(
     }
 
     let mask = pointer_mask(node);
-    let bit = |ev: u32| mask & (1u64 << ev) != 0;
     // Like `<img>` and `<lottie>`: not focusable in HTML without `tabindex`.
     // (A browser's `<video controls>` IS focusable, but we render no controls —
     // the app's own buttons are the focusable things.)
     let tab_index = tab_index_of(t, id);
-    let focusable = tab_index.is_some()
-        || bit(tree::EV_KEYDOWN)
-        || bit(tree::EV_KEYUP)
-        || bit(tree::EV_FOCUS)
-        || bit(tree::EV_BLUR);
+    // A key or focus listener makes nothing focusable (FO-3).
+    let focusable = tab_index.is_some();
     let styled_focus = node.computed.as_ref().is_some_and(|cs| cs.needs_focus_handle());
     let handle = (focusable || styled_focus).then(|| focus_handle_for(id, tab_index, cx));
     if let Some(h) = &handle {
@@ -6552,6 +6644,49 @@ mod tests {
             assert!(actually_disabled(t, inside), "inside a disabled fieldset");
             assert!(!actually_disabled(t, in_legend), "inside its first legend");
             assert!(!actually_disabled(t, div), "a div is never disabled");
+        });
+    }
+
+    /// FO-3 (docs/RUNTIME.md §5.2): a key or focus listener makes nothing
+    /// focusable, as in Chrome 156, where a press on a `<span>` with a focus
+    /// listener or a `<div>` with a keydown listener blurs to `body` and
+    /// `focus()` on either is refused. A `tabindex`, even -1, does, and one
+    /// that is not an integer is ignored.
+    #[test]
+    fn a_listener_makes_nothing_focusable() {
+        with_tree(|t| {
+            let root = t.create_root();
+            let el = |t: &mut Tree, tag: &str, props: &[(&str, &str)]| {
+                let tag = t.intern(tag);
+                let id = t.create_element(tag);
+                for (k, v) in props {
+                    let key = t.intern(k);
+                    t.set_prop(id, key, Some((*v).to_string()));
+                }
+                t.insert(id, root, 0);
+                id
+            };
+            let tag = el(t, "span", &[]);
+            t.set_listener(tag, tree::EV_FOCUS, true);
+            t.set_listener(tag, tree::EV_BLUR, true);
+            let keys = el(t, "div", &[]);
+            t.set_listener(keys, tree::EV_KEYDOWN, true);
+            t.set_listener(keys, tree::EV_KEYUP, true);
+            let role = el(t, "div", &[("role", "button")]);
+            t.set_listener(role, tree::EV_KEYDOWN, true);
+            let minus = el(t, "div", &[("tabindex", "-1")]);
+            let junk = el(t, "div", &[("tabindex", "first")]);
+            let label = el(t, "label", &[]);
+            for (id, want, what) in [
+                (tag, false, "a span with a focus listener"),
+                (keys, false, "a div with key listeners"),
+                (role, false, "role=button without tabindex"),
+                (minus, true, "tabindex=-1"),
+                (junk, false, "a tabindex that is not an integer"),
+                (label, false, "a label"),
+            ] {
+                assert_eq!(could_take_focus(t, id), want, "{what}");
+            }
         });
     }
 
