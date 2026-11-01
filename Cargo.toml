@@ -15,6 +15,7 @@ members = [
     "crates/vn-clipboard",  # navigator.clipboard over the SAME gpui clipboard the <input> uses
     "crates/vn-thorvg-sys", # vendored ThorVG C++ + checked-in FFI (vn-lottie's `thorvg` feature)
     "crates/vn-vpx-sys",    # vendored libvpx VP9 decoder (cc, no nasm) + a safe wrapper (vn-sticker's video)
+    "crates/vn-yuv",        # I420 + alpha to straight BGRA at any size, SIMD (optimised in dev, below)
     "crates/vn-payload",    # VNPK v1 (a packaged exe's app payload) + the one URL→asset-key normaliser
     "crates/vn-desktop",    # argv parser, shell (open/reveal/trash), single instance, custom protocols
     "crates/vn-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)
@@ -151,4 +152,10 @@ opt-level = 2
 # (research/reports/m26/perf-mem-1.md). Nobody steps through it, and it is
 # small, so the rebuild cost is nothing.
 [profile.dev.package.vn-resample]
+opt-level = 3
+
+# The video stickers' pixel kernel, for the same reason: it touches every
+# decoded pixel of every frame on the sticker worker, and at opt-level 0 its
+# SIMD intrinsics are function calls.
+[profile.dev.package.vn-yuv]
 opt-level = 3
