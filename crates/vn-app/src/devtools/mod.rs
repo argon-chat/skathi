@@ -1246,7 +1246,14 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             arg("value").as_deref(),
         ),
         "screenshot" => cmd_screenshot(arg("path").as_deref(), arg("backend").as_deref()),
-        "dialog" => cmd_dialog(arg("op").as_deref(), num("id"), req.get("paths")),
+        "dialog" => cmd_dialog(
+            arg("op").as_deref(),
+            num("id"),
+            req.get("paths"),
+            // A button by label, or by index.
+            arg("button").or_else(|| num("button").map(|n| (n as i64).to_string())),
+        ),
+        "permissions" => cmd_permissions(arg("op").as_deref(), arg("name").as_deref()),
         "type" | "key" => return start_input_command(cmd, req, reply),
         "" => err("no `cmd` in the request"),
         other => err(format!("unknown command `{other}` — see docs/DEVTOOLS.md")),
@@ -2778,17 +2785,20 @@ fn cmd_storage(
     }
 }
 
-/// `dialog`: the file dialogs waiting for a scripted answer — `<input
-/// type=file>`, the File System Access pickers, `<a download>`'s Save As
-/// (crates/vn-desktop dialog/scripted.rs). Only under `VN_DIALOGS=scripted`:
-/// a real dialog is the user's, and the devtools never answer one.
+/// `dialog`: the dialogs waiting for a scripted answer — `<input
+/// type=file>`, the File System Access pickers, `<a download>`'s Save As,
+/// and the permission prompt (crates/vn-desktop dialog/scripted.rs). Only
+/// under `VN_DIALOGS=scripted`: a real dialog is the user's, and the
+/// devtools never answer one.
 ///
-/// `list` (the default) names each one: its `id`, `window`, `what` (`picker`
-/// or `download`), its kind and filters, `suggestedName`. `answer` finishes
-/// one with `paths` (a JSON array, or one string with `|` between paths; `|`
-/// cannot appear in a Windows path), checked the way the OS dialog would
-/// check them. `cancel` dismisses it as Esc would.
-fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>) -> String {
+/// `list` (the default) names each one: its `id`, `window`, `what` (`picker`,
+/// `download` or `permission`), a file dialog's kind and filters and
+/// `suggestedName`, a question's `instruction` and `buttons`. `answer`
+/// finishes a file dialog with `paths` (a JSON array, or one string with `|`
+/// between paths; `|` cannot appear in a Windows path), checked the way the
+/// OS dialog would check them. `choose` presses a question's `button` (its
+/// label or index). `cancel` dismisses either as Esc would.
+fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>, button: Option<String>) -> String {
     use vn_desktop::dialog::{scripted, scripted_mode};
     if !scripted_mode() {
         return err(
@@ -2815,6 +2825,14 @@ fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>) -> String
                 Err(e) => err(e),
             }
         }
+        "choose" => {
+            let Some(id) = id else { return err("dialog choose needs the dialog's `id` (see `dialog list`)") };
+            let Some(button) = button else { return err("dialog choose needs a `button`: its label or its index") };
+            match scripted::choose(id, &button) {
+                Ok(v) => ok(embed(v)),
+                Err(e) => err(e),
+            }
+        }
         "cancel" => {
             let Some(id) = id else { return err("dialog cancel needs the dialog's `id` (see `dialog list`)") };
             match scripted::cancel(id) {
@@ -2822,7 +2840,30 @@ fn cmd_dialog(op: Option<&str>, id: Option<f64>, paths: Option<&Json>) -> String
                 Err(e) => err(e),
             }
         }
-        other => err(format!("unknown dialog op {other:?} — use \"list\", \"answer\" or \"cancel\"")),
+        other => err(format!("unknown dialog op {other:?} — use \"list\", \"answer\", \"choose\" or \"cancel\"")),
+    }
+}
+
+/// `permissions`: the app's permission states and its stored answers to its
+/// own prompt (crates/vn-permissions, docs/PERMISSIONS.md §5.1).
+///
+/// `list` (the default) gives every capability's four-state `state`, the
+/// stored `decisions` (`allow` / `block`, and when) and the `file` they live
+/// in. `reset` forgets the answer for `name` (`microphone`), or every
+/// answer without one, so the next `getUserMedia` asks again. That is the
+/// way back from a Block besides `appPermissions.request`. A real decision:
+/// unlike `dialog`, this works on any host.
+fn cmd_permissions(op: Option<&str>, name: Option<&str>) -> String {
+    match op.unwrap_or("list") {
+        "list" => ok(Json::from(Raw(vn_permissions::describe_json()))),
+        "reset" => match vn_permissions::reset(name) {
+            Ok(names) => ok(Json::obj(vec![
+                ("reset", Json::arr(names.into_iter().map(Json::s).collect())),
+                ("now", Json::from(Raw(vn_permissions::describe_json()))),
+            ])),
+            Err(e) => err(e),
+        },
+        other => err(format!("unknown permissions op {other:?} — use \"list\" or \"reset\"")),
     }
 }
 

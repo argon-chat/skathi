@@ -59,6 +59,8 @@ use vn_runtime::redjs::webapi::permissions::{
 use vn_runtime::redjs::webapi::util::read_string;
 use vn_runtime::{host_fn, JsRuntime};
 
+pub mod consent;
+pub mod decisions;
 pub mod stub;
 
 #[cfg(target_os = "windows")]
@@ -67,6 +69,7 @@ pub mod win;
 #[cfg(target_os = "macos")]
 pub mod mac;
 
+pub use consent::{set_app_name, set_asker, Asker, Question};
 pub use vn_runtime::redjs::webapi::permissions::{Capability as Cap, PermissionState as State};
 
 /// How many settled requests one frame may deliver. A user cannot answer more
@@ -79,12 +82,85 @@ thread_local! {
     static DISPATCHER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// The backend for this build.
+/// The backend for this build: the platform's, with the app's own prompt on
+/// top for the microphone ([`consent`]).
 ///
 /// A `&'static` because [`api::set_host`] stores one for the life of the
 /// process; there is exactly one OS under one process and no reason to make it
 /// swappable at runtime.
-fn backend() -> &'static dyn PermissionHost {
+fn backend() -> &'static consent::AppConsent {
+    static C: std::sync::OnceLock<consent::AppConsent> = std::sync::OnceLock::new();
+    C.get_or_init(|| consent::AppConsent::new(platform(), consent::Hooks::process()))
+}
+
+/// Where the app's answers to its prompt are kept: `permissions.json` in its
+/// storage folder (vn-app passes it once storage is installed). `None`, or
+/// never called: for this run only.
+pub fn set_decisions_file(path: Option<std::path::PathBuf>) {
+    backend().set_decisions_file(path);
+}
+
+/// Forgets the stored answer for `name` (a permission name), or for every
+/// capability with a prompt when `None`, so the next `getUserMedia` asks
+/// again. The devtools `permissions reset` (docs/DEVTOOLS.md). Returns the
+/// names forgotten.
+pub fn reset(name: Option<&str>) -> Result<Vec<&'static str>, String> {
+    let cap = match name {
+        None => None,
+        Some(n) => Some(Capability::from_web_name(n).ok_or_else(|| format!("{n:?} is not a permission name"))?),
+    };
+    if let Some(c) = cap {
+        if !consent::prompts(c) {
+            return Err(format!("{n} has no prompt of this app's to reset: its state is the platform's", n = c.web_name()));
+        }
+    }
+    Ok(backend().reset(cap).into_iter().map(Capability::web_name).collect())
+}
+
+/// The devtools `permissions` listing: every capability's four-state status,
+/// the stored answers and where they are kept.
+pub fn describe_json() -> String {
+    let b = backend();
+    let mut s = String::from("{\"states\":[");
+    for (i, cap) in Capability::ALL.iter().copied().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&format!(
+            "{{\"name\":\"{}\",\"state\":\"{}\",\"prompts\":{}}}",
+            cap.web_name(),
+            state_of(cap).as_str(),
+            consent::prompts(cap)
+        ));
+    }
+    s.push_str("],\"decisions\":[");
+    for (i, (cap, e)) in b.decisions().into_iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&format!("{{\"name\":\"{}\",\"decision\":\"{}\",\"at\":{}}}", cap.web_name(), e.decision.as_str(), e.at));
+    }
+    let file = b.decisions_file().map(|p| p.display().to_string());
+    s.push_str(&format!("],\"file\":{}}}", file.map(|f| json_string(&f)).unwrap_or_else(|| "null".into())));
+    s
+}
+
+fn json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The platform's own backend.
+fn platform() -> &'static dyn PermissionHost {
     #[cfg(target_os = "windows")]
     {
         static H: win::WindowsHost = win::WindowsHost::new();
@@ -204,7 +280,8 @@ fn can_request_state(state: PermissionState) -> bool {
 /// backend is a few registry reads and one lazily-spawned watcher thread that
 /// only starts once something actually subscribes.
 pub fn install(rt: &JsRuntime) {
-    api::set_host(backend());
+    let host: &'static dyn PermissionHost = backend();
+    api::set_host(host);
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_permissions_platform", 0, vn_permissions_platform as *const _),
         ("__vn_permissions_query", 1, vn_permissions_query as *const _),
@@ -232,8 +309,12 @@ pub fn pump() {
     if dispatcher == 0 {
         return;
     }
-    let Some(host) = api::host() else { return };
-    let mut settled = host.drain_settled();
+    if api::host().is_none() {
+        return;
+    }
+    // Not the host's `drain_settled`: that queue also carries the requests
+    // `getUserMedia` made, which redjs settles itself.
+    let mut settled = api::take_settled();
     if settled.is_empty() {
         return;
     }

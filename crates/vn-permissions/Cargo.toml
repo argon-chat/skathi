@@ -13,6 +13,9 @@ publish = false
 # the abstraction belongs on the redjs side of the seam and only the *backends*
 # live here. Exactly the layering `vn-voice` has with `redjs::webapi::pcm`.
 vn-runtime = { path = "../vn-runtime" }
+# `permissions.json`, the app's answers to its own prompt (src/decisions.rs).
+# Already in the graph (gpui, vn-desktop), so it adds no crate to the build.
+serde_json = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # 0.62 rather than gpui's 0.61, matching `vn-video`: this crate shares no types
@@ -23,8 +26,12 @@ vn-runtime = { path = "../vn-runtime" }
 # `Security_Authorization_AppCapabilityAccess` is deliberately absent — see
 # `win.rs` for the probe that showed `AppCapability::CheckAccess` returns
 # `Allowed` for capabilities that do not exist when the caller is unpackaged.
+# The prompt the app shows itself is not here either: it is vn-desktop's
+# TaskDialog, reached through `consent::set_asker`. `Globalization` is only
+# `GetUserDefaultUILanguage`, which picks the prompt's language.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Security",
     "Win32_System_Registry",
     "Win32_System_Threading",

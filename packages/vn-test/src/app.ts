@@ -95,6 +95,25 @@ export type PendingDialog = {
   suggestedName: string | null;
   [more: string]: unknown;
 };
+/** A question waiting for a button: the app's permission prompt (`dialog list`, kind "ask"). */
+export type PendingQuestion = {
+  id: number;
+  window: number;
+  what: "permission";
+  kind: "ask";
+  title: string;
+  instruction: string;
+  content: string;
+  /** Labels, access-key `&` removed: "Allow", "Block". */
+  buttons: string[];
+  default: string | null;
+};
+/** `permissions list` (crates/vn-permissions `describe_json`). */
+export type PermissionsInfo = {
+  states: { name: string; state: "granted" | "denied" | "prompt" | "unsupported"; prompts: boolean }[];
+  decisions: { name: string; decision: "allow" | "block"; at: number }[];
+  file: string | null;
+};
 
 const live = new Set<VnApp>();
 let hooked = false;
@@ -279,9 +298,44 @@ export class VnApp {
 
   // -- file dialogs (VN_DIALOGS=scripted, which launch() sets) ---------------
 
-  /** The file dialogs waiting for an answer, oldest first. */
-  dialogs(): Promise<PendingDialog[]> {
-    return this.send("dialog", { op: "list" });
+  /** The file dialogs waiting for an answer, oldest first (questions are `questions()`). */
+  async dialogs(): Promise<PendingDialog[]> {
+    const all: (PendingDialog | PendingQuestion)[] = await this.send("dialog", { op: "list" });
+    return all.filter((d): d is PendingDialog => d.kind !== "ask");
+  }
+
+  // -- the permission prompt (a question dialog, VN_DIALOGS=scripted) -------
+
+  /** The questions waiting for a button, oldest first: the permission prompt. */
+  async questions(): Promise<PendingQuestion[]> {
+    const all: (PendingDialog | PendingQuestion)[] = await this.send("dialog", { op: "list" });
+    return all.filter((d): d is PendingQuestion => d.kind === "ask");
+  }
+
+  /** Waits until a question is pending and returns the oldest one. */
+  async waitForQuestion(timeoutMs = 5000): Promise<PendingQuestion> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const [first] = await this.questions();
+      if (first) return first;
+      if (Date.now() > deadline) throw new Error(`no question (permission prompt) opened within ${timeoutMs} ms`);
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  /** Presses `button` (its label, `"Allow"` / `"Block"`, or its index) in question `id`. */
+  chooseDialog(id: number, button: string | number): Promise<{ id: number; chose: string }> {
+    return this.send("dialog", { op: "choose", id, button: String(button) });
+  }
+
+  /** The app's permission states, its stored prompt answers and their file (`permissions`). */
+  permissions(): Promise<PermissionsInfo> {
+    return this.send("permissions", { op: "list" });
+  }
+
+  /** Forgets the stored prompt answer for `name` (every one without), so the next request asks again. */
+  resetPermissions(name?: string): Promise<{ reset: string[]; now: PermissionsInfo }> {
+    return this.send("permissions", name ? { op: "reset", name } : { op: "reset" });
   }
 
   /**
@@ -552,10 +606,12 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
   if (env.VN_WINDOW_FOCUS === undefined) env.VN_WINDOW_FOCUS = "never";
   Object.assign(env, options.env ?? {});
   // A test never opens the machine's microphone, whatever the app or a spec
-  // asks for: getUserMedia is a NotAllowedError for the whole run
-  // (crates/vn-voice/src/lib.rs, `capture_gate`). Set after the spec's env on
-  // purpose, so no spec can turn it off.
-  env.VN_MEDIA_CAPTURE = "deny";
+  // asks for: getUserMedia is a NotAllowedError for the whole run, and no
+  // prompt is shown (crates/vn-voice/src/lib.rs, `capture_gate`). Set after
+  // the spec's env on purpose, so no spec can turn it off. The one other
+  // value a spec may ask for is `fake`: a synthetic 440 Hz microphone that
+  // opens no device, behind the same prompt (answered with `chooseDialog`).
+  if (env.VN_MEDIA_CAPTURE?.trim().toLowerCase() !== "fake") env.VN_MEDIA_CAPTURE = "deny";
 
   log(`[vn-test] ${label}: launching ${exe} on ${slotDir || "its own %TEMP% slot"}`);
   const child = spawn(exe, options.args ?? [], {

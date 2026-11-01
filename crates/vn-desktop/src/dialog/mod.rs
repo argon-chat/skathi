@@ -56,7 +56,10 @@ use crate::fs::writable::Data;
 use crate::fs::{self, fail_io, Access};
 use crate::{Done, Fail};
 
+pub mod ask;
 pub mod scripted;
+
+pub use ask::{ask, Ask, Reply};
 
 #[cfg(target_os = "windows")]
 mod win;
@@ -68,6 +71,9 @@ mod imp {
     use super::*;
     pub(super) fn pick(_: &Native, _: isize, _: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
         Err(Fail::new("NotSupportedError", "file dialogs are not implemented on this platform yet"))
+    }
+    pub(super) fn ask(_: &Ask, _: isize, _: &Cancellation) -> Result<Option<usize>, Fail> {
+        Err(Fail::new("NotSupportedError", "native questions are not implemented on this platform yet"))
     }
     pub(super) fn known_folder(_: Known) -> Option<PathBuf> {
         None
@@ -576,6 +582,31 @@ pub fn start(native: Native, then: Then, label: &'static str) -> String {
 /// How often a queued download looks for its turn.
 const QUEUE_POLL: std::time::Duration = std::time::Duration::from_millis(25);
 
+/// On a dialog thread: waits for `ticket`'s turn on `st`, which comes after
+/// the tickets queued before it, once the owner has no dialog open; then
+/// claims the owner (`active`). `false` when the owner closed meanwhile: the
+/// ticket has left the queue and nothing is claimed, so the HWND is never
+/// used.
+fn wait_turn(st: &OwnerState, ticket: u64, cancel: &Cancellation) -> bool {
+    loop {
+        if cancel.is_requested() {
+            st.leave_queue(ticket);
+            return false;
+        }
+        let front = st.queue.lock().unwrap_or_else(|p| p.into_inner()).front() == Some(&ticket);
+        if front && !st.active.swap(true, Ordering::AcqRel) {
+            break;
+        }
+        std::thread::sleep(QUEUE_POLL);
+    }
+    st.leave_queue(ticket);
+    if cancel.is_requested() {
+        st.active.store(false, Ordering::Release);
+        return false;
+    }
+    true
+}
+
 fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static str) -> String {
     let key = owner.map(|o| o.key).unwrap_or(0);
     let hwnd = owner.map(|o| o.hwnd).unwrap_or(0);
@@ -596,28 +627,9 @@ fn start_owned(owner: Option<Owner>, native: Native, then: Then, label: &'static
     }
     let cancel = Cancellation(st.clone());
     let spawned = std::thread::Builder::new().name("vn-dialog".into()).spawn(move || {
-        if queued {
-            // Its turn comes after the downloads clicked before it, once the
-            // owner has no dialog open. A window that closes meanwhile cancels
-            // it before it ever uses the HWND.
-            loop {
-                if cancel.is_requested() {
-                    st.leave_queue(ticket);
-                    crate::settle(token, Ok(cancelled()));
-                    return;
-                }
-                let front = st.queue.lock().unwrap_or_else(|p| p.into_inner()).front() == Some(&ticket);
-                if front && !st.active.swap(true, Ordering::AcqRel) {
-                    break;
-                }
-                std::thread::sleep(QUEUE_POLL);
-            }
-            st.leave_queue(ticket);
-            if cancel.is_requested() {
-                st.active.store(false, Ordering::Release);
-                crate::settle(token, Ok(cancelled()));
-                return;
-            }
+        if queued && !wait_turn(&st, ticket, &cancel) {
+            crate::settle(token, Ok(cancelled()));
+            return;
         }
         let picked = if scripted_mode() {
             scripted::pick(&native, key, label, &cancel)

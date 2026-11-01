@@ -13,8 +13,14 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 
-use windows::core::{w, Interface, BOOL, HSTRING, PCWSTR};
+use windows::core::{s, w, Interface, BOOL, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{ERROR_CANCELLED, HWND, LPARAM, TRUE, WPARAM};
+use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+use windows::Win32::UI::Controls::{
+    TASKDIALOGCONFIG, TASKDIALOG_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TDF_POSITION_RELATIVE_TO_WINDOW,
+    TDF_USE_HICON_MAIN,
+};
+use windows::Win32::UI::WindowsAndMessaging::{GetClassLongPtrW, GCLP_HICON, HICON};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
     COINIT_DISABLE_OLE1DDE,
@@ -125,6 +131,87 @@ unsafe extern "system" fn close_dialog(hwnd: HWND, _: LPARAM) -> BOOL {
         }
     }
     TRUE
+}
+
+/// `TaskDialogIndirect`, resolved at run time. It exists only in comctl32 v6,
+/// which a process gets through its manifest (vn-app's exe carries gpui's).
+/// Linked statically, it would keep every binary of this crate that has no
+/// such manifest, its unit tests among them, from loading at all.
+type TaskDialogIndirectFn = unsafe extern "system" fn(
+    *const TASKDIALOGCONFIG,
+    *mut i32,
+    *mut i32,
+    *mut BOOL,
+) -> windows::core::HRESULT;
+
+fn task_dialog_indirect() -> Option<TaskDialogIndirectFn> {
+    static F: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    let p = *F.get_or_init(|| unsafe {
+        let module = LoadLibraryW(w!("comctl32.dll")).ok()?;
+        GetProcAddress(module, s!("TaskDialogIndirect")).map(|f| f as usize)
+    });
+    // SAFETY: the export's documented signature.
+    p.map(|p| unsafe { std::mem::transmute::<usize, TaskDialogIndirectFn>(p) })
+}
+
+/// The first button's id; button `i` is `BUTTON_BASE + i`.
+const BUTTON_BASE: i32 = 100;
+
+/// Asks `q` in a TaskDialog owned by `owner` (0 = none): the index of the
+/// button pressed, or `Ok(None)` for Esc, the close box, or the owner's
+/// closing (the same 100 ms timer as a file dialog: a TaskDialog is a
+/// `#32770` too).
+pub(super) fn ask(q: &super::Ask, owner: isize, cancel: &Cancellation) -> Result<Option<usize>, Fail> {
+    let Some(show) = task_dialog_indirect() else {
+        return Err(Fail::new(
+            "NotSupportedError",
+            "TaskDialogIndirect is not available: this process has no Common Controls 6 manifest",
+        ));
+    };
+    let _timer = CancellationTimer::new(cancel.clone())?;
+    if cancel.is_requested() {
+        return Ok(None);
+    }
+    let title = HSTRING::from(q.title.as_str());
+    let instruction = HSTRING::from(q.instruction.as_str());
+    let content = HSTRING::from(q.content.as_str());
+    let labels: Vec<HSTRING> = q.buttons.iter().map(|b| HSTRING::from(b.as_str())).collect();
+    let buttons: Vec<TASKDIALOG_BUTTON> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, l)| TASKDIALOG_BUTTON { nButtonID: BUTTON_BASE + i as i32, pszButtonText: PCWSTR(l.as_ptr()) })
+        .collect();
+    let mut config = TASKDIALOGCONFIG::default();
+    config.cbSize = std::mem::size_of::<TASKDIALOGCONFIG>() as u32;
+    config.hwndParent = HWND(owner as *mut core::ffi::c_void);
+    // Esc and the close box are a dismissal; the dialog opens over its owner.
+    let mut flags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
+    // The owner window's own icon, so the question says whose it is.
+    let icon = if owner != 0 { unsafe { GetClassLongPtrW(HWND(owner as *mut core::ffi::c_void), GCLP_HICON) } } else { 0 };
+    if icon != 0 {
+        flags |= TDF_USE_HICON_MAIN;
+        config.Anonymous1.hMainIcon = HICON(icon as *mut core::ffi::c_void);
+    }
+    // TASKDIALOGCONFIG is packed: its fields are assigned whole, never borrowed.
+    config.dwFlags = flags;
+    config.pszWindowTitle = PCWSTR(title.as_ptr());
+    config.pszMainInstruction = PCWSTR(instruction.as_ptr());
+    if !q.content.is_empty() {
+        config.pszContent = PCWSTR(content.as_ptr());
+    }
+    config.cButtons = buttons.len() as u32;
+    config.pButtons = buttons.as_ptr();
+    config.nDefaultButton = BUTTON_BASE + q.default.min(buttons.len().saturating_sub(1)) as i32;
+    let mut pressed = 0i32;
+    let hr = unsafe { show(&config, &mut pressed, std::ptr::null_mut(), std::ptr::null_mut()) };
+    if let Err(e) = hr.ok() {
+        return Err(fail("TaskDialogIndirect", &e));
+    }
+    if cancel.is_requested() {
+        return Ok(None);
+    }
+    let i = pressed - BUTTON_BASE;
+    Ok((0..buttons.len() as i32).contains(&i).then_some(i as usize))
 }
 
 /// Shows the dialog for `n`, owned by `owner` (0 = none). `Ok(None)` is a

@@ -1361,6 +1361,11 @@ fn main() {
             // A file dialog is owned by the window published for the call
             // that asked for it (docs/DESKTOP.md, pickers).
             vn_desktop::dialog::set_owner_resolver(dialogs::owner);
+            // The microphone prompt is vn-desktop's question dialog, owned
+            // the same way, and named after the app's window title
+            // (docs/PERMISSIONS.md §5.1).
+            vn_permissions::set_asker(dialogs::ask_permission);
+            vn_permissions::set_app_name(&cfg.title);
             // The backend behind redjs's `localStorage`, plus
             // `__vn_storage_*` for the `appStorage` extension. Must happen
             // before any app code runs: the area is loaded lazily on first
@@ -1373,6 +1378,12 @@ fn main() {
                 rt,
                 if devtools_mode { Some("vn-devtools".to_string()) } else { boot_mode::app_name() },
             );
+            // The answers to the app's own permission prompt live beside its
+            // localStorage, in the storage folder as of now
+            // (crates/vn-permissions/src/decisions.rs). Without storage they
+            // last for the run.
+            #[cfg(feature = "storages")]
+            vn_permissions::set_decisions_file(vn_storage::cookies::folder().map(|f| f.join("permissions.json")));
             // TEMPORARY (m26): the Argon client's `ArgonSecure` cookie, when the
             // build or `VN_ARGON_SECURE` opts in. After the jar's file is loaded
             // (just above) and before any JS (src/temp_argon_secure.rs).

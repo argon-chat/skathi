@@ -40,6 +40,8 @@ serde_json = "1"
 #   System_Registry        per-user protocol registration (HKCU only)
 #   Storage_Packaging_Appx GetCurrentPackageFullName (MSIX: skip the registry)
 #   UI_WindowsAndMessaging raising the primary; AllowSetForegroundWindow
+#   UI_Controls            TASKDIALOGCONFIG (the question dialog; the function
+#                          itself is resolved at run time, dialog/win.rs)
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -55,6 +57,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
+    "Win32_UI_Controls",
     "Win32_UI_WindowsAndMessaging",
 ] }
 # `#[implement(IFileOperationProgressSink)]` expands to `::windows_core::…`

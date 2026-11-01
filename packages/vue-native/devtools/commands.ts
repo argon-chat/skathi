@@ -610,21 +610,25 @@ export const COMMANDS: CommandSpec[] = [
   {
     cmd: "dialog",
     description:
-      "The file dialogs waiting for an answer — <input type=file>, the File System Access pickers, " +
-      "<a download>'s Save As — when the app runs with VN_DIALOGS=scripted (nothing reaches the " +
-      "OS then). `list` names each one ({id, window, what, kind, multiple, filters, startIn, " +
-      "suggestedName}); `answer` finishes one with absolute paths, checked as the OS dialog " +
-      "would check them; `cancel` dismisses it as Esc would. Without VN_DIALOGS=scripted every " +
-      "dialog is real and this command refuses.",
+      "The dialogs waiting for an answer — <input type=file>, the File System Access pickers, " +
+      "<a download>'s Save As, and the app's permission prompt — when the app runs with " +
+      "VN_DIALOGS=scripted (nothing reaches the OS then). `list` names each one ({id, window, " +
+      "what, kind, ...}: a file dialog's multiple, filters, startIn, suggestedName; a question's " +
+      "(kind \"ask\") instruction and buttons); `answer` finishes a file dialog with absolute " +
+      "paths, checked as the OS dialog would check them; `choose` presses a question's button " +
+      "(its label, e.g. \"Allow\", or its index); `cancel` dismisses either, as Esc would. " +
+      "Without VN_DIALOGS=scripted every dialog is real and this command refuses.",
     usage: [
       "  dialog   [list]                     dialogs waiting for an answer (VN_DIALOGS=scripted)",
-      "  dialog   answer <id> <path>...      answer one with absolute paths",
+      "  dialog   answer <id> <path>...      answer a file dialog with absolute paths",
+      "  dialog   choose <id> <button>       press a question's button (label or index)",
       "  dialog   cancel <id>                dismiss one, as Esc would",
     ],
     args: {
-      op: str('"list" (default), "answer" or "cancel"'),
-      id: int("the dialog to answer or cancel (from `list`)"),
+      op: str('"list" (default), "answer", "choose" or "cancel"'),
+      id: int("the dialog to answer, choose in or cancel (from `list`)"),
       paths: str("for op=answer: absolute paths, separated by `|` (the wire also takes an array)"),
+      button: str('for op=choose: the button\'s label ("Allow", "Block") or its index'),
     },
     cli: (rest, flags) => {
       const op = rest[0] || "list";
@@ -633,10 +637,38 @@ export const COMMANDS: CommandSpec[] = [
       const id = flagged ?? num(rest[1]);
       if (op !== "list" && id === undefined) die(`dialog ${op} needs the dialog's id`);
       const listed = rest.slice(flagged === undefined ? 2 : 1);
+      if (op === "choose") {
+        const button = typeof flags.button === "string" ? flags.button : listed.join(" ");
+        if (!button) die("dialog choose needs a button: its label or its index");
+        return compact({ op, id, button });
+      }
       const paths = typeof flags.paths === "string" ? flags.paths : listed.length ? listed.join("|") : undefined;
       if (op === "answer" && paths === undefined) die("dialog answer needs at least one path");
       return compact({ op, id, paths });
     },
+  },
+  {
+    cmd: "permissions",
+    description:
+      "The app's permissions: every capability's state (granted / denied / prompt / unsupported), " +
+      "the answers stored for the app's own prompt (microphone: allow / block, and when) and the " +
+      "file they live in (permissions.json in the app's storage folder). `reset` forgets a stored " +
+      "answer, so the next getUserMedia shows the prompt again. That and the app's own " +
+      "appPermissions.request(\"microphone\") are the ways back after Block. It changes a real " +
+      "decision on any host, scripted or not.",
+    usage: [
+      "  permissions [list]                  states, stored answers, where they are kept",
+      "  permissions reset [name]            forget an answer (all of them without a name)",
+    ],
+    args: {
+      op: str('"list" (default) or "reset"'),
+      name: str('for op=reset: the permission, e.g. "microphone" (default: every one with a prompt)'),
+    },
+    cli: (rest, flags) =>
+      compact({
+        op: rest[0] || "list",
+        name: typeof flags.name === "string" ? flags.name : rest[1],
+      }),
   },
   {
     cmd: "raise",

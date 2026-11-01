@@ -30,6 +30,23 @@ pub fn owner() -> Option<vn_desktop::dialog::Owner> {
     crate::window::hwnd_of(key).map(|hwnd| vn_desktop::dialog::Owner { key, hwnd })
 }
 
+/// vn-permissions' prompt, shown as vn-desktop's question dialog: a
+/// TaskDialog owned by the window asking, or under `VN_DIALOGS=scripted` a
+/// question the devtools answer (`dialog choose`).
+pub fn ask_permission(q: vn_permissions::Question, reply: Box<dyn FnOnce(Option<usize>) + Send>) {
+    vn_desktop::dialog::ask(
+        vn_desktop::dialog::Ask {
+            what: "permission",
+            title: q.title,
+            instruction: q.instruction,
+            content: q.content,
+            buttons: q.buttons,
+            default: q.default,
+        },
+        reply,
+    );
+}
+
 /// Removes `handle`'s window, after its file dialog if it has one open.
 pub fn remove_window(handle: AnyWindowHandle, cx: &mut App) {
     if vn_desktop::dialog::owner_closing(handle.window_id().as_u64()) {
