@@ -325,7 +325,48 @@ is not built), so the cost is the transport arithmetic.
 
 ### 8.9 GC drops go through a queue
 
-§3 notes `gc_node_state` has no `Window`. It queues the images instead: `gc`
-pushes `take_all_images()` into a `PENDING_DROPS` list which `frame_tick` drains
-into `App::drop_image` on the next frame. Same for a `src` swap, which retires
-the whole previous state.
+§3 notes `gc_node_state` has no `Window`. It queues the tiles instead: `gc`
+retires the node's tile into its window's drop queue, which that window's next
+frame drains into `App::drop_image`. Same for a `src` swap, which retires the
+whole previous state.
+
+### 8.10 The load and the raster are off the UI thread
+
+§3, §4 and §7 describe the crate's `LottieState`, which loads in the call that
+creates it and rasterises inside the build. The element does neither on the UI
+thread (m26, `research/reports/m26/stickers-1.md` "L"):
+
+- **The UI thread keeps only the transport**, `vn_lottie::Transport`: the
+  playhead, the props, `advance()` and its events. It is `LottieState`'s own
+  transport, split out, so the event stream, the sub-frame playhead and §8.1–8.4
+  are unchanged.
+- **The load is asynchronous.** A file is read and parsed, and the engine
+  loads, on the `vn-lottie` worker thread; an `http(s)` `src` is fetched on
+  gpui's HTTP client first (the element used to refuse one). Until the load
+  lands the element is an empty box, as an `<img>` is before it decodes, and
+  its intrinsic size is unknown. The transport starts on the tick the load
+  lands, with the props the node has then, so `autoplay` decides there whether
+  it plays (§8.4). A `src` that cannot be resolved still fails at once, with
+  the same advisory.
+- **The raster trails the transport by at most one vsync.** Each tick asks the
+  worker for the frame at the playhead, at the box's device-pixel size
+  (`vn_lottie::raster_size_for`, the size `render_frame` draws), for a node
+  that can be seen. The next tick writes the frame into the node's `LiveTile`;
+  in place, that is a present and no build. When the worker falls behind, the
+  newest frame asked for wins. Events go out on the transport's tick, as
+  before, so an `enterFrame` handler sees the frame one vsync before it shows.
+- **Straight alpha.** `vn_lottie::Animation::render_at` draws straight-alpha
+  BGRA, which is what gpui blends; the premultiplied raster darkened
+  antialiased edges.
+- **A node nobody can see draws nothing**: off screen, clipped away by an
+  ancestor, in a hidden page or a detached subtree (§8.8). Its tile keeps the
+  last frame it showed.
+- **Not a reason to repaint.** §4's OR-chain is gone from the host:
+  `lotties_animating()` no longer makes vn-app draw every frame. The pump ticks
+  every frame anyway, and the tick asks for a draw only when a present cannot
+  show a frame (a tile's first frame, a new size, a tile that moved).
+- **Cacheable.** `<lottie>` is no longer one of `crate::cache`'s exclusions: a
+  frame written in place is shown by a replayed sprite, and a first frame, a
+  new size or a tile that moved in the atlas touches the node.
+- The `webworkers` prop's advisory now says rasterisation always runs on a
+  worker.

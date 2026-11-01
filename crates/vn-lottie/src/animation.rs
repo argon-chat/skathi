@@ -88,6 +88,15 @@ impl Animation {
         self.renderer.render_straight(frame, intrinsic, width, height)
     }
 
+    /// Draws the animation at source frame `frame` (absolute, fractional: a
+    /// `<lottie>` playhead, [`crate::Transport::frame`]) filling
+    /// `width × height`, straight-alpha BGRA as [`Self::render`] draws. A
+    /// `<lottie>` box's size is [`crate::raster_size_for`].
+    pub fn render_at(&mut self, frame: f32, width: u32, height: u32) -> Option<&[u8]> {
+        let intrinsic = (self.meta.width.max(1), self.meta.height.max(1));
+        self.renderer.render_straight(frame, intrinsic, width, height)
+    }
+
     /// An estimate of the bytes this animation holds, for the engine's
     /// budget. Neither engine reports its scene, so it is three times the
     /// document's JSON (W0 measured a parsed `.tgs` at 1.0–1.7× its JSON, and

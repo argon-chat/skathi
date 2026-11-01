@@ -15,6 +15,7 @@ use image::{Frame, RgbaImage};
 use serde_json::Value;
 
 use crate::backend::{self, Backend, Rasteriser};
+use crate::transport::Transport;
 use crate::normalize::{self, Normalization};
 
 /// Why a Lottie could not be loaded.
@@ -111,14 +112,14 @@ pub enum Direction {
 }
 
 impl Direction {
-    fn sign(self) -> f32 {
+    pub(crate) fn sign(self) -> f32 {
         match self {
             Self::Forward => 1.0,
             Self::Reverse => -1.0,
         }
     }
 
-    fn flipped(self) -> Self {
+    pub(crate) fn flipped(self) -> Self {
         match self {
             Self::Forward => Self::Reverse,
             Self::Reverse => Self::Forward,
@@ -213,21 +214,8 @@ struct CachedFrame {
 /// as it keeps `TextInputState` for `<input>` — see `CONTRACT.md`.
 pub struct LottieState {
     renderer: Rasteriser,
-    meta: LottieMeta,
     advisories: Vec<String>,
-
-    frame: f32,
-    playing: bool,
-    finished: bool,
-    speed: f32,
-    direction: Direction,
-    /// The direction `play()` resets to; `Bounce` flips `direction` but must not
-    /// lose the authored one.
-    base_direction: Direction,
-    loop_mode: LoopMode,
-    play_mode: PlayMode,
-    loops_done: u32,
-    segment: Option<(f32, f32)>,
+    transport: Transport,
 
     cached: Option<CachedFrame>,
     /// Held one extra frame before being handed back for `Window::drop_image`.
@@ -275,18 +263,8 @@ impl LottieState {
 
         Ok(Self {
             renderer,
-            frame: meta.in_point,
-            meta,
             advisories,
-            playing: true,
-            finished: false,
-            speed: 1.0,
-            direction: Direction::Forward,
-            base_direction: Direction::Forward,
-            loop_mode: LoopMode::default(),
-            play_mode: PlayMode::default(),
-            loops_done: 0,
-            segment: None,
+            transport: Transport::new(meta),
             cached: None,
             previous: None,
             retired: Vec::new(),
@@ -295,7 +273,12 @@ impl LottieState {
 
     /// Everything the file said about itself.
     pub fn meta(&self) -> &LottieMeta {
-        &self.meta
+        self.transport.meta()
+    }
+
+    /// The transport alone.
+    pub fn transport(&self) -> &Transport {
+        &self.transport
     }
 
     /// Which rasteriser is drawing this animation.
@@ -309,252 +292,106 @@ impl LottieState {
         &self.advisories
     }
 
-    // ---- transport, mirroring lottie-web's `AnimationItem` --------------
+    // ---- transport: [`Transport`]'s, see there -----------------------
 
-    /// `play()` — resume from the current playhead. Replaying a completed
-    /// animation rewinds it, as lottie-web does.
+    /// [`Transport::play`].
     pub fn play(&mut self) {
-        if self.finished {
-            self.finished = false;
-            self.loops_done = 0;
-            self.direction = self.base_direction;
-            self.frame = self.segment_entry();
-        }
-        self.playing = true;
+        self.transport.play()
     }
 
-    /// `pause()` — freeze the playhead where it is.
+    /// [`Transport::pause`].
     pub fn pause(&mut self) {
-        self.playing = false;
+        self.transport.pause()
     }
 
-    /// `stop()` — pause and rewind to the start of the active segment.
+    /// [`Transport::stop`].
     pub fn stop(&mut self) {
-        self.playing = false;
-        self.finished = false;
-        self.loops_done = 0;
-        self.direction = self.base_direction;
-        self.frame = self.segment_entry();
+        self.transport.stop()
     }
 
-    /// `goToAndStop(frame, true)` — jump to an absolute source frame, clamped
-    /// into the active segment.
+    /// [`Transport::seek_frame`].
     pub fn seek_frame(&mut self, frame: f32) {
-        let (start, end) = self.active_segment();
-        self.frame = frame.clamp(start, end);
-        self.finished = false;
+        self.transport.seek_frame(frame)
     }
 
-    /// Jump to a normalised position in `0.0..=1.0` across the active segment.
+    /// [`Transport::seek_progress`].
     pub fn seek_progress(&mut self, progress: f32) {
-        let (start, end) = self.active_segment();
-        self.frame = start + (end - start) * progress.clamp(0.0, 1.0);
-        self.finished = false;
+        self.transport.seek_progress(progress)
     }
 
-    /// The playhead, in absolute source frames.
+    /// [`Transport::frame`].
     pub fn frame(&self) -> f32 {
-        self.frame
+        self.transport.frame()
     }
 
-    /// The playhead as `0.0..=1.0` across the active segment.
+    /// [`Transport::progress`].
     pub fn progress(&self) -> f32 {
-        let (start, end) = self.active_segment();
-        if end <= start {
-            return 0.0;
-        }
-        ((self.frame - start) / (end - start)).clamp(0.0, 1.0)
+        self.transport.progress()
     }
 
-    /// `setSpeed()` — a multiplier on wall-clock time. Clamped non-negative;
-    /// play *backwards* with [`Self::set_direction`], as lottie-web does.
+    /// [`Transport::set_speed`].
     pub fn set_speed(&mut self, speed: f32) {
-        self.speed = speed.max(0.0);
+        self.transport.set_speed(speed)
     }
 
-    /// The current speed multiplier.
+    /// [`Transport::speed`].
     pub fn speed(&self) -> f32 {
-        self.speed
+        self.transport.speed()
     }
 
-    /// `setDirection()`. Under [`PlayMode::Bounce`] this also becomes the
-    /// direction a `stop()`/replay returns to.
+    /// [`Transport::set_direction`].
     pub fn set_direction(&mut self, direction: Direction) {
-        self.direction = direction;
-        self.base_direction = direction;
+        self.transport.set_direction(direction)
     }
 
-    /// The direction the playhead is currently travelling — under
-    /// [`PlayMode::Bounce`] this flips at every boundary.
+    /// [`Transport::direction`].
     pub fn direction(&self) -> Direction {
-        self.direction
+        self.transport.direction()
     }
 
-    /// `setLoop()`. Changing the mode clears the finished flag so a completed
-    /// animation can be made to loop without an explicit `play()`.
+    /// [`Transport::set_loop_mode`].
     pub fn set_loop_mode(&mut self, loop_mode: LoopMode) {
-        self.loop_mode = loop_mode;
-        if loop_mode != LoopMode::None {
-            self.finished = false;
-        }
+        self.transport.set_loop_mode(loop_mode)
     }
 
-    /// The current loop mode.
+    /// [`Transport::loop_mode`].
     pub fn loop_mode(&self) -> LoopMode {
-        self.loop_mode
+        self.transport.loop_mode()
     }
 
-    /// `mode="normal" | "bounce"`.
+    /// [`Transport::set_play_mode`].
     pub fn set_play_mode(&mut self, play_mode: PlayMode) {
-        self.play_mode = play_mode;
+        self.transport.set_play_mode(play_mode)
     }
 
-    /// `playSegments([in, out])` — restrict playback to a frame range. `None`
-    /// (`resetSegments()`) restores the full `in_point..out_point`.
-    ///
-    /// The playhead is pulled into the new range, so a segment change never
-    /// leaves it stranded outside the window it is allowed to play.
+    /// [`Transport::set_segment`].
     pub fn set_segment(&mut self, segment: Option<(f32, f32)>) {
-        self.segment = segment.map(|(start, end)| {
-            let (start, end) = if start <= end {
-                (start, end)
-            } else {
-                (end, start)
-            };
-            (
-                start.clamp(self.meta.in_point, self.meta.out_point),
-                end.clamp(self.meta.in_point, self.meta.out_point),
-            )
-        });
-        let (start, end) = self.active_segment();
-        self.frame = self.frame.clamp(start, end);
+        self.transport.set_segment(segment)
     }
 
-    /// The frame range playback is currently confined to.
+    /// [`Transport::active_segment`].
     pub fn active_segment(&self) -> (f32, f32) {
-        self.segment
-            .unwrap_or((self.meta.in_point, self.meta.out_point))
+        self.transport.active_segment()
     }
 
-    /// True while the animation is playing and has not completed — i.e. the
-    /// host must keep pumping frames for this node.
-    ///
-    /// The host's `animating()` OR-chain includes this, the same way it already
-    /// includes the CSS transition animator. See `CONTRACT.md`.
+    /// [`Transport::needs_frame`].
     pub fn needs_frame(&self) -> bool {
-        self.playing && !self.finished && self.speed > 0.0
+        self.transport.needs_frame()
     }
 
-    /// True once playback has run to its end and stopped on its own.
+    /// [`Transport::is_finished`].
     pub fn is_finished(&self) -> bool {
-        self.finished
+        self.transport.is_finished()
     }
 
-    /// True while the transport is running (independent of completion).
+    /// [`Transport::is_playing`].
     pub fn is_playing(&self) -> bool {
-        self.playing
+        self.transport.is_playing()
     }
 
-    // ---- the tick -------------------------------------------------------
-
-    /// Moves the playhead by `dt` of wall-clock time and reports what happened.
-    ///
-    /// A paused, finished or zero-speed animation returns an all-false
-    /// [`Advance`] without touching anything, so calling this unconditionally on
-    /// every node every frame is free.
+    /// [`Transport::advance`].
     pub fn advance(&mut self, dt: Duration) -> Advance {
-        let mut result = Advance {
-            loop_count: self.loops_done,
-            ..Advance::default()
-        };
-        if !self.needs_frame() {
-            return result;
-        }
-
-        let (start, end) = self.active_segment();
-        let span = end - start;
-        let before = self.frame;
-
-        // A degenerate segment has nowhere to go: treat reaching it as an
-        // immediate completion rather than spinning on a zero-length loop.
-        if span <= 0.0 {
-            self.frame = start;
-            self.finish(&mut result);
-            return result;
-        }
-
-        let mut remaining = dt.as_secs_f32() * self.meta.frame_rate * self.speed;
-        // Bounded because each iteration consumes at least the distance to the
-        // near boundary, and a bounce/wrap resets to the far one.
-        let mut guard = 0;
-        while remaining > 0.0 && guard < 64 {
-            guard += 1;
-            let to_boundary = match self.direction {
-                Direction::Forward => end - self.frame,
-                Direction::Reverse => self.frame - start,
-            };
-
-            if remaining < to_boundary {
-                self.frame += remaining * self.direction.sign();
-                break;
-            }
-
-            // Landed on (or past) the boundary.
-            remaining -= to_boundary;
-            self.frame = match self.direction {
-                Direction::Forward => end,
-                Direction::Reverse => start,
-            };
-            self.loops_done += 1;
-            result.loops_completed += 1;
-            result.loop_count = self.loops_done;
-
-            let keep_going = match self.loop_mode {
-                LoopMode::None => false,
-                LoopMode::Loop => true,
-                // lottie-web's numeric `loop` is a count of *repeats*, so the
-                // animation plays n + 1 times before completing.
-                LoopMode::Count(count) => self.loops_done < count,
-            };
-            if !keep_going {
-                self.finish(&mut result);
-                break;
-            }
-
-            match self.play_mode {
-                PlayMode::Normal => {
-                    self.frame = match self.direction {
-                        Direction::Forward => start,
-                        Direction::Reverse => end,
-                    }
-                }
-                PlayMode::Bounce => self.direction = self.direction.flipped(),
-            }
-        }
-
-        self.frame = self.frame.clamp(start, end);
-        if self.frame != before {
-            result.entered_frame = Some(self.frame);
-            result.needs_repaint = true;
-        }
-        result.elapsed_frames = self.frame - start;
-        result.needs_repaint |= result.completed || result.loops_completed > 0;
-        result
-    }
-
-    fn finish(&mut self, result: &mut Advance) {
-        self.playing = false;
-        self.finished = true;
-        result.completed = true;
-    }
-
-    /// Where a fresh pass over the segment starts, given the direction.
-    fn segment_entry(&self) -> f32 {
-        let (start, end) = self.active_segment();
-        match self.base_direction {
-            Direction::Forward => start,
-            Direction::Reverse => end,
-        }
+        self.transport.advance(dt)
     }
 
     // ---- rasterisation --------------------------------------------------
@@ -588,7 +425,8 @@ impl LottieState {
             return None;
         }
 
-        let frame_bits = self.frame.to_bits();
+        let frame = self.transport.frame();
+        let frame_bits = frame.to_bits();
         if let Some(cached) = &self.cached {
             if cached.frame_bits == frame_bits
                 && cached.width == width_px
@@ -598,13 +436,14 @@ impl LottieState {
             }
         }
 
-        let intrinsic = (self.meta.width.max(1), self.meta.height.max(1));
+        let meta = self.transport.meta();
+        let intrinsic = (meta.width.max(1), meta.height.max(1));
         let raster_scale = (width_px as f32 / intrinsic.0 as f32)
             .min(height_px as f32 / intrinsic.1 as f32);
         let (raster_width, raster_height) = backend::raster_size(intrinsic, raster_scale);
         let raster = self
             .renderer
-            .render(self.frame, raster_scale, raster_width, raster_height)?;
+            .render(frame, raster_scale, raster_width, raster_height)?;
 
         // `RgbaImage` is a byte container here, not a colour-space claim: the
         // bytes are already BGRA, which is what gpui's atlas uploads.
@@ -653,6 +492,22 @@ impl LottieState {
         images.extend(self.cached.take().map(|cached| cached.image));
         images
     }
+}
+
+/// The raster [`LottieState::render_frame`] draws for a box of `size` logical
+/// px on a `scale` display: the animation at one texel per device px under
+/// `contain`, sized as both backends size it. `None` for a box with no area.
+/// A host that draws elsewhere ([`crate::Animation::render_at`]) asks this for
+/// the same pixels.
+pub fn raster_size_for(meta: &LottieMeta, size: (f32, f32), scale: f32) -> Option<(u32, u32)> {
+    let width_px = (size.0 * scale).round().max(0.0) as u32;
+    let height_px = (size.1 * scale).round().max(0.0) as u32;
+    if width_px == 0 || height_px == 0 {
+        return None;
+    }
+    let intrinsic = (meta.width.max(1), meta.height.max(1));
+    let raster_scale = (width_px as f32 / intrinsic.0 as f32).min(height_px as f32 / intrinsic.1 as f32);
+    Some(backend::raster_size(intrinsic, raster_scale))
 }
 
 /// A loaded document, before any transport: what [`LottieState`] and

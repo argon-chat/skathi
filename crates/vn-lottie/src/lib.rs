@@ -65,13 +65,15 @@ pub mod backend;
 pub mod element;
 pub mod normalize;
 pub mod state;
+pub mod transport;
 
 pub use animation::Animation;
+pub use transport::Transport;
 pub use backend::Backend;
 pub use element::{lottie, LottieFit, LottieOptions};
 pub use normalize::Normalization;
 pub use state::{
-    Advance, Direction, LoopMode, LottieError, LottieEvent, LottieMeta, LottieState, PlayMode,
+    raster_size_for, Advance, Direction, LoopMode, LottieError, LottieEvent, LottieMeta, LottieState, PlayMode,
 };
 
 /// True if any state in `states` still needs the frame pump running.

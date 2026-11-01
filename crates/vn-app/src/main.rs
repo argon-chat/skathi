@@ -806,7 +806,10 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
     // regardless, and its tick reports a decoded frame as `media_moved` when
     // the video can be on screen. A video that only feeds a canvas, or sits
     // outside the viewport, no longer redraws the window at the display rate.
-    let moving = vn_tree::animating() || media_moved || vn_tree::lotties_animating();
+    // Nor is a playing `<lottie>` any more: its frames are written into its
+    // tile by the same tick, which asks for a draw only when a present cannot
+    // show them (crates/vn-lottie/CONTRACT.md §8.10).
+    let moving = vn_tree::animating() || media_moved;
     if flush == vn_tree::Flush::DrawnBySync {
         // Counted for the frame trace: a forced layout already drew this tree,
         // so unless something else moves, the draw below only repeats it.

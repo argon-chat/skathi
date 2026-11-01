@@ -43,8 +43,11 @@
 //! A boundary is refused when its subtree contains anything whose per-frame
 //! work does not survive a replay:
 //!
-//! * **`<input>`/`<textarea>`, `<img>`, `<svg>`, `<video>`, `<lottie>`** —
-//!   native widgets and decoders that repaint on their own clock;
+//! * **`<input>`/`<textarea>`, `<img>`, `<svg>`, `<video>`** — native widgets
+//!   and decoders that repaint on their own clock. (`<lottie>` and
+//!   `<vn-sticker>` are not: their frames are written into a tile a replayed
+//!   sprite samples, and a tile that moves touches its node — `crate::lottie`,
+//!   `render::sticker`);
 //! * an **out-of-flow box** (`position: absolute|fixed`) or a **group anchor**
 //!   (`.group(name)` is registered during the paint walk);
 //! * a subtree holding a node whose transition or animation is moving this
@@ -286,8 +289,9 @@ fn min_nodes() -> u32 {
 /// whole 4 000-node chat re-rendered at the display's rate. Now the moving
 /// nodes and their ancestors are collected here ([`HOT`]) at `now`, the same
 /// instant `build_node` samples the overlays at, and only a boundary on that
-/// path is refused. A `<lottie>` or a `<video>` never needed the global
-/// refusal: its tag already blocks every boundary above it ([`node_blocks`]).
+/// path is refused. A `<video>` never needed the global refusal: its tag
+/// already blocks every boundary above it ([`node_blocks`]). A `<lottie>`
+/// needs none: its frames are tile writes a replay shows.
 ///
 /// The frame a node STOPS moving is the one that must not replay: the last
 /// recording of its subtree, if there is one, predates the animation. A
@@ -364,7 +368,7 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     }
     if matches!(
         t.name(node.tag),
-        "input" | "textarea" | "img" | "svg" | "video" | "lottie" | "canvas" | "iframe"
+        "input" | "textarea" | "img" | "svg" | "video" | "canvas" | "iframe"
     ) {
         return true;
     }

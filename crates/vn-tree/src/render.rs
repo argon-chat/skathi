@@ -5356,8 +5356,9 @@ fn build_lottie<V: 'static>(
     control_area: Option<WindowControlArea>,
 ) -> AnyElement {
     let win = windows::key(window);
-    // Load (once per `src`) and push this frame's props into the transport.
-    let intrinsic = crate::lottie::sync(t, id, win);
+    // Load (once per `src`, off the UI thread) and push this frame's props
+    // into the transport.
+    let intrinsic = crate::lottie::sync(t, id, win, &mut **cx);
 
     let mut d = with_control_area(div().id(id as usize), id, control_area, win);
     d = crate::aria::apply(d, t, id, node);
@@ -5431,20 +5432,17 @@ fn build_lottie<V: 'static>(
             // element mirrors that component. CONTRACT.md §6.
             .unwrap_or(vn_lottie::LottieFit::Contain);
 
-        let options = vn_lottie::LottieOptions {
-            size,
-            scale: window.scale_factor(),
-            object_fit,
-            // gpui's image element implements `filter: grayscale(1)` natively,
-            // but the cascade does not carry `filter` yet — wire it here the
-            // day `Extras` grows the property.
-            grayscale: false,
-        };
-        if let Some(child) =
-            crate::lottie::with_state(id, |s| vn_lottie::lottie(s, &options, window, &mut **cx))
-        {
-            d = d.child(child);
-        }
+        // The tile the worker's frames are written into (`crate::lottie`), and
+        // the box the next one is drawn for. gpui's image element implements
+        // `filter: grayscale(1)` natively, but the cascade does not carry
+        // `filter` yet — wire it here the day `Extras` grows the property.
+        d = d.child(match crate::lottie::paint(id, win, size, window.scale_factor()) {
+            Some(image) => gpui::img(gpui::ImageSource::Render(image))
+                .object_fit(object_fit.into())
+                .size_full()
+                .into_any_element(),
+            None => div().size_full().into_any_element(),
+        });
     }
 
     let mask = pointer_mask(node);

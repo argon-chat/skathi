@@ -958,12 +958,35 @@ pub(crate) fn read_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
         }
     }
     let path = resolve_path(tag, src)?;
-    std::fs::read(&path).map_err(|e| {
-        format!(
-            "<{tag} src=\"{src}\">: could not read {} — {e}",
-            path.display()
-        )
-    })
+    read_file(tag, src, &path)
+}
+
+/// What [`read_bytes`] reads, without reading a file yet: the bytes of a
+/// `data:` or `blob:` URL or a packaged asset, which are in memory, or the
+/// path of a file, for a caller that reads it on another thread with
+/// [`read_file`] (`<lottie>`, `crate::lottie`). Same grammar, same errors.
+pub(crate) enum Readable {
+    Bytes(Vec<u8>),
+    File(PathBuf),
+}
+
+pub(crate) fn readable(tag: &str, src: &str) -> Result<Readable, String> {
+    let src = src.trim();
+    let scheme = scheme_of(src);
+    if src.is_empty() || scheme == "data" || scheme == "blob" {
+        return read_bytes(tag, src).map(Readable::Bytes);
+    }
+    if scheme.is_empty() {
+        if let Some(hit) = stored(tag, src) {
+            return hit.map(|(_, bytes)| Readable::Bytes(bytes.to_vec()));
+        }
+    }
+    resolve_path(tag, src).map(Readable::File)
+}
+
+/// A file [`read_bytes`] resolved, read on any thread.
+pub(crate) fn read_file(tag: &str, src: &str, path: &std::path::Path) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| format!("<{tag} src=\"{src}\">: could not read {} — {e}", path.display()))
 }
 
 /// The FILE PATH behind a `src`, for elements that hand the *file* to something

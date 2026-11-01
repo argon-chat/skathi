@@ -699,3 +699,43 @@ fn concurrent_loads_and_renders_do_not_corrupt_the_engine() {
         }
     });
 }
+
+/// A [`vn_lottie::Transport`] on its own is the state's transport: the same
+/// start, the same playhead and the same events, tick for tick, through loops,
+/// a bounce, a segment and a reverse.
+#[test]
+fn a_transport_alone_plays_as_the_state_does() {
+    let mut state = load("spinning-star.tgs");
+    let mut transport = vn_lottie::Transport::new(state.meta().clone());
+    assert_eq!(transport.frame(), state.frame());
+    assert_eq!(transport.is_playing(), state.is_playing());
+    let ticks = [16u64, 17, 250, 3, 1000, 33, 16, 500];
+    let set = |s: &mut LottieState, t: &mut vn_lottie::Transport, step: usize| match step {
+        2 => {
+            s.set_loop_mode(LoopMode::Count(2));
+            t.set_loop_mode(LoopMode::Count(2));
+        }
+        3 => {
+            s.set_play_mode(PlayMode::Bounce);
+            t.set_play_mode(PlayMode::Bounce);
+        }
+        5 => {
+            s.set_segment(Some((5.0, 20.0)));
+            t.set_segment(Some((5.0, 20.0)));
+            s.set_direction(Direction::Reverse);
+            t.set_direction(Direction::Reverse);
+            s.play();
+            t.play();
+        }
+        _ => {}
+    };
+    for (step, ms) in ticks.iter().enumerate() {
+        set(&mut state, &mut transport, step);
+        let a = state.advance(Duration::from_millis(*ms));
+        let b = transport.advance(Duration::from_millis(*ms));
+        assert_eq!(a, b, "tick {step}");
+        assert_eq!(state.frame().to_bits(), transport.frame().to_bits(), "tick {step}");
+        assert_eq!(state.is_finished(), transport.is_finished(), "tick {step}");
+        assert_eq!(a.events().collect::<Vec<LottieEvent>>(), b.events().collect::<Vec<LottieEvent>>());
+    }
+}

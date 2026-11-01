@@ -815,8 +815,11 @@ pub fn animating() -> bool {
 }
 
 /// True while any `<lottie>` still needs frames (crates/vn-lottie/CONTRACT.md
-/// §4). Folded into the host's `animating()` OR-chain next to [`animating`], so
-/// a playing animation keeps the pump awake and a paused one lets it sleep.
+/// §4), or a load or a raster is out on its worker.
+///
+/// Not a reason to repaint (§8.10): the pump ticks every frame anyway, and
+/// [`frame_tick`] writes a `<lottie>`'s frames into its tile, asking for a
+/// draw only when a present cannot show them.
 pub fn lotties_animating() -> bool {
     lottie::any_playing()
 }
@@ -980,7 +983,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
 pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     pointer::arm_hover_tick(window);
     img::evict_pending(window, cx);
-    lottie::drain_pending_drops_for(window, cx);
+    lottie::window_tick(window, cx);
     video::drain_pending_drops_for(window, cx);
     video::drain_pending_uploads(window);
     render::sticker::window_tick(window);
@@ -998,6 +1001,7 @@ pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
 pub fn forget_window(key: windows::WinKey) {
     windows::forget(key);
     render::sticker::forget_window(key);
+    lottie::forget_window(key);
 }
 
 /// The page became hidden or shown (minimised, or on another virtual desktop):

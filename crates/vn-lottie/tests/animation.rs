@@ -35,6 +35,39 @@ const ALL: &[&str] = &[
     "spinning-star.tgs",
 ];
 
+/// vue-native's `<lottie>` draws on a worker with [`Animation::render_at`] at
+/// [`raster_size_for`]: the same size as `render_frame`'s raster, and the same
+/// picture at a fractional playhead, in any box.
+#[test]
+fn render_at_draws_render_frames_picture_at_a_fractional_playhead() {
+    use vn_lottie::raster_size_for;
+    for backend in backends() {
+        for name in ["star.json", "spinning-star.tgs", "position-linear.json"] {
+            let Ok(mut state) = LottieState::load_with(backend, &bytes(name)) else { continue };
+            let mut animation = load(backend, name);
+            for (size, scale, at) in [((128.0, 128.0), 1.0, 7.5), ((90.0, 40.0), 1.5, 12.25), ((33.0, 77.0), 1.25, 0.0)] {
+                let frame = state.meta().in_point + at;
+                state.seek_frame(frame);
+                let image = state.render_frame(size, scale).expect("a frame");
+                let (w, h) = raster_size_for(state.meta(), size, scale).expect("a raster");
+                let got = image.size(0);
+                assert_eq!((w, h), (got.width.0 as u32, got.height.0 as u32), "{name} on {backend} at {size:?}×{scale}");
+                let premultiplied = image.as_bytes(0).expect("bytes").to_vec();
+                let straight = animation.render_at(frame, w, h).expect("a frame").to_vec();
+                assert_eq!(straight.len(), premultiplied.len());
+                for (s, p) in straight.chunks_exact(4).zip(premultiplied.chunks_exact(4)) {
+                    assert!((s[3] as i32 - p[3] as i32).abs() <= 1, "{name} on {backend}: alpha {s:?} vs {p:?}");
+                    for c in 0..3 {
+                        let again = (s[c] as u32 * s[3] as u32 + 127) / 255;
+                        assert!((again as i32 - p[c] as i32).abs() <= 2, "{name} on {backend}: {s:?} vs {p:?}");
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(raster_size_for(load(Backend::preferred(), "star.json").meta(), (0.0, 50.0), 1.0), None);
+}
+
 /// The same frame through `<lottie>`'s premultiplied path and `Animation`'s
 /// straight one: premultiplying the straight bytes gives `<lottie>`'s back, so
 /// only the alpha convention differs, never the picture.
