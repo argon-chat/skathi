@@ -13,6 +13,7 @@
 // and WebSocket: on `events`, whose devtools are on from boot, and on
 // `devtools-late`, which turns them on itself after the runtime has run.
 
+import { readFileSync } from "node:fs";
 import { afterAll, expect, test } from "bun:test";
 import { launch } from "../src/index";
 
@@ -63,6 +64,42 @@ test("after location.reload() the runtime's classes are new, ResizeObserver fire
   expect(await until("__VN_TEST_RO_SEEN__ > 0")).toBe(true);
   const { entries } = await app.logs(0);
   expect(entries.some((e) => e.text.includes("re-runs the app in the SAME JavaScript realm"))).toBe(true);
+}, T);
+
+// A browser's navigation ends the old document's calls, captures and audio
+// (crates/vn-app/src/reload.rs `end_media`). Before m26 voice-fixes-1 a voice
+// room survived the reload — still in the call, still publishing — because
+// the new `livekit-client` shim could never reach it, and an AudioContext
+// kept playing (a looping ringtone rang on). A room here is an engine made
+// through the host fn the shim uses (no connect: no network); the reload must
+// retire it without the frame waiting on it.
+test("location.reload() ends the old page's voice rooms and AudioContexts", async () => {
+  expect(await until("document.querySelector('#trigger')")).toBe(true);
+  await js(`(() => {
+    const ctx = new AudioContext();
+    const mute = ctx.createGain(); mute.gain.value = 0; mute.connect(ctx.destination);
+    const src = ctx.createBufferSource();
+    src.buffer = ctx.createBuffer(1, 4800, 48000); src.loop = true; src.connect(mute); src.start();
+    const room = __vn_voice_create("{}");
+    globalThis.__VN_TEST_MEDIA__ = { ctx, room, t: Date.now() };
+    globalThis.mediaOldApp = 1;
+    location.reload();
+    return "asked";
+  })()`);
+  expect(await until("typeof mediaOldApp === 'undefined' && document.querySelector('#trigger')")).toBe(true);
+  expect(await js("__VN_TEST_MEDIA__.room > 0 && __VN_TEST_MEDIA__.ctx.state")).toBe("closed");
+  // The old room id is gone: a call on it is the synchronous refusal (0).
+  expect(await js("String(__vn_voice_call(__VN_TEST_MEDIA__.room, 1, 'null'))")).toBe("0");
+  // The host's own line (stderr, so the host log rather than the JS ring).
+  const ended = readFileSync(app.hostLog, "utf8")
+    .split(/\r?\n/)
+    .find((t) => t.includes("the old page's media ended"));
+  expect(ended).toBeDefined();
+  expect(ended).toContain("1 voice room(s) leaving");
+  expect(ended).toContain("1 AudioContext(s) closed");
+  // The advisory (said once, at the first reload) names what a reload closes.
+  const { entries } = await app.logs(0);
+  expect(entries.some((e) => e.text.includes("voice rooms (with their peer connections), media tracks"))).toBe(true);
 }, T);
 
 

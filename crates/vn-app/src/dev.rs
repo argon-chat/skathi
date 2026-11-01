@@ -428,6 +428,10 @@ fn cold_restart(rt: &JsRuntime) {
     ) {
         eprintln!("[dev] teardown: {}\n{}", e.header, e.stack);
     }
+    // A new vendor.js is a new `livekit-client` shim that can never reach the
+    // old rooms: end them, and the old page's captures and AudioContexts, as
+    // a reload does. (A hot restart keeps them — the shim reseeds.)
+    crate::reload::end_media(rt, "cold restart");
     // The Network panel's divider between the two runs (devtools/net.rs).
     #[cfg(vn_devtools)]
     crate::devtools::mark_reload("cold restart: vendor.js changed");

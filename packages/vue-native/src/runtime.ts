@@ -3951,9 +3951,14 @@ function activeElement(): MirrorElement | null {
 //    - every `window` / `document` listener added through the runtime for
 //      an event the host does not source (`resize`, `message`, `storage`…).
 //
+//    The host then ends the old page's media as a navigation does
+//    (crates/vn-app/src/reload.rs `end_media`): every voice room leaves, with
+//    its peer connections, every MediaStreamTrack stops (an unused microphone
+//    is released) and every AudioContext closes.
+//
 //    What stays, and is said once when a reload happens: globals the old app
 //    set, fetches in flight (they settle into the old promise chains),
-//    IndexedDB connections, voice rooms, and the fact that `DOMContentLoaded`
+//    IndexedDB connections, and the fact that `DOMContentLoaded`
 //    / `load` do not fire again. `beforeunload` is not asked.
 
 type Fn = (...args: unknown[]) => unknown;
@@ -4106,9 +4111,10 @@ const realm = (() => {
     warnCompat(
       "location.reload",
       "location.reload() re-runs the app in the SAME JavaScript realm: its timers, animation frames, " +
-        "WebSockets and window/document listeners are closed and the globals it added are deleted, but " +
+        "WebSockets, window/document listeners, voice rooms (with their peer connections), media tracks " +
+        "and AudioContexts are closed and the globals it added are deleted, but " +
         "changes it made to built-in objects and to globals that were already there stay, fetches in " +
-        "flight settle into the old code, IndexedDB connections and voice rooms stay until the old code " +
+        "flight settle into the old code, IndexedDB connections stay until the old code " +
         "ends them, beforeunload is not asked, and DOMContentLoaded / load do not fire again",
     );
     try {

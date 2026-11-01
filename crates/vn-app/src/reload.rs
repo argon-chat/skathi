@@ -27,8 +27,9 @@
 //!   MODIFIED, plus globals it made non-configurable (counted in an
 //!   advisory);
 //! - fetches in flight still settle into the old app's promise chains;
-//! - IndexedDB connections and voice rooms stay open until the old code
-//!   closes them;
+//! - IndexedDB connections stay open until the old code closes them.
+//!   (Voice rooms, captures and `AudioContext`s do NOT: [`end_media`] ends
+//!   them as a browser's navigation does);
 //! - `beforeunload` is not asked (a reload the app requested is not vetoed);
 //! - `DOMContentLoaded` / `load` fired once per process and do not fire again
 //!   (`document.readyState` stays `"complete"`).
@@ -74,8 +75,38 @@ fn run(rt: &JsRuntime) {
     ) {
         eprintln!("[vn] reload teardown: {}\n{}", e.header, e.stack);
     }
+    end_media(rt, "location.reload()");
     // The Network panel's divider between the two runs (devtools/net.rs).
     #[cfg(vn_devtools)]
     crate::devtools::mark_reload("location.reload()");
     crate::boot_mode::reboot(rt);
+}
+
+/// What a browser's navigation ends with the old document, after its
+/// `pagehide` and teardown have run: its calls (every voice room leaves, and
+/// with it its peer connections and the capture feeding them), its captures
+/// (every `MediaStreamTrack` stops and an unused microphone is released) and
+/// its `AudioContext`s (a looping ringtone stops with them).
+///
+/// Never blocks the frame: each voice engine leaves on its own thread, within
+/// about a second (`vn_voice::close_all`). `why` names the caller in the log.
+pub fn end_media(rt: &JsRuntime, why: &str) {
+    let rooms = vn_voice::close_all();
+    #[cfg(feature = "audio")]
+    let (tracks, contexts) = {
+        use vn_runtime::redjs::webapi::{audio, mediastream};
+        let g = rt.ctx().raw();
+        (mediastream::stop_all(g), audio::close_all(g))
+    };
+    #[cfg(not(feature = "audio"))]
+    let (tracks, contexts) = {
+        let _ = rt;
+        (0usize, 0usize)
+    };
+    if rooms + tracks + contexts > 0 {
+        eprintln!(
+            "[vn] {why}: the old page's media ended — {rooms} voice room(s) leaving, {tracks} capture track(s) \
+             stopped, {contexts} AudioContext(s) closed"
+        );
+    }
 }
