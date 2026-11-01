@@ -2577,10 +2577,11 @@ pub fn restyle_all() {
     sync_runtime_sheets();
     let env = env();
     // Viewport units are flattened to px at sheet-compile time, exactly like
-    // `rem` — so a resize has to recompile, and only when the sheet actually
-    // contains a `vh`/`vw`. Almost none do; the ones that do cannot do without
-    // it (`max-h-[85vh]` is the only thing keeping reka's dialog inside the
-    // window, and dropping it turned the dialog into a full-window black slab).
+    // `rem` — so a resize has to re-resolve them ([`rebase_viewport`]), and
+    // only when the sheet actually contains a `vh`/`vw`. Almost none do; the
+    // ones that do cannot do without it (`max-h-[85vh]` is the only thing
+    // keeping reka's dialog inside the window, and dropping it turned the
+    // dialog into a full-window black slab).
     // **A-M05, the phase-1 guard (docs/MULTIWINDOW.md §6.2 option C).** `vw` /
     // `vh` / `rem` are flattened to px at SHEET-COMPILE time, into one
     // process-wide basis, so two differently-sized windows sharing a
@@ -2596,10 +2597,7 @@ pub fn restyle_all() {
     // primary window's viewport.
     let basis_moved = vn_css::set_viewport_basis(env.viewport_width, env.viewport_height);
     if basis_moved && vn_css::uses_viewport_units() {
-        recompile_sheet(crate::perf::FullReason::ViewportBasis, &format!(
-            "viewport basis is now {}x{}px — recompiling the stylesheet (it uses vh/vw units)",
-            env.viewport_width, env.viewport_height
-        ));
+        rebase_viewport(env.viewport_width, env.viewport_height);
     }
     // …and the INLINE styles, which no recompile reaches: each body that names
     // a viewport unit is re-parsed against the new basis (m26; see
@@ -2768,6 +2766,33 @@ fn recompile_sheet(reason: crate::perf::FullReason, why: &str) -> bool {
     crate::perf::note_sheet_compile(took.elapsed().as_secs_f32() * 1000.0, len, before, crate::perf::live_bytes());
     with_tree(|t| t.mark_dirty());
     true
+}
+
+/// The viewport basis moved under a sheet that uses `vh`/`vw`: re-resolves just
+/// the rules that use one, in the installed engine
+/// ([`vn_css::Engine::rebase_viewport`]), or recompiles the sheet when the
+/// engine cannot. A window drag does this on every step, and a recompile of the
+/// Argon client's sheet is ~60 ms (research/reports/m26/perf-mem-3.md §2).
+///
+/// Unlike a recompile it keeps the engine, so running transitions and
+/// animations are not cancelled. The resize itself already marked the whole
+/// document for a restyle (`crate::set_env`); this marks it again for the
+/// callers that move the basis some other way.
+fn rebase_viewport(width: f32, height: f32) {
+    let took = std::time::Instant::now();
+    let rebased = ENGINE.with(|e| e.borrow_mut().as_mut().is_some_and(|e| e.rebase_viewport()));
+    if !rebased {
+        recompile_sheet(crate::perf::FullReason::ViewportBasis, &format!(
+            "viewport basis is now {width}x{height}px — recompiling the stylesheet (it uses vh/vw units)"
+        ));
+        return;
+    }
+    crate::log::record("dev", format!(
+        "[css] viewport basis is now {width}x{height}px — re-resolved the stylesheet's vh/vw rules ({:.1} ms)",
+        took.elapsed().as_secs_f32() * 1000.0
+    ));
+    crate::perf::note_full(crate::perf::FullReason::ViewportBasis);
+    with_tree(|t| t.mark_dirty());
 }
 
 /// One recompile to adopt the root's font-size, and one more in case that
@@ -3251,6 +3276,55 @@ mod tests {
         ENGINE.with(|eng| with_tree(|t| t.restyle(eng.borrow().as_ref(), &env())));
         assert_eq!(size(shell), Some((Some(1000.0), Some(500.0))));
         assert_eq!(size(child).and_then(|s| s.0), Some(500.0));
+    }
+
+    /// A SHEET's `vw`/`vh` follow a resize: re-resolved in the installed
+    /// engine (`rebase_viewport`), or, with a viewport unit inside
+    /// `@keyframes`, by compiling the sheet again. Same answer either way.
+    #[test]
+    fn sheet_viewport_units_follow_the_viewport() {
+        let width = |id: u32| {
+            read_tree(|t| match t.node(id)?.computed.as_ref()?.base.size.width? {
+                gpui::Length::Definite(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(p))) => {
+                    Some(f32::from(p))
+                }
+                _ => None,
+            })
+        };
+        let resize = |w: f32, h: f32| {
+            if set_env(vn_css::Env { viewport_width: w, viewport_height: h, ..vn_css::Env::default() }) {
+                with_tree(|t| t.mark_dirty());
+            }
+            restyle_all();
+        };
+        resize(1000.0, 800.0);
+        assert!(set_stylesheet_with_head(".box, .wide { width: 50vw } .wide { min-height: 10vh }".into(), vec![]));
+        let (bx, wide) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let bx = t.create_element(div);
+            t.insert(bx, root, 0);
+            t.set_class(bx, "box");
+            let wide = t.create_element(div);
+            t.insert(wide, root, 1);
+            t.set_class(wide, "wide");
+            t.mark_dirty();
+            (bx, wide)
+        });
+        restyle_all();
+        assert_eq!((width(bx), width(wide)), (Some(500.0), Some(500.0)));
+        resize(1200.0, 800.0);
+        assert_eq!((width(bx), width(wide)), (Some(600.0), Some(600.0)), "rebased");
+
+        assert!(set_stylesheet_with_head(
+            ".box, .wide { width: 50vw } @keyframes k { from { height: 10vh } }".into(),
+            vec![]
+        ));
+        with_tree(|t| t.mark_dirty());
+        restyle_all();
+        resize(800.0, 800.0);
+        assert_eq!((width(bx), width(wide)), (Some(400.0), Some(400.0)), "recompiled");
+        vn_css::set_viewport_basis(vn_css::INITIAL_VIEWPORT_BASIS.0, vn_css::INITIAL_VIEWPORT_BASIS.1);
     }
 
     /// The runtime re-sends the sheet whenever a head `<style>` is touched; the

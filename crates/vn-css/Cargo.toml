@@ -9,6 +9,9 @@ gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 # MPL-2.0 (owner-approved): link unmodified, never edit these crates in place —
 # behavior changes go into OUR files. parcel_selectors is pinned to the exact
 # version lightningcss resolves so the two share one `Selector` type.
-lightningcss = { version = "1.0.0-alpha.72", default-features = false }
+# `into_owned`: a compiled rule OWNS its selector (`Selector::into_owned`), so
+# the parsed sheet — source text and AST — goes as soon as the engine is built
+# (lib.rs `parse_author_sheet`).
+lightningcss = { version = "1.0.0-alpha.72", default-features = false, features = ["into_owned"] }
 parcel_selectors = "0.28.3"
 vn-effects = { path = "../vn-effects" }

@@ -1,8 +1,7 @@
-//! What a compiled stylesheet keeps in memory, split into the parse (the
-//! source text and lightningcss's AST, which the engine's rules borrow their
-//! selectors from and the parse cache keeps for the next recompile) and the
-//! engine built from it. A measuring tool, not a check (research/reports/m26
-//! perf-mem-2.md §1):
+//! What a compiled stylesheet keeps in memory: the engine, and whatever
+//! outlives it (the parse cache did, until the rules owned their selectors).
+//! A measuring tool, not a check (research/reports/m26 perf-mem-2.md §1,
+//! perf-mem-3.md §2):
 //!
 //! ```text
 //! VN_SHEET=path/to/app.css cargo test -p vn-css --test sheet_memory -- --ignored --nocapture
@@ -70,8 +69,8 @@ fn what_a_compiled_sheet_keeps() {
 
     println!("sheet: {} ({} bytes of source)", path, css.len());
     println!("first compile (parse + engine): {first_ms:.0} ms, keeps {}", mb(with_engine));
-    println!("  the parse, kept by the parse cache (source, AST, UA sheet, memos): {}", mb(parse_only));
+    println!("  what outlives the engine (UA sheet, memos; the parse cache, while there was one): {}", mb(parse_only));
     println!("  the engine: {}", mb(with_engine - parse_only));
-    println!("recompile (cache hit): {second_ms:.0} ms, engine {}", mb(engine));
+    println!("recompile of the same text: {second_ms:.0} ms, engine {}", mb(engine));
     println!("after both engines are dropped: {}", mb(after));
 }

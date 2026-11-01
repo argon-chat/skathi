@@ -1574,8 +1574,8 @@ pub fn viewport_basis() -> (f32, f32) {
 /// Whether the sheet compiled so far resolved any viewport-relative unit.
 ///
 /// This is what keeps [`set_viewport_basis`] free for the apps that do not use
-/// one: a resize only has to recompile the stylesheet when a length in it
-/// actually depends on the viewport.
+/// one: a resize only has to touch the stylesheet when a length in it actually
+/// depends on the viewport.
 pub fn uses_viewport_units() -> bool {
     VIEWPORT_UNITS_SEEN.with(|c| c.get())
 }
@@ -1586,11 +1586,23 @@ pub fn reset_viewport_units_seen() {
     VIEWPORT_UNITS_SEEN.with(|c| c.set(false));
 }
 
+/// Runs `f` and says whether IT resolved a viewport unit, whatever the flag
+/// said before; the flag ends up as before OR that. The compile uses it to
+/// find the few declaration blocks a resize has to convert again
+/// (`Engine::rebase_viewport`).
+pub(crate) fn noting_viewport_units<R>(f: impl FnOnce() -> R) -> (R, bool) {
+    let before = VIEWPORT_UNITS_SEEN.with(|c| c.replace(false));
+    let out = f();
+    let seen = VIEWPORT_UNITS_SEEN.with(|c| c.get());
+    VIEWPORT_UNITS_SEEN.with(|c| c.set(before || seen));
+    (out, seen)
+}
+
 /// Sets the px size of the viewport, returning whether it actually changed.
 ///
-/// Same contract as [`set_rem_basis`]: viewport units are flattened to px at
-/// SHEET COMPILE time, so a `true` return means "recompile the stylesheet" —
-/// but only if [`uses_viewport_units`] says the sheet cares.
+/// Viewport units are flattened to px at SHEET COMPILE time, so a `true` return
+/// means "re-resolve them" (`Engine::rebase_viewport`, or a recompile when that
+/// says no), but only if [`uses_viewport_units`] says the sheet cares.
 ///
 /// The viewport here is vue-native's viewport, which is the ROOT element's box
 /// (`window.innerWidth`/`innerHeight` report the same numbers — m12's inset

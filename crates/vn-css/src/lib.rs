@@ -349,7 +349,9 @@ impl ComputedStates {
 }
 
 struct RuleEntry {
-    selector: &'static Selector<'static>,
+    /// Owned (`Selector::into_owned`): the parsed sheet it came from is gone
+    /// once the engine is built (see [`parse_author_sheet`]).
+    selector: Selector<'static>,
     normal: Option<Rc<StyleRefinement>>,
     important: Option<Rc<StyleRefinement>>,
     normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
@@ -390,6 +392,28 @@ struct RuleEntry {
     decls: Option<Rc<Vec<(String, String, bool)>>>,
 }
 
+impl RuleEntry {
+    /// Replaces what the rule's declarations converted to, and nothing else
+    /// ([`Engine::rebase_viewport`]). Every field `collect` fills from a
+    /// `Converted` belongs here, except the advisories.
+    fn set_declarations(&mut self, c: &mapper::Converted) {
+        self.normal = c.normal.clone();
+        self.important = c.important.clone();
+        self.normal_transitions = c.normal_transitions.clone();
+        self.important_transitions = c.important_transitions.clone();
+        self.normal_animations = c.normal_animations.clone();
+        self.important_animations = c.important_animations.clone();
+        self.normal_animation_patch = c.normal_animation_patch;
+        self.important_animation_patch = c.important_animation_patch;
+        self.normal_extras = c.normal_extras.clone();
+        self.important_extras = c.important_extras.clone();
+        self.normal_custom = c.normal_custom.clone();
+        self.important_custom = c.important_custom.clone();
+        self.normal_dynamic = c.normal_dynamic.clone();
+        self.important_dynamic = c.important_dynamic.clone();
+    }
+}
+
 /// The few user-agent defaults vue-native supplies, collected ahead of every
 /// author sheet.
 ///
@@ -411,12 +435,8 @@ pub(crate) const UA_SHEET: &str = ":where([hidden]) { display: none }";
 /// A compiled stylesheet: rules with matchable selectors, pre-converted
 /// declaration blocks, specificity and state classification.
 ///
-/// The source is intentionally leaked: `lightningcss::StyleSheet` borrows it,
-/// and the rules borrow `'static` selectors out of the sheet. It is leaked once
-/// per DISTINCT text ([`parse_author_sheet`]), so recompiling the same text
-/// under a new viewport / rem / font basis retains nothing; a new text (an HMR
-/// edit, a new `<style>` text) still leaves its parse behind — the documented
-/// tradeoff until `into_owned` is wired.
+/// It owns everything it holds: the source text and lightningcss's parse are
+/// gone once [`Engine::compile_sheets`] returns ([`parse_author_sheet`]).
 pub struct Engine {
     rules: Vec<RuleEntry>,
     /// The rule index — see [`RuleIndex`].
@@ -447,7 +467,28 @@ pub struct Engine {
     /// `@media` around any of them that is exactly CSS's "a later block with
     /// the same name wins", at the cost of one `Vec` of length 1.
     keyframes: std::collections::HashMap<Box<str>, Vec<KeyframesBlock>>,
+    /// The declaration blocks that resolved a viewport unit, kept with the
+    /// rules they fill, so a resize converts just these again
+    /// ([`Engine::rebase_viewport`]).
+    viewport_blocks: Vec<ViewportBlock>,
+    /// A block resolved a viewport unit and was not kept: one inside
+    /// `@keyframes`, or one that did not print. Such a sheet is compiled again
+    /// on a resize.
+    viewport_unkept: bool,
     pub diagnostics: Vec<String>,
+}
+
+/// One style rule's declarations that resolved a viewport unit (`85vh`,
+/// `calc(100vw - 2rem)`), and the [`Engine::rules`] they fill, one per
+/// selector in its list.
+///
+/// Kept as lightningcss PRINTS them, and parsed again on a resize. An owned
+/// block (`DeclarationBlock::into_owned`) would skip that parse, but its code
+/// added 248 KB to the exe; the print and the parse are linked already, and a
+/// few dozen short blocks parse in well under a millisecond.
+struct ViewportBlock {
+    css: Box<str>,
+    rules: std::ops::Range<u32>,
 }
 
 /// One `@keyframes` block, and the `@media` condition it was declared under.
@@ -609,16 +650,12 @@ fn rule_index_enabled() -> bool {
 
 /// One author sheet as parsed: the sheet itself (or why it failed) and the
 /// advisories its error recovery produced. See [`parse_author_sheet`].
-#[derive(Clone)]
-struct ParsedSheet {
-    sheet: Option<&'static StyleSheet<'static>>,
+struct ParsedSheet<'i> {
+    sheet: Option<StyleSheet<'i>>,
     diagnostics: Vec<String>,
 }
 
 thread_local! {
-    /// Every author sheet ever parsed, by its text. See [`parse_author_sheet`].
-    static PARSED_SHEETS: std::cell::RefCell<std::collections::HashMap<&'static str, ParsedSheet>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
     /// The UA defaults, parsed once (per thread — the cascade runs on one).
     static UA_PARSED: std::cell::OnceCell<Option<&'static StyleSheet<'static>>> =
         const { std::cell::OnceCell::new() };
@@ -627,28 +664,26 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Parses one author sheet, or hands back the parse of the same text from an
-/// earlier compile.
+/// Parses one author sheet, for the compile in progress only.
 ///
-/// The rules borrow `&'static` selectors out of the parsed sheet, so a sheet
-/// and its source are leaked for the life of the process. That used to happen
-/// on EVERY compile, and the engine is compiled again whenever a basis it
-/// flattens moves — the viewport (`vh`/`vw`), the root font-size (`rem`), the
-/// installed web fonts — none of which changes a byte of the text. The Argon
-/// client's 1.27 MB sheet left ~21.5 MB behind per compile: 159 MB after boot,
-/// and another 21.5 MB on every step of a window resize, forever
-/// (research/reports/m26/perf-mem-1.md §3).
+/// What a compile keeps of a sheet is what the engine holds: the rules own
+/// their selectors (`Selector::into_owned`) and their converted declarations,
+/// so the source text and lightningcss's AST go when the compile returns.
 ///
-/// Parsing is a pure function of the text — the bases only enter in
-/// [`Engine::collect`], which runs again on every compile — so the same text
-/// can share one parse. What is leaked is now bounded by the DISTINCT texts a
-/// process ever compiles: one per sheet, plus one per `<style>` text and per
-/// HMR edit, instead of one per compile.
-fn parse_author_sheet(css: &str) -> ParsedSheet {
-    if let Some(hit) = PARSED_SHEETS.with(|p| p.borrow().get(css).cloned()) {
-        return hit;
-    }
-    let src: &'static str = Box::leak(css.to_string().into_boxed_str());
+/// History, because each step was a measured cost:
+/// - Until m26 every compile LEAKED its parse (the rules borrowed `&'static`
+///   selectors out of it): ~21.5 MB for the Argon client's 1.27 MB sheet, on
+///   every recompile the viewport (`vh`/`vw`), the root font-size (`rem`) or
+///   the web fonts asked for — 159 MB after boot, +21.5 MB per resize step
+///   (research/reports/m26/perf-mem-1.md §3).
+/// - Then a parse cache kept ONE parse per distinct text and recompiles reused
+///   it: flat, but 22.6 MB held for the life of the process
+///   (perf-mem-2.md §1).
+/// - Now nothing is kept, and a recompile parses again: ~30 ms more per
+///   recompile on that sheet (perf-mem-3.md §2). A resize, the one recompile
+///   that came in bursts, is no longer one ([`Engine::rebase_viewport`]); the
+///   rem basis and web fonts still recompile, a few times per boot.
+fn parse_author_sheet(src: &str) -> ParsedSheet<'_> {
     // CSS's own error handling (CSS Syntax §2.2: an invalid rule or
     // declaration is dropped and parsing resumes), which every browser
     // applies. Without it, ONE stray `}` anywhere — the Argon client ships
@@ -662,7 +697,7 @@ fn parse_author_sheet(css: &str) -> ParsedSheet {
     };
     let mut diagnostics = Vec::new();
     let sheet = match StyleSheet::parse(src, options) {
-        Ok(s) => Some(&*Box::leak(Box::new(s))),
+        Ok(s) => Some(s),
         Err(e) => {
             diagnostics.push(format!("stylesheet parse error: {e}"));
             None
@@ -682,9 +717,7 @@ fn parse_author_sheet(css: &str) -> ParsedSheet {
             }
         }
     }
-    let parsed = ParsedSheet { sheet, diagnostics };
-    PARSED_SHEETS.with(|p| p.borrow_mut().insert(src, parsed.clone()));
-    parsed
+    ParsedSheet { sheet, diagnostics }
 }
 
 impl Engine {
@@ -696,10 +729,8 @@ impl Engine {
     /// sheet's rules come later, so at equal specificity they win.
     ///
     /// Each sheet is parsed on its own, the way a browser parses each
-    /// `<style>`: a stray brace in one cannot swallow the next. And each is
-    /// parsed once per distinct text ([`parse_author_sheet`]), so a host that
-    /// keeps a big build sheet and a few small `<style>` texts apart does not
-    /// re-parse — or re-leak — the big one when a small one changes.
+    /// `<style>`: a stray brace in one cannot swallow the next. The parses
+    /// last only as long as this call ([`parse_author_sheet`]).
     pub fn compile_sheets(sheets: &[&str]) -> Engine {
         let mut engine = Engine {
             rules: Vec::new(),
@@ -709,6 +740,8 @@ impl Engine {
             sibling_combinators: false,
             group_states: false,
             keyframes: std::collections::HashMap::new(),
+            viewport_blocks: Vec::new(),
+            viewport_unkept: false,
             diagnostics: Vec::new(),
         };
         // The flag describes THIS sheet: a resize only recompiles when the sheet
@@ -720,7 +753,7 @@ impl Engine {
         for css in sheets {
             let parsed = parse_author_sheet(css);
             engine.diagnostics.extend(parsed.diagnostics);
-            if let Some(sheet) = parsed.sheet {
+            if let Some(sheet) = &parsed.sheet {
                 engine.collect(&sheet.rules.0, None, &mut order);
             }
         }
@@ -910,12 +943,7 @@ impl Engine {
     /// rules join the same flat list with a condition index. `order` is shared
     /// across the whole walk, so document order (the cascade tiebreak) survives
     /// nesting.
-    fn collect(
-        &mut self,
-        rules: &'static [CssRule<'static>],
-        condition: Option<u32>,
-        order: &mut u32,
-    ) {
+    fn collect(&mut self, rules: &[CssRule<'_>], condition: Option<u32>, order: &mut u32) {
         for rule in rules {
             let style = match rule {
                 CssRule::Style(style) => style,
@@ -960,7 +988,9 @@ impl Engine {
                     continue;
                 }
             };
-            let converted = mapper::convert_block(&style.declarations);
+            let (converted, viewport) =
+                mapper::noting_viewport_units(|| mapper::convert_block(&style.declarations));
+            let first_rule = self.rules.len() as u32;
             // The author's own words, for the devtools styles panel. Off by
             // default: it is one `String` pair per declaration in the sheet,
             // and nothing in the RENDER path ever reads them.
@@ -980,13 +1010,13 @@ impl Engine {
                 // matcher does route to the element (see `crate::has`). The
                 // rewrite re-parses, so from here down this is an ordinary
                 // selector with an ordinary pseudo-class in it.
-                let rewritten;
-                let sel = if has::present(&sel_text(sel)) {
+                //
+                // Either way the rule gets its OWN copy of the selector: the
+                // sheet it was parsed from is dropped when the compile ends.
+                use lightningcss::traits::IntoOwned as _;
+                let owned: Selector<'static> = if has::present(&sel_text(sel)) {
                     match has::rewrite(&sel_text(sel)).and_then(|text| reparse_selector(&text)) {
-                        Some(s) => {
-                            rewritten = s;
-                            rewritten
-                        }
+                        Some(s) => s.clone(),
                         None => {
                             mapper::once(
                                 &mut self.diagnostics,
@@ -999,8 +1029,9 @@ impl Engine {
                         }
                     }
                 } else {
-                    sel
+                    sel.clone().into_owned()
                 };
+                let sel = &owned;
                 let Some((states, ancestor)) = classify_states(sel, &mut self.diagnostics) else {
                     continue;
                 };
@@ -1068,9 +1099,9 @@ impl Engine {
                 self.sibling_combinators |= has_sibling_combinator(sel);
                 self.group_states |= ancestor.is_some();
                 self.index.file(sel, self.rules.len() as u32);
-                // `sheet` is a leaked &'static, so its selectors are 'static too.
+                let specificity = sel.specificity();
                 self.rules.push(RuleEntry {
-                    selector: sel,
+                    selector: owned,
                     normal: converted.normal.clone(),
                     important: converted.important.clone(),
                     normal_transitions: converted.normal_transitions.clone(),
@@ -1085,7 +1116,7 @@ impl Engine {
                     important_custom: converted.important_custom.clone(),
                     normal_dynamic: converted.normal_dynamic.clone(),
                     important_dynamic: converted.important_dynamic.clone(),
-                    specificity: sel.specificity(),
+                    specificity,
                     order: *order,
                     states,
                     ancestor,
@@ -1097,7 +1128,55 @@ impl Engine {
                 });
                 *order += 1;
             }
+            // The block's own text: the parse goes when the compile ends, and
+            // a resize converts this block again ([`ViewportBlock`]).
+            let rules = first_rule..self.rules.len() as u32;
+            if viewport && !rules.is_empty() {
+                use lightningcss::traits::ToCss as _;
+                match style.declarations.to_css_string(lightningcss::printer::PrinterOptions::default()) {
+                    Ok(css) => self.viewport_blocks.push(ViewportBlock { css: css.into(), rules }),
+                    Err(_) => self.viewport_unkept = true,
+                }
+            }
         }
+    }
+
+    /// Resolves the sheet's viewport units (`vw`, `vh`, `vmin`, …) again, in
+    /// place, against the basis [`set_viewport_basis`] holds now. `false` = it
+    /// cannot (a `@keyframes` block uses one, say), and the sheet has to be
+    /// compiled again.
+    ///
+    /// vn-css flattens a viewport length to px when it converts a declaration,
+    /// so a resize used to recompile the whole sheet: ~30 ms for the Argon
+    /// client's 1.27 MB, ~60 ms since the compile keeps no parse to reuse
+    /// (perf-mem-3.md §2), on every step of a window drag. Only the few
+    /// blocks that resolved a viewport unit change, and the engine keeps
+    /// exactly those ([`ViewportBlock`]), so this converts a few dozen blocks
+    /// instead.
+    ///
+    /// Every other part of a rule (selector, specificity, order, state
+    /// classification, `@media` condition) does not depend on the viewport,
+    /// nor do the advisories, which name properties and selectors. Custom
+    /// properties and `var()`-composed declarations are resolved per element
+    /// at cascade time already. The caller restyles the whole document after
+    /// either path, as it does on any resize.
+    pub fn rebase_viewport(&mut self) -> bool {
+        if self.viewport_unkept {
+            return false;
+        }
+        let options = || ParserOptions { error_recovery: true, ..ParserOptions::default() };
+        for block in &self.viewport_blocks {
+            let Ok(declarations) = DeclarationBlock::parse_string(&block.css, options()) else {
+                // It printed, so it parses; if it ever does not, the
+                // recompile replaces every rule this loop already touched.
+                return false;
+            };
+            let converted = mapper::convert_block(&declarations);
+            for i in block.rules.clone() {
+                self.rules[i as usize].set_declarations(&converted);
+            }
+        }
+        true
     }
 
     /// Interns a condition, `and`-ing it with the enclosing block's when
@@ -1228,7 +1307,7 @@ impl Engine {
             };
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
                 MatchingContext::new(mode, None, None, QuirksMode::NoQuirks);
-            if matches_selector(rule.selector, 0, None, &el, &mut ctx, &mut |_, _| {}) {
+            if matches_selector(&rule.selector, 0, None, &el, &mut ctx, &mut |_, _| {}) {
                 matched.push(rule);
             }
         });
@@ -1445,7 +1524,7 @@ impl Engine {
                 // has a solution — so a `None` here means the tree moved under
                 // us and the rule simply does not apply.
                 if let Some(a) = r.ancestor {
-                    let Some(key) = nearest_group_ancestor(&node, r.selector, a.offset) else {
+                    let Some(key) = nearest_group_ancestor(&node, &r.selector, a.offset) else {
                         continue;
                     };
                     let Some(bucket) = group.bucket(a.states, key) else {
@@ -1658,7 +1737,7 @@ impl Engine {
     /// SEGMENT STARTING at that keyframe, not the animation as a whole.
     fn collect_keyframes(
         &mut self,
-        rule: &'static lightningcss::rules::keyframes::KeyframesRule<'static>,
+        rule: &lightningcss::rules::keyframes::KeyframesRule<'_>,
         condition: Option<u32>,
     ) {
         use lightningcss::rules::keyframes::{KeyframeSelector, KeyframesName};
@@ -1672,7 +1751,11 @@ impl Engine {
             // through the SAME mapper every rule does — which is what makes the
             // animatable property set identical to `transition`'s by
             // construction rather than by a second list that could drift.
-            let converted = mapper::convert_block(&frame.declarations);
+            let (converted, viewport) =
+                mapper::noting_viewport_units(|| mapper::convert_block(&frame.declarations));
+            // Not kept for [`Engine::rebase_viewport`]: rare, and a running
+            // animation holds the block it started with.
+            self.viewport_unkept |= viewport;
             // A keyframe block has no selector to match, so its declarations
             // can only be reported here.
             if let Some(list) = &converted.diagnostics {
@@ -2570,7 +2653,7 @@ impl Engine {
             };
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
                 MatchingContext::new(mode, None, None, QuirksMode::NoQuirks);
-            if matches_selector(rule.selector, 0, None, &el, &mut ctx, &mut |_, _| {}) {
+            if matches_selector(&rule.selector, 0, None, &el, &mut ctx, &mut |_, _| {}) {
                 matched.push(rule);
             }
         });
@@ -2578,7 +2661,7 @@ impl Engine {
         matched
             .into_iter()
             .map(|r| MatchedRule {
-                selector: sel_text(r.selector),
+                selector: sel_text(&r.selector),
                 specificity: r.specificity,
                 order: r.order,
                 media: r.condition.map(|c| self.condition_text[c as usize].clone()),
@@ -2800,26 +2883,21 @@ mod tests {
     }
 
     /// Recompiling the same text — what every viewport / rem / font basis move
-    /// does — must retain nothing new: no parsed sheet, no re-parsed `:has()`
-    /// selector, no `:has()` registry entry (perf-mem-1 §3: it used to leave
-    /// ~21.5 MB per compile of the Argon client's sheet). The caches are
-    /// per-thread and each test runs on its own thread, so the counts are this
-    /// test's alone.
+    /// does — must retain nothing new: no re-parsed `:has()` selector, no
+    /// `:has()` registry entry (perf-mem-1 §3: it used to leave ~21.5 MB per
+    /// compile of the Argon client's sheet). The parse itself is not kept at
+    /// all (`parse_author_sheet`). The caches are per-thread and each test runs
+    /// on its own thread, so the counts are this test's alone.
     #[test]
     fn recompiling_the_same_text_retains_nothing_new() {
         let css = ".box { height: 10vh } .box:has(> .c) { opacity: 0.5 } \
                    @supports selector(:has(a)) { .box { width: 1px } }";
         let counts = || {
-            (
-                PARSED_SHEETS.with(|p| p.borrow().len()),
-                REPARSED.with(|r| r.borrow().len()),
-                has::registry_len(),
-            )
+            (REPARSED.with(|r| r.borrow().len()), has::registry_len())
         };
         let first = Engine::compile(css);
         let after_first = counts();
-        assert_eq!(after_first.0, 1, "one sheet parsed");
-        assert!(after_first.2 >= 1, "the :has() argument was filed");
+        assert!(after_first.1 >= 1, "the :has() argument was filed");
         // (The basis itself is process-global and other tests read it, so it
         // is not moved here; what a basis move triggers is this same call.)
         for _ in 0..5 {
@@ -2831,16 +2909,13 @@ mod tests {
 
     /// Several sheets compile as one cascade in order (a later `<style>` wins
     /// at equal specificity), each parsed on its own: a stray brace in one does
-    /// not swallow the next, and the shared text is parsed once.
+    /// not swallow the next.
     #[test]
     fn compile_sheets_is_one_ordered_cascade_of_separate_parses() {
         let engine = Engine::compile_sheets(&[".box { opacity: 0.1 }", ".box { opacity: 0.5 }"]);
         assert_eq!(engine.compute(box_node(), None, &Env::default()).base.opacity, Some(0.5));
         let engine = Engine::compile_sheets(&[".box { opacity: 0.1 } }", ".box { opacity: 0.6 }"]);
         assert_eq!(engine.compute(box_node(), None, &Env::default()).base.opacity, Some(0.6));
-        let before = PARSED_SHEETS.with(|p| p.borrow().len());
-        let _ = Engine::compile_sheets(&[".box { opacity: 0.1 }", ".box { opacity: 0.7 }"]);
-        assert_eq!(PARSED_SHEETS.with(|p| p.borrow().len()), before + 1, "only the new text parses");
     }
 
     fn node_with(attrs: &'static [(&'static str, &'static str)]) -> Node {
@@ -3238,6 +3313,87 @@ mod tests {
         let engine = Engine::compile(".box { height: calc(85vh - 80px) }");
         let s = engine.compute(box_node(), None, &Env::default());
         assert_eq!(s.base.size.height, Some(gpui::px(600.0).into()));
+        set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
+    }
+
+    /// A resize re-resolves the viewport rules in place, and the engine then
+    /// cascades exactly as one compiled fresh under the new basis would.
+    #[test]
+    fn a_resize_rebases_the_viewport_rules_in_place() {
+        assert!(set_viewport_basis(1000.0, 800.0));
+        let css = ".box, .other { width: 90vw; color: red } .plain { width: 10px } \
+                   .box { max-height: calc(85vh - 80px); transition: max-height 1s } \
+                   .other { padding-top: 10vmin }";
+        let mut engine = Engine::compile(css);
+        assert!(uses_viewport_units());
+        assert!(set_viewport_basis(1200.0, 600.0));
+        assert!(engine.rebase_viewport());
+        let fresh = Engine::compile(css);
+        for class in ["box", "other", "plain"] {
+            let node = Node { tag: "div", class, attrs: &[] };
+            assert_eq!(
+                engine.compute(node, None, &Env::default()),
+                fresh.compute(node, None, &Env::default()),
+                ".{class}"
+            );
+        }
+        let s = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(s.base.size.width, Some(gpui::px(1080.0).into()));
+        assert_eq!(s.base.max_size.height, Some(gpui::px(430.0).into()));
+        assert_eq!(s.transitions.len(), 1, "the rebased rule keeps its transition");
+        set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
+    }
+
+    /// A viewport unit inside `@keyframes` is not kept for a rebase: the
+    /// caller compiles the sheet again.
+    #[test]
+    fn a_viewport_unit_in_keyframes_asks_for_a_recompile() {
+        let mut engine = Engine::compile("@keyframes grow { from { height: 50vh } to { height: 10px } }");
+        assert!(uses_viewport_units());
+        assert!(!engine.rebase_viewport());
+        let mut plain = Engine::compile(".box { width: 10px }");
+        assert!(plain.rebase_viewport(), "nothing to re-resolve is not a failure");
+    }
+
+    /// The same check on a real sheet, rule by rule: every rule a rebase
+    /// touched holds what a fresh compile under the new basis holds, so the
+    /// print-and-parse of [`ViewportBlock`] loses nothing the mapper reads.
+    ///
+    /// `VN_SHEET=path/to/app.css cargo test -p vn-css --lib rebase_matches -- --ignored`
+    #[test]
+    #[ignore = "needs VN_SHEET=<css file>"]
+    fn rebase_matches_a_fresh_compile_on_a_real_sheet() {
+        let Ok(path) = std::env::var("VN_SHEET") else { return };
+        let css = std::fs::read_to_string(&path).expect("VN_SHEET is readable");
+        set_viewport_basis(1000.0, 800.0);
+        let mut engine = Engine::compile(&css);
+        set_viewport_basis(1371.0, 655.0);
+        assert!(engine.rebase_viewport());
+        let fresh = Engine::compile(&css);
+        assert_eq!(engine.rules.len(), fresh.rules.len());
+        let touched: usize = engine.viewport_blocks.iter().map(|b| b.rules.len()).sum();
+        for (i, (a, b)) in engine.rules.iter().zip(&fresh.rules).enumerate() {
+            let same = a.normal == b.normal
+                && a.important == b.important
+                && a.normal_transitions == b.normal_transitions
+                && a.important_transitions == b.important_transitions
+                && a.normal_animations == b.normal_animations
+                && a.important_animations == b.important_animations
+                && a.normal_animation_patch == b.normal_animation_patch
+                && a.important_animation_patch == b.important_animation_patch
+                && a.normal_extras == b.normal_extras
+                && a.important_extras == b.important_extras
+                && a.normal_custom == b.normal_custom
+                && a.important_custom == b.important_custom
+                && a.normal_dynamic == b.normal_dynamic
+                && a.important_dynamic == b.important_dynamic;
+            assert!(same, "rule {i} ({}) differs after the rebase", sel_text(&a.selector));
+        }
+        eprintln!(
+            "{} rules, {} viewport blocks filling {touched} of them: all equal to a fresh compile",
+            engine.rules.len(),
+            engine.viewport_blocks.len()
+        );
         set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
     }
 
