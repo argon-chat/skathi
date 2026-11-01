@@ -373,9 +373,15 @@ enum Picture {
     Image(ImageSource),
 }
 
-/// Records what the build read, and answers what to paint and, for a source
-/// already known, its intrinsic size.
-fn note_build(id: u32, win: WinKey, t: &Tree, node: &crate::tree::Node, sized: bool) -> (Picture, Option<(u32, u32)>, Fit) {
+/// Records what the build read, and answers what to paint, how (`fit`,
+/// `tint`) and, for a source already known, its intrinsic size.
+fn note_build(
+    id: u32,
+    win: WinKey,
+    t: &Tree,
+    node: &crate::tree::Node,
+    sized: bool,
+) -> (Picture, Option<(u32, u32)>, Fit, bool) {
     NODES.with(|m| {
         let mut m = m.borrow_mut();
         let prev = m.get(&id).map(|e| e.props.src.clone());
@@ -389,10 +395,10 @@ fn note_build(id: u32, win: WinKey, t: &Tree, node: &crate::tree::Node, sized: b
         e.props = props;
         e.win = win;
         e.sized = sized;
-        let fit = e.props.fit;
+        let (fit, tint) = (e.props.fit, e.props.tint);
         if e.props.image {
             let picture = crate::img::source_for(id, &e.props.src).map_or(Picture::Nothing, Picture::Image);
-            return (picture, None, fit);
+            return (picture, None, fit, tint);
         }
         let picture = e
             .shows
@@ -400,8 +406,72 @@ fn note_build(id: u32, win: WinKey, t: &Tree, node: &crate::tree::Node, sized: b
             .filter(|(_, w)| *w == win)
             .and_then(|k| TILES.with(|t| t.borrow().get(k).filter(|t| t.seq != 0).map(|t| t.live.image())))
             .map_or(Picture::Nothing, Picture::Tile);
-        (picture, e.info.as_ref().map(|i| (i.width, i.height)), fit)
+        (picture, e.info.as_ref().map(|i| (i.width, i.height)), fit, tint)
     })
+}
+
+/// A picture painted in the element's `color`: its pixels take the colour by
+/// the colour's alpha and keep their own (`Window::with_image_tint`), the
+/// browser client's `source-atop` fill. The colour is read when painting, as
+/// `currentColor` is for an inline `<svg>` (`render::SvgTint`): a theme or a
+/// `:hover` colour re-tints it with no new frame. A tinted video draws its
+/// alpha only, white, so the colour comes out exact.
+struct Tinted(AnyElement);
+
+impl IntoElement for Tinted {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for Tinted {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        (self.0.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.0.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        _request_layout: &mut (),
+        _prepaint: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let color = window.text_style().color;
+        window.with_image_tint(color, |window| self.0.paint(window, cx));
+    }
 }
 
 /// gpui `Img`'s sizing rule for a box holding a picture of `iw` × `ih`: an
@@ -452,7 +522,7 @@ pub(super) fn build<V: 'static>(
         let size = &d.style().size;
         is_sized(size.width) && is_sized(size.height)
     };
-    let (picture, intrinsic, fit) = note_build(id, win, t, node, sized);
+    let (picture, intrinsic, fit, tint) = note_build(id, win, t, node, sized);
     if let Some((iw, ih)) = intrinsic {
         size_as_replaced(d.style(), iw as f32, ih as f32, window.rem_size());
     }
@@ -462,7 +532,10 @@ pub(super) fn build<V: 'static>(
         Picture::Image(source) => Some(gpui::img(source)),
     };
     if let Some(picture) = picture {
-        let picture = picture.object_fit(fit.gpui()).size_full().into_any_element();
+        let mut picture = picture.object_fit(fit.gpui()).size_full().into_any_element();
+        if tint {
+            picture = Tinted(picture).into_any_element();
+        }
         let picture = super::clip_replaced(picture, d.style(), window.rem_size());
         d = d.child(picture);
     }
