@@ -852,9 +852,12 @@ pub fn lotties_animating() -> bool {
 }
 
 /// True while any `<video>` still needs frames (playing, seeking, or waiting
-/// for its first frame). Folded into the host's `animating()` OR-chain next to
-/// [`lotties_animating`], so a playing video keeps the pump awake and a paused
-/// one lets it sleep.
+/// for its first frame).
+///
+/// Not a reason to repaint: the pump ticks every video every frame anyway, and
+/// [`frame_tick`] reports a decoded frame when the video can be on screen. The
+/// host used to OR this into its repaint condition, which redrew the window
+/// at the display rate for a video nobody could see.
 pub fn videos_playing() -> bool {
     video::any_playing()
 }

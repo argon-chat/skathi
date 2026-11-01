@@ -466,6 +466,30 @@ pub fn any_playing() -> bool {
     })
 }
 
+/// Can a pixel of this `<video>` be on screen? Its painted box (laid out, or as
+/// transformed) meets its window's viewport.
+///
+/// Decides whether a new frame repaints; it is decoded and uploaded either way,
+/// because a canvas may be drawing from it. A video that was not painted at all
+/// (inside `display: none`, never built) or whose box lies wholly outside the
+/// viewport has no pixel a new frame could change. Argon's video custom emoji
+/// keep their one decoder per emoji in a 1×1 box at -9999 px and blit it into
+/// canvases from JS; while one played, the window drew every frame. A browser
+/// paints nothing for it. Clipping by an ancestor is not
+/// considered, so a clipped video still repaints: the safe side. A window with
+/// no published viewport yet counts as on screen.
+fn on_screen(id: u32, win: crate::windows::WinKey) -> bool {
+    crate::windows::peek(win, |w| {
+        let Some(env) = w.env.as_ref() else { return true };
+        let (vw, vh) = (env.viewport_width, env.viewport_height);
+        let meets = |&(x, y, bw, bh): &crate::windows::Rect| {
+            x + bw > 0.0 && y + bh > 0.0 && x < vw && y < vh
+        };
+        w.bounds.get(&id).is_some_and(meets) || w.transformed.get(&id).is_some_and(meets)
+    })
+    .unwrap_or(true)
+}
+
 /// Pulls a frame for every live `<video>` and dispatches the events that
 /// produced. Returns `true` when something moved and the window must repaint.
 ///
@@ -530,7 +554,9 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
                 continue;
             }
             let advance = state.advance(now, &FrameRequest { max_size });
-            if advance.new_frame {
+            // Decoded and uploaded either way (a canvas may be drawing from it);
+            // repainted only when a pixel of it can be on screen.
+            if advance.new_frame && on_screen(id, entry.window) {
                 moved = true;
             }
             if let Some((image, gpu)) = state.take_gpu_upload() {

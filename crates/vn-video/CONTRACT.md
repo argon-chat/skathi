@@ -92,6 +92,14 @@ let element = vn_video::video(&mut state, &options, window, cx);
 * **`take_all_images()` on teardown**, through a pending-drops queue if the GC
   site has no `Window` — which it does not.
 * **`suspend()` when the node stops being painted.** See §5.
+* **A playing video is not a reason to repaint; a new frame of a video that can
+  be on screen is** (m26). The pump ticks every video every frame regardless, so
+  decoding, uploads and events never wait on a draw. `vn_tree::video::tick`
+  reports a decoded frame only when the element's painted box meets its
+  window's viewport. A video outside it, or inside `display: none`, keeps
+  decoding (a canvas may be drawing from it, as Argon's video emoji do from a
+  1×1 box at -9999 px) and costs no window draw. The host used to repaint on
+  every vsync while any video `needs_frames()`.
 
 ---
 

@@ -783,11 +783,14 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
     if tree_moved {
         devtools::ws::note_tree_changed();
     }
+    // A playing `<video>` is not on this list: the pump ticks it every frame
+    // regardless, and its tick reports a decoded frame as `media_moved` when
+    // the video can be on screen. A video that only feeds a canvas, or sits
+    // outside the viewport, no longer redraws the window at the display rate.
     if tree_moved
         || vn_tree::animating()
         || media_moved
         || vn_tree::lotties_animating()
-        || vn_tree::videos_playing()
     {
         notify_shell(cx);
         // …and every window painting a popped-out subtree, in the SAME frame
