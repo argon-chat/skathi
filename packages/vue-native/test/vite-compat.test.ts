@@ -387,6 +387,13 @@ describe("prod.ts over test/fixtures/vite-app", () => {
     expect(has(`${v}:`)).toBe(true);
   });
 
+  test("template comments are dropped, so a comment before the root keeps it the single root", () => {
+    // Kept, the comment made App.vue's root a Fragment, which the prod runtime
+    // does not see through: no fallthrough attrs, no parent scope id.
+    expect(has("A root comment, which a production build drops")).toBe(false);
+    expect(has(".app-root[data-v-")).toBe(true);
+  });
+
   test("a define the builder cannot express fails the build with a sentence", () => {
     const bad = Bun.spawnSync(
       ["bun", "prod.ts", join(FIXTURE, "src/main.ts"), join(out, "bad.js"), "--define", "__X__=1 + 1"],

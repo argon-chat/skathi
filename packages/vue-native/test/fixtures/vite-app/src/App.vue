@@ -6,6 +6,7 @@ const parts = import.meta.glob("./kinds/*.ts", { eager: true });
 </script>
 
 <template>
+  <!-- A root comment, which a production build drops (prod.ts PROD_TEMPLATE_COMMENTS). -->
   <div class="p-4 app-root">{{ Object.keys(parts).length }}</div>
 </template>
 

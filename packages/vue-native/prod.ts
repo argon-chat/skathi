@@ -279,6 +279,20 @@ if (LIFTED) {
  *  produce byte-identical `data-v-*` ids for the same file. */
 const scopeIdOf = (id: string) => Bun.hash(id).toString(16).slice(0, 8);
 
+/**
+ * Template comments are DROPPED in a production build, as Vite's are: its
+ * build runs with NODE_ENV=production, which loads compiler-core's prod build,
+ * whose `comments` default is false. This process loads the dev compiler, so
+ * a comment was kept, and a component whose template starts with one
+ * (`<!-- why --><keep-alive>…`) compiled to a FRAGMENT root. The dev runtime
+ * sees through that (`filterSingleRoot`, `DEV_ROOT_FRAGMENT`); the prod runtime
+ * this bundle runs does not, so the component lost its single root: no
+ * fallthrough attrs and none of its parent's scope id. Argon's UserBar
+ * `.user-avatar[data-v-…] { margin-right: 10px }` never matched the
+ * ArgonAvatar it styles.
+ */
+const PROD_TEMPLATE_COMMENTS = false;
+
 /** id -> compiled css, filled by the .vue onLoad hook below. */
 const cssById = new Map<string, string>();
 
@@ -303,7 +317,13 @@ async function viteCss(text: string, from: string, label: string): Promise<strin
 
 async function compileVue(absPath: string, source: string): Promise<{ contents: string; loader: "js" | "ts" }> {
   const id = toId(absPath);
-  const { descriptor, errors } = parse(source, { filename: absPath });
+  // The template AST is parsed HERE and reused by compileTemplate, so this is
+  // where comments are dropped; `compilerOptions.comments` below only covers
+  // a template compiled from source.
+  const { descriptor, errors } = parse(source, {
+    filename: absPath,
+    templateParseOptions: { comments: PROD_TEMPLATE_COMMENTS },
+  });
   if (errors.length) {
     throw new Error(`${id}: ${errors.map((e) => e.message).join("; ")}`);
   }
@@ -336,6 +356,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
           // without this `<lottie>` compiles to resolveComponent("lottie").
           // Lockstep with build.ts, where the rationale is written out.
           isCustomElement: (tag: string) => tag === "lottie",
+          comments: PROD_TEMPLATE_COMMENTS,
         },
       },
     });
@@ -356,6 +377,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
           hoistStatic: false,
           expressionPlugins: isTS ? ["typescript"] : [],
           isCustomElement: (tag: string) => tag === "lottie",
+          comments: PROD_TEMPLATE_COMMENTS,
         },
       });
       if (t.errors.length) {
