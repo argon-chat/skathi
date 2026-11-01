@@ -16,7 +16,35 @@ const WS_ROOT = resolve(PKG_DIR, "../..");
 const FIXTURES = join(HERE, "fixtures");
 
 const tmpDirs = [];
-afterAll(() => {
+/**
+ * Every `bun build.ts --watch` this file starts. A test's own `finally` does not
+ * run when it times out or the run ends first, so the kill is also made here,
+ * at the end of the file and on the runner's exit. A runner killed outright runs
+ * neither: `VN_OWNER_PID` makes the watcher exit by itself then (build.ts).
+ */
+const watchers = [];
+function watchBuild(entry, dist) {
+  const proc = Bun.spawn(["bun", "build.ts", entry, dist, "--watch"], {
+    cwd: PKG_DIR,
+    // Nothing reads the output; a pipe nobody drains can stall the child.
+    stdout: "ignore",
+    stderr: "ignore",
+    env: { ...process.env, VN_OWNER_PID: String(process.pid) },
+  });
+  watchers.push(proc);
+  return proc;
+}
+const killWatchers = () => {
+  for (const proc of watchers) {
+    try {
+      proc.kill();
+    } catch {}
+  }
+};
+process.on("exit", killWatchers);
+afterAll(async () => {
+  killWatchers();
+  await Promise.all(watchers.map((proc) => proc.exited.catch(() => {})));
   for (const dir of tmpDirs) {
     try {
       rmSync(dir, { recursive: true, force: true });
@@ -467,11 +495,7 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
   };
 
   test("one instance across packages and the app; another version stays its own; an HMR pass keeps it", async () => {
-    const proc = Bun.spawn(["bun", "build.ts", join(dir, "src/main.ts"), dist, "--watch"], {
-      cwd: PKG_DIR,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    const proc = watchBuild(join(dir, "src/main.ts"), dist);
     try {
       expect(await until(() => read("manifest.json").includes(MAIN))).toBe(true);
       const manifest = JSON.parse(read("manifest.json"));
@@ -523,11 +547,7 @@ describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () 
     writeFileSync(join(dir, "src/main.ts"), 'import data from "./data.json";\nexport const v = data.v;\n');
     const dist = mkdtempSync(join(tmpdir(), "vn-build-inline-"));
     tmpDirs.push(dist);
-    const proc = Bun.spawn(["bun", "build.ts", join(dir, "src/main.ts"), dist, "--watch"], {
-      cwd: PKG_DIR,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    const proc = watchBuild(join(dir, "src/main.ts"), dist);
     const read = (f) => {
       try {
         return readFileSync(join(dist, f), "utf8");

@@ -43,6 +43,8 @@ export async function dev(target: string, options: { exe?: string } = {}): Promi
   const watcher = spawn(process.execPath, [join(PKG_DIR, "build.ts"), config.entry, dist, "--watch"], {
     cwd: PKG_DIR,
     stdio: "inherit",
+    // The watcher, too, dies with this process however it ends (build.ts).
+    env: { ...process.env, VN_OWNER_PID: String(process.pid) },
   });
   // The first build has written its manifest before the host may read it.
   const deadline = Date.now() + 120_000;

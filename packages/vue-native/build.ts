@@ -1601,4 +1601,18 @@ if (WATCH) {
     watched.push(TW_CONFIG);
   }
   console.log(`watching ${watched.join(", ")} ...`);
+  // VN_OWNER_PID: the watcher exits once the process that started it is gone,
+  // however that one ended (`vn dev`, test/build-graph.test.ts). Without it a
+  // killed runner left `bun build.ts --watch` running for good; the host does
+  // the same with the same variable (crates/vn-app/src/owner.rs).
+  const owner = Number(process.env.VN_OWNER_PID);
+  if (Number.isInteger(owner) && owner > 0) {
+    setInterval(() => {
+      try {
+        process.kill(owner, 0);
+      } catch (e: any) {
+        if (e?.code === "ESRCH") process.exit(0);
+      }
+    }, 1000);
+  }
 }
