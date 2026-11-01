@@ -420,64 +420,65 @@ mod tests {
     /// text comes back for the clipboard, and every store is disabled after.
     #[test]
     fn clipboard_data_crosses_in_the_right_mode_and_comes_back() {
-        JsRuntime::init();
-        let node = tree::with_tree(|t| t.create_root());
-        let f = JsRuntime::with(|rt| {
-            let f = rt
-                .ctx()
-                .eval(
-                    "globalThis.seen = []; (function (node, code, a, b, c, d, key, data) {
-                       globalThis.kept = data;
-                       const r = { code, isDT: data instanceof DataTransfer, types: [...data.types],
-                                   text: data.getData('text/plain'), files: data.files.length,
-                                   name: data.files.length ? data.files[0].name : '',
-                                   type: data.files.length ? data.files[0].type : '' };
-                       try { data.setData('text/plain', 'from js'); r.wrote = data.getData('text/plain'); }
-                       catch (e) { r.wrote = 'threw'; }
-                       if (code !== 39) data.setData('text/html', '<b>x</b>');
-                       seen.push(r);
-                       return globalThis.cancel !== true;
-                     })",
-                )
+        vn_runtime::testing::on_js_thread(move || {
+            let node = tree::with_tree(|t| t.create_root());
+            let f = JsRuntime::with(|rt| {
+                let f = rt
+                    .ctx()
+                    .eval(
+                        "globalThis.seen = []; (function (node, code, a, b, c, d, key, data) {
+                           globalThis.kept = data;
+                           const r = { code, isDT: data instanceof DataTransfer, types: [...data.types],
+                                       text: data.getData('text/plain'), files: data.files.length,
+                                       name: data.files.length ? data.files[0].name : '',
+                                       type: data.files.length ? data.files[0].type : '' };
+                           try { data.setData('text/plain', 'from js'); r.wrote = data.getData('text/plain'); }
+                           catch (e) { r.wrote = 'threw'; }
+                           if (code !== 39) data.setData('text/html', '<b>x</b>');
+                           seen.push(r);
+                           return globalThis.cancel !== true;
+                         })",
+                    )
+                    .unwrap();
+                rt.ctx().protect(f);
+                f.0
+            });
+            tree::set_dispatcher(f);
+            let last = || eval("JSON.stringify(seen[seen.length - 1])");
+
+            // paste: read-only, holding the clipboard's text and its image.
+            let mut png = Vec::new();
+            image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
                 .unwrap();
-            rt.ctx().protect(f);
-            f.0
+            let item = ClipboardItem {
+                entries: vec![
+                    ClipboardEntry::Image(gpui::Image::from_bytes(ImageFormat::Png, png)),
+                    ClipboardEntry::String(gpui::ClipboardString::new("hello".into())),
+                ],
+            };
+            let (proceed, write) = exchange(node, Verb::Paste, Some(&item));
+            assert!(proceed);
+            assert!(write.is_none(), "a paste writes nothing");
+            assert_eq!(
+                last(),
+                r#"{"code":39,"isDT":true,"types":["text/plain","Files"],"text":"hello","files":1,"name":"image.png","type":"image/png","wrote":"hello"}"#,
+                "read-only: setData is a no-op"
+            );
+            assert_eq!(eval("kept.getData('text/plain') + '|' + kept.files.length"), "|0", "disabled after the event");
+
+            // copy, not cancelled: the selection's job; nothing comes back.
+            let (proceed, write) = exchange(node, Verb::Copy, None);
+            assert!(proceed);
+            assert!(write.is_none());
+            assert_eq!(last(), r#"{"code":40,"isDT":true,"types":[],"text":"","files":0,"name":"","type":"","wrote":"from js"}"#);
+
+            // cut, cancelled: its own text/plain goes to the clipboard.
+            eval("globalThis.cancel = true; ''");
+            let (proceed, write) = exchange(node, Verb::Cut, None);
+            assert!(!proceed);
+            assert_eq!(write.and_then(|w| w.text()).as_deref(), Some("from js"));
+            assert_eq!(eval("kept.types.length + ''"), "0", "disabled after the event");
         });
-        tree::set_dispatcher(f);
-        let last = || eval("JSON.stringify(seen[seen.length - 1])");
-
-        // paste: read-only, holding the clipboard's text and its image.
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-        let item = ClipboardItem {
-            entries: vec![
-                ClipboardEntry::Image(gpui::Image::from_bytes(ImageFormat::Png, png)),
-                ClipboardEntry::String(gpui::ClipboardString::new("hello".into())),
-            ],
-        };
-        let (proceed, write) = exchange(node, Verb::Paste, Some(&item));
-        assert!(proceed);
-        assert!(write.is_none(), "a paste writes nothing");
-        assert_eq!(
-            last(),
-            r#"{"code":39,"isDT":true,"types":["text/plain","Files"],"text":"hello","files":1,"name":"image.png","type":"image/png","wrote":"hello"}"#,
-            "read-only: setData is a no-op"
-        );
-        assert_eq!(eval("kept.getData('text/plain') + '|' + kept.files.length"), "|0", "disabled after the event");
-
-        // copy, not cancelled: the selection's job; nothing comes back.
-        let (proceed, write) = exchange(node, Verb::Copy, None);
-        assert!(proceed);
-        assert!(write.is_none());
-        assert_eq!(last(), r#"{"code":40,"isDT":true,"types":[],"text":"","files":0,"name":"","type":"","wrote":"from js"}"#);
-
-        // cut, cancelled: its own text/plain goes to the clipboard.
-        eval("globalThis.cancel = true; ''");
-        let (proceed, write) = exchange(node, Verb::Cut, None);
-        assert!(!proceed);
-        assert_eq!(write.and_then(|w| w.text()).as_deref(), Some("from js"));
-        assert_eq!(eval("kept.types.length + ''"), "0", "disabled after the event");
     }
 }

@@ -156,7 +156,24 @@ pub struct JsRuntime {
 impl JsRuntime {
     /// Boots JSC and installs the web platform layer. Call once, on the gpui
     /// main thread, before anything else touches redjs.
+    ///
+    /// Once per PROCESS, not per thread. A second boot (a second test, on its
+    /// own thread) passes [`VN_JSC_OPTIONS`] to `redjs_init` again after the
+    /// first VM has frozen JSC's options, and JSC ends the process in a
+    /// fast-fail (`0xC0000409`) with no message. So it is refused here with a
+    /// panic instead. Tests use [`crate::testing::on_js_thread`].
     pub fn init() {
+        static BOOTED: OnceLock<std::thread::ThreadId> = OnceLock::new();
+        let here = std::thread::current().id();
+        if BOOTED.set(here).is_err() {
+            panic!(
+                "JsRuntime::init called a second time in this process (first on {:?}, now on {:?}). \
+                 The runtime boots once per process, and a second boot aborts it. A test that needs \
+                 JS runs its body through vn_runtime::testing::on_js_thread instead.",
+                BOOTED.get().expect("set"),
+                here
+            );
+        }
         crate::bridge::install_panic_hook();
         unsafe {
             // MUST go through ffi::redjs_init (not Context::new alone): it
@@ -188,10 +205,8 @@ impl JsRuntime {
             assert_eq!(rc, 0, "redjs_webshim_install failed: {rc}");
             ffi::redjs_set_uncaught_handler(on_uncaught as *const c_void);
         }
-        RUNTIME.with(|r| {
-            r.set(JsRuntime { ctx })
-                .unwrap_or_else(|_| panic!("JsRuntime::init called twice"))
-        });
+        // Cannot be set already: `BOOTED` above lets one call through.
+        RUNTIME.with(|r| r.set(JsRuntime { ctx }).unwrap_or_else(|_| unreachable!("BOOTED admits one init")));
     }
 
     /// Runs `f` with the runtime. Panics if [`JsRuntime::init`] has not run on

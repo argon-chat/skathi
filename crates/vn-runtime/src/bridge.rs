@@ -258,19 +258,20 @@ mod tests {
     /// Attempting to release access but the mutator does not have access".
     #[test]
     fn a_dispatch_inside_running_js_owes_nothing() {
-        JsRuntime::init();
-        JsRuntime::with(|rt| {
-            install_owe(rt);
-            // No explicit drain anywhere: the reaction runs from the eval's
-            // final unlock, which is the case under test.
-            rt.ctx().eval("globalThis.seen = []; Promise.resolve().then(() => seen.push(owe()))").unwrap();
-        });
-        assert!(!drain_owed(), "a dispatch nested in running JS owes nothing");
-        // With a lock kept from inside that drain, this release aborted.
-        settle_owed_drain();
-        JsRuntime::with(|rt| {
-            unsafe { redjs::ffi::redjs_gc(rt.raw(), 0) };
-            assert_eq!(read(rt, "String(seen)"), "false", "the reaction ran in JSC's drain, and owed nothing");
+        crate::testing::on_js_thread(|| {
+            JsRuntime::with(|rt| {
+                install_owe(rt);
+                // No explicit drain anywhere: the reaction runs from the eval's
+                // final unlock, which is the case under test.
+                rt.ctx().eval("globalThis.seen = []; Promise.resolve().then(() => seen.push(owe()))").unwrap();
+            });
+            assert!(!drain_owed(), "a dispatch nested in running JS owes nothing");
+            // With a lock kept from inside that drain, this release aborted.
+            settle_owed_drain();
+            JsRuntime::with(|rt| {
+                unsafe { redjs::ffi::redjs_gc(rt.raw(), 0) };
+                assert_eq!(read(rt, "String(seen)"), "false", "the reaction ran in JSC's drain, and owed nothing");
+            });
         });
     }
 
@@ -278,18 +279,31 @@ mod tests {
     /// drain, and the settle runs the checkpoint and gives the lock back.
     #[test]
     fn a_dispatch_outside_js_owes_its_checkpoint_until_it_is_settled() {
-        JsRuntime::init();
-        assert!(owe_drain());
-        assert!(owe_drain(), "owing twice is one owed checkpoint");
-        JsRuntime::with(|rt| {
-            rt.ctx().eval("globalThis.ran = false; Promise.resolve().then(() => { ran = true; })").unwrap();
-            assert_eq!(read(rt, "String(ran)"), "false", "a call's end does not drain while the checkpoint is owed");
+        crate::testing::on_js_thread(|| {
+            assert!(owe_drain());
+            assert!(owe_drain(), "owing twice is one owed checkpoint");
+            JsRuntime::with(|rt| {
+                rt.ctx().eval("globalThis.ran = false; Promise.resolve().then(() => { ran = true; })").unwrap();
+                assert_eq!(read(rt, "String(ran)"), "false", "a call's end does not drain while the checkpoint is owed");
+            });
+            settle_owed_drain();
+            assert!(!drain_owed());
+            JsRuntime::with(|rt| {
+                unsafe { redjs::ffi::redjs_gc(rt.raw(), 0) };
+                assert_eq!(read(rt, "String(ran)"), "true", "the settle ran the checkpoint");
+            });
         });
-        settle_owed_drain();
-        assert!(!drain_owed());
-        JsRuntime::with(|rt| {
-            unsafe { redjs::ffi::redjs_gc(rt.raw(), 0) };
-            assert_eq!(read(rt, "String(ran)"), "true", "the settle ran the checkpoint");
+    }
+
+    /// A second boot in one process is a panic that says what to do, not the
+    /// fast-fail it used to be. Runs on the JS thread, where the runtime has
+    /// booted, so it holds whichever test boots first.
+    #[test]
+    fn a_second_init_is_refused_with_a_message() {
+        let message = crate::testing::on_js_thread(|| {
+            let payload = std::panic::catch_unwind(JsRuntime::init).expect_err("a second init panics");
+            payload.downcast_ref::<String>().cloned().unwrap_or_default()
         });
+        assert!(message.contains("vn_runtime::testing::on_js_thread"), "{message}");
     }
 }

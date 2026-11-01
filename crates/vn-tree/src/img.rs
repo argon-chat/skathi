@@ -2013,40 +2013,41 @@ mod tests {
     #[test]
     fn a_url_made_by_script_resolves_through_the_runtimes_store() {
         let f = Picked::new("picked.png", PNG_1PX);
-        JsRuntime::init();
-        let eval = |src: &str| -> String {
-            JsRuntime::with(|rt| {
-                let v = rt.ctx().eval(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
-                rt.ctx().to_rust_string(v).unwrap()
-            })
-        };
-        let bytes: Vec<String> = PNG_1PX.iter().map(|b| b.to_string()).collect();
-        let mem = eval(&format!("URL.createObjectURL(new Blob([new Uint8Array([{}])], {{ type: 'image/png' }}))", bytes.join(",")));
-        assert!(matches!(resolve(&mem), Some(ImageSource::Image(_))), "{mem}");
-        JsRuntime::with(|rt| unsafe {
-            let g = rt.raw();
-            let file = redjs::webapi::file::file_from_path(g, &f.0, "").unwrap();
-            redjs::webapi::util::define(g, redjs::glue::rjs_global(g), "picked", file, 0);
+        vn_runtime::testing::on_js_thread(move || {
+            let eval = |src: &str| -> String {
+                JsRuntime::with(|rt| {
+                    let v = rt.ctx().eval(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
+                    rt.ctx().to_rust_string(v).unwrap()
+                })
+            };
+            let bytes: Vec<String> = PNG_1PX.iter().map(|b| b.to_string()).collect();
+            let mem = eval(&format!("URL.createObjectURL(new Blob([new Uint8Array([{}])], {{ type: 'image/png' }}))", bytes.join(",")));
+            assert!(matches!(resolve(&mem), Some(ImageSource::Image(_))), "{mem}");
+            JsRuntime::with(|rt| unsafe {
+                let g = rt.raw();
+                let file = redjs::webapi::file::file_from_path(g, &f.0, "").unwrap();
+                redjs::webapi::util::define(g, redjs::glue::rjs_global(g), "picked", file, 0);
+            });
+            let by_path = eval("URL.createObjectURL(picked)");
+            assert_eq!(as_path(resolve(&by_path)), Some(f.0.clone()), "a picked file is handed on by path");
+            assert!(matches!(resolve_media("video", &by_path), Ok(vn_video::MediaSource::Path(p)) if p == f.0));
+            // gpui's cache lets go of a blob: decode when the last node showing it
+            // goes, and not before (m25 review, finding 4).
+            let again = eval("URL.createObjectURL(picked)");
+            let _ = take_evictions();
+            assert!(source_for(901, &mem).is_some());
+            assert!(source_for(902, &by_path).is_some());
+            assert!(source_for(903, &again).is_some(), "a second URL of the same File: the same path");
+            gc(|id| id != 901 && id != 902);
+            let ev = take_evictions();
+            assert_eq!(ev.len(), 1, "the memory decode goes; the path is still shown by 903");
+            assert!(matches!(&ev[0], ImageSource::Image(_)));
+            gc(|id| id != 903);
+            let ev = take_evictions();
+            assert!(matches!(&ev[..], [ImageSource::Resource(Resource::Path(p))] if p.as_ref() == f.0), "{} queued", ev.len());
+            eval(&format!("URL.revokeObjectURL('{mem}'); 'ok'"));
+            assert!(resolve(&mem).is_none(), "revoked");
         });
-        let by_path = eval("URL.createObjectURL(picked)");
-        assert_eq!(as_path(resolve(&by_path)), Some(f.0.clone()), "a picked file is handed on by path");
-        assert!(matches!(resolve_media("video", &by_path), Ok(vn_video::MediaSource::Path(p)) if p == f.0));
-        // gpui's cache lets go of a blob: decode when the last node showing it
-        // goes, and not before (m25 review, finding 4).
-        let again = eval("URL.createObjectURL(picked)");
-        let _ = take_evictions();
-        assert!(source_for(901, &mem).is_some());
-        assert!(source_for(902, &by_path).is_some());
-        assert!(source_for(903, &again).is_some(), "a second URL of the same File: the same path");
-        gc(|id| id != 901 && id != 902);
-        let ev = take_evictions();
-        assert_eq!(ev.len(), 1, "the memory decode goes; the path is still shown by 903");
-        assert!(matches!(&ev[0], ImageSource::Image(_)));
-        gc(|id| id != 903);
-        let ev = take_evictions();
-        assert!(matches!(&ev[..], [ImageSource::Resource(Resource::Path(p))] if p.as_ref() == f.0), "{} queued", ev.len());
-        eval(&format!("URL.revokeObjectURL('{mem}'); 'ok'"));
-        assert!(resolve(&mem).is_none(), "revoked");
     }
 
     /// gpui keys a path's cached decode by the path alone: a file picked

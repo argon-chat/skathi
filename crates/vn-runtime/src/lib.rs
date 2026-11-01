@@ -14,6 +14,7 @@
 
 pub mod bridge;
 pub mod runtime;
+pub mod testing;
 
 pub use bridge::{Phase, with_app, with_commit, with_published, with_published_app};
 pub use runtime::{JsError, JsRuntime};
