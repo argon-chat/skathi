@@ -2107,6 +2107,30 @@ impl Animator {
         std::mem::take(&mut self.events)
     }
 
+    /// The nodes whose painted style is moving right now: the ones
+    /// [`Animator::any_active`] and [`Animator::any_animation`] answer for, by
+    /// node. An unfinished transition, or an unpaused `@keyframes` run that is
+    /// delayed or running. A node can be listed twice. The host's
+    /// retained-render cache refuses only the subtrees these are in.
+    pub fn moving_nodes(&self, now: Instant) -> impl Iterator<Item = u32> + '_ {
+        let tracks = self
+            .nodes
+            .iter()
+            .filter(move |(_, tracks)| tracks.iter().any(|t| !t.finished(now)))
+            .map(|(&node, _)| node);
+        let runs = self
+            .anims
+            .iter()
+            .filter(move |(_, runs)| {
+                runs.iter().any(|run| match run.phase(now) {
+                    Phase::Finished { .. } => false,
+                    Phase::Delayed | Phase::Running { .. } => run.paused_at.is_none(),
+                })
+            })
+            .map(|(&node, _)| node);
+        tracks.chain(runs)
+    }
+
     /// Is any animation still running (or holding a `forwards` fill)?
     pub fn any_animation(&self, now: Instant) -> bool {
         self.anims.values().flatten().any(|run| match run.phase(now) {

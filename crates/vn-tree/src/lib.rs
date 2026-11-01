@@ -1325,6 +1325,51 @@ mod tests {
         assert_eq!(reused, spinner, "after the sweep it is");
     }
 
+    /// The retained-render cache refuses only the boundaries on a moving node's
+    /// path: the node and its ancestors, never a sibling subtree. A paused run
+    /// is not moving (its frame is frozen), and neither is a node whose
+    /// animation has not been declared.
+    #[test]
+    fn only_a_moving_nodes_ancestors_are_hot() {
+        tree::set_engine(vn_css::Engine::compile(
+            ".spin { animation: spin 1s linear infinite } .held { animation-play-state: paused } \
+             @keyframes spin { to { opacity: 0.5 } }",
+        ));
+        let (list, row, spinner, other, held) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let list = t.create_element(div);
+            let row = t.create_element(div);
+            let spinner = t.create_element(div);
+            let other = t.create_element(div);
+            let held = t.create_element(div);
+            t.set_class(spinner, "spin");
+            t.set_class(held, "spin held");
+            t.insert(list, root, 0);
+            t.insert(row, list, 0);
+            t.insert(spinner, row, 0);
+            t.insert(other, list, 1);
+            t.insert(held, other, 0);
+            (list, row, spinner, other, held)
+        });
+        flush_changes();
+        let mut hot = std::collections::HashSet::new();
+        tree::moving_paths(std::time::Instant::now(), &mut hot);
+        let root = tree::read_tree(|t| t.root);
+        for id in [spinner, row, list, root] {
+            assert!(hot.contains(&id), "{id} is on the spinner's path");
+        }
+        assert!(!hot.contains(&other), "a sibling subtree stays replayable");
+        assert!(!hot.contains(&held), "a paused animation is not moving");
+
+        // Stopped: nothing is hot, so every boundary may replay again.
+        tree::with_tree(|t| t.set_class(spinner, ""));
+        flush_changes();
+        hot.clear();
+        tree::moving_paths(std::time::Instant::now(), &mut hot);
+        assert!(hot.is_empty(), "nothing moves: {hot:?}");
+    }
+
     /// Custom properties inherit through the REAL tree, which is what obliges
     /// the restyle pass to walk in document order rather than by node id.
     #[test]

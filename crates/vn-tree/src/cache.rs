@@ -47,9 +47,11 @@
 //!   native widgets and decoders that repaint on their own clock;
 //! * an **out-of-flow box** (`position: absolute|fixed`) or a **group anchor**
 //!   (`.group(name)` is registered during the paint walk);
-//! * anything at all, while a transition/animation, a Lottie or a video is
-//!   running, or while a screen reader is attached — the AccessKit tree is
-//!   built during the frame and is not part of the replayed spans.
+//! * a subtree holding a node whose transition or animation is moving this
+//!   frame — and only that subtree: the moving node and its ancestors are
+//!   refused, every other boundary still replays (see [`begin_frame`]);
+//! * anything at all while a screen reader is attached — the AccessKit tree
+//!   is built during the frame and is not part of the replayed spans.
 //!
 //! A **scroll container** used to be on that list and is the one item that came
 //! off it (m23, `research/reports/m23/scroll.md`). It was refused because
@@ -68,7 +70,7 @@
 //! on a subtree is its node count, and below a handful it is not worth having.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Element, ElementId, Entity, GlobalElementId,
@@ -194,6 +196,9 @@ thread_local! {
     /// `sub_rev`: recomputing it is a walk of the subtree, which is the cost
     /// the boundary exists to avoid.
     static STATS: RefCell<HashMap<u32, (u64, Stats)>> = RefCell::new(HashMap::new());
+    /// The nodes the animator is moving in the frame being built, and every
+    /// ancestor of each — the boundaries [`begin_frame`] refuses.
+    static HOT: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
 }
 
 /// `VN_NO_CACHE=1` — the A/B switch every "before" column in the report was
@@ -260,23 +265,47 @@ fn min_nodes() -> u32 {
     })
 }
 
-/// Decided once per build: may anything replay in this frame?
+/// Decided once per build: may anything replay in this frame, and which
+/// subtrees are moving?
 ///
-/// The four global refusals are the ones no per-node predicate can see. A
+/// The two global refusals are the ones no per-node predicate can see. A
 /// screen reader is the important one — the AccessKit tree is assembled during
 /// the frame and is not part of the prepaint/paint spans gpui replays, so a
-/// cached subtree would simply not exist for Narrator. Everything animating is
-/// re-sampled from one `Instant` per build, so a replayed subtree would freeze
-/// mid-transition. And a frame on which an image's smaller copy landed or was
-/// evicted (`crate::resample`) must repaint the scenes that name its tile.
-pub(crate) fn begin_frame(window: &Window) {
-    let on = enabled()
-        && !window.is_a11y_active()
-        && !crate::animating()
-        && !crate::lotties_animating()
-        && !crate::videos_playing()
-        && !crate::resample::holds_replays();
+/// cached subtree would simply not exist for Narrator. And a frame on which an
+/// image's smaller copy landed or was evicted (`crate::resample`) must repaint
+/// the scenes that name its tile.
+///
+/// **Animation is per subtree, not per frame.** Everything animating is
+/// re-sampled from the build's one `Instant`, so a replayed subtree would
+/// freeze mid-transition — but only the subtree that HOLDS the moving node.
+/// This used to refuse every boundary in the window while anything at all
+/// moved, which in the Argon client meant never: one visible spinner and the
+/// whole 4 000-node chat re-rendered at the display's rate. Now the moving
+/// nodes and their ancestors are collected here ([`HOT`]) at `now`, the same
+/// instant `build_node` samples the overlays at, and only a boundary on that
+/// path is refused. A `<lottie>` or a `<video>` never needed the global
+/// refusal: its tag already blocks every boundary above it ([`node_blocks`]).
+///
+/// The frame a node STOPS moving is the one that must not replay: the last
+/// recording of its subtree, if there is one, predates the animation. A
+/// refusal therefore marks the entry not-offered, and the first offer after
+/// that mints a fresh entity, which renders — at `now`, where the animation
+/// has finished — instead of replaying.
+pub(crate) fn begin_frame(window: &Window, now: std::time::Instant) {
+    let on = enabled() && !window.is_a11y_active() && !crate::resample::holds_replays();
     ACTIVE.with(|c| c.set(on));
+    HOT.with(|h| {
+        let mut h = h.borrow_mut();
+        h.clear();
+        if on {
+            crate::tree::moving_paths(now, &mut h);
+        }
+    });
+}
+
+/// Is a node the build is sampling an animation for inside `id`'s subtree?
+fn hot(id: u32) -> bool {
+    HOT.with(|h| h.borrow().contains(&id))
 }
 
 /// The boundary whose subtree is being lowered right now, or `0`.
@@ -461,6 +490,12 @@ pub(crate) fn boundary<V: 'static>(
     }
     let shape = stats(t, id);
     if shape.blocked || shape.nodes < min_nodes() {
+        return None;
+    }
+    // Something inside is moving: lower it this frame, and make sure the
+    // frame it stops moving renders rather than replays (see [`begin_frame`]).
+    if hot(id) {
+        with_entry(id, |e| e.offered = false);
         return None;
     }
     // The box the subtree laid out to last frame. Nothing to pin on the first

@@ -1867,7 +1867,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         w.control_hitboxes.clear();
     });
     arm_pick_hitboxes(window);
-    crate::cache::begin_frame(window);
+    crate::cache::begin_frame(window, now);
     reset_stacking();
     let el = tree::read_tree(|t| {
         if t.root == 0 {
@@ -1923,7 +1923,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
         w.any_drag_region = false;
         w.control_hitboxes.clear();
     });
-    crate::cache::begin_frame(window);
+    crate::cache::begin_frame(window, now);
     reset_stacking();
     tree::read_tree(|t| {
         if t.node(id).is_none() {

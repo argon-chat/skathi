@@ -2314,6 +2314,24 @@ pub fn animating() -> bool {
     })
 }
 
+/// Every node whose painted style the animator is moving at `now`, and every
+/// ancestor of each, into `out` — the subtrees the retained-render cache must
+/// not replay this frame (`cache::begin_frame`). One walk up per moving node,
+/// stopping at the first ancestor already collected.
+pub(crate) fn moving_paths(now: std::time::Instant, out: &mut std::collections::HashSet<u32>) {
+    ANIMATOR.with(|a| {
+        let a = a.borrow();
+        read_tree(|t| {
+            for id in a.moving_nodes(now) {
+                let mut cur = id;
+                while cur != 0 && out.insert(cur) {
+                    cur = t.node(cur).map_or(0, |n| n.parent);
+                }
+            }
+        });
+    });
+}
+
 /// Advances the animator's clock and queues whatever events crossing a boundary
 /// produced. Must run EVERY frame, from [`crate::frame_tick`] — it used to live
 /// inside [`animating`], which the host calls behind a `||` short-circuit, so a
