@@ -917,6 +917,21 @@ impl Tree {
         self.freed.push(id);
     }
 
+    /// Is an ANCESTOR of `id` `display: none`, by its stored computed style?
+    /// The restyle pass asks it of a node with animations, after storing the
+    /// ancestors' new styles (it walks in preorder).
+    pub(crate) fn hidden_above(&self, id: u32) -> bool {
+        let mut cur = self.node(id).map_or(0, |n| n.parent);
+        while cur != 0 {
+            let Some(n) = self.node(cur) else { return false };
+            if n.computed.as_ref().is_some_and(|c| c.base.display == Some(gpui::Display::None)) {
+                return true;
+            }
+            cur = n.parent;
+        }
+        false
+    }
+
     /// Hands the ids freed since the last call back to [`Tree::alloc`]. Called
     /// by the wave's flush after every side table keyed by node id has been
     /// swept for dead ids (`crate::flush_changes`).
@@ -1952,6 +1967,8 @@ impl Tree {
         // case: `any_secondary` is an `is_empty`, and a sheet with no
         // `@keyframes` never reaches the second one.
         let multiwindow = crate::windows::any_secondary();
+        // Nodes whose `display` went to or from `none` in this pass.
+        let mut display_flips: Vec<(u32, bool)> = Vec::new();
         ANIMATOR.with(|a| {
             let mut animator = a.borrow_mut();
             for (id, states) in computed {
@@ -1970,7 +1987,25 @@ impl Tree {
                 // before its window had painted and `ROOTS` was still empty,
                 // was resolved against the PRIMARY's environment.
                 let rebind = node_env != *env && !states.animations.is_empty();
+                // CSS Animations §3: nothing animates on an element that is
+                // `display: none`, or under one. Its runs are cancelled (with
+                // `animationcancel`) and none start; showing it again starts
+                // them afresh. Before `node_mut`: the walk up reads the tree,
+                // whose ancestors this preorder pass has already stored.
+                let self_none = states.base.display == Some(gpui::Display::None);
+                let animated = !states.animations.is_empty() || animator.has_animations(id);
+                let hidden = animated && (self_none || self.hidden_above(id));
                 if let Some(n) = self.node_mut(id) {
+                    let was_none = n
+                        .computed
+                        .as_ref()
+                        .map(|c| c.base.display == Some(gpui::Display::None));
+                    if was_none.is_some_and(|was| was != self_none) {
+                        display_flips.push((id, self_none));
+                    }
+                    if hidden {
+                        animator.cancel_animations(id, now);
+                    }
                     if n.computed.as_ref() != Some(&states) {
                         animator.on_computed(id, n.computed.as_ref(), &states, now);
                         // `@keyframes` are document-scoped, so the animation
@@ -1987,7 +2022,7 @@ impl Tree {
                         // This used to take the pass's fallback environment,
                         // which is the PRIMARY window's
                         // (m22/integration.md §6 item 4).
-                        if has_keyframes || !states.animations.is_empty() {
+                        if !hidden && (has_keyframes || !states.animations.is_empty()) {
                             animator.on_computed_animations(id, &states, now, &|name| {
                                 engine.keyframes_for(
                                     name,
@@ -2011,7 +2046,7 @@ impl Tree {
                         }
                         n.computed = Some(states);
                         restyled.push(id);
-                    } else if rebind {
+                    } else if rebind && !hidden {
                         // Same style, possibly a different animation. The run
                         // is kept (the name has not changed) and only the block
                         // behind it is re-resolved, which is what a browser
@@ -2026,6 +2061,43 @@ impl Tree {
                             )
                         });
                     }
+                }
+            }
+            // A `display` flip reaches the whole subtree, including the nodes
+            // whose own style did not move and so were not in this pass:
+            // hiding cancels every run under the node, and showing starts the
+            // runs of every descendant that is not itself hidden. (The node
+            // itself was handled above.)
+            for (id, none) in std::mem::take(&mut display_flips) {
+                if !none && self.hidden_above(id) {
+                    continue; // shown, but still under a hidden ancestor
+                }
+                let mut stack: Vec<u32> = self.node(id).map(|n| n.children.clone()).unwrap_or_default();
+                while let Some(c) = stack.pop() {
+                    let Some(node) = self.node(c) else { continue };
+                    if none {
+                        if animator.has_animations(c) {
+                            animator.cancel_animations(c, now);
+                        }
+                    } else {
+                        let Some(cs) = node.computed.as_ref() else { continue };
+                        if cs.base.display == Some(gpui::Display::None) {
+                            continue; // its subtree stays hidden
+                        }
+                        if !cs.animations.is_empty() {
+                            let node_env =
+                                if multiwindow { crate::windows::env_for_node(self, c, env) } else { *env };
+                            animator.on_computed_animations(c, cs, now, &|name| {
+                                engine.keyframes_for(
+                                    name,
+                                    &cs.vars,
+                                    &node_env,
+                                    &mut keyframe_diagnostics.borrow_mut(),
+                                )
+                            });
+                        }
+                    }
+                    stack.extend(node.children.iter().copied());
                 }
             }
             for d in animator.take_diagnostics() {

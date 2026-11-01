@@ -1337,6 +1337,69 @@ mod tests {
         assert_eq!(reused, spinner, "after the sweep it is");
     }
 
+    /// CSS Animations §3: an element that is `display: none`, or under one,
+    /// runs no animation. Hiding cancels its runs (with `animationcancel`) and
+    /// those of everything under it, even nodes whose own style did not move;
+    /// showing starts them afresh; a node inserted under a hidden one never
+    /// starts.
+    #[test]
+    fn display_none_stops_the_animations_under_it_and_showing_restarts_them() {
+        tree::set_engine(vn_css::Engine::compile(
+            ".spin { animation: spin 1s linear infinite } .gone { display: none } \
+             @keyframes spin { to { opacity: 0.5 } }",
+        ));
+        let (panel, spinner) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let panel = t.create_element(div);
+            let spinner = t.create_element(div);
+            t.set_class(spinner, "spin");
+            t.insert(panel, root, 0);
+            t.insert(spinner, panel, 0);
+            (panel, spinner)
+        });
+        flush_changes();
+        tree::advance_animations();
+        tree::take_anim_events();
+        assert!(animating(), "the spinner runs");
+
+        // The PANEL is hidden; the spinner's own style does not change.
+        tree::with_tree(|t| t.set_class(panel, "gone"));
+        flush_changes();
+        assert!(!animating(), "nothing runs under display: none");
+        let cancelled: Vec<_> = tree::take_anim_events()
+            .into_iter()
+            .filter(|e| e.node == spinner && e.kind == vn_css::AnimEventKind::AnimationCancel)
+            .collect();
+        assert_eq!(cancelled.len(), 1, "one animationcancel for the spinner");
+
+        // Inserted under the hidden panel: never starts.
+        let late = tree::with_tree(|t| {
+            let div = t.intern("div");
+            let late = t.create_element(div);
+            t.set_class(late, "spin");
+            t.insert(late, panel, 1);
+            late
+        });
+        flush_changes();
+        assert!(!animating(), "a node mounted under display: none does not start ({late})");
+
+        // Shown again: both start.
+        tree::with_tree(|t| t.set_class(panel, ""));
+        flush_changes();
+        assert!(animating(), "showing the panel restarts what is under it");
+        let mut hot = std::collections::HashSet::new();
+        tree::moving_paths(std::time::Instant::now(), &mut hot);
+        assert!(hot.contains(&spinner) && hot.contains(&late));
+
+        // The element itself hidden: the same.
+        tree::with_tree(|t| t.set_class(spinner, "spin gone"));
+        flush_changes();
+        hot.clear();
+        tree::moving_paths(std::time::Instant::now(), &mut hot);
+        assert!(!hot.contains(&spinner) && hot.contains(&late));
+    }
+
     /// The retained-render cache refuses only the boundaries on a moving node's
     /// path: the node and its ancestors, never a sibling subtree. A paused run
     /// is not moving (its frame is frozen), and neither is a node whose

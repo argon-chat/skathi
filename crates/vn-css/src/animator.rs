@@ -2044,6 +2044,24 @@ impl Animator {
         }
     }
 
+    /// Ends every `@keyframes` animation on `node`, each with an
+    /// `animationcancel` (unless it already ended): what CSS Animations §3 does
+    /// to an element when it, or an ancestor, becomes `display: none`. A later
+    /// [`Animator::on_computed_animations`] for the node starts them afresh,
+    /// which is the other half of that rule.
+    pub fn cancel_animations(&mut self, node: u32, now: Instant) {
+        if let Some(runs) = self.anims.remove(&node) {
+            for run in runs {
+                self.cancel_event(node, &run, now);
+            }
+        }
+    }
+
+    /// Does `node` hold any `@keyframes` run, running, delayed or filling?
+    pub fn has_animations(&self, node: u32) -> bool {
+        self.anims.contains_key(&node)
+    }
+
     fn cancel_event(&mut self, node: u32, run: &AnimRun, now: Instant) {
         // A run that already reported `animationend` finished; it was not
         // cancelled, and the DOM fires only one of the two.
