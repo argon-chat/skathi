@@ -57,7 +57,11 @@ async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "
 # vendor/taffy/src/geometry.rs; css-sizing-4 §5.2). Upstream caps a definite
 # `height: 100%` at `max-width / ratio`, so a picture under Tailwind's
 # `img { max-width: 100% }` kept its own shape in a box it should fill.
-# Moving off the vendored copy means carrying both patches to the new taffy.
+# ...and a third: a percentage `flex-basis` the container cannot resolve is
+# `content` (CSS Flexbox §7.2.3), not the item's own width/height
+# (`determine_flex_base_size`, vendor/taffy/src/compute/flexbox.rs).
+# Moving off the vendored copy means carrying all three patches to the new
+# taffy.
 taffy = { path = "vendor/taffy" }
 # m26: webrtc-sys 0.3.41 (pinned `=0.3.41` by crates/vn-voice) as published,
 # plus vue-native hooks libwebrtc has and the crate does not expose — the

@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/drawer-scroll.spec.ts: Argon's settings drawer, a fixed flex column whose `flex: 1; height: 100%` row holds an `overflow-y: auto` scroller that must be held to the drawer's height. See ../README.md.",
+
+  "name": "vn-test-drawer-scroll",
+
+  "window": {
+    "title": "vue-native — drawer-scroll (fixture)",
+    "width": 1100,
+    "height": 800,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

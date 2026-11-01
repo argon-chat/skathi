@@ -2233,7 +2233,6 @@ fn build_node<V: 'static>(
             apply_inline_align(d.style(), t, node, &extras, align);
             apply_button_content_box(d.style(), t, node);
             advise_inline_level(t, id, node, &extras, d.style());
-            apply_percentage_flex_basis(d.style(), t, node);
             // "The window IS the root" (see `createApp().mount()`): the root
             // element is vue-native's viewport, so it fills the box the host
             // gives it unless a rule says otherwise. **The root of THIS build**
@@ -2891,57 +2890,6 @@ fn inline_row_applies(
     // styled runs came out as a column (research/reports/m21/devtools-v2.md).
     // The same was true of two adjacent text nodes.
     has_text || has_element
-}
-
-/// A percentage `flex-basis` REPLACES the main-axis size — and when it cannot
-/// be resolved, the size does not come back.
-///
-/// CSS Flexbox §9.2.3 step A takes the flex base size from a *definite* used
-/// flex basis. A percentage measured against a container with an indefinite
-/// main size is not definite, so the item falls through to step E and is sized
-/// by its CONTENT. taffy stops one step short — `flex_basis.or(main_size)` —
-/// and reads the item's own `height`/`width` instead, which is exactly the
-/// property a non-`auto` flex basis is defined to stand in for.
-///
-/// reka's Select viewport is precisely that shape: reka writes `flex: 1`
-/// inline (i.e. `flex-basis: 0%`) and shadcn adds
-/// `h-[--reka-select-trigger-height]`, inside reka's own `display: flex;
-/// flex-direction: column` listbox whose height is auto. Measured on the same
-/// markup in Edge: the viewport is 103px, its content's height. Ours was 40px,
-/// the trigger's — so the list showed its group label and clipped every item.
-///
-/// Dropping the main-axis size whenever a percentage basis is in force is
-/// confined to that case: where the percentage DOES resolve, taffy already took
-/// the basis and never looked at the size, so this is a no-op there.
-fn apply_percentage_flex_basis(
-    style: &mut gpui::StyleRefinement,
-    t: &Tree,
-    node: &crate::tree::Node,
-) {
-    // A `calc()` with a percentage in it is as unresolvable as the bare
-    // percentage, for the same reason.
-    if !matches!(
-        style.flex_basis,
-        Some(gpui::Length::Definite(
-            gpui::DefiniteLength::Fraction(_) | gpui::DefiniteLength::Calc { .. }
-        ))
-    ) {
-        return;
-    }
-    // Only a FLEX ITEM has a flex basis; in any other container the property is
-    // inert and the size is the size.
-    let Some(parent) = t.node(node.parent) else { return };
-    let Some(parent_style) = parent.computed.as_ref().map(|cs| &cs.base) else { return };
-    if parent_style.display != Some(gpui::Display::Flex) {
-        return;
-    }
-    match parent_style.flex_direction {
-        Some(gpui::FlexDirection::Column) | Some(gpui::FlexDirection::ColumnReverse) => {
-            style.size.height = None;
-        }
-        // `None` is CSS's initial `row`.
-        _ => style.size.width = None,
-    }
 }
 
 /// `text-align` on a block container centres its INLINE-level children.
@@ -6840,67 +6788,6 @@ mod tests {
             t.insert(inline, row, 0);
             t.set_element_text(inline, " b ".to_string());
             assert_eq!(trim_own_edges(t, t.node(inline).unwrap(), &t.node(inline).unwrap().text, None), " b ");
-        });
-    }
-
-    /// A percentage `flex-basis` stands in for the main-axis size (Flexbox
-    /// §9.2.3), and taffy falls back to that size when the percentage cannot be
-    /// resolved — which sized reka's Select viewport to the trigger's 40px
-    /// instead of to its items.
-    #[test]
-    fn a_percentage_flex_basis_drops_the_main_axis_size() {
-        fn flex(direction: Option<gpui::FlexDirection>) -> vn_css::ComputedStates {
-            let mut base = gpui::StyleRefinement::default();
-            base.display = Some(gpui::Display::Flex);
-            base.flex_direction = direction;
-            vn_css::ComputedStates { base: std::rc::Rc::new(base), ..Default::default() }
-        }
-        fn item() -> gpui::StyleRefinement {
-            let mut style = gpui::StyleRefinement::default();
-            style.flex_basis = Some(gpui::Length::Definite(gpui::relative(0.0)));
-            style.size.width = Some(gpui::Length::Definite(gpui::px(390.0).into()));
-            style.size.height = Some(gpui::Length::Definite(gpui::px(40.0).into()));
-            style
-        }
-
-        with_tree(|t| {
-            let div = t.intern("div");
-            let column = t.create_element(div);
-            t.node_mut(column).unwrap().computed = Some(flex(Some(gpui::FlexDirection::Column)));
-            let viewport = t.create_element(div);
-            t.insert(viewport, column, 0);
-
-            let mut style = item();
-            apply_percentage_flex_basis(&mut style, t, t.node(viewport).unwrap());
-            assert_eq!(style.size.height, None, "the main-axis size is the basis's job");
-            assert!(style.size.width.is_some(), "the cross axis is untouched");
-
-            // A ROW parent makes width the main axis instead.
-            let row = t.create_element(div);
-            t.node_mut(row).unwrap().computed = Some(flex(None)); // `row` is the initial value
-            let child = t.create_element(div);
-            t.insert(child, row, 0);
-            let mut style = item();
-            apply_percentage_flex_basis(&mut style, t, t.node(child).unwrap());
-            assert_eq!(style.size.width, None);
-            assert!(style.size.height.is_some());
-
-            // Outside a flex container the property is inert and the size is
-            // the size.
-            let block = t.create_element(div);
-            let inside = t.create_element(div);
-            t.insert(inside, block, 0);
-            let mut style = item();
-            apply_percentage_flex_basis(&mut style, t, t.node(inside).unwrap());
-            assert!(style.size.width.is_some() && style.size.height.is_some());
-
-            // …and so is an ABSOLUTE basis, which taffy resolves for itself.
-            let absolute = t.create_element(div);
-            t.insert(absolute, column, 0);
-            let mut style = item();
-            style.flex_basis = Some(gpui::Length::Definite(gpui::px(0.0).into()));
-            apply_percentage_flex_basis(&mut style, t, t.node(absolute).unwrap());
-            assert!(style.size.height.is_some());
         });
     }
 

@@ -738,10 +738,17 @@ fn determine_flex_base_size(
             Size::ZERO
         }
         .main(dir);
-        let flex_basis = child_style
-            .flex_basis()
+        let flex_basis_style = child_style.flex_basis();
+        let flex_basis = flex_basis_style
             .maybe_resolve(container_width, |val, basis| tree.calc(val, basis))
             .maybe_add(box_sizing_adjustment);
+        // CSS Flexbox §7.2.3: a percentage flex-basis against a container
+        // whose main size is indefinite has a used value of `content`. It does
+        // NOT fall back to the item's own `width`/`height`, which a non-auto
+        // flex basis replaces. (vue-native patch: upstream fell back to the
+        // size, which sized reka's Select viewport, `flex: 1` in an auto-height
+        // column, to its 40px height instead of to its items.)
+        let basis_is_content = flex_basis.is_none() && !flex_basis_style.is_auto();
 
         drop(child_style);
 
@@ -755,7 +762,14 @@ fn determine_flex_base_size(
 
             // Note: `child.size` has already been resolved against aspect_ratio in generate_anonymous_flex_items
             // So B will just work here by using main_size without special handling for aspect_ratio
-            let main_size = child.size.main(dir);
+            //
+            // A `content` basis (above) has no main size to read; B still
+            // applies through the ratio, from the cross size alone.
+            let main_size = if basis_is_content {
+                child.size.with_main(dir, None).maybe_apply_aspect_ratio(child.aspect_ratio).main(dir)
+            } else {
+                child.size.main(dir)
+            };
             if let Some(flex_basis) = flex_basis.or(main_size) {
                 break 'flex_basis flex_basis;
             };
