@@ -21,6 +21,22 @@ thread_local! {
     static VARS_MS: Cell<f32> = const { Cell::new(0.0) };
     static FOLD_MS: Cell<f32> = const { Cell::new(0.0) };
     static SPLIT: Cell<Split> = const { Cell::new(Split { by_bucket: [0; 6], matched: 0 }) };
+    static SHARE: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+}
+
+/// One element asked the matched-properties cache (`share`), and whether an
+/// earlier element's result answered it.
+pub(crate) fn note_share(hit: bool) {
+    SHARE.with(|c| {
+        let (asked, hits) = c.get();
+        c.set((asked + 1, hits + u64::from(hit)));
+    });
+}
+
+/// Drains the cache counters: `(elements that asked, elements answered)`.
+/// An element with an inline style or a `.group:hover` rule does not ask.
+pub fn take_share() -> (u64, u64) {
+    SHARE.with(|c| c.replace((0, 0)))
 }
 
 /// Where the selectors run came from, and how many of them matched: the rule

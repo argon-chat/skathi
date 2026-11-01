@@ -29,6 +29,7 @@ mod mapper;
 mod media;
 mod prefix;
 pub mod perf;
+mod share;
 mod transition;
 mod vars;
 
@@ -480,7 +481,19 @@ pub struct Engine {
     /// `@keyframes`, or one that did not print. Such a sheet is compiled again
     /// on a resize.
     viewport_unkept: bool,
+    /// Which compile, and which viewport rebase of it, this is: the
+    /// matched-properties cache keys on it, since its rule indices mean nothing
+    /// across sheets and a rebase rewrites declarations in place ([`share`]).
+    generation: u64,
+    /// The matched-properties cache is on (`VN_CSS_NO_SHARE` turns it off).
+    share: bool,
     pub diagnostics: Vec<String>,
+}
+
+/// A new [`Engine::generation`].
+fn next_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// One style rule's declarations that resolved a viewport unit (`85vh`,
@@ -900,6 +913,8 @@ impl Engine {
             keyframes: std::collections::HashMap::new(),
             viewport_blocks: Vec::new(),
             viewport_unkept: false,
+            generation: next_generation(),
+            share: share::enabled(),
             diagnostics: Vec::new(),
         };
         // The flag describes THIS sheet: a resize only recompiles when the sheet
@@ -1384,6 +1399,8 @@ impl Engine {
         if self.viewport_unkept {
             return false;
         }
+        // Folded results from before the rebase are not results of this sheet.
+        self.generation = next_generation();
         let options = || ParserOptions { error_recovery: true, ..ParserOptions::default() };
         for block in &self.viewport_blocks {
             let Ok(declarations) = DeclarationBlock::parse_string(&block.css, options()) else {
@@ -1535,9 +1552,37 @@ impl Engine {
         });
         // The index hands the candidates back bucket by bucket, so this sort is
         // what restores the cascade's document order — it is not an
-        // optimization detail, it is the cascade.
-        matched.sort_by_key(|r| (r.specificity, r.order));
+        // optimization detail, it is the cascade. Entries that tie came from one
+        // rule's selector list and carry the same declarations; the position in
+        // the rule table breaks the tie only so that two elements that matched
+        // the same rules list them the same way ([`share`]).
+        let base = self.rules.as_ptr() as usize;
+        let index_of =
+            |r: &RuleEntry| ((r as *const RuleEntry as usize - base) / std::mem::size_of::<RuleEntry>()) as u32;
+        matched.sort_by_key(|r| (r.specificity, r.order, index_of(r)));
         let t1 = probe.then(std::time::Instant::now);
+
+        // ---- 0. the matched-properties cache: an earlier element that matched
+        // these rules under the same inherited inputs folded to this result.
+        let share_key = (self.share && inline.is_none() && !matched.iter().any(|r| r.ancestor.is_some()))
+            .then(|| {
+                let rules = matched.iter().map(|r| index_of(r)).collect();
+                share::Key::new(self.generation, rules, parent_vars, parent_color, env)
+            });
+        if let Some(key) = &share_key {
+            let hit = share::lookup(key);
+            if probe {
+                perf::note_share(hit.is_some());
+            }
+            if let Some(states) = hit {
+                if let (Some(t0), Some(t1)) = (t0, t1) {
+                    let ms = t1.saturating_duration_since(t0).as_secs_f32() * 1000.0;
+                    perf::note_node(tested, ms, 0.0, 0.0);
+                    perf::note_split(by_bucket, matched.len());
+                }
+                return states;
+            }
+        }
 
         // ---- 1. custom properties, first: every other declaration reads them.
         // Duplicates are left in — `vars::resolve` folds by name with last-wins,
@@ -1899,7 +1944,7 @@ impl Engine {
         mapper::compute_overflow(&mut before.0, &mut before.1);
         mapper::compute_overflow(&mut after.0, &mut after.1);
 
-        ComputedStates {
+        let states = ComputedStates {
             base: Rc::new(base),
             hover: any_hover.then(|| Rc::new(hover)),
             active: any_active.then(|| Rc::new(active)),
@@ -1952,7 +1997,11 @@ impl Engine {
             file_selector_button: any_file_button.then(|| Rc::new(file_button.0)),
             vars,
             color: effective_color,
+        };
+        if let Some(key) = share_key {
+            share::insert(key, &states);
         }
+        states
     }
 }
 
@@ -4817,6 +4866,217 @@ mod tests {
             assert_eq!(selectors(&indexed, n), want, "node {}", n.i);
         }
         assert!(matched_somewhere > 30, "the sheet exercises the tree ({matched_somewhere} matches)");
+    }
+
+    // -----------------------------------------------------------------------
+    // the matched-properties cache (`share`)
+    // -----------------------------------------------------------------------
+
+    /// Cascades `d` top-down as the restyle walk does, each element under its
+    /// parent's custom properties and colour, once with the cache and once
+    /// without. Answers both runs' states by node (slot 0 is unused).
+    fn cascade_both(css: &str, d: &Doc, env: &Env) -> (Vec<ComputedStates>, Vec<ComputedStates>) {
+        let cached = Engine::compile(css);
+        let mut plain = Engine::compile(css);
+        plain.share = false;
+        assert!(cached.share, "VN_CSS_NO_SHARE is set in the test environment");
+        let run = |e: &Engine| {
+            let root_vars = Rc::new(Vars::default());
+            let mut out = vec![ComputedStates::default()];
+            for i in 1..d.nodes.len() {
+                let p = d.nodes[i].2;
+                let (vars, color) = if p == 0 { (root_vars.clone(), None) } else { (out[p].vars.clone(), out[p].color) };
+                let mut diags = Vec::new();
+                out.push(e.compute_node(DocRef { doc: d, i }, None, &vars, color, env, &mut diags));
+            }
+            out
+        };
+        let (with, without) = (run(&cached), run(&plain));
+        for i in 1..d.nodes.len() {
+            assert_eq!(with[i], without[i], "node {i} folds the same with the cache as without");
+        }
+        (with, without)
+    }
+
+    /// Did node `b` take node `a`'s fold? A fold allocates its own `Rc`s; a
+    /// cache hit clones the kept ones.
+    fn shared(s: &[ComputedStates], a: usize, b: usize) -> bool {
+        Rc::ptr_eq(&s[a].base, &s[b].base)
+    }
+
+    /// Two message rows with the same structure: every element of the second
+    /// takes the first one's fold, the grandchildren included, since a hit
+    /// hands its parent's custom properties down by the same address.
+    #[test]
+    fn the_cache_folds_once_for_cousins() {
+        let css = ".row { padding: 4px } .label { color: #ff0000; opacity: 0.5 } \
+                   .meta { --gap: 3px } .meta > .t { margin-left: var(--gap); border-color: currentColor }";
+        let d = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "list", 0, vec![]), // 1
+                ("div", "row", 1, vec![]),  // 2
+                ("span", "label", 2, vec![]),
+                ("div", "meta", 2, vec![]),
+                ("span", "t", 4, vec![]), // 5
+                ("div", "row", 1, vec![]), // 6
+                ("span", "label", 6, vec![]),
+                ("div", "meta", 6, vec![]),
+                ("span", "t", 8, vec![]), // 9
+            ],
+        };
+        let (s, _) = cascade_both(css, &d, &Env::default());
+        for (a, b) in [(2, 6), (3, 7), (4, 8), (5, 9)] {
+            assert!(shared(&s, a, b), "node {b} takes node {a}'s fold");
+        }
+        assert_eq!(s[9].base.margin.left, Some(gpui::px(3.0).into()));
+    }
+
+    /// Each pair has the same tag and classes, and one thing a selector reads
+    /// tells them apart: a position, an attribute, a sibling, a descendant, a
+    /// child list. The match gives them different rules, so the cache never
+    /// hands one the other's fold.
+    #[test]
+    fn the_cache_keeps_apart_what_a_selector_tells_apart() {
+        type Nodes = Vec<(&'static str, &'static str, usize, Vec<(&'static str, &'static str)>)>;
+        let pair = |a: Vec<(&'static str, &'static str)>, b: Vec<(&'static str, &'static str)>| -> Nodes {
+            vec![("", "", 0, vec![]), ("div", "list", 0, vec![]), ("div", "i", 1, a), ("div", "i", 1, b)]
+        };
+        let cases: Vec<(&str, &str, Nodes)> = vec![
+            ("position", ".i:first-child { opacity: 0.5 }", pair(vec![], vec![])),
+            ("nth-child", ".i:nth-child(2n) { opacity: 0.5 }", pair(vec![], vec![])),
+            ("attribute", ".i[data-state=open] { opacity: 0.5 }", pair(vec![("data-state", "open")], vec![])),
+            ("attribute presence", ".i:not([hidden]) { opacity: 0.5 }", pair(vec![], vec![("hidden", "")])),
+            ("sibling", ".i + .i { opacity: 0.5 }", pair(vec![], vec![])),
+            ("later sibling", ".i ~ .i { opacity: 0.5 }", pair(vec![], vec![])),
+            (
+                ":has()",
+                ".i:has(.badge) { opacity: 0.5 }",
+                vec![
+                    ("", "", 0, vec![]),
+                    ("div", "list", 0, vec![]),
+                    ("div", "i", 1, vec![]),
+                    ("div", "i", 1, vec![]),
+                    ("b", "badge", 3, vec![]),
+                ],
+            ),
+            (
+                ":empty",
+                ".i:empty { opacity: 0.5 }",
+                vec![
+                    ("", "", 0, vec![]),
+                    ("div", "list", 0, vec![]),
+                    ("div", "i", 1, vec![]),
+                    ("div", "i", 1, vec![]),
+                    ("b", "", 3, vec![]),
+                ],
+            ),
+        ];
+        for (what, rule, nodes) in cases {
+            let css = format!(".i {{ opacity: 0.9; padding: 2px }} {rule}");
+            let d = Doc { nodes };
+            let (s, _) = cascade_both(&css, &d, &Env::default());
+            assert!(!shared(&s, 2, 3), "{what}: the second element folds on its own");
+            assert_ne!(s[2].base.opacity, s[3].base.opacity, "{what}: and the two differ");
+        }
+    }
+
+    /// The same rules under parents that hand down different custom properties
+    /// or a different `color` fold differently, and the cache sees it.
+    #[test]
+    fn the_cache_keeps_apart_what_the_parent_hands_down() {
+        let css = ".p1 { --w: 10px; color: #ff0000 } .p2 { --w: 20px; color: #0000ff } \
+                   .c { width: var(--w); border-color: currentColor }";
+        let d = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "list", 0, vec![]),
+                ("div", "p1", 1, vec![]),
+                ("div", "c", 2, vec![]), // 3
+                ("div", "p2", 1, vec![]),
+                ("div", "c", 4, vec![]), // 5
+                ("div", "p1", 1, vec![]),
+                ("div", "c", 6, vec![]), // 7
+            ],
+        };
+        let (s, _) = cascade_both(css, &d, &Env::default());
+        assert!(!shared(&s, 3, 5));
+        assert_ne!(s[3].base.size.width, s[5].base.size.width);
+        assert_ne!(s[3].base.border_color, s[5].base.border_color);
+        assert!(shared(&s, 3, 7), "and the same parent inputs again meet");
+    }
+
+    /// An element with an inline style, or one styled by a `.group:hover`
+    /// rule (whose bucket names the ancestor it watches), never asks.
+    #[test]
+    fn the_cache_leaves_out_inline_styles_and_group_rules() {
+        let css = ".group:hover .c { opacity: 0.5 } .c { padding: 2px } .d { padding: 3px }";
+        let d = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "list", 0, vec![]),
+                ("div", "group", 1, vec![]),
+                ("div", "c", 2, vec![]), // 3
+                ("div", "group", 1, vec![]),
+                ("div", "c", 4, vec![]), // 5
+            ],
+        };
+        let (s, _) = cascade_both(css, &d, &Env::default());
+        assert!(!shared(&s, 3, 5));
+        assert_eq!(s[3].group_hover.as_ref().map(|g| g.0), Some(2));
+        assert_eq!(s[5].group_hover.as_ref().map(|g| g.0), Some(4));
+
+        let engine = Engine::compile(css);
+        let inline = parse_inline_style("opacity: 0.25", &mut Vec::new());
+        let vars = Rc::new(Vars::default());
+        let fold = |i: usize| {
+            engine.compute_node(DocRef { doc: &d, i }, Some(&inline), &vars, None, &Env::default(), &mut Vec::new())
+        };
+        let doc_d = Doc { nodes: vec![("", "", 0, vec![]), ("div", "d", 0, vec![]), ("div", "d", 0, vec![])] };
+        let (a, b) = (
+            engine.compute_node(DocRef { doc: &doc_d, i: 1 }, Some(&inline), &vars, None, &Env::default(), &mut Vec::new()),
+            engine.compute_node(DocRef { doc: &doc_d, i: 2 }, Some(&inline), &vars, None, &Env::default(), &mut Vec::new()),
+        );
+        assert!(!Rc::ptr_eq(&a.base, &b.base), "an inline style folds on its own");
+        assert_eq!(a, b);
+        assert_eq!(fold(3).base.opacity, Some(0.25));
+    }
+
+    /// What a fold reads besides the rules and the parent: the environment
+    /// (`env()`, here), the viewport after a rebase, and the rem basis a
+    /// `var()`-composed length resolves against. The same element under a new
+    /// one of each folds again.
+    #[test]
+    fn the_cache_does_not_outlive_what_the_fold_read() {
+        let node = |class| Node { tag: "div", class, attrs: &[] };
+        let vars = Rc::new(Vars::default());
+        let fold = |e: &Engine, class, env: &Env| e.compute_node(node(class), None, &vars, None, env, &mut Vec::new());
+
+        let engine = Engine::compile(".c { height: env(titlebar-area-height, 32px) }");
+        let low = fold(&engine, "c", &titlebar_env(0.0, 0.0, 940.0, 36.0));
+        let high = fold(&engine, "c", &titlebar_env(0.0, 0.0, 940.0, 48.0));
+        assert_eq!(low.base.size.height, Some(gpui::px(36.0).into()));
+        assert_eq!(high.base.size.height, Some(gpui::px(48.0).into()));
+
+        assert!(set_viewport_basis(1000.0, 800.0) || viewport_basis() == (1000.0, 800.0));
+        let mut engine = Engine::compile(".c { width: 50vw }");
+        assert_eq!(fold(&engine, "c", &Env::default()).base.size.width, Some(gpui::px(500.0).into()));
+        assert!(set_viewport_basis(1200.0, 600.0));
+        assert!(engine.rebase_viewport());
+        assert_eq!(fold(&engine, "c", &Env::default()).base.size.width, Some(gpui::px(600.0).into()));
+        set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
+
+        let css = ".c { --w: 2rem; width: var(--w) }";
+        let engine = Engine::compile(css);
+        let before = fold(&engine, "c", &Env::default());
+        let old = rem_basis();
+        assert!(set_rem_basis(old + 4.0));
+        let after = fold(&engine, "c", &Env::default());
+        let mut plain = Engine::compile(css);
+        plain.share = false;
+        assert_eq!(after, fold(&plain, "c", &Env::default()), "a new rem basis folds again");
+        assert_ne!(before.base.size.width, after.base.size.width);
+        set_rem_basis(old);
     }
 
     // -----------------------------------------------------------------------

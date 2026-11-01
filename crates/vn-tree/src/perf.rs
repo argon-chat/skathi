@@ -96,6 +96,10 @@ pub struct Phases {
     /// how many of them matched
     /// (`vn_css::perf::Split`).
     pub rules_split: vn_css::perf::Split,
+    /// Elements that asked the matched-properties cache, and the ones an
+    /// earlier element answered (`vn_css::perf::take_share`).
+    pub share_asked: u64,
+    pub share_hits: u64,
 
     /// How many times `build_root` ran (once per gpui `render()`).
     pub build_passes: u32,
@@ -282,6 +286,8 @@ const ZERO: Phases = Phases {
     nodes_cascaded: 0,
     rules_tested: 0,
     rules_split: vn_css::perf::Split { by_bucket: [0; 6], matched: 0 },
+    share_asked: 0,
+    share_hits: 0,
     build_passes: 0,
     cached_renders: 0,
     cache_offers: 0,
@@ -389,6 +395,7 @@ pub fn note_restyle(total_ms: f32, inline_ms: f32, cascade_ms: f32, store_ms: f3
     }
     let (rules, match_ms, vars_ms, fold_ms) = vn_css::perf::take();
     let split = vn_css::perf::take_split();
+    let (share_asked, share_hits) = vn_css::perf::take_share();
     with(|p| {
         p.restyle_passes += 1;
         p.restyle_ms += total_ms;
@@ -405,6 +412,8 @@ pub fn note_restyle(total_ms: f32, inline_ms: f32, cascade_ms: f32, store_ms: f3
             *total += n;
         }
         p.rules_split.matched += split.matched;
+        p.share_asked += share_asked;
+        p.share_hits += share_hits;
     });
 }
 

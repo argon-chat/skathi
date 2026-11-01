@@ -528,6 +528,14 @@ fn report_phases() {
             compact(parent),
             compact(p.rules_split.matched),
         );
+        // The matched-properties cache: elements whose fold an earlier one
+        // with the same rules and inherited inputs already did.
+        eprintln!(
+            "[vn-perf]           fold shared: {} of {} asked ({} cascaded)",
+            compact(p.share_hits),
+            compact(p.share_asked),
+            compact(p.nodes_cascaded),
+        );
     }
     if p.build_passes > 0 {
         eprintln!(
