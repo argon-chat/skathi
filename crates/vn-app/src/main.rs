@@ -1142,9 +1142,10 @@ fn main() {
     // instance of anything and reads no app config.
     {
         let launch_cfg = if args.host.devtools { None } else { boot_mode::launch_config() };
-        // A DEV host runs many apps out of one exe, so the slot is part of the
-        // instance key (parallel e2e slots of one app must not collide); a
-        // packaged exe IS its app.
+        // A DEV host's slot, for the protocol registrations it makes. The
+        // instance key is the app's id and storage folder, not the slot: two
+        // dev hosts of one app share that folder whatever their slots
+        // (vn-test and agents' copies opt out with VN_SINGLE_INSTANCE=0).
         #[cfg(not(feature = "prod"))]
         let dev_slot = Some(slot::dir());
         #[cfg(feature = "prod")]

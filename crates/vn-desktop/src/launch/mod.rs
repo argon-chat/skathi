@@ -116,6 +116,23 @@ pub struct Identity {
     pub id: String,
 }
 
+/// The name of the app's storage folder, `%LOCALAPPDATA%\<this>\storage`:
+/// vn-storage's `sanitize` (crates/vn-storage/src/lib.rs, kept identical),
+/// lowercased because the file system does not tell `Argon` from `argon`.
+/// Part of the instance key, so two processes that would share a storage
+/// folder (and fight over its IndexedDB lock) always share the instance
+/// lock as well. Electron keys `requestSingleInstanceLock` on its `userData`
+/// folder for the same reason.
+pub fn storage_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' })
+        .take(64)
+        .collect();
+    let trimmed = cleaned.trim_matches(['-', '.'].as_slice());
+    if trimmed.is_empty() { "vue-native-app".to_string() } else { trimmed.to_ascii_lowercase() }
+}
+
 pub fn resolve_identity(cfg: &LaunchConfig, build_name: Option<String>) -> Identity {
     let name = std::env::var("VN_APP_NAME")
         .ok()
@@ -247,11 +264,16 @@ pub struct Forward {
     pub args: Vec<String>,
     pub cwd: String,
     pub url: Option<String>,
+    /// May the running instance take the foreground for this launch? `false`
+    /// when the second launch is itself quiet (`VN_WINDOW_FOCUS=never`): a
+    /// test's or an agent's launch never raises a window the person at the
+    /// machine is using. Absent from a message means `true`.
+    pub raise: bool,
 }
 
 impl Forward {
     pub fn encode(&self) -> Vec<u8> {
-        json!({ "v": 1, "argv": self.argv, "args": self.args, "cwd": self.cwd, "url": self.url })
+        json!({ "v": 1, "argv": self.argv, "args": self.args, "cwd": self.cwd, "url": self.url, "raise": self.raise })
             .to_string()
             .into_bytes()
     }
@@ -266,7 +288,7 @@ impl Forward {
         let v: Json = serde_json::from_slice(bytes).map_err(|e| format!("not JSON: {e}"))?;
         let obj = v.as_object().ok_or("not a JSON object")?;
         for k in obj.keys() {
-            if !matches!(k.as_str(), "v" | "argv" | "args" | "cwd" | "url") {
+            if !matches!(k.as_str(), "v" | "argv" | "args" | "cwd" | "url" | "raise") {
                 return Err(format!("unknown key {k:?}"));
             }
         }
@@ -287,17 +309,49 @@ impl Forward {
             Some(Json::String(s)) => Some(s.clone()),
             Some(_) => return Err("`url` must be a string or null".into()),
         };
-        Ok(Forward { argv: strings("argv")?, args: strings("args")?, cwd, url })
+        let raise = match obj.get("raise") {
+            None => true,
+            Some(Json::Bool(b)) => *b,
+            Some(_) => return Err("`raise` must be true or false".into()),
+        };
+        Ok(Forward { argv: strings("argv")?, args: strings("args")?, cwd, url, raise })
     }
+}
+
+/// `VN_WINDOW_FOCUS=never`: this process never takes the foreground
+/// (crates/vn-app/src/quiet.rs reads the same variable for its windows).
+pub fn quiet() -> bool {
+    std::env::var("VN_WINDOW_FOCUS").is_ok_and(|v| v == "never")
+}
+
+/// Why a forwarded launch leaves the window where it is (every reason that
+/// holds, `; `-joined), or `None` when it raises it: the app said so
+/// (`"raiseOnSecondInstance": false`); this instance is quiet, so nothing may
+/// raise it; the second launch was quiet, so it may not raise anything; the
+/// `VN_LAUNCH_RAISE=off` seam.
+fn raise_refusal(app_raises: bool, sender_raises: bool, quiet_here: bool, disabled: bool) -> Option<String> {
+    let reasons: Vec<&str> = [
+        (!app_raises, "\"raiseOnSecondInstance\" is false"),
+        (quiet_here, "this instance is quiet (VN_WINDOW_FOCUS=never)"),
+        (!sender_raises, "the second launch was quiet (VN_WINDOW_FOCUS=never)"),
+        (disabled, "VN_LAUNCH_RAISE=off"),
+    ]
+    .into_iter()
+    .filter_map(|(holds, why)| holds.then_some(why))
+    .collect();
+    (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
 /// A forwarded launch, delivered: raise the window, then hand it to JS as an
 /// unsolicited `launch` event. Runs on the pipe server's thread.
 pub(crate) fn deliver(msg: Forward) {
     let paths = existing_paths(&msg.args, Path::new(&msg.cwd));
-    if config().is_none_or(|c| c.raise) && !raise_disabled() {
-        raise();
-    }
+    let refusal = raise_refusal(config().is_none_or(|c| c.raise), msg.raise, quiet(), raise_disabled());
+    let raised = match refusal {
+        None if raise() => "the window was raised".to_string(),
+        None => "no window to raise yet".to_string(),
+        Some(why) => format!("not raised: {why}"),
+    };
     let event = json!({
         "kind": "launch",
         "source": "second-instance",
@@ -310,8 +364,32 @@ pub(crate) fn deliver(msg: Forward) {
     crate::emit(event.to_string());
     crate::log_later(
         "launch",
-        format!("[launch] a second launch was forwarded here ({} argument(s){})", msg.args.len(), if msg.url.is_some() { ", a URL" } else { "" }),
+        format!(
+            "[launch] a second launch was forwarded here ({} argument(s){}); {raised}",
+            msg.args.len(),
+            if msg.url.is_some() { ", a URL" } else { "" }
+        ),
     );
+}
+
+// ---------------------------------------------------------------------------
+// closing: a second launch does not land in an instance that is going away
+// ---------------------------------------------------------------------------
+
+static CLOSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The app is shutting down: its window is closed (or hidden while the
+/// teardown runs) and the process is about to exit. From now on a second
+/// launch is answered "closing" instead of being delivered, and it waits for
+/// this process to exit and runs as the new instance — a launch made right
+/// after a close opens the app, rather than being handed to a process that
+/// is going away.
+pub fn closing() {
+    CLOSING.store(true, Ordering::Relaxed);
+}
+
+pub(crate) fn is_closing() -> bool {
+    CLOSING.load(Ordering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------
@@ -333,13 +411,15 @@ fn raise_disabled() -> bool {
     std::env::var("VN_LAUNCH_RAISE").is_ok_and(|v| v.eq_ignore_ascii_case("off") || v == "0")
 }
 
-fn raise() {
+/// `false` when there is no window yet.
+fn raise() -> bool {
     let hwnd = MAIN_HWND.load(Ordering::Relaxed);
     if hwnd == 0 {
-        return;
+        return false;
     }
     #[cfg(target_os = "windows")]
     instance::raise(hwnd);
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -359,12 +439,20 @@ pub enum Outcome {
 /// How long a second launch waits for the first to answer.
 pub const FORWARD_TIMEOUT_MS: u64 = 5_000;
 
+/// How long a second launch waits, from the moment the running instance
+/// answers that it is closing, for it to exit: longer than the host's own
+/// teardown deadline (vn-app's `shutdown::DEADLINE`, 4 s), after which that
+/// process ends itself.
+pub const CLOSING_PATIENCE_MS: u64 = 6_000;
+
 /// Resolves who we are and what this launch is, and — when `singleInstance`
 /// is on — either becomes THE instance or forwards to it.
 ///
 /// `build_name` is the build's `name` (`boot_mode::app_name()`); `dev_slot`
-/// is the canonical dist slot in a DEV host (it is part of the instance key,
-/// so parallel e2e slots of one app never collide), `None` in prod.
+/// is the dist slot in a DEV host (a protocol registration made there names
+/// it), `None` in prod. The instance key is the id, the storage folder's
+/// name and the user — not the slot: two dev hosts of one app share a
+/// storage folder whatever their slots, so they are one instance too.
 pub fn start(args: &Args, config_json: Option<&str>, build_name: Option<String>, dev_slot: Option<PathBuf>) -> Outcome {
     let config = LaunchConfig::parse(config_json);
     let identity = resolve_identity(&config, build_name);
@@ -411,16 +499,28 @@ pub fn start(args: &Args, config_json: Option<&str>, build_name: Option<String>,
                 args: args.app_args.clone(),
                 cwd: info.cwd.clone(),
                 url: info.url.clone(),
+                raise: !quiet(),
             };
-            match instance::claim(&identity.id, dev_slot.as_deref(), &fwd) {
+            match instance::claim(&identity.id, &storage_name(&identity.name), &fwd) {
                 instance::Claim::Primary => holds = true,
                 instance::Claim::Unavailable(why) => {
                     eprintln!("[vue-native compat] singleInstance is declared but could not be enforced: {why}; running as a separate instance");
                 }
-                instance::Claim::Forwarded => outcome = Outcome::Exit(0),
+                instance::Claim::Forwarded => {
+                    eprintln!("[launch] {} is already running; this launch was handed to it", identity.name);
+                    outcome = Outcome::Exit(0);
+                }
                 instance::Claim::NoAnswer => {
                     eprintln!(
                         "[launch] {} is already running but did not answer within {} s; not starting a second copy",
+                        identity.name,
+                        FORWARD_TIMEOUT_MS / 1000
+                    );
+                    outcome = Outcome::Exit(2);
+                }
+                instance::Claim::StillClosing => {
+                    eprintln!(
+                        "[launch] {} is closing and had not exited within {} s; not starting a second copy",
                         identity.name,
                         FORWARD_TIMEOUT_MS / 1000
                     );
@@ -607,16 +707,21 @@ mod tests {
             args: vec!["x.txt".into()],
             cwd: "C:\\work".into(),
             url: Some("notes://a?b=\"c d\"".into()),
+            raise: true,
         };
         assert_eq!(Forward::decode(&f.encode()), Ok(f.clone()));
-        let none = Forward { url: None, ..f.clone() };
+        let none = Forward { url: None, raise: false, ..f.clone() };
         assert_eq!(Forward::decode(&none.encode()), Ok(none));
+        // A message with no `raise` asks for the default.
+        let old = Forward::decode(br#"{"v":1,"argv":[],"args":[],"cwd":"","url":null}"#).unwrap();
+        assert!(old.raise);
         for bad in [
             &br#"[]"#[..],
             br#"{"v":2,"argv":[],"args":[],"cwd":""}"#,
             br#"{"v":1,"argv":[1],"args":[],"cwd":""}"#,
             br#"{"v":1,"argv":[],"args":[],"cwd":"","url":5}"#,
             br#"{"v":1,"argv":[],"args":[],"cwd":"","extra":true}"#,
+            br#"{"v":1,"argv":[],"args":[],"cwd":"","raise":"yes"}"#,
             br#"{"v":1,"argv":[],"cwd":""}"#,
             b"\xff\xfe",
         ] {
@@ -624,6 +729,33 @@ mod tests {
         }
         let huge = vec![b' '; MAX_MESSAGE + 1];
         assert!(Forward::decode(&huge).unwrap_err().contains("cap"));
+    }
+
+    /// Any one reason keeps the window where it is, from either end: a quiet
+    /// instance is never raised, and a quiet launch raises nothing. Every
+    /// reason that holds is named, so a test that sets the seam as well still
+    /// reads the quiet rule.
+    #[test]
+    fn who_may_raise_the_window() {
+        assert_eq!(raise_refusal(true, true, false, false), None);
+        assert_eq!(raise_refusal(false, true, false, false).unwrap(), "\"raiseOnSecondInstance\" is false");
+        assert_eq!(raise_refusal(true, true, true, false).unwrap(), "this instance is quiet (VN_WINDOW_FOCUS=never)");
+        assert_eq!(raise_refusal(true, false, false, false).unwrap(), "the second launch was quiet (VN_WINDOW_FOCUS=never)");
+        assert_eq!(raise_refusal(true, true, false, true).unwrap(), "VN_LAUNCH_RAISE=off");
+        let all = raise_refusal(true, false, true, true).unwrap();
+        assert!(all.contains("this instance is quiet") && all.contains("the second launch was quiet") && all.contains("VN_LAUNCH_RAISE"), "{all}");
+    }
+
+    /// The key's name half is the storage folder's name, so the names one
+    /// folder answers to are one instance.
+    #[test]
+    fn the_storage_name_is_the_folder_name() {
+        assert_eq!(storage_name("argon-vue-native"), "argon-vue-native");
+        assert_eq!(storage_name("Argon-Vue-Native"), "argon-vue-native");
+        assert_eq!(storage_name("my app"), storage_name("my-app"));
+        assert_eq!(storage_name("..x.."), "x");
+        assert_eq!(storage_name("///"), "vue-native-app");
+        assert_eq!(storage_name(&"a".repeat(80)).len(), 64);
     }
 
     #[test]

@@ -7,9 +7,13 @@
 // slot, with VN_SINGLE_INSTANCE=1 overriding the harness default. Each
 // "second launch" below is the SAME staged exe started by hand on the SAME
 // slot, exactly as a user's second double-click (or the shell, for a
-// `myapp://` link) would start it. VN_LAUNCH_RAISE=off (the harness default)
-// keeps the primary from taking the foreground, so the run never steals focus
-// from whoever is at the machine.
+// `myapp://` link) would start it. The lock keys on the app and its storage
+// folder, not the slot (docs/LAUNCH.md §2), so this run gives the app a
+// VN_APP_NAME of its own: two runs of this file never forward into each
+// other. The primary is quiet (the harness's VN_WINDOW_FOCUS=never), so a
+// second launch never raises it, and VN_LAUNCH_RAISE=off (the harness
+// default) says the same again: the run never steals focus from whoever is
+// at the machine.
 //
 // The protocol tests use the REAL HKCU\Software\Classes with a test-only
 // scheme (`vntest-<runner pid>`), delete it in teardown whatever happened,
@@ -24,10 +28,12 @@ import { stagedExe } from "../src/dist";
 import { expect, launch, REPO } from "../src/index";
 
 const T = 30_000;
+/** This run's storage folder, and with it this run's instance lock. */
+const appName = `vn-test-launch-${process.pid}`;
 const app = await launch({
   app: "packages/vn-test/fixtures/launch/src/main.ts",
   label: "launch",
-  env: { VN_SINGLE_INSTANCE: "1" },
+  env: { VN_SINGLE_INSTANCE: "1", VN_APP_NAME: appName },
   args: ["--first", "run"],
 });
 const exe = stagedExe();
@@ -47,11 +53,16 @@ afterAll(() => {
 const secondEnv = (more: Record<string, string> = {}) => ({
   ...(process.env as Record<string, string>),
   VN_DIST: app.slotDir,
+  VN_APP_NAME: appName,
   VN_SINGLE_INSTANCE: "1",
   VN_LAUNCH_RAISE: "off",
   VN_OWNER_PID: String(process.pid),
   ...more,
 });
+
+/** The primary's `[launch]` log lines about forwarded launches, oldest first. */
+const forwardedLines = async () =>
+  (await app.logs(0)).entries.map((e) => e.text).filter((t) => t.includes("a second launch was forwarded here"));
 
 type Record_ = {
   opened: string[];
@@ -83,7 +94,12 @@ describe("the first instance", () => {
 describe("a second launch", () => {
   test("forwards argv, cwd and existing paths to the first, exits 0 fast, and opens no window", async () => {
     const t0 = Date.now();
-    const r = spawnSync(exe, ["--foo", doc, "missing.txt"], { cwd: scratch, env: secondEnv(), timeout: 15_000 });
+    // Not quiet itself (an empty VN_WINDOW_FOCUS), as a user's double-click.
+    const r = spawnSync(exe, ["--foo", doc, "missing.txt"], {
+      cwd: scratch,
+      env: secondEnv({ VN_WINDOW_FOCUS: "" }),
+      timeout: 15_000,
+    });
     const ms = Date.now() - t0;
     bunExpect(r.status).toBe(0);
     // A debug host on a busy machine: generous, but far below a window's boot.
@@ -96,9 +112,16 @@ describe("a second launch", () => {
     bunExpect(ev.cwd.toLowerCase()).toBe(scratch.toLowerCase());
     bunExpect(ev.paths).toEqual([doc]);
     bunExpect(ev.url).toBe(null);
-    // …and one more LaunchParams, after the event.
-    bunExpect(got.params.at(-1)).toEqual({ targetURL: null, files: 0 });
+    // …and one more LaunchParams, after the event, with a handle for the one
+    // path that exists (docs/LAUNCH.md §1).
+    bunExpect(got.params.at(-1)).toEqual({ targetURL: null, files: 1 });
     await expect(app.locator(".fixture")).toHaveText("forwarded launches: 1");
+    // The primary is quiet, so it stayed where it was, and its log says why
+    // (the harness's VN_LAUNCH_RAISE=off is named as well).
+    const lines = await forwardedLines();
+    bunExpect(lines.length).toBe(1);
+    bunExpect(lines[0]).toContain("not raised: this instance is quiet (VN_WINDOW_FOCUS=never)");
+    bunExpect(lines[0]).not.toContain("the second launch was quiet");
   }, T);
 
   test("a protocol launch carries its URL byte-exact, quotes and spaces included", async () => {
@@ -126,6 +149,18 @@ describe("a second launch", () => {
     bunExpect(r.status).toBe(0);
     const got = await untilEvents(3);
     bunExpect(got.events[2].argv.slice(1)).toEqual(["report.txt", "--devtools"]);
+  }, T);
+
+  test("a quiet second launch is still delivered, and asks for no raise", async () => {
+    // An agent's or a test's launch (VN_WINDOW_FOCUS=never) hands on no
+    // foreground right and says so in its message: it never pulls the
+    // running window to the front, whoever is using it.
+    const r = spawnSync(exe, ["quiet"], { cwd: scratch, env: secondEnv({ VN_WINDOW_FOCUS: "never" }), timeout: 15_000 });
+    bunExpect(r.status).toBe(0);
+    const got = await untilEvents(4);
+    bunExpect(got.events[3].argv.slice(1)).toEqual(["quiet"]);
+    const lines = await forwardedLines();
+    bunExpect(lines.at(-1)).toContain("the second launch was quiet (VN_WINDOW_FOCUS=never)");
   }, T);
 
 });
