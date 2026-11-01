@@ -138,7 +138,7 @@ describe("a same-realm reload", () => {
     // A <style> the new app puts in <head> is what head.childNodes lists.
     const style = second.nodeOps.createElement("style");
     (doc.head.appendChild as (n: unknown) => unknown)(style);
-    expect(doc.head.childNodes).toEqual([style]);
+    expect([...doc.head.childNodes]).toEqual([style]);
   });
 
   test("document.createElement wraps the ENGINE's after a reload, not the old wrapper", () => {

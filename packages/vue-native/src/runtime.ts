@@ -207,6 +207,14 @@ interface MirrorRect {
   toJSON?(): MirrorRect;
 }
 
+/**
+ * A NodeList, HTMLCollection or DOMRectList as script sees one: indexed, with
+ * `length`, `item()` and iteration (the collection kit, after `TextProto`).
+ */
+interface MirrorCollection<T> extends ArrayLike<T>, Iterable<T> {
+  item(index: number): T | null;
+}
+
 /** `el.classList`, over the class Vue assigned (transition classes ride `_vtc`). */
 interface MirrorClassList {
   add(...names: string[]): void;
@@ -360,8 +368,15 @@ interface MirrorElement extends MirrorNodeBase {
   addEventListener(name: string, fn: EventHandler, opts?: ListenerOptions): void;
   removeEventListener(name: string, fn: EventHandler, opts?: ListenerOptions): void;
 
+  /**
+   * The element's namespace when it is not HTML: `<svg>` and everything Vue
+   * renders inside one, `createElementNS(svgNS, …)`, `<math>`. Absent = HTML.
+   */
+  _ns?: "svg" | "mathml";
+
   // -- the tree, truthfully (the mirror IS the tree)
-  readonly children: MirrorElement[] & { item(i: number): MirrorElement | null };
+  /** A live HTMLCollection (`liveCollection`). */
+  readonly children: MirrorCollection<MirrorElement>;
   readonly firstElementChild: MirrorElement | null;
   readonly lastElementChild: MirrorElement | null;
   readonly childElementCount: number;
@@ -371,11 +386,13 @@ interface MirrorElement extends MirrorNodeBase {
   matches(selector: string): boolean;
   closest(selector: string): MirrorElement | null;
   querySelector(selector: string): MirrorElement | null;
-  querySelectorAll(selector: string): MirrorElement[];
+  /** A static NodeList. */
+  querySelectorAll(selector: string): MirrorCollection<MirrorElement>;
 
   // -- layout, off the bounds gpui recorded for the last painted frame
   getBoundingClientRect(): MirrorRect;
-  getClientRects(): MirrorRect[];
+  /** A DOMRectList. */
+  getClientRects(): MirrorCollection<MirrorRect>;
   readonly offsetWidth: number;
   readonly offsetHeight: number;
   readonly clientWidth: number;
@@ -810,6 +827,7 @@ function detachNode(child: MirrorNode, notify = true): void {
   const i = p.childNodes.indexOf(child);
   if (i >= 0) p.childNodes.splice(i, 1);
   child.parentNode = null;
+  domEpoch++;
   const box = __vn_create_element(I("vn-detached"));
   __vn_insert(child.__vnId, box, 0);
   if (!isLoose(child)) loosen(child);
@@ -857,6 +875,298 @@ const ElementProto: object =
 // node-level surface (see `NODE_MEMBERS` below).
 const TextProto: object = Object.create(Object.prototype);
 
+// ---- NodeList, HTMLCollection, DOMRectList ----------------------------------
+//
+// In a browser `childNodes` and `querySelectorAll()` are NodeLists, `children`
+// and `getElementsBy*()` are HTMLCollections, and code tests for them by name:
+// motion's `animate()` resolves its subject with `subject instanceof NodeList`
+// (framer-motion `resolveSubjects`), a ReferenceError while the global did not
+// exist. The prototypes are made here, before the first mirror (`mk` gives
+// every node its `childNodes`). The interface objects that own them are made
+// with the other interfaces, below (`adoptInterface`).
+//
+// There are three kinds of list, by what backs them:
+// - `childNodes` IS the renderer's own child array (every insert and removal
+//   splices it), so it is live by construction. It stays a plain Array on
+//   Array.prototype, because JavaScriptCore's fast `indexOf` and element
+//   access need the original array prototype chain: on an Array re-parented
+//   onto NodeList.prototype, `indexOf` measured 30 times slower, and the
+//   renderer calls it for every insert, move and `nextSibling`. Each list
+//   carries NodeList's `item` and toString tag as own properties
+//   (`childList`), and `instanceof NodeList` accepts it. `forEach`,
+//   `entries`, `keys`, `values` and iteration are Array's, which are
+//   NodeList's own functions in a browser too. Divergence, said in
+//   docs/RUNTIME.md §5.24: `Array.isArray(el.childNodes)` is true, its
+//   prototype is Array.prototype, and the other array methods (`map`,
+//   `filter`, …) are there too.
+// - A STATIC list (`querySelectorAll()`, a MutationRecord's `addedNodes` and
+//   `removedNodes`, `getClientRects()`) is a snapshot. It is a plain object on
+//   the interface's prototype, with read-only index properties, as a browser's is.
+// - A LIVE collection (`children`, `getElementsByTagName()`, …) is a Proxy. It
+//   recomputes its members when the tree has changed since it last looked
+//   (`domEpoch`), and it has index properties and, for an HTMLCollection,
+//   named ones (`form.elements.email`), as WebIDL's legacy platform objects do.
+
+/**
+ * Bumped by every change a live collection could see: an insert, a removal,
+ * an attribute (`id`, `name` and `class` select members).
+ */
+let domEpoch = 0;
+
+/** A static list's members. */
+const staticItems = new WeakMap<object, readonly unknown[]>();
+
+/** A live collection's state, under both its Proxy and its target. */
+interface LiveState {
+  compute: () => readonly unknown[];
+  items: readonly unknown[];
+  /** The `domEpoch` that `items` was computed at. */
+  epoch: number;
+  /** An HTMLCollection: its elements are also properties, by `id` and `name`. */
+  named: boolean;
+}
+const liveStates = new WeakMap<object, LiveState>();
+
+function liveItems(s: LiveState): readonly unknown[] {
+  if (s.epoch !== domEpoch) {
+    s.items = s.compute();
+    s.epoch = domEpoch;
+  }
+  return s.items;
+}
+
+/** The members of a list, or WebIDL's "Illegal invocation" for any other receiver. */
+function listItems(self: unknown): ArrayLike<unknown> {
+  if (self && typeof self === "object") {
+    const fixed = staticItems.get(self);
+    if (fixed) return fixed;
+    const live = liveStates.get(self);
+    if (live) return liveItems(live);
+    if (isChildList(self)) return self;
+  }
+  throw new TypeError("Illegal invocation");
+}
+
+/** An element's id, or (HTML elements only) its `name`, as HTMLCollection's named properties match. */
+function namedMember(items: ArrayLike<unknown>, key: string): unknown {
+  if (key === "") return null;
+  for (let i = 0; i < items.length; i++) {
+    const e = items[i] as Partial<MirrorElement> | undefined;
+    const a = e?.attrs;
+    if (a && (a.id === key || (a.name === key && !e._ns))) return e;
+  }
+  return null;
+}
+/** HTMLCollection's supported property names: ids and names, in tree order, each once. */
+function namedKeys(items: ArrayLike<unknown>): string[] {
+  const out = new Set<string>();
+  for (let i = 0; i < items.length; i++) {
+    const e = items[i] as Partial<MirrorElement> | undefined;
+    const a = e?.attrs;
+    if (!a) continue;
+    if (a.id) out.add(a.id);
+    if (a.name && !e._ns) out.add(a.name);
+  }
+  return [...out];
+}
+
+/** `k` as an array index (WebIDL: a canonical numeric string below 2³² − 1), else -1. */
+function indexOfKey(k: string): number {
+  const c = k.charCodeAt(0);
+  if (!(c >= 48 && c <= 57)) return -1;
+  const n = Number(k);
+  return n <= 4294967294 && String(n) === k ? n : -1;
+}
+
+/**
+ * WebIDL's legacy platform object, over a live member list: index properties
+ * are read-only and enumerable, named ones (an HTMLCollection's) read-only
+ * and not enumerable, and a name the prototype chain already has (`item`,
+ * `length`) is the prototype's.
+ */
+const LIVE_HANDLER: ProxyHandler<object> = {
+  get(t, k, recv) {
+    if (typeof k === "string") {
+      const s = liveStates.get(t)!;
+      const i = indexOfKey(k);
+      if (i >= 0) return liveItems(s)[i];
+      if (k === "length") return liveItems(s).length;
+      if (s.named && !(k in t)) {
+        const n = namedMember(liveItems(s), k);
+        if (n) return n;
+      }
+    }
+    return Reflect.get(t, k, recv);
+  },
+  has(t, k) {
+    if (typeof k === "string") {
+      const s = liveStates.get(t)!;
+      const i = indexOfKey(k);
+      if (i >= 0) return i < liveItems(s).length;
+      if (s.named && !(k in t) && namedMember(liveItems(s), k)) return true;
+    }
+    return Reflect.has(t, k);
+  },
+  ownKeys(t) {
+    const s = liveStates.get(t)!;
+    const items = liveItems(s);
+    const keys: (string | symbol)[] = [];
+    for (let i = 0; i < items.length; i++) keys.push(String(i));
+    if (s.named) for (const n of namedKeys(items)) if (indexOfKey(n) < 0 && !(n in t)) keys.push(n);
+    for (const k of Reflect.ownKeys(t)) keys.push(k);
+    return keys;
+  },
+  getOwnPropertyDescriptor(t, k) {
+    if (typeof k === "string") {
+      const s = liveStates.get(t)!;
+      const i = indexOfKey(k);
+      if (i >= 0) {
+        const items = liveItems(s);
+        return i < items.length ? { value: items[i], writable: false, enumerable: true, configurable: true } : undefined;
+      }
+      if (s.named && !(k in t)) {
+        const n = namedMember(liveItems(s), k);
+        if (n) return { value: n, writable: false, enumerable: false, configurable: true };
+      }
+    }
+    return Reflect.getOwnPropertyDescriptor(t, k);
+  },
+  defineProperty(t, k, d) {
+    if (typeof k === "string") {
+      if (indexOfKey(k) >= 0) return false;
+      const s = liveStates.get(t)!;
+      if (s.named && !Object.prototype.hasOwnProperty.call(t, k) && namedMember(liveItems(s), k)) return false;
+    }
+    return Reflect.defineProperty(t, k, d);
+  },
+  deleteProperty(t, k) {
+    if (typeof k === "string") {
+      const s = liveStates.get(t)!;
+      const i = indexOfKey(k);
+      if (i >= 0) return i >= liveItems(s).length;
+      if (s.named && !(k in t) && namedMember(liveItems(s), k)) return false;
+    }
+    return Reflect.deleteProperty(t, k);
+  },
+  preventExtensions: () => false,
+};
+
+/** A live collection on `proto`, whose members are `compute()`'s answer for the current tree. */
+function liveCollection<T>(proto: object, named: boolean, compute: () => readonly T[]): MirrorCollection<T> {
+  const target = Object.create(proto) as object;
+  const s: LiveState = { compute, items: [], epoch: -1, named };
+  const list = new Proxy(target, LIVE_HANDLER);
+  liveStates.set(target, s);
+  liveStates.set(list, s);
+  return list as MirrorCollection<T>;
+}
+
+/** A static list on `proto`: a snapshot of `items`, which must not change afterwards. */
+function staticList<T>(proto: object, items: readonly T[]): MirrorCollection<T> {
+  const list = Object.create(proto) as Record<number, unknown>;
+  for (let i = 0; i < items.length; i++) {
+    Object.defineProperty(list, i, { value: items[i], enumerable: true, configurable: true });
+  }
+  staticItems.set(list, items);
+  return list as unknown as MirrorCollection<T>;
+}
+
+/**
+ * A collection interface's prototype, with WebIDL's members on it (enumerable,
+ * as WebIDL's are). The iteration methods are the Array ones themselves, as
+ * in a browser (`NodeList.prototype.forEach === Array.prototype.forEach`).
+ */
+function collectionProto(name: string, opts: { named?: boolean; iterable?: boolean } = {}): object {
+  const proto: object = Object.create(Object.prototype);
+  const required = (member: string, n: number) => {
+    if (n < 1) throw new TypeError(`Failed to execute '${member}' on '${name}': 1 argument required, but only 0 present.`);
+  };
+  const members: Record<string, PropertyDescriptor> = {
+    item: {
+      value: function item(this: unknown, index: unknown) {
+        required("item", arguments.length);
+        const items = listItems(this);
+        const i = Number(index) >>> 0;
+        return i < items.length ? items[i] : null;
+      },
+    },
+    length: {
+      get: function length(this: unknown) {
+        return listItems(this).length;
+      },
+    },
+  };
+  if (opts.named) {
+    members.namedItem = {
+      value: function namedItem(this: unknown, key: unknown) {
+        required("namedItem", arguments.length);
+        return namedMember(listItems(this), String(key));
+      },
+    };
+  }
+  if (opts.iterable) {
+    for (const k of ["entries", "keys", "values", "forEach"] as const) members[k] = { value: Array.prototype[k] };
+  }
+  for (const [k, d] of Object.entries(members)) {
+    Object.defineProperty(proto, k, { ...d, enumerable: true, configurable: true, ...("value" in d ? { writable: true } : {}) });
+  }
+  Object.defineProperty(proto, Symbol.iterator, { value: Array.prototype.values, writable: true, configurable: true });
+  Object.defineProperty(proto, Symbol.toStringTag, { value: name, configurable: true });
+  return proto;
+}
+const NodeListProto = collectionProto("NodeList", { iterable: true });
+const HTMLCollectionProto = collectionProto("HTMLCollection", { named: true });
+const DOMRectListProto = collectionProto("DOMRectList");
+
+// What each `childNodes` array carries of NodeList's own (see above): its
+// `item`, the very function on NodeList.prototype, and its toString tag, so
+// `Object.prototype.toString` says "[object NodeList]" (and Vue's `reactive()`
+// leaves the list alone, as it does a browser's).
+const CHILD_ITEM: PropertyDescriptor = {
+  value: (NodeListProto as { item: unknown }).item,
+  writable: true,
+  configurable: true,
+};
+const CHILD_TAG: PropertyDescriptor = { value: "NodeList", configurable: true };
+/** A new, empty `childNodes`. */
+function childList(): MirrorNode[] {
+  const list: MirrorNode[] = [];
+  Object.defineProperty(list, "item", CHILD_ITEM);
+  Object.defineProperty(list, Symbol.toStringTag, CHILD_TAG);
+  return list;
+}
+/** Is `x` a node's `childNodes` (`childList`)? */
+function isChildList(x: object): x is MirrorNode[] {
+  return Array.isArray(x) && (x as { item?: unknown }).item === CHILD_ITEM.value;
+}
+
+/** The empty answer, shared: a static list can never change. */
+const NO_NODES: readonly MirrorNode[] = Object.freeze([]);
+
+/**
+ * Objects made here for interfaces this runtime has no class for (a
+ * `classList`, a MutationRecord, …), by interface. Each interface's
+ * `instanceof` answers from its set (the interface objects are made below,
+ * with the others).
+ */
+const BRANDS = {
+  DOMTokenList: new WeakSet<object>(),
+  DOMStringMap: new WeakSet<object>(),
+  MutationRecord: new WeakSet<object>(),
+  ResizeObserverEntry: new WeakSet<object>(),
+  ResizeObserverSize: new WeakSet<object>(),
+  TreeWalker: new WeakSet<object>(),
+};
+function branded<T extends object>(kind: keyof typeof BRANDS, obj: T): T {
+  BRANDS[kind].add(obj);
+  return obj;
+}
+
+/** The element namespaces (`namespaceURI`). */
+const HTML_NS = "http://www.w3.org/1999/xhtml";
+const SVG_NS = "http://www.w3.org/2000/svg";
+const MATHML_NS = "http://www.w3.org/1998/Math/MathML";
+
 // A mirror node must never become reactive state.
 //
 // In a browser this is automatic: `Object.prototype.toString.call(divElement)`
@@ -886,7 +1196,8 @@ function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode {
   n.kind = kind;
   n.tag = tag;
   n.parentNode = null;
-  n.childNodes = [];
+  // A live NodeList, because it is the list the renderer splices (`childList`).
+  n.childNodes = childList();
   if (kind === 1) {
     n.tagName = String(tag).toUpperCase();
     // The storage under the prototype's `value` accessor; its being OWN is
@@ -931,8 +1242,16 @@ const handlers = new WeakMap<MirrorNode, HandlerMap>();
 // separately below: every hook's parameter types come from the renderer that
 // calls them, so nothing here can drift out of step with what Vue passes.
 const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
-  createElement: (type) => {
+  createElement: (type, namespace) => {
     const el = mk(__vn_create_element(I(type)), 1, type);
+    // `<svg>` and what Vue renders inside it, and `<math>`: not HTML elements.
+    // Their `tagName` keeps the name's case (`svg`, `linearGradient`), as a
+    // browser's does, and `instanceof SVGElement` / `MathMLElement` hold
+    // (`namespaceURI`, `wrapElementHasInstance`).
+    if (namespace === "svg" || namespace === "mathml") {
+      el._ns = namespace;
+      el.tagName = type;
+    }
     // A `<label>` clicks its control whether or not anything listens, so the
     // host must deliver its clicks (desktop-apis-design §4.2). So does a
     // `<button>` (submit is its default type: it submits its form), and an
@@ -980,6 +1299,7 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
       const i = p.childNodes.indexOf(child);
       if (i >= 0) p.childNodes.splice(i, 1);
       child.parentNode = null;
+      domEpoch++;
       notifyMutation(p, "childList", { addedNodes: [], removedNodes: [child] });
     }
     // Already freed (its id is 0 now): nothing to free.
@@ -1031,6 +1351,7 @@ function insertNode(child: MirrorNode, parent: MirrorElement, anchor: MirrorNode
   }
   parent.childNodes.splice(idx, 0, child);
   child.parentNode = parent;
+  domEpoch++;
   // The host drops an element's own text when it gains a child; so does the mirror.
   if (parent.ownText) parent.ownText = "";
   __vn_insert(child.__vnId, parent.__vnId, anchor ? anchor.__vnId : 0);
@@ -2317,7 +2638,8 @@ defineDomGet(
 function siblingOf(node: MirrorNode, step: 1 | -1): MirrorNode | null {
   const p = node.parentNode;
   if (!p || !p.childNodes) return null;
-  const i = p.childNodes.indexOf(node);
+  // `document.head`'s list is a NodeList with no `indexOf`; a mirror's is an Array.
+  const i = Array.prototype.indexOf.call(p.childNodes, node);
   return i >= 0 ? (p.childNodes[i + step] ?? null) : null;
 }
 defineDomGet("nextSibling", function (this: MirrorNode) { return siblingOf(this, 1); }, undefined, NODE_MEMBERS);
@@ -2352,11 +2674,12 @@ defineDom(
 // handing it text and comment mirrors made it log one failure per node.
 const elementChildren = (n: MirrorNode): MirrorElement[] =>
   (n.childNodes || []).filter((c): c is MirrorElement => c.kind === 1);
-// A snapshot array, not a live HTMLCollection, with the collection's `item()`
-// (as `getElementsByTagName` answers).
+// A live HTMLCollection, the same object on every read, as a browser's is.
+const childrenOf = new WeakMap<object, MirrorCollection<MirrorElement>>();
 defineDomGet("children", function (this: MirrorElement) {
-  const out = elementChildren(this);
-  return Object.defineProperty(out, "item", { value: (i: number) => out[i] ?? null });
+  let kids = childrenOf.get(this);
+  if (!kids) childrenOf.set(this, (kids = liveCollection(HTMLCollectionProto, true, () => elementChildren(this))));
+  return kids;
 });
 defineDomGet("firstElementChild", function (this: MirrorElement) {
   return elementChildren(this)[0] ?? null;
@@ -2370,8 +2693,8 @@ defineDomGet("childElementCount", function (this: MirrorElement) {
 });
 function elementSibling(node: MirrorNode, step: number): MirrorElement | null {
   const p = node.parentNode;
-  if (!p) return null;
-  for (let i = p.childNodes.indexOf(node) + step; i >= 0 && i < p.childNodes.length; i += step) {
+  if (!p || !p.childNodes) return null;
+  for (let i = Array.prototype.indexOf.call(p.childNodes, node) + step; i >= 0 && i < p.childNodes.length; i += step) {
     if (p.childNodes[i].kind === 1) return p.childNodes[i] as MirrorElement;
   }
   return null;
@@ -2425,7 +2748,69 @@ defineDom("querySelector", function (this: MirrorElement, selector: string) {
   return queryOne(selector, this.__vnId, 0);
 });
 defineDom("querySelectorAll", function (this: MirrorElement, selector: string) {
-  return hostQuery(selector, this.__vnId, 0);
+  return staticList(NodeListProto, hostQuery(selector, this.__vnId, 0));
+});
+
+// -- getElementsByTagName / getElementsByClassName: live HTMLCollections, from
+//    a walk of the mirror tree (not the selector matcher: `foo:bar` is a tag
+//    name here and an invalid selector there).
+/** The elements under `root` (and `root` itself when `inclusive`) that `test` takes, in tree order. */
+function elementsUnder(root: MirrorNode | null, inclusive: boolean, test: (el: MirrorElement) => boolean): MirrorElement[] {
+  const out: MirrorElement[] = [];
+  if (!root) return out;
+  const walk = (n: MirrorNode) => {
+    const kids = n.childNodes;
+    for (let i = 0; i < kids.length; i++) {
+      const c = kids[i]!;
+      if (c.kind !== 1) continue;
+      if (test(c)) out.push(c);
+      walk(c);
+    }
+  };
+  if (inclusive && root.kind === 1 && test(root)) out.push(root);
+  walk(root);
+  return out;
+}
+/** DOM's "list of elements with qualified name": `*`, else the name (lowercased against HTML elements). */
+function tagTest(qualifiedName: unknown): (el: MirrorElement) => boolean {
+  const q = String(qualifiedName);
+  if (q === "*") return () => true;
+  const lower = q.toLowerCase();
+  return (el) => (el._ns ? el.tag === q : el.tag.toLowerCase() === lower);
+}
+/** DOM's "list of elements with class names": every token, case-sensitively; none = nothing. */
+function classTest(classNames: unknown): (el: MirrorElement) => boolean {
+  const want = String(classNames).split(/[ \t\n\f\r]+/).filter(Boolean);
+  if (!want.length) return () => false;
+  return (el) => {
+    const have = el.attrs.class;
+    if (!have) return false;
+    const tokens = have.split(/[ \t\n\f\r]+/);
+    return want.every((w) => tokens.includes(w));
+  };
+}
+defineDom("getElementsByTagName", function (this: MirrorElement, qualifiedName: unknown) {
+  const test = tagTest(qualifiedName);
+  return liveCollection(HTMLCollectionProto, true, () => elementsUnder(this, false, test));
+});
+defineDom("getElementsByClassName", function (this: MirrorElement, classNames: unknown) {
+  const test = classTest(classNames);
+  return liveCollection(HTMLCollectionProto, true, () => elementsUnder(this, false, test));
+});
+
+// -- namespaceURI / localName / prefix (DOM §4.9). A mirror's namespace is
+//    `_ns`; any other element on this prototype (the engine's detached ones)
+//    is HTML. Vue's own `getContainerType`, VueUse's `isSVG` and
+//    `instanceof SVGElement` all read it.
+defineDomGet("namespaceURI", function (this: MirrorElement) {
+  return this._ns === "svg" ? SVG_NS : this._ns === "mathml" ? MATHML_NS : HTML_NS;
+});
+defineDomGet("localName", function (this: MirrorElement) {
+  const name = typeof this.tag === "string" ? this.tag : String(this.tagName ?? "").toLowerCase();
+  return this._ns ? name.slice(name.indexOf(":") + 1) : name.toLowerCase();
+});
+defineDomGet("prefix", function (this: MirrorElement) {
+  return null;
 });
 
 // -- layout, off the bounds gpui recorded for the last painted frame. The two
@@ -2436,7 +2821,7 @@ defineDom("getBoundingClientRect", function (this: MirrorElement) {
 });
 defineDom("getClientRects", function (this: MirrorElement) {
   const r = paintedRectOf(this, "getClientRects()");
-  return r.width || r.height ? [r] : [];
+  return staticList(DOMRectListProto, r.width || r.height ? [asDomRect(r)] : []);
 });
 for (const [name, pick] of [
   ["offsetWidth", (r: MirrorRect) => r.width],
@@ -3168,7 +3553,7 @@ defineDomGet("dataset", function (this: MirrorElement) {
         .map((k) => k.slice(5).replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())),
     getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
   });
-  Object.defineProperty(this, "dataset", { value: proxy, configurable: true });
+  Object.defineProperty(this, "dataset", { value: branded("DOMStringMap", proxy), configurable: true });
   return proxy;
 });
 
@@ -3213,7 +3598,7 @@ defineDomGet("classList", function (this: MirrorElement) {
     toString: () => node.className,
     [Symbol.iterator]: () => parts()[Symbol.iterator](),
   };
-  Object.defineProperty(this, "classList", { value: list, configurable: true });
+  Object.defineProperty(this, "classList", { value: branded("DOMTokenList", list), configurable: true });
   return list;
 });
 
@@ -6242,8 +6627,9 @@ const CSS_UNSUPPORTED_VALUE = /(?:^|[^\w-])linear\(/i;
 interface MutationRecordLike {
   type: "childList" | "attributes";
   target: MirrorNode;
-  addedNodes: MirrorNode[];
-  removedNodes: MirrorNode[];
+  /** Static NodeLists, as a browser's are. */
+  addedNodes: MirrorCollection<MirrorNode>;
+  removedNodes: MirrorCollection<MirrorNode>;
   attributeName: string | null;
   attributeNamespace: null;
   oldValue: string | null;
@@ -6291,6 +6677,8 @@ function notifyMutation(
     oldValue?: string | null;
   },
 ): void {
+  // An `id`, `name` or `class` change moves elements in and out of live collections.
+  domEpoch++;
   if (type === "attributes" && !noAttrNodes) attrChanged(target as MirrorElement, extra!.attributeName!, extra!.oldValue ?? null);
   if (observers.size === 0) return;
   for (const ob of observers) {
@@ -6304,17 +6692,19 @@ function notifyMutation(
           continue;
         }
       }
-      ob._records.push({
-        type,
-        target,
-        addedNodes: extra?.addedNodes ?? [],
-        removedNodes: extra?.removedNodes ?? [],
-        attributeName: extra?.attributeName ?? null,
-        attributeNamespace: null,
-        oldValue: entry.options.attributeOldValue ? (extra?.oldValue ?? null) : null,
-        previousSibling: null,
-        nextSibling: null,
-      });
+      ob._records.push(
+        branded("MutationRecord", {
+          type,
+          target,
+          addedNodes: staticList(NodeListProto, extra?.addedNodes ?? NO_NODES),
+          removedNodes: staticList(NodeListProto, extra?.removedNodes ?? NO_NODES),
+          attributeName: extra?.attributeName ?? null,
+          attributeNamespace: null,
+          oldValue: entry.options.attributeOldValue ? (extra?.oldValue ?? null) : null,
+          previousSibling: null,
+          nextSibling: null,
+        }),
+      );
       break; // one record per observer per mutation, as in the DOM
     }
   }
@@ -6540,17 +6930,17 @@ function broadcastNextResize(): number {
 }
 
 function resizeEntry(target: MirrorElement, size: ResizeSize): ResizeEntryLike {
-  const box = Object.freeze([Object.freeze({ inlineSize: size.w, blockSize: size.h })]);
+  const box = Object.freeze([Object.freeze(branded("ResizeObserverSize", { inlineSize: size.w, blockSize: size.h }))]);
   const dpr = Number((globalThis as { devicePixelRatio?: number }).devicePixelRatio) || 1;
   const device = Object.freeze([
-    Object.freeze({ inlineSize: Math.round(size.w * dpr), blockSize: Math.round(size.h * dpr) }),
+    Object.freeze(branded("ResizeObserverSize", { inlineSize: Math.round(size.w * dpr), blockSize: Math.round(size.h * dpr) })),
   ]);
   const contentRect = asDomRect({
     x: 0, y: 0, width: size.w, height: size.h,
     top: 0, left: 0, right: size.w, bottom: size.h,
     toJSON() { return this; },
   });
-  return { target, contentRect, borderBoxSize: box, contentBoxSize: box, devicePixelContentBoxSize: device };
+  return branded("ResizeObserverEntry", { target, contentRect, borderBoxSize: box, contentBoxSize: box, devicePixelContentBoxSize: device });
 }
 
 const RESIZE_LOOP_MESSAGE = "ResizeObserver loop completed with undelivered notifications.";
@@ -7123,7 +7513,14 @@ defineGlobal("NodeFilter", {
 //    (FocusScope's isSelectableInput). A MISSING class is a ReferenceError,
 //    which is strictly worse than a false `instanceof` — so each one exists and
 //    answers for the tag it names.
-const TAG_CLASSES = {
+//
+//    Every HTML element interface Chrome has for a tag, by `tagName` (a list
+//    where one interface serves several tags). HTMLMediaElement comes before
+//    the two that extend it (`TAG_PARENTS`). `<audio>` matters most: the
+//    client's AudioManager tests `instanceof HTMLAudioElement` inside a
+//    MutationObserver callback, so a missing global threw on every mutation
+//    (research/reports/m26/dom-globals-1.md).
+const TAG_CLASSES: Record<string, string | readonly string[]> = {
   HTMLInputElement: "INPUT",
   HTMLTextAreaElement: "TEXTAREA",
   HTMLSelectElement: "SELECT",
@@ -7136,7 +7533,75 @@ const TAG_CLASSES = {
   HTMLImageElement: "IMG",
   HTMLIFrameElement: "IFRAME",
   HTMLCanvasElement: "CANVAS",
+  HTMLMediaElement: ["VIDEO", "AUDIO"],
+  HTMLVideoElement: "VIDEO",
+  HTMLAudioElement: "AUDIO",
+  HTMLSourceElement: "SOURCE",
+  HTMLTrackElement: "TRACK",
+  HTMLPictureElement: "PICTURE",
+  HTMLStyleElement: "STYLE",
+  HTMLLinkElement: "LINK",
+  HTMLScriptElement: "SCRIPT",
+  HTMLMetaElement: "META",
+  HTMLTitleElement: "TITLE",
+  HTMLBaseElement: "BASE",
+  HTMLHeadElement: "HEAD",
+  HTMLBodyElement: "BODY",
+  HTMLHtmlElement: "HTML",
+  HTMLParagraphElement: "P",
+  HTMLHeadingElement: ["H1", "H2", "H3", "H4", "H5", "H6"],
+  HTMLPreElement: ["PRE", "LISTING", "XMP"],
+  HTMLQuoteElement: ["Q", "BLOCKQUOTE"],
+  HTMLHRElement: "HR",
+  HTMLBRElement: "BR",
+  HTMLUListElement: "UL",
+  HTMLOListElement: "OL",
+  HTMLLIElement: "LI",
+  HTMLDListElement: "DL",
+  HTMLMenuElement: "MENU",
+  HTMLTableElement: "TABLE",
+  HTMLTableCaptionElement: "CAPTION",
+  HTMLTableSectionElement: ["THEAD", "TBODY", "TFOOT"],
+  HTMLTableRowElement: "TR",
+  HTMLTableCellElement: ["TD", "TH"],
+  HTMLTableColElement: ["COL", "COLGROUP"],
+  HTMLOptionElement: "OPTION",
+  HTMLOptGroupElement: "OPTGROUP",
+  HTMLDataListElement: "DATALIST",
+  HTMLFieldSetElement: "FIELDSET",
+  HTMLLegendElement: "LEGEND",
+  HTMLOutputElement: "OUTPUT",
+  HTMLProgressElement: "PROGRESS",
+  HTMLMeterElement: "METER",
+  HTMLDetailsElement: "DETAILS",
+  HTMLDialogElement: "DIALOG",
+  HTMLTemplateElement: "TEMPLATE",
+  HTMLSlotElement: "SLOT",
+  HTMLEmbedElement: "EMBED",
+  HTMLObjectElement: "OBJECT",
+  HTMLMapElement: "MAP",
+  HTMLAreaElement: "AREA",
+  HTMLTimeElement: "TIME",
+  HTMLDataElement: "DATA",
+  HTMLModElement: ["INS", "DEL"],
 };
+/** Tag classes that extend another tag class rather than HTMLElement. */
+const TAG_PARENTS: Record<string, string> = {
+  HTMLVideoElement: "HTMLMediaElement",
+  HTMLAudioElement: "HTMLMediaElement",
+};
+/** HTMLMediaElement's constants (HTML §4.8.11): `readyState` and `networkState` values. */
+const MEDIA_CONSTANTS: readonly (readonly [string, number])[] = [
+  ["NETWORK_EMPTY", 0],
+  ["NETWORK_IDLE", 1],
+  ["NETWORK_LOADING", 2],
+  ["NETWORK_NO_SOURCE", 3],
+  ["HAVE_NOTHING", 0],
+  ["HAVE_METADATA", 1],
+  ["HAVE_CURRENT_DATA", 2],
+  ["HAVE_FUTURE_DATA", 3],
+  ["HAVE_ENOUGH_DATA", 4],
+];
 // -- Form-control `value` / `checked` are real accessors.
 //
 // reka-ui's VisuallyHiddenInputBubble (Checkbox, Switch, RadioGroup inside a
@@ -7255,9 +7720,15 @@ const TAG_ACCESSORS: Record<string, readonly string[]> = {
   IMG: ["src", "currentSrc", "complete", "naturalWidth", "naturalHeight"],
 };
 
-for (const [name, tag] of Object.entries(TAG_CLASSES)) {
+for (const [name, spec] of Object.entries(TAG_CLASSES)) {
+  const tags: readonly string[] = typeof spec === "string" ? [spec] : spec;
+  const tag = tags[0]!;
   const existing = (globalThis as Record<string, unknown>)[name];
   const ours = vacant(globalThis, name);
+  // HTMLElement.prototype (the mirrors' own), or the tag class this one extends.
+  const parentName = TAG_PARENTS[name];
+  const parentProto =
+    (parentName && (globalThis as Record<string, { prototype?: object } | undefined>)[parentName]?.prototype) || ElementProto;
   if (typeof existing === "function" && !ours) {
     // The ENGINE's class — redjs ships HTMLImageElement, the offscreen image
     // `new Image()` and `document.createElement("img")` make (and a canvas
@@ -7267,10 +7738,14 @@ for (const [name, tag] of Object.entries(TAG_CLASSES)) {
       const own = Function.prototype[Symbol.hasInstance];
       Object.defineProperty(existing, Symbol.hasInstance, {
         value(this: unknown, x: unknown) {
-          return (isMirrorEl(x) && x.tagName === tag) || own.call(this, x);
+          return (isMirrorEl(x) && tags.includes(x.tagName)) || own.call(this, x);
         },
         configurable: true,
       });
+      // redjs's bootstrap HTMLVideoElement is a bare class on Object.prototype:
+      // it goes under HTMLMediaElement, as a browser's does.
+      const p = (existing as { prototype?: object }).prototype;
+      if (parentName && p && Object.getPrototypeOf(p) === Object.prototype) Object.setPrototypeOf(p, parentProto);
     } catch {
       /* a class that refuses the property keeps its own answer */
     }
@@ -7279,12 +7754,21 @@ for (const [name, tag] of Object.entries(TAG_CLASSES)) {
   if (!ours) continue;
   // Mirror nodes are all plain HTMLElement, so `instanceof` is answered by the
   // tag name instead of by the prototype chain — which is the ONLY way to make
-  // `el instanceof HTMLInputElement` true for a real `<input>` here.
+  // `el instanceof HTMLInputElement` true for a real `<input>` here. The
+  // prototype is still on HTMLElement's chain, so `HTMLInputElement.prototype.focus`
+  // is HTMLElement's, as in a browser.
   const klass = class {};
   Object.defineProperty(klass, "name", { value: name });
   Object.defineProperty(klass, Symbol.hasInstance, {
-    value: (x: unknown) => !!x && typeof x === "object" && (x as MirrorElement).tagName === tag,
+    value: (x: unknown) => !!x && typeof x === "object" && tags.includes((x as MirrorElement).tagName),
   });
+  Object.setPrototypeOf(klass.prototype, parentProto);
+  if (name === "HTMLMediaElement") {
+    for (const [k, v] of MEDIA_CONSTANTS) {
+      Object.defineProperty(klass, k, { value: v, enumerable: true });
+      Object.defineProperty(klass.prototype, k, { value: v, enumerable: true });
+    }
+  }
   for (const prop of TAG_ACCESSORS[tag] ?? []) {
     // The wrong receiver throws, as in a browser. So does an object that
     // inherits from this prototype: delegating would land right back here.
@@ -7352,6 +7836,166 @@ function defineInterface(
 const theGlobal = (k: string) => (globalThis as Record<string, unknown>)[k];
 const ET: Iface | null = typeof EventTarget === "function" ? (EventTarget as unknown as Iface) : null;
 
+/**
+ * An interface whose prototype object already exists: NodeList.prototype and
+ * its kin, made before the first mirror. `instanceof` is the prototype chain's
+ * answer. When the engine has an interface of the same name, ours goes under
+ * it, so `instanceof` holds for both.
+ */
+function adoptInterface(
+  name: string,
+  proto: object,
+  parent: Iface | null,
+  /** Objects off the chain that are instances all the same (`childNodes`). */
+  also?: (x: object) => boolean,
+): Iface | undefined {
+  const engine = theGlobal(name);
+  const iface = vacant(globalThis, name)
+    ? function (): never {
+        throw new TypeError("Illegal constructor");
+      }
+    : null;
+  if (!iface) {
+    const engineProto = typeof engine === "function" ? (engine as unknown as Iface).prototype : undefined;
+    if (engineProto && engineProto !== proto) {
+      try {
+        Object.setPrototypeOf(proto, engineProto);
+      } catch {
+        /* keeps its own chain */
+      }
+    }
+  } else {
+    Object.defineProperty(iface, "name", { value: name });
+    const parentProto = parent?.prototype ?? Object.prototype;
+    if (Object.getPrototypeOf(proto) !== parentProto) Object.setPrototypeOf(proto, parentProto);
+    Object.defineProperty(proto, "constructor", { value: iface, writable: true, configurable: true });
+    Object.defineProperty(iface, "prototype", { value: proto, writable: false });
+  }
+  const target = iface ?? engine;
+  if (also && typeof target === "function") {
+    const own = Function.prototype[Symbol.hasInstance];
+    try {
+      Object.defineProperty(target, Symbol.hasInstance, {
+        value(this: unknown, x: unknown) {
+          return (!!x && typeof x === "object" && also(x)) || own.call(this, x);
+        },
+        configurable: true,
+      });
+    } catch {
+      /* an interface that refuses the property keeps its own answer */
+    }
+  }
+  if (iface) defineGlobal(name, iface);
+  return (target ?? undefined) as Iface | undefined;
+}
+adoptInterface("NodeList", NodeListProto, null, isChildList);
+adoptInterface("HTMLCollection", HTMLCollectionProto, null);
+adoptInterface("DOMRectList", DOMRectListProto, null);
+
+// -- Node: an interface of its own (DOM §4.4), the parent of Element,
+//    CharacterData, Attr and Document. redjs aliases `Node` to `Element`, so
+//    `Node.TEXT_NODE` was undefined (emojix compares `node.nodeType` with it)
+//    and a text node was not `instanceof Node` (the client's EnterText.vue,
+//    DOMPurify). The engine's Element.prototype is re-parented onto it, and so
+//    are the text mirrors' prototype and Attr's (below).
+const NODE_CONSTANTS: readonly (readonly [string, number])[] = [
+  ["ELEMENT_NODE", 1],
+  ["ATTRIBUTE_NODE", 2],
+  ["TEXT_NODE", 3],
+  ["CDATA_SECTION_NODE", 4],
+  ["ENTITY_REFERENCE_NODE", 5],
+  ["ENTITY_NODE", 6],
+  ["PROCESSING_INSTRUCTION_NODE", 7],
+  ["COMMENT_NODE", 8],
+  ["DOCUMENT_NODE", 9],
+  ["DOCUMENT_TYPE_NODE", 10],
+  ["DOCUMENT_FRAGMENT_NODE", 11],
+  ["NOTATION_NODE", 12],
+  ["DOCUMENT_POSITION_DISCONNECTED", 1],
+  ["DOCUMENT_POSITION_PRECEDING", 2],
+  ["DOCUMENT_POSITION_FOLLOWING", 4],
+  ["DOCUMENT_POSITION_CONTAINS", 8],
+  ["DOCUMENT_POSITION_CONTAINED_BY", 16],
+  ["DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", 32],
+];
+const isDocument = (x: unknown) => x != null && x === theGlobal("document");
+const NodeIface: Iface | null = (() => {
+  const engineNode = theGlobal("Node");
+  const engineElement = theGlobal("Element");
+  // A real Node (not the alias, not a previous runtime's) stays.
+  if (typeof engineNode === "function" && engineNode !== engineElement && !vacant(globalThis, "Node")) {
+    return engineNode as unknown as Iface;
+  }
+  const iface = function (): never {
+    throw new TypeError("Illegal constructor");
+  };
+  Object.defineProperty(iface, "name", { value: "Node" });
+  const proto = Object.create(ET?.prototype ?? Object.prototype, {
+    constructor: { value: iface, writable: true, configurable: true },
+  }) as object;
+  Object.defineProperty(iface, "prototype", { value: proto, writable: false });
+  // WebIDL constants: on the interface object and its prototype, read-only.
+  for (const [k, v] of NODE_CONSTANTS) {
+    Object.defineProperty(iface, k, { value: v, enumerable: true });
+    Object.defineProperty(proto, k, { value: v, enumerable: true });
+  }
+  // The chain answers for elements and text; `document` (redjs's own object)
+  // and a mirror whose chain a page re-parented answer by kind.
+  Object.defineProperty(iface, Symbol.hasInstance, {
+    value: (x: unknown) =>
+      !!x && typeof x === "object" && (proto.isPrototypeOf(x) || isMirrorNode(x) || isDocument(x) || x instanceof AttrImpl),
+  });
+  try {
+    Object.defineProperty(globalThis, "Node", { value: mark(iface), configurable: true, writable: true });
+  } catch {
+    warnCompat("global:Node", "Node could not be installed over the engine's own: Node.TEXT_NODE and the other constants are missing");
+    return null;
+  }
+  // The engine's Element.prototype, under Node.prototype. A realm with no
+  // Element of its own (the test harness) gets one below.
+  if (typeof engineElement === "function" && !vacant(globalThis, "Element")) {
+    try {
+      const elementProto = (engineElement as unknown as Iface).prototype;
+      if (Object.getPrototypeOf(elementProto) !== proto) Object.setPrototypeOf(elementProto, proto);
+    } catch {
+      /* `instanceof Node` still holds for mirrors, by kind */
+    }
+  }
+  return iface as unknown as Iface;
+})();
+// A realm with no Element at all (the bun test harness): Element and
+// HTMLElement are made here, with the mirrors' prototype as
+// HTMLElement.prototype, as it is redjs's.
+const ElementIface: Iface | null = (() => {
+  if (!vacant(globalThis, "Element")) return (theGlobal("Element") as Iface | undefined) ?? null;
+  const iface = defineInterface("Element", () => false, NodeIface) ?? null;
+  if (iface) adoptInterface("HTMLElement", ElementProto, iface);
+  return iface;
+})();
+
+/**
+ * `instanceof` for an element interface whose prototype all mirror elements
+ * share (they are all on HTMLElement.prototype): a mirror answers by its
+ * namespace, anything else by the prototype chain, as before.
+ */
+function wrapElementHasInstance(iface: unknown, mirrorIs: (el: MirrorElement) => boolean): void {
+  if (typeof iface !== "function") return;
+  const own = Function.prototype[Symbol.hasInstance];
+  try {
+    Object.defineProperty(iface, Symbol.hasInstance, {
+      value(this: unknown, x: unknown) {
+        return isMirrorEl(x) ? mirrorIs(x) : own.call(this, x);
+      },
+      configurable: true,
+    });
+  } catch {
+    /* an interface that refuses the property keeps its own answer */
+  }
+}
+// An `<svg>` or `<math>` element is not an HTMLElement, and a fragment is
+// not an element at all, although each is on HTMLElement.prototype here.
+wrapElementHasInstance(theGlobal("HTMLElement"), (el) => !el._ns && !fragments.has(el));
+
 // `window` is the global (or the global's proxy, which is what `window` names).
 const WindowIface = defineInterface("Window", (x) => x != null && (x === globalThis || x === theGlobal("window")), ET);
 if (WindowIface) {
@@ -7367,8 +8011,7 @@ if (WindowIface) {
     /* a global that refuses the property keeps Object's */
   }
 }
-const isDocument = (x: unknown) => x != null && x === theGlobal("document");
-const DocumentIface = defineInterface("Document", isDocument, ET);
+const DocumentIface = defineInterface("Document", isDocument, NodeIface ?? ET);
 defineInterface("HTMLDocument", isDocument, DocumentIface ?? ET);
 defineInterface("Location", (x) => x != null && x === theGlobal("location"), null);
 defineInterface("History", (x) => x != null && x === theGlobal("history"), null);
@@ -7377,7 +8020,16 @@ defineInterface("Screen", (x) => x != null && x === theGlobal("screen"), ET);
 // Text and comment mirrors share a prototype; `kind` tells them apart.
 const mirrorKind = (x: unknown) =>
   !!x && typeof x === "object" && Object.getPrototypeOf(x) === TextProto ? (x as MirrorNode).kind : 0;
-const CharacterDataIface = defineInterface("CharacterData", (x) => mirrorKind(x) === 2 || mirrorKind(x) === 3, null);
+const CharacterDataIface = defineInterface("CharacterData", (x) => mirrorKind(x) === 2 || mirrorKind(x) === 3, NodeIface);
+// Text and comment mirrors inherit Node's constants and EventTarget's methods,
+// as a browser's Text and Comment do.
+if (CharacterDataIface && Object.getPrototypeOf(TextProto) !== CharacterDataIface.prototype) {
+  try {
+    Object.setPrototypeOf(TextProto, CharacterDataIface.prototype);
+  } catch {
+    /* `instanceof` still holds, by kind */
+  }
+}
 defineInterface("Text", (x) => mirrorKind(x) === 2, CharacterDataIface ?? null, (data) =>
   looseCreated(nodeOps.createText(data === undefined ? "" : String(data))),
 );
@@ -7389,11 +8041,162 @@ defineInterface("Comment", (x) => mirrorKind(x) === 3, CharacterDataIface ?? nul
 // No shadow DOM here, so nothing is a ShadowRoot.
 defineInterface("ShadowRoot", () => false, theGlobal("DocumentFragment") as Iface | null);
 // `el.attributes` and its Attr nodes (DOM §4.9). `document.createAttribute` makes one.
-defineInterface("Attr", (x) => x instanceof AttrImpl, (theGlobal("Node") as Iface | undefined) ?? null);
+defineInterface("Attr", (x) => x instanceof AttrImpl, NodeIface);
+if (NodeIface && Object.getPrototypeOf(AttrImpl.prototype) !== NodeIface.prototype) {
+  Object.setPrototypeOf(AttrImpl.prototype, NodeIface.prototype);
+}
 defineInterface("NamedNodeMap", (x) => x instanceof NamedNodeMapImpl, null);
 // `el.style` and `getComputedStyle()` answers register themselves.
 const styleDecls = new WeakSet<object>();
 defineInterface("CSSStyleDeclaration", (x) => !!x && typeof x === "object" && styleDecls.has(x), null);
+
+// -- SVG and MathML elements. An element Vue renders inside `<svg>` (or
+//    `createElementNS(svgNS, …)` makes) is `instanceof SVGElement` and of its
+//    tag's interface, and not `instanceof HTMLElement`; `<math>` likewise for
+//    MathMLElement. Vue's Teleport asks `instanceof SVGElement` /
+//    `MathMLElement` of its target, and motion's scroll offsets ask
+//    `instanceof SVGGraphicsElement`, a ReferenceError while it was missing.
+//    Each interface answers by tag; one with no tag of its own answers for
+//    the tags of those under it.
+const SVG_INTERFACES: readonly (readonly [name: string, parent: string, tags: readonly string[]])[] = [
+  ["SVGGraphicsElement", "SVGElement", []],
+  ["SVGGeometryElement", "SVGGraphicsElement", []],
+  ["SVGSVGElement", "SVGGraphicsElement", ["svg"]],
+  ["SVGGElement", "SVGGraphicsElement", ["g"]],
+  ["SVGDefsElement", "SVGGraphicsElement", ["defs"]],
+  ["SVGUseElement", "SVGGraphicsElement", ["use"]],
+  ["SVGImageElement", "SVGGraphicsElement", ["image"]],
+  ["SVGForeignObjectElement", "SVGGraphicsElement", ["foreignObject"]],
+  ["SVGAElement", "SVGGraphicsElement", ["a"]],
+  ["SVGSwitchElement", "SVGGraphicsElement", ["switch"]],
+  ["SVGPathElement", "SVGGeometryElement", ["path"]],
+  ["SVGRectElement", "SVGGeometryElement", ["rect"]],
+  ["SVGCircleElement", "SVGGeometryElement", ["circle"]],
+  ["SVGEllipseElement", "SVGGeometryElement", ["ellipse"]],
+  ["SVGLineElement", "SVGGeometryElement", ["line"]],
+  ["SVGPolylineElement", "SVGGeometryElement", ["polyline"]],
+  ["SVGPolygonElement", "SVGGeometryElement", ["polygon"]],
+  ["SVGTextContentElement", "SVGGraphicsElement", []],
+  ["SVGTextPositioningElement", "SVGTextContentElement", []],
+  ["SVGTextElement", "SVGTextPositioningElement", ["text"]],
+  ["SVGTSpanElement", "SVGTextPositioningElement", ["tspan"]],
+  ["SVGTextPathElement", "SVGTextContentElement", ["textPath"]],
+  ["SVGGradientElement", "SVGElement", []],
+  ["SVGLinearGradientElement", "SVGGradientElement", ["linearGradient"]],
+  ["SVGRadialGradientElement", "SVGGradientElement", ["radialGradient"]],
+  ["SVGStopElement", "SVGElement", ["stop"]],
+  ["SVGClipPathElement", "SVGElement", ["clipPath"]],
+  ["SVGMaskElement", "SVGElement", ["mask"]],
+  ["SVGPatternElement", "SVGElement", ["pattern"]],
+  ["SVGMarkerElement", "SVGElement", ["marker"]],
+  ["SVGSymbolElement", "SVGElement", ["symbol"]],
+  ["SVGFilterElement", "SVGElement", ["filter"]],
+  ["SVGTitleElement", "SVGElement", ["title"]],
+  ["SVGDescElement", "SVGElement", ["desc"]],
+  ["SVGMetadataElement", "SVGElement", ["metadata"]],
+  ["SVGStyleElement", "SVGElement", ["style"]],
+  ["SVGScriptElement", "SVGElement", ["script"]],
+  ["SVGViewElement", "SVGElement", ["view"]],
+];
+{
+  const isSvg = (x: unknown): x is MirrorElement => isMirrorEl(x) && x._ns === "svg";
+  // The engine's SVGElement (redjs has one), or ours in a realm without.
+  const SVGElementIface = defineInterface("SVGElement", isSvg, ElementIface);
+  wrapElementHasInstance(SVGElementIface, (el) => el._ns === "svg");
+  defineInterface("MathMLElement", (x) => isMirrorEl(x) && x._ns === "mathml", ElementIface);
+  // Each interface's tags and those of every interface under it. The table
+  // lists a parent before its children, so walking it backwards completes a
+  // child's set before it is added to its parent's.
+  const tagsOf = new Map<string, Set<string>>(SVG_INTERFACES.map(([name, , tags]) => [name, new Set(tags)]));
+  for (let i = SVG_INTERFACES.length - 1; i >= 0; i--) {
+    const [name, parent] = SVG_INTERFACES[i]!;
+    const into = tagsOf.get(parent);
+    if (into) for (const t of tagsOf.get(name)!) into.add(t);
+  }
+  for (const [name, parent] of SVG_INTERFACES) {
+    const tags = tagsOf.get(name)!;
+    defineInterface(name, (x) => isSvg(x) && tags.has(x.tag), (theGlobal(parent) as Iface | undefined) ?? SVGElementIface ?? null);
+  }
+}
+
+// -- Interfaces over objects that already exist here: a `classList`, a
+//    `dataset`, a MutationRecord, a ResizeObserver entry and its sizes, a
+//    TreeWalker (each branded where it is made, `BRANDS`), `matchMedia()`'s
+//    answer, `performance` and `crypto`.
+for (const [name, set] of Object.entries(BRANDS)) {
+  defineInterface(name, (x) => !!x && typeof x === "object" && set.has(x), null);
+}
+// redjs's `matchMedia()` answers an EventTarget with `media` and `matches`.
+defineInterface(
+  "MediaQueryList",
+  (x) => !!ET && x instanceof (ET as unknown as typeof EventTarget) && typeof (x as { media?: unknown }).media === "string" && "matches" in x,
+  ET,
+);
+defineInterface("Performance", (x) => x != null && x === theGlobal("performance"), ET);
+defineInterface("Crypto", (x) => x != null && x === theGlobal("crypto"), null);
+
+// -- Event interfaces the engine lacks, each constructible with its init
+//    dictionary as a browser's is, its members read-only prototype getters.
+//    The runtime makes its `transitionend` / `animation*` events with the
+//    first two when they exist (`makeEvent`); the rest exist so `instanceof`
+//    and `new` work in code that names them.
+const EVENT_INTERFACES: readonly (readonly [name: string, parent: "Event" | "UIEvent", members: Readonly<Record<string, unknown>>])[] = [
+  ["TransitionEvent", "Event", { propertyName: "", elapsedTime: 0, pseudoElement: "" }],
+  ["AnimationEvent", "Event", { animationName: "", elapsedTime: 0, pseudoElement: "" }],
+  ["CompositionEvent", "UIEvent", { data: "" }],
+  ["HashChangeEvent", "Event", { oldURL: "", newURL: "" }],
+  ["PopStateEvent", "Event", { state: null }],
+  ["PageTransitionEvent", "Event", { persisted: false }],
+  ["PromiseRejectionEvent", "Event", { promise: undefined, reason: undefined }],
+  ["ToggleEvent", "Event", { oldState: "", newState: "" }],
+  ["MediaQueryListEvent", "Event", { media: "", matches: false }],
+  ["FormDataEvent", "Event", { formData: undefined }],
+];
+{
+  const EventBase = typeof Event === "function" ? Event : null;
+  const ui = theGlobal("UIEvent");
+  const UIEventBase = typeof ui === "function" ? (ui as typeof Event) : EventBase;
+  const inits = new WeakMap<object, Record<string, unknown>>();
+  for (const [name, parent, members] of EVENT_INTERFACES) {
+    const Base = parent === "UIEvent" ? UIEventBase : EventBase;
+    if (!Base || !vacant(globalThis, name)) continue;
+    const klass = class extends Base {
+      constructor(type: string, init: Record<string, unknown> = {}) {
+        super(type, init);
+        const own: Record<string, unknown> = {};
+        for (const k in members) {
+          const d = members[k];
+          const v = init?.[k];
+          // WebIDL's conversions for each member's type, from its default.
+          own[k] =
+            v === undefined
+              ? d
+              : typeof d === "number"
+                ? Number(v)
+                : typeof d === "string"
+                  ? String(v)
+                  : typeof d === "boolean"
+                    ? !!v
+                    : v;
+        }
+        inits.set(this, own);
+      }
+    };
+    Object.defineProperty(klass, "name", { value: name });
+    for (const k of Object.keys(members)) {
+      Object.defineProperty(klass.prototype, k, {
+        get(this: object) {
+          const own = inits.get(this);
+          if (!own) throw new TypeError("Illegal invocation");
+          return own[k];
+        },
+        enumerable: true,
+        configurable: true,
+      });
+    }
+    defineGlobal(name, klass);
+  }
+}
 
 // -- DOMRectReadOnly / DOMRect: constructible, with OWN data members (so a
 //    `{ ...rect }` spread keeps them, as the rects built here already do), and
@@ -7545,7 +8348,19 @@ if (doc) {
     Object.defineProperty(doc, name, { value, configurable: true, writable: true });
   const rootId = () => (appRoot ? appRoot.__vnId : 0);
   forceDoc("querySelector", (sel: string) => queryOne(sel, rootId()));
-  forceDoc("querySelectorAll", (sel: string) => hostQuery(sel, rootId(), 0));
+  forceDoc("querySelectorAll", (sel: string) => staticList(NodeListProto, hostQuery(sel, rootId(), 0)));
+  // Live, over the whole tree (`getElementsByTagName` is with `<head>`, below).
+  defDoc("getElementsByClassName", (classNames: unknown) => {
+    const test = classTest(classNames);
+    return liveCollection(HTMLCollectionProto, true, () => elementsUnder(appRoot, true, test));
+  });
+  // A NodeList, live: the HTML elements whose `name` attribute is `name`.
+  defDoc("getElementsByName", (name: unknown) => {
+    const want = String(name);
+    return liveCollection(NodeListProto, false, () =>
+      elementsUnder(appRoot, true, (el) => !el._ns && el.attrs.name === want),
+    );
+  });
   forceDoc("getElementById", (id: unknown) =>
     queryOne(`[id=${JSON.stringify(String(id))}]`, rootId()),
   );
@@ -7584,8 +8399,9 @@ if (doc) {
     if (!VALID_ELEMENT_NAME.test(local)) {
       throw domError("createElementNS", "Document", "InvalidCharacterError", `The qualified name provided ('${name}') contains the invalid name-start character '${local[0] ?? ""}'.`);
     }
-    if (ns === "http://www.w3.org/1999/xhtml") return (doc.createElement as (t: string) => unknown)(local);
-    return looseCreated(nodeOps.createElement(local, ns === "http://www.w3.org/2000/svg" ? "svg" : undefined));
+    if (ns === HTML_NS) return (doc.createElement as (t: string) => unknown)(local);
+    const space = ns === SVG_NS ? "svg" : ns === MATHML_NS ? "mathml" : undefined;
+    return looseCreated(nodeOps.createElement(local, space));
   });
   // A browser's Text node, here a mirror text node: Vue-created and
   // library-created text are the same kind of object, so either can be
@@ -7629,7 +8445,7 @@ if (doc) {
       const fn = typeof filter === "function" ? filter : filter.acceptNode;
       return !fn || fn.call(filter, n) === 1;
     };
-    return {
+    return branded("TreeWalker", {
       root,
       currentNode: root,
       nextNode() {
@@ -7644,7 +8460,7 @@ if (doc) {
         }
         return null;
       },
-    };
+    });
   });
   defDocGet("defaultView", () => globalThis);
   // Forced, not filled in: redjs answers null whatever has focus.
@@ -8037,6 +8853,7 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
       warnCompat("head-style:install", "the dev loader's stylesheet updates will drop <style> elements added to document.head");
     }
     const refresh = () => {
+      domEpoch++; // `getElementsByTagName("style")` lists them
       if (base === null || queued) return; // before the first sheet: the mount's install carries them
       queued = true;
       queueMicrotask(() => {
@@ -8128,7 +8945,10 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
     // A previous runtime's getter (a same-realm reload, see `REALM`) read ITS
     // injected list, so it is replaced too.
     if (vacant(head, "childNodes")) {
-      Object.defineProperty(head, "childNodes", { get: mark(() => injected.map((s) => s.el)), configurable: true });
+      Object.defineProperty(head, "childNodes", {
+        get: mark(() => staticList(NodeListProto, injected.map((s) => s.el))),
+        configurable: true,
+      });
     }
 
     // A `<style>` / `<link>` from the engine inserted anywhere else (a
@@ -8139,20 +8959,20 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
       else untrack(n);
       return true;
     };
-    // An ARRAY, not a live HTMLCollection: it is a snapshot, which every
-    // `getElementsByTagName("head")[0]` and one-shot scan reads the same.
+    // A live HTMLCollection. `head`, `html` and `body` are the document's own
+    // (`html` and `body` are both the root here), `style` includes the sheets
+    // injected into `<head>`, and anything else is the tree's elements.
     if (vacant(d, "getElementsByTagName")) {
       Object.defineProperty(d, "getElementsByTagName", {
         value: mark((tag: unknown) => {
           const t = String(tag).toLowerCase();
-          let out: unknown[];
-          if (t === "head") out = [head];
-          else if (t === "html" || t === "body") out = [d.documentElement];
-          else {
-            const qsa = d.querySelectorAll as ((s: string) => ArrayLike<unknown>) | undefined;
-            out = qsa ? Array.from(qsa.call(d, t === "*" ? "*" : t)) : [];
-          }
-          return Object.assign(out, { item: (i: number) => out[i] ?? null });
+          const test = tagTest(tag);
+          return liveCollection<unknown>(HTMLCollectionProto, true, () => {
+            if (t === "head") return [head];
+            if (t === "html" || t === "body") return [d.documentElement];
+            const tree = elementsUnder(appRoot, false, test);
+            return t === "style" ? [...injected.map((s) => s.el), ...tree] : tree;
+          });
         }),
         configurable: true,
         writable: true,

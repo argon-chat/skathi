@@ -51,9 +51,9 @@ describe("tree queries answered from the mirror", () => {
     // mirror in that list is one logged failure per node.
     const rt = createRuntime();
     const { section, button, span, text } = tree(rt);
-    expect(section.children).toEqual([button, span]);
-    expect(button.childNodes).toEqual([text]);
-    expect(button.children).toEqual([]);
+    expect([...section.children]).toEqual([button, span]);
+    expect([...button.childNodes]).toEqual([text]);
+    expect([...button.children]).toEqual([]);
   });
 
   test("parentElement is the parent element, and null at the root and when detached", () => {
@@ -155,7 +155,7 @@ describe("selector matching goes to the host's real matcher", () => {
     expect(button.matches(".x")).toBe(true);
     expect(button.closest(".x")).toBe(section);
     expect(root.querySelector(".x")).toBe(section);
-    expect(root.querySelectorAll(".x")).toEqual([section, button]);
+    expect([...root.querySelectorAll(".x")]).toEqual([section, button]);
 
     expect(rt.host.queryCalls.map((c) => c.mode)).toEqual([1, 2, 0, 0]);
     expect(rt.host.queryCalls[0].root).toBe(button.__vnId);
@@ -167,7 +167,7 @@ describe("selector matching goes to the host's real matcher", () => {
     const rt = createRuntime();
     const { root } = tree(rt);
     rt.host.queryAnswers.set(":has(.x)", "!`:has()` (the matcher has no implementation)");
-    expect(root.querySelectorAll(":has(.x)")).toEqual([]);
+    expect(root.querySelectorAll(":has(.x)").length).toBe(0);
     const advisories = rt.advisories();
     expect(advisories.length).toBe(1);
     expect(advisories[0]).toContain(":has()");
@@ -200,7 +200,7 @@ describe("selector matching goes to the host's real matcher", () => {
     const rt = createRuntime();
     const { root } = tree(rt);
     rt.host.queryAnswers.set(".gone", "99999");
-    expect(root.querySelectorAll(".gone")).toEqual([]);
+    expect(root.querySelectorAll(".gone").length).toBe(0);
   });
 });
 
@@ -235,7 +235,7 @@ describe("layout comes from the host's painted bounds", () => {
     const { span } = tree(rt);
     const r = span.getBoundingClientRect();
     expect(r).toMatchObject({ x: 0, y: 0, width: 0, height: 0 });
-    expect(span.getClientRects()).toEqual([]);
+    expect(span.getClientRects().length).toBe(0);
     // …and that is NOT a compat gap, so it must not produce an advisory.
     expect(rt.advisories()).toEqual([]);
   });
@@ -262,7 +262,7 @@ describe("layout comes from the host's painted bounds", () => {
     expect(stale().length).toBe(2);
     // …and so is another accessor; the rect is all zeros, not NaN.
     expect(button.getBoundingClientRect()).toMatchObject({ x: 0, y: 0, width: 0, height: 0 });
-    expect(button.getClientRects()).toEqual([]);
+    expect(button.getClientRects().length).toBe(0);
     expect(stale().length).toBe(4);
     // Once laid out, the same node answers its real size, silently.
     rt.host.boundsById.set(button.__vnId, "0,0,120,30");
@@ -1215,7 +1215,7 @@ describe("missing globals (G5)", () => {
     await Promise.resolve();
 
     expect(seen.map((r) => r.type)).toEqual(["childList", "attributes"]);
-    expect(seen[0].addedNodes).toEqual([extra]);
+    expect([...seen[0].addedNodes]).toEqual([extra]);
     expect(seen[1].target).toBe(button);
     expect(seen[1].attributeName).toBe("data-state");
 
@@ -1260,8 +1260,8 @@ describe("missing globals (G5)", () => {
     expect(frag.nodeType).toBe(11);
     const child = rt.nodeOps.createElement("div");
     rt.nodeOps.insert(child, frag, null);
-    expect(frag.children).toEqual([child]);
-    expect(frag.childNodes).toEqual([child]);
+    expect([...frag.children]).toEqual([child]);
+    expect([...frag.childNodes]).toEqual([child]);
     // A fragment is a parent NODE but not a parent ELEMENT.
     expect(child.parentNode).toBe(frag);
     expect(child.parentElement).toBe(null);
@@ -1337,7 +1337,7 @@ describe("missing globals (G5)", () => {
     const rt = createRuntime();
     const { root, button } = tree(rt);
     // `appRoot` is only set by mount(); before that the document has no tree.
-    expect(rt.global.document.querySelectorAll("[data-x]")).toEqual([]);
+    expect(rt.global.document.querySelectorAll("[data-x]").length).toBe(0);
     void root;
     void button;
   });

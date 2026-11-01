@@ -39,7 +39,7 @@ function watch(rt: Any, target: Any) {
   const tag = (n: Any) => (n.nodeType === 3 ? `#${n.data}` : n.tagName.toLowerCase());
   new rt.global.MutationObserver((records: Any[]) => {
     for (const r of records) {
-      seen.push(`${tag(r.target)}:${r.addedNodes.map((n: Any) => "+" + tag(n)).join("")}${r.removedNodes.map((n: Any) => "-" + tag(n)).join("")}`);
+      seen.push(`${tag(r.target)}:${Array.from(r.addedNodes, (n: Any) => "+" + tag(n)).join("")}${Array.from(r.removedNodes, (n: Any) => "-" + tag(n)).join("")}`);
     }
   }).observe(target, { childList: true, subtree: true });
   return seen;
