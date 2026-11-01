@@ -1652,6 +1652,46 @@ mod tests {
         assert_eq!(opacity_of(leaf), Some(0.9));
     }
 
+    /// `.stack > *` is offered to an element only when its parent carries the
+    /// key (vn-css's parent buckets), so no child of a plain `div` ever asks the
+    /// parent about `stack`. The change still has to reach the children.
+    #[test]
+    fn a_parent_gaining_the_key_of_a_parent_keyed_rule_restyles_its_children() {
+        let (mid, first, second) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let mid = t.create_element(div);
+            let first = t.create_element(div);
+            let second = t.create_element(div);
+            t.insert(mid, root, 0);
+            t.insert(first, mid, 0);
+            t.insert(second, mid, 1);
+            (mid, first, second)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            "* { opacity: 0.1 } .stack > * { opacity: 0.5 } .space > * + * { opacity: 0.9 } \
+             #list > * { opacity: 0.3 }",
+        ));
+        tree::restyle_all();
+        assert_eq!((opacity_of(first), opacity_of(second)), (Some(0.1), Some(0.1)));
+
+        tree::with_tree(|t| t.set_class(mid, "stack"));
+        flush_changes();
+        assert_eq!((opacity_of(first), opacity_of(second)), (Some(0.5), Some(0.5)));
+
+        tree::with_tree(|t| t.set_class(mid, "space"));
+        flush_changes();
+        assert_eq!((opacity_of(first), opacity_of(second)), (Some(0.1), Some(0.9)));
+
+        tree::with_tree(|t| {
+            t.set_class(mid, "");
+            let key = t.intern("id");
+            t.set_prop(mid, key, Some("list".into()));
+        });
+        flush_changes();
+        assert_eq!((opacity_of(first), opacity_of(second)), (Some(0.3), Some(0.3)));
+    }
+
     /// The class list is a set, as `classList` is: the rule index offers a
     /// class's rules once per entry, so a repeated class would run them twice.
     /// The attribute keeps the string as written.

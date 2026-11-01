@@ -514,6 +514,20 @@ fn report_phases() {
             p.fold_ms,
             p.store_ms,
         );
+        // The rule index's report card: where the selectors run came from
+        // (rules no key could file are run against every element), and how
+        // few of them matched.
+        let [any, tag, class, id, root, parent] = p.rules_split.by_bucket;
+        eprintln!(
+            "[vn-perf]           sel by bucket: any {} · tag {} · class {} · id {} · root {} · parent {}   matched {}",
+            compact(any),
+            compact(tag),
+            compact(class),
+            compact(id),
+            compact(root),
+            compact(parent),
+            compact(p.rules_split.matched),
+        );
     }
     if p.build_passes > 0 {
         eprintln!(

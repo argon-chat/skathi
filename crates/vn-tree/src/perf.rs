@@ -91,6 +91,11 @@ pub struct Phases {
     /// place this is much smaller than `nodes_cascaded * rules_in_sheet`, and
     /// the ratio between the two is the index's whole reason for existing.
     pub rules_tested: u64,
+    /// [`Self::rules_tested`] split by the index bucket that offered each one
+    /// (no key, the subject's tag, class or id, `:root`, the parent's key), and
+    /// how many of them matched
+    /// (`vn_css::perf::Split`).
+    pub rules_split: vn_css::perf::Split,
 
     /// How many times `build_root` ran (once per gpui `render()`).
     pub build_passes: u32,
@@ -276,6 +281,7 @@ const ZERO: Phases = Phases {
     store_ms: 0.0,
     nodes_cascaded: 0,
     rules_tested: 0,
+    rules_split: vn_css::perf::Split { by_bucket: [0; 6], matched: 0 },
     build_passes: 0,
     cached_renders: 0,
     cache_offers: 0,
@@ -382,6 +388,7 @@ pub fn note_restyle(total_ms: f32, inline_ms: f32, cascade_ms: f32, store_ms: f3
         return;
     }
     let (rules, match_ms, vars_ms, fold_ms) = vn_css::perf::take();
+    let split = vn_css::perf::take_split();
     with(|p| {
         p.restyle_passes += 1;
         p.restyle_ms += total_ms;
@@ -394,6 +401,10 @@ pub fn note_restyle(total_ms: f32, inline_ms: f32, cascade_ms: f32, store_ms: f3
         p.store_ms += store_ms;
         p.nodes_cascaded += nodes;
         p.rules_tested += rules;
+        for (total, n) in p.rules_split.by_bucket.iter_mut().zip(split.by_bucket) {
+            *total += n;
+        }
+        p.rules_split.matched += split.matched;
     });
 }
 

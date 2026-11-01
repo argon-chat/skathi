@@ -1800,6 +1800,7 @@ impl Tree {
         let addr = engine as *const vn_css::Engine as usize;
         if CACHE_ENGINE.with(|c| c.replace(addr)) != addr {
             forget_read_cache();
+            note_parent_keys(engine);
         }
         self.sibling_combinators = engine.uses_sibling_combinators();
         let pass = crate::perf::Span::start();
@@ -2718,6 +2719,7 @@ pub(crate) fn set_engine(engine: vn_css::Engine) {
     for d in &engine.diagnostics {
         warn_css(&format!("[css] {d}"));
     }
+    note_parent_keys(&engine);
     ENGINE.with(|c| *c.borrow_mut() = Some(engine));
     // The cache is keyed by the old sheet's string addresses, which the new
     // sheet may reuse for different names.
@@ -2726,6 +2728,26 @@ pub(crate) fn set_engine(engine: vn_css::Engine) {
 
 fn forget_read_cache() {
     READ_CACHE.with(|c| c.iter().for_each(|s| s.set((0, 0, 0))));
+}
+
+/// The names [`ReadOnOthers`] cannot learn by listening: vn-css's index offers
+/// `.stack > *` only to the children of a `.stack`, so no other child ever
+/// asks its parent about `stack` (`Engine::classes_keyed_on_the_parent`). Each
+/// is entered as read by every tag, which is what the matcher's questions
+/// recorded when every element was asked them.
+fn note_parent_keys(engine: &vn_css::Engine) {
+    READ_ON_OTHERS.with(|r| {
+        let mut r = r.borrow_mut();
+        let map = &mut r.names[NameKind::Class as usize];
+        for name in engine.classes_keyed_on_the_parent() {
+            let readers = match map.get_mut(name) {
+                Some(readers) => readers,
+                None => map.entry(name.into()).or_default(),
+            };
+            readers.all = true;
+            readers.tags = Vec::new();
+        }
+    });
 }
 
 /// Reads the installed stylesheet. `None` = no sheet (inline styles only).

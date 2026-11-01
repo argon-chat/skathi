@@ -513,12 +513,18 @@ struct KeyframesBlock {
 /// carries `title`, and `button.ghost` only one whose tag is `button`. So a
 /// rule can be filed under one key its subject must have, and an element only
 /// ever has to run the selectors filed under the keys it actually carries plus
-/// the ones that could not be keyed at all (`*`, `[data-x]`, `:root`).
+/// the ones that could not be keyed at all (`*`, `[data-x]`, `.a *`).
+/// [`bucket_of`] also keys a pseudo-element rule by its originating element,
+/// `:root` by the root, and a subject that names nothing by its PARENT
+/// (`.space-x-2 > :not([hidden]) ~ :not([hidden])`).
 ///
 /// This is the browsers' oldest cascade optimization and it is what turns
 /// `elements × rules-in-the-sheet` into `elements × a-handful`: on the shadcn
 /// app a 25 KB Tailwind sheet went from ~1.5 M selector runs per restyle to
-/// ~28 K (research/reports/m11/perf-restyle-rebuild.md).
+/// ~28 K (research/reports/m11/perf-restyle-rebuild.md). On the Argon client's
+/// 12 K rules the unkeyed rules alone were ~290 runs per element, 95% of all
+/// of them, until the pseudo-element, `:root` and parent keys took them from
+/// 284 rules to 100 (research/reports/m26/fixes-lag-1.md).
 ///
 /// It is a pure FILTER: everything it hands back still goes through
 /// `matches_selector`, and the cascade sorts by `(specificity, order)`
@@ -531,45 +537,172 @@ struct RuleIndex {
     by_id: std::collections::HashMap<Box<str>, Vec<u32>>,
     by_class: std::collections::HashMap<Box<str>, Vec<u32>>,
     by_tag: std::collections::HashMap<Box<str>, Vec<u32>>,
-    /// Rules whose rightmost compound names no id, class or tag — every
-    /// element has to run these.
+    /// Rules whose subject is `:root` (and names no id or class): offered to
+    /// the document root alone.
+    root: Vec<u32>,
+    /// Rules whose subject names nothing, filed by what its PARENT must carry:
+    /// `.space-x-2 > :not([hidden]) ~ :not([hidden])`, `.card > *`, `ul > li`
+    /// is the tag bucket's. See [`bucket_of`].
+    by_parent_id: std::collections::HashMap<Box<str>, Vec<u32>>,
+    by_parent_class: std::collections::HashMap<Box<str>, Vec<u32>>,
+    by_parent_tag: std::collections::HashMap<Box<str>, Vec<u32>>,
+    /// Rules no key could file — every element has to run these.
     any: Vec<u32>,
     enabled: bool,
 }
 
-/// The key a selector's rightmost compound can be filed under.
-enum Bucket {
+/// Which bucket offered a candidate, as [`perf::Split::by_bucket`] counts it.
+const BUCKET_ANY: usize = 0;
+const BUCKET_TAG: usize = 1;
+const BUCKET_CLASS: usize = 2;
+const BUCKET_ID: usize = 3;
+const BUCKET_ROOT: usize = 4;
+const BUCKET_PARENT: usize = 5;
+
+/// One compound's strongest key.
+enum Key {
     Id(Box<str>),
     Class(Box<str>),
     Tag(Box<str>),
+}
+
+/// Where a selector is filed: under a key its subject must carry, under one
+/// its parent must carry, or nowhere.
+enum Bucket {
+    Subject(Key),
+    Root,
+    Parent(Key),
     Any,
 }
 
-/// Files a selector by the strongest key its rightmost compound guarantees.
+/// The strongest key in the compound `iter` is at (id, then class, then tag),
+/// and whether it holds `:root`. Consumes the compound, so `next_sequence`
+/// answers the combinator to its left afterwards. (A macro because the
+/// iterator's type names lightningcss's private selector `Impl`.)
 ///
-/// Only TOP-LEVEL components of that compound count. A class inside
-/// `:not()` / `:is()` / `:where()` guarantees nothing about the element (it may
-/// even be a negation), so such a selector falls into [`RuleIndex::any`] and is
-/// simply always tested — conservative, never wrong.
+/// Only TOP-LEVEL components count. A class inside `:not()` / `:is()` /
+/// `:where()` guarantees nothing about the element (it may even be a
+/// negation).
+macro_rules! compound_key {
+    ($iter:expr) => {{
+        let mut id: Option<Box<str>> = None;
+        let mut class: Option<Box<str>> = None;
+        let mut tag: Option<Box<str>> = None;
+        let mut root = false;
+        for component in &mut $iter {
+            match component {
+                Component::ID(i) if id.is_none() => id = Some(i.0.as_ref().into()),
+                Component::Class(c) if class.is_none() => class = Some(c.0.as_ref().into()),
+                // `is_html_element_in_html_document()` is false for us, so the
+                // matcher compares against `name` as written, never `lower_name`.
+                Component::LocalName(ln) if tag.is_none() => tag = Some(ln.name.0.as_ref().into()),
+                Component::Root => root = true,
+                _ => {}
+            }
+        }
+        let key = id.map(Key::Id).or(class.map(Key::Class)).or(tag.map(Key::Tag));
+        (key, root)
+    }};
+}
+
+/// Files a selector by the strongest key it guarantees the element carries,
+/// read off its SUBJECT (the rightmost compound):
+///
+/// * the subject's own id, class or tag;
+/// * for a pseudo-element rule (`.a::before`, `.b::placeholder`), the
+///   ORIGINATING element's compound: the selectors crate keeps the
+///   pseudo-element as a compound of its own, behind a `PseudoElement`
+///   combinator, and only the element left of it can carry a key;
+/// * `:root` — offered to the document root alone;
+/// * a subject that names nothing (`*`, `:not([hidden])`, `[data-x]`) whose
+///   parent does: `.p > *`, and across sibling combinators, which share the
+///   parent, `.space-x-2 > :not([hidden]) ~ :not([hidden])`. Tailwind's
+///   `space-*`, `divide-*` and `*:` variants are that shape, as are many
+///   component sheets' `.list > li + li`.
+///
+/// Anything else (a key only on an ANCESTOR, `.a *`; none at all, `*`) goes
+/// to [`RuleIndex::any`] and is tested against every element — conservative,
+/// never wrong. Every key is one the matcher itself requires, so filing can
+/// only drop candidates that could not match.
 fn bucket_of(sel: &Selector<'_>) -> Bucket {
-    let mut class: Option<Box<str>> = None;
-    let mut tag: Option<Box<str>> = None;
-    // `iter()` yields the RIGHTMOST compound and stops at the first combinator
-    // (the same contract `classify_states` relies on).
-    for component in sel.iter() {
-        match component {
-            Component::ID(id) => return Bucket::Id(id.0.as_ref().into()),
-            Component::Class(c) if class.is_none() => class = Some(c.0.as_ref().into()),
-            // `is_html_element_in_html_document()` is false for us, so the
-            // matcher compares against `name` as written, never `lower_name`.
-            Component::LocalName(ln) if tag.is_none() => tag = Some(ln.name.0.as_ref().into()),
-            _ => {}
+    use parcel_selectors::parser::Combinator;
+    let mut iter = sel.iter();
+    let (mut key, mut root) = compound_key!(iter);
+    let mut next = iter.next_sequence();
+    if next == Some(Combinator::PseudoElement) {
+        // The compound read was the pseudo-element's; the subject is next.
+        (key, root) = compound_key!(iter);
+        next = iter.next_sequence();
+    }
+    match (key, root) {
+        (Some(Key::Tag(_)), true) => return Bucket::Root,
+        (Some(key), _) => return Bucket::Subject(key),
+        (None, true) => return Bucket::Root,
+        (None, false) => {}
+    }
+    // The subject names nothing: its siblings share its parent, so walk over
+    // them to the first parent compound.
+    loop {
+        match next {
+            Some(Combinator::NextSibling | Combinator::LaterSibling) => {
+                let _ = compound_key!(iter);
+                next = iter.next_sequence();
+            }
+            Some(Combinator::Child) => {
+                return match compound_key!(iter) {
+                    (Some(key), _) => Bucket::Parent(key),
+                    (None, _) => Bucket::Any,
+                };
+            }
+            _ => return Bucket::Any,
         }
     }
-    match (class, tag) {
-        (Some(c), _) => Bucket::Class(c),
-        (None, Some(t)) => Bucket::Tag(t),
-        (None, None) => Bucket::Any,
+}
+
+type KeyMap = std::collections::HashMap<Box<str>, Vec<u32>>;
+
+/// Hands `f` the rules filed under `node`'s tag, classes and id in `maps`
+/// (`[by tag, by class, by id]`), each with its `buckets` entry.
+fn offer_keyed<D: MatchDom>(node: &D, maps: [&KeyMap; 3], buckets: [usize; 3], f: &mut dyn FnMut(u32, usize)) {
+    let [by_tag, by_class, by_id] = maps;
+    if !by_tag.is_empty() {
+        if let Some(v) = by_tag.get(node.tag_name()) {
+            for &i in v {
+                f(i, buckets[0]);
+            }
+        }
+        // The document root answers to `html` and `body` as well as to its own
+        // tag (`MatchDom::has_tag`), so the index has to offer it those rules
+        // too or a `body { … }` rule would never be a candidate and could never
+        // match. The root's own tag is never one of the two, so this cannot
+        // hand the same rule back twice.
+        if node.is_root() {
+            for name in ["html", "body"] {
+                if let Some(v) = by_tag.get(name) {
+                    for &i in v {
+                        f(i, buckets[0]);
+                    }
+                }
+            }
+        }
+    }
+    if !by_class.is_empty() {
+        node.each_class(&mut |c| {
+            if let Some(v) = by_class.get(c) {
+                for &i in v {
+                    f(i, buckets[1]);
+                }
+            }
+        });
+    }
+    if !by_id.is_empty() {
+        if let Some(id) = node.attr("id") {
+            if let Some(v) = by_id.get(id) {
+                for &i in v {
+                    f(i, buckets[2]);
+                }
+            }
+        }
     }
 }
 
@@ -606,18 +739,30 @@ fn list_has_sibling_combinator(list: &[Selector<'_>]) -> bool {
 impl RuleIndex {
     fn file(&mut self, sel: &Selector<'_>, rule: u32) {
         match bucket_of(sel) {
-            Bucket::Id(k) => self.by_id.entry(k).or_default().push(rule),
-            Bucket::Class(k) => self.by_class.entry(k).or_default().push(rule),
-            Bucket::Tag(k) => self.by_tag.entry(k).or_default().push(rule),
+            Bucket::Subject(Key::Id(k)) => self.by_id.entry(k).or_default().push(rule),
+            Bucket::Subject(Key::Class(k)) => self.by_class.entry(k).or_default().push(rule),
+            Bucket::Subject(Key::Tag(k)) => self.by_tag.entry(k).or_default().push(rule),
+            Bucket::Root => self.root.push(rule),
+            Bucket::Parent(Key::Id(k)) => self.by_parent_id.entry(k).or_default().push(rule),
+            Bucket::Parent(Key::Class(k)) => self.by_parent_class.entry(k).or_default().push(rule),
+            Bucket::Parent(Key::Tag(k)) => self.by_parent_tag.entry(k).or_default().push(rule),
             Bucket::Any => self.any.push(rule),
         }
     }
 
     fn shrink(&mut self) {
-        for map in [&mut self.by_id, &mut self.by_class, &mut self.by_tag] {
+        for map in [
+            &mut self.by_id,
+            &mut self.by_class,
+            &mut self.by_tag,
+            &mut self.by_parent_id,
+            &mut self.by_parent_class,
+            &mut self.by_parent_tag,
+        ] {
             map.values_mut().for_each(Vec::shrink_to_fit);
             map.shrink_to_fit();
         }
+        self.root.shrink_to_fit();
         self.any.shrink_to_fit();
     }
 }
@@ -813,6 +958,23 @@ impl Engine {
         self.sibling_combinators
     }
 
+    /// The class names the rule index answers about an element's PARENT
+    /// without the matcher ever asking.
+    ///
+    /// `.stack > *` is offered only to the children of a `.stack`
+    /// (`RuleIndex`'s parent buckets), so the child of a plain `div` never
+    /// asks its parent about `stack`. A host that learns how far a change
+    /// reaches from the matcher's own questions (vn-tree's `ReadOnOthers`)
+    /// would then see nobody read `stack`, and a `div` that gains it would
+    /// restyle alone, leaving its children on their old match. A change to one
+    /// of these names, on any element, reaches that element's children.
+    ///
+    /// A parent's id needs no such list: the index reads it through
+    /// [`MatchDom::attr`], which the host sees as a question.
+    pub fn classes_keyed_on_the_parent(&self) -> impl Iterator<Item = &str> {
+        self.index.by_parent_class.keys().map(|k| &**k)
+    }
+
     /// Does any rule in the sheet put an interaction state on an ANCESTOR
     /// compound (`.group:hover .child`)?
     ///
@@ -913,53 +1075,34 @@ impl Engine {
 
     /// Hands `f` every rule this element could match, once each. With the index
     /// off (or on a sheet compiled before it existed) that is simply every rule.
-    fn candidates<D: MatchDom>(&self, node: &D, f: &mut dyn FnMut(u32)) {
+    /// The second argument is the bucket that offered it (`BUCKET_*`), for the
+    /// perf probe's split.
+    fn candidates<D: MatchDom>(&self, node: &D, f: &mut dyn FnMut(u32, usize)) {
         if !self.index.enabled {
             for i in 0..self.rules.len() as u32 {
-                f(i);
+                f(i, BUCKET_ANY);
             }
             return;
         }
-        for &i in &self.index.any {
-            f(i);
+        let ix = &self.index;
+        for &i in &ix.any {
+            f(i, BUCKET_ANY);
         }
-        if !self.index.by_tag.is_empty() {
-            if let Some(v) = self.index.by_tag.get(node.tag_name()) {
-                for &i in v {
-                    f(i);
-                }
-            }
-            // The document root answers to `html` and `body` as well as to its
-            // own tag (`MatchDom::has_tag`), so the index has to offer it those
-            // rules too or a `body { … }` rule would never be a candidate and
-            // could never match. The root's own tag is never one of the two, so
-            // this cannot hand the same rule back twice.
-            if node.is_root() {
-                for name in ["html", "body"] {
-                    if let Some(v) = self.index.by_tag.get(name) {
-                        for &i in v {
-                            f(i);
-                        }
-                    }
-                }
+        offer_keyed(node, [&ix.by_tag, &ix.by_class, &ix.by_id], [BUCKET_TAG, BUCKET_CLASS, BUCKET_ID], f);
+        if node.is_root() {
+            for &i in &ix.root {
+                f(i, BUCKET_ROOT);
             }
         }
-        if !self.index.by_class.is_empty() {
-            node.each_class(&mut |c| {
-                if let Some(v) = self.index.by_class.get(c) {
-                    for &i in v {
-                        f(i);
-                    }
-                }
-            });
-        }
-        if !self.index.by_id.is_empty() {
-            if let Some(id) = node.attr("id") {
-                if let Some(v) = self.index.by_id.get(id) {
-                    for &i in v {
-                        f(i);
-                    }
-                }
+        if !(ix.by_parent_tag.is_empty() && ix.by_parent_class.is_empty() && ix.by_parent_id.is_empty()) {
+            // The matcher's `>` reads `MatchDom::parent`, so this does too.
+            if let Some(parent) = node.parent() {
+                offer_keyed(
+                    &parent,
+                    [&ix.by_parent_tag, &ix.by_parent_class, &ix.by_parent_id],
+                    [BUCKET_PARENT; 3],
+                    f,
+                );
             }
         }
     }
@@ -1363,7 +1506,8 @@ impl Engine {
         let el = element::El(node);
         let mut matched: Vec<&RuleEntry> = Vec::new();
         let mut tested = 0u64;
-        self.candidates(&node, &mut |i| {
+        let mut by_bucket = [0u32; 6];
+        self.candidates(&node, &mut |i, bucket| {
             let rule = &self.rules[i as usize];
             // Cheaper than matching, and it has to run first anyway: a rule
             // inside a `@media` block that does not hold is simply not there.
@@ -1373,6 +1517,7 @@ impl Engine {
                 }
             }
             tested += 1;
+            by_bucket[bucket] += 1;
             // A `::before` selector only matches under
             // `ForStatelessPseudoElement`, which consumes the pseudo component
             // and runs the REST of the selector against the originating
@@ -1703,6 +1848,7 @@ impl Engine {
                 b.saturating_duration_since(a).as_secs_f32() * 1000.0
             };
             perf::note_node(tested, ms(t0, t1), ms(t1, t2), ms(t2, std::time::Instant::now()));
+            perf::note_split(by_bucket, matched.len());
         }
         // `currentColor` is the element's computed `color`, so it can only be
         // substituted now — after the whole cascade has run. Every rung gets
@@ -2721,7 +2867,7 @@ impl Engine {
     pub fn matched_rules<D: MatchDom>(&self, node: D, env: &Env) -> Vec<MatchedRule> {
         let el = element::El(node);
         let mut matched: Vec<&RuleEntry> = Vec::new();
-        self.candidates(&node, &mut |i| {
+        self.candidates(&node, &mut |i, _| {
             let rule = &self.rules[i as usize];
             if let Some(c) = rule.condition {
                 if !self.conditions[c as usize].eval(env) {
@@ -3476,12 +3622,16 @@ mod tests {
             ("id", &engine.index.by_id),
             ("class", &engine.index.by_class),
             ("tag", &engine.index.by_tag),
+            ("parent id", &engine.index.by_parent_id),
+            ("parent class", &engine.index.by_parent_class),
+            ("parent tag", &engine.index.by_parent_tag),
         ]
         .into_iter()
         .flat_map(|(kind, map)| map.iter().map(move |(k, v)| format!("index {kind} {k}: {v:?}")))
         .collect();
         buckets.sort();
         out.extend(buckets);
+        out.push(format!("index root: {:?}", engine.index.root));
         out.push(format!("index any: {:?} enabled {}", engine.index.any, engine.index.enabled));
         for (c, t) in engine.conditions.iter().zip(&engine.condition_text) {
             out.push(format!("media {t}: {c:?}"));
@@ -4564,6 +4714,109 @@ mod tests {
 
     fn refs(d: &Doc) -> Vec<DocRef<'_>> {
         (1..d.nodes.len()).map(|i| DocRef { doc: d, i }).collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // the rule index
+    // -----------------------------------------------------------------------
+
+    /// Where `bucket_of` files each shape: under a key the subject must
+    /// carry (a pseudo-element rule's ORIGINATING element included), under
+    /// `:root`, under a key the subject's parent must carry (across sibling
+    /// combinators, which share that parent), or in `any`.
+    #[test]
+    fn the_index_files_a_rule_where_its_subject_or_parent_must_carry_a_key() {
+        let engine = Engine::compile(concat!(
+            ".a::before { content: \"x\" }\n",
+            ":root { --x: 1px }\n",
+            ".p > :not([hidden]) ~ :not([hidden]) { margin-left: 1px }\n",
+            "ul > * { margin-top: 1px }\n",
+            ".p > * + * { margin-top: 2px }\n",
+            ".a * { color: red }\n",
+            "* { margin: 0 }\n",
+            ".a ~ * { color: blue }\n",
+            ":is(.x) > * { color: green }\n",
+            "#i > * { color: black }\n",
+            ".b::placeholder { color: gray }\n",
+            "[data-x] { color: white }\n",
+        ));
+        let ix = &engine.index;
+        // Selector text, not indices: the UA sheet's rules come first.
+        let names = |v: Option<&Vec<u32>>| -> Vec<String> {
+            v.map_or(vec![], |v| v.iter().map(|&i| sel_text(&engine.rules[i as usize].selector)).collect())
+        };
+        assert_eq!(names(ix.by_class.get("a")), [".a:before"]);
+        assert_eq!(names(ix.by_class.get("b")), [".b::placeholder"]);
+        assert_eq!(names(Some(&ix.root)), [":root"]);
+        assert_eq!(names(ix.by_parent_class.get("p")), [".p > :not([hidden]) ~ :not([hidden])", ".p > * + *"]);
+        assert_eq!(names(ix.by_parent_tag.get("ul")), ["ul > *"]);
+        assert_eq!(names(ix.by_parent_id.get("i")), ["#i > *"]);
+        // `:is(.x)` prints as `.x`, but the parent's class is inside `:is()`, which
+        // guarantees nothing at the top level, so it stays in `any`.
+        assert_eq!(names(Some(&ix.any)), [":where([hidden])", ".a *", "*", ".a ~ *", ".x > *", "[data-x]"]);
+    }
+
+    /// The index is a filter and nothing else: for every element, the rules
+    /// it hands back and that match are exactly the rules that match when
+    /// every rule is tried (`index.enabled = false`, `VN_CSS_NO_RULE_INDEX`).
+    #[test]
+    fn the_index_hands_back_exactly_what_matching_every_rule_would() {
+        let css = concat!(
+            ":root { --x: 1px }\n",
+            ".app:root { --y: 1px }\n",
+            ".a::before { content: \"a\" }\n",
+            ".a:hover::after { content: \"h\" }\n",
+            "::before { width: 1px }\n",
+            ".p > :not([hidden]) ~ :not([hidden]) { margin-left: 1px }\n",
+            ".p > * + * { margin-top: 1px }\n",
+            ".p > *:first-child { margin-top: 2px }\n",
+            "ul > * { padding: 1px }\n",
+            "ul > li + li { padding: 2px }\n",
+            "#i > * { color: black }\n",
+            "#i b { color: gray }\n",
+            ".a * { color: red }\n",
+            ".app .p > span { color: green }\n",
+            "* + span { color: blue }\n",
+            "span ~ .a { color: white }\n",
+            ":is(.p, ul) > * { margin: 3px }\n",
+            ":not(.p) > span { margin: 4px }\n",
+            "[hidden] { display: none }\n",
+            "* { box-sizing: border-box }\n",
+            ".missing > * { margin: 5px }\n",
+        );
+        let indexed = Engine::compile(css);
+        let mut every = Engine::compile(css);
+        every.index.enabled = false;
+        let d = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("div", "app", 0, vec![]),                 // 1, the root
+                ("div", "p", 1, vec![]),                   // 2
+                ("span", "", 2, vec![]),                   // 3
+                ("span", "", 2, vec![("hidden", "")]),     // 4
+                ("span", "a", 2, vec![]),                  // 5
+                ("ul", "", 1, vec![]),                     // 6
+                ("li", "", 6, vec![]),                     // 7
+                ("li", "a", 6, vec![]),                    // 8
+                ("div", "", 1, vec![("id", "i")]),         // 9
+                ("b", "", 9, vec![]),                      // 10
+                ("p", "a", 1, vec![]),                     // 11
+                ("em", "", 11, vec![]),                    // 12
+            ],
+        };
+        let env = Env::default();
+        let selectors = |e: &Engine, n: DocRef<'_>| {
+            let mut v: Vec<(u32, String)> = e.matched_rules(n, &env).into_iter().map(|r| (r.order, r.selector)).collect();
+            v.sort();
+            v
+        };
+        let mut matched_somewhere = 0;
+        for n in refs(&d) {
+            let want = selectors(&every, n);
+            matched_somewhere += want.len();
+            assert_eq!(selectors(&indexed, n), want, "node {}", n.i);
+        }
+        assert!(matched_somewhere > 30, "the sheet exercises the tree ({matched_somewhere} matches)");
     }
 
     // -----------------------------------------------------------------------

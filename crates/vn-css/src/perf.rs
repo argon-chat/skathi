@@ -20,6 +20,34 @@ thread_local! {
     static MATCH_MS: Cell<f32> = const { Cell::new(0.0) };
     static VARS_MS: Cell<f32> = const { Cell::new(0.0) };
     static FOLD_MS: Cell<f32> = const { Cell::new(0.0) };
+    static SPLIT: Cell<Split> = const { Cell::new(Split { by_bucket: [0; 6], matched: 0 }) };
+}
+
+/// Where the selectors run came from, and how many of them matched: the rule
+/// index's own report card. `by_bucket` is: rules no key could file (`any`,
+/// run against every element), then the subject's tag, class and id buckets,
+/// `:root`, and the parent-keyed buckets (crate `RuleIndex`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Split {
+    pub by_bucket: [u64; 6],
+    pub matched: u64,
+}
+
+/// One element's cascade: the selectors run per bucket, and how many matched.
+pub(crate) fn note_split(by_bucket: [u32; 6], matched: usize) {
+    SPLIT.with(|c| {
+        let mut s = c.get();
+        for (total, n) in s.by_bucket.iter_mut().zip(by_bucket) {
+            *total = total.wrapping_add(n as u64);
+        }
+        s.matched = s.matched.wrapping_add(matched as u64);
+        c.set(s);
+    });
+}
+
+/// Drains the [`Split`] counters.
+pub fn take_split() -> Split {
+    SPLIT.with(|c| c.replace(Split::default()))
 }
 
 /// One element's cascade: selectors run, then the three phases in milliseconds.
