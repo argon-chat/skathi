@@ -266,29 +266,18 @@ impl LottieState {
     /// Asking for a backend that was not compiled in is an error rather than a
     /// silent downgrade; use [`Backend::is_available`] to check first.
     pub fn load_with(backend: Backend, bytes: &[u8]) -> Result<Self, LottieError> {
-        let json = if bytes.starts_with(&[0x1f, 0x8b]) {
-            use std::io::Read as _;
-            let mut text = String::new();
-            flate2::read::GzDecoder::new(bytes)
-                .read_to_string(&mut text)
-                .map_err(LottieError::Decompress)?;
-            text
-        } else {
-            String::from_utf8_lossy(bytes).into_owned()
-        };
-
-        let mut document: Value = serde_json::from_str(&json).map_err(LottieError::Json)?;
-        let telegram_sticker = document.get("tgs").is_some();
-        let normalization = normalize::normalize(&mut document);
-
-        let meta = read_meta(&document, telegram_sticker)?;
-        let renderer = Rasteriser::load(backend, document, &meta)?;
+        let Prepared {
+            renderer,
+            meta,
+            advisories,
+            ..
+        } = prepare(backend, bytes)?;
 
         Ok(Self {
             renderer,
             frame: meta.in_point,
             meta,
-            advisories: advisories_for(normalization),
+            advisories,
             playing: true,
             finished: false,
             speed: 1.0,
@@ -664,6 +653,46 @@ impl LottieState {
         images.extend(self.cached.take().map(|cached| cached.image));
         images
     }
+}
+
+/// A loaded document, before any transport: what [`LottieState`] and
+/// [`crate::Animation`] are both built from.
+pub(crate) struct Prepared {
+    pub renderer: Rasteriser,
+    pub meta: LottieMeta,
+    pub advisories: Vec<String>,
+    /// The (gunzipped) JSON's length in bytes.
+    pub json_bytes: usize,
+}
+
+/// The gunzip (sniffed by the `1f 8b` magic), the JSON parse, the
+/// [`crate::normalize`] pass, [`LottieMeta`] and the backend's load.
+pub(crate) fn prepare(backend: Backend, bytes: &[u8]) -> Result<Prepared, LottieError> {
+    let json = if bytes.starts_with(&[0x1f, 0x8b]) {
+        use std::io::Read as _;
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(bytes)
+            .read_to_string(&mut text)
+            .map_err(LottieError::Decompress)?;
+        text
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    };
+
+    let mut document: Value = serde_json::from_str(&json).map_err(LottieError::Json)?;
+    let json_bytes = json.len();
+    drop(json);
+    let telegram_sticker = document.get("tgs").is_some();
+    let normalization = normalize::normalize(&mut document);
+
+    let meta = read_meta(&document, telegram_sticker)?;
+    let renderer = Rasteriser::load(backend, document, &meta)?;
+    Ok(Prepared {
+        renderer,
+        meta,
+        advisories: advisories_for(normalization),
+        json_bytes,
+    })
 }
 
 /// Reads [`LottieMeta`] straight out of the Bodymovin document.

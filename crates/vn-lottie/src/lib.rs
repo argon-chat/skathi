@@ -14,6 +14,10 @@
 //!   box, the display scale, `object-fit`, `grayscale`.
 //! * [`lottie`] — builds the element for one frame out of the two.
 //!
+//! [`Animation`] is the same load without the transport or any gpui type:
+//! whole frames, straight-alpha bytes, `Send`. The sticker engine
+//! (`crates/vn-sticker`) draws with it on a worker thread.
+//!
 //! ```ignore
 //! // once per <lottie> node, kept in the host's side map
 //! let mut state = LottieState::load(&bytes)?;
@@ -56,11 +60,13 @@
 //! `<lottie-player>` disagree — notably the defaults of `autoplay` and `loop` —
 //! `CONTRACT.md` records which one this follows and why.
 
+pub mod animation;
 pub mod backend;
 pub mod element;
 pub mod normalize;
 pub mod state;
 
+pub use animation::Animation;
 pub use backend::Backend;
 pub use element::{lottie, LottieFit, LottieOptions};
 pub use normalize::Normalization;

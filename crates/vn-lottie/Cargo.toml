@@ -31,7 +31,11 @@ thorvg-default = ["thorvg"]
 #
 # `gif` is off (we never export GIFs); `images` and `text` stay on because real
 # Bodymovin exports lean on embedded image assets and glyph-backed text layers.
-rasterlottie = { version = "0.2.2", default-features = false, features = [
+#
+# Pinned exactly: `backend::raster` declares the prepared animation `Send` on an
+# argument about rasterlottie's internals (its `Rc` path cache stays inside the
+# graph). An upgrade re-checks that argument.
+rasterlottie = { version = "=0.2.2", default-features = false, features = [
     "images",
     "text",
 ] }

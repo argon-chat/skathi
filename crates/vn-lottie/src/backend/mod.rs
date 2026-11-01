@@ -180,6 +180,42 @@ impl Rasteriser {
             Self::ThorVg(inner) => inner.render(frame, scale, width, height),
         }
     }
+
+    /// Draws absolute source `frame` filling a `width × height` raster,
+    /// STRAIGHT-alpha BGRA rows packed, borrowed until the next call
+    /// ([`crate::Animation`]'s raster). `intrinsic` is the authored size.
+    #[cfg_attr(not(feature = "thorvg"), allow(unused_variables))]
+    pub fn render_straight(&mut self, frame: f32, intrinsic: (u32, u32), width: u32, height: u32) -> Option<&[u8]> {
+        match self {
+            Self::Rasterlottie(inner) => inner.render_straight(frame, intrinsic, width, height),
+            #[cfg(feature = "thorvg")]
+            Self::ThorVg(inner) => inner.render_straight(frame, width, height),
+        }
+    }
+
+    /// Bytes the backend holds in its own raster buffers. ThorVG's scene and
+    /// rasterlottie's prepared model are not reported by either engine.
+    pub fn buffer_bytes(&self) -> usize {
+        match self {
+            Self::Rasterlottie(inner) => inner.buffer_bytes(),
+            #[cfg(feature = "thorvg")]
+            Self::ThorVg(inner) => inner.target_bytes(),
+        }
+    }
+}
+
+/// One premultiplied BGRA pixel as straight alpha. A fully transparent pixel
+/// is all zeros; otherwise each colour channel is `c · 255 / a`, rounded.
+pub(crate) fn unpremultiply(px: [u8; 4]) -> [u8; 4] {
+    let a = px[3] as u32;
+    match a {
+        0 => [0; 4],
+        255 => px,
+        _ => {
+            let c = |v: u8| ((v as u32 * 255 + a / 2) / a).min(255) as u8;
+            [c(px[0]), c(px[1]), c(px[2]), px[3]]
+        }
+    }
 }
 
 /// The raster dimensions an animation of `(width, height)` produces at `scale`.
