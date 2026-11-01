@@ -367,6 +367,10 @@ fn frame_json(f: &Frame) -> Json {
                 ("ms", r2(p.sync_layout_ms)),
                 ("maxMs", r2(p.sync_layout_max_ms)),
                 ("refused", Json::n(f64::from(p.sync_layout_refused))),
+                // The wave ended with its changes already drawn by a forced
+                // layout; `tailFree`: and nothing else asked for a draw.
+                ("tail", Json::n(f64::from(p.sync_tail))),
+                ("tailFree", Json::n(f64::from(p.sync_tail_free))),
                 ("by", Json::obj(by)),
             ]),
         ));
@@ -509,6 +513,8 @@ fn summary(frames: &[Frame]) -> Json {
                 ("ms", r2(s.sync_ms)),
                 ("maxMs", r2(s.sync_max)),
                 ("refused", Json::n(s.sync_refused as f64)),
+                ("tail", Json::n(s.sync_tail as f64)),
+                ("tailFree", Json::n(s.sync_tail_free as f64)),
                 ("maxPerFrame", Json::n(s.sync_per_frame_max as f64)),
                 ("by", Json::obj(by)),
             ]),
@@ -613,6 +619,8 @@ struct Totals {
     sync_ms: f32,
     sync_max: f32,
     sync_refused: u64,
+    sync_tail: u64,
+    sync_tail_free: u64,
     sync_per_frame_max: u32,
     sync_by: [u32; SyncCaller::COUNT],
     restyles: u64,
@@ -661,6 +669,8 @@ impl Totals {
         self.sync_ms += p.sync_layout_ms;
         self.sync_max = self.sync_max.max(p.sync_layout_max_ms);
         self.sync_refused += u64::from(p.sync_layout_refused);
+        self.sync_tail += u64::from(p.sync_tail);
+        self.sync_tail_free += u64::from(p.sync_tail_free);
         self.sync_per_frame_max = self.sync_per_frame_max.max(p.sync_layouts);
         for (a, b) in self.sync_by.iter_mut().zip(p.sync_by.iter()) {
             *a += *b;

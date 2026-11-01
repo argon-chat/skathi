@@ -832,9 +832,28 @@ fn sync_layout_inner() {
     IN_SYNC_LAYOUT.with(|c| c.set(false));
 }
 
+/// What a JS wave left for the frame ([`flush_changes_kind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flush {
+    /// The tree did not change.
+    Unchanged,
+    /// The tree changed, and no element-tree build has laid it out since.
+    Changed,
+    /// Every change of the wave was flushed by a forced layout, and that
+    /// layout's draw came after the last of them: the primary window already
+    /// holds a drawn frame of the tree as it stands, waiting to be presented.
+    DrawnBySync,
+}
+
 /// Call after a JS wave: if the tree changed, run the restyle pass (inline
 /// parse + cascade) and report `true` so the caller notifies the root view.
 pub fn flush_changes() -> bool {
+    flush_changes_kind() != Flush::Unchanged
+}
+
+/// [`flush_changes`], telling apart the wave whose changes a forced layout has
+/// already drawn ([`Flush::DrawnBySync`]) from one that still needs a draw.
+pub fn flush_changes_kind() -> Flush {
     let dirty = tree::with_tree(|t| t.take_dirty());
     if dirty {
         tree::restyle_all();
@@ -848,7 +867,16 @@ pub fn flush_changes() -> bool {
     // Inside a forced layout this is its own flush; outside, it also answers
     // for the changes a forced layout took earlier in the wave.
     let forced = !IN_SYNC_LAYOUT.with(|c| c.get()) && FLUSHED_BY_SYNC.with(|c| c.replace(false));
-    dirty || forced
+    if dirty {
+        Flush::Changed
+    } else if !forced {
+        Flush::Unchanged
+    } else if layout_owed() {
+        // Flushed by a forced layout the host could not draw.
+        Flush::Changed
+    } else {
+        Flush::DrawnBySync
+    }
 }
 
 /// True while any CSS transition runs — the host keeps repainting.
@@ -1239,7 +1267,7 @@ mod tests {
         let child = mounted_child();
         assert_eq!(dom::bounds(child), (None, true));
         assert!(!tree::read_tree(|t| t.is_dirty()), "the forced layout flushed");
-        assert!(flush_changes(), "…and the wave still repaints");
+        assert_eq!(flush_changes_kind(), Flush::Changed, "…and the wave still draws, as nothing did");
         assert!(!flush_changes(), "once");
 
         fn draw() {
@@ -1248,7 +1276,18 @@ mod tests {
         set_sync_layout(draw);
         let other = mounted_child();
         assert_eq!(dom::bounds(other), (None, false));
-        assert!(flush_changes(), "a forced layout that drew still repaints every window");
+        assert_eq!(
+            flush_changes_kind(),
+            Flush::DrawnBySync,
+            "a forced layout that drew still reports the change (pop-outs repaint), as already drawn",
+        );
+        assert_eq!(flush_changes_kind(), Flush::Unchanged, "once");
+
+        // A change after the forced layout's draw is the frame's to draw.
+        let third = mounted_child();
+        assert_eq!(dom::bounds(third), (None, false));
+        tree::with_tree(|t| t.set_class(third, "moved"));
+        assert_eq!(flush_changes_kind(), Flush::Changed);
     }
 
     /// m26 client sweep #27. A parked runtime is woken once, by the first

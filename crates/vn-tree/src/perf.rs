@@ -153,6 +153,12 @@ pub struct Phases {
     pub sync_layout_max_ms: f32,
     pub sync_layout_refused: u32,
     pub sync_by: [u32; SyncCaller::COUNT],
+    /// JS waves whose changes were all flushed AND drawn by a forced layout
+    /// ([`crate::Flush::DrawnBySync`]), and of those, the ones where nothing
+    /// else (an animation, a media frame, a lottie) asked the frame to draw:
+    /// a frame whose own draw only repeated the forced layout's.
+    pub sync_tail: u32,
+    pub sync_tail_free: u32,
     /// Host DOM operations (`__vn_*` mutators), by [`DomOp`].
     pub dom_ops: [u32; DomOp::COUNT],
     /// The first and last DOM mutation in the window: the span Vue spent
@@ -283,6 +289,8 @@ const ZERO: Phases = Phases {
     sync_layout_max_ms: 0.0,
     sync_layout_refused: 0,
     sync_by: [0; SyncCaller::COUNT],
+    sync_tail: 0,
+    sync_tail_free: 0,
     dom_ops: [0; DomOp::COUNT],
     dom_first: None,
     dom_last: None,
@@ -538,6 +546,20 @@ pub fn note_recompile(ms: f32) {
     with(|p| {
         p.recompiles += 1;
         p.recompile_ms += ms;
+    });
+}
+
+/// A JS wave whose changes a forced layout had already drawn; `free` = nothing
+/// else needed the frame to draw.
+pub fn note_sync_tail(free: bool) {
+    if !enabled() {
+        return;
+    }
+    with(|p| {
+        p.sync_tail += 1;
+        if free {
+            p.sync_tail_free += 1;
+        }
     });
 }
 

@@ -785,7 +785,8 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
     // this callback picks it up (same frame). While CSS transitions run or a
     // Lottie plays, keep repainting: `on_next_frame` alone re-arms but does not
     // redraw.
-    let tree_moved = vn_tree::flush_changes();
+    let flush = vn_tree::flush_changes_kind();
+    let tree_moved = flush != vn_tree::Flush::Unchanged;
     // The push channel's tree revision. A number on a socket, not a tree: it
     // lets an attached inspector refetch because something MOVED rather than
     // because 2.5 s went by (docs/DEVTOOLS.md, the push channel).
@@ -797,11 +798,13 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
     // regardless, and its tick reports a decoded frame as `media_moved` when
     // the video can be on screen. A video that only feeds a canvas, or sits
     // outside the viewport, no longer redraws the window at the display rate.
-    if tree_moved
-        || vn_tree::animating()
-        || media_moved
-        || vn_tree::lotties_animating()
-    {
+    let moving = vn_tree::animating() || media_moved || vn_tree::lotties_animating();
+    if flush == vn_tree::Flush::DrawnBySync {
+        // Counted for the frame trace: a forced layout already drew this tree,
+        // so unless something else moves, the draw below only repeats it.
+        vn_tree::perf::note_sync_tail(!moving);
+    }
+    if tree_moved || moving {
         notify_shell(cx);
         // …and every window painting a popped-out subtree, in the SAME frame
         // group. This is the line that makes the spike's claim true: one JS
