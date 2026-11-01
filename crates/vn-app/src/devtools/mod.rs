@@ -2675,6 +2675,11 @@ fn perf_data() -> Json {
         ),
         ("samples", Json::arr(tail)),
         ("nodes", Json::n(f64::from(vn_tree::devtools::node_count()))),
+        // Since the process started: element-tree builds, and the frames shown
+        // by a present alone (a `<video>` or moving `<canvas>` frame written
+        // into its atlas tile, vn-tree's `live`).
+        ("builds", Json::n(vn_tree::devtools::frame_counts().0 as f64)),
+        ("presents", Json::n(vn_tree::devtools::frame_counts().1 as f64)),
         // Scroll containers registered with the wheel router last frame. It is
         // here because it is the one structure a retained-render REPLAY cannot
         // rebuild by itself (it is filled by the paint walk), so it is the

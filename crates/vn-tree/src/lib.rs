@@ -22,6 +22,7 @@ mod clipboard;
 mod dom;
 mod fonts;
 mod img;
+mod live;
 pub mod log;
 mod lottie;
 pub mod perf;
@@ -900,6 +901,9 @@ pub fn video_device_changed() -> usize {
 /// * every `<video>` is pulled for a frame and its media events are dispatched
 ///   (`crates/vn-video/CONTRACT.md` §3);
 /// * a `<canvas>` that drew since the last frame asks for a repaint;
+/// * a `<video>` or moving `<canvas>` frame written into the atlas tile the
+///   last drawn scene samples asks only for a present (`crate::live`): the
+///   window shows it with no build, and this returns `false` for it;
 /// * the CSS animation clock is advanced and `transitionend` /
 ///   `animationstart` / `animationend` / `animationcancel` are dispatched;
 /// * a node that was focused when it got detached from the painted tree loses
@@ -936,7 +940,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let video_moved = video::tick(window, cx);
     // A `<canvas>` that drew since the last frame repaints, as a mutation
     // would; an idle one costs this one atomic swap (render::canvas).
-    let canvas_moved = render::canvas::tick();
+    let canvas_moved = render::canvas::tick(window);
     // `el.scrollTop = n`, `scrollTo`, `scrollBy`, `scrollIntoView()`: the write
     // itself happened synchronously inside the host fn (a `ScrollHandle` is an
     // `Rc`, so the getter sees it on the next line), but the DOM `scroll` event
@@ -960,7 +964,19 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // drag past its scroll container's edge scrolls it, and an owed
     // `selectionchange` goes to `document`. One flag read otherwise.
     let selecting = selection::tick(window, cx);
-    anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved | resampled | restored | selecting
+    let draw =
+        anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved | resampled | restored | selecting;
+    // A frame written into the tile the last drawn scene samples is shown by a
+    // present, with no build (`crate::live`); one that needs a draw is folded
+    // into the answer, and a frame that draws anyway presents what it drew.
+    match live::take() {
+        live::Shown::Draw => true,
+        live::Shown::Present if !draw => {
+            live::present(window);
+            false
+        }
+        _ => draw,
+    }
 }
 
 /// The per-frame work a SECONDARY window has to do for itself, because the

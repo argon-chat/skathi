@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/paint-only.spec.ts: a playing <video> and a moving <canvas> repaint by presents, not builds (docs/ARCHITECTURE.md decision 28). See ../README.md.",
+
+  "name": "vn-test-paint-only",
+
+  "window": {
+    "title": "vue-native — paint-only (fixture)",
+    "width": 360,
+    "height": 140,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

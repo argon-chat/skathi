@@ -18,7 +18,9 @@
 //!   runs anyway (something else moved) compares the surface's generation and
 //!   reuses the image it uploaded. A canvas that drew costs one snapshot (the
 //!   queued commands rasterized), a swizzle to BGRA and one atlas upload; the
-//!   image it replaces goes back to the atlas on the next frame.
+//!   image it replaces goes back to the atlas on the next frame. A canvas that
+//!   keeps drawing is paint-only (`crate::live`): each frame is written into
+//!   the tile its last frame has, and a present shows it, with no build.
 //! * **Drawn smaller than its bitmap.** A still canvas is drawn from a
 //!   filtered copy at the size it is shown (`crate::resample`, #22), as an
 //!   `<img>` is. A canvas that draws again within [`MOVING`] of its last
@@ -210,6 +212,10 @@ pub(crate) fn mem_stats() -> (usize, usize) {
 
 thread_local! {
     static CANVASES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
+    /// Every `<canvas>` built, with the window that built it last: the ones
+    /// [`tick`] fetches when a bitmap moved. A canvas never built has nothing
+    /// on screen; the build that first paints it fetches for itself.
+    static BUILT: RefCell<HashMap<u32, WinKey>> = RefCell::new(HashMap::new());
     /// When the last animating canvas is due to be still ([`STILL`]): the
     /// frame that re-wraps its last frame has to be asked for.
     static STILL_AT: Cell<Option<Instant>> = const { Cell::new(None) };
@@ -276,6 +282,7 @@ fn current_at(id: u32, win: WinKey, now: Instant) -> Option<Pixels> {
 
 /// Drops the state of canvases that left the tree, their images included.
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
+    BUILT.with(|b| b.borrow_mut().retain(|&id, _| live(id)));
     let gone: Vec<Entry> = CANVASES.with(|m| {
         let mut m = m.borrow_mut();
         let dead: Vec<u32> = m.keys().copied().filter(|&id| !live(id)).collect();
@@ -284,20 +291,109 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
     gone.into_iter().for_each(retire);
 }
 
-/// The pump's per-frame question: did any on-screen canvas draw, resize, or
-/// get its context since the last frame? `true` repaints, the same as a tree
-/// mutation would. One atomic swap — plus, after an animation stopped, the
-/// one repaint that re-wraps its last frame as a still image.
-pub(crate) fn tick() -> bool {
+/// The pump's per-frame work: did any canvas draw, resize, or get its context
+/// since the last frame? One atomic swap when none did. `true` asks for a
+/// draw, the same as a tree mutation would; so does an animation that has
+/// just stopped, whose last frame is re-wrapped as a still image.
+///
+/// **A moving canvas is paint-only** (`crate::live`). Its frames are
+/// `dynamic` images that keep one id, so the new bitmap goes into the atlas
+/// tile the last drawn scene samples, and a present shows it. What still
+/// draws: the first frame, a canvas starting to move or going still (each a
+/// new image), a resize, a canvas whose last frame was not painted, and a
+/// pop-out's canvas (its own build fetches it).
+pub(crate) fn tick(window: &mut Window) -> bool {
     let presented = rjs::take_presented_changed();
+    let now = Instant::now();
     let still = STILL_AT.with(|s| match s.get() {
-        Some(at) if Instant::now() >= at => {
+        Some(at) if now >= at => {
             s.set(None);
             true
         }
         _ => false,
     });
-    presented | still
+    if !presented {
+        return still;
+    }
+    let here = windows::key(window);
+    let built: Vec<(u32, WinKey)> = BUILT.with(|b| b.borrow().iter().map(|(&id, &w)| (id, w)).collect());
+    let mut draw = still;
+    for (id, win) in built {
+        if win != here {
+            draw = true;
+            continue;
+        }
+        match fetch_live(id, here, now, window) {
+            crate::live::Shown::Draw => draw = true,
+            shown => crate::live::note(shown),
+        }
+    }
+    draw
+}
+
+/// [`tick`]'s fetch of one built canvas: the new bitmap written in place
+/// when it is the next frame of a moving one, else stored for the build as
+/// [`current_at`] would.
+fn fetch_live(id: u32, win: WinKey, now: Instant, window: &mut Window) -> crate::live::Shown {
+    use crate::live::{shown, Shown};
+    let visible = crate::live::on_screen(id, win);
+    let seen = |s: Shown| if visible { s } else { Shown::Nowhere };
+    CANVASES.with(|m| {
+        let mut m = m.borrow_mut();
+        let since = m.get(&id).map_or(0, |e| e.generation);
+        match Source::fetch(id as u64, since) {
+            Fetch::Unchanged => Shown::Nowhere,
+            Fetch::Unpublished => match m.remove(&id) {
+                Some(old) => {
+                    retire(old);
+                    seen(Shown::Draw)
+                }
+                None => Shown::Nowhere,
+            },
+            Fetch::Changed(generation, pixels) => {
+                let moving = m.get(&id).is_some_and(|e| now.duration_since(e.changed) < MOVING);
+                if moving {
+                    STILL_AT.with(|s| s.set(Some(now + STILL)));
+                }
+                // The next frame of a moving canvas, in place: the frame painted
+                // last is a live one (`dynamic`) of the same size, in this
+                // window's atlas, and the new one takes its id.
+                if let (true, Some(Pixels::Atlas(fresh)), Some(e)) = (moving, &pixels, m.get_mut(&id)) {
+                    let live = match &e.pixels {
+                        Some(Pixels::Atlas(old)) if e.window == win && old.is_dynamic() && old.size(0) == fresh.size(0) => {
+                            Some(old.id)
+                        }
+                        _ => None,
+                    };
+                    if let Some(old_id) = live {
+                        let Some(Pixels::Atlas(fresh)) = pixels else { unreachable!() };
+                        // Fresh from `fetch`, so the only reference.
+                        if let Ok(mut next) = Arc::try_unwrap(fresh) {
+                            next.id = old_id;
+                            let next = Arc::new(next.dynamic());
+                            let write = window
+                                .write_image_tile(&next, 0, gpui::TileSource::Bytes)
+                                .unwrap_or(gpui::TileWrite::Placed);
+                            // Not retired: the same id, so the same tile.
+                            e.pixels = Some(Pixels::Atlas(next));
+                            e.generation = generation;
+                            e.changed = now;
+                            e.moving = true;
+                            return shown(write, visible);
+                        }
+                        // Unreachable in practice; the build fetches it again.
+                        e.generation = 0;
+                        return seen(Shown::Draw);
+                    }
+                }
+                let pixels = pixels.map(|p| as_painted(p, moving));
+                if let Some(old) = m.insert(id, Entry { generation, pixels, window: win, changed: now, moving }) {
+                    retire(old);
+                }
+                seen(Shown::Draw)
+            }
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +466,7 @@ pub(super) fn build<V: 'static>(
     control_area: Option<WindowControlArea>,
 ) -> AnyElement {
     let win = windows::key(window);
+    BUILT.with(|b| b.borrow_mut().insert(id, win));
     let pixels = current(id, win);
 
     let mut d = with_control_area(div().id(id as usize), id, control_area, win);

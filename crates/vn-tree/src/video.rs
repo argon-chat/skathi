@@ -466,8 +466,7 @@ pub fn any_playing() -> bool {
     })
 }
 
-/// Can a pixel of this `<video>` be on screen? Its painted box (laid out, or as
-/// transformed) meets its window's viewport.
+/// Can a pixel of this `<video>` be on screen (`crate::live::on_screen`)?
 ///
 /// Decides whether a new frame repaints; it is decoded and uploaded either way,
 /// because a canvas may be drawing from it. A video that was not painted at all
@@ -475,19 +474,9 @@ pub fn any_playing() -> bool {
 /// viewport has no pixel a new frame could change. Argon's video custom emoji
 /// keep their one decoder per emoji in a 1×1 box at -9999 px and blit it into
 /// canvases from JS; while one played, the window drew every frame. A browser
-/// paints nothing for it. Clipping by an ancestor is not
-/// considered, so a clipped video still repaints: the safe side. A window with
-/// no published viewport yet counts as on screen.
+/// paints nothing for it.
 fn on_screen(id: u32, win: crate::windows::WinKey) -> bool {
-    crate::windows::peek(win, |w| {
-        let Some(env) = w.env.as_ref() else { return true };
-        let (vw, vh) = (env.viewport_width, env.viewport_height);
-        let meets = |&(x, y, bw, bh): &crate::windows::Rect| {
-            x + bw > 0.0 && y + bh > 0.0 && x < vw && y < vh
-        };
-        w.bounds.get(&id).is_some_and(meets) || w.transformed.get(&id).is_some_and(meets)
-    })
-    .unwrap_or(true)
+    crate::live::on_screen(id, win)
 }
 
 /// Pulls a frame for every live `<video>` and dispatches the events that
@@ -495,6 +484,13 @@ fn on_screen(id: u32, win: crate::windows::WinKey) -> bool {
 ///
 /// Runs from the host's frame pump, **before** the draw that builds the
 /// elements, so the frame a node paints is the one this tick pulled.
+///
+/// **A zero-copy frame is paint-only** (`crate::live`). The decoder hands back
+/// the same placeholder image every frame, so the blit overwrites the tile the
+/// last drawn scene samples, and the frame is shown by a present: no build, no
+/// layout. A new decode size (a new placeholder), the first frame after the
+/// poster, the CPU readback fallback (a new image a frame) and a pop-out's
+/// frame still draw.
 pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     drain_pending_drops(window, cx);
 
@@ -518,7 +514,8 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
     // (`crate::window_frame_tick`), which happens later in the same effect
     // cycle — inside the tick the texture is valid for, as
     // `VideoState::take_gpu_upload` requires.
-    let mut uploads: Vec<(u32, Arc<RenderImage>, vn_video::GpuFrame)> = Vec::new();
+    // With each: does the frame need showing (a new frame, on screen)?
+    let mut uploads: Vec<(u32, Arc<RenderImage>, vn_video::GpuFrame, bool)> = Vec::new();
     let mut elsewhere: Vec<(crate::windows::WinKey, crate::windows::PendingUpload)> = Vec::new();
     let here = crate::windows::key(window);
     let ticks: Vec<(u32, Vec<MediaEvent>)> = VIDEO_STATES.with(|m| {
@@ -555,19 +552,21 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
             }
             let advance = state.advance(now, &FrameRequest { max_size });
             // Decoded and uploaded either way (a canvas may be drawing from it);
-            // repainted only when a pixel of it can be on screen.
-            if advance.new_frame && on_screen(id, entry.window) {
-                moved = true;
-            }
-            if let Some((image, gpu)) = state.take_gpu_upload() {
-                if entry.window == here {
-                    uploads.push((id, image, gpu));
-                } else {
+            // shown only when a pixel of it can be on screen.
+            let show = advance.new_frame && on_screen(id, entry.window);
+            match state.take_gpu_upload() {
+                // The blit's answer decides between a present and a draw.
+                Some((image, gpu)) if entry.window == here => uploads.push((id, image, gpu, show)),
+                Some((image, gpu)) => {
+                    // A pop-out's atlas is written by its own draw.
+                    moved |= show;
                     elsewhere.push((
                         entry.window,
                         crate::windows::PendingUpload { node: id, image, gpu },
                     ));
                 }
+                // The CPU readback path: a new image every frame.
+                None => moved |= show,
             }
             // A rebuild forced by device-lost picks up where it left off. The
             // seek can only land once the new pipeline knows the duration, so
@@ -607,11 +606,12 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
 
     // Before the events, because a JS handler could unmount the node and take
     // its `VideoState` — and therefore the texture — with it.
-    for (id, image, gpu) in uploads {
-        let ok = window
-            .upload_image_from_gpu(&image, 0, gpui::GpuTextureHandle(gpu.texture))
-            .unwrap_or(false);
-        if !ok {
+    for (id, image, gpu, show) in uploads {
+        let write = window
+            .write_image_tile(&image, 0, gpui::TileSource::Gpu(gpui::GpuTextureHandle(gpu.texture)))
+            .unwrap_or(gpui::TileWrite::Refused);
+        crate::live::note(crate::live::shown(write, show));
+        if write == gpui::TileWrite::Refused {
             // The atlas refused it: a decode on a private device
             // (`VN_VIDEO_DEVICE=private`), a device generation that moved under
             // us, or a renderer with no GPU path. Fall back to the readback,

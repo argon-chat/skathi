@@ -105,6 +105,13 @@ pub fn node_count() -> u32 {
     tree::read_tree(|t| t.live_count())
 }
 
+/// `(element-tree builds, paint-only presents)` since the process started, in
+/// any window. A `<video>` or moving `<canvas>` frame is a present, not a
+/// build (`crate::live`); a test reads both to tell the two apart.
+pub fn frame_counts() -> (u64, u64) {
+    (crate::render::build_count(), crate::live::present_count())
+}
+
 pub use crate::resample::ImageStats;
 pub use crate::tree::TreeMem;
 
