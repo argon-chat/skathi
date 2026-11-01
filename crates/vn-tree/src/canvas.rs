@@ -56,7 +56,7 @@ use vn_runtime::redjs::webapi::canvas2d as rjs;
 
 use super::{
     apply_computed_style, bind_events, focus_handle_for, gpui_object_fit, pointer_mask, tab_index_of,
-    wants_style_hover, warn_compat, watch_focus, with_control_area,
+    warn_compat, watch_focus, with_control_area,
 };
 use crate::tree::{self, Tree};
 use crate::windows::{self, WinKey};
@@ -525,8 +525,7 @@ pub(super) fn build<V: 'static>(
         }
     }
     let click_focus = handle.filter(|_| focusable);
-    let style_hover = wants_style_hover(t, id, node);
-    bind_events(d, id, mask, click_focus, focusable, true, style_hover, cx).into_any_element()
+    bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
 #[cfg(test)]

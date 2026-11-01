@@ -164,6 +164,9 @@ pub struct WindowState {
     /// [`Self::hit`] of the last press: with the release's, where its `click`
     /// goes (`pointer::click_target_or`).
     pub down_hit: Option<u32>,
+    /// What is hovered in this window, resolved once a frame
+    /// (`pointer::resolve_hover`).
+    pub hover: crate::pointer::Hover,
     /// This window's activation observer — a press the window loses
     /// activation in the middle of is cancelled (`pointercancel`).
     pub activation: Option<Subscription>,

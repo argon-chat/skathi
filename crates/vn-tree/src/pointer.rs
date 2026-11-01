@@ -41,10 +41,11 @@
 //!
 //! `mousemove` is not refined (moves are frequent, and resolving one is a walk
 //! over every box): its one dispatch per frame resolves its own target
-//! ([`target_at`]). **Hover stays geometric** — `:hover`, `:active`,
-//! `mouseenter` and `mouseleave` still come from gpui's own hit test, so an
-//! element under a cover that listens for nothing stays hovered (H-1 in
-//! docs/RUNTIME.md). A press on such a cover says so once ([`note_covered`]).
+//! ([`target_at`]). **Hover** is resolved the same way, once a frame
+//! ([`resolve_hover`]): the path of the topmost element under the pointer is
+//! what `:hover` and `group-hover:` match, and the elements joining or leaving
+//! it are what `mouseenter` and `mouseleave` fire at. `:active` is gpui's
+//! ladder on the press's refined set, so it is the press target's path too.
 
 use gpui::{App, Pixels, Point, VnHitKind, Window};
 use vn_runtime::redjs::api::Value;
@@ -59,9 +60,6 @@ const PRESS_BITS: u64 = (1 << tree::EV_CLICK)
     | (1 << tree::EV_MOUSEDOWN)
     | (1 << tree::EV_MOUSEUP)
     | (1 << tree::EV_CONTEXTMENU);
-
-/// The listeners whose element shows a hover of its own.
-const HOVER_BITS: u64 = (1 << tree::EV_MOUSEENTER) | (1 << tree::EV_MOUSELEAVE);
 
 /// Turns the targeting on for this window: picks for every element, and the
 /// refiner. Called once per build (`render::arm_pick_hitboxes`); both are
@@ -315,25 +313,20 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
-/// A press whose target COVERS an element that is not on its path — a box
-/// painted over it that is not one of its ancestors. That is the browser's
-/// rule and nothing to correct, but it is new here, and a layout that differs
-/// from Chromium's (a transparent box laid out bigger than it should be) now
-/// takes presses it used to let through. So:
-///
-/// * a covered element that listens for presses gets one `dev` log line per
-///   (cover, listener) pair — the lead for "my button stopped working";
-/// * a covered element that shows a hover (a `:hover` rung, a `group-hover`
-///   anchor, a `mouseenter`/`mouseleave` listener) gets the one-time `hover:covered`
-///   advisory: it stays hovered under the cover, where a browser would not (H-1).
+/// A press whose target COVERS an element that listens for presses and is not
+/// on its path — a box painted over it that is not one of its ancestors. That
+/// is the browser's rule and nothing to correct, but it is new here, and a
+/// layout that differs from Chromium's (a transparent box laid out bigger than
+/// it should be) takes presses the old rule let through. So the covered
+/// listener gets one `dev` log line per (cover, listener) pair: the lead for
+/// "my button stopped working".
 ///
 /// Only the elements gpui found under the pointer are looked at, so this is a
 /// few node reads per press.
 fn note_covered(t: &Tree, r: &Resolved, p: Point<Pixels>) {
     let mut listener = None;
-    let mut hovered = None;
     for &tag in r.tags.iter().skip(r.at + 1) {
-        if r.path.contains(&tag) || (listener.is_some() && hovered.is_some()) {
+        if r.path.contains(&tag) {
             continue;
         }
         let Some(node) = t.node(tag) else { continue };
@@ -341,54 +334,207 @@ fn note_covered(t: &Tree, r: &Resolved, p: Point<Pixels>) {
             continue;
         }
         let inert = node.computed.as_ref().is_some_and(|cs| cs.extras.pointer_events_none == Some(true));
-        if inert {
-            continue;
-        }
-        if listener.is_none() && node.listeners & PRESS_BITS != 0 {
+        if !inert && node.listeners & PRESS_BITS != 0 {
             listener = Some(tag);
-        }
-        let shows_hover = node.listeners & HOVER_BITS != 0
-            || node.computed.as_ref().is_some_and(|cs| cs.hover.is_some() || cs.group_hover.is_some())
-            || t.is_group_anchor(tag);
-        if hovered.is_none() && shows_hover {
-            hovered = Some(tag);
+            break;
         }
     }
-    if let Some(l) = listener {
-        let fresh = NAMED.with(|n| {
-            let mut n = n.borrow_mut();
-            if n.len() > 256 {
-                n.clear();
-            }
-            n.insert((r.target, l))
-        });
-        if fresh {
-            crate::log::record(
-                "dev",
-                format!(
-                    "[hit] a press at ({:.0}, {:.0}) is for {}, painted over {} — which listens for it and, \
-                     as in a browser, does not get it (the cover is not one of its descendants)",
-                    f32::from(p.x),
-                    f32::from(p.y),
-                    describe(t, r.target),
-                    describe(t, l),
-                ),
-            );
+    let Some(l) = listener else { return };
+    let fresh = NAMED.with(|n| {
+        let mut n = n.borrow_mut();
+        if n.len() > 256 {
+            n.clear();
         }
-    }
-    if let Some(h) = hovered {
-        crate::render::warn_compat_at(
-            "hover:covered",
-            &format!("{}: ", describe(t, h)),
-            &format!(
-                "is hovered under {}, which is painted over it — a press there goes to the cover, \
-                 as in a browser, but `:hover`, `:active` and `mouseenter`/`mouseleave` still follow \
-                 the pointer's geometry here, so the element under it keeps its hover. Give the cover \
-                 `pointer-events: none` if it should not take the pointer",
+        n.insert((r.target, l))
+    });
+    if fresh {
+        crate::log::record(
+            "dev",
+            format!(
+                "[hit] a press at ({:.0}, {:.0}) is for {}, painted over {} — which listens for it and, \
+                 as in a browser, does not get it (the cover is not one of its descendants)",
+                f32::from(p.x),
+                f32::from(p.y),
                 describe(t, r.target),
+                describe(t, l),
             ),
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Hover: `:hover`, `group-hover`, `mouseenter` / `mouseleave`
+// ---------------------------------------------------------------------------
+
+/// What is hovered in one window (`WindowState::hover`), and what the answer
+/// was resolved from.
+#[derive(Default)]
+pub struct Hover {
+    /// The topmost element under the pointer and its ancestors, target first:
+    /// the elements `:hover` matches. Empty while the pointer is outside the
+    /// window.
+    path: Vec<u32>,
+    /// The pointer's position, whether it was in the window, and
+    /// `render::layout_count()`, at the last resolution.
+    from: Option<(Point<Pixels>, bool, u64)>,
+    /// When the last resolution ran.
+    when: Option<std::time::Instant>,
+    /// A pop-out's per-frame tick is armed ([`arm_hover_tick`]).
+    ticking: bool,
+}
+
+/// How often a page that keeps building frames under a STILL pointer has its
+/// hover resolved again: an animation, a scroll, a list filling in. A moving
+/// pointer resolves every frame it moves in. Chromium likewise refreshes hover
+/// under a still pointer on a timer while a page scrolls, not every frame.
+const STILL_POINTER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Resolves what is hovered in this window, once a frame, the way a press is
+/// resolved: the topmost element under the pointer that `pointer-events` lets
+/// be hit (a pick or a hitbox, [`gpui::Window::vn_tags_at`]), and its
+/// ancestors. That path is what `:hover` matches, and the elements that join
+/// or leave it are what `mouseenter` and `mouseleave` fire at. gpui's own
+/// hover is geometric: every hitbox under the pointer, so an element under a
+/// cover that listens for nothing stayed hovered, and an ancestor whose box
+/// the pointer had left (a dropdown laid out below its trigger) lost its hover
+/// while its child kept it.
+///
+/// Cost: nothing on a frame in which the pointer did not move and nothing was
+/// built; one walk over the frame's tagged boxes on a frame in which it moved;
+/// the same walk at most every [`STILL_POINTER_INTERVAL`] while frames are
+/// built under a still pointer. The pointer's own moves between frames are
+/// never resolved one by one.
+///
+/// Keyboard input does not hide hover: CSS `:hover` is pointer geometry and
+/// nothing else (docs/ARCHITECTURE.md §11 item 12).
+pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
+    let pos = window.mouse_position();
+    let inside = window.vn_pointer_inside();
+    let built = crate::render::layout_count();
+    let now = std::time::Instant::now();
+    let due = windows::here(window, |w| match w.hover.from {
+        None => true,
+        Some((p, i, _)) if p != pos || i != inside => true,
+        Some((_, _, b)) if b != built => {
+            w.hover.when.is_none_or(|t| now.duration_since(t) >= STILL_POINTER_INTERVAL)
+        }
+        Some(_) => false,
+    });
+    if !due {
+        return;
+    }
+    let path = if inside {
+        let tags = window.vn_tags_at(pos);
+        tree::read_tree(|t| match window_root(t, window) {
+            0 => Vec::new(),
+            root => resolve(t, tags, root).path,
+        })
+    } else {
+        Vec::new()
+    };
+    let old = windows::here(window, |w| {
+        w.hover.from = Some((pos, inside, built));
+        w.hover.when = Some(now);
+        (w.hover.path != path).then(|| std::mem::replace(&mut w.hover.path, path.clone()))
+    });
+    if let Some(old) = old {
+        hover_moved(&old, &path, pos, window, cx);
+    }
+}
+
+/// The elements that leave the hover path, innermost first, and the ones that
+/// join it, outermost first: the order `mouseleave` and `mouseenter` fire in
+/// (UI Events §4.3.3, as Chromium dispatches them).
+fn boundary(old: &[u32], new: &[u32]) -> (Vec<u32>, Vec<u32>) {
+    let left = old.iter().copied().filter(|id| !new.contains(id)).collect();
+    let entered = new.iter().rev().copied().filter(|id| !old.contains(id)).collect();
+    (left, entered)
+}
+
+/// The hover path moved from `old` to `new`: the styles first, then the
+/// events.
+fn hover_moved(old: &[u32], new: &[u32], pos: Point<Pixels>, window: &mut Window, cx: &mut App) {
+    let (left, entered) = boundary(old, new);
+    // `tree::note_hover` keeps the hovered set the renderer folds `:hover`
+    // and `group-hover:` rungs from, and aims the transitions. Before any
+    // handler: a `mouseenter` listener that restyles must find the transition
+    // already aimed at its target.
+    for &id in &left {
+        tree::note_hover(id, false);
+    }
+    for &id in &entered {
+        tree::note_hover(id, true);
+    }
+    // The rungs are folded at build time, so a cached subtree holding one has
+    // to render again.
+    let restyled = tree::with_tree(|t| {
+        let mut any = false;
+        for &id in left.iter().chain(&entered) {
+            any |= t.touch_hover_styled(id);
+        }
+        any
+    });
+    if restyled {
+        crate::render::request_repaint(window, cx);
+    }
+    // `mouseenter` and `mouseleave` fire at every element that joins or leaves
+    // the path and listens for them, `pointer-events` notwithstanding: it
+    // decides what is hit, not who hears about it. An element no longer in
+    // the document hears nothing.
+    let has = |t: &Tree, id: u32, ev: u32| t.node(id).is_some_and(|n| n.listeners & (1u64 << ev) != 0);
+    let (leaves, enters): (Vec<u32>, Vec<u32>) = tree::read_tree(|t| {
+        let root = window_root(t, window);
+        (
+            left.iter().copied().filter(|&id| has(t, id, tree::EV_MOUSELEAVE) && path_to(t, id, root)).collect(),
+            entered.iter().copied().filter(|&id| has(t, id, tree::EV_MOUSEENTER)).collect(),
+        )
+    });
+    if leaves.is_empty() && enters.is_empty() {
+        return;
+    }
+    let payload = crate::render::mouse_payload(pos, -1.0, &window.modifiers());
+    let events = leaves.into_iter().map(|id| (id, tree::EV_MOUSELEAVE)).chain(enters.into_iter().map(|id| (id, tree::EV_MOUSEENTER)));
+    // The pump's, before gpui's draw, as the frame's `mousemove` is
+    // (`render::flush_pending_mouse_move`, which runs after this).
+    crate::off_input(|| {
+        for (id, ev) in events {
+            // A handler before this one may have removed it.
+            if tree::read_tree(|t| t.node(id).is_some()) {
+                crate::render::js_dispatch_app(id, ev, &payload, window, cx);
+            }
+        }
+    });
+}
+
+/// Does `id` still hang off `root`?
+fn path_to(t: &Tree, id: u32, root: u32) -> bool {
+    let mut cur = id;
+    for _ in 0..4096 {
+        if cur == root {
+            return true;
+        }
+        match t.node(cur) {
+            Some(n) if n.parent != 0 => cur = n.parent,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A pop-out window has no frame pump (vn-app's pump drives the primary
+/// window), so its hover is resolved from a per-frame callback of its own,
+/// armed here once, from the pop-out's build.
+pub(crate) fn arm_hover_tick(window: &mut Window) {
+    let k = windows::key(window);
+    if windows::is_primary(k) || windows::here(window, |w| std::mem::replace(&mut w.hover.ticking, true)) {
+        return;
+    }
+    window.on_next_frame(hover_tick);
+}
+
+fn hover_tick(window: &mut Window, cx: &mut App) {
+    resolve_hover(window, cx);
+    window.on_next_frame(hover_tick);
 }
 
 /// `node 42 (<div id="x" class="a b">)`, for the log line and the advisory.
@@ -449,6 +595,22 @@ mod tests {
             assert_eq!(common_ancestor(t, a1, b), Some(list), "two branches");
             assert_eq!(common_ancestor(t, root, b), Some(root));
         });
+    }
+
+    /// `mouseleave` innermost first, then `mouseenter` outermost first; the
+    /// shared ancestors hear neither.
+    #[test]
+    fn the_boundary_between_two_hover_paths() {
+        // Paths are target first: a1 → a → list → root, b1 → b → list → root.
+        let (left, entered) = boundary(&[5, 3, 2, 1], &[6, 4, 2, 1]);
+        assert_eq!(left, vec![5, 3]);
+        assert_eq!(entered, vec![4, 6]);
+        // Into a child: only the child enters.
+        assert_eq!(boundary(&[3, 2, 1], &[5, 3, 2, 1]), (vec![], vec![5]));
+        // Out of the window: everything leaves, innermost first.
+        assert_eq!(boundary(&[3, 2, 1], &[]), (vec![3, 2, 1], vec![]));
+        // Into it: everything enters, the root first.
+        assert_eq!(boundary(&[], &[3, 2, 1]), (vec![], vec![1, 2, 3]));
     }
 
     #[test]

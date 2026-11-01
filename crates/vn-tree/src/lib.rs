@@ -1050,6 +1050,7 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
 /// property of the one JS realm and must run once per FRAME GROUP, not once per
 /// window (D-M06). Running it twice would double every `setTimeout` rate.
 pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
+    pointer::arm_hover_tick(window);
     img::evict_pending(window, cx);
     lottie::drain_pending_drops_for(window, cx);
     video::drain_pending_drops_for(window, cx);

@@ -517,14 +517,14 @@ pub struct Tree {
     /// ancestor, so an incremental set would go stale in exactly the case the
     /// scoped pass exists for.
     group_anchors: std::collections::HashSet<u32>,
-    /// Anchor → the elements whose `group-hover:` rung has to be ANIMATED when
-    /// that anchor's pointer state flips (i.e. the ones that also declare a
-    /// `transition`). gpui resolves the rung itself at paint time and needs no
-    /// list; the animator needs one, because a flip on the anchor is the only
-    /// signal a descendant ever gets. Built in the same pass as
-    /// [`Tree::group_anchors`] and, like it, only for a sheet that uses the
-    /// variant at all — so the m11 invariant holds: a hover walks this list,
-    /// never the tree.
+    /// Anchor → the elements whose `group-hover:` rung watches it. A flip on
+    /// the anchor is the only signal such a descendant ever gets: its rung is
+    /// folded at build time from the hovered set, so a cached subtree holding
+    /// it has to render again ([`Tree::touch_hover_styled`]), and one that
+    /// declares a `transition` has its animation aimed ([`note_hover`]). Built
+    /// in the same pass as [`Tree::group_anchors`] and, like it, only for a
+    /// sheet that uses the variant at all — so the m11 invariant holds: a
+    /// hover walks this list, never the tree.
     group_hover_deps: HashMap<u32, Vec<u32>>,
     names: Vec<String>,
     name_ids: HashMap<String, u32>,
@@ -608,10 +608,20 @@ impl Tree {
         self.group_anchors.contains(&id)
     }
 
-    /// …and does at least one of those descendants need the ANIMATOR told when
-    /// this element's pointer state flips? See [`Tree::group_hover_deps`].
-    pub fn has_group_hover_deps(&self, id: u32) -> bool {
-        self.group_hover_deps.contains_key(&id)
+    /// `id` joined or left the hover path: touch what that repaints, its own
+    /// `:hover` rung and the `group-hover:` elements watching it, so a cached
+    /// subtree holding one renders again. `false` when nothing hangs off its
+    /// hover (then no frame is owed).
+    pub(crate) fn touch_hover_styled(&mut self, id: u32) -> bool {
+        let own = self.node(id).and_then(|n| n.computed.as_ref()).is_some_and(|cs| cs.hover.is_some());
+        if own {
+            self.touch(id);
+        }
+        let deps = self.group_hover_deps.get(&id).cloned().unwrap_or_default();
+        for &dep in &deps {
+            self.touch(dep);
+        }
+        own || !deps.is_empty()
     }
 
     fn alloc(&mut self, node: Node) -> u32 {
@@ -2131,15 +2141,9 @@ impl Tree {
                 if let Some(cs) = &slot.computed {
                     if let Some((key, _)) = &cs.group_hover {
                         self.group_anchors.insert(*key as u32);
-                        // Only the ones with a `transition` need the animator's
-                        // flip signal; the rest are pure paint-ladder and cost
-                        // nothing here.
-                        if cs.hover_transitions() {
-                            self.group_hover_deps
-                                .entry(*key as u32)
-                                .or_default()
-                                .push(i as u32);
-                        }
+                        // Every one: the rung is folded at build time, so a
+                        // flip on the anchor has to reach each of them.
+                        self.group_hover_deps.entry(*key as u32).or_default().push(i as u32);
                     }
                     if let Some((key, _)) = &cs.group_active {
                         self.group_anchors.insert(*key as u32);
@@ -2263,20 +2267,22 @@ thread_local! {
         RefCell::new(std::collections::HashSet::new());
 }
 
-/// gpui saw the pointer cross this element's hitbox.
+/// `id` joined (`true`) or left the hover path: the topmost element under the
+/// pointer and its ancestors, resolved once a frame by
+/// [`crate::pointer::resolve_hover`]. [`HOVERED`] is that path, and
+/// [`crate::render::apply_computed_style`] folds the `:hover` and
+/// `group-hover:` rungs from it.
 ///
-/// This is the whole state-transition story on the input side. In a browser a
-/// `transition` on the BASE rule animates the changes a `:hover` rule makes;
-/// here the hover rung is installed into gpui's paint-time ladder, which
-/// refines it over the computed style with no clock at all — so a hover SNAPPED
-/// (m7 recorded this as "state-rule transitions rejected by design", which was
-/// about a `transition` declared ON the state rule; the base-rule case is the
-/// one authors actually write and it was snapping too).
-///
-/// So: [`crate::render::apply_computed_style`] strips the transitioned
-/// properties out of the rung before gpui ever sees it, and this routes the
-/// flip into the animator instead. What the author did NOT name in `transition`
-/// stays in the rung and still snaps — which is also what CSS says.
+/// This is also the whole state-transition story on the input side. In a
+/// browser a `transition` on the BASE rule animates the changes a `:hover`
+/// rule makes; a rung refined over the computed style has no clock at all, so
+/// a hover SNAPPED (m7 recorded this as "state-rule transitions rejected by
+/// design", which was about a `transition` declared ON the state rule; the
+/// base-rule case is the one authors actually write and it was snapping too).
+/// So the renderer strips the transitioned properties out of the rung, and this
+/// routes the flip into the animator instead. What the author did NOT name in
+/// `transition` stays in the rung and still snaps — which is also what CSS
+/// says.
 ///
 /// Cost per flip is one map lookup plus one `on_state` per element that
 /// actually declares a transition, so m11's "no full-tree work per hover" holds
@@ -2299,14 +2305,9 @@ pub fn note_hover(id: u32, hovered: bool) {
     }
 }
 
-/// Is the pointer inside `id`'s hitbox right now?
-///
-/// Only ever TRUE for a node the renderer asked gpui to report hover edges for
-/// — see [`crate::render::wants_style_hover`]. A node with a `:hover` rule but
-/// no `transition` is styled entirely inside gpui's paint-time ladder and never
-/// reaches [`note_hover`], so this answers `false` for it. That is a real limit
-/// of reading the state back rather than a bug; `live_style` says the same
-/// thing and docs/TESTING.md writes it down.
+/// Does `:hover` match `id` right now? True for the topmost element under the
+/// pointer and every ancestor of it, as of the last frame's resolution
+/// ([`note_hover`]).
 pub fn is_hovered(id: u32) -> bool {
     HOVERED.with(|h| h.borrow().contains(&id))
 }
@@ -2324,11 +2325,10 @@ pub fn is_hovered(id: u32) -> bool {
 /// actually LANDED. The static `hover` bucket next to it says only "the cascade
 /// produced this rung", which is true whether or not a pointer is anywhere near.
 ///
-/// Two honest gaps, both structural: `:active` and the untransitioned half of a
-/// hover rung are refined by gpui at paint time off a hitbox we cannot read
-/// back, so an element whose `:hover` declares no `transition` reports its base
-/// here. Introduced for `vn-test` (docs/TESTING.md); nothing on the paint path
-/// calls it.
+/// One honest gap, structural: `:active` is refined by gpui at paint time off
+/// a hitbox we cannot read back, so a pressed element reports its unpressed
+/// style here. Introduced for `vn-test` (docs/TESTING.md); nothing on the
+/// paint path calls it.
 pub fn live_style(id: u32) -> Option<gpui::StyleRefinement> {
     use gpui::Refineable as _;
     let cs = read_tree(|t| t.node(id).and_then(|n| n.computed.clone()))?;
@@ -2336,14 +2336,13 @@ pub fn live_style(id: u32) -> Option<gpui::StyleRefinement> {
     if let Some(overlay) = animation_overlay(id, &cs.base, std::time::Instant::now()) {
         live.refine(&overlay);
     }
-    // `pointer-events: none` keeps the rungs off the element entirely, so it
-    // keeps them out of here too — same condition, same place in the order.
-    if cs.extras.pointer_events_none != Some(true) {
-        if let Some(rung) = fold_hover_target(id, &cs) {
-            match vn_css::strip_transitioned(&rung, &cs.transitions) {
-                Some(stripped) => live.refine(&stripped),
-                None => live.refine(&rung),
-            }
+    // Same order as the renderer's fold. `pointer-events: none` does not keep
+    // a rung off: an element that cannot be hit is still hovered while a
+    // descendant that can be is.
+    if let Some(rung) = fold_hover_target(id, &cs) {
+        match vn_css::strip_transitioned(&rung, &cs.transitions) {
+            Some(stripped) => live.refine(&stripped),
+            None => live.refine(&rung),
         }
     }
     Some(live)

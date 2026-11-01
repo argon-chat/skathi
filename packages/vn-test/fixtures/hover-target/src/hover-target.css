@@ -1,0 +1,115 @@
+#page {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+}
+
+.box {
+  position: absolute;
+}
+
+/* A hover-styled box, its top half under a cover that listens for nothing. */
+#under {
+  left: 20px;
+  top: 20px;
+  width: 160px;
+  height: 80px;
+  background: rgb(200, 200, 200);
+}
+#under:hover {
+  background: rgb(200, 0, 0);
+}
+#cover {
+  left: 20px;
+  top: 20px;
+  width: 160px;
+  height: 40px;
+  background: rgba(0, 0, 255, 0.2);
+}
+
+/* Two nested pairs side by side, for the enter/leave order. */
+.wrap {
+  width: 200px;
+  height: 60px;
+  background: #eee;
+}
+#a-wrap {
+  left: 20px;
+  top: 130px;
+}
+#b-wrap {
+  left: 260px;
+  top: 130px;
+}
+.leaf {
+  margin: 10px;
+  width: 100px;
+  height: 40px;
+  background: #ddd;
+}
+
+/* A dropdown: the panel is laid out below its trigger, outside its box. */
+#menu {
+  left: 20px;
+  top: 220px;
+  width: 120px;
+  height: 30px;
+  background: rgb(220, 220, 220);
+}
+#menu:hover {
+  background: rgb(0, 150, 0);
+}
+#sub {
+  position: absolute;
+  left: 0;
+  top: 40px;
+  width: 120px;
+  height: 60px;
+  background: #bbb;
+}
+
+/* `group-hover`, with the right half of the group under a cover. */
+#grp {
+  left: 260px;
+  top: 220px;
+  width: 200px;
+  height: 60px;
+  background: #eee;
+}
+.dot {
+  width: 20px;
+  height: 20px;
+  margin: 20px;
+  background: rgb(100, 100, 100);
+}
+#grp:hover .dot {
+  background: rgb(0, 0, 200);
+}
+#grp-cover {
+  left: 360px;
+  top: 220px;
+  width: 100px;
+  height: 60px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* `pointer-events: none` around a child that can be hit. */
+#inert {
+  left: 20px;
+  top: 340px;
+  width: 200px;
+  height: 60px;
+  pointer-events: none;
+  background: rgb(230, 230, 230);
+}
+#inert:hover {
+  background: rgb(150, 0, 150);
+}
+#live {
+  pointer-events: auto;
+  margin: 10px;
+  width: 80px;
+  height: 40px;
+  background: #ccc;
+}

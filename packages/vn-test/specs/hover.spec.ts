@@ -3,8 +3,9 @@
 // This is the spec that could not be written before the harness existed, and
 // the reason `styles` grew a `live` bucket (research/reports/m19/vn-test.md §3).
 //
-// The hover ladder is decided by gpui's HIT TEST at paint time, not by anything
-// JavaScript can be asked. So the gesture has to be a real `PlatformInput` at a
+// Hover is decided by the host's HIT TEST, once a frame (crates/vn-tree/src/
+// pointer.rs `resolve_hover`), not by anything JavaScript can be asked. So the
+// gesture has to be a real `PlatformInput` at a
 // window coordinate — `locator.hover()`, the `mouse` command — and the readback
 // has to be the style in EFFECT, not the rung the cascade produced. `base` and
 // `hover` are both there whether or not a pointer is anywhere near; `live` is
@@ -53,8 +54,8 @@ describe("hover", () => {
 
     await tab.hover();
 
-    // gpui saw the pointer cross the hitbox — z-order, content masks and
-    // `pointer-events` all had their vote before this could be true.
+    // The host's hit test put the tab on the hover path — z-order, content
+    // masks and `pointer-events` all had their vote before this could be true.
     await expect(tab).toBeHovered();
   }, T);
 

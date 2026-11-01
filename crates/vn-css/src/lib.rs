@@ -122,13 +122,14 @@ pub struct ComputedStates {
     /// `.group:hover .this` — what this element looks like while an ANCESTOR is
     /// hovered, and which ancestor that is (its [`MatchDom::key`]).
     ///
-    /// The renderer turns the pair into gpui's own group mechanism: the
-    /// ancestor is given `.group("vn-g<key>")` and this element
-    /// `.group_hover("vn-g<key>", …)`, which gpui resolves from the group's
-    /// hitbox at PAINT time. Nothing here subscribes, and nothing restyles when
-    /// the ancestor's hover flips — the m11 perf invariants are untouched.
+    /// The renderer folds the rung in while the ancestor is on the hover path
+    /// (`vn_tree::pointer::resolve_hover`), and a flip on the ancestor renders
+    /// this element again without restyling anything — the m11 perf
+    /// invariants are untouched.
     pub group_hover: Option<(u64, Rc<StyleRefinement>)>,
-    /// `.group:active .this`. Same mechanism, gpui's `.group_active()`.
+    /// `.group:active .this`. gpui's own group mechanism: the ancestor is given
+    /// `.group("vn-g<key>")` and this element `.group_active("vn-g<key>", …)`,
+    /// which gpui resolves from the group's hitbox at paint time.
     pub group_active: Option<(u64, Rc<StyleRefinement>)>,
     /// The folded `transition` list. Empty means "no transitions".
     pub transitions: Rc<Vec<TransitionSpec>>,
@@ -2034,12 +2035,12 @@ fn ladder_state(pc: &PseudoClass<'_>) -> u8 {
 /// An interaction state named on a compound that is NOT the selector's subject
 /// — `.group:hover .child`, Tailwind's `group-hover:` variant.
 ///
-/// The state belongs to an ANCESTOR, so it cannot ride the subject's own rung
-/// in gpui's per-element ladder. gpui has the matching primitive: an element
-/// declares `.group(name)` and a descendant `.group_hover(name, style)`, and
-/// the descendant's style is refined at PAINT time from the group's hitbox —
-/// no restyle, no cascade re-run, no subscription of our own (see
-/// `vn_tree::render`, and research/reports/m18/live-test-round2.md §2).
+/// The state belongs to an ANCESTOR, so it cannot ride the subject's own rung.
+/// The descendant carries the rung keyed by that ancestor, and the renderer
+/// refines it in while the ancestor is hovered (on the hover path) or, for
+/// `:active`, through gpui's `.group(name)` / `.group_active(name, style)` —
+/// no restyle, no cascade re-run (see `vn_tree::render`, and
+/// research/reports/m18/live-test-round2.md §2).
 ///
 /// What the cascade has to supply is WHICH ancestor. `offset` is the index, in
 /// the selector's match-order storage, of the first component of the compound

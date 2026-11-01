@@ -847,7 +847,12 @@ fn dom_key(k: &str) -> String {
 /// move goes to the topmost element there (`crate::pointer::target_at`), which
 /// the listening box may be painted under. Resolved here, once a frame, rather
 /// than on every gpui move.
+///
+/// The frame's hover is resolved first (`crate::pointer::resolve_hover`), so
+/// its `mouseleave` / `mouseenter` come before the `mousemove`, as in a
+/// browser.
 pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
+    crate::pointer::resolve_hover(window, cx);
     let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
     let target = crate::pointer::target_at(window, p.position);
@@ -875,7 +880,7 @@ fn dom_wheel_delta(delta: Point<gpui::Pixels>) -> (f64, f64) {
     (-f64::from(delta.x), -f64::from(delta.y))
 }
 
-fn mouse_payload(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers) -> EventPayload<'static> {
+pub(crate) fn mouse_payload(position: Point<gpui::Pixels>, button: f64, m: &gpui::Modifiers) -> EventPayload<'static> {
     EventPayload {
         a: f64::from(position.x),
         b: f64::from(position.y),
@@ -2371,8 +2376,7 @@ fn build_node<V: 'static>(
             // has to run before gpui resolves the editing key bindings), so the
             // wrapper must not also listen — the editor is its descendant and
             // would deliver every key twice.
-            let style_hover = wants_style_hover(t, id, node);
-            d = bind_events(d, id, mask, click_focus, focusable, !is_input, style_hover, cx);
+            d = bind_events(d, id, mask, click_focus, focusable, !is_input, cx);
             // Copy / cut / paste outside a text field: the root is on every
             // keystroke's path, and its listener (bound AFTER its own keydown
             // one, so it runs after every keydown handler) is the last stop.
@@ -2599,6 +2603,12 @@ pub(crate) fn warn_missing_font(family: &str, used: Option<&str>) {
 /// an explicit `color: transparent` and would otherwise win.
 fn apply_background_clip_text(style: &mut gpui::StyleRefinement, extras: &vn_css::Extras) {
     if extras.background_clip_text != Some(true) {
+        // `-webkit-text-fill-color` on its own fills the glyphs over `color`.
+        // Beside `background-clip: text` it is the `transparent` half of the
+        // idiom, which the key colour below already stands in for.
+        if let Some(vn_css::TextFill::Color(fill)) = extras.text_fill_color {
+            style.text.color = Some(fill);
+        }
         return;
     }
     if let Some(key) = extras.background_key_color {
@@ -3841,50 +3851,11 @@ fn pointer_mask(node: &crate::tree::Node) -> u64 {
     }
 }
 
-/// Does this node's pointer state have to reach the animator?
-///
-/// **CSS `:hover` is pointer geometry and nothing else** — the compat ruling of
-/// 2026-09-04 (docs/ARCHITECTURE.md §11 item 12), spelled as the one gpui knob
-/// that expresses it.
-///
-/// gpui defaults to `InputModalityAware`: a key press suppresses hover until the
-/// pointer moves again, which is right for an editor (typing should not leave a
-/// button lit under a stationary cursor) and wrong for the web. A browser
-/// re-evaluates `:hover` from geometry alone; nothing in CSS mentions the
-/// keyboard. So a vue-native app whose user types into a form kept a hover a
-/// browser would have kept, and lost it here — a silent divergence, which is
-/// exactly the class of thing docs/COMPAT.md says we do not ship.
-///
-/// It is set on **both** gpui knobs, because they are two different decisions:
-/// upstream's `hover_listener_mode` governs the `on_hover` CALLBACK (our
-/// `mouseenter`/`mouseleave`, and the animator's state edge through
-/// [`tree::note_hover`]), and the fork's `hover_style_mode` governs the painted
-/// `hover` / `group_hover` RUNGS, which `compute_style` decides from the hitbox
-/// on its own. Setting only the first would fix the events and the transitioned
-/// half of a rung while the untransitioned half still blinked off on a keypress.
-const HOVER_MODE: gpui::HoverListenerMode = gpui::HoverListenerMode::InputModalityIndependent;
-
-/// True exactly when [`apply_computed_style`] took something out of its hover
-/// rungs — the two MUST agree, or a stripped property would have no one left to
-/// paint it. `pointer-events: none` is the case where no rung is installed at
-/// all, so there is nothing to strip and nothing to observe.
-fn wants_style_hover(t: &Tree, id: u32, node: &crate::tree::Node) -> bool {
-    let own = node.computed.as_ref().is_some_and(|cs| {
-        cs.extras.pointer_events_none != Some(true) && cs.hover_transitions()
-    });
-    // …or because this element is the `.group` some DESCENDANT watches. The
-    // descendant has no hitbox of the ancestor and gpui gives it no edge of its
-    // own, so the anchor's flip is the only signal it will ever get — even
-    // though the anchor itself may have neither a hover rung nor a transition.
-    // Missing this is what left `group-hover:` elements stuck on their base
-    // values once the rung was stripped.
-    own || t.has_group_hover_deps(id)
-}
-
 /// The style half every element shares: the folded base refinement assigned
-/// wholesale, the running transition overlay refined over it, the `translate()`
-/// offset, then gpui's own hover/active ladder rungs (the FnOnce builders run
-/// eagerly — only the resulting refinement is stored).
+/// wholesale, the running transition overlay refined over it, the `:hover` and
+/// `group-hover:` rungs when the hover path holds the element or its anchor,
+/// then gpui's own active rungs (the FnOnce builders run eagerly — only the
+/// resulting refinement is stored).
 fn apply_computed_style<E>(
     mut e: E,
     cs: &vn_css::ComputedStates,
@@ -3894,42 +3865,48 @@ fn apply_computed_style<E>(
 where
     E: gpui::Styled + gpui::StatefulInteractiveElement + 'static,
 {
+    use gpui::Refineable as _;
     *e.style() = (*cs.base).clone();
     if let Some(overlay) = tree::animation_overlay(id, &cs.base, now) {
-        use gpui::Refineable as _;
         e.style().refine(&overlay);
     }
-    // `pointer-events: none` means the node is not interactive at all — so it
-    // must not carry gpui's hover/active rungs either, which are exactly what
-    // would make gpui insert a hitbox for it.
-    if cs.extras.pointer_events_none != Some(true) {
-        // The properties the author named in `transition` come OUT of the
-        // hover rungs: gpui's ladder has no clock and would refine them in
-        // whole the instant the pointer crosses the hitbox, leaving the
-        // animator nothing to interpolate. `tree::note_hover` feeds them to
-        // the animator instead, and its overlay (refined in above) is what
-        // paints them. Everything else stays in the rung and still snaps —
-        // which is exactly what CSS does with an untransitioned property.
-        let split = |rung: &std::rc::Rc<gpui::StyleRefinement>| {
-            vn_css::strip_transitioned(rung, &cs.transitions)
-                .map(std::rc::Rc::new)
-                .unwrap_or_else(|| rung.clone())
-        };
-        if let Some(h) = cs.hover.as_ref().map(split) {
-            e = e.hover(move |_| (*h).clone()).hover_style_mode(HOVER_MODE);
+    // The properties the author named in `transition` come OUT of the hover
+    // rungs: a rung has no clock and would refine them in whole the instant
+    // the element is hovered, leaving the animator nothing to interpolate.
+    // `tree::note_hover` feeds them to the animator instead, and its overlay
+    // (refined in above) is what paints them. Everything else stays in the
+    // rung and still snaps — which is exactly what CSS does with an
+    // untransitioned property.
+    let split = |rung: &std::rc::Rc<gpui::StyleRefinement>| {
+        vn_css::strip_transitioned(rung, &cs.transitions)
+            .map(std::rc::Rc::new)
+            .unwrap_or_else(|| rung.clone())
+    };
+    // `:hover` and `.group:hover .this` match the HOVER PATH, the topmost
+    // element under the pointer and its ancestors, resolved once a frame
+    // (`crate::pointer::resolve_hover`), in gpui's order: the group's rung,
+    // then the element's own. Not gpui's `hover` rungs, which follow every
+    // hitbox under the pointer: an element under a cover stayed hovered, and
+    // an ancestor whose box the pointer left lost its hover while its child
+    // kept it. `pointer-events: none` does not keep them off: an element that
+    // cannot be hit is still hovered while a descendant that can be is.
+    if let Some((anchor, style)) = &cs.group_hover {
+        if tree::is_hovered(*anchor as u32) {
+            e.style().refine(&split(style));
         }
+    }
+    if let Some(h) = &cs.hover {
+        if tree::is_hovered(id) {
+            e.style().refine(&split(h));
+        }
+    }
+    // `pointer-events: none` means the node is not interactive at all — so it
+    // must not carry gpui's active rungs either, which are exactly what would
+    // make gpui insert a hitbox for it. `:active` is gpui's ladder on the
+    // press's refined set (`crate::pointer::refine`): the press target's path.
+    if cs.extras.pointer_events_none != Some(true) {
         if let Some(a) = cs.active.clone() {
             e = e.active(move |_| (*a).clone());
-        }
-        // `.group:hover .this` — gpui's own group mechanism, keyed by the
-        // ancestor's node id so the name is unique by construction and the
-        // `GroupHitboxes` stack resolves to exactly the element the cascade
-        // picked. The style is refined at PAINT time from that hitbox: an
-        // ancestor's hover flip costs a repaint, never a restyle.
-        if let Some((anchor, style)) = cs.group_hover.as_ref().map(|(a, s)| (*a, split(s))) {
-            e = e
-                .group_hover(group_name(anchor as u32), move |_| (*style).clone())
-                .hover_style_mode(HOVER_MODE);
         }
         if let Some((anchor, style)) = cs.group_active.clone() {
             e = e.group_active(group_name(anchor as u32), move |_| (*style).clone());
@@ -4394,7 +4371,6 @@ fn bind_events<E, V>(
     click_focus: Option<FocusHandle>,
     focusable: bool,
     keys_here: bool,
-    style_hover: bool,
     cx: &mut Context<V>,
 ) -> E
 where
@@ -4540,15 +4516,11 @@ where
             }),
         );
     }
-    // The pointer family (compat roadmap G4). gpui sources exactly two things
-    // here — "the mouse moved while over me" and "the mouse entered/left me" —
-    // and the JS runtime derives the whole W3C pointer/mouse set from them.
-    //
-    // `on_hover` is what makes `mouseenter`/`mouseleave` (and therefore
-    // `pointerenter`/`pointerleave`) correct rather than approximated: gpui
-    // tracks the hovered hitbox itself and reports both edges, so the
-    // non-bubbling "entered this element" semantics come for free instead of
-    // being reconstructed from move coordinates.
+    // The pointer family (compat roadmap G4). gpui sources "the mouse moved
+    // while over me" here, and the JS runtime derives the W3C pointer/mouse
+    // set from it. `mouseenter` / `mouseleave` (and so `pointerenter` /
+    // `pointerleave`) are not gpui's: they fire from the hover path, resolved
+    // once a frame by `crate::pointer::resolve_hover`.
     if bit(tree::EV_MOUSEMOVE) {
         // No dispatch here — stash and let the pump deliver ONE mousemove per
         // frame (see PendingMouseMove). Same position = same physical move
@@ -4567,29 +4539,6 @@ where
                     modifiers: ev.modifiers,
                 });
             });
-        }));
-    }
-    // One `on_hover` per element — gpui's slot is single (`div.rs`'s
-    // `debug_assert!(self.hover_listener.is_none())`), so the JS events and the
-    // CSS state transitions have to share it. `style_hover` is set when the
-    // cascade gave this node a hover rung AND a `transition` to run it on; see
-    // [`tree::note_hover`].
-    if style_hover || bit(tree::EV_MOUSEENTER) || bit(tree::EV_MOUSELEAVE) {
-        e = e.hover_listener_mode(HOVER_MODE);
-        e = e.on_hover(cx.listener(move |_, hovered: &bool, window, cx| {
-            if style_hover {
-                // Before the JS handler: a `mouseenter` listener that restyles
-                // must see the transition already aimed at its target, or its
-                // restyle would re-aim it at the OLD fold.
-                tree::note_hover(id, *hovered);
-            }
-            let event = if *hovered { tree::EV_MOUSEENTER } else { tree::EV_MOUSELEAVE };
-            if !bit(event) {
-                return;
-            }
-            let position = window.mouse_position();
-            let payload = mouse_payload(position, -1.0, &window.modifiers());
-            js_dispatch(id, event, &payload, window, cx);
         }));
     }
     if bit(tree::EV_WHEEL) {
@@ -5175,8 +5124,7 @@ fn build_img<V: 'static>(
         }
     }
     let click_focus = handle.filter(|_| focusable);
-    let style_hover = wants_style_hover(t, id, node);
-    bind_events(e, id, mask, click_focus, focusable, true, style_hover, cx).into_any_element()
+    bind_events(e, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -5381,8 +5329,7 @@ where
         }
     }
     let click_focus = handle.filter(|_| focusable);
-    let style_hover = wants_style_hover(t, id, node);
-    let e = bind_events(e, id, mask, click_focus, focusable, true, style_hover, cx);
+    let e = bind_events(e, id, mask, click_focus, focusable, true, cx);
     SvgTint { inner: e, inherit }.into_any_element()
 }
 
@@ -5555,8 +5502,7 @@ fn build_lottie<V: 'static>(
         }
     }
     let click_focus = handle.filter(|_| focusable);
-    let style_hover = wants_style_hover(t, id, node);
-    bind_events(d, id, mask, click_focus, focusable, true, style_hover, cx).into_any_element()
+    bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -5729,8 +5675,7 @@ fn build_video<V: 'static>(
         }
     }
     let click_focus = handle.filter(|_| focusable);
-    let style_hover = wants_style_hover(t, id, node);
-    bind_events(d, id, mask, click_focus, focusable, true, style_hover, cx).into_any_element()
+    bind_events(d, id, mask, click_focus, focusable, true, cx).into_any_element()
 }
 
 /// What an `<input type=file>` paints inside its own box: the "Choose File"
