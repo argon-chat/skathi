@@ -133,8 +133,12 @@ pub mod ffi {
         pub limit: usize,
     }
 
+    // libvpx's symbols are all `vnvpx_`-prefixed (config/prefix/, VENDOR.md
+    // "Symbol prefix"): another libvpx, libwebrtc's, is in the same link.
     extern "C" {
+        #[link_name = "vnvpx_vpx_codec_vp9_dx"]
         pub fn vpx_codec_vp9_dx() -> *const vpx_codec_iface_t;
+        #[link_name = "vnvpx_vpx_codec_dec_init_ver"]
         pub fn vpx_codec_dec_init_ver(
             ctx: *mut vpx_codec_ctx_t,
             iface: *const vpx_codec_iface_t,
@@ -142,6 +146,7 @@ pub mod ffi {
             flags: c_long,
             ver: c_int,
         ) -> vpx_codec_err_t;
+        #[link_name = "vnvpx_vpx_codec_decode"]
         pub fn vpx_codec_decode(
             ctx: *mut vpx_codec_ctx_t,
             data: *const u8,
@@ -149,20 +154,30 @@ pub mod ffi {
             user_priv: *mut c_void,
             deadline: c_long,
         ) -> vpx_codec_err_t;
+        #[link_name = "vnvpx_vpx_codec_get_frame"]
         pub fn vpx_codec_get_frame(ctx: *mut vpx_codec_ctx_t, iter: *mut vpx_codec_iter_t) -> *mut vpx_image_t;
+        #[link_name = "vnvpx_vpx_codec_destroy"]
         pub fn vpx_codec_destroy(ctx: *mut vpx_codec_ctx_t) -> vpx_codec_err_t;
+        #[link_name = "vnvpx_vpx_codec_err_to_string"]
         pub fn vpx_codec_err_to_string(err: vpx_codec_err_t) -> *const c_char;
+        #[link_name = "vnvpx_vpx_codec_error_detail"]
         pub fn vpx_codec_error_detail(ctx: *const vpx_codec_ctx_t) -> *const c_char;
+        #[link_name = "vnvpx_vpx_codec_peek_stream_info"]
         pub fn vpx_codec_peek_stream_info(
             iface: *const vpx_codec_iface_t,
             data: *const u8,
             data_sz: c_uint,
             si: *mut vpx_codec_stream_info_t,
         ) -> vpx_codec_err_t;
+        #[link_name = "vnvpx_vpx_codec_version_str"]
         pub fn vpx_codec_version_str() -> *const c_char;
+        #[link_name = "vnvpx_vp9_rtcd"]
         pub fn vp9_rtcd();
+        #[link_name = "vnvpx_vpx_dsp_rtcd"]
         pub fn vpx_dsp_rtcd();
+        #[link_name = "vnvpx_vpx_scale_rtcd"]
         pub fn vpx_scale_rtcd();
+        #[link_name = "vnvpx_vp9_init_intra_predictors"]
         pub fn vp9_init_intra_predictors();
 
         pub fn vn_vpx_account_enter(account: *mut vn_vpx_account);

@@ -14,6 +14,12 @@
 //! `VN_VPX_CONFIG=generic` forces the C build on x86_64 too. The tests use it
 //! as the reference the intrinsics build must match bit for bit (VENDOR.md).
 //!
+//! Every C file is compiled with `config/prefix/<configuration>.h`
+//! force-included: it renames each symbol libvpx defines to `vnvpx_*`, so this
+//! copy links next to libwebrtc's libvpx (`tools/prefix-symbols.ts` generates
+//! it; `VN_VPX_PREFIX=0` leaves it out, for that tool only: the Rust side
+//! links to the prefixed names).
+//!
 //! libvpx is always compiled optimised, whatever the cargo profile: a debug
 //! build of the decoder is ten times slower and nobody steps through it.
 
@@ -28,6 +34,7 @@ fn main() {
     let msvc = target_env == "msvc";
 
     println!("cargo:rerun-if-env-changed=VN_VPX_CONFIG");
+    println!("cargo:rerun-if-env-changed=VN_VPX_PREFIX");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=sources.txt");
     println!("cargo:rerun-if-changed=config");
@@ -49,8 +56,17 @@ fn main() {
     }
 
     let (common, x86_sources) = sources(&manifest.join("sources.txt"));
+    let prefix = (env::var("VN_VPX_PREFIX").as_deref() != Ok("0"))
+        .then(|| manifest.join("config").join("prefix").join(format!("{config}.h")));
 
     let base = |build: &mut cc::Build| {
+        if let Some(header) = &prefix {
+            if msvc {
+                build.flag(format!("/FI{}", header.display()));
+            } else {
+                build.flag("-include").flag(header);
+            }
+        }
         build
             .include(manifest.join("config").join(config))
             .include(manifest.join("config"))

@@ -6,20 +6,35 @@ use super::*;
 type Helper = unsafe extern "C" fn(*const u8, isize, *mut u8, isize, u32, *const i16);
 type Convolve = unsafe extern "C" fn(*const u8, isize, *mut u8, isize, *const [i16; 8], c_int, c_int, c_int, c_int, c_int, c_int);
 
+// libvpx's symbols are `vnvpx_`-prefixed (VENDOR.md, "Symbol prefix").
 extern "C" {
+    #[link_name = "vnvpx_vp9_filter_kernels"]
     static vp9_filter_kernels: [*const [i16; 8]; 5];
-
-    fn vpx_convolve8_horiz_c(s: *const u8, ss: isize, d: *mut u8, ds: isize, f: *const [i16; 8], x0: c_int, xs: c_int, y0: c_int, ys: c_int, w: c_int, h: c_int);
-    fn vpx_convolve8_vert_c(s: *const u8, ss: isize, d: *mut u8, ds: isize, f: *const [i16; 8], x0: c_int, xs: c_int, y0: c_int, ys: c_int, w: c_int, h: c_int);
-    fn vpx_convolve8_avg_horiz_c(s: *const u8, ss: isize, d: *mut u8, ds: isize, f: *const [i16; 8], x0: c_int, xs: c_int, y0: c_int, ys: c_int, w: c_int, h: c_int);
-    fn vpx_convolve8_avg_vert_c(s: *const u8, ss: isize, d: *mut u8, ds: isize, f: *const [i16; 8], x0: c_int, xs: c_int, y0: c_int, ys: c_int, w: c_int, h: c_int);
-    fn vpx_convolve8_c(s: *const u8, ss: isize, d: *mut u8, ds: isize, f: *const [i16; 8], x0: c_int, xs: c_int, y0: c_int, ys: c_int, w: c_int, h: c_int);
-    fn vpx_convolve8_avg_c(s: *const u8, ss: isize, d: *mut u8, ds: isize, f: *const [i16; 8], x0: c_int, xs: c_int, y0: c_int, ys: c_int, w: c_int, h: c_int);
 }
+
+macro_rules! convolves {
+    ($($name:ident),* $(,)?) => {
+        extern "C" {
+            $(
+                #[link_name = concat!("vnvpx_", stringify!($name))]
+                fn $name(s: *const u8, ss: isize, d: *mut u8, ds: isize, f: *const [i16; 8], x0: c_int, xs: c_int, y0: c_int, ys: c_int, w: c_int, h: c_int);
+            )*
+        }
+    };
+}
+convolves!(
+    vpx_convolve8_horiz_c, vpx_convolve8_vert_c, vpx_convolve8_avg_horiz_c, vpx_convolve8_avg_vert_c,
+    vpx_convolve8_c, vpx_convolve8_avg_c,
+);
 
 macro_rules! helpers {
     ($($name:ident),* $(,)?) => {
-        extern "C" { $(fn $name(s: *const u8, ss: isize, d: *mut u8, ds: isize, h: u32, f: *const i16);)* }
+        extern "C" {
+            $(
+                #[link_name = concat!("vnvpx_", stringify!($name))]
+                fn $name(s: *const u8, ss: isize, d: *mut u8, ds: isize, h: u32, f: *const i16);
+            )*
+        }
     };
 }
 helpers!(
@@ -41,11 +56,6 @@ helpers!(
     vpx_filter_block1d8_v8_avg_sse2, vpx_filter_block1d4_h8_avg_sse2, vpx_filter_block1d4_v8_avg_sse2,
 );
 
-macro_rules! convolves {
-    ($($name:ident),* $(,)?) => {
-        extern "C" { $(fn $name(s: *const u8, ss: isize, d: *mut u8, ds: isize, f: *const [i16; 8], x0: c_int, xs: c_int, y0: c_int, ys: c_int, w: c_int, h: c_int);)* }
-    };
-}
 convolves!(
     vpx_convolve8_horiz_sse2, vpx_convolve8_vert_sse2, vpx_convolve8_avg_horiz_sse2, vpx_convolve8_avg_vert_sse2,
     vpx_convolve8_sse2, vpx_convolve8_avg_sse2,
@@ -251,12 +261,18 @@ fn every_simd_convolution_matches_libvpx_c() {
 macro_rules! dispatch_table {
     (variants: $($variant:ident),* ; table: $($slot:ident: $c:ident, $sse2:ident, $ssse3:ident, $avx2:ident;)*) => {
         extern "C" {
-            $(static mut $slot: *const c_void;)*
+            $(
+                #[link_name = concat!("vnvpx_", stringify!($slot))]
+                static mut $slot: *const c_void;
+            )*
         }
         #[allow(clashing_extern_declarations)] // only their addresses are taken
         mod variants {
             extern "C" {
-                $(pub fn $variant();)*
+                $(
+                    #[link_name = concat!("vnvpx_", stringify!($variant))]
+                    pub fn $variant();
+                )*
             }
         }
         /// Points every dispatched function at its `level` variant.

@@ -303,6 +303,7 @@ async function main() {
     }
     const [files, bytes] = sizeOf(dest);
     console.log(`libvpx/: ${all.length} sources, ${headers.length} headers, ${LICENCE_FILES.length} licence files (${files} files, ${(bytes / 1024).toFixed(0)} KiB)`);
+    console.log("next: bun crates/vn-vpx-sys/tools/prefix-symbols.ts (the symbol prefix, VENDOR.md)");
   } finally {
     if (!argv.includes("--keep-temp")) rmSync(work, { recursive: true, force: true });
     else console.log(`temp kept: ${work}`);

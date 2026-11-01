@@ -10,8 +10,9 @@
 
 `libvpx/` is **pristine**: every file in it is byte-for-byte upstream, and
 nothing in it is edited. What this crate changes about libvpx it changes from
-outside: the generated headers under `config/`, three C files of its own
-under `csrc/`, and which files `build.rs` compiles. `tools/vendor-libvpx.ts`
+outside: the generated headers under `config/` (with the symbol prefix in
+`config/prefix/`), three C files of its own under `csrc/`, and which files
+`build.rs` compiles. `tools/vendor-libvpx.ts`
 rewrites `libvpx/` and `config/` from the release; a clean `git status` after
 running it is the audit.
 
@@ -120,6 +121,44 @@ it. The account is chosen by the calling thread (`src/lib.rs` brackets each
 libvpx call); with `--disable-multithread` every allocation happens on that
 thread, inside that call.
 
+## Symbol prefix: `config/prefix/`
+
+vn-app links libwebrtc too (`webrtc-sys`, for calls), and its prebuilt
+`webrtc.lib` bundles Chromium's libvpx (v1.15.2-142-g9a7674e1a in
+`win-x64-release-webrtc-51ef663`): VP8 and VP9, encoder and decoder. Both
+copies define `vpx_malloc`, `vpx_codec_decode`, the `vp9_*` decoder and the
+rest, so the link either fails (LNK2005) or, depending on which objects the
+linker pulls first, succeeds with one copy's functions serving both. Worse,
+libvpx's rtcd function pointers (`vpx_convolve8` and the other dispatched
+DSP functions) are common symbols, which the linker merges with no error:
+two libvpx would share them, each one's set-up writing the pointers the
+other calls through.
+
+So every C file this crate compiles gets `config/prefix/<configuration>.h`
+force-included (`/FI`, or `-include`): a `#define NAME vnvpx_NAME` for each
+symbol this libvpx defines that another copy would define too, 470 for
+`x86_64-msvc` and 328 for `generic`. `src/lib.rs` and the tests link to the
+`vnvpx_*` names (`#[link_name]`). Left alone: the crate's own `vn_vpx_*`,
+and the COMDATs the linker merges by design ("pick any": inline CRT
+functions, SIMD constants, string literals).
+
+Reusing libwebrtc's libvpx instead was weighed and refused: an older libvpx
+built with threads and assembly, no exact memory account or cap
+(`vn_vpx_mem.c` is ours), and `vn-sticker` and its tests would link the
+86 MB call stack to decode a sticker.
+
+`tools/prefix-symbols.ts` regenerates both headers from `dumpbin /symbols`
+of an unprefixed build, then builds with them and checks that every such
+symbol is `vnvpx_*`; `--check` only checks. Run it after any change to
+`sources.txt`, `csrc/` or the generated headers (a version bump):
+
+```
+bun crates/vn-vpx-sys/tools/prefix-symbols.ts
+```
+
+A symbol it misses links unprefixed and would collide again; the check
+names it.
+
 ## Verified
 
 `cargo test -p vn-vpx-sys` (and `--features shim-stats` to see the counts):
@@ -173,7 +212,9 @@ thread, inside that call.
    names: add it to `config/asm-only.txt` and re-run. On an unresolved
    `vpx_filter_block1d*`: add it to `csrc/vn_vpx_asm_shim.c` and to the
    helper test. On a missing source: add it to `sources.txt`.
-4. `cargo test -p vn-vpx-sys --features shim-stats`, and the same with
+4. `bun crates/vn-vpx-sys/tools/prefix-symbols.ts` (Windows, MSVC): the
+   symbol prefix headers for the new symbol set.
+5. `cargo test -p vn-vpx-sys --features shim-stats`, and the same with
    `VN_VPX_CONFIG=generic` (in its own `CARGO_TARGET_DIR`): both must print
    the same clip hash, and `it_is_the_vendored_release` checks the version.
-5. Update the table at the top.
+6. Update the table at the top.
