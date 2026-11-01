@@ -12,10 +12,15 @@
 // - `changes`, one `<state>` per `change` on the microphone's PermissionStatus;
 // - `open(constraints?)`, a getUserMedia whose result lands in `results` as
 //   `ok:<readyState>:<label>` or `err:<name>: <message>`, the track kept in
-//   `tracks` until `stopAll()`, and its processing in `settings`.
+//   `tracks` until `stopAll()`, and its processing in `settings`;
+// - `devices(kind, request?)`, livekit-client's `Room.getLocalDevices`, whose
+//   result lands in `listed` as `ok:<deviceId>/<label>,...` or
+//   `err:<name>: <message>`.
+import { Room } from "livekit-client";
 import { appPermissions, createApp, h } from "vue-native";
 
 const results: string[] = [];
+const listed: string[] = [];
 /** Per successful open: `getSettings()`'s `echoCancellation|noiseSuppression|autoGainControl|channelCount`. */
 const settings: string[] = [];
 const changes: string[] = [];
@@ -42,9 +47,18 @@ function stopAll() {
   for (const t of tracks.splice(0)) t.stop();
 }
 
+function devices(kind: string, request = true) {
+  Room.getLocalDevices(kind as MediaDeviceKind, request).then(
+    (ds) => listed.push("ok:" + ds.map((d) => `${d.deviceId}/${d.label}`).join(",")),
+    (e: DOMException) => listed.push(`err:${e.name}: ${e.message}`),
+  );
+}
+
 (globalThis as unknown as { __VN_TEST_MIC__: unknown }).__VN_TEST_MIC__ = {
   appPermissions,
   changes,
+  devices,
+  listed,
   results,
   settings,
   tracks,

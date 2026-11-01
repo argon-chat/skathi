@@ -43,7 +43,8 @@ async function host(capture: "fake" | "deny", label: string): Promise<VnApp> {
     app: ENTRY,
     window: [420, 200],
     label: `mic-${label}`,
-    env: { VN_MEDIA_CAPTURE: capture, VN_APP_NAME: APP_NAME },
+    // vn_voice at info: the device notifier says it registered.
+    env: { VN_MEDIA_CAPTURE: capture, VN_APP_NAME: APP_NAME, VN_LOG: "vn_voice=info" },
   });
   apps.push(app);
   return app;
@@ -89,6 +90,19 @@ async function inputs(app: VnApp): Promise<string> {
     await Bun.sleep(20);
   }
   throw new Error("enumerateDevices never settled");
+}
+
+/** livekit-client's `Room.getLocalDevices(kind, request)`, settled. */
+async function listed(app: VnApp, kind: string, request = true): Promise<string> {
+  const before = Number(await app.eval("__VN_TEST_MIC__.listed.length"));
+  await app.eval(`__VN_TEST_MIC__.devices(${JSON.stringify(kind)}, ${request}), 0`);
+  for (let i = 0; i < 400; i++) {
+    if (Number(await app.eval("__VN_TEST_MIC__.listed.length")) > before) {
+      return String(await app.eval(`__VN_TEST_MIC__.listed[${before}]`));
+    }
+    await Bun.sleep(25);
+  }
+  throw new Error("getLocalDevices never settled");
 }
 
 let app: VnApp;
@@ -137,6 +151,26 @@ test(
     expect(await app.questions()).toEqual([]);
     expect(await inputs(app)).toBe("default/Default - Fake Microphone,fake/Fake Microphone");
     await app.eval("__VN_TEST_MIC__.stopAll(), 0");
+  },
+  T,
+);
+
+test(
+  "Room.getLocalDevices lists the inputs, and the OS device notifications are on",
+  async () => {
+    // Granted, so livekit-client's DeviceManager has names and asks nothing.
+    expect(await listed(app, "audioinput")).toBe("ok:default/Default - Fake Microphone,fake/Fake Microphone");
+    expect(await app.questions()).toEqual([]);
+    expect(await listed(app, "videoinput")).toBe("ok:");
+    // devicechange comes from IMMNotificationClient, not a poll
+    // (crates/vn-voice/src/devices.rs). A listener arms it.
+    await app.eval("navigator.mediaDevices.addEventListener('devicechange', () => {}), 0");
+    let log = "";
+    for (let i = 0; i < 100 && !log.includes("audio device notifications"); i++) {
+      log = readFileSync(app.hostLog, "utf8");
+      await Bun.sleep(50);
+    }
+    expect(log).toContain("vn-voice: audio device notifications on");
   },
   T,
 );
@@ -213,6 +247,13 @@ test(
     app = await host("deny", "deny");
     expect(await state(app)).toBe("denied");
     expect(await open(app)).toBe("err:NotAllowedError: Permission denied: microphone capture is switched off for this process.");
+    // livekit-client's getLocalDevices asks getUserMedia for the names, and
+    // the refusal is its result. Without the request, the nameless entry.
+    expect(await listed(app, "audioinput")).toBe(
+      "err:NotAllowedError: Permission denied: microphone capture is switched off for this process.",
+    );
+    expect(await listed(app, "audioinput", false)).toBe("ok:/");
+    expect(await listed(app, "audiooutput")).toMatch(/^ok:default\/[^,]+/);
     await app.eval("__VN_TEST_MIC__.appPermissions.request('microphone'), 0");
     await Bun.sleep(300);
     expect(await app.questions()).toEqual([]);
