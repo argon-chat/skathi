@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/broadcast-rope.spec.ts: Argon's broadcast connector, an inline <svg> with no viewBox laid over a channel list and drawn from measured row positions. See ../README.md.",
+
+  "name": "vn-test-broadcast-rope",
+
+  "window": {
+    "title": "vue-native — broadcast-rope (fixture)",
+    "width": 360,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

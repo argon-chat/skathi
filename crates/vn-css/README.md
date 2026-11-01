@@ -398,6 +398,16 @@ project's browser-compat-first policy.
       cascaded radius, not a transition's current frame.
     The same radii clip `overflow` (docs/ARCHITECTURE.md, fork items 33 and
     34).
+14. **An inline `<svg>` reads its presentation properties from its own rules
+    only** (m26). `fill` and `stroke` fold to what gpui's monochrome sprite
+    can draw (`SvgPaint`). `stroke-width`, `stroke-opacity`, `fill-opacity`,
+    `fill-rule`, `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit`,
+    `stroke-dasharray`, `stroke-dashoffset` and `shape-rendering` travel as
+    CSS text (`Extras::svg_presentation`, merged per name across rules).
+    vn-tree writes them on the document's root in place of the markup's
+    attribute of that name, and resvg parses them there. What differs: a rule
+    that matches a shape inside the `<svg>` (`.icon path { stroke-width: 3 }`)
+    is not read, and a transition does not animate them.
 
 ---
 

@@ -50,7 +50,10 @@
 //!   The viewport of a colour raster is the element's box: the root's
 //!   `width`/`height` are replaced by the laid-out CSS size, and `viewBox` /
 //!   `preserveAspectRatio` map the content into it, as a browser does with a
-//!   CSS-sized `<svg>`.
+//!   CSS-sized `<svg>`. A root with NO `viewBox` always takes this path: its
+//!   user units are the CSS pixels of its box, which only the raster's sizing
+//!   gives (the mask path scales the document from usvg's own size, 100x100
+//!   when the root has no width/height either).
 //!
 //! `fill` / `stroke` from the cascade (Tailwind's `fill-current`, `fill-none`)
 //! reach the document as "painted or not": `currentColor` or `none`. That is
@@ -60,11 +63,20 @@
 //! `svg-css-paint-colour` says so. A colour written as an attribute or an
 //! inline style on the shapes is drawn as written.
 //!
+//! The other presentation properties the `<svg>` element's own rules set
+//! (`stroke-width`, `stroke-opacity`, `fill-opacity`, `fill-rule`, the dash,
+//! cap and join properties, `shape-rendering`) reach the document as CSS text
+//! (`vn_css::Extras::svg_presentation`). They are written on the root in place
+//! of the markup's attribute of the same name, and the shapes inherit them, as
+//! they inherit the computed value in a browser. A rule that matches a shape
+//! INSIDE the svg is not read.
+//!
 //! ## Re-serialization
 //!
 //! Keyed on a hash of everything that can change the bytes: every tag, every
 //! attribute name and value, every inline-style declaration, every text node in
-//! the subtree, plus the two computed paints. The serialization behind it runs
+//! the subtree, plus the two computed paints and the carried presentation
+//! properties. The serialization behind it runs
 //! only when the hash moves. The colour is deliberately not in the key (see
 //! above).
 
@@ -127,6 +139,11 @@ pub(crate) fn gc(alive: impl Fn(u32) -> bool) {
     }
 }
 
+/// The SVG presentation properties the cascade gave the `<svg>` root other
+/// than its paints (`vn_css::Extras::svg_presentation`): written on the root
+/// in place of the markup's attribute of the same name.
+pub(crate) type Presentation<'a> = &'a [(&'static str, Rc<str>)];
+
 /// The SVG document for this `<svg>` node, re-serialized only if the subtree or
 /// the computed paints moved since the last call.
 pub(crate) fn document(
@@ -134,8 +151,9 @@ pub(crate) fn document(
     id: u32,
     fill: Option<vn_css::SvgPaint>,
     stroke: Option<vn_css::SvgPaint>,
+    presentation: Presentation,
 ) -> Rc<SvgDoc> {
-    let key = hash_subtree(t, id, fill, stroke);
+    let key = hash_subtree(t, id, fill, stroke, presentation);
     CACHE.with(|m| {
         let mut m = m.borrow_mut();
         if let Some((cached, doc)) = m.get(&id) {
@@ -143,7 +161,7 @@ pub(crate) fn document(
                 return doc.clone();
             }
         }
-        let doc = Rc::new(build(t, id, fill, stroke));
+        let doc = Rc::new(build(t, id, fill, stroke, presentation));
         m.insert(id, (key, doc.clone()));
         doc
     })
@@ -154,10 +172,11 @@ fn build(
     id: u32,
     fill: Option<vn_css::SvgPaint>,
     stroke: Option<vn_css::SvgPaint>,
+    presentation: Presentation,
 ) -> SvgDoc {
     let mut out = String::with_capacity(256);
     let mut class = Class::default();
-    write_element(t, id, true, fill, stroke, &Inherited::root(), &mut class, &mut out);
+    write_element(t, id, true, fill, stroke, presentation, &Inherited::root(), &mut class, &mut out);
     let css_paint_colour = fill == Some(vn_css::SvgPaint::Color) || stroke == Some(vn_css::SvgPaint::Color);
     let uses_current = out.to_ascii_lowercase().contains("currentcolor");
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -274,6 +293,9 @@ impl Class {
     }
 }
 
+/// Why a root with no `viewBox` takes the colour path (see `classify`).
+const NO_VIEWBOX: &str = "no viewBox (its user units are the CSS pixels of its box)";
+
 /// The elements whose geometry is painted with `fill` and `stroke`.
 fn is_shape(tag: &str) -> bool {
     matches!(
@@ -360,6 +382,15 @@ fn classify(
     };
     if let Some(why) = colour_element(tag) {
         class.colour(why);
+    }
+    // Without a `viewBox` the document's user units ARE the CSS pixels of the
+    // element's box (no scaling at all), whatever `width`/`height` say. The
+    // mask path scales the document to the box from its own size, and usvg
+    // sizes a root with neither at 100x100, so Argon's broadcast connector
+    // (a path in px down a list hundreds of pixels tall) was scaled and cut at
+    // y = 100 into nothing. The colour raster is drawn in the box's own size.
+    if root && !n.props.iter().any(|(k, _, _)| t.name(*k) == "viewBox") {
+        class.colour(NO_VIEWBOX);
     }
     if here.painted && is_shape(tag) {
         // A line has no interior, so its fill paints nothing.
@@ -668,10 +699,12 @@ fn hash_subtree(
     id: u32,
     fill: Option<vn_css::SvgPaint>,
     stroke: Option<vn_css::SvgPaint>,
+    presentation: Presentation,
 ) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     fill.map(|p| p as u8).hash(&mut h);
     stroke.map(|p| p as u8).hash(&mut h);
+    presentation.hash(&mut h);
     hash_node(t, id, &mut h);
     h.finish()
 }
@@ -717,6 +750,7 @@ fn write_element(
     root: bool,
     fill: Option<vn_css::SvgPaint>,
     stroke: Option<vn_css::SvgPaint>,
+    presentation: Presentation,
     parent: &Inherited,
     class: &mut Class,
     out: &mut String,
@@ -754,6 +788,9 @@ fn write_element(
         if root && name.eq_ignore_ascii_case("stroke") && stroke.is_some() {
             continue;
         }
+        if root && presentation.iter().any(|(p, _)| name.eq_ignore_ascii_case(p)) {
+            continue;
+        }
         if name == "xmlns" {
             wrote_ns = true;
         }
@@ -765,6 +802,9 @@ fn write_element(
         }
         if let Some(p) = stroke {
             write_attr("stroke", p.as_attr(), out);
+        }
+        for (name, value) in presentation {
+            write_attr(name, value, out);
         }
         if !wrote_ns {
             write_attr("xmlns", SVG_NS, out);
@@ -791,7 +831,7 @@ fn write_element(
         escape_text(&n.text, out);
     } else {
         for &c in &n.children {
-            write_element(t, c, false, None, None, &here, class, out);
+            write_element(t, c, false, None, None, &[], &here, class, out);
         }
     }
     out.push_str("</");
@@ -859,7 +899,7 @@ mod tests {
         fill: Option<vn_css::SvgPaint>,
         stroke: Option<vn_css::SvgPaint>,
     ) -> String {
-        String::from_utf8(build(t, id, fill, stroke).bytes).unwrap()
+        String::from_utf8(build(t, id, fill, stroke, &[]).bytes).unwrap()
     }
 
     /// One element with attributes, inserted under `parent` (0 = none).
@@ -879,7 +919,7 @@ mod tests {
     fn doc_of(f: impl FnOnce(&mut Tree) -> u32) -> SvgDoc {
         with_tree(|t| {
             let id = f(t);
-            build(t, id, None, None)
+            build(t, id, None, None, &[])
         })
     }
 
@@ -967,6 +1007,40 @@ mod tests {
     }
 
     #[test]
+    fn a_root_with_no_viewbox_is_drawn_in_its_box_s_own_pixels() {
+        // Argon's broadcast connector: CSS-sized, a currentColor stroke, no
+        // viewBox, path coordinates in px of the list it is laid over.
+        let rope = with_tree(|t| {
+            let s = el(t, "svg", &[("class", "broadcast-connectors")], 0);
+            el(t, "path", &[("d", "M3.5 106.5 V169.5 M3.5 169.5 h4")], s);
+            build(t, s, Some(vn_css::SvgPaint::None), Some(vn_css::SvgPaint::Current), &[])
+        });
+        assert_eq!(rope.paint, Paint::Colour(NO_VIEWBOX));
+        // …and the raster writes the box's size as its width and height, so
+        // usvg's user unit is one CSS pixel.
+        let src = String::from_utf8(raster_source(&rope, 240.0, 372.0, Some([0, 0, 0, 255]))).unwrap();
+        assert!(src.contains(r#"width="240" height="372""#), "{src}");
+        assert!(!src.contains("viewBox"), "{src}");
+        // Its CSS `stroke-opacity` / `stroke-width` reach the root, where the
+        // cascade's value replaces the markup's attribute of the same name.
+        let faint: Vec<(&'static str, Rc<str>)> = vec![("stroke-opacity", "0.28".into()), ("stroke-width", "1".into())];
+        let doc = with_tree(|t| {
+            let s = el(t, "svg", &[("stroke-width", "2")], 0);
+            el(t, "path", &[("d", "M3.5 106.5 V169.5")], s);
+            String::from_utf8(build(t, s, None, Some(vn_css::SvgPaint::Current), &faint).bytes).unwrap()
+        });
+        assert!(doc.contains(r#"stroke-opacity="0.28""#), "{doc}");
+        assert!(doc.contains(r#"stroke-width="1""#) && !doc.contains(r#"stroke-width="2""#), "{doc}");
+        // The same icon WITH a viewBox stays on the mask.
+        let icon = doc_of(|t| {
+            let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24"), ("fill", "none"), ("stroke", "currentColor")], 0);
+            el(t, "path", &[("d", "M3 3h4")], s);
+            s
+        });
+        assert_eq!(icon.paint, Paint::Mono);
+    }
+
+    #[test]
     fn an_inline_style_beats_the_presentation_attribute_in_the_classifier() {
         let doc = doc_of(|t| {
             let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24")], 0);
@@ -983,7 +1057,7 @@ mod tests {
         let doc = with_tree(|t| {
             let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24"), ("fill", "#f00")], 0);
             el(t, "path", &[("d", "M0 0h4v4z")], s);
-            build(t, s, Some(vn_css::SvgPaint::Color), None)
+            build(t, s, Some(vn_css::SvgPaint::Color), None, &[])
         });
         // vn-css carries only "painted", so it is written as currentColor —
         // mono — and the renderer says that the colour itself was lost.
@@ -1175,18 +1249,18 @@ mod tests {
     #[test]
     fn re_serializes_only_when_the_subtree_moves() {
         let (svg, _) = lucide_check();
-        let a = with_tree(|t| document(t, svg, None, None));
-        let b = with_tree(|t| document(t, svg, None, None));
+        let a = with_tree(|t| document(t, svg, None, None, &[]));
+        let b = with_tree(|t| document(t, svg, None, None, &[]));
         assert!(Rc::ptr_eq(&a, &b), "an unchanged subtree must not re-serialize");
         with_tree(|t| {
             let d = t.intern("d");
             let child = t.node(svg).unwrap().children[0];
             t.set_prop(child, d, Some("M0 0 1 1".to_string()));
         });
-        let c = with_tree(|t| document(t, svg, None, None));
+        let c = with_tree(|t| document(t, svg, None, None, &[]));
         assert!(!Rc::ptr_eq(&a, &c), "a changed `d` must re-serialize");
         // …and so must a changed computed paint, which is not in the subtree.
-        let d = with_tree(|t| document(t, svg, Some(vn_css::SvgPaint::None), None));
+        let d = with_tree(|t| document(t, svg, Some(vn_css::SvgPaint::None), None, &[]));
         assert!(!Rc::ptr_eq(&c, &d));
     }
 

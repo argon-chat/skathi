@@ -277,6 +277,14 @@ pub struct Extras {
     pub fill: Option<SvgPaint>,
     /// SVG `stroke` — see [`SvgPaint`].
     pub stroke: Option<SvgPaint>,
+    /// The other SVG presentation properties a rule sets (`stroke-width`,
+    /// `stroke-opacity`, `fill-opacity`, the dash and join properties,
+    /// `fill-rule`, `shape-rendering`), by name, as CSS text. Only an `<svg>`
+    /// root reads them: the serializer writes them on the document's root, in
+    /// place of the markup's own attribute of that name, where the shapes
+    /// inherit them as they inherit the computed value in a browser. Merged
+    /// per name across rules ([`Extras::refine`]).
+    pub svg_presentation: Option<Rc<Vec<(&'static str, Rc<str>)>>>,
     /// `text-transform`. gpui has no such text-style field: the shaper is
     /// handed a string, so the case change is applied to that string by the
     /// renderer. INHERITED, like the CSS property — the renderer threads the
@@ -678,6 +686,18 @@ impl Extras {
         }
         if other.background_clip_text.is_some() {
             self.background_clip_text = other.background_clip_text;
+        }
+        if let Some(theirs) = &other.svg_presentation {
+            self.svg_presentation = Some(match self.svg_presentation.take() {
+                None => theirs.clone(),
+                Some(mine) => {
+                    let mut merged = (*mine).clone();
+                    for (name, value) in theirs.iter() {
+                        set_presentation(&mut merged, name, value.clone());
+                    }
+                    Rc::new(merged)
+                }
+            });
         }
         if other.background_key_color.is_some() {
             self.background_key_color = other.background_key_color;
@@ -4053,6 +4073,18 @@ fn apply_property(
         // for every node, because that is what a browser computes.
         Fill(p) => x.fill = Some(svg_paint(p)),
         Stroke(p) => x.stroke = Some(svg_paint(p)),
+        // The rest of SVG's presentation properties travel as text to the
+        // `<svg>` serializer (`Extras::svg_presentation`): resvg parses them
+        // itself, so there is nothing to model here.
+        FillOpacity(_) | FillRule(_) | StrokeOpacity(_) | StrokeWidth(_) | StrokeLinecap(_)
+        | StrokeLinejoin(_) | StrokeMiterlimit(_) | StrokeDasharray(_) | StrokeDashoffset(_)
+        | ShapeRendering(_) => {
+            if let (Some(name), Some(value)) = (presentation_name(p), value_text(p)) {
+                let value = presentation_value(name, value);
+                let list = x.svg_presentation.get_or_insert_with(Default::default);
+                set_presentation(Rc::make_mut(list), name, value.into());
+            }
+        }
         // taffy is border-box and only border-box, so `border-box` is not a
         // divergence — it is the model. `content-box` is one, and says so.
         BoxSizing(v, _) => {
@@ -5471,6 +5503,51 @@ fn apply_property(
                 format!("property not mapped (v1): {}", prop_name(other)),
             );
         }
+    }
+}
+
+/// The attribute name of an SVG presentation property `Extras::
+/// svg_presentation` carries (the same as the CSS property's).
+fn presentation_name(p: &Property) -> Option<&'static str> {
+    use Property::*;
+    Some(match p {
+        FillOpacity(_) => "fill-opacity",
+        FillRule(_) => "fill-rule",
+        StrokeOpacity(_) => "stroke-opacity",
+        StrokeWidth(_) => "stroke-width",
+        StrokeLinecap(_) => "stroke-linecap",
+        StrokeLinejoin(_) => "stroke-linejoin",
+        StrokeMiterlimit(_) => "stroke-miterlimit",
+        StrokeDasharray(_) => "stroke-dasharray",
+        StrokeDashoffset(_) => "stroke-dashoffset",
+        ShapeRendering(_) => "shape-rendering",
+        _ => return None,
+    })
+}
+
+/// The CSS text of a presentation property as an SVG ATTRIBUTE spells it.
+///
+/// CSS keywords are case-insensitive and lightningcss prints them lowercase;
+/// an attribute's are not, and resvg ignores `shape-rendering="crispedges"`
+/// (the line is anti-aliased again). Every other carried keyword is lowercase
+/// in SVG too.
+fn presentation_value(name: &str, value: String) -> String {
+    if name != "shape-rendering" {
+        return value;
+    }
+    match value.to_ascii_lowercase().as_str() {
+        "optimizespeed" => "optimizeSpeed".into(),
+        "crispedges" => "crispEdges".into(),
+        "geometricprecision" => "geometricPrecision".into(),
+        _ => value,
+    }
+}
+
+/// Later-wins, per name.
+fn set_presentation(list: &mut Vec<(&'static str, Rc<str>)>, name: &'static str, value: Rc<str>) {
+    match list.iter_mut().find(|(n, _)| *n == name) {
+        Some(slot) => slot.1 = value,
+        None => list.push((name, value)),
     }
 }
 
@@ -7587,6 +7664,31 @@ mod tests {
         // Nothing declared stays None, which is what lets a presentation
         // attribute in the markup survive.
         assert_eq!(extras("color: red").0.fill, None);
+    }
+
+    #[test]
+    fn svg_presentation_properties_travel_as_text_and_merge_per_name() {
+        // Argon's broadcast connector.
+        let (x, d) = extras(
+            "fill: none; stroke: currentColor; stroke-opacity: 0.28; stroke-width: 1; \
+             shape-rendering: crispEdges",
+        );
+        assert!(d.is_empty(), "{d:?}");
+        let list = x.svg_presentation.clone().expect("carried");
+        let get = |l: &[(&'static str, Rc<str>)], n: &str| l.iter().find(|(k, _)| *k == n).map(|(_, v)| v.to_string());
+        assert_eq!(get(&list, "stroke-opacity").as_deref(), Some(".28")); // lightningcss's minified text, a valid SVG <number>
+        assert_eq!(get(&list, "stroke-width").as_deref(), Some("1px")); // a <length>, which an SVG attribute takes too
+        assert_eq!(get(&list, "shape-rendering").as_deref(), Some("crispEdges"));
+        // vue-flow's edges: the dash pair, which used to be "not mapped".
+        let (dash, d) = extras("stroke-dasharray: 5 5; stroke-dashoffset: 10px");
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(dash.svg_presentation.as_ref().map(|l| l.len()), Some(2));
+        // A later rule replaces one name and keeps the rest.
+        let mut merged = x.clone();
+        merged.refine(&extras("stroke-width: 2").0);
+        let list = merged.svg_presentation.expect("merged");
+        assert_eq!(get(&list, "stroke-width").as_deref(), Some("2px"));
+        assert_eq!(get(&list, "stroke-opacity").as_deref(), Some(".28"));
     }
 
     // ---- the end-to-end Tailwind card ------------------------------------

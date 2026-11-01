@@ -5295,7 +5295,13 @@ fn build_svg<V: 'static>(
     if extras.drop_shadow.is_some() {
         advise_drop_shadow_shape(&node_prefix(t, id));
     }
-    let doc = crate::svg::document(t, id, extras.fill, extras.stroke);
+    let doc = crate::svg::document(
+        t,
+        id,
+        extras.fill,
+        extras.stroke,
+        extras.svg_presentation.as_deref().map_or(&[][..], |v| v.as_slice()),
+    );
     if doc.css_paint_colour {
         warn_compat(
             "svg-css-paint-colour",
