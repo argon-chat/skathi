@@ -1141,6 +1141,58 @@ impl Engine {
         }
     }
 
+    /// Takes the engine apart for `tests/sheet_memory.rs`, which drops the
+    /// parts one at a time under a counting allocator to see what each holds
+    /// (research/reports/m26/perf-mem-3.md §4). Each part comes with its INLINE
+    /// bytes: what its values take in the vector they were moved into, which is
+    /// the same as their share of the rule table. What a part frees beyond that
+    /// is the heap behind it.
+    #[doc(hidden)]
+    pub fn into_parts_for_measuring(self) -> Vec<(&'static str, usize, Box<dyn std::any::Any>)> {
+        fn part<T: 'static>(name: &'static str, v: Vec<T>) -> (&'static str, usize, Box<dyn std::any::Any>) {
+            (name, v.len() * std::mem::size_of::<T>(), Box::new(v))
+        }
+        let table = self.rules.capacity() * std::mem::size_of::<RuleEntry>();
+        let n = self.rules.len();
+        let mut selectors = Vec::with_capacity(n);
+        let mut refinements = Vec::with_capacity(n);
+        let mut transitions = Vec::with_capacity(n);
+        let mut animations = Vec::with_capacity(n);
+        let mut extras = Vec::with_capacity(n);
+        let mut custom = Vec::with_capacity(n);
+        let mut dynamic = Vec::with_capacity(n);
+        let mut diagnostics = Vec::with_capacity(n);
+        let mut decls = Vec::with_capacity(n);
+        for r in self.rules {
+            selectors.push(r.selector);
+            refinements.push((r.normal, r.important));
+            transitions.push((r.normal_transitions, r.important_transitions));
+            animations.push((r.normal_animations, r.important_animations, r.normal_animation_patch, r.important_animation_patch));
+            extras.push((r.normal_extras, r.important_extras));
+            custom.push((r.normal_custom, r.important_custom));
+            dynamic.push((r.normal_dynamic, r.important_dynamic));
+            diagnostics.push(r.diagnostics);
+            decls.push(r.decls);
+        }
+        vec![
+            ("rule table (every field inline, before the parts below moved out)", table, Box::new(())),
+            part("selectors", selectors),
+            part("style refinements (normal, !important)", refinements),
+            part("extras (normal, !important)", extras),
+            part("transitions", transitions),
+            part("animations", animations),
+            part("custom properties", custom),
+            part("var()-composed declarations", dynamic),
+            part("per-rule advisories", diagnostics),
+            part("author text (devtools capture)", decls),
+            ("rule index", 0, Box::new(self.index)),
+            ("@media conditions and their text", 0, Box::new((self.conditions, self.condition_text))),
+            ("@keyframes", 0, Box::new(self.keyframes)),
+            ("viewport blocks", 0, Box::new(self.viewport_blocks)),
+            ("sheet advisories", 0, Box::new(self.diagnostics)),
+        ]
+    }
+
     /// Resolves the sheet's viewport units (`vw`, `vh`, `vmin`, …) again, in
     /// place, against the basis [`set_viewport_basis`] holds now. `false` = it
     /// cannot (a `@keyframes` block uses one, say), and the sheet has to be

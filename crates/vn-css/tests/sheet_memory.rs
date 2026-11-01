@@ -11,6 +11,8 @@
 //! allocator.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 struct Counting;
@@ -73,4 +75,62 @@ fn what_a_compiled_sheet_keeps() {
     println!("  the engine: {}", mb(with_engine - parse_only));
     println!("recompile of the same text: {second_ms:.0} ms, engine {}", mb(engine));
     println!("after both engines are dropped: {}", mb(after));
+}
+
+/// Where the engine's bytes are: it is taken apart
+/// (`Engine::into_parts_for_measuring`) and each part is dropped on its own.
+///
+/// ```text
+/// VN_SHEET=path/to/app.css cargo test -p vn-css --release --test sheet_memory -- --ignored --nocapture where_the_engine
+/// ```
+#[test]
+#[ignore = "a measuring tool: VN_SHEET=<css file>"]
+fn where_the_engine_goes() {
+    let Ok(path) = std::env::var("VN_SHEET") else {
+        eprintln!("set VN_SHEET to a stylesheet file");
+        return;
+    };
+    let css = std::fs::read_to_string(&path).expect("VN_SHEET is readable");
+    // Warm the per-thread memos (UA sheet, reparsed selectors) so they are not
+    // counted as the engine's.
+    drop(vn_css::Engine::compile_sheets(&[css.as_str()]));
+    let base = LIVE.load(Ordering::Relaxed);
+    let engine = vn_css::Engine::compile_sheets(&[css.as_str()]);
+    let total = LIVE.load(Ordering::Relaxed) - base;
+    let parts = engine.into_parts_for_measuring();
+    println!("engine: {} for {} bytes of source", mb(total), css.len());
+    println!("{:<70} {:>9} {:>9}", "part", "inline", "heap");
+    let mut accounted = 0;
+    for (name, inline, value) in parts {
+        // How many of the refinements are the same value: what interning
+        // them would leave.
+        type Pair = (Option<Rc<gpui::StyleRefinement>>, Option<Rc<gpui::StyleRefinement>>);
+        if let Some(pairs) = value.downcast_ref::<Vec<Pair>>() {
+            let all: Vec<&Rc<gpui::StyleRefinement>> =
+                pairs.iter().flat_map(|(a, b)| [a.as_ref(), b.as_ref()]).flatten().collect();
+            let allocations: HashSet<*const gpui::StyleRefinement> = all.iter().map(|r| Rc::as_ptr(r)).collect();
+            let values: HashSet<String> = all.iter().map(|r| format!("{:?}", ***r)).collect();
+            println!(
+                "  ({} refinements of {} bytes each: {} allocations, {} distinct values)",
+                all.len(),
+                std::mem::size_of::<gpui::StyleRefinement>(),
+                allocations.len(),
+                values.len()
+            );
+        }
+        let before = LIVE.load(Ordering::Relaxed);
+        let unit = value.downcast_ref::<()>().is_some();
+        drop(value);
+        let freed = before - LIVE.load(Ordering::Relaxed);
+        let inline = inline as i64;
+        if unit {
+            // The rule table itself: freed while it was taken apart.
+            println!("{name:<70} {:>9} {:>9}", mb(inline), "");
+            accounted += inline;
+        } else {
+            println!("{name:<70} {:>9} {:>9}", if inline > 0 { mb(inline) } else { String::new() }, mb(freed - inline));
+            accounted += freed - inline;
+        }
+    }
+    println!("accounted: {} of {}", mb(accounted), mb(total));
 }
