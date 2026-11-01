@@ -215,6 +215,7 @@ puts it there. So the surface splits, the same way `getBoundingClientRect` and
 | host function | answers |
 | --- | --- |
 | `__vn_media_state(id)` | `name=value` lines: `currentTime`, `duration`, `paused`, `ended`, `seeking`, `readyState`, `networkState`, `volume`, `muted`, `playbackRate`, `loop`, `videoWidth`, `videoHeight`, `buffered`, `seekable`, `error`, `errorMessage` |
+| `__vn_media_prop(id, prop)` | ONE of the thirteen scalars above, by code (0 `currentTime` … 12 `videoHeight`, the order of the list); booleans are 0/1; `undefined` for a node that is not a live media element |
 | `__vn_media_call(id, verb, arg)` | 0 `play` · 1 `pause` · 2 `currentTime = arg` · 3 `volume = arg` · 4 `muted = arg` · 5 `playbackRate = arg` · 6 `loop = arg` |
 | `__vn_media_can_play(id, type)` | `""` / `"maybe"` / `"probably"`, probed live |
 | `__vn_media_events(id)` | drains the node's recent event names — a bridge and a test surface, not the event channel |
@@ -235,10 +236,14 @@ promised, **nothing in Rust changed**:
    `networkState`/`buffered`/`seekable`/`error` accessors, over the four host
    functions above.
 
-The accessors read `__vn_media_state` **live, per call, uncached** — the same
-discipline `getBoundingClientRect()` follows against `__vn_bounds`, and the same
-one a browser follows for `el.currentTime`. Nothing about them is reactive; the
-events are what drive a UI, exactly as in a browser.
+The accessors read the host **live, per call, uncached** — the same discipline
+`getBoundingClientRect()` follows against `__vn_bounds`, and the same one a
+browser follows for `el.currentTime`. Nothing about them is reactive; the events
+are what drive a UI, exactly as in a browser. A scalar reads only itself through
+`__vn_media_prop` (m26): the whole state string costs every engine getter at
+once, about 0.2 ms on Media Foundation, and Argon's video custom emoji checked
+`readyState` once per target canvas per animation frame. `buffered`, `seekable`
+and `error` still come off `__vn_media_state`.
 
 Two deliberate divergences in the JS half:
 

@@ -487,6 +487,14 @@ host_fn!(fn vn_media_state(_g, args) {
     ret_string(&video::media_state(id).unwrap_or_default())
 });
 
+// One scalar media property by code (`video::media_prop`): a number, or
+// `undefined` for a node that is not a live media element.
+host_fn!(fn vn_media_prop(_g, args) {
+    let id = arg_id(args.arg(0));
+    let code = arg_id(args.arg(1));
+    video::media_prop(id, code).map_or(UNDEF, |v| Value::number(v).0)
+});
+
 // `play` / `pause` / `currentTime =` / `volume =` / `muted =` / `playbackRate =`
 // / `loop =`, by verb. Returns whether the node was a live `<video>` at all.
 host_fn!(fn vn_media_call(_g, args) {
@@ -620,6 +628,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_scroll_into_view", 3, vn_scroll_into_view as *const _),
         ("__vn_focus", 2, vn_focus as *const _),
         ("__vn_media_state", 1, vn_media_state as *const _),
+        ("__vn_media_prop", 2, vn_media_prop as *const _),
         ("__vn_media_call", 3, vn_media_call as *const _),
         ("__vn_media_can_play", 2, vn_media_can_play as *const _),
         ("__vn_media_events", 1, vn_media_events as *const _),

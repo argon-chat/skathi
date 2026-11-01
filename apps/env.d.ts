@@ -332,8 +332,9 @@ declare global {
   }
 
   /**
-   * `<video>` / `<audio>`. Every member is read LIVE off `__vn_media_state`
-   * (crates/vn-video CONTRACT.md §6) rather than mirrored, so none of it is
+   * `<video>` / `<audio>`. Every member is read LIVE off the host
+   * (`__vn_media_prop` / `__vn_media_state`, crates/vn-video CONTRACT.md §6)
+   * rather than mirrored, so none of it is
    * reactive — the EVENTS are what drive a UI, exactly as in a browser.
    */
   interface VnMediaElement extends VnElement {

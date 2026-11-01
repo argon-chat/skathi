@@ -4538,29 +4538,60 @@ const num = (s: Record<string, string>, k: string, fallback: number): number =>
 const bool = (s: Record<string, string>, k: string, fallback: boolean): boolean =>
   s[k] === undefined ? fallback : s[k] === "true";
 
-defineMediaGet("currentTime", (s) => num(s, "currentTime", 0), function (this: MirrorElement, v: unknown) {
+/**
+ * A read-only (or verb-backed) SCALAR media property: one host call for the
+ * one value (`__vn_media_prop`), not the whole state string. The state string
+ * costs every engine getter at once (~0.2 ms on Media Foundation), and a
+ * canvas loop that checks `video.readyState` per target per animation frame
+ * (Argon's video emoji: eight targets) spent most of an idle window's JS on it.
+ * A host without the call, or a test world without it, reads the state string.
+ */
+function defineMediaScalar(
+  name: string,
+  prop: VnMediaProp,
+  fallback: number | boolean,
+  write?: (value: never) => void,
+): void {
+  const isBool = typeof fallback === "boolean";
+  defineDomGet(
+    name,
+    function (this: MirrorElement) {
+      if (!isMediaEl(this)) return undefined;
+      if (typeof __vn_media_prop === "function") {
+        const v = this.__vnId ? __vn_media_prop(this.__vnId, prop) : undefined;
+        if (v === undefined) return fallback;
+        return isBool ? v !== 0 : v;
+      }
+      const s = mediaState(this) ?? {};
+      return isBool ? bool(s, name, fallback as boolean) : num(s, name, fallback as number);
+    },
+    write,
+  );
+}
+
+defineMediaScalar("currentTime", 0, 0, function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.currentTime, Number(v));
 });
-defineMediaGet("duration", (s) => num(s, "duration", NaN));
-defineMediaGet("paused", (s) => bool(s, "paused", true));
-defineMediaGet("ended", (s) => bool(s, "ended", false));
-defineMediaGet("seeking", (s) => bool(s, "seeking", false));
-defineMediaGet("readyState", (s) => num(s, "readyState", 0));
-defineMediaGet("networkState", (s) => num(s, "networkState", 0));
-defineMediaGet("volume", (s) => num(s, "volume", 1), function (this: MirrorElement, v: unknown) {
+defineMediaScalar("duration", 1, NaN);
+defineMediaScalar("paused", 2, true);
+defineMediaScalar("ended", 3, false);
+defineMediaScalar("seeking", 4, false);
+defineMediaScalar("readyState", 5, 0);
+defineMediaScalar("networkState", 6, 0);
+defineMediaScalar("volume", 7, 1, function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.volume, Number(v));
 });
-defineMediaGet("muted", (s) => bool(s, "muted", false), function (this: MirrorElement, v: unknown) {
+defineMediaScalar("muted", 8, false, function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.muted, v ? 1 : 0);
 });
-defineMediaGet("playbackRate", (s) => num(s, "playbackRate", 1), function (this: MirrorElement, v: unknown) {
+defineMediaScalar("playbackRate", 9, 1, function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.playbackRate, Number(v));
 });
-defineMediaGet("loop", (s) => bool(s, "loop", false), function (this: MirrorElement, v: unknown) {
+defineMediaScalar("loop", 10, false, function (this: MirrorElement, v: unknown) {
   mediaCall(this, MEDIA_CALL.loop, v ? 1 : 0);
 });
-defineMediaGet("videoWidth", (s) => num(s, "videoWidth", 0));
-defineMediaGet("videoHeight", (s) => num(s, "videoHeight", 0));
+defineMediaScalar("videoWidth", 11, 0);
+defineMediaScalar("videoHeight", 12, 0);
 defineMediaGet("buffered", (s) => timeRanges(s.buffered));
 defineMediaGet("seekable", (s) => timeRanges(s.seekable));
 // `MediaError`: `null` when there is none, which is the check every handler

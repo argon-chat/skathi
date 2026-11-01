@@ -391,6 +391,29 @@ declare function __vn_reload(): void;
 /** Live media state as `name=value` lines; `""` for a node that is not one. */
 declare function __vn_media_state(id: VnNodeId): VnKvLines;
 
+/** The scalar properties `__vn_media_prop` answers, by code. Mirrors `vn_tree::video::media_prop`. */
+type VnMediaProp =
+  | 0 // currentTime
+  | 1 // duration
+  | 2 // paused        (0 | 1)
+  | 3 // ended         (0 | 1)
+  | 4 // seeking       (0 | 1)
+  | 5 // readyState
+  | 6 // networkState
+  | 7 // volume
+  | 8 // muted         (0 | 1)
+  | 9 // playbackRate
+  | 10 // loop         (0 | 1)
+  | 11 // videoWidth
+  | 12; // videoHeight
+
+/**
+ * ONE scalar media property: a number (booleans are 0/1), or `undefined` for a
+ * node that is not a live media element. One engine call, where
+ * `__vn_media_state` makes all of them (~0.2 ms on Media Foundation).
+ */
+declare function __vn_media_prop(id: VnNodeId, prop: VnMediaProp): number | undefined;
+
 /** `HTMLMediaElement`'s verbs, by code. Mirrors `vn_tree::video::media_call`. */
 type VnMediaVerb =
   | 0 // play

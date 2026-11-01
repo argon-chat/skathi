@@ -214,6 +214,29 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
     expect(node.currentTime).toBe(9);
   });
 
+  // The whole state string costs every engine getter at once (~0.2 ms on Media
+  // Foundation); a canvas loop reading `readyState` per target per frame paid it
+  // eight times a frame.
+  test("a scalar property is one host call for its own value, not the whole state", () => {
+    const rt = createRuntime();
+    const node = video(rt);
+    rt.host.mediaStateReads = 0;
+    expect([node.readyState, node.paused, node.loop, node.duration]).toEqual([4, false, true, 12]);
+    expect(rt.host.mediaStateReads).toBe(0);
+    expect(rt.host.mediaPropReads).toEqual([
+      [node.__vnId, 5],
+      [node.__vnId, 2],
+      [node.__vnId, 10],
+      [node.__vnId, 1],
+    ]);
+    // The ranges and the error still come off the state string.
+    expect(node.buffered.length).toBe(1);
+    expect(rt.host.mediaStateReads).toBe(1);
+    // A node the host knows nothing about reads the defaults, as before.
+    const bare = rt.nodeOps.createElement("video");
+    expect([bare.paused, bare.readyState, bare.duration]).toEqual([true, 0, NaN]);
+  });
+
   test("the transport verbs reach __vn_media_call", () => {
     const rt = createRuntime();
     const node = video(rt);

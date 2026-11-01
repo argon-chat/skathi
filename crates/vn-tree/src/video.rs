@@ -841,6 +841,40 @@ pub(crate) fn media_state(id: u32) -> Option<String> {
     })
 }
 
+/// ONE scalar property of [`media_state`], by code — `None` for a node that is
+/// not a live media element. Booleans are `0`/`1`.
+///
+/// The runtime reads every scalar property through this. [`media_state`]
+/// answers all of them at once, and on Media Foundation that is about sixteen
+/// engine calls, two of them building `TimeRanges` — ~0.2 ms a read, measured.
+/// Argon's video custom emoji read `readyState` for each of eight canvases on
+/// every animation frame, and those reads alone were most of the client's JS
+/// while the window sat idle. One property is one engine call.
+///
+/// Codes (packages/vue-native/src/protocol.d.ts `VnMediaProp`): 0 currentTime,
+/// 1 duration, 2 paused, 3 ended, 4 seeking, 5 readyState, 6 networkState,
+/// 7 volume, 8 muted, 9 playbackRate, 10 loop, 11 videoWidth, 12 videoHeight.
+pub(crate) fn media_prop(id: u32, code: u32) -> Option<f64> {
+    let flag = |b: bool| if b { 1.0 } else { 0.0 };
+    with_state(id, |s| match code {
+        0 => Some(s.current_time()),
+        1 => Some(s.duration()),
+        2 => Some(flag(s.paused())),
+        3 => Some(flag(s.ended())),
+        4 => Some(flag(s.seeking())),
+        5 => Some(s.ready_state() as u8 as f64),
+        6 => Some(s.network_state() as u8 as f64),
+        7 => Some(s.volume()),
+        8 => Some(flag(s.muted())),
+        9 => Some(s.playback_rate()),
+        10 => Some(flag(s.looping())),
+        11 => Some(s.native_size().map_or(0.0, |(w, _)| w as f64)),
+        12 => Some(s.native_size().map_or(0.0, |(_, h)| h as f64)),
+        _ => None,
+    })
+    .flatten()
+}
+
 /// The METHOD half: `play()` / `pause()` / `currentTime =` / `volume =` … .
 /// Verbs rather than names because this is a two-argument host call and the
 /// JS side is a switch either way.

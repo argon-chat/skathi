@@ -307,6 +307,10 @@ export function createRuntime(
     reloads: 0,
     /** `__vn_media_state` answers: node id -> "name=value\n…". */
     mediaById: new Map(),
+    /** How many times the WHOLE state was asked for (`__vn_media_state`). */
+    mediaStateReads: 0,
+    /** `__vn_media_prop` questions, as `[id, prop]`; answered off `mediaById`. */
+    mediaPropReads: [] as number[][],
     /** `__vn_media_call` log: { id, verb, arg }. */
     mediaCalls: [],
     /** `__vn_media_can_play` answers: mime type -> "" | "maybe" | "probably". */
@@ -583,6 +587,7 @@ export function createRuntime(
     "__vn_media_call",
     "__vn_media_can_play",
     "__vn_media_events",
+    "__vn_media_prop",
     "__vn_permissions_platform",
     "__vn_permissions_query",
     "__vn_permissions_list",
@@ -826,13 +831,27 @@ export function createRuntime(
     () => {
       host.reloads++;
     },
-    (id) => host.mediaById.get(id) ?? "",
+    (id) => {
+      host.mediaStateReads++;
+      return host.mediaById.get(id) ?? "";
+    },
     (id, verb, arg) => {
       host.mediaCalls.push({ id, verb, arg });
       return true;
     },
     (_id, type) => host.canPlayByType.get(type) ?? "",
     () => "",
+    // `__vn_media_prop`: the one line of the state string the code names.
+    (id, prop) => {
+      host.mediaPropReads.push([id, prop]);
+      const names = ["currentTime", "duration", "paused", "ended", "seeking", "readyState", "networkState",
+        "volume", "muted", "playbackRate", "loop", "videoWidth", "videoHeight"];
+      const raw = host.mediaById.get(id);
+      const line = raw?.split("\n").find((l) => l.startsWith(`${names[prop]}=`));
+      if (line === undefined) return undefined;
+      const v = line.slice(line.indexOf("=") + 1);
+      return v === "true" ? 1 : v === "false" ? 0 : Number(v);
+    },
     // ---- __vn_permissions_* ------------------------------------------------
     () => host.permissions.platform,
     (name) => (PERMISSION_NAMES.includes(name) ? permState(name) : ""),
