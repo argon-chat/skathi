@@ -1503,6 +1503,8 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
             // tick while the pump declines frames.
             if hidden(p) != hidden(&s) {
                 unsafe { vn_runtime::redjs::ffi::redjs_dom_set_visibility(ctx, hidden(&s) as i32) };
+                // …and no paint-only presents meanwhile (vn-tree's `live`).
+                vn_tree::set_page_hidden(hidden(&s));
             }
             if p.maximized != s.maximized {
                 kinds.push(if s.maximized { "maximize" } else { "unmaximize" });

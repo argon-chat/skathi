@@ -1026,6 +1026,14 @@ pub fn forget_window(key: windows::WinKey) {
     windows::forget(key);
 }
 
+/// The page became hidden or shown (minimised, or on another virtual desktop):
+/// what `document.hidden` reports. A paint-only frame is not presented while
+/// the page is hidden (`crate::live`); the draw that shows the window again
+/// paints the newest one.
+pub fn set_page_hidden(hidden: bool) {
+    live::set_hidden(hidden);
+}
+
 /// Mirrors the OS reduced-motion preference into the transition animator.
 pub fn set_reduce_motion(on: bool) {
     tree::set_reduce_motion(on);

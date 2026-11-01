@@ -466,7 +466,8 @@ pub fn any_playing() -> bool {
     })
 }
 
-/// Can a pixel of this `<video>` be on screen (`crate::live::on_screen`)?
+/// Can a pixel of this `<video>` be on screen: inside the viewport and not
+/// clipped away by an ancestor (`crate::live::visible`)?
 ///
 /// Decides whether a new frame repaints; it is decoded and uploaded either way,
 /// because a canvas may be drawing from it. A video that was not painted at all
@@ -476,7 +477,7 @@ pub fn any_playing() -> bool {
 /// canvases from JS; while one played, the window drew every frame. A browser
 /// paints nothing for it.
 fn on_screen(id: u32, win: crate::windows::WinKey) -> bool {
-    crate::live::on_screen(id, win)
+    crate::live::visible(id, win)
 }
 
 /// Pulls a frame for every live `<video>` and dispatches the events that

@@ -336,7 +336,7 @@ pub(crate) fn tick(window: &mut Window) -> bool {
 /// [`current_at`] would.
 fn fetch_live(id: u32, win: WinKey, now: Instant, window: &mut Window) -> crate::live::Shown {
     use crate::live::{shown, Shown};
-    let visible = crate::live::on_screen(id, win);
+    let visible = crate::live::visible(id, win);
     let seen = |s: Shown| if visible { s } else { Shown::Nowhere };
     CANVASES.with(|m| {
         let mut m = m.borrow_mut();

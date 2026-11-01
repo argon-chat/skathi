@@ -47,7 +47,7 @@
 //! frame), a pop-out's tile, and a device-lost.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use gpui::{GpuTextureHandle, RenderImage, TileSource, TileWrite, Window};
@@ -99,8 +99,24 @@ pub(crate) fn take() -> Shown {
     PENDING.with(|p| p.replace(Shown::Nowhere))
 }
 
-/// Presents `window`'s last drawn frame again, and counts it.
+/// Is the page hidden (minimised, or on another virtual desktop)? Set by the
+/// host's window funnel next to `document.hidden` ([`crate::set_page_hidden`]).
+static HIDDEN: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_hidden(hidden: bool) {
+    HIDDEN.store(hidden, Ordering::Relaxed);
+}
+
+/// Presents `window`'s last drawn frame again, and counts it. Nothing while
+/// the page is hidden or gpui says the window's frames are not shown: gpui
+/// keeps asking a window on another virtual desktop to paint every vsync, and
+/// a background tick that wrote a frame would otherwise present it there. The
+/// tile holds the newest frame; the draw that comes with showing the window
+/// paints it.
 pub(crate) fn present(window: &Window) {
+    if HIDDEN.load(Ordering::Relaxed) || !window.is_visible() {
+        return;
+    }
     PRESENTS.fetch_add(1, Ordering::Relaxed);
     window.request_present();
 }
@@ -126,14 +142,82 @@ pub(crate) fn on_screen(id: u32, win: WinKey) -> bool {
     .unwrap_or(true)
 }
 
+/// [`on_screen`], and not clipped away by an ancestor: node `id`'s painted box,
+/// cut to the viewport and to every ancestor that clips its overflow on an
+/// axis (`hidden`, `clip`, `scroll`, `auto`), is not empty. A message scrolled
+/// out of a chat list is inside the window but shows nothing.
+///
+/// On the safe side wherever it cannot be sure: a box as transformed is taken
+/// by its bounding rectangle, a clip is the clipping box's border box (not its
+/// padding box), and the walk stops at an absolutely or fixed positioned box,
+/// whose containing block may sit above an ancestor's clip. A window with no
+/// published viewport yet counts everything as visible.
+pub(crate) fn visible(id: u32, win: WinKey) -> bool {
+    let Some(Some((rect, viewport))) = windows::peek(win, |w| {
+        let env = w.env.as_ref()?;
+        let rect = w.transformed.get(&id).or_else(|| w.bounds.get(&id)).copied();
+        Some((rect, (0.0, 0.0, env.viewport_width, env.viewport_height)))
+    }) else {
+        return true; // no viewport published yet
+    };
+    let Some(r) = rect else { return false }; // not painted
+    let mut cut = clip_rect(r, viewport, true, true);
+    if cut.is_none() {
+        return false;
+    }
+    crate::tree::read_tree(|t| {
+        let mut cur = id;
+        while let Some(n) = t.node(cur) {
+            let out_of_flow = n.computed.as_ref().is_some_and(|c| {
+                matches!(c.base.position, Some(gpui::Position::Absolute)) || c.extras.may_defer()
+            });
+            if out_of_flow || n.parent == 0 {
+                break;
+            }
+            cur = n.parent;
+            let Some(p) = t.node(cur) else { break };
+            let Some(cs) = p.computed.as_ref() else { continue };
+            let clips = |o: Option<gpui::Overflow>| !matches!(o, None | Some(gpui::Overflow::Visible));
+            let (cx, cy) = (clips(cs.base.overflow.x), clips(cs.base.overflow.y));
+            if !cx && !cy {
+                continue;
+            }
+            let Some(prect) = windows::peek(win, |w| w.transformed.get(&cur).or_else(|| w.bounds.get(&cur)).copied())
+                .flatten()
+            else {
+                continue;
+            };
+            cut = cut.and_then(|c| clip_rect(c, prect, cx, cy));
+            if cut.is_none() {
+                return false;
+            }
+        }
+        true
+    })
+}
+
+/// `r` cut to `by` on the axes asked, or `None` when nothing is left.
+fn clip_rect(r: windows::Rect, by: windows::Rect, x: bool, y: bool) -> Option<windows::Rect> {
+    let (mut x0, mut y0, mut x1, mut y1) = (r.0, r.1, r.0 + r.2, r.1 + r.3);
+    if x {
+        x0 = x0.max(by.0);
+        x1 = x1.min(by.0 + by.2);
+    }
+    if y {
+        y0 = y0.max(by.1);
+        y1 = y1.min(by.1 + by.3);
+    }
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
+}
+
 /// One picture a native element repaints by itself: one image id, so one tile
 /// in one window's atlas, for the life of the picture, written frame by frame.
 ///
 /// The build paints [`LiveTile::image`], at as many places as show the
 /// picture. The tick writes the next frame ([`LiveTile::write_bgra`] or
 /// [`LiveTile::write_gpu`]) and [`note`]s the answer. `visible` is the
-/// caller's: can any place that paints this tile be on screen ([`on_screen`]
-/// over the places).
+/// caller's: can any place that paints this tile be seen ([`visible`] over
+/// the places).
 #[allow(dead_code)]
 pub(crate) struct LiveTile {
     /// The newest frame under the tile's id. Its bytes are the CPU frame last
@@ -173,7 +257,10 @@ impl LiveTile {
         self.win
     }
 
-    /// Writes a CPU frame: premultiplied BGRA, the tile's size, rows packed.
+    /// Writes a CPU frame: BGRA, the tile's size, rows packed, with STRAIGHT
+    /// alpha. gpui's own decoders un-premultiply (`swap_rgba_pa_to_bgra`) and
+    /// the polychrome pipeline blends `SRC_ALPHA`, so a premultiplied raster
+    /// (ThorVG's, a canvas's) comes out darker wherever it is translucent.
     /// A frame of another size is ignored with a Draw: resize with a new
     /// [`LiveTile`] (retiring this one), which the build then paints.
     ///
@@ -234,6 +321,45 @@ mod tests {
         note(Shown::Present);
         assert_eq!(take(), Shown::Draw);
         assert_eq!(take(), Shown::Nowhere, "reset for the next tick");
+    }
+
+    /// A box scrolled out of its clipping ancestor is inside the window but
+    /// shows nothing; an absolutely positioned one may escape the clip, so it
+    /// counts as visible.
+    #[test]
+    fn a_box_clipped_away_by_an_ancestor_is_not_visible() {
+        use crate::tree;
+        tree::set_engine(vn_css::Engine::compile(".clip { overflow: hidden } .abs { position: absolute }"));
+        let (list, inside, outside, escaped) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let list = t.create_element(div);
+            t.set_class(list, "clip");
+            t.insert(list, root, 0);
+            let inside = t.create_element(div);
+            let outside = t.create_element(div);
+            let escaped = t.create_element(div);
+            t.set_class(escaped, "abs");
+            for n in [inside, outside, escaped] {
+                t.insert(n, list, 0); // appended
+            }
+            (list, inside, outside, escaped)
+        });
+        crate::flush_changes();
+        let win: WinKey = 0x51_7E;
+        windows::set_env(win, vn_css::Env { viewport_width: 400.0, viewport_height: 300.0, ..Default::default() });
+        windows::of(win, |w| {
+            w.bounds.insert(list, (0.0, 0.0, 100.0, 100.0));
+            w.bounds.insert(inside, (0.0, 10.0, 100.0, 20.0));
+            w.bounds.insert(outside, (0.0, 150.0, 100.0, 20.0));
+            w.bounds.insert(escaped, (0.0, 150.0, 100.0, 20.0));
+        });
+        assert!(visible(inside, win));
+        assert!(on_screen(outside, win), "inside the viewport");
+        assert!(!visible(outside, win), "but cut away by the list's clip");
+        assert!(visible(escaped, win), "an absolute box may escape it: the safe side");
+        assert!(!visible(0xDEAD, win), "never painted");
+        windows::forget(win);
     }
 
     #[test]
