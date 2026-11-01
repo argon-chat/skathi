@@ -353,6 +353,8 @@ interface MirrorElement extends MirrorNodeBase {
   /** `:true-value` / `:false-value`, kept as given for v-model's checkbox, as runtime-dom keeps them. */
   _trueValue?: unknown;
   _falseValue?: unknown;
+  /** v-model's expando while an IME composes, as runtime-dom sets it (`vModelText`). */
+  composing?: boolean;
   /** `<img>`: the host's answer for `src` (`load` / `error`), which `complete` and `naturalWidth` read. */
   _img?: { src: string; ok: boolean; w: number; h: number };
   /** `on<event>` IDL handlers: the function, and the listener that calls it (`defineHandlerAttr`). */
@@ -592,7 +594,39 @@ const EV_CODES = {
   // `mouseup` and, for the right button, before its `contextmenu` (Chromium
   // on Windows). `button` 1 or 2, `detail` the click count.
   auxclick: 47,
+  // A text field's edits (crates/vn-elements TextInputState). `beforeinput`
+  // comes before each edit and cancels it (the IME's excepted); `a` is the
+  // edit's `EDIT_TYPES` code, `b` 1 while an IME composes, the eighth
+  // argument the `data` string. `input` (9) carries the same, with the new
+  // value in `key`. The composition events carry their `data` the same way.
+  beforeinput: 48,
+  compositionstart: 49,
+  compositionupdate: 50,
+  compositionend: 51,
 } as const;
+
+/**
+ * `InputEvent.inputType` by the host's code: crates/vn-elements
+ * `text_input::InputType`, whose discriminants index this table (in lockstep:
+ * test/protocol-codes.test.ts reads the Rust enum). 0 is no edit the host
+ * named.
+ */
+const EDIT_TYPES = [
+  "",
+  "insertText",
+  "insertLineBreak",
+  "insertFromPaste",
+  "insertCompositionText",
+  "deleteContentBackward",
+  "deleteContentForward",
+  "deleteWordBackward",
+  "deleteWordForward",
+  "deleteSoftLineBackward",
+  "deleteSoftLineForward",
+  "deleteByCut",
+  "historyUndo",
+  "historyRedo",
+] as const;
 
 /** Every event name the HOST delivers under a code of its own. */
 type HostEventName = keyof typeof EV_CODES;
@@ -5648,6 +5682,23 @@ function detailFor(name: string, d: number): number {
   return name === "dblclick" ? 2 : 0;
 }
 
+/**
+ * An `input` or `beforeinput` event's init from the host's payload: `a` the
+ * `EDIT_TYPES` code, `b` 1 while an IME composes, `data` the eighth
+ * argument. Both bubble and are composed; `input` never cancels, and
+ * `beforeinput` does except while an IME composes.
+ */
+function inputInit(name: string, a: number, b: number, data: unknown) {
+  return {
+    bubbles: true,
+    cancelable: name === "beforeinput" && !b,
+    composed: true,
+    inputType: EDIT_TYPES[a] ?? "",
+    data: typeof data === "string" ? data : null,
+    isComposing: !!b,
+  };
+}
+
 function synthesize(
   name: string,
   a: number,
@@ -5726,9 +5777,27 @@ function synthesize(
         if (typeof FocusEvent === "function") return new FocusEvent(name, common);
         break;
       case "input":
-        if (typeof InputEvent === "function")
-          return new InputEvent(name, { ...common, data: key ?? null });
+      case "beforeinput":
+        // Both bubble and are composed; only `beforeinput` cancels, and not
+        // while an IME composes (Input Events Level 1, Chromium's). `data` is
+        // the inserted text, `null` for a deletion or a line break.
+        if (typeof InputEvent === "function") return new InputEvent(name, inputInit(name, a, b, data));
         break;
+      case "compositionstart":
+      case "compositionupdate":
+      case "compositionend": {
+        // Chromium makes all three cancelable, and cancelling one does
+        // nothing (the IME has already acted).
+        const Composition = theGlobal("CompositionEvent");
+        if (typeof Composition === "function")
+          return new (Composition as new (type: string, init: Record<string, unknown>) => VnEvent)(name, {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            data: typeof data === "string" ? data : "",
+          });
+        break;
+      }
       case "scroll":
         // A plain Event in every browser; the position is read off e.target.
         if (typeof Event === "function") return new Event(name, common);
@@ -5765,14 +5834,16 @@ function synthesize(
   } catch (e) {
     /* fall through to the generic event */
   }
-  const ev = new CustomEvent(name, common);
+  const ev = new CustomEvent(name, name === "input" || name === "beforeinput" ? inputInit(name, a, b, data) : common);
   const extra =
     name === "wheel"
       ? { deltaX: a, deltaY: b, ...M }
       : name === "keydown" || name === "keyup"
         ? { key: key ?? "", ...M }
-        : name === "input"
-          ? { data: key ?? null }
+        : name === "input" || name === "beforeinput"
+          ? (({ data: d, inputType, isComposing }) => ({ data: d, inputType, isComposing }))(inputInit(name, a, b, data))
+          : name === "compositionstart" || name === "compositionupdate" || name === "compositionend"
+            ? { data: typeof data === "string" ? data : "" }
           : name === "transitionend"
             ? { propertyName: key ?? "", elapsedTime: a, pseudoElement: "" }
           : name === "animationstart" || name === "animationend" || name === "animationcancel"
@@ -8203,6 +8274,25 @@ const EVENT_INTERFACES: readonly (readonly [name: string, parent: "Event" | "UIE
   }
 }
 
+// -- InputEvent's two members the engine's lacks. Both are for a
+//    contenteditable: in a text field's `beforeinput` and `input` Chromium
+//    has no DataTransfer (the text is `data`) and no target ranges.
+{
+  const IE = theGlobal("InputEvent");
+  const proto = typeof IE === "function" ? (IE as { prototype: object }).prototype : null;
+  if (proto && vacant(proto, "dataTransfer"))
+    Object.defineProperty(proto, "dataTransfer", { get: mark(function dataTransfer() { return null; }), enumerable: true, configurable: true });
+  if (proto && vacant(proto, "getTargetRanges"))
+    Object.defineProperty(proto, "getTargetRanges", {
+      value: mark(function getTargetRanges(): unknown[] {
+        return [];
+      }),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+}
+
 // -- Touch: what desktop Chrome (Electron, where the client runs today) shows
 //    on a Windows machine without a touch screen. The interfaces exist and
 //    construct (`TouchEvent`, `Touch`; `TouchList` is not constructible),
@@ -9152,6 +9242,9 @@ export const vModelText = {
       );
     }
     el.addEventListener("input", () => {
+      // Runtime-dom's rule: no model update in the middle of an IME
+      // composition. The composition's end assigns the committed text.
+      if (el.composing) return;
       // `.trim` runs before `.number`, so `v` is still a string at both string
       // uses below — which is exactly what the two casts assert.
       let v: string | number = el.value;
@@ -9162,12 +9255,27 @@ export const vModelText = {
       }
       if (el[assignKey]) (el[assignKey] as (value: unknown) => void)(v);
     });
+    // …and the composition's two ends, as runtime-dom binds them: the end
+    // re-dispatches `input`, which assigns what the IME committed. (Runtime-dom
+    // binds them only without `.lazy`, which listens for `change`; here
+    // `.lazy` listens for `input`, so it needs them too.)
+    el.addEventListener("compositionstart", () => {
+      el.composing = true;
+    });
+    el.addEventListener("compositionend", () => {
+      if (!el.composing) return;
+      el.composing = false;
+      el.dispatchEvent(new Event("input"));
+    });
   },
   mounted(el: MirrorElement, { value }: DirectiveBindingLike) {
     setElValue(el, value);
   },
   beforeUpdate(el: MirrorElement, { value }: DirectiveBindingLike, vnode: VNodeLike) {
     el[assignKey] = vnode.props && vnode.props["onUpdate:modelValue"];
+    // Runtime-dom leaves a composing field alone: assigning it would end the
+    // IME's composition (vuejs/core#2302).
+    if (el.composing) return;
     setElValue(el, value);
   },
 };

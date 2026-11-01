@@ -1252,6 +1252,62 @@ fn settle_before_default(window: &mut Window, cx: &mut App) {
     }
 }
 
+/// An edit's payload (`tree::EV_BEFOREINPUT`): its `inputType` code in `a`,
+/// `isComposing` in `b`.
+fn intent_payload(intent: &vn_elements::InputIntent) -> EventPayload<'static> {
+    EventPayload {
+        a: f64::from(intent.input_type.code()),
+        b: if intent.input_type.composing() { 1.0 } else { 0.0 },
+        ..Default::default()
+    }
+}
+
+/// Does anything on `id`'s path listen for `code`: the node, an ancestor, or
+/// `document` / `window`, which ride the root's bit?
+fn path_listens(t: &Tree, id: u32, code: u32) -> bool {
+    let bit = 1u64 << code;
+    let mut cur = id;
+    for _ in 0..4096 {
+        let Some(n) = t.node(cur) else { return false };
+        if n.listeners & bit != 0 {
+            return true;
+        }
+        if n.parent == 0 {
+            return false;
+        }
+        cur = n.parent;
+    }
+    false
+}
+
+/// [`js_dispatch_app`] for an event with a string beside its payload (an
+/// InputEvent's or a CompositionEvent's `data`), passed as the dispatcher's
+/// eighth argument; `None` passes nothing, which the runtime reads as `null`.
+fn js_dispatch_text(
+    id: u32,
+    event: u32,
+    payload: &EventPayload,
+    data: Option<&str>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    js_wave_app(window, cx, || {
+        let value = data.and_then(|s| {
+            vn_runtime::JsRuntime::try_with(|rt| {
+                let v = rt.ctx().string(s);
+                // Held across the dispatch, which runs arbitrary JS.
+                rt.ctx().protect(v);
+                v
+            })
+        });
+        let proceed = crate::dispatch_event_with(id, event, payload, value);
+        if let Some(v) = value {
+            vn_runtime::JsRuntime::try_with(|rt| rt.ctx().unprotect(v));
+        }
+        proceed
+    })
+}
+
 /// DOM order for a focus move: `blur` on the node that had it, then `focus` on
 /// the node that got it. Neither event bubbles (the JS runtime knows). Each
 /// carries the other node in `a`, the events' `relatedTarget`.
@@ -4989,6 +5045,23 @@ pub(crate) fn focused_node(window: &Window, cx: &App) -> Option<u32> {
     })
 }
 
+/// The devtools' IME (`crate::devtools::ime`): the two calls the platform's
+/// input handler makes on a field, a pre-edit or a commit.
+pub(crate) fn ime(id: u32, text: &str, commit: bool, window: &mut Window, cx: &mut App) -> Result<(), String> {
+    use gpui::EntityInputHandler;
+    let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) else {
+        return Err(format!("node {id} is not a built <input> or <textarea>"));
+    };
+    state.update(cx, |s, cx| {
+        if commit {
+            s.replace_text_in_range(None, text, window, cx);
+        } else {
+            s.replace_and_mark_text_in_range(None, text, None, window, cx);
+        }
+    });
+    Ok(())
+}
+
 /// The live text of a native `<input>` — the widget's own buffer, not the
 /// `value` prop, so it reflects typing that JS has not echoed back yet.
 pub(crate) fn input_value(id: u32, cx: &App) -> Option<String> {
@@ -5833,7 +5906,12 @@ fn build_input<V: 'static>(
     // typed again writes the same string the previous clear did).
     if let Some((value, write)) = t.prop_write(id, "value") {
         let value = value.to_string();
-        state.update(cx, |s, cx| s.sync_value(&value, write, cx));
+        // A value assigned in the middle of an IME composition ends it: its
+        // `compositionend` goes out after this frame.
+        state.update(cx, |s, cx| {
+            s.sync_value(&value, write, cx);
+            s.flush_abandoned_composition(window, cx);
+        });
     } else if multiline && !node.text.is_empty() {
         // A `<textarea>`'s initial value is its TEXT CONTENT, not an attribute
         // — `<textarea>hello</textarea>`. Vue writes that through
@@ -5928,12 +6006,49 @@ fn build_input<V: 'static>(
     let bit = move |ev: u32| mask & (1u64 << ev) != 0;
 
     // vn-elements reports an edit from a `window.defer`, outside gpui's key
-    // dispatch, so a forced layout may draw in the `input` handler.
-    let on_change: vn_elements::OnChange = std::rc::Rc::new(move |text, window, cx| {
-        crate::off_input(|| {
-            js_dispatch_app(id, tree::EV_INPUT, &EventPayload { key: Some(text), ..Default::default() }, window, cx)
-        });
+    // dispatch, so a forced layout may draw in the `input` handler. The edit's
+    // `inputType`, `isComposing` and `data` ride along (`tree::EV_BEFOREINPUT`).
+    let on_change: vn_elements::OnChange = std::rc::Rc::new(move |text, intent, window, cx| {
+        let payload = EventPayload { key: Some(text), ..intent_payload(intent) };
+        crate::off_input(|| js_dispatch_text(id, tree::EV_INPUT, &payload, intent.data.as_deref(), window, cx));
     });
+
+    // `beforeinput`, from inside the widget's edit and before it changes
+    // anything; `false` cancels the edit. Only built when something on the
+    // field's path listens (the root's bit stands for `document`/`window`).
+    let on_before_input: vn_elements::OnBeforeInput =
+        std::rc::Rc::new(move |intent, window: &mut Window, cx: &mut App| {
+            if !tree::read_tree(|t| path_listens(t, id, tree::EV_BEFOREINPUT)) {
+                return true;
+            }
+            let payload = intent_payload(intent);
+            let proceed = js_dispatch_text(id, tree::EV_BEFOREINPUT, &payload, intent.data.as_deref(), window, cx);
+            if proceed {
+                // The widget edits next.
+                settle_before_default(window, cx);
+            }
+            proceed
+        });
+
+    // The IME composition's events. `End` comes deferred (after the commit's
+    // `input`), outside gpui's dispatch, as `input` does.
+    let on_composition: vn_elements::OnComposition =
+        std::rc::Rc::new(move |phase, data, window: &mut Window, cx: &mut App| {
+            let code = match phase {
+                vn_elements::CompositionPhase::Start => tree::EV_COMPOSITIONSTART,
+                vn_elements::CompositionPhase::Update => tree::EV_COMPOSITIONUPDATE,
+                vn_elements::CompositionPhase::End => tree::EV_COMPOSITIONEND,
+            };
+            if !tree::read_tree(|t| path_listens(t, id, code)) {
+                return;
+            }
+            let payload = EventPayload::default();
+            if phase == vn_elements::CompositionPhase::End {
+                crate::off_input(|| js_dispatch_text(id, code, &payload, Some(data), window, cx));
+            } else {
+                js_dispatch_text(id, code, &payload, Some(data), window, cx);
+            }
+        });
 
     // Keystrokes are forwarded *before* the widget acts on them, so a JS
     // handler that calls `preventDefault()` cancels the default editing
@@ -6002,6 +6117,8 @@ fn build_input<V: 'static>(
 
     let handlers = TextInputHandlers {
         on_change: Some(on_change),
+        on_before_input: Some(on_before_input),
+        on_composition: Some(on_composition),
         on_key_down,
         on_key_up,
         on_clipboard: Some(on_clipboard),

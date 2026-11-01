@@ -1195,6 +1195,13 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             None => err("focus needs a `selector`"),
             Some(sel) => cmd_focus(&sel, num("index")),
         },
+        "ime" => match (arg("selector"), arg("text")) {
+            (Some(sel), Some(text)) => {
+                let commit = req.get("commit").and_then(Json::as_bool).unwrap_or(false);
+                cmd_ime(&sel, num("index"), &text, commit)
+            }
+            _ => err("ime needs a `selector` and a `text` (\"\" cancels the composition)"),
+        },
         "mouse" => cmd_mouse(
             arg("selector").as_deref(),
             num("index"),
@@ -1990,6 +1997,34 @@ fn cmd_focus(selector: &str, index: Option<f64>) -> String {
         None => err("not in a commit phase"),
         Some(Err(e)) => err(e),
         Some(Ok(())) => ok(Json::obj(vec![("id", Json::n(f64::from(id)))])),
+    }
+}
+
+/// A text field's IME, driven the way the platform drives it: `text` is the
+/// composition's new pre-edit, or with `commit` its committed text. The field
+/// need not be focused. What the composition events, `beforeinput` and `input`
+/// report is the widget's own path; only the IME is stood in for.
+fn cmd_ime(selector: &str, index: Option<f64>, text: &str, commit: bool) -> String {
+    let id = match resolve_one(selector, index) {
+        Ok(id) => id,
+        Err(e) => return err(e),
+    };
+    let out = with_node_window(id, |window, app| {
+        let done = vn_tree::devtools::ime(id, text, commit, window, app);
+        // `input` and `compositionend` go out on a `Window::defer`; flushing
+        // here is what makes the next command see the tree they leave.
+        if vn_tree::flush_changes() {
+            window.refresh();
+        }
+        done.map(|()| vn_tree::devtools::input_value(id, app))
+    });
+    match out {
+        None => err("not in a commit phase"),
+        Some(Err(e)) => err(e),
+        Some(Ok(value)) => ok(Json::obj(vec![
+            ("node", Json::n(f64::from(id))),
+            ("value", value.map_or(Json::Null, Json::s)),
+        ])),
     }
 }
 

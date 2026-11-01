@@ -110,6 +110,23 @@ test("protocol.d.ts's VnEventCode lists the same codes", () => {
   expect(listed.sort((a, b) => a - b)).toEqual(rust);
 });
 
+test("EDIT_TYPES is vn-elements' InputType, code for code", () => {
+  // The host sends an edit's `inputType` as its `InputType` discriminant; the
+  // runtime names it by indexing EDIT_TYPES. A variant added or renumbered on
+  // one side only is an `input` / `beforeinput` with the wrong `inputType`.
+  const source = read("crates/vn-elements/src/text_input/mod.rs");
+  const body = source.slice(source.indexOf("pub enum InputType {"));
+  const variants = [...body.slice(0, body.indexOf("\n}")).matchAll(/^\s*(\w+) = (\d+),/gm)];
+  const names = Object.fromEntries([...source.matchAll(/InputType::(\w+) => "(\w+)",/g)].map((m) => [m[1], m[2]]));
+  const fromRust: string[] = [""];
+  for (const [, variant, code] of variants) fromRust[Number(code)] = names[variant!]!;
+  expect(variants.length).toBeGreaterThan(10);
+  const runtime = readFileSync(join(HERE, "../src/runtime.ts"), "utf8");
+  const table = runtime.slice(runtime.indexOf("const EDIT_TYPES = ["));
+  const fromTs = [...table.slice(0, table.indexOf("] as const")).matchAll(/"(\w*)"/g)].map((m) => m[1]);
+  expect(fromTs).toEqual(fromRust);
+});
+
 // ---------------------------------------------------------------------------
 // the voice op/event codes — src/livekit.ts vs crates/vn-voice/src/proto.rs
 // ---------------------------------------------------------------------------

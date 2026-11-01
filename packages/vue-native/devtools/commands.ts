@@ -293,6 +293,25 @@ export const COMMANDS: CommandSpec[] = [
     },
   },
   {
+    cmd: "ime",
+    description:
+      "Stand in for the IME on a text field: `text` becomes the composition's pre-edit, or with " +
+      "`commit` its committed text (\"\" cancels it). compositionstart, beforeinput, " +
+      "compositionupdate, input and compositionend fire in Chromium's order, from the widget's " +
+      "own path. For testing where no IME is installed; no keystroke is sent.",
+    usage: ["  ime      <selector> <text> [--commit] [--index N]"],
+    args: {
+      selector: SELECTOR_REQ,
+      text: str('the pre-edit, or the committed text; "" cancels the composition', true),
+      commit: bool("commit the composition with `text`"),
+      index: INDEX,
+    },
+    cli: (rest, flags) => {
+      if (!rest[0]) die('ime needs a selector and text: ctl ime ".field" "か" [--commit]');
+      return withIndex(compact({ selector: rest[0], text: rest.slice(1).join(" "), commit: flags.commit === true || undefined }), flags);
+    },
+  },
+  {
     cmd: "key",
     description:
       "Send one keystroke: `Enter`, `Escape`, `Shift+Tab`, `Ctrl+A`, `ArrowDown`, ... With a " +

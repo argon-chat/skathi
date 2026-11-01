@@ -251,6 +251,14 @@ pub fn input_value(id: u32, cx: &App) -> Option<String> {
     crate::render::input_value(id, cx)
 }
 
+/// A text field's IME, as the platform drives the field's input handler:
+/// `text` becomes the composition's pre-edit (`""` cancels it), or with
+/// `commit` its committed text. The devtools `ime` command; a test composes
+/// with it where no IME is installed.
+pub fn ime(id: u32, text: &str, commit: bool, window: &mut Window, cx: &mut App) -> Result<(), String> {
+    crate::render::ime(id, text, commit, window, cx)
+}
+
 /// Is the pointer inside this node's hitbox right now? See [`tree::is_hovered`]
 /// for the one case that answers `false` while a browser would say `true`.
 pub fn is_hovered(id: u32) -> bool {

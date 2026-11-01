@@ -25,9 +25,9 @@ use gpui::{
 
 use super::boundaries;
 use super::{
-    Backspace, ClearSelection, Copy, Cut, Delete, DeleteToEnd, DeleteToStart, DeleteWordLeft,
-    ControlledValue, DeleteWordRight, Down, End, Home, Left, Newline, OnChange, OnKeyDown, Paste,
-    Redo, Right,
+    Backspace, ClearSelection, CompositionPhase, Copy, Cut, Delete, DeleteToEnd, DeleteToStart,
+    DeleteWordLeft, ControlledValue, DeleteWordRight, Down, End, Home, InputIntent, InputType, Left,
+    Newline, OnBeforeInput, OnChange, OnComposition, OnKeyDown, Paste, Redo, Right,
     SelectAll, SelectDown, SelectEnd, SelectHome, SelectLeft, SelectRight, SelectUp, SelectWordLeft,
     SelectWordRight, ShowCharacterPalette, TextInputHandlers, Undo, Up, WordLeft, WordRight,
 };
@@ -187,7 +187,18 @@ pub struct TextInputState {
     marked_range: Option<Range<usize>>,
     read_only: bool,
     on_change: Option<OnChange>,
+    on_before_input: Option<OnBeforeInput>,
+    on_composition: Option<OnComposition>,
     on_key_down: Option<OnKeyDown>,
+    /// A `compositionstart` went out and its `compositionend` is still owed.
+    composition_open: bool,
+    /// The text of a composition that a value assigned from outside cut short,
+    /// whose `compositionend` the framework delivers
+    /// ([`Self::flush_abandoned_composition`]): the assignment comes with no
+    /// window to dispatch from.
+    abandoned_composition: Option<String>,
+    /// Ends a composition when the field loses focus ([`Self::finish_composition`]).
+    _blur: Subscription,
 
     /// Set when `on_key_down` cancelled a keystroke that would have produced a
     /// character.
@@ -295,10 +306,9 @@ impl LineBox {
 }
 
 impl TextInputState {
-    /// Create the state for one input node. `window` is unused today but kept
-    /// in the signature so the framework's construction site does not have to
-    /// change when it becomes needed.
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// Create the state for one input node, in the window that shows it (its
+    /// blur is that window's focus change).
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // A DOM `keydown` listener runs before the browser's default action for
         // the key. gpui resolves key *bindings* (our editing actions) before it
         // ever reaches element key listeners, so a plain `on_key_down` would
@@ -310,15 +320,22 @@ impl TextInputState {
             weak.update(cx, |this, cx| this.on_intercept_keystroke(event, window, cx))
                 .ok();
         });
+        let focus_handle = cx.focus_handle();
+        let blur = cx.on_blur(&focus_handle, window, |this, window, cx| this.finish_composition(window, cx));
         Self {
-            focus_handle: cx.focus_handle(),
+            focus_handle,
             content: String::new(),
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
             read_only: false,
             on_change: None,
+            on_before_input: None,
+            on_composition: None,
             on_key_down: None,
+            composition_open: false,
+            abandoned_composition: None,
+            _blur: blur,
             suppress_text_input: false,
             _key_interceptor: Some(interceptor),
             pending_values: VecDeque::new(),
@@ -423,6 +440,8 @@ impl TextInputState {
         input_config: TextInputConfiguration,
     ) {
         self.on_change = handlers.on_change;
+        self.on_before_input = handlers.on_before_input;
+        self.on_composition = handlers.on_composition;
         self.on_key_down = handlers.on_key_down;
         self.controlled_value = handlers.controlled_value;
         self.read_only = read_only;
@@ -506,6 +525,7 @@ impl TextInputState {
             // The keydown's handlers may have assigned the field; the binding
             // or the character that follows edits what they wrote.
             self.resync_controlled(cx);
+            self.flush_abandoned_composition(window, cx);
             return;
         }
         // preventDefault(): no binding action for this keystroke, and no
@@ -537,6 +557,9 @@ impl TextInputState {
         if self.content == value {
             return;
         }
+        // The pre-edit's range means nothing in the new value: the composition
+        // ends here, and its `compositionend` is owed.
+        self.abandon_composition();
         self.content = value;
         let end = self.content.len();
         self.selected_range = end..end;
@@ -550,35 +573,120 @@ impl TextInputState {
         cx.notify();
     }
 
-    /// Report the current value to the framework and remember it in the echo
-    /// ring. The callback runs deferred — after the current update completes —
-    /// so it is safe for it to call back into this entity (`sync_value`).
-    fn emit_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Report the current value to the framework, with the edit that made it,
+    /// and remember it in the echo ring. The callback runs deferred — after
+    /// the current update completes — so it is safe for it to call back into
+    /// this entity (`sync_value`).
+    fn emit_change(&mut self, intent: InputIntent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(on_change) = self.on_change.clone() else {
             return;
         };
         remember_reported(&mut self.pending_values, self.content.clone());
         let value = self.content.clone();
-        window.defer(cx, move |window, cx| on_change(&value, window, cx));
+        window.defer(cx, move |window, cx| on_change(&value, &intent, window, cx));
     }
 
-    fn restore(&mut self, snapshot: EditSnapshot, window: &mut Window, cx: &mut Context<Self>) {
+    /// `beforeinput` for an edit about to be made: `false` when a handler
+    /// cancelled it. Its handlers may have assigned the field, and the edit
+    /// applies to what they wrote, so the value is read back first; the caller
+    /// works out its range after this. The IME's edits cannot be cancelled,
+    /// and the text in the middle of a composition is the IME's: nothing is
+    /// read back then.
+    fn before_input(&mut self, intent: &InputIntent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(hook) = self.on_before_input.clone() else {
+            return true;
+        };
+        let proceed = hook(intent, window, cx);
+        if intent.input_type.composing() {
+            return true;
+        }
+        if proceed {
+            self.resync_controlled(cx);
+            self.flush_abandoned_composition(window, cx);
+        }
+        proceed
+    }
+
+    /// One stage of the IME composition for the framework: `Start` and
+    /// `Update` now, `End` deferred, so that it follows the `input` the
+    /// commit's edit queued. An `End` with no open composition is dropped, so
+    /// each `Start` gets exactly one.
+    fn composition(&mut self, phase: CompositionPhase, data: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match phase {
+            CompositionPhase::Start => self.composition_open = true,
+            CompositionPhase::Update => {}
+            CompositionPhase::End => {
+                if !std::mem::take(&mut self.composition_open) {
+                    return;
+                }
+            }
+        }
+        let Some(hook) = self.on_composition.clone() else {
+            return;
+        };
+        if phase == CompositionPhase::End {
+            let data = data.to_owned();
+            window.defer(cx, move |window, cx| hook(CompositionPhase::End, &data, window, cx));
+        } else {
+            hook(phase, data, window, cx);
+        }
+    }
+
+    /// Ends the composition in progress, keeping the text it has: the field
+    /// lost focus (Chromium commits the composition then) or the platform
+    /// unmarked it.
+    pub(crate) fn finish_composition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(range) = self.marked_range.take() else {
+            return;
+        };
+        let text = self.content.get(range).unwrap_or_default().to_owned();
+        cx.notify();
+        self.composition(CompositionPhase::End, &text, window, cx);
+    }
+
+    /// The pre-edit is about to lose its meaning (a value assigned from
+    /// outside): its `compositionend` is owed, with the text it had.
+    fn abandon_composition(&mut self) {
+        let Some(range) = self.marked_range.take() else {
+            return;
+        };
+        if std::mem::take(&mut self.composition_open) {
+            self.abandoned_composition = Some(self.content.get(range).unwrap_or_default().to_owned());
+        }
+    }
+
+    /// Delivers the `compositionend` an assigned value owes
+    /// ([`Self::abandon_composition`]), deferred like every `End`. The
+    /// framework calls it after [`Self::sync_value`], where it has a window.
+    pub fn flush_abandoned_composition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = self.abandoned_composition.take() else {
+            return;
+        };
+        let Some(hook) = self.on_composition.clone() else {
+            return;
+        };
+        window.defer(cx, move |window, cx| hook(CompositionPhase::End, &text, window, cx));
+    }
+
+    fn restore(&mut self, snapshot: EditSnapshot, input_type: InputType, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_composition(window, cx);
         self.content = snapshot.content;
         self.selected_range = snapshot.selected_range;
         self.selection_reversed = snapshot.selection_reversed;
-        self.marked_range = None;
         self.reset_blink(cx);
-        self.emit_change(window, cx);
+        self.emit_change(InputIntent::bare(input_type), window, cx);
         cx.notify();
     }
 
     /// The one place content is mutated by the user. `range` is a byte range
     /// into the current content; the returned range covers the inserted text,
-    /// or `None` if the edit was a no-op.
+    /// or `None` if the edit was a no-op. `intent` is the edit as the `input`
+    /// event reports it.
     fn edit(
         &mut self,
         range: Range<usize>,
         new_text: &str,
+        intent: InputIntent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
@@ -602,13 +710,13 @@ impl TextInputState {
             self.content[..range.start].to_owned() + &replacement + &self.content[range.end..];
         let inserted = range.start..range.start + replacement.len();
         self.reset_blink(cx);
-        self.emit_change(window, cx);
+        self.emit_change(intent, window, cx);
         cx.notify();
         Some(inserted)
     }
 
     /// Replace the current selection (or the IME pre-edit) with `text`.
-    fn replace_selection(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn replace_selection(&mut self, text: &str, intent: InputIntent, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
         }
@@ -616,12 +724,42 @@ impl TextInputState {
             .marked_range
             .clone()
             .unwrap_or_else(|| self.selected_range.clone());
-        let Some(inserted) = self.edit(range, text, window, cx) else {
+        let Some(inserted) = self.edit(range, text, intent, window, cx) else {
             return;
         };
         self.selected_range = inserted.end..inserted.end;
         self.selection_reversed = false;
-        self.marked_range = None;
+        // A paste in the middle of a composition replaced the pre-edit.
+        if self.marked_range.take().is_some() {
+            self.composition(CompositionPhase::End, text, window, cx);
+        }
+    }
+
+    /// A deletion: the selection, or from the caret to `to(self)`. Nothing to
+    /// delete (Backspace at the start of the value) is no edit and no
+    /// `beforeinput`, as in Chromium.
+    fn delete_toward(
+        &mut self,
+        input_type: InputType,
+        to: fn(&Self) -> usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only || (self.selected_range.is_empty() && to(self) == self.cursor_offset()) {
+            return;
+        }
+        let intent = InputIntent::bare(input_type);
+        if !self.before_input(&intent, window, cx) {
+            return;
+        }
+        if self.selected_range.is_empty() {
+            let offset = to(self);
+            if offset == self.cursor_offset() {
+                return;
+            }
+            self.select_to(offset, cx);
+        }
+        self.replace_selection("", intent, window, cx);
     }
 
     // -------------------------------------------------------------- selection
@@ -674,31 +812,13 @@ impl TextInputState {
     // ------------------------------------------------------------- key actions
 
     pub(crate) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
-            return;
-        }
-        if self.selected_range.is_empty() {
-            let previous = boundaries::previous_grapheme(&self.content, self.cursor_offset());
-            if previous == self.cursor_offset() {
-                return;
-            }
-            self.select_to(previous, cx);
-        }
-        self.replace_selection("", window, cx);
+        let to = |s: &Self| boundaries::previous_grapheme(&s.content, s.cursor_offset());
+        self.delete_toward(InputType::DeleteContentBackward, to, window, cx);
     }
 
     pub(crate) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
-            return;
-        }
-        if self.selected_range.is_empty() {
-            let next = boundaries::next_grapheme(&self.content, self.cursor_offset());
-            if next == self.cursor_offset() {
-                return;
-            }
-            self.select_to(next, cx);
-        }
-        self.replace_selection("", window, cx);
+        let to = |s: &Self| boundaries::next_grapheme(&s.content, s.cursor_offset());
+        self.delete_toward(InputType::DeleteContentForward, to, window, cx);
     }
 
     pub(crate) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
@@ -786,7 +906,13 @@ impl TextInputState {
         if self.read_only || !self.multiline {
             return;
         }
-        self.replace_selection("\n", window, cx);
+        // Chromium's `insertLineBreak` for a textarea (a contenteditable's
+        // Return is `insertParagraph`), with no data.
+        let intent = InputIntent::bare(InputType::InsertLineBreak);
+        if !self.before_input(&intent, window, cx) {
+            return;
+        }
+        self.replace_selection("\n", intent, window, cx);
     }
 
     pub(crate) fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -825,14 +951,8 @@ impl TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
-            return;
-        }
-        if self.selected_range.is_empty() {
-            let offset = boundaries::previous_word(&self.content, self.cursor_offset());
-            self.select_to(offset, cx);
-        }
-        self.replace_selection("", window, cx);
+        let to = |s: &Self| boundaries::previous_word(&s.content, s.cursor_offset());
+        self.delete_toward(InputType::DeleteWordBackward, to, window, cx);
     }
 
     pub(crate) fn delete_word_right(
@@ -841,14 +961,8 @@ impl TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
-            return;
-        }
-        if self.selected_range.is_empty() {
-            let offset = boundaries::next_word(&self.content, self.cursor_offset());
-            self.select_to(offset, cx);
-        }
-        self.replace_selection("", window, cx);
+        let to = |s: &Self| boundaries::next_word(&s.content, s.cursor_offset());
+        self.delete_toward(InputType::DeleteWordForward, to, window, cx);
     }
 
     pub(crate) fn delete_to_start(
@@ -857,16 +971,7 @@ impl TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
-            return;
-        }
-        if self.selected_range.is_empty() {
-            if self.cursor_offset() == 0 {
-                return;
-            }
-            self.select_to(0, cx);
-        }
-        self.replace_selection("", window, cx);
+        self.delete_toward(InputType::DeleteSoftLineBackward, |_| 0, window, cx);
     }
 
     pub(crate) fn delete_to_end(
@@ -875,16 +980,7 @@ impl TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.read_only {
-            return;
-        }
-        if self.selected_range.is_empty() {
-            if self.cursor_offset() == self.content.len() {
-                return;
-            }
-            self.select_to(self.content.len(), cx);
-        }
-        self.replace_selection("", window, cx);
+        self.delete_toward(InputType::DeleteSoftLineForward, |s| s.content.len(), window, cx);
     }
 
     pub(crate) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
@@ -898,36 +994,56 @@ impl TextInputState {
         if self.read_only || self.selected_range.is_empty() {
             return;
         }
+        // Chromium writes the clipboard BEFORE it asks `beforeinput`
+        // (`ClipboardCommands::ExecuteCut`): a cancelled `deleteByCut` leaves
+        // the text both on the clipboard and in the field.
         cx.write_to_clipboard(ClipboardItem::new_string(self.selected_text().to_owned()));
-        self.replace_selection("", window, cx);
+        let intent = InputIntent::bare(InputType::DeleteByCut);
+        if !self.before_input(&intent, window, cx) || self.selected_range.is_empty() {
+            return;
+        }
+        self.replace_selection("", intent, window, cx);
     }
 
     pub(crate) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
         }
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_selection(&text, window, cx);
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        // A plain-text field's `insertFromPaste` carries the clipboard's text
+        // as `data` (and no DataTransfer), as Chromium's does.
+        let intent = InputIntent::with(InputType::InsertFromPaste, &text);
+        if !self.before_input(&intent, window, cx) {
+            return;
         }
+        self.replace_selection(&text, intent, window, cx);
     }
 
     pub(crate) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.undo_stack.is_empty() {
+            return;
+        }
+        if !self.before_input(&InputIntent::bare(InputType::HistoryUndo), window, cx) {
             return;
         }
         if let Some(previous) = self.undo_stack.pop() {
             self.redo_stack.push(self.snapshot());
-            self.restore(previous, window, cx);
+            self.restore(previous, InputType::HistoryUndo, window, cx);
         }
     }
 
     pub(crate) fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.redo_stack.is_empty() {
+            return;
+        }
+        if !self.before_input(&InputIntent::bare(InputType::HistoryRedo), window, cx) {
             return;
         }
         if let Some(next) = self.redo_stack.pop() {
             self.undo_stack.push(self.snapshot());
-            self.restore(next, window, cx);
+            self.restore(next, InputType::HistoryRedo, window, cx);
         }
     }
 
@@ -1349,9 +1465,8 @@ impl EntityInputHandler for TextInputState {
             .map(|range| self.range_to_utf16(range))
     }
 
-    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.marked_range = None;
-        cx.notify();
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_composition(window, cx);
     }
 
     fn replace_text_in_range(
@@ -1369,12 +1484,48 @@ impl EntityInputHandler for TextInputState {
         if std::mem::take(&mut self.suppress_text_input) && range_utf16.is_none() {
             return;
         }
-        let range = range_utf16
-            .as_ref()
-            .map(|range| self.range_from_utf16(range))
-            .or_else(|| self.marked_range.clone())
-            .unwrap_or_else(|| self.selected_range.clone());
-        let Some(inserted) = self.edit(range, new_text, window, cx) else {
+        let range_of = |this: &Self| {
+            range_utf16
+                .as_ref()
+                .map(|range| this.range_from_utf16(range))
+                .or_else(|| this.marked_range.clone())
+                .unwrap_or_else(|| this.selected_range.clone())
+        };
+        if self.marked_range.is_some() {
+            // The IME commits (or, with "", cancels) its composition. The
+            // last `beforeinput` and `compositionupdate` carry the committed
+            // text, then the edit and its `input`, then `compositionend`
+            // (Chromium's `InsertTextDuringCompositionWithEvents`, then
+            // `DispatchCompositionEndEvent`).
+            let intent = InputIntent::with(InputType::InsertCompositionText, new_text);
+            self.before_input(&intent, window, cx);
+            self.composition(CompositionPhase::Update, new_text, window, cx);
+            if let Some(inserted) = self.edit(range_of(self), new_text, intent, window, cx) {
+                self.selected_range = inserted.end..inserted.end;
+                self.selection_reversed = false;
+            }
+            if self.marked_range.take().is_some() {
+                cx.notify();
+            }
+            self.composition(CompositionPhase::End, new_text, window, cx);
+            return;
+        }
+        // Typed text. What the field cannot hold (Return in an `<input>`) is
+        // no edit and no event, whatever is selected.
+        let replacement = self.sanitize(new_text);
+        if replacement.is_empty() && (!new_text.is_empty() || range_of(self).is_empty()) {
+            return;
+        }
+        let intent = if replacement == "\n" {
+            InputIntent::bare(InputType::InsertLineBreak)
+        } else {
+            InputIntent::with(InputType::InsertText, new_text)
+        };
+        if !self.before_input(&intent, window, cx) {
+            return;
+        }
+        // After the handlers: a value they assigned put the caret at its end.
+        let Some(inserted) = self.edit(range_of(self), new_text, intent, window, cx) else {
             return;
         };
         self.selected_range = inserted.end..inserted.end;
@@ -1399,14 +1550,49 @@ impl EntityInputHandler for TextInputState {
             .or_else(|| self.marked_range.clone())
             .unwrap_or_else(|| self.selected_range.clone());
 
-        let Some(inserted) = self.edit(range, new_text, window, cx) else {
+        if self.marked_range.is_none() {
+            if new_text.is_empty() {
+                // An empty pre-edit outside a composition (some IMEs send
+                // one): Chromium deletes the selection and starts nothing.
+                if range.is_empty() {
+                    return;
+                }
+                let intent = InputIntent::bare(InputType::DeleteContentBackward);
+                if !self.before_input(&intent, window, cx) {
+                    return;
+                }
+                let range = self.selected_range.clone();
+                if let Some(inserted) = self.edit(range, "", intent, window, cx) {
+                    self.selected_range = inserted.end..inserted.end;
+                    self.selection_reversed = false;
+                }
+                return;
+            }
+            // The first pre-edit: `compositionstart`, whose data is what the
+            // composition replaces (the selection, usually nothing).
+            let replaced = self.content.get(range.clone()).unwrap_or_default().to_owned();
+            self.composition(CompositionPhase::Start, &replaced, window, cx);
+        }
+        // Chromium's order for every pre-edit: `beforeinput` (not
+        // cancelable), `compositionupdate`, the edit, `input`.
+        let intent = InputIntent::with(InputType::InsertCompositionText, new_text);
+        self.before_input(&intent, window, cx);
+        self.composition(CompositionPhase::Update, new_text, window, cx);
+
+        let Some(inserted) = self.edit(range, new_text, intent, window, cx) else {
             // The composition was cancelled with nothing to replace.
             if self.marked_range.take().is_some() {
                 cx.notify();
             }
+            self.composition(CompositionPhase::End, "", window, cx);
             return;
         };
         self.marked_range = (!inserted.is_empty()).then_some(inserted.clone());
+        if self.marked_range.is_none() {
+            // An empty pre-edit (the user deleted all of it, or Escape) ends
+            // the composition.
+            self.composition(CompositionPhase::End, "", window, cx);
+        }
 
         // `new_selected_range_utf16` is relative to the inserted text.
         let selected_range = match new_selected_range_utf16.as_ref() {

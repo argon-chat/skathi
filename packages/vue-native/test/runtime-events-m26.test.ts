@@ -179,6 +179,142 @@ describe("auxclick", () => {
   });
 });
 
+describe("beforeinput, input and the composition events", () => {
+  type Edit = Ev & { inputType: string; data: string | null; isComposing: boolean; composed: boolean };
+  /** The host's edit: `a` the inputType code, `b` 1 while composing, the data string 8th. */
+  const send = (rt: Rt, el: El, name: string, type: number, data?: string, composing = 0, value?: string) =>
+    rt.host.dispatcher(el.__vnId, (rt.EV_CODES as Record<string, number>)[name], type, composing, 0, 0, value, data);
+  const field = (rt: Rt, tag = "textarea") => {
+    const { outer } = tree(rt);
+    const el = rt.nodeOps.createElement(tag) as unknown as El;
+    rt.nodeOps.insert(el as never, outer as never, null);
+    return { outer, el };
+  };
+  const read = (e: Edit) => [e.type, e.inputType, e.data, e.isComposing, e.bubbles, e.cancelable, e.composed];
+
+  test("@beforeinput and the composition events arm their own codes, and are not advised", () => {
+    const rt = createRuntime();
+    rt.patchProp(rt.el(5), "onBeforeinput", null, () => {});
+    rt.patchProp(rt.el(5), "onCompositionstart", null, () => {});
+    rt.patchProp(rt.el(5), "onCompositionend", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.beforeinput)).toEqual([{ id: 5, code: 48, on: true }]);
+    expect(rt.flagsFor(rt.EV_CODES.compositionstart)).toEqual([{ id: 5, code: 49, on: true }]);
+    expect(rt.flagsFor(rt.EV_CODES.compositionend)).toEqual([{ id: 5, code: 51, on: true }]);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("typing: beforeinput, then input, both InputEvents with inputType and data; only beforeinput cancels", () => {
+    const rt = createRuntime();
+    const { outer, el } = field(rt);
+    const seen: unknown[][] = [];
+    outer.addEventListener("beforeinput", (e) => seen.push([...read(e as Edit), el.value]));
+    outer.addEventListener("input", (e) => seen.push([...read(e as Edit), el.value]));
+    expect(send(rt, el, "beforeinput", 1, "a")).toBe(true);
+    send(rt, el, "input", 1, "a", 0, "a");
+    expect(seen).toEqual([
+      ["beforeinput", "insertText", "a", false, true, true, true, ""],
+      ["input", "insertText", "a", false, true, false, true, "a"],
+    ]);
+  });
+
+  test("useEmojiSuggest's swallowed space: a cancelled beforeinput answers the host false", () => {
+    const rt = createRuntime();
+    const { el } = field(rt);
+    // apps/client useEmojiSuggest.ts onBeforeInput, minus the caret check.
+    el.addEventListener("beforeinput", (e) => {
+      const ie = e as Edit;
+      if (ie.inputType === "insertText" && ie.data === " ") ie.preventDefault();
+    });
+    expect(send(rt, el, "beforeinput", 1, " ")).toBe(false);
+    expect(send(rt, el, "beforeinput", 1, "x")).toBe(true);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("a deletion and a line break carry no data; a paste carries its text", () => {
+    const rt = createRuntime();
+    const { el } = field(rt);
+    const seen: unknown[] = [];
+    el.addEventListener("beforeinput", (e) => seen.push([(e as Edit).inputType, (e as Edit).data]));
+    send(rt, el, "beforeinput", 5);
+    send(rt, el, "beforeinput", 7);
+    send(rt, el, "beforeinput", 2);
+    send(rt, el, "beforeinput", 3, "pasted\ntext");
+    send(rt, el, "beforeinput", 11);
+    send(rt, el, "beforeinput", 12);
+    expect(seen).toEqual([
+      ["deleteContentBackward", null],
+      ["deleteWordBackward", null],
+      ["insertLineBreak", null],
+      ["insertFromPaste", "pasted\ntext"],
+      ["deleteByCut", null],
+      ["historyUndo", null],
+    ]);
+  });
+
+  test("the IME's beforeinput says isComposing and cannot be cancelled", () => {
+    const rt = createRuntime();
+    const { el } = field(rt);
+    let seen: Edit | undefined;
+    el.addEventListener("beforeinput", (e) => {
+      seen = e as Edit;
+      e.preventDefault();
+    });
+    expect(send(rt, el, "beforeinput", 4, "に", 1)).toBe(true);
+    expect(read(seen!)).toEqual(["beforeinput", "insertCompositionText", "に", true, true, false, true]);
+    expect(seen!.defaultPrevented).toBe(false);
+  });
+
+  test("the composition events are CompositionEvents with data, and bubble", () => {
+    const rt = createRuntime();
+    const { outer, el } = field(rt);
+    const C = (rt.global as unknown as { CompositionEvent: new (t: string) => Event }).CompositionEvent;
+    const seen: unknown[] = [];
+    for (const t of ["compositionstart", "compositionupdate", "compositionend"])
+      outer.addEventListener(t, (e) => seen.push([e.type, (e as unknown as { data: string }).data, e instanceof C, e.bubbles]));
+    send(rt, el, "compositionstart", 0, "");
+    send(rt, el, "compositionupdate", 0, "か");
+    send(rt, el, "compositionend", 0, "火");
+    expect(seen).toEqual([
+      ["compositionstart", "", true, true],
+      ["compositionupdate", "か", true, true],
+      ["compositionend", "火", true, true],
+    ]);
+  });
+
+  test("v-model leaves the model alone while an IME composes, as runtime-dom does", () => {
+    const rt = createRuntime();
+    const { el } = field(rt, "input");
+    const model: unknown[] = [];
+    const binding = { modifiers: {} };
+    rt.vModelText.created(el as never, binding, { props: { "onUpdate:modelValue": (v: unknown) => model.push(v) } });
+    send(rt, el, "input", 1, "a", 0, "a");
+    send(rt, el, "compositionstart", 0, "");
+    send(rt, el, "input", 4, "k", 1, "ak");
+    send(rt, el, "input", 4, "か", 1, "aか");
+    expect(model).toEqual(["a"]);
+    // A re-render in the middle of it does not write the field back.
+    const writes = () => rt.host.props.filter((p: { id: number; key: string }) => p.id === el.__vnId && p.key === "value").length;
+    const before = writes();
+    rt.vModelText.beforeUpdate(el as never, { value: "a" }, { props: { "onUpdate:modelValue": (v: unknown) => model.push(v) } });
+    expect(writes()).toBe(before);
+    send(rt, el, "compositionend", 0, "か");
+    expect(model).toEqual(["a", "aか"]);
+    send(rt, el, "input", 1, "b", 0, "aかb");
+    expect(model).toEqual(["a", "aか", "aかb"]);
+  });
+
+  test("InputEvent.prototype has a null dataTransfer and no target ranges, as a text field's has", () => {
+    class EngineInputEvent extends Event {}
+    const rt = createRuntime({ globals: { InputEvent: EngineInputEvent } });
+    const ie = new (rt.global as unknown as { InputEvent: typeof EngineInputEvent }).InputEvent("beforeinput") as unknown as {
+      dataTransfer: unknown;
+      getTargetRanges(): unknown[];
+    };
+    expect(ie.dataTransfer).toBe(null);
+    expect(ie.getTargetRanges()).toEqual([]);
+  });
+});
+
 describe("dblclick and detail", () => {
   test("@dblclick arms the click bit — it has no code of its own", () => {
     const rt = createRuntime();

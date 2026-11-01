@@ -22,9 +22,10 @@
 //!   ring).
 //! * [`TextInputOptions`] — everything the CSS engine recomputes per frame
 //!   (placeholder, colours, font size, disabled, tab index).
-//! * [`TextInputHandlers`] — the per-frame event sinks (`input`, `keydown`,
-//!   `keyup`, `copy`/`cut`/`paste`); `keydown` and the clipboard hook run
-//!   *before* the widget acts and can cancel it.
+//! * [`TextInputHandlers`] — the per-frame event sinks (`input`,
+//!   `beforeinput`, the composition events, `keydown`, `keyup`,
+//!   `copy`/`cut`/`paste`); `keydown`, the clipboard hook and `beforeinput`
+//!   run *before* the widget acts and can cancel it.
 //! * [`text_input`] — builds the element for one frame out of the three.
 
 mod boundaries;
@@ -99,13 +100,130 @@ const BOTH_KEY_CONTEXTS: &str = "VnTextInput VnTextArea";
 /// HTML's default `<textarea rows>`.
 pub const DEFAULT_ROWS: usize = 2;
 
+/// What a user edit does, in the Input Events vocabulary: the DOM's
+/// `InputEvent.inputType`. The discriminant is the code the framework carries
+/// across to JS, where `EDIT_TYPES` in `packages/vue-native/src/runtime.ts`
+/// names it (in lockstep: `test/protocol-codes.test.ts` parses this enum).
+///
+/// Only what this widget can do is here. It has no drag-and-drop of text
+/// (`insertFromDrop`), no spelling replacement (`insertReplacementText`) and no
+/// formatting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum InputType {
+    /// Typed text. Its data is the text.
+    InsertText = 1,
+    /// Return in a `<textarea>`.
+    InsertLineBreak = 2,
+    /// A paste. Its data is the clipboard's text, as a browser's plain-text
+    /// field has it.
+    InsertFromPaste = 3,
+    /// The IME's pre-edit, and its commit. Its data is the composition's text.
+    InsertCompositionText = 4,
+    DeleteContentBackward = 5,
+    DeleteContentForward = 6,
+    DeleteWordBackward = 7,
+    DeleteWordForward = 8,
+    DeleteSoftLineBackward = 9,
+    DeleteSoftLineForward = 10,
+    DeleteByCut = 11,
+    HistoryUndo = 12,
+    HistoryRedo = 13,
+}
+
+impl InputType {
+    /// The DOM's name for it.
+    pub const fn name(self) -> &'static str {
+        match self {
+            InputType::InsertText => "insertText",
+            InputType::InsertLineBreak => "insertLineBreak",
+            InputType::InsertFromPaste => "insertFromPaste",
+            InputType::InsertCompositionText => "insertCompositionText",
+            InputType::DeleteContentBackward => "deleteContentBackward",
+            InputType::DeleteContentForward => "deleteContentForward",
+            InputType::DeleteWordBackward => "deleteWordBackward",
+            InputType::DeleteWordForward => "deleteWordForward",
+            InputType::DeleteSoftLineBackward => "deleteSoftLineBackward",
+            InputType::DeleteSoftLineForward => "deleteSoftLineForward",
+            InputType::DeleteByCut => "deleteByCut",
+            InputType::HistoryUndo => "historyUndo",
+            InputType::HistoryRedo => "historyRedo",
+        }
+    }
+
+    /// The code the framework carries across to JS.
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// The IME's text: its `beforeinput` cannot be cancelled, and its events
+    /// say `isComposing` (Input Events Level 1, which Chromium implements).
+    pub const fn composing(self) -> bool {
+        matches!(self, InputType::InsertCompositionText)
+    }
+}
+
+/// One user edit, as `beforeinput` announces it and `input` reports it: its
+/// type, and its `data` (the inserted text for the types that insert some,
+/// `None` for the others).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputIntent {
+    pub input_type: InputType,
+    pub data: Option<String>,
+}
+
+impl InputIntent {
+    /// An edit with no data: a deletion, a line break, undo or redo.
+    pub fn bare(input_type: InputType) -> Self {
+        Self { input_type, data: None }
+    }
+
+    pub fn with(input_type: InputType, data: &str) -> Self {
+        Self { input_type, data: Some(data.to_owned()) }
+    }
+}
+
 /// Called by [`TextInputState`] whenever the user's editing changed the
-/// content; the framework forwards it to JS as an `input`/`change` event.
+/// content; the framework forwards it to JS as an `input` event. The
+/// [`InputIntent`] is the edit that did it.
 ///
 /// Invoked deferred (via [`Window::defer`]), i.e. after the edit that caused it
 /// has finished, so it is safe to call back into the same entity — including
 /// [`TextInputState::sync_value`] — from inside it.
-pub type OnChange = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+pub type OnChange = Rc<dyn Fn(&str, &InputIntent, &mut Window, &mut App)>;
+
+/// Fired before every user edit, the native side of the DOM's `beforeinput`:
+/// after the keystroke's `keydown` (and a paste's or cut's ClipboardEvent),
+/// before the content changes. Returning `false` means the event was
+/// cancelled: the widget makes no edit and reports no change. Not called when
+/// the edit would do nothing (Backspace at the start of the value).
+///
+/// The IME's events ([`InputType::composing`]) cannot be cancelled; their
+/// answer is ignored. The hook runs inside the widget's update, as
+/// [`OnKeyDown`] does; what its handlers assign to the field is read back
+/// ([`ControlledValue`]) before the edit, which then applies to it.
+pub type OnBeforeInput = Rc<dyn Fn(&InputIntent, &mut Window, &mut App) -> bool>;
+
+/// The three stages of an IME composition (UI Events §5.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompositionPhase {
+    Start,
+    Update,
+    End,
+}
+
+/// The DOM's `compositionstart` / `compositionupdate` / `compositionend`,
+/// with their `data`: what the composition replaces at the start (usually
+/// nothing), the pre-edit text at each update, the committed text at the end.
+///
+/// The order is Chromium's for one pre-edit: `compositionstart`, then
+/// `beforeinput`, `compositionupdate`, the edit, `input`; the commit's
+/// `compositionend` comes after its `input`. `Start` and `Update` run inside
+/// the widget's update, as [`OnBeforeInput`] does; `End` is deferred, after the
+/// `input` it follows. Every `Start` gets its `End`: a commit, a cancelled
+/// pre-edit, the field losing focus, or a value assigned from outside in the
+/// middle of a composition each end it.
+pub type OnComposition = Rc<dyn Fn(CompositionPhase, &str, &mut Window, &mut App)>;
 
 /// Fired for every keystroke that reaches this input *before* the widget acts
 /// on it — the native equivalent of a DOM `keydown` listener.
@@ -159,6 +277,10 @@ pub type ControlledValue = Rc<dyn Fn(&App) -> Option<(String, u32)>>;
 pub struct TextInputHandlers {
     /// User editing changed the content (`input`/`change`).
     pub on_change: Option<OnChange>,
+    /// Before each user edit, and able to cancel it; see [`OnBeforeInput`].
+    pub on_before_input: Option<OnBeforeInput>,
+    /// The IME composition's three stages; see [`OnComposition`].
+    pub on_composition: Option<OnComposition>,
     /// Pre-processing hook for keystrokes; see [`OnKeyDown`].
     pub on_key_down: Option<OnKeyDown>,
     pub on_key_up: Option<OnKeyUp>,
@@ -172,6 +294,8 @@ impl std::fmt::Debug for TextInputHandlers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextInputHandlers")
             .field("on_change", &self.on_change.is_some())
+            .field("on_before_input", &self.on_before_input.is_some())
+            .field("on_composition", &self.on_composition.is_some())
             .field("on_key_down", &self.on_key_down.is_some())
             .field("on_key_up", &self.on_key_up.is_some())
             .field("on_clipboard", &self.on_clipboard.is_some())
@@ -553,6 +677,34 @@ mod tests {
             .iter()
             .find(|b| b.keystrokes().len() == 1 && *b.keystrokes()[0].inner() == want)
             .map(|b| b.action().name())
+    }
+
+    /// The codes are what JS indexes `EDIT_TYPES` with: dense from 1, and only
+    /// the IME's type composes (its `beforeinput` cannot be cancelled).
+    #[test]
+    fn input_types_are_dense_and_only_the_ime_composes() {
+        let all = [
+            InputType::InsertText,
+            InputType::InsertLineBreak,
+            InputType::InsertFromPaste,
+            InputType::InsertCompositionText,
+            InputType::DeleteContentBackward,
+            InputType::DeleteContentForward,
+            InputType::DeleteWordBackward,
+            InputType::DeleteWordForward,
+            InputType::DeleteSoftLineBackward,
+            InputType::DeleteSoftLineForward,
+            InputType::DeleteByCut,
+            InputType::HistoryUndo,
+            InputType::HistoryRedo,
+        ];
+        for (i, t) in all.iter().enumerate() {
+            assert_eq!(usize::from(t.code()), i + 1, "{t:?}");
+            assert_eq!(t.composing(), *t == InputType::InsertCompositionText);
+        }
+        assert_eq!(InputType::DeleteByCut.name(), "deleteByCut");
+        assert_eq!(InputIntent::with(InputType::InsertText, "a").data.as_deref(), Some("a"));
+        assert_eq!(InputIntent::bare(InputType::InsertLineBreak).data, None);
     }
 
     /// Shift+Insert, Ctrl+Insert and Shift+Delete are the same three commands

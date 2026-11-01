@@ -271,7 +271,11 @@ type VnEventCode =
   | 44 // pointercancel      (the window lost activation mid-press)
   | 45 // selectstart        (a press that starts a text selection, cancelable)
   | 46 // selectionchange   (at the root, for `document`, crates/vn-tree/src/selection.rs)
-  | 47; // auxclick         (the middle or right button's click, after its mouseup)
+  | 47 // auxclick          (the middle or right button's click, after its mouseup)
+  | 48 // beforeinput       (a text field's edit, before it: cancelable but for the IME's)
+  | 49 // compositionstart  (the IME composition, crates/vn-elements TextInputState)
+  | 50 // compositionupdate
+  | 51; // compositionend
 
 // ---------------------------------------------------------------------------
 // the text selection — crates/vn-tree/src/selection.rs (src/selection.ts)

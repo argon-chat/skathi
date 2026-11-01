@@ -29,10 +29,10 @@ pub mod text_input;
 pub use scrollbar::{ChainSpan, Overscroll, Scrollbar, ScrollbarStyle, undo_wheel_scroll};
 pub use tab_nav::{FocusNext, FocusPrev};
 pub use text_input::{
-    ClipboardCommand, ControlledValue, DEFAULT_ROWS, InputAttributes, KEY_CONTEXT,
-    MappedConfiguration, OnChange, OnClipboard, OnKeyDown, OnKeyUp,
-    TEXTAREA_KEY_CONTEXT, TextInputHandlers, TextInputOptions, TextInputState, configuration,
-    text_input,
+    ClipboardCommand, CompositionPhase, ControlledValue, DEFAULT_ROWS, InputAttributes, InputIntent,
+    InputType, KEY_CONTEXT, MappedConfiguration, OnBeforeInput, OnChange, OnClipboard,
+    OnComposition, OnKeyDown, OnKeyUp, TEXTAREA_KEY_CONTEXT, TextInputHandlers, TextInputOptions,
+    TextInputState, configuration, text_input,
 };
 
 /// One-time app setup for every widget in this crate (key bindings, actions),

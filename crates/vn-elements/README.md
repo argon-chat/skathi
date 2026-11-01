@@ -53,7 +53,14 @@ pub struct TextInputOptions {
 }
 
 // ---- per-frame event sinks -------------------------------------------------
-pub type OnChange  = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+/// The new value and the edit that made it (`InputType` + `data`): `input`.
+pub type OnChange  = Rc<dyn Fn(&str, &InputIntent, &mut Window, &mut App)>;
+/// Before each edit: `beforeinput`. `false` == cancelled, no edit and no
+/// change (the IME's edits cannot be cancelled).
+pub type OnBeforeInput = Rc<dyn Fn(&InputIntent, &mut Window, &mut App) -> bool>;
+/// The IME composition's Start / Update (now) and End (deferred, after the
+/// commit's change). Every Start gets its End.
+pub type OnComposition = Rc<dyn Fn(CompositionPhase, &str, &mut Window, &mut App)>;
 /// Runs BEFORE the widget acts on the keystroke. `false` == preventDefault():
 /// no key-binding action and no character insertion for that keystroke.
 pub type OnKeyDown = Rc<dyn Fn(&KeyDownEvent, &mut Window, &mut App) -> bool>;
@@ -68,6 +75,8 @@ pub type ControlledValue = Rc<dyn Fn(&App) -> Option<(String, u32)>>;
 #[derive(Clone, Default)]
 pub struct TextInputHandlers {
     pub on_change: Option<OnChange>,
+    pub on_before_input: Option<OnBeforeInput>,
+    pub on_composition: Option<OnComposition>,
     pub on_key_down: Option<OnKeyDown>,
     pub on_key_up: Option<OnKeyUp>,
     pub on_clipboard: Option<OnClipboard>,
@@ -90,16 +99,23 @@ pub const KEY_CONTEXT: &str;
 Per-frame usage:
 
 ```rust
-state.update(cx, |state, cx| state.sync_value(&value, write, cx));  // 1
-let element = text_input(&state, options, handlers, cx);            // 2
+state.update(cx, |state, cx| {
+    state.sync_value(&value, write, cx);                            // 1
+    state.flush_abandoned_composition(window, cx);                  // 2
+});
+let element = text_input(&state, options, handlers, cx);            // 3
 ```
+
+Step 2 delivers the `compositionend` that a value assigned in the middle of
+an IME composition owes; the assignment itself has no window to deliver it
+from.
 
 ## Deviations from the requested contract
 
 | # | Deviation | Why |
 |---|-----------|-----|
 | 1 | `text_input(..., cx: &mut App)` takes an extra context | `on_change` and `disabled` must reach the *entity* — the platform calls `EntityInputHandler::replace_text_in_range` on the entity directly, not through anything the returned element owns — and reaching into an `Entity` needs an `App`. The focus handle for `track_focus` also comes from `state.read(cx)`. |
-| 2 | `TextInputState::new(window, cx)` ignores `window` | Nothing in construction needs it today; the parameter is kept so the framework's call site does not change when it does. |
+| 2 | `TextInputState::new(window, cx)` takes the window | It subscribes to the field's blur in that window, which ends an IME composition in progress (Chromium commits it then). |
 | 3 | `sync_value` takes a write counter and is idempotent *per counter* | It remembers the last **assignment** the framework passed and returns immediately if the counter is unchanged, so vn-tree can call it unconditionally every frame without tracking prop changes itself (and an *uncontrolled* input — one whose `value` prop is never assigned again — is not reset to that prop every frame). Keying on the counter instead of on the string is what lets `v-model` clear the same field twice: the second `""` is a *different assignment* even though it is the same string, and the user has typed in between. |
 | 4 | `on_change` fires deferred (`Window::defer`) | It is invoked after the edit's `Entity::update` has finished, so the callback may re-enter this entity — including calling `sync_value` — without the "entity already borrowed" panic. Ordering is preserved, and the echo-ring entry is pushed *synchronously* before the deferral, so an echo can never overtake it. |
 | 5 | `disabled` means read-only, not inert | No typing/paste/cut/undo/redo, `accepts_text_input() == false` (so the IME will not target it) and no caret. Focus, selection and copy still work, like a `readonly` HTML input rather than a `disabled` one. Nothing in the contract distinguished the two; flip `read_only` in `TextInputState` if a harder lock is wanted. |

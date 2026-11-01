@@ -68,7 +68,7 @@ pub const EV_EMPTIED: u32 = 34;
 // These four were 17-20 on the compat track and were RENUMBERED to 35-38 at the
 // m12 integration merge, because the `<video>` track had independently taken
 // 17-34 for the media block. `Node::listeners` is a `u64`, so the space is
-// there; bits 48-63 remain free.
+// there; bits 52-63 remain free.
 pub const EV_TRANSITIONEND: u32 = 35;
 pub const EV_ANIMATIONSTART: u32 = 36;
 pub const EV_ANIMATIONEND: u32 = 37;
@@ -107,6 +107,19 @@ pub const EV_SELECTIONCHANGE: u32 = 46;
 /// release's wave after `mouseup` and, for the right button, before
 /// `contextmenu` (Chromium on Windows; `crate::render`'s up wave).
 pub const EV_AUXCLICK: u32 = 47;
+// A text field's edits (vn-elements `TextInputState`). `a` is the edit's
+// `InputType` code (`InputEvent.inputType`), `b` 1 while an IME composes
+// (`isComposing`), and the dispatcher's eighth argument the event's `data`
+// string (`null` without one). `input` (code 9) carries the same, with the new
+// value in `key`.
+/// Before each edit, cancelable (except the IME's): a cancelled one makes no
+/// edit and no `input`.
+pub const EV_BEFOREINPUT: u32 = 48;
+/// The IME composition's stages (CompositionEvents, `data` as above): start,
+/// each pre-edit, and the end, which follows the commit's `input`.
+pub const EV_COMPOSITIONSTART: u32 = 49;
+pub const EV_COMPOSITIONUPDATE: u32 = 50;
+pub const EV_COMPOSITIONEND: u32 = 51;
 
 /// Every host event code with the name JS knows it by — the ONE table, so a
 /// listing (devtools) can never lag the codes again. It did: `event_names` in
@@ -164,6 +177,10 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_SELECTSTART, "selectstart"),
     (EV_SELECTIONCHANGE, "selectionchange"),
     (EV_AUXCLICK, "auxclick"),
+    (EV_BEFOREINPUT, "beforeinput"),
+    (EV_COMPOSITIONSTART, "compositionstart"),
+    (EV_COMPOSITIONUPDATE, "compositionupdate"),
+    (EV_COMPOSITIONEND, "compositionend"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
