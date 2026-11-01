@@ -1,0 +1,10 @@
+[package]
+name = "vn-sticker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# None yet. The core (registry, clock, worker, loop cache) brings vn-lottie and
+# lz4_flex; the video track brings `vn-vpx-sys` (libvpx 1.17, VP9 decoder only)
+# for `src/video/`.

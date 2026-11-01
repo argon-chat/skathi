@@ -7953,6 +7953,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vn-sticker"
+version = "0.1.0"
+
+[[package]]
 name = "vn-storage"
 version = "0.1.0"
 dependencies = [

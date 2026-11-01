@@ -7,6 +7,7 @@ members = [
     "crates/vn-elements",   # native widgets (text input, ...)
     "crates/vn-effects",    # `--shading` registry + .slang sources + generated HLSL
     "crates/vn-lottie",     # Lottie/.tgs playback behind the `<lottie>` element
+    "crates/vn-sticker",    # <vn-sticker>: Lottie + VP9-alpha stickers, shared decoders, loop cache
     "crates/vn-video",      # <video> playback: portable core + the Media Foundation backend
     "crates/vn-voice",      # LiveKit voice: the actor, the playout mixer, the JS host fns
     "crates/vn-permissions",# platform permission backends behind redjs's navigator.permissions
