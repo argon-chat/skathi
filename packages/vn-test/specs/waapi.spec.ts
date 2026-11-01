@@ -123,6 +123,59 @@ describe("el.animate()", () => {
   );
 
   test(
+    "Digit's probe: CSS.supports says no to linear(), which animate() refuses, so the fallback rolls",
+    async () => {
+      expect(
+        await app.eval(`(() => {
+          let thrown = "";
+          try {
+            document.createElement("div").animate({ opacity: [0, 1] }, { duration: 10, easing: "linear(0, 1)" });
+          } catch (e) {
+            thrown = e.name;
+          }
+          return [CSS.supports("animation-timing-function", "linear(0, 1)"), thrown,
+            CSS.supports("animation-timing-function", "cubic-bezier(0.34, 1.56, 0.64, 1)")];
+        })()`),
+      ).toEqual([false, "TypeError", true]);
+    },
+    T,
+  );
+
+  test(
+    "motion's finish: the end value written from a rAF in onfinish, then cancel; no frame paints the base",
+    async () => {
+      // motion-dom's NativeAnimation, minus motion: fill "both", and onfinish
+      // sets the end value through a motion value (a rAF render) and cancels.
+      await app.eval(`(() => {
+        const box = document.getElementById("settle");
+        const a = box.animate({ opacity: [1, 0.2] }, { duration: 300, fill: "both" });
+        window.__settled = false;
+        a.onfinish = () => {
+          requestAnimationFrame(() => (box.style.opacity = "0.2"));
+          a.cancel();
+          window.__settled = true;
+        };
+      })()`);
+      // Red at the box's centre: 0 at opacity 1, 204 at 0.2 on white. A
+      // screenshot is a frame that was drawn, and one takes a few ms.
+      const reds: number[] = [];
+      const started = Date.now();
+      while (Date.now() - started < 700) {
+        const shot = readPng(await app.screenshot());
+        const k = shot.width / 400;
+        reds.push(shot.at(Math.floor(360 * k), Math.floor(60 * k))[0]);
+      }
+      const near = reds.findIndex((r) => r > 180);
+      expect(near).toBeGreaterThan(0);
+      // Once near the end, it never goes back to the base value.
+      expect(Math.min(...reds.slice(near))).toBeGreaterThan(180);
+      expect(reds[reds.length - 1]).toBeGreaterThan(200);
+      expect(await app.eval(`[window.__settled, document.getElementById("settle").getAnimations().length, document.getElementById("settle").style.opacity]`)).toEqual([true, 0, "0.2"]);
+    },
+    T,
+  );
+
+  test(
     "pause and a seek paint the held time, and it stays there",
     async () => {
       await app.eval(`(() => {

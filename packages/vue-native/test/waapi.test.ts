@@ -93,6 +93,8 @@ function world() {
     el,
     frame,
     flush,
+    /** An app's requestAnimationFrame. */
+    raf: (cb: (ts: number) => void) => frames.push(cb),
     HTMLProto,
     SVGProto,
     ElementProto,
@@ -167,9 +169,32 @@ describe("Element.animate()", () => {
     await w.frame(60);
     expect(a.playState).toBe("finished");
     expect(a.currentTime).toBe(100);
+    expect(order).toEqual(["promise"]);
+    // The event: at the next frame's update step.
+    await w.frame();
     expect(order).toEqual(["promise", "event:100", "onfinish"]);
     expect(w.last("drop")).toMatchObject({ id: w.last("set").id });
     expect(w.HTMLProto.getAnimations.call(w.el(3))).toEqual([]);
+  });
+
+  test("onfinish runs before a frame's rAF callbacks: an end value written from one lands with the drop", async () => {
+    // motion's NativeAnimation: fill "both"; onfinish sets the motion value
+    // (whose render is a rAF) and cancels.
+    const w = world();
+    const a = w.el(11).animate({ opacity: [1, 0.5] }, { duration: 100, fill: "both" });
+    const log: string[] = [];
+    let frameNo = 0;
+    a.onfinish = () => {
+      w.raf(() => log.push(`style@${frameNo}`));
+      a.cancel();
+      log.push(`drop@${frameNo}`);
+    };
+    for (; frameNo < 12 && !log.length; frameNo++) await w.frame(16);
+    await w.frame();
+    // The same frame: no frame paints between the drop and the inline style.
+    expect(log).toHaveLength(2);
+    expect(log[0].split("@")[1]).toBe(log[1].split("@")[1]);
+    expect(log[0].startsWith("drop")).toBe(true);
   });
 
   test("cancel mid-flight rejects `finished` with AbortError, fires cancel, and drops the effect", async () => {
@@ -186,6 +211,8 @@ describe("Element.animate()", () => {
     a.cancel();
     await w.flush();
     expect(why).toBe("AbortError");
+    expect(cancelled).toBe(false);
+    await w.frame();
     expect(cancelled).toBe(true);
     expect(a.playState).toBe("idle");
     expect(a.currentTime).toBe(null);
@@ -259,6 +286,7 @@ describe("Element.animate()", () => {
     await w.frame(110);
     expect(b.playState).toBe("finished");
     expect(a.replaceState).toBe("removed");
+    await w.frame();
     expect(removed).toBe(true);
     expect(target.getAnimations()).toEqual([b]);
     // persist() keeps one.

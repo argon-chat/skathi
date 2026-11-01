@@ -6185,10 +6185,12 @@ defineGlobal("CSS", {
   // this says what vue-native can express: the properties the cascade maps.
   supports(a: unknown, b?: unknown) {
     const body = b === undefined ? String(a) : `${String(a)}:${String(b)}`;
-    const name = (body.split(":")[0] || "").trim().toLowerCase();
+    const colon = body.indexOf(":");
+    const name = (colon < 0 ? body : body.slice(0, colon)).trim().toLowerCase();
     if (!name) return false;
     if (name.startsWith("--")) return true;
-    return CSS_SUPPORTED.has(name);
+    if (!CSS_SUPPORTED.has(name)) return false;
+    return colon < 0 || !CSS_UNSUPPORTED_VALUE.test(body.slice(colon + 1));
   },
   registerProperty() {
     warnCompat(
@@ -6218,6 +6220,14 @@ const CSS_SUPPORTED = new Set<string>([
   "pointer-events", "position", "right", "row-gap", "text-align", "top", "transform",
   "visibility", "white-space", "width", "z-index",
 ]);
+
+/// The values `CSS.supports` says no to for a property it otherwise knows.
+/// `linear(…)` easing: the parser (lightningcss alpha.72) has no such
+/// function, so a stylesheet drops the declaration and `el.animate()` refuses
+/// it (src/waapi.ts). Apps probe for it and fall back — Argon's counter
+/// (Digit.vue) picks a `cubic-bezier` when this answers no. Not
+/// `linear-gradient(`.
+const CSS_UNSUPPORTED_VALUE = /(?:^|[^\w-])linear\(/i;
 
 // -- MutationObserver, wired to the REAL mirror-tree mutations.
 // Records are queued at the nodeOps/patchProp call sites and delivered on a

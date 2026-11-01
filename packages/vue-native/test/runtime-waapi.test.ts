@@ -53,6 +53,21 @@ describe("el.animate() in the runtime", () => {
     expect(g.document.getAnimations()).toEqual([]);
   });
 
+  test("CSS.supports says no to linear() easing, which el.animate() refuses", () => {
+    // Argon's Digit.vue asks exactly this, and builds a linear() spring when
+    // the answer is yes: el.animate() would then throw on every tick.
+    const rt = createRuntime();
+    const CSS = (rt.global as Record<string, Any>).CSS;
+    expect(CSS.supports("animation-timing-function", "linear(0, 1)")).toBe(false);
+    expect(CSS.supports("transition-timing-function: LINEAR(0, 0.5 50%, 1)")).toBe(false);
+    expect(CSS.supports("transition", "opacity 1s linear(0, 1)")).toBe(false);
+    expect(CSS.supports("animation-timing-function", "cubic-bezier(0.34, 1.56, 0.64, 1)")).toBe(true);
+    expect(CSS.supports("transition-timing-function", "linear")).toBe(true);
+    expect(CSS.supports("background", "linear-gradient(red, blue)")).toBe(true);
+    const el: Any = rt.nodeOps.createElement("div");
+    expect(() => el.animate({ opacity: [0, 1] }, { duration: 10, easing: "linear(0, 1)" })).toThrow(TypeError);
+  });
+
   test("an older host without __vn_anim_* installs nothing", async () => {
     const rt = createRuntime({ anim: false });
     const el: Any = rt.nodeOps.createElement("div");

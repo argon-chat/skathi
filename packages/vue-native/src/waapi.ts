@@ -24,13 +24,20 @@
 //   SVGElement.prototype, NOT Element.prototype. motion / framer-motion decide
 //   between their own JS animations and WAAPI with
 //   `Object.hasOwnProperty.call(Element.prototype, "animate")`, and their JS
-//   path is the proven one here; app code calling `el.animate()` on an element
-//   works either way. One advisory, on the first call.
+//   path is the better one here: on this one a spring would fall back to a
+//   300 ms ease-out (no `linear()`) and a `filter` would jump at its end.
+//   App code calling `el.animate()` on an element works either way. One
+//   advisory, on the first call.
 // * `document.timeline.currentTime` is `performance.now()` read live, not a
 //   value frozen for the frame.
+// * The animation events go out before a frame's rAF callbacks, as in a
+//   browser, but a finish is dispatched one frame after the frame that
+//   reached it: the promise settles in that frame's microtasks, which here
+//   run after its rAF batch (`queueEvent`). A filling animation paints its
+//   end value meanwhile.
 // * Composite `add` / `accumulate`, pseudo-element targets, other timelines,
-//   `linear(…)` easing (refused, as by a browser without it: `CSS.supports`
-//   answers no too) and properties the animator cannot interpolate
+//   `linear(…)` easing (refused, as by a browser without it; `CSS.supports`
+//   answers no to it too, runtime.ts) and properties the animator cannot interpolate
 //   (crates/vn-css `TransitionProperty::animatable`) are advised once each;
 //   the timing, the promises and the events still run.
 // * `getAnimations()` lists script animations only: CSS animations and
@@ -524,6 +531,26 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
   const live = new Set<AnimationImpl>();
   let nextId = 0;
 
+  // The animation events (finish, cancel, remove) wait for the next frame's
+  // "update animations and send events" step, as in a browser, which runs it
+  // before that frame's animation frame callbacks. Here that step is a timer:
+  // the host's frame runs due timers first, then the rAF batch. So a handler
+  // that writes the end value from a rAF (motion's onfinish does, through a
+  // motion value) paints it in the frame its `cancel()` drops the effect,
+  // with no frame of the base value in between. The promises still settle
+  // first, in the microtasks before.
+  const events: (() => void)[] = [];
+  let eventsArmed = false;
+  const queueEvent = (send: () => void): void => {
+    events.push(send);
+    if (eventsArmed) return;
+    eventsArmed = true;
+    d.setTimer(() => {
+      eventsArmed = false;
+      for (const f of events.splice(0)) f();
+    }, 0);
+  };
+
   // -- the timeline --------------------------------------------------------
 
   class AnimationTimelineImpl {
@@ -984,7 +1011,7 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
         this.#finished.reject(domError("The user aborted a request.", "AbortError"));
         this.#finished = deferred();
         const tl = this.#timelineTime();
-        microtask(() => this.#fire("cancel", null, tl));
+        queueEvent(() => this.#fire("cancel", null, tl));
       }
       this.#hold = null;
       this.#start = null;
@@ -1154,9 +1181,9 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       const tl = this.#timelineTime();
       this.#sync();
       removeReplaced(this);
-      // After the promise's reactions, as a browser's frame runs its
-      // microtask checkpoint before it dispatches the animation events.
-      microtask(() => this.#fire("finish", cur, tl));
+      // After the promise's reactions, at the next frame's update step
+      // (`queueEvent`).
+      queueEvent(() => this.#fire("finish", cur, tl));
     }
 
     #fire(type: string, currentTime: number | null, timelineTime: number | null): void {
@@ -1245,7 +1272,7 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       const cur = this.#current();
       const tl = this.#timelineTime();
       this.#sync();
-      microtask(() => this.#fire("remove", cur, tl));
+      queueEvent(() => this.#fire("remove", cur, tl));
     }
   }
 
