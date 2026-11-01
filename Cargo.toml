@@ -14,6 +14,7 @@ members = [
     "crates/vn-storage",    # localStorage on a disk: folders, atomic writes, DPAPI at rest
     "crates/vn-clipboard",  # navigator.clipboard over the SAME gpui clipboard the <input> uses
     "crates/vn-thorvg-sys", # vendored ThorVG C++ + checked-in FFI (vn-lottie's `thorvg` feature)
+    "crates/vn-vpx-sys",    # vendored libvpx VP9 decoder (cc, no nasm) + a safe wrapper (vn-sticker's video)
     "crates/vn-payload",    # VNPK v1 (a packaged exe's app payload) + the one URL→asset-key normaliser
     "crates/vn-desktop",    # argv parser, shell (open/reveal/trash), single instance, custom protocols
     "crates/vn-resample",   # the downscaled image copies' pixel kernel (optimised in dev, below)

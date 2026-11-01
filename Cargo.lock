@@ -8029,6 +8029,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vn-vpx-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "vswhom"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
