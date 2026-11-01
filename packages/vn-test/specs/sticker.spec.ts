@@ -113,6 +113,16 @@ test("tint paints the frame in the element's colour, by the frame's alpha", asyn
   expect(near(tintHalf!, [128, 0, 128])).toBe(true);
 }, T);
 
+test("a colour change, as a theme switch makes, re-tints the frame shown", async () => {
+  // The tint is read when painting (render::sticker `Tinted`): the tile keeps
+  // its frame, and the next draw paints it in the new colour.
+  await app.eval("document.getElementById('tint').style.color = 'rgb(0, 0, 255)'; 'ok'");
+  await sleep(300);
+  const [tint] = await centres([await box("#tint")]);
+  expect(near(tint!, [128, 128, 255])).toBe(true);
+  await app.eval("document.getElementById('tint').style.color = 'rgb(255, 0, 0)'; 'ok'");
+}, T);
+
 test("a sticker clipped out of sight is never loaded", async () => {
   await sleep(500);
   expect((await events()).some((e) => e.endsWith(":far"))).toBe(false);
