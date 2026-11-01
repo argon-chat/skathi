@@ -98,6 +98,38 @@ fn apply_pump_budget() {
     redjs::web::set_pump_budget_us(VN_PUMP_DELIVERY_BUDGET_US);
 }
 
+/// The JavaScriptCore options every vue-native app runs with, applied by
+/// `redjs_init` before the first VM exists.
+///
+/// `jitPolicyScale=0.5` halves the execution counts after which JSC moves a
+/// function up a tier (LLInt → Baseline → DFG → FTL). The defaults are tuned
+/// for a long-lived page that can afford to warm up; an app's first space open
+/// or channel switch runs Vue's patch and the component library's mount code a
+/// few hundred times each, and the interaction is over before much of it has
+/// left the interpreter. Measured on the Argon client (research/reports/m26/
+/// fixes-lag-1.md §4.6): the private working set does not move (the dashboard and
+/// a read through chat history stay within the runs' own spread; JIT code
+/// 3.5-3.9 MB at the dashboard either way), and the latencies move within
+/// the noise of three sessions each, leaning faster (a warm space open painted
+/// its messages at 207 ms against 223 ms, medians).
+///
+/// An option the environment sets (`JSC_jitPolicyScale=1`) is left alone:
+/// `JSC::initialize` reads the environment first and this list is applied
+/// after it, so it would otherwise overwrite a developer's A/B.
+pub const VN_JSC_OPTIONS: &str = "jitPolicyScale=0.5";
+
+/// [`VN_JSC_OPTIONS`], minus the options the environment already sets.
+fn jsc_options() -> std::ffi::CString {
+    let kept: Vec<&str> = VN_JSC_OPTIONS
+        .split(',')
+        .filter(|opt| {
+            let name = opt.split('=').next().unwrap_or(opt);
+            std::env::var_os(format!("JSC_{name}")).is_none()
+        })
+        .collect();
+    std::ffi::CString::new(kept.join(",")).expect("VN_JSC_OPTIONS holds no NUL")
+}
+
 /// Re-derives the delivery budget from the display's refresh interval. Called
 /// by the host once per frame, before the pump, with what the window snapshot
 /// just read (`None` until the platform says): one atomic store when it moved,
@@ -130,7 +162,8 @@ impl JsRuntime {
             // MUST go through ffi::redjs_init (not Context::new alone): it
             // anchors the ICU zstd-decompress hook that the thin -bundle
             // archive otherwise drops (research/reports/redjs.md §a.4).
-            let rc = ffi::redjs_init(std::ptr::null());
+            let options = jsc_options();
+            let rc = ffi::redjs_init(options.as_ptr());
             assert_eq!(rc, 0, "redjs_init failed: {rc}");
         }
         apply_user_agent();
