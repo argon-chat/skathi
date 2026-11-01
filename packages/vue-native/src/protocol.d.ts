@@ -799,6 +799,13 @@ declare function __vn_voice_create(optionsJson: VnJson): number;
 declare function __vn_voice_call(roomId: number, op: number, argJson: VnJson): number;
 /** A live read of the actor's plain-data mirror. `""` for an unknown room. */
 declare function __vn_voice_snapshot(roomId: number): VnJson;
+/**
+ * A new page `MediaStreamTrack` of a subscribed remote audio track, or `null`
+ * (unsubscribed, or no Web Audio in this host). The page plays it once its
+ * graph reaches a destination, and the room's mix then leaves it out
+ * (docs/VOICE.md D-23).
+ */
+declare function __vn_voice_remote_track(roomId: number, trackSid: string): object | null;
 /** Installs the one callback every room's results and events arrive through. */
 declare function __vn_voice_set_dispatcher(fn: VnVoiceDispatcher): void;
 /** Posts Shutdown and JOINS the thread, so no callback can still be in flight. */
