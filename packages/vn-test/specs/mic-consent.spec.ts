@@ -183,6 +183,30 @@ test(
 );
 
 test(
+  "processing is on by default as in Chrome, and getSettings reports what runs",
+  async () => {
+    // The fake microphone runs through libwebrtc's APM like a device
+    // (crates/vn-voice/src/apm.rs).
+    const opened = async (constraints: string) => {
+      const before = Number(await app.eval("__VN_TEST_MIC__.settings.length"));
+      await app.eval(`__VN_TEST_MIC__.open(${constraints}), 0`);
+      for (let i = 0; i < 400; i++) {
+        if (Number(await app.eval("__VN_TEST_MIC__.settings.length")) > before) break;
+        await Bun.sleep(25);
+      }
+      return String(await app.eval(`__VN_TEST_MIC__.settings[${before}]`));
+    };
+    expect(await opened("{ audio: true }")).toBe("true|true|true|1");
+    expect(await opened("{ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }")).toBe(
+      "false|false|false|1",
+    );
+    expect(await opened("{ audio: { noiseSuppression: { exact: false } } }")).toBe("true|false|true|1");
+    await app.eval("__VN_TEST_MIC__.stopAll(), 0");
+  },
+  T,
+);
+
+test(
   "VN_MEDIA_CAPTURE=deny refuses without a prompt, whatever was stored",
   async () => {
     await app.close();
