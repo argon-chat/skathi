@@ -75,11 +75,13 @@
 
 use std::sync::Arc;
 
+mod colour;
 mod index;
 mod vp9;
 mod webm;
 
 use index::Packet;
+use vn_vpx_sys::{Decoder, ErrorCode, Format};
 
 /// What a file is, known after [`VideoSource::open`] without decoding a frame.
 #[derive(Clone, Debug, PartialEq)]
@@ -175,13 +177,11 @@ impl std::error::Error for VideoError {}
 /// Immutable after [`VideoSource::open`].
 pub struct VideoSource {
     meta: VideoMeta,
-    #[allow(dead_code)] // W3: the decoder reads it (next step)
     bytes: Arc<[u8]>,
     /// Every block of the video track, in file order: where its colour and
     /// alpha packets are in `bytes`, and whether it shows a frame.
     packets: Box<[Packet]>,
     /// The track's `Colour`, which picks the YUV matrix when it is complete.
-    #[allow(dead_code)] // W3: the conversion reads it (next step)
     colour: Option<webm::Colour>,
 }
 
@@ -207,10 +207,22 @@ impl VideoSource {
     /// A decoder at frame 0. [`VideoError::Malformed`] when libvpx will not
     /// start.
     pub fn decoder(self: &Arc<Self>, options: DecodeOptions) -> Result<VideoDecoder, VideoError> {
+        let start = || Decoder::new().map_err(|e| VideoError::Malformed(format!("the VP9 decoder would not start: {e}")));
+        // A tinted decoder needs no colour; a file without alpha no alpha
+        // decoder (and a tinted one without alpha decodes nothing at all).
+        let color = if options.alpha_only { None } else { Some(start()?) };
+        let alpha = if self.meta.has_alpha { Some(start()?) } else { None };
         Ok(VideoDecoder {
             source: self.clone(),
             options,
             position: 0,
+            next: 0,
+            color,
+            alpha,
+            current: false,
+            alpha_now: false,
+            failed: false,
+            converter: vn_yuv::Converter::new(),
             _not_sync: std::marker::PhantomData,
         })
     }
@@ -224,10 +236,35 @@ pub struct VideoDecoder {
     options: DecodeOptions,
     /// The frame the next [`VideoDecoder::decode_next`] decodes.
     position: u32,
-    // W3: the libvpx contexts and any conversion scratch. Raw libvpx pointers
-    // make the type neither Send nor Sync: give it back `unsafe impl Send`
-    // (a context is used by one thread at a time) and keep this marker.
+    /// The packet the next decode starts at.
+    next: usize,
+    /// The libvpx contexts. `vn_vpx_sys::Decoder` is `Send` and not `Sync`
+    /// itself (one call at a time), so this type is too.
+    color: Option<Decoder>,
+    alpha: Option<Decoder>,
+    /// A frame was decoded since the decoder was made or rewound: the
+    /// contexts hold it.
+    current: bool,
+    /// The current frame has an alpha frame (its block carried one); else it
+    /// is opaque, as in Chromium.
+    alpha_now: bool,
+    /// A decode failed: only a rewind goes on.
+    failed: bool,
+    converter: vn_yuv::Converter,
     _not_sync: std::marker::PhantomData<std::cell::Cell<()>>,
+}
+
+/// A libvpx plane as vn-yuv takes it.
+fn yuv_plane<'a>(p: &vn_vpx_sys::Plane<'a>) -> vn_yuv::Plane<'a> {
+    vn_yuv::Plane { data: p.data, stride: p.stride }
+}
+
+/// A libvpx error as the advisory: what it refused and why.
+fn decode_error(what: String, e: vn_vpx_sys::Error) -> VideoError {
+    match e.code {
+        ErrorCode::Unsupported => VideoError::Unsupported(format!("{what}: {e}")),
+        _ => VideoError::Malformed(format!("{what}: {e}")),
+    }
 }
 
 impl VideoDecoder {
@@ -251,7 +288,50 @@ impl VideoDecoder {
     /// [`VideoDecoder::rewind`]. After an error the decoder is only good for
     /// [`VideoDecoder::rewind`] or dropping.
     pub fn decode_next(&mut self) -> Result<Option<u32>, VideoError> {
-        Err(VideoError::NotBuilt) // W3
+        if self.failed {
+            return Err(VideoError::Malformed("an earlier frame failed to decode; the decoder needs a rewind".into()));
+        }
+        let source = self.source.clone();
+        while let Some(packet) = source.packets.get(self.next) {
+            self.next += 1;
+            let frame = self.position;
+            // Every packet goes to both streams, shown or not: a hidden
+            // frame is a reference the next ones need.
+            let color_shown = match self.color.as_mut().map(|c| c.decode(packet.color.of(&source.bytes))) {
+                Some(Err(e)) => {
+                    self.failed = true;
+                    return Err(decode_error(format!("video frame {frame}"), e));
+                }
+                shown => shown.is_some_and(|s| s.unwrap_or(false)),
+            };
+            let alpha_shown = match (self.alpha.as_mut(), packet.alpha) {
+                (Some(alpha), Some(span)) => match alpha.decode(span.of(&source.bytes)) {
+                    Ok(shown) => shown,
+                    Err(e) => {
+                        self.failed = true;
+                        return Err(decode_error(format!("the alpha of video frame {frame}"), e));
+                    }
+                },
+                _ => false,
+            };
+            if !packet.shows {
+                continue;
+            }
+            // The index and libvpx agree on what shows, or the file lies.
+            if self.color.is_some() && !color_shown {
+                self.failed = true;
+                return Err(VideoError::Malformed(format!("video frame {frame} decoded to no picture")));
+            }
+            if self.alpha.is_some() && packet.alpha.is_some() && !alpha_shown {
+                self.failed = true;
+                return Err(VideoError::Malformed(format!("the alpha of video frame {frame} decoded to no picture")));
+            }
+            self.alpha_now = alpha_shown;
+            self.current = true;
+            self.position += 1;
+            return Ok(Some(frame));
+        }
+        Ok(None)
     }
 
     /// Writes the current frame into `out`, scaled to its size (module docs,
@@ -263,14 +343,57 @@ impl VideoDecoder {
             out.pixels.len(),
             out.width as usize * out.height as usize * 4
         );
-        Err(VideoError::NotBuilt) // W3
+        if !self.current || self.failed {
+            return Err(VideoError::Malformed("no video frame is decoded to convert".into()));
+        }
+        let plane = yuv_plane;
+        let alpha = if self.alpha_now { self.alpha.as_ref().and_then(Decoder::frame) } else { None };
+        let result = if self.options.alpha_only {
+            let size = alpha.map_or((0, 0), |a| (a.width, a.height));
+            self.converter.alpha_to_bgra(alpha.map(|a| plane(&a.planes[0])), size, out.pixels, out.width, out.height)
+        } else {
+            let frame = self
+                .color
+                .as_ref()
+                .and_then(Decoder::frame)
+                .ok_or_else(|| VideoError::Malformed("no video frame is decoded to convert".into()))?;
+            if frame.format != Format::I420 {
+                return Err(VideoError::Unsupported(format!("its frames are {:?}; video stickers are 4:2:0", frame.format)));
+            }
+            if let Some(a) = alpha {
+                if (a.width, a.height) != (frame.width, frame.height) {
+                    return Err(VideoError::Malformed(format!(
+                        "its alpha frames are {}×{} and its colour frames {}×{}",
+                        a.width, a.height, frame.width, frame.height
+                    )));
+                }
+            }
+            let colorimetry = colour::colorimetry(self.source.colour.as_ref(), frame.color_space, frame.full_range, self.source.meta.has_alpha);
+            let i420 = vn_yuv::I420 {
+                width: frame.width,
+                height: frame.height,
+                y: plane(&frame.planes[0]),
+                u: plane(&frame.planes[1]),
+                v: plane(&frame.planes[2]),
+                a: alpha.map(|a| plane(&a.planes[0])),
+            };
+            self.converter.to_bgra(&i420, colorimetry, out.pixels, out.width, out.height)
+        };
+        result.map_err(|e| VideoError::Malformed(format!("converting a video frame: {e}")))
     }
 
     /// Back to frame 0. The next [`VideoDecoder::decode_next`] decodes the
     /// first keyframe again; nothing is re-demuxed.
     pub fn rewind(&mut self) -> Result<(), VideoError> {
+        // The contexts stay: the first packet is a keyframe (`open` checks),
+        // which resets a VP9 decoder, and after an error vn-vpx-sys starts
+        // the next decode from a fresh context.
         self.position = 0;
-        Ok(()) // W3: reset the libvpx contexts
+        self.next = 0;
+        self.current = false;
+        self.alpha_now = false;
+        self.failed = false;
+        Ok(())
     }
 
     /// Bytes this decoder holds: libvpx's frame buffers for each stream and
@@ -278,7 +401,9 @@ impl VideoDecoder {
     /// to call. W0 measured 5.3 MB for a 512² stream with alpha, 0.63 MB at
     /// 100².
     pub fn memory_bytes(&self) -> usize {
-        std::mem::size_of::<Self>() // W3
+        std::mem::size_of::<Self>()
+            + [&self.color, &self.alpha].iter().filter_map(|d| d.as_ref()).map(|d| d.memory().live).sum::<usize>()
+            + self.converter.memory_bytes()
     }
 }
 
@@ -317,14 +442,14 @@ mod tests {
     }
 
     #[test]
-    fn a_file_is_demuxed_and_the_decoder_is_not_built_yet() {
+    fn a_file_opens_and_its_frames_decode() {
         let bytes: Arc<[u8]> = Arc::from(&b"\x1a\x45\xdf\xa3"[..]);
         assert!(matches!(VideoSource::open(bytes), Err(VideoError::Malformed(_))));
         let source = VideoSource::open(Arc::from(&include_bytes!("testdata/alpha.webm")[..])).unwrap();
         assert_eq!(source.meta().frame_count(), 48);
         assert!(source.memory_bytes() > 48 * 4);
         let mut decoder = source.decoder(DecodeOptions::default()).unwrap();
-        assert_eq!(decoder.decode_next(), Err(VideoError::NotBuilt));
+        assert_eq!(decoder.decode_next(), Ok(Some(0)));
     }
 
     #[test]
@@ -335,3 +460,6 @@ mod tests {
         send::<VideoDecoder>();
     }
 }
+
+#[cfg(test)]
+mod decode_tests;

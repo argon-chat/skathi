@@ -7965,6 +7965,8 @@ version = "0.1.0"
 dependencies = [
  "lz4_flex",
  "vn-lottie",
+ "vn-vpx-sys",
+ "vn-yuv",
 ]
 
 [[package]]

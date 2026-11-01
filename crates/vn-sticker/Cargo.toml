@@ -11,5 +11,7 @@ vn-lottie = { path = "../vn-lottie" }
 # The loop cache's frames (`src/cache.rs`). Block format, safe Rust only: W0
 # measured 2.3–4.2× on 48 px `.tgs` loops and 2–3.4 µs to decompress a frame.
 lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"] }
-# The video track adds `vn-vpx-sys` (libvpx 1.17, VP9 decoder only) for
-# `src/video/`.
+# The video track (`src/video/`): libvpx 1.17's VP9 decoder, and the I420 +
+# alpha to straight BGRA kernel (a crate of its own, optimised in dev).
+vn-vpx-sys = { path = "../vn-vpx-sys" }
+vn-yuv = { path = "../vn-yuv" }
