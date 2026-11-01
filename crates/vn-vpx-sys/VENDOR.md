@@ -157,7 +157,9 @@ bun crates/vn-vpx-sys/tools/prefix-symbols.ts
 ```
 
 A symbol it misses links unprefixed and would collide again; the check
-names it.
+names it. The tool builds into `target/vn-vpx-symbols/<configuration>`
+(about 100 MB for both); nothing else uses that directory, so delete it
+afterwards: the next run builds it again from scratch.
 
 ## Verified
 
