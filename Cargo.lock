@@ -7997,6 +7997,7 @@ dependencies = [
  "vn-payload",
  "vn-resample",
  "vn-runtime",
+ "vn-sticker",
  "vn-video",
  "windows 0.62.2",
 ]

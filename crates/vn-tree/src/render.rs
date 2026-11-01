@@ -570,6 +570,7 @@ pub(crate) fn gc_node_state() {
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
+    sticker::gc(live);
     crate::svg::gc(live);
     // A selection boundary in a node that went away, or past the end of a
     // shortened text (`crate::selection::gc`).
@@ -2165,6 +2166,12 @@ fn build_node<V: 'static>(
             own.clone(),
             &extras,
             probe(id, build_video(t, id, node, window, cx, now, control_area)),
+        ),
+        // vue-native's own: stickers and animated emoji (`sticker` below).
+        Kind::Element if t.name(node.tag) == "vn-sticker" => stack(
+            own.clone(),
+            &extras,
+            probe(id, sticker::build(t, id, node, window, cx, now, control_area)),
         ),
         // The bitmap the page drew, painted into the box (`canvas` below).
         Kind::Element if t.name(node.tag) == "canvas" => stack(
@@ -5554,6 +5561,15 @@ fn build_lottie<V: 'static>(
 /// builds with the replaced-element helpers `<img>` and `<video>` use.
 #[path = "canvas.rs"]
 pub(crate) mod canvas;
+
+// ---------------------------------------------------------------------------
+// <vn-sticker>
+// ---------------------------------------------------------------------------
+
+/// `<vn-sticker>` lives in its own file, a child of this module for the same
+/// reason `<canvas>` is.
+#[path = "sticker.rs"]
+pub(crate) mod sticker;
 
 // ---------------------------------------------------------------------------
 // <video>

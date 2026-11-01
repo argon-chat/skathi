@@ -149,6 +149,7 @@ pub fn side_stats() -> Vec<(&'static str, u64)> {
     let (declared, waiting, waiting_bytes, registered, registered_bytes) = crate::fonts::mem_stats();
     let (boundaries, entities, cached_ids) = crate::cache::mem_stats();
     let (focus, inputs, scrolls, bounds) = crate::render::side_state_counts();
+    let (stickers, sticker_tiles, sticker_tile_bytes) = crate::render::sticker::mem_stats();
     let u = |v: usize| v as u64;
     vec![
         ("imgMemos", u(memos)),
@@ -163,6 +164,9 @@ pub fn side_stats() -> Vec<(&'static str, u64)> {
         ("svgColourRasterBytes", u(svg_bytes)),
         ("videos", u(crate::video::count())),
         ("lotties", u(crate::lottie::count())),
+        ("stickers", u(stickers)),
+        ("stickerTiles", u(sticker_tiles)),
+        ("stickerTileBytes", u(sticker_tile_bytes)),
         ("logRingEntries", u(log_entries)),
         ("logRingBytes", u(log_bytes)),
         ("fontFacesDeclared", u(declared)),

@@ -107,6 +107,12 @@ pub(crate) fn set_hidden(hidden: bool) {
     HIDDEN.store(hidden, Ordering::Relaxed);
 }
 
+/// Is the page hidden ([`set_hidden`])? Nothing on it can be seen, so a
+/// producer that plays only while seen (`<vn-sticker>`) stops.
+pub(crate) fn page_hidden() -> bool {
+    HIDDEN.load(Ordering::Relaxed)
+}
+
 /// Presents `window`'s last drawn frame again, and counts it. Nothing while
 /// the page is hidden or gpui says the window's frames are not shown: gpui
 /// keeps asking a window on another virtual desktop to paint every vsync, and
@@ -229,7 +235,7 @@ pub(crate) struct LiveTile {
 }
 
 // The API the `<lottie>` port and the shared sticker element build on
-// (module docs); nothing in the tree writes one yet.
+// (module docs); `<vn-sticker>` writes CPU frames, nothing writes GPU ones yet.
 #[allow(dead_code)]
 impl LiveTile {
     /// A transparent `width` × `height` picture in window `win`'s atlas.

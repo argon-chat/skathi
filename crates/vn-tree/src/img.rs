@@ -711,7 +711,7 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) {
 }
 
 /// One `src`, answered as far as it can be right now.
-fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
+pub(crate) fn probe(id: u32, src: &str, cx: &mut gpui::App) -> Probe {
     // HTML: an empty `src` fires `error` (it is not "no src").
     if src.trim().is_empty() {
         return Probe::Failed;

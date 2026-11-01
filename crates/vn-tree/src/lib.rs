@@ -939,6 +939,9 @@ pub fn video_device_changed() -> usize {
 ///   back to gpui, since `flush_changes` has no `Window` to hand them to;
 /// * every `<video>` is pulled for a frame and its media events are dispatched
 ///   (`crates/vn-video/CONTRACT.md` §3);
+/// * every `<vn-sticker>` source is fetched and asked for at its boxes' sizes,
+///   and the frames due are written into this window's tiles
+///   (`render::sticker`);
 /// * a `<canvas>` that drew since the last frame asks for a repaint;
 /// * a `<video>` or moving `<canvas>` frame written into the atlas tile the
 ///   last drawn scene samples asks only for a present (`crate::live`): the
@@ -977,6 +980,8 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     img::tick(window, cx);
     let lottie_moved = lottie::tick(window, cx);
     let video_moved = video::tick(window, cx);
+    // `<vn-sticker>`: fetches, targets, this window's tiles written, events.
+    let stickers_moved = render::sticker::tick(window, cx);
     // A `<canvas>` that drew since the last frame repaints, as a mutation
     // would; an idle one costs this one atomic swap (render::canvas).
     let canvas_moved = render::canvas::tick(window);
@@ -1004,7 +1009,8 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     // `selectionchange` goes to `document`. One flag read otherwise.
     let selecting = selection::tick(window, cx);
     let draw =
-        anim | lottie_moved | video_moved | canvas_moved | scrolled | fonts_moved | resampled | restored | selecting;
+        anim | lottie_moved | video_moved | stickers_moved | canvas_moved | scrolled | fonts_moved | resampled
+            | restored | selecting;
     // A frame written into the tile the last drawn scene samples is shown by a
     // present, with no build (`crate::live`); one that needs a draw is folded
     // into the answer, and a frame that draws anyway presents what it drew.
@@ -1033,7 +1039,8 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
 ///   `App::windows` is whichever window's update is currently running — so each
 ///   window drains its own queue;
 /// * **zero-copy `<video>` frames** decoded by the pump are blitted into THIS
-///   window's atlas, or the element paints transparent here;
+///   window's atlas, or the element paints transparent here, and
+///   **`<vn-sticker>` frames** are written into THIS window's tiles;
 /// * **focus**: a node detached while focused in THIS window loses gpui focus,
 ///   and this window keeps something on its own focus path so keystrokes have
 ///   somewhere to travel.
@@ -1047,6 +1054,7 @@ pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
     lottie::drain_pending_drops_for(window, cx);
     video::drain_pending_drops_for(window, cx);
     video::drain_pending_uploads(window);
+    render::sticker::window_tick(window);
     render::apply_pending_blur(window, cx);
     render::apply_pending_focus(window, cx);
     render::ensure_root_focus(window, cx);
@@ -1060,6 +1068,7 @@ pub fn window_frame_tick(window: &mut gpui::Window, cx: &mut gpui::App) {
 /// than a leak.
 pub fn forget_window(key: windows::WinKey) {
     windows::forget(key);
+    render::sticker::forget_window(key);
 }
 
 /// The page became hidden or shown (minimised, or on another virtual desktop):

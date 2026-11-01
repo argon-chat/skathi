@@ -1107,7 +1107,9 @@ fn plan(sources: &[Src]) -> Result<Fetch, String> {
     Err(if why.is_empty() { "no src".into() } else { why.join("; ") })
 }
 
-async fn http_bytes(client: Arc<dyn gpui::http_client::HttpClient>, url: &str) -> Result<Vec<u8>, String> {
+/// An http(s) body off gpui's HTTP client, redirects followed (also
+/// `<vn-sticker>`'s fetch, `crate::render::sticker`).
+pub(crate) async fn http_bytes(client: Arc<dyn gpui::http_client::HttpClient>, url: &str) -> Result<Vec<u8>, String> {
     use futures::AsyncReadExt;
     let mut response = client
         .get(url, gpui::http_client::AsyncBody::default(), true)
