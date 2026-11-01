@@ -420,8 +420,18 @@ if (APP_DEFINES.errors.length) {
   process.exit(1);
 }
 
-/** What Vite's dev server inlines for `import.meta.env` — plus the app's own `import.meta.env.*` defines. */
-const VITE_ENV_DEV: Record<string, unknown> = { MODE: "development", DEV: true, PROD: false, SSR: false, BASE_URL: "/" };
+/**
+ * What Vite's dev server inlines for `import.meta.env`, plus `VN: true` (vue-native's own, see
+ * `"import.meta.env.VN"` below) and the app's own `import.meta.env.*` defines.
+ */
+const VITE_ENV_DEV: Record<string, unknown> = {
+  MODE: "development",
+  DEV: true,
+  PROD: false,
+  SSR: false,
+  BASE_URL: "/",
+  VN: true,
+};
 for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
   if (!k.startsWith("import.meta.env.")) continue;
   try {
@@ -467,6 +477,12 @@ const DEFINES: Record<string, string> = {
   "import.meta.env.PROD": "false",
   "import.meta.env.SSR": "false",
   "import.meta.env.BASE_URL": '"/"',
+  // vue-native's own: `true` in every vue-native build, absent (undefined) under
+  // Vite. An app keeps browser-only code out of a vue-native build with
+  // `if (!import.meta.env.VN) { … import("…") … }`: Bun drops the branch while
+  // parsing, so what it imports is never resolved, bundled or stubbed (Argon's
+  // tlottie WebAssembly, which <vn-sticker> replaces). docs/PACKAGING.md.
+  "import.meta.env.VN": "true",
   "import.meta.env": JSON.stringify(VITE_ENV_DEV),
   // A dev server's HMR client hook. Vue SFCs compiled by `@vue/compiler-sfc`
   // do not emit it (our HMR rides `__VUE_HMR_RUNTIME__`), but library code
@@ -625,7 +641,7 @@ async function compileVue(
         // (`app.config.compilerOptions.isCustomElement`), applied at build time
         // because our templates are precompiled. Keep in lockstep with
         // prod.ts and with the tag tests in crates/vn-tree/src/render.rs.
-        isCustomElement: (tag: string) => tag === "lottie",
+        isCustomElement: (tag: string) => tag === "lottie" || tag.startsWith("vn-"),
       },
     });
     if (t.errors.length) {

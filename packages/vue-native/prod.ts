@@ -185,8 +185,18 @@ if (APP_DEFINES.errors.length) {
   process.exit(1);
 }
 
-/** What `vite build` inlines for `import.meta.env` — plus the app's own `import.meta.env.*` defines. */
-const VITE_ENV_PROD: Record<string, unknown> = { MODE: "production", DEV: false, PROD: true, SSR: false, BASE_URL: "/" };
+/**
+ * What `vite build` inlines for `import.meta.env`, plus `VN: true` (vue-native's own, see build.ts)
+ * and the app's own `import.meta.env.*` defines.
+ */
+const VITE_ENV_PROD: Record<string, unknown> = {
+  MODE: "production",
+  DEV: false,
+  PROD: true,
+  SSR: false,
+  BASE_URL: "/",
+  VN: true,
+};
 for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
   if (!k.startsWith("import.meta.env.")) continue;
   try {
@@ -231,6 +241,9 @@ const DEFINES: Record<string, string> = {
   "import.meta.env.PROD": "true",
   "import.meta.env.SSR": "false",
   "import.meta.env.BASE_URL": '"/"',
+  // vue-native's own (build.ts): `if (!import.meta.env.VN) import("…")` keeps
+  // browser-only code, and what it imports, out of the bundle.
+  "import.meta.env.VN": "true",
   "import.meta.env": JSON.stringify(VITE_ENV_PROD),
   "import.meta.hot": "undefined",
   "import.meta.url": '"vn://app.prod.js"',
@@ -355,7 +368,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
           // vue-native host elements the HTML tag list does not contain —
           // without this `<lottie>` compiles to resolveComponent("lottie").
           // Lockstep with build.ts, where the rationale is written out.
-          isCustomElement: (tag: string) => tag === "lottie",
+          isCustomElement: (tag: string) => tag === "lottie" || tag.startsWith("vn-"),
           comments: PROD_TEMPLATE_COMMENTS,
         },
       },
@@ -376,7 +389,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
         compilerOptions: {
           hoistStatic: false,
           expressionPlugins: isTS ? ["typescript"] : [],
-          isCustomElement: (tag: string) => tag === "lottie",
+          isCustomElement: (tag: string) => tag === "lottie" || tag.startsWith("vn-"),
           comments: PROD_TEMPLATE_COMMENTS,
         },
       });
