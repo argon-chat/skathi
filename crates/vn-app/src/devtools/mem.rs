@@ -1060,6 +1060,30 @@ fn side() -> Vec<(&'static str, u64)> {
     o
 }
 
+/// `<vn-sticker>`'s engine: its sources, loaded engines, frames held and loop
+/// cache. `null` until something has used it.
+fn stickers() -> Json {
+    let Some(s) = vn_sticker::stats() else { return Json::Null };
+    let n = |v: usize| Json::n(v as f64);
+    Json::obj(vec![
+        ("sources", n(s.sources)),
+        ("fileBytes", bytes(s.file_bytes as f64)),
+        ("engines", n(s.engines)),
+        ("engineBytes", bytes(s.engine_bytes as f64)),
+        ("targets", n(s.targets)),
+        ("visibleTargets", n(s.visible_targets)),
+        ("frameBytes", bytes(s.frame_bytes as f64)),
+        ("loops", n(s.loops)),
+        ("loopsComplete", n(s.loops_complete)),
+        ("cacheBytes", bytes(s.cache_bytes as f64)),
+        ("cacheBudgetBytes", bytes(s.cache_budget as f64)),
+        ("drawn", Json::n(s.drawn as f64)),
+        ("fromCache", Json::n(s.from_cache as f64)),
+        ("loads", Json::n(s.loads as f64)),
+        ("failures", Json::n(s.failures as f64)),
+    ])
+}
+
 fn rust_json(rust: Option<(i64, i64, i64, u64)>) -> Json {
     match rust {
         Some((live, blocks, peak, allocs)) => {
@@ -1390,6 +1414,7 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
         ("images", images.json),
         ("tree", tree_json),
         ("side", side_json),
+        ("stickers", stickers()),
         ("stylesheetCompiles", sheets_json),
         (
             "explained",

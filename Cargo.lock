@@ -7868,6 +7868,7 @@ dependencies = [
  "vn-payload",
  "vn-permissions",
  "vn-runtime",
+ "vn-sticker",
  "vn-storage",
  "vn-tree",
  "vn-voice",
