@@ -68,8 +68,9 @@ use crate::windows::{self, WinKey};
 /// What a canvas paints. Step 2 grows this, not the element.
 #[derive(Clone)]
 pub(crate) enum Pixels {
-    /// A bitmap uploaded into the painting window's sprite atlas. Premultiplied
-    /// BGRA, as gpui's atlas takes it.
+    /// A bitmap uploaded into the painting window's sprite atlas: BGRA with
+    /// straight alpha, as gpui's atlas takes it (its polychrome pipeline blends
+    /// `SRC_ALPHA`, and its own decoders un-premultiply).
     Atlas(Arc<RenderImage>),
     // Step 2, shared-texture flavour: `Texture(..)`, a GPU texture the element
     // paints without a copy.
@@ -139,18 +140,15 @@ const MOVING: Duration = Duration::from_millis(250);
 const STILL: Duration = Duration::from_millis(300);
 
 /// `pixels` as an animating canvas (`moving`) or a still one paints them: a
-/// frame of a moving picture, which the resampler leaves alone, or a
-/// premultiplied still image it may draw from a smaller copy.
+/// frame of a moving picture, which the resampler leaves alone, or a still
+/// image it may draw from a smaller copy.
 fn as_painted(pixels: Pixels, moving: bool) -> Pixels {
     match pixels {
         Pixels::Atlas(image) if moving => {
             // Fresh from `fetch`, so the only reference.
             Pixels::Atlas(Arc::try_unwrap(image).map(|i| Arc::new(i.dynamic())).unwrap_or_else(|a| a))
         }
-        Pixels::Atlas(image) => {
-            crate::resample::mark_premultiplied(&image);
-            Pixels::Atlas(image)
-        }
+        Pixels::Atlas(image) => Pixels::Atlas(image),
     }
 }
 
@@ -160,16 +158,24 @@ fn still_copy(image: &RenderImage) -> Option<Arc<RenderImage>> {
     let size = image.size(0);
     let bytes = image.as_bytes(0)?.to_vec();
     let buffer = image::RgbaImage::from_raw(size.width.0 as u32, size.height.0 as u32, bytes)?;
-    let still = RenderImage::new(vec![image::Frame::new(buffer)]);
-    crate::resample::mark_premultiplied(&still);
-    Some(Arc::new(still))
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
-/// Premultiplied RGBA (redjs) to premultiplied BGRA (gpui's atlas).
+/// Premultiplied RGBA (redjs's bitmap, as a canvas keeps it) to straight
+/// BGRA (gpui's atlas). Before this the bytes went in premultiplied and were
+/// blended as straight, so every translucent pixel (an alpha fill, an
+/// antialiased edge) came out darker than in a browser: a half-transparent
+/// white was drawn as a half-transparent mid grey.
 fn to_bgra(rgba: &[u8]) -> Vec<u8> {
     let mut out = rgba.to_vec();
     for px in out.chunks_exact_mut(4) {
         px.swap(0, 2);
+        let a = u32::from(px[3]);
+        if a != 0 && a != 255 {
+            for c in &mut px[..3] {
+                *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
     }
     out
 }
@@ -568,8 +574,13 @@ mod tests {
     }
 
     #[test]
-    fn premultiplied_rgba_becomes_bgra() {
-        assert_eq!(to_bgra(&[1, 2, 3, 4, 10, 20, 30, 40]), vec![3, 2, 1, 4, 30, 20, 10, 40]);
+    fn premultiplied_rgba_becomes_straight_bgra() {
+        // Opaque and fully transparent pixels only swap.
+        assert_eq!(to_bgra(&[1, 2, 3, 255, 0, 0, 0, 0]), vec![3, 2, 1, 255, 0, 0, 0, 0]);
+        // Half-transparent white, premultiplied (128, 128, 128, 128), is white.
+        assert_eq!(to_bgra(&[128, 128, 128, 128]), vec![255, 255, 255, 128]);
+        // Quarter red: (64, 0, 0, 64) is (255, 0, 0) at alpha 64.
+        assert_eq!(to_bgra(&[64, 0, 0, 64]), vec![0, 0, 255, 64]);
     }
 
     /// Upload only when the surface moved: the second fetch at the same

@@ -179,6 +179,51 @@ test("a draw with no DOM change repaints the canvas on the next frame", async ()
   expect(g > 200 && r < 60 && bl < 60).toBe(true);
 }, T);
 
+// A canvas keeps its bitmap premultiplied; gpui's atlas takes straight alpha
+// and blends with SRC_ALPHA. The bitmap used to go in premultiplied, so every
+// translucent pixel was multiplied by its alpha twice: half-transparent white
+// over black came out at 64, where a browser shows 128.
+test("translucent canvas pixels composite as in a browser: an alpha fill and an antialiased edge", async () => {
+  const got = await inPage(`
+    const wrap = document.createElement('div');
+    wrap.setAttribute('id', 'cv-alpha-wrap');
+    wrap.setAttribute('style', 'position: fixed; left: 160px; top: 20px; width: 120px; height: 60px; background: #000');
+    const c = document.createElement('canvas');
+    c.setAttribute('id', 'cv-alpha');
+    c.setAttribute('style', 'display: block; width: 120px; height: 60px');
+    c.width = 4; c.height = 2;
+    wrap.appendChild(c);
+    document.body.appendChild(wrap);
+    const ctx = c.getContext('2d');
+    // Bitmap column 0: white at alpha 0.5. Column 1: nothing.
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; ctx.fillRect(0, 0, 1, 2);
+    // Columns 2 and 3: an opaque white rect from x = 2.5 to 3.5, so each
+    // column is half covered: the antialiased edge of a shape.
+    ctx.fillStyle = '#fff'; ctx.fillRect(2.5, 0, 1, 2);
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    return [...ctx.getImageData(0, 0, 4, 1).data];
+  `);
+  // What the page reads back is the browser's unpremultiplied value.
+  const data = (got as { ok: number[] }).ok;
+  expect(data.slice(0, 4)).toEqual([255, 255, 255, 128]);
+  expect(Math.abs(data[11] - 128)).toBeLessThanOrEqual(2);
+
+  const b = (await app.query("#cv-alpha")).nodes[0]!.bounds!;
+  const shot = readPng(await app.screenshot());
+  const scale = shot.width / Number(await app.eval("window.innerWidth"));
+  // The centre of bitmap column `i`: each column is 30 CSS px wide.
+  const grey = (i: number) => shot.at(Math.round((b.x + 30 * i + 15) * scale), Math.round((b.y + 30) * scale))[1];
+  const seen = { fill: grey(0), empty: grey(1), edgeA: grey(2), edgeB: grey(3) };
+  // Over black, a browser shows 255 x alpha: 128. Premultiplied twice it was 64.
+  const near = (v: number, want: number) => Math.abs(v - want) <= 12;
+  expect({
+    fill: near(seen.fill, 128),
+    empty: near(seen.empty, 0),
+    edgeA: near(seen.edgeA, 128),
+    edgeB: near(seen.edgeB, 128),
+  }).toEqual({ fill: true, empty: true, edgeA: true, edgeB: true });
+}, T);
+
 test("a mirror <img> draws its decoded pixels: data:, blob: and http(s), origin recorded", async () => {
   const base = `http://127.0.0.1:${server.port}`;
   const got = await inPage(`

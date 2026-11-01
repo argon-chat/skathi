@@ -123,9 +123,6 @@ struct Cache {
     in_flight: HashSet<Key>,
     /// Other sizes of images that have a copy, and since when they are asked for.
     waiting: HashMap<Key, (Weak<RenderImage>, Instant)>,
-    /// Images whose pixels are premultiplied (a `<canvas>` bitmap); the rest
-    /// are straight alpha, as gpui decodes them.
-    premultiplied: HashSet<ImageId>,
     clock: u64,
     bytes: usize,
     /// Time spent making copies on the painting thread since the last tick.
@@ -299,7 +296,6 @@ struct Job {
     key: Key,
     source: Arc<RenderImage>,
     target: (u32, u32),
-    premultiplied: bool,
 }
 
 type Landed = (Key, Weak<RenderImage>, Option<RenderImage>);
@@ -320,17 +316,10 @@ fn enabled() -> bool {
     })
 }
 
-/// Marks a `<canvas>` bitmap as premultiplied, so its copies are filtered as
-/// such. Undone by [`forget`].
-pub(crate) fn mark_premultiplied(image: &RenderImage) {
-    CACHE.with(|c| c.borrow_mut().premultiplied.insert(image.id));
-}
-
 /// An image its owner is done with: its copies go back to gpui at the next tick.
 pub(crate) fn forget(image: &RenderImage) {
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
-        c.premultiplied.remove(&image.id);
         let keys: Vec<Key> = c.copies.keys().filter(|k| k.0 == image.id).copied().collect();
         for k in keys {
             evict(&mut c, k);
@@ -535,10 +524,9 @@ fn choose(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) ->
                     return None;
                 }
                 let target = (stepped(nw as u32, steps.0), stepped(nh as u32, steps.1));
-                let premultiplied = c.premultiplied.contains(&image.id);
                 if (nw as u64) * (nh as u64) <= SYNC_PIXELS && c.sync_spent < SYNC_BUDGET {
                     let t = Instant::now();
-                    let made = Arc::new(make(image, frame, target, premultiplied)?);
+                    let made = Arc::new(make(image, frame, target)?);
                     c.sync_spent += t.elapsed();
                     crate::perf::note_resample(Some(t.elapsed().as_secs_f32() * 1000.0));
                     insert(&mut c, key, made.clone(), Arc::downgrade(image), clock);
@@ -546,7 +534,7 @@ fn choose(image: &Arc<RenderImage>, frame: usize, device: Size<DevicePixels>) ->
                 } else {
                     c.in_flight.insert(key);
                     crate::perf::note_resample(None);
-                    submit(Job { key, source: image.clone(), target, premultiplied });
+                    submit(Job { key, source: image.clone(), target });
                     None
                 }
             }
@@ -595,10 +583,12 @@ fn evict(c: &mut Cache, key: Key) {
 }
 
 /// A copy of `image`'s `frame` at `target`, or `None` if it has no such frame.
-fn make(image: &RenderImage, frame: usize, target: (u32, u32), premultiplied: bool) -> Option<RenderImage> {
+/// Every image in the atlas is straight alpha: gpui's decoders hand it over so,
+/// and a `<canvas>` bitmap is un-premultiplied on its way in.
+fn make(image: &RenderImage, frame: usize, target: (u32, u32)) -> Option<RenderImage> {
     let size = image.size(frame);
     let bytes = image.as_bytes(frame)?;
-    let out = downscale(bytes, size.width.0 as u32, size.height.0 as u32, target.0, target.1, premultiplied);
+    let out = downscale(bytes, size.width.0 as u32, size.height.0 as u32, target.0, target.1, false);
     let buffer = image::RgbaImage::from_raw(target.0, target.1, out)?;
     // The picture's size rides along, so the copy can stand in for the
     // decode ([`reduced_copy`]).
@@ -612,7 +602,7 @@ fn submit(job: Job) {
             .name("vn-resample".into())
             .spawn(move || {
                 while let Ok(job) = rx.recv() {
-                    let made = make(&job.source, job.key.1, job.target, job.premultiplied);
+                    let made = make(&job.source, job.key.1, job.target);
                     let landed = (job.key, Arc::downgrade(&job.source), made);
                     drop(job.source);
                     DONE.lock().unwrap_or_else(|e| e.into_inner()).push(landed);
@@ -662,9 +652,8 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
             }
             let natural = source.size(key.1);
             let target = (stepped(natural.width.0 as u32, key.2), stepped(natural.height.0 as u32, key.3));
-            let premultiplied = c.premultiplied.contains(&key.0);
             c.in_flight.insert(key);
-            submit(Job { key, source, target, premultiplied });
+            submit(Job { key, source, target });
         }
         let gone: Vec<Key> = c.copies.iter().filter(|(_, v)| v.source.strong_count() == 0).map(|(k, _)| *k).collect();
         for key in gone {
