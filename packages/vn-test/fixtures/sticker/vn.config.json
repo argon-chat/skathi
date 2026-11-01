@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/sticker.spec.ts: <vn-sticker>, vue-native's stickers and animated emoji (crates/vn-tree/src/sticker.rs). See ../README.md.",
+
+  "name": "vn-test-sticker",
+
+  "window": {
+    "title": "vue-native — vn-sticker (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}
