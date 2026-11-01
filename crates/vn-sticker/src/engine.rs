@@ -196,10 +196,10 @@ mod tests {
     }
 
     #[test]
-    fn a_video_waits_for_the_decoder_and_garbage_is_named() {
+    fn a_cut_video_and_garbage_are_named() {
         let webm: Arc<[u8]> = Arc::from(&b"\x1a\x45\xdf\xa3\x9f"[..]);
         let error = load(&webm).err().unwrap();
-        assert!(error.contains("not in this build"), "{error}");
+        assert!(error.contains("malformed video sticker"), "{error}");
         let png: Arc<[u8]> = Arc::from(&b"\x89PNG\r\n"[..]);
         assert!(load(&png).err().unwrap().contains("neither"));
     }

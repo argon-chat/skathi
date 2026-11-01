@@ -75,6 +75,12 @@
 
 use std::sync::Arc;
 
+mod index;
+mod vp9;
+mod webm;
+
+use index::Packet;
+
 /// What a file is, known after [`VideoSource::open`] without decoding a frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VideoMeta {
@@ -169,8 +175,14 @@ impl std::error::Error for VideoError {}
 /// Immutable after [`VideoSource::open`].
 pub struct VideoSource {
     meta: VideoMeta,
-    // W3: the block index (offsets into `bytes` of each colour and alpha
-    // packet, keyframe flags), and the bytes themselves.
+    #[allow(dead_code)] // W3: the decoder reads it (next step)
+    bytes: Arc<[u8]>,
+    /// Every block of the video track, in file order: where its colour and
+    /// alpha packets are in `bytes`, and whether it shows a frame.
+    packets: Box<[Packet]>,
+    /// The track's `Colour`, which picks the YUV matrix when it is complete.
+    #[allow(dead_code)] // W3: the conversion reads it (next step)
+    colour: Option<webm::Colour>,
 }
 
 impl VideoSource {
@@ -178,8 +190,8 @@ impl VideoSource {
     /// track and every block, and decodes no frame. Cheap enough for the
     /// worker to call on a cache miss: a sticker is at most a few hundred KB.
     pub fn open(bytes: Arc<[u8]>) -> Result<Arc<VideoSource>, VideoError> {
-        let _ = bytes; // W3
-        Err(VideoError::NotBuilt)
+        let index = index::index(&bytes)?;
+        Ok(Arc::new(VideoSource { meta: index.meta, bytes, packets: index.packets, colour: index.colour }))
     }
 
     pub fn meta(&self) -> &VideoMeta {
@@ -189,7 +201,7 @@ impl VideoSource {
     /// Bytes held by this source beyond the file itself (the registry counts
     /// the file): the block index.
     pub fn memory_bytes(&self) -> usize {
-        std::mem::size_of::<Self>() + self.meta.pts_ms.len() * 4 // W3: plus the index
+        std::mem::size_of::<Self>() + self.meta.pts_ms.len() * 4 + self.packets.len() * std::mem::size_of::<Packet>()
     }
 
     /// A decoder at frame 0. [`VideoError::Malformed`] when libvpx will not
@@ -305,12 +317,14 @@ mod tests {
     }
 
     #[test]
-    fn the_stub_says_it_is_not_built() {
+    fn a_file_is_demuxed_and_the_decoder_is_not_built_yet() {
         let bytes: Arc<[u8]> = Arc::from(&b"\x1a\x45\xdf\xa3"[..]);
-        assert!(matches!(
-            VideoSource::open(bytes),
-            Err(VideoError::NotBuilt)
-        ));
+        assert!(matches!(VideoSource::open(bytes), Err(VideoError::Malformed(_))));
+        let source = VideoSource::open(Arc::from(&include_bytes!("testdata/alpha.webm")[..])).unwrap();
+        assert_eq!(source.meta().frame_count(), 48);
+        assert!(source.memory_bytes() > 48 * 4);
+        let mut decoder = source.decoder(DecodeOptions::default()).unwrap();
+        assert_eq!(decoder.decode_next(), Err(VideoError::NotBuilt));
     }
 
     #[test]
