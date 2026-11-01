@@ -996,111 +996,189 @@ describe("document- and window-level listeners", () => {
   });
 });
 
-describe("ResizeObserver samples the host's layout", () => {
-  test("it fires once for the first size and again only when the size changes", async () => {
-    const rt = createRuntime();
-    const { button } = tree(rt);
-    rt.host.boundsById.set(button.__vnId, "0,0,100,40");
-    const seen = [];
+// m26 fixes-lag-1: ResizeObserver runs where HTML runs it, in the host's step
+// after the frame's layout (`host.layout.step()` here; crates/vn-tree/src/
+// observe.rs), not polled from requestAnimationFrame before it.
+describe("ResizeObserver, after layout (Resize Observer §3.4.4)", () => {
+  /** The fake world's tree: `section` at depth 2, `button` and `span` at depth 3. */
+  function world(globals: Record<string, unknown> = {}) {
+    const rt = createRuntime({ globals });
+    const nodes = tree(rt);
+    rt.host.boundsById.set(nodes.section.__vnId, "0,0,300,100");
+    rt.host.boundsById.set(nodes.button.__vnId, "0,0,100,40");
+    rt.host.boundsById.set(nodes.span.__vnId, "0,0,30,10");
+    return { rt, ...nodes };
+  }
+
+  test("a target's first size is reported at the next step, and again only when it changes", () => {
+    const { rt, button } = world();
+    const seen: number[][] = [];
     const ob = new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.width)));
+    expect(rt.host.layout.step()).toBe(-1); // nothing observed: the host calls nothing
     ob.observe(button);
-
-    const frame = () => new Promise((r) => setTimeout(r, 4));
-    await frame();
+    // observe() tells the host a step is owed even if the next frame lays nothing out.
+    expect(rt.host.layout.pending).toBe(true);
+    expect(rt.host.layout.step()).toBe(1);
     expect(seen).toEqual([[100]]);
-    // No change -> no callback.
-    await frame();
+    // Same layout: no callback.
+    expect(rt.host.layout.step()).toBe(0);
     expect(seen).toEqual([[100]]);
-    // A real change -> exactly one more. A box only moves in a frame the host
-    // builds, and the build is what wakes the parked poll.
     rt.host.boundsById.set(button.__vnId, "0,0,250,40");
-    rt.host.layout.built();
-    await frame();
-    await frame();
+    rt.host.layout.step();
     expect(seen).toEqual([[100], [250]]);
+    // Nothing left to observe: the step says so, and the host stops calling.
     ob.disconnect();
+    rt.host.layout.step();
+    expect(rt.host.layout.observing).toBe(false);
   });
-});
 
-// m26 client sweep #27: one observed element used to request an animation
-// frame on every frame for as long as it was observed, so an idle app never
-// stopped running JS and redrawing. The poll now parks after two quiet polls
-// and the host wakes it after its next build (`host.layout.built()` here).
-describe("the layout samplers park while nothing changes", () => {
-  /** Animation frames run by hand, counting every request. */
-  function handFrames(globals: Record<string, unknown> = {}, layoutWatch = true) {
+  test("an unpainted target reports 0x0 at once, then its size", () => {
+    const { rt, span } = world();
+    rt.host.boundsById.delete(span.__vnId);
+    const seen: number[][] = [];
+    new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.height))).observe(span);
+    rt.host.layout.step();
+    expect(seen).toEqual([[0]]);
+    rt.host.boundsById.set(span.__vnId, "0,0,30,10");
+    rt.host.layout.step();
+    expect(seen).toEqual([[0], [10]]);
+  });
+
+  test("the entry: the layout box, contentRect at (0, 0), device pixels, and the observer as `this`", () => {
+    const { rt, button } = world({ devicePixelRatio: 1.5 });
+    rt.host.boundsById.set(button.__vnId, "40,60,101,40");
+    let got: any = null;
+    let self: unknown = null;
+    const ob = new rt.global.ResizeObserver(function (this: unknown, entries: any[], o: unknown) {
+      self = this;
+      got = { entry: entries[0], o };
+    });
+    ob.observe(button);
+    rt.host.layout.step();
+    expect(self).toBe(ob);
+    expect(got.o).toBe(ob);
+    expect(got.entry.target).toBe(button);
+    // The spec's contentRect is at the padding edge; the layout box's position is not in it.
+    expect(got.entry.contentRect).toMatchObject({ x: 0, y: 0, top: 0, left: 0, width: 101, height: 40 });
+    expect(got.entry.borderBoxSize[0]).toEqual({ inlineSize: 101, blockSize: 40 });
+    expect(got.entry.contentBoxSize[0]).toEqual({ inlineSize: 101, blockSize: 40 });
+    expect(got.entry.devicePixelContentBoxSize[0]).toEqual({ inlineSize: 152, blockSize: 60 });
+  });
+
+  test("what a callback changes is laid out and reported in the same step, deeper targets only", () => {
+    const { rt, section, button } = world();
+    const order: string[] = [];
+    // The section's observer grows the button (in the host's re-layout).
+    let grow = false;
+    new rt.global.ResizeObserver(() => {
+      order.push("section");
+      grow = true;
+    }).observe(section);
+    new rt.global.ResizeObserver((e) => order.push(`button ${e[0].contentRect.width}`)).observe(button);
+    expect(rt.host.layout.step()).toBe(1); // both first sizes, one round
+    expect(order).toEqual(["section", "button 100"]);
+    order.length = 0;
+    grow = false;
+
+    rt.host.boundsById.set(section.__vnId, "0,0,320,100");
+    const rounds = rt.host.layout.step(() => {
+      if (grow) rt.host.boundsById.set(button.__vnId, "0,0,180,40");
+      grow = false;
+    });
+    // Round 1: the section (depth 2). The re-layout moved the button (depth 3),
+    // deeper than the section, so round 2 reports it: in the SAME step, which is
+    // the same frame — no frame paints the button at its old size.
+    expect(rounds).toBe(2);
+    expect(order).toEqual(["section", "button 180"]);
+    expect(rt.host.layout.loopErrors).toBe(0);
+  });
+
+  test("a change at or above the depth just reported is skipped: the loop error, and the next step reports it", () => {
+    const events: any[] = [];
+    const onerror: unknown[][] = [];
+    const { rt, section, button } = world({
+      dispatchEvent: (ev: any) => (events.push(ev), true),
+    });
+    (rt.global as any).onerror = (...args: unknown[]) => void onerror.push(args);
+    const sizes: string[] = [];
+    let shrinkSection = false;
+    new rt.global.ResizeObserver((e) => sizes.push(`section ${e[0].contentRect.width}`)).observe(section);
+    new rt.global.ResizeObserver((e) => {
+      sizes.push(`button ${e[0].contentRect.width}`);
+      shrinkSection = true;
+    }).observe(button);
+    rt.host.layout.step(() => (shrinkSection = false));
+    expect(sizes).toEqual(["section 300", "button 100"]);
+    sizes.length = 0;
+
+    // The button (depth 3) changes; its callback changes the section (depth 2),
+    // which is not deeper than what was just reported: skipped this step.
+    rt.host.boundsById.set(button.__vnId, "0,0,120,40");
+    rt.host.layout.step(() => {
+      if (shrinkSection) rt.host.boundsById.set(section.__vnId, "0,0,280,100");
+      shrinkSection = false;
+    });
+    expect(sizes).toEqual(["button 120"]);
+    expect(rt.host.layout.loopErrors).toBe(1);
+    const ev = events.find((e) => e.type === "error");
+    expect(ev).toBeInstanceOf(rt.global.ErrorEvent);
+    expect(ev.message).toBe("ResizeObserver loop completed with undelivered notifications.");
+    expect(ev.cancelable).toBe(true);
+    expect(ev.error).toBe(null);
+    // window.onerror the HTML way: (message, source, lineno, colno, error).
+    expect(onerror).toEqual([["ResizeObserver loop completed with undelivered notifications.", "", 0, 0, null]]);
+    // The host owes the next frame a step, which delivers the skipped one.
+    expect(rt.host.layout.pending).toBe(true);
+    rt.host.layout.step();
+    expect(sizes).toEqual(["button 120", "section 280"]);
+    expect(rt.host.layout.loopErrors).toBe(1);
+  });
+
+  test("an observer disconnected by an earlier callback in the round is not called", () => {
+    const { rt, section, button } = world();
+    const calls: string[] = [];
+    let second: any = null;
+    new rt.global.ResizeObserver(() => {
+      calls.push("first");
+      second.disconnect();
+    }).observe(section);
+    second = new rt.global.ResizeObserver(() => calls.push("second"));
+    second.observe(button);
+    rt.host.layout.step();
+    expect(calls).toEqual(["first"]);
+  });
+
+  test("a callback that throws is reported after it, and the next observer is still called", () => {
+    const later: (() => void)[] = [];
+    const { rt, section, button } = world({ queueMicrotask: (fn: () => void) => later.push(fn) });
+    const calls: string[] = [];
+    new rt.global.ResizeObserver(() => {
+      calls.push("throws");
+      throw new Error("boom");
+    }).observe(section);
+    new rt.global.ResizeObserver(() => calls.push("next")).observe(button);
+    rt.host.layout.step();
+    expect(calls).toEqual(["throws", "next"]);
+    // Rethrown from a microtask: the host's uncaught-error sink, as a listener's throw is.
+    expect(later.length).toBe(1);
+    expect(() => later[0]!()).toThrow("boom");
+  });
+
+  test("a host without the step: polled from animation frames, then a slow timer while nothing changes", () => {
     const queue: (() => void)[] = [];
-    const counter = { requested: 0 };
+    const timers = new Map<number, { cb: () => void; ms: number }>();
+    let nextTimer = 1;
     const rt = createRuntime({
       globals: {
-        requestAnimationFrame: (cb: () => void) => {
-          counter.requested++;
-          return queue.push(cb);
-        },
-        ...globals,
+        requestAnimationFrame: (cb: () => void) => queue.push(cb),
+        setTimeout: (cb: () => void, ms: number) => (timers.set(nextTimer, { cb, ms }), nextTimer++),
+        clearTimeout: (id: number) => timers.delete(id),
       },
-      layoutWatch,
+      layoutWatch: false,
     });
     const tick = (n = 1) => {
       for (let i = 0; i < n; i++) queue.splice(0).forEach((cb) => cb());
     };
-    return { rt, tick, counter, queue };
-  }
-
-  test("no frame is requested after the quiet polls, and a build wakes it again", () => {
-    const { rt, tick, counter, queue } = handFrames();
-    const { button, span } = tree(rt);
-    rt.host.boundsById.set(button.__vnId, "0,0,100,40");
-    const seen: number[][] = [];
-    const ob = new rt.global.ResizeObserver((entries) => seen.push(entries.map((e) => e.contentRect.width)));
-    const r0 = counter.requested;
-    ob.observe(button);
-    tick(10);
-    expect(seen).toEqual([[100]]);
-    // observe, the poll that reported, two quiet polls; then parked.
-    expect(counter.requested - r0).toBe(3);
-    expect(queue.length).toBe(0);
-    expect(rt.host.layout.watching).toBe(true);
-
-    // An idle stretch: not one frame requested.
-    const idle = counter.requested;
-    tick(50);
-    expect(counter.requested).toBe(idle);
-
-    // A build that moved nothing it watches: one poll from the host's hook,
-    // parked again at once, still no frame.
-    rt.host.layout.built();
-    expect(counter.requested).toBe(idle);
-    expect(rt.host.layout.watching).toBe(true);
-
-    // A mutation that resizes it: the build wakes the poll, which reports in
-    // that same tick and polls on until it is quiet again.
-    rt.host.boundsById.set(button.__vnId, "0,0,250,40");
-    rt.host.layout.built();
-    expect(seen).toEqual([[100], [250]]);
-    tick(10);
-    expect(counter.requested - idle).toBe(2);
-    expect(rt.host.layout.watching).toBe(true);
-
-    // observe() while parked reports the new target's first size at once,
-    // without waiting for a build, as a browser does.
-    rt.host.boundsById.set(span.__vnId, "0,0,30,10");
-    ob.observe(span);
-    tick();
-    expect(seen.at(-1)).toEqual([30]);
-    ob.disconnect();
-  });
-
-  test("a host without the layout signal re-polls on a slow timer, as a safety net", () => {
-    const timers = new Map<number, { cb: () => void; ms: number }>();
-    let nextTimer = 1;
-    const { rt, tick, queue } = handFrames(
-      {
-        setTimeout: (cb: () => void, ms: number) => (timers.set(nextTimer, { cb, ms }), nextTimer++),
-        clearTimeout: (id: number) => timers.delete(id),
-      },
-      false,
-    );
     const { button } = tree(rt);
     rt.host.boundsById.set(button.__vnId, "0,0,100,40");
     const seen: number[][] = [];
@@ -1114,6 +1192,7 @@ describe("the layout samplers park while nothing changes", () => {
     const [id, t] = slow[0];
     timers.delete(id);
     t.cb();
+    tick();
     expect(seen).toEqual([[100], [250]]);
   });
 });

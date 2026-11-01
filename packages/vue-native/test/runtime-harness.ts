@@ -242,19 +242,41 @@ export function createRuntime(
     /** `__vn_bounds` answers: node id -> "x,y,w,h". */
     boundsById: new Map(),
     /**
-     * The layout signal (`crates/vn-tree` `wake_layout_watchers`), faked: the
-     * hook the runtime installed, whether it is parked (`watching`), and how
-     * many times it parked. `host.layout.built()` is a frame built in some
-     * window followed by the next frame tick — it wakes a parked runtime, once.
+     * The observer step after layout (crates/vn-tree/src/observe.rs), faked:
+     * the runtime's `layoutStep`, whether it observes anything, whether an
+     * `observe()` is waiting (`pending`), how many `__vn_layout_watch` calls
+     * came, and the loop errors the steps raised. `host.layout.step()` is
+     * one frame's step with the layout already done (`boundsById` IS the
+     * layout): the rounds, a `relayout` between them when given (the host's
+     * draw; a test moves `boundsById` there), then the finish. Answers the
+     * rounds, or -1 when the host would not have called the runtime at all.
      */
     layout: {
-      hook: null as (() => void) | null,
-      watching: false,
+      hook: null as ((op: number) => number) | null,
+      observing: false,
+      pending: false,
       watches: 0,
-      built() {
-        if (!this.watching) return;
-        this.watching = false;
-        this.hook?.();
+      steps: 0,
+      loopErrors: 0,
+      step(relayout?: () => void): number {
+        if (!this.hook || !this.observing) return -1;
+        this.pending = false;
+        this.steps++;
+        let rounds = 0;
+        let due = this.hook(0);
+        while (due > 0 && rounds < 1000) {
+          rounds++;
+          while (this.hook(1) > 0);
+          relayout?.();
+          due = this.hook(2);
+        }
+        const state = this.hook(3);
+        this.observing = (state & 2) !== 0;
+        if (state & 1) {
+          this.loopErrors++;
+          this.pending = true;
+        }
+        return rounds;
       },
     },
     /** `__vn_computed_style` answers: node id -> "k=v\n…". */
@@ -1027,16 +1049,17 @@ export function createRuntime(
     loadAdoptCanvas(),
     loadInstallFonts(),
     // `__vn_set_layout_hook` / `__vn_layout_watch`. `layoutWatch: false` makes
-    // them absent, which is an older host: the runtime's safety-net timer.
+    // them absent, which is an older host: the runtime's rAF fallback.
     options.layoutWatch === false
       ? undefined
-      : (fn: () => void) => {
+      : (fn: (op: number) => number) => {
           host.layout.hook = fn;
         },
     options.layoutWatch === false
       ? undefined
-      : () => {
-          host.layout.watching = true;
+      : (observing: boolean) => {
+          host.layout.observing = observing;
+          host.layout.pending = observing;
           host.layout.watches++;
         },
     loadInstallSelection(),

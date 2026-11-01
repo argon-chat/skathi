@@ -656,12 +656,19 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     window::note_painted_frame();
     after_wave(window, cx);
     window.on_next_frame(pump_frame);
-    // The wave may have been long; the background tick measures the stall
-    // from its end, so a slow frame is not mistaken for a parked one.
-    background::note_frame();
     // Closes the `pump` bucket: everything after this is gpui's — its decision
     // to draw, the draw itself, the present, and the wait for the next vsync.
     perf::pump_done();
+    // ResizeObserver and IntersectionObserver, where a browser runs them:
+    // after this frame's layout and before its paint. When the frame is going
+    // to draw, this draws it (the frame's own draw, moved ahead of gpui's,
+    // which then only presents it), delivers, and lays out again if the
+    // callbacks changed anything (crates/vn-tree/src/observe.rs). After
+    // `pump_done`, so that draw stays in gpui's bucket of the frame trace.
+    vn_tree::update_layout_observers(window, cx);
+    // The wave and the step may have been long; the background tick measures
+    // the stall from its end, so a slow frame is not mistaken for a parked one.
+    background::note_frame();
 }
 
 /// Which clock drives a JS wave.

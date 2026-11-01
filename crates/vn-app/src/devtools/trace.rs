@@ -164,6 +164,7 @@ impl Frame {
             && p.draw_passes == 0
             && p.js_passes == 0
             && p.sync_layouts + p.sync_layout_refused == 0
+            && p.observer_steps == 0
             && p.dom_ops.iter().all(|&n| n == 0)
             && p.layout_reads + p.style_reads + p.queries + p.scroll_reads == 0
             && self.pump_ms < 2.0
@@ -375,6 +376,9 @@ fn frame_json(f: &Frame) -> Json {
             ]),
         ));
     }
+    if p.observer_steps > 0 {
+        o.push(("observers", observers_json(p.observer_steps, p.observer_rounds, p.observer_relayouts, p.observer_relayout_ms, p.observer_ms, p.observer_loop_errors)));
+    }
     if p.restyle_passes > 0 || p.recompiles > 0 || p.full_reasons.iter().any(|&n| n > 0) {
         let reasons: Vec<(&str, Json)> = FullReason::NAMES
             .iter()
@@ -466,6 +470,19 @@ fn frame_json(f: &Frame) -> Json {
     Json::obj(o)
 }
 
+/// The ResizeObserver / IntersectionObserver step after layout, per frame and
+/// in total (`vn_tree::perf::Phases::observer_steps` and the rest).
+fn observers_json(steps: u32, rounds: u32, relayouts: u32, relayout_ms: f32, ms: f32, loop_errors: u32) -> Json {
+    Json::obj(vec![
+        ("n", Json::n(f64::from(steps))),
+        ("rounds", Json::n(f64::from(rounds))),
+        ("relayouts", Json::n(f64::from(relayouts))),
+        ("relayoutMs", r2(relayout_ms)),
+        ("ms", r2(ms)),
+        ("loopErrors", Json::n(f64::from(loop_errors))),
+    ])
+}
+
 /// Totals over the stored frames, and the ten longest.
 fn summary(frames: &[Frame]) -> Json {
     let mut s = Totals::default();
@@ -518,6 +535,10 @@ fn summary(frames: &[Frame]) -> Json {
                 ("maxPerFrame", Json::n(s.sync_per_frame_max as f64)),
                 ("by", Json::obj(by)),
             ]),
+        ),
+        (
+            "observers",
+            observers_json(s.observer_steps, s.observer_rounds, s.observer_relayouts, s.observer_relayout_ms, s.observer_ms, s.observer_loop_errors),
         ),
         (
             "restyle",
@@ -622,6 +643,12 @@ struct Totals {
     sync_tail: u64,
     sync_tail_free: u64,
     sync_per_frame_max: u32,
+    observer_steps: u32,
+    observer_rounds: u32,
+    observer_relayouts: u32,
+    observer_relayout_ms: f32,
+    observer_ms: f32,
+    observer_loop_errors: u32,
     sync_by: [u32; SyncCaller::COUNT],
     restyles: u64,
     restyle_full: u64,
@@ -671,6 +698,12 @@ impl Totals {
         self.sync_refused += u64::from(p.sync_layout_refused);
         self.sync_tail += u64::from(p.sync_tail);
         self.sync_tail_free += u64::from(p.sync_tail_free);
+        self.observer_steps += p.observer_steps;
+        self.observer_rounds += p.observer_rounds;
+        self.observer_relayouts += p.observer_relayouts;
+        self.observer_relayout_ms += p.observer_relayout_ms;
+        self.observer_ms += p.observer_ms;
+        self.observer_loop_errors += p.observer_loop_errors;
         self.sync_per_frame_max = self.sync_per_frame_max.max(p.sync_layouts);
         for (a, b) in self.sync_by.iter_mut().zip(p.sync_by.iter()) {
             *a += *b;

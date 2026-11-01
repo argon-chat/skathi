@@ -79,8 +79,8 @@ thread_local! {
     /// stale answer has no other way to tell (`crate::dom::layout_if_stale`).
     static BUILDS: Cell<u64> = const { Cell::new(0) };
     /// Builds in ANY window, a pop-out's included: when layout can have moved.
-    /// It is what parks ResizeObserver and IntersectionObserver
-    /// (`crate::wake_layout_watchers`). [`BUILDS`] stays the primary window's
+    /// It is how the observer step knows a frame laid anything out since its
+    /// last run (`crate::observe`). [`BUILDS`] stays the primary window's
     /// alone, because a pop-out's build is not the forced layout a DOM read on
     /// the main window asked for.
     static LAYOUTS: Cell<u64> = const { Cell::new(0) };

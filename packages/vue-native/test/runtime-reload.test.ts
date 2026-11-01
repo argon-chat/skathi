@@ -38,18 +38,20 @@ type G = Record<PropertyKey, unknown> & {
 
 describe("a same-realm reload", () => {
   test("the next runtime's ResizeObserver replaces the old one, and it fires", () => {
-    const raf = frameQueue();
-    const first = createRuntime({ globals: { ...raf.globals } });
+    const first = createRuntime();
     const g = first.global as unknown as G;
     const OldRO = g.ResizeObserver;
-    // The old app observes something, so its poll is queued on a frame...
+    // The old app observes something, so the host runs the old runtime's step...
     const a = first.nodeOps.createElement("div");
     first.host.boundsById.set(a.__vnId, "0,0,50,10");
-    new OldRO(() => {}).observe(a);
-    expect(raf.size).toBe(1);
-    // ...which the unload cancels.
+    const old: number[] = [];
+    new OldRO((entries) => old.push(...entries.map((e) => e.contentRect.width))).observe(a);
+    expect(first.host.layout.observing).toBe(true);
+    // ...until the unload lets every observation go and says so.
     g.__VN_UNLOAD__!();
-    expect(raf.size).toBe(0);
+    expect(first.host.layout.observing).toBe(false);
+    expect(first.host.layout.step()).toBe(-1);
+    expect(old).toEqual([]);
 
     const second = createRuntime({ realm: first.global });
     expect(g.ResizeObserver).not.toBe(OldRO);
@@ -57,8 +59,25 @@ describe("a same-realm reload", () => {
     second.host.boundsById.set(b.__vnId, "0,0,120,30");
     const seen: number[] = [];
     new g.ResizeObserver((entries) => seen.push(...entries.map((e) => e.contentRect.width))).observe(b);
-    raf.run();
+    second.host.layout.step();
     expect(seen).toEqual([120]);
+    expect(old).toEqual([]);
+  });
+
+  test("an old runtime's step, still called before the next one installs its own, delivers nothing", () => {
+    const raf = frameQueue();
+    const first = createRuntime({ globals: { ...raf.globals } });
+    const g = first.global as unknown as G;
+    const a = first.nodeOps.createElement("div");
+    first.host.boundsById.set(a.__vnId, "0,0,50,10");
+    const old: number[] = [];
+    new g.ResizeObserver((entries) => old.push(...entries.map((e) => e.contentRect.width))).observe(a);
+    g.__VN_UNLOAD__!();
+    // A host that has not heard the `false` yet calls the old step anyway.
+    first.host.layout.observing = true;
+    first.host.layout.step();
+    expect(old).toEqual([]);
+    expect(first.host.layout.observing).toBe(false);
   });
 
   test("every class and interface the runtime installs is the new runtime's", () => {

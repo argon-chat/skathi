@@ -159,6 +159,18 @@ pub struct Phases {
     /// a frame whose own draw only repeated the forced layout's.
     pub sync_tail: u32,
     pub sync_tail_free: u32,
+    /// The ResizeObserver / IntersectionObserver step after layout
+    /// (`crate::observe`): steps run, ResizeObserver broadcast rounds, the
+    /// layouts a round's callbacks made the step redo and their wall time, the
+    /// rest of the step's time (the callbacks, the microtasks after them, the
+    /// flushes; the frame's own draw at its start is not in it), and the
+    /// "loop completed with undelivered notifications" errors raised.
+    pub observer_steps: u32,
+    pub observer_rounds: u32,
+    pub observer_relayouts: u32,
+    pub observer_relayout_ms: f32,
+    pub observer_ms: f32,
+    pub observer_loop_errors: u32,
     /// Host DOM operations (`__vn_*` mutators), by [`DomOp`].
     pub dom_ops: [u32; DomOp::COUNT],
     /// The first and last DOM mutation in the window: the span Vue spent
@@ -291,6 +303,12 @@ const ZERO: Phases = Phases {
     sync_by: [0; SyncCaller::COUNT],
     sync_tail: 0,
     sync_tail_free: 0,
+    observer_steps: 0,
+    observer_rounds: 0,
+    observer_relayouts: 0,
+    observer_relayout_ms: 0.0,
+    observer_ms: 0.0,
+    observer_loop_errors: 0,
     dom_ops: [0; DomOp::COUNT],
     dom_first: None,
     dom_last: None,
@@ -560,6 +578,23 @@ pub fn note_sync_tail(free: bool) {
         if free {
             p.sync_tail_free += 1;
         }
+    });
+}
+
+/// One observer step (`crate::observe`): its broadcast rounds, the layouts
+/// they made it redo and their time, the rest of its time, and whether it
+/// raised the loop error.
+pub fn note_observers(rounds: u32, relayouts: u32, relayout_ms: f32, ms: f32, loop_error: bool) {
+    if !enabled() {
+        return;
+    }
+    with(|p| {
+        p.observer_steps += 1;
+        p.observer_rounds += rounds;
+        p.observer_relayouts += relayouts;
+        p.observer_relayout_ms += relayout_ms;
+        p.observer_ms += ms.max(0.0);
+        p.observer_loop_errors += u32::from(loop_error);
     });
 }
 

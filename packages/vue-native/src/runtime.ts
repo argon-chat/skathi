@@ -4507,9 +4507,13 @@ const realm = (() => {
       __vn_log("reload: teardown: " + e);
     }
     realm.close();
-    // The host keeps calling the layout hook it was given until the next
-    // runtime installs its own; with nothing parked, the old one does nothing.
-    parkedSamplers.clear();
+    // The host keeps calling the observer step it was given until the next
+    // runtime installs its own; with nothing observed, the old one does
+    // nothing, and the host is told so it stops asking.
+    resizeObservers.length = 0;
+    resizeDue = [];
+    intersectionObservers.clear();
+    if (hostSteps) __vn_layout_watch(false);
     // Last: the teardown and the realm hygiene above still call through the
     // globals they are about to lose.
     const kept = resetGlobals();
@@ -6388,132 +6392,354 @@ defineGlobal(
   },
 );
 
-// -- ResizeObserver, sampled from the host's real layout.
+// -- ResizeObserver and IntersectionObserver, after layout and before paint.
 //
-// gpui recomputes layout every frame and publishes no per-element resize
-// SIGNAL, but it does publish the resulting rectangle (`__vn_bounds`) — so the
-// observer polls its targets on animation frames and reports the frames on
-// which a size actually changed. That is a frame of latency against a browser's
-// notification, and it costs one host call per observed element per polled
-// frame. Polls stop when they go quiet and resume after the host's next build
-// (`parkSampler`, below), so an idle window polls nothing.
+// HTML "update the rendering" (§8.1.7.3) runs both where the document's
+// layout is fresh: after the animation frame callbacks it recalculates styles
+// and updates layout, runs ResizeObserver's loop (Resize Observer §3.4.4:
+// gather the active observations deeper than `depth`, broadcast them, lay out
+// again, gather again at the shallowest depth just broadcast, until nothing
+// is active; an observation skipped on the way raises the "loop completed
+// with undelivered notifications" error), then the update intersection
+// observations steps, and then paints. So a ResizeObserver callback sees the
+// size the frame is about to paint, and what it changes is painted in that
+// same frame.
+//
+// The host runs this once per frame as one step (`layoutStep` below, through
+// `__vn_set_layout_hook`; crates/vn-tree/src/observe.rs): it draws the frame
+// first when the frame is going to draw, calls `layoutStep` once per op, drains
+// microtasks after every call (a browser's microtask checkpoint after each
+// callback, where Vue's scheduler flushes the patch a callback asked for), and
+// lays out again between rounds when the callbacks changed anything. A frame
+// that lays nothing out runs no step, unless an `observe()` is waiting for its
+// first report.
+//
+// Until m26 fixes-lag-1 both observers were POLLED from requestAnimationFrame,
+// which runs before the frame's layout: a callback saw the previous frame's
+// size, its response painted a frame late (the "one-frame jump"), and a target
+// mounted in the wave, which had no box yet, forced a layout from inside the
+// rAF.
 //
 // It has to be real: @floating-ui's `autoUpdate` positions an element ONCE and
 // then waits for a ResizeObserver to tell it the element has been laid out. An
 // inert observer means every popover, tooltip, dropdown and select keeps the
 // position computed from its pre-layout 0×0 box — which is to say none of them
 // is ever placed at all.
+//
+// Divergence, said in docs/RUNTIME.md §5.1: `contentRect`, `contentBoxSize`
+// and `borderBoxSize` are all the BORDER box, as `clientWidth` is here. The
+// cascade's padding and border widths are not published per node, so the
+// content box is not known; `contentRect` is at (0, 0), as for a box without
+// padding.
 /** One `ResizeObserverEntry`, with the box fields every consumer reads. */
 interface ResizeEntryLike {
   target: MirrorElement;
   contentRect: MirrorRect;
-  borderBoxSize: { inlineSize: number; blockSize: number }[];
-  contentBoxSize: { inlineSize: number; blockSize: number }[];
-  devicePixelContentBoxSize: { inlineSize: number; blockSize: number }[];
+  borderBoxSize: readonly { inlineSize: number; blockSize: number }[];
+  contentBoxSize: readonly { inlineSize: number; blockSize: number }[];
+  devicePixelContentBoxSize: readonly { inlineSize: number; blockSize: number }[];
 }
-/** The instance shape the poll below drives. */
+interface ResizeSize {
+  w: number;
+  h: number;
+}
+/** The instance shape the step below drives. */
 interface ResizeObserverLike {
-  _callback: (entries: ResizeEntryLike[], ob: ResizeObserverLike) => void;
-  /** node -> the size last REPORTED for it; `null` = nothing reported yet. */
-  _targets: Map<MirrorElement, { w: number; h: number } | null>;
+  _callback: (this: ResizeObserverLike, entries: ResizeEntryLike[], ob: ResizeObserverLike) => void;
+  /**
+   * The observation targets, with the size last REPORTED for each; `null` =
+   * nothing reported yet, so the next gather reports it, as `observe()` does
+   * in a browser, a 0×0 or undisplayed target included.
+   */
+  _targets: Map<MirrorElement, ResizeSize | null>;
+  /** What the last gather found active: the target, its size, its depth. */
+  _active: [MirrorElement, ResizeSize, number][];
+  /** The last gather skipped an active observation at or above its depth. */
+  _skipped: boolean;
 }
 
-// -- Parking the layout samplers (m26 client sweep #27).
-//
-// Layout only moves in a frame the host builds, and an idle window builds
-// none. Polling every animation frame regardless meant that one observed
-// element (every mounted popover anchor, every `visible` motion) requested a
-// rAF on every frame, so an idle app ran JS at the display's rate and never
-// stopped redrawing. A sampler therefore keeps polling only while its polls
-// find something: after `QUIET_POLLS` polls in a row that report nothing, it
-// PARKS, and the host calls `wakeSamplers` from the first frame tick after its
-// next build in any window (`__vn_layout_watch`, `crates/vn-tree` `LAYOUTS`).
-// Any change that can move a box goes through a build: a tree mutation, a
-// style or class write, a viewport resize, a font load, hover, scrolling, an
-// animation frame. So a parked sampler misses nothing; it costs the one
-// frame of latency that polling already had. `observe()` un-parks at once,
-// because a browser reports a target's first state without waiting for a
-// change.
-const QUIET_POLLS = 2;
-const parkedSamplers = new Set<() => void>();
-let layoutHookSet = false;
-let layoutSafetyTimer: unknown = null;
+/** The document's ResizeObservers that have observations, in the order they observed first. */
+const resizeObservers: ResizeObserverLike[] = [];
+/** The observers the current round calls back, in order. */
+let resizeDue: ResizeObserverLike[] = [];
+/** The shallowest target depth the current round has broadcast. */
+let resizeDepth = Infinity;
+
+/**
+ * Resize Observer "calculate depth for node": the nodes on the path from it
+ * to the root of its tree, itself included, so a root (or a detached node) is
+ * at depth 1 and the first gather, at depth 0, takes every target.
+ */
+function nodeDepth(node: MirrorNode): number {
+  let d = 1;
+  for (let n = node.parentNode; n; n = n.parentNode) d++;
+  return d;
+}
+
+/** Resize Observer "gather active observations at depth". Answers how many observers have entries. */
+function gatherResizes(depth: number): number {
+  resizeDue = [];
+  resizeDepth = Infinity;
+  for (const ob of resizeObservers) {
+    ob._active = [];
+    ob._skipped = false;
+    for (const [target, last] of ob._targets) {
+      // The layout box (transforms ignored, as the spec's is). The step runs
+      // after the frame's layout, so nothing is owed and no read forces one.
+      const r = rectOf(target);
+      if (last && last.w === r.width && last.h === r.height) continue;
+      const d = nodeDepth(target);
+      if (d > depth) ob._active.push([target, { w: r.width, h: r.height }, d]);
+      else ob._skipped = true;
+    }
+    if (ob._active.length) resizeDue.push(ob);
+  }
+  return resizeDue.length;
+}
+
+/** One observer of "broadcast active resize observations". Answers how many are left this round. */
+function broadcastNextResize(): number {
+  const ob = resizeDue.shift();
+  // A callback earlier in the round may have disconnected it.
+  if (ob && ob._active.length) {
+    const entries: ResizeEntryLike[] = [];
+    for (const [target, size, d] of ob._active) {
+      entries.push(resizeEntry(target, size));
+      if (ob._targets.has(target)) ob._targets.set(target, size);
+      if (d < resizeDepth) resizeDepth = d;
+    }
+    ob._active = [];
+    try {
+      ob._callback.call(ob, entries, ob);
+    } catch (e) {
+      // "Report the exception", after the callback, as a listener's is.
+      (globalThis.queueMicrotask ?? queueMicrotask)(() => {
+        throw e;
+      });
+    }
+  }
+  return resizeDue.length;
+}
+
+function resizeEntry(target: MirrorElement, size: ResizeSize): ResizeEntryLike {
+  const box = Object.freeze([Object.freeze({ inlineSize: size.w, blockSize: size.h })]);
+  const dpr = Number((globalThis as { devicePixelRatio?: number }).devicePixelRatio) || 1;
+  const device = Object.freeze([
+    Object.freeze({ inlineSize: Math.round(size.w * dpr), blockSize: Math.round(size.h * dpr) }),
+  ]);
+  const contentRect = asDomRect({
+    x: 0, y: 0, width: size.w, height: size.h,
+    top: 0, left: 0, right: size.w, bottom: size.h,
+    toJSON() { return this; },
+  });
+  return { target, contentRect, borderBoxSize: box, contentBoxSize: box, devicePixelContentBoxSize: device };
+}
+
+const RESIZE_LOOP_MESSAGE = "ResizeObserver loop completed with undelivered notifications.";
+
+/**
+ * Resize Observer "deliver resize loop error notification": HTML "report an
+ * exception" with no Error object, at the global. An `ErrorEvent` named
+ * `error`, cancelable, for `addEventListener("error")`, and `window.onerror`
+ * called the HTML way, `(message, source, lineno, colno, error)`. The engine
+ * calls an `on<type>` attribute with the event alone, which would hand an
+ * error reporter an event object for a message (and Sentry's default filter,
+ * which drops this message, would not recognise it), so the attribute is held
+ * back from the engine's dispatch and called here. Nothing is printed: a
+ * browser does not print this one either.
+ */
+function deliverResizeLoopError(): void {
+  const g = globalThis as {
+    onerror?: unknown;
+    dispatchEvent?: (e: VnEvent) => boolean;
+  };
+  if (!ErrorEventClass) return;
+  const ev = new ErrorEventClass("error", {
+    cancelable: true,
+    message: RESIZE_LOOP_MESSAGE,
+    filename: "",
+    lineno: 0,
+    colno: 0,
+    error: null,
+  });
+  const handler = g.onerror;
+  const own = Object.getOwnPropertyDescriptor(g, "onerror");
+  let hidden = false;
+  if (typeof handler === "function" && own?.writable) {
+    try {
+      g.onerror = null;
+      hidden = true;
+    } catch {
+      /* not writable after all: the engine calls it as an attribute */
+    }
+  }
+  try {
+    g.dispatchEvent?.(ev);
+  } finally {
+    if (hidden) g.onerror = handler;
+  }
+  if (hidden) {
+    try {
+      (handler as (...a: unknown[]) => unknown).call(globalThis, RESIZE_LOOP_MESSAGE, "", 0, 0, null);
+    } catch (e) {
+      (globalThis.queueMicrotask ?? queueMicrotask)(() => {
+        throw e;
+      });
+    }
+  }
+}
+
+type ErrorEventInit = {
+  bubbles?: boolean;
+  cancelable?: boolean;
+  composed?: boolean;
+  message?: string;
+  filename?: string;
+  lineno?: number;
+  colno?: number;
+  error?: unknown;
+};
+/** The engine's `ErrorEvent`, or ours, installed on the global when it lacks one. */
+const ErrorEventClass: (new (type: string, init?: ErrorEventInit) => VnEvent) | null = (() => {
+  const g = globalThis as { ErrorEvent?: unknown };
+  if (typeof g.ErrorEvent === "function" && !vacant(g, "ErrorEvent"))
+    return g.ErrorEvent as new (type: string, init?: ErrorEventInit) => VnEvent;
+  if (typeof Event !== "function") return null;
+  const fields = new WeakMap<object, Required<Pick<ErrorEventInit, "message" | "filename" | "lineno" | "colno">> & { error: unknown }>();
+  const field = <K extends "message" | "filename" | "lineno" | "colno" | "error">(ev: object, k: K, empty: unknown) =>
+    fields.has(ev) ? fields.get(ev)![k] : empty;
+  class ErrorEvent extends Event {
+    constructor(type: string, init: ErrorEventInit = {}) {
+      super(type, init);
+      fields.set(this, {
+        message: String(init.message ?? ""),
+        filename: String(init.filename ?? ""),
+        lineno: Number(init.lineno ?? 0) >>> 0,
+        colno: Number(init.colno ?? 0) >>> 0,
+        error: init.error === undefined ? null : init.error,
+      });
+    }
+    get message(): string {
+      return field(this, "message", "") as string;
+    }
+    get filename(): string {
+      return field(this, "filename", "") as string;
+    }
+    get lineno(): number {
+      return field(this, "lineno", 0) as number;
+    }
+    get colno(): number {
+      return field(this, "colno", 0) as number;
+    }
+    get error(): unknown {
+      return field(this, "error", null);
+    }
+  }
+  try {
+    Object.defineProperty(globalThis, "ErrorEvent", { value: mark(ErrorEvent), configurable: true, writable: true });
+  } catch {
+    /* a frozen global: the class still serves this module */
+  }
+  return ErrorEvent as unknown as new (type: string, init?: ErrorEventInit) => VnEvent;
+})();
+
+// The step's ops: the numbers are the protocol with crates/vn-tree/src/observe.rs.
+const LAYOUT_START = 0;
+const LAYOUT_NEXT = 1;
+const LAYOUT_AGAIN = 2;
+const LAYOUT_FINISH = 3;
+
+/** Is anything observed, by either observer? */
+function observingLayout(): boolean {
+  for (const ob of resizeObservers) if (ob._targets.size) return true;
+  for (const ob of intersectionObservers) if (ob._targets.size) return true;
+  return false;
+}
+
+/**
+ * The runtime's half of the step (see the section header): one op per host
+ * call. Anything that throws out of here would lose the step's state, so the
+ * callbacks' exceptions are reported from a microtask instead.
+ */
+function layoutStep(op: number): number {
+  switch (op) {
+    case LAYOUT_START:
+      return gatherResizes(0);
+    case LAYOUT_NEXT:
+      return broadcastNextResize();
+    case LAYOUT_AGAIN:
+      return gatherResizes(resizeDepth);
+    case LAYOUT_FINISH: {
+      let raised = 0;
+      if (resizeObservers.some((ob) => ob._skipped)) {
+        for (const ob of resizeObservers) ob._skipped = false;
+        deliverResizeLoopError();
+        raised = 1;
+      }
+      updateIntersections();
+      // Observers that observe nothing leave the list: a browser keeps them
+      // (weakly), and nothing can tell the difference.
+      for (let i = resizeObservers.length - 1; i >= 0; i--) if (!resizeObservers[i]!._targets.size) resizeObservers.splice(i, 1);
+      return raised | (observingLayout() ? 2 : 0);
+    }
+    default:
+      return 0;
+  }
+}
+
+// The host runs the step; one without the two functions (an older shell, a
+// test harness that leaves them out) gets the step from requestAnimationFrame,
+// which is BEFORE layout, with no re-layout between rounds, and while nothing
+// changes it re-polls on a 250 ms timer instead of every frame. A safety net,
+// not the mechanism.
+const hostSteps = typeof __vn_set_layout_hook === "function" && typeof __vn_layout_watch === "function";
+if (hostSteps) __vn_set_layout_hook(layoutStep);
+const QUIET_STEPS = 2;
+let fallbackQueued = false;
+let fallbackQuiet = 0;
+let fallbackTimer: unknown = null;
 const layoutTimers = globalThis as { setTimeout?: (cb: () => void, ms: number) => unknown; clearTimeout?: (id: unknown) => void };
 
-/** The host's call: a frame was built since the samplers parked. */
-function wakeSamplers() {
-  if (layoutSafetyTimer != null) layoutTimers.clearTimeout?.(layoutSafetyTimer);
-  layoutSafetyTimer = null;
-  const woken = [...parkedSamplers];
-  parkedSamplers.clear();
-  for (const poll of woken) poll();
-}
-
-/** Parks `poll` until the host has built a frame. */
-function parkSampler(poll: () => void) {
-  parkedSamplers.add(poll);
-  if (typeof __vn_layout_watch === "function" && typeof __vn_set_layout_hook === "function") {
-    if (!layoutHookSet) {
-      __vn_set_layout_hook(wakeSamplers);
-      layoutHookSet = true;
-    }
-    __vn_layout_watch();
+/** An `observe()`: the next frame reports the target's first state, whatever it lays out. */
+function layoutObserved(): void {
+  if (hostSteps) {
+    __vn_layout_watch(true);
     return;
   }
-  // A SAFETY NET, not the mechanism: only a host without the layout signal
-  // (an older shell, a test harness that leaves it out) gets here, and a slow
-  // re-poll keeps such an observer working at a quarter-second's latency
-  // instead of going deaf.
-  if (layoutSafetyTimer == null && typeof layoutTimers.setTimeout === "function") {
-    layoutSafetyTimer = layoutTimers.setTimeout(wakeSamplers, 250);
-  }
+  fallbackQuiet = 0;
+  queueFallbackStep();
 }
 
-const resizeObservers = new Set<ResizeObserverLike>();
-let resizePollQueued = false;
-let resizeQuiet = 0;
-
-function scheduleResizePoll() {
-  if (resizePollQueued) return;
+function queueFallbackStep(): void {
+  if (fallbackTimer != null) layoutTimers.clearTimeout?.(fallbackTimer);
+  fallbackTimer = null;
+  if (fallbackQueued) return;
   const raf = globalThis.requestAnimationFrame;
   if (typeof raf !== "function") return;
-  resizePollQueued = true;
-  raf(pollResizeObservers);
+  fallbackQueued = true;
+  raf(fallbackStep);
 }
 
-function pollResizeObservers() {
-  resizePollQueued = false;
-  sampleResizes();
-}
-
-/** One poll; keeps polling while it finds changes, then parks (`parkSampler`). */
-function sampleResizes() {
-  let observing = false;
-  let changed = false;
-  for (const ob of [...resizeObservers]) {
-    if (!ob._targets.size) continue;
-    observing = true;
-    const entries: ResizeEntryLike[] = [];
-    for (const [node, last] of ob._targets) {
-      const r = rectOf(node);
-      if (last && last.w === r.width && last.h === r.height) continue;
-      ob._targets.set(node, { w: r.width, h: r.height });
-      const box = [{ inlineSize: r.width, blockSize: r.height }];
-      entries.push({ target: node, contentRect: r, borderBoxSize: box, contentBoxSize: box, devicePixelContentBoxSize: box });
-    }
-    if (entries.length) {
-      changed = true;
-      try {
-        ob._callback(entries, ob);
-      } catch (e) {
-        console.error(`[vue-native] ResizeObserver callback threw: ${e}`);
-      }
-    }
+function fallbackStep(): void {
+  fallbackQueued = false;
+  let reported = false;
+  let due = layoutStep(LAYOUT_START);
+  while (due > 0) {
+    reported = true;
+    while (layoutStep(LAYOUT_NEXT) > 0);
+    due = layoutStep(LAYOUT_AGAIN);
   }
-  if (!observing) return;
-  resizeQuiet = changed ? 0 : resizeQuiet + 1;
-  if (resizeQuiet < QUIET_POLLS) scheduleResizePoll();
-  else parkSampler(sampleResizes);
+  const state = layoutStep(LAYOUT_FINISH);
+  if (intersectionsQueued) reported = true;
+  if (!(state & 2)) return;
+  fallbackQuiet = reported ? 0 : fallbackQuiet + 1;
+  if (fallbackQuiet < QUIET_STEPS) queueFallbackStep();
+  else if (fallbackTimer == null && typeof layoutTimers.setTimeout === "function") {
+    fallbackTimer = layoutTimers.setTimeout(() => {
+      fallbackTimer = null;
+      queueFallbackStep();
+    }, 250);
+  }
 }
 
 defineGlobal(
@@ -6521,30 +6747,36 @@ defineGlobal(
   class ResizeObserver implements ResizeObserverLike {
     declare _callback: ResizeObserverLike["_callback"];
     declare _targets: ResizeObserverLike["_targets"];
+    declare _active: ResizeObserverLike["_active"];
+    declare _skipped: boolean;
     constructor(callback: ResizeObserverLike["_callback"]) {
+      if (typeof callback !== "function") {
+        throw new TypeError("Failed to construct 'ResizeObserver': parameter 1 is not of type 'Function'.");
+      }
       this._callback = callback;
-      this._targets = new Map(); // node -> last reported {w, h}
+      this._targets = new Map();
+      this._active = [];
+      this._skipped = false;
     }
     observe(node: MirrorElement) {
       if (!node || typeof node.__vnId !== "number") return;
-      // `null` = "no size reported yet", so the first poll always fires —
-      // which is what a browser does on `observe()` too.
+      // A second observe() of a target replaces its observation: reported anew.
       this._targets.set(node, null);
-      resizeObservers.add(this);
-      resizeQuiet = 0;
-      scheduleResizePoll();
+      if (!resizeObservers.includes(this)) resizeObservers.push(this);
+      layoutObserved();
     }
     unobserve(node: MirrorElement) {
       this._targets.delete(node);
     }
     disconnect() {
       this._targets.clear();
-      resizeObservers.delete(this);
+      this._active = [];
+      this._skipped = false;
     }
   },
 );
 
-// -- IntersectionObserver, sampled from the host's painted bounds.
+// -- IntersectionObserver, from the host's painted bounds.
 //
 // redjs ships an INERT one ("nothing intersects in a game host"), and an inert
 // IntersectionObserver is not a harmless one in an app: every `visible` /
@@ -6553,30 +6785,27 @@ defineGlobal(
 // whole login card, research/reports/m26/client-gap.md §1 #12) stays invisible
 // forever; lazy loaders never load; off-screen animations never pause.
 //
-// This one is the W3C algorithm ("run the update intersection observations
-// steps") over the same per-frame `__vn_bounds` sample the ResizeObserver
-// above uses: each frame, for each target, the painted rectangle is intersected
+// This one is the W3C algorithm, run where HTML runs it: "run the update
+// intersection observations steps" in the frame's step after layout (the
+// FINISH op above), which, for each target, intersects its painted rectangle
 // with the root's (the viewport, or the `root` element's box, grown by
-// `rootMargin`), the ratio is mapped onto `thresholds`, and an entry is queued
-// when the threshold index or `isIntersecting` moves — so the first poll always
-// reports, as `observe()` does in a browser.
+// `rootMargin`), maps the ratio onto `thresholds`, and queues an entry when the
+// threshold index or `isIntersecting` moves, so the first update always
+// reports, as `observe()` does in a browser. The callbacks run from a task
+// ("queue an intersection observer task"), after the frame has painted.
 //
 // The rectangles are where the boxes were DRAWN, transforms applied: the spec
 // takes the target's from getBoundingClientRect() ("getting the bounding box"),
 // not from its layout box as ResizeObserver does.
 //
-// Divergences, both deliberate: (1) the intersection is clipped by the ROOT
-// only, not by every scrolling ancestor between target and root, because
-// answering "which ancestors clip" per target per frame would cost a host call
-// per ancestor; a target scrolled out of an inner scroller that is still inside
-// the window reads as intersecting. (2) A target that has never been painted is
-// given three frames to get its first layout before it is reported as not
-// intersecting — a browser computes after layout, and our rAF can run before
-// the first paint of a freshly mounted node.
+// Divergence, deliberate: the intersection is clipped by the ROOT only, not by
+// every scrolling ancestor between target and root, because answering "which
+// ancestors clip" per target per frame would cost a host call per ancestor; a
+// target scrolled out of an inner scroller that is still inside the window
+// reads as intersecting.
 interface IntersectionTargetState {
   prevIndex: number;
   prevIntersecting: boolean;
-  waited: number;
 }
 interface IntersectionEntryInit {
   time: number;
@@ -6588,37 +6817,47 @@ interface IntersectionEntryInit {
   intersectionRatio: number;
 }
 const intersectionObservers = new Set<VnIntersectionObserver>();
-let intersectionPollQueued = false;
+let intersectionTaskQueued = false;
+/** The last update queued entries. */
+let intersectionsQueued = false;
 
-function scheduleIntersectionPoll() {
-  if (intersectionPollQueued) return;
-  const raf = globalThis.requestAnimationFrame;
-  if (typeof raf !== "function") return;
-  intersectionPollQueued = true;
-  raf(pollIntersectionObservers);
-}
-
-function pollIntersectionObservers() {
-  intersectionPollQueued = false;
-  sampleIntersections();
-}
-
-let intersectionQuiet = 0;
-
-/** One poll; keeps polling while it finds changes, then parks (`parkSampler`). */
-function sampleIntersections() {
-  let observing = false;
-  let busy = false;
+/** HTML "run the update intersection observations steps", for the document. */
+function updateIntersections(): void {
   const now = (globalThis as { performance?: { now(): number } }).performance?.now() ?? Date.now();
+  let queued = false;
   for (const ob of [...intersectionObservers]) {
-    if (!ob._targets.size) continue;
-    observing = true;
-    if (ob._update(now)) busy = true;
+    if (!ob._targets.size) {
+      intersectionObservers.delete(ob);
+      continue;
+    }
+    if (ob._update(now)) queued = true;
   }
-  if (!observing) return;
-  intersectionQuiet = busy ? 0 : intersectionQuiet + 1;
-  if (intersectionQuiet < QUIET_POLLS) scheduleIntersectionPoll();
-  else parkSampler(sampleIntersections);
+  intersectionsQueued = queued;
+  if (!queued || intersectionTaskQueued) return;
+  // "Queue an intersection observer task": the next pump's timers, after this
+  // frame has painted.
+  const later =
+    (globalThis as { setTimeout?: (cb: () => void, ms: number) => unknown }).setTimeout ??
+    (typeof setTimeout === "function" ? setTimeout : undefined);
+  if (typeof later !== "function") return;
+  intersectionTaskQueued = true;
+  later(notifyIntersectionObservers, 0);
+}
+
+/** HTML "notify intersection observers". */
+function notifyIntersectionObservers(): void {
+  intersectionTaskQueued = false;
+  for (const ob of [...intersectionObservers]) {
+    const records = ob.takeRecords();
+    if (!records.length) continue;
+    try {
+      ob._callback.call(ob, records, ob);
+    } catch (e) {
+      (globalThis.queueMicrotask ?? queueMicrotask)(() => {
+        throw e;
+      });
+    }
+  }
 }
 
 const ioRect = (x: number, y: number, width: number, height: number): MirrorRect => ({
@@ -6694,16 +6933,16 @@ class VnIntersectionObserver {
       throw new TypeError("Failed to execute 'observe' on 'IntersectionObserver': parameter 1 is not of type 'Element'.");
     }
     if (this._targets.has(target)) return;
-    this._targets.set(target, { prevIndex: -1, prevIntersecting: false, waited: 0 });
+    this._targets.set(target, { prevIndex: -1, prevIntersecting: false });
     intersectionObservers.add(this);
-    intersectionQuiet = 0;
-    scheduleIntersectionPoll();
+    layoutObserved();
   }
   unobserve(target: MirrorElement) {
     this._targets.delete(target);
   }
   disconnect() {
     this._targets.clear();
+    this._records.length = 0;
     intersectionObservers.delete(this);
   }
   takeRecords(): unknown[] {
@@ -6727,18 +6966,13 @@ class VnIntersectionObserver {
     const bottom = r.bottom + px(b, r.height);
     return ioRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
   }
-  /** One sample. `true` while it is not quiet: it reported, or a target is still waiting for its first layout. */
+  /** "Run the update intersection observations steps" for this observer. `true` when it queued entries. */
   _update(time: number): boolean {
     const rootBounds = this._rootBounds();
-    let busy = false;
+    let queued = false;
     for (const [target, state] of this._targets) {
+      // After the frame's layout: a target with no box is not being rendered.
       const painted = !!boundsOf(target);
-      // Never painted yet: give the first layout a few frames (see the header).
-      if (!painted && state.prevIndex === -1 && state.waited < 3) {
-        state.waited++;
-        busy = true;
-        continue;
-      }
       let isIntersecting = false;
       let thresholdIndex = 0;
       let ratio = 0;
@@ -6778,15 +7012,9 @@ class VnIntersectionObserver {
           intersectionRatio: ratio,
         }),
       );
+      queued = true;
     }
-    const records = this.takeRecords();
-    if (!records.length) return busy;
-    try {
-      this._callback.call(this, records, this);
-    } catch (e) {
-      console.error(`[vue-native] IntersectionObserver callback threw: ${e}`);
-    }
-    return true;
+    return queued;
   }
 }
 

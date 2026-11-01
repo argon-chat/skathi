@@ -1,6 +1,6 @@
 // runtime-dom's names that are not in runtime-core (render, useCssVars, the
-// custom-element and SSR entry points) and the IntersectionObserver sampled
-// from painted bounds — research/reports/m26/client-gap.md §3.2.
+// custom-element and SSR entry points) and the IntersectionObserver updated
+// from painted bounds after layout — research/reports/m26/client-gap.md §3.2.
 //
 //   bun test test/runtime-domcompat.test.ts      (from packages/vue-native)
 
@@ -168,7 +168,7 @@ describe("a <style> injected into document.head", () => {
   });
 });
 
-describe("IntersectionObserver samples the painted bounds", () => {
+describe("IntersectionObserver, updated after layout and delivered from a task", () => {
   /** An app root painted at 800x600, and one element in it at `bounds`. */
   function world(bounds: string) {
     const rt = createRuntime();
@@ -180,13 +180,22 @@ describe("IntersectionObserver samples the painted bounds", () => {
     rt.host.boundsById.set(el.__vnId, bounds);
     return { rt, root, el };
   }
+  /** One frame: the host's step after layout, then the task it queued. */
+  async function frameStep(rt: ReturnType<typeof createRuntime>) {
+    rt.host.layout.step();
+    await frame();
+  }
 
   test("replaces redjs's inert observer, and reports once on observe and again only on a change", async () => {
     const { rt, el } = world("100,100,200,100");
     const seen: any[] = [];
     const ob = new rt.global.IntersectionObserver((entries: any[]) => seen.push(...entries));
     ob.observe(el);
-    await frames(2);
+    expect(rt.host.layout.pending).toBe(true);
+    rt.host.layout.step();
+    // Queued by the step, delivered from a task: not inside the step.
+    expect(seen.length).toBe(0);
+    await frame();
     expect(seen.length).toBe(1);
     expect(seen[0].isIntersecting).toBe(true);
     expect(seen[0].intersectionRatio).toBe(1);
@@ -195,12 +204,11 @@ describe("IntersectionObserver samples the painted bounds", () => {
     expect(seen[0].rootBounds).toMatchObject({ x: 0, y: 0, width: 800, height: 600 });
     expect(seen[0]).toBeInstanceOf(rt.global.IntersectionObserverEntry);
     // No change -> no callback.
-    await frames(2);
+    await frameStep(rt);
     expect(seen.length).toBe(1);
-    // Scrolled out below the viewport, in a frame the host built.
+    // Scrolled out below the viewport.
     rt.host.boundsById.set(el.__vnId, "100,700,200,100");
-    rt.host.layout.built();
-    await frames(2);
+    await frameStep(rt);
     expect(seen.length).toBe(2);
     expect(seen[1].isIntersecting).toBe(false);
     expect(seen[1].intersectionRatio).toBe(0);
@@ -213,19 +221,17 @@ describe("IntersectionObserver samples the painted bounds", () => {
     const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { threshold: [0.75, 0, 0.5] });
     expect(ob.thresholds).toEqual([0, 0.5, 0.75]);
     ob.observe(el);
-    await frames(2);
+    await frameStep(rt);
     expect(seen.length).toBe(1);
     expect(seen[0].intersectionRatio).toBeCloseTo(0.5);
     expect(seen[0].intersectionRect).toMatchObject({ y: 550, height: 50, width: 100 });
     // 60% visible: still between 0.5 and 0.75 -> same threshold index, no entry.
     rt.host.boundsById.set(el.__vnId, "0,540,100,100");
-    rt.host.layout.built();
-    await frames(2);
+    await frameStep(rt);
     expect(seen.length).toBe(1);
     // 80%: past 0.75 -> one entry.
     rt.host.boundsById.set(el.__vnId, "0,520,100,100");
-    rt.host.layout.built();
-    await frames(2);
+    await frameStep(rt);
     expect(seen.length).toBe(2);
     ob.disconnect();
   });
@@ -236,7 +242,7 @@ describe("IntersectionObserver samples the painted bounds", () => {
     const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { rootMargin: "0px 0px 10%" });
     expect(ob.rootMargin).toBe("0px 0px 10% 0px");
     ob.observe(el);
-    await frames(2);
+    await frameStep(rt);
     // 10% of 600 = 60 px of margin below: the element at 650..690 is inside 0..660.
     expect(seen[0].isIntersecting).toBe(true);
     expect(seen[0].rootBounds).toMatchObject({ height: 660 });
@@ -257,24 +263,17 @@ describe("IntersectionObserver samples the painted bounds", () => {
     const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e), { root: scroller });
     ob.observe(inside);
     ob.observe(el); // not a descendant of the root
-    await frames(2);
+    await frameStep(rt);
     expect(seen.find((e) => e.target === inside).isIntersecting).toBe(false);
     expect(seen.find((e) => e.target === el).isIntersecting).toBe(false);
     rt.host.boundsById.set(inside.__vnId, "0,200,100,50");
-    rt.host.layout.built();
-    await frames(2);
+    await frameStep(rt);
     expect(seen.filter((e) => e.target === inside).at(-1).isIntersecting).toBe(true);
     ob.disconnect();
   });
 
-  test("a not-yet-painted target gets grace frames; one that never paints reports not-intersecting", () => {
-    // rAF driven by hand, so "frames" are exact.
-    const queue: (() => void)[] = [];
-    const rt = createRuntime({ globals: { requestAnimationFrame: (cb: () => void) => queue.push(cb) } });
-    const tick = () => queue.splice(0).forEach((cb) => cb());
-    rt.createApp({ render: () => null }).mount();
-    const root = rt.global.document.documentElement;
-    rt.host.boundsById.set(root.__vnId, "0,0,800,600");
+  test("a target with no box after the frame's layout is not intersecting, at once", async () => {
+    const { rt, root } = world("0,0,1,1");
     const late = rt.nodeOps.createElement("div");
     rt.nodeOps.insert(late, root, null);
     const hidden = rt.nodeOps.createElement("div"); // detached: never painted
@@ -282,54 +281,41 @@ describe("IntersectionObserver samples the painted bounds", () => {
     const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e));
     ob.observe(late);
     ob.observe(hidden);
-    tick();
-    tick();
-    expect(seen).toEqual([]); // both still within their grace frames
-    rt.host.boundsById.set(late.__vnId, "10,10,50,50"); // its first layout lands
-    tick();
-    expect(seen.map((e) => [e.target === late, e.isIntersecting])).toEqual([[true, true]]);
-    tick();
-    tick();
+    await frameStep(rt);
+    // The step runs after layout, so "no box" is the answer, not "not yet".
     expect(seen.map((e) => [e.target === late, e.isIntersecting])).toEqual([
-      [true, true],
+      [true, false],
       [false, false],
     ]);
+    rt.host.boundsById.set(late.__vnId, "10,10,50,50"); // laid out in a later frame
+    await frameStep(rt);
+    expect(seen.slice(2).map((e) => [e.target === late, e.isIntersecting])).toEqual([[true, true]]);
     expect(ob.takeRecords()).toEqual([]);
     ob.disconnect();
   });
 
-  test("it parks while nothing moves and a build wakes it (m26 #27)", () => {
-    const queue: (() => void)[] = [];
-    let requested = 0;
-    const rt = createRuntime({
-      globals: { requestAnimationFrame: (cb: () => void) => (requested++, queue.push(cb)) },
-    });
-    const tick = (n: number) => {
-      for (let i = 0; i < n; i++) queue.splice(0).forEach((cb) => cb());
-    };
-    rt.createApp({ render: () => null }).mount();
-    const root = rt.global.document.documentElement;
-    rt.host.boundsById.set(root.__vnId, "0,0,800,600");
-    const el = rt.nodeOps.createElement("div");
-    rt.nodeOps.insert(el, root, null);
-    rt.host.boundsById.set(el.__vnId, "100,100,200,100");
+  test("takeRecords() empties the queue before the task delivers it", async () => {
+    const { rt, el } = world("100,100,200,100");
     const seen: any[] = [];
-    const ob = new rt.global.IntersectionObserver((entries: any[]) => seen.push(...entries));
+    const ob = new rt.global.IntersectionObserver((e: any[]) => seen.push(...e));
     ob.observe(el);
-    tick(10);
-    expect(seen.length).toBe(1);
-    expect(queue.length).toBe(0);
-    expect(rt.host.layout.watching).toBe(true);
-    const idle = requested;
-    tick(50);
-    expect(requested).toBe(idle);
-    // Scrolled out, in a frame the host built: reported from the hook.
-    rt.host.boundsById.set(el.__vnId, "100,700,200,100");
-    rt.host.layout.built();
-    expect(seen.map((e) => e.isIntersecting)).toEqual([true, false]);
-    tick(10);
-    expect(requested - idle).toBe(2);
-    expect(rt.host.layout.watching).toBe(true);
+    rt.host.layout.step();
+    const taken = ob.takeRecords();
+    expect(taken.length).toBe(1);
+    await frame();
+    expect(seen.length).toBe(0);
     ob.disconnect();
+  });
+
+  test("nothing observed: the step says so, and the host stops calling it", async () => {
+    const { rt, el } = world("100,100,200,100");
+    const ob = new rt.global.IntersectionObserver(() => {});
+    ob.observe(el);
+    await frameStep(rt);
+    expect(rt.host.layout.observing).toBe(true);
+    ob.unobserve(el);
+    await frameStep(rt);
+    expect(rt.host.layout.observing).toBe(false);
+    expect(rt.host.layout.step()).toBe(-1);
   });
 });

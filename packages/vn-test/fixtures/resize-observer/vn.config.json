@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/resize-observer.spec.ts: ResizeObserver delivered after the frame's layout and before its paint (a panel sized from its list in the same frame), and the loop error for an observation the depth rule skips. See ../README.md.",
+
+  "name": "vn-test-resize-observer",
+
+  "window": {
+    "title": "vue-native — ResizeObserver (fixture)",
+    "width": 480,
+    "height": 360,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

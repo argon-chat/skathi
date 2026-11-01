@@ -132,17 +132,25 @@ declare function __vn_set_listener(id: VnNodeId, code: VnEventCode, on: boolean)
 declare function __vn_set_dispatcher(fn: VnDispatcher): void;
 
 /**
- * Installs the hook the host calls when a parked layout sampler should look
- * again (m26 client sweep #27). ResizeObserver and IntersectionObserver sample
- * layout, and layout only changes in a frame the host builds.
+ * Installs the runtime's observer step, `layoutStep(op) -> number`, which the
+ * host calls after a frame's layout and before its paint
+ * (crates/vn-tree/src/observe.rs): ResizeObserver's gather and broadcast
+ * loop, then the IntersectionObserver update. `op` 0 gathers at depth 0 and
+ * answers how many observers have entries; 1 calls the next one back and
+ * answers how many are left (the host drains microtasks after each call); 2
+ * gathers again at the depth the last broadcast reached, after the host has
+ * laid out again; 3 raises the loop error if an observation was skipped,
+ * updates the intersections, and answers bit 0 = the loop error was raised,
+ * bit 1 = something is still observed.
  */
-declare function __vn_set_layout_hook(fn: () => void): void;
+declare function __vn_set_layout_hook(fn: (op: number) => number): void;
 
 /**
- * Parks the layout samplers. The host calls the hook once, from the first
- * frame tick after it next builds a frame in any window, and forgets the park.
+ * `true`: there are observations, and the next frame runs the step even if it
+ * lays nothing out (an `observe()` reports the target's first size). `false`:
+ * the runtime let every observation go (its unload).
  */
-declare function __vn_layout_watch(): void;
+declare function __vn_layout_watch(observing: boolean): void;
 
 /**
  * `(nodeId, code, a, b, c, d, key, data) -> proceed`.
