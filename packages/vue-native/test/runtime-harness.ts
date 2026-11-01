@@ -290,6 +290,15 @@ export function createRuntime(
       rebases: [] as number[][],
       text: "",
     },
+    /**
+     * The hit test (`__vn_hit_at`): what the host answers for a point — ids
+     * topmost first, `""` outside the viewport — and every question asked, as
+     * `[x, y, all]`.
+     */
+    hit: {
+      answer: (_x: number, _y: number, _all: number) => "",
+      calls: [] as number[][],
+    },
     /** `"prop: value"` declarations the fake engine does not apply (`__vn_style_accepts`). */
     styleRejects: new Set<string>(),
     /** Every `__vn_style_accepts` question, as `"prop: value"`. */
@@ -655,6 +664,8 @@ export function createRuntime(
     "__vn_selection_set",
     "__vn_selection_text",
     "__vn_selection_rebase",
+    // `document.elementFromPoint` / `elementsFromPoint` (`host.hit`).
+    "__vn_hit_at",
   ];
   let nextId = 1;
   /**
@@ -1046,6 +1057,10 @@ export function createRuntime(
       const s = host.selection.sel;
       if (!s) return;
       for (const at of [0, 3]) if (s[at + 2] && s[at] === el) [s[at], s[at + 2]] = [text, 0];
+    },
+    (x: number, y: number, all: number) => {
+      host.hit.calls.push([x, y, all]);
+      return host.hit.answer(x, y, all);
     },
   ];
   if (options.selection === false) {

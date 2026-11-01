@@ -7257,6 +7257,38 @@ for (const type of ["selectionchange", "selectstart"]) {
   });
 }
 
+// ---- document.elementFromPoint / elementsFromPoint
+// The host's own hit test (crates/vn-tree/src/pointer.rs), the one a press
+// resolves its target with: the topmost element under the point, skipping
+// `pointer-events: none` and `visibility: hidden`, in the coordinates
+// `clientX` / `getBoundingClientRect()` use. `elementsFromPoint` is every
+// element whose box is under the point, topmost first. A point outside the
+// viewport is null / []. Coordinates are a WebIDL `double`, so a non-finite one
+// throws.
+if (doc && typeof __vn_hit_at === "function") {
+  const hitAt = (name: string, x: unknown, y: unknown, all: boolean): MirrorElement[] => {
+    const px = Number(x);
+    const py = Number(y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) {
+      throw new TypeError(`Failed to execute '${name}' on 'Document': The provided double value is non-finite.`);
+    }
+    const ids = __vn_hit_at(px, py, all ? 1 : 0);
+    if (!ids) return [];
+    const out: MirrorElement[] = [];
+    for (const part of ids.split(",")) {
+      const n = nodeById(Number(part) as VnNodeId);
+      if (n && n.kind === 1) out.push(n as MirrorElement);
+    }
+    return out;
+  };
+  for (const [name, fn] of [
+    ["elementFromPoint", (x: unknown, y: unknown) => hitAt("elementFromPoint", x, y, false)[0] ?? null],
+    ["elementsFromPoint", (x: unknown, y: unknown) => hitAt("elementsFromPoint", x, y, true)],
+  ] as const) {
+    if (vacant(doc, name)) Object.defineProperty(doc, name, { value: mark(fn), configurable: true, writable: true });
+  }
+}
+
 // ---- <style> injected into document.head, createTextNode, getElementsByTagName
 // The runtime-CSS idiom of half the npm ecosystem (style-inject, which
 // vue3-spinners runs at MODULE SCOPE; css-in-js; toast libraries):

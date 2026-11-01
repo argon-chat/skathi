@@ -36,6 +36,9 @@
 //!   ([`target_or`]); a `click` goes to the nearest common ancestor of the
 //!   press's target and the release's ([`click_target_or`]), as in Chromium.
 //!
+//! `document.elementFromPoint` / `elementsFromPoint` ask the same question
+//! from script (`__vn_hit_at`), of the primary window's last painted frame.
+//!
 //! `mousemove` is not refined (moves are frequent, and resolving one is a walk
 //! over every box): its one dispatch per frame resolves its own target
 //! ([`target_at`]). **Hover stays geometric** — `:hover`, `:active`,
@@ -44,6 +47,8 @@
 //! docs/RUNTIME.md). A press on such a cover says so once ([`note_covered`]).
 
 use gpui::{App, Pixels, Point, VnHitKind, Window};
+use vn_runtime::redjs::api::Value;
+use vn_runtime::{host_fn, JsRuntime};
 
 use crate::tree::{self, Kind, Tree};
 use crate::windows;
@@ -222,6 +227,86 @@ fn common_ancestor(t: &Tree, a: u32, b: u32) -> Option<u32> {
         cur = n.parent;
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// `document.elementFromPoint` / `elementsFromPoint` (runtime.ts)
+// ---------------------------------------------------------------------------
+
+/// The elements under `p` in `window`, topmost first: every hittable element
+/// whose box is there (`all`), or the target alone. Nothing outside the
+/// window root's box — the viewport.
+fn hit_ids(window: &Window, p: Point<Pixels>, all: bool) -> Vec<u32> {
+    let tags = window.vn_tags_at(p);
+    tree::read_tree(|t| {
+        let root = window_root(t, window);
+        let inside = windows::peek(windows::key(window), |w| w.bounds.get(&root).copied())
+            .flatten()
+            .is_some_and(|(x, y, w, h)| {
+                let (px, py) = (f32::from(p.x), f32::from(p.y));
+                px >= x && px < x + w && py >= y && py < y + h
+            });
+        if !inside {
+            return Vec::new();
+        }
+        if !all {
+            return vec![resolve(t, tags, root).target];
+        }
+        let mut out: Vec<u32> = Vec::new();
+        for tag in tags {
+            if !out.contains(&tag) && path_if_hittable(t, tag, root).is_some() {
+                out.push(tag);
+            }
+        }
+        if !out.contains(&root) {
+            out.push(root);
+        }
+        out
+    })
+}
+
+/// `hit_ids` in the primary window — the one `document`'s viewport is — from
+/// wherever the script runs: the window in hand when it is that one, else
+/// borrowed through the app.
+fn hit_ids_in_primary(p: Point<Pixels>, all: bool) -> Vec<u32> {
+    let primary = windows::primary();
+    let in_hand = vn_runtime::with_commit(|window, cx| {
+        if windows::key(window) == primary {
+            Some(hit_ids(window, p, all))
+        } else {
+            other_window(cx, primary, p, all)
+        }
+    });
+    match in_hand {
+        Some(Some(ids)) => ids,
+        Some(None) => Vec::new(),
+        None => vn_runtime::with_app(|cx| other_window(cx, primary, p, all)).flatten().unwrap_or_default(),
+    }
+}
+
+fn other_window(cx: &mut App, key: windows::WinKey, p: Point<Pixels>, all: bool) -> Option<Vec<u32>> {
+    let handle = cx.windows().into_iter().find(|h| h.window_id().as_u64() == key)?;
+    handle.update(cx, |_, window, _| hit_ids(window, p, all)).ok()
+}
+
+// `(x, y, all)` → the element ids under the viewport point, topmost first,
+// comma-separated; `""` outside the viewport (`hit_ids`).
+host_fn!(fn vn_hit_at(_g, args) {
+    let n = |v: Value| v.as_number().unwrap_or(f64::NAN);
+    let (x, y) = (n(args.arg(0)), n(args.arg(1)));
+    let all = n(args.arg(2)) == 1.0;
+    let ids = if x.is_finite() && y.is_finite() {
+        hit_ids_in_primary(gpui::point(gpui::px(x as f32), gpui::px(y as f32)), all)
+    } else {
+        Vec::new()
+    };
+    let s = ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    JsRuntime::with(|rt| rt.ctx().string(&s).0)
+});
+
+/// Registers `__vn_hit_at`.
+pub(crate) fn install(rt: &JsRuntime) {
+    rt.register("__vn_hit_at", 3, vn_hit_at as *const std::ffi::c_void);
 }
 
 thread_local! {

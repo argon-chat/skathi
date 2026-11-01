@@ -282,6 +282,18 @@ declare function __vn_selection_text(): string;
 declare function __vn_selection_rebase(element: VnNodeId, text: VnNodeId): void;
 
 // ---------------------------------------------------------------------------
+// the hit test — crates/vn-tree/src/pointer.rs
+// ---------------------------------------------------------------------------
+
+/**
+ * `document.elementFromPoint` (`all` 0) / `elementsFromPoint` (`all` 1): the
+ * element ids under the viewport point `(x, y)`, topmost first and
+ * comma-separated, as the host targets a press there (`pointer-events: none`
+ * and `visibility: hidden` left out). `""` for a point outside the viewport.
+ */
+declare function __vn_hit_at(x: number, y: number, all: 0 | 1): string;
+
+// ---------------------------------------------------------------------------
 // the DOM surface — crates/vn-tree/src/dom.rs
 // ---------------------------------------------------------------------------
 

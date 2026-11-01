@@ -647,6 +647,8 @@ pub fn install(rt: &JsRuntime) {
     }
     // `getSelection()` / `Range` (crate::selection).
     selection::install(rt);
+    // `document.elementFromPoint` / `elementsFromPoint` (crate::pointer).
+    pointer::install(rt);
 }
 
 // ---------------------------------------------------------------------------

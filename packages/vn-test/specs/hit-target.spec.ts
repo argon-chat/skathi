@@ -131,5 +131,36 @@ describe("a mouse event is for the topmost element under the pointer", () => {
     // row around both listens too.
     const [x, y] = await centre("#cc1");
     bunExpect(await clickAt(x, y)).toEqual(["mousedown:document t=cc1", "click:crow1 t=cc1"]);
+    bunExpect(await app.eval(`document.elementFromPoint(${x}, ${y}).id`)).toBe("cc1");
+  }, T);
+});
+
+describe("document.elementFromPoint / elementsFromPoint", () => {
+  const at = async (x: number, y: number) => String(await app.eval(`(document.elementFromPoint(${x}, ${y}) || {}).id || ''`));
+  const all = async (x: number, y: number) =>
+    JSON.parse(String(await app.eval(`JSON.stringify(document.elementsFromPoint(${x}, ${y}).map((e) => e.id || e.tagName))`))) as string[];
+
+  test("answer what a press there is for", async () => {
+    const [x, y] = await centre("#card-text");
+    bunExpect(await at(x, y)).toBe("card-text");
+    const d = await box("#decor");
+    bunExpect(await at(d.x + 20, d.y + d.h / 2)).toBe("under");
+    const [ax, ay] = await centre("#decor-auto");
+    bunExpect(await at(ax, ay)).toBe("decor-auto");
+  }, T);
+
+  test("elementsFromPoint is every box there, topmost first, pointer-events: none left out", async () => {
+    const [x, y] = await centre("#card-text");
+    const list = await all(x, y);
+    bunExpect(list.slice(0, 4)).toEqual(["card-text", "card", "backdrop", "page"]);
+    const d = await box("#decor");
+    const under = await all(d.x + 20, d.y + d.h / 2);
+    bunExpect(under[0]).toBe("under");
+    bunExpect(under).not.toContain("decor");
+  }, T);
+
+  test("a point outside the viewport is null", async () => {
+    bunExpect(await app.eval("document.elementFromPoint(-10, 5)")).toBeNull();
+    bunExpect(await app.eval("document.elementsFromPoint(5, 100000).length")).toBe(0);
   }, T);
 });
