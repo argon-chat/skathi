@@ -129,9 +129,10 @@ pub fn arm() {
     // `Hitbox::is_hovered_at` takes — the primitive that makes `pick` gpui's own
     // hit test instead of a rectangle walk of our own (`vn_tree::devtools::
     // hit_test_in`). Same reasoning as the line above: the inspector attaches to
-    // a host that is already running, so it cannot be armed on demand. A prod
-    // build never reaches here, so it inserts nothing and gpui's per-move hit
-    // test iterates exactly the hitboxes it always did.
+    // a host that is already running, so it cannot be armed on demand. A
+    // `--features no-devtools` build never reaches here, so it inserts nothing
+    // and gpui's per-move hit test iterates exactly the hitboxes it always did
+    // (its other elements get vn-tree's cheaper pick records instead).
     vn_tree::enable_pick_hitboxes();
 }
 

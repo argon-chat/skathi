@@ -147,16 +147,23 @@ pub struct WindowState {
     pub press_focus: Option<(u32, gpui::FocusHandle)>,
     /// The mouse-up waves not yet delivered to JS (`render::UpWave`). One
     /// physical mouse-up is a `mouseup`, a `click` and (right button) a
-    /// `contextmenu`, each at its own innermost listening box (the same "one
-    /// target" claim as `down_claimed`) — and gpui calls those boxes
-    /// innermost-first, and a box's click listener before its own mouse-up
-    /// listener. So the listeners only CLAIM, into the wave the build root
-    /// opened in the capture phase, and one deferred flush delivers every wave
-    /// in DOM order.
+    /// `contextmenu`, each claimed by the first listening box on its target's
+    /// path (the same "one target" claim as `down_claimed`) — and gpui calls
+    /// those boxes innermost-first, and a box's click listener before its own
+    /// mouse-up listener. So the listeners only CLAIM, into the wave the build
+    /// root opened in the capture phase, and one deferred flush delivers every
+    /// wave in DOM order.
     pub up_waves: Vec<crate::render::UpWave>,
     /// The press in progress: its `mousedown` target and button, until its
     /// `mouseup` (`render::Press`).
     pub press: Option<crate::render::Press>,
+    /// The element the press, release or wheel being dispatched is for — the
+    /// topmost one under the pointer (`crate::pointer`), resolved before any
+    /// listener ran. Last event's until the next one.
+    pub hit: Option<u32>,
+    /// [`Self::hit`] of the last press: with the release's, where its `click`
+    /// goes (`pointer::click_target_or`).
+    pub down_hit: Option<u32>,
     /// This window's activation observer — a press the window loses
     /// activation in the middle of is cancelled (`pointercancel`).
     pub activation: Option<Subscription>,

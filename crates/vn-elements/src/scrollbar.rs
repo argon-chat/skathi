@@ -645,9 +645,18 @@ impl Element for Scrollbar {
             && max.y > px(0.5)
             && max.x > px(0.5);
 
+        // The wheel's box: the whole viewport, inserted after the content it
+        // covers. It is the container's (a wheel is judged by the container),
+        // but nothing is pressed ON it, so its tag says passive
+        // (`gpui::VN_TAG_PASSIVE`): an embedder's hit test looks through it to
+        // the content.
         let hitbox = window
             .with_content_mask(Some(ContentMask::rect(viewport)), |window| {
-                window.insert_hitbox(viewport, HitboxBehavior::Normal)
+                let tag = window.set_hitbox_tag(0);
+                window.set_hitbox_tag(if tag == 0 { 0 } else { tag | gpui::VN_TAG_PASSIVE });
+                let hitbox = window.insert_hitbox(viewport, HitboxBehavior::Normal);
+                window.set_hitbox_tag(tag);
+                hitbox
             });
 
         let mut axes = Vec::new();

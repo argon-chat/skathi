@@ -950,18 +950,11 @@ fn used_at(t: &Tree, id: u32) -> Us {
     chain.iter().rev().fold(Us::Text, |us, d| used(us, *d))
 }
 
-/// The topmost node under `p` in the frame gpui last painted, by gpui's own
-/// hit test: the first tagged hitbox whose node takes the pointer.
+/// The topmost node under `p` in the frame gpui last painted: the element a
+/// press there is for (`crate::pointer`), so a selection starts where the
+/// press's events go.
 fn topmost(window: &Window, p: Point<Pixels>) -> Option<u32> {
-    let tags = window.vn_tags_at(p);
-    tree::read_tree(|t| {
-        tags.into_iter().find(|&id| {
-            t.node(id).is_some_and(|n| {
-                n.kind == Kind::Element
-                    && !n.computed.as_ref().is_some_and(|cs| cs.extras.pointer_events_none == Some(true))
-            })
-        })
-    })
+    crate::pointer::topmost(window, p)
 }
 
 fn contains(r: crate::windows::Rect, p: Point<Pixels>) -> bool {

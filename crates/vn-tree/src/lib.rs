@@ -26,6 +26,7 @@ mod live;
 pub mod log;
 mod lottie;
 pub mod perf;
+mod pointer;
 mod render;
 mod resample;
 mod scroll;

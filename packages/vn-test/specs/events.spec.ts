@@ -72,8 +72,9 @@ describe("contextmenu from the mouse", () => {
       `mousedown@trigger|t=inner b=2 bs=2 d=1 ${at} c=true`,
       `mouseup@inner|t=inner b=2 bs=0 d=1 ${at} c=true`,
       `mouseup@trigger|t=inner b=2 bs=0 d=1 ${at} c=true`,
-      // The innermost box that LISTENS for contextmenu is the target (E-2).
-      `contextmenu@trigger|t=trigger b=2 bs=0 d=0 ${at} c=true`,
+      // The element under the pointer is the target, whether it listens for
+      // contextmenu or not (E-2 retired, crates/vn-tree/src/pointer.rs).
+      `contextmenu@trigger|t=inner b=2 bs=0 d=0 ${at} c=true`,
     ]);
     await expect(app.locator("#menu")).toHaveCount(1);
   }, T);
@@ -87,7 +88,7 @@ describe("contextmenu from the mouse", () => {
       `mousedown@trigger|t=inner b=0 bs=1 d=1 ${at} c=true`,
       `mouseup@inner|t=inner b=0 bs=0 d=1 ${at} c=true`,
       `mouseup@trigger|t=inner b=0 bs=0 d=1 ${at} c=true`,
-      `click@trigger|t=trigger b=0 bs=0 d=1 ${at} c=true`,
+      `click@trigger|t=inner b=0 bs=0 d=1 ${at} c=true`,
     ]);
   }, T);
 

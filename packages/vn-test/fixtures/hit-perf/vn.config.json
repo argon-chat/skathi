@@ -1,0 +1,13 @@
+{
+  "$comment": "The prepaint cost of hit targeting (m26, crates/vn-tree/src/pointer.rs): VN_SCENARIO=<cards> cards of five elements each, redrawn every frame. Run under VN_PERF=1 (and VN_NO_CACHE=1 for the worst case, every element prepainted every frame). See ../README.md.",
+
+  "name": "vn-test-hit-perf",
+
+  "window": {
+    "title": "vue-native — hit targeting cost (fixture)",
+    "width": 1200,
+    "height": 900,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

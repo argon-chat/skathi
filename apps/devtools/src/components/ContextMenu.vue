@@ -14,11 +14,11 @@
 //
 // The menu box swallows its own `mousedown` (`@mousedown.stop`). In a browser
 // that listener changes nothing — the shield is a sibling, not an ancestor, so
-// a press on an item never reaches it. Here it is load-bearing: the engine
-// hands a press to the TOPMOST box that LISTENS for it, and an item listens
-// only for `click`, so the shield under it took the press, closed the menu,
-// and the item's click never came ("Copy message" copied nothing). The
-// menu's own listener is painted above the shield and claims the press first.
+// a press on an item never reaches it — and since m26 the same holds here (a
+// press goes to the topmost element and its ancestors only). It stays for an
+// engine before that: there the shield under an item, which listens only for
+// `click`, took the press, closed the menu, and the item's click never came
+// ("Copy message" copied nothing).
 import { computed } from "vue";
 import { MENU_ITEM_H, viewport } from "../layout";
 import { closeMenu, ui } from "../store";

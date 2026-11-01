@@ -102,13 +102,17 @@ thread_local! {
 
 /// Whether the build asks gpui to tag a hitbox onto every node.
 ///
-/// Off by default and turned on by `vn-app`'s devtools boot, which a
-/// `--features prod` host never compiles — so a shipped binary tags nothing,
-/// gpui inserts hitboxes only where an element is interactive, and its per-move
-/// hit test iterates exactly what it always did. The cost when it IS on is one
-/// `Hitbox` per painted element per frame and the same number of rectangle
-/// tests per mouse move; measured on apps/meet-probe (~400 painted nodes) it
-/// does not move the frame budget.
+/// Off by default and turned on by `vn-app`'s devtools boot, which every host
+/// compiles but a `--features no-devtools` one (a `--features prod` host
+/// included: the inspector attaches to a host that is already running). A
+/// no-devtools binary tags nothing, so gpui inserts hitboxes only where an
+/// element is interactive and its per-move hit test iterates exactly what it
+/// always did; the other elements get the cheaper PICK records
+/// (`crate::pointer`). The cost when it IS on is one `Hitbox` per painted
+/// element per frame and the same number of rectangle tests per mouse move;
+/// measured on apps/meet-probe (~400 painted nodes) it does not move the frame
+/// budget, and on `fixtures/hit-perf` (~3 000 elements) it is within noise of
+/// the picks (research/reports/m26/hit-target-1.md §3).
 static PICK_HITBOXES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Turns [`PICK_HITBOXES`] on. Called once, from the dev host's devtools boot.
@@ -116,13 +120,18 @@ pub fn enable_pick_hitboxes() {
     PICK_HITBOXES.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Tells this window whether to give every element a hitbox. Called once per
-/// build, because the flag lives on the `Window` and every window this process
-/// paints has to be told.
+/// Tells this window whether to give every element a hitbox, and turns its hit
+/// targeting on. Called once per build, because the flags live on the `Window`
+/// and every window this process paints has to be told.
 fn arm_pick_hitboxes(window: &mut Window) {
     if PICK_HITBOXES.load(std::sync::atomic::Ordering::Relaxed) {
         window.set_tag_every_hitbox(true);
     }
+    // Every host: a mouse event goes to the topmost element under the
+    // pointer, which needs every element to be a box gpui can find there
+    // (picks, for the ones without a hitbox) and the target resolved before
+    // the listeners run (`crate::pointer`).
+    crate::pointer::arm(window);
 }
 
 /// The hitbox gpui made for `id` in the frame this window last rendered — the
@@ -832,11 +841,17 @@ fn dom_key(k: &str) -> String {
 /// Deliver the frame's coalesced `mousemove` (if any) for ONE window. Called by
 /// the host's pump BEFORE the JS pump, so everything the handler schedules
 /// (Vue's queue, microtasks) drains in the same frame.
+///
+/// A listener's claim says only that somebody listens under the pointer: the
+/// move goes to the topmost element there (`crate::pointer::target_at`), which
+/// the listening box may be painted under. Resolved here, once a frame, rather
+/// than on every gpui move.
 pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
     let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
+    let target = crate::pointer::target_at(window, p.position);
     // The pump's, before gpui's draw: a forced layout may draw (`crate::off_input`).
-    crate::off_input(|| js_dispatch_app(p.id, tree::EV_MOUSEMOVE, &payload, window, cx));
+    crate::off_input(|| js_dispatch_app(target, tree::EV_MOUSEMOVE, &payload, window, cx));
 }
 
 /// gpui's scroll delta as the DOM's `WheelEvent.deltaX` / `deltaY`.
@@ -900,9 +915,10 @@ impl MousePt {
 /// One physical mouse-up, as the DOM sees it: a `mouseup`, then a `click`
 /// (left button, released on the box it was pressed on), then — the right
 /// button, Chromium on Windows — a `contextmenu`. Each slot is claimed by the
-/// innermost listening box for that event, the browser's target as far as the
-/// host can see one. Why they are claimed and delivered later rather than
-/// dispatched in place: `WindowState::up_waves`.
+/// first listening box on the target's path, for the target the release
+/// resolved to (`crate::pointer`; a click's is the common ancestor of the
+/// press's and the release's). Why they are claimed and delivered later rather
+/// than dispatched in place: `WindowState::up_waves`.
 #[derive(Default)]
 pub struct UpWave {
     mouseup: Option<(u32, MousePt)>,
@@ -1344,12 +1360,13 @@ fn scrollbar_for<V: 'static>(
     // which moves the offset with no wheel event anywhere in sight — so before
     // this, `@scroll` never fired for a scrollbar drag at all.
     //
-    // The `wheel` hook dispatches from THIS node, and the JS runtime propagates
-    // the synthesized event over the mirror tree from there, so an ancestor's
-    // `@wheel` still fires. The divergence, and it is the honest one to name:
-    // the event's target is the scroll container rather than the deepest
-    // element under the pointer, so a `@wheel` on a descendant of a taken-over
-    // box does not see it.
+    // The `wheel` hook dispatches at the wheel's target, the topmost element
+    // under the pointer (`crate::pointer`), and the JS runtime propagates the
+    // synthesized event over the mirror tree from there, so the container's
+    // and its ancestors' `@wheel` fire, and a descendant's on the way. The
+    // divergence, and it is the honest one to name: the hook exists only when
+    // the container or an ancestor listens (`wheel_listener_above`), so a
+    // `@wheel` found only BELOW a taken-over box does not see the wheel.
     let sb = vn_elements::Scrollbar::new(("vn-scrollbar", id), handle.clone(), style)
         .axes(scrolls_x, scrolls_y)
         .overscroll(overscroll)
@@ -1369,7 +1386,8 @@ fn scrollbar_for<V: 'static>(
             };
             // `js_dispatch_app` returns "the app did not call
             // preventDefault()", so the hook's answer is its negation.
-            !js_dispatch_app(id, tree::EV_WHEEL, &payload, window, cx)
+            let target = crate::pointer::target_or(window, id);
+            !js_dispatch_app(target, tree::EV_WHEEL, &payload, window, cx)
         })
     } else {
         sb
@@ -3932,8 +3950,11 @@ where
 /// ([`cancel_press_focus`]); Vue's `@mousedown.prevent` on a mention list or a
 /// toolbar button is how a composer keeps its caret. And a target the
 /// checkpoint removed is left unfocused. The `mousedown` is dispatched by the
-/// innermost LISTENING box, which may be an ancestor whose listener runs after
-/// this one, so the claim waits for it.
+/// innermost box on the target's path that LISTENS, which may be an ancestor
+/// whose listener runs after this one, so the claim waits for it. Only boxes
+/// on that path run at all (`crate::pointer`), so the focus goes to the
+/// target's nearest focusable ancestor, as in a browser — never to a field the
+/// target is painted over.
 ///
 /// One log line per real focus move, at `dev` kind — this is the exact failure
 /// the meet app's "typing does nothing" turned out to be, and it is invisible
@@ -4351,14 +4372,18 @@ where
     V: 'static,
 {
     let bit = move |ev: u32| mask & (1u64 << ev) != 0;
-    // ONE event per press, at the innermost listening box — the browser's
-    // target. gpui runs a mouse listener on EVERY listening box under the
-    // pointer (innermost first, in the bubble phase), and the JS side already
-    // walks the ancestors itself, so without a claim an outer `@click` ran
-    // twice for one press: once bubbled from the inner target, once as a target
-    // of its own. (An `<a href>` listens for its own activation, which is how
-    // this surfaced for `click`: desktop-a-impl.md. `mousedown` and `mouseup`
-    // had the same double delivery until m26.)
+    // ONE event per press, dispatched AT the browser's target: the topmost
+    // element under the pointer, which `crate::pointer` resolved before any
+    // listener ran — and which need not listen at all. The same resolution
+    // narrowed gpui's hovered set to that target's path, so the listeners
+    // below run only on the target and its ancestors, never on a box the
+    // target is painted over. gpui runs them innermost first, in the bubble
+    // phase, and the JS side walks the ancestors itself, so the first to run
+    // claims the event and the rest stay quiet: without the claim an outer
+    // `@click` ran twice for one press, once bubbled from the target and once
+    // as a target of its own. (An `<a href>` listens for its own activation,
+    // which is how this surfaced for `click`: desktop-a-impl.md. `mousedown`
+    // and `mouseup` had the same double delivery until m26.)
     //
     // The three events of a mouse-up (`mouseup`, `click`, `contextmenu`) are
     // claimed into one wave and delivered together, in DOM order, when gpui's
@@ -4372,9 +4397,13 @@ where
             // `detail` is the click count (UI Events §3.5): the second click
             // of a double-click says 2, and the JS runtime fires `dblclick`
             // after it.
+            // At the nearest common ancestor of the press's target and the
+            // release's (`pointer::click_target_or`): gpui clicks a box both
+            // landed on, which the narrowed hit test makes one of those.
             ClickEvent::Mouse(m) => {
                 let payload = mouse_payload_n(m.up.position, 0.0, &m.up.modifiers, m.up.click_count);
-                claim_up(window, &mut **cx, |w| &mut w.click, id, &payload);
+                let target = crate::pointer::click_target_or(window, id);
+                claim_up(window, &mut **cx, |w| &mut w.click, target, &payload);
             }
             // Space on the focused box reaches that box only, and is no part of
             // a mouse-up. gpui clicks on the key's RELEASE, which is
@@ -4440,12 +4469,13 @@ where
             }
             if bit(tree::EV_MOUSEDOWN) && !windows::here(window, |w| std::mem::replace(&mut w.down_claimed, true)) {
                 let button = button_code(ev.button);
+                let target = crate::pointer::target_or(window, id);
                 windows::here(window, |w| {
-                    w.press = Some(Press { target: id, button, position: ev.position, cancelled: false })
+                    w.press = Some(Press { target, button, position: ev.position, cancelled: false })
                 });
                 watch_activation(window, cx);
                 let payload = mouse_payload_n(ev.position, button, &ev.modifiers, ev.click_count);
-                if !js_dispatch(id, tree::EV_MOUSEDOWN, &payload, window, cx) {
+                if !js_dispatch(target, tree::EV_MOUSEDOWN, &payload, window, cx) {
                     cancel_press_focus(window);
                     // …and a cancelled press starts no text selection.
                     crate::selection::note_press_prevented();
@@ -4461,7 +4491,8 @@ where
                 button,
                 cx.listener(move |_, ev: &MouseUpEvent, window, cx| {
                     let payload = mouse_payload_n(ev.position, button_code(ev.button), &ev.modifiers, ev.click_count);
-                    claim_up(window, &mut **cx, |w| &mut w.mouseup, id, &payload);
+                    let target = crate::pointer::target_or(window, id);
+                    claim_up(window, &mut **cx, |w| &mut w.mouseup, target, &payload);
                 }),
             );
         }
@@ -4474,7 +4505,8 @@ where
             MouseButton::Right,
             cx.listener(move |_, ev: &MouseUpEvent, window, cx| {
                 let payload = mouse_payload(ev.position, 2.0, &ev.modifiers);
-                claim_up(window, &mut **cx, |w| &mut w.menu, id, &payload);
+                let target = crate::pointer::target_or(window, id);
+                claim_up(window, &mut **cx, |w| &mut w.menu, target, &payload);
             }),
         );
     }
@@ -4532,7 +4564,7 @@ where
     }
     if bit(tree::EV_WHEEL) {
         e = e.on_scroll(cx.listener(move |_, ev: &ScrollEvent, window, cx| {
-            // One `wheel` per wheel event, at the innermost listening box.
+            // One `wheel` per wheel event, at its target (`crate::pointer`).
             if !claim_wheel(&mut **cx) {
                 return;
             }
@@ -4544,7 +4576,8 @@ where
                 d: mods_bits(&ev.modifiers),
                 key: None,
             };
-            if !js_dispatch(id, tree::EV_WHEEL, &payload, window, cx) {
+            let target = crate::pointer::target_or(window, id);
+            if !js_dispatch(target, tree::EV_WHEEL, &payload, window, cx) {
                 // Cancelled: a browser scrolls nothing. gpui's own listener has
                 // already moved this box, if it scrolls, and any scroll
                 // container inside it: put them back, and keep the outer ones
