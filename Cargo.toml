@@ -51,7 +51,12 @@ async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "
 # ...and one vue-native patch that stays: `TaffyTree::resolve_calc_value`
 # decodes the calc() handle gpui packs for `DefiniteLength::Calc`
 # (vendor/taffy/src/tree/taffy_tree.rs; upstream resolves every calc to 0).
-# Moving off the vendored copy means carrying that patch to the new taffy.
+# ...and a second one: a min/max size transfers through `aspect-ratio` only
+# into an axis whose size is auto (`Size::maybe_transfer_aspect_ratio`,
+# vendor/taffy/src/geometry.rs; css-sizing-4 §5.2). Upstream caps a definite
+# `height: 100%` at `max-width / ratio`, so a picture under Tailwind's
+# `img { max-width: 100% }` kept its own shape in a box it should fill.
+# Moving off the vendored copy means carrying both patches to the new taffy.
 taffy = { path = "vendor/taffy" }
 
 # vendor/redjs is a git submodule (https://github.com/argon-chat/redjs) consumed as a
