@@ -10,6 +10,11 @@
 //! * **The matrix** is the caller's [`Colorimetry`] (which one a file gets is
 //!   the caller's rule; vn-sticker follows Chromium's). Studio range maps
 //!   Y 16..235 and C 16..240 to 0..255, full range takes them as they are.
+//! * **Primaries and transfer** other than sRGB's (BT.709 primaries, and
+//!   the curves Chromium draws as sRGB's) are converted to sRGB in linear
+//!   light, per pixel, as Chromium's compositor does (`gamut.rs`). It runs
+//!   on whichever is smaller, the frame or the target: on each source row
+//!   before scaling, or on each target row after. sRGB's own pair skips it.
 //! * **Alpha** is the alpha plane as is, or 255. Colour is never
 //!   premultiplied in the output.
 //! * **Scaling** is separable, per axis: an area average when the axis
@@ -31,10 +36,16 @@
 //! many runs): 90 µs at 512², 280 µs to 256², 240 µs to 160²; its alpha
 //! alone, 60 and 40 µs. A 100² frame: 5 µs at 100², 14 µs to 48². The
 //! scalar rows take 1.6 ms at 512².
+//!
+//! Converting other primaries is scalar, about 3 ns a pixel on the smaller
+//! of frame and target: +0.8 ms at 512², +0.2 ms to 256², +9 µs to 48² from
+//! 100². sRGB's own primaries and curve skip it at no cost.
 
+mod gamut;
 mod rows;
 mod scale;
 
+use gamut::Gamut;
 pub use rows::Level;
 use rows::{chroma_row, yuva_row, Coeffs, SHIFT};
 use scale::Scaler;
@@ -68,15 +79,72 @@ impl Matrix {
     }
 }
 
+/// H.273 `ColourPrimaries`: the gamut a frame's RGB is in. Anything but
+/// [`Primaries::Bt709`] (sRGB's) is converted to sRGB's, as Chromium does on
+/// an sRGB display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Primaries {
+    /// BT.709 and sRGB (1).
+    Bt709,
+    /// BT.470 System M (4), white C.
+    Bt470M,
+    /// BT.470 System B, G (5).
+    Bt470Bg,
+    /// SMPTE 170M, BT.601 525 lines (6).
+    Smpte170,
+    /// SMPTE 240M (7): SMPTE 170M's.
+    Smpte240,
+    /// Generic film (8), white C.
+    Film,
+    /// BT.2020 (9).
+    Bt2020,
+    /// SMPTE ST 428-1, CIE XYZ (10), white E.
+    Smpte428,
+    /// SMPTE RP 431-2, DCI-P3 (11), DCI white.
+    Smpte431,
+    /// SMPTE EG 432-1, Display P3 (12).
+    P3,
+    /// EBU Tech 3213-E (22).
+    Ebu3213,
+}
+
+/// H.273 `TransferCharacteristics`, as Chromium draws them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Transfer {
+    /// sRGB (13), and the SDR video curves Chromium draws as sRGB's:
+    /// BT.709 (1), SMPTE 170M (6), BT.2020 (14, 15).
+    Srgb,
+    /// Gamma 2.2 (4, BT.470 System M).
+    Gamma22,
+    /// Gamma 2.8 (5, BT.470 System B, G).
+    Gamma28,
+    /// SMPTE 240M (7).
+    Smpte240,
+    /// Linear (8).
+    Linear,
+    /// SMPTE ST 428-1 (17).
+    Smpte428,
+}
+
 /// How to read a frame's samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Colorimetry {
     pub matrix: Matrix,
     /// Full range (0..255) rather than studio range (Y 16..235, C 16..240).
     pub full_range: bool,
+    /// With [`Transfer::Srgb`], [`Primaries::Bt709`] costs nothing; any
+    /// other pair is converted to sRGB per pixel (module `gamut`).
+    pub primaries: Primaries,
+    pub transfer: Transfer,
 }
 
 impl Colorimetry {
+    /// `matrix` and range, in sRGB's primaries and curve: no conversion
+    /// past the matrix.
+    pub const fn new(matrix: Matrix, full_range: bool) -> Colorimetry {
+        Colorimetry { matrix, full_range, primaries: Primaries::Bt709, transfer: Transfer::Srgb }
+    }
+
     fn coeffs(self) -> Coeffs {
         let (kr, kb) = self.matrix.kr_kb();
         let kg = 1.0 - kr - kb;
@@ -154,6 +222,8 @@ pub struct Converter {
     u: Vec<u8>,
     v: Vec<u8>,
     scaler: Scaler,
+    /// The tables of the last frame colour space that needed converting.
+    gamut: Option<Gamut>,
 }
 
 impl Default for Converter {
@@ -171,7 +241,7 @@ impl Converter {
     /// At `level`, which must be one of [`Level::available`] (else the best).
     pub fn with_level(level: Level) -> Converter {
         let level = if Level::available().contains(&level) { level } else { Level::best() };
-        Converter { level, tmp: Vec::new(), u: Vec::new(), v: Vec::new(), scaler: Scaler::default() }
+        Converter { level, tmp: Vec::new(), u: Vec::new(), v: Vec::new(), scaler: Scaler::default(), gamut: None }
     }
 
     pub fn level(&self) -> Level {
@@ -180,7 +250,7 @@ impl Converter {
 
     /// Scratch bytes held.
     pub fn memory_bytes(&self) -> usize {
-        self.tmp.capacity() * 2 + self.u.capacity() + self.v.capacity() + self.scaler.bytes()
+        self.tmp.capacity() * 2 + self.u.capacity() + self.v.capacity() + self.scaler.bytes() + self.gamut.as_ref().map_or(0, Gamut::bytes)
     }
 
     /// `frame` into `pixels`, `width` × `height` straight BGRA, rows packed.
@@ -212,6 +282,15 @@ impl Converter {
         self.tmp.resize(cw + 2, 0);
         self.u.resize(w, 0);
         self.v.resize(w, 0);
+        let key = (colour.primaries, colour.transfer);
+        if self.gamut.as_ref().is_none_or(|g| g.key != key) {
+            self.gamut = Gamut::new(key.0, key.1).or(self.gamut.take());
+        }
+        let gamut = self.gamut.as_ref().filter(|g| g.key == key);
+        // The conversion runs on the fewer pixels: the frame's rows before
+        // scaling (growing, or 1:1), or the target's after (shrinking).
+        let before = gamut.filter(|_| tw * th >= w * h);
+        let after = gamut.filter(|_| tw * th < w * h);
         let Converter { tmp, u, v, scaler, .. } = self;
         // Source row `sy`, straight BGRA, into `out` (`w · 4`).
         let mut convert = |sy: usize, out: &mut [u8]| {
@@ -220,6 +299,9 @@ impl Converter {
             chroma_row(level, frame.u.row(j, cw), frame.u.row(far, cw), tmp, u);
             chroma_row(level, frame.v.row(j, cw), frame.v.row(far, cw), tmp, v);
             yuva_row(level, &k, frame.y.row(sy, w), u, v, frame.a.map(|a| a.row(sy, w)), out);
+            if let Some(g) = before {
+                g.apply(out);
+            }
         };
         if (tw, th) == (w, h) {
             for (sy, out) in pixels.chunks_exact_mut(w * 4).enumerate() {
@@ -228,7 +310,11 @@ impl Converter {
             return Ok(());
         }
         scaler.run::<4>(level, (w, h), (tw, th), &mut convert, |oy, row| {
-            scale::unpremultiply(row, &mut pixels[oy * tw * 4..(oy + 1) * tw * 4])
+            let out = &mut pixels[oy * tw * 4..(oy + 1) * tw * 4];
+            scale::unpremultiply(row, out);
+            if let Some(g) = after {
+                g.apply(out);
+            }
         });
         Ok(())
     }

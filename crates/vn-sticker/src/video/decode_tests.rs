@@ -124,7 +124,7 @@ fn a_frame_converts_to_straight_bgra_with_its_alpha_as_is() {
         a: Some(plane(&alpha.planes[0])),
     };
     let mut want = vec![0; 41 * 29 * 4];
-    let bt601 = vn_yuv::Colorimetry { matrix: vn_yuv::Matrix::Bt601, full_range: false };
+    let bt601 = vn_yuv::Colorimetry::new(vn_yuv::Matrix::Bt601, false);
     vn_yuv::Converter::new().to_bgra(&i420, bt601, &mut want, 41, 29).unwrap();
     assert_eq!(pixels, want);
 }
@@ -172,7 +172,7 @@ fn a_file_without_alpha_is_opaque_and_tinted_it_is_white() {
         a: None,
     };
     let mut want = vec![0; 72 * 56 * 4];
-    let bt709 = vn_yuv::Colorimetry { matrix: vn_yuv::Matrix::Bt709, full_range: false };
+    let bt709 = vn_yuv::Colorimetry::new(vn_yuv::Matrix::Bt709, false);
     vn_yuv::Converter::new().to_bgra(&i420, bt709, &mut want, 72, 56).unwrap();
     assert_eq!(convert(&mut d, 72, 56).unwrap(), want);
     // Tinted and without alpha there is nothing to decode at all.
@@ -324,8 +324,8 @@ fn samples_decode() {
 /// cargo test -p vn-sticker dump_frames -- --ignored --nocapture`: writes the
 /// frames, converted at the file's own size (straight BGRA), one after
 /// another into `<out>`, and prints their pts, to compare with what a
-/// browser draws. The last part reads them with that matrix and range
-/// instead of the colour rule's.
+/// browser draws. The last part reads them with that matrix and range (and
+/// sRGB's primaries) instead of the colour rule's.
 #[test]
 #[ignore]
 fn dump_frames() {
@@ -333,10 +333,9 @@ fn dump_frames() {
     let mut parts = spec.split('|');
     let (input, output, frames) = (parts.next().unwrap(), parts.next().unwrap(), parts.next().unwrap());
     let frames: Vec<u32> = frames.split(',').map(|f| f.parse().unwrap()).collect();
-    let forced = parts.next().map(|c| vn_yuv::Colorimetry {
-        matrix: if c.starts_with("709") { vn_yuv::Matrix::Bt709 } else { vn_yuv::Matrix::Bt601 },
-        full_range: c.ends_with('f'),
-    });
+    let forced = parts
+        .next()
+        .map(|c| vn_yuv::Colorimetry::new(if c.starts_with("709") { vn_yuv::Matrix::Bt709 } else { vn_yuv::Matrix::Bt601 }, c.ends_with('f')));
     let source = VideoSource::open(Arc::from(std::fs::read(input).unwrap())).unwrap();
     let m = source.meta().clone();
     let mut d = source.decoder(DecodeOptions::default()).unwrap();

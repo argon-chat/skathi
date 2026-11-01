@@ -25,7 +25,7 @@ impl Noise {
 
 const ALL: [Colorimetry; 10] = {
     const fn c(matrix: Matrix, full_range: bool) -> Colorimetry {
-        Colorimetry { matrix, full_range }
+        Colorimetry::new(matrix, full_range)
     }
     [
         c(Matrix::Bt601, false),
@@ -118,7 +118,7 @@ fn the_reference_colours_come_out() {
         let rgb = [out[2], out[1], out[0]];
         assert!(rgb.iter().zip(want).all(|(&g, w)| (g as i32 - w as i32).abs() <= tolerance), "{colour:?} {y} {u} {v}: {rgb:?}, want {want:?}");
     };
-    let studio601 = Colorimetry { matrix: Matrix::Bt601, full_range: false };
+    let studio601 = Colorimetry::new(Matrix::Bt601, false);
     check(studio601, (16, 128, 128), [0, 0, 0], 0);
     check(studio601, (235, 128, 128), [255, 255, 255], 0);
     check(studio601, (126, 128, 128), [128, 128, 128], 0);
@@ -127,11 +127,11 @@ fn the_reference_colours_come_out() {
     check(studio601, (145, 54, 34), [0, 255, 0], 2);
     check(studio601, (41, 240, 110), [0, 0, 255], 2);
     // BT.709's: the same red read as BT.601 is visibly off.
-    let studio709 = Colorimetry { matrix: Matrix::Bt709, full_range: false };
+    let studio709 = Colorimetry::new(Matrix::Bt709, false);
     check(studio709, (63, 102, 240), [255, 0, 0], 2);
     check(studio709, (173, 42, 26), [0, 255, 0], 2);
     check(studio601, (63, 102, 240), [234, 0, 2], 1);
-    let full601 = Colorimetry { matrix: Matrix::Bt601, full_range: true };
+    let full601 = Colorimetry::new(Matrix::Bt601, true);
     check(full601, (0, 128, 128), [0, 0, 0], 0);
     check(full601, (255, 128, 128), [255, 255, 255], 0);
     check(full601, (76, 85, 255), [254, 0, 0], 1);
@@ -202,7 +202,7 @@ impl Frame {
     }
 }
 
-const STUDIO601: Colorimetry = Colorimetry { matrix: Matrix::Bt601, full_range: false };
+const STUDIO601: Colorimetry = Colorimetry::new(Matrix::Bt601, false);
 
 #[test]
 fn a_frame_at_its_own_size_is_its_pixels_at_every_level() {
@@ -401,6 +401,118 @@ fn scratch_stays_a_few_rows() {
     assert!(c.memory_bytes() < 100 * 4 * 4 * 8, "{}", c.memory_bytes());
 }
 
+const PRIMARIES: [Primaries; 11] = [
+    Primaries::Bt709,
+    Primaries::Bt470M,
+    Primaries::Bt470Bg,
+    Primaries::Smpte170,
+    Primaries::Smpte240,
+    Primaries::Film,
+    Primaries::Bt2020,
+    Primaries::Smpte428,
+    Primaries::Smpte431,
+    Primaries::P3,
+    Primaries::Ebu3213,
+];
+const TRANSFERS: [Transfer; 6] = [Transfer::Srgb, Transfer::Gamma22, Transfer::Gamma28, Transfer::Smpte240, Transfer::Linear, Transfer::Smpte428];
+
+const fn with(colour: Colorimetry, primaries: Primaries, transfer: Transfer) -> Colorimetry {
+    Colorimetry { primaries, transfer, ..colour }
+}
+
+/// One straight RGB colour moved to sRGB in f64: the definition.
+fn to_srgb(primaries: Primaries, transfer: Transfer, rgb: [u8; 3]) -> [f64; 3] {
+    let m = gamut::matrix(primaries);
+    let lin = rgb.map(|c| gamut::decode(transfer, c as f64 / 255.0));
+    [0, 1, 2].map(|i| 255.0 * gamut::encode_srgb((m[i][0] * lin[0] + m[i][1] * lin[1] + m[i][2] * lin[2]).clamp(0.0, 1.0)))
+}
+
+#[test]
+fn srgb_primaries_and_curve_cost_nothing() {
+    let frame = Frame::new(41, 29, 21);
+    let mut c = Converter::new();
+    let mut out = vec![0; 20 * 14 * 4];
+    c.to_bgra(&frame.i420(true), STUDIO601, &mut out, 20, 14).unwrap();
+    assert!(c.gamut.is_none(), "no tables for sRGB's own pair");
+    // And a frame in other primaries keeps its tables for the next one.
+    c.to_bgra(&frame.i420(true), with(STUDIO601, Primaries::Smpte170, Transfer::Srgb), &mut out, 20, 14).unwrap();
+    let held = c.memory_bytes();
+    c.to_bgra(&frame.i420(true), with(STUDIO601, Primaries::Smpte170, Transfer::Srgb), &mut out, 20, 14).unwrap();
+    assert_eq!(c.memory_bytes(), held);
+}
+
+#[test]
+fn other_primaries_and_curves_are_moved_to_srgb_in_linear_light() {
+    let frame = Frame::new(41, 29, 22);
+    let plain = frame.bgra(STUDIO601, true);
+    let mut combos: Vec<(Primaries, Transfer)> = PRIMARIES.iter().map(|&p| (p, Transfer::Srgb)).collect();
+    combos.extend(TRANSFERS.iter().map(|&t| (Primaries::Bt709, t)));
+    combos.push((Primaries::Bt2020, Transfer::Gamma22));
+    for (p, t) in combos {
+        let got = frame.bgra(with(STUDIO601, p, t), true);
+        let mut moved = 0;
+        for (g, s) in got.chunks_exact(4).zip(plain.chunks_exact(4)) {
+            assert_eq!(g[3], s[3]);
+            if s[3] == 0 {
+                assert_eq!(g, s, "a transparent pixel is left as it is");
+                continue;
+            }
+            let want = to_srgb(p, t, [s[2], s[1], s[0]]);
+            for (c, w) in [g[2], g[1], g[0]].into_iter().zip(want) {
+                assert!((c as f64 - w).abs() <= 0.5 + 0.25, "{p:?} {t:?}: {:?} gave {:?}, want {want:?}", &s[..3], &g[..3]);
+            }
+            moved += (g != s) as u32;
+        }
+        assert_eq!(moved == 0, (p, t) == (Primaries::Bt709, Transfer::Srgb), "{p:?} {t:?}: {moved} pixels changed");
+    }
+}
+
+#[test]
+fn white_and_greys_stay_whatever_the_white_point() {
+    // Bradford adaptation takes every white point to D65, so a neutral
+    // stays neutral (within the tables' rounding).
+    for p in PRIMARIES {
+        let Some(g) = gamut::Gamut::new(p, Transfer::Srgb) else { continue };
+        let mut px: Vec<u8> = [0u8, 1, 17, 64, 128, 200, 254, 255].iter().flat_map(|&v| [v, v, v, 255]).collect();
+        let before = px.clone();
+        g.apply(&mut px);
+        for (a, b) in px.iter().zip(&before) {
+            assert!((*a as i32 - *b as i32).abs() <= 1, "{p:?}: {before:?} became {px:?}");
+        }
+    }
+    // SMPTE 170M's red is inside sRGB's: less saturated there.
+    let mut red = [0u8, 0, 255, 255];
+    gamut::Gamut::new(Primaries::Smpte170, Transfer::Srgb).unwrap().apply(&mut red);
+    assert!(red[2] < 255 && red[1] > 0, "{red:?}");
+}
+
+#[test]
+fn the_conversion_runs_on_the_fewer_pixels_and_alike_at_every_level() {
+    let frame = Frame::new(41, 29, 23);
+    let colour = with(STUDIO601, Primaries::Bt2020, Transfer::Srgb);
+    let g = gamut::Gamut::new(colour.primaries, colour.transfer).unwrap();
+    let full = frame.bgra(colour, true);
+    for level in Level::available() {
+        // Shrinking: scaled first, then converted, byte for byte.
+        let mut plain = vec![0; 20 * 14 * 4];
+        Converter::with_level(level).to_bgra(&frame.i420(true), STUDIO601, &mut plain, 20, 14).unwrap();
+        g.apply(&mut plain);
+        let mut got = vec![0; 20 * 14 * 4];
+        Converter::with_level(level).to_bgra(&frame.i420(true), colour, &mut got, 20, 14).unwrap();
+        assert_eq!(got, plain, "{} shrinking", level.name());
+        // Growing: converted at the frame's size, then scaled.
+        let want = reference_scale(&full, (41, 29), (82, 58));
+        let mut got = vec![0; 82 * 58 * 4];
+        Converter::with_level(level).to_bgra(&frame.i420(true), colour, &mut got, 82, 58).unwrap();
+        for (i, (&g, &r)) in got.iter().zip(&want).enumerate() {
+            if i % 4 != 3 && want[i - i % 4 + 3] < 0.5 {
+                continue;
+            }
+            assert!((g as f64 - r).abs() <= 0.5 + 1e-3, "{} growing byte {i}: {g} against {r}", level.name());
+        }
+    }
+}
+
 /// `cargo test --release -p vn-yuv bench -- --ignored --nocapture`: µs a
 /// frame for each level, source size and target size, one thread.
 #[test]
@@ -424,6 +536,7 @@ fn bench() {
         for level in Level::available() {
             let mut c = Converter::with_level(level);
             let mut line = format!("{w:>3}² {:<6}", level.name());
+            let mut converted = format!("{w:>3}² {:<6}", "+170M");
             for t in targets {
                 let mut out = vec![0; t * t * 4];
                 let colour = time(&mut || c.to_bgra(&frame.i420(true), STUDIO601, &mut out, t as u32, t as u32).unwrap());
@@ -431,8 +544,13 @@ fn bench() {
                     c.alpha_to_bgra(Some(Plane { data: &frame.a, stride: frame.stride }), (w as u32, w as u32), &mut out, t as u32, t as u32).unwrap()
                 });
                 line += &format!(" | →{t}: {colour:7.1} µs, alpha {alpha:6.1}");
+                // SMPTE 170M primaries: the sRGB conversion on top.
+                let smpte = with(STUDIO601, Primaries::Smpte170, Transfer::Srgb);
+                let moved = time(&mut || c.to_bgra(&frame.i420(true), smpte, &mut out, t as u32, t as u32).unwrap());
+                converted += &format!(" | →{t}: {moved:7.1} µs (+{:5.1})", moved - colour);
             }
             println!("{line}");
+            println!("{converted}");
         }
     }
 }
