@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/dialog-escape.spec.ts: Escape closes a dialog opened from a context menu, whose menu hands the focus back to a tooltip trigger (docs/RUNTIME.md §5.21). See ../README.md.",
+
+  "name": "vn-test-dialog-escape",
+
+  "window": {
+    "title": "vue-native — dialog from a menu, and Escape (fixture)",
+    "width": 420,
+    "height": 320,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

@@ -180,6 +180,7 @@ type VnDispatcher = (
  * | keydown/keyup             | —            | —           | —           | mods       | `KeyboardEvent.key` |
  * | input                     | —            | —           | —           | —          | the new value   |
  * | scroll                    | scrollLeft   | scrollTop   | —           | —          | —               |
+ * | focus / blur              | the move's other node id (`relatedTarget`; 0 none) | — | — | — | —   |
  * | media (crates/vn-video)    | currentTime  | duration    | readyState  | playbackRate | —             |
  * | media `error`             | MediaError.code | currentTime | —        | —          | advisory text   |
  * | lottie `enterFrame`       | currentTime  | totalTime   | elapsed     | progress   | —               |

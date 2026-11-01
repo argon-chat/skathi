@@ -1242,7 +1242,15 @@ fn settle_before_default(window: &mut Window, cx: &mut App) {
 }
 
 /// DOM order for a focus move: `blur` on the node that had it, then `focus` on
-/// the node that got it. Neither event bubbles (the JS runtime knows).
+/// the node that got it. Neither event bubbles (the JS runtime knows). Each
+/// carries the other node in `a`, the events' `relatedTarget`.
+///
+/// While the old node hears `blur`, nothing is focused (the slot is 0, and
+/// `document.activeElement` is `body`). A handler that takes the focus then
+/// (reka's FocusScope pulls it back into a dialog from `focusout`) abandons
+/// this move: the new node hears nothing. This is Chromium's
+/// `Document::SetFocusedElement` ("handler shifted focus"); the JS half of the
+/// same rule is the runtime's `focusMoved`.
 fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Context<V>) {
     // gpui calls focus listeners from inside `Window::draw`, after its frame
     // swap: a forced layout must not draw under them (`crate::in_input_dispatch`).
@@ -1256,15 +1264,22 @@ fn focus_transition<V: 'static>(new_focus: u32, window: &mut Window, cx: &mut Co
     if old == new_focus {
         return;
     }
+    if old != 0 {
+        windows::set_focused_node(k, 0);
+        let payload = EventPayload { a: new_focus as f64, ..Default::default() };
+        js_dispatch(old, tree::EV_BLUR, &payload, window, cx);
+        // `el.focus()` from a handler set the slot (`js_focus`); `el.blur()`
+        // cannot have, since nothing is focused.
+        if windows::focused_node(k) != 0 {
+            cx.notify();
+            return;
+        }
+    }
     windows::set_focused_node(k, new_focus);
     if new_focus != 0 {
         crate::selection::focus_moved(new_focus);
-    }
-    if old != 0 {
-        js_dispatch(old, tree::EV_BLUR, &EventPayload::default(), window, cx);
-    }
-    if new_focus != 0 {
-        js_dispatch(new_focus, tree::EV_FOCUS, &EventPayload::default(), window, cx);
+        let payload = EventPayload { a: old as f64, ..Default::default() };
+        js_dispatch(new_focus, tree::EV_FOCUS, &payload, window, cx);
     }
     // A focus move can change what `:focus` / `:focus-visible` paint even when
     // no JS handler ran (an `<input>` folds its focus rungs at build time), so

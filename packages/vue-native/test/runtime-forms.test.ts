@@ -363,6 +363,192 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
   });
 });
 
+// A handler that moves the focus while another move's events run. Every
+// expectation below is what Chrome 156 logs for the same page
+// (research/reports/m26/hit-target-2.md §7 has the probe): `type@node(related)
+// active=<document.activeElement>`.
+describe("focus: a handler that moves the focus abandons the move it interrupts", () => {
+  const focus = (n: unknown) => (n as { focus(): void }).focus();
+  const blur = (n: unknown) => (n as { blur(): void }).blur();
+  function nestedWorld() {
+    const rt = createRuntime();
+    const root = rt.nodeOps.createElement("div");
+    const nodes: Record<string, Node> = {};
+    for (const id of ["inside", "trigger", "other"]) {
+      nodes[id] = rt.nodeOps.createElement("button");
+      rt.nodeOps.insert(nodes[id], root, null);
+    }
+    const name = (n: unknown) => Object.keys(nodes).find((k) => nodes[k] === n) ?? "null";
+    // With nothing focused, `activeElement` is the root: `body` (this harness has none).
+    const active = () => Object.keys(nodes).find((k) => nodes[k] === rt.global.document.activeElement) ?? "body";
+    const log: string[] = [];
+    // `rt.patchProp` keeps one handler per event: tests add theirs through `on`.
+    const extra: Record<string, ((e: unknown) => void)[]> = {};
+    for (const [id, n] of Object.entries(nodes)) {
+      for (const type of ["focus", "blur", "focusin", "focusout"]) {
+        rt.patchProp(n, `on${type[0].toUpperCase()}${type.slice(1)}`, null, (e: { relatedTarget?: unknown; type: string }) => {
+          log.push(`${e.type}@${id}(${name(e.relatedTarget ?? null)}) active=${active()}`);
+          for (const f of extra[`${id}:${type}`]?.splice(0) ?? []) f(e);
+        });
+      }
+    }
+    const on = (id: string, type: string, f: (e: unknown) => void) => (extra[`${id}:${type}`] ??= []).push(f);
+    // The host's slot, as `js_focus` / `js_blur` keep it.
+    let slot = 0;
+    rt.host.focus.answer = (id: number, op: number) => {
+      if (op === 1) {
+        if (slot !== id) return "";
+        slot = 0;
+        return "blurred";
+      }
+      if (slot === id) return "already";
+      const old = slot;
+      slot = id;
+      return `moved:${old}`;
+    };
+    const start = () => {
+      focus(nodes.inside);
+      log.length = 0;
+    };
+    return { rt, nodes, log, on, start, active, slot: () => slot };
+  }
+
+  test("reka's trap: a focusout handler that pulls the focus back keeps it from ever reaching the target", () => {
+    const { nodes, log, on, start, active } = nestedWorld();
+    start();
+    on("inside", "focusout", (e) => {
+      const rel = (e as { relatedTarget: unknown }).relatedTarget;
+      if (rel !== null && rel !== nodes.inside) focus(nodes.inside);
+    });
+    focus(nodes.trigger);
+    expect(log).toEqual([
+      "blur@inside(trigger) active=body",
+      "focusout@inside(trigger) active=body",
+      "focus@inside(null) active=inside",
+      "focusin@inside(null) active=inside",
+    ]);
+    expect(active()).toBe("inside");
+  });
+
+  test("a blur handler that moves the focus: focusout follows with no relatedTarget", () => {
+    const { nodes, log, on, start, active } = nestedWorld();
+    start();
+    on("inside", "blur", () => focus(nodes.other));
+    focus(nodes.trigger);
+    expect(log).toEqual([
+      "blur@inside(trigger) active=body",
+      "focus@other(null) active=other",
+      "focusin@other(null) active=other",
+      "focusout@inside(null) active=other",
+    ]);
+    expect(active()).toBe("other");
+  });
+
+  test("a focus handler that moves the focus cancels its own node's focusin", () => {
+    const { nodes, log, on, start, active } = nestedWorld();
+    start();
+    on("trigger", "focus", () => focus(nodes.other));
+    focus(nodes.trigger);
+    expect(log).toEqual([
+      "blur@inside(trigger) active=body",
+      "focusout@inside(trigger) active=body",
+      "focus@trigger(inside) active=trigger",
+      "blur@trigger(other) active=body",
+      "focusout@trigger(other) active=body",
+      "focus@other(trigger) active=other",
+      "focusin@other(trigger) active=other",
+    ]);
+    expect(active()).toBe("other");
+  });
+
+  test("a focus handler that blurs its own node", () => {
+    const { nodes, log, on, start, active } = nestedWorld();
+    start();
+    on("trigger", "focus", () => blur(nodes.trigger));
+    focus(nodes.trigger);
+    expect(log).toEqual([
+      "blur@inside(trigger) active=body",
+      "focusout@inside(trigger) active=body",
+      "focus@trigger(inside) active=trigger",
+      "blur@trigger(null) active=body",
+      "focusout@trigger(null) active=body",
+    ]);
+    expect(active()).toBe("body");
+  });
+
+  test("focus() on the node being moved to, from the blur phase, focuses it at once", () => {
+    const { nodes, log, on, start, active } = nestedWorld();
+    start();
+    on("inside", "focusout", () => focus(nodes.trigger));
+    focus(nodes.trigger);
+    expect(log).toEqual([
+      "blur@inside(trigger) active=body",
+      "focusout@inside(trigger) active=body",
+      "focus@trigger(null) active=trigger",
+      "focusin@trigger(null) active=trigger",
+    ]);
+    expect(active()).toBe("trigger");
+  });
+
+  test("blur() on the node being moved to, from the blur phase, does nothing", () => {
+    const { rt, nodes, log, on, start, active, slot } = nestedWorld();
+    start();
+    on("inside", "focusout", () => blur(nodes.trigger));
+    focus(nodes.trigger);
+    expect(log).toEqual([
+      "blur@inside(trigger) active=body",
+      "focusout@inside(trigger) active=body",
+      "focus@trigger(inside) active=trigger",
+      "focusin@trigger(inside) active=trigger",
+    ]);
+    expect(active()).toBe("trigger");
+    // …and the host was never asked: its focus stays where JS says it is.
+    expect(rt.host.focus.calls.filter((c: { op: number }) => c.op === 1)).toEqual([]);
+    expect(slot()).toBe(nodes.trigger.__vnId);
+  });
+
+  test("a blur handler that takes the focus back for the old node", () => {
+    const { nodes, log, on, start, active } = nestedWorld();
+    start();
+    on("inside", "blur", () => focus(nodes.inside));
+    focus(nodes.trigger);
+    expect(log).toEqual([
+      "blur@inside(trigger) active=body",
+      "focus@inside(null) active=inside",
+      "focusin@inside(null) active=inside",
+      "focusout@inside(null) active=inside",
+    ]);
+    expect(active()).toBe("inside");
+  });
+
+  test("the host's move: blur, then focus, each with the other node as relatedTarget", () => {
+    const { rt, nodes, log, active } = nestedWorld();
+    rt.host.dispatcher(nodes.inside.__vnId, rt.EV_CODES.focus, 0, 0, 0, 0, undefined);
+    log.length = 0;
+    rt.host.dispatcher(nodes.inside.__vnId, rt.EV_CODES.blur, nodes.trigger.__vnId, 0, 0, 0, undefined);
+    rt.host.dispatcher(nodes.trigger.__vnId, rt.EV_CODES.focus, nodes.inside.__vnId, 0, 0, 0, undefined);
+    expect(log).toEqual([
+      "blur@inside(trigger) active=body",
+      "focusout@inside(trigger) active=body",
+      "focus@trigger(inside) active=trigger",
+      "focusin@trigger(inside) active=trigger",
+    ]);
+    expect(active()).toBe("trigger");
+  });
+
+  test("the host's move: a focus handler that moves the focus on cancels the focusin", () => {
+    const { rt, nodes, log, on, active } = nestedWorld();
+    on("trigger", "focus", () => focus(nodes.other));
+    rt.host.dispatcher(nodes.trigger.__vnId, rt.EV_CODES.focus, 0, 0, 0, 0, undefined);
+    expect(log).toEqual([
+      "focus@trigger(null) active=trigger",
+      "focus@other(null) active=other",
+      "focusin@other(null) active=other",
+    ]);
+    expect(active()).toBe("other");
+  });
+});
+
 describe("location.reload()", () => {
   test("asks the host, which re-runs the app at the next frame", () => {
     const location: Record<string, unknown> = { href: "app://redpew/" };

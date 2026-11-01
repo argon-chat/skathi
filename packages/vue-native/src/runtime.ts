@@ -4192,21 +4192,73 @@ defineDom("reset", function (this: MirrorElement) {
 //    later, which is one advisory. Not focusable, disabled or detached: a
 //    no-op, as in a browser. Divergence, named: `focus()` does not scroll the
 //    element into view (`preventScroll` is the only behaviour).
+//
+//    A handler that moves the focus while another move's events are running
+//    abandons that move, as every browser does (Chromium's
+//    `Document::SetFocusedElement`, "handler shifted focus"). While the old
+//    node hears `blur` and `focusout`, nothing is focused, so
+//    `document.activeElement` is `body`. A `focus()` from one of those handlers
+//    wins: the node the first move was going to gets no `focus` and no
+//    `focusin`. reka's FocusScope relies on this when it traps focus in a
+//    dialog: its `focusout` handler pulls the focus back. Without it, a focus
+//    handed back to a menu's trigger after the dialog opened still reached the
+//    trigger's `focus` listener, and a tooltip opened above the dialog
+//    (docs/RUNTIME.md §5.21). A `focus` handler that moves the focus on
+//    likewise cancels its own node's `focusin`.
 
 /** The element JS last learned has focus: a move from here, or a host focus/blur event. */
 let focusedNode: MirrorElement | null = null;
 
-function fireFocusEvents(target: MirrorElement, base: "focus" | "blur", related: MirrorElement | null): void {
-  for (const name of base === "focus" ? ["focus", "focusin"] : ["blur", "focusout"]) {
-    if (!hasListener(target, name)) continue;
-    const ev = synthesize(name, 0, 0, 0, 0, undefined);
-    try {
-      Object.defineProperty(ev, "relatedTarget", { value: related, configurable: true });
-    } catch {
-      /* the engine's own accessor: leave it */
-    }
-    propagate(target, name, ev);
+/** Bumped by every focus change. A move whose count changed while its handlers ran was overtaken. */
+let focusChanges = 0;
+
+/**
+ * The node a `focus()` is moving to while the old node hears `blur` and
+ * `focusout`. The host has already given it the focus, but in a browser
+ * nothing is focused yet: `blur()` on it does nothing, and `focus()` on it
+ * focuses it now.
+ */
+let arriving: MirrorElement | null = null;
+
+function fireFocusEvent(target: MirrorElement, name: string, related: MirrorElement | null): void {
+  if (!hasListener(target, name)) return;
+  propagate(target, name, withRelatedTarget(synthesize(name, 0, 0, 0, 0, undefined), related));
+}
+
+function withRelatedTarget(ev: VnEvent, related: MirrorNode | null): VnEvent {
+  try {
+    Object.defineProperty(ev, "relatedTarget", { value: related, configurable: true });
+  } catch {
+    /* the engine's own accessor: leave it */
   }
+  return ev;
+}
+
+/**
+ * The events of a move the host has already made, in the browser's order:
+ * `blur` and `focusout` on `old` with nothing focused, then `focus` and
+ * `focusin` on `next`. A handler that moves the focus ends the move there.
+ * `focusout` then has no `relatedTarget`, as in Chromium.
+ */
+function focusMoved(next: MirrorElement, old: MirrorElement | null): void {
+  const change = ++focusChanges;
+  // Any move whose blur phase is still running is overtaken by this one.
+  arriving = null;
+  if (old) {
+    focusedNode = null;
+    arriving = next;
+    try {
+      fireFocusEvent(old, "blur", next);
+      fireFocusEvent(old, "focusout", focusChanges === change ? next : null);
+    } finally {
+      arriving = null;
+    }
+    if (focusChanges !== change) return;
+  }
+  focusedNode = next;
+  fireFocusEvent(next, "focus", old);
+  if (focusChanges !== change) return;
+  fireFocusEvent(next, "focusin", old);
 }
 
 /** What `focus()` / `blur()` work on: a connected mirror element. */
@@ -4219,12 +4271,18 @@ defineDom("focus", function (this: MirrorElement) {
     warnCompat("focus", "element.focus() is a no-op: this host has no programmatic focus (__vn_focus)");
     return;
   }
+  // From a handler of a move to this very node: the host already gave it the
+  // focus, and a browser focuses it now, with no old node.
+  if (this === arriving) {
+    focusMoved(this, null);
+    return;
+  }
   const answer = __vn_focus(this.__vnId, 0);
   if (answer.startsWith("moved:")) {
-    const old = nodeById(Number(answer.slice(6))) as MirrorElement | undefined;
-    focusedNode = this;
-    if (old && old !== this) fireFocusEvents(old, "blur", this);
-    fireFocusEvents(this, "focus", old && old !== this ? old : null);
+    const old = (nodeById(Number(answer.slice(6))) as MirrorElement | undefined) ?? null;
+    // The host's old node is the one a move in progress was going to. It
+    // never got the focus, so there is nothing to blur.
+    focusMoved(this, old === arriving || old === this ? null : old);
   } else if (answer === "pending") {
     warnCompat(
       "focus:deferred",
@@ -4236,9 +4294,14 @@ defineDom("focus", function (this: MirrorElement) {
 });
 defineDom("blur", function (this: MirrorElement) {
   if (!isMirrorNode(this) || typeof __vn_focus !== "function") return;
+  // Not focused yet in a browser: a move to it is still in its blur phase.
+  if (this === arriving) return;
   if (__vn_focus(this.__vnId, 1) === "blurred") {
+    focusChanges++;
+    arriving = null;
     if (focusedNode === this) focusedNode = null;
-    fireFocusEvents(this, "blur", null);
+    fireFocusEvent(this, "blur", null);
+    fireFocusEvent(this, "focusout", null);
   }
 });
 
@@ -5600,9 +5663,20 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
   // document's listeners arm; a browser fires it AT the document.
   if (name === "selectionchange") return propagateAtDocument(name, synthesize(name, a, b, c, d, key));
   // `document.activeElement` follows the host's focus moves (a click, Tab, a
-  // queued `el.focus()`): blur arrives before the next focus.
-  if (name === "focus") focusedNode = target as MirrorElement;
-  else if (name === "blur" && focusedNode === target) focusedNode = null;
+  // queued `el.focus()`): blur arrives before the next focus, with nothing
+  // focused in between. `a` is the move's other node (0: none), which is the
+  // events' `relatedTarget`. A handler that moves the focus on cancels the
+  // rest of the move, as `focusMoved` does: the host skips the `focus`, and
+  // here `focusin` is skipped and `focusout` loses its `relatedTarget`.
+  let focusChange = 0;
+  let focusRelated: MirrorNode | null = null;
+  if (name === "focus" || name === "blur") {
+    focusChange = ++focusChanges;
+    arriving = null;
+    focusRelated = (a && nodeById(a)) || null;
+    if (name === "focus") focusedNode = target as MirrorElement;
+    else if (focusedNode === target) focusedNode = null;
+  }
   // Sticky activation (docs/WINDOWING.md §1.9). The windowing prelude arms it
   // from `keydown`/`mousedown` on the engine's own EventTarget, which gpui
   // events never reach — the host delivers them HERE. The prelude publishes
@@ -5675,6 +5749,7 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
   const link = name === "click" && activatableOnPath(target);
   if (link || hasListener(target, name)) {
     const ev = synthesize(name, a, b, c, d, key, data, isImg ? "img" : undefined);
+    if (focusChange) withRelatedTarget(ev, focusRelated);
     if (!proceed && ev.preventDefault) ev.preventDefault();
     proceed = propagate(target, name, ev) && proceed;
     if (link && proceed) activate(target, true);
@@ -5707,6 +5782,13 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
       // only the primary button's — the host's click is always that one.
       if (dn === "dblclick" && detailFor("click", d) !== 2) continue;
       if (!hasListener(target, dn)) continue;
+      if (focusChange) {
+        const overtaken = focusChanges !== focusChange;
+        // A `focus` handler moved the focus on: no `focusin` (Chromium).
+        if (dn === "focusin" && overtaken) continue;
+        propagate(target, dn, withRelatedTarget(synthesize(dn, a, b, c, d, key), overtaken ? null : focusRelated));
+        continue;
+      }
       propagate(target, dn, synthesize(dn, a, b, c, d, key));
     }
   }
