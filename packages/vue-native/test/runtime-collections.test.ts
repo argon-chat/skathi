@@ -381,6 +381,33 @@ describe("interfaces over objects that already existed", () => {
   });
 });
 
+describe("touch, as desktop Chrome shows it on a machine without a touch screen", () => {
+  test("the interfaces construct; nothing says touch is there", () => {
+    const { rt, g, vue } = world();
+    const el = vue("div");
+    const t = new g.Touch({ identifier: 7, target: el, clientX: 10, clientY: "20" });
+    expect(t instanceof g.Touch).toBe(true);
+    expect([t.identifier, t.target, t.clientX, t.clientY, t.pageX, t.force, t.touchType]).toEqual([7, el, 10, 20, 0, 0, "direct"]);
+    expect(() => new g.Touch({ target: el })).toThrow("identifier");
+    const ev = new g.TouchEvent("touchstart", { touches: [t], changedTouches: [t], ctrlKey: true, bubbles: true });
+    expect(ev instanceof g.TouchEvent).toBe(true);
+    expect(ev instanceof Event).toBe(true);
+    expect(ev.touches instanceof g.TouchList).toBe(true);
+    expect([ev.touches.length, ev.touches.item(0), ev.touches[0], ev.targetTouches.length, ev.ctrlKey, ev.bubbles]).toEqual([1, t, t, 0, true, true]);
+    expect([...ev.changedTouches]).toEqual([t]);
+    expect(() => new g.TouchEvent("touchstart", { touches: [{}] })).toThrow("Touch");
+    expect(() => new g.TouchList()).toThrow("Illegal constructor");
+    // What a page tests to decide it is on a touch device: all no.
+    expect("ontouchstart" in g).toBe(false);
+    expect("ontouchstart" in el).toBe(false);
+    void rt;
+    // The engine's navigator (a parameter in the harness) says 0 touch points.
+    const navigator: Any = { permissions: { query: () => Promise.resolve(Object.assign(new EventTarget(), { state: "granted" })) } };
+    createRuntime({ navigator });
+    expect(navigator.maxTouchPoints).toBe(0);
+  });
+});
+
 describe("a same-realm reload", () => {
   test("Node, NodeList and the element chain are the new runtime's", () => {
     const first: Any = createRuntime();

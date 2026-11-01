@@ -8198,6 +8198,127 @@ const EVENT_INTERFACES: readonly (readonly [name: string, parent: "Event" | "UIE
   }
 }
 
+// -- Touch: what desktop Chrome (Electron, where the client runs today) shows
+//    on a Windows machine without a touch screen. The interfaces exist and
+//    construct (`TouchEvent`, `Touch`; `TouchList` is not constructible),
+//    `'ontouchstart' in window` is false (no `ontouch*` handler attribute is
+//    defined anywhere), `navigator.maxTouchPoints` is 0, and no touch event
+//    is ever delivered. A library that feature-tests any of these takes the
+//    path it takes in Electron (naive-ui's `window.TouchEvent && e instanceof
+//    TouchEvent`, a "touch device" test on `maxTouchPoints`).
+const TouchListProto = collectionProto("TouchList");
+adoptInterface("TouchList", TouchListProto, null);
+{
+  /** TouchInit's members and their defaults (Touch Events §4.1). */
+  const TOUCH_MEMBERS: Readonly<Record<string, number | string>> = {
+    clientX: 0,
+    clientY: 0,
+    screenX: 0,
+    screenY: 0,
+    pageX: 0,
+    pageY: 0,
+    radiusX: 0,
+    radiusY: 0,
+    rotationAngle: 0,
+    force: 0,
+    altitudeAngle: 0,
+    azimuthAngle: 0,
+    touchType: "direct",
+  };
+  const touches = new WeakMap<object, Record<string, unknown>>();
+  const touchSlot = (self: object) => {
+    const own = touches.get(self);
+    if (!own) throw new TypeError("Illegal invocation");
+    return own;
+  };
+  class Touch {
+    constructor(init?: Record<string, unknown>) {
+      if (init == null || typeof init !== "object") {
+        throw new TypeError("Failed to construct 'Touch': 1 argument required, but only 0 present.");
+      }
+      for (const req of ["identifier", "target"]) {
+        if (init[req] === undefined) {
+          throw new TypeError(`Failed to construct 'Touch': Failed to read the '${req}' property from 'TouchInit': Required member is undefined.`);
+        }
+      }
+      const own: Record<string, unknown> = { identifier: Number(init.identifier) | 0, target: init.target };
+      for (const [k, d] of Object.entries(TOUCH_MEMBERS)) {
+        const v = init[k];
+        own[k] = v === undefined ? d : typeof d === "number" ? Number(v) : String(v);
+      }
+      touches.set(this, own);
+    }
+  }
+  for (const k of ["identifier", "target", ...Object.keys(TOUCH_MEMBERS)]) {
+    Object.defineProperty(Touch.prototype, k, {
+      get(this: object) {
+        return touchSlot(this)[k];
+      },
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  if (vacant(globalThis, "Touch")) defineGlobal("Touch", Touch);
+  const TouchCtor = theGlobal("Touch") as { prototype: object } | undefined;
+
+  const ui = theGlobal("UIEvent");
+  const Base = typeof ui === "function" ? (ui as typeof Event) : typeof Event === "function" ? Event : null;
+  if (Base && vacant(globalThis, "TouchEvent")) {
+    const lists = new WeakMap<object, Record<string, unknown>>();
+    /** A `sequence<Touch>` init member as a TouchList: every member must be a Touch. */
+    const touchList = (v: unknown, member: string): MirrorCollection<unknown> => {
+      if (v == null) return staticList(TouchListProto, []);
+      if (typeof (v as Iterable<unknown>)[Symbol.iterator] !== "function") {
+        throw new TypeError(`Failed to construct 'TouchEvent': Failed to read the '${member}' property from 'TouchEventInit': The provided value cannot be converted to a sequence.`);
+      }
+      const items = [...(v as Iterable<unknown>)];
+      for (const t of items) {
+        if (!(TouchCtor && t instanceof (TouchCtor as unknown as new () => object))) {
+          throw new TypeError(`Failed to construct 'TouchEvent': Failed to read the '${member}' property from 'TouchEventInit': Failed to convert value to 'Touch'.`);
+        }
+      }
+      return staticList(TouchListProto, items);
+    };
+    class TouchEvent extends Base {
+      constructor(type: string, init: Record<string, unknown> = {}) {
+        super(type, init);
+        lists.set(this, {
+          touches: touchList(init?.touches, "touches"),
+          targetTouches: touchList(init?.targetTouches, "targetTouches"),
+          changedTouches: touchList(init?.changedTouches, "changedTouches"),
+          altKey: !!init?.altKey,
+          metaKey: !!init?.metaKey,
+          ctrlKey: !!init?.ctrlKey,
+          shiftKey: !!init?.shiftKey,
+        });
+      }
+    }
+    for (const k of ["touches", "targetTouches", "changedTouches", "altKey", "metaKey", "ctrlKey", "shiftKey"]) {
+      Object.defineProperty(TouchEvent.prototype, k, {
+        get(this: object) {
+          const own = lists.get(this);
+          if (!own) throw new TypeError("Illegal invocation");
+          return own[k];
+        },
+        enumerable: true,
+        configurable: true,
+      });
+    }
+    defineGlobal("TouchEvent", TouchEvent);
+  }
+}
+// `navigator.maxTouchPoints`: 0, a machine with no touch screen.
+{
+  const nav = typeof navigator !== "undefined" && navigator ? (navigator as object) : null;
+  if (nav && vacant(nav, "maxTouchPoints")) {
+    try {
+      Object.defineProperty(nav, "maxTouchPoints", { get: mark(() => 0), enumerable: true, configurable: true });
+    } catch {
+      /* a frozen navigator keeps its own shape */
+    }
+  }
+}
+
 // -- DOMRectReadOnly / DOMRect: constructible, with OWN data members (so a
 //    `{ ...rect }` spread keeps them, as the rects built here already do), and
 //    `getBoundingClientRect()` answers are DOMRects.

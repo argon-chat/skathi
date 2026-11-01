@@ -72,6 +72,17 @@ g.__VN_TEST_DOM__ = {
       // the other brands
       brands: [list.classList instanceof g.DOMTokenList, list.dataset instanceof g.DOMStringMap, typeof g.MutationRecord, typeof g.TreeWalker, matchMedia("(min-width: 1px)") instanceof g.MediaQueryList],
       events: [new g.TransitionEvent("transitionend", { propertyName: "opacity" }).propertyName, new g.AnimationEvent("animationend") instanceof g.Event],
+      // touch, as desktop Chrome without a touch screen
+      touch: [
+        "ontouchstart" in window,
+        "ontouchstart" in document.documentElement,
+        "ontouchstart" in list,
+        navigator.maxTouchPoints,
+        typeof g.TouchEvent,
+        typeof g.Touch,
+        typeof g.TouchList,
+        new g.TouchEvent("touchstart", { touches: [new g.Touch({ identifier: 1, target: list })] }).touches.length,
+      ],
     });
   },
 };

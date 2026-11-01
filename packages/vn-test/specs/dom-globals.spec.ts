@@ -53,6 +53,7 @@ describe("DOM interfaces in the real engine", () => {
       expect(p.media).toEqual([true, true, true, false, true]);
       expect(p.brands).toEqual([true, true, "function", "function", true]);
       expect(p.events).toEqual(["opacity", true]);
+      expect(p.touch).toEqual([false, false, false, 0, "function", "function", "function", 1]);
     },
     T,
   );
