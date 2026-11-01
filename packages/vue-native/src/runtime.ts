@@ -4347,6 +4347,10 @@ type SocketLike = {
   [handler: string]: unknown;
 };
 
+/// Called with each animation frame's timestamp before a rAF callback runs:
+/// `document.timeline` holds its time to it (src/waapi.ts, `onFrame`).
+const frameStampers: ((timestamp: number) => void)[] = [];
+
 const realm = (() => {
   const g = globalThis as unknown as Record<string, unknown>;
   // The engine's own functions, kept ONCE per process (see `nativeListenFns`).
@@ -4376,6 +4380,7 @@ const realm = (() => {
       const run = once
         ? function (this: unknown, ...a: unknown[]) {
             live.delete(id);
+            if (live === frames && typeof a[0] === "number") for (const stamp of frameStampers) stamp(a[0]);
             return (cb as Fn).apply(this, a);
           }
         : cb;
@@ -7882,6 +7887,7 @@ if (typeof __vn_anim_set === "function") {
       if (typeof requestAnimationFrame === "function") requestAnimationFrame(cb);
       else setTimeout(() => cb((g.performance as { now(): number } | undefined)?.now() ?? Date.now()), 16);
     },
+    onFrame: (stamp) => void frameStampers.push(stamp),
     setTimer: (cb, ms) => setTimeout(cb, ms),
     clearTimer: (h) => clearTimeout(h as number),
     defineGlobal,

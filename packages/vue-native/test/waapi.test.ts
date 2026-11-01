@@ -13,6 +13,7 @@ type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 function world() {
   let now = 1000;
   const frames: ((ts: number) => void)[] = [];
+  const stamps: ((ts: number) => void)[] = [];
   let timers: { at: number; cb: () => void; id: number }[] = [];
   let timerId = 0;
   const calls: Any[] = [];
@@ -56,6 +57,7 @@ function world() {
     },
     now: () => now,
     frame: (cb) => frames.push(cb),
+    onFrame: (stamp) => stamps.push(stamp),
     setTimer: (cb, ms) => {
       timers.push({ at: now + ms, cb, id: ++timerId });
       return timerId;
@@ -77,7 +79,10 @@ function world() {
     timers = timers.filter((t) => t.at > now);
     for (const t of due) t.cb();
     const batch = frames.splice(0);
-    for (const cb of batch) cb(now);
+    for (const cb of batch) {
+      for (const stamp of stamps) stamp(now);
+      cb(now);
+    }
     await flush();
   };
   const flush = async () => {
@@ -95,6 +100,8 @@ function world() {
     flush,
     /** An app's requestAnimationFrame. */
     raf: (cb: (ts: number) => void) => frames.push(cb),
+    /** The clock moves on inside the same wave (an observer step after the rAF batch). */
+    tick: (ms: number) => void (now += ms),
     HTMLProto,
     SVGProto,
     ElementProto,
@@ -127,6 +134,38 @@ describe("Element.animate()", () => {
       expect(typeof w.globals[name]).toBe("function");
     }
     expect((w.doc.timeline as Any).currentTime).toBe(w.now);
+  });
+
+  test("document.timeline holds the frame's rAF timestamp until the next wave, and never goes back", async () => {
+    const w = world();
+    const timeline = w.doc.timeline as Any;
+    let inFrame: Any = null;
+    let ts = 0;
+    w.raf((t) => {
+      ts = t;
+      inFrame = timeline.currentTime;
+    });
+    await w.frame(16);
+    expect(inFrame).toBe(ts);
+    // Later in the same wave (the observer step after layout): unchanged,
+    // which is what a "same frame" check compares.
+    w.tick(7);
+    expect(timeline.currentTime).toBe(ts);
+    // The next wave: the new time.
+    await w.frame(16);
+    expect(timeline.currentTime).toBe(w.now);
+    const read = timeline.currentTime;
+    w.tick(3);
+    expect(timeline.currentTime).toBe(read);
+    // A read outside any frame holds the time it was read at; a frame stamp
+    // older than that does not move it back.
+    await w.frame(0);
+    w.tick(5);
+    const early = timeline.currentTime;
+    let stamped: Any = null;
+    w.raf(() => (stamped = timeline.currentTime));
+    await w.frame(0);
+    expect(stamped).toBeGreaterThanOrEqual(early);
   });
 
   test("hands the host the effect, then holds at 0 until the next frame starts the clock", async () => {

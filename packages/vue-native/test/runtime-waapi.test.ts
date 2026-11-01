@@ -68,6 +68,16 @@ describe("el.animate() in the runtime", () => {
     expect(() => el.animate({ opacity: [0, 1] }, { duration: 10, easing: "linear(0, 1)" })).toThrow(TypeError);
   });
 
+  test("a rAF callback stamps document.timeline with its timestamp", async () => {
+    const TS = 1e9 + 0.5;
+    const rt = createRuntime({ globals: { requestAnimationFrame: (cb: (ts: number) => void) => setTimeout(() => cb(TS), 0) } });
+    const g = rt.global as Record<string, Any>;
+    const seen = await new Promise((resolve) => g.requestAnimationFrame((ts: number) => resolve([ts, g.document.timeline.currentTime])));
+    expect(seen).toEqual([TS, TS]);
+    // Still held after the callback, in its wave.
+    expect(g.document.timeline.currentTime).toBe(TS);
+  });
+
   test("an older host without __vn_anim_* installs nothing", async () => {
     const rt = createRuntime({ anim: false });
     const el: Any = rt.nodeOps.createElement("div");

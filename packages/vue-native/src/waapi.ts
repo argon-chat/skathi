@@ -28,8 +28,10 @@
 //   300 ms ease-out (no `linear()`) and a `filter` would jump at its end.
 //   App code calling `el.animate()` on an element works either way. One
 //   advisory, on the first call.
-// * `document.timeline.currentTime` is `performance.now()` read live, not a
-//   value frozen for the frame.
+// * `document.timeline.currentTime` is held for the frame and is the rAF
+//   timestamp, as in a browser, but only once a rAF callback has run in that
+//   frame. Read before that (from a timer in the same wave), it is the time of
+//   that first read, held from then on; it never goes back.
 // * The animation events go out before a frame's rAF callbacks, as in a
 //   browser, but a finish is dispatched one frame after the frame that
 //   reached it: the promise settles in that frame's microtasks, which here
@@ -73,6 +75,8 @@ export interface WaapiDeps {
   now(): number;
   /** `requestAnimationFrame`: a pending play or pause resolves at the next frame. */
   frame(cb: (timestamp: number) => void): void;
+  /** Calls `stamp` with each animation frame's timestamp, before that frame's rAF callbacks run. */
+  onFrame?(stamp: (timestamp: number) => void): void;
   setTimer(cb: () => void, ms: number): unknown;
   clearTimer(handle: unknown): void;
   defineGlobal(name: string, value: unknown): void;
@@ -553,9 +557,37 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
 
   // -- the timeline --------------------------------------------------------
 
+  // The document timeline's time does not move within a frame: Web Animations
+  // updates it once per frame, to the timestamp the frame's
+  // requestAnimationFrame callbacks get, and a script comparing two reads from
+  // one frame sees them equal (Argon's chat scroller does, between its rAF
+  // pass and the ResizeObserver report that follows). A rAF callback stamps it
+  // here (`d.onFrame`). Read outside a frame, it is read once and then held,
+  // as Chromium holds it for a task. Either way it is held until the host's
+  // next wave starts: a 0 ms timer, which runs in that wave's timers phase.
+  // It never goes back.
+  let heldTime: number | null = null;
+  let lastTime = -Infinity;
+  let releaseArmed = false;
+  const holdTime = (t: number): number => {
+    heldTime = lastTime = Math.max(t, lastTime);
+    if (!releaseArmed) {
+      releaseArmed = true;
+      d.setTimer(() => {
+        releaseArmed = false;
+        heldTime = null;
+      }, 0);
+    }
+    return heldTime;
+  };
+  const timelineNow = (): number => heldTime ?? holdTime(d.now());
+  d.onFrame?.((ts) => {
+    if (heldTime === null || ts > heldTime) holdTime(ts);
+  });
+
   class AnimationTimelineImpl {
     get currentTime(): number | null {
-      return d.now();
+      return timelineNow();
     }
     get duration(): number | null {
       return null;
@@ -568,7 +600,7 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       this.#origin = Number(options?.originTime ?? 0) || 0;
     }
     override get currentTime(): number | null {
-      return d.now() - this.#origin;
+      return timelineNow() - this.#origin;
     }
   }
   const timeline = new DocumentTimelineImpl();
