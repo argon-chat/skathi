@@ -98,6 +98,20 @@ describe("<lottie> event names", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
+  test("`once`, `online` and `only` are attributes, not listeners for ce / line / ly", () => {
+    // runtime-dom's `isOn`: `on` and then anything but a lowercase letter.
+    // `<vn-sticker once>` is the attribute that plays one loop.
+    const rt = createRuntime();
+    for (const key of ["once", "online", "only"]) rt.patchProp(rt.el(5), key, null, "");
+    expect(rt.host.listeners).toEqual([]);
+    expect(rt.advisories()).toEqual([]);
+    expect(rt.host.props.filter((p: { id: number }) => p.id === 5).map((p: { key: string }) => p.key)).toEqual([
+      "once",
+      "online",
+      "only",
+    ]);
+  });
+
   test("the hyphenated spelling folds onto the same name", () => {
     // If the tag is ever classified as a plain element, `@loopComplete` becomes
     // `onLoopComplete` and runtime-dom hyphenates it to "loop-complete" — the

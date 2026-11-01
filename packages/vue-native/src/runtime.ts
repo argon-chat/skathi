@@ -1469,6 +1469,16 @@ function toLong(v: unknown): number {
 }
 
 /**
+ * A listener key, by `@vue/shared`'s `isOn`: `on` and then anything but a
+ * lowercase letter (`onClick`, `on:loopComplete`). `once`, `online` and
+ * `only` are attributes, as in runtime-dom.
+ */
+function isOn(key: string): boolean {
+  const c = key.charCodeAt(2);
+  return key.charCodeAt(0) === 111 && key.charCodeAt(1) === 110 && (c > 122 || c < 97);
+}
+
+/**
  * The renderer's single prop hook — so `prev`/`next` really are `unknown`: a
  * template can bind any value at all. `namespace` is what Vue passes for an
  * element inside `<svg>` / `<math>`, where every key is an attribute.
@@ -1489,7 +1499,7 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
       el._class = next == null ? "" : String(next);
       writeClass(el, next == null);
     }
-  } else if (key.startsWith("on") && key.length > 2) {
+  } else if (isOn(key)) {
     // runtime-dom's `parseName`, same order: strip the option suffixes, then
     // read the name.
     //   onClick / onClickCapture / onClickOnce / onClickCaptureOnce
