@@ -5,6 +5,11 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# None yet. The core (registry, clock, worker, loop cache) brings vn-lottie and
-# lz4_flex; the video track brings `vn-vpx-sys` (libvpx 1.17, VP9 decoder only)
-# for `src/video/`.
+# Lottie stickers draw through `vn_lottie::Animation` (ThorVG by default):
+# whole frames, straight alpha, on the worker thread.
+vn-lottie = { path = "../vn-lottie" }
+# The loop cache's frames (`src/cache.rs`). Block format, safe Rust only: W0
+# measured 2.3–4.2× on 48 px `.tgs` loops and 2–3.4 µs to decompress a frame.
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"] }
+# The video track adds `vn-vpx-sys` (libvpx 1.17, VP9 decoder only) for
+# `src/video/`.

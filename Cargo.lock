@@ -3917,6 +3917,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_flex"
+version = "0.11.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+
+[[package]]
 name = "mac-notification-sys"
 version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7955,6 +7961,10 @@ dependencies = [
 [[package]]
 name = "vn-sticker"
 version = "0.1.0"
+dependencies = [
+ "lz4_flex",
+ "vn-lottie",
+]
 
 [[package]]
 name = "vn-storage"
