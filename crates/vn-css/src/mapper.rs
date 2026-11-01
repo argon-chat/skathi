@@ -247,6 +247,17 @@ pub struct Extras {
     /// before the states are stored, so everything downstream (the renderer, the
     /// devtools' `getComputedStyle`) reads one answer.
     pub pointer_events_none: Option<bool>,
+    /// The `visibility` the element DECLARED: `Some(true)` for `hidden` or
+    /// `collapse`, `Some(false)` for `visible`, `None` when nothing declared it.
+    ///
+    /// The refinement's own `visibility` is gpui's paint switch, and the mapper
+    /// also turns it off for the two screen-reader-only idioms
+    /// (`clip: rect(0, 0, 0, 0)`, `clip-path: inset(50%)`). Their box paints
+    /// nothing, but its CSS `visibility` is still `visible`, and that is what
+    /// a browser asks before `el.focus()` and answers from `getComputedStyle`
+    /// (`vn_tree::render::css_visible`). The property is inherited, so the
+    /// nearest declaration on the element or an ancestor decides.
+    pub visibility_hidden: Option<bool>,
     /// `user-select`; `None` when nothing declared it. NOT folded down the
     /// tree: `auto` defers to the parent at the moment a selection asks
     /// (`vn_tree::selection`), which is the used-value rule.
@@ -637,6 +648,9 @@ impl Extras {
         }
         if other.pointer_events_none.is_some() {
             self.pointer_events_none = other.pointer_events_none;
+        }
+        if other.visibility_hidden.is_some() {
+            self.visibility_hidden = other.visibility_hidden;
         }
         if other.user_select.is_some() {
             self.user_select = other.user_select;
@@ -4071,6 +4085,7 @@ fn apply_property(
         OverflowY(v) => r.overflow.y = Some(overflow(*v)),
         Visibility(v) => {
             use lightningcss::properties::display::Visibility as V;
+            x.visibility_hidden = Some(!matches!(v, V::Visible));
             r.visibility = Some(match v {
                 V::Visible => gpui::Visibility::Visible,
                 V::Hidden => gpui::Visibility::Hidden,
@@ -6206,6 +6221,23 @@ mod tests {
             Some(gpui::Visibility::Hidden)
         );
         assert_eq!(clean("aspect-ratio: 16 / 9").aspect_ratio, Some(16.0 / 9.0));
+    }
+
+    /// The DECLARED `visibility` rides beside the paint switch, which the
+    /// screen-reader-only idioms also turn off: their box paints nothing, but
+    /// its CSS `visibility` stays `visible`, and `el.focus()` asks that one.
+    #[test]
+    fn declared_visibility_is_not_the_paint_switch() {
+        assert_eq!(extras("visibility: hidden").0.visibility_hidden, Some(true));
+        assert_eq!(extras("visibility: collapse").0.visibility_hidden, Some(true));
+        assert_eq!(extras("visibility: visible").0.visibility_hidden, Some(false));
+        assert_eq!(extras("color: red").0.visibility_hidden, None);
+        for sr_only in ["clip: rect(0, 0, 0, 0)", "clip-path: inset(50%)"] {
+            let mut d = Vec::new();
+            let inline = parse_inline_style(sr_only, &mut d);
+            assert_eq!(inline.refinement.and_then(|r| r.visibility), Some(gpui::Visibility::Hidden), "{sr_only}");
+            assert_eq!(inline.extras.visibility_hidden, None, "{sr_only}");
+        }
     }
 
     // ---- diagnostics are ONE-SHOT ----------------------------------------

@@ -306,14 +306,10 @@ pub fn computed_style(id: u32) -> Option<String> {
             }
             .into(),
         );
-        put(
-            "visibility",
-            match cs.base.visibility.unwrap_or(gpui::Visibility::Visible) {
-                gpui::Visibility::Visible => "visible",
-                gpui::Visibility::Hidden => "hidden",
-            }
-            .into(),
-        );
+        // The CSS value, inherited, not gpui's paint switch: a
+        // screen-reader-only box paints nothing but is `visible`, and a child
+        // of a `hidden` box is `hidden` (render::css_visible).
+        put("visibility", if crate::render::css_visible(t, id) { "visible" } else { "hidden" }.into());
         let overflow_name = |o: Option<gpui::Overflow>| match o.unwrap_or(gpui::Overflow::Visible) {
             gpui::Overflow::Visible => "visible",
             gpui::Overflow::Hidden => "hidden",

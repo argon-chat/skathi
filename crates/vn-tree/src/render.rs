@@ -4734,7 +4734,8 @@ pub(crate) enum FocusAnswer {
     Already,
     /// Queued for the frame tick; the observers report it.
     Pending,
-    /// Not focusable, or not in the document: a no-op, as in a browser.
+    /// Not focusable, not in the document, or hidden by CSS: a no-op, as in
+    /// a browser.
     Refused,
 }
 
@@ -4754,6 +4755,56 @@ fn could_take_focus(t: &Tree, id: u32) -> bool {
         || t.prop(id, "tabindex").is_some()
         || default_tab_index(t, id).is_some()
         || n.listeners & bits != 0
+}
+
+/// Is the CSS `visibility` of `id` `visible`? The nearest DECLARED value on it
+/// or an ancestor decides (`Extras::visibility_hidden`), since the property
+/// inherits, and it is `visible` when nothing declared one. The screen-reader-only idioms paint
+/// nothing but are `visible` here, as in a browser. `getComputedStyle` reports
+/// this, and `el.focus()` asks it ([`style_refuses_focus`]).
+pub(crate) fn css_visible(t: &Tree, id: u32) -> bool {
+    let mut cur = id;
+    for _ in 0..4096 {
+        let Some(n) = t.node(cur) else { break };
+        if let Some(hidden) = n.computed.as_ref().and_then(|cs| cs.extras.visibility_hidden) {
+            return !hidden;
+        }
+        if n.parent == 0 {
+            break;
+        }
+        cur = n.parent;
+    }
+    true
+}
+
+/// Is `id` in a `display: none` subtree, so not rendered at all?
+fn in_display_none(t: &Tree, id: u32) -> bool {
+    let mut cur = id;
+    for _ in 0..4096 {
+        let Some(n) = t.node(cur) else { return false };
+        if n.computed.as_ref().is_some_and(|cs| cs.base.display == Some(gpui::Display::None)) {
+            return true;
+        }
+        if n.parent == 0 {
+            return false;
+        }
+        cur = n.parent;
+    }
+    false
+}
+
+/// Does CSS keep `id` from taking focus now? A browser's `el.focus()` flushes
+/// style first and is a no-op on an element that is not rendered
+/// (`display: none` on it or an ancestor) or whose computed `visibility` is
+/// not `visible` (Chromium's `Element::IsFocusableStyle`; HTML's "being
+/// rendered"). So a popover that mounts `visibility: hidden` and focuses its
+/// item from `onMounted`, before its own reactive "now visible" write is
+/// patched, does NOT take the focus. Argon's emoji tone popover does exactly
+/// that inside a reka popover, and taking the focus moved it out of reka's
+/// dismissable layer, which closed the picker (docs/RUNTIME.md §5.20).
+pub(crate) fn style_refuses_focus(id: u32) -> bool {
+    tree::flush_pending_style();
+    tree::read_tree(|t| t.node(id).is_some() && (in_display_none(t, id) || !css_visible(t, id)))
 }
 
 /// Does `el.focus()` on `id` need a build first? It could take focus but has
@@ -4832,6 +4883,13 @@ pub(crate) fn apply_pending_focus(window: &mut Window, cx: &mut App) {
     }
     if !tree::read_tree(|t| t.node(id).is_some() && reaches_painted_root(t, id)) {
         PENDING_FOCUS.with(|p| p.set((0, 0)));
+        return;
+    }
+    // Visible when focus() queued it, hidden since: a browser would have
+    // focused it then and let it go when it hid, so it does not get it now.
+    if style_refuses_focus(id) {
+        PENDING_FOCUS.with(|p| p.set((0, 0)));
+        crate::log::record("dev", format!("[focus] queued el.focus() on node {id} dropped: CSS hid it"));
         return;
     }
     if let Some(handle) = focus_target_of(id, cx) {

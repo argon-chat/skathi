@@ -437,7 +437,9 @@ host_fn!(fn vn_scroll_into_view(_g, args) {
 //   op 0  `el.focus()` -> "moved:<old id>" (focus moved now; JS fires blur/
 //         focusout on <old> unless it is 0, then focus/focusin) | "already" |
 //         "pending" (queued for the frame tick; the host's observers fire the
-//         events) | "refused" (not focusable, or not in the document)
+//         events) | "refused" (not focusable, not in the document, or hidden
+//         by CSS: `display: none`, or a computed `visibility` other than
+//         `visible`)
 //   op 1  `el.blur()`  -> "blurred" (JS fires blur/focusout) | ""
 //
 // Outside a Commit publication (no window: module-scope code at startup), a
@@ -445,6 +447,12 @@ host_fn!(fn vn_scroll_into_view(_g, args) {
 host_fn!(fn vn_focus(_g, args) {
     let id = arg_id(args.arg(0));
     let op = arg_id(args.arg(1));
+    // A browser flushes style and refuses an element CSS hides before anything
+    // else, so there is nothing to build or queue for one
+    // (render::style_refuses_focus, docs/RUNTIME.md §5.20).
+    if op == 0 && render::style_refuses_focus(id) {
+        return ret_string("refused");
+    }
     // A node mounted in this same update has no handle yet: lay out first
     // where that is legal, so the focus is synchronous (render::focus_wants_build).
     // Under a gpui listener this draws nothing and the focus is queued (FO-1).
@@ -1911,6 +1919,44 @@ mod tests {
         assert_eq!(inert_of(child), Some(true), "inertness inherits");
         assert_eq!(inert_of(opted_in), Some(false), "`auto` opts back in");
         assert_eq!(inert_of(deep), Some(false), "…and that inherits too");
+    }
+
+    /// `el.focus()` asks CSS what a browser asks (docs/RUNTIME.md §5.20): an
+    /// element in a `display: none` subtree, or whose inherited `visibility`
+    /// is not `visible`, refuses it. A screen-reader-only box paints nothing
+    /// but is `visible`, and a `visible` declaration under a hidden box wins.
+    #[test]
+    fn focus_refuses_what_css_hides() {
+        let ids = tree::with_tree(|t| {
+            let root = t.create_root();
+            let tag = t.intern("div");
+            let mut kid = |parent: u32, class: &str| {
+                let id = t.create_element(tag);
+                t.insert(id, parent, 0);
+                t.set_class(id, class);
+                id
+            };
+            let hidden = kid(root, "hidden");
+            let under_hidden = kid(hidden, "plain");
+            let shown = kid(hidden, "shown");
+            let gone = kid(root, "gone");
+            let under_gone = kid(gone, "plain");
+            let sr = kid(root, "sr");
+            let plain = kid(root, "plain");
+            [under_hidden, shown, under_gone, sr, plain]
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".hidden { visibility: hidden } .shown { visibility: visible } .gone { display: none } \
+             .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0) }",
+        ));
+        flush_changes();
+        let [under_hidden, shown, under_gone, sr, plain] = ids;
+        assert!(render::style_refuses_focus(under_hidden), "visibility inherits");
+        assert!(!render::style_refuses_focus(shown), "the nearest declaration decides");
+        assert!(render::style_refuses_focus(under_gone), "a display: none subtree is not rendered");
+        assert!(!render::style_refuses_focus(sr), "a screen-reader-only box is visible to CSS");
+        assert!(!render::style_refuses_focus(plain));
+        assert!(tree::read_tree(|t| !render::css_visible(t, under_hidden) && render::css_visible(t, sr)));
     }
 }
 
