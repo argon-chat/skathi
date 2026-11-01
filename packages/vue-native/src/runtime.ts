@@ -2827,11 +2827,323 @@ defineDomGet(
     this.setAttribute("dir", String(v));
   } as (value: never) => void,
 );
+// DOM §4.9 `toggleAttribute`: `force` true keeps an existing value, false
+// removes; it answers whether the attribute is there afterwards.
 defineDom("toggleAttribute", function (this: MirrorElement, name: string, force?: boolean) {
-  const on = force === undefined ? !this.hasAttribute(name) : !!force;
-  if (on) this.setAttribute(name, "");
-  else this.removeAttribute(name);
+  const has = this.hasAttribute(name);
+  const on = force === undefined ? !has : !!force;
+  if (on && !has) this.setAttribute(name, "");
+  else if (!on && has) this.removeAttribute(name);
   return on;
+});
+
+// -- `el.attributes`, `Attr` nodes and the namespaced attribute methods
+//    (DOM §4.9, §4.9.1 NamedNodeMap, §4.9.2 Attr)
+//
+// `attributes` is a live `NamedNodeMap` over the element's attribute list
+// (`attrs`, in the order the attributes were added, as a browser keeps them):
+// `length`, `item(i)`, `[i]`, `[name]`, iteration, and the get / set / remove
+// methods. It is the same object on every read. Each attribute is one `Attr`
+// for as long as the element has it, so `el.attributes[0] ===
+// el.getAttributeNode(name)`. An Attr reads and writes through the element
+// (`attr.value = "x"` is `setAttribute`), so `style` and `class` keep their
+// own rules. Removing the attribute detaches its Attr (`ownerElement` null),
+// which keeps the value it had.
+//
+// Names are kept as written, as `getAttribute` keeps them here; a browser
+// lowercases them on an HTML element. The mirror has no element namespaces,
+// so an attribute's namespace comes from its prefix: `xlink:`, `xml:` and
+// `xmlns` are the XLink, XML and XMLNS namespaces, the way Vue's renderer
+// sets them on SVG; any other name has none.
+
+const XLINK_NS = "http://www.w3.org/1999/xlink";
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
+
+/** A qualified attribute name's namespace, prefix and local name. */
+function attrParts(name: string): { ns: string | null; prefix: string | null; local: string } {
+  if (name === "xmlns") return { ns: XMLNS_NS, prefix: null, local: name };
+  const i = name.indexOf(":");
+  if (i > 0) {
+    const prefix = name.slice(0, i);
+    const ns = prefix === "xlink" ? XLINK_NS : prefix === "xml" ? XML_NS : prefix === "xmlns" ? XMLNS_NS : null;
+    if (ns) return { ns, prefix, local: name.slice(i + 1) };
+  }
+  return { ns: null, prefix: null, local: name };
+}
+
+/** The qualified name of `el`'s attribute in namespace `ns` with local name `local`, if it has one. */
+function attrNameNS(el: MirrorElement, ns: unknown, local: unknown): string | null {
+  const want = ns == null || ns === "" ? null : String(ns);
+  const l = String(local);
+  for (const name of Object.keys(el.attrs ?? {})) {
+    const p = attrParts(name);
+    if (p.ns === want && p.local === l) return name;
+  }
+  return null;
+}
+
+/** One attribute as a node. Attached: `_el` is its element. Detached: `_value` is its value. */
+class AttrImpl {
+  _el: MirrorElement | null = null;
+  _name: string;
+  _value: string;
+  constructor(name: string, value: string) {
+    this._name = name;
+    this._value = value;
+  }
+  get name(): string {
+    return this._name;
+  }
+  get nodeName(): string {
+    return this._name;
+  }
+  get localName(): string {
+    return attrParts(this._name).local;
+  }
+  get prefix(): string | null {
+    return attrParts(this._name).prefix;
+  }
+  get namespaceURI(): string | null {
+    return attrParts(this._name).ns;
+  }
+  get ownerElement(): MirrorElement | null {
+    return this._el;
+  }
+  get value(): string {
+    if (this._el) this._value = this._el.getAttribute(this._name) ?? this._value;
+    return this._value;
+  }
+  set value(v: string) {
+    const s = String(v);
+    this._value = s;
+    if (this._el) this._el.setAttribute(this._name, s);
+  }
+  get nodeValue(): string {
+    return this.value;
+  }
+  set nodeValue(v: string) {
+    this.value = v == null ? "" : v;
+  }
+  get textContent(): string {
+    return this.value;
+  }
+  set textContent(v: string) {
+    this.value = v == null ? "" : v;
+  }
+  get nodeType(): number {
+    return 2;
+  }
+  get specified(): boolean {
+    return true;
+  }
+  get isConnected(): boolean {
+    return false;
+  }
+  get parentNode(): null {
+    return null;
+  }
+  get ownerDocument(): unknown {
+    return (globalThis as { document?: unknown }).document ?? null;
+  }
+  cloneNode(): AttrImpl {
+    return new AttrImpl(this._name, this.value);
+  }
+}
+Object.defineProperty(AttrImpl, "name", { value: "Attr" });
+for (const [k, v] of [["ATTRIBUTE_NODE", 2], ["ELEMENT_NODE", 1], ["TEXT_NODE", 3], ["COMMENT_NODE", 8]] as const) {
+  Object.defineProperty(AttrImpl.prototype, k, { value: v, enumerable: true });
+}
+
+/** Each element's Attr objects, by name, for the attributes it has now. */
+const attrNodes = new WeakMap<MirrorElement, Map<string, AttrImpl>>();
+/** No Attr has been made yet: an attribute change then has none to detach. */
+let noAttrNodes = true;
+
+/** The Attr for `el`'s attribute `name`, made on first use; null when it has none. */
+function attrNode(el: MirrorElement, name: string): AttrImpl | null {
+  if (!el.attrs || !(name in el.attrs)) return null;
+  let map = attrNodes.get(el);
+  if (!map) attrNodes.set(el, (map = new Map()));
+  let a = map.get(name);
+  if (!a) {
+    noAttrNodes = false;
+    a = new AttrImpl(name, "");
+    a._el = el;
+    map.set(name, a);
+  }
+  return a;
+}
+
+/** An attribute changed (`notifyMutation`): if it is gone, its Attr detaches, keeping the value it had. */
+function attrChanged(el: MirrorElement, name: string, oldValue: string | null): void {
+  if (noAttrNodes || (el.attrs && name in el.attrs)) return;
+  const map = attrNodes.get(el);
+  const a = map?.get(name);
+  if (!a) return;
+  if (oldValue !== null) a._value = oldValue;
+  a._el = null;
+  map!.delete(name);
+}
+
+/** DOM "set an attribute": `attr` becomes `el`'s, replacing (and returning) the one of its name. */
+function setAttrNode(el: MirrorElement, attr: unknown, method: string): AttrImpl | null {
+  if (!(attr instanceof AttrImpl)) {
+    throw new TypeError(`Failed to execute '${method}' on 'Element': parameter 1 is not of type 'Attr'.`);
+  }
+  if (attr._el && attr._el !== el) {
+    throw domError(method, "Element", "InUseAttributeError", "The node provided is an attribute node that is already an attribute of another Element; attribute nodes must be explicitly cloned.");
+  }
+  if (attr._el === el) return attr;
+  const old = attrNode(el, attr._name);
+  if (old) old._value = old.value;
+  el.setAttribute(attr._name, attr._value);
+  // `setAttribute` kept the old Attr attached; the new one takes its place.
+  if (old) old._el = null;
+  noAttrNodes = false;
+  let map = attrNodes.get(el);
+  if (!map) attrNodes.set(el, (map = new Map()));
+  attr._el = el;
+  map.set(attr._name, attr);
+  return old;
+}
+
+/** DOM "remove an attribute": `attr` must be `el`'s. */
+function removeAttrNode(el: MirrorElement, attr: unknown, method: string, iface: string): AttrImpl {
+  if (!(attr instanceof AttrImpl) || attr._el !== el) {
+    throw domError(method, iface, "NotFoundError", "The node provided is owned by another element.");
+  }
+  attr._value = attr.value;
+  el.removeAttribute(attr._name);
+  return attr;
+}
+
+/** `el.attributes`: one per element, live. */
+const namedNodeMaps = new WeakMap<MirrorElement, object>();
+
+class NamedNodeMapImpl {
+  /** The element whose attributes these are. */
+  declare _el: MirrorElement;
+  get length(): number {
+    return Object.keys(this._el.attrs ?? {}).length;
+  }
+  item(i: unknown): AttrImpl | null {
+    const n = Number(i) >>> 0;
+    const name = Object.keys(this._el.attrs ?? {})[n];
+    return name === undefined ? null : attrNode(this._el, name);
+  }
+  getNamedItem(name: unknown): AttrImpl | null {
+    return attrNode(this._el, String(name));
+  }
+  getNamedItemNS(ns: unknown, local: unknown): AttrImpl | null {
+    const name = attrNameNS(this._el, ns, local);
+    return name === null ? null : attrNode(this._el, name);
+  }
+  setNamedItem(attr: unknown): AttrImpl | null {
+    return setAttrNode(this._el, attr, "setNamedItem");
+  }
+  setNamedItemNS(attr: unknown): AttrImpl | null {
+    return setAttrNode(this._el, attr, "setNamedItemNS");
+  }
+  removeNamedItem(name: unknown): AttrImpl {
+    const a = attrNode(this._el, String(name));
+    if (!a) throw domError("removeNamedItem", "NamedNodeMap", "NotFoundError", `No item with name '${String(name)}' was found.`);
+    return removeAttrNode(this._el, a, "removeNamedItem", "NamedNodeMap");
+  }
+  removeNamedItemNS(ns: unknown, local: unknown): AttrImpl {
+    const name = attrNameNS(this._el, ns, local);
+    if (name === null) {
+      throw domError("removeNamedItemNS", "NamedNodeMap", "NotFoundError", `No item with name '${String(ns)}::${String(local)}' was found.`);
+    }
+    return removeAttrNode(this._el, attrNode(this._el, name), "removeNamedItemNS", "NamedNodeMap");
+  }
+  *[Symbol.iterator](): IterableIterator<AttrImpl> {
+    for (const name of Object.keys(this._el.attrs ?? {})) {
+      const a = attrNode(this._el, name);
+      if (a) yield a;
+    }
+  }
+}
+Object.defineProperty(NamedNodeMapImpl, "name", { value: "NamedNodeMap" });
+
+/** Index and name lookups (`attributes[0]`, `attributes.id`), live, over the map's methods. */
+function namedNodeMapOf(el: MirrorElement): object {
+  let m = namedNodeMaps.get(el);
+  if (m) return m;
+  const target = Object.create(NamedNodeMapImpl.prototype) as NamedNodeMapImpl;
+  Object.defineProperty(target, "_el", { value: el });
+  const index = (k: PropertyKey): number => (typeof k === "string" && /^(0|[1-9]\d*)$/.test(k) ? Number(k) : -1);
+  const named = (k: PropertyKey): boolean => typeof k === "string" && !(k in target) && !!el.attrs && k in el.attrs;
+  m = new Proxy(target, {
+    get(t, k, receiver) {
+      const i = index(k);
+      if (i >= 0) return t.item(i) ?? undefined;
+      if (named(k)) return attrNode(el, k as string);
+      return Reflect.get(t, k, receiver);
+    },
+    has(t, k) {
+      const i = index(k);
+      if (i >= 0) return i < t.length;
+      return named(k) || Reflect.has(t, k);
+    },
+    ownKeys(t) {
+      return [...Object.keys(el.attrs ?? {}).map((_, i) => String(i)), ...Reflect.ownKeys(t)];
+    },
+    getOwnPropertyDescriptor(t, k) {
+      const i = index(k);
+      if (i >= 0) return i < t.length ? { value: t.item(i), enumerable: true, configurable: true, writable: false } : undefined;
+      return Reflect.getOwnPropertyDescriptor(t, k);
+    },
+    // Indexed and named properties are read-only, as on a browser's map.
+    set(t, k, v, receiver) {
+      if (index(k) >= 0 || named(k)) return true;
+      return Reflect.set(t, k, v, receiver);
+    },
+  });
+  namedNodeMaps.set(el, m);
+  return m;
+}
+
+defineDomGet("attributes", function (this: MirrorElement) {
+  return isMirrorEl(this) ? namedNodeMapOf(this) : undefined;
+});
+defineDom("hasAttributes", function (this: MirrorElement) {
+  return !!this.attrs && Object.keys(this.attrs).length > 0;
+});
+defineDom("getAttributeNode", function (this: MirrorElement, name: unknown) {
+  return attrNode(this, String(name));
+});
+defineDom("getAttributeNodeNS", function (this: MirrorElement, ns: unknown, local: unknown) {
+  const name = attrNameNS(this, ns, local);
+  return name === null ? null : attrNode(this, name);
+});
+defineDom("setAttributeNode", function (this: MirrorElement, attr: unknown) {
+  return setAttrNode(this, attr, "setAttributeNode");
+});
+defineDom("setAttributeNodeNS", function (this: MirrorElement, attr: unknown) {
+  return setAttrNode(this, attr, "setAttributeNodeNS");
+});
+defineDom("removeAttributeNode", function (this: MirrorElement, attr: unknown) {
+  return removeAttrNode(this, attr, "removeAttributeNode", "Element");
+});
+defineDom("getAttributeNS", function (this: MirrorElement, ns: unknown, local: unknown) {
+  const name = attrNameNS(this, ns, local);
+  return name === null ? null : this.getAttribute(name);
+});
+defineDom("hasAttributeNS", function (this: MirrorElement, ns: unknown, local: unknown) {
+  return attrNameNS(this, ns, local) !== null;
+});
+// The qualified name is the key, so `setAttributeNS(XLINK_NS, "xlink:href", v)`
+// and `getAttribute("xlink:href")` meet, and `setAttributeNS(null, "x", v)` is
+// `setAttribute("x", v)`.
+defineDom("setAttributeNS", function (this: MirrorElement, ns: unknown, qualifiedName: unknown, value: unknown) {
+  const q = String(qualifiedName);
+  const existing = attrNameNS(this, ns, q.slice(q.indexOf(":") + 1));
+  this.setAttribute(existing ?? q, value);
+});
+defineDom("removeAttributeNS", function (this: MirrorElement, ns: unknown, local: unknown) {
+  const name = attrNameNS(this, ns, local);
+  if (name !== null) this.removeAttribute(name);
 });
 const camelToData = (k: string): string => "data-" + hyphenate(k);
 defineDomGet("dataset", function (this: MirrorElement) {
@@ -5875,6 +6187,7 @@ function notifyMutation(
     oldValue?: string | null;
   },
 ): void {
+  if (type === "attributes" && !noAttrNodes) attrChanged(target as MirrorElement, extra!.attributeName!, extra!.oldValue ?? null);
   if (observers.size === 0) return;
   for (const ob of observers) {
     for (const entry of ob._targets) {
@@ -6747,6 +7060,9 @@ defineInterface("Comment", (x) => mirrorKind(x) === 3, CharacterDataIface ?? nul
 });
 // No shadow DOM here, so nothing is a ShadowRoot.
 defineInterface("ShadowRoot", () => false, theGlobal("DocumentFragment") as Iface | null);
+// `el.attributes` and its Attr nodes (DOM §4.9). `document.createAttribute` makes one.
+defineInterface("Attr", (x) => x instanceof AttrImpl, (theGlobal("Node") as Iface | undefined) ?? null);
+defineInterface("NamedNodeMap", (x) => x instanceof NamedNodeMapImpl, null);
 // `el.style` and `getComputedStyle()` answers register themselves.
 const styleDecls = new WeakSet<object>();
 defineInterface("CSSStyleDeclaration", (x) => !!x && typeof x === "object" && styleDecls.has(x), null);
@@ -6952,6 +7268,14 @@ if (doc) {
     const c = looseCreated(nodeOps.createComment(String(data)));
     c.text = String(data);
     return c;
+  });
+  // A detached Attr, for `setAttributeNode` (DOM §4.5).
+  defDoc("createAttribute", (name: unknown) => {
+    const n = String(name);
+    if (!VALID_ELEMENT_NAME.test(n)) {
+      throw domError("createAttribute", "Document", "InvalidCharacterError", `The localName provided ('${n}') contains an invalid character.`);
+    }
+    return new AttrImpl(n, "");
   });
   // `DocumentFragment` is installed on the global by `defineGlobal` above, so
   // it is not part of the engine's declared surface — hence the cast.
