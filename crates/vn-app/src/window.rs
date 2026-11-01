@@ -643,9 +643,8 @@ mod win {
     }
 
     /// Whether the window is CLOAKED — hidden because its virtual desktop is
-    /// not the current one. Deliberately NOT folded into `document.hidden` in
-    /// v1 (see the note on the visibility funnel); reported so the omission is
-    /// documented rather than silent.
+    /// not the current one. Treated as minimised: `document.hidden`, and no
+    /// frames ([`super::cloaked`]).
     pub fn is_cloaked() -> bool {
         use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
         let Some(h) = hwnd() else { return false };
@@ -1007,6 +1006,26 @@ fn visibility_changed(window: &mut Window, cx: &mut gpui::App) {
         with_commit(|window, cx| pump(window, cx));
         JsRuntime::with(|rt| rt.ctx().drain_microtasks());
     });
+}
+
+/// Is the window on another virtual desktop right now? Asked by the frame pump
+/// every frame, of DWM directly rather than of the snapshot: while cloaked the
+/// snapshot is only refreshed by the background tick.
+///
+/// A cloaked window is a hidden page, as a minimised one is: `document.hidden`,
+/// no `requestAnimationFrame`, timers and sockets on the background tick. A
+/// browser does the same (Chromium's Windows occlusion tracker counts a cloaked
+/// window as hidden). The difference from minimised is only in how the frames
+/// stop: gpui parks a minimised window's frame callback, and a cloaked one keeps
+/// being asked to paint every vsync, so the pump declines instead
+/// (`crate::pump_frame`).
+pub fn cloaked() -> bool {
+    win::is_cloaked()
+}
+
+/// `document.hidden` for a snapshot: minimised, or on another virtual desktop.
+fn hidden(s: &Snapshot) -> bool {
+    s.minimized || s.cloaked
 }
 
 /// Whether the host still draws its own titlebar strip.
@@ -1413,7 +1432,7 @@ thread_local! {
 /// 3. `redjs_dom_resize` when the viewport or the DPI moved — this is what
 ///    updates `innerWidth`/`innerHeight`/`devicePixelRatio` and fires the
 ///    trusted `resize`;
-/// 4. `redjs_dom_set_visibility` when minimised-ness moved;
+/// 4. `redjs_dom_set_visibility` when hidden-ness (minimised or cloaked) moved;
 /// 5. the JS observer, with the state delta.
 ///
 /// Step 3 before step 5 is what makes `fullscreenchange` fire AFTER the
@@ -1474,17 +1493,16 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
             if viewport_moved {
                 kinds.push("resize");
             }
-            // "Hidden" means MINIMISED, not unfocused: a browser does not
-            // report a background-but-visible window as hidden, and ours keeps
-            // rendering when inactive by design. Virtual-desktop cloaking is
-            // read (`snapshot.cloaked`) but deliberately NOT folded in here —
-            // documented rather than silently reported as `visible`. The edge
-            // normally arrives through `visibility_changed`; this diff is
-            // what makes that path and the frame's agree.
-            if p.minimized != s.minimized {
-                unsafe {
-                    vn_runtime::redjs::ffi::redjs_dom_set_visibility(ctx, s.minimized as i32)
-                };
+            // "Hidden" means MINIMISED or CLOAKED (on another virtual desktop),
+            // not unfocused: a browser does not report a background-but-visible
+            // window as hidden, and ours keeps rendering when inactive by
+            // design. Chromium's Windows occlusion tracker does count a cloaked
+            // window as hidden, and so do we (`cloaked`). The minimise edge
+            // normally arrives through `visibility_changed`; a cloak has no
+            // window message, so its edge is this diff, run by the background
+            // tick while the pump declines frames.
+            if hidden(p) != hidden(&s) {
+                unsafe { vn_runtime::redjs::ffi::redjs_dom_set_visibility(ctx, hidden(&s) as i32) };
             }
             if p.maximized != s.maximized {
                 kinds.push(if s.maximized { "maximize" } else { "unmaximize" });
@@ -2156,6 +2174,10 @@ mod tests {
 
         let min = Snapshot { minimized: true, ..base.clone() };
         assert_eq!(titlebar_area(&min), (false, (0.0, 0.0, 0.0, 0.0)));
+        // Hidden is minimised OR cloaked (another virtual desktop); unfocused is not.
+        let cloaked = Snapshot { cloaked: true, ..base.clone() };
+        let unfocused = Snapshot { focused: false, ..base.clone() };
+        assert_eq!((hidden(&base), hidden(&min), hidden(&cloaked), hidden(&unfocused)), (false, true, true, false));
 
         // A host-drawn cluster takes its width off the RIGHT on Windows, so the
         // content area keeps x = 0 and loses width (3 x 46 px).

@@ -27,11 +27,12 @@
 //!   when it is shown again.
 //!
 //! The trigger is "no frame for `STALL`", not "minimised": it covers every way
-//! a window stops getting frames (minimised, `SW_HIDE`, a stalled swap chain)
+//! a window stops getting frames (minimised, `SW_HIDE`, a stalled swap chain,
+//! and a window on another virtual desktop, whose frames the pump declines)
 //! with one rule, and while frames arrive the tick costs one `Instant`
 //! comparison. `document.hidden` and `visibilitychange` are not this module's:
-//! they follow the minimise state through gpui's visibility observer
-//! (src/window.rs `visibility_changed`).
+//! they follow the minimise state through gpui's visibility observer, and the
+//! cloak through the funnel this tick runs (src/window.rs).
 //!
 //! **Re-entrancy.** The tick is a gpui foreground task, so it runs from the
 //! message loop, never inside the frame pump (one thread). It stands down when
@@ -80,6 +81,12 @@ pub fn note_frame() {
             format!("[window] frames resumed — the background tick stands down ({n} background waves so far)"),
         );
     }
+}
+
+/// Has the frame pump run at all? Until it has, nothing may stand in for it:
+/// the first frame owns the boot wave.
+pub fn pumped_once() -> bool {
+    LAST_FRAME.with(|c| c.get().is_some())
 }
 
 /// The decision, pure: is the frame clock stalled? `None` (the pump has never

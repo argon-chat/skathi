@@ -609,6 +609,16 @@ host_fn!(fn vn_log(g, args) {
 /// callbacks drain first), so `cx.notify()` from a host fn is picked up by the
 /// very same frame.
 fn pump_frame(window: &mut Window, cx: &mut App) {
+    // On another virtual desktop: a hidden page, as when minimised. gpui keeps
+    // asking a cloaked window to paint every vsync, so the pump declines — no
+    // JS wave, no requestAnimationFrame — and, by not stamping the frame clock,
+    // hands the window to the background tick (timers, sockets, devtools every
+    // 100 ms; src/background.rs), whose funnel reports `document.hidden`. Not
+    // before the first frame: that one owns the boot wave.
+    if background::pumped_once() && window::cloaked() {
+        window.on_next_frame(pump_frame);
+        return;
+    }
     // One `Instant` read per frame when VN_PERF is on, an atomic load when it
     // is off. `on_next_frame` re-arms every frame, so this IS the frame clock.
     perf::frame();
