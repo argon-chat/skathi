@@ -104,6 +104,37 @@ test("a destination node's track plays into a source node in the same graph", as
   });
 }, T);
 
+// The audio-atlas case (Argon's tone store, @argon/soundfx createAudioAtlas):
+// `start(when, offset, duration)` on a buffer holding many sounds must play the
+// one slice. Before redjs 0b15d66 `duration` was ignored and the source ran on
+// to the end of the buffer, so `onended` came ~0.5 s late here. Muted output.
+test("a sprite plays only its slice of the buffer: onended after its duration", async () => {
+  const got = await inPage(`
+    const ctx = new AudioContext();
+    const mute = ctx.createGain(); mute.gain.value = 0; mute.connect(ctx.destination);
+    const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate); // 1 s
+    const ch = buf.getChannelData(0); for (let i = 0; i < ch.length; i++) ch[i] = Math.sin(i / 10) * 0.5;
+    buf.copyToChannel(ch, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buf; src.connect(mute);
+    const ended = new Promise(r => { src.onended = r; });
+    const t0 = ctx.currentTime;
+    src.start(0, 0.5, 0.05);
+    const timeout = new Promise(r => setTimeout(() => r("timeout"), 3000));
+    const why = await Promise.race([ended.then(() => "ended"), timeout]);
+    const took = ctx.currentTime - t0;
+    const moved = ctx.currentTime > 0;
+    ctx.close();
+    const loop = (() => { const s = new AudioContext().createBufferSource(); s.loopStart = 0.25; s.loopEnd = 0.5; return [s.loopStart, s.loopEnd]; })();
+    return { moved, why, inTime: !moved || took < 0.3, loop };
+  `);
+  console.log(`[media] sprite ${JSON.stringify(got)}`);
+  const r = (got as { ok: { moved: boolean; why: string } }).ok;
+  // With no output device the clock does not run and nothing ends; the slice
+  // itself is pinned by redjs's offline-graph tests.
+  if (r.moved) expect(got).toEqual({ ok: { moved: true, why: "ended", inTime: true, loop: [0.25, 0.5] } });
+}, T);
+
 test("the app logged nothing broken", async () => {
   await app.expectNoErrors();
 }, T);
