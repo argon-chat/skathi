@@ -59,7 +59,8 @@ use crate::windows;
 const PRESS_BITS: u64 = (1 << tree::EV_CLICK)
     | (1 << tree::EV_MOUSEDOWN)
     | (1 << tree::EV_MOUSEUP)
-    | (1 << tree::EV_CONTEXTMENU);
+    | (1 << tree::EV_CONTEXTMENU)
+    | (1 << tree::EV_AUXCLICK);
 
 /// Turns the targeting on for this window: picks for every element, and the
 /// refiner. Called once per build (`render::arm_pick_hitboxes`); both are

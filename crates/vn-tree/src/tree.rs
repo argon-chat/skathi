@@ -68,7 +68,7 @@ pub const EV_EMPTIED: u32 = 34;
 // These four were 17-20 on the compat track and were RENUMBERED to 35-38 at the
 // m12 integration merge, because the `<video>` track had independently taken
 // 17-34 for the media block. `Node::listeners` is a `u64`, so the space is
-// there; bits 45-63 remain free.
+// there; bits 48-63 remain free.
 pub const EV_TRANSITIONEND: u32 = 35;
 pub const EV_ANIMATIONSTART: u32 = 36;
 pub const EV_ANIMATIONEND: u32 = 37;
@@ -101,6 +101,12 @@ pub const EV_POINTERCANCEL: u32 = 44;
 /// frame tick at the root (the JS side retargets it to `document`).
 pub const EV_SELECTSTART: u32 = 45;
 pub const EV_SELECTIONCHANGE: u32 = 46;
+/// A MouseEvent: the middle or the right button pressed and released over the
+/// same element (UI Events §3.5), at the press and release targets' nearest
+/// common ancestor, as `click` is for the primary button. Delivered in the
+/// release's wave after `mouseup` and, for the right button, before
+/// `contextmenu` (Chromium on Windows; `crate::render`'s up wave).
+pub const EV_AUXCLICK: u32 = 47;
 
 /// Every host event code with the name JS knows it by — the ONE table, so a
 /// listing (devtools) can never lag the codes again. It did: `event_names` in
@@ -157,6 +163,7 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_POINTERCANCEL, "pointercancel"),
     (EV_SELECTSTART, "selectstart"),
     (EV_SELECTIONCHANGE, "selectionchange"),
+    (EV_AUXCLICK, "auxclick"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

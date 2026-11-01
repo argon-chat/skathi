@@ -1,5 +1,5 @@
-// contextmenu, one event per press, `detail`, and `<img>` load / error on the
-// real host (m26 fixes, docs/RUNTIME.md §5.6).
+// contextmenu, auxclick, one event per press, `detail`, and `<img>` load /
+// error on the real host (m26 fixes, docs/RUNTIME.md §5.6).
 //
 //   bun test packages/vn-test/specs/events.spec.ts
 //
@@ -72,11 +72,27 @@ describe("contextmenu from the mouse", () => {
       `mousedown@trigger|t=inner b=2 bs=2 d=1 ${at} c=true`,
       `mouseup@inner|t=inner b=2 bs=0 d=1 ${at} c=true`,
       `mouseup@trigger|t=inner b=2 bs=0 d=1 ${at} c=true`,
+      // The right button's click, before the menu: Chromium on Windows
+      // finishes the release before it shows one.
+      `auxclick@trigger|t=inner b=2 bs=0 d=1 ${at} c=true`,
       // The element under the pointer is the target, whether it listens for
       // contextmenu or not (E-2 retired, crates/vn-tree/src/pointer.rs).
       `contextmenu@trigger|t=inner b=2 bs=0 d=0 ${at} c=true`,
     ]);
     await expect(app.locator("#menu")).toHaveCount(1);
+  }, T);
+
+  test("a middle click: mousedown, mouseup, then auxclick (button 1), and no click", async () => {
+    await fresh();
+    await app.locator("#inner").click({ real: true, button: 1 });
+    const at = await centre("#inner");
+    bunExpect(await fresh()).toEqual([
+      `mousedown@inner|t=inner b=1 bs=4 d=1 ${at} c=true`,
+      `mousedown@trigger|t=inner b=1 bs=4 d=1 ${at} c=true`,
+      `mouseup@inner|t=inner b=1 bs=0 d=1 ${at} c=true`,
+      `mouseup@trigger|t=inner b=1 bs=0 d=1 ${at} c=true`,
+      `auxclick@trigger|t=inner b=1 bs=0 d=1 ${at} c=true`,
+    ]);
   }, T);
 
   test("a left click: mouseup BEFORE click, each once, and click's detail is the count", async () => {

@@ -919,16 +919,18 @@ impl MousePt {
 }
 
 /// One physical mouse-up, as the DOM sees it: a `mouseup`, then a `click`
-/// (left button, released on the box it was pressed on), then — the right
-/// button, Chromium on Windows — a `contextmenu`. Each slot is claimed by the
-/// first listening box on the target's path, for the target the release
-/// resolved to (`crate::pointer`; a click's is the common ancestor of the
-/// press's and the release's). Why they are claimed and delivered later rather
-/// than dispatched in place: `WindowState::up_waves`.
+/// (left button, released on the box it was pressed on) or an `auxclick` (the
+/// middle or right button, the same rule), then — the right button, Chromium
+/// on Windows — a `contextmenu`. Each slot is claimed by the first listening
+/// box on the target's path, for the target the release resolved to
+/// (`crate::pointer`; a click's and an auxclick's is the common ancestor of
+/// the press's and the release's). Why they are claimed and delivered later
+/// rather than dispatched in place: `WindowState::up_waves`.
 #[derive(Default)]
 pub struct UpWave {
     mouseup: Option<(u32, MousePt)>,
     click: Option<(u32, MousePt)>,
+    aux: Option<(u32, MousePt)>,
     menu: Option<(u32, MousePt)>,
     scheduled: bool,
     /// The release of a press the host cancelled: nothing is delivered.
@@ -1018,6 +1020,12 @@ fn flush_up_waves(window: &mut Window, cx: &mut App) {
         }
         if let Some((id, p)) = wave.click {
             js_dispatch_app(id, tree::EV_CLICK, &p.payload(), window, cx);
+        }
+        // Blink's `WebFrameWidgetImpl::HandleMouseUp` finishes the release
+        // (`mouseup`, then the click family) before it shows the context menu
+        // on Windows, so the right button's `auxclick` precedes `contextmenu`.
+        if let Some((id, p)) = wave.aux {
+            js_dispatch_app(id, tree::EV_AUXCLICK, &p.payload(), window, cx);
         }
         if let Some((id, p)) = wave.menu {
             js_dispatch_app(id, tree::EV_CONTEXTMENU, &p.payload(), window, cx);
@@ -3812,6 +3820,7 @@ const POINTER_BITS: u64 = (1 << tree::EV_CLICK)
     | (1 << tree::EV_MOUSEDOWN)
     | (1 << tree::EV_MOUSEUP)
     | (1 << tree::EV_CONTEXTMENU)
+    | (1 << tree::EV_AUXCLICK)
     | (1 << tree::EV_MOUSEMOVE)
     | (1 << tree::EV_MOUSEENTER)
     | (1 << tree::EV_MOUSELEAVE)
@@ -4533,6 +4542,26 @@ where
                 }
             }));
         }
+    }
+    if bit(tree::EV_AUXCLICK) {
+        // `click`'s rule for the other two buttons (UI Events §3.5): pressed
+        // and released over one element, fired at the nearest common ancestor
+        // of the two targets. gpui hands a box its non-primary clicks here,
+        // once it holds an aux-click listener; it pairs the release with the
+        // LAST press on the box, whatever its button, so a release of another
+        // button than that press's is dropped here. The back and forward
+        // buttons get none, as they get no `mouseup` here either (the up wave
+        // knows three buttons). `detail` is the click count, as for a click;
+        // `buttons` is 0.
+        e = e.on_aux_click(cx.listener(move |_, ev: &ClickEvent, window, cx| {
+            let ClickEvent::Mouse(m) = ev else { return };
+            if m.down.button != m.up.button || !matches!(m.up.button, MouseButton::Middle | MouseButton::Right) {
+                return;
+            }
+            let payload = mouse_payload_n(m.up.position, button_code(m.up.button), &m.up.modifiers, m.up.click_count);
+            let target = crate::pointer::click_target_or(window, id);
+            claim_up(window, &mut **cx, |w| &mut w.aux, target, &payload);
+        }));
     }
     if bit(tree::EV_MOUSEDOWN) {
         e = e.capture_any_mouse_down(|_, window, _| windows::here(window, |w| w.down_claimed = false));

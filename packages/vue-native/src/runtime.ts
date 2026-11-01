@@ -588,6 +588,10 @@ const EV_CODES = {
   // retargets it to `document`, where a browser fires it.
   selectstart: 45,
   selectionchange: 46,
+  // The middle or right button's click (UI Events §3.5): after the release's
+  // `mouseup` and, for the right button, before its `contextmenu` (Chromium
+  // on Windows). `button` 1 or 2, `detail` the click count.
+  auxclick: 47,
 } as const;
 
 /** Every event name the HOST delivers under a code of its own. */
@@ -5591,9 +5595,9 @@ const BUTTON_BITS = [1, 4, 2, 8, 16];
 /**
  * `buttons` — which buttons are DOWN as the event fires. Only the host's press
  * and the moves made while one is held have one down: by a `mouseup`, a
- * `click`, a `dblclick` or a `contextmenu` (Chromium on Windows opens the
- * menu on the release) the button is already up. Other buttons held at the
- * same time are not tracked.
+ * `click`, a `dblclick`, an `auxclick` or a `contextmenu` (Chromium on
+ * Windows opens the menu on the release) the button is already up. Other
+ * buttons held at the same time are not tracked.
  */
 function buttonsFor(name: string, c: number): number {
   switch (name) {
@@ -5635,12 +5639,12 @@ function buttonFor(name: string, c: number): number {
 }
 /**
  * `detail` — the click count (UI Events §3.5): the host's `mousedown` /
- * `mouseup` / `click` carry it above the four modifier bits of `d`;
- * `dblclick` is 2 by definition; everything else is 0, `contextmenu` included
- * (Blink counts only the press, release and click family).
+ * `mouseup` / `click` / `auxclick` carry it above the four modifier bits of
+ * `d`; `dblclick` is 2 by definition; everything else is 0, `contextmenu`
+ * included (Blink counts only the press, release and click family).
  */
 function detailFor(name: string, d: number): number {
-  if (name === "click" || name === "mousedown" || name === "mouseup") return (d >>> 4) & 0xff;
+  if (name === "click" || name === "auxclick" || name === "mousedown" || name === "mouseup") return (d >>> 4) & 0xff;
   return name === "dblclick" ? 2 : 0;
 }
 
@@ -5684,6 +5688,7 @@ function synthesize(
     switch (name) {
       case "click":
       case "dblclick":
+      case "auxclick":
       case "contextmenu":
       case "mousedown":
       case "mouseup":
@@ -6043,7 +6048,7 @@ function hasListener(target: MirrorNode, name: string): boolean {
  * `<input type=file>`?
  */
 /** Host events that mean a person just pressed something (see the dispatcher). */
-const ACTIVATING_EVENTS = new Set(["keydown", "mousedown", "pointerdown", "mouseup", "pointerup", "click"]);
+const ACTIVATING_EVENTS = new Set(["keydown", "mousedown", "pointerdown", "mouseup", "pointerup", "click", "auxclick"]);
 
 function activatableOnPath(target: MirrorNode): boolean {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {

@@ -1,6 +1,6 @@
 // The events the Argon client binds that the host never delivered (m26 fixes):
-// `contextmenu`, `dblclick` (and `detail` on the click family), `pointercancel`,
-// and an `<img>`'s `load` / `error` — with `complete`, `naturalWidth` and the
+// `contextmenu`, `auxclick`, `dblclick` (and `detail` on the click family),
+// `pointercancel`, and an `<img>`'s `load` / `error` — with `complete`, `naturalWidth` and the
 // `on<event>` handler attributes they are read through. (`new Image()` is the
 // engine's own offscreen image, redjs webapi/image.rs, and is not this.)
 //
@@ -121,6 +121,61 @@ describe("contextmenu", () => {
     const { inner } = tree(rt);
     inner.oncontextmenu = () => false;
     expect(fire(rt, inner, "contextmenu", 0, 0, 2)).toBe(false);
+  });
+});
+
+describe("auxclick", () => {
+  test("a listener arms the host's own code, and is not advised as undelivered", () => {
+    const rt = createRuntime();
+    rt.patchProp(rt.el(6), "onAuxclick", null, () => {});
+    expect(rt.flagsFor(rt.EV_CODES.auxclick)).toEqual([{ id: 6, code: 47, on: true }]);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("a middle click: a MouseEvent that bubbles and is cancelable, button 1, buttons 0, detail the count", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { outer, inner } = tree(rt);
+    let seen: Ev | undefined;
+    const path: string[] = [];
+    inner.addEventListener("auxclick", () => path.push("inner"));
+    outer.addEventListener("auxclick", (e) => {
+      seen = e;
+      path.push("outer");
+    });
+    fire(rt, inner, "auxclick", 30, 40, 1, (1 << 4) | 1 /* ctrl */);
+    expect(path).toEqual(["inner", "outer"]);
+    expect(seen).toBeInstanceOf(FakeMouseEvent);
+    expect([seen!.type, seen!.bubbles, seen!.cancelable]).toEqual(["auxclick", true, true]);
+    expect([seen!.clientX, seen!.clientY, seen!.button, seen!.buttons, seen!.detail]).toEqual([30, 40, 1, 0, 1]);
+    expect(seen!.ctrlKey).toBe(true);
+  });
+
+  test("ChannelItem.vue's split: button 1, preventDefault, and the host hears the cancel", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    const split: number[] = [];
+    rt.patchProp(inner as never, "onAuxclick", null, (e: Ev) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        split.push(e.button);
+      }
+    });
+    expect(fire(rt, inner, "auxclick", 0, 0, 1, 1 << 4)).toBe(false);
+    // A right button's auxclick is not the split, and is not cancelled.
+    expect(fire(rt, inner, "auxclick", 0, 0, 2, 1 << 4)).toBe(true);
+    expect(split).toEqual([1]);
+  });
+
+  test("never a click nor a dblclick, whatever its count; the handler attribute works", () => {
+    const rt = createRuntime({ MouseEvent: FakeMouseEvent });
+    const { inner } = tree(rt);
+    const seen: string[] = [];
+    inner.addEventListener("click", () => seen.push("click"));
+    inner.addEventListener("dblclick", () => seen.push("dblclick"));
+    inner.onauxclick = (e: Ev) => seen.push(`auxclick:${e.detail}`);
+    fire(rt, inner, "auxclick", 0, 0, 1, 1 << 4);
+    fire(rt, inner, "auxclick", 0, 0, 1, 2 << 4);
+    expect(seen).toEqual(["auxclick:1", "auxclick:2"]);
   });
 });
 

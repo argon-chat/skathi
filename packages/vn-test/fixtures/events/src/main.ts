@@ -4,8 +4,9 @@
 //
 // - `#trigger` is a reka-style context-menu trigger: `contextmenu` is cancelled
 //   and opens `#menu` at the pointer. It also listens for `mousedown`,
-//   `mouseup` and `click`, and so does `#inner` inside it (press and release
-//   only), which is what pins ONE event per press and the DOM order.
+//   `mouseup`, `click` and `auxclick`, and so does `#inner` inside it (press
+//   and release only), which is what pins ONE event per press and the DOM
+//   order.
 // - `#plain` leaves its `contextmenu` uncancelled (the E-1 advisory).
 // - `#pad` and `#pad2` are focusable: the Menu key and Shift+F10 fire
 //   `contextmenu` at them. `#pad2` cancels the Menu key's `keyup`, which
@@ -64,6 +65,7 @@ createApp({
             onMousedown: mouse("trigger"),
             onMouseup: mouse("trigger"),
             onClick: mouse("trigger"),
+            onAuxclick: mouse("trigger"),
             onContextmenu: (e: MouseEvent) => {
               mouse("trigger", true)(e);
               menu.value = { x: e.clientX, y: e.clientY };

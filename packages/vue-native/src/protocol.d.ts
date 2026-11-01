@@ -270,7 +270,8 @@ type VnEventCode =
   | 43 // load                (<img>, crates/vn-tree/src/img.rs)
   | 44 // pointercancel      (the window lost activation mid-press)
   | 45 // selectstart        (a press that starts a text selection, cancelable)
-  | 46; // selectionchange   (at the root, for `document`, crates/vn-tree/src/selection.rs)
+  | 46 // selectionchange   (at the root, for `document`, crates/vn-tree/src/selection.rs)
+  | 47; // auxclick         (the middle or right button's click, after its mouseup)
 
 // ---------------------------------------------------------------------------
 // the text selection — crates/vn-tree/src/selection.rs (src/selection.ts)
