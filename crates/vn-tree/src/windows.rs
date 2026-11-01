@@ -174,6 +174,9 @@ pub struct WindowState {
     /// `copy` event (`crate::clipboard`). `keyup` uses it the same way: a
     /// cancelled Menu-key `keyup` has no `contextmenu`.
     pub key_prevented: bool,
+    /// The key event (gpui's `Window::vn_key_event_seq`) whose ONE DOM
+    /// `keydown` / `keyup` has been dispatched (`render::claim_key_event`).
+    pub key_event_claimed: u64,
     /// The keyboard click the key event being dispatched owes, decided once
     /// every handler of that event has run (`render::resolve_key_click`).
     pub key_click: Option<crate::render::KeyClick>,

@@ -4354,6 +4354,29 @@ fn stack_box(
     stack(own, extras, el)
 }
 
+/// Claims the key event gpui is dispatching in this window for ONE DOM event:
+/// `true` for the first caller, `false` for every later one.
+///
+/// A browser fires one `keydown` per key, at the focused element, and lets it
+/// bubble to `document`. gpui instead hands the key event to EVERY key listener
+/// on the focus path, and a text field's editor sees it before all of them
+/// (its keystroke interceptor). Each of those used to dispatch a DOM event of
+/// its own: a focused box's listener, then a listening ancestor's, then the
+/// root's (which stands in for `document`) — so a `document` listener heard
+/// one Escape twice or three times, and a field whose Escape handler removed
+/// it still had the root deliver the key again, because gpui walks the path it
+/// computed before anyone ran. A dialog's field closed two layers on one key.
+///
+/// The claim is keyed by gpui's per-event number (`Window::vn_key_event_seq`,
+/// fork), not by a flag reset in some phase: interceptors run before the
+/// capture phase, a cancelled key stops gpui's walk early, and devtools sends
+/// several keys inside one update — a number that changes with each event is
+/// right in all three.
+fn claim_key_event(window: &Window) -> bool {
+    let seq = window.vn_key_event_seq();
+    windows::here(window, |w| std::mem::replace(&mut w.key_event_claimed, seq) != seq)
+}
+
 /// The listener half every element shares. `keys_here` is false for `<input>`,
 /// whose editor forwards its own keystrokes from inside the widget.
 #[allow(clippy::too_many_arguments)]
@@ -4587,15 +4610,25 @@ where
             }
         }));
     }
+    // ONE `keydown` / `keyup` per key event, AT the focused element, bubbling
+    // from there to `document` and `window` — whichever listening box on the
+    // focus path gpui reaches first dispatches it ([`claim_key_event`]), and
+    // every other one (an ancestor, the root standing in for `document`) lets
+    // it pass, the root included when the first dispatch removed the focused
+    // element.
     if bit(tree::EV_KEYDOWN) && keys_here {
         e = e.on_key_down(cx.listener(move |_, ev: &KeyDownEvent, window, cx| {
+            if !claim_key_event(window) {
+                return;
+            }
+            let target = focused_node(window, cx).unwrap_or(id);
             let key = dom_key(&ev.keystroke.key);
             let payload = EventPayload {
                 d: mods_bits(&ev.keystroke.modifiers),
                 key: Some(&key),
                 ..Default::default()
             };
-            if !js_dispatch(id, tree::EV_KEYDOWN, &payload, window, cx) {
+            if !js_dispatch(target, tree::EV_KEYDOWN, &payload, window, cx) {
                 // A cancelled Ctrl+C has no `copy` event: the root's clipboard
                 // listener, which this keystroke reaches last, reads this.
                 windows::here(window, |w| w.key_prevented = true);
@@ -4604,13 +4637,17 @@ where
     }
     if bit(tree::EV_KEYUP) && keys_here {
         e = e.on_key_up(cx.listener(move |_, ev: &KeyUpEvent, window, cx| {
+            if !claim_key_event(window) {
+                return;
+            }
+            let target = focused_node(window, cx).unwrap_or(id);
             let key = dom_key(&ev.keystroke.key);
             let payload = EventPayload {
                 d: mods_bits(&ev.keystroke.modifiers),
                 key: Some(&key),
                 ..Default::default()
             };
-            if !js_dispatch(id, tree::EV_KEYUP, &payload, window, cx) {
+            if !js_dispatch(target, tree::EV_KEYUP, &payload, window, cx) {
                 // A cancelled Menu-key keyup has no `contextmenu`
                 // (`bind_menu_keys`, the last listener it reaches).
                 windows::here(window, |w| w.key_prevented = true);
@@ -5796,6 +5833,13 @@ fn build_input<V: 'static>(
     // (`dispatch_event` already reports `!defaultPrevented`).
     let on_key_down: Option<vn_elements::OnKeyDown> = bit(tree::EV_KEYDOWN).then(|| {
         std::rc::Rc::new(move |ev: &gpui::KeyDownEvent, window: &mut Window, cx: &mut App| {
+            // The field's interceptor runs before any listener, so it is the
+            // one `keydown` of this key event; the root's listener, which
+            // gpui reaches afterwards even when this handler removed the
+            // field, lets it pass (`claim_key_event`).
+            if !claim_key_event(window) {
+                return true;
+            }
             let key = dom_key(&ev.keystroke.key);
             let payload = EventPayload {
                 d: mods_bits(&ev.keystroke.modifiers),
@@ -5816,6 +5860,9 @@ fn build_input<V: 'static>(
     });
     let on_key_up: Option<vn_elements::OnKeyUp> = bit(tree::EV_KEYUP).then(|| {
         std::rc::Rc::new(move |ev: &KeyUpEvent, window: &mut Window, cx: &mut App| {
+            if !claim_key_event(window) {
+                return;
+            }
             let key = dom_key(&ev.keystroke.key);
             let payload = EventPayload {
                 d: mods_bits(&ev.keystroke.modifiers),
