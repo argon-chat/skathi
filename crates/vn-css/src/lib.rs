@@ -607,6 +607,14 @@ impl RuleIndex {
             Bucket::Any => self.any.push(rule),
         }
     }
+
+    fn shrink(&mut self) {
+        for map in [&mut self.by_id, &mut self.by_class, &mut self.by_tag] {
+            map.values_mut().for_each(Vec::shrink_to_fit);
+            map.shrink_to_fit();
+        }
+        self.any.shrink_to_fit();
+    }
 }
 
 /// Is the `VN_PERF` probe on? vn-css cannot see vn-tree's copy of the flag and
@@ -757,7 +765,19 @@ impl Engine {
                 engine.collect(&sheet.rules.0, None, &mut order);
             }
         }
+        engine.shrink();
         engine
+    }
+
+    /// Gives back what the vectors grew past their length. The rule table is
+    /// the big one: `Vec`'s doubling left 16,384 slots for the Argon client's
+    /// 12,332 rules, 2.8 MB of nothing (research/reports/m26/perf-mem-3.md §4).
+    fn shrink(&mut self) {
+        self.rules.shrink_to_fit();
+        self.index.shrink();
+        self.conditions.shrink_to_fit();
+        self.condition_text.shrink_to_fit();
+        self.viewport_blocks.shrink_to_fit();
     }
 
     /// The UA defaults, collected before the author's sheet (see [`UA_SHEET`]).
@@ -3405,6 +3425,118 @@ mod tests {
         assert!(!engine.rebase_viewport());
         let mut plain = Engine::compile(".box { width: 10px }");
         assert!(plain.rebase_viewport(), "nothing to re-resolve is not a failure");
+    }
+
+    /// What a compiled engine says, one line per rule (and per index bucket,
+    /// `@media` condition, `@keyframes` block, viewport block and advisory):
+    /// the VALUES, never their layout, so a change to how the engine stores a
+    /// rule can be checked against the engine before it on a real sheet.
+    fn engine_digest(engine: &Engine) -> Vec<String> {
+        let mut out = Vec::new();
+        for r in &engine.rules {
+            out.push(format!(
+                "{} | {} {} {} {:?} {:?} {:?} | {:?} | {:?} | {:?} {:?} | {:?} {:?} | {:?} {:?} | {:?} | {:?} | \
+                 {:?} {:?} | {:?} {:?} | {:?} | {:?}",
+                sel_text(&r.selector),
+                r.specificity,
+                r.order,
+                r.states,
+                r.ancestor,
+                r.pseudo,
+                r.condition,
+                r.normal,
+                r.important,
+                r.normal_transitions,
+                r.important_transitions,
+                r.normal_animations,
+                r.important_animations,
+                r.normal_animation_patch,
+                r.important_animation_patch,
+                r.normal_extras,
+                r.important_extras,
+                r.normal_custom,
+                r.important_custom,
+                r.normal_dynamic,
+                r.important_dynamic,
+                r.diagnostics,
+                r.decls,
+            ));
+        }
+        let mut buckets: Vec<String> = [
+            ("id", &engine.index.by_id),
+            ("class", &engine.index.by_class),
+            ("tag", &engine.index.by_tag),
+        ]
+        .into_iter()
+        .flat_map(|(kind, map)| map.iter().map(move |(k, v)| format!("index {kind} {k}: {v:?}")))
+        .collect();
+        buckets.sort();
+        out.extend(buckets);
+        out.push(format!("index any: {:?} enabled {}", engine.index.any, engine.index.enabled));
+        for (c, t) in engine.conditions.iter().zip(&engine.condition_text) {
+            out.push(format!("media {t}: {c:?}"));
+        }
+        let mut names: Vec<&Box<str>> = engine.keyframes.keys().collect();
+        names.sort();
+        for name in names {
+            for b in &engine.keyframes[name] {
+                let steps: Vec<String> = b
+                    .block
+                    .steps
+                    .iter()
+                    .map(|k| format!("{:?} {:?} {:?} {:?}", k.offset, k.easing, k.style, k.dynamic))
+                    .collect();
+                out.push(format!("keyframes {name} {:?} {} {steps:?}", b.condition, b.block.dynamic));
+            }
+        }
+        for b in &engine.viewport_blocks {
+            out.push(format!("viewport {:?} {}", b.rules, b.css));
+        }
+        out.push(format!(
+            "flags {} {} {}",
+            engine.sibling_combinators, engine.group_states, engine.viewport_unkept
+        ));
+        out.extend(engine.diagnostics.iter().map(|d| format!("advisory {d}")));
+        out
+    }
+
+    /// An engine change that should not change what the engine SAYS, checked
+    /// on a real sheet: the first run (no digest file yet) writes one hash per
+    /// line of [`engine_digest`], and every later run compares against it.
+    ///
+    /// ```text
+    /// VN_SHEET=app.css VN_ENGINE_DIGEST=before.txt cargo test -p vn-css --lib engine_digest -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs VN_SHEET=<css file> and VN_ENGINE_DIGEST=<file>"]
+    fn engine_digest_matches_the_recorded_one() {
+        use std::hash::{Hash as _, Hasher as _};
+        let (Ok(sheet), Ok(file)) = (std::env::var("VN_SHEET"), std::env::var("VN_ENGINE_DIGEST")) else { return };
+        let css = std::fs::read_to_string(&sheet).expect("VN_SHEET is readable");
+        set_viewport_basis(INITIAL_VIEWPORT_BASIS.0, INITIAL_VIEWPORT_BASIS.1);
+        let lines = engine_digest(&Engine::compile(&css));
+        let hashed: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                l.hash(&mut h);
+                format!("{:016x}", h.finish())
+            })
+            .collect();
+        match std::fs::read_to_string(&file) {
+            Err(_) => {
+                std::fs::write(&file, hashed.join("\n")).expect("VN_ENGINE_DIGEST is writable");
+                eprintln!("recorded {} lines to {file}", hashed.len());
+            }
+            Ok(recorded) => {
+                let recorded: Vec<&str> = recorded.lines().collect();
+                for (i, (a, b)) in recorded.iter().zip(&hashed).enumerate() {
+                    assert_eq!(*a, b.as_str(), "line {i} differs; it now reads: {}", lines[i]);
+                }
+                assert_eq!(recorded.len(), hashed.len(), "line count");
+                eprintln!("{} lines, all equal to {file}", hashed.len());
+            }
+        }
     }
 
     /// The same check on a real sheet, rule by rule: every rule a rebase
