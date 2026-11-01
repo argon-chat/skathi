@@ -1,9 +1,41 @@
-//! libvpx 1.17's VP9 decoder, vendored and compiled with `cc` (VENDOR.md).
+//! libvpx 1.17's VP9 decoder, vendored and compiled with `cc` (VENDOR.md),
+//! and a small safe wrapper around it.
 //!
-//! This is the raw C surface: the declarations the safe wrapper is built on.
+//! A [`Decoder`] takes VP9 packets one at a time (a frame, or a superframe: a
+//! hidden alt-ref frame and the frame after it) and hands back the I420 frame
+//! each one shows. Nothing else of libvpx is exposed: no encoder, no VP8, no
+//! threads (every decoder runs on its caller's thread, `threads = 1`).
+//!
+//! # Memory
+//!
+//! libvpx allocates through `csrc/vn_vpx_mem.c`, which charges every block
+//! to the decoder whose call made it. [`Decoder::memory`] is that account,
+//! exact to the byte, and [`Decoder::set_memory_limit`] caps it: past the cap
+//! an allocation fails the way an out-of-memory does in libvpx (the decode
+//! returns [`ErrorCode::Mem`] and the decoder stays usable).
+//!
+//! # Errors
+//!
+//! A failed decode leaves the decoder usable: the next decode starts from a
+//! fresh libvpx context and needs a keyframe ([`Decoder::decode`] says why
+//! not libvpx's own recovery).
+//!
+//! # Threads
+//!
+//! A [`Decoder`] is `Send` and not `Sync`: one call at a time, from any
+//! thread. Decoders are independent of each other, with one exception libvpx
+//! has: the first decode in the process fills process-wide dispatch tables,
+//! guarded by a plain flag in this configuration (`CONFIG_MULTITHREAD 0`).
+//! [`Decoder::new`] runs that set-up first, under a [`std::sync::Once`], so
+//! decoders can be made and used on several threads at once.
 
+use std::cell::UnsafeCell;
 use std::ffi::CStr;
+use std::fmt;
+use std::marker::PhantomData;
 use std::os::raw::{c_char, c_int, c_long, c_uint, c_void};
+use std::ptr;
+use std::sync::Once;
 
 /// The C declarations, as `vpx/vpx_decoder.h`, `vpx/vpx_codec.h` and
 /// `vpx/vpx_image.h` have them (the `layout` test checks them against the C
@@ -146,3 +178,379 @@ pub fn version() -> &'static str {
     // SAFETY: a static NUL-terminated string from libvpx.
     unsafe { CStr::from_ptr(ffi::vpx_codec_version_str()) }.to_str().unwrap_or("")
 }
+
+/// Which way a libvpx call failed (`vpx_codec_err_t`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorCode {
+    /// `VPX_CODEC_MEM_ERROR`: an allocation failed, or passed
+    /// [`Decoder::set_memory_limit`].
+    Mem,
+    /// `VPX_CODEC_UNSUP_BITSTREAM`, `VPX_CODEC_UNSUP_FEATURE`,
+    /// `VPX_CODEC_INCAPABLE`: valid VP9 this build does not decode (a high bit
+    /// depth profile, say).
+    Unsupported,
+    /// `VPX_CODEC_CORRUPT_FRAME`, `VPX_CODEC_ERROR`, `VPX_CODEC_INVALID_PARAM`:
+    /// the packet is not a VP9 frame libvpx can decode, a frame larger than
+    /// the 4096×4096 size limit among them.
+    Corrupt,
+    /// Anything else (`VPX_CODEC_ABI_MISMATCH`: a bug here).
+    Other(i32),
+}
+
+/// A libvpx failure: the code and libvpx's own words for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Error {
+    pub code: ErrorCode,
+    pub message: String,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl Error {
+    fn new(err: ffi::vpx_codec_err_t, detail: *const c_char) -> Error {
+        let code = match err {
+            ffi::VPX_CODEC_MEM_ERROR => ErrorCode::Mem,
+            ffi::VPX_CODEC_UNSUP_BITSTREAM | ffi::VPX_CODEC_UNSUP_FEATURE | ffi::VPX_CODEC_INCAPABLE => {
+                ErrorCode::Unsupported
+            }
+            ffi::VPX_CODEC_CORRUPT_FRAME | ffi::VPX_CODEC_ERROR | ffi::VPX_CODEC_INVALID_PARAM => ErrorCode::Corrupt,
+            other => ErrorCode::Other(other),
+        };
+        // SAFETY: both are NULL or static/context-owned NUL-terminated strings.
+        let what = unsafe { CStr::from_ptr(ffi::vpx_codec_err_to_string(err)) }.to_string_lossy();
+        let message = if detail.is_null() {
+            what.into_owned()
+        } else {
+            let detail = unsafe { CStr::from_ptr(detail) }.to_string_lossy();
+            format!("{what}: {detail}")
+        };
+        Error { code, message }
+    }
+
+    fn invalid(message: &str) -> Error {
+        Error { code: ErrorCode::Corrupt, message: message.to_string() }
+    }
+}
+
+/// What a keyframe says about the stream, without decoding it
+/// ([`peek`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamInfo {
+    pub width: u32,
+    pub height: u32,
+    pub keyframe: bool,
+}
+
+/// libvpx's `vpx_codec_peek_stream_info` for VP9: the frame size of a keyframe
+/// (or intra-only frame) packet, or `None` when the packet is not one.
+pub fn peek(packet: &[u8]) -> Option<StreamInfo> {
+    let len = c_uint::try_from(packet.len()).ok()?;
+    let mut si = ffi::vpx_codec_stream_info_t { sz: std::mem::size_of::<ffi::vpx_codec_stream_info_t>() as c_uint, w: 0, h: 0, is_kf: 0 };
+    // SAFETY: the packet outlives the call; peek allocates nothing.
+    let err = unsafe { ffi::vpx_codec_peek_stream_info(ffi::vpx_codec_vp9_dx(), packet.as_ptr(), len, &mut si) };
+    (err == ffi::VPX_CODEC_OK && si.w > 0 && si.h > 0).then_some(StreamInfo { width: si.w, height: si.h, keyframe: si.is_kf != 0 })
+}
+
+/// Bytes a decoder holds through libvpx's allocator, allocator overhead
+/// included.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MemoryUse {
+    pub live: usize,
+    /// The most `live` has been since the decoder was made.
+    pub peak: usize,
+}
+
+/// The VP9 colour space a frame declares (`color_space` in its header).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorSpace {
+    Unknown,
+    Bt601,
+    Bt709,
+    Smpte170,
+    Smpte240,
+    Bt2020,
+    Reserved,
+    Srgb,
+}
+
+impl ColorSpace {
+    fn from_vpx(cs: c_int) -> ColorSpace {
+        match cs {
+            1 => ColorSpace::Bt601,
+            2 => ColorSpace::Bt709,
+            3 => ColorSpace::Smpte170,
+            4 => ColorSpace::Smpte240,
+            5 => ColorSpace::Bt2020,
+            6 => ColorSpace::Reserved,
+            7 => ColorSpace::Srgb,
+            _ => ColorSpace::Unknown,
+        }
+    }
+}
+
+/// How a frame's chroma is sampled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    I420,
+    I422,
+    I440,
+    I444,
+}
+
+/// One plane of a decoded frame: `height` rows of `width` bytes, `stride`
+/// bytes apart.
+#[derive(Clone, Copy)]
+pub struct Plane<'a> {
+    pub data: &'a [u8],
+    pub stride: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl<'a> Plane<'a> {
+    /// Row `y`, `width` bytes.
+    #[inline]
+    pub fn row(&self, y: usize) -> &'a [u8] {
+        &self.data[y * self.stride..y * self.stride + self.width]
+    }
+}
+
+impl fmt::Debug for Plane<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Plane({}x{}, stride {})", self.width, self.height, self.stride)
+    }
+}
+
+/// A decoded frame, borrowed from the [`Decoder`] until its next decode.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame<'a> {
+    pub format: Format,
+    /// The displayed size (`d_w` × `d_h`).
+    pub width: u32,
+    pub height: u32,
+    pub color_space: ColorSpace,
+    /// `color_range`: full (0..255) rather than studio (16..235).
+    pub full_range: bool,
+    /// Y, U, V.
+    pub planes: [Plane<'a>; 3],
+}
+
+/// One libvpx VP9 decoding context. `Send`, not `Sync` (the crate docs).
+pub struct Decoder {
+    // Boxed: libvpx keeps pointers to the context and to the configuration
+    // for the decoder's life, so neither may move.
+    ctx: Box<ffi::vpx_codec_ctx_t>,
+    cfg: Box<ffi::vpx_codec_dec_cfg_t>,
+    // Written by csrc/vn_vpx_mem.c during this decoder's calls, through the
+    // pointer it is given; read here between calls.
+    account: Box<UnsafeCell<ffi::vn_vpx_account>>,
+    /// The frame the last decode showed, owned by the context until the next
+    /// decode.
+    frame: *const ffi::vpx_image_t,
+    /// The last decode failed: the next one starts from a fresh context
+    /// ([`Decoder::decode`] says why).
+    failed: bool,
+    _not_sync: PhantomData<std::cell::Cell<()>>,
+}
+
+// SAFETY: libvpx keeps no thread affinity; a context is used by one thread at
+// a time (&mut self), and the account is only touched inside those calls.
+unsafe impl Send for Decoder {}
+
+/// Charges libvpx's allocations on this thread to `account` until dropped.
+struct Charging;
+
+impl Charging {
+    fn to(account: &UnsafeCell<ffi::vn_vpx_account>) -> Charging {
+        // SAFETY: the account outlives the libvpx call this brackets.
+        unsafe { ffi::vn_vpx_account_enter(account.get()) };
+        Charging
+    }
+}
+
+impl Drop for Charging {
+    fn drop(&mut self) {
+        // SAFETY: clears a thread-local pointer.
+        unsafe { ffi::vn_vpx_account_leave() };
+    }
+}
+
+/// libvpx's process-wide set-up, on one thread while any other waits.
+///
+/// A VP9 decoder's first decode runs `initialize_dec` (vp9_decoder.c), which
+/// fills the rtcd dispatch pointers from CPUID and builds the intra predictor
+/// tables, each behind libvpx's `once()`. With `CONFIG_MULTITHREAD 0` that is
+/// a plain flag, so two first decodes on two threads would both write the
+/// tables while the other reads them. The same four functions run here first,
+/// under a [`Once`]; after it, every `once()` libvpx reaches finds its flag
+/// set, with the happens-before the `Once` gives.
+pub(crate) fn init_once() {
+    static INIT: Once = Once::new();
+    // SAFETY: libvpx's own initialisers, idempotent, run once.
+    INIT.call_once(|| unsafe {
+        ffi::vp9_rtcd();
+        ffi::vpx_dsp_rtcd();
+        ffi::vpx_scale_rtcd();
+        ffi::vp9_init_intra_predictors();
+    });
+}
+
+impl Decoder {
+    /// A VP9 decoder, one thread, no memory cap.
+    pub fn new() -> Result<Decoder, Error> {
+        init_once();
+        Decoder::create()
+    }
+
+    fn create() -> Result<Decoder, Error> {
+        // SAFETY: a zeroed vpx_codec_ctx_t is what libvpx expects to fill.
+        let mut decoder = Decoder {
+            ctx: Box::new(unsafe { std::mem::zeroed() }),
+            cfg: Box::new(ffi::vpx_codec_dec_cfg_t { threads: 1, w: 0, h: 0 }),
+            account: Box::new(UnsafeCell::new(ffi::vn_vpx_account::default())),
+            frame: ptr::null(),
+            failed: false,
+            _not_sync: PhantomData,
+        };
+        decoder.init()?;
+        Ok(decoder)
+    }
+
+    /// A fresh libvpx context in `self.ctx`, charged to the same account.
+    fn init(&mut self) -> Result<(), Error> {
+        // SAFETY: as in create(): libvpx fills a zeroed context.
+        *self.ctx = unsafe { std::mem::zeroed() };
+        let _charging = Charging::to(&self.account);
+        // SAFETY: ctx and cfg are boxed and live as long as the decoder.
+        let err = unsafe { ffi::vpx_codec_dec_init_ver(&mut *self.ctx, ffi::vpx_codec_vp9_dx(), &*self.cfg, 0, ffi::VPX_DECODER_ABI_VERSION) };
+        if err != ffi::VPX_CODEC_OK {
+            // A failed init has released what it took (vpx_decoder.h).
+            return Err(Error::new(err, self.ctx.err_detail));
+        }
+        self.failed = false;
+        Ok(())
+    }
+
+    /// Destroys the context (not the account).
+    fn destroy(&mut self) {
+        self.frame = ptr::null();
+        if !self.ctx.priv_.is_null() {
+            let _charging = Charging::to(&self.account);
+            // SAFETY: an initialised context, destroyed once (priv_ is cleared
+            // by libvpx's destroy).
+            unsafe { ffi::vpx_codec_destroy(&mut *self.ctx) };
+        }
+        self.ctx.priv_ = ptr::null_mut();
+    }
+
+    /// Caps what this decoder may hold (0: no cap). A decode that would
+    /// allocate past it fails with [`ErrorCode::Mem`].
+    pub fn set_memory_limit(&mut self, bytes: usize) {
+        self.account.get_mut().limit = bytes;
+    }
+
+    /// What this decoder holds now and has held at most.
+    pub fn memory(&self) -> MemoryUse {
+        // SAFETY: no libvpx call is running on this decoder (&self, !Sync).
+        let account = unsafe { &*self.account.get() };
+        MemoryUse { live: account.live, peak: account.peak }
+    }
+
+    /// Decodes one packet: a VP9 frame, or a superframe (several frames, at
+    /// most one of them shown). `Ok(true)` when it shows a frame, which
+    /// [`Decoder::frame`] then returns; `Ok(false)` for a packet that only
+    /// updates references (a lone hidden frame).
+    ///
+    /// After an error the next decode starts from a fresh libvpx context, so
+    /// it needs a keyframe, as libvpx itself would after an error. A fresh
+    /// context rather than libvpx's own recovery because libvpx 1.17 leaks a
+    /// frame buffer on some error paths (a frame that fails after its header
+    /// has claimed its reference slots keeps those claims): a dozen such
+    /// errors and the context has no buffer left, even for a good keyframe.
+    pub fn decode(&mut self, packet: &[u8]) -> Result<bool, Error> {
+        self.frame = ptr::null();
+        if packet.is_empty() {
+            // An empty packet is libvpx's "flush", not a frame.
+            return Err(Error::invalid("empty VP9 packet"));
+        }
+        let len = c_uint::try_from(packet.len()).map_err(|_| Error::invalid("VP9 packet over 4 GiB"))?;
+        if self.failed {
+            self.destroy();
+            self.init()?;
+        }
+        let _charging = Charging::to(&self.account);
+        // SAFETY: the packet outlives the call; libvpx copies what it keeps.
+        let err = unsafe { ffi::vpx_codec_decode(&mut *self.ctx, packet.as_ptr(), len, ptr::null_mut(), 0) };
+        if err != ffi::VPX_CODEC_OK {
+            self.failed = true;
+            // SAFETY: the context is valid; the detail string is owned by it.
+            return Err(Error::new(err, unsafe { ffi::vpx_codec_error_detail(&*self.ctx) }));
+        }
+        let mut iter: ffi::vpx_codec_iter_t = ptr::null();
+        loop {
+            // SAFETY: iterates the frames this decode produced.
+            let image = unsafe { ffi::vpx_codec_get_frame(&mut *self.ctx, &mut iter) };
+            if image.is_null() {
+                break;
+            }
+            self.frame = image;
+        }
+        Ok(!self.frame.is_null())
+    }
+
+    /// The frame the last [`Decoder::decode`] showed, if it showed one.
+    pub fn frame(&self) -> Option<Frame<'_>> {
+        if self.frame.is_null() {
+            return None;
+        }
+        // SAFETY: libvpx keeps the image and its planes until the next decode
+        // or the destroy, and both need &mut self.
+        let img = unsafe { &*self.frame };
+        if img.fmt & ffi::VPX_IMG_FMT_HIGHBITDEPTH != 0 {
+            return None; // not built (CONFIG_VP9_HIGHBITDEPTH 0); never produced
+        }
+        let format = match img.fmt {
+            ffi::VPX_IMG_FMT_I420 => Format::I420,
+            ffi::VPX_IMG_FMT_I422 => Format::I422,
+            ffi::VPX_IMG_FMT_I440 => Format::I440,
+            ffi::VPX_IMG_FMT_I444 => Format::I444,
+            _ => return None,
+        };
+        let (w, h) = (img.d_w as usize, img.d_h as usize);
+        let (xs, ys) = (img.x_chroma_shift as usize, img.y_chroma_shift as usize);
+        let plane = |i: usize, width: usize, height: usize| -> Option<Plane<'_>> {
+            let stride = usize::try_from(img.stride[i]).ok()?;
+            if img.planes[i].is_null() || stride < width || width == 0 || height == 0 {
+                return None;
+            }
+            let len = stride * (height - 1) + width;
+            // SAFETY: libvpx's plane holds `height` rows of `stride` bytes.
+            let data = unsafe { std::slice::from_raw_parts(img.planes[i], len) };
+            Some(Plane { data, stride, width, height })
+        };
+        let (cw, ch) = ((w + xs) >> xs, (h + ys) >> ys);
+        Some(Frame {
+            format,
+            width: img.d_w,
+            height: img.d_h,
+            color_space: ColorSpace::from_vpx(img.cs),
+            full_range: img.range == 1,
+            planes: [plane(0, w, h)?, plane(1, cw, ch)?, plane(2, cw, ch)?],
+        })
+    }
+}
+
+impl Drop for Decoder {
+    fn drop(&mut self) {
+        self.destroy();
+    }
+}
+
+#[cfg(test)]
+mod tests;
