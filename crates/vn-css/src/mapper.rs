@@ -439,6 +439,13 @@ pub struct Extras {
     pub overscroll_x: Option<OverscrollBehavior>,
     /// `overscroll-behavior-y`.
     pub overscroll_y: Option<OverscrollBehavior>,
+    /// The `overflow-x` keyword, which the refinement's `gpui::Overflow` cannot
+    /// spell: it folds `auto` into `Scroll` and `clip` into `Hidden`. Only a
+    /// QUALIFIER of the refinement's axis, which stays the truth: see
+    /// [`compute_overflow`] and [`Extras::overflow_names`].
+    pub overflow_x: Option<OverflowKeyword>,
+    /// The `overflow-y` keyword, as [`Self::overflow_x`].
+    pub overflow_y: Option<OverflowKeyword>,
     /// `mask-image` (or the `mask` shorthand's images). The three `mask_*`
     /// fields are kept apart because they cascade apart, and
     /// [`Extras::mask_ring`] reads them together.
@@ -757,6 +764,12 @@ impl Extras {
         }
         if other.overscroll_y.is_some() {
             self.overscroll_y = other.overscroll_y;
+        }
+        if other.overflow_x.is_some() {
+            self.overflow_x = other.overflow_x;
+        }
+        if other.overflow_y.is_some() {
+            self.overflow_y = other.overflow_y;
         }
         if other.mask_images.is_some() {
             self.mask_images = other.mask_images;
@@ -4140,11 +4153,21 @@ fn apply_property(
         Overflow(v) => {
             r.overflow.x = Some(overflow(v.x));
             r.overflow.y = Some(overflow(v.y));
+            x.overflow_x = Some(v.x);
+            x.overflow_y = Some(v.y);
         }
         // The longhands are what Tailwind's `overflow-x-*` / `overflow-y-*`
-        // emit; the shorthand only covers `overflow-*`.
-        OverflowX(v) => r.overflow.x = Some(overflow(*v)),
-        OverflowY(v) => r.overflow.y = Some(overflow(*v)),
+        // emit; the shorthand only covers `overflow-*`. One axis each: the
+        // other axis's computed value depends on this one, which only the
+        // whole cascade knows ([`compute_overflow`]).
+        OverflowX(v) => {
+            r.overflow.x = Some(overflow(*v));
+            x.overflow_x = Some(*v);
+        }
+        OverflowY(v) => {
+            r.overflow.y = Some(overflow(*v));
+            x.overflow_y = Some(*v);
+        }
         Visibility(v) => {
             use lightningcss::properties::display::Visibility as V;
             x.visibility_hidden = Some(!matches!(v, V::Visible));
@@ -5979,6 +6002,77 @@ fn overflow(k: OverflowKeyword) -> Overflow {
     }
 }
 
+/// The keyword an axis computes to so far: the refinement's `gpui::Overflow`,
+/// qualified by the declared keyword where the refinement folded two into one.
+/// The refinement decides, the keyword only refines, so a keyword a `:hover`
+/// rule folded into the node's one [`Extras`] cannot turn the base style's
+/// `hidden` into a `scroll`.
+fn overflow_keyword(axis: Option<Overflow>, declared: Option<OverflowKeyword>) -> OverflowKeyword {
+    use OverflowKeyword as K;
+    match axis {
+        None | Some(Overflow::Visible) => K::Visible,
+        Some(Overflow::Clip) => K::Clip,
+        Some(Overflow::Hidden) if declared == Some(K::Clip) => K::Clip,
+        Some(Overflow::Hidden) => K::Hidden,
+        Some(Overflow::Scroll) if declared == Some(K::Auto) => K::Auto,
+        Some(Overflow::Scroll) => K::Scroll,
+    }
+}
+
+/// `overflow-x` / `overflow-y` computed values (css-overflow-3 §3.1): "as
+/// specified, except with `visible`/`clip` computing to `auto`/`hidden`
+/// (respectively) if one of `overflow-x` or `overflow-y` is neither `visible`
+/// nor `clip`". So `overflow-y: auto` alone makes the box a scroll container
+/// on BOTH axes, as it is in a browser: content too wide for it scrolls
+/// sideways instead of spilling out, and, as a flex item, its automatic
+/// minimum width is 0 rather than its content's min-content width.
+///
+/// Run on the folded base style, after the whole cascade: one rule may
+/// declare one axis and another rule the other. A `:hover`/`:focus` rung's own
+/// overflow is not paired (v1), since the rung is a refinement over the base
+/// that gpui applies at paint time.
+pub(crate) fn compute_overflow(r: &mut StyleRefinement, x: &mut Extras) {
+    use OverflowKeyword as K;
+    let kx = overflow_keyword(r.overflow.x, x.overflow_x);
+    let ky = overflow_keyword(r.overflow.y, x.overflow_y);
+    let plain = |k: K| matches!(k, K::Visible | K::Clip);
+    if plain(kx) == plain(ky) {
+        return;
+    }
+    let computed = |k: K| match k {
+        K::Visible => K::Auto,
+        K::Clip => K::Hidden,
+        k => k,
+    };
+    if plain(kx) {
+        r.overflow.x = Some(overflow(computed(kx)));
+        x.overflow_x = Some(computed(kx));
+    } else {
+        r.overflow.y = Some(overflow(computed(ky)));
+        x.overflow_y = Some(computed(ky));
+    }
+}
+
+impl Extras {
+    /// `getComputedStyle`'s `overflow-x` and `overflow-y` for a node whose
+    /// folded base style is `base`: `auto` and `clip` where they were declared
+    /// (or computed, [`compute_overflow`]), not the `scroll` and `hidden`
+    /// gpui folds them into.
+    pub fn overflow_names(&self, base: &StyleRefinement) -> [&'static str; 2] {
+        let name = |k: OverflowKeyword| match k {
+            OverflowKeyword::Visible => "visible",
+            OverflowKeyword::Hidden => "hidden",
+            OverflowKeyword::Clip => "clip",
+            OverflowKeyword::Scroll => "scroll",
+            OverflowKeyword::Auto => "auto",
+        };
+        [
+            name(overflow_keyword(base.overflow.x, self.overflow_x)),
+            name(overflow_keyword(base.overflow.y, self.overflow_y)),
+        ]
+    }
+}
+
 fn border_width_px(w: &lightningcss::properties::border::BorderSideWidth) -> Option<f32> {
     use lightningcss::properties::border::BorderSideWidth as W;
     match w {
@@ -6043,6 +6137,58 @@ mod tests {
         let r = clean("overflow: hidden; overflow-y: scroll");
         assert_eq!(r.overflow.x, Some(Overflow::Hidden));
         assert_eq!(r.overflow.y, Some(Overflow::Scroll));
+    }
+
+    /// [`map_full`] and then the post-cascade pairing, which is what an
+    /// element whose rules declared `body` ends up with.
+    fn computed_overflow(body: &str) -> (StyleRefinement, [&'static str; 2]) {
+        let (mut r, mut x, d) = map_full(body);
+        assert!(d.is_empty(), "{body:?} produced {d:?}");
+        compute_overflow(&mut r, &mut x);
+        let names = x.overflow_names(&r);
+        (r, names)
+    }
+
+    #[test]
+    fn visible_beside_a_scrolling_axis_computes_to_auto() {
+        // css-overflow-3 §3.1. Tailwind's `overflow-y-auto` alone is a scroll
+        // container on both axes in a browser.
+        let (r, names) = computed_overflow("overflow-y: auto");
+        assert_eq!(names, ["auto", "auto"]);
+        assert_eq!(r.overflow.x, Some(Overflow::Scroll), "x scrolls too, it is not just clipped");
+        assert_eq!(r.overflow.y, Some(Overflow::Scroll));
+
+        let (r, names) = computed_overflow("overflow-x: hidden");
+        assert_eq!(names, ["hidden", "auto"]);
+        assert_eq!(r.overflow.y, Some(Overflow::Scroll));
+
+        assert_eq!(computed_overflow("overflow-x: scroll").1, ["scroll", "auto"]);
+        assert_eq!(computed_overflow("overflow: auto").1, ["auto", "auto"]);
+        assert_eq!(computed_overflow("overflow: hidden scroll").1, ["hidden", "scroll"]);
+    }
+
+    #[test]
+    fn clip_beside_a_scrolling_axis_computes_to_hidden_and_beside_visible_stays() {
+        assert_eq!(computed_overflow("overflow-x: clip; overflow-y: auto").1, ["hidden", "auto"]);
+        // `clip` and `visible` are both "plain": nothing to pair, so neither
+        // axis becomes a scroll container.
+        let (r, names) = computed_overflow("overflow-x: clip");
+        assert_eq!(names, ["clip", "visible"]);
+        assert_eq!(r.overflow.y, None);
+        assert_eq!(computed_overflow("overflow: clip").1, ["clip", "clip"]);
+        assert_eq!(computed_overflow("color: red").1, ["visible", "visible"]);
+    }
+
+    #[test]
+    fn the_refinement_decides_and_the_keyword_only_qualifies_it() {
+        // A `:hover { overflow-y: auto }` folds its keyword into the node's one
+        // `Extras` while its refinement goes to the hover rung: the base style
+        // still has no overflow, and stays visible on both axes.
+        let (mut base, mut x, _) = map_full("color: red");
+        x.refine(&map_full("overflow-y: auto").1);
+        compute_overflow(&mut base, &mut x);
+        assert_eq!(x.overflow_names(&base), ["visible", "visible"]);
+        assert_eq!(base.overflow.x, None);
     }
 
     // ---- gap longhands (Tailwind `gap-x-*` / `gap-y-*`) ------------------

@@ -310,18 +310,16 @@ pub fn computed_style(id: u32) -> Option<String> {
         // screen-reader-only box paints nothing but is `visible`, and a child
         // of a `hidden` box is `hidden` (render::css_visible).
         put("visibility", if crate::render::css_visible(t, id) { "visible" } else { "hidden" }.into());
-        let overflow_name = |o: Option<gpui::Overflow>| match o.unwrap_or(gpui::Overflow::Visible) {
-            gpui::Overflow::Visible => "visible",
-            gpui::Overflow::Hidden => "hidden",
-            gpui::Overflow::Clip => "clip",
-            gpui::Overflow::Scroll => "scroll",
-        };
-        put("overflow-x", overflow_name(cs.base.overflow.x).into());
-        put("overflow-y", overflow_name(cs.base.overflow.y).into());
-        // The shorthand, which is what `isOverflowElement` in @floating-ui reads.
+        // `auto` and `clip` as computed (vn_css::Extras::overflow_names), not
+        // the `scroll` and `hidden` gpui folds them into.
+        let [overflow_x, overflow_y] = cs.extras.overflow_names(&cs.base);
+        put("overflow-x", overflow_x.into());
+        put("overflow-y", overflow_y.into());
+        // The shorthand, which is what `isOverflowElement` in @floating-ui
+        // reads: one keyword when the axes agree, as CSSOM serializes it.
         put(
             "overflow",
-            format!("{} {}", overflow_name(cs.base.overflow.x), overflow_name(cs.base.overflow.y)),
+            if overflow_x == overflow_y { overflow_x.to_string() } else { format!("{overflow_x} {overflow_y}") },
         );
         // `auto` is the CSS initial value AND an exact description of what we
         // do: gpui's scrollbars are overlays, so no gutter is ever reserved and
@@ -541,5 +539,38 @@ mod tests {
         for name in ["width", "height", "position", "direction", "animation-name", "transition-delay", "transition-duration"] {
             assert!(!prop(inner, name).is_empty(), "{name}");
         }
+    }
+
+    /// css-overflow-3 §3.1, across rules: `.list` declares only `overflow-y:
+    /// auto`, and `.wide` only `overflow-x: hidden`, so each one's other axis
+    /// computes from `visible` to `auto`. `.cut` is `clip` beside `visible`,
+    /// which pairs with nothing.
+    #[test]
+    fn computed_overflow_pairs_the_axes_and_reports_auto_and_clip() {
+        let (list, wide, cut, plain) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let mut make = |class: &str, at: u32| {
+                let n = t.create_element(div);
+                t.insert(n, root, at);
+                if !class.is_empty() {
+                    t.set_class(n, class);
+                }
+                n
+            };
+            (make("list", 0), make("wide", 1), make("cut", 2), make("", 3))
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            ".list { overflow-y: auto } .wide { overflow-x: hidden } .cut { overflow-x: clip }",
+        ));
+        tree::restyle_all();
+        let axes = |id| [prop(id, "overflow-x"), prop(id, "overflow-y"), prop(id, "overflow")];
+        assert_eq!(axes(list), ["auto", "auto", "auto"]);
+        assert_eq!(axes(wide), ["hidden", "auto", "hidden auto"]);
+        assert_eq!(axes(cut), ["clip", "visible", "clip visible"]);
+        assert_eq!(axes(plain), ["visible", "visible", "visible"]);
+        // And the layout side: `.list` is a scroll container on x as well.
+        let x = tree::with_tree(|t| t.node(list).and_then(|n| n.computed.as_ref()).map(|cs| cs.base.overflow.x));
+        assert_eq!(x, Some(Some(gpui::Overflow::Scroll)));
     }
 }

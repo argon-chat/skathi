@@ -1747,6 +1747,11 @@ impl Engine {
                 }
             }
         }
+        // `overflow-x` and `overflow-y` compute as a pair (`overflow-y: auto`
+        // alone scrolls both axes), and one rule may have declared each.
+        mapper::compute_overflow(&mut base, &mut extras);
+        mapper::compute_overflow(&mut before.0, &mut before.1);
+        mapper::compute_overflow(&mut after.0, &mut after.1);
 
         ComputedStates {
             base: Rc::new(base),

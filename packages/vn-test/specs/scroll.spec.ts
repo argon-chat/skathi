@@ -170,6 +170,40 @@ describe("el.scrollTop / scrollLeft", () => {
   }, T);
 });
 
+describe("overflow-y: auto alone (css-overflow-3 §3.1)", () => {
+  // `visible` beside an axis that is neither `visible` nor `clip` computes to
+  // `auto`. So a box that declares only `overflow-y: auto` scrolls a child
+  // too wide for it sideways, in a browser and here, instead of letting it
+  // spill out of the box.
+  test("the x axis computes to auto and scrolls a too-wide child, by script and by wheel", async () => {
+    await app.eval(`(() => {
+      const box = document.createElement("div");
+      box.id = "pair";
+      box.setAttribute("style", "position: absolute; left: 20px; top: 20px; width: 200px; height: 120px; overflow-y: auto");
+      const wide = document.createElement("div");
+      wide.setAttribute("style", "width: 600px; height: 60px; background-color: #c33");
+      box.appendChild(wide);
+      document.body.appendChild(box);
+      return 0;
+    })()`);
+    await settle();
+    const pair = `document.querySelector("#pair")`;
+    expect(await app.eval(`[getComputedStyle(${pair}).overflowX, getComputedStyle(${pair}).overflowY]`)).toEqual([
+      "auto",
+      "auto",
+    ]);
+    expect(await app.eval(`${pair}.scrollWidth`)).toBe(600);
+    expect(await app.eval(`(${pair}.scrollLeft = 150, ${pair}.scrollLeft)`)).toBe(150);
+    await app.eval(`(${pair}.scrollLeft = 0, 0)`);
+    await settle();
+    await app.send("wheel", { selector: "#pair", dx: 120 });
+    await settle();
+    expect(await app.eval(`${pair}.scrollLeft`)).toBeGreaterThan(0);
+    await app.eval(`(${pair}.remove(), 0)`);
+    await settle();
+  }, T);
+});
+
 describe("el.scrollIntoView()", () => {
   test("a row far below the fold comes to the top", async () => {
     // The off-screen half matters: row 900 is ~22 500 px down and has never
