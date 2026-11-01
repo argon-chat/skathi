@@ -461,7 +461,11 @@ pub struct TreeMem {
 #[derive(Default)]
 pub struct Tree {
     nodes: Vec<Option<Node>>,
+    /// Ids [`Tree::alloc`] may hand out again.
     free: Vec<u32>,
+    /// Ids freed this wave, not reusable until the side tables have been swept
+    /// ([`Tree::release_freed`]).
+    freed: Vec<u32>,
     pub root: u32,
     dirty: bool,
     /// The current restyle generation. A node whose [`Node::mark_gen`] equals
@@ -910,7 +914,25 @@ impl Tree {
         if self.root == id {
             self.root = 0;
         }
-        self.free.push(id);
+        self.freed.push(id);
+    }
+
+    /// Hands the ids freed since the last call back to [`Tree::alloc`]. Called
+    /// by the wave's flush after every side table keyed by node id has been
+    /// swept for dead ids (`crate::flush_changes`).
+    ///
+    /// Until then a freed id is not reused. The side tables (the animator's
+    /// runs, hover, rectangles, scroll handles, focus, image and canvas state)
+    /// are swept by asking whether the id is still alive. An id freed and
+    /// reallocated within one wave was alive again by the time they asked, so
+    /// the new node inherited the old one's state. In the Argon client a
+    /// dashboard widget's spinner (`animate-spin`, infinite) was removed when a
+    /// space opened, a Vue anchor got its id in the same wave, and the animator
+    /// kept the window redrawing every frame for good, idle. The
+    /// same reuse handed a node mounted and measured in one wave the old
+    /// node's rectangle instead of a layout.
+    pub(crate) fn release_freed(&mut self) {
+        self.free.append(&mut self.freed);
     }
 
     pub fn set_style(&mut self, id: u32, key: u32, value: String) {

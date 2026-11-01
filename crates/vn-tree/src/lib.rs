@@ -820,6 +820,8 @@ pub fn flush_changes() -> bool {
         render::gc_node_state();
         render::canvas::gc(|id| tree::read_tree(|t| t.node(id).is_some()));
         tree::animator_gc();
+        // Only now may this wave's freed ids be reused (`Tree::release_freed`).
+        tree::with_tree(|t| t.release_freed());
         FLUSHED_AT_BUILD.with(|c| c.set(Some(render::build_count())));
     }
     // Inside a forced layout this is its own flush; outside, it also answers
@@ -1289,6 +1291,38 @@ mod tests {
         // …and the wave still reports a change, so the frame still repaints:
         // the flush must not swallow the dirty flag it consumed.
         assert!(flush_changes(), "a forced flush still owes the frame a repaint");
+    }
+
+    /// An infinite animation stops with its node, even when Vue hands the
+    /// node's id to a new one in the same wave. The Argon client's dashboard
+    /// spinner did exactly that on every space open, and the window then
+    /// repainted at the display's rate for good.
+    #[test]
+    fn an_infinite_animation_dies_with_its_node_when_the_wave_reuses_nothing() {
+        tree::set_engine(vn_css::Engine::compile(
+            ".spin { animation: spin 1s linear infinite } @keyframes spin { to { opacity: 0.5 } }",
+        ));
+        let spinner = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let spinner = t.create_element(div);
+            t.set_class(spinner, "spin");
+            t.insert(spinner, root, 0);
+            spinner
+        });
+        assert!(flush_changes());
+        assert!(animating(), "the spinner runs");
+
+        // Removed, and a Vue anchor created in the same wave.
+        let anchor = tree::with_tree(|t| {
+            t.remove(spinner);
+            t.create_anchor()
+        });
+        assert_ne!(anchor, spinner, "a freed id is not reused before the sweep");
+        flush_changes();
+        assert!(!animating(), "nothing is left running");
+        let reused = tree::with_tree(|t| t.create_anchor());
+        assert_eq!(reused, spinner, "after the sweep it is");
     }
 
     /// Custom properties inherit through the REAL tree, which is what obliges
