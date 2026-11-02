@@ -60,7 +60,11 @@ async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "
 # ...and a third: a percentage `flex-basis` the container cannot resolve is
 # `content` (CSS Flexbox §7.2.3), not the item's own width/height
 # (`determine_flex_base_size`, vendor/taffy/src/compute/flexbox.rs).
-# Moving off the vendored copy means carrying all three patches to the new
+# ...and a fourth: a row's auto width in a definite space is fit-content,
+# clamped to the space but not below the items' min-content (CSS Sizing 3
+# §5.1; `determine_container_main_size`). Upstream kept the max-content width,
+# so a long link in a chat bubble held the bubble wider than its column.
+# Moving off the vendored copy means carrying all four patches to the new
 # taffy.
 taffy = { path = "vendor/taffy" }
 # m26: webrtc-sys 0.3.41 (pinned `=0.3.41` by crates/vn-voice) as published,
