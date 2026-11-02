@@ -916,6 +916,10 @@ pub(crate) struct Converted {
     /// Known properties whose value referenced `var()`.
     pub normal_dynamic: Option<Rc<Decls>>,
     pub important_dynamic: Option<Rc<Decls>>,
+    /// The font-relative declarations, and every static one after the first
+    /// of them, applied again per element ([`FontDecls`]).
+    pub normal_font: Option<FontDecls>,
+    pub important_font: Option<FontDecls>,
     /// The advisories this block's DECLARATIONS produced.
     ///
     /// Kept with the rule instead of being logged at sheet-compile time,
@@ -933,6 +937,15 @@ pub(crate) struct Converted {
     pub diagnostics: Option<Rc<Vec<String>>>,
 }
 
+/// A block half's font-relative declarations as parsed properties, from the
+/// first one that read an em (or `ch`, `ex`, a `font-size` percentage…) to
+/// the end of the half, static declarations only. The per-element fold
+/// applies them over the refinement the block compiled to, under the element's
+/// font size (see "em: the element's own font size" above). The static ones
+/// after the first font-relative one ride along so that a later
+/// `padding-left: 4px` still beats an earlier `padding: 1em`.
+pub type FontDecls = Rc<Vec<Property<'static>>>;
+
 /// One converted declaration half.
 #[derive(Default)]
 struct Half {
@@ -943,6 +956,23 @@ struct Half {
     extras: Extras,
     custom: Option<Rc<Decls>>,
     dynamic: Option<Rc<Decls>>,
+    font: Option<FontDecls>,
+}
+
+/// Applies one static declaration, and keeps it for the per-element pass
+/// once the half has had a font-relative one ([`FontDecls`]).
+fn apply_static<'i>(
+    p: &Property<'i>,
+    r: &mut StyleRefinement,
+    x: &mut Extras,
+    font: &mut Option<Vec<Property<'static>>>,
+    diagnostics: &mut Vec<String>,
+) {
+    use lightningcss::traits::IntoOwned as _;
+    let ((), relative) = noting_font_units(|| apply(p, r, x, diagnostics));
+    if relative || font.is_some() {
+        font.get_or_insert_with(Vec::new).push(p.clone().into_owned());
+    }
 }
 
 /// Which channel a declaration travels on.
@@ -1065,6 +1095,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
         let mut animations = AnimationCollector::default();
         let mut custom: Decls = Vec::new();
         let mut dynamic: Decls = Vec::new();
+        let mut font: Option<Vec<Property<'static>>> = None;
         let mut styled = false;
         for p in props {
             // `-moz-osx-font-smoothing`, `-webkit-touch-callout`: dropped
@@ -1098,7 +1129,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
                             ),
                         );
                     }
-                    apply(p, &mut r, &mut extras, diagnostics);
+                    apply_static(p, &mut r, &mut extras, &mut font, diagnostics);
                     styled = true;
                 }
             }
@@ -1112,6 +1143,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
             extras,
             custom: (!custom.is_empty()).then(|| Rc::new(custom)),
             dynamic: (!dynamic.is_empty()).then(|| Rc::new(dynamic)),
+            font: font.map(Rc::new),
         }
     };
     let normal = convert(&block.declarations);
@@ -1132,6 +1164,8 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
         important_custom: important.custom,
         normal_dynamic: normal.dynamic,
         important_dynamic: important.dynamic,
+        normal_font: normal.font,
+        important_font: important.font,
         diagnostics: (!diagnostics.is_empty()).then(|| Rc::new(diagnostics)),
     }
 }
@@ -1291,6 +1325,10 @@ pub struct InlineStyle {
     pub custom: Decls,
     /// Known properties whose value referenced `var()`.
     pub dynamic: Decls,
+    /// The font-relative declarations, applied again per element under its
+    /// font size ([`FontDecls`]). An inline `padding: .5em` is the element's
+    /// own em, which the parse cannot know.
+    pub font: Option<FontDecls>,
 }
 
 impl InlineStyle {
@@ -1302,6 +1340,7 @@ impl InlineStyle {
             && self.extras == Extras::default()
             && self.custom.is_empty()
             && self.dynamic.is_empty()
+            && self.font.is_none()
     }
 }
 
@@ -1352,6 +1391,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     let mut animations = AnimationCollector::default();
     let mut custom: Decls = Vec::new();
     let mut dynamic: Decls = Vec::new();
+    let mut font: Option<Vec<Property<'static>>> = None;
     let mut styled = false;
     // CSS's error handling, as for the stylesheet (`Engine::compile`): a
     // malformed declaration (`0: d`, a stray `}`) is dropped and the rest of
@@ -1385,7 +1425,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
                         if animations.take(p, diagnostics) {
                             continue;
                         }
-                        apply(p, &mut r, &mut extras, diagnostics);
+                        apply_static(p, &mut r, &mut extras, &mut font, diagnostics);
                         styled = true;
                     }
                 }
@@ -1402,6 +1442,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
         extras,
         custom,
         dynamic,
+        font: font.map(Rc::new),
     }
 }
 
@@ -1759,31 +1800,25 @@ fn length_value_px(v: &LengthValue) -> Option<f32> {
     match v {
         LengthValue::Px(v) => Some(*v),
         LengthValue::Rem(v) => Some(v * rem_basis()),
-        // v1: no parent font-size context, so `em` reads as `rem`. Wrong
-        // wherever a font-size is nested, right at the top level — and closer
-        // than a hardcoded 16 was the moment an app sets a root font size.
-        LengthValue::Em(v) => Some(v * rem_basis()),
-        LengthValue::Ch(v) | LengthValue::Rch(v) | LengthValue::Ex(v) | LengthValue::Rex(v) => {
-            Some(v * HALF_EM * rem_basis())
-        }
+        LengthValue::Em(v) => Some(v * em_basis()),
+        LengthValue::Ch(v) | LengthValue::Ex(v) => Some(v * HALF_EM * em_basis()),
+        LengthValue::Rch(v) | LengthValue::Rex(v) => Some(v * HALF_EM * rem_basis()),
         other => viewport_value_px(other),
     }
 }
 
-/// `ch`, `ex` and their root spellings `rch` / `rex`, as a fraction of the em
-/// basis.
+/// `ch`, `ex` and their root spellings `rch` / `rex`, as a fraction of an em.
 ///
 /// They are the advance of "0" and the x-height of the element's font. Nothing
-/// here measures a glyph while a sheet compiles, and `em` already reads as `rem`
-/// (README divergence 7). So they take the value css-values-4 §6.1.1 tells a UA
-/// to assume when the glyph cannot be measured: half an em.
+/// in the cascade measures a glyph: it knows the element's font size but not
+/// which face gpui will pick for it. So they take the value css-values-4
+/// §6.1.1 tells a UA to assume when the glyph cannot be measured: half an em.
+/// That is close to a real "0" in common UI fonts.
 ///
 /// They used to be dropped as unresolved, which is not a narrower box but none:
 /// Argon's titlebar call timer (motionCounter/Digit.vue) sizes each digit's
 /// clipping cell `width: 1ch`, and every cell came out 0 px wide, so the
-/// timer never showed. Half an em is close to a real "0" in common UI fonts.
-/// The error that matters is the basis: `em` is the root's size here, not the
-/// element's, so a `1ch` under a smaller font-size is too wide.
+/// timer never showed.
 const HALF_EM: f32 = 0.5;
 
 /// The px value of one `unit` of the font-relative lengths [`length_value_px`]
@@ -1791,9 +1826,113 @@ const HALF_EM: f32 = 0.5;
 /// takes.
 fn font_unit_px(unit: &str, value: f32) -> Option<f32> {
     match unit {
-        "rem" | "em" => Some(value * rem_basis()),
-        "ch" | "rch" | "ex" | "rex" => Some(value * HALF_EM * rem_basis()),
+        "rem" => Some(value * rem_basis()),
+        "em" => Some(value * em_basis()),
+        "ch" | "ex" => Some(value * HALF_EM * em_basis()),
+        "rch" | "rex" => Some(value * HALF_EM * rem_basis()),
         _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// em: the element's own font size
+// ---------------------------------------------------------------------------
+//
+// `em` (and `ch`, `ex`, a `font-size` percentage, `smaller` / `larger`, a
+// `line-height` percentage) depends on where the element sits, so a sheet
+// cannot flatten it once. While a block compiles, such a length reads the rem
+// basis and marks the declaration FONT-RELATIVE ([`noting_font_units`]). The
+// block keeps that declaration, and every static one after it, as parsed
+// properties (`Converted::normal_font`). `Engine::compute_node_at` applies
+// them again per element, under [`with_font_basis`]: the element's own
+// computed font size, or for `font-size` itself its parent's. That is CSS
+// Values 4 §6.1.1. The refinement compiled against the rem basis stays in the
+// rule as well, so compile-time inspection of a rule (state advisories, the
+// `@keyframes` path) sees every property it declares. The per-element pass
+// overwrites the em-derived fields, and re-applying the static declarations
+// that follow keeps the block's source order.
+
+thread_local! {
+    /// What `em` resolves against right now. NaN outside a per-element fold:
+    /// compiling a sheet or parsing an inline style, where it reads the rem
+    /// basis.
+    static FONT_BASIS: std::cell::Cell<f32> = const { std::cell::Cell::new(f32::NAN) };
+    /// Set whenever a length read [`em_basis`]: the declaration being converted
+    /// is font-relative.
+    static FONT_UNITS_SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The px value of `1em` for the declaration being converted.
+fn em_basis() -> f32 {
+    FONT_UNITS_SEEN.with(|c| c.set(true));
+    let basis = FONT_BASIS.with(|c| c.get());
+    if basis.is_nan() {
+        rem_basis()
+    } else {
+        basis
+    }
+}
+
+/// Runs `f` with `1em` = `px`.
+pub(crate) fn with_font_basis<R>(px: f32, f: impl FnOnce() -> R) -> R {
+    struct Restore(f32);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FONT_BASIS.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(FONT_BASIS.with(|c| c.replace(px)));
+    f()
+}
+
+/// Runs `f`, and says whether anything it converted read the font basis.
+pub(crate) fn noting_font_units<R>(f: impl FnOnce() -> R) -> (R, bool) {
+    let before = FONT_UNITS_SEEN.with(|c| c.replace(false));
+    let out = f();
+    let seen = FONT_UNITS_SEEN.with(|c| c.replace(before));
+    FONT_UNITS_SEEN.with(|c| c.set(before || seen));
+    (out, seen)
+}
+
+/// Whether `p` sets `font-size`, which resolves its em against the PARENT's
+/// font size where every other property uses the element's own.
+pub(crate) fn sets_font_size(p: &Property) -> bool {
+    matches!(p, Property::FontSize(_))
+}
+
+/// Applies one font-relative declaration with `1em` = `basis`.
+pub(crate) fn apply_at(
+    p: &Property,
+    basis: f32,
+    r: &mut StyleRefinement,
+    x: &mut Extras,
+    diagnostics: &mut Vec<String>,
+) {
+    with_font_basis(basis, || apply(p, r, x, diagnostics));
+}
+
+/// A computed `font-size` in px. The mapper writes px; a `Rems` is read
+/// against the current basis.
+pub(crate) fn font_size_px(l: AbsoluteLength) -> f32 {
+    match l {
+        AbsoluteLength::Pixels(p) => f32::from(p),
+        AbsoluteLength::Rems(r) => r.0 * rem_basis(),
+    }
+}
+
+/// The px sizes Chromium gives the absolute `font-size` keywords at a 16px
+/// `medium`.
+fn absolute_font_size_px(k: &lightningcss::properties::font::AbsoluteFontSize) -> f32 {
+    use lightningcss::properties::font::AbsoluteFontSize as A;
+    match k {
+        A::XXSmall => 9.0,
+        A::XSmall => 10.0,
+        A::Small => 13.0,
+        A::Medium => 16.0,
+        A::Large => 18.0,
+        A::XLarge => 24.0,
+        A::XXLarge => 32.0,
+        A::XXXLarge => 48.0,
     }
 }
 
@@ -4779,9 +4918,24 @@ fn apply_property(
             }
         }
         FontSize(v) => {
-            use lightningcss::properties::font::FontSize as FS;
-            if let FS::Length(lp) = v {
-                r.text.font_size = lp_absolute(lp);
+            // Its em, its percentage and `smaller` / `larger` are the PARENT's
+            // font size, which the per-element fold makes the basis for this
+            // one property (`Engine::compute_node_at`).
+            use lightningcss::properties::font::{FontSize as FS, RelativeFontSize as R};
+            let size = match v {
+                FS::Length(DimensionPercentage::Percentage(p)) => Some(p.0 * em_basis()),
+                FS::Length(DimensionPercentage::Calc(c)) => match calc_px(c, &lp_leaf_px) {
+                    Some(p) => Some(p),
+                    None => calc_linear(c).map(|(fraction, pixels)| fraction * em_basis() + pixels),
+                },
+                FS::Length(lp) => lp_absolute(lp).map(font_size_px),
+                FS::Absolute(k) => Some(absolute_font_size_px(k)),
+                // CSS Fonts 4 leaves the ratio to the UA and suggests 1.2.
+                FS::Relative(R::Smaller) => Some(em_basis() / 1.2),
+                FS::Relative(R::Larger) => Some(em_basis() * 1.2),
+            };
+            if let Some(size) = size {
+                r.text.font_size = Some(px(size.max(0.0)).into());
             }
         }
         FontWeight(w) => {
@@ -4810,7 +4964,12 @@ fn apply_property(
         }
         LineHeight(v) => {
             r.text.line_height = match v {
+                // A number inherits as the number: gpui's fraction is taken of
+                // each element's own font size at paint.
                 CssLineHeight::Number(n) => Some(relative(*n)),
+                // A percentage computes to a length, as `1.5em` does, and the
+                // children inherit that length.
+                CssLineHeight::Length(DimensionPercentage::Percentage(p)) => Some(px(p.0 * em_basis()).into()),
                 CssLineHeight::Length(lp) => lp_definite(lp),
                 CssLineHeight::Normal => Some(relative(1.2)),
             };

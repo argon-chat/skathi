@@ -323,13 +323,28 @@ project's browser-compat-first policy.
    emitted.** Nothing is dispatched into JS.
 6. **`transition-behavior: allow-discrete`, `@starting-style`, and discrete
    interpolation are unimplemented** — discrete properties simply snap.
-7. **`em` is the root's font size** (the rem basis, 16px until the root sets
-   one) rather than the element's: the mapper has no parent font-size context.
-   `font-size` transitions in `em` interpolate against that basis. `ch` and
-   `ex` (and `rch` / `rex`) are half of it: css-values-4 tells a UA to assume
-   that value when the glyph cannot be measured, and nothing measures one while
-   a sheet compiles. So a `1ch` under a smaller font is too wide (a 14px basis
-   gives 7px). `mapper.rs`, `HALF_EM`.
+7. **`em` is the element's own font size, with v1 edges.** The walk threads
+   each element's computed font size into its children
+   (`Engine::compute_node_at`, `ComputedStates::font_size`). `em`, `%` and
+   `smaller` / `larger` in `font-size` are of the parent's, and every other
+   `em` is of the element's own (CSS Values 4 §6.1.1). The font-relative
+   declarations are kept parsed beside the compiled refinement and folded
+   again per element (`mapper::FontDecls`). A `line-height` number stays a
+   number, and `1.5em` or `150%` becomes px. `rem` stays on the root.
+   - **`ch` and `ex`** (and `rch` / `rex`) are half an em of the element.
+     css-values-4 tells a UA to assume that value when the glyph cannot be
+     measured, and the cascade does not know the face, so a `1ch` in a narrow
+     face is a little too wide. `mapper.rs`, `HALF_EM`.
+   - **State rules.** A `:hover` / `:active` / `:focus*` rule that changes
+     the font size folds its own em at that size, and gets the base's em
+     declarations folded again under it, so `padding: 1em` grows with a
+     hovered `font-size`. The element's CHILDREN keep the base size: they
+     are not restyled on hover. A `group-hover:` rule's em uses the base size.
+   - **Pseudo-element boxes.** A box's `font-size: 2em` is of the element.
+     Its other em are of the element's size too, even when the box sets a
+     font size of its own.
+   - **`@keyframes` frames** still read em as the root's: a frame is compiled
+     once per sheet, not per element.
 8. **One border color.** gpui has a single `border_color`, so `border-top-color`
    and friends are neither mapped nor animatable; `border-color` transitions the
    one color.

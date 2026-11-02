@@ -32,6 +32,8 @@ pub mod perf;
 mod share;
 mod transition;
 mod vars;
+#[cfg(test)]
+mod em_tests;
 
 use std::rc::Rc;
 
@@ -184,6 +186,12 @@ pub struct ComputedStates {
     /// else needs the fold. `vn_tree::tree::restyle_with` threads it down the
     /// document-order walk, the same way it threads `pointer-events`.
     pub color: Option<gpui::Hsla>,
+    /// The element's computed `font-size` in px, base state: its own
+    /// declaration resolved against its parent's, or the parent's. Every `em`
+    /// in the element's declarations resolved against it, and its children's
+    /// `font-size: 1.2em` resolve against it ([`Engine::compute_node_at`]).
+    /// Threaded down the walk beside [`Self::color`].
+    pub font_size: f32,
 }
 
 /// Which generated box a rule targets.
@@ -374,6 +382,10 @@ struct RuleEntry {
     important_custom: Option<Rc<Decls>>,
     normal_dynamic: Option<Rc<Decls>>,
     important_dynamic: Option<Rc<Decls>>,
+    /// Font-relative declarations: applied again per element under its font
+    /// size ([`mapper::FontDecls`]).
+    normal_font: Option<mapper::FontDecls>,
+    important_font: Option<mapper::FontDecls>,
     specificity: u32,
     order: u32,
     states: u8,
@@ -417,6 +429,115 @@ impl RuleEntry {
         self.important_custom = c.important_custom.clone();
         self.normal_dynamic = c.normal_dynamic.clone();
         self.important_dynamic = c.important_dynamic.clone();
+        self.normal_font = c.normal_font.clone();
+        self.important_font = c.important_font.clone();
+    }
+
+    /// What one half folds: the compiled refinement, the font-relative
+    /// declarations and the `var()`-composed ones.
+    fn half(&self, important: bool) -> Half<'_> {
+        if important {
+            Half {
+                refinement: self.important.as_ref(),
+                font: self.important_font.as_ref(),
+                dynamic: self.important_dynamic.as_deref().map(Vec::as_slice),
+            }
+        } else {
+            Half {
+                refinement: self.normal.as_ref(),
+                font: self.normal_font.as_ref(),
+                dynamic: self.normal_dynamic.as_deref().map(Vec::as_slice),
+            }
+        }
+    }
+}
+
+/// One half of a matched rule (or an inline style), as the fold applies it.
+#[derive(Clone, Copy)]
+struct Half<'a> {
+    refinement: Option<&'a Rc<StyleRefinement>>,
+    font: Option<&'a mapper::FontDecls>,
+    dynamic: Option<&'a [(String, String)]>,
+}
+
+impl<'a> Half<'a> {
+    fn of_inline(inline: &'a InlineStyle) -> Self {
+        Half {
+            refinement: inline.refinement.as_ref(),
+            font: inline.font.as_ref(),
+            dynamic: (!inline.dynamic.is_empty()).then_some(inline.dynamic.as_slice()),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.refinement.is_none() && self.font.is_none() && self.dynamic.is_none()
+    }
+
+    /// Whether anything in it may depend on the font size.
+    fn font_relative(&self) -> bool {
+        self.font.is_some() || self.dynamic.is_some()
+    }
+
+    /// Folds the half into `bucket`: the refinement, then the font-relative
+    /// declarations with `1em` = `basis` (`parent` for `font-size`), then the
+    /// `var()`-composed ones under the same rule.
+    #[allow(clippy::too_many_arguments)]
+    fn apply(
+        &self,
+        vars: &Vars,
+        env: &Env,
+        basis: f32,
+        parent: f32,
+        bucket: &mut StyleRefinement,
+        extras: &mut Extras,
+        diagnostics: &mut Vec<String>,
+    ) {
+        if let Some(r) = self.refinement {
+            bucket.refine(r);
+        }
+        if let Some(list) = self.font {
+            for p in list.iter() {
+                let at = if mapper::sets_font_size(p) { parent } else { basis };
+                mapper::apply_at(p, at, bucket, extras, diagnostics);
+            }
+        }
+        if let Some(list) = self.dynamic {
+            for (name, raw) in list {
+                let at = if name == "font-size" { parent } else { basis };
+                mapper::with_font_basis(at, || {
+                    mapper::apply_dynamic(name, raw, vars, env, bucket, extras, diagnostics)
+                });
+            }
+        }
+    }
+
+    /// The `font-size` this half leaves, if it sets one, against a parent of
+    /// `parent` px.
+    fn font_size(&self, vars: &Vars, env: &Env, parent: f32) -> Option<f32> {
+        let mut size = self.refinement.and_then(|r| r.text.font_size).map(mapper::font_size_px);
+        let sets = self.font.is_some_and(|l| l.iter().any(mapper::sets_font_size))
+            || self.dynamic.is_some_and(|l| l.iter().any(|(n, _)| n == "font-size"));
+        if sets {
+            let mut scratch = StyleRefinement::default();
+            let mut extras = Extras::default();
+            let mut quiet = Vec::new();
+            if let Some(list) = self.font {
+                for p in list.iter().filter(|p| mapper::sets_font_size(p)) {
+                    mapper::apply_at(p, parent, &mut scratch, &mut extras, &mut quiet);
+                }
+            }
+            if let Some(list) = self.dynamic {
+                for (name, raw) in list.iter().filter(|(n, _)| n == "font-size") {
+                    mapper::with_font_basis(parent, || {
+                        mapper::apply_dynamic(name, raw, vars, env, &mut scratch, &mut extras, &mut quiet)
+                    });
+                }
+            }
+            if let Some(l) = scratch.text.font_size {
+                size = Some(mapper::font_size_px(l));
+            }
+        }
+        size
     }
 }
 
@@ -1299,6 +1420,8 @@ impl Engine {
                     important_custom: converted.important_custom.clone(),
                     normal_dynamic: converted.normal_dynamic.clone(),
                     important_dynamic: converted.important_dynamic.clone(),
+                    normal_font: converted.normal_font.clone(),
+                    important_font: converted.important_font.clone(),
                     specificity,
                     order: *order,
                     states,
@@ -1344,9 +1467,11 @@ impl Engine {
         let mut extras = Vec::with_capacity(n);
         let mut custom = Vec::with_capacity(n);
         let mut dynamic = Vec::with_capacity(n);
+        let mut font = Vec::with_capacity(n);
         let mut diagnostics = Vec::with_capacity(n);
         let mut decls = Vec::with_capacity(n);
         for r in self.rules {
+            font.push((r.normal_font, r.important_font));
             selectors.push(r.selector);
             refinements.push((r.normal, r.important));
             transitions.push((r.normal_transitions, r.important_transitions));
@@ -1366,6 +1491,7 @@ impl Engine {
             part("animations", animations),
             part("custom properties", custom),
             part("var()-composed declarations", dynamic),
+            part("font-relative declarations", font),
             part("per-rule advisories", diagnostics),
             part("author text (devtools capture)", decls),
             ("rule index", 0, Box::new(self.index)),
@@ -1518,6 +1644,32 @@ impl Engine {
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
+        self.compute_node_at(node, inline, parent_vars, parent_color, mapper::rem_basis(), env, diagnostics)
+    }
+
+    /// [`Self::compute_node`] for an element whose parent's computed font size
+    /// is `parent_font_size` px: the walk threads each element's
+    /// [`ComputedStates::font_size`] into its children, as it does `color`.
+    /// The document root's parent is the initial `medium`, 16px.
+    ///
+    /// `em` resolves against the element's own font size, except in
+    /// `font-size` itself, where it is the parent's (CSS Values 4 §6.1.1). So
+    /// the font size is folded first, then everything else under it. A `:hover`
+    /// (or other state) rule that changes the font size gets its rung folded
+    /// at that size: the rung's own em declarations, and the base's em
+    /// declarations again, so a `padding: 1em` grows with a hovered
+    /// `font-size`. A `group-hover:` rule's em uses the base size.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_node_at<D: MatchDom>(
+        &self,
+        node: D,
+        inline: Option<&InlineStyle>,
+        parent_vars: &Rc<Vars>,
+        parent_color: Option<gpui::Hsla>,
+        parent_font_size: f32,
+        env: &Env,
+        diagnostics: &mut Vec<String>,
+    ) -> ComputedStates {
         let probe = perf_on();
         let t0 = probe.then(std::time::Instant::now);
         let el = element::El(node);
@@ -1567,7 +1719,7 @@ impl Engine {
         let share_key = (self.share && inline.is_none() && !matched.iter().any(|r| r.ancestor.is_some()))
             .then(|| {
                 let rules = matched.iter().map(|r| index_of(r)).collect();
-                share::Key::new(self.generation, rules, parent_vars, parent_color, env)
+                share::Key::new(self.generation, rules, parent_vars, parent_color, parent_font_size, env)
             });
         if let Some(key) = &share_key {
             let hit = share::lookup(key);
@@ -1641,6 +1793,31 @@ impl Engine {
             combined.extend(state_custom[rung].iter().copied());
             Some(vars::resolve(parent_vars, &combined, env, diagnostics))
         });
+
+        // ---- 1b. the font size, before anything that reads an em: the base
+        // state's, and each state rung's that declares its own. Each resolves
+        // its own em against the parent's.
+        let mut font_size: Option<f32> = None;
+        let mut rung_font: [Option<f32>; STATE_RUNGS] = [None; STATE_RUNGS];
+        for important_pass in [false, true] {
+            for r in &matched {
+                if r.pseudo.is_some() || r.ancestor.is_some() {
+                    continue;
+                }
+                let rung = rung_of(r.states);
+                let scope = rung.and_then(|i| state_vars[i].as_ref()).unwrap_or(&vars);
+                if let Some(size) = r.half(important_pass).font_size(scope, env, parent_font_size) {
+                    match rung {
+                        None => font_size = Some(size),
+                        Some(i) => rung_font[i] = Some(size),
+                    }
+                }
+            }
+        }
+        if let Some(size) = inline.and_then(|i| Half::of_inline(i).font_size(&vars, env, parent_font_size)) {
+            font_size = Some(size);
+        }
+        let font_size = font_size.unwrap_or(parent_font_size);
         let t2 = probe.then(std::time::Instant::now);
 
         // A matched rule's declaration advisories are the ones that describe
@@ -1711,19 +1888,13 @@ impl Engine {
                     } else {
                         &r.normal_extras
                     });
-                    let refinement = if important_pass { &r.important } else { &r.normal };
-                    if let Some(refinement) = refinement {
-                        slot.0.refine(refinement);
-                    }
-                    let dynamic =
-                        if important_pass { &r.important_dynamic } else { &r.normal_dynamic };
-                    if let Some(list) = dynamic {
-                        for (name, raw) in list.iter() {
-                            mapper::apply_dynamic(
-                                name, raw, &vars, env, &mut slot.0, &mut slot.1, diagnostics,
-                            );
-                        }
-                    }
+                    // A generated box is the element's child: its `font-size`
+                    // em is the element's size, and so, here, is every other
+                    // em it declares (a box that also sets its own font size
+                    // resolves the rest against the element's, v1).
+                    r.half(important_pass).apply(
+                        &vars, env, font_size, font_size, &mut slot.0, &mut slot.1, diagnostics,
+                    );
                     continue;
                 }
                 // `border-radius: inherit` is filled into the BASE style after
@@ -1779,9 +1950,8 @@ impl Engine {
                         p.apply_over(&mut animation_patch);
                     }
                 }
-                let refinement = if important_pass { &r.important } else { &r.normal };
-                let dynamic = if important_pass { &r.important_dynamic } else { &r.normal_dynamic };
-                if refinement.is_none() && dynamic.is_none() {
+                let half = r.half(important_pass);
+                if half.is_empty() {
                     continue;
                 }
                 // `.group:hover .this` goes to its own bucket, keyed by the
@@ -1797,15 +1967,10 @@ impl Engine {
                     let Some(bucket) = group.bucket(a.states, key) else {
                         continue;
                     };
-                    if let Some(refinement) = refinement {
-                        bucket.refine(refinement);
-                    }
-                    if let Some(list) = dynamic {
-                        for (name, raw) in list.iter() {
-                            mapper::apply_dynamic(
-                                name, raw, &vars, env, bucket, &mut extras, diagnostics,
-                            );
-                        }
+                    // Its em is the base state's: the size a hovered ANCESTOR
+                    // gives this element is not modelled (v1).
+                    half.apply(&vars, env, font_size, parent_font_size, bucket, &mut extras, diagnostics);
+                    if half.font_relative() {
                         keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                     }
                     continue;
@@ -1838,36 +2003,26 @@ impl Engine {
                         &mut focus_within
                     }
                 };
-                if let Some(refinement) = refinement {
-                    bucket.refine(refinement);
-                }
-                if let Some(list) = dynamic {
-                    // A rung's `var()`-composed declarations read that rung's
-                    // custom properties (base map + whatever the rung declares
-                    // on top), never another rung's. `hover:shadow-lg` sets
-                    // `--tw-shadow` and reads it back in the same `:hover`
-                    // rule; `focus-visible:ring-2` does the same one rung over,
-                    // and the two must not see each other.
-                    let scope = rung
-                        .and_then(|i| state_vars[i].as_ref())
-                        .unwrap_or(&vars);
-                    let radius_inherit = extras.radius_inherit;
-                    for (name, raw) in list.iter() {
-                        mapper::apply_dynamic(name, raw, scope, env, bucket, &mut extras, diagnostics);
-                    }
-                    if rung.is_some() {
-                        keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
-                    }
+                // A rung's `var()`-composed declarations read that rung's
+                // custom properties (base map + whatever the rung declares
+                // on top), never another rung's. `hover:shadow-lg` sets
+                // `--tw-shadow` and reads it back in the same `:hover`
+                // rule; `focus-visible:ring-2` does the same one rung over,
+                // and the two must not see each other. Its em is the rung's
+                // font size when the rung declares one.
+                let scope = rung.and_then(|i| state_vars[i].as_ref()).unwrap_or(&vars);
+                let basis = rung.and_then(|i| rung_font[i]).unwrap_or(font_size);
+                let radius_inherit = extras.radius_inherit;
+                half.apply(scope, env, basis, parent_font_size, bucket, &mut extras, diagnostics);
+                if rung.is_some() && half.font_relative() {
+                    keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                 }
             }
         }
         if let Some(inline) = inline {
-            if let Some(r) = &inline.refinement {
-                base.refine(r);
-            }
-            for (name, raw) in &inline.dynamic {
-                mapper::apply_dynamic(name, raw, &vars, env, &mut base, &mut extras, diagnostics);
-            }
+            Half::of_inline(inline).apply(
+                &vars, env, font_size, parent_font_size, &mut base, &mut extras, diagnostics,
+            );
             if let Some(t) = &inline.transitions {
                 transitions = Some(t.clone());
             }
@@ -1878,6 +2033,43 @@ impl Engine {
                 p.apply_over(&mut animation_patch);
             }
             extras.refine(&inline.extras);
+        }
+        // A state rung that changes the font size changes every em the BASE
+        // resolved too: `.x { padding: 1em } .x:hover { font-size: 20px }`
+        // pads 20px under the pointer. gpui's ladder lays the rung over the
+        // base, so the rung gets the base folded again at its size, under its
+        // own declarations. Only for a rung that declares a size, and only
+        // when the base has something font-relative to fold again.
+        let base_font_relative = matched
+            .iter()
+            .filter(|r| r.pseudo.is_none() && r.ancestor.is_none() && r.states == 0)
+            .any(|r| r.half(false).font_relative() || r.half(true).font_relative())
+            || inline.is_some_and(|i| Half::of_inline(i).font_relative());
+        if base_font_relative {
+            let rungs = [&mut active, &mut hover, &mut focus_visible, &mut focus, &mut focus_within];
+            for (i, bucket) in rungs.into_iter().enumerate() {
+                let Some(size) = rung_font[i] else { continue };
+                if size == font_size {
+                    continue;
+                }
+                let mut again = StyleRefinement::default();
+                let mut scratch = Extras::default();
+                let mut quiet = Vec::new();
+                for important_pass in [false, true] {
+                    for r in matched.iter().filter(|r| r.pseudo.is_none() && r.ancestor.is_none() && r.states == 0) {
+                        r.half(important_pass).apply(
+                            &vars, env, size, parent_font_size, &mut again, &mut scratch, &mut quiet,
+                        );
+                    }
+                }
+                if let Some(inline) = inline {
+                    Half::of_inline(inline).apply(
+                        &vars, env, size, parent_font_size, &mut again, &mut scratch, &mut quiet,
+                    );
+                }
+                again.refine(bucket);
+                *bucket = again;
+            }
         }
         if group.conflict {
             diagnostics.push(
@@ -1997,6 +2189,7 @@ impl Engine {
             file_selector_button: any_file_button.then(|| Rc::new(file_button.0)),
             vars,
             color: effective_color,
+            font_size,
         };
         if let Some(key) = share_key {
             share::insert(key, &states);
@@ -3779,7 +3972,9 @@ mod tests {
                 && a.normal_custom == b.normal_custom
                 && a.important_custom == b.important_custom
                 && a.normal_dynamic == b.normal_dynamic
-                && a.important_dynamic == b.important_dynamic;
+                && a.important_dynamic == b.important_dynamic
+                && a.normal_font == b.normal_font
+                && a.important_font == b.important_font;
             assert!(same, "rule {i} ({}) differs after the rebase", sel_text(&a.selector));
         }
         eprintln!(

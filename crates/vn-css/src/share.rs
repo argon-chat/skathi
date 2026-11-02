@@ -3,7 +3,7 @@
 //!
 //! Everything [`crate::Engine::compute_node`] does after matching is a function
 //! of the matched rules (in cascade order), the inline style, what the parent
-//! hands down (its custom properties and `color`), the environment the `@media`
+//! hands down (its custom properties, `color` and font size), the environment the `@media`
 //! conditions and `env()` read, and the rem and viewport bases. Two elements
 //! that agree on all of them get equal `ComputedStates`, so the second is a clone
 //! of the first: custom properties are not resolved again and the declarations
@@ -56,8 +56,11 @@ pub(crate) struct Key<'a> {
     /// resolves `rem` and `vw` against them at fold time. A new rem basis or a
     /// resize also recompiles or rebases the sheet, which moves the generation;
     /// this keeps the cache right where a resize skips the rebase (a sheet
-    /// whose only viewport units sit inside custom properties).
-    bases: [u32; 3],
+    /// whose only viewport units sit inside custom properties). And the
+    /// parent's font size: every `em` the element resolves, and its own font
+    /// size when it inherits one, follow from it, so two cousins under
+    /// different font sizes must not share.
+    bases: [u32; 4],
 }
 
 impl<'a> Key<'a> {
@@ -66,6 +69,7 @@ impl<'a> Key<'a> {
         rules: Box<[u32]>,
         parent_vars: &'a Rc<Vars>,
         parent_color: Option<gpui::Hsla>,
+        parent_font_size: f32,
         env: &'a Env,
     ) -> Self {
         // FNV-1a: a cheap first filter before the slices are compared.
@@ -77,7 +81,7 @@ impl<'a> Key<'a> {
             }
         }
         let (w, h) = crate::mapper::viewport_basis();
-        let bases = [crate::mapper::rem_basis().to_bits(), w.to_bits(), h.to_bits()];
+        let bases = [crate::mapper::rem_basis().to_bits(), w.to_bits(), h.to_bits(), parent_font_size.to_bits()];
         Key { generation, hash, rules, parent_vars, parent_color, env, bases }
     }
 }
@@ -89,7 +93,7 @@ struct Entry {
     parent_vars: Rc<Vars>,
     parent_color: Option<gpui::Hsla>,
     env: Env,
-    bases: [u32; 3],
+    bases: [u32; 4],
     states: ComputedStates,
 }
 
