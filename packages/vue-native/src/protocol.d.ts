@@ -1055,6 +1055,9 @@ interface VnAppWindow extends VnEventTarget {
   setTitleBarOverlay(overlay: boolean | null | Record<string, unknown>): void;
   title: string;
   backdrop: string;
+  /** `"system" | "light" | "dark"`: Electron's `nativeTheme.themeSource`
+   *  (docs/WINDOWING.md §4.5). */
+  theme: string;
   alwaysOnTop: boolean;
   readonly scaleFactor: number;
   readonly chrome: VnWindowChrome;

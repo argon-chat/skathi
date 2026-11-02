@@ -270,6 +270,15 @@
     configurable: true,
     enumerable: true
   });
+  Object.defineProperty(appWindow, "theme", {
+    get: () => S.theme,
+    set: (v) => {
+      __vn_window_set_theme(String(v));
+      refresh();
+    },
+    configurable: true,
+    enumerable: true
+  });
   Object.defineProperty(appWindow, "alwaysOnTop", {
     get: () => S.alwaysOnTop,
     set: (v) => {

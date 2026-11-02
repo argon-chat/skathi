@@ -140,6 +140,50 @@ impl Backdrop {
     }
 }
 
+/// `appWindow.theme`: which colour scheme the app's windows take, in place of
+/// the OS's. Electron's `nativeTheme.themeSource`, with its spellings.
+///
+/// Two things follow it, as they follow `themeSource` in Electron:
+/// - the window's own dark mode (`DWMWA_USE_IMMERSIVE_DARK_MODE`), which is
+///   what tints Mica and the OS caption;
+/// - `prefers-color-scheme`, i.e. every `@media` and `matchMedia` here.
+///
+/// `System` is the initial value, and it returns both to the OS's setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Theme {
+    System,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    fn from_str(s: &str) -> Option<Theme> {
+        Some(match s {
+            "system" => Theme::System,
+            "light" => Theme::Light,
+            "dark" => Theme::Dark,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Theme::System => "system",
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+        }
+    }
+
+    /// The dark-or-light answer for a window whose OS appearance is `os_dark`.
+    fn is_dark(self, os_dark: bool) -> bool {
+        match self {
+            Theme::System => os_dark,
+            Theme::Light => false,
+            Theme::Dark => true,
+        }
+    }
+}
+
 const A20: &str = "`backdrop: \"blur\"` resolves to `acrylic` here — gpui exposes one blurred \
                    material on Windows. Use `acrylic` to say so explicitly.";
 const A20B: &str = "Mica is a Windows 11 material; falling back to `acrylic`.";
@@ -621,6 +665,23 @@ mod win {
         set_always_on_top_hwnd(HWND(raw as *mut _), on);
     }
 
+    /// `DWMWA_USE_IMMERSIVE_DARK_MODE` on one window: the dark or light Mica
+    /// tint, and the OS caption's colours. What gpui itself writes when the OS
+    /// theme changes (`configure_dwm_dark_mode`), here for `appWindow.theme`.
+    pub fn set_dark_mode_for(raw: isize, dark: bool) {
+        use windows::core::BOOL;
+        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+        let on: BOOL = dark.into();
+        let _ = unsafe {
+            DwmSetWindowAttribute(
+                HWND(raw as *mut _),
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                &on as *const BOOL as *const _,
+                std::mem::size_of::<BOOL>() as u32,
+            )
+        };
+    }
+
     fn set_always_on_top_hwnd(h: HWND, on: bool) {
         let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
         // `SWP_NOACTIVATE`: a palette that jumps in front must not also steal
@@ -688,6 +749,25 @@ mod win {
         Some(v)
     }
 
+    /// Reads `DWMWA_USE_IMMERSIVE_DARK_MODE` back out of DWM, for
+    /// `appWindow.theme`'s state: what the compositor tints Mica with.
+    pub fn dark_mode() -> Option<bool> {
+        use windows::core::BOOL;
+        use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+        let h = hwnd()?;
+        let mut v = BOOL(0);
+        unsafe {
+            DwmGetWindowAttribute(
+                h,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                &mut v as *mut BOOL as *mut _,
+                std::mem::size_of::<BOOL>() as u32,
+            )
+        }
+        .ok()?;
+        Some(v.as_bool())
+    }
+
     pub fn cursor_pos() -> Option<(f32, f32)> {
         let mut p = POINT::default();
         unsafe { GetCursorPos(&mut p) }.ok()?;
@@ -731,9 +811,11 @@ mod win {
     pub fn set_outer_size(_w: f32, _h: f32) {}
     pub fn set_always_on_top(_on: bool) {}
     pub fn set_always_on_top_for(_raw: isize, _on: bool) {}
+    pub fn set_dark_mode_for(_raw: isize, _dark: bool) {}
     pub fn start_dragging() {}
     pub fn is_cloaked() -> bool { false }
     pub fn system_backdrop() -> Option<u32> { None }
+    pub fn dark_mode() -> Option<bool> { None }
     pub fn cursor_pos() -> Option<(f32, f32)> { None }
     pub fn monitor_key() -> Option<(isize, [i32; 8])> { None }
 }
@@ -839,6 +921,7 @@ pub struct Snapshot {
     pub displays: usize,
     pub title: String,
     pub backdrop: Backdrop,
+    pub theme: Theme,
     pub always_on_top: bool,
     pub title_bar_height: f32,
     pub fallback_titlebar: bool,
@@ -868,6 +951,7 @@ impl Default for Snapshot {
             displays: 1,
             title: String::new(),
             backdrop: Backdrop::Mica,
+            theme: Theme::System,
             always_on_top: false,
             title_bar_height: 32.0,
             fallback_titlebar: true,
@@ -901,6 +985,9 @@ thread_local! {
 struct Live {
     title: String,
     backdrop: Backdrop,
+    /// `appWindow.theme`. App-wide, as Electron's `nativeTheme` is: pop-outs
+    /// follow it too.
+    theme: Theme,
     always_on_top: bool,
     title_bar_height: f32,
     overlay: Option<Overlay>,
@@ -914,6 +1001,7 @@ impl Default for Live {
         Live {
             title: "vue-native".into(),
             backdrop: Backdrop::Mica,
+            theme: Theme::System,
             always_on_top: false,
             title_bar_height: 32.0,
             overlay: None,
@@ -934,6 +1022,7 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
         *l.borrow_mut() = Live {
             title: cfg.title.clone(),
             backdrop: cfg.backdrop,
+            theme: Theme::System,
             always_on_top: cfg.always_on_top,
             title_bar_height: cfg.title_bar_height,
             // OS chrome draws the real thing; a host cluster on top of it would
@@ -968,10 +1057,7 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     SNAPSHOT.with(|c| *c.borrow_mut() = s);
     // Seed the cascade env too, so the very first restyle already knows the
     // real viewport, DPI and chrome mode.
-    let dark = matches!(
-        window.appearance(),
-        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
-    );
+    let dark = effective_dark(window);
     let s = SNAPSHOT.with(|c| c.borrow().clone());
     vn_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
     // `visibilitychange` on the platform's edge rather than the frame's: a
@@ -1194,6 +1280,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         displays,
         title: live.title,
         backdrop: live.backdrop,
+        theme: live.theme,
         always_on_top: live.always_on_top,
         title_bar_height: live.title_bar_height,
         fallback_titlebar: live.fallback_titlebar,
@@ -1242,6 +1329,58 @@ fn css_env(s: &Snapshot, dark: bool, reduce_motion: bool) -> vn_css::Env {
     }
 }
 
+fn os_dark(window: &Window) -> bool {
+    matches!(
+        window.appearance(),
+        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
+    )
+}
+
+/// Whether `window` is dark: `appWindow.theme`, or the OS's setting under
+/// `system`. What `prefers-color-scheme` answers.
+pub fn effective_dark(window: &Window) -> bool {
+    LIVE.with(|l| l.borrow().theme).is_dark(os_dark(window))
+}
+
+thread_local! {
+    /// The OS appearance each window was last seen with, for [`keep_theme`].
+    static OS_DARK_SEEN: RefCell<std::collections::HashMap<vn_tree::WinKey, bool>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// Keeps a window's DWM dark mode on `appWindow.theme`. Called every frame, for
+/// the primary window and for each pop-out.
+///
+/// gpui writes the OS's appearance into the window whenever the OS theme
+/// changes (`configure_dwm_dark_mode`, after its appearance callback has run),
+/// which would quietly undo a forced theme. So the first frame a window shows
+/// after an OS change writes the forced one back. A window's first frame counts
+/// as a change, which is how a pop-out opened under a forced theme takes it.
+/// Nothing is written while the theme is `system`: there gpui's value is right.
+fn keep_theme(window: &Window) {
+    let key = vn_tree::windows::key(window);
+    let Some(hwnd) = hwnd_of(key) else { return };
+    let os = os_dark(window);
+    if OS_DARK_SEEN.with(|m| m.borrow_mut().insert(key, os)) == Some(os) {
+        return;
+    }
+    let theme = LIVE.with(|l| l.borrow().theme);
+    if theme != Theme::System {
+        win::set_dark_mode_for(hwnd, theme.is_dark(os));
+    }
+}
+
+/// `appWindow.theme = …`: every open window's dark mode follows at once, and
+/// `prefers-color-scheme` on the next frame's env.
+fn apply_theme(theme: Theme, window: &Window) {
+    LIVE.with(|l| l.borrow_mut().theme = theme);
+    let dark = theme.is_dark(os_dark(window));
+    let hwnds: Vec<isize> = HWND_CACHE.with(|m| m.borrow().values().copied().filter(|&h| h != 0).collect());
+    for h in hwnds {
+        win::set_dark_mode_for(h, dark);
+    }
+}
+
 /// The `@media` + `env()` environment of a SECONDARY window — a `<VnWindow>`
 /// pop-out (docs/MULTIWINDOW.md §6).
 ///
@@ -1262,10 +1401,8 @@ pub fn popout_env(
     os_chrome: bool,
     title_bar_height: f32,
 ) -> vn_css::Env {
-    let dark = matches!(
-        window.appearance(),
-        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
-    );
+    keep_theme(window);
+    let dark = effective_dark(window);
     let display_mode = if os_chrome {
         vn_css::DisplayMode::Standalone
     } else {
@@ -1351,6 +1488,15 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("cloaked", Json::Bool(s.cloaked)),
         ("title", Json::s(s.title.clone())),
         ("backdrop", Json::s(s.backdrop.as_str())),
+        ("theme", Json::s(s.theme.as_str())),
+        // The window's dark mode as DWM has it, read back like `systemBackdrop`.
+        (
+            "systemDarkMode",
+            match win::dark_mode() {
+                Some(v) => Json::Bool(v),
+                None => Json::Null,
+            },
+        ),
         // What DWM believes, read back rather than remembered — the two
         // mechanisms `set_background_appearance` drives can disagree.
         (
@@ -1553,10 +1699,8 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     // evaluated against. Published here rather than after the pump so a
     // `matchMedia(...).matches` read from a `resize` handler already sees the
     // new viewport.
-    let dark = matches!(
-        window.appearance(),
-        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
-    );
+    keep_theme(window);
+    let dark = effective_dark(window);
     let env_changed = vn_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
     if env_changed && BOOTED.with(|b| b.get()) {
         IN_DISPATCH.with(|f| f.set(true));
@@ -1657,6 +1801,7 @@ enum Op {
     Center,
     AlwaysOnTop(bool),
     SetBackdrop(Backdrop),
+    SetTheme(Theme),
     StartDragging,
 }
 
@@ -1756,6 +1901,12 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
         Op::SetBackdrop(b) => {
             window.set_background_appearance(b.to_gpui());
             LIVE.with(|l| l.borrow_mut().backdrop = b);
+        }
+        Op::SetTheme(t) => {
+            apply_theme(t, window);
+            // The env (`prefers-color-scheme`) is re-read on the next frame;
+            // ask for one, since nothing else may be painting.
+            window.refresh();
         }
         Op::StartDragging => win::start_dragging(),
     }
@@ -1861,6 +2012,7 @@ fn op_take(op: &Op) -> Op {
         Op::Center => Op::Center,
         Op::AlwaysOnTop(b) => Op::AlwaysOnTop(*b),
         Op::SetBackdrop(b) => Op::SetBackdrop(*b),
+        Op::SetTheme(t) => Op::SetTheme(*t),
         Op::StartDragging => Op::StartDragging,
     }
 }
@@ -1985,6 +2137,15 @@ host_fn!(fn vn_window_set_backdrop(g, args) {
             "unknown `backdrop`: {name:?} — expected mica | mica-alt | tabbed | acrylic | blur | \
              transparent | none."
         )),
+    }
+    UNDEF
+});
+
+host_fn!(fn vn_window_set_theme(g, args) {
+    let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
+    match Theme::from_str(&name) {
+        Some(t) => submit(Op::SetTheme(t)),
+        None => advise(&format!("unknown `theme`: {name:?} — expected system | light | dark.")),
     }
     UNDEF
 });
@@ -2134,6 +2295,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_window_set_bounds", 5, vn_window_set_bounds as *const _),
         ("__vn_window_set_always_on_top", 1, vn_window_set_always_on_top as *const _),
         ("__vn_window_set_backdrop", 1, vn_window_set_backdrop as *const _),
+        ("__vn_window_set_theme", 1, vn_window_set_theme as *const _),
         ("__vn_window_set_overlay", 4, vn_window_set_overlay as *const _),
         ("__vn_window_match_media", 1, vn_window_match_media as *const _),
         ("__vn_window_hitboxes", 1, vn_window_hitboxes as *const _),
@@ -2148,6 +2310,19 @@ pub fn install(rt: &JsRuntime) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `appWindow.theme` takes `nativeTheme.themeSource`'s three spellings and
+    /// nothing else; `system` is the OS's answer, the other two override it.
+    #[test]
+    fn the_theme_takes_electrons_spellings_and_forces_only_when_asked() {
+        for t in [Theme::System, Theme::Light, Theme::Dark] {
+            assert_eq!(Theme::from_str(t.as_str()), Some(t));
+        }
+        assert_eq!(Theme::from_str("Dark"), None, "the client's config spelling is mapped before this");
+        assert_eq!(Theme::from_str("auto"), None);
+        assert!(Theme::System.is_dark(true) && !Theme::System.is_dark(false));
+        assert!(!Theme::Light.is_dark(true) && Theme::Dark.is_dark(false));
+    }
 
     /// `titleBarOverlay.color` takes CSS hex, which is what Electron's option
     /// takes. `0xAARRGGBB` is what `gpui::rgba` reads.

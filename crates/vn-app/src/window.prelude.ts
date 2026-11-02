@@ -487,6 +487,14 @@
     configurable: true,
     enumerable: true,
   });
+  // Electron's `nativeTheme.themeSource`: the windows' dark mode (Mica's tint)
+  // and `prefers-color-scheme`. Read back as `backdrop` is.
+  Object.defineProperty(appWindow, "theme", {
+    get: () => S.theme,
+    set: (v: unknown) => { __vn_window_set_theme(String(v)); refresh(); },
+    configurable: true,
+    enumerable: true,
+  });
   Object.defineProperty(appWindow, "alwaysOnTop", {
     get: () => S.alwaysOnTop,
     set: (v: unknown) => { __vn_window_set_always_on_top(!!v); refresh(); },

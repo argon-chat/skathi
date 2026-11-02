@@ -89,6 +89,8 @@ declare function __vn_window_set_bounds(
 
 declare function __vn_window_set_always_on_top(on: boolean): void;
 declare function __vn_window_set_backdrop(name: string): void;
+/** `"system" | "light" | "dark"`; anything else is advised and ignored. */
+declare function __vn_window_set_theme(name: string): void;
 
 /**
  * `height` is `NaN` for "unchanged"; `mode` is -1 keep / 0 off / 1 on;
@@ -137,6 +139,10 @@ interface VnWindowState {
   cloaked: boolean;
   title: string;
   backdrop: string;
+  /** `appWindow.theme`: `"system"`, `"light"` or `"dark"`. */
+  theme: string;
+  /** The window's dark mode as DWM has it, read back — `null` when it will not say. */
+  systemDarkMode: boolean | null;
   /** What DWM believes, read back — `null` when it will not say. */
   systemBackdrop: number | null;
   alwaysOnTop: boolean;
