@@ -54,6 +54,8 @@ const shoot = async () => {
 const yellow = ([r, g, b]: Rgb) => r > 220 && g > 220 && b < 60;
 const page = ([r, g, b]: Rgb) => Math.abs(r - 40) < 12 && Math.abs(g - 40) < 12 && Math.abs(b - 40) < 12;
 const dark = ([r, g, b]: Rgb) => r + g + b < 300;
+/** The highlighted row: Chromium's blue, light or dark. */
+const lit = ([r, g, b]: Rgb) => b > 200 && r < 170 && g > 120;
 
 /** Is a popup painted at `(x, y)`? Polled: it opens on the next frame. */
 const popupAt = (x: number, y: number, open: boolean) =>
@@ -175,6 +177,48 @@ describe("the popup", () => {
       expect(page((await shoot()).at(f.x + 10, f.y + f.h + 5))).toBe(true);
       await app.press("Escape");
       expect(await popupAt(f.x + 10, f.y - 5, false)).toBe(false);
+    },
+    T,
+  );
+
+  test(
+    "a list longer than the room is capped to it, scrolls by wheel, and keeps the highlight in view",
+    async () => {
+      const l = await box("#long");
+      // Right of the labels, so the samples are the rows' own colour.
+      const x = l.x + l.w - 10;
+      // The popup fills the 360px above the box: row 0's centre while the
+      // list is at its top, and the bottom row's, just above the box.
+      const first = 1 + ROW / 2;
+      const last = l.y - 1 - ROW / 2;
+      await app.locator("#long").click({ real: true });
+      expect(await popupAt(x, last, true)).toBe(true);
+      expect(lit((await shoot()).at(x, first))).toBe(true);
+      // End highlights the last option and scrolls it into view.
+      await app.press("End");
+      expect(await until(async () => lit((await shoot()).at(x, last)), (v) => v)).toBe(true);
+      expect(yellow((await shoot()).at(x, first))).toBe(true);
+      await app.press("Home");
+      expect(await until(async () => lit((await shoot()).at(x, first)), (v) => v)).toBe(true);
+      // The wheel scrolls the list, which stays open. The pointer it comes
+      // with rests on row 0, the highlighted one, so the highlight stays.
+      await app.send("wheel", { x, y: first, dy: 120 });
+      expect(await until(async () => yellow((await shoot()).at(x, first)), (v) => v)).toBe(true);
+      expect(yellow((await shoot()).at(x, last))).toBe(true);
+      // Home lands on row 0 again, scrolled out above: it comes back into
+      // view at the top.
+      await app.press("Home");
+      expect(await until(async () => lit((await shoot()).at(x, first)), (v) => v)).toBe(true);
+      // The pointer, moved over a row, highlights it, as in Chromium; the
+      // keys go on from there.
+      await app.send("mouse", { x, y: first + ROW * 3, kind: "move" });
+      expect(await until(async () => lit((await shoot()).at(x, first + ROW * 3)), (v) => v)).toBe(true);
+      await app.press("ArrowDown");
+      expect(await until(async () => lit((await shoot()).at(x, first + ROW * 4)), (v) => v)).toBe(true);
+      await app.press("Escape");
+      expect(await popupAt(x, last, false)).toBe(false);
+      expect(await value("#long")).toBe("0");
+      expect((await log()).filter((e) => e.startsWith("long"))).toEqual([]);
     },
     T,
   );

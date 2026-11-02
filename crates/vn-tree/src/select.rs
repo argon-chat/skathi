@@ -379,7 +379,9 @@ fn highlight(index: Option<usize>, reveal: bool, window: &mut Window, cx: &mut A
     let select = OPEN.with(|o| {
         let mut o = o.borrow_mut();
         let o = o.as_mut()?;
-        if o.highlight == index {
+        // A key that lands on the option already highlighted still brings it
+        // back into view, if the wheel scrolled it out.
+        if o.highlight == index && !reveal {
             return None;
         }
         o.highlight = index;

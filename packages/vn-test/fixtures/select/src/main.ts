@@ -8,6 +8,8 @@
 // * `#guarded` cancels its `mousedown` (it must not open) and its ArrowDown
 //   `keydown` (it must not change).
 // * `#far` sits at the bottom of the window: its popup opens above it.
+// * `#long` sits there too, with 40 options: its popup is capped to the
+//   room above it, and scrolls.
 // * `#behind` is a button below `#model`'s popup, counting its clicks: a
 //   press on it while the popup is open only closes the popup.
 //
@@ -60,6 +62,11 @@ const App = {
           options(["One", "Two"]),
         ),
         h("select", { id: "far", class: "box" }, options(["One", "Two", "Three", "Four", "Five"])),
+        h(
+          "select",
+          { id: "long", class: "box", onInput: () => log.push("long:input") },
+          options(Array.from({ length: 40 }, (_, i) => `Item ${i}`)),
+        ),
         h("button", { id: "behind", onClick: () => behind.value++ }, `behind ${behind.value}`),
         h("div", { id: "out" }, `model ${model.value}`),
       ]);
