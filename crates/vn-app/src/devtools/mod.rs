@@ -748,6 +748,53 @@ pub fn mark_reload(cause: &str) {
     }
 }
 
+/// A Network row for a load the HOST made: gpui's loaders (`<img>`, CSS
+/// `url()`, `@font-face`, `<lottie>`) fetching through `crate::http_client`.
+/// No script asked, so no tee saw it. Started when the request is, finished
+/// on the network thread with the outcome (`net::record_loader`). Inert while
+/// the devtools are off.
+pub struct LoaderRow(Option<(String, String, f64, std::time::Instant)>);
+
+impl LoaderRow {
+    pub fn start(method: &str, url: &str) -> LoaderRow {
+        if !enabled() {
+            return LoaderRow(None);
+        }
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        LoaderRow(Some((method.to_string(), url.to_string(), at, std::time::Instant::now())))
+    }
+
+    pub fn finish(
+        self,
+        result: &Result<vn_runtime::redjs::webapi::http::Response, vn_runtime::redjs::webapi::http::HttpError>,
+    ) {
+        if let Some((method, url, at, t0)) = self.0 {
+            net::record_loader(&method, &url, at, t0.elapsed().as_secs_f64() * 1000.0, result);
+        }
+    }
+}
+
+/// `net_cache`: the HTTP cache's counters and folder, or `op: "clear"` to
+/// empty it (docs/DEVTOOLS.md). `null` stats: no cache is installed.
+fn cmd_net_cache(op: Option<&str>) -> String {
+    use vn_runtime::redjs::webapi::http::cache;
+    match op.unwrap_or("stats") {
+        // After the writes already queued (≤ 2 s): what is on disk, not what
+        // is about to be.
+        "stats" => {
+            cache::flush();
+            ok(net::cache_json())
+        }
+        "clear" => match cache::clear() {
+            Ok(freed) => ok(Json::obj(vec![("freed", Json::n(freed as f64)), ("now", net::cache_json())])),
+            Err(e) => err(format!("net_cache clear: {e}")),
+        },
+        other => err(format!("net_cache: unknown op {other:?} — \"stats\" (default) or \"clear\"")),
+    }
+}
+
 /// 128 bits of process-local entropy, hex. No `rand` dependency for a token
 /// whose only job is to stop an unrelated local process from driving the app:
 /// the address of a fresh allocation, the pid, and two clock reads taken apart
@@ -1228,6 +1275,7 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             None => err("net_detail needs a `seq` — a row's `seq` from `net`"),
             Some(seq) => cmd_net_detail(seq),
         },
+        "net_cache" | "net-cache" => cmd_net_cache(arg("op").as_deref()),
         "perf" => ok(perf_data()),
         "mem" => {
             let gc = req.get("gc").and_then(Json::as_bool).unwrap_or(false);

@@ -1265,6 +1265,10 @@ fn main() {
                     eprintln!("[storage] cookies: the last change was not written: {e}");
                 }
             });
+            // The HTTP cache's queued entries and its LRU index. A kill skips
+            // this and loses only recency: the next start rebuilds the entry
+            // list from the folder (redjs `http::cache`).
+            shutdown::step("http-cache", vn_runtime::redjs::webapi::http::cache::uninstall);
             std::future::ready(())
         }));
         #[cfg(feature = "indexeddb")]
@@ -1310,6 +1314,10 @@ fn main() {
             if devtools_mode { inspector::window_config() } else { boot_mode::window_config() };
         #[cfg(not(vn_devtools))]
         let window_json = boot_mode::window_config();
+        // The HTTP cache's cap rides in the same block (`httpCache`, folded in
+        // by the builders like `devtools`); read before the block is consumed.
+        #[cfg(feature = "storages")]
+        let http_cache_mb = http_client::cache_mb(window_json.as_deref());
         let cfg = window::load_config(window_json);
 
         // The runtime switch (docs/DEVTOOLS.md "Turning them off"): the config's
@@ -1381,6 +1389,15 @@ fn main() {
                 rt,
                 if devtools_mode { Some("vn-devtools".to_string()) } else { boot_mode::app_name() },
             );
+            // The disk HTTP cache under `fetch`, XHR and every `<img>`
+            // (docs/STORAGE.md §12): `%LOCALAPPDATA%\<app>\cache\http`,
+            // sealed when the storage is. After `install` above, which names
+            // the app; before any JS and any loader. Not for the inspector,
+            // which loads nothing worth keeping.
+            #[cfg(feature = "storages")]
+            if !devtools_mode {
+                vn_storage::http_cache::install(http_cache_mb);
+            }
             // The answers to the app's own permission prompt live beside its
             // localStorage, in the storage folder as of now
             // (crates/vn-permissions/src/decisions.rs). Without storage they

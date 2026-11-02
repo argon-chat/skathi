@@ -9781,6 +9781,10 @@ function createStorage(host: StorageHost): AppStorage {
      * `indexedDB` call. Later, the change applies at the next start (said once
      * on stderr; the encryption half is remembered even if that start calls
      * late again). docs/STORAGE.md "IndexedDB".
+     *
+     * The HTTP cache (docs/STORAGE.md §12) follows `encrypted` at once: its
+     * folder is purged and refills in the new format. It does not follow
+     * `path`; it lives beside the default storage folder.
      */
     setStorageFolder(path: string, options: { encrypted?: boolean } = {}) {
       // No `encrypted` is "keep the format", not "plaintext": a folder change

@@ -96,6 +96,42 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// The HTTP cache's cap in MB (docs/STORAGE.md §12): `VN_HTTP_CACHE` (`0` or
+/// `off` turns it off, a number is the cap), else `vn.config.json`'s
+/// `"httpCache": { "maxMB": N }` (`0` or `"httpCache": false` turns it off),
+/// else 256. `window_json` is the window block, which the builders fold the
+/// top-level `httpCache` into, as they do `devtools`.
+#[cfg_attr(not(feature = "storages"), allow(dead_code))]
+pub fn cache_mb(window_json: Option<&str>) -> u64 {
+    if let Ok(v) = std::env::var("VN_HTTP_CACHE") {
+        let v = v.trim();
+        if v == "0" || v.eq_ignore_ascii_case("off") {
+            return 0;
+        }
+        if let Ok(n) = v.parse::<u64>() {
+            return n;
+        }
+        log::warn!("VN_HTTP_CACHE={v:?} is neither 0/off nor a size in MB; ignored");
+    }
+    config_mb(window_json).unwrap_or(DEFAULT_CACHE_MB)
+}
+
+/// The window block's `httpCache`: `false` is 0, `{ "maxMB": N }` is N, anything
+/// else (absent, a negative or non-numeric `maxMB`) names nothing.
+#[cfg_attr(not(feature = "storages"), allow(dead_code))]
+fn config_mb(window_json: Option<&str>) -> Option<u64> {
+    window_json.and_then(crate::json::parse).and_then(|w| match w.get("httpCache")? {
+        crate::json::Json::Bool(false) => Some(0),
+        o => o.get("maxMB").and_then(crate::json::Json::as_f64).filter(|n| *n >= 0.0).map(|n| n as u64),
+    })
+}
+
+/// The HTTP cache's cap when neither the environment nor the config names one.
+/// Chromium sizes its cache from the free disk space; a fixed cap is easier to
+/// reason about for an app, and holds a few thousand avatars.
+#[cfg_attr(not(feature = "storages"), allow(dead_code))]
+const DEFAULT_CACHE_MB: u64 = 256;
+
 /// Is this a request redjs's transport carries as is: no body, redirects followed?
 fn plain_get(parts: &http::request::Parts, body: &AsyncBody) -> bool {
     let empty = match &body.0 {
@@ -140,13 +176,21 @@ impl HttpClient for RedjsHttpClient {
             connect_timeout: CONNECT_TIMEOUT,
             io_timeout,
             observer: None,
+            // A loader's request goes through the HTTP cache as a browser's
+            // does (docs/STORAGE.md §12).
+            cache: net::cache::CacheMode::Default,
         };
         let cancel = net::Cancel::new();
         let (tx, rx) = oneshot::channel();
+        #[cfg(vn_devtools)]
+        let row = crate::devtools::LoaderRow::start(&request.method, &request.url);
         let started = net::start(
             request,
             (*cancel).clone(),
             Box::new(move |result| {
+                // The Network panel's row for a load no script made (devtools on only).
+                #[cfg(vn_devtools)]
+                row.finish(&result);
                 let _ = tx.send(result);
             }),
         );
@@ -166,5 +210,22 @@ impl HttpClient for RedjsHttpClient {
             }
             Ok(builder.body(AsyncBody::from(response.body))?)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_mb;
+
+    #[test]
+    fn the_config_names_a_cap_turns_the_cache_off_or_says_nothing() {
+        let w = |s: &str| config_mb(Some(s));
+        assert_eq!(w(r#"{"httpCache":{"maxMB":3}}"#), Some(3));
+        assert_eq!(w(r#"{"httpCache":{"maxMB":0}}"#), Some(0));
+        assert_eq!(w(r#"{"httpCache":false}"#), Some(0));
+        assert_eq!(w(r#"{"httpCache":{"maxMB":-1}}"#), None);
+        assert_eq!(w(r#"{"httpCache":true}"#), None);
+        assert_eq!(w(r#"{"title":"x"}"#), None);
+        assert_eq!(config_mb(None), None);
     }
 }

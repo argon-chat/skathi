@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/http-cache.spec.ts and the image-transport A/B: a grid of http <img> loaded from a loopback server the spec runs, shaped like the Argon client's files (a 302 with `private, max-age=300`, then the CDN's 200 with `max-age=2592000`, an ETag and Last-Modified). The spec drives it through `globalThis.__imgs`. See ../README.md.",
+
+  "name": "vn-test-http-images",
+
+  "window": {
+    "title": "vue-native — http-images (fixture)",
+    "width": 640,
+    "height": 300,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

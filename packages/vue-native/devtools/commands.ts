@@ -605,6 +605,19 @@ export const COMMANDS: CommandSpec[] = [
     },
   },
   {
+    cmd: "net_cache",
+    aliases: ["net-cache"],
+    description:
+      "The disk HTTP cache under fetch, XHR and every <img>/font load (docs/STORAGE.md §12): its " +
+      "folder, cap, entries and size, whether this instance owns the folder (`writable`) and seals " +
+      "entries (`sealed`), and the counters since start (hits, revalidated, stored, misses, " +
+      "bypassed, evicted, errors). `op: \"clear\"` deletes every entry and answers `freed` (bytes). " +
+      "`null` when no cache is installed (VN_HTTP_CACHE=0, httpCache.maxMB 0, or no storage).",
+    usage: ["  net_cache [stats|clear]            the disk HTTP cache: counters, or empty it"],
+    args: { op: str('"stats" (default) or "clear"') },
+    cli: (rest, flags) => compact({ op: rest[0] ?? (flags.op as string | undefined) }),
+  },
+  {
     cmd: "storage",
     description:
       "localStorage / sessionStorage, read and written through the APP's own JS rather than the " +

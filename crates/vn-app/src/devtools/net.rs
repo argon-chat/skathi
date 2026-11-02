@@ -179,6 +179,30 @@ struct Conn {
     /// Process-unique: equal ids shared one connection.
     id: u64,
     remote: Option<String>,
+    /// What the HTTP cache did (redjs `cache::Outcome`): `"hit"` came from
+    /// disk with no connection at all (`protocol` "", `id` 0), `"revalidated"`
+    /// from disk after a 304 on this connection; `"stored"`, `"miss"`, `"off"`.
+    cache: &'static str,
+}
+
+impl Conn {
+    /// The summary row's columns: `proto`/`conn`/`reused` when a connection
+    /// carried the answer, `cache` when the cache had a part in it.
+    fn columns(&self) -> String {
+        let mut out = Vec::new();
+        if self.id != 0 {
+            out.push(format!(
+                "\"proto\":{},\"conn\":{},\"reused\":{}",
+                json::quote(self.protocol),
+                self.id,
+                self.reused
+            ));
+        }
+        if self.cache != "off" {
+            out.push(format!("\"cache\":{}", json::quote(self.cache)));
+        }
+        out.join(",")
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -385,14 +409,7 @@ impl Ring {
         // row, and it is spliced in HERE, host-side: script never sees it.
         let conn = rid
             .and_then(|rid| self.records[self.index_of(rid)?].conn.as_ref())
-            .map(|c| {
-                format!(
-                    "\"proto\":{},\"conn\":{},\"reused\":{}",
-                    json::quote(c.protocol),
-                    c.id,
-                    c.reused
-                )
-            })
+            .map(Conn::columns)
             .unwrap_or_default();
         // The seq is spliced in rather than wrapped: the panel wants one flat
         // object, and a `{"seq":n,"entry":{…}}` envelope would make every field
@@ -603,6 +620,7 @@ impl Ring {
                     ("reused", Json::Bool(c.reused)),
                     ("connectionId", Json::n(c.id as f64)),
                     ("remote", c.remote.clone().map_or(Json::Null, Json::s)),
+                    ("cache", Json::s(c.cache)),
                 ]),
             );
         }
@@ -1046,10 +1064,86 @@ host_fn!(fn vn_devtools_net_conn(g, args) {
         reused: info.reused,
         id: info.connection_id,
         remote: info.remote_addr.map(|a| a.to_string()),
+        cache: info.cache.as_str(),
     };
     with_ring(|ring| ring.conn(rid, conn, info.set_cookies));
     Value::undefined().0
 });
+
+/// A row for a load the host made (`super::LoaderRow`): gpui's loaders fetch
+/// through redjs (`crate::http_client`), so there is a `Response` but no
+/// script, no tee and no record behind it, only the summary. `kind` is
+/// `"img"`, `"font"` or `"other"` from the answer's `Content-Type`.
+/// Called on the network thread.
+pub fn record_loader(
+    method: &str,
+    url: &str,
+    at: f64,
+    ms: f64,
+    result: &Result<vn_runtime::redjs::webapi::http::Response, vn_runtime::redjs::webapi::http::HttpError>,
+) {
+    let mut fields = vec![
+        ("url", Json::s(url)),
+        ("method", Json::s(method)),
+        ("at", Json::n(at)),
+        ("ms", Json::n(ms)),
+    ];
+    let kind = match result {
+        Ok(r) => {
+            let ty = vn_runtime::redjs::webapi::http::header(&r.headers, "content-type").unwrap_or("");
+            fields.push(("status", Json::n(r.status as f64)));
+            fields.push(("ok", Json::Bool((200..300).contains(&r.status))));
+            if !ty.is_empty() {
+                fields.push(("type", Json::s(ty)));
+            }
+            if r.connection_id != 0 {
+                fields.push(("proto", Json::s(r.protocol)));
+                fields.push(("conn", Json::n(r.connection_id as f64)));
+                fields.push(("reused", Json::Bool(r.reused)));
+            }
+            if r.cache != vn_runtime::redjs::webapi::http::cache::Outcome::Off {
+                fields.push(("cache", Json::s(r.cache.as_str())));
+            }
+            let t = ty.to_ascii_lowercase();
+            if t.starts_with("image/") {
+                "img"
+            } else if t.starts_with("font/") || t.contains("font-woff") || t.contains("opentype") {
+                "font"
+            } else {
+                "other"
+            }
+        }
+        Err(e) => {
+            fields.push(("error", Json::s(e.message.clone())));
+            "other"
+        }
+    };
+    fields.insert(0, ("kind", Json::s(kind)));
+    let raw = Json::obj(fields).to_json();
+    with_ring(|ring| ring.record(&raw));
+}
+
+/// The HTTP cache for `net_cache` and `mem`: redjs's counters plus the
+/// host's account of the folder (vn-storage). `null` when no cache is
+/// installed.
+pub fn cache_json() -> Json {
+    let Some(s) = vn_runtime::redjs::webapi::http::cache::stats() else { return Json::Null };
+    Json::obj(vec![
+        ("dir", Json::s(s.dir.display().to_string())),
+        ("maxMB", Json::n((s.max_bytes as f64 / 1048576.0 * 10.0).round() / 10.0)),
+        ("entries", Json::n(s.entries as f64)),
+        ("MB", Json::n((s.bytes as f64 / 1048576.0 * 10.0).round() / 10.0)),
+        ("writable", Json::Bool(s.writable)),
+        ("sealed", Json::Bool(s.sealed)),
+        ("hits", Json::n(s.hits as f64)),
+        ("revalidated", Json::n(s.revalidated as f64)),
+        ("stored", Json::n(s.stored as f64)),
+        ("misses", Json::n(s.misses as f64)),
+        ("bypassed", Json::n(s.bypassed as f64)),
+        ("evicted", Json::n(s.evicted as f64)),
+        ("errors", Json::n(s.errors as f64)),
+    ])
+}
 
 /// The pooled transport's counters, for the Network panel's header: how many
 /// HTTP/1.1 and HTTP/2 connections were opened, how many requests went out, how
@@ -1767,7 +1861,7 @@ mod tests {
     fn the_connection_rides_the_row_and_answers_transport_and_raw_set_cookie() {
         let mut ring = Ring::new();
         let rid = begun(&mut ring, "fetch");
-        let conn = Conn { protocol: "h2", reused: true, id: 7, remote: Some("93.184.215.14:443".into()) };
+        let conn = Conn { protocol: "h2", reused: true, id: 7, remote: Some("93.184.215.14:443".into()), cache: "off" };
         ring.conn(rid, conn, vec!["sid=abc; Path=/; HttpOnly".into(), "theme=dark".into()]);
         let seq = summary(&mut ring, Some(rid));
         // The row carries the columns, spliced host-side.
@@ -1794,10 +1888,29 @@ mod tests {
     }
 
     #[test]
+    fn a_disk_cache_hit_has_no_connection_columns_and_says_where_it_came_from() {
+        let mut ring = Ring::new();
+        let rid = begun(&mut ring, "fetch");
+        ring.conn(rid, Conn { protocol: "", reused: false, id: 0, remote: None, cache: "hit" }, vec![]);
+        let seq = summary(&mut ring, Some(rid));
+        let row = json::parse(&ring.entries.back().unwrap().1).unwrap();
+        assert_eq!(row.get("cache").and_then(Json::as_str), Some("hit"));
+        assert!(row.get("proto").is_none() && row.get("conn").is_none());
+        let t = ring.detail(seq).unwrap();
+        assert_eq!(t.get("transport").and_then(|t| t.get("cache")).and_then(Json::as_str), Some("hit"));
+        // A revalidation used a connection AND the cache.
+        let c = Conn { protocol: "h2", reused: true, id: 3, remote: None, cache: "revalidated" };
+        assert_eq!(c.columns(), "\"proto\":\"h2\",\"conn\":3,\"reused\":true,\"cache\":\"revalidated\"");
+        // Nothing about the cache when it had no part in it.
+        let off = Conn { protocol: "h2", reused: false, id: 4, remote: None, cache: "off" };
+        assert!(!off.columns().contains("cache"));
+    }
+
+    #[test]
     fn raw_set_cookie_lines_are_capped_per_line_and_per_response() {
         let mut ring = Ring::new();
         let rid = begun(&mut ring, "fetch");
-        let conn = Conn { protocol: "http/1.1", reused: false, id: 1, remote: None };
+        let conn = Conn { protocol: "http/1.1", reused: false, id: 1, remote: None, cache: "off" };
         let huge = format!("big={}", "x".repeat(10_000));
         let lines: Vec<String> = std::iter::once(huge).chain((0..100).map(|i| format!("c{i}=v"))).collect();
         ring.conn(rid, conn, lines);

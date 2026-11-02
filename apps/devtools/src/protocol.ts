@@ -340,6 +340,12 @@ export interface NetEntry {
   proto?: string;
   conn?: number;
   reused?: boolean;
+  /**
+   * What the HTTP cache did (m26, docs/STORAGE.md §12): `hit` came from disk
+   * with no connection, and `revalidated` from disk after a 304. `stored` and
+   * `miss` came from the network. Absent when the cache had no part in it.
+   */
+  cache?: "hit" | "revalidated" | "stored" | "miss";
 }
 
 /** The pooled transport's counters (redjs `http::pool::stats`). */
@@ -448,7 +454,14 @@ export interface NetDetail {
    * What the transport reports about the connection (redjs `fetch::net_info`)
    * — or, failing that, the protocol from `nextHopProtocol`.
    */
-  transport?: { protocol?: string; reused?: boolean; connectionId?: number; remote?: string | null };
+  transport?: {
+    protocol?: string;
+    reused?: boolean;
+    connectionId?: number;
+    remote?: string | null;
+    /** The HTTP cache's part (m26): `off`, `hit`, `revalidated`, `stored`, `miss`. */
+    cache?: string;
+  };
   timing?: { headersMs?: number; bodyMs?: number; failedMs?: number };
   error?: { name?: string; message?: string };
   ws?: {

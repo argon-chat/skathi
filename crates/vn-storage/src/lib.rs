@@ -116,6 +116,7 @@ pub mod cookies;
 pub mod crypt;
 pub mod file;
 pub mod folders;
+pub mod http_cache;
 #[cfg(feature = "indexeddb")]
 pub mod idb;
 
@@ -347,7 +348,7 @@ pub fn default_folder(app_name: Option<&str>) -> PathBuf {
     }
 }
 
-fn resolve_app_name(from_embedder: Option<&str>) -> String {
+pub(crate) fn resolve_app_name(from_embedder: Option<&str>) -> String {
     let env = std::env::var("VN_APP_NAME").ok();
     let stem = std::env::current_exe()
         .ok()
@@ -420,6 +421,9 @@ pub fn set_storage_folder(folder: &Path, encrypted: Option<bool>) -> Result<Path
     // Outside the State lock: the IndexedDB host takes it from its own thread.
     #[cfg(feature = "indexeddb")]
     idb::storage_changed(&folder, encrypted);
+    // The HTTP cache follows the encryption at once; it has nothing to
+    // migrate (src/http_cache.rs).
+    http_cache::storage_changed(encrypted);
     r.map(|()| folder)
 }
 
@@ -472,9 +476,9 @@ fn relocate(folder: &Path, encrypted: Option<bool>) -> Result<(), String> {
 }
 
 /// The storage folder as of now: the configured one, else the default
-/// `install` would have set. What IndexedDB's host latches (src/idb.rs).
-#[cfg_attr(not(feature = "indexeddb"), allow(dead_code))]
-fn current_folder() -> PathBuf {
+/// `install` would have set. What IndexedDB's host latches (src/idb.rs), and
+/// what the HTTP cache's sticky rule reads (src/http_cache.rs).
+pub(crate) fn current_folder() -> PathBuf {
     let folder = storage().state.lock().unwrap().folder.clone();
     if folder.as_os_str().is_empty() {
         default_folder(embedder_app_name().as_deref())
@@ -540,7 +544,7 @@ pub fn pump() {
 // host functions
 // ---------------------------------------------------------------------------
 
-fn json_escape(s: &str) -> String {
+pub(crate) fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     for c in s.chars() {
         match c {
@@ -647,7 +651,7 @@ host_fn!(fn vn_storage_flush(_g, _args) {
 
 static APP_NAME: Mutex<Option<String>> = Mutex::new(None);
 
-fn embedder_app_name() -> Option<String> {
+pub(crate) fn embedder_app_name() -> Option<String> {
     APP_NAME.lock().unwrap().clone()
 }
 

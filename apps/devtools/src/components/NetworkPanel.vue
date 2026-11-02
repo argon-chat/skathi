@@ -73,13 +73,24 @@ function statusText(entry: {
   phase?: string;
   sent?: number;
   received?: number;
+  cache?: string;
 }): string {
   if (entry.error) return "failed";
   if (entry.phase) {
     if (entry.phase === "close") return `closed ${entry.status ?? ""}`.trim();
     return entry.phase;
   }
+  // Chromium's Status column says what the NETWORK answered: a revalidation is
+  // a 304, whatever status the stored answer gave the app.
+  if (entry.cache === "revalidated") return "304";
   return entry.status === undefined ? "—" : String(entry.status);
+}
+
+function statusTitle(entry: NetEntry): string {
+  if (entry.cache === "revalidated")
+    return `304 Not Modified: the body came from the disk cache; the app saw ${entry.status ?? "the stored status"}`;
+  if (entry.cache === "hit") return "from the disk cache: no request was made";
+  return "";
 }
 
 /** The last path segment, with the origin kept as a dim prefix. */
@@ -89,8 +100,13 @@ function shortUrl(url: string): { host: string; rest: string } {
   return { host: m[1], rest: m[2] || "/" };
 }
 
-/** `h2`, `http/1.1` — Chromium's Protocol column; empty when there was no connection. */
+/**
+ * `h2`, `http/1.1` — Chromium's Protocol column; empty when there was no
+ * connection. An answer from the HTTP cache had none, and says so the way
+ * Chromium's Size column does.
+ */
 function protoText(entry: NetEntry): string {
+  if (entry.cache === "hit") return "(disk cache)";
   return entry.proto || "";
 }
 
@@ -330,11 +346,17 @@ onUnmounted(() => {
                   ><span class="rest">{{ shortUrl(entry.url).rest }}</span>
                 </span>
                 <span v-else class="c-url rest-only" :title="entry.url">{{ entry.url }}</span>
-                <span v-if="!open" class="c-proto" :class="{ h2: entry.proto === 'h2' }">{{ protoText(entry) }}</span>
+                <span
+                  v-if="!open"
+                  class="c-proto"
+                  :class="{ h2: entry.proto === 'h2', disk: entry.cache === 'hit' }"
+                  :title="statusTitle(entry)"
+                  >{{ protoText(entry) }}</span
+                >
                 <span v-if="!open" class="c-conn" :class="{ fresh: entry.conn !== undefined && !entry.reused }" :title="connTitle(entry)">{{
                   entry.conn === undefined ? "" : "#" + entry.conn
                 }}</span>
-                <span class="c-status" :class="statusClass(entry)">{{ statusText(entry) }}</span>
+                <span class="c-status" :class="statusClass(entry)" :title="statusTitle(entry)">{{ statusText(entry) }}</span>
                 <span v-if="!open" class="c-time">{{ entry.ms === undefined ? "" : Math.round(entry.ms) + " ms" }}</span>
               </div>
             </template>
@@ -530,12 +552,17 @@ onUnmounted(() => {
  * the host). A new connection's id is drawn brighter than a reused one's, so
  * a burst of fresh dials — the thing worth seeing — stands out. */
 .c-proto {
-  width: 58px;
+  width: 84px;
   flex-shrink: 0;
   color: #6d7c90;
 }
 .c-proto.h2 {
   color: #a5d6ff;
+}
+/* An answer from the HTTP cache: no connection, Chromium's "(disk cache)". */
+.c-proto.disk {
+  color: #8494a8;
+  font-style: italic;
 }
 .c-conn {
   width: 40px;

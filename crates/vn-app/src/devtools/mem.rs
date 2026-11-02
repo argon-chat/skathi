@@ -1415,6 +1415,9 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
         ("tree", tree_json),
         ("side", side_json),
         ("stickers", stickers()),
+        // The disk HTTP cache (`net_cache` has the same block): on disk, not
+        // in memory, but it is what makes an evicted image cheap to show again.
+        ("httpCache", super::net::cache_json()),
         ("stylesheetCompiles", sheets_json),
         (
             "explained",

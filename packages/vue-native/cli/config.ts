@@ -11,6 +11,7 @@
 //     "version": "1.2.3",         default: the app's package.json version
 //     "window": { … },            unchanged
 //     "devtools": true,           unchanged (a runtime switch)
+//     "httpCache": { "maxMB": 256 },  the disk HTTP cache's cap; 0 or false = none (docs/STORAGE.md §12)
 //     "id": "gl.argon.hello",     launch identity (instance key, protocol owner) — default name
 //     "singleInstance": true,     one process per user session; a 2nd launch forwards (docs/LAUNCH.md)
 //     "raiseOnSecondInstance": true,  bring the window forward on a forwarded launch (default true)
@@ -87,6 +88,9 @@ const TOP_LEVEL = new Set([
   "version",
   "window",
   "devtools",
+  // The disk HTTP cache's cap, folded into the window block like `devtools`
+  // (docs/STORAGE.md §12).
+  "httpCache",
   "assets",
   "publicDir",
   "define",
@@ -313,6 +317,13 @@ export function loadAppConfig(target: string): AppConfig {
 
   if (raw.argonSecure !== undefined && typeof raw.argonSecure !== "boolean") {
     throw new ConfigError('vn.config.json "argonSecure" must be true or false');
+  }
+  if (raw.httpCache !== undefined && raw.httpCache !== false) {
+    const c = raw.httpCache as Record<string, unknown> | null;
+    const mb = c && typeof c === "object" ? c.maxMB : undefined;
+    if (typeof mb !== "number" || !(mb >= 0)) {
+      throw new ConfigError('vn.config.json "httpCache" must be false or { "maxMB": <MB, 0 = no cache> }');
+    }
   }
   const argonSecure = raw.argonSecure === true;
 

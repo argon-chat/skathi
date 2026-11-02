@@ -184,13 +184,26 @@ function foldDevtoolsFlag(
   return { ...(win ?? {}), devtools: cfg.devtools };
 }
 
+// The top-level `"httpCache": { "maxMB": N }` (docs/STORAGE.md §12) rides in
+// the same block for the same reason: the host installs the cache before any
+// JS runs, so the answer has to be in the JSON it reads at boot. Same
+// precedence as the devtools flag.
+function foldHttpCache(
+  cfg: Record<string, unknown> | undefined,
+  win: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!cfg || cfg.httpCache === undefined) return win;
+  if (win && win.httpCache !== undefined) return win;
+  return { ...(win ?? {}), httpCache: cfg.httpCache };
+}
+
 function readWindowConfig(): Record<string, unknown> | undefined {
   const cfg = readVnConfig();
   const win =
     cfg && typeof cfg.window === "object" && cfg.window
       ? (cfg.window as Record<string, unknown>)
       : undefined;
-  return foldDevtoolsFlag(cfg, win);
+  return foldHttpCache(cfg, foldDevtoolsFlag(cfg, win));
 }
 
 // The app's own name, copied into the manifest for the Rust host.

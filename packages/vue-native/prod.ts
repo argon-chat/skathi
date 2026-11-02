@@ -133,6 +133,11 @@ function windowConfig(): string {
   if (typeof cfg.devtools === "boolean" && typeof win.devtools !== "boolean") {
     win.devtools = cfg.devtools;
   }
+  // `"httpCache": { "maxMB": N }` (docs/STORAGE.md §12): the host installs the
+  // cache before any JS runs, so it rides here too, with the same precedence.
+  if (cfg.httpCache !== undefined && win.httpCache === undefined) {
+    win.httpCache = cfg.httpCache;
+  }
   return JSON.stringify(win, null, 2);
 }
 

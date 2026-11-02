@@ -118,6 +118,14 @@ function reveal(kv: KV, key: string): void {
 
 // ---- headers ----------------------------------------------------------------
 
+/** What the HTTP cache did (redjs `cache::Outcome`, docs/STORAGE.md §12). */
+const CACHE_LABEL: Record<string, string> = {
+  hit: "(disk cache) — served from disk, no request was made",
+  revalidated: "revalidated — the server answered 304; the body came from disk",
+  stored: "stored — from the network, and kept",
+  miss: "not stored — from the network",
+};
+
 /**
  * Why a connection fact is missing. The transport reports it (redjs
  * `fetch::net_info`) for every response that crossed a network; what is left
@@ -192,6 +200,7 @@ const general = computed<KV[]>(() => {
           : missing,
     faint: t.connectionId === undefined && t.reused === undefined,
   });
+  if (t.cache && t.cache !== "off") rows.push({ name: "HTTP Cache", value: CACHE_LABEL[t.cache] ?? t.cache });
   if (req) {
     const bits = [
       req.credentials && `credentials ${req.credentials}`,
