@@ -65,6 +65,33 @@ pub trait MatchDom: Copy {
     /// unit-test doubles) yield nothing, which makes `:has()` false rather
     /// than wrong.
     fn each_child(&self, _f: &mut dyn FnMut(Self)) {}
+    /// Does [`Self::interaction`] answer the element's LIVE state? Then a
+    /// script's query (`matches`, `querySelector`, `closest`) is filtered by
+    /// it, as a browser's is ([`crate::query_all_in`]).
+    const LIVE_STATE: bool = false;
+    /// Is this element in `state` right now? `None`, the default, is the
+    /// cascade's view: an interaction pseudo-class matches as "would match
+    /// when in that state", because the cascade sorts such rules into gpui's
+    /// state ladder and gpui applies the rung live. A view for a script's
+    /// query answers `Some`.
+    fn interaction(&self, _state: Interaction) -> Option<bool> {
+        None
+    }
+}
+
+/// The interaction states a selector can name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Interaction {
+    /// `:hover`
+    Hover,
+    /// `:active`
+    Active,
+    /// `:focus`
+    Focus,
+    /// `:focus-visible`
+    FocusVisible,
+    /// `:focus-within`
+    FocusWithin,
 }
 
 /// The HTML rule for a boolean attribute (`disabled`, `checked`): present is
@@ -204,12 +231,17 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
         match pc {
             // Interaction states: the cascade computes "would this match WHEN
             // in the state" — the buckets are classified separately and gpui's
-            // ladder picks them live, so here they are unconditionally true.
-            PseudoClass::Hover
-            | PseudoClass::Active
-            | PseudoClass::Focus
-            | PseudoClass::FocusVisible
-            | PseudoClass::FocusWithin => true,
+            // ladder picks them live, so for it they are unconditionally true.
+            // A script's query asks a view that knows the live state.
+            PseudoClass::Hover => self.0.interaction(Interaction::Hover).unwrap_or(true),
+            PseudoClass::Active => self.0.interaction(Interaction::Active).unwrap_or(true),
+            PseudoClass::Focus => self.0.interaction(Interaction::Focus).unwrap_or(true),
+            PseudoClass::FocusVisible => {
+                self.0.interaction(Interaction::FocusVisible).unwrap_or(true)
+            }
+            PseudoClass::FocusWithin => {
+                self.0.interaction(Interaction::FocusWithin).unwrap_or(true)
+            }
             // Property states: the element property IS the state, so these are
             // matched for real and their rules fold into the base bucket. A
             // property write already marks the tree dirty, so the next restyle

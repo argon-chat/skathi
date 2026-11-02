@@ -89,7 +89,10 @@ fn elements_in_document_order(t: &Tree) -> Vec<u32> {
 pub fn query(selector: &str) -> Result<(Vec<u32>, Vec<String>), String> {
     tree::read_tree(|t| {
         let ids = elements_in_document_order(t);
-        let candidates: Vec<NodeRef<'_>> = ids.iter().map(|&id| NodeRef { tree: t, id }).collect();
+        // Filtered by the live interaction state, as `document.querySelectorAll`.
+        let live = crate::live_state::LiveStates::take(t);
+        let candidates: Vec<crate::live_state::LiveRef<'_>> =
+            ids.iter().map(|&id| crate::live_state::LiveRef::new(t, id, &live)).collect();
         let result = vn_css::query_all(selector, &candidates)?;
         for w in &result.warnings {
             crate::log::record("css", format!("[query] {w}"));

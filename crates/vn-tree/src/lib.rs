@@ -23,6 +23,7 @@ mod dom;
 mod fonts;
 mod img;
 mod live;
+mod live_state;
 pub mod log;
 mod lottie;
 mod observe;

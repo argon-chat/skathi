@@ -185,6 +185,16 @@ pub struct WindowState {
     /// What is hovered in this window, resolved once a frame
     /// (`pointer::resolve_hover`).
     pub hover: crate::pointer::Hover,
+    /// The target of the mouse press in progress in this window, from the
+    /// press to the release, whatever listens: it and its ancestors are what
+    /// `:active` matches in a script's query (`crate::live_state`). Set and
+    /// cleared by the hit refiner (`pointer::refine`).
+    pub active: Option<u32>,
+    /// Was this window's last input the keyboard, as of the last time the
+    /// host ran script for it (`live_state::note_modality`)? What
+    /// `:focus-visible` reads in a script's query, as the painter reads
+    /// `Window::last_input_was_keyboard`.
+    pub keyboard_input: bool,
     /// This window's activation observer — a press the window loses
     /// activation in the middle of is cancelled (`pointercancel`).
     pub activation: Option<Subscription>,

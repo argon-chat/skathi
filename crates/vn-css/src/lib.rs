@@ -50,7 +50,7 @@ pub use animator::{
     script_keyframes, strip_transitioned, AnimEvent, AnimEventKind, Animator, ScriptClock, ScriptFrame,
     ScriptKeyframeNotes, ScriptTiming,
 };
-pub use element::MatchDom;
+pub use element::{Interaction, MatchDom};
 pub use mapper::{
     accepts_declaration, parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
     set_font_source, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses, uses_viewport_units,
@@ -2710,13 +2710,21 @@ fn is_webkit_scrollbar(
 }
 
 pub(crate) fn audit_selector(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> bool {
-    audit_components(sel, sel.iter_raw_match_order(), false, diagnostics)
+    audit_components(sel, sel.iter_raw_match_order(), false, false, diagnostics)
+}
+
+/// [`audit_selector`] for a script's query against a view that answers the
+/// LIVE interaction state ([`MatchDom::LIVE_STATE`]): a state inside
+/// `:not()` / `:is()` / `:where()` is a plain yes or no there, so it is fine.
+fn audit_live_selector(sel: &Selector<'_>, diagnostics: &mut Vec<String>) -> bool {
+    audit_components(sel, sel.iter_raw_match_order(), false, true, diagnostics)
 }
 
 fn audit_components<'a, 'i>(
     sel: &Selector<'i>,
     components: impl Iterator<Item = &'a Component<'i, element::Impl>>,
     nested: bool,
+    live: bool,
     diagnostics: &mut Vec<String>,
 ) -> bool
 where
@@ -2727,7 +2735,7 @@ where
         // `Some(reason)` = this component can never be answered truthfully.
         let reason: Option<String> = match c {
             Component::NonTSPseudoClass(pc) => {
-                if nested && ladder_state(pc) != 0 {
+                if nested && !live && ladder_state(pc) != 0 {
                     // Outside a functional pseudo an interaction state is a
                     // ladder bucket; inside one the matcher has to answer it
                     // with a bare yes/no and always says "yes", which silently
@@ -2812,7 +2820,7 @@ where
             | Component::Is(list)
             | Component::Any(_, list) => {
                 for inner in list.iter() {
-                    if !audit_components(inner, inner.iter_raw_match_order(), true, diagnostics) {
+                    if !audit_components(inner, inner.iter_raw_match_order(), true, live, diagnostics) {
                         ok = false;
                     }
                 }
@@ -3175,6 +3183,12 @@ pub struct QueryResult {
 /// `Err(advisory)` rather than silently matching nothing, which is the whole
 /// point: `query(":has(.x)")` must say why, exactly like a rule using it does.
 ///
+/// The interaction pseudo-classes are the one place the query parts ways with
+/// the cascade: when the view answers the live state ([`MatchDom::LIVE_STATE`],
+/// vue-native's tree does), `:hover` / `:active` / `:focus` / `:focus-visible`
+/// / `:focus-within` filter the query as a browser's do, and
+/// [`classify_states`] (whose limits are gpui's state ladder's) is skipped.
+///
 /// Candidates rather than a root node because [`MatchDom`] deliberately has no
 /// child accessor (the matcher never walks downwards); the caller owns the tree
 /// and hands us its elements in document order.
@@ -3224,28 +3238,40 @@ pub fn query_all_in<D: MatchDom>(
             return Err(format!("`{sel}` is not a selector"));
         };
         for s in &style.selectors.0 {
-            let (states, ancestor) = match classify_states(s, &mut diagnostics) {
-                Some(pair) => pair,
-                None => return Err(join_diagnostics(&diagnostics)),
-            };
             if !probe_runnable(s) {
                 return Err(format!(
                     "selector rejected (matcher cannot run it — :has()/nesting?): {}",
                     sel_text(s)
                 ));
             }
+            // A view with the live state answers `:hover` / `:active` /
+            // `:focus` / `:focus-visible` / `:focus-within` as a browser does,
+            // anywhere in the selector: `.a:hover + .b`, `:not(:focus)` and
+            // `:hover:focus` are plain conjunctions there. The limits
+            // `classify_states` reports belong to gpui's state ladder, which a
+            // query does not go through.
+            if D::LIVE_STATE {
+                if !audit_live_selector(s, &mut diagnostics) {
+                    return Err(join_diagnostics(&diagnostics));
+                }
+                selectors.push(s);
+                continue;
+            }
+            let (states, ancestor) = match classify_states(s, &mut diagnostics) {
+                Some(pair) => pair,
+                None => return Err(join_diagnostics(&diagnostics)),
+            };
             if !audit_selector(s, &mut diagnostics) {
                 return Err(join_diagnostics(&diagnostics));
             }
             if states != 0 || ancestor.is_some() {
-                // Honest about the one place a query diverges from a browser's
-                // `querySelectorAll`: the cascade answers interaction pseudos
-                // with "would match when in that state" (gpui's ladder picks
-                // them live), so they cannot filter a query either.
+                // A view with no live state (a test double, the compile-time
+                // probe) can only answer an interaction pseudo the cascade's
+                // way, "would match when in that state", so it cannot filter.
                 diagnostics.push(format!(
-                    "`{}` names an interaction state — the matcher answers `:hover`/`:active`/\
-                     `:focus`/`:focus-visible` as \"would match when in that state\" (the cascade's \
-                     own semantics), so the query is NOT filtered by the live state",
+                    "`{}` names an interaction state, and this element view has no live state: \
+                     `:hover`/`:active`/`:focus`/`:focus-visible`/`:focus-within` match as \
+                     \"would match when in that state\", so the query is NOT filtered by it",
                     sel_text(s)
                 ));
             }
@@ -5782,6 +5808,117 @@ mod tests {
             "{:?}",
             r.warnings
         );
+    }
+
+    /// [`DocRef`] with a live state: `hovered` and `focused` are node indices,
+    /// focus within is the focused node's ancestors, and `keyboard` is the
+    /// modality `:focus-visible` reads.
+    #[derive(Clone, Copy)]
+    struct LiveRef<'d> {
+        r: DocRef<'d>,
+        hovered: &'d [usize],
+        focused: usize,
+        keyboard: bool,
+    }
+
+    impl<'d> LiveRef<'d> {
+        fn wrap(&self, r: DocRef<'d>) -> Self {
+            LiveRef { r, ..*self }
+        }
+    }
+
+    impl<'d> MatchDom for LiveRef<'d> {
+        const LIVE_STATE: bool = true;
+        fn interaction(&self, state: Interaction) -> Option<bool> {
+            let i = self.r.i;
+            let within = || {
+                let mut at = self.focused;
+                while at != 0 {
+                    if at == i {
+                        return true;
+                    }
+                    at = self.r.doc.nodes[at].2;
+                }
+                false
+            };
+            Some(match state {
+                Interaction::Hover => self.hovered.contains(&i),
+                Interaction::Active => false,
+                Interaction::Focus => self.focused == i,
+                Interaction::FocusVisible => self.focused == i && self.keyboard,
+                Interaction::FocusWithin => within(),
+            })
+        }
+        fn key(&self) -> u64 {
+            self.r.key()
+        }
+        fn parent(&self) -> Option<Self> {
+            self.r.parent().map(|r| self.wrap(r))
+        }
+        fn prev_sibling(&self) -> Option<Self> {
+            self.r.prev_sibling().map(|r| self.wrap(r))
+        }
+        fn next_sibling(&self) -> Option<Self> {
+            self.r.next_sibling().map(|r| self.wrap(r))
+        }
+        fn has_tag(&self, name: &str) -> bool {
+            self.r.has_tag(name)
+        }
+        fn tag_eq(&self, other: &Self) -> bool {
+            self.r.tag_eq(&other.r)
+        }
+        fn has_class(&self, name: &str) -> bool {
+            self.r.has_class(name)
+        }
+        fn tag_name(&self) -> &str {
+            self.r.tag_name()
+        }
+        fn each_class(&self, f: &mut dyn FnMut(&str)) {
+            self.r.each_class(f)
+        }
+        fn has_scope(&self, name: &str) -> bool {
+            self.r.has_scope(name)
+        }
+        fn attr(&self, name: &str) -> Option<&str> {
+            self.r.attr(name)
+        }
+        fn is_empty(&self) -> bool {
+            self.r.is_empty()
+        }
+        fn is_root(&self) -> bool {
+            self.r.is_root()
+        }
+    }
+
+    /// A view with the live state filters a query by it, as a browser's
+    /// `querySelectorAll` / `matches` does, with no advisory; and the forms
+    /// gpui's state ladder cannot take (a state inside `:not()`, a sibling's
+    /// state, two states at once) are plain conjunctions there.
+    #[test]
+    fn a_live_view_filters_a_query_by_the_interaction_state() {
+        fn live<'d>(d: &'d Doc, hovered: &'d [usize], focused: usize, keyboard: bool) -> Vec<LiveRef<'d>> {
+            refs(d).into_iter().map(|r| LiveRef { r, hovered, focused, keyboard }).collect()
+        }
+        fn q(s: &str, c: &[LiveRef<'_>]) -> Result<(Vec<usize>, Vec<String>), String> {
+            query_all(s, c).map(|r| (r.matched, r.warnings))
+        }
+        let d = doc();
+        // nav (0) and the first tab (1) hovered; the second tab (2) focused by mouse.
+        let c = live(&d, &[1, 2], 3, false);
+        assert_eq!(q(".tab:hover", &c).unwrap(), (vec![1], vec![]));
+        assert_eq!(q(":hover", &c).unwrap().0, vec![0, 1]);
+        assert_eq!(q(":focus", &c).unwrap().0, vec![2]);
+        assert!(q(":focus-visible", &c).unwrap().0.is_empty());
+        assert_eq!(q(":focus-within", &c).unwrap().0, vec![0, 2]);
+        assert!(q(":active", &c).unwrap().0.is_empty());
+        assert_eq!(q(".tab:not(:hover)", &c).unwrap().0, vec![2]);
+        assert_eq!(q(".tab:hover + .tab", &c).unwrap().0, vec![2]);
+        assert_eq!(q(".nav:focus-within .tab:focus", &c).unwrap().0, vec![2]);
+        assert!(q(".tab:hover:focus", &c).unwrap().0.is_empty());
+        // The same focus by keyboard is visible.
+        let k = live(&d, &[], 3, true);
+        assert_eq!(q(":focus-visible", &k).unwrap().0, vec![2]);
+        assert!(q(":hover", &k).unwrap().0.is_empty());
     }
 
 

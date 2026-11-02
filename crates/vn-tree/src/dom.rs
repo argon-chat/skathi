@@ -20,7 +20,8 @@
 //! JSON round trip per `getBoundingClientRect()` would be the wrong tax on a
 //! call floating-ui makes dozens of times per open.
 
-use crate::tree::{self, Kind, NodeRef, Tree};
+use crate::live_state::{LiveRef, LiveStates};
+use crate::tree::{self, Kind, Tree};
 
 /// What a [`query`] call is asking for.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -52,14 +53,18 @@ pub fn query(selector: &str, root: u32, mode: QueryMode) -> Result<Vec<u32>, Str
             QueryMode::SelfOnly => vec![root],
             QueryMode::Closest => ancestors_from(t, root),
         };
-        let candidates: Vec<NodeRef<'_>> = ids.iter().map(|&id| NodeRef { tree: t, id }).collect();
+        // A script's query filters `:hover` / `:active` / `:focus` /
+        // `:focus-visible` / `:focus-within` by the live state, as a browser's
+        // does; the cascade's matcher answers them "would match"
+        // (`crate::live_state`).
+        let live = LiveStates::take(t);
+        let candidates: Vec<LiveRef<'_>> = ids.iter().map(|&id| LiveRef::new(t, id, &live)).collect();
         // `root` is the node the method was called on, which is exactly the
         // DOM's *scoping root*: `el.querySelector(":scope > .x")` asks for a
         // child of `el`, not of the document element. Passing it here is the
         // whole of `:scope` support — parcel answers `Component::Scope` from
         // this field.
-        let result =
-            vn_css::query_all_in(selector, &candidates, Some(NodeRef { tree: t, id: root }))?;
+        let result = vn_css::query_all_in(selector, &candidates, Some(LiveRef::new(t, root, &live)))?;
         for w in &result.warnings {
             crate::log::record("css", format!("[query] {w}"));
         }

@@ -852,6 +852,9 @@ fn dom_key(k: &str) -> String {
 /// its `mouseleave` / `mouseenter` come before the `mousemove`, as in a
 /// browser.
 pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
+    // The frame's script runs after this: its queries see this window's
+    // modality as gpui's `:focus-visible` rung paints it.
+    crate::live_state::note_modality(window);
     crate::pointer::resolve_hover(window, cx);
     let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
@@ -1038,6 +1041,8 @@ fn flush_up_waves(window: &mut Window, cx: &mut App) {
 /// [`flush_up_waves`]). Called when the window loses activation mid-press —
 /// the case where the release goes to some other window, or nowhere.
 fn cancel_press(window: &mut Window, cx: &mut App) {
+    // The release may never reach this window now: nothing is `:active`.
+    windows::here(window, |w| w.active = None);
     let Some((target, position)) = windows::here(window, |w| match &mut w.press {
         Some(p) if !p.cancelled => {
             p.cancelled = true;
@@ -1121,6 +1126,7 @@ pub(crate) fn js_wave_app(window: &mut Window, cx: &mut App, wave: impl FnOnce()
     // A gpui listener's dispatch (unless the frame tick is the caller): no
     // forced layout may draw under it (`crate::in_input_dispatch`).
     let _input = crate::InputDispatch::enter();
+    crate::live_state::note_modality(window);
     let proceed = with_published(window, cx, Phase::Commit, wave);
     settle_owed_later(window, cx);
     if crate::flush_changes() {
@@ -1188,6 +1194,7 @@ fn js_dispatch<V: 'static>(
     cx: &mut Context<V>,
 ) -> bool {
     let _input = crate::InputDispatch::enter();
+    crate::live_state::note_modality(window);
     let proceed = with_published(window, &mut **cx, Phase::Commit, || {
         crate::dispatch_event(id, event, payload)
     });
@@ -2527,8 +2534,13 @@ fn build_node<V: 'static>(
                         if let Some(f) = &cs.focus {
                             d.style().refine(f);
                         }
+                        // A text field shows focus whatever moved it there, a
+                        // click included, as in Chromium; anything else only
+                        // after the keyboard (`crate::live_state`).
                         if let Some(f) = &cs.focus_visible {
-                            if window.last_input_was_keyboard() {
+                            if window.last_input_was_keyboard()
+                                || crate::live_state::is_text_field(t, id)
+                            {
                                 d.style().refine(f);
                             }
                         }

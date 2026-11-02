@@ -175,8 +175,14 @@ fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, _cx: &mut App)
     let target = resolved.target;
     windows::here(window, |w| {
         w.hit = Some(target);
-        if kind == VnHitKind::Down {
-            w.down_hit = Some(target);
+        // `:active` in a script's query: from the press to the release.
+        match kind {
+            VnHitKind::Down => {
+                w.down_hit = Some(target);
+                w.active = Some(target);
+            }
+            VnHitKind::Up => w.active = None,
+            VnHitKind::Scroll => {}
         }
     });
     let mut path = resolved.path;
