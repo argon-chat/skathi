@@ -3144,6 +3144,9 @@ fn apply_self_blur(
                 spread_radius: gpui::px(0.0),
                 inset: false,
             }]);
+            // The shadow IS the box here, so its middle stays filled: a CSS
+            // outer shadow is cut out of the border box, this one must not be.
+            style.vn_shadow_under_box = Some(true);
         }
         _ => warn_compat_at(
             "filter-blur-shape",

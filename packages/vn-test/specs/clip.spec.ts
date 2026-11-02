@@ -191,3 +191,37 @@ describe("a rounded card around a list that scrolls", () => {
     await check();
   }, T);
 });
+
+describe("box-shadow outside the border box (CSS Backgrounds 3 §7.1)", () => {
+  // An outer shadow is drawn only outside the border box, so a control with a
+  // transparent or translucent background and a focus ring (Tailwind's
+  // `ring-[3px]`, a spread shadow) shows a ring, not a filled slab of the
+  // ring colour. `filter: blur()` on a solid box, which vue-native draws as
+  // the box's own shadow, stays filled.
+  test("a ring around a transparent box is a ring, and a blurred box stays filled", async () => {
+    await app.eval(`(() => {
+      const pad = document.createElement("div");
+      pad.id = "shadow-pad";
+      pad.setAttribute("style", "position: fixed; left: 540px; top: 380px; width: 170px; height: 130px; z-index: 100; background-color: rgb(255, 255, 255)");
+      const ring = document.createElement("div");
+      ring.id = "ring";
+      ring.setAttribute("style", "position: absolute; left: 20px; top: 20px; width: 80px; height: 40px; border-radius: 6px; background-color: transparent; box-shadow: 0 0 0 6px rgb(255, 0, 0)");
+      const blur = document.createElement("div");
+      blur.id = "blurred";
+      blur.setAttribute("style", "position: absolute; left: 115px; top: 20px; width: 40px; height: 40px; background-color: rgb(0, 0, 255); filter: blur(2px)");
+      pad.append(ring, blur);
+      document.body.appendChild(pad);
+      return 0;
+    })()`);
+    const r = await box("#ring");
+    const b = await box("#blurred");
+    const s = await until(shoot, (s) => red(s.at(r.x - 3, r.y + 20)));
+    bunExpect(red(s.at(r.x - 3, r.y + 20))).toBe(true);
+    bunExpect(red(s.at(r.x + 40, r.y + r.h + 3))).toBe(true);
+    // The middle is the white pad, not the ring colour.
+    bunExpect(white(s.at(r.x + 40, r.y + 20))).toBe(true);
+    bunExpect(white(s.at(r.x + 3, r.y + 3))).toBe(true);
+    bunExpect(blue(s.at(b.x + 20, b.y + 20))).toBe(true);
+    await app.eval(`(document.getElementById("shadow-pad").remove(), 0)`);
+  }, T);
+});
