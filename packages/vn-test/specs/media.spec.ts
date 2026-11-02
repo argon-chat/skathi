@@ -135,6 +135,116 @@ test("a sprite plays only its slice of the buffer: onended after its duration", 
   if (r.moved) expect(got).toEqual({ ok: { moved: true, why: "ended", inTime: true, loop: [0.25, 0.5] } });
 }, T);
 
+// The Argon dialpad (apps/client packages/audio/src/DTMF.ts, verbatim but for
+// the output node): per key, two oscillators through two stereo panners, a
+// gain whose envelope is scheduled in the same task (0 at `now`, up to 0.075
+// in 8 ms, down to 0 at 120 ms) and a low-pass, started at once, and nothing
+// kept but the oscillators. Pressed 20 times a second for 3 s, while the spec
+// forces a garbage collection every ~60 ms, as a busy client page does.
+// Read through an analyser into a muted gain; nothing reaches a speaker.
+//
+// What the owner heard, and what this measures:
+// - a gain still at its default 1 when the oscillators start is a full-scale
+//   dual tone (peaks near 2) at every key. Each tone peaks near 0.1 and a
+//   few overlap, so the mix never comes near 0.6;
+// - a gain applied squared (0.075 as 0.0056) leaves the tones near 0.01, so
+//   the mix must also reach 0.05;
+// - a gain, panner or filter collected while its oscillators still play
+//   leaves the graph, and the tone stops mid-way. The keys overlap, so the
+//   mix is never silent while they are pressed: a 10 ms stretch of silence
+//   inside the burst is a tone cut short.
+test("a fast dialpad: no full-scale burst, and no tone cut short by a collection", async () => {
+  await app.eval(`
+    globalThis.__dial = undefined;
+    (async () => {
+      const ctx = new AudioContext();
+      const bus = ctx.createGain();
+      const meter = ctx.createAnalyser(); meter.fftSize = 4096;
+      const mute = ctx.createGain(); mute.gain.value = 0;
+      bus.connect(meter); meter.connect(mute); mute.connect(ctx.destination);
+      const map = { "1": [697, 1209], "2": [697, 1336], "3": [697, 1477], "4": [770, 1209], "5": [770, 1336],
+        "6": [770, 1477], "7": [852, 1209], "8": [852, 1336], "9": [852, 1477], "*": [941, 1209],
+        "0": [941, 1336], "#": [941, 1477] };
+      const playDTMF = (key) => {
+        const freqs = map[key];
+        const now = ctx.currentTime;
+        const duration = 0.12, attack = 0.008, release = 0.02;
+        const oscLow = ctx.createOscillator(), oscHigh = ctx.createOscillator();
+        const panLow = ctx.createStereoPanner(), panHigh = ctx.createStereoPanner();
+        const gain = ctx.createGain(), filter = ctx.createBiquadFilter();
+        oscLow.type = "sine"; oscHigh.type = "sine";
+        oscLow.frequency.value = freqs[0]; oscHigh.frequency.value = freqs[1];
+        panLow.pan.value = -0.12; panHigh.pan.value = 0.12;
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.075, now + attack);
+        gain.gain.setValueAtTime(0.075, now + duration - release);
+        gain.gain.linearRampToValueAtTime(0, now + duration);
+        filter.type = "lowpass"; filter.frequency.value = 3000; filter.Q.value = 0.7;
+        oscLow.connect(panLow).connect(gain);
+        oscHigh.connect(panHigh).connect(gain);
+        gain.connect(filter);
+        filter.connect(bus);
+        oscLow.start(now); oscHigh.start(now);
+        oscLow.stop(now + duration); oscHigh.stop(now + duration);
+      };
+      const buf = new Float32Array(4096);
+      const presses = 60, every = 50;
+      let peak = 0, loud = 0, polls = 0, silent = 0, gap = 0, n = 0;
+      let last = performance.now(), first = 0;
+      const poll = setInterval(() => {
+        const t = performance.now(); gap = Math.max(gap, t - last); last = t;
+        meter.getFloatTimeDomainData(buf);
+        let p = 0; for (let i = 0; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > p) p = a; }
+        if (p > peak) peak = p;
+        if (p > 0.6) loud++;
+        // The newest 10 ms: inside the burst, past its first tone and before
+        // its last one ends, the mix is never silent.
+        const since = t - first;
+        if (first && since > 250 && since < (presses - 1) * every) {
+          let e = 0; for (let i = buf.length - 480; i < buf.length; i++) e += buf[i] * buf[i];
+          if (Math.sqrt(e / 480) < 0.005) silent++;
+        }
+        polls++;
+      }, 10);
+      const t0 = ctx.currentTime;
+      const keys = "123456789*0#";
+      await new Promise(r => { const id = setInterval(() => {
+        if (!first) first = performance.now();
+        playDTMF(keys[n++ % 12]);
+        if (n >= presses) { clearInterval(id); r(); }
+      }, every); });
+      await new Promise(r => setTimeout(r, 400));
+      clearInterval(poll);
+      const moved = ctx.currentTime - t0 > 1;
+      ctx.close();
+      return { moved, presses: n, peak: Math.round(peak * 1000) / 1000, loud, silent, polls, gapMs: Math.round(gap) };
+    })().then(v => { globalThis.__dial = JSON.stringify({ ok: v }); },
+              e => { globalThis.__dial = JSON.stringify({ err: String(e && e.message) }); });
+    'started'`);
+  let raw = "";
+  let collections = 0;
+  const until = Date.now() + 20_000;
+  while (!raw && Date.now() < until) {
+    await app.send("mem", { gc: true });
+    collections++;
+    await Bun.sleep(60);
+    raw = String((await app.eval("globalThis.__dial ?? ''")) ?? "");
+  }
+  const got = JSON.parse(raw || "{}");
+  console.log(`[media] dialpad ${JSON.stringify(got)}, ${collections} forced collections`);
+  const r = (got as { ok: { moved: boolean; presses: number; peak: number; loud: number; silent: number } }).ok;
+  expect(r.presses).toBe(60);
+  // With no output device the clock does not run and nothing plays; the
+  // envelope and the node lifetimes are then pinned by redjs's own tests.
+  if (r.moved) {
+    // Heard, at the envelope's level and not its square.
+    expect(r.peak).toBeGreaterThan(0.05);
+    expect(r.peak).toBeLessThan(0.6);
+    expect(r.loud).toBe(0);
+    expect(r.silent).toBe(0);
+  }
+}, T);
+
 test("the app logged nothing broken", async () => {
   await app.expectNoErrors();
 }, T);
