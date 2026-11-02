@@ -1,0 +1,14 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/backdrop.spec.ts: the window's backdrop material, switched at runtime and read back from DWM and from PrintWindow. See ../README.md.",
+
+  "name": "vn-test-backdrop",
+
+  "window": {
+    "title": "vue-native — backdrop (fixture)",
+    "width": 240,
+    "height": 160,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false,
+    "backdrop": "acrylic"
+  }
+}

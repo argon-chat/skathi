@@ -81,10 +81,10 @@ impl Backdrop {
             "none" | "opaque" => (Backdrop::None, None),
             "mica" => (Backdrop::Mica, None),
             "mica-alt" | "tabbed" => (Backdrop::MicaAlt, None),
-            "acrylic" => (Backdrop::Acrylic, Some(A20C)),
-            // gpui exposes ONE blurred material on Windows, so `blur` and
-            // `acrylic` are the same pixels. Say so rather than let an author
-            // believe they picked something different (A-20).
+            "acrylic" => (Backdrop::Acrylic, None),
+            // Windows has ONE blurred material, so `blur` and `acrylic` are the
+            // same pixels. Say so rather than let an author believe they picked
+            // something different (A-20).
             "blur" => (Backdrop::Acrylic, Some(A20)),
             "transparent" => (Backdrop::Transparent, None),
             _ => return None,
@@ -106,7 +106,11 @@ impl Backdrop {
             Backdrop::None => WindowBackgroundAppearance::Opaque,
             Backdrop::Mica => WindowBackgroundAppearance::MicaBackdrop,
             Backdrop::MicaAlt => WindowBackgroundAppearance::MicaAltBackdrop,
-            Backdrop::Acrylic => WindowBackgroundAppearance::Blurred,
+            // DWM's own acrylic, `DWMSBT_TRANSIENTWINDOW` — Electron's
+            // `backgroundMaterial: 'acrylic'`. The fork draws the accent
+            // policy's blur instead before 22621 ([`Backdrop::resolve_for_os`]
+            // says so).
+            Backdrop::Acrylic => WindowBackgroundAppearance::AcrylicBackdrop,
             Backdrop::Transparent => WindowBackgroundAppearance::Transparent,
         }
     }
@@ -130,13 +134,22 @@ impl Backdrop {
         Some(resolved)
     }
 
-    /// Mica is a Windows 11 material. Asking for it on Windows 10 must advise
-    /// and fall back to acrylic, never silently no-op (Tauri's precedent).
+    /// DWM draws the system backdrops — Mica, Mica Alt and acrylic — from
+    /// Windows 11 22H2 (build 22621). Before that, Mica must advise and fall
+    /// back to acrylic, never silently no-op (Tauri's precedent), and acrylic
+    /// is the older accent-policy blur, which says what it costs.
     fn resolve_for_os(self) -> (Backdrop, Option<&'static str>) {
-        match self {
-            Backdrop::Mica | Backdrop::MicaAlt if !is_windows_11() => (Backdrop::Acrylic, Some(A20B)),
-            other => (other, None),
-        }
+        resolve_backdrop(self, has_system_backdrop())
+    }
+}
+
+/// [`Backdrop::resolve_for_os`] with the OS's answer passed in, so both
+/// answers are testable on one machine.
+fn resolve_backdrop(b: Backdrop, system_backdrop: bool) -> (Backdrop, Option<&'static str>) {
+    match b {
+        Backdrop::Mica | Backdrop::MicaAlt if !system_backdrop => (Backdrop::Acrylic, Some(A20B)),
+        Backdrop::Acrylic if !system_backdrop => (Backdrop::Acrylic, Some(A20C)),
+        other => (other, None),
     }
 }
 
@@ -145,7 +158,7 @@ impl Backdrop {
 ///
 /// Two things follow it, as they follow `themeSource` in Electron:
 /// - the window's own dark mode (`DWMWA_USE_IMMERSIVE_DARK_MODE`), which is
-///   what tints Mica and the OS caption;
+///   what tints Mica, acrylic and the OS caption;
 /// - `prefers-color-scheme`, i.e. every `@media` and `matchMedia` here.
 ///
 /// `System` is the initial value, and it returns both to the OS's setting.
@@ -184,12 +197,13 @@ impl Theme {
     }
 }
 
-const A20: &str = "`backdrop: \"blur\"` resolves to `acrylic` here — gpui exposes one blurred \
-                   material on Windows. Use `acrylic` to say so explicitly.";
-const A20B: &str = "Mica is a Windows 11 material; falling back to `acrylic`.";
-const A20C: &str = "`acrylic` has known compositor cost while resizing and dragging on Windows 10 \
-                    1903+ and Windows 11 22000. `mica` is cheaper if you do not need the \
-                    per-window tint.";
+const A20: &str = "`backdrop: \"blur\"` resolves to `acrylic` here — Windows has one blurred \
+                   material. Use `acrylic` to say so explicitly.";
+const A20B: &str = "Mica needs Windows 11 22H2 (build 22621); falling back to `acrylic`, which \
+                    is the older accent-policy blur on this Windows.";
+const A20C: &str = "`acrylic` before Windows 11 22H2 (build 22621) is the older accent-policy \
+                    blur: it has no light or dark tint of its own, and it has known compositor \
+                    cost while resizing and dragging. 22H2 and later draw DWM's own acrylic.";
 
 /// `titleBarOverlay` — the HOST-drawn caption-button cluster for custom-chrome
 /// apps (§2.3, §4.3, D-decisions on the overlay).
@@ -732,7 +746,7 @@ mod win {
     /// captioned window means DWM accepted it.
     ///
     /// `0 = DWMSBT_AUTO`, `1 = NONE`, `2 = MAINWINDOW` (mica),
-    /// `3 = TRANSIENTWINDOW`, `4 = TABBEDWINDOW` (mica-alt).
+    /// `3 = TRANSIENTWINDOW` (acrylic), `4 = TABBEDWINDOW` (mica-alt).
     pub fn system_backdrop() -> Option<u32> {
         use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE};
         let h = hwnd()?;
@@ -878,12 +892,16 @@ pub fn forget_window(key: vn_tree::WinKey) {
     HWND_CACHE.with(|m| m.borrow_mut().remove(&key));
 }
 
-/// Windows 11 = build 22000 or later. Mica exists only there.
+/// Windows 11 22H2 = build 22621 or later: where `DWMWA_SYSTEMBACKDROP_TYPE`
+/// exists, so where DWM draws Mica, Mica Alt and acrylic. The fork's own
+/// check (`gpui_windows`' `has_system_backdrop`) is the same number. 21H2
+/// (22000) had Mica only through an undocumented attribute the fork never set,
+/// so it counts as before.
 #[cfg(target_os = "windows")]
-fn is_windows_11() -> bool {
+fn has_system_backdrop() -> bool {
     use std::sync::OnceLock;
-    static IS_11: OnceLock<bool> = OnceLock::new();
-    *IS_11.get_or_init(|| {
+    static HAS: OnceLock<bool> = OnceLock::new();
+    *HAS.get_or_init(|| {
         use windows::Wdk::System::SystemServices::RtlGetVersion;
         use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
         let mut vi = OSVERSIONINFOW {
@@ -892,12 +910,12 @@ fn is_windows_11() -> bool {
         };
         // `RtlGetVersion` is the only version query Windows does not lie about
         // for an unmanifested process (`GetVersionEx` reports 6.2 forever).
-        unsafe { RtlGetVersion(&mut vi) }.is_ok() && vi.dwBuildNumber >= 22000
+        unsafe { RtlGetVersion(&mut vi) }.is_ok() && vi.dwBuildNumber >= 22621
     })
 }
 
 #[cfg(not(target_os = "windows"))]
-fn is_windows_11() -> bool {
+fn has_system_backdrop() -> bool {
     false
 }
 
@@ -1901,6 +1919,11 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
         Op::SetBackdrop(b) => {
             window.set_background_appearance(b.to_gpui());
             LIVE.with(|l| l.borrow_mut().backdrop = b);
+            // The renderer reads the appearance when it draws: `none` clears
+            // to opaque and every material to transparent, and text drops
+            // subpixel AA over a material. Until a frame is drawn, the window
+            // keeps the last one, so `material → none` left it see-through.
+            window.refresh();
         }
         Op::SetTheme(t) => {
             apply_theme(t, window);
@@ -2322,6 +2345,33 @@ mod tests {
         assert_eq!(Theme::from_str("auto"), None);
         assert!(Theme::System.is_dark(true) && !Theme::System.is_dark(false));
         assert!(!Theme::Light.is_dark(true) && Theme::Dark.is_dark(false));
+    }
+
+    /// `acrylic` is DWM's own acrylic wherever DWM draws system backdrops, as
+    /// Electron's `backgroundMaterial: 'acrylic'` is, and says nothing there.
+    /// Before 22621 it is the accent-policy blur, and that is advised; Mica
+    /// falls back to it, advised too. `blur` is the same material, advised
+    /// wherever it is asked for.
+    #[test]
+    fn acrylic_is_the_system_material_and_only_its_fallback_is_advised() {
+        assert_eq!(Backdrop::from_str("acrylic"), Some((Backdrop::Acrylic, None)));
+        assert_eq!(Backdrop::from_str("blur"), Some((Backdrop::Acrylic, Some(A20))));
+        assert_eq!(Backdrop::Acrylic.to_gpui(), WindowBackgroundAppearance::AcrylicBackdrop);
+
+        for b in [Backdrop::None, Backdrop::Mica, Backdrop::MicaAlt, Backdrop::Acrylic, Backdrop::Transparent] {
+            assert_eq!(resolve_backdrop(b, true), (b, None), "{b:?} on 22621+");
+        }
+        assert_eq!(resolve_backdrop(Backdrop::Acrylic, false), (Backdrop::Acrylic, Some(A20C)));
+        assert_eq!(resolve_backdrop(Backdrop::Mica, false), (Backdrop::Acrylic, Some(A20B)));
+        assert_eq!(resolve_backdrop(Backdrop::MicaAlt, false), (Backdrop::Acrylic, Some(A20B)));
+        assert_eq!(resolve_backdrop(Backdrop::None, false), (Backdrop::None, None));
+
+        // The config path says nothing about `acrylic` on this machine's
+        // Windows when DWM draws it, and the value survives the load.
+        let cfg = load_config(Some(r#"{"backdrop":"acrylic"}"#.to_string()));
+        assert_eq!(cfg.backdrop, Backdrop::Acrylic);
+        let advised = ADVISED.with(|s| s.borrow().contains(A20C));
+        assert_eq!(advised, !has_system_backdrop());
     }
 
     /// `titleBarOverlay.color` takes CSS hex, which is what Electron's option
