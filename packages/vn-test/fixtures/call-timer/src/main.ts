@@ -7,7 +7,8 @@
 // translateY, and rolled with `el.animate()`.
 //
 // The cell's `1ch` is what hid the timer: the unit was dropped, so every cell
-// was 0 px wide. The root font size is 14px, as `@argon/theme` sets it.
+// was 0 px wide. It is half an em of the cell's own 9px now. The root font
+// size is 14px, as `@argon/theme` sets it.
 //
 // The time is @argon/core's startTimer: a 1 s setInterval counting seconds,
 // split into minutes and seconds. `__VN_TEST_TIMER__.start()` runs it,

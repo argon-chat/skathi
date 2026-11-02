@@ -1,0 +1,86 @@
+/* Each block is one rule of CSS Values 4 §6.1.1 the spec checks. The root's
+   font size is 14px, set inline by main.ts as @argon/theme sets it. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px;
+  background: #202225;
+  color: #e3e5e8;
+}
+
+/* A badge in small text: every em is of its own 9px. */
+.chip {
+  display: flex;
+  font-size: 9px;
+  padding: 0.5em 1em;
+  gap: 1em;
+  background: #5865f2;
+}
+.chip > i {
+  display: block;
+  width: 2em;
+  height: 1em;
+  background: #fff;
+}
+
+/* A chain: each `font-size` em or percentage is of the parent's computed
+   size, and the leaf inherits the px. */
+.l1 {
+  font-size: 1.5em;
+}
+.l2 {
+  font-size: 75%;
+}
+.l3 {
+  width: 10em;
+  height: 1em;
+  margin-left: 2em;
+  background: #3ba55d;
+}
+/* `rem` stays on the root, whatever the element's size. */
+.rem {
+  font-size: 30px;
+  width: 4rem;
+  height: 4px;
+  background: #faa61a;
+}
+
+/* A number line height inherits as the number, an em one as px. */
+.lh-num {
+  font-size: 10px;
+  line-height: 2;
+}
+.lh-em {
+  font-size: 10px;
+  line-height: 2em;
+}
+.lh-num > div,
+.lh-em > div {
+  font-size: 20px;
+}
+
+/* A hover rule that changes the font size moves the base's em with it. */
+.hov {
+  font-size: 10px;
+  padding: 1em;
+  background: #ed4245;
+}
+.hov:hover {
+  font-size: 20px;
+}
+.hov > i {
+  display: block;
+  width: 1px;
+  height: 1px;
+}
+
+/* `ch` is half an em of the element's own size (no glyph is measured). */
+.ch {
+  font-size: 12px;
+  width: 4ch;
+  height: 2px;
+  background: #fff;
+}

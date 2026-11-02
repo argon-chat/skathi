@@ -8,9 +8,9 @@
 // What hid it was each digit's clipping cell, `width: 1ch`. The mapper
 // dropped `ch` as unresolved, the cell was 0 px wide, and its strip of digits
 // was clipped away entirely. `ch` and `ex` are now half an em, css-values-4's
-// value for a glyph that is not measured, with `em` read as the root's size
-// (crates/vn-css README, divergence 7). Under the client's 14px root that is
-// a 7px cell.
+// value for a glyph that is not measured, and the em is the cell's own font
+// size, the counter's 9px (crates/vn-css README, divergence 7). That is a
+// 4.5px cell.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { launch, readPng } from "../src/index";
@@ -32,12 +32,13 @@ const digits = async (): Promise<string> => (await cells()).map((c) => c.digit ?
 const settle = () => sleep(1300);
 
 describe("the call timer", () => {
-  test("each digit's `width: 1ch` cell is half an em of the 14px root, one 9px line high", async () => {
+  test("each digit's `width: 1ch` cell is half an em of its 9px text, one 9px line high", async () => {
     await sleep(400);
     const cs = await cells();
     expect(cs.length).toBe(4);
     for (const c of cs) {
-      expect(c.w).toBeCloseTo(7, 1);
+      // 4.5px, within the layout's whole-pixel rounding.
+      expect(Math.abs(c.w - 4.5)).toBeLessThanOrEqual(0.5);
       expect(c.h).toBeCloseTo(9, 1);
     }
     expect(await digits()).toBe("0000");
