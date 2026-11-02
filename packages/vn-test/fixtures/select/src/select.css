@@ -1,0 +1,57 @@
+#page {
+  position: relative;
+  height: 100%;
+  background-color: rgb(40, 40, 40);
+  color: rgb(255, 255, 255);
+  font-size: 14px;
+}
+/* The Argon client's settings select (`border rounded-md px-3 py-1.5
+   text-sm`), with an opaque background the popup takes, and a line height
+   Chromium ignores on a menulist. */
+.box {
+  position: absolute;
+  border: 1px solid rgb(120, 120, 120);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 30px;
+  background-color: rgb(255, 255, 0);
+  color: rgb(0, 0, 0);
+}
+#model {
+  left: 20px;
+  top: 20px;
+}
+/* The same box with no native skin: no arrow, no internal padding, and the
+   line height is the author's again. */
+#flat {
+  left: 240px;
+  top: 20px;
+  appearance: none;
+}
+#groups {
+  left: 20px;
+  top: 104px;
+}
+#guarded {
+  left: 240px;
+  top: 104px;
+}
+#far {
+  left: 20px;
+  top: 360px;
+}
+/* Below #model's popup: a press here while it is open only closes it. */
+#behind {
+  position: absolute;
+  left: 20px;
+  top: 160px;
+  width: 200px;
+  height: 40px;
+}
+#out {
+  position: absolute;
+  left: 240px;
+  top: 160px;
+  width: 200px;
+}

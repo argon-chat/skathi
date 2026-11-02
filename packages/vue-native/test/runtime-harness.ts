@@ -22,6 +22,7 @@ import {
   getCurrentInstance,
   getTransitionRawChildren,
   h,
+  nextTick,
   onBeforeUpdate,
   onMounted,
   onUnmounted,
@@ -615,6 +616,7 @@ export function createRuntime(
     "queuePostFlushCb",
     "Static",
     "watch",
+    "nextTick",
     "globalThis",
     "console",
     "__vn_intern",
@@ -834,6 +836,7 @@ export function createRuntime(
     queuePostFlushCb,
     Static,
     watch,
+    nextTick,
     fakeGlobal,
     {
       log: (m) => host.logs.push(String(m)),
@@ -1165,7 +1168,7 @@ export function createRuntime(
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, nodeById, looseById, looseRoots, sweepLoose, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
-       appDevtools, appShell, appLaunch, vModelText, vShow, desktopApi, activation, noteActivation,
+       appDevtools, appShell, appLaunch, vModelText, vModelSelect, vShow, desktopApi, activation, noteActivation,
        render, useCssVars, useCssModule, VueElement, defineCustomElement, createSSRApp, hydrate,
        useHost, useShadowRoot, initDirectivesForSSR };`,
   )(...args);

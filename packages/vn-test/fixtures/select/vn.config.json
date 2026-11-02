@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/select.spec.ts: the native <select> — Chromium's closed box, the popup list, the keyboard, and v-model (docs/RUNTIME.md §5.28). See ../README.md.",
+
+  "name": "vn-test-select",
+
+  "window": {
+    "title": "vue-native — select (fixture)",
+    "width": 460,
+    "height": 420,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

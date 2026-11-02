@@ -162,7 +162,12 @@ pub(crate) fn target_at(window: &Window, p: Point<Pixels>) -> u32 {
 
 /// The fork's hit refiner: run at the start of every press, release and wheel
 /// in a window, before any listener.
-fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, _cx: &mut App) {
+fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) {
+    // An open `<select>` popup takes what is on it, and the press that
+    // dismisses it (`crate::select`).
+    if crate::select::refine(kind, p, window, cx) {
+        return;
+    }
     let tags = window.vn_tags_at(p);
     let resolved = tree::read_tree(|t| {
         let root = window_root(t, window);
@@ -416,6 +421,11 @@ const STILL_POINTER_INTERVAL: std::time::Duration = std::time::Duration::from_mi
 /// nothing else (docs/ARCHITECTURE.md §11 item 12).
 pub(crate) fn resolve_hover(window: &mut Window, cx: &mut App) {
     let pos = window.mouse_position();
+    // Over an open `<select>` popup nothing of the page is under the pointer:
+    // the hover stays as it was, as when the pointer is over another window.
+    if crate::select::covers(window, pos) {
+        return;
+    }
     let inside = window.vn_pointer_inside();
     let built = crate::render::layout_count();
     let now = std::time::Instant::now();

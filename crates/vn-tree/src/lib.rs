@@ -32,6 +32,7 @@ mod pointer;
 mod render;
 mod resample;
 mod scroll;
+mod select;
 mod selection;
 mod svg;
 mod tree;

@@ -13,6 +13,7 @@ import {
   getCurrentInstance,
   getTransitionRawChildren,
   h,
+  nextTick,
   onBeforeUpdate,
   onMounted,
   onUnmounted,
@@ -355,6 +356,16 @@ interface MirrorElement extends MirrorNodeBase {
   _falseValue?: unknown;
   /** v-model's expando while an IME composes, as runtime-dom sets it (`vModelText`). */
   composing?: boolean;
+  /** `<option>`: its selectedness and dirtiness (HTML §4.10.10). */
+  _selected?: boolean;
+  _dirty?: boolean;
+  /** `<option>`: the `value` prop as Vue bound it, which `v-model` assigns (runtime-dom's `_value`). Own only once bound. */
+  _rawValue?: unknown;
+  /** `<select>`: the selected index the host was last told (`showSelected`). */
+  _shown?: number;
+  /** `<select v-model>`: the model value, and "a change is being assigned" (runtime-dom's `vModelSelect`). */
+  _modelValue?: unknown;
+  _assigning?: boolean;
   /** `<img>`: the host's answer for `src` (`load` / `error`), which `complete` and `naturalWidth` read. */
   _img?: { src: string; ok: boolean; w: number; h: number };
   /** `on<event>` IDL handlers: the function, and the listener that calls it (`defineHandlerAttr`). */
@@ -866,6 +877,7 @@ function detachNode(child: MirrorNode, notify = true): void {
   if (i >= 0) p.childNodes.splice(i, 1);
   child.parentNode = null;
   domEpoch++;
+  optionsChangedIn(p);
   const box = __vn_create_element(I("vn-detached"));
   __vn_insert(child.__vnId, box, 0);
   if (!isLoose(child)) loosen(child);
@@ -1301,6 +1313,10 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
     // typed with no `@input` anywhere.
     if (type === "input" || type === "textarea") syncListenerFlag(el, "input");
     if (type === "canvas") adoptCanvas(el);
+    // `<select>` / `<option>`: the selection model's members (`selectedIndex`,
+    // `options`, `option.selected`…).
+    if (!namespace && type === "select") defineSelectMembers(el);
+    else if (!namespace && type === "option") defineOptionMembers(el);
     return el;
   },
   createText: (text) => {
@@ -1328,6 +1344,7 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
     // tree) — `textContent` reads it back.
     node.ownText = String(text);
     __vn_set_element_text(node.__vnId, String(text));
+    if (kids) optionsChangedIn(node);
     notifyMutation(node, "childList", { addedNodes: [], removedNodes: kids ?? [] });
   },
   insert: (child, parent, anchor) => insertNode(child, parent, anchor ?? null, true),
@@ -1338,6 +1355,7 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
       if (i >= 0) p.childNodes.splice(i, 1);
       child.parentNode = null;
       domEpoch++;
+      optionsChangedIn(p);
       notifyMutation(p, "childList", { addedNodes: [], removedNodes: [child] });
     }
     // Already freed (its id is 0 now): nothing to free.
@@ -1400,6 +1418,9 @@ function insertNode(child: MirrorNode, parent: MirrorElement, anchor: MirrorNode
     const now = isLoose(parent);
     if (now !== isLoose(child)) (now ? loosen : tighten)(child);
   }
+  // A select's list of options changed: its selection is settled again.
+  if (old && old !== parent) optionsChangedIn(old);
+  optionsChangedIn(parent);
   if (old) notifyMutation(old, "childList", { addedNodes: [], removedNodes: [child] });
   if (notifyAdd) notifyMutation(parent, "childList", { addedNodes: [child], removedNodes: [] });
 }
@@ -1939,6 +1960,13 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
     // `v-text` compiles to this DOM property; runtime-dom assigns it, and
     // ignores a null.
     if (next != null) (el as { textContent: unknown }).textContent = next;
+  } else if (key === "value" && (isSelectEl(el) || isOptionEl(el)) && !foreignNamespace(namespace)) {
+    patchSelectValue(el, next);
+  } else if (key === "selected" && isOptionEl(el) && !foreignNamespace(namespace)) {
+    // runtime-dom assigns the PROPERTY: the option's selectedness, and its
+    // dirtiness (the attribute is written as well, as it always was here).
+    patchAttribute(el, ...attributeOf(el, key, next, namespace));
+    setOptionSelected(el, next === "" || !!next);
   } else {
     // runtime-dom keeps these two as properties for v-model's checkbox.
     if (key === "true-value") el._trueValue = next;
@@ -2019,6 +2047,17 @@ function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
   // The host has the value already (the generic channel, above); only the
   // mirror's storage follows, so the accessor does not push it twice.
   if (key === "value") el._value = next == null ? "" : String(next);
+  // An option's `selected` attribute is its default selectedness: it selects
+  // (or deselects) an option nothing has selected by hand yet (HTML §4.10.10).
+  // A select's `multiple` and `size` change what its selection may be.
+  if (key === "selected" && isOptionEl(el) && !el._dirty) {
+    el._selected = next != null;
+    selectednessChanged(el);
+  }
+  if ((key === "multiple" || key === "size") && isSelectEl(el)) {
+    resetSelect(el);
+    adviseListBox(el);
+  }
   // (`checked` is the other way round: the attribute is `defaultChecked`, and
   // the `checked` getter follows it until something assigns the property.)
   // An `<a href>` has an ACTIVATION BEHAVIOUR whether or not anything
@@ -4183,11 +4222,11 @@ function adviseJsSourced(el: MirrorElement, name: string, via: string): void {
   const key = `event:${name}`;
   if (warned.has(key)) return;
   queueMicrotask(() => {
-    if (warned.has(key) || firstInTree(el, (n) => isFileInput(n))) return;
+    if (warned.has(key) || firstInTree(el, (n) => isFileInput(n) || (name === "change" && isSelectEl(n)))) return;
     warnCompat(
       key,
-      `${via} — this event type is not delivered by the native host yet: only <input type=file> fires it ` +
-        `here, so on this element it will never fire`,
+      `${via} — this event type is not delivered by the native host yet: only <input type=file> ` +
+        `(and <select>, for \`change\`) fires it here, so on this element it will never fire`,
     );
   });
 }
@@ -6179,6 +6218,9 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
   // this is the line that has to already be right — and `test/protocol-codes
   // .test.ts` is what will notice the code arriving. See `vModelText`, which is
   // the directive that wanted it.
+  // A pick in a select's popup, or a key on a closed one: `a` is the option's
+  // index. The selection changes, then `input` and `change` fire.
+  if (name === "input" && isSelectEl(target)) return pickOption(target as MirrorElement, a);
   if ((name === "input" || name === "change") && key != null)
     // The storage, not the accessor: the host already holds this value, and
     // the accessor would push it straight back.
@@ -7721,11 +7763,20 @@ function ownExpando(self: object, key: string, v: unknown): void {
 defineDomGet(
   "value",
   function (this: MirrorElement) {
-    return isMirrorEl(this) ? this._value : undefined;
+    if (!isMirrorEl(this)) return undefined;
+    // A select's is its first selected option's; an option's is its `value`
+    // attribute, else its text (the select model, below).
+    if (isSelectEl(this)) return selectValue(this);
+    if (isOptionEl(this)) return optionValue(this);
+    return this._value;
   },
   function (this: MirrorElement, v: unknown) {
     if (!isMirrorEl(this)) return ownExpando(this, "value", v);
-    if (VALUE_TAGS.has(this.tag)) writeControlValue(this, v);
+    // Selects the first option with that value (none: nothing is selected).
+    if (isSelectEl(this)) setSelectValue(this, String(v));
+    // Sets the `value` attribute, as HTMLOptionElement's setter does.
+    else if (isOptionEl(this)) patchAttribute(this, "value", String(v));
+    else if (VALUE_TAGS.has(this.tag)) writeControlValue(this, v);
     // Any other element: an expando, kept as given, as on a browser's <div>.
     else this._value = v as string;
   } as (value: never) => void,
@@ -7783,6 +7834,280 @@ defineDomGet(
   } as (value: never) => void,
 );
 
+// ---- <select> and <option>: the selection model -----------------------------
+//
+// HTML §4.10.7 and §4.10.10, kept in the mirror: each option's selectedness
+// and dirtiness, the selectedness setting algorithm whenever a select's list
+// of options or its `multiple` / `size` changes, and the members scripts and
+// `v-model` use (`value`, `selectedIndex`, `options`, `selectedOptions`,
+// `option.selected`, `option.index`, `option.text`, `option.label`).
+//
+// The host draws the select (crates/vn-tree/src/select.rs) from the reserved
+// `:selected` prop, the selected index, and reports a user's pick as the
+// select's `input` host event with the option's index (`pickOption`), which
+// changes the selection and fires `input` and `change`, as Chromium does.
+// The host draws a drop-down whatever `multiple` and `size` say
+// (`adviseListBox`).
+
+// Plain predicates, not type guards: `this` in an accessor is already a
+// MirrorElement, and a guard's false branch would narrow it to `never`.
+function isSelectEl(n: unknown): boolean {
+  const e = n as MirrorElement | null | undefined;
+  return !!e && e.kind === 1 && e.tag === "select" && !e._ns;
+}
+
+function isOptionEl(n: unknown): boolean {
+  const e = n as MirrorElement | null | undefined;
+  return !!e && e.kind === 1 && e.tag === "option" && !e._ns;
+}
+
+function isOptGroup(n: unknown): boolean {
+  const e = n as MirrorElement | null | undefined;
+  return !!e && e.kind === 1 && e.tag === "optgroup";
+}
+
+/** A present boolean attribute ("false" is Vue's spelling of absent). */
+const attrOn = (el: MirrorElement, k: string): boolean => el.attrs[k] != null && el.attrs[k] !== "false";
+
+/** The select whose list of options `n` (an option) is in: its parent, or its optgroup parent's parent. */
+function ownerSelect(n: MirrorNode): MirrorElement | null {
+  const p = n.parentNode;
+  if (isSelectEl(p)) return p;
+  if (p && isOptGroup(p) && isSelectEl(p.parentNode)) return p.parentNode;
+  return null;
+}
+
+/** HTML's list of options: the option children, and the option children of the optgroup children, in tree order. */
+function selectOptions(sel: MirrorElement): MirrorElement[] {
+  const out: MirrorElement[] = [];
+  for (const c of sel.childNodes) {
+    if (isOptionEl(c)) out.push(c as MirrorElement);
+    else if (isOptGroup(c)) for (const g of c.childNodes) if (isOptionEl(g)) out.push(g as MirrorElement);
+  }
+  return out;
+}
+
+const isMultipleSelect = (sel: MirrorElement): boolean => attrOn(sel, "multiple");
+
+/** The display size: `size` if positive, else 4 for a multiple select and 1 for the rest. */
+function displaySize(sel: MirrorElement): number {
+  const n = parseInt(sel.attrs.size ?? "", 10);
+  return n > 0 ? n : isMultipleSelect(sel) ? 4 : 1;
+}
+
+/** Disabled itself, or in a disabled optgroup. */
+function optionDisabled(o: MirrorElement): boolean {
+  return attrOn(o, "disabled") || (!!o.parentNode && isOptGroup(o.parentNode) && attrOn(o.parentNode, "disabled"));
+}
+
+/** The text with ASCII white space stripped and collapsed. */
+const stripCollapse = (s: string): string => s.split(/[ \t\n\f\r]+/).filter(Boolean).join(" ");
+
+function optionText(o: MirrorElement): string {
+  return stripCollapse(String((o as unknown as { textContent: unknown }).textContent ?? ""));
+}
+
+/** `option.value`: the `value` attribute, else the text. */
+function optionValue(o: MirrorElement): string {
+  return o.attrs.value ?? optionText(o);
+}
+
+/** What `v-model` reads off an option: the value Vue bound, else `option.value` (runtime-dom's `getValue`). */
+function modelValueOf(o: MirrorElement): unknown {
+  return Object.prototype.hasOwnProperty.call(o, "_rawValue") ? o._rawValue : optionValue(o);
+}
+
+function selectedIndexOf(sel: MirrorElement): number {
+  const opts = selectOptions(sel);
+  for (let i = 0; i < opts.length; i++) if (opts[i]!._selected) return i;
+  return -1;
+}
+
+/** `select.value`: the first selected option's value, "" with none. */
+function selectValue(sel: MirrorElement): string {
+  const o = selectOptions(sel).find((x) => x._selected);
+  return o ? optionValue(o) : "";
+}
+
+/** Tells the host which option to show, when that changed. */
+function showSelected(sel: MirrorElement): void {
+  const ix = selectedIndexOf(sel);
+  if (sel._shown === ix) return;
+  sel._shown = ix;
+  __vn_set_prop(sel.__vnId, I(":selected"), String(ix));
+}
+
+/**
+ * HTML's "selectedness setting algorithm": a single drop-down with nothing
+ * selected selects its first enabled option, and a single select with
+ * several selected keeps the last. Then the host is told.
+ */
+function resetSelect(sel: MirrorElement): void {
+  if (!isMultipleSelect(sel)) {
+    const opts = selectOptions(sel);
+    const on = opts.filter((o) => o._selected);
+    if (on.length === 0 && displaySize(sel) === 1) {
+      const first = opts.find((o) => !optionDisabled(o));
+      if (first) first._selected = true;
+    } else if (on.length > 1) {
+      for (const o of on.slice(0, -1)) o._selected = false;
+    }
+  }
+  showSelected(sel);
+}
+
+/** `n`'s child list changed: if that is a select's list of options, its selection settles again. */
+function optionsChangedIn(n: MirrorNode | null): void {
+  if (!n || n.kind !== 1) return;
+  const tag = (n as MirrorElement).tag;
+  if (tag === "select") {
+    if (isSelectEl(n)) resetSelect(n);
+  } else if (tag === "optgroup" && isSelectEl(n.parentNode)) {
+    resetSelect(n.parentNode as MirrorElement);
+  }
+}
+
+/** An option's selectedness just changed: a selected one deselects the others of a single select, then the select settles. */
+function selectednessChanged(o: MirrorElement): void {
+  const sel = ownerSelect(o);
+  if (!sel) return;
+  if (o._selected && !isMultipleSelect(sel)) for (const x of selectOptions(sel)) if (x !== o) x._selected = false;
+  resetSelect(sel);
+}
+
+/** `option.selected = on`: the selectedness, dirty (HTML §4.10.10). */
+function setOptionSelected(o: MirrorElement, on: boolean): void {
+  o._dirty = true;
+  o._selected = on;
+  selectednessChanged(o);
+}
+
+/** `select.selectedIndex = ix`: every option deselected, then the one at `ix`, if any, selected and dirty. */
+function setSelectedIndex(sel: MirrorElement, ix: number): void {
+  const opts = selectOptions(sel);
+  for (const o of opts) o._selected = false;
+  const o = ix >= 0 ? opts[ix] : undefined;
+  if (o) {
+    o._selected = true;
+    o._dirty = true;
+  }
+  showSelected(sel);
+}
+
+/** `select.value = v`: every option deselected, then the first whose value is `v`, if any, selected and dirty. */
+function setSelectValue(sel: MirrorElement, v: string): void {
+  let found = false;
+  for (const o of selectOptions(sel)) {
+    o._selected = !found && optionValue(o) === v;
+    if (o._selected) {
+      o._dirty = true;
+      found = true;
+    }
+  }
+  showSelected(sel);
+}
+
+/**
+ * A select's or an option's `value` prop. runtime-dom assigns the PROPERTY:
+ * on a select that selects the first option with the value (and only when
+ * the value read differs); on an option it is the `value` attribute, and the
+ * value as bound is kept for `v-model` (`_rawValue`, runtime-dom's `_value`),
+ * so `<option :value="1">` gives the model a number, and `:value="obj"` the
+ * object.
+ */
+function patchSelectValue(el: MirrorElement, next: unknown): void {
+  if (isOptionEl(el)) {
+    el._rawValue = next;
+    patchAttribute(el, "value", next == null ? null : String(next));
+    return;
+  }
+  const v = next == null ? "" : String(next);
+  if (selectValue(el) !== v) setSelectValue(el, v);
+}
+
+/**
+ * The user picked option `ix` (the host's `input` on the select): it alone is
+ * selected, and `input` then `change` fire, as Chromium fires them for a
+ * drop-down. Nothing happens for the option already selected, a disabled one,
+ * or a disabled select.
+ */
+function pickOption(sel: MirrorElement, ix: number): boolean {
+  const opts = selectOptions(sel);
+  const o = opts[ix];
+  if (!o || optionDisabled(o) || attrOn(sel, "disabled")) return true;
+  if (o._selected && opts.every((x) => x === o || !x._selected)) return true;
+  for (const x of opts) x._selected = x === o;
+  o._dirty = true;
+  showSelected(sel);
+  propagate(sel, "input", fileEvent("input"));
+  propagate(sel, "change", fileEvent("change"));
+  return true;
+}
+
+/** `multiple` or a `size` above 1: Chromium draws a list box, which the host does not. */
+function adviseListBox(sel: MirrorElement): void {
+  if (!isMultipleSelect(sel) && displaySize(sel) === 1) return;
+  warnCompat(
+    "select:list-box",
+    "<select multiple> / <select size>: drawn as a drop-down here (the first selected option, and a popup that " +
+      "picks one option at a time), not as Chromium's list box; the selection model, selectedOptions and " +
+      "v-model with an array work",
+  );
+}
+
+/** A select's own members (per element: `type` and `length` mean other things on other elements). */
+function defineSelectMembers(sel: MirrorElement): void {
+  const options = liveCollection<MirrorElement>(HTMLCollectionProto, true, () => selectOptions(sel));
+  const acc = (get: () => unknown, set?: (v: unknown) => void): PropertyDescriptor => ({
+    get,
+    set,
+    configurable: true,
+    enumerable: true,
+  });
+  Object.defineProperties(sel, {
+    options: acc(() => options),
+    selectedOptions: acc(() => staticList(HTMLCollectionProto, selectOptions(sel).filter((o) => o._selected))),
+    selectedIndex: acc(
+      () => selectedIndexOf(sel),
+      (v) => setSelectedIndex(sel, toLong(v)),
+    ),
+    length: acc(() => selectOptions(sel).length),
+    item: { value: (i: unknown) => selectOptions(sel)[toLong(i)] ?? null, configurable: true, writable: true },
+  });
+}
+
+/** An option's own members. */
+function defineOptionMembers(o: MirrorElement): void {
+  o._selected = false;
+  o._dirty = false;
+  const acc = (get: () => unknown, set?: (v: unknown) => void): PropertyDescriptor => ({
+    get,
+    set,
+    configurable: true,
+    enumerable: true,
+  });
+  Object.defineProperties(o, {
+    selected: acc(
+      () => !!o._selected,
+      (v) => setOptionSelected(o, !!v),
+    ),
+    index: acc(() => {
+      const sel = ownerSelect(o);
+      return sel ? selectOptions(sel).indexOf(o) : 0;
+    }),
+    text: acc(
+      () => optionText(o),
+      (v) => {
+        (o as unknown as { textContent: unknown }).textContent = String(v);
+      },
+    ),
+    label: acc(
+      () => o.attrs.label ?? optionText(o),
+      (v) => patchAttribute(o, "label", String(v)),
+    ),
+  });
+}
+
 /**
  * The members each tag class's PROTOTYPE carries as own accessors, for
  * `Object.getOwnPropertyDescriptor(X.prototype, name).get/.set.call(el)`.
@@ -7792,7 +8117,8 @@ defineDomGet(
 const TAG_ACCESSORS: Record<string, readonly string[]> = {
   INPUT: ["value", "checked", "defaultValue", "defaultChecked"],
   TEXTAREA: ["value", "defaultValue"],
-  SELECT: ["value"],
+  SELECT: ["value", "selectedIndex"],
+  OPTION: ["value", "selected"],
   IMG: ["src", "currentSrc", "complete", "naturalWidth", "naturalHeight"],
 };
 
@@ -9280,8 +9606,9 @@ export const vModelText = {
   },
 };
 
-// v1: every input renders as a text field, so the dynamic/checkbox/radio/
-// select variants fall back to the text behavior with an advisory.
+// v1: every input renders as a text field, so the dynamic/checkbox/radio
+// variants fall back to the text behavior with an advisory. (`<select>` has
+// its own, `vModelSelect`, below.)
 function modelFallback(kind: string) {
   return {
     created(el: MirrorElement, binding: DirectiveBindingLike, vnode: VNodeLike) {
@@ -9299,7 +9626,119 @@ function modelFallback(kind: string) {
 export const vModelDynamic = modelFallback("dynamic");
 export const vModelCheckbox = modelFallback("checkbox");
 export const vModelRadio = modelFallback("radio");
-export const vModelSelect = modelFallback("select");
+
+// @vue/shared's `looseEqual`, `looseIndexOf` and `looseToNumber`, which
+// `vModelSelect` matches option values with.
+function looseEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  const date = (x: unknown): x is Date => x instanceof Date;
+  if (date(a) || date(b)) return date(a) && date(b) ? a.getTime() === b.getTime() : false;
+  if (typeof a === "symbol" || typeof b === "symbol") return a === b;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!looseEqual(a[i], b[i])) return false;
+    return true;
+  }
+  const obj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object";
+  if (obj(a) || obj(b)) {
+    if (!obj(a) || !obj(b)) return false;
+    if (Object.keys(a).length !== Object.keys(b).length) return false;
+    for (const key in a) {
+      const has = Object.prototype.hasOwnProperty;
+      if (has.call(a, key) !== has.call(b, key) || !looseEqual(a[key], b[key])) return false;
+    }
+  }
+  return String(a) === String(b);
+}
+
+const looseIndexOf = (arr: readonly unknown[], v: unknown): number => arr.findIndex((x) => looseEqual(x, v));
+
+function looseToNumber(v: unknown): unknown {
+  const n = parseFloat(v as string);
+  return Number.isNaN(n) ? v : n;
+}
+
+/** runtime-dom's `getModelAssigner`. */
+function modelAssigner(vnode: VNodeLike): ((value: unknown) => void) | null {
+  const fn = vnode.props?.["onUpdate:modelValue"];
+  if (Array.isArray(fn)) return (value) => fn.forEach((f) => (f as (v: unknown) => void)(value));
+  return typeof fn === "function" ? (fn as (value: unknown) => void) : null;
+}
+
+/** runtime-dom's `setSelected`: the model value onto the options. */
+function setModelSelected(el: MirrorElement, value: unknown): void {
+  const multiple = isMultipleSelect(el);
+  const isArray = Array.isArray(value);
+  if (multiple && !isArray && !(value instanceof Set)) {
+    console.warn(
+      `[Vue warn]: <select multiple v-model> expects an Array or Set value for its binding, but got ` +
+        `${Object.prototype.toString.call(value).slice(8, -1)}.`,
+    );
+    return;
+  }
+  const opts = selectOptions(el);
+  for (let i = 0; i < opts.length; i++) {
+    const option = opts[i]!;
+    const optionValue = modelValueOf(option);
+    if (multiple) {
+      let on: boolean;
+      if (isArray) {
+        const type = typeof optionValue;
+        on =
+          type === "string" || type === "number"
+            ? (value as unknown[]).some((v) => String(v) === String(optionValue))
+            : looseIndexOf(value as unknown[], optionValue) > -1;
+      } else {
+        on = (value as Set<unknown>).has(optionValue);
+      }
+      setOptionSelected(option, on);
+    } else if (looseEqual(optionValue, value)) {
+      if (selectedIndexOf(el) !== i) setSelectedIndex(el, i);
+      return;
+    }
+  }
+  if (!multiple && selectedIndexOf(el) !== -1) setSelectedIndex(el, -1);
+}
+
+/**
+ * runtime-dom's `vModelSelect`, over the select model above: `change` assigns
+ * the selected option's value as Vue bound it (`.number` through
+ * `looseToNumber`), or an array / Set of them for `multiple`, and the model
+ * selects the matching option once the options are mounted and after every
+ * update but the one its own assignment caused.
+ */
+export const vModelSelect = {
+  deep: true,
+  created(el: MirrorElement, { value, modifiers = {} }: DirectiveBindingLike, vnode: VNodeLike) {
+    el._modelValue = value;
+    el.addEventListener("change", () => {
+      const picked = selectOptions(el)
+        .filter((o) => o._selected)
+        .map((o) => (modifiers.number ? looseToNumber(modelValueOf(o)) : modelValueOf(o)));
+      const assign = el[assignKey] as ((value: unknown) => void) | null | undefined;
+      if (assign) {
+        assign(isMultipleSelect(el) ? (el._modelValue instanceof Set ? new Set(picked) : picked) : picked[0]);
+      }
+      el._assigning = true;
+      void nextTick(() => {
+        el._assigning = false;
+      });
+    });
+    el[assignKey] = modelAssigner(vnode);
+  },
+  // Set in `mounted` and `updated`: a select's value depends on its options,
+  // which are mounted (and updated) before it.
+  mounted(el: MirrorElement, { value }: DirectiveBindingLike) {
+    setModelSelected(el, value);
+  },
+  beforeUpdate(el: MirrorElement, { value }: DirectiveBindingLike, vnode: VNodeLike) {
+    el._modelValue = value;
+    el[assignKey] = modelAssigner(vnode);
+  },
+  updated(el: MirrorElement, { value }: DirectiveBindingLike) {
+    if (!el._assigning) setModelSelected(el, value);
+  },
+};
 
 // runtime-dom's `vShow`: the element's own inline `display` is remembered
 // before the first hide and restored on show, so `<div v-show="x"

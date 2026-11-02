@@ -273,6 +273,10 @@ pub struct Extras {
     /// the inherited `text-align` and centres the box with auto margins, which
     /// is the block-layout spelling of the same intent.
     pub inline_level: Option<bool>,
+    /// `appearance: none` (`Some(true)`) or any other value (`Some(false)`).
+    /// The one native skin here is `<select>`'s: its arrow, and the padding
+    /// Chromium keeps for it, which `none` takes away (vn-tree `select.rs`).
+    pub appearance_none: Option<bool>,
     /// SVG `fill` — see [`SvgPaint`].
     pub fill: Option<SvgPaint>,
     /// SVG `stroke` — see [`SvgPaint`].
@@ -667,6 +671,9 @@ impl Extras {
         }
         if other.fixed.is_some() {
             self.fixed = other.fixed;
+        }
+        if other.appearance_none.is_some() {
+            self.appearance_none = other.appearance_none;
         }
         if other.z_index.is_some() {
             self.z_index = other.z_index;
@@ -5616,10 +5623,13 @@ fn apply_property(
                 }
             });
         }
-        // `appearance` switches a native OS control skin on or off. No element
-        // here carries one under any value, so every value produces the same
-        // box and there is nothing to diverge from.
-        Appearance(..) => {}
+        // `appearance` switches a native OS control skin on or off. The one
+        // element here that has one is `<select>`: its arrow, and the room
+        // Chromium keeps for it, are drawn unless the value is `none`. Every
+        // other value is the skin Chromium draws for a select too (`menulist`,
+        // `menulist-button`, `auto`…), and on any other element nothing
+        // changes, so there is nothing to advise.
+        Appearance(a, _) => x.appearance_none = Some(matches!(a, lightningcss::properties::ui::Appearance::None)),
         // `tab-size` sizes a preserved tab. Whitespace is always collapsed here
         // (`white-space` says so, once, where the divergence actually is), so a
         // tab is a single space at every tab-size and this property could not
@@ -6915,6 +6925,28 @@ mod tests {
         assert_eq!(r.inset.right, Some(Length::Definite(px(0.0).into())));
         assert_eq!(r.inset.left, Some(Length::Definite(relative(0.5))));
         assert_eq!(r.inset.top, Some(Length::Definite(px(8.0).into())));
+    }
+
+    /// `appearance` records whether a `<select>` keeps its native skin, in the
+    /// two spellings Chromium reads, and says nothing.
+    #[test]
+    fn appearance_none_takes_the_select_skin_away() {
+        for (body, none) in [
+            ("appearance: none", Some(true)),
+            ("-webkit-appearance: none", Some(true)),
+            // Gecko's prefix, which Chromium does not read either.
+            ("-moz-appearance: none", None),
+            ("appearance: auto", Some(false)),
+            ("appearance: menulist-button", Some(false)),
+            ("color: red", None),
+        ] {
+            let (x, d) = extras(body);
+            assert_eq!(x.appearance_none, none, "{body}");
+            assert!(d.is_empty(), "{body}: {d:?}");
+        }
+        let (mut x, _) = extras("appearance: none");
+        x.refine(&extras("appearance: auto").0);
+        assert_eq!(x.appearance_none, Some(false), "a later rule wins");
     }
 
     /// `fixed` records the flag and takes the deferred layer, and says NOTHING

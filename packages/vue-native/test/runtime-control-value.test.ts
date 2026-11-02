@@ -60,13 +60,24 @@ describe("the reka bubble-input pattern", () => {
   test("BubbleSelect: HTMLSelectElement.prototype's value setter, then change", () => {
     const rt = createRuntime();
     const select = rt.nodeOps.createElement("select") as unknown as El;
+    // reka's BubbleSelect renders an empty option and one per item.
+    for (const v of ["", "apple", "pear"]) {
+      const o = rt.nodeOps.createElement("option");
+      rt.patchProp(o, "value", null, v);
+      rt.nodeOps.insert(o as never, select as never, null);
+    }
     const seen: string[] = [];
     select.addEventListener("change", (e) => seen.push(`change:${e.target.value}`));
     const setValue = Object.getOwnPropertyDescriptor(proto(rt, "HTMLSelectElement"), "value")!.set!;
     setValue.call(select, "apple");
     select.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(lastValue(rt, select.__vnId)).toBe("apple");
+    // The host draws the option it selected.
+    expect(lastValue(rt, select.__vnId, ":selected")).toBe("1");
     expect(seen).toEqual(["change:apple"]);
+    // No option has the value: nothing is selected, and the value reads "".
+    setValue.call(select, "plum");
+    expect(select.value).toBe("");
+    expect(lastValue(rt, select.__vnId, ":selected")).toBe("-1");
   });
 
   test("the prototype accessors refuse a receiver of the wrong kind", () => {

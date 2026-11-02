@@ -1725,7 +1725,7 @@ fn summarizes_details(t: &Tree, id: u32) -> bool {
 /// a form control inside a disabled `<fieldset>` but not inside its first
 /// `<legend>`. Such an element is not focusable at all, whatever its
 /// `tabindex`, and neither a click nor `el.focus()` focuses it.
-fn actually_disabled(t: &Tree, id: u32) -> bool {
+pub(crate) fn actually_disabled(t: &Tree, id: u32) -> bool {
     let disabled = |id: u32| t.prop(id, "disabled").is_some_and(|v| v != "false");
     let Some(n) = t.node(id) else { return false };
     let tag = t.name(n.tag);
@@ -2489,6 +2489,12 @@ fn build_node<V: 'static>(
             // wrapper must not also listen — the editor is its descendant and
             // would deliver every key twice.
             d = bind_events(d, id, mask, click_focus, focusable, !is_input, cx);
+            // A `<select>` opens its popup as a press's default action
+            // (`crate::select`).
+            let is_select = t.name(node.tag) == "select";
+            if is_select && !disabled {
+                d = crate::select::bind_press(d, id);
+            }
             // Copy / cut / paste outside a text field: the root is on every
             // keystroke's path, and its listener (bound AFTER its own keydown
             // one, so it runs after every keydown handler) is the last stop.
@@ -2501,6 +2507,9 @@ fn build_node<V: 'static>(
                 // A press that may start a text selection, and Ctrl+A.
                 d = crate::selection::bind_root(d);
                 d = bind_menu_keys(d, id);
+                // A `<select>`'s keys: its popup's before the page's, a closed
+                // one's after them.
+                d = crate::select::bind_root(d);
                 // …and the keyboard click a key event owes, last of all.
                 d = bind_root_key_clicks(d);
             }
@@ -2588,6 +2597,13 @@ fn build_node<V: 'static>(
                 }
                 if is_file_input {
                     kids.push(file_input_children(t, id, node, case));
+                } else if is_select {
+                    // The menulist Chromium draws, not the options as boxes.
+                    let skin = extras.appearance_none != Some(true);
+                    kids.extend(crate::select::closed_children(t, id, skin, case));
+                    if let Some(popup) = crate::select::popup_child(t, id, node, case, window) {
+                        kids.push(popup);
+                    }
                 } else if !node.text.is_empty() {
                     // `setElementText` — what Vue calls for an element whose
                     // only child is text, which is most of them. The text IS
@@ -4107,6 +4123,8 @@ fn apply_press_focus(window: &mut Window, cx: &mut App) {
         }
     }
     sync_focus_events(window, cx);
+    // …and a press on a `<select>` opens it, now that it has the focus.
+    crate::select::press_settled(press.cancelled, window, cx);
 }
 
 /// Reports gpui's focus to JS now, if it moved past what JS was last told:
