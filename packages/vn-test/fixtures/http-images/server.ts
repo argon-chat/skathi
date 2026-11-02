@@ -28,6 +28,8 @@ export interface ImageServer {
   cdn(i: number, query?: string): string;
   /** Headers the 200 (and its 304) carry instead of the defaults. */
   policy: Record<string, string> | null;
+  /** Held before every answer, in ms: a round trip to a real server rather than loopback's none. Default 0. */
+  delayMs: number;
   reset(): void;
   stop(): void;
 }
@@ -111,6 +113,7 @@ export function serveImages(): ImageServer {
     base: "",
     seen,
     policy: null,
+    delayMs: 0,
     file: (i, q) => `${api.base}/files/${i}${q ? `?${q}` : ""}`,
     cdn: (i, q) => `${api.base}/cdn/${i}.png${q ? `?${q}` : ""}`,
     reset() {
@@ -124,7 +127,8 @@ export function serveImages(): ImageServer {
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
-    fetch(req) {
+    async fetch(req) {
+      if (api.delayMs > 0) await Bun.sleep(api.delayMs);
       const url = new URL(req.url);
       const note = (status: number) => seen.log.push(`${req.method} ${url.pathname}${url.search} ${status}`);
       let m = /^\/files\/(\d+)$/.exec(url.pathname);
