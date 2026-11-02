@@ -7853,6 +7853,7 @@ name = "vn-app"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "futures",
  "gpui",
  "gpui_platform",
  "gpui_windows",

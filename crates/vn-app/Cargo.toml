@@ -151,15 +151,15 @@ vn-voice = { path = "../vn-voice" }
 # Cargo has no per-feature exclusion for a dependency a prod build never calls,
 # same as `image` above.
 livekit-api = { version = "0.6", default-features = false, features = ["access-token"] }
-# The HTTP client gpui asks for when an `<img src="https://…">` or a
-# `<video src="https://…">` needs bytes. Without one, `App::http_client()` is
-# gpui's `NullHttpClient`, which fails every request with "No HttpClient
-# available" a frame after the element asked — the silent failure the m10
-# images report chose an advisory over.
-#
-# This is the fork's own client (vendor/zed/crates/reqwest_client), so it is
-# the one Zed ships and the one gpui's asset loader was written against.
+# The fork's own client (vendor/zed/crates/reqwest_client). Since m26 gpui's
+# loaders fetch through redjs's stack instead (src/http_client.rs); this one is
+# the fallback for a request that stack does not carry as is (a body, or a
+# redirect that must not be followed), built on first use. No loader sends one
+# today. `VN_HTTP_CLIENT=reqwest` installs it in place of redjs's (main.rs).
 reqwest_client = { path = "../../vendor/zed/crates/reqwest_client" }
+# The oneshot that hands redjs's answer (on its network thread) to the gpui
+# loader awaiting it (src/http_client.rs). Already in the link through gpui.
+futures = "0.3"
 # Inflates the embedded inspector bundle, which `build.rs` deflates
 # (src/inspector.rs). Not a new crate in the image: redjs already links flate2
 # with the same miniz_oxide backend.

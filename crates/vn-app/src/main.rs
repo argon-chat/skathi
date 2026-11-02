@@ -42,6 +42,8 @@ mod devtools;
 // dev build, not in a `prod` one, `VN_MEMSTATS=0/1` either way (src/heapcount.rs).
 #[cfg(vn_devtools)]
 mod heapcount;
+// The HTTP client gpui loaders use: redjs's network stack, the one `fetch` uses.
+mod http_client;
 #[cfg(vn_devtools)]
 #[global_allocator]
 static GLOBAL: heapcount::Counting = heapcount::Counting;
@@ -1092,34 +1094,35 @@ fn publish_video_device() {
 #[cfg(not(target_os = "windows"))]
 fn publish_video_device() {}
 
-/// The HTTP client gpui fetches `Resource::Uri` assets through.
+/// The HTTP client gpui fetches `Resource::Uri` assets through: redjs's
+/// network stack, the one `fetch` uses ([`http_client`]).
 ///
 /// Without one, `App::http_client()` is gpui's `NullHttpClient`, which fails
 /// every request with "No HttpClient available" a frame after the element asked
 /// — the silent failure the m10 images report chose an advisory over rather
 /// than shipping.
 ///
-/// The user agent is the app's, not a browser's. Nothing here pretends to be
-/// Chrome: a server that serves us different bytes because of the UA string is
-/// a server whose answer we would rather see honestly.
+/// The user agent is the one `fetch` sends (`vn_runtime::runtime::VN_USER_AGENT`),
+/// which names the runtime and no browser: a server that serves us different
+/// bytes because of the UA string is a server whose answer we would rather see
+/// honestly.
 ///
-/// A failure to build one is not fatal — it leaves gpui's null client in place,
-/// which is exactly the behaviour every build had before this. It is logged, so
-/// "my images do not load" has an answer in `VN_LOG=warn`.
+/// `VN_HTTP_CLIENT=reqwest` installs the client every build had before m26 (the
+/// fork's `ReqwestClient`, its own runtime and connection pool, UA
+/// `vue-native/<version>`): the A/B in research/reports/m26/fixes-lag-1.md §4.12
+/// runs one binary both ways, and "this image stopped loading" can be bisected
+/// without a rebuild.
 fn install_http_client(app: gpui::Application) -> gpui::Application {
-    match reqwest_client::ReqwestClient::user_agent(concat!(
-        "vue-native/",
-        env!("CARGO_PKG_VERSION")
-    )) {
-        Ok(client) => app.with_http_client(std::sync::Arc::new(client)),
-        Err(e) => {
-            log::warn!(
-                "could not build an HTTP client ({e}); http(s) <img> and <video> sources will \
-                 fail to load. Local paths and data: URIs are unaffected."
-            );
-            app
-        }
+    if std::env::var("VN_HTTP_CLIENT").is_ok_and(|v| v.eq_ignore_ascii_case("reqwest")) {
+        return match reqwest_client::ReqwestClient::user_agent(concat!("vue-native/", env!("CARGO_PKG_VERSION"))) {
+            Ok(client) => app.with_http_client(std::sync::Arc::new(client)),
+            Err(e) => {
+                log::warn!("VN_HTTP_CLIENT=reqwest: the client could not be built ({e}); http(s) images will not load");
+                app
+            }
+        };
     }
+    app.with_http_client(std::sync::Arc::new(http_client::RedjsHttpClient::new()))
 }
 
 fn main() {
