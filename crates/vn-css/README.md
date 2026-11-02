@@ -470,6 +470,24 @@ project's browser-compat-first policy.
 
     A script animation is not cancelled by `display: none`, by reduced motion
     or by `clear()` (a sheet swap).
+17. **Lines break at gpui's opportunities, under CSS's rules** (m26).
+    `overflow-wrap` (and `word-wrap`), `word-break` and `hyphens` reach the
+    text style, and the fork's wrapper applies them (docs/ARCHITECTURE.md,
+    fork item 47). A word may break only where they allow, and `anywhere`
+    lowers min-content where `break-word` does not, as in Chromium. What
+    differs:
+    - The opportunities themselves are not UAX #14's. A line breaks after a
+      space, a zero width space or a soft hyphen, between two CJK letters, and
+      before any character that is not a word character. So a URL breaks
+      BEFORE a `/` or a `?`, where Chromium breaks after the `/`.
+    - `hyphens: auto` hyphenates only at soft hyphens, as `manual` does: there
+      is no dictionary (advisory).
+    - Text mixed with inline elements is laid out as a wrapping row of its
+      pieces (vn-tree's inline row). A break falls inside a piece or between
+      two, and a piece that does not fit after the one before it starts a
+      line: in `see <a>long link</a> ok` the link starts its own line, where
+      Chromium starts it after "see ". `<wbr>` splits its text into pieces,
+      so it is an opportunity.
 
 ---
 

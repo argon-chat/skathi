@@ -5657,28 +5657,45 @@ fn apply_property(
                 "`clip-path` is not applied (v1) — gpui clips with rectangular content masks in                  window space, so an arbitrary shape (a circle, an ellipse, a polygon, an SVG                  path) has nothing to become. `clip-path: inset(50%)` IS honoured — it encloses                  nothing, which is `visibility: hidden` with the layout box intact — and                  `overflow: hidden` on a sized box clips for real",
             ),
         }
+        // The line breaker's three CSS Text 3 properties, inherited through
+        // gpui's text style like `white-space` (the fork's `TextWrap`).
         // `word-wrap` is the legacy alias for `overflow-wrap` — CSS Text 3
         // defines the two as the same property, and lightningcss parses them
-        // into two ids. reka's `VisuallyHidden` writes the legacy spelling
-        // inline (`wordWrap: "normal"`), which is the INITIAL value and
-        // therefore says nothing at all; the arm below is what decides.
+        // into two ids.
         WordWrap(v) | OverflowWrap(v) => {
             use lightningcss::properties::text::OverflowWrap as OW;
-            if !matches!(v, OW::Normal) {
-                warn_once(
-                    diagnostics,
-                    "`overflow-wrap: break-word` / `anywhere` are not applied (v1) — gpui wraps                      at word boundaries and does not break inside a word. A long unbroken token                      will overflow rather than break",
-                );
-            }
+            r.text.overflow_wrap = Some(match v {
+                OW::Normal => gpui::OverflowWrap::Normal,
+                OW::BreakWord => gpui::OverflowWrap::BreakWord,
+                OW::Anywhere => gpui::OverflowWrap::Anywhere,
+            });
         }
         WordBreak(v) => {
             use lightningcss::properties::text::WordBreak as WB;
-            if !matches!(v, WB::Normal) {
-                warn_once(
-                    diagnostics,
-                    "`word-break` other than `normal` is not applied (v1) — gpui wraps at word                      boundaries and does not break inside a word",
-                );
-            }
+            r.text.word_break = Some(match v {
+                WB::Normal => gpui::WordBreak::Normal,
+                WB::BreakAll => gpui::WordBreak::BreakAll,
+                WB::KeepAll => gpui::WordBreak::KeepAll,
+                WB::BreakWord => gpui::WordBreak::BreakWord,
+            });
+        }
+        // `manual` (the initial value) breaks after a soft hyphen and shows a
+        // hyphen there; `none` does not break there. `auto` hyphenates words
+        // from a dictionary, which there is none of: it is `manual`.
+        Hyphens(v, _) => {
+            use lightningcss::properties::text::Hyphens as H;
+            r.text.hyphens = Some(match v {
+                H::None => gpui::Hyphens::None,
+                H::Manual => gpui::Hyphens::Manual,
+                H::Auto => {
+                    warn_once(
+                        diagnostics,
+                        "`hyphens: auto` hyphenates only at soft hyphens (`&shy;`), as `manual` \
+                         does (v1) — there is no hyphenation dictionary",
+                    );
+                    gpui::Hyphens::Manual
+                }
+            });
         }
         // `scroll-margin` / `scroll-padding` only shift where `scrollIntoView`
         // and scroll snapping land. Neither exists here — there is no
@@ -7854,7 +7871,6 @@ mod tests {
             ("list-style-image: url(dot.png)", "this list marker is not generated"),
             ("resize: both", "resize"),
             ("user-select: contain", "user-select"),
-            ("overflow-wrap: break-word", "overflow-wrap"),
             // `blur()` alone is recorded rather than advised (see `apply_filter`),
             // so the advisory this sweep is about needs a filter that is not it.
             ("filter: grayscale(1)", "only blur() and drop-shadow() are implemented"),
@@ -7910,6 +7926,15 @@ mod tests {
             "resize: none",
             "overflow-wrap: normal",
             "word-break: normal",
+            // Applied by the line breaker (gpui fork, `TextWrap`).
+            "overflow-wrap: break-word",
+            "overflow-wrap: anywhere",
+            "word-wrap: break-word",
+            "word-break: break-all",
+            "word-break: keep-all",
+            "word-break: break-word",
+            "hyphens: manual",
+            "hyphens: none",
             // `list-style: none` asks for no marker, which is what a tree with
             // no marker boxes already produces.
             // Every predefined counter style generates a real marker box now,
@@ -8243,26 +8268,33 @@ mod tests {
         assert_eq!(clean("clip-path: none").visibility, Some(gpui::Visibility::Visible));
     }
 
-    /// `word-wrap` is the legacy alias of `overflow-wrap` — CSS Text 3 defines
-    /// them as one property and lightningcss parses two ids, so they share an
-    /// arm. `normal` is the INITIAL value (what reka's `VisuallyHidden` writes
-    /// inline) and diverges from nothing.
+    /// `overflow-wrap` (and its legacy alias `word-wrap`, which CSS Text 3
+    /// defines as the same property), `word-break` and `hyphens` reach gpui's
+    /// line breaker through the text style, and say nothing. `hyphens: auto`
+    /// is `manual`, with an advisory: there is no hyphenation dictionary.
     #[test]
-    fn word_wrap_shares_the_overflow_wrap_arm_and_normal_is_silent() {
-        let (_, d) = map("word-wrap: break-word");
-        assert_eq!(d.len(), 1, "{d:?}");
-        assert!(
-            d[0].contains("overflow-wrap"),
-            "the legacy spelling gets the modern message: {d:?}"
-        );
-
-        // Byte-identical to what the modern spelling says — one property, one
-        // divergence, one line in the panel.
-        let (_, modern) = map("overflow-wrap: break-word");
-        assert_eq!(d, modern);
-
-        assert!(map("word-wrap: normal").1.is_empty());
-        assert!(map("overflow-wrap: normal").1.is_empty());
+    fn the_line_breaking_properties_reach_the_text_style() {
+        for (body, want) in [
+            ("overflow-wrap: normal", gpui::OverflowWrap::Normal),
+            ("overflow-wrap: break-word", gpui::OverflowWrap::BreakWord),
+            ("overflow-wrap: anywhere", gpui::OverflowWrap::Anywhere),
+            ("word-wrap: break-word", gpui::OverflowWrap::BreakWord),
+        ] {
+            assert_eq!(clean(body).text.overflow_wrap, Some(want), "{body}");
+        }
+        for (body, want) in [
+            ("word-break: normal", gpui::WordBreak::Normal),
+            ("word-break: break-all", gpui::WordBreak::BreakAll),
+            ("word-break: keep-all", gpui::WordBreak::KeepAll),
+            ("word-break: break-word", gpui::WordBreak::BreakWord),
+        ] {
+            assert_eq!(clean(body).text.word_break, Some(want), "{body}");
+        }
+        assert_eq!(clean("hyphens: none").text.hyphens, Some(gpui::Hyphens::None));
+        assert_eq!(clean("-webkit-hyphens: manual").text.hyphens, Some(gpui::Hyphens::Manual));
+        let (r, d) = map("hyphens: auto");
+        assert_eq!(r.text.hyphens, Some(gpui::Hyphens::Manual));
+        assert!(d.len() == 1 && d[0].contains("hyphenation dictionary"), "{d:?}");
     }
 
     /// `scrollbar-width` and `scrollbar-color` are applied now (m22 adoptions
