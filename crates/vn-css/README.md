@@ -488,6 +488,24 @@ project's browser-compat-first policy.
       line: in `see <a>long link</a> ok` the link starts its own line, where
       Chromium starts it after "see ". `<wbr>` splits its text into pieces,
       so it is an opportunity.
+18. **`clip-path` is a rounded content mask** (m26, `clip_path` in
+    `src/mapper.rs`, gpui `Style::vn_clip_path`, docs/ARCHITECTURE.md fork
+    item 48). It cuts the element's whole painting and its hit test, inside
+    its `transform`, and makes it a stacking context. Exact: `inset()` with
+    `round` (an elliptical corner is its smaller radius, as in item 13),
+    `circle()`, a lone `<geometry-box>` rounded by `border-radius`, and every
+    reference box (`fill-box` is the content box, `stroke-box` and
+    `view-box` the border box). The screen-reader-only `inset(50%)` is a clip
+    to nothing. What differs:
+    - `ellipse()` clips to the capsule around the ellipse, its bounding box
+      with corners of the smaller radius (advisory).
+    - `polygon()`, `path()`, `url()` and the CSS Shapes 2 functions are not
+      applied (advisory).
+    - A percentage padding or margin in the reference box resolves against
+      the element's own width.
+    - A `position: fixed` descendant is not cut.
+    - It is not animated: `clip-path` is outside the transition set
+      (`TransitionProperty::animatable`), as item 16 says for scripts.
 
 ---
 

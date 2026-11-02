@@ -4271,10 +4271,11 @@ pub(crate) fn z_applies(extras: &vn_css::Extras, parent_display: Option<gpui::Di
 
 /// Does a box's declared style make it a stacking context at `z-index:
 /// auto`? `opacity < 1`, a `transform` that moves something, a `filter` we
-/// model, `backdrop-filter`, `isolation: isolate`. (`fixed` and `sticky` are
-/// [`layer_of`]'s.)
+/// model, `backdrop-filter`, `isolation: isolate`, a `clip-path` (CSS
+/// Masking 1 §5). (`fixed` and `sticky` are [`layer_of`]'s.)
 pub(crate) fn effect_context(extras: &vn_css::Extras, style: &gpui::StyleRefinement) -> bool {
     style.opacity.is_some_and(|o| o < 1.0)
+        || !matches!(style.vn_clip_path, None | Some(gpui::VnClipPath::None))
         || style.vn_transform.as_ref().is_some_and(|t| !t.is_identity())
         || style.backdrop_blur.is_some_and(|r| r > gpui::px(0.0))
         || extras.blur.is_some_and(|b| b > 0.0)

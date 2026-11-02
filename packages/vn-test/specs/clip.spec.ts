@@ -225,3 +225,80 @@ describe("box-shadow outside the border box (CSS Backgrounds 3 §7.1)", () => {
     await app.eval(`(document.getElementById("shadow-pad").remove(), 0)`);
   }, T);
 });
+
+describe("clip-path (CSS Masking 1 §5)", () => {
+  // A rounded mask around the element's whole painting: background, border,
+  // shadow and subtree, and its hit test, inside its transform (gpui
+  // `Style::vn_clip_path`). The shapes sit on a white pad over the fixture.
+  test("inset() and circle() clip the painting and the hit test, inside the transform", async () => {
+    await app.eval(`(() => {
+      const pad = document.createElement("div");
+      pad.id = "cp-pad";
+      pad.setAttribute("style", "position: fixed; left: 520px; top: 380px; width: 190px; height: 130px; z-index: 100; background-color: rgb(255, 255, 255)");
+      const shape = (id, style) => {
+        const el = document.createElement("div");
+        el.id = id;
+        el.setAttribute("style", "position: absolute; background-color: rgb(255, 0, 0); " + style);
+        el.addEventListener("click", (e) => { e.stopPropagation(); globalThis.cpHits.push(id); });
+        pad.appendChild(el);
+      };
+      globalThis.cpHits = [];
+      pad.addEventListener("click", () => globalThis.cpHits.push("pad"));
+      // The border and the ring shadow lie outside the inset: both go.
+      shape("cp-inset", "left: 10px; top: 10px; width: 54px; height: 34px; border: 3px solid rgb(0, 0, 255); box-shadow: 0 0 0 6px rgb(0, 255, 0); clip-path: inset(8px 15px round 6px)");
+      shape("cp-circle", "left: 80px; top: 10px; width: 60px; height: 60px; clip-path: circle(50%)");
+      // The clip moves with the transform: the left half of the painted box.
+      shape("cp-moved", "left: 10px; top: 80px; width: 60px; height: 40px; transform: translateX(20px); clip-path: inset(0 50% 0 0)");
+      // The screen-reader-only idiom: nothing painted, nothing hit.
+      shape("cp-sr", "left: 150px; top: 80px; width: 30px; height: 30px; clip-path: inset(50%)");
+      document.body.appendChild(pad);
+      return 0;
+    })()`);
+    const pad = await box("#cp-pad");
+    const i = await box("#cp-inset");
+    const c = await box("#cp-circle");
+    bunExpect(c).toMatchObject({ w: 60, h: 60 });
+    const s = await until(shoot, (s) => red(s.at(c.x + 30, c.y + 30)));
+
+    // inset(8px 15px round 6px) of the 60x40 border box: x 15..45, y 8..32.
+    bunExpect(red(s.at(i.x + 30, i.y + 20))).toBe(true);
+    bunExpect(red(s.at(i.x + 17, i.y + 20))).toBe(true);
+    for (const [x, y] of [
+      [i.x + 5, i.y + 20], // the left inset, over the blue border
+      [i.x + 30, i.y + 3], // the top inset
+      [i.x - 3, i.y + 20], // the ring shadow
+      [i.x + 15, i.y + 8], // outside the 6px corner
+    ]) bunExpect(white(s.at(x, y))).toBe(true);
+
+    // circle(50%) of a 60px square is its disc: pi * 30^2 = 2827 of 3600.
+    bunExpect(s.count(c, red)).toBeGreaterThan(2700);
+    bunExpect(s.count(c, red)).toBeLessThan(2950);
+    for (const [x, y] of corners(c, 3)) bunExpect(white(s.at(x, y))).toBe(true);
+
+    // translateX(20px) carries the clip along: the painted box is x 30..90
+    // of the pad and its left half, 30..60, shows.
+    bunExpect(red(s.at(pad.x + 45, pad.y + 100))).toBe(true);
+    bunExpect(white(s.at(pad.x + 75, pad.y + 100))).toBe(true);
+    bunExpect(white(s.at(pad.x + 20, pad.y + 100))).toBe(true);
+
+    // inset(50%) encloses nothing.
+    bunExpect(s.count({ x: pad.x + 150, y: pad.y + 80, w: 30, h: 30 }, red)).toBe(0);
+
+    // A press outside the shape reaches what is under it.
+    const click = async (x: number, y: number) => {
+      await app.send("mouse", { x, y, kind: "click" });
+      await sleep(100);
+    };
+    await click(c.x + 3, c.y + 3);
+    await click(c.x + 30, c.y + 30);
+    await click(pad.x + 165, pad.y + 95);
+    await click(pad.x + 75, pad.y + 100);
+    await click(pad.x + 45, pad.y + 100);
+    const hits = await until(
+      async () => JSON.parse(String(await app.eval("JSON.stringify(globalThis.cpHits)"))) as string[],
+      (h) => h.length >= 5,
+    );
+    bunExpect(hits).toEqual(["pad", "cp-circle", "pad", "pad", "cp-moved"]);
+    await app.eval(`(document.getElementById("cp-pad").remove(), 0)`);
+  }, T);
+});

@@ -251,9 +251,10 @@ pub struct Extras {
     /// `collapse`, `Some(false)` for `visible`, `None` when nothing declared it.
     ///
     /// The refinement's own `visibility` is gpui's paint switch, and the mapper
-    /// also turns it off for the two screen-reader-only idioms
-    /// (`clip: rect(0, 0, 0, 0)`, `clip-path: inset(50%)`). Their box paints
-    /// nothing, but its CSS `visibility` is still `visible`, and that is what
+    /// also turns it off for the screen-reader-only idiom
+    /// `clip: rect(0, 0, 0, 0)`. Its box paints nothing, as one under the
+    /// other idiom, `clip-path: inset(50%)`, a real clip to nothing, does,
+    /// but its CSS `visibility` is still `visible`, and that is what
     /// a browser asks before `el.focus()` and answers from `getComputedStyle`
     /// (`vn_tree::render::css_visible`). The property is inherited, so the
     /// nearest declaration on the element or an ancestor decides.
@@ -1078,6 +1079,13 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
             }
             CustomPropertyName::Unknown(_) => Channel::Static,
         },
+        // A `clip-path` lightningcss has no typed value for, and no `var()`
+        // to resolve first: `apply` advises it.
+        Property::Unparsed(u)
+            if matches!(u.property_id, PropertyId::ClipPath(_)) && !has_substitution(&u.value) =>
+        {
+            Channel::Static
+        }
         Property::Unparsed(u) => match value_text(p) {
             Some(v) => Channel::Dynamic(u.property_id.name().to_string(), v),
             None => Channel::Static,
@@ -3383,39 +3391,124 @@ fn single_ident<'a>(
     first
 }
 
-/// The single `<length>` a token list carries, in px. `0` with no unit counts,
-/// because that is how every sheet writes a zero length.
+/// `clip-path` as gpui's rounded content mask carries it (`gpui::VnClipPath`),
+/// or `None` (advised) for a shape the mask cannot be.
+///
+/// `inset()` and `circle()` are exact, and so is a `<geometry-box>` alone,
+/// rounded by the element's `border-radius`. `ellipse()` is the capsule
+/// around the ellipse. `polygon()`, `path()` and `url()` are not applied:
+/// they need a mask that is not a rounded rectangle.
+fn clip_path(v: &CssClipPath<'_>, diagnostics: &mut Vec<String>) -> Option<gpui::VnClipPath> {
+    use gpui::{VnClipBox, VnClipPath, VnShapeRadius};
+    use lightningcss::properties::masking::GeometryBox as G;
+    use lightningcss::values::shape::{BasicShape, ShapeRadius};
+    // CSS Masking 1 §5.1: an element with a CSS box takes `fill-box` as its
+    // content box, and `stroke-box` and `view-box` as its border box.
+    let reference = |b: &G| match b {
+        G::MarginBox => VnClipBox::Margin,
+        G::BorderBox | G::StrokeBox | G::ViewBox => VnClipBox::Border,
+        G::PaddingBox => VnClipBox::Padding,
+        G::ContentBox | G::FillBox => VnClipBox::Content,
+    };
+    let radius = |r: &ShapeRadius| match r {
+        ShapeRadius::LengthPercentage(lp) => lp_definite(lp).map(VnShapeRadius::Length),
+        ShapeRadius::ClosestSide => Some(VnShapeRadius::ClosestSide),
+        ShapeRadius::FarthestSide => Some(VnShapeRadius::FarthestSide),
+    };
+    let unsupported = |diagnostics: &mut Vec<String>, what: &str| {
+        clip_path_unsupported(diagnostics, what);
+        None
+    };
+    match v {
+        CssClipPath::None => Some(VnClipPath::None),
+        CssClipPath::Box(b) => Some(VnClipPath::Box(reference(b))),
+        CssClipPath::Url(_) => unsupported(diagnostics, "url()"),
+        CssClipPath::Shape { shape, reference_box } => {
+            let reference = reference(reference_box);
+            match &**shape {
+                BasicShape::Inset(inset) => {
+                    let r = &inset.rect;
+                    let insets = [lp_definite(&r.0)?, lp_definite(&r.1)?, lp_definite(&r.2)?, lp_definite(&r.3)?];
+                    let corner = |c: &lightningcss::values::size::Size2D<LengthPercentage>| {
+                        Some(gpui::VnCornerRadius { x: lp_definite(&c.0)?, y: lp_definite(&c.1)? })
+                    };
+                    let b = &inset.radius;
+                    let radii =
+                        [corner(&b.top_left)?, corner(&b.top_right)?, corner(&b.bottom_right)?, corner(&b.bottom_left)?];
+                    Some(VnClipPath::Inset { reference, insets, radii })
+                }
+                BasicShape::Circle(c) => {
+                    let r = radius(&c.radius)?;
+                    let center = shape_center(&c.position)?;
+                    Some(VnClipPath::Ellipse { reference, center, radius: [r, r], circle: true })
+                }
+                BasicShape::Ellipse(e) => {
+                    let (rx, ry) = (radius(&e.radius_x)?, radius(&e.radius_y)?);
+                    let center = shape_center(&e.position)?;
+                    // Exact only when the two radii are the same length.
+                    let round = rx == ry && matches!(rx, VnShapeRadius::Length(DefiniteLength::Absolute(_)));
+                    if !round {
+                        warn_once(
+                            diagnostics,
+                            "`clip-path: ellipse()` clips to the capsule around the ellipse (v1) — gpui                              clips to rounded rectangles, so it is the ellipse's bounding box with                              corners of its smaller radius, which shows a little more than the                              ellipse towards the four diagonals. `circle()` is exact",
+                        );
+                    }
+                    Some(VnClipPath::Ellipse { reference, center, radius: [rx, ry], circle: false })
+                }
+                BasicShape::Polygon(_) => unsupported(diagnostics, "polygon()"),
+            }
+        }
+    }
+}
+
+/// The advisory for a `clip-path` that is no rounded rectangle, `what` being
+/// its function (`polygon()`).
+fn clip_path_unsupported(diagnostics: &mut Vec<String>, what: &str) {
+    warn_once(
+        diagnostics,
+        &format!(
+            "`clip-path: {what}` is not applied (v1) — gpui clips to rounded rectangles, and              this shape is not one. `inset()`, `circle()` and a box (`padding-box`…) are              honoured exactly, `ellipse()` approximately"
+        ),
+    );
+}
+
+/// A `circle()` or `ellipse()` centre (`at <position>`), from the reference
+/// box's top left corner. An offset from the far side, `right 10px`, is
+/// `calc(100% - 10px)`.
+fn shape_center(position: &lightningcss::values::position::Position) -> Option<[DefiniteLength; 2]> {
+    use lightningcss::values::position::PositionComponent as P;
+    fn component<S: PositionSide + Copy>(c: &P<S>) -> Option<DefiniteLength> {
+        match c {
+            P::Center => Some(relative(0.5)),
+            P::Length(lp) => lp_definite(lp),
+            P::Side { side, offset } => {
+                let near = side.is_near_edge();
+                let Some(offset) = offset else { return Some(relative(if near { 0.0 } else { 1.0 })) };
+                let offset = lp_definite(offset)?;
+                if near {
+                    return Some(offset);
+                }
+                match offset {
+                    DefiniteLength::Fraction(f) => Some(relative(1.0 - f)),
+                    DefiniteLength::Absolute(AbsoluteLength::Pixels(p)) => {
+                        Some(DefiniteLength::Calc { fraction: 1.0, pixels: -p })
+                    }
+                    DefiniteLength::Calc { fraction, pixels } => {
+                        Some(DefiniteLength::Calc { fraction: 1.0 - fraction, pixels: -pixels })
+                    }
+                    DefiniteLength::Absolute(AbsoluteLength::Rems(_)) => None,
+                }
+            }
+        }
+    }
+    Some([component(&position.x)?, component(&position.y)?])
+}
+
 /// `true` when a `clip: rect(…)` names a zero-area rectangle — the
 /// screen-reader-only idiom, which clips the box away entirely.
 ///
 /// Both spellings count: `rect(0, 0, 0, 0)` and `rect(0 0 0 0)`. `auto` is not
 /// a rect and is not empty.
-/// Does this `inset()` enclose a zero-area rectangle?
-///
-/// `inset(50%)` insets every side by half the box, so the two edges of each
-/// axis meet and nothing is left — the visually-hidden idiom. Anything larger
-/// than 50% on opposing sides has the same effect (CSS clamps the crossing).
-/// Only percentages are answerable without a box to measure against, which is
-/// all the idiom ever uses.
-fn inset_encloses_nothing(shape: &lightningcss::values::shape::BasicShape) -> bool {
-    use lightningcss::values::length::LengthPercentage;
-    use lightningcss::values::shape::BasicShape;
-    let BasicShape::Inset(inset) = shape else { return false };
-    let pct = |v: &LengthPercentage| match v {
-        LengthPercentage::Percentage(p) => Some(p.0),
-        _ => None,
-    };
-    let (Some(top), Some(right), Some(bottom), Some(left)) = (
-        pct(&inset.rect.0),
-        pct(&inset.rect.1),
-        pct(&inset.rect.2),
-        pct(&inset.rect.3),
-    ) else {
-        return false;
-    };
-    top + bottom >= 1.0 && left + right >= 1.0
-}
-
 fn clip_rect_is_empty(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
     use lightningcss::properties::custom::{Token, TokenOrValue};
 
@@ -5638,24 +5731,18 @@ fn apply_property(
         // `text-size-adjust` exists to stop MOBILE BROWSERS inflating text.
         // Nothing here inflates it, under any value.
         TextSizeAdjust(..) => {}
-        // `clip-path` has no general expression here — clipping a box to an
-        // arbitrary shape needs a per-element mask the paint path does not
-        // carry, and gpui's content masks are rectangles in window space. But
-        // the one shape that appears in real code is not a shape at all: it is
-        // the SCREEN-READER-ONLY idiom, `clip-path: inset(50%)`, whose insets
-        // meet in the middle and enclose nothing. An element clipped to nothing
-        // paints nothing while keeping its layout box, which is exactly
-        // `visibility: hidden` — the same reading m19 gave the deprecated
-        // `clip: rect(0,0,0,0)` beside it. reka's `VisuallyHidden` writes both.
-        ClipPath(v, _) => match v {
-            CssClipPath::None => r.visibility = Some(gpui::Visibility::Visible),
-            CssClipPath::Shape { shape, .. } if inset_encloses_nothing(shape) => {
-                r.visibility = Some(gpui::Visibility::Hidden);
+        // `clip-path` cuts the element's whole painting and its hit test to a
+        // shape (CSS Masking 1 §5), which gpui does with a rounded content
+        // mask around the box (`gpui::Style::vn_clip_path`): `inset()`,
+        // `circle()` and a lone `<geometry-box>` exactly, `ellipse()` as a
+        // capsule. The screen-reader-only idiom, `inset(50%)`, encloses
+        // nothing and so paints nothing, while the layout box and the CSS
+        // `visibility` stay. `polygon()`, `path()` and `url()` are advised
+        // in [`clip_path`].
+        ClipPath(v, _) => {
+            if let Some(clip) = clip_path(v, diagnostics) {
+                r.vn_clip_path = Some(clip);
             }
-            _ => warn_once(
-                diagnostics,
-                "`clip-path` is not applied (v1) — gpui clips with rectangular content masks in                  window space, so an arbitrary shape (a circle, an ellipse, a polygon, an SVG                  path) has nothing to become. `clip-path: inset(50%)` IS honoured — it encloses                  nothing, which is `visibility: hidden` with the layout box intact — and                  `overflow: hidden` on a sized box clips for real",
-            ),
         }
         // The line breaker's three CSS Text 3 properties, inherited through
         // gpui's text style like `white-space` (the fork's `TextWrap`).
@@ -5759,6 +5846,19 @@ fn apply_property(
             // card layers that round themselves with it (`.card-bg { overflow:
             // hidden; border-radius: inherit }`) square. It is recorded here and
             // filled in after the cascade ([`RadiusInherit`]).
+            // `path()`, and the CSS Shapes 2 functions (`rect()`, `xywh()`,
+            // `shape()`): Chromium applies them, lightningcss has no typed
+            // value for them, and none is a rounded rectangle.
+            if matches!(u.property_id, PropertyId::ClipPath(_)) && !has_substitution(&u.value) {
+                use lightningcss::properties::custom::{Token, TokenOrValue};
+                let what = u.value.0.iter().find_map(|t| match t {
+                    TokenOrValue::Function(f) => Some(format!("{}()", f.name.0.as_ref())),
+                    TokenOrValue::Token(Token::Function(name)) => Some(format!("{}()", name.as_ref())),
+                    _ => None,
+                });
+                clip_path_unsupported(diagnostics, what.as_deref().unwrap_or("this value"));
+                return;
+            }
             if matches!(single_ident_raw(&u.value), Some("inherit")) {
                 let corners = match u.property_id {
                     PropertyId::BorderRadius(_) => RadiusInherit::ALL,
@@ -6714,12 +6814,17 @@ mod tests {
         assert_eq!(extras("visibility: collapse").0.visibility_hidden, Some(true));
         assert_eq!(extras("visibility: visible").0.visibility_hidden, Some(false));
         assert_eq!(extras("color: red").0.visibility_hidden, None);
-        for sr_only in ["clip: rect(0, 0, 0, 0)", "clip-path: inset(50%)"] {
+        // `clip-path: inset(50%)`, the other idiom, is a real clip
+        // (`clip_path_is_a_rounded_mask_and_the_other_shapes_advise`).
+        for sr_only in ["clip: rect(0, 0, 0, 0)"] {
             let mut d = Vec::new();
             let inline = parse_inline_style(sr_only, &mut d);
             assert_eq!(inline.refinement.and_then(|r| r.visibility), Some(gpui::Visibility::Hidden), "{sr_only}");
             assert_eq!(inline.extras.visibility_hidden, None, "{sr_only}");
         }
+        let mut d = Vec::new();
+        let inline = parse_inline_style("clip-path: inset(50%)", &mut d);
+        assert_eq!(inline.extras.visibility_hidden, None);
     }
 
     // ---- diagnostics are ONE-SHOT ----------------------------------------
@@ -8243,29 +8348,81 @@ mod tests {
         assert!(d.is_empty() && !x.mask_ring(), "{d:?}");
     }
 
-    /// `clip-path: inset(50%)` is the screen-reader-only idiom: the insets meet
-    /// in the middle and enclose nothing, which is `visibility: hidden` with the
-    /// layout box intact (§4.8). Any other shape has nothing to become and says
-    /// so — and says what IS honoured.
+    /// `clip-path` reaches gpui as a rounded content mask (`gpui::VnClipPath`):
+    /// `inset()`, `circle()` and a lone box exactly, `ellipse()` as a capsule
+    /// with an advisory. `polygon()`, `path()` and `url()` are advised and
+    /// set nothing. The screen-reader-only `inset(50%)` is a real clip to
+    /// nothing: the paint switch and the CSS `visibility` are left alone.
     #[test]
-    fn clip_path_inset_50_is_visibility_hidden_and_a_real_shape_advises() {
-        let r = clean("clip-path: inset(50%)");
-        assert_eq!(r.visibility, Some(gpui::Visibility::Hidden));
-        // …and the four-value spelling reka's `VisuallyHidden` actually writes.
+    fn clip_path_is_a_rounded_mask_and_the_other_shapes_advise() {
+        use gpui::{VnClipBox as B, VnClipPath as C, VnCornerRadius, VnShapeRadius as R};
+        let at = |x: f32, y: f32| VnCornerRadius { x: px(x).into(), y: px(y).into() };
+        let half = relative(0.5);
+        for sr_only in ["clip-path: inset(50%)", "clip-path: inset(50% 50% 50% 50%)"] {
+            let r = clean(sr_only);
+            assert_eq!(r.visibility, None, "{sr_only}");
+            assert_eq!(
+                r.vn_clip_path,
+                Some(C::Inset { reference: B::Border, insets: [half; 4], radii: [at(0., 0.); 4] }),
+                "{sr_only}"
+            );
+        }
+        // Two insets, the `round` radii (one elliptical corner) and a box.
         assert_eq!(
-            clean("clip-path: inset(50% 50% 50% 50%)").visibility,
-            Some(gpui::Visibility::Hidden)
+            clean("clip-path: inset(10px 20% round 8px 8px 8px 4px / 8px 8px 8px 6px) padding-box").vn_clip_path,
+            Some(C::Inset {
+                reference: B::Padding,
+                insets: [px(10.).into(), relative(0.2), px(10.).into(), relative(0.2)],
+                radii: [at(8., 8.), at(8., 8.), at(8., 8.), at(4., 6.)],
+            })
         );
-        // An inset that encloses something is a real clip, and a real gap.
-        let (r, d) = map("clip-path: inset(10%)");
-        assert_eq!(r.visibility, None, "a real clip must not hide the element");
-        assert!(d.iter().any(|m| m.contains("clip-path")), "{d:?}");
-
-        let (_, d) = map("clip-path: circle(40%)");
-        assert!(d.iter().any(|m| m.contains("clip-path")), "{d:?}");
-
-        // `none` is the initial value and un-hides.
-        assert_eq!(clean("clip-path: none").visibility, Some(gpui::Visibility::Visible));
+        assert_eq!(
+            clean("clip-path: circle(40%)").vn_clip_path,
+            Some(C::Ellipse {
+                reference: B::Border,
+                center: [half, half],
+                radius: [R::Length(relative(0.4)); 2],
+                circle: true,
+            })
+        );
+        // The default radius is the closest side; an offset from the far side
+        // is 100% less it.
+        assert_eq!(
+            clean("clip-path: circle(at right 10px top) content-box").vn_clip_path,
+            Some(C::Ellipse {
+                reference: B::Content,
+                center: [DefiniteLength::Calc { fraction: 1.0, pixels: px(-10.) }, relative(0.)],
+                radius: [R::ClosestSide; 2],
+                circle: true,
+            })
+        );
+        // An ellipse is a capsule, and says so, unless its radii are one length.
+        let (r, d) = map("clip-path: ellipse(30% farthest-side at 25% 75%)");
+        assert_eq!(
+            r.vn_clip_path,
+            Some(C::Ellipse {
+                reference: B::Border,
+                center: [relative(0.25), relative(0.75)],
+                radius: [R::Length(relative(0.3)), R::FarthestSide],
+                circle: false,
+            })
+        );
+        assert!(d.iter().any(|m| m.contains("ellipse()") && m.contains("capsule")), "{d:?}");
+        assert!(clean("clip-path: ellipse(20px 20px)").vn_clip_path.is_some());
+        // A box alone; `fill-box` is the content box and `stroke-box` the
+        // border box of an element with a CSS box.
+        assert_eq!(clean("clip-path: margin-box").vn_clip_path, Some(C::Box(B::Margin)));
+        assert_eq!(clean("clip-path: fill-box").vn_clip_path, Some(C::Box(B::Content)));
+        assert_eq!(clean("clip-path: stroke-box").vn_clip_path, Some(C::Box(B::Border)));
+        // What a rounded rectangle cannot be.
+        for other in ["polygon(0 0, 100% 0, 0 100%)", "path('M0 0 L10 10 Z')", "url(#c)"] {
+            let (r, d) = map(&format!("clip-path: {other}"));
+            assert_eq!(r.vn_clip_path, None, "{other}");
+            assert!(d.iter().any(|m| m.contains("clip-path")), "{other}: {d:?}");
+        }
+        // `none` clears an earlier clip, and leaves the paint switch alone.
+        let r = clean("clip-path: none");
+        assert_eq!((r.vn_clip_path, r.visibility), (Some(C::None), None));
     }
 
     /// `overflow-wrap` (and its legacy alias `word-wrap`, which CSS Text 3
