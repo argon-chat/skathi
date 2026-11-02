@@ -414,28 +414,37 @@ pub fn computed_style(id: u32) -> Option<String> {
         put("direction", "ltr".into());
         // The two INHERITED text properties a component reads to match its
         // surroundings: an inline custom emoji sizes itself off its parent's
-        // `fontSize`, an overlay tints itself with `color`. Both inherit, so the
-        // answer is the nearest declaration up the parent chain — what the
-        // painter inherits too — and, with none, the root's: the rem basis
-        // (which IS the root font-size, `probe_root_font_size`) and the window's
-        // default text colour.
-        let (mut font_size, mut color) = (None, None);
+        // `fontSize`, an overlay tints itself with `color`. The font size is
+        // the cascade's own computed value, inherited and em-resolved down the
+        // walk (`ComputedStates::font_size`). The colour is the nearest
+        // declaration up the parent chain — what the painter inherits too —
+        // and, with none, the window's default text colour.
+        let mut color = None;
         let mut at = id;
         while let Some(n) = t.node(at) {
             if let Some(c) = n.computed.as_ref() {
-                font_size = font_size.or(c.base.text.font_size);
                 color = color.or(c.base.text.color);
             }
-            if (font_size.is_some() && color.is_some()) || n.parent == 0 || n.parent == at {
+            if color.is_some() || n.parent == 0 || n.parent == at {
                 break;
             }
             at = n.parent;
         }
-        let px = match font_size {
-            Some(gpui::AbsoluteLength::Pixels(p)) => f32::from(p),
-            Some(gpui::AbsoluteLength::Rems(r)) => r.0 * vn_css::rem_basis(),
-            None => vn_css::rem_basis(),
-        };
+        // A node not cascaded yet inherits: the nearest cascaded ancestor's,
+        // and with none the root's, the rem basis.
+        let mut px = None;
+        let mut at = id;
+        while let Some(n) = t.node(at) {
+            if let Some(c) = n.computed.as_ref() {
+                px = Some(c.font_size);
+                break;
+            }
+            if n.parent == 0 || n.parent == at {
+                break;
+            }
+            at = n.parent;
+        }
+        let px = px.unwrap_or_else(vn_css::rem_basis);
         put("font-size", format!("{px}px"));
         put("color", css_rgb(color.unwrap_or_else(gpui::black)));
         for (name, value) in cs.vars.iter() {

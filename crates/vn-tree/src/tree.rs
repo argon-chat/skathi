@@ -1648,11 +1648,12 @@ impl Tree {
         } else {
             n.inline.as_deref()
         };
-        let states = engine.compute_node(
+        let states = engine.compute_node_at(
             NodeRef { tree: self, id: self.root },
             inline,
             &std::rc::Rc::new(vn_css::Vars::default()),
             None,
+            ROOT_PARENT_FONT_SIZE,
             env,
             &mut Vec::new(),
         );
@@ -1686,7 +1687,7 @@ impl Tree {
         r: u32,
         env: &vn_css::Env,
         root_vars: &std::rc::Rc<vn_css::Vars>,
-    ) -> (std::rc::Rc<vn_css::Vars>, bool, Option<gpui::Hsla>, vn_css::InheritedRadii, vn_css::Env) {
+    ) -> (std::rc::Rc<vn_css::Vars>, bool, Inherited, vn_css::InheritedRadii, vn_css::Env) {
         let root_env = crate::windows::env_for_node(self, r, env);
         let mut cur = self.node(r).map_or(0, |n| n.parent);
         let mut parent_computed = None;
@@ -1706,9 +1707,14 @@ impl Tree {
         // `currentColor` resolves against the element's computed `color`,
         // which is inherited when it declares none — so the effective colour
         // rides down the walk beside the vars map.
-        let inherited_color = parent_computed.and_then(|c| c.color);
+        // So does the computed font size, which every `em` below resolves
+        // against.
+        let inherited_text = Inherited {
+            color: parent_computed.and_then(|c| c.color),
+            font_size: parent_computed.map_or(ROOT_PARENT_FONT_SIZE, |c| c.font_size),
+        };
         let inherited_radii = parent_computed.map(|c| vn_css::InheritedRadii::of(&c.base)).unwrap_or_default();
-        (inherited, inherited_inert, inherited_color, inherited_radii, root_env)
+        (inherited, inherited_inert, inherited_text, inherited_radii, root_env)
     }
 
     /// One element's cascade, as the walk runs it: `compute_node` with the
@@ -1718,10 +1724,10 @@ impl Tree {
         &self,
         engine: &vn_css::Engine,
         id: u32,
-        (parent_vars, parent_inert, parent_color, parent_radii): (
+        (parent_vars, parent_inert, parent_text, parent_radii): (
             &std::rc::Rc<vn_css::Vars>,
             bool,
-            Option<gpui::Hsla>,
+            Inherited,
             vn_css::InheritedRadii,
         ),
         env: &vn_css::Env,
@@ -1731,11 +1737,12 @@ impl Tree {
         // The matcher's sibling and content questions are recorded against
         // this element ([`sel`]).
         CASCADE_SUBJECT.with(|c| c.set(id));
-        let mut states = engine.compute_node(
+        let mut states = engine.compute_node_at(
             NodeRef { tree: self, id },
             n.inline.as_deref(),
             parent_vars,
-            parent_color,
+            parent_text.color,
+            parent_text.font_size,
             env,
             diagnostics,
         );
@@ -1758,8 +1765,8 @@ impl Tree {
     /// Each is cascaded alone, against what it would inherit. A result equal
     /// to the one it has is dropped; one that differs only in what the node
     /// itself paints is returned, to be stored with the pass; and one that
-    /// changes what its children inherit (custom properties, `color`,
-    /// `pointer-events`, corner radii) turns into an ordinary mark, subtree
+    /// changes what its children inherit (custom properties, `color`, font
+    /// size, `pointer-events`, corner radii) turns into an ordinary mark, subtree
     /// and all. Run before [`Tree::restyle_roots`], so a node that also lies
     /// under a walk root of the same pass is simply walked, and its result
     /// here thrown away by the caller.
@@ -1786,15 +1793,16 @@ impl Tree {
             if n.kind != Kind::Element || n.mark_gen == self.restyle_gen || n.computed.is_none() {
                 continue;
             }
-            let (vars, inert, color, radii, here_env) = self.walk_inputs(id, env, &root_vars);
+            let (vars, inert, text, radii, here_env) = self.walk_inputs(id, env, &root_vars);
             let (states, child_radii) =
-                self.cascade_one(engine, id, (&vars, inert, color, radii), &here_env, &mut diagnostics);
+                self.cascade_one(engine, id, (&vars, inert, text, radii), &here_env, &mut diagnostics);
             let Some(old) = n.computed.as_ref() else { continue };
             if *old == states {
                 continue;
             }
             let hands_down_the_same = old.vars == states.vars
                 && old.color == states.color
+                && old.font_size == states.font_size
                 && old.extras.pointer_events_none == states.extras.pointer_events_none
                 && vn_css::InheritedRadii::of(&old.base) == child_radii;
             if hands_down_the_same {
@@ -1898,7 +1906,7 @@ impl Tree {
                 u32,
                 std::rc::Rc<vn_css::Vars>,
                 bool,
-                Option<gpui::Hsla>,
+                Inherited,
                 vn_css::InheritedRadii,
                 vn_css::Env,
             )> = Vec::new();
@@ -1918,30 +1926,30 @@ impl Tree {
                 //
                 // Free when there is no pop-out: `window_env` short-circuits to
                 // the published env the moment no window has a painted root.
-                let (inherited, inherited_inert, inherited_color, inherited_radii, root_env) =
+                let (inherited, inherited_inert, inherited_text, inherited_radii, root_env) =
                     this.walk_inputs(r, env, &root_vars);
-                stack.push((r, inherited, inherited_inert, inherited_color, inherited_radii, root_env));
-                while let Some((id, parent_vars, parent_inert, parent_color, parent_radii, here_env)) =
+                stack.push((r, inherited, inherited_inert, inherited_text, inherited_radii, root_env));
+                while let Some((id, parent_vars, parent_inert, parent_text, parent_radii, here_env)) =
                     stack.pop()
                 {
                     let Some(n) = this.node(id) else { continue };
                     // Text and anchor nodes have no cascade of their own; they
                     // simply pass the map down to whatever hangs under them.
-                    let (child_vars, child_inert, child_color, child_radii) = if n.kind == Kind::Element {
+                    let (child_vars, child_inert, child_text, child_radii) = if n.kind == Kind::Element {
                         let (states, radii) = this.cascade_one(
                             engine,
                             id,
-                            (&parent_vars, parent_inert, parent_color, parent_radii),
+                            (&parent_vars, parent_inert, parent_text, parent_radii),
                             &here_env,
                             &mut diagnostics,
                         );
                         let inert = states.extras.pointer_events_none == Some(true);
                         let vars = states.vars.clone();
-                        let color = states.color;
+                        let text = Inherited { color: states.color, font_size: states.font_size };
                         out.push((id, states));
-                        (vars, inert, color, radii)
+                        (vars, inert, text, radii)
                     } else {
-                        (parent_vars, parent_inert, parent_color, parent_radii)
+                        (parent_vars, parent_inert, parent_text, parent_radii)
                     };
                     for &c in n.children.iter().rev() {
                         // **The window boundary.** A popped-out node is painted
@@ -1964,7 +1972,7 @@ impl Tree {
                             c,
                             child_vars.clone(),
                             child_inert,
-                            child_color,
+                            child_text,
                             child_radii,
                             child_env,
                         ));
@@ -3022,6 +3030,21 @@ fn rebase_viewport(width: f32, height: f32) {
 /// One recompile to adopt the root's font-size, and one more in case that
 /// font-size was itself relative. A third would be a cycle.
 const REM_BASIS_PASSES: usize = 3;
+
+/// The font size the document root inherits: CSS's initial `medium`, which
+/// is 16px in every browser's default settings. The root's own `font-size:
+/// 62.5%` or `1.5em` is of this.
+const ROOT_PARENT_FONT_SIZE: f32 = 16.0;
+
+/// The inherited text values the restyle walk threads into each element:
+/// what `currentColor` and `em` resolve against when the element declares
+/// no `color` or `font-size` of its own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Inherited {
+    color: Option<gpui::Hsla>,
+    /// The parent's computed font size, px.
+    font_size: f32,
+}
 
 
 /// The matcher's view of one element node.
@@ -4087,5 +4110,103 @@ mod tests {
             fresh
         });
         assert_eq!(roots_of(), vec![fresh]);
+    }
+
+    fn font_size_of(id: u32) -> f32 {
+        read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).map(|c| c.font_size)).expect("cascaded")
+    }
+
+    fn padding_top_of(id: u32) -> Option<gpui::DefiniteLength> {
+        read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.padding.top))
+    }
+
+    fn px_len(v: f32) -> Option<gpui::DefiniteLength> {
+        Some(gpui::px(v).into())
+    }
+
+    /// CSS Values 4 §6.1.1 down a real walk: the root's `62.5%` is of the
+    /// initial 16px, each `font-size` em or percentage is of the parent's
+    /// computed size, every other em is of the element's own, an element
+    /// that declares no size inherits the px, and `rem` stays on the root.
+    #[test]
+    fn em_follows_the_computed_font_size_down_the_walk() {
+        set_stylesheet(
+            ":root { font-size: 62.5% } \
+             .a { font-size: 2em } \
+             .b { font-size: 75%; padding: .5em } \
+             .c { margin-top: 1em; width: 2rem; line-height: 1.5em } \
+             .n { line-height: 1.5 }"
+                .into(),
+        );
+        let (root, a, b, c, n) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let mut make = |class: &str, parent: u32| {
+                let e = t.create_element(div);
+                t.set_class(e, class);
+                t.insert(e, parent, 0);
+                e
+            };
+            let a = make("a", root);
+            let b = make("b", a);
+            let c = make("c", b);
+            let n = make("n", c);
+            (root, a, b, c, n)
+        });
+        restyle_all();
+        assert_eq!(vn_css::rem_basis(), 10.0, "the root's 62.5% of 16px is the rem basis");
+        assert_eq!(
+            [root, a, b, c, n].map(font_size_of),
+            [10.0, 20.0, 15.0, 15.0, 15.0],
+            "each size of its parent's, and inherited as px"
+        );
+        assert_eq!(padding_top_of(b), px_len(7.5), "`.5em` of its own 15px");
+        let computed = read_tree(|t| t.node(c).and_then(|n| n.computed.as_ref()).map(|c| c.base.clone()))
+            .expect("cascaded");
+        assert_eq!(computed.margin.top, Some(gpui::Length::Definite(gpui::px(15.0).into())));
+        assert_eq!(computed.size.width, Some(gpui::Length::Definite(gpui::px(20.0).into())), "2rem");
+        assert_eq!(computed.text.line_height, px_len(22.5), "an em line-height is px");
+        let number = read_tree(|t| t.node(n).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.text.line_height));
+        assert_eq!(number, Some(gpui::relative(1.5)), "a number line-height stays a number");
+        let reported = crate::dom::computed_style(c).unwrap_or_default();
+        assert!(reported.lines().any(|l| l == "font-size=15px"), "getComputedStyle: {reported}");
+    }
+
+    /// Two cousins with the same rules under parents of different font sizes:
+    /// the matched-properties cache must not hand the second the first's px.
+    /// And a class that changes only its own element's font size still walks
+    /// the subtree under it, since every em there moves.
+    #[test]
+    fn a_new_parent_font_size_reaches_the_em_below_it() {
+        set_stylesheet(".big { font-size: 20px } .leaf { padding: 1em }".into());
+        let (big, plain, leaves) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let big = t.create_element(div);
+            t.set_class(big, "big");
+            t.insert(big, root, 0);
+            let plain = t.create_element(div);
+            t.insert(plain, root, 1);
+            let mut leaves = Vec::new();
+            for parent in [big, plain] {
+                let leaf = t.create_element(div);
+                t.set_class(leaf, "leaf");
+                t.insert(leaf, parent, 0);
+                leaves.push(leaf);
+            }
+            (big, plain, leaves)
+        });
+        restyle_all();
+        assert_eq!(leaves.iter().map(|&l| padding_top_of(l)).collect::<Vec<_>>(), vec![px_len(20.0), px_len(16.0)]);
+
+        // `.big` is read by its own element alone, so this is a self-mark; the
+        // font size it hands down moved, so the leaf under it is walked too.
+        with_tree(|t| {
+            t.set_class(plain, "big");
+            t.set_class(big, "");
+        });
+        restyle_all();
+        assert_eq!(leaves.iter().map(|&l| padding_top_of(l)).collect::<Vec<_>>(), vec![px_len(16.0), px_len(20.0)]);
+        assert_eq!(font_size_of(leaves[1]), 20.0);
     }
 }
