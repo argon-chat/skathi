@@ -323,8 +323,13 @@ project's browser-compat-first policy.
    emitted.** Nothing is dispatched into JS.
 6. **`transition-behavior: allow-discrete`, `@starting-style`, and discrete
    interpolation are unimplemented** — discrete properties simply snap.
-7. **`em` is treated as `16px`** by the mapper (no parent font-size context yet),
-   so `font-size` transitions in `em` interpolate against that constant.
+7. **`em` is the root's font size** (the rem basis, 16px until the root sets
+   one) rather than the element's: the mapper has no parent font-size context.
+   `font-size` transitions in `em` interpolate against that basis. `ch` and
+   `ex` (and `rch` / `rex`) are half of it: css-values-4 tells a UA to assume
+   that value when the glyph cannot be measured, and nothing measures one while
+   a sheet compiles. So a `1ch` under a smaller font is too wide (a 14px basis
+   gives 7px). `mapper.rs`, `HALF_EM`.
 8. **One border color.** gpui has a single `border_color`, so `border-top-color`
    and friends are neither mapped nor animatable; `border-color` transitions the
    one color.

@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/call-timer.spec.ts: Argon's titlebar call timer (Counter.vue + Digit.vue), whose digit cells are `width: 1ch`. See ../README.md.",
+
+  "name": "vn-test-call-timer",
+
+  "window": {
+    "title": "vue-native — call timer (fixture)",
+    "width": 200,
+    "height": 80,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

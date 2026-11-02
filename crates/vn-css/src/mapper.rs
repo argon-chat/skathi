@@ -1763,7 +1763,37 @@ fn length_value_px(v: &LengthValue) -> Option<f32> {
         // wherever a font-size is nested, right at the top level — and closer
         // than a hardcoded 16 was the moment an app sets a root font size.
         LengthValue::Em(v) => Some(v * rem_basis()),
+        LengthValue::Ch(v) | LengthValue::Rch(v) | LengthValue::Ex(v) | LengthValue::Rex(v) => {
+            Some(v * HALF_EM * rem_basis())
+        }
         other => viewport_value_px(other),
+    }
+}
+
+/// `ch`, `ex` and their root spellings `rch` / `rex`, as a fraction of the em
+/// basis.
+///
+/// They are the advance of "0" and the x-height of the element's font. Nothing
+/// here measures a glyph while a sheet compiles, and `em` already reads as `rem`
+/// (README divergence 7). So they take the value css-values-4 §6.1.1 tells a UA
+/// to assume when the glyph cannot be measured: half an em.
+///
+/// They used to be dropped as unresolved, which is not a narrower box but none:
+/// Argon's titlebar call timer (motionCounter/Digit.vue) sizes each digit's
+/// clipping cell `width: 1ch`, and every cell came out 0 px wide, so the
+/// timer never showed. Half an em is close to a real "0" in common UI fonts.
+/// The error that matters is the basis: `em` is the root's size here, not the
+/// element's, so a `1ch` under a smaller font-size is too wide.
+const HALF_EM: f32 = 0.5;
+
+/// The px value of one `unit` of the font-relative lengths [`length_value_px`]
+/// resolves, reached from a raw token: the path a `var()`-composed declaration
+/// takes.
+fn font_unit_px(unit: &str, value: f32) -> Option<f32> {
+    match unit {
+        "rem" | "em" => Some(value * rem_basis()),
+        "ch" | "rch" | "ex" | "rex" => Some(value * HALF_EM * rem_basis()),
+        _ => None,
     }
 }
 
@@ -3419,8 +3449,7 @@ fn single_length_px(value: &lightningcss::properties::custom::TokenList<'_>) -> 
                 }
                 found = match unit.as_ref() {
                     "px" => Some(*value),
-                    "rem" | "em" => Some(*value * rem_basis()),
-                    other => match viewport_unit_px(other, *value) {
+                    other => match font_unit_px(other, *value).or_else(|| viewport_unit_px(other, *value)) {
                         Some(px) => Some(px),
                         None => return None,
                     },
@@ -7538,6 +7567,23 @@ mod tests {
         assert!(!set_rem_basis(f32::NAN));
         assert_eq!(rem_basis(), 14.0);
 
+        set_rem_basis(INITIAL_REM_BASIS);
+    }
+
+    /// `ch` and `ex` are half an em (css-values-4's value for an unmeasured
+    /// glyph), and so follow the root font size as `em` does. They used to be
+    /// dropped, which made Argon's call timer digits (`width: 1ch`) 0 px wide.
+    #[test]
+    fn ch_and_ex_are_half_an_em_of_the_root() {
+        let w = |body: &str| clean(body).size.width;
+        assert_eq!(w("width: 1ch"), Some(Length::Definite(px(8.0).into())));
+        assert_eq!(w("width: 3ex"), Some(Length::Definite(px(24.0).into())));
+        assert_eq!(w("width: 2rch"), Some(Length::Definite(px(16.0).into())));
+        assert_eq!(w("width: 2rex"), Some(Length::Definite(px(16.0).into())));
+        assert_eq!(w("width: calc(2ch + 1px)"), Some(Length::Definite(px(17.0).into())));
+
+        assert!(set_rem_basis(14.0));
+        assert_eq!(w("width: 1ch"), Some(Length::Definite(px(7.0).into())));
         set_rem_basis(INITIAL_REM_BASIS);
     }
 
