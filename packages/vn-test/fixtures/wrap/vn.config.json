@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/wrap.spec.ts: long unbroken tokens against overflow-wrap, word-break and white-space. See ../README.md.",
+
+  "name": "vn-test-wrap",
+
+  "window": {
+    "title": "vue-native — wrap (fixture)",
+    "width": 1280,
+    "height": 900,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

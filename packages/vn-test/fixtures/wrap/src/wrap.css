@@ -1,0 +1,154 @@
+/* Argon's message row (apps/client MessageItem.vue), the utilities spelled out:
+   a row of avatar and body, the body a column capped at 85%, the bubble an
+   `inline-flex` column inside a flex row, and the text bubble `break-words
+   whitespace-pre-wrap max-w-[520px]`. UrlSegment.vue adds
+   `[overflow-wrap:anywhere]` to a link. */
+
+/* Tailwind's preflight, which Argon has: the bubble's `max-w-[520px]` is
+   its border box. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #313338;
+}
+/* Three stacks side by side, so the whole fixture fits the window: the
+   messages, the one-property boxes, the fit-content probes. */
+.page {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px;
+  background: #313338;
+  color: #dbdee1;
+  font-size: 14px;
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #2b2d31;
+}
+.wide {
+  width: 640px;
+}
+.narrow {
+  width: 260px;
+}
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.av {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  background: #5865f2;
+}
+.body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 85%;
+  align-items: flex-start;
+}
+.row-body {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.bubble-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.bubble {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  max-width: 520px;
+  border-radius: 14px;
+  background: #404249;
+}
+.text {
+  position: relative;
+}
+.url {
+  overflow-wrap: anywhere;
+  color: #00a8fc;
+  font-weight: 600;
+}
+
+/* Fixed-width boxes, one property each. */
+.box {
+  width: 120px;
+  font-size: 14px;
+  line-height: 20px;
+  background: #404249;
+}
+.normal {
+  overflow-wrap: normal;
+}
+.break-word {
+  overflow-wrap: break-word;
+}
+.anywhere {
+  overflow-wrap: anywhere;
+}
+.break-all {
+  word-break: break-all;
+}
+.keep-all {
+  word-break: keep-all;
+}
+.word-break-legacy {
+  word-break: break-word;
+}
+.nowrap {
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+.pre {
+  white-space: pre;
+  overflow-wrap: anywhere;
+}
+.pre-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.no-hyphens {
+  hyphens: none;
+}
+/* min-content: a row that only fits if the text's min-content allows it. */
+.mc-row {
+  display: flex;
+  width: 120px;
+  background: #1e1f22;
+}
+.mc-row > div {
+  background: #404249;
+  line-height: 20px;
+}
+/* fit-content: a flex column that does not stretch its items sizes each
+   between its min-content and max-content, at the room it has. */
+.fc {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 200px;
+  background: #1e1f22;
+}
