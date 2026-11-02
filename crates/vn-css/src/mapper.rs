@@ -7299,8 +7299,8 @@ mod tests {
         assert_eq!(clean("word-spacing: 2px").text.word_spacing, Some(px(2.0)));
         // `normal` is zero extra spacing, which is also the initial value.
         assert_eq!(clean("letter-spacing: normal").text.letter_spacing, Some(px(0.0)));
-        // `em` resolves against the rem basis, like every other relative length
-        // the sheet compiler flattens.
+        // Compiled alone, with no element, `em` is the root's; the fold applies
+        // it again under the element's own size (em_tests.rs).
         assert_eq!(
             clean("letter-spacing: 0.5em").text.letter_spacing,
             Some(px(0.5 * crate::rem_basis()))
@@ -7730,10 +7730,12 @@ mod tests {
     }
 
     /// `ch` and `ex` are half an em (css-values-4's value for an unmeasured
-    /// glyph), and so follow the root font size as `em` does. They used to be
-    /// dropped, which made Argon's call timer digits (`width: 1ch`) 0 px wide.
+    /// glyph). They used to be dropped, which made Argon's call timer digits
+    /// (`width: 1ch`) 0 px wide. Compiled alone, with no element, the em is the
+    /// root's; the fold applies them again under the element's own size
+    /// (em_tests.rs).
     #[test]
-    fn ch_and_ex_are_half_an_em_of_the_root() {
+    fn ch_and_ex_compile_to_half_an_em_of_the_root() {
         let w = |body: &str| clean(body).size.width;
         assert_eq!(w("width: 1ch"), Some(Length::Definite(px(8.0).into())));
         assert_eq!(w("width: 3ex"), Some(Length::Definite(px(24.0).into())));
