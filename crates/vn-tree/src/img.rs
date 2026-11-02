@@ -296,6 +296,9 @@ pub struct KeptFull {
     pub small_saving: usize,
     /// A canvas read its pixels.
     pub canvas_read: usize,
+    /// Shown in a window that keeps full decodes: a media viewer, which zooms
+    /// to 1:1 (`windows::WindowState::full_res_images`).
+    pub full_res_window: usize,
 }
 
 impl KeptFull {
@@ -467,6 +470,7 @@ fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App)
     // Reduce what is drawn only well below its size; count why the rest stay.
     let mut kept = KeptFull::default();
     let mut seen = std::collections::HashSet::new();
+    let pinned = full_res_sources();
     for source in &shown {
         let Some(key) = source_key(source) else { continue };
         if !seen.insert(key.clone()) {
@@ -474,6 +478,10 @@ fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App)
         }
         let Some(full) = source.cached(cx) else { continue };
         if full.is_reduced() {
+            continue;
+        }
+        if pinned.contains(&key) {
+            kept.full_res_window += 1;
             continue;
         }
         let (canvas_read, restoring) = RESIDENCY.with(|r| {
@@ -505,6 +513,31 @@ fn sweep(now: std::time::Instant, window: &mut gpui::Window, cx: &mut gpui::App)
     }
     RESIDENCY.with(|r| r.borrow_mut().stats.kept_full = kept);
     moved
+}
+
+/// The sources an `<img>` shows in a window that keeps full decodes — a media
+/// viewer, which zooms to 1:1 at any moment, so a smaller copy standing in
+/// for what it shows would be a blurred picture until the restore landed. Only
+/// while shown: once the viewer stops showing it, the source reduces and
+/// evicts like any other.
+fn full_res_sources() -> std::collections::HashSet<SourceKey> {
+    if !crate::windows::any_full_res() {
+        return std::collections::HashSet::new();
+    }
+    let nodes: Vec<(u32, SourceKey)> = RESOLVED.with(|m| {
+        m.borrow()
+            .iter()
+            .filter_map(|(id, memo)| Some((*id, source_key(memo.source.as_ref()?)?)))
+            .collect()
+    });
+    nodes
+        .into_iter()
+        .filter(|(id, _)| {
+            let k = crate::windows::window_of_node(*id);
+            crate::windows::peek(k, |w| w.full_res_images).unwrap_or(false)
+        })
+        .map(|(_, key)| key)
+        .collect()
 }
 
 /// A canvas is about to read `source`'s pixels: they must be the full decode.

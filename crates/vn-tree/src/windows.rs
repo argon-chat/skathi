@@ -227,6 +227,13 @@ pub struct WindowState {
     /// pop-out asks for a real `WS_CAPTION`, or the other way round.
     pub os_chrome: bool,
 
+    // --- images ------------------------------------------------------------
+    /// Do the images this window shows keep their full decode while it shows
+    /// them? A media viewer zooms to 1:1 at any moment, so the residency
+    /// sweep must not have a smaller copy stand in for what it shows
+    /// (`crate::img`, "residency"). `<VnWindow fullResolution>`.
+    pub full_res_images: bool,
+
     // --- cascade (§6) ------------------------------------------------------
     /// The `@media` environment the subtree this window paints is cascaded
     /// against: its own viewport, its own scale factor, its own colour scheme.
@@ -559,6 +566,17 @@ pub fn focused_node(k: WinKey) -> u32 {
 /// Sets the node that owns keyboard focus in this window.
 pub fn set_focused_node(k: WinKey, node: u32) {
     of(k, |w| w.focused_node = node);
+}
+
+/// Marks a window as one whose images keep their full decode while shown
+/// ([`WindowState::full_res_images`]).
+pub fn set_full_res_images(k: WinKey, on: bool) {
+    of(k, |w| w.full_res_images = on);
+}
+
+/// Is any window keeping its images' full decodes?
+pub(crate) fn any_full_res() -> bool {
+    WINDOWS.with(|m| m.borrow().values().any(|w| w.full_res_images))
 }
 
 /// The focus handle a node would use, App-scoped and therefore **shared**.

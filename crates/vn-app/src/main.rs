@@ -55,6 +55,7 @@ mod owner; // VN_OWNER_PID: a test host dies with the runner that launched it
 mod payload; // the app stamped into a packaged exe (VNPK), and `--vn-host-info`
 mod perf;
 mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWINDOW.md)
+mod popout_win; // a pop-out shown and hidden, owned, covering a monitor (MULTIWINDOW.md §7.9)
 #[cfg(feature = "prod")]
 mod prod;
 mod quiet; // VN_WINDOW_FOCUS=never: test hosts open behind and never take the foreground

@@ -29,6 +29,7 @@
 //! * closing the primary window closes every pop-out first (D-M16, §7.8).
 
 use std::cell::RefCell;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, Context, Render, Subscription, TitlebarOptions, Window, WindowBounds,
@@ -39,6 +40,7 @@ use vn_runtime::redjs::webapi::util::read_string;
 use vn_runtime::{JsRuntime, host_fn, with_app};
 
 use crate::json::{self, Json};
+use crate::popout_win;
 use crate::window::Backdrop;
 
 const UNDEF: u64 = 0xa;
@@ -68,6 +70,7 @@ impl Render for PopoutShell {
         vn_tree::windows::set_painted_root(id, self.node);
         publish_env(id, self.node, window, cx);
         report_metrics(id, self.node, window);
+        frame_drawn(id, window, cx);
         gpui::div()
             .relative()
             .size_full()
@@ -152,6 +155,36 @@ struct Popout {
     last_metrics: (f32, f32),
     /// Last focus state reported to JS, for the `focus` / `blur` edges.
     last_focused: bool,
+    /// The window's HWND, captured when it opened (0 = none).
+    hwnd: isize,
+    /// Shown, as far as `visible` is concerned (§7.9). A hidden pop-out still
+    /// paints its subtree — nobody sees it — and is shown again rather than
+    /// opened again.
+    visible: bool,
+    /// `cover: "monitor"`: every show covers the whole monitor the main
+    /// window is on.
+    cover: bool,
+    /// `taskbar` as it was created — read back only to advise on a change.
+    taskbar: bool,
+    /// Does a show take the foreground?
+    activate: bool,
+    /// The size and place a window created hidden takes on its first show:
+    /// `(x, y, width, height)`, CSS px. `None` once placed, and for a cover
+    /// window, which the monitor places.
+    first_place: Option<(Option<f32>, Option<f32>, f32, f32)>,
+    /// When the show in progress was asked for, until its first frame.
+    show_asked: Option<Instant>,
+    /// The first frame of the show in progress was drawn: when.
+    show_drawn: Option<Instant>,
+    /// Milliseconds from the latest show request to its first drawn frame.
+    last_show_ms: f64,
+    /// Bumped by every show and hide, so a deferred tidy-up after a hide can
+    /// tell that the window has been shown since.
+    epoch: u64,
+    /// Device px per CSS px, as of its latest frame.
+    scale: f32,
+    /// The client area in CSS px, as of its latest frame.
+    viewport: (f32, f32),
 }
 
 thread_local! {
@@ -232,6 +265,18 @@ struct Options {
     /// clickable without an activation. An app that genuinely wants the second
     /// window in front — a detached editor, say — passes `activate`.
     activate: bool,
+    /// `visible` — LIVE. `false` creates the window hidden (warm: the next
+    /// show is a show, not an open) and hides an open one (§7.9).
+    visible: bool,
+    /// `cover: "monitor"` — the window covers the whole monitor the main
+    /// window is on, taskbar included, with no frame. Creation-time.
+    cover: bool,
+    /// `taskbar: false` — the main window owns it: no taskbar button and no
+    /// second Alt-Tab entry. Creation-time.
+    taskbar: bool,
+    /// `fullResolution` — the images it shows keep their full decode while it
+    /// shows them (a media viewer zooms to 1:1). Live.
+    full_resolution: bool,
 }
 
 fn parse_options(raw: &str) -> Options {
@@ -267,6 +312,20 @@ fn parse_options(raw: &str) -> Options {
         min_height: num("minHeight").map(|n| n as f32),
         title_bar_height: num("titleBarHeight").unwrap_or(32.0) as f32,
         activate: flag("activate").unwrap_or(false),
+        visible: flag("visible").unwrap_or(true),
+        cover: match text("cover").as_deref() {
+            None | Some("") | Some("none") => false,
+            Some("monitor") => true,
+            Some(other) => {
+                crate::window::advise(&format!(
+                    "<VnWindow cover=\"{other}\">: unknown cover — expected \"monitor\". The window \
+                     takes its `bounds` instead (docs/MULTIWINDOW.md §7.9)"
+                ));
+                false
+            }
+        },
+        taskbar: flag("taskbar").unwrap_or(true),
+        full_resolution: flag("fullResolution").unwrap_or(false),
     }
 }
 
@@ -360,16 +419,19 @@ host_fn!(fn vn_window_close_popout(_g, args) {
 // `__vn_window_set_options(nodeId, optionsJson)` — the LIVE half of
 // `<VnWindow>`'s props.
 //
-// Two of them move at runtime (`title`, `alwaysOnTop`); the rest are
-// creation-time-only in gpui and therefore here too. **A creation-time prop
+// Four of them move at runtime (`title`, `alwaysOnTop`, `visible`,
+// `fullResolution`); the rest are creation-time-only in gpui and therefore
+// here too. **A creation-time prop
 // that changed says so and does nothing**, which is D-25/D-30's rule and the
 // opposite of what a silent no-op teaches an author (docs/WINDOWING.md §3.3).
 host_fn!(fn vn_window_set_options(g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let raw = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
     let Some(i) = popout_of_node(node) else { return UNDEF };
-    let (handle, old_title, old_chrome) =
-        POPOUTS.with(|p| { let p = p.borrow(); (p[i].handle, p[i].title.clone(), p[i].os_chrome) });
+    let (handle, old_title, old_chrome, old_visible, old_cover, old_taskbar) = POPOUTS.with(|p| {
+        let p = p.borrow();
+        (p[i].handle, p[i].title.clone(), p[i].os_chrome, p[i].visible, p[i].cover, p[i].taskbar)
+    });
     let opts = parse_options(&raw);
     if opts.os_chrome != old_chrome {
         crate::window::advise(
@@ -379,11 +441,35 @@ host_fn!(fn vn_window_set_options(g, args) {
              (docs/WINDOWING.md D-25)",
         );
     }
+    if opts.cover != old_cover {
+        crate::window::advise(
+            "<VnWindow cover>: covering the monitor is decided when the window is created (it \
+             takes the frame off the window), so changing it does nothing to a window that is \
+             already open — close and re-open it (docs/MULTIWINDOW.md §7.9)",
+        );
+    }
+    if opts.taskbar != old_taskbar {
+        crate::window::advise(
+            "<VnWindow taskbar>: the taskbar reads a window's owner and styles when it is shown, \
+             so this is decided when the window is created and changing it does nothing to a \
+             window that is already open — close and re-open it (docs/MULTIWINDOW.md §7.9)",
+        );
+    }
+    // Live, and nothing to schedule: the next residency sweep reads it.
+    vn_tree::windows::set_full_res_images(handle.window_id().as_u64(), opts.full_resolution);
     let title_moved = opts.title != old_title;
     if title_moved {
         POPOUTS.with(|p| p.borrow_mut()[i].title = opts.title.clone());
     }
+    // `visible` is recorded now, so a second change in the same wave compares
+    // against it; the show or hide itself is deferred with the rest.
+    let visible = opts.visible;
+    let visible_moved = visible != old_visible;
+    if visible_moved {
+        POPOUTS.with(|p| p.borrow_mut()[i].visible = visible);
+    }
     let always_on_top = opts.always_on_top;
+    let id = handle.window_id();
     with_app(|cx| {
         cx.defer(move |cx| {
             let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| {
@@ -392,6 +478,13 @@ host_fn!(fn vn_window_set_options(g, args) {
                 }
             });
             set_always_on_top(handle, always_on_top);
+            if visible_moved {
+                if visible {
+                    show_now(id, cx);
+                } else {
+                    hide_now(id, cx);
+                }
+            }
         });
     });
     UNDEF
@@ -485,6 +578,13 @@ host_fn!(fn vn_window_popouts(_g, _args) {
             p.borrow()
                 .iter()
                 .map(|w| {
+                    // The window as Win32 has it, for the specs of §7.9: what
+                    // DWM shows, where, and who owns it.
+                    let rect = popout_win::window_rect(w.hwnd).map_or(Json::Null, |r| {
+                        Json::arr(r.iter().map(|v| Json::n(*v as f64)).collect())
+                    });
+                    let (owner, appwindow, toolwindow, popup, thickframe, non_rude) =
+                        popout_win::describe(w.hwnd);
                     Json::obj(vec![
                         ("node", Json::n(w.node as f64)),
                         ("windowId", Json::n(w.id.as_u64() as f64)),
@@ -493,12 +593,68 @@ host_fn!(fn vn_window_popouts(_g, _args) {
                         ("width", Json::n(w.last_metrics.0)),
                         ("height", Json::n(w.last_metrics.1)),
                         ("focused", Json::Bool(w.last_focused)),
+                        ("visible", Json::Bool(w.visible)),
+                        ("shown", Json::Bool(popout_win::is_visible(w.hwnd))),
+                        ("foreground", Json::Bool(popout_win::is_foreground(w.hwnd))),
+                        ("cover", Json::Bool(w.cover)),
+                        ("rect", rect),
+                        ("hwnd", Json::n(w.hwnd as f64)),
+                        ("ownedByMain", Json::Bool(owner != 0 && Some(owner) == crate::window::primary_hwnd())),
+                        ("appWindow", Json::Bool(appwindow)),
+                        ("toolWindow", Json::Bool(toolwindow)),
+                        ("popup", Json::Bool(popup)),
+                        ("thickFrame", Json::Bool(thickframe)),
+                        ("nonRude", Json::Bool(non_rude)),
+                        ("lastShowMs", Json::n(w.last_show_ms)),
+                        (
+                            "mainMonitor",
+                            crate::window::primary_hwnd().and_then(popout_win::monitor_rect).map_or(
+                                Json::Null,
+                                |r| Json::arr(r.iter().map(|v| Json::n(*v as f64)).collect()),
+                            ),
+                        ),
                     ])
                 })
                 .collect(),
         )
         .to_json()
     });
+    JsRuntime::with(|rt| rt.ctx().string(&json)).0
+});
+
+// `__vn_window_map_rect(popoutNode, nodeId)` — where `nodeId`, as the PRIMARY
+// window painted it, falls inside the pop-out painting `popoutNode`: a
+// `[x, y, width, height]` JSON string in that pop-out's CSS px, relative to its
+// painted root (the space an absolutely positioned child of the root lives
+// in), or `undefined` when either was not painted. It goes through the screen,
+// so it holds across monitors and DPIs — what a viewer's zoom out of the
+// thumbnail needs (§7.9).
+//
+// A cover window is measured where its next show puts it, the main window's
+// monitor at the main window's scale, so the answer is already right while it
+// is hidden and still warm-small.
+host_fn!(fn vn_window_map_rect(_g, args) {
+    let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
+    let src = args.arg(1).as_number().unwrap_or(0.0) as u32;
+    let Some(i) = popout_of_node(node) else { return UNDEF };
+    let (hwnd, cover, scale) = POPOUTS.with(|p| {
+        let p = p.borrow();
+        (p[i].hwnd, p[i].cover, p[i].scale)
+    });
+    let Some(rect) = vn_tree::bounds_in(0, src) else { return UNDEF };
+    let Some(main) = crate::window::primary_hwnd() else { return UNDEF };
+    let Some(from) = popout_win::client_rect_on_screen(main) else { return UNDEF };
+    let main_scale = crate::window::primary_scale();
+    let to = if cover {
+        popout_win::monitor_rect(main).map(|r| (r, main_scale))
+    } else {
+        popout_win::client_rect_on_screen(hwnd).map(|r| (r, scale))
+    };
+    let Some((to, to_scale)) = to else { return UNDEF };
+    let root = vn_tree::bounds_in(node, node).map_or((0.0, 0.0), |r| (r.0, r.1));
+    let (x, y, w, h) =
+        popout_win::map_rect(rect, (from[0], from[1]), main_scale, (to[0], to[1]), to_scale);
+    let json = Json::arr(vec![Json::n(x - root.0), Json::n(y - root.1), Json::n(w), Json::n(h)]).to_json();
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
@@ -526,6 +682,17 @@ fn enclosing_popout(node: u32) -> Option<u32> {
 // ---------------------------------------------------------------------------
 // the push channel back to JS
 // ---------------------------------------------------------------------------
+
+/// [`emit`] from the top of an effect cycle (a `defer`, a timer), with the app
+/// published to the handler: a handler that answers by changing a prop —
+/// `visible` again, say — reaches `__vn_window_set_options`, which schedules
+/// through the app and would otherwise be dropped.
+fn emit_in(cx: &mut App, on_event: u64, kind: &str, detail: Json) {
+    if on_event == 0 {
+        return;
+    }
+    vn_runtime::with_published_app(cx, || emit(on_event, kind, detail));
+}
 
 /// Fires one `<VnWindow>` event. `detail` is a JSON object the component turns
 /// into the emit's payload.
@@ -687,6 +854,11 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             // same frame group" false the moment one of them loses focus —
             // which is *always*, since only one can be focused.
             inactive_frame_interval: None,
+            // A cover window is always created hidden, even a `visible` one:
+            // its styles change and it is placed on the monitor first, so its
+            // first visible frame already covers it (§7.9).
+            show: opts.visible && !opts.cover,
+            is_minimizable: !opts.cover,
             ..Default::default()
         },
         |window, cx| {
@@ -704,6 +876,36 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     // reads it to decide whether a `window-drag` region is live or inert, and
     // the first frame is already a frame (docs/MULTIWINDOW.md §7.6).
     vn_tree::set_os_chrome_in(key, opts.os_chrome);
+    vn_tree::windows::set_full_res_images(key, opts.full_resolution);
+    // The HWND has to exist before `alwaysOnTop` can be applied to it, and
+    // `open_window` has already drawn the window once by now — so the handle is
+    // live and `capture_hwnd` succeeds.
+    let mut hwnd = 0;
+    let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
+        hwnd = crate::window::capture_hwnd(window).unwrap_or(0);
+        // Its own X while it owns a file dialog: the dialog closes first
+        // (dialogs.rs). The OS keeps an owner disabled under its modal
+        // dialog, so this is the taskbar's "Close window", not a click.
+        window.on_window_should_close(cx, |window, cx| crate::dialogs::may_close_now(window.window_handle(), cx));
+    });
+    // §7.9, while the window is still hidden: the taskbar reads a window's
+    // styles when it is shown, and a cover window's first frame must already
+    // be the monitor's size.
+    if hwnd != 0 {
+        if !opts.taskbar {
+            if let Some(main) = crate::window::primary_hwnd() {
+                popout_win::make_owned(hwnd, main);
+            }
+        }
+        if opts.cover {
+            popout_win::make_cover(hwnd);
+            // WARM SMALL. A hidden window keeps its swapchain, and one the
+            // monitor's size is 30 MB at 1440p and 66 MB at 4K, in shared
+            // memory on an integrated GPU. The first show sizes it. Out of
+            // this update, as every resize here is: see `resize_outside`.
+            cx.spawn(async move |_| warm_small(hwnd)).detach();
+        }
+    }
     let title = opts.title.clone();
     POPOUTS.with(|p| {
         p.borrow_mut().push(Popout {
@@ -717,17 +919,19 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             title_bar_height: opts.title_bar_height,
             last_metrics: (0.0, 0.0),
             last_focused: false,
+            hwnd,
+            visible: opts.visible,
+            cover: opts.cover,
+            taskbar: opts.taskbar,
+            activate: opts.activate,
+            first_place: (!opts.visible && !opts.cover).then_some((opts.x, opts.y, opts.width, opts.height)),
+            show_asked: None,
+            show_drawn: None,
+            last_show_ms: 0.0,
+            epoch: 0,
+            scale: 1.0,
+            viewport: (0.0, 0.0),
         })
-    });
-    // The HWND has to exist before `alwaysOnTop` can be applied to it, and
-    // `open_window` has already drawn the window once by now — so the handle is
-    // live and `capture_hwnd` succeeds.
-    let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, cx| {
-        crate::window::capture_hwnd(window);
-        // Its own X while it owns a file dialog: the dialog closes first
-        // (dialogs.rs). The OS keeps an owner disabled under its modal
-        // dialog, so this is the taskbar's "Close window", not a click.
-        window.on_window_should_close(cx, |window, cx| crate::dialogs::may_close_now(window.window_handle(), cx));
     });
     if opts.always_on_top {
         set_always_on_top(handle, true);
@@ -740,7 +944,8 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     );
     eprintln!("{msg}");
     vn_tree::log::record("window", msg);
-    emit(
+    emit_in(
+        cx,
         on_event,
         "open",
         Json::obj(vec![("windowId", Json::n(key as f64)), ("node", Json::n(node as f64))]),
@@ -748,6 +953,232 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     // The primary window has to redraw WITHOUT the subtree; nothing in the tree
     // changed, so `flush_changes` would not have asked for it.
     crate::notify_shell(cx);
+    // A cover window asked for `visible` was created hidden all the same; this
+    // is its first show.
+    if opts.visible && opts.cover {
+        show_now(handle.window_id(), cx);
+    }
+}
+
+/// The edge, physical px, of the hidden window a cover window waits as.
+const WARM_SIZE: i32 = 64;
+/// How long a hidden cover window keeps the monitor-sized swapchain of its
+/// last show before it goes back to [`WARM_SIZE`].
+const SHRINK_AFTER: Duration = Duration::from_secs(30);
+/// How long after a hide the hidden window draws once, to hand back the atlas
+/// tiles of what it showed (§7.9).
+const TIDY_AFTER: Duration = Duration::from_millis(500);
+
+/// Shows a pop-out (`visible` became `true`), §7.9.
+///
+/// The frame is drawn BEFORE the window is shown: a hidden window gets no
+/// `WM_PAINT`, so whatever it presented last — the previous picture of a
+/// viewer — would otherwise be what DWM shows until the next vsync. A cover
+/// window is placed on the main window's monitor first, so that frame is
+/// already the monitor's size.
+fn show_now(id: WindowId, cx: &mut App) {
+    let Some((handle, hwnd, cover, activate, first)) = POPOUTS.with(|p| {
+        let mut p = p.borrow_mut();
+        let w = p.iter_mut().find(|w| w.id == id)?;
+        w.epoch += 1;
+        w.show_asked = Some(Instant::now());
+        w.show_drawn = None;
+        Some((w.handle, w.hwnd, w.cover, w.activate, w.first_place.take()))
+    }) else {
+        return;
+    };
+    if hwnd == 0 {
+        return;
+    }
+    let main = crate::window::primary_hwnd();
+    // Where it goes is worked out here and the move is made outside this
+    // update, with the draw (see [`warm_small`]).
+    let target = if cover {
+        main.and_then(popout_win::monitor_rect).filter(|r| popout_win::window_rect(hwnd) != Some(*r))
+    } else {
+        first.and_then(|f| first_rect(hwnd, main, f))
+    };
+    let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| window.refresh());
+    let activate = activate && !crate::quiet::never_focus();
+    // Outside this update: the draw takes the app.
+    cx.spawn(async move |cx| {
+        if let Some(r) = target {
+            popout_win::set_rect(hwnd, r);
+            // A frame drawn while it was being placed is not the show's.
+            cx.update(|_| {
+                POPOUTS.with(|p| {
+                    if let Some(w) = p.borrow_mut().iter_mut().find(|w| w.id == id) {
+                        w.show_drawn = None;
+                    }
+                })
+            });
+        }
+        popout_win::paint_now(hwnd);
+        popout_win::show(hwnd, activate);
+        cx.update(|cx| shown(id, cx));
+    })
+    .detach();
+}
+
+/// Back to [`WARM_SIZE`], where it is.
+///
+/// **Every resize of a pop-out in this module runs outside any `App` update**,
+/// from a spawned task. gpui hears of a window's new size through `WM_SIZE`
+/// and a callback that needs the app; inside an update that callback is lost,
+/// and the swapchain follows the new size while the window goes on laying out
+/// at the old one.
+fn warm_small(hwnd: isize) {
+    if let Some(r) = popout_win::window_rect(hwnd) {
+        popout_win::set_rect(hwnd, [r[0], r[1], r[0] + WARM_SIZE, r[1] + WARM_SIZE]);
+    }
+}
+
+/// The window is on screen. Its first frame was drawn before the show, or the
+/// next vsync draws it and [`frame_drawn`] reports then.
+fn shown(id: WindowId, cx: &mut App) {
+    let Some((on_event, asked, drawn)) = POPOUTS.with(|p| {
+        let p = p.borrow();
+        let w = p.iter().find(|w| w.id == id)?;
+        Some((w.on_event, w.show_asked, w.show_drawn))
+    }) else {
+        return;
+    };
+    if let (Some(asked), Some(_)) = (asked, drawn) {
+        report_show(cx, id, on_event, Instant::now().duration_since(asked));
+    }
+}
+
+/// Fires `show` once per show, with how long it took to the first frame.
+fn report_show(cx: &mut App, id: WindowId, on_event: u64, took: Duration) {
+    let ms = took.as_secs_f64() * 1000.0;
+    let viewport = POPOUTS.with(|p| {
+        let mut p = p.borrow_mut();
+        let w = p.iter_mut().find(|w| w.id == id)?;
+        w.show_asked = None;
+        w.last_show_ms = ms;
+        Some((w.viewport, w.scale))
+    });
+    let Some(((width, height), scale)) = viewport else { return };
+    emit_in(
+        cx,
+        on_event,
+        "show",
+        Json::obj(vec![
+            ("firstFrameMs", Json::n(ms)),
+            ("width", Json::n(width)),
+            ("height", Json::n(height)),
+            ("scale", Json::n(scale)),
+        ]),
+    );
+}
+
+/// From the pop-out's own render: the first frame of a show, and the scale
+/// [`vn_window_map_rect`] needs.
+fn frame_drawn(id: u64, window: &Window, cx: &mut App) {
+    let report = POPOUTS.with(|p| {
+        let mut p = p.borrow_mut();
+        let w = p.iter_mut().find(|w| w.id.as_u64() == id)?;
+        w.scale = window.scale_factor();
+        let size = window.viewport_size();
+        w.viewport = (f32::from(size.width), f32::from(size.height));
+        let asked = w.show_asked?;
+        if w.show_drawn.is_some() {
+            return None;
+        }
+        let now = Instant::now();
+        w.show_drawn = Some(now);
+        // Drawn while still hidden (the usual case): `shown` reports once
+        // the window is on screen. Drawn after it (the paint was skipped):
+        // this frame is the first one anybody sees.
+        popout_win::is_visible(w.hwnd).then_some((w.id, w.on_event, now.duration_since(asked)))
+    });
+    if let Some((wid, on_event, took)) = report {
+        cx.defer(move |cx| report_show(cx, wid, on_event, took));
+    }
+}
+
+/// Hides a pop-out (`visible` became `false`), §7.9. The activation goes back
+/// to the main window when this one had it.
+///
+/// What the hidden window still holds is let go of on a timer, unless it is
+/// shown again first: after [`TIDY_AFTER`] it draws once (its subtree is
+/// empty by then), which hands back the atlas tiles of what it showed — a
+/// hidden window gets no frames, and tiles are returned by a frame; after
+/// [`SHRINK_AFTER`] a cover window goes back to [`WARM_SIZE`], and with it
+/// its monitor-sized swapchain.
+fn hide_now(id: WindowId, cx: &mut App) {
+    let Some((hwnd, epoch, on_event, cover)) = POPOUTS.with(|p| {
+        let mut p = p.borrow_mut();
+        let w = p.iter_mut().find(|w| w.id == id)?;
+        w.epoch += 1;
+        w.show_asked = None;
+        Some((w.hwnd, w.epoch, w.on_event, w.cover))
+    }) else {
+        return;
+    };
+    if hwnd == 0 {
+        return;
+    }
+    let return_to = crate::window::primary_hwnd().filter(|_| !crate::quiet::never_focus());
+    popout_win::hide(hwnd, return_to);
+    emit_in(cx, on_event, "hide", Json::obj(vec![]));
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(TIDY_AFTER).await;
+        if cx.update(|cx| still_hidden(id, epoch, cx)) {
+            popout_win::paint_now(hwnd);
+        }
+        if !cover {
+            return;
+        }
+        cx.background_executor().timer(SHRINK_AFTER - TIDY_AFTER).await;
+        if cx.update(|cx| still_hidden(id, epoch, cx)) {
+            warm_small(hwnd);
+            popout_win::paint_now(hwnd);
+            vn_tree::log::record(
+                "window",
+                format!("[window] the hidden cover window {id:?} went back to its warm size"),
+            );
+        }
+    })
+    .detach();
+}
+
+/// Is the hide `epoch` still the latest thing that happened to the window?
+/// If so it is made dirty, for a resize and a draw the caller makes outside
+/// this update.
+fn still_hidden(id: WindowId, epoch: u64, cx: &mut App) -> bool {
+    let Some((handle, hwnd)) = POPOUTS.with(|p| {
+        let p = p.borrow();
+        let w = p.iter().find(|w| w.id == id)?;
+        (w.epoch == epoch && !w.visible).then_some((w.handle, w.hwnd))
+    }) else {
+        return false;
+    };
+    if popout_win::is_visible(hwnd) {
+        return false;
+    }
+    gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| window.refresh()).is_ok()
+}
+
+/// The first show of a window created hidden without `cover`: gpui never
+/// applied its placement (it would have, showing it), so the window takes its
+/// `bounds` now — the client size asked for, at `x`/`y` or centred on the main
+/// window's monitor, CSS px at the main window's scale. The window rect that
+/// makes, for the caller to move it to.
+fn first_rect(
+    hwnd: isize,
+    main: Option<isize>,
+    (x, y, w, h): (Option<f32>, Option<f32>, f32, f32),
+) -> Option<popout_win::Rect> {
+    let scale = crate::window::primary_scale();
+    let (win, client) = (popout_win::window_rect(hwnd)?, popout_win::client_rect_on_screen(hwnd)?);
+    // The frame around the client area, as this window's styles draw it.
+    let border = [client[0] - win[0], client[1] - win[1], win[2] - client[2], win[3] - client[3]];
+    let (cw, ch) = ((w * scale).round() as i32, (h * scale).round() as i32);
+    let monitor = main.and_then(popout_win::monitor_rect).unwrap_or([0, 0, cw, ch]);
+    let left = x.map_or(monitor[0] + (monitor[2] - monitor[0] - cw) / 2, |x| (x * scale).round() as i32);
+    let top = y.map_or(monitor[1] + (monitor[3] - monitor[1] - ch) / 2, |y| (y * scale).round() as i32);
+    Some([left - border[0], top - border[1], left + cw + border[2], top + ch + border[3]])
 }
 
 fn ensure_close_observer(cx: &mut App) {
@@ -848,6 +1279,7 @@ pub fn install(rt: &JsRuntime) {
     rt.register("__vn_window_popouts", 0, vn_window_popouts as *const _);
     rt.register("__vn_window_click", 3, vn_window_click as *const _);
     rt.register("__vn_window_set_options", 2, vn_window_set_options as *const _);
+    rt.register("__vn_window_map_rect", 2, vn_window_map_rect as *const _);
 }
 
 #[cfg(test)]
@@ -868,6 +1300,32 @@ mod tests {
         assert!(o.backdrop.is_none());
         // The departure from gpui's default, asserted so it cannot drift back.
         assert!(!o.activate);
+        // §7.9's options are all off: an ordinary pop-out is shown, framed,
+        // on the taskbar, and its images follow the residency rules.
+        assert!(o.visible);
+        assert!(!o.cover);
+        assert!(o.taskbar);
+        assert!(!o.full_resolution);
+    }
+
+    #[test]
+    fn a_viewer_is_a_hidden_owned_cover_window_at_full_resolution() {
+        let o = parse_options(
+            r#"{"visible":false,"cover":"monitor","taskbar":false,"fullResolution":true,"activate":true}"#,
+        );
+        assert!(!o.visible);
+        assert!(o.cover);
+        assert!(!o.taskbar);
+        assert!(o.full_resolution);
+        assert!(o.activate);
+    }
+
+    #[test]
+    fn an_unknown_cover_is_no_cover() {
+        // Advised; the window takes its `bounds` instead of covering anything.
+        assert!(!parse_options(r#"{"cover":"screen"}"#).cover);
+        assert!(!parse_options(r#"{"cover":"none"}"#).cover);
+        assert!(!parse_options(r#"{"cover":""}"#).cover);
     }
 
     #[test]

@@ -503,13 +503,16 @@ declare function __vn_media_events(id: VnNodeId): string;
  *
  * `options` is JSON — `<VnWindow>`'s props, verbatim:
  * `{ title?, x?, y?, width?, height?, chrome?, backdrop?, alwaysOnTop?,
- *    resizable?, minWidth?, minHeight?, titleBarHeight?, activate? }`.
+ *    resizable?, minWidth?, minHeight?, titleBarHeight?, activate?, visible?,
+ *    cover?, taskbar?, fullResolution? }` — the last four are §7.9's.
  *
  * `onClose` fires with the window, however it closed — the X button,
  * `__vn_window_close`, or the primary window going away. `onEvent` is the push
  * channel for everything else the window reports: `("open", '{"windowId":N}')`,
  * `("focus", "{}")`, `("blur", "{}")`,
- * `("resize", '{"width":W,"height":H,"scale":S}')`. It is how a pop-out's OWN
+ * `("resize", '{"width":W,"height":H,"scale":S}')`,
+ * `("show", '{"firstFrameMs":T,"width":W,"height":H,"scale":S}')` and
+ * `("hide", "{}")` (§7.9). It is how a pop-out's OWN
  * metrics reach JS at all: there is one JS realm, so `window.innerWidth` keeps
  * meaning the primary window's viewport (A-M04, §7.7).
  *
@@ -528,12 +531,22 @@ declare function __vn_window_open(
 ): void;
 
 /**
- * The LIVE half of `<VnWindow>`'s props: `title` renames the window and
- * `alwaysOnTop` re-stacks it. Everything else gpui fixes at creation, so a
- * changed value ADVISES and does nothing — never a silent no-op
- * (docs/WINDOWING.md D-25/D-30).
+ * The LIVE half of `<VnWindow>`'s props: `title` renames the window,
+ * `alwaysOnTop` re-stacks it, `visible` shows or hides it and
+ * `fullResolution` pins or releases its images' full decodes. Everything else
+ * gpui fixes at creation, so a changed value ADVISES and does nothing — never
+ * a silent no-op (docs/WINDOWING.md D-25/D-30).
  */
 declare function __vn_window_set_options(nodeId: VnNodeId, options: VnJson): void;
+
+/**
+ * Where `nodeId`, as the PRIMARY window painted it, falls in the pop-out
+ * painting `popoutNodeId`: `[x, y, width, height]` as JSON, in the pop-out's
+ * CSS px relative to its painted root — through the screen, so across monitors
+ * and DPIs. A `cover` window is measured where its next show puts it.
+ * `undefined` when either node was not painted (MULTIWINDOW.md §7.9).
+ */
+declare function __vn_window_map_rect(popoutNodeId: VnNodeId, nodeId: VnNodeId): VnJson | undefined;
 
 /** Closes the window painting `nodeId` — the same path as the user clicking X. */
 declare function __vn_window_close(nodeId: VnNodeId): void;

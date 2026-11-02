@@ -1004,6 +1004,7 @@ fn images(cx: &App) -> Images {
                             ("noCopy", Json::n(res.kept_full.no_copy as f64)),
                             ("smallSaving", Json::n(res.kept_full.small_saving as f64)),
                             ("canvasRead", Json::n(res.kept_full.canvas_read as f64)),
+                            ("fullResWindow", Json::n(res.kept_full.full_res_window as f64)),
                         ]),
                     ),
                 ]),

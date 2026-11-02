@@ -886,6 +886,18 @@ pub fn capture_hwnd(window: &Window) -> Option<isize> {
     Some(raw)
 }
 
+/// The primary window's HWND, once captured.
+pub fn primary_hwnd() -> Option<isize> {
+    hwnd_of(PRIMARY_WINDOW.with(|c| c.get()))
+}
+
+/// The primary window's device pixels per CSS px, from the latest snapshot
+/// (1 before the first one).
+pub fn primary_scale() -> f32 {
+    let s = SNAPSHOT.with(|s| s.borrow().scale);
+    if s > 0.0 { s } else { 1.0 }
+}
+
 /// Forgets a window that has closed, so its HWND cannot be handed to a Win32
 /// call against a window that no longer exists.
 pub fn forget_window(key: vn_tree::WinKey) {

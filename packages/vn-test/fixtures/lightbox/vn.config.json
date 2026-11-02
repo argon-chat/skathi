@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/lightbox.spec.ts: a media viewer as its own window — a hidden, owned, monitor-covering <VnWindow> shown and hidden rather than opened (docs/MULTIWINDOW.md §7.9). See ../README.md.",
+
+  "name": "vn-test-lightbox",
+
+  "window": {
+    "title": "vue-native — lightbox (fixture)",
+    "width": 480,
+    "height": 320,
+    "titleBarStyle": "default",
+    "backdrop": "none"
+  }
+}
