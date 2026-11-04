@@ -16,7 +16,7 @@ publish = false
 # The JS host seam (`host_fn!`, `JsRuntime`), exactly as vn-permissions uses it:
 # every async call answers `{token}` synchronously and the per-frame pump settles
 # it through ONE registered dispatcher.
-vn-runtime = { path = "../vn-runtime" }
+vn-runtime = { path = "../vn-runtime", default-features = false }
 # Already in the graph (gpui uses it), so this adds no crate to the build. The
 # instance pipe's messages and vn.config's launch block are JSON, and both are
 # parsed STRICTLY — a hand-rolled reader for input that crosses a process

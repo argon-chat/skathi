@@ -167,9 +167,17 @@ pub struct Hooks {
 
 impl Hooks {
     /// The process's own.
+    #[cfg(feature = "audio")]
     pub fn process() -> Hooks {
         use vn_runtime::redjs::webapi::mediastream;
         Hooks { forbidden: mediastream::capture_forbidden, fake: mediastream::fake_capture, asker: installed_asker }
+    }
+
+    /// A host without `audio` has no `getUserMedia`, so nothing can latch
+    /// either gate: both read as they would before any latch.
+    #[cfg(not(feature = "audio"))]
+    pub fn process() -> Hooks {
+        Hooks { forbidden: || false, fake: || false, asker: installed_asker }
     }
 }
 

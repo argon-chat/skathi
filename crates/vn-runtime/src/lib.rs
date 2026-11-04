@@ -22,6 +22,16 @@ pub use runtime::{JsError, JsRuntime};
 // Re-exported so `host_fn!` expansions and downstream crates use the same redjs.
 pub use redjs;
 
+/// The optional web APIs this build of the crate carries, as Cargo resolved
+/// them. Features unify across the graph, so a host can only check that what
+/// it asked for is what it got (vn-app's payload tests do) by asking here.
+pub mod built {
+    pub const AUDIO: bool = cfg!(feature = "audio");
+    pub const STORAGES: bool = cfg!(feature = "storages");
+    pub const CLIPBOARD: bool = cfg!(feature = "clipboard");
+    pub const INDEXEDDB: bool = cfg!(feature = "indexeddb");
+}
+
 /// Defines a panic-shielded `extern "sysv64"` JSC host function.
 ///
 /// The body receives `$g: *mut c_void` (the JSGlobalObject) and

@@ -2,8 +2,10 @@
 //
 // A bare host is `cargo build --release -p vn-app --features prod` (or
 // `prod,no-devtools`): the whole engine, no app. It is built once per
-// vue-native version, never per app — the app arrives later as a payload
-// (research/reports/m25/packaging-design.md §4.9).
+// vue-native version and VARIANT, never per app — the app arrives later as a
+// payload (research/reports/m25/packaging-design.md §4.9). A variant names the
+// engine parts left out (config.ts `OPTIONAL`): `no-voice` is
+// `--no-default-features --features prod,audio,clipboard,storages,indexeddb`.
 //
 // Resolution, first hit wins:
 //   1. `--host <exe>` or `VN_HOST`;
@@ -27,7 +29,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { Variant } from "./config";
+import { cargoFeatureArgs, type Variant } from "./config";
 import { readPe, RT } from "./pe";
 import { PAYLOAD_NAME } from "./stamp";
 
@@ -203,7 +205,11 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
       "\nSupply one of:\n" +
       "  --host <vn-app.exe>  (or VN_HOST=<exe>)   a prod host built from this version\n" +
       "  vn host add <exe>                          import one into the local cache\n" +
-      (REPO_ROOT ? "  vn host build                              build both variants from this checkout (cargo)\n" : ""),
+      (REPO_ROOT
+        ? options.variant === "standard" || options.variant === "no-devtools"
+          ? "  vn host build                              build both variants from this checkout (cargo)\n"
+          : `  vn host build --variant ${options.variant}   build this one from this checkout (cargo)\n`
+        : ""),
   );
 }
 
@@ -242,8 +248,7 @@ export function buildHost(variant: Variant, log: (line: string) => void = consol
   if (!REPO_ROOT || !REPO_RELEASE_EXE) {
     throw new HostError("vn host build runs from a vue-native checkout; elsewhere, use vn host add <exe>");
   }
-  const features = variant === "standard" ? "prod" : "prod,no-devtools";
-  const args = ["build", "--release", "-p", "vn-app", "--features", features];
+  const args = ["build", "--release", "-p", "vn-app", ...cargoFeatureArgs(variant)];
   log(`[vn] cargo ${args.join(" ")}`);
   const t0 = performance.now();
   const r = spawnSync(cargo(), args, { cwd: REPO_ROOT, stdio: "inherit" });
@@ -251,7 +256,7 @@ export function buildHost(variant: Variant, log: (line: string) => void = consol
   const ms = Math.round(performance.now() - t0);
   const added = addHost(REPO_RELEASE_EXE, log);
   if (added.info.variant !== variant) {
-    throw new HostError(`built ${features} but the exe reports variant ${added.info.variant}`);
+    throw new HostError(`built ${args.slice(4).join(" ")} but the exe reports variant ${added.info.variant}`);
   }
   return { ...added, ms };
 }

@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+# The capture latches (`VN_MEDIA_CAPTURE=deny|fake`) live in redjs's
+# `mediastream`, which exists only with Web Audio. vn-app's `audio` turns this
+# on; without it nothing can capture, so the latches read as never set.
+audio = ["vn-runtime/audio"]
+
 [dependencies]
 # The JS host seam AND the trait this crate implements. `PermissionHost`,
 # `Capability` and `PermissionState` are defined in redjs
@@ -12,7 +18,7 @@ publish = false
 # a `navigator.permissions.query()` without knowing which OS is underneath, so
 # the abstraction belongs on the redjs side of the seam and only the *backends*
 # live here. Exactly the layering `vn-voice` has with `redjs::webapi::pcm`.
-vn-runtime = { path = "../vn-runtime" }
+vn-runtime = { path = "../vn-runtime", default-features = false }
 # `permissions.json`, the app's answers to its own prompt (src/decisions.rs).
 # Already in the graph (gpui, vn-desktop), so it adds no crate to the build.
 serde_json = "1"

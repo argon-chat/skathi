@@ -8,7 +8,7 @@
 
 import { spawn } from "node:child_process";
 import { buildApp, summary } from "./build-app";
-import { ConfigError, VARIANTS, type Variant } from "./config";
+import { ConfigError, OPTIONAL, parseParts, partsLeftOut, selectVariant, VARIANTS, variantFor, type Variant } from "./config";
 import { dev } from "./dev";
 import { addHost, buildHost, CLI_VERSION, HostError, hostInfo, resolveHost } from "./host";
 import { create } from "./create";
@@ -20,10 +20,11 @@ usage
   vn run   [app] [options]     build, then start the exe with its stderr in this terminal
   vn dev   [app] [--exe <h>]   the in-repo dev loop: build.ts --watch + the dev host (HMR)
   vn host info [exe]           what a host exe says about itself (--vn-host-info)
-  vn host path [--variant v]   which host \`vn build\` would stamp
+  vn host path [selection]     which host \`vn build\` would stamp
   vn host add <exe>            verify a prod host and copy it into the local cache
-  vn host build [--variant v|both]
+  vn host build [selection | --variant both]
                                maintainers, in a checkout: cargo-build the bare host(s)
+                               (no selection: standard and no-devtools)
   vn create <dir> [--name n]   a new app: vn.config.json, src/main.ts, src/App.vue, assets/
 
   [app] is an app directory (default: .), its entry module, or its vn.config.json.
@@ -32,8 +33,13 @@ build options
   --out <dir>                  output directory (default <app>/dist)
   --host <exe>                 the bare host to stamp (default: VN_HOST, the checkout's
                                target/…/release/vn-app.exe, then the local cache)
-  --variant standard|no-devtools
-                               which host (default: vn.config.json windows.host, else standard)
+  selection — which engine parts the host carries (default: vn.config.json
+  "windows": "without" / "features" / "host", else every part). One of:
+  --without voice,audio        leave these parts out
+  --features audio,storages    take only these parts
+  --variant no-devtools+no-voice
+                               a host variant by name ("standard" = every part)
+  parts: ${OPTIONAL.join(", ")}
   --console                    keep the console subsystem (a console window opens with it)
   --payload-only               write dist/.vn/app.vnpk and stop; no host needed
   --allow-host-mismatch        stamp a host from another vue-native version (maintainers)
@@ -74,13 +80,20 @@ function parse(argv: string[]): { positional: string[]; flags: Flags; repeated: 
   return { positional, flags, repeated, rest };
 }
 
+/** The variant `--variant` / `--features` / `--without` select, or undefined for none. */
 function variantOf(flags: Flags): Variant | undefined {
-  const v = flags.variant;
-  if (v === undefined) return undefined;
-  if (typeof v !== "string" || !VARIANTS.includes(v as Variant)) {
-    throw new ConfigError(`--variant must be one of ${VARIANTS.join(", ")}`);
-  }
-  return v as Variant;
+  const list = (name: string) => {
+    const v = flags[name];
+    if (v === undefined) return undefined;
+    if (typeof v !== "string" || !v.trim()) throw new ConfigError(`--${name} needs a list of parts (${OPTIONAL.join(", ")})`);
+    return parseParts(v, `--${name}`);
+  };
+  const host = flags.variant;
+  if (host !== undefined && (typeof host !== "string" || !host.trim())) throw new ConfigError("--variant needs a variant name");
+  const sel = { features: list("features"), without: list("without"), host: host as string | undefined };
+  if (!sel.features && !sel.without && !sel.host) return undefined;
+  // Normalised: `no-voice+no-devtools` and `no-devtools+no-voice` are one host.
+  return variantFor(partsLeftOut(selectVariant(sel, "the command line")));
 }
 
 async function main(argv: string[]): Promise<number> {

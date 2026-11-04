@@ -430,6 +430,18 @@ mod tests {
         );
     }
 
+    /// A part this host left out must be out of vn-runtime too. Cargo unifies
+    /// features, so one crate depending on vn-runtime with its defaults would
+    /// put them all back and the variant would name a host it is not.
+    #[test]
+    fn the_runtime_carries_exactly_the_parts_this_host_names() {
+        use vn_runtime::built;
+        assert_eq!(built::AUDIO, cfg!(feature = "audio"), "audio");
+        assert_eq!(built::STORAGES, cfg!(feature = "storages"), "storages");
+        assert_eq!(built::CLIPBOARD, cfg!(feature = "clipboard"), "clipboard");
+        assert_eq!(built::INDEXEDDB, cfg!(feature = "indexeddb"), "indexeddb");
+    }
+
     #[test]
     fn a_test_binary_carries_no_payload() {
         // `cargo test` builds an unstamped exe, so the embedded lookup must

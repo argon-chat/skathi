@@ -21,7 +21,10 @@
 //     "define": { "K": … },       Vite's `define` — read by the builders (vitecompat.ts appDefines)
 //     "windows": {                Windows exe identity — only `vn build` reads it
 //       "exeName": "Hello", "icon": "icon.png", "company": "…", "copyright": "…",
-//       "description": "…", "console": false, "host": "standard" | "no-devtools"
+//       "description": "…", "console": false,
+//       "without": ["voice"]      the engine parts the host leaves out (OPTIONAL below);
+//                                 or "features": [...] — the parts it TAKES;
+//                                 or "host": "no-devtools" — a whole variant, by name
 //     }
 //   }
 //
@@ -33,8 +36,117 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { numericVersion } from "./versioninfo";
 
-export type Variant = "standard" | "no-devtools";
+/**
+ * The parts of the engine a host can be built WITHOUT (docs/PACKAGING.md
+ * §7.1) — the same list, in the same order, as `OPTIONAL` in
+ * crates/vn-app/src/payload.rs, which is what a host's `variant` is named
+ * from. Every one is in a host unless it is left out:
+ *
+ * - `devtools`  — the devtools listener, the embedded inspector, F12
+ *                 (`--features no-devtools`; a runtime switch exists too);
+ * - `voice`     — `livekit-client`: LiveKit and the prebuilt libwebrtc;
+ * - `audio`     — Web Audio and `getUserMedia`;
+ * - `clipboard` — `navigator.clipboard`;
+ * - `storages`  — `localStorage` / `sessionStorage` / `appStorage`;
+ * - `indexeddb` — `indexedDB` and `navigator.storage`.
+ *
+ * Each but `devtools` is a default cargo feature of vn-app of the same name.
+ */
+export const OPTIONAL = ["devtools", "voice", "audio", "clipboard", "storages", "indexeddb"] as const;
+export type Part = (typeof OPTIONAL)[number];
+
+/**
+ * A host's name for what is in it: `standard` with every part, else the parts
+ * left out as `no-<part>` joined by `+`, in {@link OPTIONAL}'s order —
+ * `no-devtools`, `no-voice`, `no-devtools+no-voice`. The host cache is keyed
+ * by it, and a host is asked for by it.
+ */
+export type Variant = string;
+/** What `vn host build` builds with no selection: the two pre-features variants. */
 export const VARIANTS: Variant[] = ["standard", "no-devtools"];
+
+const isPart = (p: unknown): p is Part => typeof p === "string" && (OPTIONAL as readonly string[]).includes(p);
+
+/** The variant of a host built without `without`. */
+export function variantFor(without: Iterable<Part>): Variant {
+  const off = new Set(without);
+  const names = OPTIONAL.filter((p) => off.has(p)).map((p) => `no-${p}`);
+  return names.length ? names.join("+") : "standard";
+}
+
+/** The parts a variant leaves out; an unknown name is a ConfigError. */
+export function partsLeftOut(variant: Variant): Part[] {
+  if (variant === "standard") return [];
+  const off = new Set<Part>();
+  for (const name of variant.split("+")) {
+    const p = name.startsWith("no-") ? name.slice(3) : "";
+    if (!isPart(p)) {
+      throw new ConfigError(
+        `${JSON.stringify(variant)} is not a host variant — "standard", or the parts left out as no-<part> joined by "+" ` +
+          `(parts: ${OPTIONAL.join(", ")})`,
+      );
+    }
+    off.add(p);
+  }
+  return OPTIONAL.filter((p) => off.has(p));
+}
+
+/**
+ * A list of part names, checked: `"voice,audio"`, or an array of them. Spaces
+ * separate too: PowerShell hands an unquoted `voice,audio` over as
+ * `"voice audio"`.
+ */
+export function parseParts(list: unknown, where: string): Part[] {
+  const items = typeof list === "string" ? list.split(/[\s,]+/).filter(Boolean) : list;
+  if (!Array.isArray(items)) throw new ConfigError(`${where} must be a list of parts (${OPTIONAL.join(", ")})`);
+  const out = new Set<Part>();
+  for (const p of items) {
+    if (!isPart(p)) throw new ConfigError(`${where}: ${JSON.stringify(p)} is not a part — known parts are ${OPTIONAL.join(", ")}`);
+    out.add(p);
+  }
+  return OPTIONAL.filter((p) => out.has(p));
+}
+
+/**
+ * The variant a selection asks for. `features` names what to TAKE (everything
+ * else is left out); `without` names what to leave out; `host` is the
+ * pre-features spelling of a whole variant. One of them, or none (`standard`).
+ */
+export function selectVariant(sel: { features?: Part[]; without?: Part[]; host?: Variant }, where: string): Variant {
+  const given = [sel.features && "features", sel.without && "without", sel.host && "host"].filter(Boolean);
+  if (given.length > 1) throw new ConfigError(`${where}: give one of ${given.join(" / ")}, not several`);
+  if (sel.features) return variantFor(OPTIONAL.filter((p) => !sel.features!.includes(p)));
+  if (sel.without) return variantFor(sel.without);
+  if (sel.host) return variantFor(partsLeftOut(sel.host));
+  return "standard";
+}
+
+/** What a host of `variant` will do that its author may not expect. */
+export function variantWarnings(variant: Variant): string[] {
+  const off = new Set(partsLeftOut(variant));
+  const out: string[] = [];
+  if (!off.has("voice") && off.has("audio")) {
+    out.push("the host has voice but no audio: a voice room connects, but nothing it receives is heard");
+  }
+  if (!off.has("indexeddb") && off.has("storages")) {
+    out.push("the host has indexedDB but no storages: its databases are in memory and nothing survives a restart");
+  }
+  return out;
+}
+
+/**
+ * The cargo arguments that build a bare host of `variant` (after `cargo build
+ * --release -p vn-app`). A host that leaves out none of the default features
+ * keeps `--features prod[,no-devtools]`, the command line both pre-features
+ * variants always had.
+ */
+export function cargoFeatureArgs(variant: Variant): string[] {
+  const off = partsLeftOut(variant);
+  const features = ["prod", ...(off.includes("devtools") ? ["no-devtools"] : [])];
+  const defaults = OPTIONAL.filter((p) => p !== "devtools");
+  if (!off.some((p) => p !== "devtools")) return ["--features", features.join(",")];
+  return ["--no-default-features", "--features", [...features, ...defaults.filter((p) => !off.includes(p))].join(",")];
+}
 
 export interface WindowsConfig {
   exeName?: string;
@@ -44,6 +156,12 @@ export interface WindowsConfig {
   description?: string;
   console?: boolean;
   host?: Variant;
+  /** The parts to take — every other one is left out of the host. */
+  features?: Part[];
+  /** The parts to leave out of the host. */
+  without?: Part[];
+  /** The host variant all of the above select. */
+  variant: Variant;
 }
 
 export interface AppConfig {
@@ -153,7 +271,7 @@ function readLaunch(raw: Record<string, unknown>, name: string): LaunchConfig {
     protocols,
   };
 }
-const WINDOWS_KEYS = new Set(["exeName", "icon", "company", "copyright", "description", "console", "host"]);
+const WINDOWS_KEYS = new Set(["exeName", "icon", "company", "copyright", "description", "console", "host", "features", "without"]);
 const ENTRY_CANDIDATES = ["src/main.ts", "src/main.js", "src/main.mts", "main.ts", "main.js"];
 
 export class ConfigError extends Error {}
@@ -284,7 +402,7 @@ export function loadAppConfig(target: string): AppConfig {
     throw new ConfigError('vn.config.json "define" must be an object of { "NAME": value }');
   }
 
-  const windows: WindowsConfig = {};
+  const windows: WindowsConfig = { variant: "standard" };
   if (raw.windows !== undefined) {
     if (!raw.windows || typeof raw.windows !== "object" || Array.isArray(raw.windows)) {
       throw new ConfigError('vn.config.json "windows" must be an object');
@@ -308,11 +426,17 @@ export function loadAppConfig(target: string): AppConfig {
       windows.console = w.console;
     }
     if (w.host !== undefined) {
-      if (w.host !== "standard" && w.host !== "no-devtools") {
-        throw new ConfigError('vn.config.json "windows.host" must be "standard" or "no-devtools"');
+      if (typeof w.host !== "string") throw new ConfigError('vn.config.json "windows.host" must be a host variant, e.g. "no-devtools"');
+      try {
+        partsLeftOut(w.host);
+      } catch (e) {
+        throw new ConfigError(`vn.config.json "windows.host": ${(e as Error).message}`);
       }
       windows.host = w.host;
     }
+    if (w.features !== undefined) windows.features = parseParts(w.features, where("windows.features"));
+    if (w.without !== undefined) windows.without = parseParts(w.without, where("windows.without"));
+    windows.variant = selectVariant(windows, where('"windows"'));
   }
 
   if (raw.argonSecure !== undefined && typeof raw.argonSecure !== "boolean") {

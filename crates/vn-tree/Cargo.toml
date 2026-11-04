@@ -15,7 +15,7 @@ vn-video = { path = "../vn-video" }
 # `<vn-sticker>`'s engine: stickers and animated emoji drawn off the UI thread
 # (crate::render::sticker).
 vn-sticker = { path = "../vn-sticker" }
-vn-runtime = { path = "../vn-runtime" }
+vn-runtime = { path = "../vn-runtime", default-features = false }
 # The ONE URL → asset-key normaliser (`content_key`), shared with vn-app's
 # content provider so `<img>` and `fetch()` can never disagree about what a
 # relative URL names — and, in a packaged exe, the key the payload store is

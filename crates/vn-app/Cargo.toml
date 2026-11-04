@@ -62,11 +62,11 @@ default = ["audio", "storages", "clipboard", "indexeddb", "voice"]
 # `redjs::webapi::pcm` and route a room's playout into the app's graph. The two
 # must move together — a host with `AudioContext` but no way to reach it from
 # voice would be a silent room with no explanation.
-audio = ["vn-runtime/audio", "vn-voice?/audio"]
+audio = ["vn-runtime/audio", "vn-voice?/audio", "vn-permissions/audio"]
 # LiveKit voice — `livekit-client` (docs/VOICE.md): the `livekit` crate and the
 # whole prebuilt libwebrtc linked statically, the largest optional piece of
 # the image. ON by default. An app with no calls ships a host without it —
-# `vn build --without voice` (docs/PACKAGING.md §features). Off, the
+# `vn build --without voice` (docs/PACKAGING.md §7.1). Off, the
 # `__vn_voice_*` globals do not exist and the `livekit-client` shim advises
 # once at the first `new Room()`, whose `connect()` then rejects; nothing else
 # in the app changes. `getUserMedia` and Web Audio are not voice's: they stay
@@ -122,7 +122,12 @@ raw-window-handle = "0.6"
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false }
 vn-css = { path = "../vn-css" }
 vn-elements = { path = "../vn-elements" }
-vn-runtime = { path = "../vn-runtime" }
+# `default-features = false` here and in every crate that depends on
+# vn-runtime: Cargo unifies features across the graph, so one plain dependency
+# anywhere would turn every vn-runtime default back on and make `audio`,
+# `storages`, `clipboard` and `indexeddb` above impossible to leave out. This
+# crate's features are the only ones that switch them; `net-h2` is not optional.
+vn-runtime = { path = "../vn-runtime", default-features = false, features = ["net-h2"] }
 vn-tree = { path = "../vn-tree" }
 # `<vn-sticker>`'s engine: devtools `mem` reports its sources, engines, frames
 # and loop cache (`vn_sticker::stats`).

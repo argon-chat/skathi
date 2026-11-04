@@ -18,7 +18,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { collectAssets, type AssetFile } from "./assets";
-import { loadAppConfig, type AppConfig, type Variant } from "./config";
+import { loadAppConfig, partsLeftOut, variantWarnings, type AppConfig, type Variant } from "./config";
 import { CLI_VERSION, PKG_DIR, resolveHost, type ResolvedHost } from "./host";
 import { iconImagesFrom } from "./icon";
 import { stamp, type StampResult } from "./stamp";
@@ -37,6 +37,7 @@ export interface BuildOptions {
   /** Output directory. Default `<appRoot>/dist`. */
   out?: string;
   host?: string;
+  /** The host variant; overrides vn.config.json's `windows` selection. */
   variant?: Variant;
   /** Keep the console subsystem (stderr in a console window). */
   console?: boolean;
@@ -104,7 +105,10 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const t0 = performance.now();
   const config = loadAppConfig(options.target);
   const warnings = [...config.warnings];
-  const variant: Variant = options.variant ?? config.windows.host ?? "standard";
+  // `--variant` / `--features` / `--without` (vn.ts) over vn.config.json's.
+  const variant: Variant = options.variant ?? config.windows.variant;
+  partsLeftOut(variant);
+  warnings.push(...variantWarnings(variant));
   const outDir = resolve(options.out ?? join(config.appRoot, "dist"));
   const work = join(outDir, ".vn");
   mkdirSync(work, { recursive: true });
