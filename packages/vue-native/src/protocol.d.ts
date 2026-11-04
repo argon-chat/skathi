@@ -573,13 +573,13 @@ declare function __vn_window_popouts(): VnJson;
 declare function __vn_window_click(nodeId: VnNodeId, x: number, y: number): boolean;
 
 // ---------------------------------------------------------------------------
-// host logging — crates/vn-app/src/main.rs
+// host logging — crates/vn-app/src/lib.rs
 // ---------------------------------------------------------------------------
 
 /**
  * A line into the host log.
  *
- * `vn-app` registers it UNCONDITIONALLY (`main.rs`, next to `__vn_set_status`
+ * `vn-app` registers it UNCONDITIONALLY (`lib.rs`, next to `__vn_set_status`
  * and `__vn_perf_mark`) and `runtime.ts` calls it unguarded, which is why this
  * is a `function` rather than an optional `var` — an app does not have to
  * probe. An embedder that installed `vn-tree` without `vn-app` would have to
@@ -715,6 +715,24 @@ declare function __vn_storage_set_folder(path: string, encrypted: "true" | "fals
 declare function __vn_storage_info(): VnJson;
 /** Forces the coalesced write. `{ wrote: boolean }` or `{ error }`. */
 declare function __vn_storage_flush(): VnJson;
+
+// ---------------------------------------------------------------------------
+// appHost — crates/vn-app/src/embed.rs (docs/EMBEDDING.md). Registered ONLY
+// when another program embeds vue-native; in the vue-native exe none of these
+// exist and `appHost.available` is false.
+// ---------------------------------------------------------------------------
+
+/**
+ * The one callback calls settle and events arrive through:
+ * `(token, ok, text)`. Token `0` is an event, `text` `{"event", "data"}`.
+ * Otherwise `ok` true means `text` is the result as JSON, false that it is
+ * the host's message.
+ */
+declare function __vn_host_set_dispatcher(fn: (token: number, ok: boolean, text: string) => void): void;
+/** Calls the embedder's function `name`: the call's token, `0` when it has none by that name. */
+declare function __vn_host_call(name: string, argsJson: string): number;
+/** The names of the embedder's functions, as a JSON array of strings. */
+declare function __vn_host_functions(): string;
 
 // ---------------------------------------------------------------------------
 // desktop — crates/vn-desktop/src/lib.rs (docs/SHELL.md, docs/LAUNCH.md)

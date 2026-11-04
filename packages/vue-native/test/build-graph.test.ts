@@ -86,7 +86,7 @@ describe("manifest", () => {
   const LIB = id("graph-app", "lib/index.ts");
 
   test("keeps the fields the Rust host reads", () => {
-    // crates/vn-app/src/main.rs read_manifest(): vendorRev, entry, modules
+    // crates/vn-app/src/dev.rs read_manifest(): vendorRev, entry, modules
     expect(typeof out.manifest.rev).toBe("number");
     expect(typeof out.manifest.vendorRev).toBe("number");
     expect(out.manifest.entry).toBe(ENTRY);

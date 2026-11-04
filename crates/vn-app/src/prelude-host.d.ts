@@ -2,7 +2,7 @@
 //
 // `prelude.ts` and `window.prelude.ts` are not part of the runtime bundle: the
 // Rust host `include_str!`s their generated JavaScript and hands each string to
-// `rt.eval` before the app bundle exists (crates/vn-app/src/main.rs). So they
+// `rt.eval` before the app bundle exists (crates/vn-app/src/lib.rs). So they
 // have no imports to carry types in, and `tsconfig.json` next to this file is
 // what puts a type on every free name they touch. It pulls in THREE things:
 //

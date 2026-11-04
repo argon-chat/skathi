@@ -11568,6 +11568,11 @@ export const TransitionGroup = /*@__PURE__*/ defineComponent({
 export { VnWindow, VN_WINDOW_CREATION_TIME_PROPS } from "./vnwindow";
 export type { VnWindowBounds, VnWindowMetrics, VnWindowTarget } from "./vnwindow";
 
+// `appHost` — the functions and events of a program that embeds vue-native as
+// a library (docs/EMBEDDING.md). Inert, and saying so, in the exe.
+export { appHost } from "./apphost";
+export type { AppHost, AppHostError } from "./apphost";
+
 // Compiled SFC code and app code import everything Vue-ish from here
 // ("vue" / "vue-native" are aliased to this module). Local exports win over
 // the star re-export, so our createApp shadows runtime-core's.

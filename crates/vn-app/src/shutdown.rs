@@ -26,6 +26,10 @@
 //! in meanwhile is told the instance is closing, waits for this process to
 //! end, and starts afresh (crates/vn-desktop/src/launch).
 //!
+//! **Embedded** (src/embed.rs, docs/EMBEDDING.md) the process is not ours:
+//! [`finish`] and the deadline tell the embedder the app has closed, and the
+//! vue-native thread sleeps instead of ending anything.
+//!
 //! **The end.** Once the quit hooks have run, [`finish`] ends the process with
 //! `TerminateProcess` instead of returning from `main`. Returning runs every
 //! thread-local destructor (the JS realm's, the voice engines') and every
@@ -73,6 +77,14 @@ pub fn begin(why: &'static str) {
         if ENDING.swap(true, Ordering::SeqCst) {
             return;
         }
+        // Embedded, the process is the embedder's to end: it hears that the
+        // app is gone, unclean, and the teardown thread is left where it is.
+        if crate::embed::active() {
+            let line = timeline();
+            eprintln!("[shutdown] the teardown passed its {} s deadline. {line}", DEADLINE.as_secs());
+            crate::embed::finished(false, line);
+            return;
+        }
         eprintln!(
             "[shutdown] the teardown passed its {} s deadline; ending the process. {}",
             DEADLINE.as_secs(),
@@ -110,6 +122,15 @@ pub fn finish() -> ! {
         }
     }
     eprintln!("[shutdown] closed. {}", timeline());
+    // Embedded: the embedder's process goes on. This thread may not end —
+    // its thread-locals are the JS realm, whose teardown this JSC build
+    // fast-fails (vn-runtime's invariants) — so it reports and sleeps.
+    if crate::embed::active() {
+        crate::embed::finished(true, timeline());
+        loop {
+            std::thread::park();
+        }
+    }
     terminate()
 }
 

@@ -13,7 +13,7 @@
 //! before any JS runs.
 //!
 //! **Removing it is one step:** delete this file, its `mod` line and its one
-//! call in `main.rs`. The `argonSecure` key in the build tooling then does
+//! call in `lib.rs`. The `argonSecure` key in the build tooling then does
 //! nothing and can go in the same commit (build.ts, cli/config.ts,
 //! cli/build-app.ts, payload.rs, dev.rs, prod.rs, each marked TEMPORARY).
 //!

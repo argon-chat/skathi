@@ -364,9 +364,20 @@ pub fn quote_always(arg: &str) -> String {
     out
 }
 
+static ARGS: OnceLock<Args> = OnceLock::new();
+
+/// The arguments of an EMBEDDED vue-native (vn-app's src/embed.rs): the
+/// process's command line belongs to the embedder, so none of it is a host
+/// flag, and `appLaunch.argv` is what the embedder hands the app, `exe` first.
+/// Before the first [`process`]; `false` when that already ran.
+pub fn set_embedded(exe: String, app_args: Vec<String>) -> bool {
+    let mut argv = vec![exe.clone()];
+    argv.extend(app_args.iter().cloned());
+    ARGS.set(Args { exe, app_args, argv, ..Args::default() }).is_ok()
+}
+
 /// This process's command line, parsed on first ask and never again.
 pub fn process() -> &'static Args {
-    static ARGS: OnceLock<Args> = OnceLock::new();
     ARGS.get_or_init(|| {
         let argv: Vec<String> =
             std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();

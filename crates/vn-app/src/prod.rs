@@ -17,7 +17,7 @@
 //! | the window config | `vn/window.json` — exactly what dev reads from the manifest |
 //! | the app's name | `vn/app.json` `name` — `vn.config.json` `"name"`, else the app directory |
 //! | `fetch()` / `Image` | the content provider below, over the payload's assets |
-//! | `<img>` / `<lottie>` / `<video>` | `vn_tree::set_asset_store` (main.rs) — the same lookup |
+//! | `<img>` / `<lottie>` / `<video>` | `vn_tree::set_asset_store` (lib.rs) — the same lookup |
 //!
 //! The inspector bundle and the preludes stay `include_str!`: they belong to
 //! the host, not to the app.
@@ -37,6 +37,7 @@ pub fn boot(rt: &JsRuntime) {
     let from = match &loaded.source {
         payload::Source::Embedded => "embedded".to_string(),
         payload::Source::File(p) => format!("VN_PAYLOAD={}", p.display()),
+        payload::Source::Embedder(label) => format!("from the embedder ({label})"),
     };
     eprintln!(
         "[prod] {} {} (\"{}\") — payload {from}, {} KiB, {} asset(s)",

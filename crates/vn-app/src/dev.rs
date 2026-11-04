@@ -268,7 +268,7 @@ fn eval_path(rt: &JsRuntime, path: &std::path::Path, url: &str, label: &'static 
 /// `apps/imgperf/src/main.js` → `apps/imgperf/` — the entry's directory with a
 /// trailing `src/` stripped, i.e. where a Vite app would keep `index.html`. A
 /// browser resolves a relative URL against the document; this is our document's
-/// directory. `VN_APP_ROOT` (read in `main.rs`) overrides and wins, so this
+/// directory. `VN_APP_ROOT` (read in `lib.rs`) overrides and wins, so this
 /// never clobbers an explicit choice.
 fn publish_asset_base(entry: &str) {
     if std::env::var_os("VN_APP_ROOT").is_some_and(|v| !v.is_empty()) {

@@ -18,7 +18,7 @@
 //! matcher actually ran. They are what makes "the mutation frame costs 90 ms"
 //! an actionable statement instead of a complaint.
 //!
-//! `__vn_perf_mark("<label>")` (registered in `main.rs`) labels the scenario
+//! `__vn_perf_mark("<label>")` (registered in `lib.rs`) labels the scenario
 //! from the Vue app: it flushes the window in progress, prints a banner and
 //! restarts the clock, which is what makes "idle vs scrolling vs churn"
 //! separable in the log. It is a no-op when the probe is off, so an app may

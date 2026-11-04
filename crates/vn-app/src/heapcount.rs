@@ -139,7 +139,7 @@ unsafe impl GlobalAlloc for Counting {
 /// `Some((live bytes, live blocks, peak bytes, allocations since start))`
 /// while counting, `None` when it is off.
 pub fn snapshot() -> Option<(i64, i64, i64, u64)> {
-    counting().then(|| {
+    on().then(|| {
         (LIVE_BYTES.load(Relaxed), LIVE_BLOCKS.load(Relaxed), PEAK_BYTES.load(Relaxed), ALLOCS.load(Relaxed))
     })
 }
@@ -157,7 +157,9 @@ pub fn classes() -> Vec<(u64, i64, i64)> {
         .collect()
 }
 
-/// Is the Rust heap being counted?
+/// Is the Rust heap being counted? Only when [`Counting`] IS the global
+/// allocator — the exe's is (src/main.rs), an embedder's need not be — and
+/// then it has counted the first allocation long before anyone asks.
 pub fn on() -> bool {
-    counting()
+    counting() && ALLOCS.load(Relaxed) > 0
 }

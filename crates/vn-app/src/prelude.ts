@@ -1,5 +1,5 @@
 // The FIRST thing this process evaluates — `vn://prelude.js`, before
-// `window.prelude.js` and before the app bundle (crates/vn-app/src/main.rs).
+// `window.prelude.js` and before the app bundle (crates/vn-app/src/lib.rs).
 //
 // Why it must be first is documented on the Rust const that `include_str!`s the
 // generated JavaScript, because that reason is about the ORDER of the two

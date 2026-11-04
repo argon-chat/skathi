@@ -1,0 +1,664 @@
+//! vue-native as a LIBRARY: another program — a terminal UI, a game launcher,
+//! a service with a tray — runs the whole engine on a thread of its own and
+//! talks to the app through async functions and events (docs/EMBEDDING.md).
+//!
+//! ```text
+//!   embedder's threads                   the vue-native thread (gpui + JSC)
+//!  ┌──────────────────────────┐        ┌──────────────────────────────────────┐
+//!  │ Builder::spawn ──────────┼──────▶ │ run_embedded: the exe's boot without │
+//!  │                          │        │   the process (argv, single instance,│
+//!  │ Handle::emit ──┐         │        │   protocols, the exit)               │
+//!  │ Handle::close ─┤ QUEUE ──┼─wake──▶│ pump source: events, settles → JS    │
+//!  │ Reply::resolve ┘         │        │ appHost.call("x") → __vn_host_call ──┼─▶ handler(Call)
+//!  │ Handle::wait ◀───────────┼─EXIT───│ shutdown::finish: report, then park  │
+//!  └──────────────────────────┘        └──────────────────────────────────────┘
+//! ```
+//!
+//! **One per process, once.** The JS realm cannot be torn down (vn-runtime's
+//! invariants) and gpui is one `Application`, so [`Builder::spawn`] works once;
+//! after the app closes its thread sleeps for the rest of the process.
+//!
+//! **Handlers run on the vue-native thread**, inside the JS call, so a handler
+//! that blocks freezes the UI. One that has work to do moves its [`Reply`] to a
+//! thread of its own and answers from there; a dropped `Reply` rejects.
+//!
+//! What stays the exe's: the host flags on the command line (an embedder's argv
+//! is its own), `singleInstance` and the declared protocols (the embedder is
+//! the instance), and ending the process. F12 opens the inspector only when
+//! [`Builder::inspector_exe`] names a vn-app.exe to start it from.
+//!
+//! JS: `appHost` (packages/vue-native/src/apphost.ts).
+
+use std::collections::{HashMap, VecDeque};
+use std::ffi::c_void;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
+
+use vn_runtime::redjs::api::Value;
+use vn_runtime::{JsRuntime, host_fn};
+
+/// The vue-native thread's stack: the exe's own (`/STACK` in build.rs), which
+/// is what JSC's recursion limit is sized for.
+const STACK: usize = 8 * 1024 * 1024;
+
+/// How many queued items one drain may deliver, as in vn-desktop.
+const DRAIN_CAP: usize = 16;
+
+/// A host function: called with the [`Call`] on the vue-native thread.
+pub type Handler = Arc<dyn Fn(Call) + Send + Sync + 'static>;
+
+struct Config {
+    functions: HashMap<String, Handler>,
+    activate: bool,
+    #[cfg_attr(not(vn_devtools), allow(dead_code))]
+    inspector_exe: Option<PathBuf>,
+}
+
+static CONFIG: OnceLock<Config> = OnceLock::new();
+static STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Is this vue-native embedded in another program?
+pub(crate) fn active() -> bool {
+    CONFIG.get().is_some()
+}
+
+/// Does the app take the foreground at startup? Always, unless embedded with
+/// [`Builder::activate`]`(false)`.
+pub(crate) fn activates() -> bool {
+    CONFIG.get().is_none_or(|c| c.activate)
+}
+
+/// The exe F12 starts as the inspector, embedded (src/inspector.rs).
+#[cfg_attr(not(vn_devtools), allow(dead_code))]
+pub(crate) fn inspector_exe() -> Option<PathBuf> {
+    CONFIG.get()?.inspector_exe.clone()
+}
+
+// ---------------------------------------------------------------------------
+// the builder
+// ---------------------------------------------------------------------------
+
+// A dev build has no payload loader; it only refuses one.
+#[cfg_attr(not(feature = "prod"), allow(dead_code))]
+enum PayloadSource {
+    File(PathBuf),
+    Bytes(Vec<u8>),
+}
+
+/// Why [`Builder::spawn`] did not start vue-native.
+#[derive(Debug)]
+pub enum Error {
+    /// vue-native already ran in this process (it runs once; module docs).
+    AlreadyStarted,
+    /// A `--features prod` build with no app: no payload was given, none is
+    /// stamped into this exe, and `VN_PAYLOAD` is unset.
+    NoPayload,
+    /// A dev build boots the dev dist (`VN_DIST`, packages/vue-native/dist)
+    /// and has no payload loader; a payload needs `--features prod`.
+    PayloadNeedsProd,
+    /// The payload could not be read or parsed.
+    Payload(String),
+    /// Something read this process's arguments before `spawn`.
+    ArgsAlreadyRead,
+    /// The thread could not be started.
+    Spawn(std::io::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::AlreadyStarted => write!(f, "vue-native already ran in this process; it runs once"),
+            Error::NoPayload => write!(f, "no app: give the builder a payload (vn build writes dist/.vn/app.vnpk)"),
+            Error::PayloadNeedsProd => {
+                write!(f, "a payload needs vn-app's `prod` feature; a dev build boots the dev dist instead")
+            }
+            Error::Payload(e) => write!(f, "{e}"),
+            Error::ArgsAlreadyRead => write!(f, "vue-native's arguments were read before spawn"),
+            Error::Spawn(e) => write!(f, "the vue-native thread did not start: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// Configures and starts an embedded vue-native.
+///
+/// ```no_run
+/// let ui = vn_app::embed::Builder::new()
+///     .payload_file("apps/hello/dist/.vn/app.vnpk")
+///     .function("db.query", |call| {
+///         let reply = call.into_reply();
+///         std::thread::spawn(move || reply.resolve(r#"{"rows":[]}"#));
+///     })
+///     .spawn()?;
+/// ui.emit("status", r#"{"online":true}"#)?;
+/// let exit = ui.wait();
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct Builder {
+    payload: Option<PayloadSource>,
+    args: Vec<String>,
+    functions: HashMap<String, Handler>,
+    activate: bool,
+    inspector_exe: Option<PathBuf>,
+}
+
+impl Default for Builder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Builder {
+    pub fn new() -> Self {
+        Builder { payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None }
+    }
+
+    /// The app, as the `.vnpk` file `vn build` writes (`dist/.vn/app.vnpk`).
+    /// A `--features prod` build only.
+    pub fn payload_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.payload = Some(PayloadSource::File(path.into()));
+        self
+    }
+
+    /// The app, as the bytes of a `.vnpk` (an `include_bytes!` of one, say).
+    pub fn payload_bytes(mut self, bytes: impl Into<Vec<u8>>) -> Self {
+        self.payload = Some(PayloadSource::Bytes(bytes.into()));
+        self
+    }
+
+    /// `appLaunch.argv` after the exe: what the app is launched with. None of
+    /// it is read as a host flag.
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// A function the app calls as `appHost.call(name, ...args)`: the handler
+    /// gets the arguments as a JSON array and answers through the [`Call`].
+    pub fn function<F>(mut self, name: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(Call) + Send + Sync + 'static,
+    {
+        self.functions.insert(name.into(), Arc::new(handler));
+        self
+    }
+
+    /// Whether the app's window takes the foreground when it opens (default
+    /// `true`, as the exe does). `false` leaves the embedder's console or
+    /// window where it is.
+    pub fn activate(mut self, on: bool) -> Self {
+        self.activate = on;
+        self
+    }
+
+    /// A vn-app.exe of this vue-native version, started as the inspector on
+    /// F12 and `appDevtools.open()`. Without it they say why nothing opened;
+    /// the devtools protocol itself (ctl.ts, the MCP server) works either way.
+    pub fn inspector_exe(mut self, path: impl Into<PathBuf>) -> Self {
+        self.inspector_exe = Some(path.into());
+        self
+    }
+
+    /// Starts vue-native on a thread of its own and returns at once; the
+    /// window opens a moment later. Events emitted before the app is ready
+    /// wait for it.
+    pub fn spawn(self) -> Result<Handle, Error> {
+        if STARTED.swap(true, Ordering::SeqCst) {
+            return Err(Error::AlreadyStarted);
+        }
+        if let Err(e) = self.load_payload() {
+            STARTED.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
+        let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        if !vn_desktop::args::set_embedded(exe, self.args) {
+            return Err(Error::ArgsAlreadyRead);
+        }
+        let config = Config { functions: self.functions, activate: self.activate, inspector_exe: self.inspector_exe };
+        if CONFIG.set(config).is_err() {
+            return Err(Error::AlreadyStarted);
+        }
+        std::thread::Builder::new()
+            .name("vue-native".into())
+            .stack_size(STACK)
+            .spawn(run_thread)
+            .map_err(Error::Spawn)?;
+        Ok(Handle { _private: () })
+    }
+
+    #[cfg(feature = "prod")]
+    fn load_payload(&self) -> Result<(), Error> {
+        let (bytes, label): (&'static [u8], String) = match &self.payload {
+            // Leaked on purpose: a payload lives as long as the process, like
+            // the mapped resource it stands in for (payload.rs).
+            Some(PayloadSource::File(p)) => {
+                let v = std::fs::read(p).map_err(|e| Error::Payload(format!("{}: {e}", p.display())))?;
+                (Box::leak(v.into_boxed_slice()), p.display().to_string())
+            }
+            Some(PayloadSource::Bytes(b)) => (Box::leak(b.clone().into_boxed_slice()), "bytes".into()),
+            // The embedder's own exe may carry one (`vn build` stamps any PE),
+            // or `VN_PAYLOAD` may name one: the exe's own rules.
+            None => {
+                return if crate::payload::get().is_some() { Ok(()) } else { Err(Error::NoPayload) };
+            }
+        };
+        crate::payload::set_external(bytes, label).map_err(Error::Payload)
+    }
+
+    #[cfg(not(feature = "prod"))]
+    fn load_payload(&self) -> Result<(), Error> {
+        match self.payload {
+            Some(_) => Err(Error::PayloadNeedsProd),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The vue-native thread.
+fn run_thread() {
+    // `run_embedded` ends in `shutdown::finish`, which never returns; only a
+    // panic out of gpui's loop gets past it. The thread must not end even then
+    // (its thread-locals are the JS realm), so it reports and sleeps.
+    if let Err(p) = std::panic::catch_unwind(crate::run_embedded) {
+        let why = p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "a panic".into());
+        eprintln!("[embed] the vue-native thread panicked: {why}");
+        finished(false, format!("panicked: {why}"));
+    }
+    loop {
+        std::thread::park();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the handle
+// ---------------------------------------------------------------------------
+
+/// How the app ended.
+#[derive(Debug, Clone)]
+pub struct Exit {
+    /// `false` when the teardown ran past its deadline (docs/EMBEDDING.md) or
+    /// the vue-native thread panicked.
+    pub clean: bool,
+    /// What closed it and how long each teardown step took — the exe's
+    /// `[shutdown]` line.
+    pub summary: String,
+}
+
+static EXIT: Mutex<Option<Exit>> = Mutex::new(None);
+static EXIT_CV: Condvar = Condvar::new();
+static CLOSE: AtomicBool = AtomicBool::new(false);
+
+/// The app has closed (src/shutdown.rs). The first report wins.
+pub(crate) fn finished(clean: bool, summary: String) {
+    let Ok(mut exit) = EXIT.lock() else { return };
+    if exit.is_none() {
+        *exit = Some(Exit { clean, summary });
+        EXIT_CV.notify_all();
+    }
+}
+
+/// Why [`Handle::emit`] did not queue an event.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EmitError {
+    /// `data` is not one JSON value.
+    NotJson,
+    /// The app has closed.
+    Closed,
+}
+
+impl std::fmt::Display for EmitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EmitError::NotJson => write!(f, "the event's data is not JSON"),
+            EmitError::Closed => write!(f, "the app has closed"),
+        }
+    }
+}
+
+impl std::error::Error for EmitError {}
+
+/// The embedder's side of a running vue-native. Cheap to clone; every method
+/// works from any thread.
+#[derive(Clone)]
+pub struct Handle {
+    _private: (),
+}
+
+impl Handle {
+    /// Delivers `appHost.on(event)`'s handlers `data` (one JSON value) in the
+    /// app's next frame.
+    pub fn emit(&self, event: &str, data: &str) -> Result<(), EmitError> {
+        if self.is_closed() {
+            return Err(EmitError::Closed);
+        }
+        if crate::json::parse(data).is_none() {
+            return Err(EmitError::NotJson);
+        }
+        let json = format!("{{\"event\":{},\"data\":{data}}}", crate::json::quote(event));
+        push(Item::Event { json });
+        Ok(())
+    }
+
+    /// Closes the app as `appWindow.close()` does: the windows go at once and
+    /// the teardown runs behind them; [`Handle::wait`] returns when it is done.
+    pub fn close(&self) {
+        CLOSE.store(true, Ordering::Release);
+        wake();
+    }
+
+    /// Has the app closed?
+    pub fn is_closed(&self) -> bool {
+        EXIT.lock().is_ok_and(|e| e.is_some())
+    }
+
+    /// Blocks until the app has closed.
+    pub fn wait(&self) -> Exit {
+        let mut exit = EXIT.lock().unwrap_or_else(|p| p.into_inner());
+        loop {
+            if let Some(e) = exit.as_ref() {
+                return e.clone();
+            }
+            exit = EXIT_CV.wait(exit).unwrap_or_else(|p| p.into_inner());
+        }
+    }
+
+    /// [`Handle::wait`], for at most `timeout`.
+    pub fn wait_timeout(&self, timeout: Duration) -> Option<Exit> {
+        let exit = EXIT.lock().unwrap_or_else(|p| p.into_inner());
+        let (exit, _) = EXIT_CV
+            .wait_timeout_while(exit, timeout, |e| e.is_none())
+            .unwrap_or_else(|p| p.into_inner());
+        exit.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// calls
+// ---------------------------------------------------------------------------
+
+/// One `appHost.call(name, ...args)`.
+pub struct Call {
+    name: String,
+    args: String,
+    reply: Reply,
+}
+
+impl Call {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The call's arguments, as one JSON array.
+    pub fn args(&self) -> &str {
+        &self.args
+    }
+
+    /// Resolves the call's promise with `json` (one JSON value).
+    pub fn resolve(self, json: impl Into<String>) {
+        self.reply.resolve(json)
+    }
+
+    /// Rejects the call's promise with an `AppHostError` saying `message`.
+    pub fn reject(self, message: impl Into<String>) {
+        self.reply.reject(message)
+    }
+
+    /// The answer half, to move to another thread.
+    pub fn into_reply(self) -> Reply {
+        self.reply
+    }
+}
+
+/// Settles one call's promise, from any thread. Dropped unanswered, it
+/// rejects, so a promise never hangs on a host that forgot it.
+pub struct Reply {
+    token: u32,
+    settled: bool,
+}
+
+impl Reply {
+    /// Resolves with `json` (one JSON value); text that is not JSON rejects.
+    pub fn resolve(mut self, json: impl Into<String>) {
+        self.settled = true;
+        let json = json.into();
+        if crate::json::parse(&json).is_some() {
+            push(Item::Settle { token: self.token, ok: true, text: json });
+        } else {
+            push(Item::Settle { token: self.token, ok: false, text: "the host answered with text that is not JSON".into() });
+        }
+    }
+
+    pub fn reject(mut self, message: impl Into<String>) {
+        self.settled = true;
+        push(Item::Settle { token: self.token, ok: false, text: message.into() });
+    }
+}
+
+impl Drop for Reply {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        let why = if std::thread::panicking() {
+            "the host function panicked"
+        } else {
+            "the host dropped this call without answering"
+        };
+        push(Item::Settle { token: self.token, ok: false, text: why.into() });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the queue into JS — vn-desktop's settle channel, in miniature
+// ---------------------------------------------------------------------------
+
+enum Item {
+    Settle { token: u32, ok: bool, text: String },
+    Event { json: String },
+}
+
+static QUEUE: Mutex<VecDeque<Item>> = Mutex::new(VecDeque::new());
+static QUEUED: AtomicUsize = AtomicUsize::new(0);
+/// Calls made and not yet delivered back: the event loop's in-flight work.
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+static NEXT_TOKEN: AtomicU32 = AtomicU32::new(1);
+static RT_G: AtomicUsize = AtomicUsize::new(0);
+static RT_ID: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    static DISPATCHER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn push(item: Item) {
+    if let Ok(mut q) = QUEUE.lock() {
+        q.push_back(item);
+        QUEUED.fetch_add(1, Ordering::AcqRel);
+    }
+    wake();
+}
+
+fn wake() {
+    let id = RT_ID.load(Ordering::Acquire);
+    if id != 0 {
+        vn_runtime::redjs::web::wake(vn_runtime::redjs::context::ContextId(id));
+    }
+}
+
+fn is_ours(g: *mut c_void) -> bool {
+    !g.is_null() && g as usize == RT_G.load(Ordering::Acquire)
+}
+
+unsafe fn src_inflight(g: *mut c_void) -> bool {
+    is_ours(g) && IN_FLIGHT.load(Ordering::Acquire) != 0
+}
+
+unsafe fn src_ready(g: *mut c_void) -> bool {
+    is_ours(g) && QUEUED.load(Ordering::Acquire) != 0 && DISPATCHER.with(|d| d.get()) != 0
+}
+
+unsafe fn src_drain(g: *mut c_void) -> usize {
+    if !unsafe { src_ready(g) } {
+        return 0;
+    }
+    let budget = Duration::from_micros(vn_runtime::redjs::web::pump_budget_us() as u64);
+    let start = std::time::Instant::now();
+    let mut n = 0;
+    while n < DRAIN_CAP {
+        let Some(item) = QUEUE.lock().ok().and_then(|mut q| q.pop_front()) else { break };
+        QUEUED.fetch_sub(1, Ordering::AcqRel);
+        match item {
+            Item::Settle { token, ok, text } => {
+                IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+                deliver(token, ok, &text);
+            }
+            Item::Event { json } => deliver(0, true, &json),
+        }
+        n += 1;
+        if start.elapsed() >= budget {
+            break;
+        }
+    }
+    n
+}
+
+fn deliver(token: u32, ok: bool, text: &str) {
+    let dispatcher = DISPATCHER.with(|d| d.get());
+    if dispatcher == 0 {
+        return;
+    }
+    JsRuntime::with(|rt| {
+        let a = [Value::number(f64::from(token)), Value::boolean(ok), rt.ctx().string(text)];
+        if let Err(vn_runtime::redjs::api::Error::Exception(e)) = rt.ctx().call(Value(dispatcher), Value::undefined(), &a) {
+            let err = rt.describe(e);
+            eprintln!("[appHost dispatch] {}\n{}", err.header, err.stack);
+        }
+    });
+}
+
+/// In the frame's JS wave (lib.rs `js_wave`): a close the embedder asked for.
+pub(crate) fn pump() {
+    if CLOSE.swap(false, Ordering::AcqRel) {
+        vn_tree::log::record("embed", "[embed] the embedder closed the app");
+        crate::window::request_close();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// host functions — `appHost` (packages/vue-native/src/apphost.ts)
+// ---------------------------------------------------------------------------
+
+host_fn!(fn vn_host_set_dispatcher(g, args) {
+    let f = args.arg(0);
+    unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
+    DISPATCHER.with(|d| d.set(f.0));
+    // Whatever was emitted before the app was ready is deliverable now.
+    wake();
+    Value::undefined().0
+});
+
+// `__vn_host_call(name, argsJson) -> token`, 0 for a name the embedder did not
+// register (the shim rejects with the list it did).
+host_fn!(fn vn_host_call(g, args) {
+    let name = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }.unwrap_or_default();
+    let call_args = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(1).0) }
+        .filter(|a| crate::json::parse(a).is_some())
+        .unwrap_or_else(|| "[]".into());
+    let Some(handler) = CONFIG.get().and_then(|c| c.functions.get(&name)).cloned() else {
+        return Value::number(0.0).0;
+    };
+    let token = loop {
+        let t = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+        if t != 0 {
+            break t;
+        }
+    };
+    IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+    let call = Call { name, args: call_args, reply: Reply { token, settled: false } };
+    // The embedder's code, not ours: a panic in it rejects this call (the
+    // Reply's drop says so) instead of poisoning the runtime the way a panic
+    // in a host fn of our own does.
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(call))).is_err() {
+        eprintln!("[embed] the host function behind appHost.call panicked");
+    }
+    Value::number(f64::from(token)).0
+});
+
+host_fn!(fn vn_host_functions(_g, _args) {
+    let mut names: Vec<&String> = CONFIG.get().map(|c| c.functions.keys().collect()).unwrap_or_default();
+    names.sort();
+    let json = crate::json::Json::arr(names.into_iter().map(|n| crate::json::Json::s(n.as_str())).collect()).to_json();
+    JsRuntime::with(|rt| rt.ctx().string(&json)).0
+});
+
+/// Registers `__vn_host_*`, embedded only: in the exe they do not exist and
+/// `appHost.available` is `false`.
+pub(crate) fn install(rt: &JsRuntime) {
+    if !active() {
+        return;
+    }
+    rt.register("__vn_host_set_dispatcher", 1, vn_host_set_dispatcher as *const _);
+    rt.register("__vn_host_call", 2, vn_host_call as *const _);
+    rt.register("__vn_host_functions", 0, vn_host_functions as *const _);
+    let g = rt.raw();
+    RT_G.store(g as usize, Ordering::Release);
+    if let Some(id) = vn_runtime::redjs::context::id_of(g) {
+        RT_ID.store(id.0, Ordering::Release);
+        let _ = vn_runtime::redjs::web::waker(id);
+    }
+    vn_runtime::redjs::web::register_pump_source(vn_runtime::redjs::web::PumpSource {
+        inflight: src_inflight,
+        ready: src_ready,
+        drain: src_drain,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn drain_queue() -> Vec<(u32, bool, String)> {
+        let mut q = QUEUE.lock().unwrap();
+        let out = q
+            .drain(..)
+            .map(|i| match i {
+                Item::Settle { token, ok, text } => (token, ok, text),
+                Item::Event { json } => (0, true, json),
+            })
+            .collect();
+        QUEUED.store(0, Ordering::Release);
+        out
+    }
+
+    // One test, because the queue is the process's.
+    #[test]
+    fn replies_settle_once_and_a_dropped_one_rejects() {
+        drain_queue();
+        Reply { token: 7, settled: false }.resolve(r#"{"a":1}"#);
+        Reply { token: 8, settled: false }.resolve("not json");
+        Reply { token: 9, settled: false }.reject("nope");
+        drop(Reply { token: 10, settled: false });
+        let got = drain_queue();
+        assert_eq!(got[0], (7, true, r#"{"a":1}"#.to_string()));
+        assert_eq!(got[1].0, 8);
+        assert!(!got[1].1 && got[1].2.contains("not JSON"));
+        assert_eq!(got[2], (9, false, "nope".to_string()));
+        assert_eq!(got[3].0, 10);
+        assert!(!got[3].1 && got[3].2.contains("without answering"));
+
+        let h = Handle { _private: () };
+        assert_eq!(h.emit("x", "{bad"), Err(EmitError::NotJson));
+        h.emit("status", r#"{"online":true}"#).unwrap();
+        assert_eq!(drain_queue()[0].2, r#"{"event":"status","data":{"online":true}}"#);
+    }
+}

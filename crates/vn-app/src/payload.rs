@@ -11,7 +11,7 @@
 //!  ┌───────────────────┐     ┌─────────────────────────┐     ┌──────────────────────────────┐
 //!  │ Embedded          │     │ Payload::parse — O(n),  │     │ prod.rs: script, window.json,│
 //!  │  FindResourceW →  ├────▶│ header + TOC only, never├────▶│   app name, content provider │
-//!  │  LockResource     │     │ the asset bytes         │     │ main.rs: GpuiAssets, the     │
+//!  │  LockResource     │     │ the asset bytes         │     │ lib.rs: GpuiAssets, the      │
 //!  │ File (bare host)  │     └─────────────────────────┘     │   vn_tree asset store, slot  │
 //!  │  VN_PAYLOAD=…vnpk │                                     └──────────────────────────────┘
 //!  └───────────────────┘
@@ -43,6 +43,9 @@ use vn_payload::Payload;
 pub enum Source {
     Embedded,
     File(std::path::PathBuf),
+    /// Handed over by the process that embeds vue-native (src/embed.rs);
+    /// the label says how (a path, or "bytes").
+    Embedder(String),
 }
 
 /// The META entry, read once.
@@ -76,6 +79,26 @@ static LOADED: OnceLock<Option<Loaded>> = OnceLock::new();
 /// app to run, and running none silently would be worse.
 pub fn get() -> Option<&'static Loaded> {
     LOADED.get_or_init(load).as_ref()
+}
+
+/// The embedder's payload (src/embed.rs), parsed now so a bad one is the
+/// embedder's `Err` rather than this module's [`fatal`]. Before the first
+/// [`get`]; it then wins over a stamped resource and `VN_PAYLOAD` alike, since
+/// the process that embeds vue-native is the one that says what it runs.
+pub(crate) fn set_external(bytes: &'static [u8], label: String) -> Result<(), String> {
+    let payload = Payload::parse(bytes).map_err(|e| format!("the app payload is unreadable — {e}"))?;
+    let meta = payload.meta().map(parse_meta).unwrap_or_default();
+    if !meta.vue_native.is_empty() && meta.vue_native != env!("VN_PKG_VERSION") {
+        return Err(format!(
+            "this app was built by vue-native {} and this library is {}: the bundle carries the JS half of \
+             the host protocol, so rebuild it with the matching vn",
+            meta.vue_native,
+            env!("VN_PKG_VERSION")
+        ));
+    }
+    LOADED
+        .set(Some(Loaded { payload, meta, source: Source::Embedder(label) }))
+        .map_err(|_| "a payload was already resolved in this process".to_string())
 }
 
 /// Is a payload STAMPED into this exe? Unlike [`get`], `VN_PAYLOAD` does not

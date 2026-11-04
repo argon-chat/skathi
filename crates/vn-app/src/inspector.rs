@@ -450,7 +450,17 @@ fn allow_foreground(pid: u32) {
 
 /// Starts a new inspector for `window`.
 fn spawn(window: Option<u64>) -> Result<u32, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    // The inspector is this host exe started again in `--devtools` mode. An
+    // embedded vue-native is not in its own exe — this one is the embedder's —
+    // so it uses the vn-app.exe the embedder named (src/embed.rs).
+    let exe = if crate::embed::active() {
+        crate::embed::inspector_exe().ok_or(
+            "vue-native is embedded, so there is no host exe to start as the inspector; \
+             name one with embed::Builder::inspector_exe (a vn-app.exe of this vue-native version)",
+        )?
+    } else {
+        std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?
+    };
     let target = crate::slot::dir();
     let slot = child_slot(std::process::id(), window);
     std::fs::create_dir_all(&slot).map_err(|e| format!("{}: {e}", slot.display()))?;

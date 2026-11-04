@@ -110,7 +110,7 @@ element**, with the wall-clock delta since the last frame. `vn-app`'s
 `Instant`-based cadence the CSS animator uses.
 
 An animating Lottie must keep frames coming the same way a running CSS
-transition does. Extend the OR-chain in `crates/vn-app/src/main.rs:160`:
+transition does. Extend the OR-chain in `crates/vn-app/src/lib.rs:160`:
 
 ```rust
 if vn_tree::flush_changes() || vn_tree::animating() || vn_tree::lotties_animating() {

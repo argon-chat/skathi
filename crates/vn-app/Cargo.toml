@@ -116,7 +116,7 @@ gpui = { path = "../../vendor/zed/crates/gpui", default-features = false, featur
 image = { version = "0.25", default-features = false, features = ["png"] }
 # gpui logs through the `log` facade and nothing in this process ever installed
 # a sink, so every `log::info!` in the renderer — the GPU it picked included —
-# was discarded. `VN_LOG=<level>` turns them on (see `logger` in main.rs).
+# was discarded. `VN_LOG=<level>` turns them on (see `logger` in lib.rs).
 log = "0.4"
 raw-window-handle = "0.6"
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false }
@@ -170,7 +170,7 @@ livekit-api = { version = "0.6", default-features = false, features = ["access-t
 # loaders fetch through redjs's stack instead (src/http_client.rs); this one is
 # the fallback for a request that stack does not carry as is (a body, or a
 # redirect that must not be followed), built on first use. No loader sends one
-# today. `VN_HTTP_CLIENT=reqwest` installs it in place of redjs's (main.rs).
+# today. `VN_HTTP_CLIENT=reqwest` installs it in place of redjs's (lib.rs).
 reqwest_client = { path = "../../vendor/zed/crates/reqwest_client" }
 # The oneshot that hands redjs's answer (on its network thread) to the gpui
 # loader awaiting it (src/http_client.rs). Already in the link through gpui.
@@ -179,6 +179,11 @@ futures = "0.3"
 # (src/inspector.rs). Not a new crate in the image: redjs already links flate2
 # with the same miniz_oxide backend.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+# examples/embed.rs reads its calls' JSON arguments the way an embedder would.
+# Already in the graph (vn-permissions, gpui).
+serde_json = "1"
 
 [build-dependencies]
 # Deflates the inspector bundle before it is embedded. Host-side only.

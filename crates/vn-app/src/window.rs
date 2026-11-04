@@ -2024,6 +2024,12 @@ fn submit(op: Op) {
     }
 }
 
+/// `appWindow.close()`, asked from Rust: the embedder's `Handle::close`
+/// (src/embed.rs). Main thread.
+pub(crate) fn request_close() {
+    submit(Op::Close);
+}
+
 /// `submit` needs the op twice (apply it, or queue it) and `Op` is not `Clone`
 /// because `Op::Title` owns a `String`. Rather than clone every op on the hot
 /// path, take it by reference and rebuild — the enum is tiny.

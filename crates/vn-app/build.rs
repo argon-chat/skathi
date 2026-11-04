@@ -13,7 +13,7 @@
 //! ## Why a build script and not a checked-in bundle
 //!
 //! Two generated JS artifacts are already checked in here — `src/prelude.js` and
-//! `src/window.prelude.js` — for a reason stated in `main.rs`: `cargo build`
+//! `src/window.prelude.js` — for a reason stated in `lib.rs`: `cargo build`
 //! must not need a JS toolchain, and an `include_str!` of a missing file is a
 //! terrible place to discover bun is not installed. Both are a few hundred
 //! lines of hand-reviewable code that changes when somebody edits its `.ts`

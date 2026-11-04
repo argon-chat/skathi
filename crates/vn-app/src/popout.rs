@@ -867,7 +867,7 @@ fn report_metrics(id: u64, node: u32, window: &Window) {
 ///
 /// The devtools' `windows` command puts the primary window at the head of this
 /// list; here there is nothing but the pop-outs, because the primary window's
-/// identity is `main.rs`'s to report.
+/// identity is `lib.rs`'s to report.
 ///
 /// That command is also the only caller, so a `--features no-devtools` build
 /// has none. Kept rather than `cfg`'d: the pop-out registry is this module's
