@@ -584,6 +584,20 @@ fn expand(id: &PropertyId) -> Expansion {
         "margin-right" => one(MarginRight),
         "margin-bottom" => one(MarginBottom),
         "margin-left" => one(MarginLeft),
+        // The logical names, resolved like the mapper resolves them
+        // (`horizontal-tb` + `ltr`).
+        "padding-inline" => Expansion::Props(vec![PaddingLeft, PaddingRight]),
+        "padding-block" => Expansion::Props(vec![PaddingTop, PaddingBottom]),
+        "padding-inline-start" => one(PaddingLeft),
+        "padding-inline-end" => one(PaddingRight),
+        "padding-block-start" => one(PaddingTop),
+        "padding-block-end" => one(PaddingBottom),
+        "margin-inline" => Expansion::Props(vec![MarginLeft, MarginRight]),
+        "margin-block" => Expansion::Props(vec![MarginTop, MarginBottom]),
+        "margin-inline-start" => one(MarginLeft),
+        "margin-inline-end" => one(MarginRight),
+        "margin-block-start" => one(MarginTop),
+        "margin-block-end" => one(MarginBottom),
         "border-radius" => Expansion::Props(vec![
             BorderTopLeftRadius,
             BorderTopRightRadius,
@@ -743,6 +757,18 @@ mod tests {
                 easing: Easing::EaseIn,
             }]
         );
+    }
+
+    #[test]
+    fn logical_margin_and_padding_names_transition_their_physical_sides() {
+        let props = |body: &str| -> Vec<TransitionProperty> {
+            specs(body).into_iter().map(|s| s.property).collect()
+        };
+        use TransitionProperty::*;
+        assert_eq!(props("transition: margin-inline 1s"), vec![MarginLeft, MarginRight]);
+        assert_eq!(props("transition: padding-block 1s"), vec![PaddingTop, PaddingBottom]);
+        assert_eq!(props("transition: margin-inline-end 1s"), vec![MarginRight]);
+        assert_eq!(props("transition: padding-block-start 1s"), vec![PaddingTop]);
     }
 
     #[test]

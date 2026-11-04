@@ -206,7 +206,9 @@ Semantics implemented:
   each expanded longhand inherits that list entry's timing:
   `padding` → 4 sides, `margin` → 4 sides, `border-radius` → 4 corners,
   `gap` → `row-gap` + `column-gap`, `background` → `background-color`,
-  `border` → `border-color`.
+  `border` → `border-color`. The logical names map onto the physical sides
+  (`horizontal-tb` + `ltr`): `margin-inline` → left + right,
+  `padding-block-start` → `padding-top`, and so on.
 * Per property, the **last matching list entry wins** (`spec_for`); `all`
   matches everything, so `transition: all 1s, opacity 2s` gives opacity 2s and
   everything else 1s.
@@ -236,8 +238,8 @@ last. `transition: none` therefore clears it. `ComputedStates::transitions` is a
 | `width`, `height` | `size.{width,height}` | `Pixels` / `Rems` | both ends must be absolute |
 | `min-width`, `min-height` | `min_size.*` | `Pixels` / `Rems` | |
 | `max-width`, `max-height` | `max_size.*` | `Pixels` / `Rems` | |
-| `padding-{top,right,bottom,left}` | `padding.*` | `Pixels` / `Rems` | |
-| `margin-{top,right,bottom,left}` | `margin.*` | `Pixels` / `Rems` | |
+| `padding-{top,right,bottom,left}` | `padding.*` | `Pixels` / `Rems` | also the logical `padding-{inline,block}[-start,-end]` |
+| `margin-{top,right,bottom,left}` | `margin.*` | `Pixels` / `Rems` | also the logical `margin-{inline,block}[-start,-end]` |
 | `border-*-radius` (4 corners) | `corner_radii.*` | `Pixels` / `Rems` | |
 | `row-gap`, `column-gap` | `gap.height`, `gap.width` | `Pixels` / `Rems` | gpui's `gap` is a `Size` |
 | `font-size` | `text.font_size` | `Pixels` / `Rems` | |
@@ -506,6 +508,12 @@ project's browser-compat-first policy.
     - A `position: fixed` descendant is not cut.
     - It is not animated: `clip-path` is outside the transition set
       (`TransitionProperty::animatable`), as item 16 says for scripts.
+19. **Logical properties are laid out in `horizontal-tb` + `ltr`**, the only
+    writing mode and direction vue-native has. `margin-inline`, `padding-block`,
+    `inset-inline` and their `-start` / `-end` longhands are the physical sides
+    (inline-start is left, block-start is top). They share the physical
+    properties' slots, so whichever is declared later wins, as CSS says for a
+    logical/physical pair. `inset-*` does not transition, like `top` / `left`.
 
 ---
 

@@ -4190,6 +4190,34 @@ fn apply_property(
         MarginRight(v) => r.margin.right = lpa_length(v),
         MarginBottom(v) => r.margin.bottom = lpa_length(v),
         MarginLeft(v) => r.margin.left = lpa_length(v),
+        // The logical spellings resolve against `horizontal-tb` + `ltr`, the
+        // only writing mode and direction we lay out in: inline-start is the
+        // left side, block-start the top. They write the same slots as the
+        // physical ones, so whichever is declared later wins, as in CSS.
+        PaddingInline(v) => {
+            r.padding.left = lp_definite_of_lpa(&v.inline_start);
+            r.padding.right = lp_definite_of_lpa(&v.inline_end);
+        }
+        PaddingBlock(v) => {
+            r.padding.top = lp_definite_of_lpa(&v.block_start);
+            r.padding.bottom = lp_definite_of_lpa(&v.block_end);
+        }
+        PaddingInlineStart(v) => r.padding.left = lp_definite_of_lpa(v),
+        PaddingInlineEnd(v) => r.padding.right = lp_definite_of_lpa(v),
+        PaddingBlockStart(v) => r.padding.top = lp_definite_of_lpa(v),
+        PaddingBlockEnd(v) => r.padding.bottom = lp_definite_of_lpa(v),
+        MarginInline(v) => {
+            r.margin.left = lpa_length(&v.inline_start);
+            r.margin.right = lpa_length(&v.inline_end);
+        }
+        MarginBlock(v) => {
+            r.margin.top = lpa_length(&v.block_start);
+            r.margin.bottom = lpa_length(&v.block_end);
+        }
+        MarginInlineStart(v) => r.margin.left = lpa_length(v),
+        MarginInlineEnd(v) => r.margin.right = lpa_length(v),
+        MarginBlockStart(v) => r.margin.top = lpa_length(v),
+        MarginBlockEnd(v) => r.margin.bottom = lpa_length(v),
         Position(v) => {
             use lightningcss::properties::position::Position as P;
             x.fixed = Some(matches!(v, P::Fixed));
@@ -4418,6 +4446,19 @@ fn apply_property(
             r.inset.bottom = lpa_length(&v.bottom);
             r.inset.left = lpa_length(&v.left);
         }
+        // Logical insets: `horizontal-tb` + `ltr`, as the margins above.
+        InsetInline(v) => {
+            r.inset.left = lpa_length(&v.inline_start);
+            r.inset.right = lpa_length(&v.inline_end);
+        }
+        InsetBlock(v) => {
+            r.inset.top = lpa_length(&v.block_start);
+            r.inset.bottom = lpa_length(&v.block_end);
+        }
+        InsetInlineStart(v) => r.inset.left = lpa_length(v),
+        InsetInlineEnd(v) => r.inset.right = lpa_length(v),
+        InsetBlockStart(v) => r.inset.top = lpa_length(v),
+        InsetBlockEnd(v) => r.inset.bottom = lpa_length(v),
         Overflow(v) => {
             r.overflow.x = Some(overflow(v.x));
             r.overflow.y = Some(overflow(v.y));
@@ -8248,6 +8289,34 @@ mod tests {
         let list = merged.svg_presentation.expect("merged");
         assert_eq!(get(&list, "stroke-width").as_deref(), Some("2px"));
         assert_eq!(get(&list, "stroke-opacity").as_deref(), Some(".28"));
+    }
+
+    /// The logical box properties resolve against `horizontal-tb` + `ltr`
+    /// and share their slots with the physical ones: the later one wins.
+    #[test]
+    fn logical_margin_padding_and_inset_are_their_physical_sides() {
+        let r = clean(
+            "margin-inline: auto; margin-block: 2px 4px; padding-inline: 6px 8px; \
+             padding-block-start: 10px; padding-block-end: 12px; inset-inline: 0 -22px; \
+             inset-block-start: 3px; inset-block-end: 5%",
+        );
+        assert_eq!(r.margin.left, Some(Length::Auto));
+        assert_eq!(r.margin.right, Some(Length::Auto));
+        assert_eq!(r.margin.top, Some(px(2.0).into()));
+        assert_eq!(r.margin.bottom, Some(px(4.0).into()));
+        assert_eq!(r.padding.left, Some(px(6.0).into()));
+        assert_eq!(r.padding.right, Some(px(8.0).into()));
+        assert_eq!(r.padding.top, Some(px(10.0).into()));
+        assert_eq!(r.padding.bottom, Some(px(12.0).into()));
+        assert_eq!(r.inset.left, Some(px(0.0).into()));
+        assert_eq!(r.inset.right, Some(px(-22.0).into()));
+        assert_eq!(r.inset.top, Some(px(3.0).into()));
+        assert_eq!(r.inset.bottom, Some(gpui::relative(0.05).into()));
+
+        let later = |body: &str| clean(body).margin.left;
+        assert_eq!(later("margin-left: 3px; margin-inline-start: 5px"), Some(px(5.0).into()));
+        assert_eq!(later("margin-inline-start: 5px; margin-left: 3px"), Some(px(3.0).into()));
+        assert_eq!(clean("margin: 1px; margin-inline-end: 9px").margin.right, Some(px(9.0).into()));
     }
 
     // ---- the end-to-end Tailwind card ------------------------------------
