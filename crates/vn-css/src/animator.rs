@@ -64,6 +64,10 @@ enum Opaque {
     /// painted at all. CSS does not interpolate `none` with a paint either, so
     /// the pair is discrete and snaps.
     UnpaintedSvg,
+    /// A concrete `fill` / `stroke` colour. vn-tree draws it into the
+    /// serialized `<svg>` document, which an overlay refinement cannot
+    /// reach, so a change of one snaps (and says so).
+    SvgColour(Hsla),
 }
 
 /// What one property looks like in one `StyleRefinement`.
@@ -226,15 +230,16 @@ fn slot_inherited(
 /// * `none` — an unpainted half of the geometry. CSS does not interpolate
 ///   `none` with a colour either (SVG paint is a discrete type at that
 ///   boundary), so this is deliberately opaque and snaps;
-/// * anything painted — `currentColor`, a concrete colour, a paint server:
-///   `vn_tree::svg` flattens all of them onto the element's `color`, because
-///   gpui rasterises an SVG into a single-colour alpha mask. So the value that
-///   is actually on screen, and therefore the value to interpolate, is that
-///   colour.
+/// * `currentColor`, or a paint server (which `vn_tree::svg` draws in
+///   `currentColor`): the value on screen is the element's `color`, so that
+///   is the value to interpolate;
+/// * a concrete colour — drawn into the serialized document, which the
+///   animator's overlay cannot reach, so it is opaque and snaps.
 fn slot_paint(paint: Option<crate::SvgPaint>, color: Option<Hsla>) -> Slot {
     match paint {
         None => Slot::Missing,
         Some(crate::SvgPaint::None) => Slot::Opaque(Opaque::UnpaintedSvg),
+        Some(crate::SvgPaint::Color(c)) => Slot::Opaque(Opaque::SvgColour(c)),
         Some(_) => slot_color(color),
     }
 }
@@ -1064,6 +1069,14 @@ impl Animator {
                     return Endpoints::Snap;
                 }
             },
+            (Slot::Opaque(Opaque::SvgColour(_)), _) | (_, Slot::Opaque(Opaque::SvgColour(_))) => {
+                self.warn_once(format!(
+                    "transition of {} to or from a concrete SVG paint colour is not animatable \
+                     yet (v1) — snapping",
+                    property.name()
+                ));
+                return Endpoints::Snap;
+            }
             _ => {
                 self.warn_once(format!(
                     "transition of {} between percentage/auto endpoints is not animatable yet \

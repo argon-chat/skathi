@@ -3319,13 +3319,18 @@ fn paints_children(t: &Tree, node: &crate::tree::Node) -> bool {
     node.children.iter().any(|&c| paints(t, c))
 }
 
-/// The `drop-shadow()` this engine cannot draw, said once. Shared by
-/// [`apply_drop_shadow`] and by `build_svg`, which does not go through it.
+/// The `drop-shadow()` this engine cannot draw, said once (from
+/// [`apply_drop_shadow`]; an inline `<svg>` draws its own, `crate::svg`).
 fn advise_drop_shadow_shape(at: &str) {
     warn_compat_at(
         "filter-drop-shadow-shape",
         at,
-        "`filter: drop-shadow()` is honoured only on a box with an OPAQUE solid background          (v1) — gpui has no post-processing pass over an element's own painted output, so the          shadow is drawn as the element's OWN blurred rounded rect. That is exact for a box          and impossible for a silhouette made of glyphs, of SVG strokes, or of a translucent          fill whose alpha the shadow would have to carry. On an <svg> icon there is no          expressible substitute at all: gpui rasterises an SVG into a single-colour alpha          mask, so even an offset copy of that mask could only be the icon's own colour, never          the shadow's. On a box, `box-shadow` draws the same picture",
+        "`filter: drop-shadow()` is honoured only on a box with an OPAQUE solid background \
+         (v1), and on an inline <svg>, whose shapes resvg shadows. gpui has no \
+         post-processing pass over an element's own painted output, so on a box the shadow \
+         is drawn as the element's OWN blurred rounded rect. That is exact for an opaque box \
+         and impossible for a silhouette made of glyphs, or of a translucent fill whose alpha \
+         the shadow would have to carry. On a box, `box-shadow` draws the same picture",
     );
 }
 
@@ -5493,28 +5498,34 @@ fn build_svg<V: 'static>(
     control_area: Option<WindowControlArea>,
 ) -> AnyElement {
     let win = windows::key(window);
-    let extras = extras_of(node);
-    // An `<svg>`'s silhouette is its strokes, so a `drop-shadow()` on one is
-    // precisely the case `apply_drop_shadow` cannot express — but it must
-    // still be SAID, and `build_svg` never reaches the generic element branch
-    // that would say it.
-    if extras.drop_shadow.is_some() {
-        advise_drop_shadow_shape(&node_prefix(t, id));
+    // An `<svg>`'s silhouette is its shapes, and resvg draws a
+    // `drop-shadow()` around them (`crate::svg`, `Shadow`). What gpui paints
+    // for the box itself, a background or a border, is outside the raster
+    // and casts none.
+    let shadow = node.computed.as_ref().and_then(|cs| cs.extras.drop_shadow).map(|d| crate::svg::ShadowSpec {
+        dx: d.dx,
+        dy: d.dy,
+        blur: d.blur,
+        color: d.color,
+    });
+    if shadow.is_some() && paints_own_box(node) {
+        warn_compat_at(
+            "filter-drop-shadow-svg-box",
+            &node_prefix(t, id),
+            "`filter: drop-shadow()` on an inline <svg> follows its shapes, as in a browser, but \
+             the svg's own CSS background and border cast no shadow (v1): they are painted by \
+             the box, outside the rasterised document the shadow is drawn in",
+        );
     }
-    let doc = crate::svg::document(
-        t,
-        id,
-        extras.fill,
-        extras.stroke,
-        extras.svg_presentation.as_deref().map_or(&[][..], |v| v.as_slice()),
-    );
-    if doc.css_paint_colour {
+    let doc = crate::svg::document(t, id);
+    if doc.css_paint_server {
         warn_compat(
-            "svg-css-paint-colour",
-            "an inline <svg> takes a concrete `fill`/`stroke` colour from a CSS rule; vn-css \
-             keeps only whether such a paint is painted, so it is drawn in the element's `color` \
-             (`currentColor`). A colour written on the shapes (`fill=\"#…\"`, or an inline \
-             style) is drawn as written",
+            "svg-css-paint-server",
+            "an inline <svg> takes a `fill`/`stroke` from a CSS rule that is a paint server \
+             (`url(#…)`), `context-fill`/`context-stroke`, or a colour vn-css cannot resolve; \
+             it is drawn in the element's `color` (`currentColor`). Concrete colours and \
+             `var()` are drawn as computed, and a `url(#…)` written on the shapes \
+             (`fill=\"url(#g)\"`) is drawn as written",
         );
     }
 
@@ -5525,17 +5536,29 @@ fn build_svg<V: 'static>(
     //
     // Mono: gpui's mask, tinted by `color`. Anything else: the full-colour
     // raster (`crate::svg` explains the split).
-    match doc.paint {
-        crate::svg::Paint::Mono => {
+    // A shadow needs the colour path: the mask has one colour, the icon's.
+    match (doc.paint, shadow) {
+        (crate::svg::Paint::Mono, None) => {
             crate::svg::forget_raster(id);
             let e = with_control_area(gpui::svg().data(&doc.bytes).id(id as usize), id, control_area, win);
             finish_svg(e, t, id, node, window, cx, now)
         }
-        crate::svg::Paint::Colour(_) => {
-            let e = with_control_area(crate::svg::raster(id, doc.clone()).id(id as usize), id, control_area, win);
+        _ => {
+            let e = with_control_area(crate::svg::raster(id, doc.clone(), shadow).id(id as usize), id, control_area, win);
             finish_svg(e, t, id, node, window, cx, now)
         }
     }
+}
+
+/// Does the cascade give this element a background or a border of its own?
+fn paints_own_box(node: &crate::tree::Node) -> bool {
+    let Some(cs) = &node.computed else { return false };
+    let b = &cs.base.border_widths;
+    let wide = |w: Option<gpui::AbsoluteLength>| w.is_some_and(|w| w.to_pixels(gpui::px(16.0)) > gpui::px(0.0));
+    let background = cs.base.background.as_ref().is_some_and(|f| {
+        f.color().and_then(|c| c.as_solid()).map_or(true, |c| c.a > 0.0)
+    });
+    background || wide(b.top) || wide(b.right) || wide(b.bottom) || wide(b.left)
 }
 
 /// Everything after the choice of element: ARIA, the computed style, the

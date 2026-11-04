@@ -624,36 +624,48 @@ pub enum TextFill {
     Color(Hsla),
 }
 
-/// An SVG paint, reduced to the only distinction gpui can express.
+/// An SVG `fill` / `stroke` as the cascade computed it.
 ///
-/// gpui rasterises an SVG into a **single-colour alpha mask** and tints the
-/// whole sprite with one `Hsla` (`MonochromeSprite`), so the only thing a
-/// `fill` / `stroke` declaration can change about the result is whether that
-/// half of the geometry contributes coverage at all. The colour itself always
-/// comes from the cascade's `color` — which is also what `currentColor`, the
-/// value every icon set actually ships, means.
-///
-/// `fill: red` and `fill: currentColor` therefore compute to the same painted
-/// pixels here; [`SvgPaint::Color`] is kept distinct only so the renderer can
-/// say so once instead of diverging in silence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// vn-tree serializes an inline `<svg>` into a document for resvg and writes
+/// each element's computed paint on it in place of the markup's attribute
+/// (`vn_tree::svg`), so a concrete colour from a rule, `var()` resolved, is
+/// drawn as that colour. A document whose paints are all `currentColor` takes
+/// gpui's monochrome mask, tinted by `color`; anything else is rasterised in
+/// full colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SvgPaint {
     /// `none` — this half of the geometry is not painted.
     None,
     /// `currentColor` — painted in the cascade's `color`.
     Current,
-    /// A concrete colour or a paint server, flattened to the cascade's `color`.
-    Color,
+    /// A concrete colour, its alpha included.
+    Color(Hsla),
+    /// A paint this engine does not carry: a paint server (`url(…)`),
+    /// `context-fill` / `context-stroke`, or a colour the mapper cannot
+    /// resolve. Drawn in `currentColor`, and vn-tree says so.
+    Server,
 }
 
 impl SvgPaint {
     /// How this paint is spelled in the serialized SVG the renderer feeds
-    /// resvg. A concrete colour becomes `currentColor` because the tint is
-    /// applied to the sprite, not to the geometry.
-    pub fn as_attr(self) -> &'static str {
+    /// resvg: `none`, `currentColor`, or `rgb(r,g,b)` with the alpha as
+    /// `rgba` when it is not opaque (resvg folds a colour's alpha into the
+    /// paint's opacity, as a browser does).
+    pub fn as_attr(self) -> std::borrow::Cow<'static, str> {
         match self {
-            SvgPaint::None => "none",
-            SvgPaint::Current | SvgPaint::Color => "currentColor",
+            SvgPaint::None => "none".into(),
+            SvgPaint::Current | SvgPaint::Server => "currentColor".into(),
+            SvgPaint::Color(c) => {
+                let c = gpui::Rgba::from(c);
+                let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                let (r, g, b) = (q(c.r), q(c.g), q(c.b));
+                let a = (c.a.clamp(0.0, 1.0) * 1000.0).round() / 1000.0;
+                if a >= 1.0 {
+                    format!("rgb({r},{g},{b})").into()
+                } else {
+                    format!("rgba({r},{g},{b},{a})").into()
+                }
+            }
         }
     }
 }
@@ -712,8 +724,12 @@ impl Extras {
         if other.content.is_some() {
             self.content = other.content.clone();
         }
+        // `blur` is `Some` for every `filter` declaration, and the
+        // `drop-shadow()` is the same declaration's: a later `filter` replaces
+        // both (`filter: none` takes an earlier shadow away).
         if other.blur.is_some() {
             self.blur = other.blur;
+            self.drop_shadow = other.drop_shadow;
         }
         if other.background_clip_text.is_some() {
             self.background_clip_text = other.background_clip_text;
@@ -4491,11 +4507,12 @@ fn apply_property(
                 );
             }
         }
-        // SVG paint. Only meaningful on an `<svg>` leaf (see `SvgPaint`), but —
-        // like `object-fit` on a non-replaced element — it is parsed and folded
-        // for every node, because that is what a browser computes.
-        Fill(p) => x.fill = Some(svg_paint(p)),
-        Stroke(p) => x.stroke = Some(svg_paint(p)),
+        // SVG paint. Read by the `<svg>` serializer for the element and every
+        // element inside it (see `SvgPaint`); like `object-fit` on a
+        // non-replaced element it is parsed and folded for every node,
+        // because that is what a browser computes.
+        Fill(p) => x.fill = Some(svg_paint(p, "fill", diagnostics)),
+        Stroke(p) => x.stroke = Some(svg_paint(p, "stroke", diagnostics)),
         // The rest of SVG's presentation properties travel as text to the
         // `<svg>` serializer (`Extras::svg_presentation`): resvg parses them
         // itself, so there is nothing to model here.
@@ -6062,16 +6079,26 @@ fn set_presentation(list: &mut Vec<(&'static str, Rc<str>)>, name: &'static str,
     }
 }
 
-/// One SVG paint declaration, reduced to what gpui's monochrome sprite can
-/// express. See [`SvgPaint`].
-fn svg_paint(p: &lightningcss::properties::svg::SVGPaint<'_>) -> SvgPaint {
+/// One SVG paint declaration. See [`SvgPaint`].
+fn svg_paint(
+    p: &lightningcss::properties::svg::SVGPaint<'_>,
+    what: &str,
+    diagnostics: &mut Vec<String>,
+) -> SvgPaint {
     use lightningcss::properties::svg::SVGPaint as P;
     match p {
         P::None => SvgPaint::None,
+        P::Color(c) if is_current_color(c) => SvgPaint::Current,
+        P::Color(c) => match color(c) {
+            Some(c) => SvgPaint::Color(c),
+            None => {
+                unresolved_color(diagnostics, what);
+                SvgPaint::Server
+            }
+        },
         // `context-fill`/`context-stroke` only mean anything inside a `<use>`
         // of a marker; treated as "painted", which is what they degrade to.
-        P::Color(c) if is_current_color(c) => SvgPaint::Current,
-        P::Color(_) | P::Url { .. } | P::ContextFill | P::ContextStroke => SvgPaint::Color,
+        P::Url { .. } | P::ContextFill | P::ContextStroke => SvgPaint::Server,
     }
 }
 
@@ -8378,15 +8405,20 @@ mod tests {
     }
 
     #[test]
-    fn svg_paint_keeps_only_what_a_monochrome_mask_can_express() {
+    fn svg_paint_keeps_the_concrete_colour() {
         assert_eq!(extras("fill: none").0.fill, Some(SvgPaint::None));
         assert_eq!(extras("fill: currentColor").0.fill, Some(SvgPaint::Current));
-        // A concrete colour is kept distinct ONLY so the renderer can say the
-        // sprite is flattened to the cascade's `color`; it still paints.
-        assert_eq!(extras("fill: #ff0000").0.fill, Some(SvgPaint::Color));
+        // A concrete colour is carried, alpha and all, and spelled for resvg.
+        let red = extras("fill: #ff0000").0.fill;
+        assert!(matches!(red, Some(SvgPaint::Color(_))), "{red:?}");
+        assert_eq!(red.unwrap().as_attr(), "rgb(255,0,0)");
+        let faint = extras("stroke: rgba(219, 232, 255, 0.17)").0.stroke.expect("declared");
+        assert_eq!(faint.as_attr(), "rgba(219,232,255,0.169)");
         assert_eq!(extras("stroke: currentColor").0.stroke, Some(SvgPaint::Current));
         assert_eq!(SvgPaint::None.as_attr(), "none");
-        assert_eq!(SvgPaint::Color.as_attr(), "currentColor");
+        // A paint server is drawn in currentColor (vn-tree advises).
+        assert_eq!(extras("fill: url(#g)").0.fill, Some(SvgPaint::Server));
+        assert_eq!(SvgPaint::Server.as_attr(), "currentColor");
         // Nothing declared stays None, which is what lets a presentation
         // attribute in the markup survive.
         assert_eq!(extras("color: red").0.fill, None);

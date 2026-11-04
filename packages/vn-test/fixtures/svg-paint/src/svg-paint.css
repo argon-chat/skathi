@@ -1,0 +1,77 @@
+#root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+  /* What a shape drawn in `currentColor` by mistake would show. */
+  color: rgb(0, 0, 255);
+}
+
+.cell {
+  position: absolute;
+  width: 100px;
+  height: 60px;
+}
+
+/* The EXOBIO overlay's notch: the surface token on a wrapper, the paints on
+   the <svg> (one bare <path> inside), the outline swapped by a class. */
+.dock {
+  --surface: rgb(255, 0, 0);
+  left: 20px;
+  top: 20px;
+}
+.outline {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  fill: var(--surface);
+  stroke: rgb(0, 160, 0);
+  stroke-width: 8;
+}
+.outline.alt {
+  stroke: rgb(255, 0, 255);
+}
+
+/* A presentation attribute on the <svg> loses to the rule on the <svg>… */
+.attr-loses {
+  left: 140px;
+  top: 20px;
+  fill: rgb(255, 0, 0);
+}
+
+/* …and a rule on a shape inside beats the shape's own attribute. */
+.inner-rule {
+  left: 260px;
+  top: 20px;
+}
+.inner-rule rect {
+  fill: rgb(255, 0, 0);
+}
+
+/* The inline style on the shape beats the rule. */
+.inline-wins {
+  left: 380px;
+  top: 20px;
+}
+.inline-wins rect {
+  fill: rgb(255, 0, 0);
+}
+
+/* A shape's attribute beats the value it would INHERIT from a rule on the
+   <svg>: inheritance is the weakest of the three. */
+.inherit-loses {
+  left: 20px;
+  top: 120px;
+  fill: rgb(255, 0, 0);
+}
+
+/* `drop-shadow()` follows the circle, not the box, and reaches past it. */
+.shadowed {
+  left: 140px;
+  top: 120px;
+  width: 60px;
+  height: 60px;
+  fill: rgb(0, 0, 0);
+  filter: drop-shadow(20px 0 0 rgb(255, 0, 0));
+}

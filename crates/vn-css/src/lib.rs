@@ -295,6 +295,33 @@ fn keep_base_radius_inherit(extras: &mut Extras, before: RadiusInherit, diagnost
     extras.radius_inherit = before;
 }
 
+/// An element's SVG presentation properties as the base rules left them.
+type SvgBase = (Option<SvgPaint>, Option<SvgPaint>, Option<Rc<Vec<(&'static str, Rc<str>)>>>);
+
+fn svg_base(extras: &Extras) -> SvgBase {
+    (extras.fill, extras.stroke, extras.svg_presentation.clone())
+}
+
+/// [`keep_base_radius_inherit`] for `fill`, `stroke` and the other SVG
+/// presentation properties: `Extras` have no state ladder, so a state rule's
+/// value would be drawn ALL the time (`.btn:hover svg { fill: red }` a red
+/// icon at rest). The base value is kept, and the drop is said.
+fn keep_base_svg_paint(extras: &mut Extras, before: SvgBase, diagnostics: &mut Vec<String>) {
+    let (fill, stroke, presentation) = before;
+    if extras.fill != fill || extras.stroke != stroke || extras.svg_presentation != presentation {
+        mapper::once(
+            diagnostics,
+            "`fill`, `stroke` and the other SVG presentation properties in a \
+             :hover/:focus/:active (or group-) rule are not applied (v1): they are drawn into \
+             the <svg>'s rasterised document from the base state only. Toggle a class instead"
+                .to_string(),
+        );
+    }
+    extras.fill = fill;
+    extras.stroke = stroke;
+    extras.svg_presentation = presentation;
+}
+
 /// Fills in `border-radius: inherit` ([`mapper::RadiusInherit`]) once the
 /// parent's radii are known: the element's base style from `parent`, then its
 /// `::before`/`::after` boxes from the element itself. Answers what the element
@@ -1905,6 +1932,7 @@ impl Engine {
                 // hover's `inherit` apply when the pointer is elsewhere.
                 let state_rule = r.states != 0 || r.ancestor.is_some();
                 let radius_inherit = extras.radius_inherit;
+                let svg_before = state_rule.then(|| svg_base(&extras));
                 extras.refine(if important_pass {
                     &r.important_extras
                 } else {
@@ -1912,6 +1940,9 @@ impl Engine {
                 });
                 if state_rule {
                     keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
+                }
+                if let Some(before) = svg_before {
+                    keep_base_svg_paint(&mut extras, before, diagnostics);
                 }
                 if r.states == 0 {
                     let declared = if important_pass {
@@ -1970,10 +2001,12 @@ impl Engine {
                     };
                     // Its em is the base state's: the size a hovered ANCESTOR
                     // gives this element is not modelled (v1).
+                    let svg_before = svg_base(&extras);
                     half.apply(&vars, env, font_size, parent_font_size, bucket, &mut extras, diagnostics);
                     if half.font_relative() {
                         keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                     }
+                    keep_base_svg_paint(&mut extras, svg_before, diagnostics);
                     continue;
                 }
                 // One rung per rule. A compound that names several ladder
@@ -2014,9 +2047,13 @@ impl Engine {
                 let scope = rung.and_then(|i| state_vars[i].as_ref()).unwrap_or(&vars);
                 let basis = rung.and_then(|i| rung_font[i]).unwrap_or(font_size);
                 let radius_inherit = extras.radius_inherit;
+                let svg_before = rung.is_some().then(|| svg_base(&extras));
                 half.apply(scope, env, basis, parent_font_size, bucket, &mut extras, diagnostics);
                 if rung.is_some() && half.font_relative() {
                     keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
+                }
+                if let Some(before) = svg_before {
+                    keep_base_svg_paint(&mut extras, before, diagnostics);
                 }
             }
         }
@@ -5634,6 +5671,48 @@ mod tests {
         assert!(Rc::ptr_eq(&states[0].vars, &states[2].vars));
         // …and the button's `color` resolved through it.
         assert!(states[2].base.text.color.is_some());
+    }
+
+    /// The EXOBIO overlay's notch: `fill: var(--notch-surface)` on an inline
+    /// `<svg>`, the token declared on an ancestor, reaches the element as the
+    /// concrete colour the serializer draws.
+    #[test]
+    fn an_svg_paint_resolves_through_var() {
+        let engine = Engine::compile(
+            ".page { --surface: #06080b } .btn { fill: var(--surface); stroke: rgba(219, 232, 255, 0.17) } \
+             button { filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.45)) } .page .btn { stroke-width: 1 }",
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let states = cascade(&engine, &themed_doc(), &Env::default());
+        let fill = states[2].extras.fill.expect("fill computed");
+        assert_eq!(fill.as_attr(), "rgb(6,8,11)");
+        assert_eq!(states[2].extras.stroke.expect("stroke computed").as_attr(), "rgba(219,232,255,0.169)");
+        // The `drop-shadow()` survives the fold of the rules after it (it was
+        // dropped by `Extras::refine`, so no rule's shadow ever reached a node).
+        let shadow = states[2].extras.drop_shadow.expect("drop-shadow computed");
+        assert_eq!((shadow.dx, shadow.dy, shadow.blur), (0.0, 18.0, 30.0));
+        // …and a later `filter` takes it away.
+        let engine = Engine::compile(".btn { filter: drop-shadow(0 1px 2px #000) } .page .btn { filter: none }");
+        let states = cascade(&engine, &themed_doc(), &Env::default());
+        assert_eq!(states[2].extras.drop_shadow, None);
+    }
+
+    /// `Extras` have no state ladder, so a `:hover` paint would be drawn at
+    /// rest: it is dropped, and said, and the base paint stays.
+    #[test]
+    fn a_state_rule_does_not_paint_an_svg_at_rest() {
+        let engine = Engine::compile(
+            ".btn { fill: #f00 } .btn:hover { fill: #00f; stroke-width: 3 } \
+             .page:hover .btn { stroke: var(--x, #0f0) }",
+        );
+        let d = themed_doc();
+        let mut diagnostics = Vec::new();
+        let vars = Rc::new(Vars::default());
+        let btn = engine.compute_node(DocRef { doc: &d, i: 3 }, None, &vars, None, &Env::default(), &mut diagnostics);
+        assert_eq!(btn.extras.fill.map(|p| p.as_attr().into_owned()).as_deref(), Some("rgb(255,0,0)"));
+        assert_eq!(btn.extras.svg_presentation, None);
+        assert_eq!(btn.extras.stroke, None);
+        assert!(diagnostics.iter().any(|m| m.contains("SVG presentation properties")), "{diagnostics:?}");
     }
 
     /// The dark-mode mechanism: a class on an ancestor redefines the token and

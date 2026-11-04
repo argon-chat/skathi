@@ -55,31 +55,55 @@
 //!   gives (the mask path scales the document from usvg's own size, 100x100
 //!   when the root has no width/height either).
 //!
-//! `fill` / `stroke` from the cascade (Tailwind's `fill-current`, `fill-none`)
-//! reach the document as "painted or not": `currentColor` or `none`. That is
-//! what makes the shadcn radio dot, a `<circle class="fill-current">`, visible
-//! at all. A CONCRETE colour from a CSS rule is carried by vn-css only as
-//! "painted" (`SvgPaint::Color`), so it is drawn in `color`; the advisory
-//! `svg-css-paint-colour` says so. A colour written as an attribute or an
-//! inline style on the shapes is drawn as written.
+//! ## The cascade's presentation properties
 //!
-//! The other presentation properties the `<svg>` element's own rules set
-//! (`stroke-width`, `stroke-opacity`, `fill-opacity`, `fill-rule`, the dash,
-//! cap and join properties, `shape-rendering`) reach the document as CSS text
-//! (`vn_css::Extras::svg_presentation`). They are written on the root in place
-//! of the markup's attribute of the same name, and the shapes inherit them, as
-//! they inherit the computed value in a browser. A rule that matches a shape
-//! INSIDE the svg is not read.
+//! Every element of the document, the `<svg>` itself and each `<g>` and shape
+//! inside it, has its own computed style (the cascade walks the whole tree).
+//! What it computed for SVG's presentation properties is written on that
+//! element in place of the markup's attribute of the same name
+//! ([`cascaded`]):
+//!
+//! * `fill` and `stroke` (`vn_css::SvgPaint`): `none`, `currentColor`, or the
+//!   concrete colour, `var()` resolved and alpha kept — Tailwind's
+//!   `fill-current` that makes the shadcn radio dot visible, and the EXOBIO
+//!   overlay's `fill: var(--notch-surface)`, alike. A paint server
+//!   (`url(…)`) or `context-fill` from a rule is drawn in `currentColor`, and
+//!   the advisory `svg-css-paint-server` says so;
+//! * `stroke-width`, `stroke-opacity`, `fill-opacity`, `fill-rule`, the dash,
+//!   cap, join and miter properties and `shape-rendering`, as CSS text
+//!   (`vn_css::Extras::svg_presentation`);
+//! * inside the document only, `opacity` and `display: none` (on the `<svg>`
+//!   itself those are the box's, and gpui applies them).
+//!
+//! That is the browser's order: a presentation attribute loses to every
+//! author rule, and the inline `style` — already folded into the computed
+//! value with the rules, `!important` included — wins over both. Inheritance
+//! is resvg's: a value written on the `<svg>` or a `<g>` is inherited by the
+//! shapes under it exactly as the computed value is in a browser. What is NOT
+//! read: a `color` a rule gives an element inside the document (its
+//! `currentColor` is the `<svg>`'s), and a `:hover`/`:focus`/`:active` or
+//! `group-` rule's values (vn-css drops them with an advisory: `Extras` have
+//! no state ladder, so they would be drawn at rest).
+//!
+//! ## `filter: drop-shadow()`
+//!
+//! A browser blurs the alpha of what the element painted, so the shadow of an
+//! icon is the icon's silhouette. resvg has the same primitive, so a
+//! `drop-shadow()` on the `<svg>` puts the document on the colour path and
+//! wraps it in a `<filter><feDropShadow/></filter>` (see [`raster_source`]).
+//! The raster is grown by the shadow's reach on each side ([`Shadow::margins`])
+//! and painted that much outside the box. The svg's own CSS background and
+//! border, which gpui paints, cast no shadow (render.rs advises).
 //!
 //! ## Re-serialization
 //!
 //! Keyed on a hash of everything that can change the bytes: every tag, every
 //! attribute name and value, every inline-style declaration, every text node in
-//! the subtree, plus the two computed paints and the carried presentation
-//! properties. The serialization behind it runs
-//! only when the hash moves. The colour is deliberately not in the key (see
-//! above).
+//! the subtree, and every element's cascaded presentation properties. The
+//! serialization behind it runs only when the hash moves. The colour is
+//! deliberately not in the key (see above).
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -103,10 +127,9 @@ pub(crate) struct SvgDoc {
     /// The document says `currentColor` somewhere, so its colour raster
     /// depends on the element's CSS `color`.
     pub(crate) uses_current: bool,
-    /// The cascade gave the root a concrete `fill`/`stroke` colour, which
-    /// vn-css carries only as "painted" and which is therefore drawn in
-    /// `currentColor`.
-    pub(crate) css_paint_colour: bool,
+    /// The cascade gave an element a paint vn-css does not carry (a paint
+    /// server, `context-fill`), which is therefore drawn in `currentColor`.
+    pub(crate) css_paint_server: bool,
 }
 
 /// How a document paints: the colour-independent mask, or full colour.
@@ -139,21 +162,10 @@ pub(crate) fn gc(alive: impl Fn(u32) -> bool) {
     }
 }
 
-/// The SVG presentation properties the cascade gave the `<svg>` root other
-/// than its paints (`vn_css::Extras::svg_presentation`): written on the root
-/// in place of the markup's attribute of the same name.
-pub(crate) type Presentation<'a> = &'a [(&'static str, Rc<str>)];
-
 /// The SVG document for this `<svg>` node, re-serialized only if the subtree or
-/// the computed paints moved since the last call.
-pub(crate) fn document(
-    t: &Tree,
-    id: u32,
-    fill: Option<vn_css::SvgPaint>,
-    stroke: Option<vn_css::SvgPaint>,
-    presentation: Presentation,
-) -> Rc<SvgDoc> {
-    let key = hash_subtree(t, id, fill, stroke, presentation);
+/// a computed presentation property in it moved since the last call.
+pub(crate) fn document(t: &Tree, id: u32) -> Rc<SvgDoc> {
+    let key = hash_subtree(t, id);
     CACHE.with(|m| {
         let mut m = m.borrow_mut();
         if let Some((cached, doc)) = m.get(&id) {
@@ -161,33 +173,96 @@ pub(crate) fn document(
                 return doc.clone();
             }
         }
-        let doc = Rc::new(build(t, id, fill, stroke, presentation));
+        let doc = Rc::new(build(t, id));
         m.insert(id, (key, doc.clone()));
         doc
     })
 }
 
-fn build(
-    t: &Tree,
-    id: u32,
-    fill: Option<vn_css::SvgPaint>,
-    stroke: Option<vn_css::SvgPaint>,
-    presentation: Presentation,
-) -> SvgDoc {
+fn build(t: &Tree, id: u32) -> SvgDoc {
     let mut out = String::with_capacity(256);
     let mut class = Class::default();
-    write_element(t, id, true, fill, stroke, presentation, &Inherited::root(), &mut class, &mut out);
-    let css_paint_colour = fill == Some(vn_css::SvgPaint::Color) || stroke == Some(vn_css::SvgPaint::Color);
+    write_element(t, id, true, &Inherited::root(), &mut class, &mut out);
     let uses_current = out.to_ascii_lowercase().contains("currentcolor");
     let mut h = std::collections::hash_map::DefaultHasher::new();
     out.hash(&mut h);
+    let css_paint_server = class.server;
     SvgDoc {
         source: h.finish(),
         paint: class.finish(),
         uses_current,
-        css_paint_colour,
+        css_paint_server,
         bytes: out.into_bytes(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// what the cascade gives each element
+// ---------------------------------------------------------------------------
+
+/// The presentation properties the cascade computed for one element, as the
+/// attributes written in place of the markup's own of the same name. Empty for
+/// an element the cascade has not styled.
+///
+/// `opacity` and `display: none` are written only INSIDE the document: on the
+/// `<svg>` they are the box's, which gpui applies to the whole picture. The
+/// root's `overflow` is written for the drop-shadow wrapper, where the root
+/// becomes a nested `<svg>`: `visible` lets its shapes past the box, as far as
+/// the shadow's margins reach, and anything else clips them to it.
+fn cascaded(n: &crate::tree::Node, root: bool) -> Vec<(&'static str, Cow<'static, str>)> {
+    let Some(cs) = &n.computed else { return Vec::new() };
+    let x = &cs.extras;
+    let mut out: Vec<(&'static str, Cow<'static, str>)> = Vec::new();
+    if let Some(p) = x.fill {
+        out.push(("fill", p.as_attr()));
+    }
+    if let Some(p) = x.stroke {
+        out.push(("stroke", p.as_attr()));
+    }
+    if let Some(list) = &x.svg_presentation {
+        for (name, value) in list.iter() {
+            out.push((name, Cow::Owned(value.to_string())));
+        }
+    }
+    if root {
+        match cs.base.overflow.x {
+            Some(gpui::Overflow::Visible) => out.push(("overflow", "visible".into())),
+            Some(_) => out.push(("overflow", "hidden".into())),
+            None => {}
+        }
+    } else {
+        if let Some(o) = cs.base.opacity {
+            out.push(("opacity", Cow::Owned(format!("{}", o.clamp(0.0, 1.0)))));
+        }
+        if cs.base.display == Some(gpui::Display::None) {
+            out.push(("display", "none".into()));
+        }
+    }
+    out
+}
+
+/// [`cascaded`]'s inputs, hashed without building the attribute text.
+fn hash_cascaded(n: &crate::tree::Node, root: bool, h: &mut impl Hasher) {
+    let Some(cs) = &n.computed else {
+        0u8.hash(h);
+        return;
+    };
+    1u8.hash(h);
+    let x = &cs.extras;
+    x.fill.hash(h);
+    x.stroke.hash(h);
+    x.svg_presentation.hash(h);
+    if root {
+        cs.base.overflow.x.map(|o| o == gpui::Overflow::Visible).hash(h);
+    } else {
+        cs.base.opacity.map(f32::to_bits).hash(h);
+        (cs.base.display == Some(gpui::Display::None)).hash(h);
+    }
+}
+
+/// Does the cascade write this attribute name on the element?
+fn overridden(declared: &[(&'static str, Cow<'static, str>)], name: &str) -> bool {
+    declared.iter().any(|(p, _)| name.eq_ignore_ascii_case(p))
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +332,9 @@ struct Class {
     /// Why the document needs full colour, when something other than its
     /// paints decides that.
     reason: Option<&'static str>,
+    /// Some element's computed paint is one vn-css does not carry
+    /// (`vn_css::SvgPaint::Server`).
+    server: bool,
 }
 
 impl Class {
@@ -315,16 +393,17 @@ fn colour_element(tag: &str) -> Option<&'static str> {
     }
 }
 
-/// Folds one element's own presentation attributes and inline declarations
-/// (which win, as CSS beats a presentation attribute) into its context, and
-/// records what a shape paints.
+/// Folds one element's presentation attributes, then what the cascade
+/// computed for it, then the inline declarations the cascade does not carry
+/// (the order `write_element` writes them in, and the browser's) into its
+/// context, and records what a shape paints.
+#[allow(clippy::too_many_arguments)]
 fn classify(
     t: &Tree,
     n: &crate::tree::Node,
     tag: &str,
     root: bool,
-    fill: Option<vn_css::SvgPaint>,
-    stroke: Option<vn_css::SvgPaint>,
+    declared: &[(&'static str, Cow<'static, str>)],
     parent: &Inherited,
     class: &mut Class,
 ) -> Inherited {
@@ -353,22 +432,18 @@ fn classify(
     for (k, v, _) in &n.props {
         look(t.name(*k), v, &mut own_fill, &mut own_stroke, class);
     }
-    // The cascade's paint replaces the root's attribute (`write_element` does
-    // the same to the bytes): "painted or not" is all it carries.
-    if root {
-        let computed = |p: vn_css::SvgPaint| match p {
-            vn_css::SvgPaint::None => Spec::Is(Eff::None),
-            _ => Spec::Is(Eff::Current),
-        };
-        if let Some(p) = fill {
-            own_fill = computed(p);
-        }
-        if let Some(p) = stroke {
-            own_stroke = computed(p);
-        }
+    for (name, value) in declared {
+        look(name, value, &mut own_fill, &mut own_stroke, class);
     }
     for (k, v) in &n.style {
-        look(t.name(*k), v, &mut own_fill, &mut own_stroke, class);
+        let name = t.name(*k);
+        if !overridden(declared, name) {
+            look(name, v, &mut own_fill, &mut own_stroke, class);
+        }
+    }
+    if let Some(cs) = &n.computed {
+        let server = |p: Option<vn_css::SvgPaint>| p == Some(vn_css::SvgPaint::Server);
+        class.server |= server(cs.extras.fill) || server(cs.extras.stroke);
     }
     let resolve = |spec: Spec, inherited: &Eff| match spec {
         Spec::Unset | Spec::Inherit => inherited.clone(),
@@ -420,7 +495,69 @@ pub(crate) struct RasterKey {
     /// What `currentColor` resolved to, 8 bits a channel. `None` when the
     /// document never says `currentColor`, so its colour cannot matter.
     pub(crate) color: Option<[u8; 4]>,
+    /// The `drop-shadow()`, as [`Shadow::key`]. With one, `width`/`height`
+    /// are the box grown by its margins.
+    pub(crate) shadow: Option<([u32; 3], [u8; 4])>,
 }
+
+/// A `filter: drop-shadow()` on the `<svg>`, its colour resolved: drawn by
+/// resvg around the shapes (`feDropShadow`), not around the box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Shadow {
+    /// Offset, CSS px.
+    pub(crate) dx: f32,
+    pub(crate) dy: f32,
+    /// The Gaussian's standard deviation, CSS px (CSS's third length).
+    pub(crate) sigma: f32,
+    /// 8 bits a channel.
+    pub(crate) color: [u8; 4],
+}
+
+/// The `drop-shadow()` as the cascade gave it (`vn_css::Extras::drop_shadow`):
+/// its colour `None` is CSS's default, `currentColor`, resolved at paint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShadowSpec {
+    pub(crate) dx: f32,
+    pub(crate) dy: f32,
+    pub(crate) blur: f32,
+    pub(crate) color: Option<gpui::Hsla>,
+}
+
+impl Shadow {
+    /// `shadow` with `currentColor` resolved to `color`.
+    pub(crate) fn of(shadow: &ShadowSpec, color: Option<gpui::Hsla>) -> Shadow {
+        Shadow {
+            dx: shadow.dx,
+            dy: shadow.dy,
+            sigma: shadow.blur.max(0.0),
+            color: rgba8(shadow.color.or(color).unwrap_or_else(gpui::black)),
+        }
+    }
+
+    /// How far the shadow reaches past the box on each side, in whole CSS
+    /// px: `[left, top, right, bottom]`. Three sigmas is where a Gaussian's
+    /// tail is below one part in 300, invisible in 8 bits.
+    pub(crate) fn margins(&self) -> [f32; 4] {
+        let reach = (3.0 * self.sigma).ceil();
+        let side = |offset: f32| (reach + offset).max(0.0).ceil();
+        [side(-self.dx), side(-self.dy), side(self.dx), side(self.dy)]
+    }
+
+    fn key(&self) -> ([u32; 3], [u8; 4]) {
+        ([self.dx.to_bits(), self.dy.to_bits(), self.sigma.to_bits()], self.color)
+    }
+}
+
+/// A colour, 8 bits a channel.
+fn rgba8(c: gpui::Hsla) -> [u8; 4] {
+    let c = gpui::Rgba::from(c);
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    [q(c.r), q(c.g), q(c.b), q(c.a)]
+}
+
+/// The id of the wrapper's filter. A document's own ids cannot clash with it
+/// in practice; the prefix is not one an author writes.
+const SHADOW_ID: &str = "__vn_drop_shadow";
 
 impl RasterKey {
     /// The same picture but for the colour: a recolour, which is throttled.
@@ -430,26 +567,31 @@ impl RasterKey {
 }
 
 /// The key for `doc` in a box of `size` CSS pixels at `scale`, with `color` as
-/// the element's CSS colour. `None` for an empty box.
+/// the element's CSS colour, and the box grown by `shadow`'s margins. `None`
+/// for an empty box.
 pub(crate) fn raster_key(
     doc: &SvgDoc,
     size: gpui::Size<Pixels>,
     scale: f32,
     color: Option<gpui::Hsla>,
+    shadow: Option<&Shadow>,
 ) -> Option<RasterKey> {
-    let w = (f32::from(size.width) * scale).round();
-    let h = (f32::from(size.height) * scale).round();
-    if !(w >= 1.0 && h >= 1.0) {
+    let (bw, bh) = (f32::from(size.width), f32::from(size.height));
+    if !((bw * scale).round() >= 1.0 && (bh * scale).round() >= 1.0) {
         return None;
     }
-    let color = if doc.uses_current {
-        let c = gpui::Rgba::from(color.unwrap_or_else(gpui::black));
-        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        Some([q(c.r), q(c.g), q(c.b), q(c.a)])
-    } else {
-        None
-    };
-    Some(RasterKey { source: doc.source, width: w as u32, height: h as u32, scale_milli: (scale * 1000.0).round() as u32, color })
+    let [l, t, r, b] = shadow.map_or([0.0; 4], Shadow::margins);
+    let w = ((bw + l + r) * scale).round();
+    let h = ((bh + t + b) * scale).round();
+    let color = doc.uses_current.then(|| rgba8(color.unwrap_or_else(gpui::black)));
+    Some(RasterKey {
+        source: doc.source,
+        width: w as u32,
+        height: h as u32,
+        scale_milli: (scale * 1000.0).round() as u32,
+        color,
+        shadow: shadow.map(Shadow::key),
+    })
 }
 
 /// The document as the colour raster reads it: the root's `width`/`height`
@@ -457,7 +599,43 @@ pub(crate) fn raster_key(
 /// `preserveAspectRatio` fit the content into the box, as in a browser), and
 /// `currentColor` resolves to `color` through the root's `color` property,
 /// unless the root sets a `color` of its own.
-pub(crate) fn raster_source(doc: &SvgDoc, css_w: f32, css_h: f32, color: Option<[u8; 4]>) -> Vec<u8> {
+///
+/// With a `shadow`, that root becomes a nested `<svg>` at the shadow's
+/// margins inside a wrapper the size of the grown raster, under a `<g>` whose
+/// filter is the `feDropShadow` CSS's `drop-shadow()` is defined as. The
+/// filter region is the whole wrapper, so nothing of the shadow is cut at
+/// resvg's default 10% margin.
+pub(crate) fn raster_source(
+    doc: &SvgDoc,
+    css_w: f32,
+    css_h: f32,
+    color: Option<[u8; 4]>,
+    shadow: Option<&Shadow>,
+) -> Vec<u8> {
+    let inner = root_source(doc, css_w, css_h, color, shadow.map(|s| s.margins()));
+    let Some(s) = shadow else { return inner };
+    let Ok(inner) = String::from_utf8(inner) else { return doc.bytes.clone() };
+    let [l, t, r, b] = s.margins();
+    let (w, h) = (css_w + l + r, css_h + t + b);
+    let [cr, cg, cb, ca] = s.color;
+    format!(
+        "<svg xmlns=\"{SVG_NS}\" width=\"{w}\" height=\"{h}\">\
+         <filter id=\"{SHADOW_ID}\" filterUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" \
+         color-interpolation-filters=\"sRGB\">\
+         <feDropShadow dx=\"{dx}\" dy=\"{dy}\" stdDeviation=\"{sd}\" flood-color=\"rgb({cr},{cg},{cb})\" \
+         flood-opacity=\"{fo}\"/></filter>\
+         <g filter=\"url(#{SHADOW_ID})\">{inner}</g></svg>",
+        dx = s.dx,
+        dy = s.dy,
+        sd = s.sigma,
+        fo = ca as f32 / 255.0,
+    )
+    .into_bytes()
+}
+
+/// [`raster_source`]'s root: sized to the box, and placed at `offset`'s left
+/// and top margins when it is nested in the shadow wrapper.
+fn root_source(doc: &SvgDoc, css_w: f32, css_h: f32, color: Option<[u8; 4]>, offset: Option<[f32; 4]>) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(&doc.bytes) else {
         return doc.bytes.clone();
     };
@@ -479,7 +657,9 @@ pub(crate) fn raster_source(doc: &SvgDoc, css_w: f32, css_h: f32, color: Option<
         let Some(close) = after.find('"') else { break };
         let value = &after[..close];
         rest = &after[close + 1..];
-        if name == "width" || name == "height" {
+        // `x` / `y` do nothing on an outermost `<svg>`, and would move the
+        // nested one the shadow wrapper makes of it.
+        if matches!(name, "width" | "height" | "x" | "y") {
             continue;
         }
         has_color |= name == "color";
@@ -488,6 +668,9 @@ pub(crate) fn raster_source(doc: &SvgDoc, css_w: f32, css_h: f32, color: Option<
         out.push_str("=\"");
         out.push_str(value);
         out.push('"');
+    }
+    if let Some([l, t, _, _]) = offset {
+        out.push_str(&format!(" x=\"{l}\" y=\"{t}\""));
     }
     out.push_str(&format!(" width=\"{css_w}\" height=\"{css_h}\""));
     if let (Some([r, g, b, a]), false) = (color, has_color) {
@@ -563,11 +746,19 @@ fn paint_colour(
     doc: &SvgDoc,
     bounds: Bounds<Pixels>,
     color: Option<gpui::Hsla>,
+    shadow: Option<&ShadowSpec>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some(key) = raster_key(doc, bounds.size, window.scale_factor(), color) else {
+    let shadow = shadow.map(|s| Shadow::of(s, color));
+    let Some(key) = raster_key(doc, bounds.size, window.scale_factor(), color, shadow.as_ref()) else {
         return;
+    };
+    // The raster covers the box and the shadow's reach past it.
+    let [l, t, r, b] = shadow.as_ref().map_or([0.0; 4], Shadow::margins);
+    let area = Bounds {
+        origin: gpui::point(bounds.origin.x - gpui::px(l), bounds.origin.y - gpui::px(t)),
+        size: gpui::size(bounds.size.width + gpui::px(l + r), bounds.size.height + gpui::px(t + b)),
     };
     let now = Instant::now();
     let held = RASTERS.with(|m| m.borrow().get(&id).map(|r| (r.key, r.image.clone(), r.at)));
@@ -578,7 +769,13 @@ fn paint_colour(
             image
         }
         _ => {
-            let src = raster_source(doc, f32::from(bounds.size.width), f32::from(bounds.size.height), key.color);
+            let src = raster_source(
+                doc,
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+                key.color,
+                shadow.as_ref(),
+            );
             let Some(image) = rasterize(&cx.svg_renderer(), &src, &key) else {
                 crate::render::warn_compat(
                     "svg-raster",
@@ -597,7 +794,7 @@ fn paint_colour(
             image
         }
     };
-    let _ = window.paint_image(bounds, bounds, gpui::Corners::default(), image, 0, false);
+    let _ = window.paint_image(area, area, gpui::Corners::default(), image, 0, false);
 }
 
 /// The colour path's element: `gpui::svg()`'s layout, hit-testing and style
@@ -609,10 +806,11 @@ pub(crate) struct SvgRaster {
     interactivity: gpui::Interactivity,
     id: u32,
     doc: Rc<SvgDoc>,
+    shadow: Option<ShadowSpec>,
 }
 
-pub(crate) fn raster(id: u32, doc: Rc<SvgDoc>) -> SvgRaster {
-    SvgRaster { interactivity: gpui::Interactivity::new(), id, doc }
+pub(crate) fn raster(id: u32, doc: Rc<SvgDoc>, shadow: Option<ShadowSpec>) -> SvgRaster {
+    SvgRaster { interactivity: gpui::Interactivity::new(), id, doc, shadow }
 }
 
 impl gpui::Element for SvgRaster {
@@ -663,10 +861,10 @@ impl gpui::Element for SvgRaster {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let (id, doc) = (self.id, self.doc.clone());
+        let (id, doc, shadow) = (self.id, self.doc.clone(), self.shadow);
         self.interactivity
             .paint(global_id, inspector_id, bounds, hitbox.as_ref(), window, cx, |style, window, cx| {
-                paint_colour(id, &doc, bounds, style.text.color, window, cx);
+                paint_colour(id, &doc, bounds, style.text.color, shadow.as_ref(), window, cx);
             });
     }
 }
@@ -694,22 +892,13 @@ impl gpui::InteractiveElement for SvgRaster {
 // the change key
 // ---------------------------------------------------------------------------
 
-fn hash_subtree(
-    t: &Tree,
-    id: u32,
-    fill: Option<vn_css::SvgPaint>,
-    stroke: Option<vn_css::SvgPaint>,
-    presentation: Presentation,
-) -> u64 {
+fn hash_subtree(t: &Tree, id: u32) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    fill.map(|p| p as u8).hash(&mut h);
-    stroke.map(|p| p as u8).hash(&mut h);
-    presentation.hash(&mut h);
-    hash_node(t, id, &mut h);
+    hash_node(t, id, true, &mut h);
     h.finish()
 }
 
-fn hash_node(t: &Tree, id: u32, h: &mut impl Hasher) {
+fn hash_node(t: &Tree, id: u32, root: bool, h: &mut impl Hasher) {
     let Some(n) = t.node(id) else { return };
     (n.kind as u8).hash(h);
     match n.kind {
@@ -730,8 +919,9 @@ fn hash_node(t: &Tree, id: u32, h: &mut impl Hasher) {
         t.name(*k).hash(h);
         v.hash(h);
     }
+    hash_cascaded(n, root, h);
     for &c in &n.children {
-        hash_node(t, c, h);
+        hash_node(t, c, false, h);
     }
 }
 
@@ -743,18 +933,7 @@ fn hash_node(t: &Tree, id: u32, h: &mut impl Hasher) {
 /// `<svg>` in HTML does not have to carry it — the HTML parser supplies it.
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
-#[allow(clippy::too_many_arguments)]
-fn write_element(
-    t: &Tree,
-    id: u32,
-    root: bool,
-    fill: Option<vn_css::SvgPaint>,
-    stroke: Option<vn_css::SvgPaint>,
-    presentation: Presentation,
-    parent: &Inherited,
-    class: &mut Class,
-    out: &mut String,
-) {
+fn write_element(t: &Tree, id: u32, root: bool, parent: &Inherited, class: &mut Class, out: &mut String) {
     let Some(n) = t.node(id) else { return };
     match n.kind {
         // A fragment anchor is a comment in a browser: not rendered, and not
@@ -770,7 +949,8 @@ fn write_element(
     if !is_name(tag) {
         return;
     }
-    let here = classify(t, n, tag, root, fill, stroke, parent, class);
+    let declared = cascaded(n, root);
+    let here = classify(t, n, tag, root, &declared, parent, class);
     out.push('<');
     out.push_str(tag);
 
@@ -780,15 +960,9 @@ fn write_element(
         if !is_name(name) {
             continue;
         }
-        // The cascade beats a presentation attribute (CSS always does), so a
-        // `fill` the cascade computed replaces the one the markup carries.
-        if root && name.eq_ignore_ascii_case("fill") && fill.is_some() {
-            continue;
-        }
-        if root && name.eq_ignore_ascii_case("stroke") && stroke.is_some() {
-            continue;
-        }
-        if root && presentation.iter().any(|(p, _)| name.eq_ignore_ascii_case(p)) {
+        // Every author rule beats a presentation attribute, so what the
+        // cascade computed replaces the attribute the markup carries.
+        if overridden(&declared, name) {
             continue;
         }
         if name == "xmlns" {
@@ -796,26 +970,24 @@ fn write_element(
         }
         write_attr(name, v, out);
     }
-    if root {
-        if let Some(p) = fill {
-            write_attr("fill", p.as_attr(), out);
-        }
-        if let Some(p) = stroke {
-            write_attr("stroke", p.as_attr(), out);
-        }
-        for (name, value) in presentation {
-            write_attr(name, value, out);
-        }
-        if !wrote_ns {
-            write_attr("xmlns", SVG_NS, out);
-        }
+    for (name, value) in &declared {
+        write_attr(name, value, out);
+    }
+    if root && !wrote_ns {
+        write_attr("xmlns", SVG_NS, out);
     }
     // Inline `style` travels on its own channel (`__vn_set_style`), not in
     // `props`, so it has to be rebuilt into the declaration body resvg reads.
-    if !n.style.is_empty() {
+    // A property the cascade carries is left out: its computed value, written
+    // above, already has the inline declaration folded in (with `var()`
+    // resolved, and an `!important` rule still beating it).
+    if n.style.iter().any(|(k, _)| !overridden(&declared, t.name(*k))) {
         let mut body = String::new();
         for (k, v) in &n.style {
             let name = t.name(*k);
+            if overridden(&declared, name) {
+                continue;
+            }
             if !body.is_empty() {
                 body.push(';');
             }
@@ -831,7 +1003,7 @@ fn write_element(
         escape_text(&n.text, out);
     } else {
         for &c in &n.children {
-            write_element(t, c, false, None, None, &[], &here, class, out);
+            write_element(t, c, false, &here, class, out);
         }
     }
     out.push_str("</");
@@ -893,13 +1065,39 @@ mod tests {
     use super::*;
     use crate::tree::with_tree;
 
-    fn serialize(
-        t: &Tree,
+    fn serialize(t: &Tree, id: u32) -> String {
+        String::from_utf8(build(t, id).bytes).unwrap()
+    }
+
+    /// What the cascade computed for one node: `f` fills its `Extras`, `g`
+    /// its base refinement.
+    fn computed(
+        t: &mut Tree,
         id: u32,
-        fill: Option<vn_css::SvgPaint>,
-        stroke: Option<vn_css::SvgPaint>,
-    ) -> String {
-        String::from_utf8(build(t, id, fill, stroke, &[]).bytes).unwrap()
+        f: impl FnOnce(&mut vn_css::Extras),
+        g: impl FnOnce(&mut gpui::StyleRefinement),
+    ) {
+        let mut cs = vn_css::ComputedStates::default();
+        f(&mut cs.extras);
+        g(Rc::make_mut(&mut cs.base));
+        t.node_mut(id).unwrap().computed = Some(cs);
+    }
+
+    /// [`computed`] with only the paints.
+    fn paints(t: &mut Tree, id: u32, fill: Option<vn_css::SvgPaint>, stroke: Option<vn_css::SvgPaint>) {
+        computed(
+            t,
+            id,
+            |x| {
+                x.fill = fill;
+                x.stroke = stroke;
+            },
+            |_| {},
+        );
+    }
+
+    fn colour(hex: u32) -> vn_css::SvgPaint {
+        vn_css::SvgPaint::Color(gpui::Hsla::from(gpui::rgb(hex)))
     }
 
     /// One element with attributes, inserted under `parent` (0 = none).
@@ -919,7 +1117,7 @@ mod tests {
     fn doc_of(f: impl FnOnce(&mut Tree) -> u32) -> SvgDoc {
         with_tree(|t| {
             let id = f(t);
-            build(t, id, None, None, &[])
+            build(t, id)
         })
     }
 
@@ -1013,12 +1211,13 @@ mod tests {
         let rope = with_tree(|t| {
             let s = el(t, "svg", &[("class", "broadcast-connectors")], 0);
             el(t, "path", &[("d", "M3.5 106.5 V169.5 M3.5 169.5 h4")], s);
-            build(t, s, Some(vn_css::SvgPaint::None), Some(vn_css::SvgPaint::Current), &[])
+            paints(t, s, Some(vn_css::SvgPaint::None), Some(vn_css::SvgPaint::Current));
+            build(t, s)
         });
         assert_eq!(rope.paint, Paint::Colour(NO_VIEWBOX));
         // …and the raster writes the box's size as its width and height, so
         // usvg's user unit is one CSS pixel.
-        let src = String::from_utf8(raster_source(&rope, 240.0, 372.0, Some([0, 0, 0, 255]))).unwrap();
+        let src = String::from_utf8(raster_source(&rope, 240.0, 372.0, Some([0, 0, 0, 255]), None)).unwrap();
         assert!(src.contains(r#"width="240" height="372""#), "{src}");
         assert!(!src.contains("viewBox"), "{src}");
         // Its CSS `stroke-opacity` / `stroke-width` reach the root, where the
@@ -1027,7 +1226,16 @@ mod tests {
         let doc = with_tree(|t| {
             let s = el(t, "svg", &[("stroke-width", "2")], 0);
             el(t, "path", &[("d", "M3.5 106.5 V169.5")], s);
-            String::from_utf8(build(t, s, None, Some(vn_css::SvgPaint::Current), &faint).bytes).unwrap()
+            computed(
+                t,
+                s,
+                |x| {
+                    x.stroke = Some(vn_css::SvgPaint::Current);
+                    x.svg_presentation = Some(Rc::new(faint));
+                },
+                |_| {},
+            );
+            serialize(t, s)
         });
         assert!(doc.contains(r#"stroke-opacity="0.28""#), "{doc}");
         assert!(doc.contains(r#"stroke-width="1""#) && !doc.contains(r#"stroke-width="2""#), "{doc}");
@@ -1053,20 +1261,118 @@ mod tests {
     }
 
     #[test]
-    fn the_cascade_paint_on_the_root_is_painted_or_not() {
+    fn a_paint_server_from_a_rule_is_drawn_in_currentcolor_and_said() {
         let doc = with_tree(|t| {
             let s = el(t, "svg", &[NS, ("viewBox", "0 0 24 24"), ("fill", "#f00")], 0);
             el(t, "path", &[("d", "M0 0h4v4z")], s);
-            build(t, s, Some(vn_css::SvgPaint::Color), None, &[])
+            paints(t, s, Some(vn_css::SvgPaint::Server), None);
+            build(t, s)
         });
-        // vn-css carries only "painted", so it is written as currentColor —
-        // mono — and the renderer says that the colour itself was lost.
         assert_eq!(doc.paint, Paint::Mono);
-        assert!(doc.css_paint_colour);
+        assert!(doc.css_paint_server);
+    }
+
+    /// The EXOBIO overlay's notch: `.notch-outline { fill: var(--notch-surface);
+    /// stroke: rgba(219, 232, 255, 0.17); stroke-width: 1 }` on the `<svg>`,
+    /// one `<path>` inside with no attributes but `d`.
+    fn notch(stroke: vn_css::SvgPaint) -> SvgDoc {
+        with_tree(|t| {
+            let s = el(t, "svg", &[("width", "40"), ("height", "20")], 0);
+            el(t, "path", &[("d", "M0 0 H40 V20 H0 Z")], s);
+            computed(
+                t,
+                s,
+                |x| {
+                    x.fill = Some(colour(0x06080b));
+                    x.stroke = Some(stroke);
+                    x.svg_presentation = Some(Rc::new(vec![("stroke-width", "1px".into())]));
+                },
+                |_| {},
+            );
+            build(t, s)
+        })
+    }
+
+    #[test]
+    fn a_concrete_paint_from_a_rule_is_drawn_as_computed() {
+        let faint = vn_css::SvgPaint::Color(gpui::Hsla::from(gpui::Rgba { r: 219.0 / 255.0, g: 232.0 / 255.0, b: 1.0, a: 0.17 }));
+        let doc = notch(faint);
+        let src = String::from_utf8(doc.bytes.clone()).unwrap();
+        assert!(src.contains(r#"fill="rgb(6,8,11)""#), "{src}");
+        assert!(src.contains(r#"stroke="rgba(219,232,255,0.17)""#), "{src}");
+        assert!(src.contains(r#"stroke-width="1px""#), "{src}");
+        assert!(!doc.css_paint_server);
+        assert!(matches!(doc.paint, Paint::Colour(_)));
+        // resvg draws it: the inside is the fill, not the element's colour.
+        let white = Some(gpui::Hsla::from(gpui::rgb(0xf4f4f6)));
+        let image = render(&doc, (40.0, 20.0), 1.0, white);
+        assert!(close(pixel(&image, 20, 10), [6, 8, 11, 255]), "{:?}", pixel(&image, 20, 10));
+        // A class that swaps the stroke is another document.
+        let other = notch(colour(0x7c99f4));
+        assert_ne!(doc.source, other.source);
+    }
+
+    #[test]
+    fn rules_on_shapes_inside_win_over_attributes_and_lose_to_inline_style() {
+        let src = with_tree(|t| {
+            let s = el(t, "svg", &[NS, ("viewBox", "0 0 30 10")], 0);
+            // a <g> with a rule fill: the shapes under it inherit it…
+            let g = el(t, "g", &[("fill", "#00f")], s);
+            let a = el(t, "rect", &[("x", "0"), ("width", "10"), ("height", "10")], g);
+            // …a shape whose ATTRIBUTE says otherwise loses to its own rule…
+            let b = el(t, "rect", &[("x", "10"), ("width", "10"), ("height", "10"), ("fill", "#000")], g);
+            // …and an inline style beats the rule (the cascade folded it in).
+            let c = el(t, "rect", &[("x", "20"), ("width", "10"), ("height", "10")], g);
+            paints(t, g, Some(colour(0xff0000)), None);
+            paints(t, b, Some(colour(0x00ff00)), None);
+            let fill = t.intern("fill");
+            t.set_style(c, fill, "var(--x)".into());
+            paints(t, c, Some(colour(0x0000ff)), None);
+            // Inside the document `opacity` and `display: none` are the
+            // shape's own.
+            computed(t, a, |_| {}, |r| r.opacity = Some(0.5));
+            let hidden = el(t, "circle", &[("r", "3")], s);
+            computed(t, hidden, |_| {}, |r| r.display = Some(gpui::Display::None));
+            serialize(t, s)
+        });
+        assert!(src.contains(r##"<g fill="rgb(255,0,0)">"##), "{src}");
+        assert!(src.contains(r#"opacity="0.5""#), "{src}");
+        assert!(src.contains(r#"x="10" width="10" height="10" fill="rgb(0,255,0)""#), "{src}");
+        assert!(!src.contains("#000") && !src.contains("#00f"), "{src}");
+        // The raw `var()` never reaches resvg: the computed value replaced it.
+        assert!(src.contains(r#"fill="rgb(0,0,255)""#) && !src.contains("var("), "{src}");
+        assert!(src.contains(r#"display="none""#), "{src}");
+        assert!(usvg::Tree::from_data(src.as_bytes(), &usvg::Options::default()).is_ok(), "{src}");
+    }
+
+    #[test]
+    fn a_drop_shadow_follows_the_shape_and_grows_the_raster() {
+        // A 20x20 box with a 10x10 square in its top-left quarter, and
+        // `drop-shadow(10px 10px 0 #ff0000)`: a hard copy of the square,
+        // moved into the bottom-right quarter. A box shadow would fill the
+        // whole box's offset copy instead.
+        let doc = doc_of(|t| {
+            let s = el(t, "svg", &[NS, ("viewBox", "0 0 20 20")], 0);
+            el(t, "rect", &[("width", "10"), ("height", "10"), ("fill", "#0000ff")], s);
+            s
+        });
+        let shadow = Shadow { dx: 10.0, dy: 10.0, sigma: 0.0, color: [255, 0, 0, 255] };
+        assert_eq!(shadow.margins(), [0.0, 0.0, 10.0, 10.0]);
+        let key = raster_key(&doc, gpui::size(gpui::px(20.0), gpui::px(20.0)), 1.0, None, Some(&shadow)).unwrap();
+        assert_eq!((key.width, key.height), (30, 30));
+        let src = raster_source(&doc, 20.0, 20.0, key.color, Some(&shadow));
+        let image = rasterize(&gpui::SvgRenderer::new(Arc::new(())), &src, &key).expect("resvg renders it");
+        assert_eq!(pixel(&image, 5, 5), [0, 0, 255, 255], "the shape");
+        assert_eq!(pixel(&image, 15, 15), [255, 0, 0, 255], "its shadow");
+        assert_eq!(pixel(&image, 15, 5)[3], 0, "beside the shape, no shadow");
+        assert_eq!(pixel(&image, 25, 25)[3], 0, "the box's shadow corner stays empty");
+        // A blurred one reaches three sigmas past the box on every side.
+        let soft = Shadow { dx: 0.0, dy: 18.0, sigma: 30.0, color: [0, 0, 0, 115] };
+        assert_eq!(soft.margins(), [90.0, 72.0, 90.0, 108.0]);
     }
 
     fn sample_doc(uses_current: bool) -> SvgDoc {
-        SvgDoc { bytes: Vec::new(), source: 7, paint: Paint::Colour("t"), uses_current, css_paint_colour: false }
+        SvgDoc { bytes: Vec::new(), source: 7, paint: Paint::Colour("t"), uses_current, css_paint_server: false }
     }
 
     #[test]
@@ -1075,24 +1381,24 @@ mod tests {
         let blue = Some(gpui::Hsla::from(gpui::rgb(0x3b82f6)));
         let red = Some(gpui::Hsla::from(gpui::rgb(0xff0000)));
         let doc = sample_doc(true);
-        let a = raster_key(&doc, size, 1.25, blue).unwrap();
+        let a = raster_key(&doc, size, 1.25, blue, None).unwrap();
         assert_eq!((a.width, a.height, a.scale_milli), (30, 30, 1250));
         assert!(close(a.color.unwrap(), [0x3b, 0x82, 0xf6, 255]), "{:?}", a.color);
-        assert_eq!(raster_key(&doc, size, 1.25, blue), Some(a));
+        assert_eq!(raster_key(&doc, size, 1.25, blue, None), Some(a));
         // Another colour is a recolour of the same picture…
-        let b = raster_key(&doc, size, 1.25, red).unwrap();
+        let b = raster_key(&doc, size, 1.25, red, None).unwrap();
         assert!(a.recolour_of(&b));
         // …another size or scale is another picture, not a recolour.
-        let c = raster_key(&doc, gpui::size(gpui::px(48.0), gpui::px(24.0)), 1.25, red).unwrap();
+        let c = raster_key(&doc, gpui::size(gpui::px(48.0), gpui::px(24.0)), 1.25, red, None).unwrap();
         assert!(!a.recolour_of(&c) && a != c);
-        let d = raster_key(&doc, size, 1.5, blue).unwrap();
+        let d = raster_key(&doc, size, 1.5, blue, None).unwrap();
         assert_eq!(d.width, 36);
         assert!(!a.recolour_of(&d) && a != d);
         // A document that never says currentColor does not depend on colour.
         let fixed = sample_doc(false);
-        assert_eq!(raster_key(&fixed, size, 1.0, blue), raster_key(&fixed, size, 1.0, red));
+        assert_eq!(raster_key(&fixed, size, 1.0, blue, None), raster_key(&fixed, size, 1.0, red, None));
         // An empty box has no raster.
-        assert_eq!(raster_key(&doc, gpui::size(gpui::px(0.0), gpui::px(24.0)), 1.0, blue), None);
+        assert_eq!(raster_key(&doc, gpui::size(gpui::px(0.0), gpui::px(24.0)), 1.0, blue, None), None);
     }
 
     #[test]
@@ -1102,7 +1408,7 @@ mod tests {
             el(t, "path", &[("d", "M0 0h4v4z")], s);
             s
         });
-        let src = String::from_utf8(raster_source(&doc, 48.0, 32.0, Some([1, 2, 3, 255]))).unwrap();
+        let src = String::from_utf8(raster_source(&doc, 48.0, 32.0, Some([1, 2, 3, 255]), None)).unwrap();
         assert!(src.contains(r#"width="48" height="32""#), "{src}");
         assert!(!src.contains(r#"width="24""#), "{src}");
         assert!(src.contains(r#"color="rgba(1,2,3,1)""#), "{src}");
@@ -1111,7 +1417,7 @@ mod tests {
         assert_eq!((tree.size().width(), tree.size().height()), (48.0, 32.0));
         // A root that sets its own colour keeps it.
         let own = doc_of(|t| el(t, "svg", &[NS, ("color", "red")], 0));
-        let src = String::from_utf8(raster_source(&own, 10.0, 10.0, Some([1, 2, 3, 255]))).unwrap();
+        let src = String::from_utf8(raster_source(&own, 10.0, 10.0, Some([1, 2, 3, 255]), None)).unwrap();
         assert!(!src.contains("rgba"), "{src}");
     }
 
@@ -1129,8 +1435,8 @@ mod tests {
     }
 
     fn render(doc: &SvgDoc, css: (f32, f32), scale: f32, color: Option<gpui::Hsla>) -> Arc<RenderImage> {
-        let key = raster_key(doc, gpui::size(gpui::px(css.0), gpui::px(css.1)), scale, color).unwrap();
-        let src = raster_source(doc, css.0, css.1, key.color);
+        let key = raster_key(doc, gpui::size(gpui::px(css.0), gpui::px(css.1)), scale, color, None).unwrap();
+        let src = raster_source(doc, css.0, css.1, key.color, None);
         let renderer = gpui::SvgRenderer::new(Arc::new(()));
         rasterize(&renderer, &src, &key).expect("resvg renders it")
     }
@@ -1207,7 +1513,7 @@ mod tests {
             let d = t.intern("d");
             t.set_prop(path, d, Some("M20 6 9 17l-5-5".to_string()));
             t.insert(path, svg, 0);
-            let doc = serialize(t, svg, None, None);
+            let doc = serialize(t, svg);
             (svg, doc)
         })
     }
@@ -1237,7 +1543,10 @@ mod tests {
     #[test]
     fn the_cascade_overrides_a_presentation_attribute() {
         let (svg, _) = lucide_check();
-        let doc = with_tree(|t| serialize(t, svg, Some(vn_css::SvgPaint::Current), None));
+        let doc = with_tree(|t| {
+            paints(t, svg, Some(vn_css::SvgPaint::Current), None);
+            serialize(t, svg)
+        });
         // `fill="none"` in the markup, `fill: currentColor` from the sheet
         // (Tailwind's `fill-current`) — CSS wins, which is what makes the
         // shadcn radio dot visible.
@@ -1249,19 +1558,28 @@ mod tests {
     #[test]
     fn re_serializes_only_when_the_subtree_moves() {
         let (svg, _) = lucide_check();
-        let a = with_tree(|t| document(t, svg, None, None, &[]));
-        let b = with_tree(|t| document(t, svg, None, None, &[]));
+        let a = with_tree(|t| document(t, svg));
+        let b = with_tree(|t| document(t, svg));
         assert!(Rc::ptr_eq(&a, &b), "an unchanged subtree must not re-serialize");
         with_tree(|t| {
             let d = t.intern("d");
             let child = t.node(svg).unwrap().children[0];
             t.set_prop(child, d, Some("M0 0 1 1".to_string()));
         });
-        let c = with_tree(|t| document(t, svg, None, None, &[]));
+        let c = with_tree(|t| document(t, svg));
         assert!(!Rc::ptr_eq(&a, &c), "a changed `d` must re-serialize");
-        // …and so must a changed computed paint, which is not in the subtree.
-        let d = with_tree(|t| document(t, svg, Some(vn_css::SvgPaint::None), None, &[]));
+        // …and so must a changed computed paint, on the root or inside.
+        let d = with_tree(|t| {
+            paints(t, svg, Some(vn_css::SvgPaint::None), None);
+            document(t, svg)
+        });
         assert!(!Rc::ptr_eq(&c, &d));
+        let e = with_tree(|t| {
+            let child = t.node(svg).unwrap().children[0];
+            paints(t, child, Some(colour(0x123456)), None);
+            document(t, svg)
+        });
+        assert!(!Rc::ptr_eq(&d, &e));
     }
 
     #[test]
@@ -1275,7 +1593,7 @@ mod tests {
             t.set_prop(svg, worse, Some("y".to_string()));
             let vb = t.intern("viewBox");
             t.set_prop(svg, vb, Some("0 0 10 10".to_string()));
-            serialize(t, svg, None, None)
+            serialize(t, svg)
         });
         assert!(!doc.contains("2bad"), "{doc}");
         assert!(usvg::Tree::from_data(doc.as_bytes(), &usvg::Options::default()).is_ok(), "{doc}");

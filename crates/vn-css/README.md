@@ -420,16 +420,26 @@ project's browser-compat-first policy.
       cascaded radius, not a transition's current frame.
     The same radii clip `overflow` (docs/ARCHITECTURE.md, fork items 33 and
     34).
-14. **An inline `<svg>` reads its presentation properties from its own rules
-    only** (m26). `fill` and `stroke` fold to what gpui's monochrome sprite
-    can draw (`SvgPaint`). `stroke-width`, `stroke-opacity`, `fill-opacity`,
-    `fill-rule`, `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit`,
+14. **An inline `<svg>`'s presentation properties are computed per element
+    and drawn by resvg** (m26). `fill` and `stroke` compute to `SvgPaint`:
+    `none`, `currentColor`, or the concrete colour with its alpha, `var()`
+    resolved. `stroke-width`, `stroke-opacity`, `fill-opacity`, `fill-rule`,
+    `stroke-linecap`, `stroke-linejoin`, `stroke-miterlimit`,
     `stroke-dasharray`, `stroke-dashoffset` and `shape-rendering` travel as
     CSS text (`Extras::svg_presentation`, merged per name across rules).
-    vn-tree writes them on the document's root in place of the markup's
-    attribute of that name, and resvg parses them there. What differs: a rule
-    that matches a shape inside the `<svg>` (`.icon path { stroke-width: 3 }`)
-    is not read, and a transition does not animate them.
+    vn-tree writes each element's computed values (the `<svg>`'s, each
+    `<g>`'s and each shape's, plus `opacity` and `display: none` inside the
+    document) on that element in place of the markup's attribute of that
+    name, so a rule beats a presentation attribute, the inline style beats
+    the rule, and resvg's inheritance does the rest (crates/vn-tree/src/
+    svg.rs). What differs: a paint server (`fill: url(#g)`) or
+    `context-fill` from a rule is drawn in `currentColor` (`SvgPaint::Server`,
+    advised by vn-tree), a `color` set by a rule on an element INSIDE the
+    `<svg>` is not read for its `currentColor`, a `:hover`/`:focus`/`:active`
+    or `group-` rule's values are dropped with an advisory (`Extras` have no
+    state ladder, and applying them would draw the hover colour at rest),
+    and a transition does not animate them: one between two concrete
+    `fill`/`stroke` colours snaps, with an advisory.
 15. **A vendor-prefixed declaration is applied only when it is a `-webkit-`
     spelling Chromium honours** (m26, `src/prefix.rs`). `WEBKIT_APPLIED` lists
     them: the aliases of standard properties (`-webkit-transform`,
