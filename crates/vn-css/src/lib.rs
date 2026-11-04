@@ -51,6 +51,7 @@ pub use animator::{
     ScriptKeyframeNotes, ScriptTiming,
 };
 pub use element::{Interaction, MatchDom};
+pub use mapper::{set_composed_font_families, take_unreached_fonts};
 pub use mapper::{
     accepts_declaration, parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
     set_font_source, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses, uses_viewport_units,

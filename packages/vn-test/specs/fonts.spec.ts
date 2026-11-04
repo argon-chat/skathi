@@ -77,10 +77,12 @@ describe("@font-face in the stylesheet", () => {
     expect(await until(() => width("#inline"), (w) => w === PIXEL)).toBe(PIXEL);
   }, T);
 
-  test("a PUA-only family that leads a stack leaves the Latin text to the next family (FONT-2)", async () => {
+  test("a PUA-only family that leads a stack leaves the Latin text to the next family", async () => {
+    // Per character (its own glyphs: specs/font-subsets.spec.ts), so no
+    // advisory any more.
     expect(await until(() => width("#stack"), (w) => w === PIXEL)).toBe(PIXEL);
     const { entries } = await app.logs(0);
-    expect(entries.some((e) => e.kind === "advisory" && e.text.includes("`VN Tengwar` covers only part of Unicode"))).toBe(true);
+    expect(entries.filter((e) => e.kind === "advisory" && e.text.includes("VN Tengwar"))).toEqual([]);
   }, T);
 
   test("a face loads when text is first drawn with it, and the text swaps to it", async () => {

@@ -1612,8 +1612,9 @@ fn generic_family(g: &lightningcss::properties::font::GenericFontFamily) -> Opti
 
 /// CSS Fonts 4 §5's "first available font": the first entry of the list that
 /// is installed (or a generic, which always is). Only that first available
-/// family is mapped — per-glyph fallback through the REST of the list is not
-/// (DirectWrite's system fallback still covers missing glyphs).
+/// family is mapped here; per-glyph fallback through the REST of the list is
+/// [`composed_font_stack`]'s, when web families are composed, and otherwise
+/// DirectWrite's system fallback covers missing glyphs.
 ///
 /// When nothing in the list is available the first named family is kept, so
 /// gpui's own default applies exactly as before.
@@ -1649,6 +1650,89 @@ fn first_available_family(families: &[CssFontFamily]) -> Option<String> {
         note_font_miss(asked, None);
     }
     first_named
+}
+
+thread_local! {
+    /// See [`set_composed_font_families`]: `(lowercase family, covers Latin)`.
+    static COMPOSED_FONTS: std::cell::RefCell<Vec<(String, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// See [`take_unreached_fonts`].
+    static UNREACHED_FONTS: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The web font families the host draws character by character, from the
+/// faces whose `unicode-range` covers each (gpui's `FamilyComposer`), with
+/// whether each covers Latin text. A family that does not (a Private Use Area
+/// icon font) is never installed as far as [`set_font_source`] goes, so it is
+/// never the first available font. When any is set, every `font-family` hands
+/// gpui the rest of its list as the font's `fallbacks`
+/// ([`composed_font_stack`]). Takes effect on the next compile.
+pub fn set_composed_font_families(families: impl IntoIterator<Item = (String, bool)>) {
+    let list = families.into_iter().map(|(f, latin)| (f.to_lowercase(), latin)).collect();
+    COMPOSED_FONTS.with(|c| *c.borrow_mut() = list);
+}
+
+/// `(web family, family drawn instead)` for every `font-family` list in
+/// which a composed web family comes after the installed family the text is
+/// drawn with: the characters that family has no glyph for go to the system
+/// fallback, not to the web family. Drained by the host's advisory.
+pub fn take_unreached_fonts() -> Vec<(String, String)> {
+    UNREACHED_FONTS.with(|m| std::mem::take(&mut *m.borrow_mut()))
+}
+
+/// The family and `fallbacks` a `font-family` list draws with when web
+/// families are composed ([`set_composed_font_families`]): the families that
+/// are installed or composed, generics as the family they stand for, in list
+/// order. The first is the font's family: a composed family that covers no
+/// Latin text when it leads, else the first available one (as
+/// [`first_available_family`]). The rest are its `fallbacks` when that family
+/// is composed, so a character none of its faces covers reaches the next one
+/// (CSS Fonts 4 §5.3). An installed family has no such fallbacks (DirectWrite
+/// falls back to the system's), and empty ones are set so that a parent's are
+/// not inherited. `None` when nothing is composed, or nothing in the list is
+/// available.
+fn composed_font_stack(families: &[CssFontFamily]) -> Option<(String, gpui::FontFallbacks)> {
+    use lightningcss::traits::ToCss;
+    let composed = COMPOSED_FONTS.with(|c| c.borrow().clone());
+    if composed.is_empty() {
+        return None;
+    }
+    let mut stack: Vec<(String, Option<bool>)> = Vec::new();
+    for f in families {
+        let (name, generic) = match f {
+            CssFontFamily::FamilyName(name) => {
+                let Ok(css) = name.to_css_string(Default::default()) else { continue };
+                (css.trim_matches('"').to_string(), false)
+            }
+            CssFontFamily::Generic(g) => match generic_family(g) {
+                Some(name) => (name, true),
+                None => continue,
+            },
+        };
+        let latin = composed.iter().find(|(c, _)| c.eq_ignore_ascii_case(&name)).map(|c| c.1);
+        if latin.is_none() && !generic && font_installed(&name) == Some(false) {
+            continue;
+        }
+        if !stack.iter().any(|(s, _)| s.eq_ignore_ascii_case(&name)) {
+            stack.push((name, latin));
+        }
+    }
+    let (first, latin) = stack.first()?.clone();
+    if latin.is_none() {
+        // An installed family draws the text; a composed one after it is
+        // reached only by the characters it lacks, and DirectWrite's own
+        // fallback takes those.
+        for (name, _) in stack.iter().skip(1).filter(|s| s.1.is_some()) {
+            UNREACHED_FONTS.with(|u| {
+                let mut u = u.borrow_mut();
+                if !u.iter().any(|(n, _)| n == name) {
+                    u.push((name.clone(), first.clone()));
+                }
+            });
+        }
+        return Some((first, gpui::FontFallbacks::default()));
+    }
+    let rest = stack.into_iter().skip(1).map(|s| s.0).collect();
+    Some((first, gpui::FontFallbacks::from_fonts(rest)))
 }
 
 /// A browser's initial root font size, and the basis every sheet compiles
@@ -5057,6 +5141,10 @@ fn apply_property(
             if let Some(family) = first_available_family(families) {
                 r.text.font_family = Some(gpui::SharedString::from(family));
             }
+            if let Some((family, fallbacks)) = composed_font_stack(families) {
+                r.text.font_family = Some(gpui::SharedString::from(family));
+                r.text.font_fallbacks = Some(fallbacks);
+            }
         }
         FontSize(v) => {
             // Its em, its percentage and `smaller` / `larger` are the PARENT's
@@ -7658,6 +7746,44 @@ mod tests {
             "{misses:?}"
         );
         assert!(take_font_misses().is_empty());
+    }
+
+    /// Web families the host draws per character (`unicode-range` subsets)
+    /// get the rest of their list as gpui `fallbacks`, so a character their
+    /// faces do not cover reaches the next family; one that covers no Latin
+    /// text leads only when it comes first.
+    #[test]
+    fn composed_web_families_hand_gpui_the_rest_of_the_list() {
+        let font = |css: &str| {
+            let t = clean(css).text;
+            (
+                t.font_family.map(|f| f.to_string()),
+                t.font_fallbacks.map(|f| f.fallback_list().join("|")),
+            )
+        };
+        set_font_source(|| vec!["Arial".into(), "Mix".into(), "Segoe UI".into()]);
+        // Nothing composed: as before, no fallbacks at all.
+        assert_eq!(font("font-family: Mix, Arial"), (Some("Mix".into()), None));
+
+        set_composed_font_families([("Mix".to_string(), true), ("VN PUA".to_string(), false)]);
+        let some = |f: &str, rest: &str| (Some(f.to_string()), Some(rest.to_string()));
+        assert_eq!(font("font-family: Mix, \"Segoe UI\", sans-serif"), some("Mix", "Segoe UI|Arial"));
+        // The Argon client's `"Alcarin Tengwar", Inter, …`; a family that is
+        // neither installed nor composed is passed over.
+        assert_eq!(font("font-family: \"VN PUA\", Nowhere, mix, sans-serif"), some("VN PUA", "mix|Arial"));
+        assert_eq!(font("font-family: Nowhere, \"VN PUA\", Mix"), some("VN PUA", "Mix"));
+        // An installed family first draws the text; the web families after
+        // it are not reached, and say so.
+        assert!(take_unreached_fonts().is_empty());
+        assert_eq!(font("font-family: Arial, Mix, \"VN PUA\""), some("Arial", ""));
+        assert_eq!(
+            take_unreached_fonts(),
+            vec![("Mix".to_string(), "Arial".to_string()), ("VN PUA".to_string(), "Arial".to_string())]
+        );
+        assert_eq!(font("font-family: Arial"), some("Arial", ""));
+        assert!(take_unreached_fonts().is_empty());
+        set_composed_font_families([]);
+        assert_eq!(font("font-family: Mix"), (Some("Mix".into()), None));
     }
 
     /// The families with a web font face still to load are recorded for the

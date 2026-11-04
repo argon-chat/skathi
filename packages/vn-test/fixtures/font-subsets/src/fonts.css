@@ -1,0 +1,109 @@
+/* A fixture for packages/vn-test/specs/font-subsets.spec.ts: one family cut
+   into `unicode-range` subsets, as Fontsource and Google Fonts ship it
+   (docs/RUNTIME.md §5.15). The `Mix` faces are @fontsource-variable/manrope's
+   own rules for its latin and cyrillic files, plus a greek subset whose file
+   is not there and that no text asks for. `Ref *` name the same files once
+   each, without a range: what `Mix` must draw per character. `PUA` is Alcarin
+   Tengwar limited to the Private Use Area, leading a stack as the Argon
+   client's `"Alcarin Tengwar", Inter, …` does. Both fonts are OFL (the
+   licences are next to them). */
+
+@font-face {
+  font-family: "Mix";
+  font-style: normal;
+  font-weight: 200 800;
+  src: url("./fonts/manrope-cyrillic-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+  font-family: "Mix";
+  font-style: normal;
+  font-weight: 200 800;
+  src: url("./fonts/manrope-greek-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+
+@font-face {
+  font-family: "Mix";
+  font-style: normal;
+  font-weight: 200 800;
+  src: url("./fonts/manrope-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Ref Latin";
+  font-weight: 200 800;
+  src: url("./fonts/manrope-latin-wght-normal.woff2") format("woff2-variations");
+}
+
+@font-face {
+  font-family: "Ref Cyr";
+  font-weight: 200 800;
+  src: url("./fonts/manrope-cyrillic-wght-normal.woff2") format("woff2-variations");
+}
+
+@font-face {
+  font-family: "PUA";
+  font-weight: 400 700;
+  src: url("./fonts/AlcarinTengwarVF.woff2") format("woff2-variations");
+  unicode-range: U+E000-E0FF;
+}
+
+@font-face {
+  font-family: "Ref PUA";
+  font-weight: 400 700;
+  src: url("./fonts/AlcarinTengwarVF.woff2") format("woff2-variations");
+}
+
+#root {
+  background: #ffffff;
+  color: #000000;
+  padding: 4px 8px;
+}
+
+/* Every probe is one line, shrink-wrapped, at a whole CSS pixel, so two
+   probes with the same text in the same face rasterize the same. */
+.row {
+  display: flex;
+  align-items: flex-start;
+  height: 28px;
+}
+
+.probe {
+  flex: none;
+  font-size: 20px;
+  line-height: 28px;
+  /* The pieces' leading and trailing spaces count. */
+  white-space: pre;
+}
+
+.mix {
+  font-family: "Mix", "Segoe UI", sans-serif;
+}
+
+.lat {
+  font-family: "Ref Latin", sans-serif;
+}
+
+.cyr {
+  font-family: "Ref Cyr", sans-serif;
+}
+
+.pua {
+  font-family: "PUA", "Mix", "Segoe UI", sans-serif;
+}
+
+.refpua {
+  font-family: "Ref PUA", sans-serif;
+}
+
+.plain {
+  font-family: "Segoe UI", sans-serif;
+}
+
+.bold {
+  font-weight: 700;
+}

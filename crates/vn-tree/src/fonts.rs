@@ -21,9 +21,11 @@
 //!    [`crate::img`]'s URL grammar), `data:`, `blob:`, or http(s) through
 //!    gpui's HTTP client. WOFF and WOFF2 are unpacked by DirectWrite.
 //! 3. **Registered.** The font's bytes go to `TextSystem::add_fonts` once it is
-//!    loaded AND in `document.fonts` (always, for a CSS face). A file that names
-//!    itself by another family than the declared one is renamed first, so
-//!    `font-family: <declared>` reaches it, as in a browser.
+//!    loaded AND in `document.fonts` (always, for a CSS face), renamed to a
+//!    family of its own ([`face_family`]: `Manrope Variable (vn face 3)`).
+//!    The declared family is then a gpui [`gpui::FamilyComposer`] made of
+//!    those ([`compositions`]), so `font-family: <declared>` reaches the faces
+//!    whatever their files call themselves, as in a browser.
 //! 4. **Used.** vn-css picks a family when the sheet is compiled (CSS's first
 //!    available font), so the sheet is compiled again, and the inline styles
 //!    that name a font are parsed again ([`crate::tree::recompile_for_fonts`]).
@@ -35,13 +37,33 @@
 //! loading and asked for nothing new ([`tick`]'s `quiet`): until then, the
 //! page's text may still ask for a face.
 //!
-//! # `unicode-range`
+//! # Drawn: per character, by `unicode-range`
 //!
-//! A family whose faces all declare a `unicode-range` that leaves out Latin
-//! letters never becomes the PRIMARY font of an element, so a stack that leads
-//! with it (the Argon client's `"Alcarin Tengwar", Inter, …`: Private Use Area
-//! glyphs only) keeps drawing its Latin text in the next family. Its glyphs are
-//! not reached as a per-glyph fallback (FONT-2).
+//! A family is often one file per subset (Fontsource, Google Fonts: `latin`,
+//! `cyrillic`, … each an `@font-face` with its `unicode-range`). A browser
+//! draws each character with the face of the family whose range covers it
+//! (CSS Fonts 4 §4.5, §5.3), and one no face covers with the next family. So
+//! here: the family's composer names, for a run's weight and style, the faces
+//! CSS font matching picks ([`best_matching`], as [`want`] does) that are
+//! registered, last-declared first where ranges overlap, and gpui's DirectWrite
+//! text system splits the run by character before shaping
+//! (`direct_write.rs`, `split_composed_runs`). A face still loading leaves its
+//! characters to the next family meanwhile.
+//!
+//! Every subset used to be registered under the declared family. DirectWrite
+//! then shaped a run with one file of the family and gpui drew the glyph ids
+//! with another, which made letter-shaped garbage of the right width
+//! ("EXOBIO" in Manrope came out "OMu Ï èu").
+//!
+//! The rest of the `font-family` list reaches gpui as the font's `fallbacks`
+//! (vn-css's `composed_font_stack`), which is where a character no face
+//! covers goes. A family whose faces all leave out Latin letters is never the
+//! first available font, but it leads its fallbacks when it comes first: the
+//! Argon client's `"Alcarin Tengwar", Inter, …` draws Tengwar's Private Use
+//! Area glyphs in Alcarin Tengwar and the rest in Inter. A web family listed
+//! after an installed family that draws the text is not reached: the
+//! characters that font lacks go to the system's fallback (FONT-2,
+//! [`advise_unreached`]).
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -137,6 +159,22 @@ struct Face {
     /// The unpacked font, between loading and registration.
     ready: Option<Vec<u8>>,
     registered: bool,
+    /// The family of its own the face was registered under
+    /// ([`face_family`]), when its file could be renamed; `None` for a font
+    /// registered under the declared family (a collection).
+    registered_as: Option<String>,
+}
+
+/// The family a face is registered under: one of its own, so that the text
+/// system draws exactly this file wherever the face draws (module docs,
+/// "Drawn"). Recognizable by [`is_face_family`].
+fn face_family(family: &str, id: u32) -> String {
+    format!("{family} (vn face {id})")
+}
+
+/// Is `name` a family [`face_family`] made, rather than one a page can name?
+fn is_face_family(name: &str) -> bool {
+    name.ends_with(')') && name.contains(" (vn face ")
 }
 
 /// A load that finished on a background thread: the face, and its sfnt bytes.
@@ -215,11 +253,17 @@ pub(crate) fn note_sheet(css: &str) {
             }
         }
         let mut i = 0;
+        let mut dropped_registered = false;
         f.faces.retain(|x| {
             let k = !x.css || keep[i];
             i += 1;
+            dropped_registered |= !k && x.registered;
             k
         });
+        // Its family is composed of one face fewer (`refresh_font_source`).
+        if dropped_registered {
+            f.changed_since.get_or_insert_with(Instant::now);
+        }
         for (desc, sources) in added {
             if desc.family.is_empty() || sources.is_empty() {
                 continue;
@@ -236,6 +280,7 @@ pub(crate) fn note_sheet(css: &str) {
                 status: Status::Unloaded,
                 ready: None,
                 registered: false,
+                registered_as: None,
             });
         }
         f.choice.clear();
@@ -411,6 +456,14 @@ fn best_faces(faces: &[Face], family: &str, weight: f32, italic: bool) -> Vec<us
     let of_family: Vec<usize> = (0..faces.len())
         .filter(|&i| faces[i].in_set && faces[i].desc.family.eq_ignore_ascii_case(family))
         .collect();
+    let descs: Vec<&Descriptors> = of_family.iter().map(|&i| &faces[i].desc).collect();
+    best_matching(&descs, weight, italic).into_iter().map(|j| of_family[j]).collect()
+}
+
+/// [`best_faces`] over one family's descriptors: the indices into `descs`,
+/// in order.
+fn best_matching(descs: &[&Descriptors], weight: f32, italic: bool) -> Vec<usize> {
+    let of_family: Vec<usize> = (0..descs.len()).collect();
     // 0 normal, 1 italic, 2 oblique.
     let style_class = |s: &str| {
         let s = s.trim().to_ascii_lowercase();
@@ -427,13 +480,13 @@ fn best_faces(faces: &[Face], family: &str, weight: f32, italic: bool) -> Vec<us
         (_, 2) => 1,
         _ => 2,
     };
-    let Some(best_style) = of_family.iter().map(|&i| style_rank(style_class(&faces[i].desc.style))).min() else {
+    let Some(best_style) = of_family.iter().map(|&i| style_rank(style_class(&descs[i].style))).min() else {
         return Vec::new();
     };
     let styled: Vec<usize> =
-        of_family.into_iter().filter(|&i| style_rank(style_class(&faces[i].desc.style)) == best_style).collect();
+        of_family.into_iter().filter(|&i| style_rank(style_class(&descs[i].style)) == best_style).collect();
     let rank = |i: usize| {
-        let (lo, hi) = weight_range(&faces[i].desc.weight);
+        let (lo, hi) = weight_range(&descs[i].weight);
         let d = weight;
         if lo <= d && d <= hi {
             (0u8, 0u32)
@@ -495,6 +548,7 @@ pub(crate) fn create(desc: Descriptors, source: &str, now: bool) -> Result<u32, 
             status: Status::Unloaded,
             ready: None,
             registered: false,
+            registered_as: None,
         });
         id
     }))
@@ -832,6 +886,7 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut App) -> bool {
     for (family, used) in due_misses(Instant::now()) {
         crate::render::warn_missing_font(&family, used.as_deref());
     }
+    advise_unreached();
     let laid_out = crate::render::layout_count() > 0 && !crate::layout_owed();
     note_quiet(started || due, laid_out);
     deliver_events(window, cx);
@@ -969,11 +1024,16 @@ fn register_finished(cx: &mut App) {
         }
         for x in f.faces.iter_mut().filter(|x| x.in_set && !x.registered && x.ready.is_some()) {
             let bytes = x.ready.take().unwrap();
-            let bytes = match own_family(&bytes) {
-                Some(own) if !own.eq_ignore_ascii_case(&x.desc.family) => {
-                    rename_family(&bytes, &x.desc.family).unwrap_or(bytes)
+            // A family of its own (`face_family`); the declared family is
+            // composed of those (`compose`). A font that cannot be renamed
+            // (a collection) is registered as it names itself.
+            let own = face_family(&x.desc.family, x.id);
+            let bytes = match rename_family(&bytes, &own) {
+                Some(renamed) => {
+                    x.registered_as = Some(own);
+                    renamed
                 }
-                _ => bytes,
+                None => bytes,
             };
             fresh.push(Cow::Owned(bytes));
             names.push(x.desc.family.clone());
@@ -1006,18 +1066,89 @@ fn register_finished(cx: &mut App) {
 fn refresh_font_source(cx: &mut App) {
     let text_system = cx.text_system().clone();
     let limited = range_limited();
+    let composed = compositions();
+    text_system.set_composed_families(
+        composed.iter().map(|c| (gpui::SharedString::from(c.family.clone()), c.composer.clone())).collect(),
+    );
+    vn_css::set_composed_font_families(
+        composed.iter().map(|c| (c.family.clone(), !limited.iter().any(|l| l.eq_ignore_ascii_case(&c.family)))),
+    );
+    // The families a page can name: the system's and the web families with
+    // a face in, never the families of one face each, nor a family that
+    // covers no Latin text (it leads a list only through vn-css's stack).
+    let families: Vec<String> = composed.into_iter().map(|c| c.family).collect();
     vn_css::set_font_source(move || {
         let mut names = text_system.all_font_names();
+        names.retain(|n| !is_face_family(n));
+        names.extend(families.iter().cloned());
         names.retain(|n| !limited.iter().any(|l| l.eq_ignore_ascii_case(n)));
         names
     });
-    if let Some(first) = range_limited().first() {
+}
+
+/// A web family as the text system draws it: per character, by the face
+/// whose `unicode-range` covers it ([`gpui::FamilyComposer`]).
+struct Composition {
+    /// As the first of its faces declares it.
+    family: String,
+    composer: gpui::FamilyComposer,
+}
+
+/// Every family of the set with a face registered under a family of its own
+/// ([`face_family`]). The composer matches the family's faces in the set as
+/// [`want`] does (CSS Fonts 4 §5.2: style, then weight), keeps the ones that
+/// are registered (a face still loading leaves its characters to the next
+/// family, as `font-display: swap` would), and tries the last-declared first
+/// where ranges overlap (§4.5). A family with a face registered under its own
+/// name (a font that could not be renamed) is drawn by name, as before.
+fn compositions() -> Vec<Composition> {
+    FONTS.with(|f| {
+        let f = f.borrow();
+        let mut out: Vec<Composition> = Vec::new();
+        for x in f.faces.iter().filter(|x| x.in_set && x.registered_as.is_some()) {
+            let family = &x.desc.family;
+            if out.iter().any(|c| c.family.eq_ignore_ascii_case(family)) {
+                continue;
+            }
+            let of_family: Vec<&Face> =
+                f.faces.iter().filter(|y| y.in_set && y.desc.family.eq_ignore_ascii_case(family)).collect();
+            if of_family.iter().any(|y| y.registered && y.registered_as.is_none()) {
+                continue;
+            }
+            let faces: Vec<(Descriptors, Option<String>)> =
+                of_family.iter().map(|y| (y.desc.clone(), y.registered_as.clone())).collect();
+            out.push(Composition { family: family.clone(), composer: Arc::new(move |weight, style| compose(&faces, weight, style)) });
+        }
+        out
+    })
+}
+
+/// A composer's answer: the registered faces of `faces` (one family, rule
+/// order) that CSS font matching picks for `weight` and `style`, last
+/// declared first.
+fn compose(faces: &[(Descriptors, Option<String>)], weight: gpui::FontWeight, style: gpui::FontStyle) -> Vec<gpui::ComposedFace> {
+    let descs: Vec<&Descriptors> = faces.iter().map(|x| &x.0).collect();
+    let italic = !matches!(style, gpui::FontStyle::Normal);
+    best_matching(&descs, weight.0, italic)
+        .into_iter()
+        .rev()
+        .filter_map(|i| {
+            let (desc, family) = &faces[i];
+            Some(gpui::ComposedFace { family: family.clone()?.into(), ranges: desc.unicode_range.clone().into() })
+        })
+        .collect()
+}
+
+/// The `font-family` lists in which a web family follows an installed one
+/// (vn-css's stack): advised once per family.
+fn advise_unreached() {
+    for (family, used) in vn_css::take_unreached_fonts() {
         crate::render::warn_compat(
-            &format!("font:unicode-range:{first}"),
+            &format!("font:unreached:{family}"),
             &format!(
-                "@font-face `{first}` covers only part of Unicode (unicode-range), so it is never an \
-                 element's primary font and the next family in the list draws the text; its own glyphs \
-                 are not reached as a fallback yet (docs/RUNTIME.md §5.15, FONT-2)"
+                "font-family: `{family}` comes after `{used}`, an installed font, which draws the text; \
+                 the characters `{used}` has no glyph for are drawn by the system's fallback font, not by \
+                 `{family}` (docs/RUNTIME.md §5.15, FONT-2)"
             ),
         );
     }
@@ -1211,6 +1342,7 @@ fn name_records(sfnt: &[u8]) -> Option<Vec<NameRecord>> {
     Some(out)
 }
 
+#[cfg(test)]
 fn utf16be(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
     String::from_utf16_lossy(&units)
@@ -1219,6 +1351,8 @@ fn utf16be(bytes: &[u8]) -> String {
 /// The family a font names itself by, as DirectWrite's weight/stretch/style
 /// model groups it: the WWS family (name 21), else the typographic one (16),
 /// else the legacy one (1), from the Windows records, US English first.
+/// (Every face is renamed now, so only the tests read it back.)
+#[cfg(test)]
 pub(crate) fn own_family(sfnt: &[u8]) -> Option<String> {
     let records = name_records(sfnt)?;
     for id in [21, 16, 1] {
@@ -1730,6 +1864,88 @@ mod tests {
         assert_eq!(urls(700.0, true), vec!["i.ttf"]);
         assert_eq!(weight_range("100 900"), (100.0, 900.0));
         assert_eq!(weight_range("bold"), (700.0, 700.0));
+    }
+
+    /// Marks the faces whose first url is one of `urls` registered, under a
+    /// family of their own, as `register_finished` does.
+    fn register(urls: &[&str]) {
+        FONTS.with(|f| {
+            for x in f.borrow_mut().faces.iter_mut() {
+                if matches!(&x.sources[0], Src::Url { url, .. } if urls.contains(&url.as_str())) {
+                    x.status = Status::Loaded;
+                    x.registered = true;
+                    x.registered_as = Some(face_family(&x.desc.family, x.id));
+                }
+            }
+        });
+    }
+
+    /// The registered file each composed face stands for, in the order the
+    /// composer gives them.
+    fn composed_urls(c: &Composition, weight: f32, italic: bool) -> Vec<String> {
+        let style = if italic { gpui::FontStyle::Italic } else { gpui::FontStyle::Normal };
+        (c.composer)(gpui::FontWeight(weight), style)
+            .into_iter()
+            .map(|face| {
+                FONTS.with(|f| {
+                    let f = f.borrow();
+                    let x = f.faces.iter().find(|x| x.registered_as.as_deref() == Some(face.family.as_ref())).unwrap();
+                    match &x.sources[0] {
+                        Src::Url { url, .. } => url.clone(),
+                        Src::Local(l) => l.clone(),
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// CSS Fonts 4 §4.5: one family as Fontsource ships it, a subset per file, is drawn
+    /// per character. Each registered face is a family of its own, and the
+    /// declared family is composed of the ones font matching picks.
+    #[test]
+    fn a_family_of_subsets_is_composed_of_its_registered_faces() {
+        note_sheet(
+            "@font-face { font-family: 'Manrope Variable'; src: url(cyr.woff2); font-weight: 200 800; unicode-range: U+0301, U+0400-045F; } \
+             @font-face { font-family: 'Manrope Variable'; src: url(greek.woff2); font-weight: 200 800; unicode-range: U+0370-03FF; } \
+             @font-face { font-family: 'Manrope Variable'; src: url(latin.woff2); font-weight: 200 800; unicode-range: U+0-FF, U+2000-206F; }",
+        );
+        assert!(compositions().is_empty(), "nothing registered yet");
+        register(&["cyr.woff2", "latin.woff2"]);
+        let c = compositions();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].family, "Manrope Variable");
+        // Last declared first (CSS Fonts 4 §4.5); the greek face is not in,
+        // so Greek text falls to the next family.
+        assert_eq!(composed_urls(&c[0], 400.0, false), vec!["latin.woff2", "cyr.woff2"]);
+        assert_eq!(composed_urls(&c[0], 700.0, false), vec!["latin.woff2", "cyr.woff2"]);
+        let faces = (c[0].composer)(gpui::FontWeight(400.0), gpui::FontStyle::Normal);
+        assert_eq!(&*faces[0].ranges, &[(0, 0xFF), (0x2000, 0x206F)]);
+        assert!(faces[1].covers('Ж') && !faces[1].covers('a'));
+        assert!(is_face_family(&faces[0].family) && !is_face_family("Manrope Variable"));
+        assert_eq!(face_family("Inter", 7), "Inter (vn face 7)");
+    }
+
+    /// The composer matches weight and style across the family's faces as
+    /// `want` does, keeping only the registered ones.
+    #[test]
+    fn a_composed_family_matches_weight_and_style_across_its_faces() {
+        note_sheet(FAMILY);
+        register(&["r.ttf", "b.ttf", "i.ttf", "l-latin.ttf", "l-cyr.ttf"]);
+        let c = compositions();
+        let vn = c.iter().find(|c| c.family == "VN").unwrap();
+        assert_eq!(composed_urls(vn, 400.0, false), vec!["r.ttf"]);
+        assert_eq!(composed_urls(vn, 700.0, false), vec!["b.ttf"]);
+        assert_eq!(composed_urls(vn, 700.0, true), vec!["i.ttf"]);
+        assert_eq!(composed_urls(vn, 200.0, false), vec!["l-cyr.ttf", "l-latin.ttf"]);
+        // `Unused` has nothing registered: not composed, and not installed.
+        assert!(c.iter().all(|c| c.family != "Unused"));
+        // A face that could not be renamed keeps its family drawn by name.
+        FONTS.with(|f| {
+            let mut f = f.borrow_mut();
+            let x = f.faces.iter_mut().find(|x| x.desc.family == "Unused").unwrap();
+            x.registered = true;
+        });
+        assert!(compositions().iter().all(|c| c.family != "Unused"));
     }
 
     /// `document.fonts.ready` waits for a frame laid out with nothing loading
