@@ -3495,9 +3495,10 @@ fn single_ident<'a>(
 /// or `None` (advised) for a shape the mask cannot be.
 ///
 /// `inset()` and `circle()` are exact, and so is a `<geometry-box>` alone,
-/// rounded by the element's `border-radius`. `ellipse()` is the capsule
-/// around the ellipse. `polygon()`, `path()` and `url()` are not applied:
-/// they need a mask that is not a rounded rectangle.
+/// rounded by the element's `border-radius`. `ellipse()` and `polygon()` are
+/// exact too, as an isolated layer composited through the shape (gpui
+/// `VnClipGeometry`); `path()` arrives unparsed ([`clip_path_path`]).
+/// `url()` is not applied.
 fn clip_path(v: &CssClipPath<'_>, diagnostics: &mut Vec<String>) -> Option<gpui::VnClipPath> {
     use gpui::{VnClipBox, VnClipPath, VnShapeRadius};
     use lightningcss::properties::masking::GeometryBox as G;
@@ -3545,17 +3546,17 @@ fn clip_path(v: &CssClipPath<'_>, diagnostics: &mut Vec<String>) -> Option<gpui:
                 BasicShape::Ellipse(e) => {
                     let (rx, ry) = (radius(&e.radius_x)?, radius(&e.radius_y)?);
                     let center = shape_center(&e.position)?;
-                    // Exact only when the two radii are the same length.
-                    let round = rx == ry && matches!(rx, VnShapeRadius::Length(DefiniteLength::Absolute(_)));
-                    if !round {
-                        warn_once(
-                            diagnostics,
-                            "`clip-path: ellipse()` clips to the capsule around the ellipse (v1) — gpui                              clips to rounded rectangles, so it is the ellipse's bounding box with                              corners of its smaller radius, which shows a little more than the                              ellipse towards the four diagonals. `circle()` is exact",
-                        );
-                    }
+                    // Equal radii are the rounded mask; others the outline.
                     Some(VnClipPath::Ellipse { reference, center, radius: [rx, ry], circle: false })
                 }
-                BasicShape::Polygon(_) => unsupported(diagnostics, "polygon()"),
+                BasicShape::Polygon(polygon) => match clip_path_polygon(polygon) {
+                    Some(points) => Some(VnClipPath::Polygon {
+                        reference,
+                        fill_rule: fill_rule(polygon.fill_rule),
+                        points: points.into(),
+                    }),
+                    None => unsupported(diagnostics, "polygon() with a vertex that is no length or percentage"),
+                },
             }
         }
     }
@@ -3567,9 +3568,108 @@ fn clip_path_unsupported(diagnostics: &mut Vec<String>, what: &str) {
     warn_once(
         diagnostics,
         &format!(
-            "`clip-path: {what}` is not applied (v1) — gpui clips to rounded rectangles, and              this shape is not one. `inset()`, `circle()` and a box (`padding-box`…) are              honoured exactly, `ellipse()` approximately"
+            "`clip-path: {what}` is not applied (v1) and the element paints unclipped — \
+             `inset()`, `circle()`, `ellipse()`, `polygon()`, `path()` and a box \
+             (`padding-box`…) are honoured"
         ),
     );
+}
+
+fn fill_rule(rule: lightningcss::values::shape::FillRule) -> gpui::VnFillRule {
+    match rule {
+        lightningcss::values::shape::FillRule::Nonzero => gpui::VnFillRule::NonZero,
+        lightningcss::values::shape::FillRule::Evenodd => gpui::VnFillRule::EvenOdd,
+    }
+}
+
+/// `polygon()`'s vertices as x and y lengths, a percentage of the reference
+/// box's width and height. lightningcss keeps a vertex's two values private,
+/// so each vertex is printed back to CSS (`10% calc(100% - 4px)`) and read as
+/// two `<length-percentage>`s, split at the space outside any parentheses.
+fn clip_path_polygon(polygon: &lightningcss::values::shape::Polygon) -> Option<Vec<[DefiniteLength; 2]>> {
+    use lightningcss::traits::{Parse, ToCss};
+    polygon
+        .points
+        .iter()
+        .map(|point| {
+            let text = point.to_css_string(lightningcss::stylesheet::PrinterOptions::default()).ok()?;
+            let mut depth = 0i32;
+            let split = text.char_indices().find_map(|(i, c)| {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    ' ' if depth == 0 => return Some(i),
+                    _ => {}
+                }
+                None
+            })?;
+            let x = LengthPercentage::parse_string(text[..split].trim()).ok()?;
+            let y = LengthPercentage::parse_string(text[split..].trim()).ok()?;
+            Some([lp_definite(&x)?, lp_definite(&y)?])
+        })
+        .collect()
+}
+
+/// `clip-path: path([<fill-rule>,]? <string>) <geometry-box>?`, which
+/// lightningcss leaves unparsed. `None` when the value is no `path()`;
+/// otherwise the clip, or why the declaration is invalid. The string is SVG
+/// path data ([`crate::path_data`]) in pixels from the reference box's corner.
+fn clip_path_path(
+    tokens: &lightningcss::properties::custom::TokenList<'_>,
+) -> Option<Result<gpui::VnClipPath, String>> {
+    use gpui::{VnClipBox, VnFillRule};
+    use lightningcss::properties::custom::{Token, TokenOrValue};
+    let mut path = None;
+    let mut reference = None;
+    for t in &tokens.0 {
+        match t {
+            TokenOrValue::Function(f) if f.name.0.as_ref().eq_ignore_ascii_case("path") && path.is_none() => {
+                path = Some(&f.arguments);
+            }
+            TokenOrValue::Token(Token::Ident(id)) if path.is_some() && reference.is_none() => {
+                reference = Some(match id.as_ref().to_ascii_lowercase().as_str() {
+                    "margin-box" => VnClipBox::Margin,
+                    "border-box" | "stroke-box" | "view-box" => VnClipBox::Border,
+                    "padding-box" => VnClipBox::Padding,
+                    "content-box" | "fill-box" => VnClipBox::Content,
+                    other => return Some(Err(format!("`{other}` is no <geometry-box>"))),
+                });
+            }
+            TokenOrValue::Token(Token::WhiteSpace(_)) => {}
+            // Another function, or a box before the shape: not ours.
+            _ if path.is_none() => return None,
+            _ => return Some(Err("unexpected text after `path()`".into())),
+        }
+    }
+    let arguments = path?;
+    let mut fill_rule = None;
+    let mut data = None;
+    let mut comma = false;
+    for t in &arguments.0 {
+        match t {
+            TokenOrValue::Token(Token::WhiteSpace(_)) => {}
+            TokenOrValue::Token(Token::Ident(id)) if fill_rule.is_none() && data.is_none() => {
+                fill_rule = Some(match id.as_ref().to_ascii_lowercase().as_str() {
+                    "nonzero" => VnFillRule::NonZero,
+                    "evenodd" => VnFillRule::EvenOdd,
+                    other => return Some(Err(format!("`{other}` is no <fill-rule>"))),
+                });
+            }
+            TokenOrValue::Token(Token::Comma) if fill_rule.is_some() && !comma => comma = true,
+            TokenOrValue::Token(Token::String(d)) if data.is_none() && (fill_rule.is_none() || comma) => {
+                data = Some(d.as_ref().to_string());
+            }
+            _ => return Some(Err("`path()` takes an optional fill rule, a comma and a string".into())),
+        }
+    }
+    let Some(data) = data else {
+        return Some(Err("`path()` has no path string".into()));
+    };
+    Some(crate::path_data::parse(&data).map(|verbs| gpui::VnClipPath::Path {
+        reference: reference.unwrap_or_default(),
+        fill_rule: fill_rule.unwrap_or_default(),
+        verbs: verbs.into(),
+    }))
 }
 
 /// A `circle()` or `ellipse()` centre (`at <position>`), from the reference
@@ -5993,10 +6093,25 @@ fn apply_property(
             // hidden; border-radius: inherit }`) square. It is recorded here and
             // filled in after the cascade ([`RadiusInherit`]).
             // `path()`, and the CSS Shapes 2 functions (`rect()`, `xywh()`,
-            // `shape()`): Chromium applies them, lightningcss has no typed
-            // value for them, and none is a rounded rectangle.
+            // `shape()`): Chromium applies them, and lightningcss has no typed
+            // value for them. `path()` is parsed here ([`clip_path_path`]);
+            // the others are advised.
             if matches!(u.property_id, PropertyId::ClipPath(_)) && !has_substitution(&u.value) {
                 use lightningcss::properties::custom::{Token, TokenOrValue};
+                match clip_path_path(&u.value) {
+                    Some(Ok(clip)) => {
+                        r.vn_clip_path = Some(clip);
+                        return;
+                    }
+                    Some(Err(why)) => {
+                        once(
+                            diagnostics,
+                            format!("`clip-path: path()` was dropped as invalid, as Chromium drops it: {why}"),
+                        );
+                        return;
+                    }
+                    None => {}
+                }
                 let what = u.value.0.iter().find_map(|t| match t {
                     TokenOrValue::Function(f) => Some(format!("{}()", f.name.0.as_ref())),
                     TokenOrValue::Token(Token::Function(name)) => Some(format!("{}()", name.as_ref())),
@@ -8623,10 +8738,10 @@ mod tests {
                 circle: true,
             })
         );
-        // An ellipse is a capsule, and says so, unless its radii are one length.
-        let (r, d) = map("clip-path: ellipse(30% farthest-side at 25% 75%)");
+        // An ellipse is exact now (an isolated layer through its outline),
+        // so it says nothing.
         assert_eq!(
-            r.vn_clip_path,
+            clean("clip-path: ellipse(30% farthest-side at 25% 75%)").vn_clip_path,
             Some(C::Ellipse {
                 reference: B::Border,
                 center: [relative(0.25), relative(0.75)],
@@ -8634,22 +8749,78 @@ mod tests {
                 circle: false,
             })
         );
-        assert!(d.iter().any(|m| m.contains("ellipse()") && m.contains("capsule")), "{d:?}");
         assert!(clean("clip-path: ellipse(20px 20px)").vn_clip_path.is_some());
         // A box alone; `fill-box` is the content box and `stroke-box` the
         // border box of an element with a CSS box.
         assert_eq!(clean("clip-path: margin-box").vn_clip_path, Some(C::Box(B::Margin)));
         assert_eq!(clean("clip-path: fill-box").vn_clip_path, Some(C::Box(B::Content)));
         assert_eq!(clean("clip-path: stroke-box").vn_clip_path, Some(C::Box(B::Border)));
-        // What a rounded rectangle cannot be.
-        for other in ["polygon(0 0, 100% 0, 0 100%)", "path('M0 0 L10 10 Z')", "url(#c)"] {
+        // What is still not applied: a reference and the CSS Shapes 2
+        // functions.
+        for other in ["url(#c)", "rect(0 10px 10px 0)", "xywh(0 0 10px 10px)", "shape(from 0 0, line to 10px 10px)"] {
             let (r, d) = map(&format!("clip-path: {other}"));
             assert_eq!(r.vn_clip_path, None, "{other}");
-            assert!(d.iter().any(|m| m.contains("clip-path")), "{other}: {d:?}");
+            assert!(d.iter().any(|m| m.contains("clip-path") && m.contains("not applied")), "{other}: {d:?}");
         }
         // `none` clears an earlier clip, and leaves the paint switch alone.
         let r = clean("clip-path: none");
         assert_eq!((r.vn_clip_path, r.visibility), (Some(C::None), None));
+    }
+
+    /// `polygon()` keeps its vertices as lengths and percentages of the
+    /// reference box, and its fill rule; `path()`, which lightningcss leaves
+    /// unparsed, is parsed here from an inline style as the overlay writes it
+    /// every frame, with its fill rule and box. Broken path data drops the
+    /// declaration, as Chromium does.
+    #[test]
+    fn clip_path_polygon_and_path_are_shapes() {
+        use gpui::{VnClipBox as B, VnClipPath as C, VnFillRule as F, VnPathVerb::*};
+        let polygon = |r: &StyleRefinement| match &r.vn_clip_path {
+            Some(C::Polygon { reference, fill_rule, points }) => (*reference, *fill_rule, points.to_vec()),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            polygon(&clean("clip-path: polygon(50% 0, 100% 100%, 0 100%)")),
+            (
+                B::Border,
+                F::NonZero,
+                vec![[relative(0.5), px(0.).into()], [relative(1.), relative(1.)], [px(0.).into(), relative(1.)]]
+            )
+        );
+        // The fill rule, a box, and `calc()` in a vertex (its space is no
+        // separator between the two values).
+        let (rb, rule, points) =
+            polygon(&clean("clip-path: polygon(evenodd, calc(100% - 8px) 0, 8px 100%) content-box"));
+        assert_eq!((rb, rule), (B::Content, F::EvenOdd));
+        assert_eq!(points[0], [DefiniteLength::Calc { fraction: 1., pixels: px(-8.) }, px(0.).into()]);
+        assert_eq!(points[1], [px(8.).into(), relative(1.)]);
+
+        let path = |r: &StyleRefinement| match &r.vn_clip_path {
+            Some(C::Path { reference, fill_rule, verbs }) => (*reference, *fill_rule, verbs.to_vec()),
+            other => panic!("{other:?}"),
+        };
+        // The overlay's notch, as its inline style writes it.
+        let notch = "clip-path: path('M0 0 C12.1506 0 22 9.8494 22 22 V42 Q22 64 44 64 H420 Q442 64 442 42 V22 C442 9.8494 451.8494 0 464 0 Z')";
+        let (rb, rule, verbs) = path(&clean(notch));
+        assert_eq!((rb, rule, verbs.len()), (B::Border, F::NonZero, 9));
+        assert_eq!(verbs[3], QuadTo([22., 64.], [44., 64.]));
+        // Through the public inline-style entry too, which vn-tree calls.
+        let mut d = Vec::new();
+        let inline = parse_inline_style(notch, &mut d);
+        assert!(d.is_empty(), "{d:?}");
+        assert!(format!("{inline:?}").contains("Path"), "{inline:?}");
+        // Double quotes, a fill rule and a box.
+        let (rb, rule, verbs) = path(&clean(r#"clip-path: path(evenodd, "M0 0 h10 v10 h-10 z M2 2 h6 v6 h-6 z") padding-box"#));
+        assert_eq!((rb, rule, verbs.len()), (B::Padding, F::EvenOdd, 10));
+        assert_eq!(verbs[5], MoveTo([2., 2.]));
+        // An empty string is an empty path (it encloses nothing).
+        assert_eq!(path(&clean("clip-path: path('')")).2, vec![]);
+        // Broken data, a bad fill rule, or no string: dropped and advised.
+        for bad in ["path('M0 0 L')", "path('L10 10')", "path(round, 'M0 0')", "path(evenodd)", "path('M0 0') blue"] {
+            let (r, d) = map(&format!("clip-path: {bad}"));
+            assert_eq!(r.vn_clip_path, None, "{bad}");
+            assert!(d.iter().any(|m| m.contains("path()") && m.contains("invalid")), "{bad}: {d:?}");
+        }
     }
 
     /// `overflow-wrap` (and its legacy alias `word-wrap`, which CSS Text 3

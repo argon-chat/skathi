@@ -500,19 +500,31 @@ project's browser-compat-first policy.
       line: in `see <a>long link</a> ok` the link starts its own line, where
       Chromium starts it after "see ". `<wbr>` splits its text into pieces,
       so it is an opportunity.
-18. **`clip-path` is a rounded content mask** (m26, `clip_path` in
-    `src/mapper.rs`, gpui `Style::vn_clip_path`, docs/ARCHITECTURE.md fork
-    item 48). It cuts the element's whole painting and its hit test, inside
-    its `transform`, and makes it a stacking context. Exact: `inset()` with
-    `round` (an elliptical corner is its smaller radius, as in item 13),
-    `circle()`, a lone `<geometry-box>` rounded by `border-radius`, and every
-    reference box (`fill-box` is the content box, `stroke-box` and
-    `view-box` the border box). The screen-reader-only `inset(50%)` is a clip
-    to nothing. What differs:
-    - `ellipse()` clips to the capsule around the ellipse, its bounding box
-      with corners of the smaller radius (advisory).
-    - `polygon()`, `path()`, `url()` and the CSS Shapes 2 functions are not
-      applied (advisory).
+18. **`clip-path` is a rounded content mask, or an isolated layer** (m26,
+    `clip_path`, `clip_path_polygon` and `clip_path_path` in
+    `src/mapper.rs`, `src/path_data.rs`, gpui `Style::vn_clip_path`,
+    docs/ARCHITECTURE.md fork items 48 and 49). It cuts the element's whole
+    painting and its hit test, inside its `transform`, and makes it a
+    stacking context. Exact: `inset()` with `round` (an elliptical corner is
+    its smaller radius, as in item 13), `circle()` and a lone
+    `<geometry-box>` rounded by `border-radius`, as a content mask; and
+    `ellipse()`, `polygon()` (its fill rule, percentages of the reference
+    box, `calc()`) and `path()` as an isolated layer composited through the
+    shape, antialiased. `path([nonzero|evenodd,] '<data>') <box>?` takes
+    every SVG path command, absolute and relative (`M L H V C S Q T A Z`),
+    in pixels from the reference box's corner; lightningcss leaves it
+    unparsed, so the mapper parses it, inline styles included (the EXOBIO
+    overlay rewrites one every frame). Every reference box (`fill-box` is the
+    content box, `stroke-box` and `view-box` the border box). The
+    screen-reader-only `inset(50%)` is a clip to nothing. What differs:
+    - `url()` and the CSS Shapes 2 functions (`rect()`, `xywh()`, `shape()`)
+      are not applied (advisory).
+    - Path data that breaks the grammar drops the declaration (advisory), as
+      Chromium's parser does; an SVG `d` attribute would draw up to the error.
+    - In a layer, a `backdrop-filter` sees only what the layer painted (the
+      element is a Backdrop Root, Filter Effects 2 §3.1), and text is
+      grayscale, as Chromium draws it in a layer that is not opaque.
+    - Metal and wgpu draw a layer's content cut to the shape's box only.
     - A percentage padding or margin in the reference box resolves against
       the element's own width.
     - A `position: fixed` descendant is not cut.

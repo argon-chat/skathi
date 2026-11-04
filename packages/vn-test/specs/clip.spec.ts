@@ -302,3 +302,206 @@ describe("clip-path (CSS Masking 1 §5)", () => {
     await app.eval(`(document.getElementById("cp-pad").remove(), 0)`);
   }, T);
 });
+
+describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
+  // A shape that is no rounded rectangle paints the element into an isolated
+  // layer, composited through the shape's coverage (gpui `VnClipGeometry`,
+  // docs/ARCHITECTURE.md fork item 49). Red shapes on a white pad.
+  const PAD = "position: fixed; left: 10px; top: 10px; width: 700px; height: 220px; z-index: 200; background-color: rgb(255, 255, 255)";
+  // The EXOBIO overlay's notch, 120 wide: concave shoulders from the top
+  // corners down to x = 20 and x = 100, rounded bottom corners.
+  const NOTCH = "M0 0 C11 0 20 9 20 20 V40 Q20 60 40 60 H80 Q100 60 100 40 V20 C100 9 109 0 120 0 Z";
+  const HOLE = "M0 0 h60 v60 h-60 z M15 15 h30 v30 h-30 z";
+
+  test("a polygon, a path with curves, and evenodd clip the painting and the hit test", async () => {
+    await app.eval(`(() => {
+      const pad = document.createElement("div");
+      pad.id = "cps-pad";
+      pad.setAttribute("style", ${JSON.stringify(PAD)});
+      globalThis.cpsHits = [];
+      pad.addEventListener("click", () => globalThis.cpsHits.push("pad"));
+      const shape = (id, style, parent = pad) => {
+        const el = document.createElement("div");
+        el.id = id;
+        el.setAttribute("style", "position: absolute; " + style);
+        parent.appendChild(el);
+        return el;
+      };
+      const hit = (el) => el.addEventListener("click", (e) => { e.stopPropagation(); globalThis.cpsHits.push(el.id); });
+      hit(shape("cps-tri", "left: 10px; top: 10px; width: 80px; height: 60px; background-color: rgb(255, 0, 0); clip-path: polygon(50% 0, 100% 100%, 0 100%)"));
+      // The notch's painting is all a positioned child's, which spills
+      // 20px around it: the child paints apart from the clipped element
+      // (a deferred draw) and is cut all the same, as the overlay's sprites are.
+      const notch = shape("cps-notch", "left: 110px; top: 30px; width: 120px; height: 60px; clip-path: path('${NOTCH}')");
+      shape("cps-glow", "left: -20px; top: -20px; width: 160px; height: 100px; background-color: rgb(255, 0, 0)", notch);
+      hit(notch);
+      shape("cps-hole", "left: 250px; top: 10px; width: 60px; height: 60px; background-color: rgb(255, 0, 0); clip-path: path(evenodd, '${HOLE}')");
+      shape("cps-nonzero", "left: 330px; top: 10px; width: 60px; height: 60px; background-color: rgb(255, 0, 0); clip-path: path('${HOLE}')");
+      document.body.appendChild(pad);
+      return 0;
+    })()`);
+    const t = await box("#cps-tri");
+    const n = await box("#cps-notch");
+    const h = await box("#cps-hole");
+    const z = await box("#cps-nonzero");
+    bunExpect(t).toMatchObject({ w: 80, h: 60 });
+    const s = await until(shoot, (s) => red(s.at(t.x + 40, t.y + 45)) && red(s.at(n.x + 60, n.y + 30)));
+
+    // polygon(50% 0, 100% 100%, 0 100%) of 80x60: half the box, 2400 px.
+    bunExpect(s.count(t, red)).toBeGreaterThan(2250);
+    bunExpect(s.count(t, red)).toBeLessThan(2550);
+    for (const [x, y] of [[t.x + 5, t.y + 5], [t.x + 75, t.y + 5], [t.x + 15, t.y + 15]]) bunExpect(white(s.at(x, y))).toBe(true);
+    for (const [x, y] of [[t.x + 40, t.y + 3], [t.x + 40, t.y + 57], [t.x + 5, t.y + 57]]) bunExpect(red(s.at(x, y))).toBe(true);
+
+    // The notch: inside, right of the concave shoulder near the top, and
+    // between the rounded bottom corners.
+    for (const [x, y] of [[n.x + 60, n.y + 30], [n.x + 25, n.y + 4], [n.x + 95, n.y + 4], [n.x + 60, n.y + 58]]) {
+      bunExpect(red(s.at(x, y))).toBe(true);
+    }
+    // Outside: the shoulders' hollows, the rounded corners, and the glow
+    // where it spills above, left and below the element.
+    for (const [x, y] of [
+      [n.x + 5, n.y + 12],
+      [n.x + 3, n.y + 40],
+      [n.x + 116, n.y + 30],
+      [n.x + 21, n.y + 58],
+      [n.x + 99, n.y + 58],
+      [n.x + 60, n.y - 8],
+      [n.x - 10, n.y + 30],
+      [n.x + 60, n.y + 70],
+    ]) bunExpect(white(s.at(x, y))).toBe(true);
+
+    // evenodd cuts the inner square out; nonzero, both squares wound the
+    // same way, keeps it.
+    bunExpect(white(s.at(h.x + 30, h.y + 30))).toBe(true);
+    bunExpect(red(s.at(h.x + 5, h.y + 5))).toBe(true);
+    bunExpect(red(s.at(z.x + 30, z.y + 30))).toBe(true);
+    bunExpect(s.count(h, red)).toBeGreaterThan(2600); // 3600 - 900
+    bunExpect(s.count(h, red)).toBeLessThan(2800);
+
+    // A press outside the shape reaches what is under it; inside it is the
+    // element's. The glow that spills above the notch is not hit either.
+    const click = async (x: number, y: number) => {
+      await app.send("mouse", { x, y, kind: "click" });
+      await sleep(100);
+    };
+    await click(t.x + 15, t.y + 15);
+    await click(t.x + 40, t.y + 45);
+    await click(n.x + 4, n.y + 40);
+    await click(n.x + 60, n.y + 30);
+    await click(n.x + 60, n.y - 8);
+    const hits = await until(
+      async () => JSON.parse(String(await app.eval("JSON.stringify(globalThis.cpsHits)"))) as string[],
+      (h) => h.length >= 5,
+    );
+    bunExpect(hits).toEqual(["pad", "cps-tri", "pad", "cps-notch", "pad"]);
+    await app.eval(`(document.getElementById("cps-pad").remove(), 0)`);
+  }, T);
+
+  test("an inline path() rewritten every frame clips to the frame's shape", async () => {
+    // The overlay's spring rewrites `clip-path: path(...)` inline on every
+    // animation frame; each frame's shape is the one that clips.
+    await app.eval(`(() => {
+      const pad = document.createElement("div");
+      pad.id = "cps-pad";
+      pad.setAttribute("style", ${JSON.stringify(PAD)});
+      const el = document.createElement("div");
+      el.id = "cps-anim";
+      el.setAttribute("style", "position: absolute; left: 10px; top: 10px; width: 140px; height: 40px; background-color: rgb(255, 0, 0)");
+      pad.appendChild(el);
+      document.body.appendChild(pad);
+      globalThis.cpsAnimate = (from, to, frames) => new Promise((done) => {
+        const gaps = [];
+        let i = 0, last = performance.now();
+        const step = (now) => {
+          gaps.push(now - last);
+          last = now;
+          const w = from + ((to - from) * i) / frames;
+          el.style.clipPath = "path('M0 0 H" + w + " Q" + (w + 8) + " 20 " + w + " 40 H0 Z')";
+          if (i++ < frames) requestAnimationFrame(step);
+          else done(gaps.slice(2));
+        };
+        requestAnimationFrame(step);
+      });
+      return 0;
+    })()`);
+    const a = await box("#cps-anim");
+    // `eval` does not wait for a promise: the animation leaves its frame
+    // gaps in a global when it is done.
+    const animate = async (from: number, to: number) => {
+      await app.eval(`(globalThis.cpsGaps = null, cpsAnimate(${from}, ${to}, 40).then((g) => (globalThis.cpsGaps = g)), 0)`);
+      return (await until(
+        async () => JSON.parse(String(await app.eval("JSON.stringify(globalThis.cpsGaps)"))) as number[] | null,
+        (g) => g !== null,
+        10_000,
+      )) as number[];
+    };
+    const gaps = await animate(10, 60);
+    let s = await until(shoot, (s) => red(s.at(a.x + 55, a.y + 20)) && white(s.at(a.x + 75, a.y + 20)));
+    bunExpect(red(s.at(a.x + 55, a.y + 20))).toBe(true);
+    bunExpect(red(s.at(a.x + 63, a.y + 20))).toBe(true); // the bulge of the curve
+    bunExpect(white(s.at(a.x + 75, a.y + 20))).toBe(true);
+    bunExpect(white(s.at(a.x + 62, a.y + 2))).toBe(true);
+    await animate(60, 120);
+    s = await until(shoot, (s) => red(s.at(a.x + 115, a.y + 20)));
+    bunExpect(red(s.at(a.x + 115, a.y + 20))).toBe(true);
+    bunExpect(white(s.at(a.x + 134, a.y + 20))).toBe(true);
+    // Frames keep coming while the clip changes every one of them.
+    const mean = gaps.reduce((x, y) => x + y, 0) / gaps.length;
+    console.log(`clip-path path() animation: ${gaps.length} frames, mean rAF gap ${mean.toFixed(2)} ms`);
+    bunExpect(mean).toBeLessThan(40);
+    await app.eval(`(document.getElementById("cps-pad").remove(), 0)`);
+  }, T);
+
+  test("nested clips intersect: a circle inside a polygon, and a polygon inside a polygon", async () => {
+    await app.eval(`(() => {
+      const pad = document.createElement("div");
+      pad.id = "cps-pad";
+      pad.setAttribute("style", ${JSON.stringify(PAD)});
+      const outer = (id, left) => {
+        const el = document.createElement("div");
+        el.id = id;
+        el.setAttribute("style", "position: absolute; top: 10px; left: " + left + "px; width: 100px; height: 100px; clip-path: polygon(0 0, 100% 0, 0 100%)");
+        pad.appendChild(el);
+        return el;
+      };
+      const inner = (parent, clip) => {
+        const el = document.createElement("div");
+        el.setAttribute("style", "width: 100px; height: 100px; background-color: rgb(255, 0, 0); clip-path: " + clip);
+        parent.appendChild(el);
+      };
+      // A rounded mask inside the layer: circle(40%), centre (50, 50), r 40.
+      inner(outer("cps-o1", 10), "circle(40%)");
+      // A second layer inside the first: the upper-right triangle.
+      inner(outer("cps-o2", 130), "polygon(0 0, 100% 0, 100% 100%)");
+      // A rounded overflow clip inside the layer.
+      const o3 = outer("cps-o3", 250);
+      const round = document.createElement("div");
+      round.setAttribute("style", "width: 100px; height: 100px; border-radius: 50%; overflow: hidden");
+      o3.appendChild(round);
+      inner(round, "none");
+      document.body.appendChild(pad);
+      return 0;
+    })()`);
+    const o1 = await box("#cps-o1");
+    const o2 = await box("#cps-o2");
+    const o3 = await box("#cps-o3");
+    const s = await until(shoot, (s) => red(s.at(o1.x + 35, o1.y + 35)) && red(s.at(o2.x + 50, o2.y + 20)));
+    // In both, in the triangle only, in the circle only.
+    bunExpect(red(s.at(o1.x + 35, o1.y + 35))).toBe(true);
+    bunExpect(white(s.at(o1.x + 12, o1.y + 12))).toBe(true);
+    bunExpect(white(s.at(o1.x + 62, o1.y + 62))).toBe(true);
+    // The two triangles leave the top one, apex at the centre.
+    bunExpect(red(s.at(o2.x + 50, o2.y + 20))).toBe(true);
+    bunExpect(white(s.at(o2.x + 20, o2.y + 50))).toBe(true);
+    bunExpect(white(s.at(o2.x + 80, o2.y + 50))).toBe(true);
+    bunExpect(s.count(o2, red)).toBeGreaterThan(2350); // 100 * 50 / 2 = 2500
+    bunExpect(s.count(o2, red)).toBeLessThan(2650);
+    // The disc of `overflow: hidden` and `border-radius: 50%`, under the
+    // triangle.
+    bunExpect(red(s.at(o3.x + 30, o3.y + 30))).toBe(true);
+    bunExpect(white(s.at(o3.x + 4, o3.y + 4))).toBe(true);
+    bunExpect(white(s.at(o3.x + 60, o3.y + 60))).toBe(true);
+    await app.eval(`(document.getElementById("cps-pad").remove(), 0)`);
+  }, T);
+});

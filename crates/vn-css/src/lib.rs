@@ -26,6 +26,7 @@ mod element;
 mod has;
 mod keyframes;
 mod mapper;
+mod path_data;
 mod media;
 mod prefix;
 pub mod perf;
