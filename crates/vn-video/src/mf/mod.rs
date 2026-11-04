@@ -101,6 +101,29 @@ pub unsafe fn set_shared_device(ptr: *mut c_void, generation: u64) {
     SHARED_GENERATION.store(generation, Ordering::Release);
 }
 
+/// `AddRef` on a texture a [`GpuFrame`](crate::GpuFrame) names
+/// ([`HeldGpuFrame`](crate::HeldGpuFrame)).
+///
+/// # Safety
+/// `texture` is null or a live COM pointer.
+pub(crate) unsafe fn retain_texture(texture: *mut c_void) {
+    // SAFETY: the caller's.
+    if let Some(unknown) = unsafe { windows::core::IUnknown::from_raw_borrowed(&texture) } {
+        std::mem::forget(unknown.clone());
+    }
+}
+
+/// `Release` of a reference [`retain_texture`] took.
+///
+/// # Safety
+/// `texture` is null or a pointer `retain_texture` was given.
+pub(crate) unsafe fn release_texture(texture: *mut c_void) {
+    if !texture.is_null() {
+        // SAFETY: the caller's: it owns the reference this drops.
+        drop(unsafe { windows::core::IUnknown::from_raw(texture) });
+    }
+}
+
 /// The renderer's device if one was published, else a private one built the
 /// same way. `bool` = "this is the renderer's own device".
 fn device() -> Result<(ID3D11Device, bool), MediaError> {
@@ -746,6 +769,17 @@ impl VideoBackend for MediaEngineBackend {
 
     fn seeking(&self) -> bool {
         unsafe { self.engine.IsSeeking() }.as_bool()
+    }
+
+    fn audible(&self) -> bool {
+        // The engine's own answers: what it renders, not what was pushed.
+        unsafe {
+            self.engine.HasAudio().as_bool()
+                && !self.engine.IsPaused().as_bool()
+                && !self.engine.IsEnded().as_bool()
+                && !self.engine.GetMuted().as_bool()
+                && self.engine.GetVolume() > 0.0
+        }
     }
 
     fn ready_state(&self) -> ReadyState {

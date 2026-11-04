@@ -21,6 +21,7 @@ import {
   resolveTransitionHooks,
   setTransitionHooks,
   Static,
+  Teleport,
   toRaw,
   useTransitionState,
   version,
@@ -49,6 +50,9 @@ import { installSelection } from "./selection";
 // `Element.animate()`, `Animation`, `KeyframeEffect` and `document.timeline`
 // over the host's script-animation layer (crates/vn-css/src/animator/script.rs).
 import { installWaapi } from "./waapi";
+// The painted roots of the `<VnWindow>`s: a node under one is in that window's
+// document (`windowRootOf`).
+import { VnWindow, WINDOW_ROOT, windowRoots } from "./vnwindow";
 
 // ---- the realm a reload keeps (m26 client sweep #3) ------------------------
 //
@@ -1292,8 +1296,10 @@ const handlers = new WeakMap<MirrorNode, HandlerMap>();
 // separately below: every hook's parameter types come from the renderer that
 // calls them, so nothing here can drift out of step with what Vue passes.
 const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
-  createElement: (type, namespace) => {
+  createElement: (type, namespace, _is, props) => {
     const el = mk(__vn_create_element(I(type)), 1, type);
+    // `<VnWindow>`'s root: registered before its content mounts (vnwindow.ts).
+    if (props && (props as Record<symbol, unknown>)[WINDOW_ROOT]) windowRoots.add(el);
     // `<svg>` and what Vue renders inside it, and `<math>`: not HTML elements.
     // Their `tagName` keeps the name's case (`svg`, `linearGradient`), as a
     // browser's does, and `instanceof SVGElement` / `MathMLElement` hold
@@ -1380,12 +1386,146 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
   // "Current renderer does not support string target" and renders nothing.
   //
   // The document roots a browser component reaches for all mean "the app root"
-  // here; anything else goes through the real matcher.
+  // here; anything else goes through the real matcher. A Teleport inside a
+  // `<VnWindow>` asks through `windowTeleport` instead, where they mean that
+  // window's root.
   querySelector: (sel) => {
-    if (sel === "body" || sel === "html" || sel === ":root" || sel === "#app") return appRoot;
+    if (DOCUMENT_ROOTS.has(sel)) return appRoot;
     return queryOne(sel, appRoot ? appRoot.__vnId : 0);
   },
 };
+
+/** The selectors that name the document itself, as a Teleport target. */
+const DOCUMENT_ROOTS = new Set(["body", "html", ":root", "#app"]);
+
+/**
+ * The `<VnWindow>` root `node` paints under, or `null` for the main window.
+ *
+ * A pop-out's content stays in this ONE tree (MULTIWINDOW.md §1), so nothing
+ * in the tree's shape says which window a node is in: its nearest registered
+ * window root does (vnwindow.ts `windowRoots`). Free without a pop-out.
+ */
+function windowRootOf(node: MirrorNode | null | undefined): MirrorElement | null {
+  if (windowRoots.size === 0) return null;
+  for (let n = node; n; n = n.parentNode) if (windowRoots.has(n)) return n as MirrorElement;
+  return null;
+}
+
+/** What `mountingWindowRoot` reads of a component instance. */
+interface MountingInstance {
+  type: unknown;
+  parent: MountingInstance | null;
+  subTree?: { el?: unknown } | null;
+}
+
+/**
+ * The `<VnWindow>` root that `container`, NOT in the document yet, will paint
+ * under — or `null`.
+ *
+ * Vue mounts an element's children before it inserts the element, so content
+ * that mounts with its window (or with any new element in it) hands a
+ * `<Teleport>` a container whose parents stop short of the window root, and
+ * `windowRootOf` cannot see the window. The components can: the nearest
+ * `<VnWindow>` above the Teleport's, whose root element exists before its
+ * content mounts. A container that IS in the document and under no window root
+ * is in the main window, whatever its components are.
+ */
+function mountingWindowRoot(container: MirrorNode | null | undefined, parent: MountingInstance | null | undefined): MirrorElement | null {
+  if (windowRoots.size === 0 || !container) return null;
+  for (let n: MirrorNode | null = container; n; n = n.parentNode) if (n === appRoot) return null;
+  for (let i = parent; i; i = i.parent) {
+    if (i.type !== VnWindow) continue;
+    const el = i.subTree?.el as MirrorElement | null | undefined;
+    return el && windowRoots.has(el) ? el : null;
+  }
+  return null;
+}
+
+/**
+ * `<Teleport to="body">` inside a `<VnWindow>` lands in THAT window.
+ *
+ * In a browser, content in a popup is in the popup's document, and a portal
+ * that teleports to "body" from there (`document.body` of the component's own
+ * document) stays in the popup. Here a pop-out's subtree is part of the main
+ * tree, so the renderer's `querySelector("body")` alone would carry every
+ * reka-ui menu, tooltip and dialog opened in a pop-out back to the MAIN
+ * window. Teleport resolves a string `to` through the renderer options it is
+ * handed (`internals.o.querySelector`), at mount, on a `to` change and in a
+ * deferred mount; this hands it options whose document roots are the window
+ * root its own placeholder sits under (or will, once the content it mounts
+ * with is inserted: `mountingWindowRoot`). A `to` that is a selector for
+ * anything else, or an element, is untouched.
+ */
+const TELEPORT_ORIGINAL = Symbol.for("vn.teleport.original");
+type TeleportProcess = ((this: unknown, ...args: unknown[]) => unknown) & { [TELEPORT_ORIGINAL]?: TeleportProcess };
+interface TeleportInternals {
+  o: { querySelector?: (sel: string) => unknown };
+}
+{
+  const impl = Teleport as unknown as { process: TeleportProcess };
+  // `location.reload()` evaluates this module again (see the top of this
+  // file), maybe over the same Teleport: the wrapper installed now wraps Vue's
+  // own `process`, never a predecessor's wrapper, whose window registry is the
+  // old app's.
+  let process = impl.process;
+  while (process[TELEPORT_ORIGINAL]) process = process[TELEPORT_ORIGINAL];
+  const wrapped: TeleportProcess = function (this: unknown, ...args: unknown[]) {
+    // process(n1, n2, container, anchor, parentComponent, parentSuspense,
+    //         namespace, slotScopeIds, optimized, internals)
+    const container = args[2] as MirrorNode | null;
+    const root = windowRootOf(container) ?? mountingWindowRoot(container, args[4] as MountingInstance | null);
+    const internals = args[9] as TeleportInternals | undefined;
+    if (root && internals?.o) {
+      const select = internals.o.querySelector;
+      args[9] = {
+        ...internals,
+        o: {
+          ...internals.o,
+          querySelector: (sel: string) => (DOCUMENT_ROOTS.has(sel) ? root : select ? select(sel) : null),
+        },
+      };
+    }
+    return process.apply(this, args);
+  };
+  wrapped[TELEPORT_ORIGINAL] = process;
+  impl.process = wrapped;
+}
+
+/**
+ * The document a node in a `<VnWindow>` belongs to: its `ownerDocument`.
+ *
+ * A browser popup's nodes are in the POPUP's document, whose root element is
+ * the popup's viewport — so `el.ownerDocument.documentElement.clientWidth` is
+ * the popup's width, which is how floating-ui (and with it every reka-ui
+ * popper: a context menu, a tooltip) measures the viewport it keeps a menu
+ * inside. One realm and one `window` stay one (D-M01): this document is the
+ * real one with its root elements (`documentElement`, `body`,
+ * `scrollingElement`) answered by the window's root, and everything else —
+ * listeners, `activeElement`, `createElement`, queries — the real document's,
+ * so a listener added through it hears the same events. Like a popup's
+ * document, it is not `=== document`.
+ */
+const WINDOW_DOCUMENTS = new WeakMap<object, object>();
+function windowDocument(root: MirrorElement): object {
+  const known = WINDOW_DOCUMENTS.get(root);
+  if (known) return known;
+  const real = globalThis.document as unknown as object;
+  const bound = new WeakMap<object, unknown>();
+  const doc = new Proxy(real, {
+    get(target, key) {
+      if (key === "documentElement" || key === "body" || key === "scrollingElement") return root;
+      const v: unknown = Reflect.get(target, key, target);
+      if (typeof v !== "function") return v;
+      // A method answers for the real document (its `this` is a native
+      // receiver), and the same one on every read.
+      let b = bound.get(v);
+      if (!b) bound.set(v, (b = (v as (...a: unknown[]) => unknown).bind(target)));
+      return b;
+    },
+  });
+  WINDOW_DOCUMENTS.set(root, doc);
+  return doc;
+}
 
 /**
  * The renderer's insert, which is also a move, and the DOM methods' too.
@@ -2643,7 +2783,16 @@ defineDom(
   },
   NODE_MEMBERS,
 );
-defineDomGet("ownerDocument", () => globalThis.document, undefined, NODE_MEMBERS);
+// A node painted in a `<VnWindow>` is in that window's document (`windowDocument`).
+defineDomGet(
+  "ownerDocument",
+  function (this: MirrorNode) {
+    const root = windowRootOf(this);
+    return root ? windowDocument(root) : globalThis.document;
+  },
+  undefined,
+  NODE_MEMBERS,
+);
 defineDomGet(
   "nodeType",
   function (this: MirrorNode) {
@@ -5738,6 +5887,19 @@ function inputInit(name: string, a: number, b: number, data: unknown) {
   };
 }
 
+/**
+ * A wheel's `clientX` / `clientY`: where the pointer was, which the dispatcher
+ * hands `synthesize` as the event's `data` (its `a`/`b` are the deltas). A
+ * wheel built without one (a test's) is at 0, 0, as `new WheelEvent` is.
+ */
+function wheelAt(data: unknown): { clientX: number; clientY: number } {
+  const at = data as { clientX?: unknown; clientY?: unknown } | null | undefined;
+  return {
+    clientX: typeof at?.clientX === "number" ? at.clientX : 0,
+    clientY: typeof at?.clientY === "number" ? at.clientY : 0,
+  };
+}
+
 function synthesize(
   name: string,
   a: number,
@@ -5804,7 +5966,7 @@ function synthesize(
         break;
       case "wheel":
         if (typeof WheelEvent === "function")
-          return new WheelEvent(name, { ...common, ...M, deltaX: a, deltaY: b });
+          return new WheelEvent(name, { ...common, ...M, ...wheelAt(data), deltaX: a, deltaY: b });
         break;
       case "keydown":
       case "keyup":
@@ -5876,7 +6038,7 @@ function synthesize(
   const ev = new CustomEvent(name, name === "input" || name === "beforeinput" ? inputInit(name, a, b, data) : common);
   const extra =
     name === "wheel"
-      ? { deltaX: a, deltaY: b, ...M }
+      ? { deltaX: a, deltaY: b, ...wheelAt(data), ...M }
       : name === "keydown" || name === "keyup"
         ? { key: key ?? "", ...M }
         : name === "input" || name === "beforeinput"
@@ -6167,10 +6329,13 @@ function activatableOnPath(target: MirrorNode): boolean {
   return false;
 }
 
-__vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data) => {
+__vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   const name = CODE_TO_NAME[evCode];
   const target = nodeById(nodeId);
   if (!name || !target) return true;
+  // A wheel's pointer position rides beside its deltas (`VnDispatcher`); it
+  // reaches `synthesize` as the event's data.
+  if (name === "wheel" && x !== undefined) data = { clientX: x, clientY: y ?? 0 };
   // The host delivers `selectionchange` at the root, whose listener bit the
   // document's listeners arm; a browser fires it AT the document.
   if (name === "selectionchange") return propagateAtDocument(name, synthesize(name, a, b, c, d, key));

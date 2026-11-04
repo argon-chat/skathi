@@ -35,14 +35,22 @@
 //! platform quirks (retry on a busy clipboard, CF_UNICODETEXT vs CF_TEXT, the
 //! trailing NUL) are solved once, in the place that already had to solve them.
 //!
+//! # Items: the one place this crate opens the clipboard itself
+//!
+//! `navigator.clipboard.write([new ClipboardItem({...})])` and `read()` go to
+//! the Windows clipboard directly (`win.rs`), because gpui's `ClipboardItem`
+//! has no HTML entry and writes an image as its PNG alone — and the apps that
+//! paste only bitmaps (Paint, Word, most of what the owner pastes a picture
+//! into) need the `CF_DIBV5` / `CF_DIB` Chrome writes beside it. That is not
+//! the race the section above is about: both paths open and close the
+//! clipboard around one call, on the one thread JS and gpui's text input share,
+//! so they are never inside it at the same time.
+//!
 //! # There is no tier-2 extension here
 //!
 //! Unlike windowing and permissions, the clipboard needs no `appClipboard`:
-//! `navigator.clipboard.readText()`/`writeText()` say everything a desktop app
-//! wants to say. The one thing a browser has that we do not — item-based
-//! `read()`/`write()` with images — is a *missing* capability, and inventing a
-//! namespaced spelling for something that does not work yet would be worse than
-//! the honest rejection redjs already returns.
+//! `navigator.clipboard` with `ClipboardItem` says everything a desktop app
+//! wants to say.
 //!
 //! # Frame phase
 //!
@@ -92,7 +100,37 @@ impl ClipboardHost for GpuiClipboard {
         with_app(|cx| cx.write_to_clipboard(ClipboardItem::new_string(text.to_string())))
             .ok_or_else(|| NO_FRAME.to_string())
     }
+
+    fn item_types(&self) -> &'static [&'static str] {
+        #[cfg(windows)]
+        return win::TYPES;
+        #[cfg(not(windows))]
+        return &[];
+    }
+
+    fn write_items(&self, items: &[(String, Vec<u8>)]) -> Result<(), String> {
+        #[cfg(windows)]
+        return win::write(items);
+        #[cfg(not(windows))]
+        {
+            let _ = items;
+            Err(format!("{} has no item clipboard in this build", self.platform()))
+        }
+    }
+
+    fn read_items(&self) -> Result<Vec<(String, Vec<u8>)>, String> {
+        #[cfg(windows)]
+        return win::read();
+        #[cfg(not(windows))]
+        {
+            let text = self.read_text()?;
+            Ok(if text.is_empty() { Vec::new() } else { vec![("text/plain".to_string(), text.into_bytes())] })
+        }
+    }
 }
+
+#[cfg(windows)]
+mod win;
 
 /// Installs the backend into redjs.
 ///

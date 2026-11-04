@@ -397,7 +397,7 @@ export const COMMANDS: CommandSpec[] = [
       "means (gpui carries the platform's opposite sign; the conversion is one place on each " +
       "side). Aim it with a selector or with x + y.",
     usage: [
-      "  wheel    [selector] [--x N --y N] --dy N [--dx N]",
+      "  wheel    [selector] [--x N --y N] --dy N [--dx N] [--ctrl] [--shift] [--alt]",
       "                                     a REAL wheel event through gpui's hit",
       "                                     test — what an app's own @wheel handler",
       "                                     sees. DOM signs: --dy 200 scrolls DOWN.",
@@ -411,16 +411,20 @@ export const COMMANDS: CommandSpec[] = [
       y: int("window y, when no selector is given"),
       dy: int("vertical delta, DOM signs: positive scrolls DOWN"),
       dx: int("horizontal delta"),
+      ctrl: bool("Ctrl is held (a ctrl+wheel zooms in most apps)"),
+      shift: bool("Shift is held"),
+      alt: bool("Alt is held"),
     },
     cli: (rest, flags) => {
       const dy = num(flags.dy) ?? 0;
       const dx = num(flags.dx) ?? 0;
       if (!dy && !dx) die("wheel needs --dy (or --dx); DOM signs, so --dy 200 scrolls down");
-      if (rest[0]) return withIndex({ selector: rest[0], dx, dy }, flags);
+      const keys = { ...(flags.ctrl ? { ctrl: true } : {}), ...(flags.shift ? { shift: true } : {}), ...(flags.alt ? { alt: true } : {}) };
+      if (rest[0]) return withIndex({ selector: rest[0], dx, dy, ...keys }, flags);
       const x = num(flags.x);
       const y = num(flags.y);
       if (x === undefined || y === undefined) die("wheel needs a selector, or both --x and --y");
-      return { dx, dy, x, y };
+      return { dx, dy, x, y, ...keys };
     },
   },
   {

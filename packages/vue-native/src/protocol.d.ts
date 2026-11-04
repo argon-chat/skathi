@@ -153,14 +153,17 @@ declare function __vn_set_layout_hook(fn: (op: number) => number): void;
 declare function __vn_layout_watch(observing: boolean): void;
 
 /**
- * `(nodeId, code, a, b, c, d, key, data) -> proceed`.
+ * `(nodeId, code, a, b, c, d, key, data, x, y) -> proceed`.
  *
  * The four numbers and the optional string are ONE payload shape reused for
  * every event; `VnEventPayload` below documents what each slot means per
  * event, mirroring `vn_tree::EventPayload`'s own doc comment. `data` is an
  * object the event carries, `undefined` for every event but copy / cut /
  * paste, where it is the `clipboardData` DataTransfer the host built
- * (`vn_tree::dispatch_event_with`).
+ * (`vn_tree::dispatch_event_with`). `x`/`y` are where the pointer is, in the
+ * window's CSS px, for an event whose own numbers are taken by something else:
+ * a `wheel` (its `clientX`/`clientY`; `a`/`b` are its deltas). `undefined`
+ * for every other event.
  */
 type VnDispatcher = (
   node: VnNodeId,
@@ -171,6 +174,8 @@ type VnDispatcher = (
   d: number,
   key: string | undefined,
   data: unknown,
+  x?: number,
+  y?: number,
 ) => boolean;
 
 /**
@@ -504,7 +509,9 @@ declare function __vn_media_events(id: VnNodeId): string;
  * `options` is JSON — `<VnWindow>`'s props, verbatim:
  * `{ title?, x?, y?, width?, height?, chrome?, backdrop?, alwaysOnTop?,
  *    resizable?, minWidth?, minHeight?, titleBarHeight?, activate?, visible?,
- *    cover?, taskbar?, fullResolution? }` — the last four are §7.9's.
+ *    cover?, taskbar?, fullResolution?, ignoreMouseEvents?, focusable?,
+ *    contentProtection?, monitor? }` — `visible`…`fullResolution` are §7.9's,
+ *    the last four an overlay's (§7.11).
  *
  * `onClose` fires with the window, however it closed — the X button,
  * `__vn_window_close`, or the primary window going away. `onEvent` is the push
@@ -532,8 +539,10 @@ declare function __vn_window_open(
 
 /**
  * The LIVE half of `<VnWindow>`'s props: `title` renames the window,
- * `alwaysOnTop` re-stacks it, `visible` shows or hides it and
- * `fullResolution` pins or releases its images' full decodes. Everything else
+ * `alwaysOnTop` re-stacks it, `visible` shows or hides it,
+ * `fullResolution` pins or releases its images' full decodes, and
+ * `ignoreMouseEvents`, `contentProtection` and `monitor` (§7.11) make it
+ * click-through, leave it out of capture and move it. Everything else
  * gpui fixes at creation, so a changed value ADVISES and does nothing — never
  * a silent no-op (docs/WINDOWING.md D-25/D-30).
  */

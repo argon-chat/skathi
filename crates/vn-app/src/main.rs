@@ -757,6 +757,7 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
         // frame's wave. `on_next_frame` re-arms unconditionally, so a queued
         // event is at most ONE frame late — 6 ms at 165 Hz — and no new wake
         // seam was needed. See crates/vn-voice/CONTRACT.md §3.
+        #[cfg(feature = "voice")]
         vn_voice::pump();
         // Settled `appPermissions.request()` promises, same publication, same
         // reasoning. The `change` half is not here: `PermissionStatus` events
@@ -1288,6 +1289,7 @@ fn main() {
         // Left to `vn_voice`'s thread-local destructor, the engines would be
         // dropped after `ExitProcess` killed those threads: nobody sees the
         // leave until the server times the peer out. Bounded like IndexedDB's.
+        #[cfg(feature = "voice")]
         std::mem::forget(cx.on_app_quit(|_| {
             shutdown::step("voice", || vn_voice::shutdown_all(std::time::Duration::from_secs(2)));
             std::future::ready(())
@@ -1347,9 +1349,12 @@ fn main() {
             // one Vue subtree painted by a second OS window (docs/MULTIWINDOW.md).
             popout::install(rt);
             // `__vn_voice_*` — the five host fns behind "livekit-client".
-            // Registered in every build; the JS shim is pre-seeded into the
-            // vendor bundle either way, and an app that never constructs a
-            // Room costs one idle registration.
+            // Registered in every build with the `voice` feature; the JS shim
+            // is pre-seeded into the vendor bundle either way, and an app that
+            // never constructs a Room costs one idle registration. Without the
+            // feature the globals do not exist, and the shim says so at the
+            // first `new Room()` (src/livekit.ts).
+            #[cfg(feature = "voice")]
             vn_voice::install(rt);
             // `navigator.clipboard` over gpui's clipboard — the same one the
             // native <input> uses for Ctrl+C, so there is never a second owner

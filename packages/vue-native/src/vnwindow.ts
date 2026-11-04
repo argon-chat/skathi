@@ -35,7 +35,7 @@
 // it means "a second DOCUMENT", which is a different feature from "one tree,
 // two windows".
 
-import { defineComponent, h, onBeforeUnmount, onMounted, ref, watch } from "@vue/runtime-core";
+import { defineComponent, h, mergeProps, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from "@vue/runtime-core";
 import type { PropType } from "@vue/runtime-core";
 
 /**
@@ -89,7 +89,36 @@ export interface VnWindowRect {
  * `vn.config.json`'s `titleBarStyle` and `resizable` (docs/WINDOWING.md
  * D-25/D-30). Close and re-open the window (`v-if`) to change them.
  */
-const CREATION_TIME_ONLY = ["chrome", "backdrop", "resizable", "minWidth", "minHeight", "cover", "taskbar"] as const;
+const CREATION_TIME_ONLY = [
+  "chrome",
+  "backdrop",
+  "resizable",
+  "minWidth",
+  "minHeight",
+  "cover",
+  "taskbar",
+  "focusable",
+] as const;
+
+/**
+ * The prop that marks the element `<VnWindow>` renders as a window's painted
+ * root. A symbol: Vue's prop loop (`for…in`) never sees one, so it never
+ * reaches `patchProp` or the host, but the renderer's `createElement` is
+ * handed the props and registers the element there — BEFORE its children
+ * mount, which is when a `<Teleport>` in the window's content first asks where
+ * `body` is (runtime.ts, `windowRootOf`; content that is not inserted yet is
+ * placed by its components, `mountingWindowRoot`). Vue's attribute
+ * fall-through would drop it, which is why the root merges its own.
+ */
+export const WINDOW_ROOT: unique symbol = Symbol("vn-window-root");
+
+/**
+ * The painted roots of the mounted `<VnWindow>`s. A node under one paints in
+ * that window, so it is that window's document a `<Teleport to="body">` or an
+ * `el.ownerDocument` means (runtime.ts, `windowRootOf` / `windowDocument`).
+ * Empty without a pop-out, which is what keeps both free in the main window.
+ */
+export const windowRoots = new Set<object>();
 
 interface OpenOptions extends VnWindowBounds {
   title: string;
@@ -105,10 +134,16 @@ interface OpenOptions extends VnWindowBounds {
   cover?: string;
   taskbar: boolean;
   fullResolution: boolean;
+  ignoreMouseEvents: boolean;
+  focusable: boolean;
+  contentProtection: boolean;
+  monitor?: number;
 }
 
 export const VnWindow = /*@__PURE__*/ defineComponent({
   name: "VnWindow",
+  // The render function puts the attributes on the root itself (see there).
+  inheritAttrs: false,
   props: {
     /** The OS caption text. Live: changing it renames the window. */
     title: { type: String, default: "vue-native" },
@@ -168,6 +203,36 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
      * after a while (a viewer zooms to 1:1). Live.
      */
     fullResolution: { type: Boolean, default: false },
+    /**
+     * The mouse goes THROUGH the window to whatever is under it, in any
+     * application — Electron's `setIgnoreMouseEvents(true)`. What an overlay
+     * laid over a game is (MULTIWINDOW.md §7.11). Live. The whole window,
+     * always: there is no `forward` mode that lets clicks land on its painted
+     * parts.
+     */
+    ignoreMouseEvents: { type: Boolean, default: false },
+    /**
+     * `false`: the window is never activated — not when it is shown, not when
+     * it is clicked — has no taskbar button and no Alt-Tab entry, and the
+     * shell never hears of it, so it does not bring the taskbar up over a
+     * borderless game. Electron's `focusable: false`, which on Windows also
+     * means `skipTaskbar`. It takes no keyboard. Creation-time only.
+     */
+    focusable: { type: Boolean, default: true },
+    /**
+     * Screen capture leaves the window out (`WDA_EXCLUDEFROMCAPTURE`) —
+     * Electron's `setContentProtection(true)`. For an overlay drawn over a
+     * screen that is being shared, so it does not echo back into the stream.
+     * Live.
+     */
+    contentProtection: { type: Boolean, default: false },
+    /**
+     * With `cover="monitor"`: WHICH monitor, by index, in the order Windows
+     * enumerates them (`EnumDisplayMonitors` — the order a game-activity
+     * plugin reports a game's monitor in). Absent: the main window's. Live: a
+     * shown window moves to the new monitor.
+     */
+    monitor: { type: Number, default: undefined },
   },
   emits: {
     /** The OS window exists. Carries its gpui window id — what devtools `--window` names. */
@@ -183,7 +248,7 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
     /** `visible` became `false` and the window is off screen. */
     hide: () => true,
   },
-  setup(props, { slots, emit, expose }) {
+  setup(props, { slots, emit, expose, attrs }) {
     const el = ref<VnWindowTarget | null>(null);
     const windowId = ref(0);
     /**
@@ -236,7 +301,11 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
         visible: props.visible,
         taskbar: props.taskbar,
         fullResolution: props.fullResolution,
+        ignoreMouseEvents: props.ignoreMouseEvents,
+        focusable: props.focusable,
+        contentProtection: props.contentProtection,
       };
+      if (props.monitor !== undefined) o.monitor = props.monitor;
       if (props.backdrop !== undefined) o.backdrop = props.backdrop;
       if (props.minWidth !== undefined) o.minWidth = props.minWidth;
       if (props.minHeight !== undefined) o.minHeight = props.minHeight;
@@ -323,11 +392,19 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       if (closed || !el.value) return;
       __vn_window_close(el.value.__vnId);
     });
+    // The root leaves the registry once its content has unmounted, so a
+    // child's own unmount hooks still see the window it was in.
+    let root: object | null = null;
+    onMounted(() => (root = el.value));
+    onUnmounted(() => {
+      if (root) windowRoots.delete(root);
+    });
 
     // The LIVE props. `title` renames the window; `alwaysOnTop` re-stacks it;
-    // `visible` shows or hides it; `fullResolution` pins its images' decodes.
-    // Everything else is creation-time-only in gpui and the host advises rather
-    // than pretending — see CREATION_TIME_ONLY.
+    // `visible` shows or hides it; `fullResolution` pins its images' decodes;
+    // `ignoreMouseEvents`, `contentProtection` and `monitor` are an overlay's
+    // (§7.11). Everything else is creation-time-only in gpui and the host
+    // advises rather than pretending — see CREATION_TIME_ONLY.
     watch(
       () =>
         [
@@ -335,10 +412,14 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
           props.alwaysOnTop,
           props.visible,
           props.fullResolution,
+          props.ignoreMouseEvents,
+          props.contentProtection,
+          props.monitor,
           props.chrome,
           props.resizable,
           props.cover,
           props.taskbar,
+          props.focusable,
         ] as const,
       sync,
     );
@@ -351,8 +432,17 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
     //
     // It renders in THIS window's tree for exactly the frames between mount and
     // the deferred open; `class="vn-window-root"` is the handle an app has if
-    // it wants to style those frames.
-    return () => h("div", { ref: el, class: "vn-window-root" }, slots.default?.());
+    // it wants to style those frames. `WINDOW_ROOT` is the renderer's.
+    //
+    // The attributes an app puts on `<VnWindow>` (`class`, `data-*`, a listener)
+    // land on the root as they would fall through, but merged here: Vue's own
+    // fall-through clones the root's props with a `for…in`, which would drop
+    // the `WINDOW_ROOT` symbol and leave the window's portals in the main one.
+    return () => {
+      const root: Record<string | symbol, unknown> = mergeProps({ ref: el, class: "vn-window-root" }, attrs);
+      root[WINDOW_ROOT] = true;
+      return h("div", root, slots.default?.());
+    };
   },
 });
 

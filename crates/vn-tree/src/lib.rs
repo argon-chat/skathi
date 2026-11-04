@@ -2121,21 +2121,37 @@ pub fn dispatch_event(node: u32, event: u32, payload: &EventPayload) -> bool {
     dispatch_event_with(node, event, payload, None)
 }
 
+thread_local! {
+    /// The pointer position, window CSS px, for the next dispatch only.
+    static POINTER_AT: std::cell::Cell<Option<(f64, f64)>> = const { std::cell::Cell::new(None) };
+}
+
+/// The next [`dispatch_event`] carries the pointer at (`x`, `y`) as the
+/// dispatcher's ninth and tenth arguments: a `wheel` is a MouseEvent, and its
+/// `clientX` / `clientY` are where it happened, which its payload has no room
+/// for (its `a`/`b` are the deltas).
+pub(crate) fn pointer_at_next_dispatch(x: f64, y: f64) {
+    POINTER_AT.with(|c| c.set(Some((x, y))));
+}
+
 /// [`dispatch_event`] with an object for the event to carry, passed as the
 /// dispatcher's eighth argument: a ClipboardEvent's `clipboardData`
 /// (`crate::clipboard`). The caller keeps `data` alive across the call.
 pub fn dispatch_event_with(node: u32, event: u32, payload: &EventPayload, data: Option<Value>) -> bool {
+    // Taken first, so a position set for a dispatch that goes nowhere never
+    // reaches the next one.
+    let at = POINTER_AT.with(|c| c.take());
     let f = tree::dispatcher();
     if f == 0 {
         return true;
     }
     let span = perf::Span::start();
-    let proceed = dispatch_event_inner(f, node, event, payload, data);
+    let proceed = dispatch_event_inner(f, node, event, payload, data, at);
     perf::note_js(span.ms());
     proceed
 }
 
-fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, data: Option<Value>) -> bool {
+fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, data: Option<Value>, at: Option<(f64, f64)>) -> bool {
     // The dispatch before this one may have left its checkpoint owed: it runs
     // first, as a browser's would have between the two events.
     vn_runtime::bridge::settle_owed_drain();
@@ -2148,8 +2164,11 @@ fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, d
     if owe {
         vn_runtime::bridge::owe_drain();
     }
+    // `at`: where the pointer is, for an event that carries it beside its own
+    // four numbers — a `wheel` (render.rs), whose `a`/`b` are its deltas.
     JsRuntime::with(|rt| {
         let key = payload.key.map(|k| rt.ctx().string(k));
+        let (x, y) = at.map_or((Value::undefined(), Value::undefined()), |(x, y)| (Value::double(x), Value::double(y)));
         let args = [
             Value::int32(node as i32),
             Value::int32(event as i32),
@@ -2159,6 +2178,8 @@ fn dispatch_event_inner(f: u64, node: u32, event: u32, payload: &EventPayload, d
             Value::double(payload.d),
             key.unwrap_or_else(Value::undefined),
             data.unwrap_or_else(Value::undefined),
+            x,
+            y,
         ];
         let proceed = match rt.ctx().call(Value(f), Value::undefined(), &args) {
             Ok(v) => v.as_bool().unwrap_or(true),

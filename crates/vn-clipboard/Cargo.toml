@@ -18,3 +18,14 @@ vn-runtime = { path = "../vn-runtime", default-features = false, features = ["cl
 # `default-features = false` like every other gpui dependency in this
 # workspace except vn-app's (which enables `stacker` for the whole binary).
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
+
+# The item clipboard (src/win.rs): `write()` / `read()` of a ClipboardItem.
+# Both are already in the graph with these features (gpui_windows' clipboard
+# uses the same Win32 calls and `image`'s PNG codec), so nothing new compiles.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+] }
+image = { version = "0.25.1", default-features = false, features = ["png"] }

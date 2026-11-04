@@ -310,6 +310,32 @@ pub fn slot_name() -> String {
     }
 }
 
+/// The parts of the engine a host can be built without, in the order
+/// [`host_variant`] names them — the same list, in the same order, as
+/// `OPTIONAL` in packages/vue-native/cli/config.ts. `devtools` is the inverse
+/// of the `no-devtools` feature; the rest are default features of their own.
+pub const OPTIONAL: [(&str, bool); 6] = [
+    ("devtools", cfg!(vn_devtools)),
+    ("voice", cfg!(feature = "voice")),
+    ("audio", cfg!(feature = "audio")),
+    ("clipboard", cfg!(feature = "clipboard")),
+    ("storages", cfg!(feature = "storages")),
+    ("indexeddb", cfg!(feature = "indexeddb")),
+];
+
+/// This host's variant: `standard` when nothing optional was left out, else
+/// what was, as `no-<part>` joined by `+` in [`OPTIONAL`]'s order —
+/// `no-devtools`, `no-voice`, `no-devtools+no-voice`. `vn build` keys its host
+/// cache by it, and asks for one by it.
+pub fn host_variant() -> String {
+    let off: Vec<String> = OPTIONAL.iter().filter(|(_, on)| !on).map(|(name, _)| format!("no-{name}")).collect();
+    if off.is_empty() {
+        "standard".to_string()
+    } else {
+        off.join("+")
+    }
+}
+
 /// `--vn-host-info`: what this exe is, as one JSON line, for `vn build`'s host
 /// check. Printed only by an exe with NO payload stamped into it — a packaged
 /// app passes its argv to the app untouched.
@@ -322,6 +348,8 @@ pub fn host_info_json() -> String {
         (cfg!(feature = "audio"), "audio"),
         (cfg!(feature = "storages"), "storages"),
         (cfg!(feature = "clipboard"), "clipboard"),
+        (cfg!(feature = "indexeddb"), "indexeddb"),
+        (cfg!(feature = "voice"), "voice"),
     ] {
         if on {
             features.push(Json::s(name));
@@ -338,14 +366,7 @@ pub fn host_info_json() -> String {
         ),
         ("vueNative", Json::s(env!("VN_PKG_VERSION"))),
         ("crate", Json::s(env!("CARGO_PKG_VERSION"))),
-        (
-            "variant",
-            Json::s(if cfg!(vn_devtools) {
-                "standard"
-            } else {
-                "no-devtools"
-            }),
-        ),
+        ("variant", Json::s(host_variant())),
         ("devtools", Json::Bool(cfg!(vn_devtools))),
         ("features", Json::arr(features)),
         ("jscPin", Json::s(env!("VN_JSC_PIN"))),
@@ -398,7 +419,11 @@ mod tests {
             .get("variant")
             .and_then(crate::json::Json::as_str)
             .unwrap();
-        assert_eq!(variant == "standard", cfg!(vn_devtools));
+        assert_eq!(variant, super::host_variant());
+        // Every optional part in: the name every host built before features
+        // could be left out already carried.
+        assert_eq!(variant == "standard", super::OPTIONAL.iter().all(|(_, on)| *on));
+        assert_eq!(variant.contains("no-devtools"), !cfg!(vn_devtools));
         assert_eq!(
             v.get("payloadFormat").and_then(crate::json::Json::as_f64),
             Some(1.0)

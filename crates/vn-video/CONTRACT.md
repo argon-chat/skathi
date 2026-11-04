@@ -44,6 +44,7 @@ report §3 and §8.
 | `present` | `OnVideoStreamTick` + `TransferVideoFrame` | `hasNewPixelBuffer` + `copyPixelBuffer` |
 | `drain_events` | `IMFMediaEngineNotify` queue | KVO + `AVPlayerItemDidPlayToEndTime` + periodic observer |
 | `suspend` / `resume` | pause + release our own textures (see §5) | pause + release the `AVPlayerItemVideoOutput` |
+| `audible` | `HasAudio && !IsPaused && !IsEnded && !GetMuted && GetVolume > 0` | `rate != 0 && !isMuted && volume > 0` over an asset with an audible track |
 
 **No platform type appears in `backend.rs`, `state.rs` or `element.rs`.** That is
 the invariant that keeps the port honest; if a future backend needs the trait to
@@ -91,6 +92,13 @@ let element = vn_video::video(&mut state, &options, window, cx);
   the identical hazard `crates/vn-lottie/CONTRACT.md` §3 documents.
 * **`take_all_images()` on teardown**, through a pending-drops queue if the GC
   site has no `Window` — which it does not.
+* **A zero-copy frame is uploaded in its tick, or HELD.** Its texture is
+  borrowed from the backend, which reuses it for the next frame and releases
+  it on a suspend, a new size or its own drop. A frame for a pop-out waits for
+  the pop-out's draw, and a hidden pop-out draws once, 500 ms after its hide.
+  So the queue keeps a `HeldGpuFrame`, which holds a reference of its own to
+  the texture. Until m26 it kept the bare pointer, and closing a media viewer
+  while its video played could take the process down at that draw.
 * **`suspend()` when the node stops being painted.** See §5.
 * **A playing video is not a reason to repaint; a new frame of a video that can
   be on screen is** (m26). The pump ticks every video every frame regardless, so
@@ -182,9 +190,21 @@ gpui's existing `PaintSurface` / `CVPixelBuffer` path.
 
 * A `<video>` node that leaves the painted tree — unmounted, or parked in a
   `<KeepAlive>` cache container — is **suspended**: paused, and our own textures
-  (the transfer target plus two staging surfaces) given back. `display: none`
-  deliberately does NOT suspend, because a browser keeps decoding a hidden
-  video.
+  (the transfer target plus two staging surfaces) given back. A playing one is
+  paused first the way HTML's removal runs the pause steps: it fires
+  `timeupdate` and `pause`, reads `paused`, and is still paused when it is put
+  back (m26). `display: none` deliberately does NOT suspend, because a browser
+  keeps decoding a hidden video, and neither does a hidden `<VnWindow>`, whose
+  video plays on as one in a minimised browser window does.
+* **What a script sets through the element outlives the decoder** (m26).
+  `muted`, `volume`, `playbackRate`, `loop` and a `play()` / `pause()` made
+  before there is a decoder are the element's state in HTML. They are kept per
+  node (`vn_tree::video::Api`) and applied to every decoder the node gets: the
+  first one, made by the paint after the `src` arrives, and one rebuilt for a
+  new `src` or a lost device. Before, a write that came first was lost, and
+  Argon's chat previews, which set `muted` in `onMounted` before their `src`
+  and autoplay, played with sound. An attribute changed later wins over an
+  earlier script write, as the newer word.
 
   Liveness is answered by **reachability from the tree root**, not by "was the
   element built last frame". gpui rebuilds only when the host notifies, so a

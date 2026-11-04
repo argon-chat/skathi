@@ -69,8 +69,8 @@ pub mod stub;
 pub mod mf;
 
 pub use backend::{
-    CanPlay, FrameRequest, GpuFrame, MediaError, MediaErrorCode, MediaEvent, MediaSource,
-    NetworkState, ReadyState, VideoBackend, VideoFrame,
+    CanPlay, FrameRequest, GpuFrame, HeldGpuFrame, MediaError, MediaErrorCode, MediaEvent,
+    MediaSource, NetworkState, ReadyState, VideoBackend, VideoFrame,
 };
 pub use element::{video, VideoFit, VideoOptions};
 pub use state::{Advance, VideoState};

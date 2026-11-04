@@ -261,6 +261,12 @@ impl VideoState {
         self.suspended
     }
 
+    /// Is this element's sound playing out now (`VideoBackend::audible`)? A
+    /// suspended element has no pipeline, so no sound.
+    pub fn audible(&self) -> bool {
+        !self.suspended && self.backend.audible()
+    }
+
     // -- the property surface ------------------------------------------------
 
     pub fn current_time(&self) -> f64 {

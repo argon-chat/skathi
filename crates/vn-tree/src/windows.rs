@@ -271,10 +271,14 @@ pub struct PendingMouseMove {
 
 /// A decoded `<video>` frame that still lives in the renderer's GPU memory and
 /// has to reach one window's sprite atlas before that window's next draw.
+///
+/// Its texture is HELD, not borrowed: the window may not draw for a while (a
+/// hidden media viewer draws once, 500 ms after its hide), and by then the
+/// element that made the frame can be gone with its texture.
 pub struct PendingUpload {
     pub node: u32,
     pub image: Arc<RenderImage>,
-    pub gpu: vn_video::GpuFrame,
+    pub gpu: vn_video::HeldGpuFrame,
 }
 
 thread_local! {

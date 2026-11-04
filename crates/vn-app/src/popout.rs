@@ -166,8 +166,19 @@ struct Popout {
     cover: bool,
     /// `taskbar` as it was created — read back only to advise on a change.
     taskbar: bool,
-    /// Does a show take the foreground?
+    /// `focusable` as it was created — read back only to advise on a change.
+    focusable: bool,
+    /// Does a show take the foreground? Never for a window that is not
+    /// `focusable`.
     activate: bool,
+    /// `alwaysOnTop`, as of the latest options: every show re-asserts it.
+    always_on_top: bool,
+    /// `ignoreMouseEvents` and `contentProtection`, as of the latest options.
+    ignore_mouse_events: bool,
+    content_protection: bool,
+    /// `monitor`: which monitor a cover window covers, in `EnumDisplayMonitors`
+    /// order. `None` = the main window's.
+    monitor: Option<usize>,
     /// The size and place a window created hidden takes on its first show:
     /// `(x, y, width, height)`, CSS px. `None` once placed, and for a cover
     /// window, which the monitor places.
@@ -277,6 +288,16 @@ struct Options {
     /// `fullResolution` — the images it shows keep their full decode while it
     /// shows them (a media viewer zooms to 1:1). Live.
     full_resolution: bool,
+    /// `ignoreMouseEvents` — the mouse goes through the window to whatever is
+    /// under it (§7.11). Live.
+    ignore_mouse_events: bool,
+    /// `focusable: false` — never activated, no taskbar button, unknown to
+    /// the shell (§7.11). Creation-time.
+    focusable: bool,
+    /// `contentProtection` — screen capture leaves the window out. Live.
+    content_protection: bool,
+    /// `monitor` — the monitor a `cover` window covers, by index. Live.
+    monitor: Option<usize>,
 }
 
 fn parse_options(raw: &str) -> Options {
@@ -326,7 +347,26 @@ fn parse_options(raw: &str) -> Options {
         },
         taskbar: flag("taskbar").unwrap_or(true),
         full_resolution: flag("fullResolution").unwrap_or(false),
+        ignore_mouse_events: flag("ignoreMouseEvents").unwrap_or(false),
+        focusable: flag("focusable").unwrap_or(true),
+        content_protection: flag("contentProtection").unwrap_or(false),
+        monitor: num("monitor").filter(|n| *n >= 0.0).map(|n| n as usize),
     }
+}
+
+/// The rect a cover window takes on its show: monitor `monitor` when there is
+/// one by that index (advised when there is not), else the main window's.
+fn cover_rect(main: Option<isize>, monitor: Option<usize>) -> Option<popout_win::Rect> {
+    if let Some(i) = monitor {
+        if let Some(r) = popout_win::monitor_rect_at(i) {
+            return Some(r);
+        }
+        crate::window::advise(&format!(
+            "<VnWindow :monitor=\"{i}\">: there is no monitor {i} — the window covers the main \
+             window's monitor instead (docs/MULTIWINDOW.md §7.11)"
+        ));
+    }
+    main.and_then(popout_win::monitor_rect)
 }
 
 // ---------------------------------------------------------------------------
@@ -428,11 +468,20 @@ host_fn!(fn vn_window_set_options(g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let raw = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
     let Some(i) = popout_of_node(node) else { return UNDEF };
-    let (handle, old_title, old_chrome, old_visible, old_cover, old_taskbar) = POPOUTS.with(|p| {
+    let (handle, old_title, old_chrome, old_visible, old_cover, old_taskbar, old_focusable) = POPOUTS.with(|p| {
         let p = p.borrow();
-        (p[i].handle, p[i].title.clone(), p[i].os_chrome, p[i].visible, p[i].cover, p[i].taskbar)
+        let w = &p[i];
+        (w.handle, w.title.clone(), w.os_chrome, w.visible, w.cover, w.taskbar, w.focusable)
     });
     let opts = parse_options(&raw);
+    if opts.focusable != old_focusable {
+        crate::window::advise(
+            "<VnWindow focusable>: whether a window can be activated is decided when it is created \
+             (the taskbar and the shell read its styles when it is first shown), so changing it \
+             does nothing to a window that is already open — close and re-open it \
+             (docs/MULTIWINDOW.md §7.11)",
+        );
+    }
     if opts.os_chrome != old_chrome {
         crate::window::advise(
             "<VnWindow chrome>: the caption mode is decided when the window is created (a real \
@@ -469,6 +518,26 @@ host_fn!(fn vn_window_set_options(g, args) {
         POPOUTS.with(|p| p.borrow_mut()[i].visible = visible);
     }
     let always_on_top = opts.always_on_top;
+    // §7.11's live three, recorded now (a second change in the same wave
+    // compares against them) and applied with the rest, out of this update:
+    // a style change re-frames the window, and gpui hears of that through its
+    // window proc.
+    let (hwnd, click_through, protection, monitor_moved) = POPOUTS.with(|p| {
+        let mut p = p.borrow_mut();
+        let w = &mut p[i];
+        w.always_on_top = always_on_top;
+        let click_through = (w.ignore_mouse_events != opts.ignore_mouse_events).then_some(opts.ignore_mouse_events);
+        w.ignore_mouse_events = opts.ignore_mouse_events;
+        let protection = (w.content_protection != opts.content_protection).then_some(opts.content_protection);
+        w.content_protection = opts.content_protection;
+        let monitor_moved = w.monitor != opts.monitor;
+        w.monitor = opts.monitor;
+        (w.hwnd, click_through, protection, monitor_moved)
+    });
+    // A shown cover window that is asked for another monitor moves there now
+    // (a game moved monitors); a hidden one takes it on its next show.
+    let replace = monitor_moved && old_cover && old_visible && visible && hwnd != 0;
+    let monitor = opts.monitor;
     let id = handle.window_id();
     with_app(|cx| {
         cx.defer(move |cx| {
@@ -478,6 +547,22 @@ host_fn!(fn vn_window_set_options(g, args) {
                 }
             });
             set_always_on_top(handle, always_on_top);
+            if let Some(on) = click_through {
+                popout_win::set_click_through(hwnd, on);
+            }
+            if let Some(on) = protection {
+                popout_win::set_content_protection(hwnd, on);
+            }
+            if replace {
+                if let Some(r) = cover_rect(crate::window::primary_hwnd(), monitor) {
+                    // Outside any update, as every resize here is (`warm_small`).
+                    cx.spawn(async move |_| {
+                        popout_win::set_rect(hwnd, r);
+                        popout_win::paint_now(hwnd);
+                    })
+                    .detach();
+                }
+            }
             if visible_moved {
                 if visible {
                     show_now(id, cx);
@@ -585,6 +670,7 @@ host_fn!(fn vn_window_popouts(_g, _args) {
                     });
                     let (owner, appwindow, toolwindow, popup, thickframe, non_rude) =
                         popout_win::describe(w.hwnd);
+                    let (layered, transparent, no_activate) = popout_win::describe_input(w.hwnd);
                     Json::obj(vec![
                         ("node", Json::n(w.node as f64)),
                         ("windowId", Json::n(w.id.as_u64() as f64)),
@@ -605,6 +691,14 @@ host_fn!(fn vn_window_popouts(_g, _args) {
                         ("popup", Json::Bool(popup)),
                         ("thickFrame", Json::Bool(thickframe)),
                         ("nonRude", Json::Bool(non_rude)),
+                        // §7.11: the overlay's half, as Win32 has it.
+                        ("focusable", Json::Bool(w.focusable)),
+                        ("ignoreMouseEvents", Json::Bool(w.ignore_mouse_events)),
+                        ("layered", Json::Bool(layered)),
+                        ("transparent", Json::Bool(transparent)),
+                        ("noActivate", Json::Bool(no_activate)),
+                        ("displayAffinity", Json::n(popout_win::display_affinity(w.hwnd) as f64)),
+                        ("monitor", w.monitor.map_or(Json::Null, |m| Json::n(m as f64))),
                         ("lastShowMs", Json::n(w.last_show_ms)),
                         (
                             "mainMonitor",
@@ -637,16 +731,20 @@ host_fn!(fn vn_window_map_rect(_g, args) {
     let node = args.arg(0).as_number().unwrap_or(0.0) as u32;
     let src = args.arg(1).as_number().unwrap_or(0.0) as u32;
     let Some(i) = popout_of_node(node) else { return UNDEF };
-    let (hwnd, cover, scale) = POPOUTS.with(|p| {
+    let (hwnd, cover, scale, monitor) = POPOUTS.with(|p| {
         let p = p.borrow();
-        (p[i].hwnd, p[i].cover, p[i].scale)
+        (p[i].hwnd, p[i].cover, p[i].scale, p[i].monitor)
     });
     let Some(rect) = vn_tree::bounds_in(0, src) else { return UNDEF };
     let Some(main) = crate::window::primary_hwnd() else { return UNDEF };
     let Some(from) = popout_win::client_rect_on_screen(main) else { return UNDEF };
     let main_scale = crate::window::primary_scale();
     let to = if cover {
-        popout_win::monitor_rect(main).map(|r| (r, main_scale))
+        // On another monitor than the main window's, at the scale of its own
+        // latest frame — the main window's says nothing about that monitor.
+        let at = monitor.and_then(popout_win::monitor_rect_at);
+        let s = if at.is_some() { scale } else { main_scale };
+        at.or_else(|| popout_win::monitor_rect(main)).map(|r| (r, s))
     } else {
         popout_win::client_rect_on_screen(hwnd).map(|r| (r, scale))
     };
@@ -819,6 +917,19 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
         },
         _ => Bounds::centered(None, size(px(opts.width), px(opts.height)), cx),
     };
+    if opts.activate && !opts.focusable {
+        crate::window::advise(
+            "<VnWindow activate :focusable=\"false\">: a window that cannot be activated does not \
+             take the foreground when it is shown either — `activate` is ignored \
+             (docs/MULTIWINDOW.md §7.11)",
+        );
+    }
+    let activate = opts.activate && opts.focusable;
+    // Created hidden, as a cover window is, and for the same reason: its
+    // styles change first, and the shell reads them when it is shown. A
+    // window shown as an app window and only then made a tool window has
+    // already told the shell it exists (§7.11).
+    let hidden_first = opts.cover || !opts.focusable;
     let opened = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -844,7 +955,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             is_resizable: opts.resizable,
             // See `Options::activate`: a pop-out appears without stealing the
             // keyboard unless the app asks for it.
-            focus: opts.activate && !crate::quiet::never_focus(),
+            focus: activate && !crate::quiet::never_focus(),
             window_min_size: match (opts.min_width, opts.min_height) {
                 (None, None) => None,
                 (w, h) => Some(size(px(w.unwrap_or(0.0)), px(h.unwrap_or(0.0)))),
@@ -856,8 +967,9 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             inactive_frame_interval: None,
             // A cover window is always created hidden, even a `visible` one:
             // its styles change and it is placed on the monitor first, so its
-            // first visible frame already covers it (§7.9).
-            show: opts.visible && !opts.cover,
+            // first visible frame already covers it (§7.9). So is a window
+            // that is not `focusable` (§7.11).
+            show: opts.visible && !hidden_first,
             is_minimizable: !opts.cover,
             ..Default::default()
         },
@@ -905,6 +1017,16 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             // this update, as every resize here is: see `resize_outside`.
             cx.spawn(async move |_| warm_small(hwnd)).detach();
         }
+        // §7.11, while it is still hidden too.
+        if !opts.focusable {
+            popout_win::make_unfocusable(hwnd);
+        }
+        if opts.ignore_mouse_events {
+            popout_win::set_click_through(hwnd, true);
+        }
+        if opts.content_protection {
+            popout_win::set_content_protection(hwnd, true);
+        }
     }
     let title = opts.title.clone();
     POPOUTS.with(|p| {
@@ -923,8 +1045,17 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             visible: opts.visible,
             cover: opts.cover,
             taskbar: opts.taskbar,
-            activate: opts.activate,
-            first_place: (!opts.visible && !opts.cover).then_some((opts.x, opts.y, opts.width, opts.height)),
+            focusable: opts.focusable,
+            activate,
+            always_on_top: opts.always_on_top,
+            ignore_mouse_events: opts.ignore_mouse_events,
+            content_protection: opts.content_protection,
+            monitor: opts.monitor,
+            // Every window created hidden takes its `bounds` on its first
+            // show — gpui never applied them — except a cover window, which
+            // the monitor places.
+            first_place: ((!opts.visible || hidden_first) && !opts.cover)
+                .then_some((opts.x, opts.y, opts.width, opts.height)),
             show_asked: None,
             show_drawn: None,
             last_show_ms: 0.0,
@@ -953,9 +1084,9 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
     // The primary window has to redraw WITHOUT the subtree; nothing in the tree
     // changed, so `flush_changes` would not have asked for it.
     crate::notify_shell(cx);
-    // A cover window asked for `visible` was created hidden all the same; this
-    // is its first show.
-    if opts.visible && opts.cover {
+    // A cover window asked for `visible` was created hidden all the same, as
+    // was one that is not `focusable`; this is its first show.
+    if opts.visible && hidden_first {
         show_now(handle.window_id(), cx);
     }
 }
@@ -977,13 +1108,13 @@ const TIDY_AFTER: Duration = Duration::from_millis(500);
 /// window is placed on the main window's monitor first, so that frame is
 /// already the monitor's size.
 fn show_now(id: WindowId, cx: &mut App) {
-    let Some((handle, hwnd, cover, activate, first)) = POPOUTS.with(|p| {
+    let Some((handle, hwnd, cover, activate, first, monitor, on_top)) = POPOUTS.with(|p| {
         let mut p = p.borrow_mut();
         let w = p.iter_mut().find(|w| w.id == id)?;
         w.epoch += 1;
         w.show_asked = Some(Instant::now());
         w.show_drawn = None;
-        Some((w.handle, w.hwnd, w.cover, w.activate, w.first_place.take()))
+        Some((w.handle, w.hwnd, w.cover, w.activate, w.first_place.take(), w.monitor, w.always_on_top))
     }) else {
         return;
     };
@@ -994,7 +1125,7 @@ fn show_now(id: WindowId, cx: &mut App) {
     // Where it goes is worked out here and the move is made outside this
     // update, with the draw (see [`warm_small`]).
     let target = if cover {
-        main.and_then(popout_win::monitor_rect).filter(|r| popout_win::window_rect(hwnd) != Some(*r))
+        cover_rect(main, monitor).filter(|r| popout_win::window_rect(hwnd) != Some(*r))
     } else {
         first.and_then(|f| first_rect(hwnd, main, f))
     };
@@ -1015,6 +1146,12 @@ fn show_now(id: WindowId, cx: &mut App) {
         }
         popout_win::paint_now(hwnd);
         popout_win::show(hwnd, activate);
+        // Back on top of the topmost band: whatever became topmost while it
+        // was hidden — the taskbar, another overlay — would otherwise stay
+        // above it. Argon's native overlay re-asserts it on every show too.
+        if on_top {
+            crate::window::set_always_on_top_hwnd(hwnd, true);
+        }
         cx.update(|cx| shown(id, cx));
     })
     .detach();
@@ -1265,7 +1402,7 @@ fn on_window_closed(id: WindowId, cx: &mut App) {
 /// swallowed — the tree is right, A's pixels never move, and nothing says so.
 /// `cx.defer` runs the fan-out at the end of the effect cycle, when every
 /// window is back in its slot.
-fn repaint_all(cx: &mut App) {
+pub(crate) fn repaint_all(cx: &mut App) {
     cx.defer(|cx| {
         crate::refresh_main(cx);
         notify_all(cx);
@@ -1306,6 +1443,28 @@ mod tests {
         assert!(!o.cover);
         assert!(o.taskbar);
         assert!(!o.full_resolution);
+        // §7.11's too: an ordinary pop-out takes the mouse, can be activated,
+        // is captured, and covers nothing.
+        assert!(!o.ignore_mouse_events);
+        assert!(o.focusable);
+        assert!(!o.content_protection);
+        assert!(o.monitor.is_none());
+    }
+
+    #[test]
+    fn an_overlay_is_click_through_unfocusable_and_left_out_of_capture() {
+        let o = parse_options(
+            r#"{"ignoreMouseEvents":true,"focusable":false,"contentProtection":true,
+                "cover":"monitor","monitor":1,"alwaysOnTop":true}"#,
+        );
+        assert!(o.ignore_mouse_events);
+        assert!(!o.focusable);
+        assert!(o.content_protection);
+        assert!(o.cover);
+        assert_eq!(o.monitor, Some(1));
+        assert!(o.always_on_top);
+        // A negative index is no index: the main window's monitor.
+        assert!(parse_options(r#"{"monitor":-1}"#).monitor.is_none());
     }
 
     #[test]

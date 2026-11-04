@@ -313,6 +313,50 @@ pub struct GpuFrame {
     pub size: (u32, u32),
 }
 
+/// A [`GpuFrame`] that holds a reference of its own to its texture, for a host
+/// that cannot upload the frame in the tick that made it.
+///
+/// A pop-out's atlas is written by the pop-out's own draw, which comes after
+/// the tick, and a HIDDEN pop-out does not draw until its next show or its
+/// one draw after a hide. By then the backend may have released the borrowed
+/// texture: the element was removed and its engine shut down, it was
+/// suspended, or the frame size changed. Uploading from it then read freed
+/// memory, and the process died ~500 ms after a media viewer with a playing
+/// video closed. Held, the texture stays alive until this is dropped: a late
+/// upload shows an old picture at worst.
+#[derive(Debug)]
+pub struct HeldGpuFrame {
+    frame: GpuFrame,
+}
+
+impl HeldGpuFrame {
+    /// Takes a reference to `frame`'s texture.
+    pub fn new(frame: GpuFrame) -> Self {
+        #[cfg(windows)]
+        // SAFETY: a `GpuFrame` is valid in the tick it was produced, which is
+        // when the host wraps it.
+        unsafe {
+            crate::mf::retain_texture(frame.texture)
+        };
+        Self { frame }
+    }
+
+    /// The frame, valid for as long as this is held.
+    pub fn frame(&self) -> GpuFrame {
+        self.frame
+    }
+}
+
+impl Drop for HeldGpuFrame {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        // SAFETY: the reference `new` took.
+        unsafe {
+            crate::mf::release_texture(self.frame.texture)
+        };
+    }
+}
+
 // ---------------------------------------------------------------------------
 // the trait
 // ---------------------------------------------------------------------------
@@ -367,6 +411,14 @@ pub trait VideoBackend {
     /// `seekable` as `(start, end)` pairs in seconds.
     fn seekable(&self) -> Vec<(f64, f64)>;
     fn error(&self) -> Option<MediaError>;
+
+    /// Is this element's SOUND going to the audio renderer right now: it has
+    /// an audio track, it plays, and it is neither muted nor at volume zero —
+    /// read off the platform, not off what was last asked of it. What a test
+    /// asks instead of listening. The default: a backend with no sound.
+    fn audible(&self) -> bool {
+        false
+    }
 
     /// `canPlayType(type)` — a **live probe**, never a table.
     ///

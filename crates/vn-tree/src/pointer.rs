@@ -539,8 +539,14 @@ fn path_to(t: &Tree, id: u32, root: u32) -> bool {
 }
 
 /// A pop-out window has no frame pump (vn-app's pump drives the primary
-/// window), so its hover is resolved from a per-frame callback of its own,
-/// armed here once, from the pop-out's build.
+/// window), so its hover — and its frame's coalesced `mousemove` — are
+/// delivered from a per-frame callback of its own, armed here once, from the
+/// pop-out's build.
+///
+/// The `mousemove` used to be left out: a pop-out's move was stored for its
+/// window and never delivered, so nothing in a pop-out heard the pointer move
+/// — a drag that pans a zoomed picture, a player's controls that come back on
+/// a move.
 pub(crate) fn arm_hover_tick(window: &mut Window) {
     let k = windows::key(window);
     if windows::is_primary(k) || windows::here(window, |w| std::mem::replace(&mut w.hover.ticking, true)) {
@@ -550,7 +556,8 @@ pub(crate) fn arm_hover_tick(window: &mut Window) {
 }
 
 fn hover_tick(window: &mut Window, cx: &mut App) {
-    resolve_hover(window, cx);
+    // Hover first, then the move, as the pump does for the primary window.
+    crate::render::flush_pending_mouse_move(window, cx);
     window.on_next_frame(hover_tick);
 }
 

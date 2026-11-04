@@ -6,25 +6,34 @@
 //! whether to show at all), so these act on the HWND the window host cached,
 //! the way `alwaysOnTop` and the dark mode already do. Every function takes the
 //! raw HWND and does nothing on a handle that is not one.
+//!
+//! The same goes for an OVERLAY — a window laid over another application, a
+//! game's HUD (§7.11): one the mouse goes through (`ignoreMouseEvents`), that
+//! is never activated (`focusable: false`), and that screen capture leaves out
+//! (`contentProtection`).
 
 #[cfg(target_os = "windows")]
 mod imp {
-    use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
+    use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use windows::Win32::Graphics::Dwm::{
         DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
     };
     use windows::Win32::Graphics::Gdi::{
-        ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+        ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
+        MONITORINFO, MonitorFromWindow,
     };
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
         GWL_EXSTYLE, GWL_STYLE, GWLP_HWNDPARENT, GetClientRect, GetForegroundWindow, GetPropW,
-        GetWindowLongPtrW, GetWindowRect, IsWindowVisible, RemovePropW, SW_HIDE, SW_SHOW, SW_SHOWNA,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
-        SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_PAINT,
-        WS_CAPTION, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP,
-        WS_SYSMENU, WS_THICKFRAME,
+        GetWindowDisplayAffinity, GetWindowLongPtrW, GetWindowRect, IsWindowVisible, LWA_ALPHA,
+        MA_NOACTIVATE, RemovePropW, SW_HIDE, SW_SHOW, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
+        SetLayeredWindowAttributes, SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos,
+        ShowWindow, WDA_EXCLUDEFROMCAPTURE, WDA_MONITOR, WDA_NONE, WM_MOUSEACTIVATE, WM_NCDESTROY,
+        WM_PAINT, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
     };
-    use windows::core::w;
+    use windows::core::{BOOL, w};
 
     fn h(raw: isize) -> HWND {
         HWND(raw as *mut _)
@@ -206,6 +215,155 @@ mod imp {
             )
         }
     }
+
+    /// The whole of monitor `index`, in `EnumDisplayMonitors` order — the
+    /// order a game-activity plugin reports a game's monitor in (Argon's gap /
+    /// libovl `monitorIndex`). Physical px.
+    pub fn monitor_rect_at(index: usize) -> Option<Rect> {
+        unsafe extern "system" fn each(m: HMONITOR, _: HDC, _: *mut RECT, out: LPARAM) -> BOOL {
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            if unsafe { GetMonitorInfoW(m, &mut info) }.as_bool() {
+                unsafe { (*(out.0 as *mut Vec<Rect>)).push(rect(info.rcMonitor)) };
+            }
+            true.into()
+        }
+        let mut all: Vec<Rect> = Vec::new();
+        let _ = unsafe { EnumDisplayMonitors(None, None, Some(each), LPARAM(&mut all as *mut _ as isize)) };
+        all.get(index).copied()
+    }
+
+    /// `ignoreMouseEvents`: the mouse goes THROUGH the window, to whatever is
+    /// under it, in every process — `WS_EX_LAYERED | WS_EX_TRANSPARENT`, what
+    /// Electron's `setIgnoreMouseEvents(true)` sets. (`HTTRANSPARENT` from
+    /// `WM_NCHITTEST` would not do: it passes a click on only to windows of the
+    /// same thread.)
+    ///
+    /// gpui presents through DirectComposition (`WS_EX_NOREDIRECTIONBITMAP`),
+    /// and DWM keeps composing that content under `WS_EX_LAYERED`: the window
+    /// looks the same and keeps presenting new frames. The constant alpha of
+    /// 255 is set all the same, since a layered window that never had its
+    /// attributes set is one DWM may leave undrawn.
+    pub fn set_click_through(raw: isize, on: bool) {
+        let hwnd = h(raw);
+        let bits = (WS_EX_LAYERED | WS_EX_TRANSPARENT).0 as isize;
+        unsafe {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let want = if on { ex | bits } else { ex & !bits };
+            if want == ex {
+                return;
+            }
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
+            if on {
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
+            }
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    /// The subclass id of [`make_unfocusable`]'s window proc.
+    const NO_ACTIVATE: usize = 0x766e_6e61; // "vnna"
+
+    unsafe extern "system" fn no_activate_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
+        match msg {
+            // gpui answers `MA_ACTIVATE` to every click, eagerly
+            // (gpui_windows/src/events.rs): a click on the overlay would make
+            // it the foreground window, take the game's focus, and bring the
+            // taskbar up over a borderless game.
+            WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+            WM_NCDESTROY => {
+                let _ = unsafe { RemoveWindowSubclass(hwnd, Some(no_activate_proc), NO_ACTIVATE) };
+                unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+            }
+            _ => unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
+        }
+    }
+
+    /// `focusable: false`: a window that is never activated — not by a show,
+    /// not by a click — and that the shell does not track. What a HUD over a
+    /// game needs, and what Argon's native overlay (libovl) does with its own
+    /// window:
+    ///
+    /// * `WS_EX_NOACTIVATE`, plus a `WM_MOUSEACTIVATE` that answers
+    ///   `MA_NOACTIVATE` (gpui answers `MA_ACTIVATE` itself, so the style alone
+    ///   would not hold);
+    /// * `WS_EX_TOOLWINDOW` instead of `WS_EX_APPWINDOW`: no taskbar button,
+    ///   no Alt-Tab entry, and no `HSHELL_WINDOWCREATED` — the shell does not
+    ///   re-check the monitor's fullscreen state for a window it never hears
+    ///   of, which is what keeps the taskbar down over a borderless game;
+    /// * no `NonRudeHWND`, which gpui puts on every frameless window precisely
+    ///   so that the taskbar stays UP over it.
+    ///
+    /// Electron's `focusable: false` is the same promise, and on Windows it
+    /// too means `skipTaskbar`. Done while the window is hidden: the taskbar
+    /// reads the styles when a window is shown.
+    pub fn make_unfocusable(raw: isize) {
+        let hwnd = h(raw);
+        unsafe {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let want = (ex | (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW).0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
+            let _ = RemovePropW(hwnd, w!("NonRudeHWND"));
+            let _ = SetWindowSubclass(hwnd, Some(no_activate_proc), NO_ACTIVATE, 0);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    /// `contentProtection`: screen capture leaves the window out —
+    /// `WDA_EXCLUDEFROMCAPTURE` (Windows 10 2004+), which is what Electron's
+    /// `setContentProtection(true)` asks for. Where Windows is older it falls
+    /// back, as Electron does, to `WDA_MONITOR`, which captures the window as
+    /// black. Returns the affinity the window has now.
+    pub fn set_content_protection(raw: isize, on: bool) -> u32 {
+        let hwnd = h(raw);
+        unsafe {
+            if !on {
+                let _ = SetWindowDisplayAffinity(hwnd, WDA_NONE);
+            } else if SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).is_err() {
+                let _ = SetWindowDisplayAffinity(hwnd, WDA_MONITOR);
+            }
+        }
+        display_affinity(raw)
+    }
+
+    pub fn display_affinity(raw: isize) -> u32 {
+        let mut a = 0u32;
+        let _ = unsafe { GetWindowDisplayAffinity(h(raw), &mut a) };
+        a
+    }
+
+    /// What a test asks of an overlay's styles: `(layered, transparent,
+    /// noactivate)`.
+    pub fn describe_input(raw: isize) -> (bool, bool, bool) {
+        let ex = unsafe { GetWindowLongPtrW(h(raw), GWL_EXSTYLE) };
+        (
+            ex & WS_EX_LAYERED.0 as isize != 0,
+            ex & WS_EX_TRANSPARENT.0 as isize != 0,
+            ex & WS_EX_NOACTIVATE.0 as isize != 0,
+        )
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -223,6 +381,12 @@ mod imp {
     pub fn is_foreground(_raw: isize) -> bool { false }
     pub fn paint_now(_raw: isize) {}
     pub fn describe(_raw: isize) -> (isize, bool, bool, bool, bool, bool) { (0, false, false, false, false, false) }
+    pub fn monitor_rect_at(_index: usize) -> Option<Rect> { None }
+    pub fn set_click_through(_raw: isize, _on: bool) {}
+    pub fn make_unfocusable(_raw: isize) {}
+    pub fn set_content_protection(_raw: isize, _on: bool) -> u32 { 0 }
+    pub fn display_affinity(_raw: isize) -> u32 { 0 }
+    pub fn describe_input(_raw: isize) -> (bool, bool, bool) { (false, false, false) }
 }
 
 pub use imp::*;

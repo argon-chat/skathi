@@ -166,6 +166,7 @@ pub fn side_stats() -> Vec<(&'static str, u64)> {
         ("svgColourRasters", u(svg_rasters)),
         ("svgColourRasterBytes", u(svg_bytes)),
         ("videos", u(crate::video::count())),
+        ("videosAudible", u(crate::video::audible_count())),
         ("lotties", u(crate::lottie::count())),
         ("stickers", u(stickers)),
         ("stickerTiles", u(sticker_tiles)),

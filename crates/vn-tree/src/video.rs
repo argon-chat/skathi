@@ -27,11 +27,17 @@
 //!    replay button works), and a prop channel that dedupes on the string alone
 //!    cannot see it. The `<input value>` path solved this once already; this
 //!    reuses it.
-//! 3. **A detached `<video>` is SUSPENDED, unlike a detached `<lottie>`.**
-//!    A parked `<KeepAlive>` page keeps its Lottie clock running because the
-//!    cost is arithmetic. A video costs ~28 MiB of RAM and ~68 MiB of VRAM per
-//!    1080p stream, and a browser does not keep decoding one in a detached
-//!    subtree either.
+//! 3. **A detached `<video>` is PAUSED and SUSPENDED, unlike a detached
+//!    `<lottie>`.** A parked `<KeepAlive>` page keeps its Lottie clock running
+//!    because the cost is arithmetic. A video costs ~28 MiB of RAM and ~68 MiB
+//!    of VRAM per 1080p stream, and a browser does not keep decoding one in a
+//!    detached subtree either — it runs the pause steps on removal, so the
+//!    element hears `pause` and is still paused when it comes back.
+//!
+//! What a script sets through the element (`el.muted`, `el.volume`, a `play()`
+//! before the source is ready) is the ELEMENT's and survives the decoder: see
+//! [`Api`]. A hidden or off-screen `<video>`, and one in a hidden `<VnWindow>`,
+//! keeps playing, as one in a browser's hidden or minimised window does.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -97,11 +103,84 @@ struct Entry {
 
 thread_local! {
     static VIDEO_STATES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
+    /// What scripts set through each element's own API, by node — kept apart
+    /// from [`VIDEO_STATES`] because it outlives the decoder (see [`Api`]).
+    static API: RefCell<HashMap<u32, Api>> = RefCell::new(HashMap::new());
+}
+
+/// What a script set through the element's own API: `el.muted = true`,
+/// `el.volume`, `el.playbackRate`, `el.loop`, and a `play()` / `pause()` made
+/// before there was anything to play.
+///
+/// In HTML these are the ELEMENT's state, not its resource's: `muted` set in a
+/// component's `onMounted`, before the `src` is even assigned, holds for the
+/// load that follows, and a new `src` does not unmute it. The decoder here is
+/// built by the first paint after the `src` arrives ([`sync`]) and rebuilt by
+/// a `src` change or a lost GPU device, so a write that only went to the
+/// decoder was LOST whenever it came first — and Argon's chat previews, which
+/// set `video.muted = true` that way and autoplay, played with sound. Every
+/// write lands here as well, and a new decoder starts from it.
+#[derive(Default, Clone, Copy)]
+struct Api {
+    muted: Option<bool>,
+    volume: Option<f64>,
+    rate: Option<f64>,
+    looping: Option<bool>,
+    /// `play()` (true) or `pause()` (false) made while there was no decoder.
+    /// HTML: a `play()` before the source is ready plays once it is. Taken by
+    /// the next decoder; a later load starts paused, as the load algorithm says.
+    playing: Option<bool>,
+}
+
+/// Records one API write ([`media_call`]'s verb) for node `id`.
+fn note_api(id: u32, verb: u32, arg: f64, live: bool) {
+    API.with(|m| {
+        let mut m = m.borrow_mut();
+        let api = m.entry(id).or_default();
+        match verb {
+            0 | 1 if !live => api.playing = Some(verb == 0),
+            3 if arg.is_finite() => api.volume = Some(arg.clamp(0.0, 1.0)),
+            4 => api.muted = Some(arg != 0.0),
+            5 if arg.is_finite() && arg > 0.0 => api.rate = Some(arg),
+            6 => api.looping = Some(arg != 0.0),
+            _ => {}
+        }
+    });
+}
+
+/// Node `id`'s API writes; `take_playing` also consumes its pending `play()`.
+fn api_of(id: u32, take_playing: bool) -> Api {
+    API.with(|m| {
+        let mut m = m.borrow_mut();
+        let Some(api) = m.get_mut(&id) else { return Api::default() };
+        let out = *api;
+        if take_playing {
+            api.playing = None;
+        }
+        out
+    })
+}
+
+/// An attribute moved after the script's write: the attribute is the newer
+/// word, so the script's stops overriding it on the next decoder.
+fn attribute_wins(id: u32, f: impl FnOnce(&mut Api)) {
+    API.with(|m| {
+        if let Some(api) = m.borrow_mut().get_mut(&id) {
+            f(api);
+        }
+    });
 }
 
 /// Live `<video>` elements (devtools `mem`).
 pub(crate) fn count() -> usize {
     VIDEO_STATES.with(|m| m.borrow().len())
+}
+
+/// `<video>` elements whose sound is playing out now, by the platform's own
+/// state (`VideoState::audible`) — devtools `mem`, which is how a test hears
+/// that a closed viewer went quiet and a muted preview stays so.
+pub(crate) fn audible_count() -> usize {
+    VIDEO_STATES.with(|m| m.borrow().values().filter_map(|e| e.state.as_ref()).filter(|s| s.audible()).count())
 }
 
 /// Frames whose node was GC'd, queued against the window whose atlas holds
@@ -285,17 +364,45 @@ pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -
         };
         if fresh || props.looping != entry.props.looping {
             state.set_looping(props.looping);
+            if !fresh {
+                attribute_wins(id, |a| a.looping = None);
+            }
         }
         if fresh || props.muted != entry.props.muted {
             state.set_muted(props.muted);
+            if !fresh {
+                attribute_wins(id, |a| a.muted = None);
+            }
         }
         if fresh || props.volume != entry.props.volume {
             state.set_volume(props.volume);
+            if !fresh {
+                attribute_wins(id, |a| a.volume = None);
+            }
         }
         if fresh || props.rate != entry.props.rate {
             state.set_rate(props.rate);
+            if !fresh {
+                attribute_wins(id, |a| a.rate = None);
+            }
         }
         entry.props = props;
+        // A new decoder starts from what scripts set on the element (`Api`):
+        // after the attributes, which are only its starting values, and
+        // before `autoplay`, so a muted preview is muted before it plays.
+        let api = if fresh { api_of(id, true) } else { Api::default() };
+        if let Some(looping) = api.looping {
+            state.set_looping(looping);
+        }
+        if let Some(muted) = api.muted {
+            state.set_muted(muted);
+        }
+        if let Some(volume) = api.volume {
+            state.set_volume(volume);
+        }
+        if let Some(rate) = api.rate {
+            state.set_rate(rate);
+        }
 
         // `currentTime`: the WRITE COUNTER decides, not the value (decision 2).
         if let Some((value, write)) = t
@@ -315,6 +422,10 @@ pub(crate) fn sync(t: &Tree, id: u32, win: crate::windows::WinKey, scale: f32) -
             state.set_playing(autoplay);
         }
         entry.autoplay = autoplay;
+        // A `play()` / `pause()` made before there was a decoder.
+        if let Some(playing) = api.playing {
+            state.set_playing(playing);
+        }
 
         state.native_size()
     })
@@ -401,6 +512,7 @@ pub(crate) fn note_frame_box(id: u32, options: &VideoOptions) {
 /// Drops states for nodes that no longer exist, handing their frames back
 /// through [`PENDING_DROPS`].
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
+    API.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     VIDEO_STATES.with(|m| {
         m.borrow_mut().retain(|&id, entry| {
             if live(id) {
@@ -528,7 +640,26 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
             // Detached — unmounted, or parked in a `<KeepAlive>` cache
             // container that is never inserted — means stop decoding
             // (decision 3 in the module docs).
+            //
+            // And PAUSED, first: HTML runs the internal pause steps for a
+            // media element removed from its document (one that is back by
+            // the next stable state, a move, is left alone — and so it is
+            // here, the tick being later than any one task). It fires
+            // `timeupdate` and `pause` at the element, and it stays paused
+            // when it is inserted again: a `<KeepAlive>` page that comes back
+            // does not start talking on its own.
             if !attached {
+                if state.wants_playing() && !state.suspended() {
+                    state.pause();
+                    let removed = [MediaEvent::TimeUpdate, MediaEvent::Pause];
+                    for event in removed {
+                        if entry.recent.len() >= RING {
+                            entry.recent.remove(0);
+                        }
+                        entry.recent.push(event.name());
+                    }
+                    out.push((id, removed.to_vec()));
+                }
                 state.suspend();
                 continue;
             }
@@ -563,7 +694,7 @@ pub fn tick(window: &mut Window, cx: &mut App) -> bool {
                     moved |= show;
                     elsewhere.push((
                         entry.window,
-                        crate::windows::PendingUpload { node: id, image, gpu },
+                        crate::windows::PendingUpload { node: id, image, gpu: vn_video::HeldGpuFrame::new(gpu) },
                     ));
                 }
                 // The CPU readback path: a new image every frame.
@@ -679,11 +810,19 @@ fn attached(id: u32) -> bool {
 /// the only place that holds the window whose atlas the tile has to land in.
 /// A refusal falls back to the CPU readback exactly as the primary window's
 /// path does — the element paints a real picture either way.
+///
+/// A frame whose element has no player any more is dropped unwritten: its
+/// image's tile was handed back with the player ([`gc`]), and writing it again
+/// would leave a tile nothing drops.
 pub(crate) fn drain_pending_uploads(window: &mut Window) {
     let queued = crate::windows::here(window, |w| std::mem::take(&mut w.pending_uploads));
     for u in queued {
+        let alive = VIDEO_STATES.with(|m| m.borrow().get(&u.node).is_some_and(|e| e.state.is_some()));
+        if !alive {
+            continue;
+        }
         let ok = window
-            .upload_image_from_gpu(&u.image, 0, gpui::GpuTextureHandle(u.gpu.texture))
+            .upload_image_from_gpu(&u.image, 0, gpui::GpuTextureHandle(u.gpu.frame().texture))
             .unwrap_or(false);
         if ok {
             continue;
@@ -852,6 +991,8 @@ pub(crate) fn media_state(id: u32) -> Option<String> {
         put("muted", s.muted().to_string());
         put("playbackRate", s.playback_rate().to_string());
         put("loop", s.looping().to_string());
+        // Not a DOM property: whether the platform plays this element's sound.
+        put("audible", s.audible().to_string());
         let (w, h) = s.native_size().unwrap_or((0, 0));
         put("videoWidth", w.to_string());
         put("videoHeight", h.to_string());
@@ -883,6 +1024,20 @@ pub(crate) fn media_state(id: u32) -> Option<String> {
 /// 7 volume, 8 muted, 9 playbackRate, 10 loop, 11 videoWidth, 12 videoHeight.
 pub(crate) fn media_prop(id: u32, code: u32) -> Option<f64> {
     let flag = |b: bool| if b { 1.0 } else { 0.0 };
+    if with_state(id, |_| ()).is_none() {
+        // No decoder yet (or none for this `src`): the element's own state
+        // still reads back — what a script set (`Api`), else the attribute.
+        let api = api_of(id, false);
+        let attr = |name: &str| tree::read_tree(|t| t.prop(id, name).map(|v| bool_attr(Some(v))));
+        return match code {
+            2 => api.playing.map(|p| flag(!p)),
+            7 => api.volume,
+            8 => api.muted.or_else(|| attr("muted")).map(flag),
+            9 => api.rate,
+            10 => api.looping.or_else(|| attr("loop")).map(flag),
+            _ => None,
+        };
+    }
     with_state(id, |s| match code {
         0 => Some(s.current_time()),
         1 => Some(s.duration()),
@@ -906,6 +1061,14 @@ pub(crate) fn media_prop(id: u32, code: u32) -> Option<f64> {
 /// Verbs rather than names because this is a two-argument host call and the
 /// JS side is a switch either way.
 pub(crate) fn media_call(id: u32, verb: u32, arg: f64) -> bool {
+    let live = with_state(id, |_| ()).is_some();
+    // The element's own state whether or not a decoder exists yet (`Api`).
+    note_api(id, verb, arg, live);
+    if !live {
+        // Kept for the decoder the next paint builds; a seek has nothing to
+        // seek yet (`currentTime` before metadata is a no-op in effect).
+        return matches!(verb, 0 | 1 | 3 | 4 | 5 | 6);
+    }
     with_state(id, |s| match verb {
         0 => {
             s.play();
@@ -974,6 +1137,39 @@ mod tests {
         assert!(bool_attr(Some("true")));
         // What `:muted="false"` serialises to through patchProp.
         assert!(!bool_attr(Some("false")));
+    }
+
+    /// **A script's `muted` before the decoder exists is kept for it** (`Api`).
+    ///
+    /// Argon's chat preview sets `video.muted = true` in `onMounted`, before
+    /// its `src`, and autoplays: the write went to a decoder that did not
+    /// exist yet and was dropped, and the preview played with sound.
+    #[test]
+    fn element_api_writes_before_the_decoder_are_kept_for_it() {
+        let id = 0x7fff_0001;
+        assert!(media_call(id, 4, 1.0), "muted = true is the element's, decoder or not");
+        assert!(media_call(id, 3, 0.25));
+        assert!(media_call(id, 0, 0.0), "play() before there is anything to play");
+        assert!(!media_call(id, 2, 5.0), "a seek has nothing to seek yet");
+        let api = api_of(id, false);
+        assert_eq!(api.muted, Some(true));
+        assert_eq!(api.volume, Some(0.25));
+        assert_eq!(api.playing, Some(true));
+        // Read back before any decoder: what the script set.
+        assert_eq!(media_prop(id, 8), Some(1.0));
+        assert_eq!(media_prop(id, 7), Some(0.25));
+        assert_eq!(media_prop(id, 2), Some(0.0), "paused is false after play()");
+        // The decoder takes the pending play() once; muted stays the element's.
+        let taken = api_of(id, true);
+        assert_eq!(taken.playing, Some(true));
+        assert_eq!(api_of(id, false).playing, None);
+        assert_eq!(api_of(id, false).muted, Some(true));
+        // An attribute that moves afterwards is the newer word.
+        attribute_wins(id, |a| a.muted = None);
+        assert_eq!(api_of(id, false).muted, None);
+        // The node goes: so does what was kept for it.
+        gc(|n| n != id);
+        assert!(API.with(|m| !m.borrow().contains_key(&id)));
     }
 
     #[test]

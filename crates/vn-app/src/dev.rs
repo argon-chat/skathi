@@ -38,10 +38,16 @@ use crate::json;
 // is too short"), and it is a well-known dev value on a LOOPBACK-ONLY server —
 // there is nothing here to leak.
 
+// All of it goes with the `voice` feature: a host without LiveKit has no room
+// to hand a token to.
+
 /// Where the loopback dev server listens. Handed to JS alongside the token so
 /// the app never hard-codes a URL.
+#[cfg(feature = "voice")]
 const DEV_URL: &str = "ws://127.0.0.1:7880";
+#[cfg(feature = "voice")]
 const DEV_API_KEY: &str = "devkey";
+#[cfg(feature = "voice")]
 const DEV_API_SECRET: &str = "secret-secret-secret-secret-1234";
 
 // ---------------------------------------------------------------------------
@@ -71,11 +77,13 @@ const DEV_API_SECRET: &str = "secret-secret-secret-secret-1234";
 // This is not staging-specific and not test-specific: it is the one seam that
 // makes "which server does the Voice page join?" answerable without a rebuild.
 
+#[cfg(feature = "voice")]
 fn env_nonempty(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
 /// `alice` -> `VN_VOICE_TOKEN_ALICE`
+#[cfg(feature = "voice")]
 fn token_var_for(identity: &str) -> String {
     let mut name = String::from("VN_VOICE_TOKEN_");
     for c in identity.chars() {
@@ -91,6 +99,7 @@ fn token_var_for(identity: &str) -> String {
 //
 // The shape `TokenSource.endpoint()` resolves to, so an app can swap between
 // this and a real backend by changing one line.
+#[cfg(feature = "voice")]
 vn_runtime::host_fn!(fn vn_dev_voice_token(g, args) {
     use livekit_api::access_token::{AccessToken, VideoGrants};
 
@@ -162,6 +171,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "voice")]
     fn token_var_names_are_derived_from_the_identity() {
         assert_eq!(super::token_var_for("alice"), "VN_VOICE_TOKEN_ALICE");
         assert_eq!(super::token_var_for("a"), "VN_VOICE_TOKEN_A");
@@ -173,7 +183,10 @@ mod tests {
 /// Registers the dev-only host fns. Called from `main` next to
 /// `devtools::install`, inside the same `#[cfg(not(feature = "prod"))]`.
 pub fn install(rt: &JsRuntime) {
+    #[cfg(feature = "voice")]
     rt.register("__vn_dev_voice_token", 2, vn_dev_voice_token as *const _);
+    #[cfg(not(feature = "voice"))]
+    let _ = rt;
 }
 
 /// How often the frame pump calls [`poll`] — every 30th frame, ~2×/s at 60 fps.

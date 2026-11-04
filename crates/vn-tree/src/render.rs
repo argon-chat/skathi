@@ -972,13 +972,35 @@ fn open_up_wave(ev: &MouseUpEvent, window: &mut Window) {
 /// [`open_up_wave`]; the `_out` variants are what make "every" true when
 /// something that blocks the mouse covers the root under the pointer.
 fn bind_root_mouse<E: gpui::InteractiveElement>(mut e: E) -> E {
-    e = e.capture_any_mouse_down(|_, window, cx| begin_press_focus(window, cx));
+    e = e.capture_any_mouse_down(|_, window, cx| {
+        deliver_move_before_button(window, cx);
+        begin_press_focus(window, cx)
+    });
     e = e.on_any_mouse_down(|_, window, _| windows::here(window, |w| w.press_focus.reached = true));
-    e = e.capture_any_mouse_up(|ev, window, _| open_up_wave(ev, window));
+    e = e.capture_any_mouse_up(|ev, window, cx| {
+        deliver_move_before_button(window, cx);
+        open_up_wave(ev, window)
+    });
     for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
-        e = e.on_mouse_up_out(button, |ev, window, _| open_up_wave(ev, window));
+        e = e.on_mouse_up_out(button, |ev, window, cx| {
+            deliver_move_before_button(window, cx);
+            open_up_wave(ev, window)
+        });
     }
     e
+}
+
+/// A press or a release delivers the `mousemove` the frame has coalesced
+/// first, as Chromium does: a discrete input event flushes the continuous ones
+/// queued before it. Otherwise a move and the release after it that arrive in
+/// one frame were heard release first, and the move after the drag had ended —
+/// a drag stopped where the move before the last one left it. Seen in a pop-out
+/// (`specs/lightbox.spec.ts`), whose moves wait for its frame tick.
+fn deliver_move_before_button(window: &mut Window, cx: &mut App) {
+    let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
+    let payload = mouse_payload(p.position, p.button, &p.modifiers);
+    let target = crate::pointer::target_at(window, p.position);
+    js_dispatch_app(target, tree::EV_MOUSEMOVE, &payload, window, cx);
 }
 
 /// Bubble phase: the first (= innermost) box to ask gets the slot, and the
@@ -1502,6 +1524,8 @@ fn scrollbar_for<V: 'static>(
             // `js_dispatch_app` returns "the app did not call
             // preventDefault()", so the hook's answer is its negation.
             let target = crate::pointer::target_or(window, id);
+            let at = window.mouse_position();
+            crate::pointer_at_next_dispatch(f64::from(at.x), f64::from(at.y));
             !js_dispatch_app(target, tree::EV_WHEEL, &payload, window, cx)
         })
     } else {
@@ -2419,7 +2443,7 @@ fn build_node<V: 'static>(
                 crate::scroll::note_built(id, h);
             }
 
-            let mask = pointer_mask(node);
+            let mask = if id == root { root_mask(t, node) } else { pointer_mask(node) };
             let bit = move |ev: u32| mask & (1u64 << ev) != 0;
             // `<input>` and `<textarea>` are the SAME native widget — only
             // `TextInputOptions::multiline` differs (see `build_input`), so
@@ -3913,6 +3937,36 @@ const POINTER_BITS: u64 = (1 << tree::EV_CLICK)
     | (1 << tree::EV_MOUSELEAVE)
     | (1 << tree::EV_WHEEL);
 
+/// The listener mask of a BUILD root: the main window's root, or a pop-out's.
+///
+/// A root is what gpui's dispatch of every press and keystroke in its window
+/// passes through last, so it listens for what anything above the event's
+/// target does. In the main window that is the root's own listeners, which
+/// `document`'s and `window`'s ride. A pop-out's root is a node deep in the
+/// same tree (docs/MULTIWINDOW.md §1): its ancestors are in no element gpui
+/// lays out for the pop-out, yet in the DOM their listeners — `document`'s
+/// among them — hear its events bubble. So it takes their bits as well. Without
+/// them a press on an element with no `mousedown` listener of its own never
+/// reached a `document` `pointerdown` listener in a pop-out, which is what
+/// dismisses a reka-ui menu on a click outside it.
+///
+/// And `pointer-events: none` never takes a root's away, as
+/// [`pointer_mask`] says for the main one: a pop-out's root is its window's
+/// `body` (runtime.ts, `windowDocument`), which a modal layer sets to `none`.
+fn root_mask(t: &Tree, node: &crate::tree::Node) -> u64 {
+    let mut mask = node.listeners;
+    let mut cur = node.parent;
+    for _ in 0..4096 {
+        let Some(n) = t.node(cur) else { break };
+        mask |= n.listeners;
+        if n.parent == 0 {
+            break;
+        }
+        cur = n.parent;
+    }
+    mask
+}
+
 /// The node's listener mask with `pointer-events: none` applied. Together with
 /// the hover/active rungs being skipped in [`apply_computed_style`], this is
 /// what stops gpui giving the node a hitbox at all.
@@ -4747,6 +4801,7 @@ where
                 key: None,
             };
             let target = crate::pointer::target_or(window, id);
+            crate::pointer_at_next_dispatch(f64::from(ev.position.x), f64::from(ev.position.y));
             if !js_dispatch(target, tree::EV_WHEEL, &payload, window, cx) {
                 // Cancelled: a browser scrolls nothing. gpui's own listener has
                 // already moved this box, if it scrolls, and any scroll

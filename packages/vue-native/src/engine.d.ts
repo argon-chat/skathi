@@ -162,15 +162,18 @@ declare var KeyboardEvent:
     }
   | undefined;
 
+/** A MouseEvent, as the UI Events spec has it: `clientX`/`clientY` included. */
 interface VnWheelEvent extends VnEvent, Required<VnModifierInit> {
   readonly deltaX: number;
   readonly deltaY: number;
+  readonly clientX: number;
+  readonly clientY: number;
 }
 declare var WheelEvent:
   | {
       new (
         type: string,
-        init?: VnEventInit & VnModifierInit & { deltaX?: number; deltaY?: number },
+        init?: VnEventInit & VnModifierInit & { deltaX?: number; deltaY?: number; clientX?: number; clientY?: number },
       ): VnWheelEvent;
       prototype: VnWheelEvent;
     }

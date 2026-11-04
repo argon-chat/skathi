@@ -1229,6 +1229,13 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             num("y"),
             num("dx"),
             num("dy"),
+            // Held keys: a ctrl+wheel is a zoom in most apps, not a scroll.
+            gpui::Modifiers {
+                control: req.get("ctrl").and_then(Json::as_bool).unwrap_or(false),
+                shift: req.get("shift").and_then(Json::as_bool).unwrap_or(false),
+                alt: req.get("alt").and_then(Json::as_bool).unwrap_or(false),
+                ..Default::default()
+            },
         ),
         "click" => match arg("selector") {
             None => err("click needs a `selector`"),
@@ -2294,10 +2301,13 @@ fn cmd_eval(src: &str) -> String {
         Ok(None) => err("eval produced no result (the helper did not report back)"),
         Ok(Some(text)) => {
             // Vue may have scheduled work; land it in this frame like every
-            // other command does.
-            let _ = with_commit(|window, _| {
+            // other command does — in every window that paints the tree, as a
+            // JS wave does: an eval that changes a pop-out's content has to
+            // repaint the pop-out, not just the window the command ran in.
+            let _ = with_commit(|window, cx| {
                 if vn_tree::flush_changes() {
                     window.refresh();
+                    crate::popout::repaint_all(cx);
                 }
             });
             ok(Json::from(Raw(text)))
@@ -2529,16 +2539,17 @@ fn cmd_wheel(
     y: Option<f64>,
     dx: Option<f64>,
     dy: Option<f64>,
+    modifiers: gpui::Modifiers,
 ) -> String {
-    let point = match (selector, x, y) {
+    let (point, node) = match (selector, x, y) {
         (Some(sel), _, _) => match resolve_one(sel, index) {
             Err(e) => return err(e),
             Ok(id) => match vn_tree::devtools::node_info(id).and_then(|n| n.bounds) {
-                Some((bx, by, bw, bh)) => (bx + bw / 2.0, by + bh / 2.0),
+                Some((bx, by, bw, bh)) => ((bx + bw / 2.0, by + bh / 2.0), Some(id)),
                 None => return err(format!("`{sel}` is not painted, so it has no centre to aim at")),
             },
         },
-        (None, Some(x), Some(y)) => (x as f32, y as f32),
+        (None, Some(x), Some(y)) => ((x as f32, y as f32), None),
         _ => return err("wheel needs either a `selector` or both `x` and `y` (window coordinates)"),
     };
     let (dx, dy) = (dx.unwrap_or(0.0) as f32, dy.unwrap_or(0.0) as f32);
@@ -2546,7 +2557,7 @@ fn cmd_wheel(
         return err("wheel needs a `dx` or a `dy` (DOM signs: dy > 0 scrolls down)");
     }
     let position = gpui::Point::new(gpui::px(point.0), gpui::px(point.1));
-    let done = with_target(|window, app| {
+    let wheel = |window: &mut Window, app: &mut App| {
         // A move first, for the same reason `mouse` sends one: gpui recomputes
         // its hit test from the window's own pointer position, and a wheel that
         // arrives without one is tested against wherever the pointer was last.
@@ -2554,7 +2565,7 @@ fn cmd_wheel(
             gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
                 position,
                 pressed_button: None,
-                modifiers: gpui::Modifiers::default(),
+                modifiers,
             }),
             app,
         );
@@ -2565,7 +2576,7 @@ fn cmd_wheel(
                 // turned away from you = a scroll UP), the DOM's is the
                 // opposite, and this command speaks the DOM's.
                 delta: gpui::ScrollDelta::Pixels(gpui::Point::new(gpui::px(-dx), gpui::px(-dy))),
-                modifiers: gpui::Modifiers::default(),
+                modifiers,
                 touch_phase: gpui::TouchPhase::Moved,
                 // A wheel, as `gpui_windows` reports one — not a touch pan,
                 // which gpui would route through its gesture recognizer.
@@ -2577,7 +2588,14 @@ fn cmd_wheel(
             window.refresh();
         }
         true
-    });
+    };
+    // A selector names its own window — the one that PAINTS the node, whose
+    // client space its centre is in (as `mouse` does); a bare x/y is in the
+    // window the command named.
+    let done = match node {
+        Some(id) => with_node_window(id, wheel),
+        None => with_target(wheel),
+    };
     match done {
         None => err("no such window"),
         Some(_) => ok(Json::obj(vec![

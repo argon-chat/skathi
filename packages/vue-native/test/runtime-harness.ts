@@ -30,6 +30,7 @@ import {
   resolveTransitionHooks,
   setTransitionHooks,
   Static,
+  Teleport,
   toRaw,
   useTransitionState,
   version,
@@ -155,6 +156,15 @@ const NAMED_REEXPORT = /^\s*export\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*
  * declarations in the body, so dropping the list loses nothing.
  */
 const LOCAL_EXPORT = /^\s*export\s+\{[^}]*\};?[^\S\n]*$/gm;
+
+/**
+ * What runtime.ts imports from src/vnwindow.ts — `VnWindow`, `WINDOW_ROOT`,
+ * `windowRoots` — in the order the parameters list them. The import line goes
+ * with the others, so they come back as parameters: a component nothing here
+ * renders, its root's marker, and an empty registry of window roots, so every
+ * node is in the main window, as in a runtime that never opened a pop-out.
+ */
+const VNWINDOW_STANDINS = (): unknown[] => [{ name: "VnWindow" }, Symbol("vn-window-root"), new Set<object>()];
 
 /**
  * `FileList`, as much of it as an input's `files` needs (redjs has the real
@@ -724,6 +734,12 @@ export function createRuntime(
     "__vn_anim_clock",
     "__vn_anim_drop",
     "__vn_anim_values",
+    // `<Teleport>`, which runtime.ts makes window-aware, and what it imports
+    // from src/vnwindow.ts (see `VNWINDOW_STANDINS`).
+    "Teleport",
+    "VnWindow",
+    "WINDOW_ROOT",
+    "windowRoots",
   ];
   let nextId = 1;
   /**
@@ -1135,6 +1151,8 @@ export function createRuntime(
       host.anim.calls.push(["values", id]);
       return host.anim.values;
     },
+    Teleport,
+    ...VNWINDOW_STANDINS(),
   ];
   if (options.selection === false) {
     // A host without the selection: `getSelection` stays undefined.

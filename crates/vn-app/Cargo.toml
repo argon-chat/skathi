@@ -57,12 +57,21 @@ devtools = []
 # default; `cargo build -p vn-app --no-default-features` builds a host with no
 # audio at all, which is ~40 fewer crates to compile. The reasoning for the
 # default living on rather than off is in crates/vn-runtime/Cargo.toml.
-default = ["audio", "storages", "clipboard", "indexeddb"]
+default = ["audio", "storages", "clipboard", "indexeddb", "voice"]
 # `vn-voice/audio` rides along: it is the flag that lets the voice mixer see
 # `redjs::webapi::pcm` and route a room's playout into the app's graph. The two
 # must move together — a host with `AudioContext` but no way to reach it from
 # voice would be a silent room with no explanation.
-audio = ["vn-runtime/audio", "vn-voice/audio"]
+audio = ["vn-runtime/audio", "vn-voice?/audio"]
+# LiveKit voice — `livekit-client` (docs/VOICE.md): the `livekit` crate and the
+# whole prebuilt libwebrtc linked statically, the largest optional piece of
+# the image. ON by default. An app with no calls ships a host without it —
+# `vn build --without voice` (docs/PACKAGING.md §features). Off, the
+# `__vn_voice_*` globals do not exist and the `livekit-client` shim advises
+# once at the first `new Room()`, whose `connect()` then rejects; nothing else
+# in the app changes. `getUserMedia` and Web Audio are not voice's: they stay
+# with `audio`.
+voice = ["dep:vn-voice", "dep:livekit-api"]
 
 # `localStorage` / `sessionStorage`, plus the `appStorage` folder + encryption
 # extension. ON by default for the same reason `audio` is: an app written
@@ -140,17 +149,18 @@ vn-storage = { path = "../vn-storage", optional = true }
 # `navigator.clipboard` over gpui's clipboard — the same one vn-elements' text
 # input uses for Ctrl+C. Optional for the same reason.
 vn-clipboard = { path = "../vn-clipboard", optional = true }
-# LiveKit voice. NOT dev-gated: `vn_voice::pump()` runs in every build, because
-# voice is an application capability rather than an automation surface.
-vn-voice = { path = "../vn-voice" }
+# LiveKit voice. NOT dev-gated: `vn_voice::pump()` runs in every build that has
+# the `voice` feature, because voice is an application capability rather than
+# an automation surface.
+vn-voice = { path = "../vn-voice", optional = true }
 # The DEV token minter only (`dev.rs`, behind `#[cfg(not(feature = "prod"))]`).
 # `access-token` is just `jsonwebtoken` + `hmac` — no HTTP client — and it lives
 # here rather than in vn-voice on purpose: an API secret compiled into a client
 # binary is the classic LiveKit footgun, so the half of the app that ships
 # (`--features prod`) must not be able to mint one (docs/VOICE.md D-15).
 # Cargo has no per-feature exclusion for a dependency a prod build never calls,
-# same as `image` above.
-livekit-api = { version = "0.6", default-features = false, features = ["access-token"] }
+# same as `image` above. It goes with `voice`.
+livekit-api = { version = "0.6", default-features = false, features = ["access-token"], optional = true }
 # The fork's own client (vendor/zed/crates/reqwest_client). Since m26 gpui's
 # loaders fetch through redjs's stack instead (src/http_client.rs); this one is
 # the fallback for a request that stack does not carry as is (a body, or a
@@ -191,6 +201,10 @@ windows = { version = "0.62", features = [
     # `OpenProcess` + `WaitForSingleObject` — `VN_OWNER_PID` (src/owner.rs).
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
+    # `SetWindowSubclass` — a `<VnWindow :focusable="false">` answers
+    # `WM_MOUSEACTIVATE` itself (src/popout_win.rs). Already compiled for the
+    # graph: the zed workspace's `windows` enables it.
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     # `RtlGetVersion` — the only version query Windows does not lie about for an
     # unmanifested process, and the way `backdrop: "mica"` knows it is on Win11.

@@ -34,4 +34,15 @@ export type { Orphan } from "./reap";
 export { featureExe, featureExeDir, fileContains, packagedExe, bareHost } from "./features";
 export type { FeatureExeOptions, PackagedExeOptions } from "./features";
 export { uiaTree, uiaSupported, uiaByName, uiaByType, uiaFormat } from "./uia";
+export {
+  clipboardFormat,
+  clipboardFormatId,
+  clipboardRestore,
+  clipboardSnapshot,
+  dibHeader,
+  CF_DIB,
+  CF_DIBV5,
+  CF_UNICODETEXT,
+} from "./clipboard";
+export type { ClipboardSnapshot } from "./clipboard";
 export type { UiaNode, UiaOptions } from "./uia";

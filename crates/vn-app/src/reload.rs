@@ -91,7 +91,10 @@ fn run(rt: &JsRuntime) {
 /// Never blocks the frame: each voice engine leaves on its own thread, within
 /// about a second (`vn_voice::close_all`). `why` names the caller in the log.
 pub fn end_media(rt: &JsRuntime, why: &str) {
+    #[cfg(feature = "voice")]
     let rooms = vn_voice::close_all();
+    #[cfg(not(feature = "voice"))]
+    let rooms = 0usize;
     #[cfg(feature = "audio")]
     let (tracks, contexts) = {
         use vn_runtime::redjs::webapi::{audio, mediastream};

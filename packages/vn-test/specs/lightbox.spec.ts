@@ -23,7 +23,28 @@
 //     size;
 //   * a picture in a `fullResolution` window keeps its full decode while the
 //     same kind of picture drawn as small in the main window is reduced, and
-//     the pin goes when the window stops showing it.
+//     the pin goes when the window stops showing it;
+//   * Ctrl+wheel zooms about the pointer — the picture's point under it stays
+//     under it, which needs the wheel's `clientX`/`clientY` — and a plain wheel
+//     does nothing; a drag pans a zoomed picture no further than Telegram's
+//     clamp, a drag that ends on the dim does not close the viewer, and one
+//     that ends on the picture leaves the next click on the dim its own;
+//   * a right click opens a menu teleported to `body` from inside the viewer:
+//     it is painted IN the viewer, where the click was, and its nodes are in
+//     the viewer's document (the viewport floating-ui measures), whose body
+//     is the window's root, attributes and all; a Teleport that mounted with
+//     the content is in the viewer too. A press outside the menu dismisses it
+//     the way reka-ui's layer does, with no click on the dim. "Go to message"
+//     closes the viewer; "Copy" puts the picture on the clipboard as its PNG
+//     and as the bitmaps other apps paste (read back from this process, and
+//     by the app; the clipboard is put back afterwards); "Save As..." asks the
+//     save dialog with a suggested name and writes the picture's own bytes;
+//   * a chat preview muted through its properties before its `src` plays
+//     without sound, the viewer's video with the same `src` plays with it, and
+//     closing the viewer silences it, and the hidden viewer's draw after the
+//     hide survives the video's frame it may still have queued; a video taken
+//     out of the document is paused, hears `pause`, and is still paused when
+//     it comes back.
 //
 // Quiet: vn-test runs `VN_WINDOW_FOCUS=never`, so the viewer is shown without
 // activation and stays in the z-order just above its owner, which vn-test
@@ -36,7 +57,10 @@
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { dlopen, FFIType } from "bun:ffi";
-import { launch } from "../src/index";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CF_DIB, CF_DIBV5, clipboardFormat, clipboardRestore, clipboardSnapshot, dibHeader, launch } from "../src/index";
 import { png } from "../fixtures/http-images/server";
 
 const T = 120_000;
@@ -71,7 +95,7 @@ for (let i = 0; i < 24; i++) body(`full-${i}`, i, 1600);
 for (const i of [1, 2]) body(`big-${i}`, i, 2400);
 const RUN = process.pid;
 /** Distinct per run, so nothing comes out of a previous run's disk cache. */
-const item = (i: number) => ({ thumb: `${base}/thumb/${i}.png?r=${RUN}`, full: `${base}/full/${i}.png?r=${RUN}` });
+const item = (i: number) => ({ thumb: `${base}/thumb/${i}.png?r=${RUN}`, full: `${base}/full/${i}.png?r=${RUN}`, messageId: `m-${i}` });
 
 const exe = process.env.VN_LIGHTBOX_EXE;
 const app = await launch({
@@ -374,10 +398,364 @@ describe("lightbox", () => {
     report.residency = { before, pinned };
   }, T);
 
+  test("Ctrl+wheel zooms about the pointer; a plain wheel does nothing", async () => {
+    await ensureItems();
+    await openByClick(0);
+    try {
+      const id = (await viewer()).windowId;
+      const r0 = await until("the picture's box", () => lb<PicRect | null>("picRect()"));
+      // A point off the centre, inside the picture: the picture's point under
+      // the pointer, as a fraction of it, has to stay under it.
+      const x = r0.left + r0.width * 0.62;
+      const y = r0.top + r0.height * 0.57;
+      const u = (x - r0.left) / r0.width;
+      const v = (y - r0.top) / r0.height;
+      const wheels = async () => lb<{ ctrl: boolean; x: number; y: number; dy: number }[]>("S.wheels");
+      const before = (await wheels()).length;
+      await app.send("wheel", { x, y, dy: 120, window: id });
+      const plain = await until("the plain wheel", async () => (await wheels()).slice(before)[0]);
+      // The wheel is a MouseEvent: it says where it happened.
+      expect(plain.ctrl).toBe(false);
+      expect(Math.abs(plain.x - x)).toBeLessThan(1.5);
+      expect(Math.abs(plain.y - y)).toBeLessThan(1.5);
+      await sleep(100);
+      expect(await lb<number>("S.zoom")).toBe(1);
+      const steps: { zoom: number; dx: number; dy: number }[] = [];
+      for (let n = 1; n <= 3; n++) {
+        const zoomBefore = await lb<number>("S.zoom");
+        await app.send("wheel", { x, y, dy: -120, ctrl: true, window: id });
+        const zoom = await until(`notch ${n}`, async () => {
+          const z = await lb<number>("S.zoom");
+          return z > zoomBefore + 0.01 ? z : 0;
+        });
+        // The rect once the transform is the new one.
+        const r = await until(`notch ${n}'s box`, async () => {
+          const rr = await lb<PicRect>("picRect()");
+          return Math.abs(rr.width - r0.width * zoom) < 1 ? rr : null;
+        });
+        steps.push({ zoom: round(zoom * 1000) / 1000, dx: round(r.left + u * r.width - x), dy: round(r.top + v * r.height - y) });
+      }
+      report.zoomAboutPointer = { at: { x, y, r0 }, steps, log: await lb<unknown[]>("S.zoomLog") };
+      for (const s of steps) {
+        expect(Math.abs(s.dx)).toBeLessThan(1.5);
+        expect(Math.abs(s.dy)).toBeLessThan(1.5);
+      }
+    } finally {
+      await closeByEscape();
+    }
+  }, T);
+
+  test("a drag pans a zoomed picture no further than its edges; a drag that ends on the dim does not close", async () => {
+    await ensureItems();
+    await openByClick(0);
+    try {
+      const id = (await viewer()).windowId;
+      const r0 = await until("the picture's box", () => lb<PicRect | null>("picRect()"));
+      const zoomTo = async (z: number) => {
+        await app.eval(`__VN_TEST_LB__.setZoom(${z}); "ok"`);
+        return until(`zoom ${z}`, async () => {
+          const r = await lb<PicRect>("picRect()");
+          return Math.abs(r.width - r0.width * z) < 1 ? r : null;
+        });
+      };
+      const dragTo = async (from: [number, number], to: [number, number]) => {
+        await app.send("mouse", { x: from[0], y: from[1], kind: "down", window: id });
+        await app.send("mouse", { x: (from[0] + to[0]) / 2, y: (from[1] + to[1]) / 2, kind: "move", held: true, window: id });
+        await app.send("mouse", { x: to[0], y: to[1], kind: "move", held: true, window: id });
+        await app.send("mouse", { x: to[0], y: to[1], kind: "up", window: id });
+        await sleep(150);
+        return lb<PicRect>("picRect()");
+      };
+      // Twice the size: both axes overflow. A drag far past the edge stops
+      // with the picture's edge on the window's.
+      const z2 = await zoomTo(2);
+      const centre: [number, number] = [z2.vw / 2, z2.vh / 2];
+      const toBottomRight = await dragTo(centre, [z2.vw - 3, z2.vh - 3]);
+      await zoomTo(2);
+      const toTopLeft = await dragTo(centre, [3, 3]);
+      report.panClamp = { zoom2: z2, toBottomRight, toTopLeft };
+      expect(Math.abs(toBottomRight.left)).toBeLessThan(1.5);
+      expect(Math.abs(toBottomRight.top)).toBeLessThan(1.5);
+      expect(Math.abs(toTopLeft.left + toTopLeft.width - toTopLeft.vw)).toBeLessThan(1.5);
+      expect(Math.abs(toTopLeft.top + toTopLeft.height - toTopLeft.vh)).toBeLessThan(1.5);
+      // Barely zoomed: it fits, so it stays centred whatever the drag — and
+      // the drag ends on the dim, which must not close the viewer.
+      const small = await zoomTo(1.04);
+      const clicks = await lb<number>("S.dimClicks");
+      const closes = (await lb<string[]>("S.closes")).length;
+      const after = await dragTo([small.vw / 2, small.vh / 2], [4, 4]);
+      await sleep(250);
+      report.dragEndingOnDim = { dimClicksArrived: (await lb<number>("S.dimClicks")) - clicks };
+      expect(Math.abs(after.left + after.width / 2 - after.vw / 2)).toBeLessThan(1.5);
+      expect(Math.abs(after.top + after.height / 2 - after.vh / 2)).toBeLessThan(1.5);
+      expect((await lb<string[]>("S.closes")).length).toBe(closes);
+      expect((await viewer()).visible).toBe(true);
+      // A drag that ends on the picture leaves no swallowed click behind: the
+      // next click on the dim closes.
+      await dragTo([small.vw / 2, small.vh / 2], [small.vw / 2 + 60, small.vh / 2 + 40]);
+      const before = (await lb<unknown[]>("S.events")).length;
+      await app.send("mouse", { x: 4, y: 4, kind: "click", window: id });
+      await until("the hide", async () => (await lb<{ kind: string }[]>("S.events")).slice(before).some((e) => e.kind === "hide"));
+      expect((await lb<string[]>("S.closes")).at(-1)).toBe("dim");
+    } finally {
+      if ((await viewer()).visible) await closeByEscape();
+    }
+  }, T);
+
+  test("a right click opens the menu in the viewer, at the click; Go to message closes the viewer", async () => {
+    await ensureItems();
+    await openByClick(1);
+    try {
+      const m = await openMenu(0.3, 0.4);
+      report.menu = m;
+      // Teleported to `body` from inside the viewer: it is the viewer's.
+      expect(m.inWindow).toBe(true);
+      expect(Math.abs(m.left - m.x)).toBeLessThan(1.5);
+      expect(Math.abs(m.top - m.y)).toBeLessThan(1.5);
+      // Its document is the viewer's: the viewport floating-ui keeps a menu in
+      // is the viewer's width, not the 480 px main window's.
+      expect(m.sameDocument).toBe(false);
+      expect(m.bodyIsRoot).toBe(true);
+      expect(Math.abs(m.docWidth - m.vw)).toBeLessThan(1.5);
+      expect(m.mainWidth).toBeLessThan(m.docWidth);
+      // The window's root is that `body`, with the attribute `<VnWindow>` was
+      // given; the layer's `pointer-events: none` is on it, not the main one.
+      expect(m.rootClass.split(" ").sort()).toEqual(["lb-window", "vn-window-root"]);
+      expect(m.bodyPointerEvents).toBe("none");
+      expect(await app.eval(`JSON.stringify(document.body.style.pointerEvents)`)).toBe(`""`);
+      // A Teleport that mounted with the content, before that was in the
+      // document, is the viewer's too.
+      expect(m.hintInWindow).toBe(true);
+      const before = (await lb<unknown[]>("S.events")).length;
+      // A real click in the viewer: the menu is hit there, or not at all.
+      await clickInViewer("#lb-menu-goto");
+      await until("the hide", async () => (await lb<{ kind: string }[]>("S.events")).slice(before).some((e) => e.kind === "hide"));
+      expect((await lb<string[]>("S.actions")).at(-1)).toBe("goto:m-1");
+      expect((await lb<string[]>("S.closes")).at(-1)).toBe("goto");
+    } finally {
+      if ((await viewer()).visible) await closeByEscape();
+    }
+  }, T);
+
+  test("a press outside the menu dismisses it and is no click on the dim; the next click on the dim closes", async () => {
+    await ensureItems();
+    await openByClick(1);
+    try {
+      await openMenu(0.5, 0.5);
+      const id = (await viewer()).windowId;
+      const closes = (await lb<string[]>("S.closes")).length;
+      const dims = await lb<number>("S.dimClicks");
+      const dismissals = (await lb<string[]>("S.dismissals")).length;
+      // The dim's corner, which the layer's `body { pointer-events: none }`
+      // covers: the window's root takes the press, as a browser's document
+      // would, and the layer's `document` listener hears it.
+      await app.send("mouse", { x: 4, y: 4, kind: "click", window: id });
+      await until("the dismissal", async () => (await lb<string[]>("S.dismissals")).length > dismissals);
+      await until("the menu gone", async () => (await lb<MenuInfo | null>("menuInfo()")) === null);
+      expect((await lb<string[]>("S.closes")).length).toBe(closes);
+      expect(await lb<number>("S.dimClicks")).toBe(dims);
+      expect((await viewer()).visible).toBe(true);
+      // The layer gave the body its pointer events back: a click on the dim closes now.
+      const before = (await lb<unknown[]>("S.events")).length;
+      await app.send("mouse", { x: 4, y: 4, kind: "click", window: id });
+      await until("the hide", async () => (await lb<{ kind: string }[]>("S.events")).slice(before).some((e) => e.kind === "hide"));
+      expect((await lb<string[]>("S.closes")).at(-1)).toBe("dim");
+    } finally {
+      if ((await viewer()).visible) await closeByEscape();
+    }
+  }, T);
+
+  test("Copy puts the picture on the clipboard as its PNG and as the bitmaps other apps paste", async () => {
+    await ensureItems();
+    const saved = clipboardSnapshot();
+    try {
+      await openByClick(2);
+      await openMenu(0.5, 0.5);
+      const before = (await lb<string[]>("S.actions")).length;
+      await clickInViewer("#lb-menu-copy");
+      const done = await until("the copy", async () => (await lb<string[]>("S.actions")).slice(before).find((a) => a.startsWith("copy:")), 15_000);
+      const bytes = body("full-2", 2, 1600);
+      expect(done).toBe(`copy:ok:${bytes.length}`);
+      // What another app sees: the PNG as it was fetched…
+      const asPng = clipboardFormat("PNG");
+      expect(asPng?.length).toBe(bytes.length);
+      expect(Buffer.from(asPng!).equals(Buffer.from(bytes))).toBe(true);
+      // …and a 32-bit bitmap of it, twice: CF_DIBV5 (with alpha) and CF_DIB.
+      const v5 = dibHeader(clipboardFormat(CF_DIBV5)!);
+      const dib = dibHeader(clipboardFormat(CF_DIB)!);
+      report.copy = { pngBytes: asPng?.length, v5, dib };
+      expect(v5).toMatchObject({ headerSize: 124, width: 1600, height: 1600, bits: 32 });
+      expect(dib).toMatchObject({ width: 1600, height: 1600, bits: 32 });
+      // And a paste in the app reads it back as the PNG.
+      await app.eval(`__VN_TEST_LB__.readBack(); "ok"`);
+      const back = await until("the read back", () => lb<string>("S.readBack"));
+      expect(back).toBe(`image/png:${bytes.length}:137`);
+    } finally {
+      clipboardRestore(saved);
+      if ((await viewer()).visible) await closeByEscape();
+    }
+  }, T);
+
+  test("Save As asks the save dialog with the picture's name and writes its own bytes", async () => {
+    await ensureItems();
+    const dir = join(tmpdir(), `vn-lightbox-save-${process.pid}`);
+    mkdirSync(dir, { recursive: true });
+    try {
+      await openByClick(3);
+      await openMenu(0.5, 0.5);
+      const before = (await lb<string[]>("S.actions")).length;
+      await clickInViewer("#lb-menu-save");
+      const d = await app.waitForDialog(10_000);
+      report.saveDialog = { kind: d.kind, suggestedName: d.suggestedName, filters: d.filters };
+      expect(d.kind).toBe("save");
+      expect(d.suggestedName).toBe("picture-3.png");
+      const out = join(dir, "picture-3.png");
+      await app.answerDialog(d.id, out);
+      const done = await until("the save", async () => (await lb<string[]>("S.actions")).slice(before).find((a) => a.startsWith("save:")), 15_000);
+      const bytes = body("full-3", 3, 1600);
+      expect(done).toBe(`save:ok:picture-3.png:${bytes.length}`);
+      // The bytes the server sent, not a re-encode.
+      expect(Buffer.from(readFileSync(out)).equals(Buffer.from(bytes))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      if ((await viewer()).visible) await closeByEscape();
+    }
+  }, T);
+
+  test("a muted preview is silent, the viewer's video is heard, and closing the viewer silences it", async () => {
+    await ensureItems();
+    // The chat's preview: muted and played through its properties before its
+    // `src`, as Argon's VideoPlayer does in `onMounted`.
+    await app.eval(`__VN_TEST_LB__.S.inlineSrc = "/src/av-silent.mp4"; __VN_TEST_LB__.S.inlineOn = true; "ok"`);
+    try {
+      const playing = await until("the preview to play", async () => {
+        const s = await lb<{ muted: boolean; paused: boolean } | null>("inlineState()");
+        return s && !s.paused ? s : null;
+      }, 20_000);
+      expect(playing.muted).toBe(true);
+      await sleep(300);
+      const preview = await videos();
+      expect(preview).toEqual({ videos: 1, audible: 0 });
+      // The viewer's video, the same `src`, with sound.
+      const n = (await lb<unknown[]>("S.items")).length;
+      await app.eval(`__VN_TEST_LB__.S.items.push(${JSON.stringify({ ...item(99), video: "/src/av-silent.mp4" })}); "ok"`);
+      const before = (await lb<unknown[]>("S.events")).length;
+      await app.eval(`__VN_TEST_LB__.open(${n}); "ok"`);
+      await until("the show", async () => (await lb<{ kind: string }[]>("S.events")).slice(before).some((e) => e.kind === "show"));
+      // Only the viewer's is heard: nothing is shared between two elements with one `src`.
+      const heard = await until("the viewer's video to be heard", async () => {
+        const v = await videos();
+        return v.audible === 1 ? v : null;
+      }, 20_000);
+      expect(heard.videos).toBe(2);
+      expect((await lb<{ muted: boolean }>("inlineState()")).muted).toBe(true);
+      // Closed while playing: its sound stops.
+      const t0 = performance.now();
+      await closeByEscape();
+      const quiet = await until("silence", async () => {
+        const v = await videos();
+        return v.audible === 0 ? v : null;
+      }, 5_000);
+      report.audio = { preview, heard, quietAfterCloseMs: round(performance.now() - t0), quiet };
+      expect(quiet.videos).toBe(1);
+      // The hidden viewer draws once 500 ms after the hide, and a frame of the
+      // video it showed can still be queued for it then. That frame's texture
+      // went with the video's player: the upload read freed memory and the
+      // host died here, about one run in two, until the queue held its own
+      // reference.
+      await sleep(900);
+      expect((await videos()).videos).toBe(1);
+      await app.eval(`__VN_TEST_LB__.S.items.pop(); "ok"`);
+    } finally {
+      await app.eval(`__VN_TEST_LB__.S.inlineOn = false; "ok"`);
+    }
+  }, T);
+
+  test("a video taken out of the document is paused, hears it, and stays paused when it comes back", async () => {
+    await app.eval(`__VN_TEST_LB__.S.inlineEvents = []; __VN_TEST_LB__.S.inlineSrc = "/src/av-silent.mp4"; __VN_TEST_LB__.S.inlineOn = true; "ok"`);
+    try {
+      await until("the preview to play", async () => {
+        const s = await lb<{ paused: boolean } | null>("inlineState()");
+        return s && !s.paused;
+      }, 20_000);
+      // Counted from here: the last test's preview, removed as it ended, may
+      // still be hearing its own `pause`.
+      const before = (await lb<string[]>("S.inlineEvents")).length;
+      expect(await app.eval(`__VN_TEST_LB__.detachInline()`)).toBe(true);
+      await until("its pause", async () => (await lb<string[]>("S.inlineEvents")).slice(before).includes("pause"), 5_000);
+      expect((await lb<{ paused: boolean }>("inlineState()")).paused).toBe(true);
+      expect(await app.eval(`__VN_TEST_LB__.attachInline()`)).toBe(true);
+      await sleep(600);
+      const back = await lb<{ paused: boolean }>("inlineState()");
+      report.detach = { events: await lb<string[]>("S.inlineEvents"), pausedAfterReinsert: back.paused };
+      expect(back.paused).toBe(true);
+    } finally {
+      await app.eval(`__VN_TEST_LB__.S.inlineOn = false; "ok"`);
+    }
+  }, T);
+
   test("report", () => {
     console.log(JSON.stringify(report, null, 2));
   });
 });
+
+type PicRect = { left: number; top: number; width: number; height: number; vw: number; vh: number };
+
+/** The items the first test sets, for a test run on its own (`-t`). */
+async function ensureItems() {
+  if ((await lb<unknown[]>("S.items")).length >= 24) return;
+  await app.eval(`__VN_TEST_LB__.S.items = ${JSON.stringify(Array.from({ length: 24 }, (_, i) => item(i)))}; "ok"`);
+  await until("the warm viewer", async () => (await viewer())?.hwnd);
+}
+
+/** The fixture's `menuInfo()`. */
+interface MenuInfo {
+  left: number;
+  top: number;
+  inWindow: boolean;
+  sameDocument: boolean;
+  docWidth: number;
+  bodyIsRoot: boolean;
+  mainWidth: number;
+  rootClass: string;
+  bodyPointerEvents: string;
+  hintInWindow: boolean;
+}
+
+/** A right click on the picture at (`fx`, `fy`) of it; the menu, and where the click was. */
+async function openMenu(fx: number, fy: number) {
+  const id = (await viewer()).windowId;
+  const r = await until("the picture's box", () => lb<PicRect | null>("picRect()"));
+  const x = r.left + r.width * fx;
+  const y = r.top + r.height * fy;
+  await app.send("mouse", { x, y, kind: "click", button: 2, window: id });
+  const m = await until("the menu", () => lb<MenuInfo | null>("menuInfo()"));
+  return { ...m, x, y, vw: r.vw };
+}
+
+/** A real click at the centre of `selector`, in the viewer's own client space. */
+async function clickInViewer(selector: string) {
+  const id = (await viewer()).windowId;
+  const r = JSON.parse(
+    await app.eval(`JSON.stringify(document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect())`),
+  ) as { left: number; top: number; width: number; height: number };
+  await app.send("mouse", { x: r.left + r.width / 2, y: r.top + r.height / 2, kind: "click", window: id });
+}
+
+/** `<video>` elements alive, and how many the platform is playing the sound of. */
+async function videos(): Promise<{ videos: number; audible: number }> {
+  const m = await app.send("mem", {});
+  const find = (o: any, key: string): any => {
+    if (!o || typeof o !== "object") return undefined;
+    if (key in o) return o[key];
+    for (const v of Object.values(o)) {
+      const r = find(v, key);
+      if (r !== undefined) return r;
+    }
+    return undefined;
+  };
+  return { videos: find(m, "videos") ?? -1, audible: find(m, "videosAudible") ?? -1 };
+}
 
 /** The viewer's device px per CSS px — the main window's, on the same monitor. */
 async function scaleOf(_v: Popout): Promise<number> {
