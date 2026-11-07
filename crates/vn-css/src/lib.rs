@@ -50,7 +50,7 @@ use parcel_selectors::parser::Component;
 
 pub use animator::{
     script_keyframes, strip_transitioned, AnimEvent, AnimEventKind, Animator, ScriptClock, ScriptFrame,
-    ScriptKeyframeNotes, ScriptTiming,
+    ScriptKeyframeNotes, ScriptSample, ScriptTiming,
 };
 pub use element::{Interaction, MatchDom};
 pub use mapper::{set_composed_font_families, take_unreached_fonts};

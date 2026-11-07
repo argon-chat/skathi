@@ -241,13 +241,20 @@ impl Easing {
     /// Maps input progress (0..=1) to output progress. Cubic-bézier output may
     /// leave 0..=1 (overshoot) — that is correct CSS.
     pub fn eval(self, t: f32) -> f32 {
+        self.eval_f64(t as f64) as f32
+    }
+
+    /// The same curve for script timing, without rounding progress to GPU precision.
+    /// CSS control points retain their parsed precision; time and iteration
+    /// arithmetic stay doubles as required by the Web Animations object model.
+    pub fn eval_f64(self, t: f64) -> f64 {
         match self {
             Easing::Linear => t,
             Easing::Ease => cubic_bezier(0.25, 0.1, 0.25, 1.0, t),
             Easing::EaseIn => cubic_bezier(0.42, 0.0, 1.0, 1.0, t),
             Easing::EaseOut => cubic_bezier(0.0, 0.0, 0.58, 1.0, t),
             Easing::EaseInOut => cubic_bezier(0.42, 0.0, 0.58, 1.0, t),
-            Easing::CubicBezier(x1, y1, x2, y2) => cubic_bezier(x1, y1, x2, y2, t),
+            Easing::CubicBezier(x1, y1, x2, y2) => cubic_bezier(x1 as f64, y1 as f64, x2 as f64, y2 as f64, t),
             Easing::Steps(count, position) => steps(count, position, t),
         }
     }
@@ -309,19 +316,19 @@ pub fn covered(specs: &[TransitionSpec]) -> Vec<TransitionProperty> {
 // ---------------------------------------------------------------------------
 
 /// The cubic-bézier basis with P0 = 0 and P3 = 1.
-fn bezier(a: f32, b: f32, t: f32) -> f32 {
+fn bezier(a: f64, b: f64, t: f64) -> f64 {
     let mt = 1.0 - t;
     3.0 * mt * mt * t * a + 3.0 * mt * t * t * b + t * t * t
 }
 
-fn bezier_slope(a: f32, b: f32, t: f32) -> f32 {
+fn bezier_slope(a: f64, b: f64, t: f64) -> f64 {
     let mt = 1.0 - t;
     3.0 * mt * mt * a + 6.0 * mt * t * (b - a) + 3.0 * t * t * (1.0 - b)
 }
 
 /// Inverts x(t) with Newton-Raphson, falling back to bisection when the
 /// derivative vanishes (flat control polygons) or Newton leaves 0..=1.
-fn solve_t_for_x(x1: f32, x2: f32, x: f32) -> f32 {
+fn solve_t_for_x(x1: f64, x2: f64, x: f64) -> f64 {
     let mut t = x;
     for _ in 0..8 {
         let err = bezier(x1, x2, t) - x;
@@ -339,7 +346,7 @@ fn solve_t_for_x(x1: f32, x2: f32, x: f32) -> f32 {
         t = next;
     }
 
-    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    let (mut lo, mut hi) = (0.0f64, 1.0f64);
     let mut t = x.clamp(0.0, 1.0);
     for _ in 0..48 {
         let v = bezier(x1, x2, t);
@@ -356,7 +363,7 @@ fn solve_t_for_x(x1: f32, x2: f32, x: f32) -> f32 {
     t
 }
 
-fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
+fn cubic_bezier(x1: f64, y1: f64, x2: f64, y2: f64, t: f64) -> f64 {
     if t <= 0.0 {
         return 0.0;
     }
@@ -370,8 +377,8 @@ fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
 }
 
 /// The CSS Easing Level 1 step-easing algorithm.
-fn steps(count: u32, position: StepPosition, t: f32) -> f32 {
-    let n = count.max(1) as f32;
+fn steps(count: u32, position: StepPosition, t: f64) -> f64 {
+    let n = count.max(1) as f64;
     let mut current = (t * n).floor();
     if matches!(position, StepPosition::JumpStart | StepPosition::JumpBoth) {
         current += 1.0;
@@ -995,6 +1002,16 @@ mod tests {
     const EPS: f32 = 1e-3;
 
     #[test]
+    fn script_easing_keeps_double_progress_and_step_boundaries() {
+        let progress = 0.123456789123;
+        assert_eq!(Easing::Linear.eval_f64(progress), progress);
+        let step = Easing::Steps(10, StepPosition::JumpEnd);
+        assert_eq!(step.eval_f64(0.3 - 1e-12), 0.2);
+        assert_eq!(step.eval_f64(0.3), 0.3);
+        assert!((Easing::Ease.eval_f64(0.5) - Easing::CubicBezier(0.25, 0.1, 0.25, 1.0).eval_f64(0.5)).abs() < 1e-8);
+    }
+
+    #[test]
     fn easing_endpoints_are_exact() {
         for e in [
             Easing::Linear,
@@ -1046,21 +1063,21 @@ mod tests {
         let (x1, y1, x2, y2) = (0.68, -0.55, 0.265, 1.55); // "ease-in-out-back"
         let curve = Easing::CubicBezier(x1, y1, x2, y2);
         for i in 1..100 {
-            let x = i as f32 / 100.0;
+            let x = i as f64 / 100.0;
             // Brute force: scan s densely for the closest x(s).
-            let mut best = (f32::MAX, 0.0f32);
+            let mut best = (f64::MAX, 0.0f64);
             for j in 0..=200_000 {
-                let s = j as f32 / 200_000.0;
-                let d = (bezier(x1, x2, s) - x).abs();
+                let s = j as f64 / 200_000.0;
+                let d = (bezier(x1 as f64, x2 as f64, s) - x).abs();
                 if d < best.0 {
                     best = (d, s);
                 }
             }
-            let reference = bezier(y1, y2, best.1);
+            let reference = bezier(y1 as f64, y2 as f64, best.1);
             assert!(
-                (curve.eval(x) - reference).abs() < 2e-3,
+                (curve.eval_f64(x) - reference).abs() < 2e-3,
                 "x={x}: {} vs {reference}",
-                curve.eval(x)
+                curve.eval_f64(x)
             );
         }
     }

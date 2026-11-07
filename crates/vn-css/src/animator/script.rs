@@ -14,11 +14,10 @@
 //!   [`Animator::script_clock`], every time the state machine moves it.
 //!
 //! Each frame the animator turns that clock into the animation's current time
-//! and samples the effect at it, the way it samples a `@keyframes` run. So a
-//! running script animation costs JS nothing per frame, and the two halves
-//! cannot drift: they read the same clock (`performance.now()`, whose origin
-//! the host hands over as [`Animator::set_timeline_origin`]) through the same
-//! timing model, written twice and tested on both sides.
+//! and samples the effect at it, the way it samples a `@keyframes` run. A
+//! running script animation costs JS nothing per frame. The native JS API
+//! also calls this timing model for getComputedTiming(), so script inspection
+//! and painting use one implementation and the same clock.
 //!
 //! # Where this differs from a `@keyframes` run
 //!
@@ -78,6 +77,13 @@ enum Phase {
     After,
 }
 
+/// The script-visible result of the shared timing kernel.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ScriptSample {
+    pub progress: Option<f64>,
+    pub current_iteration: Option<f64>,
+}
+
 impl ScriptTiming {
     /// Web Animations 1 §4.6.3, "the active duration".
     pub fn active_duration(&self) -> f64 {
@@ -99,6 +105,13 @@ impl ScriptTiming {
     /// direction (a negative playback rate), which decides which phase owns a
     /// local time sitting exactly on a boundary. §4.8–§4.10.
     pub fn progress(&self, local: f64, backwards: bool) -> Option<f64> {
+        self.sample(Some(local), backwards).progress
+    }
+
+    /// Both painter progress and AnimationEffect.getComputedTiming metadata.
+    /// An unresolved local time or a non-filling phase has no current iteration.
+    pub fn sample(&self, local: Option<f64>, backwards: bool) -> ScriptSample {
+        let Some(local) = local else { return ScriptSample::default(); };
         let active = self.active_duration();
         let end = self.end_time();
         let before_active = self.delay.min(end).max(0.0);
@@ -116,7 +129,8 @@ impl ScriptTiming {
             Phase::Active => Some(local - self.delay),
             Phase::After => matches!(self.fill, FillMode::Forwards | FillMode::Both)
                 .then(|| (local - self.delay).min(active).max(0.0)),
-        }?;
+        };
+        let Some(active_time) = active_time else { return ScriptSample::default(); };
         let overall = if self.duration == 0.0 {
             if phase == Phase::Before {
                 self.iteration_start
@@ -126,10 +140,10 @@ impl ScriptTiming {
         } else {
             active_time / self.duration + self.iteration_start
         };
-        let mut simple = if overall.is_infinite() {
-            self.iteration_start % 1.0
-        } else {
+        let mut simple = if overall.is_finite() {
             overall % 1.0
+        } else {
+            self.iteration_start % 1.0
         };
         // The end of an iteration is 1, not the 0 of the next one — but only
         // where the active interval actually ends.
@@ -152,7 +166,10 @@ impl ScriptTiming {
             }
         };
         let directed = if forwards { simple } else { 1.0 - simple };
-        Some(self.easing.eval(directed as f32) as f64)
+        ScriptSample {
+            progress: Some(self.easing.eval_f64(directed)),
+            current_iteration: Some(iteration),
+        }
     }
 }
 
@@ -557,6 +574,24 @@ mod tests {
             gpui::TransformLength::Pixels(p) => p,
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn script_metadata_and_paint_share_boundaries_and_double_precision() {
+        let t = timing(1_000_000_000.0);
+        assert_eq!(t.sample(None, false), ScriptSample::default());
+        assert_eq!(t.sample(Some(-1.0), false), ScriptSample::default());
+        let local = 123_456_789.123;
+        let sample = t.sample(Some(local), false);
+        assert_eq!(sample.progress, Some(local / t.duration));
+        assert_eq!(sample.current_iteration, Some(0.0));
+        assert_eq!(sample.progress, t.progress(local, false));
+        let t = ScriptTiming { duration: 1000.0, iterations: 3.0,
+            direction: Direction::Alternate, fill: FillMode::Both, ..t };
+        assert_eq!(t.sample(Some(3000.0), false), ScriptSample {
+            progress: Some(1.0), current_iteration: Some(2.0) });
+        let infinite = ScriptTiming { duration: f64::INFINITY, ..t };
+        assert_eq!(infinite.sample(Some(f64::INFINITY), false).progress, Some(1.0));
     }
 
     #[test]

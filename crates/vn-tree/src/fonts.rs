@@ -5,7 +5,7 @@
 //!
 //! 1. **Declared.** A stylesheet's `@font-face` blocks are read every time the
 //!    sheet is compiled ([`note_sheet`]); a script's `new FontFace(…)` arrives
-//!    through `__vn_font_create`. Either way it becomes a [`Face`] with the
+//!    through the native [`crate::font_api`] constructor. Either way it becomes a [`Face`] with the
 //!    descriptors it was declared with.
 //! 2. **Loaded.** Lazily, as in a browser: a face of the set loads when text is
 //!    drawn with it ([`want_for_text`]), or on `FontFace.load()` /
@@ -76,8 +76,13 @@ use gpui::App;
 /// One `src` entry.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Src {
-    Url { url: String, format: Option<String> },
+    Url {
+        url: String,
+        format: Option<String>,
+    },
     Local(String),
+    /// Owned bytes supplied by a FontFace ArrayBuffer/view constructor.
+    Bytes(Vec<u8>),
 }
 
 /// A face's descriptors, as `FontFace` reports them.
@@ -109,7 +114,11 @@ impl Descriptors {
     /// Does the face draw Latin text? A face limited to other code points is
     /// never an element's primary font (module docs).
     pub(crate) fn covers_latin(&self) -> bool {
-        self.unicode_range.is_empty() || self.unicode_range.iter().any(|&(s, e)| s <= 0x61 && 0x61 <= e)
+        self.unicode_range.is_empty()
+            || self
+                .unicode_range
+                .iter()
+                .any(|&(s, e)| s <= 0x61 && 0x61 <= e)
     }
 
     /// `unicode-range` as CSS writes it.
@@ -119,7 +128,13 @@ impl Descriptors {
         }
         self.unicode_range
             .iter()
-            .map(|&(s, e)| if s == e { format!("U+{s:X}") } else { format!("U+{s:X}-{e:X}") })
+            .map(|&(s, e)| {
+                if s == e {
+                    format!("U+{s:X}")
+                } else {
+                    format!("U+{s:X}-{e:X}")
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -135,7 +150,7 @@ pub(crate) enum Status {
 }
 
 impl Status {
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Status::Unloaded => "unloaded",
             Status::Loading => "loading",
@@ -143,6 +158,48 @@ impl Status {
             Status::Error(_) => "error",
         }
     }
+}
+
+/// Typed browser-object view; no serialized transport between the loader and JSC.
+#[derive(Clone)]
+pub(crate) struct Snapshot {
+    pub id: u32,
+    pub desc: Descriptors,
+    pub css: bool,
+    pub status: Status,
+}
+
+pub(crate) fn snapshots() -> Vec<Snapshot> {
+    FONTS.with(|f| {
+        f.borrow()
+            .faces
+            .iter()
+            .map(|x| Snapshot {
+                id: x.id,
+                desc: x.desc.clone(),
+                css: x.css,
+                status: x.status.clone(),
+            })
+            .collect()
+    })
+}
+
+pub(crate) fn quiet() -> bool {
+    FONTS.with(|f| f.borrow().quiet)
+}
+
+/// Descriptors are authoritative here as well as on the JS object. Changing
+/// them invalidates font matching; already registered faces use compositions.
+pub(crate) fn set_descriptors(id: u32, desc: Descriptors) {
+    FONTS.with(|f| {
+        let mut f = f.borrow_mut();
+        if let Some(face) = f.faces.iter_mut().find(|x| x.id == id) {
+            face.desc = desc;
+        }
+        f.choice.clear();
+        f.changed_since = Some(Instant::now());
+    });
+    publish_waiting();
 }
 
 struct Face {
@@ -203,8 +260,6 @@ struct Fonts {
 
 thread_local! {
     static FONTS: RefCell<Fonts> = RefCell::new(Fonts::default());
-    /// `__vn_fonts_set_listener`'s function (protected), or 0.
-    static LISTENER: Cell<u64> = const { Cell::new(0) };
     /// The families last given to `vn_css::set_web_font_families`, lowercase.
     static WAITING: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// What each element's text is drawn with, as far as [`want`] cares:
@@ -240,14 +295,19 @@ pub(crate) fn note_sheet(css: &str) {
     if FONTS.with(|f| f.borrow().sheet_key == key) {
         return;
     }
-    let declared: Vec<(Descriptors, Vec<Src>)> = blocks.iter().filter_map(|b| parse_block(b)).collect();
+    let declared: Vec<(Descriptors, Vec<Src>)> =
+        blocks.iter().filter_map(|b| parse_block(b)).collect();
     FONTS.with(|f| {
         let mut f = f.borrow_mut();
         f.sheet_key = key;
         let mut keep = vec![false; f.faces.len()];
         let mut added = Vec::new();
         for (desc, sources) in declared {
-            match f.faces.iter().position(|x| x.css && x.desc == desc && x.sources == sources) {
+            match f
+                .faces
+                .iter()
+                .position(|x| x.css && x.desc == desc && x.sources == sources)
+            {
                 Some(i) if !keep[i] => keep[i] = true,
                 _ => added.push((desc, sources)),
             }
@@ -335,7 +395,9 @@ pub(crate) fn want_for_text(t: &crate::tree::Tree, parent: u32, text: &str) {
 
 /// [`want`] down the waiting families, each for what the ones before leave.
 fn ask(drawn: Drawn, text: &str) {
-    let Some(families) = drawn.families else { return };
+    let Some(families) = drawn.families else {
+        return;
+    };
     let mut rest = std::borrow::Cow::Borrowed(text);
     for family in families.iter() {
         if rest.is_empty() {
@@ -374,7 +436,11 @@ fn effective(t: &crate::tree::Tree, id: u32) -> Drawn {
         let mut m = m.borrow_mut();
         let mut chain = Vec::new();
         let mut at = id;
-        let mut drawn = Drawn { families: None, weight: 400.0, italic: false };
+        let mut drawn = Drawn {
+            families: None,
+            weight: 400.0,
+            italic: false,
+        };
         while at != 0 {
             if let Some(hit) = m.get(&at) {
                 drawn = hit.clone();
@@ -410,11 +476,18 @@ pub(crate) fn want(family: &str, weight: f32, italic: bool, text: &str) -> Strin
     let (asked, rest) = FONTS.with(|f| {
         let mut f = f.borrow_mut();
         let f = &mut *f;
-        let picks = match f.choice.get(family).and_then(|v| v.iter().find(|(k, _)| *k == key)) {
+        let picks = match f
+            .choice
+            .get(family)
+            .and_then(|v| v.iter().find(|(k, _)| *k == key))
+        {
             Some((_, picks)) => picks.clone(),
             None => {
                 let picks = best_faces(&f.faces, family, key.0 as f32, italic);
-                f.choice.entry(family.to_string()).or_default().push((key, picks.clone()));
+                f.choice
+                    .entry(family.to_string())
+                    .or_default()
+                    .push((key, picks.clone()));
                 picks
             }
         };
@@ -444,7 +517,11 @@ fn covers(desc: &Descriptors, text: &str) -> bool {
 }
 
 fn in_range(desc: &Descriptors, c: char) -> bool {
-    desc.unicode_range.is_empty() || desc.unicode_range.iter().any(|&(s, e)| s <= c as u32 && c as u32 <= e)
+    desc.unicode_range.is_empty()
+        || desc
+            .unicode_range
+            .iter()
+            .any(|&(s, e)| s <= c as u32 && c as u32 <= e)
 }
 
 /// The indices of `family`'s faces in the set that CSS Fonts 4 §5.2 matches
@@ -457,7 +534,10 @@ fn best_faces(faces: &[Face], family: &str, weight: f32, italic: bool) -> Vec<us
         .filter(|&i| faces[i].in_set && faces[i].desc.family.eq_ignore_ascii_case(family))
         .collect();
     let descs: Vec<&Descriptors> = of_family.iter().map(|&i| &faces[i].desc).collect();
-    best_matching(&descs, weight, italic).into_iter().map(|j| of_family[j]).collect()
+    best_matching(&descs, weight, italic)
+        .into_iter()
+        .map(|j| of_family[j])
+        .collect()
 }
 
 /// [`best_faces`] over one family's descriptors: the indices into `descs`,
@@ -480,11 +560,17 @@ fn best_matching(descs: &[&Descriptors], weight: f32, italic: bool) -> Vec<usize
         (_, 2) => 1,
         _ => 2,
     };
-    let Some(best_style) = of_family.iter().map(|&i| style_rank(style_class(&descs[i].style))).min() else {
+    let Some(best_style) = of_family
+        .iter()
+        .map(|&i| style_rank(style_class(&descs[i].style)))
+        .min()
+    else {
         return Vec::new();
     };
-    let styled: Vec<usize> =
-        of_family.into_iter().filter(|&i| style_rank(style_class(&descs[i].style)) == best_style).collect();
+    let styled: Vec<usize> = of_family
+        .into_iter()
+        .filter(|&i| style_rank(style_class(&descs[i].style)) == best_style)
+        .collect();
     let rank = |i: usize| {
         let (lo, hi) = weight_range(&descs[i].weight);
         let d = weight;
@@ -499,14 +585,20 @@ fn best_matching(descs: &[&Descriptors], weight: f32, italic: bool) -> Vec<usize
                 (3, (lo - d) as u32)
             }
         } else if d < 400.0 {
-            if hi < d { (1, (d - hi) as u32) } else { (2, (lo - d) as u32) }
+            if hi < d {
+                (1, (d - hi) as u32)
+            } else {
+                (2, (lo - d) as u32)
+            }
         } else if lo > d {
             (1, (lo - d) as u32)
         } else {
             (2, (d - hi) as u32)
         }
     };
-    let Some(best) = styled.iter().map(|&i| rank(i)).min() else { return Vec::new() };
+    let Some(best) = styled.iter().map(|&i| rank(i)).min() else {
+        return Vec::new();
+    };
     styled.into_iter().filter(|&i| rank(i) == best).collect()
 }
 
@@ -523,21 +615,30 @@ fn weight_range(w: &str) -> (f32, f32) {
     (lo.min(hi), lo.max(hi))
 }
 
-/// A script's `new FontFace(family, source, descriptors)`. `source` is a CSS
-/// `src` value; a binary source reaches here as `url(blob:…)` (fonts.ts makes
-/// one) with `now`, because the constructor starts loading a binary source at
-/// once. `Err` is the SyntaxError a bad source throws.
+/// A script's string source. A malformed CSS source rejects its loaded promise.
 pub(crate) fn create(desc: Descriptors, source: &str, now: bool) -> Result<u32, String> {
     let sources = parse_block(&format!("@font-face {{ font-family: x; src: {source}; }}"))
         .map(|(_, s)| s)
         .unwrap_or_default();
     if sources.is_empty() {
-        return Err(format!("FontFace: the source {source:?} could not be parsed"));
+        return Err(format!(
+            "FontFace: the source {source:?} could not be parsed"
+        ));
     }
-    Ok(FONTS.with(|f| {
+    Ok(create_sources(desc, sources, now))
+}
+
+/// Copy the exact ArrayBuffer/view byte range before any JS allocation. No
+/// temporary Blob URL is created, so there is no URL lifecycle to leak.
+pub(crate) fn create_bytes(desc: Descriptors, bytes: Vec<u8>) -> u32 {
+    create_sources(desc, vec![Src::Bytes(bytes)], true)
+}
+
+fn create_sources(desc: Descriptors, sources: Vec<Src>, now: bool) -> u32 {
+    FONTS.with(|f| {
         let mut f = f.borrow_mut();
-        let id = f.next_id + 1;
-        f.next_id = id;
+        f.next_id += 1;
+        let id = f.next_id;
         f.faces.push(Face {
             id,
             desc,
@@ -551,7 +652,7 @@ pub(crate) fn create(desc: Descriptors, source: &str, now: bool) -> Result<u32, 
             registered_as: None,
         });
         id
-    }))
+    })
 }
 
 /// `FontFace.load()`: queue a face that has not started.
@@ -589,14 +690,16 @@ pub(crate) fn set_in_set(id: u32, on: bool) {
     // sheet compiles against it: on the next tick, as for a registration.
     if publish_waiting() {
         FONTS.with(|f| {
-            f.borrow_mut().changed_since.get_or_insert_with(Instant::now);
+            f.borrow_mut()
+                .changed_since
+                .get_or_insert_with(Instant::now);
         });
     }
 }
 
-/// Every face, for `document.fonts` (packages/vue-native/src/fonts.ts): a JSON
-/// array of `{id, css, family, style, weight, stretch, unicodeRange, display,
-/// status, error}`.
+/// Test-only loader inspection. Production FontFace objects consume typed
+/// snapshots and status records directly through crate::font_api.
+#[cfg(test)]
 pub(crate) fn list_json() -> String {
     FONTS.with(|f| {
         let f = f.borrow();
@@ -630,14 +733,24 @@ pub(crate) fn list_json() -> String {
 /// Is `family` declared by a face in `document.fonts` (loaded or not)?
 #[cfg(test)]
 fn declared(family: &str) -> bool {
-    FONTS.with(|f| f.borrow().faces.iter().any(|x| x.in_set && x.desc.family.eq_ignore_ascii_case(family)))
+    FONTS.with(|f| {
+        f.borrow()
+            .faces
+            .iter()
+            .any(|x| x.in_set && x.desc.family.eq_ignore_ascii_case(family))
+    })
 }
 
 /// Does any face name `family`, in the set or not yet (a script's `FontFace`
 /// between `new` and `document.fonts.add`)? The missing-font advisory leaves
 /// those alone: the font is on its way, or its own failure says why.
 fn known(family: &str) -> bool {
-    FONTS.with(|f| f.borrow().faces.iter().any(|x| x.desc.family.eq_ignore_ascii_case(family)))
+    FONTS.with(|f| {
+        f.borrow()
+            .faces
+            .iter()
+            .any(|x| x.desc.family.eq_ignore_ascii_case(family))
+    })
 }
 
 /// How long a missing `font-family` waits for a face to declare it before the
@@ -672,9 +785,14 @@ fn due_misses(now: Instant) -> Vec<(String, Option<String>)> {
         if m.is_empty() {
             return Vec::new();
         }
-        let (due, wait): (Vec<_>, Vec<_>) = m.drain(..).partition(|x| now.duration_since(x.2) >= MISS_GRACE);
+        let (due, wait): (Vec<_>, Vec<_>) = m
+            .drain(..)
+            .partition(|x| now.duration_since(x.2) >= MISS_GRACE);
         *m = wait;
-        due.into_iter().filter(|x| !known(&x.0)).map(|x| (x.0, x.1)).collect()
+        due.into_iter()
+            .filter(|x| !known(&x.0))
+            .map(|x| (x.0, x.1))
+            .collect()
     })
 }
 
@@ -702,24 +820,21 @@ fn range_limited() -> Vec<String> {
     })
 }
 
-/// `__vn_fonts_set_listener(fn)`: the page's `(id, status, message)` callback.
-pub(crate) fn set_listener(f: u64) {
-    LISTENER.with(|l| l.set(f));
-}
-
-pub(crate) fn listener() -> u64 {
-    LISTENER.with(|l| l.get())
-}
-
 /// A script face's descriptors: `family` as the constructor got it, and the
-/// others packed by fonts.ts as `style|weight|stretch|unicodeRange|display`
+/// others packed internally as `style|weight|stretch|unicodeRange|display`
 /// (`|` cannot occur in any of them). Each is parsed as the `@font-face`
 /// descriptor it is; `Err` names the first that does not parse (the face's
 /// SyntaxError).
 pub(crate) fn descriptors(family: &str, packed: &str) -> Result<Descriptors, String> {
     let mut parts = packed.split('|').map(str::trim);
     let mut block = String::from("@font-face { font-family: x; src: url(x);");
-    let names = ["font-style", "font-weight", "font-stretch", "unicode-range", "font-display"];
+    let names = [
+        "font-style",
+        "font-weight",
+        "font-stretch",
+        "unicode-range",
+        "font-display",
+    ];
     let mut given = Vec::new();
     for name in names {
         let v = parts.next().unwrap_or("");
@@ -729,7 +844,8 @@ pub(crate) fn descriptors(family: &str, packed: &str) -> Result<Descriptors, Str
         }
     }
     block.push('}');
-    let (mut desc, _) = parse_block(&block).ok_or_else(|| format!("FontFace: the descriptors {packed:?} do not parse"))?;
+    let (mut desc, _) = parse_block(&block)
+        .ok_or_else(|| format!("FontFace: the descriptors {packed:?} do not parse"))?;
     // A descriptor that does not parse is dropped by the parser, not
     // reported: compare what came back with what was given.
     let default = Descriptors::default();
@@ -757,17 +873,33 @@ pub(crate) fn descriptors(family: &str, packed: &str) -> Result<Descriptors, Str
 /// a face of one of the listed families whose `unicode-range` covers a
 /// character of `text`. `None` when `font` is not a valid shorthand (the
 /// SyntaxError both methods throw).
+#[cfg(test)]
 pub(crate) fn matching(font: &str, text: &str) -> Option<Vec<u32>> {
+    matching_for(font, text, None)
+}
+
+/// FontFaceSet instances select from their own members, not a second JS matcher.
+pub(crate) fn matching_for(font: &str, text: &str, members: Option<&[u32]>) -> Option<Vec<u32>> {
     let families = shorthand_families(font)?;
     let text = if text.is_empty() { " " } else { text };
     Some(FONTS.with(|f| {
         f.borrow()
             .faces
             .iter()
-            .filter(|x| x.in_set && families.iter().any(|fam| fam.eq_ignore_ascii_case(&x.desc.family)))
+            .filter(|x| members.map_or(x.in_set, |ids| ids.contains(&x.id)))
+            .filter(|x| {
+                families
+                    .iter()
+                    .any(|fam| fam.eq_ignore_ascii_case(&x.desc.family))
+            })
             .filter(|x| {
                 x.desc.unicode_range.is_empty()
-                    || text.chars().any(|c| x.desc.unicode_range.iter().any(|&(s, e)| s <= c as u32 && c as u32 <= e))
+                    || text.chars().any(|c| {
+                        x.desc
+                            .unicode_range
+                            .iter()
+                            .any(|&(s, e)| s <= c as u32 && c as u32 <= e)
+                    })
             })
             .map(|x| x.id)
             .collect()
@@ -789,7 +921,16 @@ fn shorthand_families(font: &str) -> Option<Vec<String>> {
         let t = t.split('/').next().unwrap_or("").to_ascii_lowercase();
         let keyword = matches!(
             t.as_str(),
-            "xx-small" | "x-small" | "small" | "medium" | "large" | "x-large" | "xx-large" | "xxx-large" | "smaller" | "larger"
+            "xx-small"
+                | "x-small"
+                | "small"
+                | "medium"
+                | "large"
+                | "x-large"
+                | "xx-large"
+                | "xxx-large"
+                | "smaller"
+                | "larger"
         );
         // A number with a unit; a bare number is a weight (`700`).
         let unit = t.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
@@ -825,10 +966,18 @@ fn shorthand_families(font: &str) -> Option<Vec<String>> {
         if p.is_empty() {
             return None;
         }
-        let name = if p.starts_with(['"', '\'']) { css_unescape(p) } else { p.split_whitespace().collect::<Vec<_>>().join(" ") };
+        let name = if p.starts_with(['"', '\'']) {
+            css_unescape(p)
+        } else {
+            p.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
         out.push(name);
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// A family list split at the commas outside quotes.
@@ -873,7 +1022,9 @@ pub(crate) fn tick(window: &mut gpui::Window, cx: &mut App) -> bool {
     let due = FONTS.with(|f| {
         let mut f = f.borrow_mut();
         let loading = f.faces.iter().any(|x| x.status == Status::Loading);
-        let due = f.changed_since.is_some_and(|t| !loading || t.elapsed() >= SETTLE);
+        let due = f
+            .changed_since
+            .is_some_and(|t| !loading || t.elapsed() >= SETTLE);
         if due {
             f.changed_since = None;
         }
@@ -904,18 +1055,21 @@ fn note_quiet(moved: bool, laid_out: bool) {
         let mut f = f.borrow_mut();
         let busy = moved
             || f.changed_since.is_some()
-            || f.faces.iter().any(|x| x.in_set && (x.wanted || x.status == Status::Loading));
+            || f.faces
+                .iter()
+                .any(|x| x.in_set && (x.wanted || x.status == Status::Loading));
         let quiet = if busy { false } else { f.quiet || laid_out };
         if quiet != f.quiet {
             f.quiet = quiet;
-            f.events.push((0, if quiet { "quiet" } else { "busy" }, String::new()));
+            f.events
+                .push((0, if quiet { "quiet" } else { "busy" }, String::new()));
         }
     });
 }
 
 /// Starts every wanted load, and says whether there was one. In-memory sources
-/// (`data:`, an in-memory `blob:` such as a script's `ArrayBuffer`, the
-/// packaged store) are read here and unpacked in the background; a file and
+/// (owned ArrayBuffer/view bytes, `data:`, `blob:`, the packaged store) are
+/// read here and unpacked in the background; a file and
 /// an http(s) URL are read on gpui's background executor too.
 fn start_wanted(cx: &mut App) -> bool {
     let starts: Vec<(u32, Vec<Src>)> = FONTS.with(|f| {
@@ -928,7 +1082,17 @@ fn start_wanted(cx: &mut App) -> bool {
                 x.status = Status::Loading;
                 events.push((x.id, "loading", String::new()));
             }
-            out.push((x.id, x.sources.clone()));
+            // A binary source has one owner after startup; do not retain a
+            // second full font file for the lifetime of its FontFace record.
+            let sources = x
+                .sources
+                .iter_mut()
+                .map(|source| match source {
+                    Src::Bytes(bytes) => Src::Bytes(std::mem::take(bytes)),
+                    other => other.clone(),
+                })
+                .collect();
+            out.push((x.id, sources));
         }
         f.events.extend(events);
         out
@@ -986,7 +1150,11 @@ thread_local! {
 pub(crate) fn mem_stats() -> (usize, usize, usize, u64, u64) {
     let (declared, waiting, waiting_bytes) = FONTS.with(|f| {
         let f = f.borrow();
-        let waiting: Vec<usize> = f.faces.iter().filter_map(|x| x.ready.as_ref().map(Vec::len)).collect();
+        let waiting: Vec<usize> = f
+            .faces
+            .iter()
+            .filter_map(|x| x.ready.as_ref().map(Vec::len))
+            .collect();
         (f.faces.len(), waiting.len(), waiting.iter().sum())
     });
     let (reg, reg_bytes) = REGISTERED.with(Cell::get);
@@ -1005,7 +1173,9 @@ fn register_finished(cx: &mut App) {
         let mut f = f.borrow_mut();
         let mut events = Vec::new();
         for (id, result) in finished {
-            let Some(x) = f.faces.iter_mut().find(|x| x.id == id) else { continue };
+            let Some(x) = f.faces.iter_mut().find(|x| x.id == id) else {
+                continue;
+            };
             match result {
                 Ok(bytes) => {
                     x.ready = Some(bytes);
@@ -1015,14 +1185,21 @@ fn register_finished(cx: &mut App) {
                 Err(why) => {
                     crate::render::warn_compat(
                         &format!("font:load:{}:{}", x.desc.family, x.id),
-                        &format!("@font-face `{}`: {why} — the family falls back", x.desc.family),
+                        &format!(
+                            "@font-face `{}`: {why} — the family falls back",
+                            x.desc.family
+                        ),
                     );
                     events.push((x.id, "error", why.clone()));
                     x.status = Status::Error(why);
                 }
             }
         }
-        for x in f.faces.iter_mut().filter(|x| x.in_set && !x.registered && x.ready.is_some()) {
+        for x in f
+            .faces
+            .iter_mut()
+            .filter(|x| x.in_set && !x.registered && x.ready.is_some())
+        {
             let bytes = x.ready.take().unwrap();
             // A family of its own (`face_family`); the declared family is
             // composed of those (`compose`). A font that cannot be renamed
@@ -1052,12 +1229,17 @@ fn register_finished(cx: &mut App) {
     if let Err(e) = cx.text_system().add_fonts(fresh) {
         crate::render::warn_compat(
             "font:add",
-            &format!("the text system refused web fonts ({}): {e}", names.join(", ")),
+            &format!(
+                "the text system refused web fonts ({}): {e}",
+                names.join(", ")
+            ),
         );
         return;
     }
     FONTS.with(|f| {
-        f.borrow_mut().changed_since.get_or_insert_with(Instant::now);
+        f.borrow_mut()
+            .changed_since
+            .get_or_insert_with(Instant::now);
     });
 }
 
@@ -1068,11 +1250,22 @@ fn refresh_font_source(cx: &mut App) {
     let limited = range_limited();
     let composed = compositions();
     text_system.set_composed_families(
-        composed.iter().map(|c| (gpui::SharedString::from(c.family.clone()), c.composer.clone())).collect(),
+        composed
+            .iter()
+            .map(|c| {
+                (
+                    gpui::SharedString::from(c.family.clone()),
+                    c.composer.clone(),
+                )
+            })
+            .collect(),
     );
-    vn_css::set_composed_font_families(
-        composed.iter().map(|c| (c.family.clone(), !limited.iter().any(|l| l.eq_ignore_ascii_case(&c.family)))),
-    );
+    vn_css::set_composed_font_families(composed.iter().map(|c| {
+        (
+            c.family.clone(),
+            !limited.iter().any(|l| l.eq_ignore_ascii_case(&c.family)),
+        )
+    }));
     // The families a page can name: the system's and the web families with
     // a face in, never the families of one face each, nor a family that
     // covers no Latin text (it leads a list only through vn-css's stack).
@@ -1105,19 +1298,34 @@ fn compositions() -> Vec<Composition> {
     FONTS.with(|f| {
         let f = f.borrow();
         let mut out: Vec<Composition> = Vec::new();
-        for x in f.faces.iter().filter(|x| x.in_set && x.registered_as.is_some()) {
+        for x in f
+            .faces
+            .iter()
+            .filter(|x| x.in_set && x.registered_as.is_some())
+        {
             let family = &x.desc.family;
             if out.iter().any(|c| c.family.eq_ignore_ascii_case(family)) {
                 continue;
             }
-            let of_family: Vec<&Face> =
-                f.faces.iter().filter(|y| y.in_set && y.desc.family.eq_ignore_ascii_case(family)).collect();
-            if of_family.iter().any(|y| y.registered && y.registered_as.is_none()) {
+            let of_family: Vec<&Face> = f
+                .faces
+                .iter()
+                .filter(|y| y.in_set && y.desc.family.eq_ignore_ascii_case(family))
+                .collect();
+            if of_family
+                .iter()
+                .any(|y| y.registered && y.registered_as.is_none())
+            {
                 continue;
             }
-            let faces: Vec<(Descriptors, Option<String>)> =
-                of_family.iter().map(|y| (y.desc.clone(), y.registered_as.clone())).collect();
-            out.push(Composition { family: family.clone(), composer: Arc::new(move |weight, style| compose(&faces, weight, style)) });
+            let faces: Vec<(Descriptors, Option<String>)> = of_family
+                .iter()
+                .map(|y| (y.desc.clone(), y.registered_as.clone()))
+                .collect();
+            out.push(Composition {
+                family: family.clone(),
+                composer: Arc::new(move |weight, style| compose(&faces, weight, style)),
+            });
         }
         out
     })
@@ -1126,7 +1334,11 @@ fn compositions() -> Vec<Composition> {
 /// A composer's answer: the registered faces of `faces` (one family, rule
 /// order) that CSS font matching picks for `weight` and `style`, last
 /// declared first.
-fn compose(faces: &[(Descriptors, Option<String>)], weight: gpui::FontWeight, style: gpui::FontStyle) -> Vec<gpui::ComposedFace> {
+fn compose(
+    faces: &[(Descriptors, Option<String>)],
+    weight: gpui::FontWeight,
+    style: gpui::FontStyle,
+) -> Vec<gpui::ComposedFace> {
     let descs: Vec<&Descriptors> = faces.iter().map(|x| &x.0).collect();
     let italic = !matches!(style, gpui::FontStyle::Normal);
     best_matching(&descs, weight.0, italic)
@@ -1134,7 +1346,10 @@ fn compose(faces: &[(Descriptors, Option<String>)], weight: gpui::FontWeight, st
         .rev()
         .filter_map(|i| {
             let (desc, family) = &faces[i];
-            Some(gpui::ComposedFace { family: family.clone()?.into(), ranges: desc.unicode_range.clone().into() })
+            Some(gpui::ComposedFace {
+                family: family.clone()?.into(),
+                ranges: desc.unicode_range.clone().into(),
+            })
         })
         .collect()
 }
@@ -1154,32 +1369,15 @@ fn advise_unreached() {
     }
 }
 
-/// Status changes, to the page's listener (fonts.ts), inside a JS wave.
+/// Deliver typed loader changes directly to native FontFace/FontFaceSet objects.
 fn deliver_events(window: &mut gpui::Window, cx: &mut App) {
-    let f = LISTENER.with(|l| l.get());
-    if f == 0 {
-        return;
-    }
     let events = FONTS.with(|x| std::mem::take(&mut x.borrow_mut().events));
     if events.is_empty() {
         return;
     }
     crate::render::js_wave_app(window, cx, || {
-        use vn_runtime::redjs::api::Value;
         vn_runtime::JsRuntime::with(|rt| {
-            for (id, status, message) in &events {
-                let args = [
-                    Value::int32(*id as i32),
-                    rt.ctx().string(status),
-                    rt.ctx().string(message),
-                ];
-                if let Err(vn_runtime::redjs::api::Error::Exception(e)) =
-                    rt.ctx().call(Value(f), Value::undefined(), &args)
-                {
-                    let err = rt.describe(e);
-                    crate::log::record("js", format!("[fonts] {}\n{}", err.header, err.stack));
-                }
-            }
+            crate::font_api::deliver(rt, &events);
             rt.ctx().drain_microtasks();
         });
         true
@@ -1201,6 +1399,7 @@ fn plan(sources: &[Src]) -> Result<Fetch, String> {
     let mut why = Vec::new();
     for src in sources {
         match src {
+            Src::Bytes(bytes) => return Ok(Fetch::Bytes(bytes.clone())),
             Src::Local(name) => {
                 why.push(format!("local({name}) is not consulted"));
                 crate::render::warn_compat(
@@ -1212,12 +1411,18 @@ fn plan(sources: &[Src]) -> Result<Fetch, String> {
             Src::Url { url, format } => {
                 if let Some(fmt) = format {
                     let base = fmt.trim_end_matches("-variations");
-                    if !matches!(base, "woff" | "woff2" | "truetype" | "opentype" | "collection") {
+                    if !matches!(
+                        base,
+                        "woff" | "woff2" | "truetype" | "opentype" | "collection"
+                    ) {
                         why.push(format!("format({fmt}) is not one this build reads"));
                         continue;
                     }
                 }
-                let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
+                let scheme = url
+                    .split_once(':')
+                    .map(|(s, _)| s.to_ascii_lowercase())
+                    .unwrap_or_default();
                 let in_memory = matches!(scheme.as_str(), "data" | "blob")
                     || (scheme.is_empty() && crate::img::asset_store().is_some());
                 let got = if matches!(scheme.as_str(), "http" | "https") {
@@ -1230,17 +1435,27 @@ fn plan(sources: &[Src]) -> Result<Fetch, String> {
                 match got {
                     Ok(f) => return Ok(f),
                     // img.rs words it for an element: `<font src="x">: …`.
-                    Err(e) => why.push(e.replacen("<font src=\"", "url(\"", 1).replacen("\">:", "\"):", 1)),
+                    Err(e) => why.push(
+                        e.replacen("<font src=\"", "url(\"", 1)
+                            .replacen("\">:", "\"):", 1),
+                    ),
                 }
             }
         }
     }
-    Err(if why.is_empty() { "no src".into() } else { why.join("; ") })
+    Err(if why.is_empty() {
+        "no src".into()
+    } else {
+        why.join("; ")
+    })
 }
 
 /// An http(s) body off gpui's HTTP client, redirects followed (also
 /// `<vn-sticker>`'s fetch, `crate::render::sticker`).
-pub(crate) async fn http_bytes(client: Arc<dyn gpui::http_client::HttpClient>, url: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn http_bytes(
+    client: Arc<dyn gpui::http_client::HttpClient>,
+    url: &str,
+) -> Result<Vec<u8>, String> {
     use futures::AsyncReadExt;
     let mut response = client
         .get(url, gpui::http_client::AsyncBody::default(), true)
@@ -1275,14 +1490,20 @@ pub(crate) fn sfnt(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
 #[cfg(windows)]
 fn unpack(bytes: &[u8]) -> Result<Vec<u8>, String> {
     use windows::Win32::Graphics::DirectWrite::*;
-    let kind = if bytes.starts_with(b"wOF2") { DWRITE_CONTAINER_TYPE_WOFF2 } else { DWRITE_CONTAINER_TYPE_WOFF };
+    let kind = if bytes.starts_with(b"wOF2") {
+        DWRITE_CONTAINER_TYPE_WOFF2
+    } else {
+        DWRITE_CONTAINER_TYPE_WOFF
+    };
     unsafe {
-        let factory: IDWriteFactory5 =
-            DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).map_err(|e| format!("DirectWrite: {e}"))?;
+        let factory: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)
+            .map_err(|e| format!("DirectWrite: {e}"))?;
         let stream = factory
             .UnpackFontFile(kind, bytes.as_ptr().cast(), bytes.len() as u32)
             .map_err(|e| format!("the WOFF container could not be unpacked: {e}"))?;
-        let size = stream.GetFileSize().map_err(|e| format!("DirectWrite: {e}"))?;
+        let size = stream
+            .GetFileSize()
+            .map_err(|e| format!("DirectWrite: {e}"))?;
         let mut start: *mut core::ffi::c_void = std::ptr::null_mut();
         let mut context: *mut core::ffi::c_void = std::ptr::null_mut();
         stream
@@ -1344,7 +1565,10 @@ fn name_records(sfnt: &[u8]) -> Option<Vec<NameRecord>> {
 
 #[cfg(test)]
 fn utf16be(bytes: &[u8]) -> String {
-    let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_be_bytes([c[0], c[1]]))
+        .collect();
     String::from_utf16_lossy(&units)
 }
 
@@ -1371,11 +1595,25 @@ pub(crate) fn own_family(sfnt: &[u8]) -> Option<String> {
 /// bold. `None` for a collection or a font without a readable `name` table.
 pub(crate) fn rename_family(sfnt: &[u8], family: &str) -> Option<Vec<u8>> {
     let dir = tables(sfnt)?;
-    let mut records: Vec<NameRecord> =
-        name_records(sfnt)?.into_iter().filter(|r| !matches!(r.3, 1 | 4 | 6 | 16 | 21)).collect();
-    let enc = |s: &str| s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect::<Vec<u8>>();
-    let ps: String = family.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
-    for (id, text) in [(1, family.to_string()), (4, family.to_string()), (6, ps), (16, family.to_string())] {
+    let mut records: Vec<NameRecord> = name_records(sfnt)?
+        .into_iter()
+        .filter(|r| !matches!(r.3, 1 | 4 | 6 | 16 | 21))
+        .collect();
+    let enc = |s: &str| {
+        s.encode_utf16()
+            .flat_map(|u| u.to_be_bytes())
+            .collect::<Vec<u8>>()
+    };
+    let ps: String = family
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    for (id, text) in [
+        (1, family.to_string()),
+        (4, family.to_string()),
+        (6, ps),
+        (16, family.to_string()),
+    ] {
         records.push((3, 1, 0x409, id, enc(&text)));
     }
     records.sort_by_key(|r| (r.0, r.1, r.2, r.3));
@@ -1398,7 +1636,11 @@ pub(crate) fn rename_family(sfnt: &[u8], family: &str) -> Option<Vec<u8>> {
     let mut out = sfnt[..header_len].to_vec();
     let mut head_at = None;
     for (i, (tag, off, len)) in dir.iter().enumerate() {
-        let data: &[u8] = if tag == b"name" { &table } else { &sfnt[*off..*off + *len] };
+        let data: &[u8] = if tag == b"name" {
+            &table
+        } else {
+            &sfnt[*off..*off + *len]
+        };
         let at = out.len();
         if tag == b"head" {
             head_at = Some(at);
@@ -1457,9 +1699,14 @@ pub(crate) fn font_face_blocks(css: &str) -> Vec<&str> {
                 }
                 i += 1;
             }
-            b'@' if css.get(i..i + 10).is_some_and(|s| s.eq_ignore_ascii_case("@font-face")) => {
+            b'@' if css
+                .get(i..i + 10)
+                .is_some_and(|s| s.eq_ignore_ascii_case("@font-face")) =>
+            {
                 let start = i;
-                let Some(open) = css[i..].find('{') else { break };
+                let Some(open) = css[i..].find('{') else {
+                    break;
+                };
                 let mut j = i + open + 1;
                 // `@font-face` bodies do not nest; quotes may hold a brace.
                 let mut quote = 0u8;
@@ -1515,7 +1762,9 @@ pub(crate) fn parse_block(block: &str) -> Option<(Descriptors, Vec<Src>)> {
     };
     for p in &rule.properties {
         match p {
-            FontFaceProperty::FontFamily(FontFamily::FamilyName(name)) => desc.family = family(name),
+            FontFaceProperty::FontFamily(FontFamily::FamilyName(name)) => {
+                desc.family = family(name)
+            }
             FontFaceProperty::FontFamily(_) => {}
             FontFaceProperty::Source(list) => {
                 for s in list {
@@ -1526,9 +1775,14 @@ pub(crate) fn parse_block(block: &str) -> Option<(Descriptors, Vec<Src>)> {
                                 .format
                                 .as_ref()
                                 .and_then(|f| f.to_css_string(Default::default()).ok())
-                                .map(|f| f.trim_matches(|c| c == '"' || c == '\'').to_ascii_lowercase()),
+                                .map(|f| {
+                                    f.trim_matches(|c| c == '"' || c == '\'')
+                                        .to_ascii_lowercase()
+                                }),
                         }),
-                        Source::Local(FontFamily::FamilyName(n)) => sources.push(Src::Local(family(n))),
+                        Source::Local(FontFamily::FamilyName(n)) => {
+                            sources.push(Src::Local(family(n)))
+                        }
                         Source::Local(_) => {}
                     }
                 }
@@ -1560,8 +1814,15 @@ pub(crate) fn parse_block(block: &str) -> Option<(Descriptors, Vec<Src>)> {
     if let Some(at) = lower.find("font-display") {
         let rest = &lower[at + "font-display".len()..];
         if let Some(v) = rest.trim_start().strip_prefix(':') {
-            let v: String = v.trim_start().chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-            if matches!(v.as_str(), "auto" | "block" | "swap" | "fallback" | "optional") {
+            let v: String = v
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            if matches!(
+                v.as_str(),
+                "auto" | "block" | "swap" | "fallback" | "optional"
+            ) {
                 desc.display = v;
             }
         }
@@ -1574,7 +1835,9 @@ pub(crate) fn parse_block(block: &str) -> Option<(Descriptors, Vec<Src>)> {
 fn css_unescape(s: &str) -> String {
     let s = s.trim();
     let s = match s.as_bytes().first() {
-        Some(q @ (b'"' | b'\'')) if s.len() >= 2 && s.as_bytes()[s.len() - 1] == *q => &s[1..s.len() - 1],
+        Some(q @ (b'"' | b'\'')) if s.len() >= 2 && s.as_bytes()[s.len() - 1] == *q => {
+            &s[1..s.len() - 1]
+        }
         _ => s,
     };
     let mut out = String::with_capacity(s.len());
@@ -1597,11 +1860,17 @@ fn css_unescape(s: &str) -> String {
         if chars.peek().is_some_and(|c| c.is_whitespace()) {
             chars.next();
         }
-        out.push(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32).unwrap_or('\u{FFFD}'));
+        out.push(
+            u32::from_str_radix(&hex, 16)
+                .ok()
+                .and_then(char::from_u32)
+                .unwrap_or('\u{FFFD}'),
+        );
     }
     out
 }
 
+#[cfg(test)]
 fn json(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -1650,7 +1919,10 @@ mod tests {
         let blocks = font_face_blocks(SHEET);
         let (d, s) = parse_block(blocks[0]).unwrap();
         assert_eq!(d.family, "Alcarin Tengwar");
-        assert_eq!((d.weight.as_str(), d.style.as_str(), d.display.as_str()), ("400 700", "normal", "swap"));
+        assert_eq!(
+            (d.weight.as_str(), d.style.as_str(), d.display.as_str()),
+            ("400 700", "normal", "swap")
+        );
         assert_eq!(d.unicode_range, vec![(0xE000, 0xE0FF)]);
         assert_eq!(d.range_text(), "U+E000-E0FF");
         assert!(!d.covers_latin());
@@ -1662,17 +1934,29 @@ mod tests {
             }]
         );
         let (d, s) = parse_block(blocks[1]).unwrap();
-        assert_eq!((d.family.as_str(), d.weight.as_str(), d.style.as_str()), ("Lato", "700", "italic"));
+        assert_eq!(
+            (d.family.as_str(), d.weight.as_str(), d.style.as_str()),
+            ("Lato", "700", "italic")
+        );
         assert!(d.covers_latin());
         assert_eq!(s[0], Src::Local("Lato".into()));
-        assert_eq!(s[1], Src::Url { url: "/fonts/Lato-Bold.ttf".into(), format: Some("truetype".into()) });
+        assert_eq!(
+            s[1],
+            Src::Url {
+                url: "/fonts/Lato-Bold.ttf".into(),
+                format: Some("truetype".into())
+            }
+        );
     }
 
     #[test]
     fn a_sheet_declares_faces_once_and_keeps_their_state() {
         note_sheet(SHEET);
         let first = list_json();
-        assert!(first.contains("\"family\":\"Alcarin Tengwar\"") && first.contains("\"family\":\"Lato\""));
+        assert!(
+            first.contains("\"family\":\"Alcarin Tengwar\"")
+                && first.contains("\"family\":\"Lato\"")
+        );
         assert!(declared("lato") && !declared("Inter"));
         // The same sheet again (a recompile under a new rem basis) changes nothing.
         note_sheet(SHEET);
@@ -1686,7 +1970,10 @@ mod tests {
     #[test]
     fn a_script_face_parses_its_source_or_throws() {
         let id = create(
-            Descriptors { family: "Brand".into(), ..Default::default() },
+            Descriptors {
+                family: "Brand".into(),
+                ..Default::default()
+            },
             "url(https://cdn.example/brand.woff2) format('woff2')",
             false,
         )
@@ -1730,7 +2017,10 @@ mod tests {
     fn a_sheets_faces_wait_until_text_drawn_with_them_asks() {
         note_sheet(FAMILY);
         assert!(list_json().matches("\"status\":\"unloaded\"").count() == 6);
-        assert_eq!(WAITING.with(|w| w.borrow().clone()), vec!["unused".to_string(), "vn".to_string()]);
+        assert_eq!(
+            WAITING.with(|w| w.borrow().clone()),
+            vec!["unused".to_string(), "vn".to_string()]
+        );
 
         // Bold upright Latin text: the 700 face only.
         want("VN", 700.0, false, "Hello");
@@ -1738,7 +2028,10 @@ mod tests {
         assert_eq!(status_of("r.ttf"), (Status::Unloaded, false));
         // Asked for once is enough; the family keeps waiting for its others.
         want("VN", 700.0, false, "Hello");
-        assert_eq!(WAITING.with(|w| w.borrow().clone()), vec!["unused".to_string(), "vn".to_string()]);
+        assert_eq!(
+            WAITING.with(|w| w.borrow().clone()),
+            vec!["unused".to_string(), "vn".to_string()]
+        );
 
         // 300 has two `unicode-range` subsets: only the one the text needs.
         want("vn", 300.0, false, "abc");
@@ -1753,7 +2046,10 @@ mod tests {
         assert_eq!(status_of("r.ttf"), (Status::Unloaded, false));
         want("VN", 400.0, false, "x");
         // Every VN face asked for: VN stops waiting, Unused never started.
-        assert_eq!(WAITING.with(|w| w.borrow().clone()), vec!["unused".to_string()]);
+        assert_eq!(
+            WAITING.with(|w| w.borrow().clone()),
+            vec!["unused".to_string()]
+        );
         assert_eq!(status_of("u.ttf"), (Status::Unloaded, false));
     }
 
@@ -1789,10 +2085,18 @@ mod tests {
         });
         restyle_all();
         let family = |id: u32| {
-            read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.text.font_family.clone()))
-                .map(|f| f.to_string())
+            read_tree(|t| {
+                t.node(id)
+                    .and_then(|n| n.computed.as_ref())
+                    .and_then(|c| c.base.text.font_family.clone())
+            })
+            .map(|f| f.to_string())
         };
-        assert_eq!(family(a).as_deref(), Some("Arial"), "drawn with the fallback while VN waits");
+        assert_eq!(
+            family(a).as_deref(),
+            Some("Arial"),
+            "drawn with the fallback while VN waits"
+        );
         read_tree(|t| assert_eq!(t.node(text).map(|n| n.parent), Some(b)));
 
         // `.b`'s text: VN inherited from `.a`, 700 inherited, italic its own.
@@ -1827,7 +2131,11 @@ mod tests {
         vn_css::set_font_source(|| vec!["Arial".into(), "VN".into()]);
         recompile_for_fonts();
         restyle_all();
-        assert_eq!(family(a).as_deref(), Some("VN"), "the text swaps to the web font");
+        assert_eq!(
+            family(a).as_deref(),
+            Some("VN"),
+            "the text swaps to the web font"
+        );
         // VN still has unloaded faces (regular, bold, light), so `.a` still
         // records it; a bold upright text now asks for the bold face.
         EFFECTIVE.with(|m| m.borrow_mut().clear());
@@ -1848,6 +2156,7 @@ mod tests {
                     .map(|i| match &f.faces[i].sources[0] {
                         Src::Url { url, .. } => url.clone(),
                         Src::Local(l) => l.clone(),
+                        Src::Bytes(_) => "<bytes>".into(),
                     })
                     .collect()
             })
@@ -1883,16 +2192,25 @@ mod tests {
     /// The registered file each composed face stands for, in the order the
     /// composer gives them.
     fn composed_urls(c: &Composition, weight: f32, italic: bool) -> Vec<String> {
-        let style = if italic { gpui::FontStyle::Italic } else { gpui::FontStyle::Normal };
+        let style = if italic {
+            gpui::FontStyle::Italic
+        } else {
+            gpui::FontStyle::Normal
+        };
         (c.composer)(gpui::FontWeight(weight), style)
             .into_iter()
             .map(|face| {
                 FONTS.with(|f| {
                     let f = f.borrow();
-                    let x = f.faces.iter().find(|x| x.registered_as.as_deref() == Some(face.family.as_ref())).unwrap();
+                    let x = f
+                        .faces
+                        .iter()
+                        .find(|x| x.registered_as.as_deref() == Some(face.family.as_ref()))
+                        .unwrap();
                     match &x.sources[0] {
                         Src::Url { url, .. } => url.clone(),
                         Src::Local(l) => l.clone(),
+                        Src::Bytes(_) => "<bytes>".into(),
                     }
                 })
             })
@@ -1916,8 +2234,14 @@ mod tests {
         assert_eq!(c[0].family, "Manrope Variable");
         // Last declared first (CSS Fonts 4 §4.5); the greek face is not in,
         // so Greek text falls to the next family.
-        assert_eq!(composed_urls(&c[0], 400.0, false), vec!["latin.woff2", "cyr.woff2"]);
-        assert_eq!(composed_urls(&c[0], 700.0, false), vec!["latin.woff2", "cyr.woff2"]);
+        assert_eq!(
+            composed_urls(&c[0], 400.0, false),
+            vec!["latin.woff2", "cyr.woff2"]
+        );
+        assert_eq!(
+            composed_urls(&c[0], 700.0, false),
+            vec!["latin.woff2", "cyr.woff2"]
+        );
         let faces = (c[0].composer)(gpui::FontWeight(400.0), gpui::FontStyle::Normal);
         assert_eq!(&*faces[0].ranges, &[(0, 0xFF), (0x2000, 0x206F)]);
         assert!(faces[1].covers('Ж') && !faces[1].covers('a'));
@@ -1936,13 +2260,20 @@ mod tests {
         assert_eq!(composed_urls(vn, 400.0, false), vec!["r.ttf"]);
         assert_eq!(composed_urls(vn, 700.0, false), vec!["b.ttf"]);
         assert_eq!(composed_urls(vn, 700.0, true), vec!["i.ttf"]);
-        assert_eq!(composed_urls(vn, 200.0, false), vec!["l-cyr.ttf", "l-latin.ttf"]);
+        assert_eq!(
+            composed_urls(vn, 200.0, false),
+            vec!["l-cyr.ttf", "l-latin.ttf"]
+        );
         // `Unused` has nothing registered: not composed, and not installed.
         assert!(c.iter().all(|c| c.family != "Unused"));
         // A face that could not be renamed keeps its family drawn by name.
         FONTS.with(|f| {
             let mut f = f.borrow_mut();
-            let x = f.faces.iter_mut().find(|x| x.desc.family == "Unused").unwrap();
+            let x = f
+                .faces
+                .iter_mut()
+                .find(|x| x.desc.family == "Unused")
+                .unwrap();
             x.registered = true;
         });
         assert!(compositions().iter().all(|c| c.family != "Unused"));
@@ -1985,12 +2316,23 @@ mod tests {
     fn script_descriptors_parse_or_name_the_bad_one() {
         let d = descriptors("'My Font'", "italic|300 500||U+0-FF, U+2000|swap").unwrap();
         assert_eq!(d.family, "My Font");
-        assert_eq!((d.style.as_str(), d.weight.as_str(), d.display.as_str()), ("italic", "300 500", "swap"));
+        assert_eq!(
+            (d.style.as_str(), d.weight.as_str(), d.display.as_str()),
+            ("italic", "300 500", "swap")
+        );
         assert_eq!(d.unicode_range, vec![(0, 0xFF), (0x2000, 0x2000)]);
-        assert_eq!(descriptors("Plain", "||||").unwrap(), Descriptors { family: "Plain".into(), ..Default::default() });
+        assert_eq!(
+            descriptors("Plain", "||||").unwrap(),
+            Descriptors {
+                family: "Plain".into(),
+                ..Default::default()
+            }
+        );
         let e = descriptors("X", "sideways|||").unwrap_err();
         assert!(e.contains("font-style"), "{e}");
-        assert!(descriptors("X", "|heavy||").unwrap_err().contains("font-weight"));
+        assert!(descriptors("X", "|heavy||")
+            .unwrap_err()
+            .contains("font-weight"));
         assert!(descriptors("  ", "||||").is_err());
     }
 
@@ -1998,10 +2340,19 @@ mod tests {
     fn the_font_shorthand_names_its_families() {
         let f = |s: &str| shorthand_families(s);
         assert_eq!(f("16px Roboto"), Some(vec!["Roboto".into()]));
-        assert_eq!(f("700 24px \"Open Sans\", sans-serif"), Some(vec!["Open Sans".into(), "sans-serif".into()]));
-        assert_eq!(f("italic bold 12px/1.5 'Fira Sans'"), Some(vec!["Fira Sans".into()]));
+        assert_eq!(
+            f("700 24px \"Open Sans\", sans-serif"),
+            Some(vec!["Open Sans".into(), "sans-serif".into()])
+        );
+        assert_eq!(
+            f("italic bold 12px/1.5 'Fira Sans'"),
+            Some(vec!["Fira Sans".into()])
+        );
         assert_eq!(f("12px / 30px Lato"), Some(vec!["Lato".into()]));
-        assert_eq!(f("x-large Press  Start 2P"), Some(vec!["Press Start 2P".into()]));
+        assert_eq!(
+            f("x-large Press  Start 2P"),
+            Some(vec!["Press Start 2P".into()])
+        );
         assert_eq!(f("menu"), Some(vec![]));
         assert_eq!(f("Roboto"), None);
         assert_eq!(f("700 Roboto"), None);
@@ -2029,8 +2380,19 @@ mod tests {
         assert!(due_misses(now).is_empty(), "still within the grace");
         // A script's FontFace names "Later" before the grace is over; it is
         // not in the set yet.
-        create(Descriptors { family: "Later".into(), ..Default::default() }, "url(x.ttf)", false).unwrap();
-        assert_eq!(due_misses(now + MISS_GRACE), vec![("Nowhere".to_string(), Some("Arial".to_string()))]);
+        create(
+            Descriptors {
+                family: "Later".into(),
+                ..Default::default()
+            },
+            "url(x.ttf)",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            due_misses(now + MISS_GRACE),
+            vec![("Nowhere".to_string(), Some("Arial".to_string()))]
+        );
         assert!(due_misses(now + MISS_GRACE * 2).is_empty());
         // A family a face already names is never held.
         hold_miss("later".into(), None);
@@ -2039,7 +2401,14 @@ mod tests {
 
     #[test]
     fn family_names_read_back_as_written() {
-        let fam = |css: &str| parse_block(&format!("@font-face {{ font-family: {css}; src: url(a.ttf) }}")).unwrap().0.family;
+        let fam = |css: &str| {
+            parse_block(&format!(
+                "@font-face {{ font-family: {css}; src: url(a.ttf) }}"
+            ))
+            .unwrap()
+            .0
+            .family
+        };
         assert_eq!(fam("'Press Start 2P'"), "Press Start 2P");
         assert_eq!(fam("\"Fira  Sans\""), "Fira  Sans");
         assert_eq!(fam("Open Sans"), "Open Sans");
@@ -2057,8 +2426,13 @@ mod tests {
 
     /// A minimal sfnt: `head` and a `name` table naming `family`.
     fn font(family: &str) -> Vec<u8> {
-        let enc = |s: &str| s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect::<Vec<u8>>();
-        let recs: Vec<NameRecord> = vec![(3, 1, 0x409, 1, enc(family)), (3, 1, 0x409, 2, enc("Bold"))];
+        let enc = |s: &str| {
+            s.encode_utf16()
+                .flat_map(|u| u.to_be_bytes())
+                .collect::<Vec<u8>>()
+        };
+        let recs: Vec<NameRecord> =
+            vec![(3, 1, 0x409, 1, enc(family)), (3, 1, 0x409, 2, enc("Bold"))];
         let mut name = vec![0, 0, 0, recs.len() as u8, 0, (6 + 12 * recs.len()) as u8];
         let mut strings = Vec::new();
         for (p, e, l, n, s) in &recs {
@@ -2072,7 +2446,10 @@ mod tests {
         let mut out = vec![0, 1, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0];
         let head_off = 12 + 32;
         let name_off = head_off + 56;
-        for (tag, off, len) in [(b"head", head_off, 54usize), (b"name", name_off, name.len())] {
+        for (tag, off, len) in [
+            (b"head", head_off, 54usize),
+            (b"name", name_off, name.len()),
+        ] {
             out.extend_from_slice(tag);
             out.extend_from_slice(&[0; 4]);
             out.extend_from_slice(&(off as u32).to_be_bytes());
@@ -2092,7 +2469,9 @@ mod tests {
         assert_eq!(own_family(&renamed).as_deref(), Some("Brand Sans"));
         let recs = name_records(&renamed).unwrap();
         assert!(recs.iter().any(|r| r.3 == 2 && utf16be(&r.4) == "Bold"));
-        assert!(recs.iter().any(|r| r.3 == 6 && utf16be(&r.4) == "BrandSans"));
+        assert!(recs
+            .iter()
+            .any(|r| r.3 == 6 && utf16be(&r.4) == "BrandSans"));
         // The whole font sums to the magic number once the adjustment is in.
         assert_eq!(checksum(&renamed), 0xB1B0_AFBA);
         assert_eq!(rename_family(b"ttcf....", "x"), None);
@@ -2102,4 +2481,31 @@ mod tests {
     fn the_list_is_json_the_page_can_read() {
         assert_eq!(json("a\"b\\c\n"), "\"a\\\"b\\\\c\\u000a\"");
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_status(id: u32, status: Status) {
+    FONTS.with(|f| {
+        if let Some(face) = f.borrow_mut().faces.iter_mut().find(|x| x.id == id) {
+            face.status = status;
+            face.wanted = false;
+        }
+    });
+}
+#[cfg(test)]
+pub(crate) fn test_quiet(quiet: bool) {
+    FONTS.with(|f| f.borrow_mut().quiet = quiet);
+}
+#[cfg(test)]
+pub(crate) fn test_bytes(id: u32) -> Option<Vec<u8>> {
+    FONTS.with(|f| {
+        f.borrow()
+            .faces
+            .iter()
+            .find(|x| x.id == id)
+            .and_then(|x| match &x.sources[0] {
+                Src::Bytes(b) => Some(b.clone()),
+                _ => None,
+            })
+    })
 }

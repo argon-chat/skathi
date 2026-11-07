@@ -9692,12 +9692,13 @@ installFonts(globalThis as unknown as Record<string, unknown>, doc);
 // -- Web Animations: `el.animate()` (src/waapi.ts). On HTMLElement.prototype
 //    and SVGElement.prototype only — not Element.prototype, so motion /
 //    framer-motion keep their JS animations (docs/RUNTIME.md §5.23). Inert
-//    without the host's `__vn_anim_*`.
-if (typeof __vn_anim_set === "function") {
+//    without the host's native WAAPI core.
+if (typeof __vn_waapi_core === "object" && __vn_waapi_core !== null) {
   const g = globalThis as unknown as Record<string, unknown>;
   const svg = (g.SVGElement as { prototype?: object } | undefined)?.prototype;
   installWaapi({
-    host: { set: __vn_anim_set, clock: __vn_anim_clock, drop: __vn_anim_drop, values: __vn_anim_values },
+    host: __vn_waapi_core,
+    core: __vn_waapi_core,
     protos: svg && svg !== ElementProto ? [ElementProto, svg] : [ElementProto],
     nodeOf: (t) => (isMirrorEl(t) ? t.__vnId : 0),
     setStyle: (t, name, value) => (t as MirrorElement).style.setProperty(name, value),

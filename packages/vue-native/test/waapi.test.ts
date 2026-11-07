@@ -5,7 +5,8 @@
 // fake that records the effect and the clock it is given.
 
 import { describe, expect, test } from "bun:test";
-import { installWaapi, parseEasing } from "../src/waapi";
+import { installWaapi } from "../src/waapi";
+import { createReferenceWaapiCore, parseEasing, referenceEffect, referenceValues } from "./fixtures/waapi-core-reference";
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -21,9 +22,10 @@ function world() {
   const styles: [string, string][] = [];
   let values: string | null = null;
   const host = {
-    set(id: number, node: number, frames: string, timing: string, easing: string) {
-      calls.push({ op: "set", id, node, frames, timing, easing });
-      return notes;
+    setEffect(id: number, node: number, frames: Any[], timing: Any) {
+      const projected = referenceEffect(frames, notes);
+      calls.push({ op: "set", id, node, frames: projected.frames, timing: { ...timing }, easing: timing.easing });
+      return projected.notes;
     },
     clock(id: number, start: number, hold: number, rate: number) {
       calls.push({ op: "clock", id, start, hold, rate });
@@ -33,7 +35,7 @@ function world() {
     },
     values(id: number) {
       calls.push({ op: "values", id });
-      return values;
+      return referenceValues(values);
     },
   };
   let notes = "";
@@ -44,6 +46,7 @@ function world() {
   const doc: Record<string, unknown> = {};
   const api = installWaapi({
     host,
+    core: createReferenceWaapiCore(),
     protos: [HTMLProto, SVGProto],
     nodeOf: (t: Any) => t.__vnId ?? 0,
     setStyle: (_t, name, value) => styles.push([name, value]),
@@ -176,8 +179,8 @@ describe("Element.animate()", () => {
     });
     const set = w.last("set");
     expect(set.node).toBe(7);
-    expect(set.frames).toBe("0\u001flinear\u001ftransform\u001dtranslateY(-100px)\u001e1\u001flinear\u001ftransform\u001dtranslateY(-120px)");
-    expect(set.timing).toBe("0,0,900,1,0,0,0");
+    expect(set.frames.map((f: Any) => [f.computed, f.props])).toEqual([[0, [["transform", "translateY(-100px)"]]], [1, [["transform", "translateY(-120px)"]]]]);
+    expect(set.timing).toMatchObject({ delay: 0, endDelay: 0, duration: 900, iterations: 1, iterationStart: 0, direction: "normal", fill: "auto" });
     expect(set.easing).toBe("cubic-bezier(0.34, 1.56, 0.64, 1)");
     expect(a.pending).toBe(true);
     expect(a.playState).toBe("running");
@@ -345,7 +348,7 @@ describe("Element.animate()", () => {
     const sets = w.calls.filter((c) => c.op === "set").length;
     a.effect.updateTiming({ duration: 300, delay: 50 });
     expect(w.calls.filter((c) => c.op === "set").length).toBe(sets + 1);
-    expect(w.last("set").timing).toBe("50,0,300,1,0,0,1");
+    expect(w.last("set").timing).toMatchObject({ delay: 50, endDelay: 0, duration: 300, iterations: 1, iterationStart: 0, direction: "normal", fill: "forwards" });
     expect(a.effect.getComputedTiming()).toMatchObject({ duration: 300, delay: 50, endTime: 350, activeDuration: 300 });
     w.values = "opacity\u001d0.5\u001ctransform\u001dtranslate(0px, -20px)";
     a.commitStyles();
@@ -417,7 +420,7 @@ describe("keyframes and timing", () => {
   test("hyphenated names are ignored with an advisory, camelCase becomes CSS", () => {
     const w = world();
     w.el(1).animate({ "background-color": ["red", "blue"], backgroundColor: ["red", "blue"] } as Any, 100);
-    expect(w.last("set").frames).toBe("0\u001flinear\u001fbackground-color\u001dred\u001e1\u001flinear\u001fbackground-color\u001dblue");
+    expect(w.last("set").frames.map((f: Any) => [f.computed, f.props])).toEqual([[0, [["background-color", "red"]]], [1, [["background-color", "blue"]]]]);
     expect(w.warnings).toContain("waapi:hyphen:background-color");
   });
 

@@ -37,6 +37,7 @@ import {
   watch,
 } from "@vue/runtime-core";
 import { readTsSource } from "./ts-source";
+import { createReferenceWaapiCore, referenceEffect, referenceValues } from "./fixtures/waapi-core-reference";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME_PATH = join(HERE, "../src/runtime.ts");
@@ -732,10 +733,7 @@ export function createRuntime(
     // waapi.ts's one export (see `loadInstallWaapi`), and the host's half of
     // `el.animate()` (`host.anim`).
     "installWaapi",
-    "__vn_anim_set",
-    "__vn_anim_clock",
-    "__vn_anim_drop",
-    "__vn_anim_values",
+    "__vn_waapi_core",
     // `<Teleport>`, which runtime.ts makes window-aware, and what it imports
     // from src/vnwindow.ts (see `VNWINDOW_STANDINS`).
     "Teleport",
@@ -1142,17 +1140,16 @@ export function createRuntime(
       return host.hit.answer(x, y, all);
     },
     loadInstallWaapi(),
-    options.anim === false
-      ? undefined
-      : (id: number, node: number, frames: string, timing: string, easing: string) => {
-          host.anim.calls.push(["set", id, node, frames, timing, easing]);
-          return host.anim.notes;
-        },
-    (id: number, start: number, hold: number, rate: number) => host.anim.calls.push(["clock", id, start, hold, rate]),
-    (id: number) => host.anim.calls.push(["drop", id]),
-    (id: number) => {
-      host.anim.calls.push(["values", id]);
-      return host.anim.values;
+    options.anim === false ? undefined : {
+      ...createReferenceWaapiCore(),
+      setEffect(id: number, node: number, frames: any[], timing: any) {
+        const projected = referenceEffect(frames, host.anim.notes);
+        host.anim.calls.push(["set", id, node, projected.frames, { ...timing }, timing.easing]);
+        return projected.notes;
+      },
+      clock: (id: number, start: number, hold: number, rate: number) => host.anim.calls.push(["clock", id, start, hold, rate]),
+      drop: (id: number) => host.anim.calls.push(["drop", id]),
+      values(id: number) { host.anim.calls.push(["values", id]); return referenceValues(host.anim.values); },
     },
     Teleport,
     ...VNWINDOW_STANDINS(),

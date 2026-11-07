@@ -1,10 +1,10 @@
-// Web fonts' object model (src/fonts.ts): `FontFace`, `document.fonts` and its
+// Legacy font object-model oracle (test/fonts-reference.ts): `FontFace`, `document.fonts` and its
 // `ready` / `check` / `load` / set methods / loading events, over a fake of the
 // host's loader (crates/vn-tree/src/fonts.rs, whose parsing, selection and
 // registration are its own Rust tests).
 
 import { describe, expect, test } from "bun:test";
-import { installFonts } from "../src/fonts";
+import { installFonts } from "./fonts-reference";
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -124,7 +124,7 @@ function fakeHost(css: Partial<Rec>[] = []) {
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-describe("web fonts (src/fonts.ts)", () => {
+describe("font behavior oracle (test only)", () => {
   test("nothing is installed without the host's loader", () => {
     const g: Any = {};
     expect(installFonts(g, {})).toBeNull();

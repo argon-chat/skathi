@@ -96,7 +96,6 @@ describe("a same-realm reload", () => {
       "DOMRect",
       "SubmitEvent",
       "ClipboardEvent",
-      "FileReader",
       "launchQueue",
     ];
     const before = Object.fromEntries(names.map((n) => [n, g[n]]));
@@ -110,6 +109,14 @@ describe("a same-realm reload", () => {
     expect(g.constructor).toBe(g.Window);
   });
 
+  test("native FileReader keeps its engine identity across reloads", () => {
+    class NativeFileReader {}
+    const first = createRuntime({ globals: { FileReader: NativeFileReader } });
+    expect(first.global.FileReader).toBe(NativeFileReader);
+    (first.global.__VN_UNLOAD__ as () => void)();
+    createRuntime({ realm: first.global });
+    expect(first.global.FileReader).toBe(NativeFileReader);
+  });
   test("without an unload (the dev host's cold restart) the next runtime still installs its own", () => {
     const first = createRuntime();
     const g = first.global as unknown as Record<string, unknown>;

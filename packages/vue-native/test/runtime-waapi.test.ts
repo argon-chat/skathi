@@ -19,8 +19,8 @@ describe("el.animate() in the runtime", () => {
     const a = el.animate([{ transform: "translateY(0px)" }, { transform: "translateY(-24px)" }], { duration: 30, easing: "ease-out" });
     const set = rt.host.anim.calls.find((c) => c[0] === "set")!;
     expect(set[2]).toBe(el.__vnId);
-    expect(set[3]).toBe("0\u001flinear\u001ftransform\u001dtranslateY(0px)\u001e1\u001flinear\u001ftransform\u001dtranslateY(-24px)");
-    expect(set[4]).toBe("0,0,30,1,0,0,0");
+    expect(set[3].map((f: Any) => [f.computed, f.props])).toEqual([[0, [["transform", "translateY(0px)"]]], [1, [["transform", "translateY(-24px)"]]]]);
+    expect(set[4]).toMatchObject({ delay: 0, endDelay: 0, duration: 30, iterations: 1, iterationStart: 0, direction: "normal", fill: "auto" });
     expect(set[5]).toBe("ease-out");
     expect(rt.host.anim.calls.find((c) => c[0] === "clock")).toEqual(["clock", set[1], NaN, 0, 1]);
     expect(rt.advisories().filter((l) => l.includes("Element.animate() runs natively"))).toHaveLength(1);

@@ -1,11 +1,10 @@
-// File System Access, `FileReader` and the file pickers — docs/DESKTOP.md
+// File System Access and the file pickers — docs/DESKTOP.md
 // ("Pickers and files"); research/reports/m25/desktop-apis-design.md §4.
 //
 // TIER 1 only, and spec-exact where script can tell: the WICG File System
 // Access classes (`showOpenFilePicker`, `showSaveFilePicker`,
 // `showDirectoryPicker`, `FileSystemHandle` and its two kinds,
-// `FileSystemWritableFileStream`), the File API's `FileReader` and
-// `ProgressEvent`, and the request half of `<input type=file>` and
+// `FileSystemWritableFileStream`), and the request half of `<input type=file>` and
 // `<a download>`. runtime.ts owns the elements; this file owns what they ask
 // the host for.
 //
@@ -36,15 +35,10 @@
 // takes the host functions, the settle channel and the transient-activation
 // state as ARGUMENTS rather than reading `__vn_*` globals, which is what lets
 // the bun harness run it against a fake host and bun's own `WritableStream`,
-// `DOMException` and `TextDecoder`.
+// `DOMException` and `Blob`.
 //
-// ## FileReader lives here, not in redjs
-//
-// It is pure event and promise plumbing over `Blob.arrayBuffer()` (which is
-// redjs's, and does the path-backed read off the UI thread). RUNTIME.md §5's
-// "missing globals" rule puts that kind of thing in the runtime, as it did
-// `ResizeObserver` and `MutationObserver`; and a bug in it is then fixed
-// without a redjs push and a submodule bump.
+// FileReader and ProgressEvent are native redjs interfaces. This adapter only
+// installs File System Access and picker integration.
 
 /** A rejection as the host serialises it (`Fail::to_json` / `to_sync_json`). */
 export interface DesktopFailure {
@@ -100,12 +94,7 @@ export interface DesktopFsHost {
 export interface DesktopEngine {
   Blob: abstract new (...args: never[]) => BlobLike;
   DOMException: new (message?: string, name?: string) => Error;
-  TextDecoder: new (label?: string, options?: { ignoreBOM?: boolean }) => {
-    readonly encoding: string;
-    decode(input?: ArrayBuffer | ArrayBufferView): string;
-  };
   WritableStream: new (sink?: WritableSink) => WritableStreamLike;
-  btoa(binary: string): string;
 }
 
 interface BlobLike {
@@ -192,7 +181,7 @@ const WELL_KNOWN = ["desktop", "documents", "downloads", "music", "pictures", "v
 
 export function installDesktop(target: Record<string, unknown>, deps: DesktopDeps): DesktopApi {
   const { host, engine, warnCompat, activation } = deps;
-  const { DOMException, TextDecoder } = engine;
+  const { DOMException } = engine;
 
   const domError = (name: string, message: string): Error =>
     name === "TypeError" ? new TypeError(message) : new DOMException(message, name);
@@ -202,237 +191,6 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     deps.call(json).catch((f: unknown) => {
       throw f instanceof Error ? f : fromFailure(f as DesktopFailure);
     });
-
-  // ---- FileReader and ProgressEvent (File API) — host or no host -----------
-
-  /** `ProgressEvent`, for an engine without one. redjs ships its own (with
-   * `XMLHttpRequest`, since m26), and `PE` below prefers it. */
-  class ProgressEvent extends Event {
-    declare readonly lengthComputable: boolean;
-    declare readonly loaded: number;
-    declare readonly total: number;
-    constructor(type: string, init: VnEventInit & { lengthComputable?: boolean; loaded?: number; total?: number } = {}) {
-      super(type, init);
-      Object.defineProperties(this, {
-        lengthComputable: { value: !!init.lengthComputable, enumerable: true },
-        loaded: { value: Number(init.loaded ?? 0), enumerable: true },
-        total: { value: Number(init.total ?? 0), enumerable: true },
-      });
-    }
-  }
-  const PE = (
-    typeof target.ProgressEvent === "function" && !deps.realm.vacant(target, "ProgressEvent") ? target.ProgressEvent : ProgressEvent
-  ) as typeof ProgressEvent;
-
-  // Does this engine's EventTarget call `on<type>` itself? redjs does (as an
-  // own listener after the others, HTML's event handler attribute); bun's
-  // does not. Probed once, so FileReader never calls a handler twice or never.
-  const nativeOnHandlers = (() => {
-    const t = new EventTarget() as VnEventTarget & { onvnprobe?: () => void };
-    let hit = false;
-    t.onvnprobe = () => (hit = true);
-    t.dispatchEvent(new Event("vnprobe"));
-    return hit;
-  })();
-
-  type ReadKind = "ArrayBuffer" | "BinaryString" | "Text" | "DataURL";
-
-  /** WHATWG Encoding "get an encoding": a label TextDecoder knows, or null. */
-  const encodingFor = (label: string | undefined): string | null => {
-    if (label === undefined) return null;
-    try {
-      return new TextDecoder(String(label)).encoding;
-    } catch {
-      return null;
-    }
-  };
-
-  /** File API "package data". */
-  const packageData = (bytes: Uint8Array, kind: ReadKind, mime: string, encoding: string | undefined): unknown => {
-    switch (kind) {
-      case "ArrayBuffer":
-        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      case "BinaryString": {
-        let s = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        return s;
-      }
-      case "DataURL": {
-        let s = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        // Chromium writes application/octet-stream for an untyped Blob.
-        return `data:${mime || "application/octet-stream"};base64,${engine.btoa(s)}`;
-      }
-      case "Text": {
-        // The argument, else the Blob type's charset, else UTF-8 — then the
-        // Encoding standard's `decode`, whose BOM sniff overrides all three.
-        let enc = encodingFor(encoding);
-        if (!enc) {
-          const m = /;\s*charset\s*=\s*"?([^";\s]+)/i.exec(mime);
-          enc = encodingFor(m?.[1]) ?? "utf-8";
-        }
-        let start = 0;
-        if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) [enc, start] = ["utf-8", 3];
-        else if (bytes[0] === 0xfe && bytes[1] === 0xff) [enc, start] = ["utf-16be", 2];
-        else if (bytes[0] === 0xff && bytes[1] === 0xfe) [enc, start] = ["utf-16le", 2];
-        return new TextDecoder(enc, { ignoreBOM: true }).decode(bytes.subarray(start));
-      }
-    }
-  };
-
-  class FileReader extends EventTarget {
-    static readonly EMPTY = 0;
-    static readonly LOADING = 1;
-    static readonly DONE = 2;
-    declare readonly EMPTY: 0;
-    declare readonly LOADING: 1;
-    declare readonly DONE: 2;
-    #state: 0 | 1 | 2 = 0;
-    #result: unknown = null;
-    #error: Error | null = null;
-    /** Bumped by `abort()` and by every new read, so a stale read's tasks stop. */
-    #generation = 0;
-    #handlers: Record<string, ((ev: VnEvent) => unknown) | null> = {};
-
-    get readyState(): 0 | 1 | 2 {
-      return this.#state;
-    }
-    get result(): unknown {
-      return this.#result;
-    }
-    get error(): Error | null {
-      return this.#error;
-    }
-
-    readAsArrayBuffer(blob: BlobLike): void {
-      this.#read(blob, "ArrayBuffer", "readAsArrayBuffer");
-    }
-    readAsBinaryString(blob: BlobLike): void {
-      this.#read(blob, "BinaryString", "readAsBinaryString");
-    }
-    readAsText(blob: BlobLike, encoding?: string): void {
-      this.#read(blob, "Text", "readAsText", encoding);
-    }
-    readAsDataURL(blob: BlobLike): void {
-      this.#read(blob, "DataURL", "readAsDataURL");
-    }
-
-    abort(): void {
-      if (this.#state !== 1) {
-        // "empty" or "done": the result goes, nothing fires.
-        this.#result = null;
-        return;
-      }
-      this.#generation++;
-      this.#state = 2;
-      this.#result = null;
-      this.#fire("abort");
-      if (!this.#loading()) this.#fire("loadend");
-    }
-
-    /** File API "read operation". */
-    #read(blob: BlobLike, kind: ReadKind, method: string, encoding?: string): void {
-      if (!(blob instanceof engine.Blob)) {
-        throw new TypeError(failed(method, "FileReader", "parameter 1 is not of type 'Blob'."));
-      }
-      if (this.#state === 1) {
-        throw new DOMException(failed(method, "FileReader", "The object is already busy reading Blobs."), "InvalidStateError");
-      }
-      this.#state = 1;
-      this.#result = null;
-      this.#error = null;
-      const gen = ++this.#generation;
-      const live = () => gen === this.#generation;
-      // The read starts now; its events are tasks, in the spec's order.
-      const bytes = blob.arrayBuffer();
-      bytes.catch(() => {});
-      setTimeout(() => {
-        if (!live()) return;
-        this.#fire("loadstart");
-        bytes.then(
-          (buf) =>
-            setTimeout(() => {
-              if (!live()) return;
-              const u8 = new Uint8Array(buf);
-              this.#fire("progress", u8.length);
-              if (!live()) return;
-              let value: unknown;
-              try {
-                value = packageData(u8, kind, blob.type, encoding);
-              } catch (e) {
-                return this.#fail(e as Error);
-              }
-              this.#state = 2;
-              this.#result = value;
-              this.#fire("load", u8.length);
-              if (!this.#loading()) this.#fire("loadend", u8.length);
-            }, 0),
-          (e: Error) =>
-            setTimeout(() => {
-              if (live()) this.#fail(e);
-            }, 0),
-        );
-      }, 0);
-    }
-
-    /**
-     * Read AFTER an event: a handler may have started a new read, in which
-     * case the old one's `loadend` is not fired (File API).
-     */
-    #loading(): boolean {
-      return this.#state === 1;
-    }
-
-    #fail(e: Error): void {
-      this.#state = 2;
-      this.#result = null;
-      this.#error = e;
-      this.#fire("error");
-      if (!this.#loading()) this.#fire("loadend");
-    }
-
-    #fire(type: string, loaded = 0): void {
-      this.dispatchEvent(new PE(type, { lengthComputable: loaded > 0, loaded, total: loaded }));
-    }
-
-    // The event handler IDL attributes.
-    get onloadstart() { return this.#on("loadstart"); }
-    set onloadstart(fn: unknown) { this.#setOn("loadstart", fn); }
-    get onprogress() { return this.#on("progress"); }
-    set onprogress(fn: unknown) { this.#setOn("progress", fn); }
-    get onload() { return this.#on("load"); }
-    set onload(fn: unknown) { this.#setOn("load", fn); }
-    get onabort() { return this.#on("abort"); }
-    set onabort(fn: unknown) { this.#setOn("abort", fn); }
-    get onerror() { return this.#on("error"); }
-    set onerror(fn: unknown) { this.#setOn("error", fn); }
-    get onloadend() { return this.#on("loadend"); }
-    set onloadend(fn: unknown) { this.#setOn("loadend", fn); }
-
-    #on(type: string): ((ev: VnEvent) => unknown) | null {
-      return this.#handlers[type] ?? null;
-    }
-    #setOn(type: string, fn: unknown): void {
-      const had = type in this.#handlers;
-      this.#handlers[type] = typeof fn === "function" ? (fn as (ev: VnEvent) => unknown) : null;
-      // An engine that does not call `on<type>` itself gets ONE listener per
-      // type, added the first time, which is where HTML orders the handler.
-      if (!nativeOnHandlers && !had) {
-        this.addEventListener(type, (ev) => void this.#handlers[type]?.call(this, ev));
-      }
-    }
-  }
-  for (const [k, v] of [
-    ["EMPTY", 0],
-    ["LOADING", 1],
-    ["DONE", 2],
-  ] as const) {
-    Object.defineProperty(FileReader.prototype, k, { value: v, enumerable: true });
-  }
-
-  if (deps.realm.vacant(target, "FileReader")) target.FileReader = deps.realm.mark(FileReader);
-  if (deps.realm.vacant(target, "ProgressEvent")) target.ProgressEvent = deps.realm.mark(ProgressEvent);
-  host?.refuseClone(FileReader.prototype, "FileReader");
 
   // ---- File System Access --------------------------------------------------
 

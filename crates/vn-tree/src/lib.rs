@@ -21,6 +21,7 @@ mod cache;
 mod clipboard;
 mod color;
 mod dom;
+mod font_api;
 mod fonts;
 mod filter;
 mod fullscreen;
@@ -41,6 +42,7 @@ mod selection;
 mod svg;
 mod tree;
 mod video;
+mod waapi;
 pub mod windows;
 
 pub mod devtools;
@@ -487,180 +489,6 @@ host_fn!(fn vn_img_bitmap(g, args) {
     }
 });
 
-// ---------------------------------------------------------------------------
-// web fonts (m26 client sweep #29) — see `fonts.rs`; the JS half is
-// packages/vue-native/src/fonts.ts (`FontFace`, `document.fonts`)
-// ---------------------------------------------------------------------------
-
-// The page's `(id, status, message)` callback for face status changes.
-host_fn!(fn vn_fonts_set_listener(g, args) {
-    let f = args.arg(0);
-    unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
-    let old = fonts::listener();
-    fonts::set_listener(f.0);
-    if old != 0 {
-        unsafe { vn_runtime::redjs::ffi::redjs_unprotect(g, old) };
-    }
-    UNDEF
-});
-
-// Every face, as JSON (`fonts::list_json`).
-host_fn!(fn vn_fonts_list(_g, _args) {
-    ret_string(&fonts::list_json())
-});
-
-// `new FontFace(family, source, descriptors)`: (family, CSS src text, the
-// descriptors packed as "style|weight|stretch|unicodeRange|display", load
-// now?) -> the face's id, or a string saying why it is a SyntaxError.
-host_fn!(fn vn_font_create(g, args) {
-    let family = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let source = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
-    let packed = unsafe { read_string(g, args.arg(2).0) }.unwrap_or_default();
-    let now = args.arg(3).as_bool().unwrap_or(false);
-    match fonts::descriptors(&family, &packed).and_then(|d| fonts::create(d, &source, now)) {
-        Ok(id) => ret_id(id),
-        Err(why) => ret_string(&why),
-    }
-});
-
-// `FontFace.load()`.
-host_fn!(fn vn_font_load(_g, args) {
-    fonts::load(arg_id(args.arg(0)));
-    UNDEF
-});
-
-// `document.fonts.add(face)` / `.delete(face)`.
-host_fn!(fn vn_font_set(_g, args) {
-    fonts::set_in_set(arg_id(args.arg(0)), args.arg(1).as_bool().unwrap_or(false));
-    UNDEF
-});
-
-// `document.fonts.load(font, text)` / `.check(font, text)`: the ids of the
-// faces in the set that the `font` shorthand and the text select, comma-joined
-// ("" for none), or null when `font` is not a valid shorthand.
-host_fn!(fn vn_fonts_match(g, args) {
-    let font = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let text = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
-    match fonts::matching(&font, &text) {
-        Some(ids) => ret_string(&ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")),
-        None => Value::null().0,
-    }
-});
-
-// ---------------------------------------------------------------------------
-// script animations: `Element.animate()` (vn-css animator/script.rs; the JS
-// half is packages/vue-native/src/waapi.ts)
-// ---------------------------------------------------------------------------
-//
-// The JS half runs the `Animation` state machine and sends only what painting
-// needs: the effect, once per change, and the clock, once per state change.
-// Nothing crosses per frame.
-
-/// `frames`: keyframes split by U+001E, each `offset ␟ easing ␟ decls`, the
-/// declarations split by U+001C and each `name ␝ value` (CSS names). The
-/// separators are control characters no CSS value contains.
-fn anim_frames(text: &str) -> Result<Vec<vn_css::ScriptFrame>, String> {
-    let mut out = Vec::new();
-    for frame in text.split('\u{1e}').filter(|f| !f.is_empty()) {
-        let mut parts = frame.splitn(3, '\u{1f}');
-        let offset: f32 = parts.next().unwrap_or("").parse().map_err(|_| format!("bad keyframe offset in {frame:?}"))?;
-        let easing = match parts.next().unwrap_or("").trim() {
-            "" | "linear" => None,
-            text => Some(vn_css::parse_easing(text).ok_or_else(|| format!("'{text}' is not a valid easing"))?),
-        };
-        let decls = parts
-            .next()
-            .unwrap_or("")
-            .split('\u{1c}')
-            .filter_map(|d| d.split_once('\u{1d}'))
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        out.push(vn_css::ScriptFrame { offset, easing, decls });
-    }
-    Ok(out)
-}
-
-/// `timing`: `delay,endDelay,duration,iterations,iterationStart,direction,fill`
-/// (milliseconds; direction 0–3 = normal, reverse, alternate,
-/// alternate-reverse; fill 0–3 = none, forwards, backwards, both).
-fn anim_timing(text: &str, easing: &str) -> Result<vn_css::ScriptTiming, String> {
-    let n: Vec<f64> = text.split(',').map(|v| v.trim().parse::<f64>().unwrap_or(f64::NAN)).collect();
-    if n.len() != 7 || n.iter().any(|v| v.is_nan()) {
-        return Err(format!("bad timing {text:?}"));
-    }
-    let easing = match easing.trim() {
-        "" | "linear" => vn_css::Easing::Linear,
-        text => vn_css::parse_easing(text).ok_or_else(|| format!("'{text}' is not a valid easing"))?,
-    };
-    Ok(vn_css::ScriptTiming {
-        delay: n[0],
-        end_delay: n[1],
-        duration: n[2],
-        iterations: n[3],
-        iteration_start: n[4],
-        direction: match n[5] as u32 {
-            1 => vn_css::AnimationDirection::Reverse,
-            2 => vn_css::AnimationDirection::Alternate,
-            3 => vn_css::AnimationDirection::AlternateReverse,
-            _ => vn_css::AnimationDirection::Normal,
-        },
-        fill: match n[6] as u32 {
-            1 => vn_css::FillMode::Forwards,
-            2 => vn_css::FillMode::Backwards,
-            3 => vn_css::FillMode::Both,
-            _ => vn_css::FillMode::None,
-        },
-        easing,
-    })
-}
-
-// (id, node, frames, timing, easing) -> notes, one per line: `E<why>` when
-// the effect was refused (nothing was set), `W<property>` for a property that
-// does not animate here, `D<diagnostic>` for what the parser said.
-host_fn!(fn vn_anim_set(g, args) {
-    let id = arg_id(args.arg(0));
-    let node = arg_id(args.arg(1));
-    let frames = unsafe { read_string(g, args.arg(2).0) }.unwrap_or_default();
-    let timing = unsafe { read_string(g, args.arg(3).0) }.unwrap_or_default();
-    let easing = unsafe { read_string(g, args.arg(4).0) }.unwrap_or_default();
-    let parsed = anim_frames(&frames).and_then(|f| anim_timing(&timing, &easing).map(|t| (f, t)));
-    let out = match parsed {
-        Err(why) => format!("E{why}"),
-        Ok((frames, timing)) => {
-            let notes = tree::script_anim_set(id, node, &frames, timing);
-            let mut lines: Vec<String> = notes.ignored.iter().map(|p| format!("W{p}")).collect();
-            lines.extend(notes.diagnostics.iter().map(|d| format!("D{d}")));
-            lines.join("\n")
-        }
-    };
-    ret_string(&out)
-});
-
-// (id, start, hold, rate): the clock. NaN is "unresolved".
-host_fn!(fn vn_anim_clock(_g, args) {
-    let id = arg_id(args.arg(0));
-    let num = |i: u32| args.arg(i).as_number().filter(|v| !v.is_nan());
-    let clock = vn_css::ScriptClock { start: num(1), hold: num(2), rate: num(3).unwrap_or(1.0) };
-    tree::script_anim_clock(id, clock);
-    UNDEF
-});
-
-host_fn!(fn vn_anim_drop(_g, args) {
-    tree::script_anim_drop(arg_id(args.arg(0)));
-    UNDEF
-});
-
-// `commitStyles()`: `name ␝ value` pairs split by U+001C, or null when the
-// animation paints nothing here.
-host_fn!(fn vn_anim_values(_g, args) {
-    match tree::script_anim_values(arg_id(args.arg(0))) {
-        Some(values) => ret_string(
-            &values.iter().map(|(k, v)| format!("{k}\u{1d}{v}")).collect::<Vec<_>>().join("\u{1c}"),
-        ),
-        None => Value::null().0,
-    }
-});
-
 host_fn!(fn vn_fullscreen_element(_g, args) {
     Value::boolean(fullscreen::set(arg_id(args.arg(0)))).0
 });
@@ -698,26 +526,20 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_media_can_play", 2, vn_media_can_play as *const _),
         ("__vn_media_events", 1, vn_media_events as *const _),
         ("__vn_img_bitmap", 2, vn_img_bitmap as *const _),
-        ("__vn_fonts_set_listener", 1, vn_fonts_set_listener as *const _),
-        ("__vn_fonts_list", 0, vn_fonts_list as *const _),
-        ("__vn_font_create", 4, vn_font_create as *const _),
-        ("__vn_font_load", 1, vn_font_load as *const _),
-        ("__vn_font_set", 2, vn_font_set as *const _),
-        ("__vn_fonts_match", 2, vn_fonts_match as *const _),
-        ("__vn_anim_set", 5, vn_anim_set as *const _),
-        ("__vn_anim_clock", 4, vn_anim_clock as *const _),
-        ("__vn_anim_drop", 1, vn_anim_drop as *const _),
-        ("__vn_anim_values", 1, vn_anim_values as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
     }
+    // Direct native Web Animations normalization, timing and painter methods.
+    waapi::install(rt);
     // `getSelection()` / `Range` (crate::selection).
     selection::install(rt);
     // `document.elementFromPoint` / `elementsFromPoint` (crate::pointer).
     pointer::install(rt);
     // ResizeObserver and IntersectionObserver after layout (crate::observe).
     observe::install(rt);
+    // Native FontFace/FontFaceSet objects with a thin document attachment.
+    font_api::install(rt);
 }
 
 // ---------------------------------------------------------------------------

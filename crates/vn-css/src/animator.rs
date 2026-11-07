@@ -686,7 +686,7 @@ pub struct Animator {
 }
 
 mod script;
-pub use script::{script_keyframes, ScriptClock, ScriptFrame, ScriptKeyframeNotes, ScriptTiming};
+pub use script::{script_keyframes, ScriptClock, ScriptFrame, ScriptKeyframeNotes, ScriptSample, ScriptTiming};
 
 impl Animator {
     /// A fresh animator with no running transitions.

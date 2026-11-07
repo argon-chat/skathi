@@ -1,4 +1,4 @@
-// File System Access, FileReader, the pickers, `<input type=file>` and
+// File System Access, the pickers, `<input type=file>` and
 // `<a download>` — the JS half of docs/DESKTOP.md "Pickers and files".
 //
 // The Rust half (the name fence, the swap and atomic replace, the cursor, the
@@ -6,7 +6,7 @@
 // packages/vn-test/specs/files.spec.ts drives both through a real host with
 // VN_DIALOGS=scripted. What is pinned here is what only the runtime can get
 // wrong: the spec's option checks and exception names, transient activation,
-// the FileReader state machine and event order, that a handle holds no path,
+// that a handle holds no path,
 // and the input element's events.
 
 import { describe, expect, test } from "bun:test";
@@ -17,10 +17,6 @@ type Call = { op: string; args: unknown[]; token: number | null };
 
 const calls = (rt: Rt, op: string): Call[] => rt.host.desktop.fs.calls.filter((c: Call) => c.op === op);
 const tick = () => new Promise((r) => setTimeout(r, 0));
-/** Lets the reader's task chain (setTimeout 0, a promise, setTimeout 0) run out. */
-const settleReader = async () => {
-  for (let i = 0; i < 6; i++) await tick();
-};
 /** A user gesture, as the host delivers one (only these activate). */
 const gesture = (rt: Rt) => rt.noteActivation("mousedown", undefined);
 
@@ -28,133 +24,13 @@ const gesture = (rt: Rt) => rt.noteActivation("mousedown", undefined);
 const handle = (rt: Rt, h: number, name: string, kind: "file" | "directory") =>
   rt.desktopApi.handleFrom({ h, name, kind }) as Record<string, any>;
 
-describe("FileReader (File API)", () => {
-  const reader = (rt: Rt) => new rt.global.FileReader();
-
-  test("is installed with its constants, on the class and on instances", () => {
-    const rt = createRuntime();
-    const FR = rt.global.FileReader;
-    expect([FR.EMPTY, FR.LOADING, FR.DONE]).toEqual([0, 1, 2]);
-    const r = reader(rt);
-    expect([r.EMPTY, r.LOADING, r.DONE, r.readyState, r.result, r.error]).toEqual([0, 1, 2, 0, null, null]);
-    expect(r).toBeInstanceOf(EventTarget);
-    expect(typeof rt.global.ProgressEvent).toBe("function");
-  });
-
-  test("events come in the spec's order, with readyState and result as each one sees them", async () => {
-    const rt = createRuntime();
-    const r = reader(rt);
-    const seen: string[] = [];
-    for (const t of ["loadstart", "progress", "load", "loadend"]) {
-      r.addEventListener(t, (e: any) => seen.push(`${t}:${r.readyState}:${r.result === null ? "null" : "set"}:${e.loaded}`));
-    }
-    r.readAsText(new Blob(["héllo"]));
-    // Synchronously: LOADING, and nothing has fired yet (every event is a task).
-    expect([r.readyState, seen.length]).toEqual([1, 0]);
-    await settleReader();
-    expect(seen).toEqual(["loadstart:1:null:0", "progress:1:null:6", "load:2:set:6", "loadend:2:set:6"]);
-    expect(r.result).toBe("héllo");
-  });
-
-  test("on<type> attributes fire once each, beside listeners", async () => {
-    const rt = createRuntime();
-    const r = reader(rt);
-    let n = 0;
-    r.onload = () => n++;
-    r.onload = () => (n += 10); // replaced, not added
-    r.readAsArrayBuffer(new Blob([new Uint8Array([1, 2, 3])]));
-    await settleReader();
-    expect(n).toBe(10);
-    expect(r.onload).toBeInstanceOf(Function);
-    expect(new Uint8Array(r.result)).toEqual(new Uint8Array([1, 2, 3]));
-  });
-
-  test("readAsText honours the label, the Blob's charset and a BOM, in that order of priority", async () => {
-    const rt = createRuntime();
-    const text = async (blob: Blob, enc?: string) => {
-      const r = reader(rt);
-      r.readAsText(blob, enc);
-      await settleReader();
-      return r.result;
-    };
-    const cp1251 = new Uint8Array([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]); // "Привет"
-    expect(await text(new Blob([cp1251]), "windows-1251")).toBe("Привет");
-    expect(await text(new Blob([cp1251], { type: "text/plain;charset=windows-1251" }))).toBe("Привет");
-    // An unknown label falls back to the type's charset, then UTF-8.
-    expect(await text(new Blob([cp1251], { type: "text/plain;charset=windows-1251" }), "no-such-label")).toBe("Привет");
-    // A BOM wins over everything.
-    expect(await text(new Blob([new Uint8Array([0xff, 0xfe, 0x41, 0x00])]), "windows-1251")).toBe("A");
-    expect(await text(new Blob([new Uint8Array([0xef, 0xbb, 0xbf, 0x41])]))).toBe("A");
-  });
-
-  test("readAsDataURL and readAsBinaryString package as Chromium does", async () => {
-    const rt = createRuntime();
-    const r = reader(rt);
-    // (Not text/plain: bun's Blob appends `;charset=utf-8` to that one.)
-    r.readAsDataURL(new Blob(["hi"], { type: "image/png" }));
-    await settleReader();
-    expect(r.result).toBe("data:image/png;base64,aGk=");
-    r.readAsDataURL(new Blob(["hi"]));
-    await settleReader();
-    expect(r.result).toBe("data:application/octet-stream;base64,aGk=");
-    r.readAsBinaryString(new Blob([new Uint8Array([0, 255])]));
-    await settleReader();
-    expect(r.result).toBe("\u0000ÿ");
-  });
-
-  test("a second read while loading is InvalidStateError; a non-Blob is TypeError", () => {
-    const rt = createRuntime();
-    const r = reader(rt);
-    expect(() => r.readAsText("not a blob")).toThrow(TypeError);
-    r.readAsText(new Blob(["x"]));
-    let err: any;
-    try {
-      r.readAsArrayBuffer(new Blob(["y"]));
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(DOMException);
-    expect(err.name).toBe("InvalidStateError");
-    expect(err.message).toContain("The object is already busy reading Blobs.");
-  });
-
-  test("abort() while loading fires abort then loadend, and no load", async () => {
-    const rt = createRuntime();
-    const r = reader(rt);
-    const seen: string[] = [];
-    for (const t of ["loadstart", "load", "abort", "loadend"]) r.addEventListener(t, () => seen.push(t));
-    r.readAsText(new Blob(["x"]));
-    r.abort();
-    expect([r.readyState, r.result]).toEqual([2, null]);
-    await settleReader();
-    expect(seen).toEqual(["abort", "loadend"]);
-    // On a DONE reader, abort() only clears the result.
-    r.readAsText(new Blob(["y"]));
-    await settleReader();
-    r.abort();
-    expect([r.readyState, r.result]).toEqual([2, null]);
-  });
-
-  test("a read that fails is error then loadend, with the read's DOMException", async () => {
-    const rt = createRuntime();
-    class Unreadable extends Blob {
-      override arrayBuffer(): Promise<ArrayBuffer> {
-        return Promise.reject(new DOMException("The requested file could not be read.", "NotReadableError"));
-      }
-    }
-    const r = reader(rt);
-    const seen: string[] = [];
-    for (const t of ["load", "error", "loadend"]) r.addEventListener(t, () => seen.push(t));
-    r.readAsText(new Unreadable(["x"]));
-    await settleReader();
-    expect(seen).toEqual(["error", "loadend"]);
-    expect([r.readyState, r.result, r.error?.name]).toEqual([2, null, "NotReadableError"]);
-  });
-
-  test("structuredClone refuses it, as Chromium does (the host marks the prototype)", () => {
-    const rt = createRuntime();
-    expect(rt.host.desktop.fs.refused.some((r: { name: string }) => r.name === "FileReader")).toBe(true);
-  });
+test("desktop adapter preserves the engine's native FileReader and ProgressEvent", () => {
+  class NativeReader {}
+  class NativeProgress {}
+  const rt = createRuntime({ globals: { FileReader: NativeReader, ProgressEvent: NativeProgress } });
+  expect(rt.global.FileReader).toBe(NativeReader);
+  expect(rt.global.ProgressEvent).toBe(NativeProgress);
+  expect(rt.host.desktop.fs.refused.some((entry: { name: string }) => entry.name === "FileReader")).toBe(false);
 });
 
 describe("the pickers (WICG File System Access)", () => {
@@ -384,7 +260,7 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(await dir.resolve({}).catch((e: Error) => e)).toBeInstanceOf(TypeError);
   });
 
-  test("handles are [Serializable] through their base, by id; a writable stream and FileReader are refused", () => {
+  test("handles are [Serializable] through their base, by id; the writable stream is refused by this adapter", () => {
     const rt = createRuntime();
     const { proto, idOf } = rt.host.desktop.fs.serializer;
     expect(proto).toBe(rt.global.FileSystemHandle.prototype);
@@ -392,7 +268,7 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(idOf(handle(rt, 32, "d", "directory"))).toBe(32);
     expect(idOf(Object.create(rt.global.FileSystemFileHandle.prototype))).toBeUndefined();
     const names = rt.host.desktop.fs.refused.map((r: { name: string }) => r.name);
-    expect(names).toEqual(["FileReader", "FileSystemWritableFileStream"]);
+    expect(names).toEqual(["FileSystemWritableFileStream"]);
     // The clone comes back through the factory, as a drop's handle does.
     const clone = rt.host.desktop.fs.factory(33, "a", "file");
     expect(clone).toBeInstanceOf(rt.global.FileSystemFileHandle);
