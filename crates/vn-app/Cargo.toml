@@ -209,6 +209,7 @@ windows = { version = "0.62", features = [
     # `FindResourceW` / `LoadResource` / `LockResource` — the stamped payload,
     # read in place out of the mapped image (src/payload.rs).
     "Win32_System_LibraryLoader",
+    "Win32_System_Com",
     "Win32_System_SystemInformation",
     # `OpenProcess` + `WaitForSingleObject` — `VN_OWNER_PID` (src/owner.rs).
     "Win32_System_Threading",

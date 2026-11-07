@@ -41,6 +41,8 @@ use vn_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 
 // The JS event loop while the window draws no frames (minimised, hidden).
 mod background;
+#[cfg(feature = "prod")]
+mod bytecode;
 #[cfg(not(feature = "prod"))]
 mod dev;
 // The automation surface (docs/DEVTOOLS.md) and the inspector it feeds

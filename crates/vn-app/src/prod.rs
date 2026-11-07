@@ -88,9 +88,7 @@ pub fn boot(rt: &JsRuntime) {
         eprintln!("[prod] the payload has no vn/app.js — nothing to run");
         return;
     };
-    if let Err(e) = crate::perf::boot_eval("app.prod.js (+mount)", || {
-        rt.eval(script, "vn://app.prod.js")
-    }) {
+    if let Err(e) = crate::bytecode::eval(rt, script) {
         eprintln!("[prod] app.prod.js: {}\n{}", e.header, e.stack);
     }
 }
@@ -103,7 +101,7 @@ pub fn reboot(rt: &JsRuntime) {
         eprintln!("[prod] reload: the payload has no vn/app.js — nothing to run");
         return;
     };
-    if let Err(e) = rt.eval(script, "vn://app.prod.js") {
+    if let Err(e) = crate::bytecode::eval(rt, script) {
         eprintln!("[prod] app.prod.js (reload): {}\n{}", e.header, e.stack);
     }
 }
