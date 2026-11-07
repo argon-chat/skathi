@@ -21,6 +21,8 @@ mod cache;
 mod clipboard;
 mod dom;
 mod fonts;
+mod filter;
+mod fullscreen;
 mod img;
 mod live;
 mod live_state;
@@ -657,6 +659,10 @@ host_fn!(fn vn_anim_values(_g, args) {
     }
 });
 
+host_fn!(fn vn_fullscreen_element(_g, args) {
+    Value::boolean(fullscreen::set(arg_id(args.arg(0)))).0
+});
+
 /// Registers the whole `__vn_*` protocol surface on the JS global.
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
@@ -676,6 +682,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_set_stylesheet", 1, vn_set_stylesheet as *const _),
         ("__vn_set_listener", 3, vn_set_listener as *const _),
         ("__vn_create_root", 0, vn_create_root as *const _),
+        ("__vn_fullscreen_element", 1, vn_fullscreen_element as *const _),
         ("__vn_set_dispatcher", 1, vn_set_dispatcher as *const _),
         ("__vn_query", 3, vn_query as *const _),
         ("__vn_bounds", 1, vn_bounds as *const _),

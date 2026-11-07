@@ -148,32 +148,188 @@
     return mql;
   };
   let fsStack = [];
+  let fsWindowWasFullscreen = false;
+  let fsInitialViewport = null;
+  let fsOwnerRoot = 0;
+  let fsOwnerElement = null;
+  const fsOwnerIsLive = () => fsOwnerRoot === 0 || fsOwnerElement?.__vnId === fsOwnerRoot;
+  const fsWindowState = () => !fsOwnerIsLive() ? false : typeof __vn_fullscreen_window === "function" ? __vn_fullscreen_window(fsOwnerRoot) : refresh().fullscreen;
+  const setFsWindow = (on) => {
+    if (!fsOwnerIsLive())
+      return;
+    if (typeof __vn_fullscreen_window === "function")
+      __vn_fullscreen_window(fsOwnerRoot, on);
+    else if (fsOwnerRoot === 0)
+      __vn_window_set_fullscreen(on);
+  };
+  let fsFrameScheduled = false;
+  let fsChanges = [];
+  let fsObserver = null;
   ro(document, "fullscreenElement", () => fsStack[fsStack.length - 1] ?? null);
   ro(document, "fullscreenEnabled", () => true);
-  const fireFs = (name, target) => {
-    const ev = new Event(name, { bubbles: true, composed: true });
-    if (target && typeof target.dispatchEvent === "function")
-      target.dispatchEvent(ev);
-    document.dispatchEvent(new Event(name, { bubbles: true, composed: true }));
+  const nextFsFrame = (callback) => {
+    if (typeof requestAnimationFrame === "function")
+      requestAnimationFrame(callback);
+    else
+      setTimeout(callback, 0);
+  };
+  const fsBox = (target) => typeof target?.getBoundingClientRect === "function" ? target.getBoundingClientRect() : null;
+  const fsViewport = () => fsBox(fsOwnerElement ?? document.documentElement);
+  const sameFsSize = (a, b) => Math.abs(a.width - b.width) < 1 && Math.abs(a.height - b.height) < 1;
+  const fsLayoutReady = () => {
+    if (!fsOwnerIsLive())
+      return true;
+    const target = fsStack[fsStack.length - 1];
+    if (fsWindowState() !== (!!target || fsWindowWasFullscreen))
+      return false;
+    const viewport = fsViewport();
+    if (viewport && (viewport.width <= 0 || viewport.height <= 0))
+      return false;
+    if (viewport && fsOwnerRoot === 0) {
+      const native = refresh();
+      if (target && native.clientWidth > 0 && native.clientHeight > 0 && !sameFsSize(viewport, { width: native.clientWidth, height: native.clientHeight }))
+        return false;
+      if (globalThis.innerWidth > 0 && globalThis.innerHeight > 0 && !sameFsSize(viewport, { width: globalThis.innerWidth, height: globalThis.innerHeight }))
+        return false;
+    }
+    if (target) {
+      const bounds = fsBox(target);
+      if (bounds && viewport && !sameFsSize(bounds, viewport))
+        return false;
+    } else if (!fsWindowWasFullscreen && fsInitialViewport && viewport && !sameFsSize(viewport, fsInitialViewport)) {
+      return false;
+    }
+    return true;
+  };
+  const fireFs = (target) => {
+    if (target?.isConnected !== false && typeof target?.dispatchEvent === "function") {
+      target.dispatchEvent(new Event("fullscreenchange", { bubbles: true, composed: true }));
+    } else {
+      document.dispatchEvent(new Event("fullscreenchange", { bubbles: true, composed: true }));
+    }
+  };
+  const flushFsChanges = () => {
+    if (!fsChanges.length || !fsLayoutReady())
+      return;
+    const changes = fsChanges;
+    fsChanges = [];
+    for (const change of changes) {
+      fireFs(change.target);
+      nextFsFrame(() => nextFsFrame(change.resolve));
+    }
+  };
+  const scheduleFsChanges = () => {
+    if (fsFrameScheduled)
+      return;
+    fsFrameScheduled = true;
+    nextFsFrame(() => {
+      fsFrameScheduled = false;
+      flushFsChanges();
+      if (fsChanges.length)
+        scheduleFsChanges();
+    });
+  };
+  const queueFsChange = (target) => {
+    const promise = new Promise((resolve) => fsChanges.push({ target, resolve }));
+    scheduleFsChanges();
+    return promise;
+  };
+  const syncFsElement = () => {
+    const target = fsStack[fsStack.length - 1];
+    if (typeof __vn_fullscreen_element === "function")
+      __vn_fullscreen_element(target?.__vnId ?? 0);
+    if (!target) {
+      fsObserver?.disconnect();
+      fsObserver = null;
+    }
+  };
+  const leaveFsWindow = () => {
+    if (!fsStack.length && !fsWindowWasFullscreen)
+      setFsWindow(false);
+  };
+  const exitAllFullscreen = () => {
+    const previous = fsStack[fsStack.length - 1];
+    if (!previous)
+      return false;
+    fsStack = [];
+    syncFsElement();
+    queueFsChange(previous);
+    leaveFsWindow();
+    return true;
+  };
+  const observeFsRemoval = () => {
+    if (fsObserver)
+      return;
+    const Observer = globalThis.MutationObserver;
+    if (!Observer)
+      return;
+    fsObserver = new Observer(() => {
+      const previous = fsStack[fsStack.length - 1];
+      fsStack = fsStack.filter((target) => target.isConnected !== false);
+      if (previous !== fsStack[fsStack.length - 1]) {
+        syncFsElement();
+        queueFsChange(previous);
+        leaveFsWindow();
+      }
+    });
+    fsObserver.observe(document, { childList: true, subtree: true });
+  };
+  const onFullscreenWindowChanged = (fullscreen) => {
+    if (fsOwnerRoot !== 0)
+      return;
+    if (!fullscreen && fsStack.length) {
+      const previous = fsStack[fsStack.length - 1];
+      fsStack = [];
+      syncFsElement();
+      if (!fsChanges.length)
+        queueFsChange(previous);
+    }
+    if (fsChanges.length)
+      scheduleFsChanges();
   };
   const requestFullscreen = function(options) {
     const el = this;
-    if (options && options.keyboardLock)
+    if (!el || el.isConnected === false || !el.__vnId) {
+      return Promise.reject(new TypeError("Fullscreen requires a connected element"));
+    }
+    if (fsStack[fsStack.length - 1] === el)
+      return Promise.resolve();
+    if (options?.keyboardLock)
       warn("fs.keyboardLock", "`keyboardLock` is ignored — there is no browser UI to lock.");
-    if (options && options.screen)
-      warn("fs.screen", "the `screen` option needs the Window Management API, which is single-window-gated here. " + "See docs/WINDOWING.md §1.5.");
-    if (el !== document.documentElement && el !== document.body) {
-      warn("fs.element", "`requestFullscreen()` on an element made the WINDOW fullscreen; per-element fullscreen " + "(`::backdrop`, the UA stretch-to-viewport rule) is not implemented. Fullscreen " + "`document.documentElement`, or style the element under " + "`@media (display-mode: fullscreen)`.");
+    if (options?.screen)
+      warn("fs.screen", "The `screen` option needs the Window Management API.");
+    const ownerElement = el.ownerDocument && el.ownerDocument !== document ? el.ownerDocument.documentElement ?? null : null;
+    const ownerRoot = ownerElement?.__vnId ?? 0;
+    if (ownerElement && !ownerRoot)
+      return Promise.reject(new TypeError("This element's window was closed"));
+    if (fsStack.length && ownerRoot !== fsOwnerRoot) {
+      return Promise.reject(new TypeError("Exit the current window fullscreen before entering another window"));
+    }
+    if (typeof __vn_fullscreen_element === "function" && !__vn_fullscreen_element(el.__vnId)) {
+      return Promise.reject(new TypeError("This element cannot enter fullscreen in this window"));
+    }
+    if (!fsStack.length) {
+      fsOwnerRoot = ownerRoot;
+      fsOwnerElement = ownerElement;
+      fsWindowWasFullscreen = fsWindowState();
+      fsInitialViewport = fsViewport();
     }
     fsStack.push(el);
-    __vn_window_set_fullscreen(true);
-    return Promise.resolve();
+    observeFsRemoval();
+    const promise = queueFsChange(el);
+    setFsWindow(true);
+    return promise;
   };
   document.exitFullscreen = () => {
-    fsStack.pop();
-    if (fsStack.length === 0)
-      __vn_window_set_fullscreen(false);
-    return Promise.resolve();
+    const previous = fsStack.pop();
+    if (!previous)
+      return Promise.resolve();
+    while (fsStack.length && fsStack[fsStack.length - 1]?.isConnected === false)
+      fsStack.pop();
+    syncFsElement();
+    const promise = queueFsChange(previous);
+    leaveFsWindow();
+    return promise;
   };
   if (typeof Element === "function" && Element.prototype)
     Element.prototype.requestFullscreen = requestFullscreen;
@@ -386,9 +542,7 @@
           emit(globalThis, kind);
           break;
         case "fullscreenchange":
-          fireFs("fullscreenchange", fsStack[fsStack.length - 1]);
-          if (!S.fullscreen)
-            fsStack = [];
+          onFullscreenWindowChanged(S.fullscreen);
           break;
         case "geometrychange": {
           const ev = new Event("geometrychange");
@@ -410,6 +564,7 @@
   });
   globalThis.__VN_WINDOW__ = {
     appWindow,
+    escapeFullscreen: exitAllFullscreen,
     defineWindow,
     getCurrentWindow: () => appWindow,
     refresh,

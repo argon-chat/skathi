@@ -2052,6 +2052,17 @@ fn submit(op: Op) {
     }
 }
 
+/// Element fullscreen explicitly addresses the primary window, even when
+/// JavaScript was entered from a pop-out's input listener. Its operation is
+/// consumed by the primary pump rather than applied to the published window.
+pub(crate) fn element_fullscreen(on: Option<bool>) -> bool {
+    let current = SNAPSHOT.with(|snapshot| snapshot.borrow().fullscreen);
+    if let Some(on) = on {
+        PENDING.with(|pending| pending.borrow_mut().push_back(Op::Fullscreen(on)));
+    }
+    current
+}
+
 /// `appWindow.close()`, asked from Rust: the embedder's `Handle::close`
 /// (src/embed.rs). Main thread.
 pub(crate) fn request_close() {

@@ -297,7 +297,7 @@ function writeAtomic(path: string, text: string) {
 const INDEX_HTML = join(VN_CONFIG_DIR, "index.html");
 const LIFTED: LiftedHtml | null = existsSync(INDEX_HTML) ? liftIndexHtml(INDEX_HTML, VN_CONFIG_DIR) : null;
 const HTML_PRELUDE =
-  LIFTED && (LIFTED.scripts.length || LIFTED.rootClasses.length || Object.keys(LIFTED.rootAttrs).length)
+  LIFTED && (LIFTED.scripts.length || LIFTED.rootClasses.length || Object.keys(LIFTED.rootAttrs).length || LIFTED.svgDefinitions?.length)
     ? htmlPreludeModule(LIFTED)
     : null;
 if (LIFTED) {
@@ -342,7 +342,7 @@ const cssById = new Map<string, string>();
  * there without a word.
  */
 async function viteCss(text: string, from: string, label: string): Promise<string> {
-  let css = inlineCssImports(text, from, VN_CONFIG_DIR, advise);
+  let css = inlineCssImports(text, from, VN_CONFIG_DIR, advise, undefined, ASSETS);
   if (TW_CONFIG && needsTailwindPass(css)) {
     try {
       css = await generateTailwind(TW_CONFIG, { text: css, from: from.replace(/\?.*$/, "") });

@@ -85,6 +85,11 @@ declare function __vn_set_element_text(id: VnNodeId, text: string): void;
 declare function __vn_insert(child: VnNodeId, parent: VnNodeId, anchor: VnNodeId): void;
 /** Destroys `id` AND ITS WHOLE SUBTREE. The ids are recycled afterwards. */
 declare function __vn_remove(id: VnNodeId): void;
+/** Selects a connected fullscreen element in its owner window; zero restores the document. */
+declare function __vn_fullscreen_element(id: VnNodeId): boolean;
+/** Queries the owner OS window; an optional boolean queues its fullscreen state.
+ * ownerRoot is zero for the primary window or a live VnWindow root id. */
+declare function __vn_fullscreen_window(ownerRoot: VnNodeId, on?: boolean): boolean;
 
 /**
  * One inline declaration. `""` REMOVES the property (it does not set empty).
@@ -592,7 +597,8 @@ declare function __vn_log(message: string): void;
 // ---------------------------------------------------------------------------
 
 /**
- * Every attachable vue-native instance, as JSON:
+ * Polls background discovery: `{ pending: true }` until a scan completes, then
+ * returns every attachable vue-native instance, as JSON:
  * `{ preferred, self: { pid, dir }, targets: [{ slot, dir, port, pid, token,
  * alive, self }] }`.
  *
@@ -1046,6 +1052,8 @@ declare var __VN_WINDOW__: VnWindowHost | undefined;
 
 interface VnWindowHost {
   appWindow: VnAppWindow;
+  /** Consumes Escape only while an element is fullscreen. */
+  escapeFullscreen?: () => boolean;
   defineWindow: (options: Record<string, unknown>) => void;
 }
 

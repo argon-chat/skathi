@@ -169,7 +169,12 @@ type EventHandler = (ev: VnEvent) => void;
 /** …and what Vue passes for `@click="[a, b]"` — several, in order. */
 type EventHandlerOrList = EventHandler | EventHandler[];
 /** The third argument to add/removeEventListener, in both spellings. */
-type ListenerOptions = boolean | { capture?: boolean; once?: boolean; passive?: boolean } | undefined;
+type ListenerSignal = {
+  readonly aborted: boolean;
+  addEventListener(type: string, listener: () => void, options?: { once?: boolean }): void;
+  removeEventListener(type: string, listener: () => void): void;
+};
+type ListenerOptions = boolean | { capture?: boolean; once?: boolean; passive?: boolean; signal?: ListenerSignal } | undefined;
 
 /** One `addEventListener` registration; `once` is consumed on dispatch. */
 interface ExtraListener {
@@ -177,6 +182,8 @@ interface ExtraListener {
   once: boolean;
   /** `{ passive: true }`, or the passive default (`passiveOf`). */
   passive?: boolean;
+  signalCleanup?: () => void;
+  removed?: boolean;
 }
 
 /**
@@ -2389,7 +2396,7 @@ const isMirrorNode = (n: unknown): n is MirrorNode =>
   nodeById((n as MirrorNode).__vnId) === (n as MirrorNode);
 
 /** The two option spellings, as an object. `true` means `{ capture: true }`. */
-type ListenerOptionsObject = { capture?: boolean; once?: boolean; passive?: boolean };
+type ListenerOptionsObject = { capture?: boolean; once?: boolean; passive?: boolean; signal?: ListenerSignal };
 
 /** The events whose listeners on `window`, `document` and `<body>` are passive unless they say otherwise. */
 const PASSIVE_BY_DEFAULT = new Set(["wheel", "mousewheel", "touchstart", "touchmove"]);
@@ -2424,21 +2431,42 @@ function addGlobalListener(
   // A file input's `change`/`cancel` bubble to the document like the host's
   // events do, so a delegated listener takes the same walk.
   if (!hostCode(name) && !JS_SOURCED_EVENTS.has(name) && !RUNTIME_FIRED_EVENTS.has(name)) return false;
+  const signal = !ALSO_NATIVE.has(name) && opts && typeof opts === "object" ? opts.signal : undefined;
+  if (signal?.aborted) return true;
   let m = globalHandlers.get(target);
   if (!m) globalHandlers.set(target, (m = {}));
   const buckets = ensureBuckets(m, name);
   const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
-  (capture ? buckets.extraC : buckets.extraB).push({
+  const entries = capture ? buckets.extraC : buckets.extraB;
+  const entry: ExtraListener = {
     fn,
     once: !!(opts && (opts as ListenerOptionsObject).once),
     passive: passiveOf(opts, target, name),
-  });
+  };
+  entries.push(entry);
+  if (signal) {
+    const abort = () => {
+      const index = entries.indexOf(entry);
+      if (index >= 0) entries.splice(index, 1);
+      disposeGlobalListener(entry);
+      if (appRoot) syncListenerFlag(appRoot, name);
+    };
+    entry.signalCleanup = () => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+  }
   if (appRoot) syncListenerFlag(appRoot, name);
   // `load` and `error` are ALSO the window's own events (the page's load, an
   // uncaught error), which the engine would fire at its EventTarget: the
   // listener goes to both, and hears an element's (capture phase) and the
   // window's.
   return !ALSO_NATIVE.has(name);
+}
+
+function disposeGlobalListener(entry: ExtraListener): void {
+  entry.removed = true;
+  const cleanup = entry.signalCleanup;
+  entry.signalCleanup = undefined;
+  cleanup?.();
 }
 
 function removeGlobalListener(
@@ -2453,7 +2481,10 @@ function removeGlobalListener(
   const capture = opts === true || (opts && (opts as ListenerOptionsObject).capture);
   const arr = capture ? buckets.extraC : buckets.extraB;
   const i = arr.findIndex((e) => e.fn === fn);
-  if (i >= 0) arr.splice(i, 1);
+  if (i >= 0) {
+    disposeGlobalListener(arr[i]);
+    arr.splice(i, 1);
+  }
   if (appRoot) syncListenerFlag(appRoot, name);
   return !ALSO_NATIVE.has(name);
 }
@@ -2465,26 +2496,35 @@ function removeGlobalListener(
 type GlobalTargetLike = {
   addEventListener?: (name: string, fn: EventHandler, opts?: ListenerOptions) => void;
   removeEventListener?: (name: string, fn: EventHandler, opts?: ListenerOptions) => void;
+  dispatchEvent?: (event: VnEvent) => boolean;
 };
 
 /**
  * What a `window` / `document` listener the HOST does not source was handed
- * to: the target's own `addEventListener` as the FIRST runtime of this process
- * found it. Kept on the global so that a runtime evaluated again by
+ * to: the target's own listener and dispatch methods as the FIRST runtime
+ * found them. Kept on the global so that a runtime evaluated again by
  * `location.reload()` wraps the same function, not the previous runtime's
  * wrapper (see `realm` below).
  */
-function nativeListenFns(target: object): { add: GlobalTargetLike["addEventListener"]; remove: GlobalTargetLike["removeEventListener"] } {
+function nativeListenFns(target: object): {
+  add: GlobalTargetLike["addEventListener"];
+  remove: GlobalTargetLike["removeEventListener"];
+  dispatch: GlobalTargetLike["dispatchEvent"];
+} {
   const g = globalThis as { __VN_NATIVE_LISTEN__?: WeakMap<object, ReturnType<typeof nativeListenFns>> };
   const table = (g.__VN_NATIVE_LISTEN__ ??= new WeakMap());
   let fns = table.get(target);
+  const t = target as GlobalTargetLike;
   if (!fns) {
-    const t = target as GlobalTargetLike;
     fns = {
       add: typeof t.addEventListener === "function" ? t.addEventListener.bind(target) : undefined,
       remove: typeof t.removeEventListener === "function" ? t.removeEventListener.bind(target) : undefined,
+      dispatch: typeof t.dispatchEvent === "function" ? t.dispatchEvent.bind(target) : undefined,
     };
     table.set(target, fns);
+  } else if (!Object.prototype.hasOwnProperty.call(fns, "dispatch")) {
+    // Older runtimes saved only listener methods; their dispatch is still native.
+    fns.dispatch = typeof t.dispatchEvent === "function" ? t.dispatchEvent.bind(target) : undefined;
   }
   return fns;
 }
@@ -2494,8 +2534,20 @@ const passedThrough: { target: object; name: string; fn: EventHandler; opts: Lis
 
 function interceptGlobalTarget(target: object | undefined): void {
   if (!target) return;
-  const { add: nativeAdd, remove: nativeRemove } = nativeListenFns(target);
+  const { add: nativeAdd, remove: nativeRemove, dispatch: nativeDispatch } = nativeListenFns(target);
   try {
+    Object.defineProperty(target, "dispatchEvent", {
+      value: (event: VnEvent) => {
+        const name = event && typeof event.type === "string" ? canonicalEvent(event.type) : "";
+        if (RUNTIME_FIRED_EVENTS.has(name)) {
+          if (target === globalThis.document) return propagateAtDocument(name, event);
+          if (target === globalThis) return propagateAtGlobal(target, name, event);
+        }
+        return nativeDispatch?.(event) ?? true;
+      },
+      configurable: true,
+      writable: true,
+    });
     Object.defineProperty(target, "addEventListener", {
       value: (name: string, fn: EventHandler, opts: ListenerOptions) => {
         if (addGlobalListener(target, name, fn, opts)) return;
@@ -4567,7 +4619,7 @@ defineDom("click", function (this: MirrorElement) {
 //    nothing; a reset does not restore the controls' values.
 
 /** Events the runtime itself fires, for which no host code exists. Their handlers are kept. */
-const RUNTIME_FIRED_EVENTS = new Set<string>(["submit", "reset"]);
+const RUNTIME_FIRED_EVENTS = new Set<string>(["submit", "reset", "fullscreenchange"]);
 
 /** HTML's boolean-attribute rule as patchProp stores it: present, and not the string "false". */
 const hasFlag = (n: MirrorElement, name: string): boolean => n.attrs?.[name] != null && n.attrs[name] !== "false";
@@ -6219,9 +6271,11 @@ function invoke(
   // snapshot: spec semantics — listeners added during dispatch don't fire now
   for (const entry of [...extra]) {
     if (state.immediate) break;
+    if (entry.removed) continue;
     if (entry.once) {
       const i = extra.indexOf(entry);
       if (i >= 0) extra.splice(i, 1);
+      if (entry.signalCleanup) disposeGlobalListener(entry);
     }
     callListener(entry.fn, node, ev, !!entry.passive);
   }
@@ -6287,9 +6341,13 @@ function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
  * the window's bubble listeners. No element is on its path.
  */
 function propagateAtDocument(name: string, ev: VnEvent): boolean {
-  const doc = globalThis.document as object | undefined;
-  if (!doc) return true;
-  Object.defineProperty(ev, "target", { value: doc, configurable: true });
+  const document = globalThis.document as object | undefined;
+  return document ? propagateAtGlobal(document, name, ev) : true;
+}
+
+function propagateAtGlobal(target: object, name: string, ev: VnEvent): boolean {
+  const windowTarget = target === globalThis;
+  Object.defineProperty(ev, "target", { value: target, configurable: true });
   const state = { stopped: false, immediate: false };
   const origStop = ev.stopPropagation?.bind(ev);
   const origStopIm = ev.stopImmediatePropagation?.bind(ev);
@@ -6302,15 +6360,17 @@ function propagateAtDocument(name: string, ev: VnEvent): boolean {
     state.immediate = true;
     origStopIm?.();
   };
-  const composed = [doc, globalThis];
+  const composed = windowTarget ? [globalThis] : [target, globalThis];
   Object.defineProperty(ev, "composedPath", { value: () => composed.slice(), configurable: true });
   const win = globalHandlers.get(globalThis)?.[name];
-  const at = globalHandlers.get(doc)?.[name];
+  const at = globalHandlers.get(target)?.[name];
   try {
-    if (win) invoke(win, "capture", EVENT_PHASE.capturing, ev, globalThis, name, state);
-    if (at && !state.stopped) invoke(at, "capture", EVENT_PHASE.atTarget, ev, doc, name, state);
-    if (at && !state.stopped) invoke(at, "bubble", EVENT_PHASE.atTarget, ev, doc, name, state);
-    if (ev.bubbles && win && !state.stopped) invoke(win, "bubble", EVENT_PHASE.bubbling, ev, globalThis, name, state);
+    if (!windowTarget && win) invoke(win, "capture", EVENT_PHASE.capturing, ev, globalThis, name, state);
+    if (!state.stopped) {
+      if (at) invoke(at, "capture", EVENT_PHASE.atTarget, ev, target, name, state);
+      if (at && !state.immediate) invoke(at, "bubble", EVENT_PHASE.atTarget, ev, target, name, state);
+    }
+    if (!windowTarget && ev.bubbles && win && !state.stopped) invoke(win, "bubble", EVENT_PHASE.bubbling, ev, globalThis, name, state);
   } finally {
     Object.defineProperty(ev, "currentTarget", { value: null, configurable: true });
     Object.defineProperty(ev, "eventPhase", { value: EVENT_PHASE.none, configurable: true });
@@ -6378,6 +6438,7 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   const name = CODE_TO_NAME[evCode];
   const target = nodeById(nodeId);
   if (!name || !target) return true;
+  if (name === "keydown" && key === "Escape" && globalThis.__VN_WINDOW__?.escapeFullscreen?.()) return false;
   // A wheel's pointer position rides beside its deltas (`VnDispatcher`); it
   // reaches `synthesize` as the event's data.
   if (name === "wheel" && x !== undefined) data = { clientX: x, clientY: y ?? 0 };
@@ -6571,6 +6632,11 @@ function teardownDocumentRoot(root: MirrorElement, unmount?: () => void): void {
   globalThis.__VN_TEARDOWN__ = undefined;
   appRoot = null;
   observers.clear();
+  for (const map of globalHandlers.values()) {
+    for (const buckets of Object.values(map)) {
+      if (buckets) for (const entry of [...buckets.extraC, ...buckets.extraB]) disposeGlobalListener(entry);
+    }
+  }
   globalHandlers.clear();
 }
 

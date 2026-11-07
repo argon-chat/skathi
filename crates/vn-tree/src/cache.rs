@@ -375,6 +375,9 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     let Some(cs) = &node.computed else {
         return false;
     };
+    // A referenced definition can change outside this subtree, so its matrix
+    // must be resolved afresh; descendants still reuse the matrix-aware cache.
+    if cs.extras.filter_url.is_some() { return true; }
     // A scroll container is NO LONGER refused by default. The wheel registry
     // it contributes to is rebuilt from the paint walk and a replay does not
     // walk, so the span it pushed is recorded and re-registered in place

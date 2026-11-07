@@ -2032,13 +2032,90 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
         } else {
             // The root inherits nothing: `window-drag`'s initial value is
             // `none`, spelled here as "nobody declared anything".
-            build_node(
-                t, t.root, t.root, window, cx, now, None, None, None, None, Stacking::default(),
-            )
+            if let Some(id) = crate::fullscreen::current(t).filter(|id| windows::window_of_node_in(t, *id) == win) {
+                build_fullscreen(t, id, t.root, window, cx, now)
+            } else {
+                build_node(
+                    t, t.root, t.root, window, cx, now, None, None, None, None, Stacking::default(),
+                )
+            }
         }
     });
     crate::perf::note_build(span.ms(), BUILT.with(|c| c.get()));
     el
+}
+
+fn build_fullscreen<V: 'static>(
+    t: &Tree,
+    id: u32,
+    document_root: u32,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+) -> AnyElement {
+    use gpui::Refineable as _;
+    let mut ancestors = Vec::new();
+    let mut cursor = if id == document_root {
+        0
+    } else {
+        t.node(id).map_or(0, |node| node.parent)
+    };
+    while let Some(node) = t.node(cursor) {
+        ancestors.push(cursor);
+        if cursor == document_root {
+            break;
+        }
+        cursor = node.parent;
+    }
+    let mut inherited = Inherited::default();
+    let mut text = gpui::TextStyleRefinement::default();
+    for ancestor in ancestors.into_iter().rev() {
+        if let Some(node) = t.node(ancestor) {
+            let extras = extras_of(node);
+            inherited.case = extras.text_transform.or(inherited.case);
+            inherited.ws = extras.white_space.or(inherited.ws);
+            if let Some(computed) = &node.computed {
+                inherited.align = computed.base.text.text_align.or(inherited.align);
+                text.refine(&computed.base.text);
+            }
+        }
+    }
+    let handle = focus_handle_for(document_root, None, cx);
+    let mut document = div()
+        .id("vn-fullscreen-document")
+        .size_full()
+        .bg(gpui::black())
+        .track_focus(&handle);
+    document.style().text = text;
+    if id != document_root {
+        if let Some(url) = t
+            .node(document_root)
+            .and_then(|node| node.computed.as_ref())
+            .and_then(|computed| computed.extras.filter_url.as_ref())
+        {
+            document.style().vn_color_matrix = crate::filter::resolve(t, url, document_root);
+        }
+    }
+    if let Some(root) = t.node(document_root) {
+        let mask = root_mask(t, root) | (1 << tree::EV_KEYDOWN);
+        document = bind_events(document, document_root, mask, None, false, true, cx);
+    }
+    let element = document
+        .child(build_node(
+            t,
+            id,
+            id,
+            window,
+            cx,
+            now,
+            None,
+            inherited.case,
+            inherited.ws,
+            inherited.align,
+            Stacking::default(),
+        ))
+        .into_any_element();
+    probe_at(document_root, true, element)
 }
 
 /// Builds ONE node's subtree as the root of a *second* window's element tree
@@ -2086,8 +2163,23 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
         if t.node(id).is_none() {
             return Empty.into_any_element();
         }
-        // A popped-out root inherits nothing — it is a root, like `t.root`.
-        build_node(t, id, id, window, cx, now, None, None, None, None, Stacking::default())
+        // A pop-out keeps its DOM ancestry even though it paints elsewhere.
+        let mut element = if let Some(fullscreen) = crate::fullscreen::current(t).filter(|node| windows::window_of_node_in(t, *node) == win) {
+            build_fullscreen(t, fullscreen, id, window, cx, now)
+        } else {
+            build_node(t, id, id, window, cx, now, None, None, None, None, Stacking::default())
+        };
+        let mut ancestor = t.node(id).map_or(0, |node| node.parent);
+        while let Some(node) = t.node(ancestor) {
+            if let Some(matrix) = node.computed.as_ref().and_then(|computed| computed.extras.filter_url.as_ref())
+                .and_then(|url| crate::filter::resolve(t, url, ancestor)) {
+                let mut layer = div().size_full();
+                layer.style().vn_color_matrix = Some(matrix);
+                element = layer.child(element).into_any_element();
+            }
+            ancestor = node.parent;
+        }
+        element
     })
 }
 
@@ -2187,7 +2279,7 @@ fn build_node<V: 'static>(
     // all — because its recording already contains them (`crate::cache`). The
     // `active` gate is one `Cell` read, so a build with caching switched off
     // (or refused for the frame) pays nothing per node for it.
-    if crate::cache::active() {
+    if crate::cache::active() && !crate::fullscreen::is_active(id) {
         let inherited = Inherited {
             drag: parent_drag,
             case: parent_case,
@@ -4044,6 +4136,9 @@ where
 {
     use gpui::Refineable as _;
     *e.style() = (*cs.base).clone();
+    if let Some(url) = &cs.extras.filter_url {
+        e.style().vn_color_matrix = tree::read_tree(|tree| crate::filter::resolve(tree, url, id));
+    }
     if let Some(overlay) = tree::animation_overlay(id, &cs.base, now) {
         e.style().refine(&overlay);
     }
@@ -4088,6 +4183,9 @@ where
         if let Some((anchor, style)) = cs.group_active.clone() {
             e = e.group_active(group_name(anchor as u32), move |_| (*style).clone());
         }
+    }
+    if crate::fullscreen::is_active(id) {
+        crate::fullscreen::apply_style(e.style());
     }
     e
 }
@@ -4370,6 +4468,7 @@ pub(crate) fn effect_context(extras: &vn_css::Extras, style: &gpui::StyleRefinem
         || style.vn_transform.as_ref().is_some_and(|t| !t.is_identity())
         || style.backdrop_blur.is_some_and(|r| r > gpui::px(0.0))
         || extras.blur.is_some_and(|b| b > 0.0)
+        || extras.filter_url.is_some()
         || extras.drop_shadow.is_some()
         || extras.isolate == Some(true)
 }

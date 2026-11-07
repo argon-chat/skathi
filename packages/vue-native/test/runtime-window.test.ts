@@ -92,3 +92,29 @@ describe("no windowing host", () => {
     expect(rt.advisories().length).toBe(1);
   });
 });
+
+
+describe("native fullscreen Escape", () => {
+  test("one Escape leaves fullscreen before app listeners, then normal key delivery resumes", () => {
+    let active = true;
+    const { host } = fakeHost();
+    Object.assign(host, { escapeFullscreen: () => {
+      if (!active) return false;
+      active = false;
+      return true;
+    } });
+    globalThis.__VN_WINDOW__ = host;
+    const rt = createRuntime();
+    rt.createApp({ render: () => null }).mount();
+    const node = rt.nodeOps.createElement("button");
+    rt.nodeOps.insert(node, rt.nodesById.get(1), null);
+    const delivered: string[] = [];
+    node.addEventListener("keydown", (event: KeyboardEvent) => delivered.push(event.key));
+    expect(rt.host.dispatcher(node.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Escape")).toBe(false);
+    expect(active).toBe(false);
+    expect(delivered).toEqual([]);
+    rt.host.dispatcher(node.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Escape");
+    rt.host.dispatcher(node.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "a");
+    expect(delivered).toEqual(["Escape", "a"]);
+  });
+});

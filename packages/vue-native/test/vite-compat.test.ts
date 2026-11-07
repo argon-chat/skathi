@@ -19,6 +19,7 @@ import {
   expandGlobs,
   frameworkDep,
   inlineCssImports,
+  htmlPreludeModule,
   rebaseCssUrls,
   liftIndexHtml,
   stubWorkerUrls,
@@ -28,6 +29,9 @@ import {
   takeDefineArgs,
 } from "../vitecompat";
 import { collectAssets } from "../cli/assets";
+import { buildApp } from "../cli/build-app";
+import { KIND, readVnpk } from "../cli/vnpk";
+import { createRuntime } from "./runtime-harness";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = resolve(HERE, "..");
@@ -259,9 +263,80 @@ describe("CSS @import inlining", () => {
     const out = rebaseCssUrls(`a{b:url(../up.png)}`, join(root, "x.css"), root);
     expect(out).toMatch(/^a\{b:url\("file:\/\/\/.*\/up\.png"\)\}$/);
   });
+
+  test("CSS assets are collected through nested imports; comments, strings and remote URLs are not files", () => {
+    const base = scratch({
+      "app/main.css": [
+        `@import "./styles/fonts.css";`,
+        `.image { background: url(./icon%20one.png?v=2#preview), url(/root.png); }`,
+        `/* url(./ignored.png) */ .literal { content: "url(./ignored.png)"; }`,
+        `.remote { background: url(https://example.invalid/image.png), url(data:image/png;base64,AA==), url(#filter), url(var(--image)); }`,
+      ].join("\n"),
+      "app/styles/fonts.css": `@font-face { font-family: Pack; src: url('../../shared/font.woff2?v=3#face'); }`,
+      "app/icon one.png": "image bytes",
+      "app/root.png": "root image",
+      "app/ignored.png": "must not be collected",
+      "shared/font.woff2": "font bytes",
+    });
+    const root = join(base, "app");
+    const from = join(root, "main.css");
+    const assets = new Map<string, string>();
+    const css = inlineCssImports(readFileSync(from, "utf8"), from, root, () => {}, undefined, assets);
+    const outside = assetKey(join(base, "shared/font.woff2"), root);
+    expect([...assets.keys()].sort()).toEqual([outside.key, "icon one.png", "root.png"].sort());
+    expect(assets.get(outside.key)).toBe(join(base, "shared/font.woff2"));
+    expect(css).toContain(`url('${outside.url}?v=3#face')`);
+    expect(css).toContain(`url("/icon%20one.png?v=2#preview")`);
+    expect(css).toContain(`/* url(./ignored.png) */ .literal { content: "url(./ignored.png)"; }`);
+    expect(css).toContain("url(https://example.invalid/image.png)");
+    expect(css).toContain("url(data:image/png;base64,AA==), url(#filter), url(var(--image))");
+  });
+});
+
+describe("packaged CSS fonts", () => {
+  test("vn build packs actual TTF and WOFF2 bytes referenced only by @font-face", async () => {
+    const target = resolve(PKG_DIR, "../vn-test/fixtures/fonts");
+    const out = mkdtempSync(join(tmpdir(), "vn-css-font-payload-"));
+    tmpDirs.push(out);
+    const result = await buildApp({ target, out, payloadOnly: true, log: () => {} });
+    const payload = readVnpk(readFileSync(result.vnpk));
+    for (const name of ["src/fonts/PressStart2P-Regular.ttf", "src/fonts/AlcarinTengwarVF.woff2"]) {
+      const entry = payload.find(KIND.ASSET, name);
+      expect(entry).toBeDefined();
+      expect(Buffer.from(payload.bytes(entry!))).toEqual(readFileSync(join(target, name)));
+    }
+  }, 30_000);
 });
 
 describe("index.html", () => {
+  test("lifted SVG definitions become queryable native nodes with case, namespaces and literal text intact", () => {
+    const values = "1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0";
+    const filters = Array.from({ length: 6 }, (_, index) =>
+      `<filter id="filter-${index}"><feColorMatrix type="matrix" values="${values}" /></filter>`,
+    ).join("");
+    const root = scratch({ "index.html": `<body><svg style="display:none" viewBox="0 0 10 10" xmlns:xlink="http://www.w3.org/1999/xlink"><defs>${filters}</defs><use xlink:href="#shape" xml:lang="ru"/><title>A &amp; B {{literal}}</title></svg><div id="app"></div></body>` });
+    const lifted = liftIndexHtml(join(root, "index.html"), root);
+    const rt = createRuntime();
+    const document = rt.global.document as Document;
+    const source = htmlPreludeModule(lifted).replace(/^import "vue-native";\s*/m, "");
+    new Function("document", source)(document);
+    const all = (node: Node): Element[] => Array.from(node.childNodes).flatMap((child) =>
+      child.nodeType === 1 ? [child as Element, ...all(child)] : [],
+    );
+    const nodes = all(document.body);
+    const svg = nodes.find((node) => node.localName === "svg")!;
+    expect(svg.namespaceURI).toBe("http://www.w3.org/2000/svg");
+    expect(svg.getAttribute("viewBox")).toBe("0 0 10 10");
+    expect(nodes.filter((node) => node.localName === "filter")).toHaveLength(6);
+    const primitives = nodes.filter((node) => node.localName === "feColorMatrix");
+    expect(primitives).toHaveLength(6);
+    expect(primitives.every((node) => node.namespaceURI === svg.namespaceURI && node.getAttribute("values") === values)).toBe(true);
+    expect(rt.host.props.filter((prop) => prop.key === "values")).toHaveLength(6);
+    const use = nodes.find((node) => node.localName === "use")!;
+    expect(use.getAttributeNS("http://www.w3.org/1999/xlink", "href")).toBe("#shape");
+    expect(use.getAttributeNS("http://www.w3.org/XML/1998/namespace", "lang")).toBe("ru");
+    expect(nodes.find((node) => node.localName === "title")!.textContent).toBe("A & B {{literal}}");
+  });
   test("app classes and attributes stay separate from html/body theme classes", () => {
     const root = scratch({ "index.html": `<html class="dark"><body class="body-theme"><main id="app" class="app-layout" vaul-drawer-wrapper style="height:100%"></main></body></html>` });
     const lifted = liftIndexHtml(join(root, "index.html"), root);
@@ -283,7 +358,8 @@ describe("index.html", () => {
     expect(lifted.rootAttrs).toEqual({});
     expect(lifted.mountElement).toEqual({ tag: "div", attrs: { id: "app", "data-wrapper": "" } });
     expect(lifted.advisories.join("\n")).toContain("remote stylesheet https://example.invalid/remote.css");
-    expect(lifted.advisories.join("\n")).toContain("<svg>, <filter>");
+    expect(lifted.svgDefinitions).toEqual(['<svg width="0" height="0"><filter id="f"></filter></svg>']);
+    expect(lifted.advisories.join("\n")).not.toContain("<svg>");
   });
 });
 

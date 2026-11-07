@@ -369,6 +369,10 @@ interface VnWindowControlsOverlay extends VnEventTarget {
  * stack can hold whatever an app passed to `requestFullscreen.call(…)`.
  */
 interface VnFullscreenTarget {
+  getBoundingClientRect?: () => { width: number; height: number };
+  readonly __vnId?: number;
+  readonly isConnected?: boolean;
+  readonly ownerDocument?: { readonly documentElement?: VnFullscreenTarget };
   requestFullscreen?: (options?: VnFullscreenOptions) => Promise<void>;
   dispatchEvent?: (ev: VnEvent) => boolean;
 }

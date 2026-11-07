@@ -2967,7 +2967,7 @@ where
 /// [`element::El::match_non_ts_pseudo_class`]).
 fn matches_from_props(pc: &PseudoClass<'_>) -> bool {
     match pc {
-        PseudoClass::Disabled | PseudoClass::Enabled | PseudoClass::Checked => true,
+        PseudoClass::Disabled | PseudoClass::Enabled | PseudoClass::Checked | PseudoClass::Fullscreen(_) => true,
         // The custom pseudo-class `crate::has`'s rewrite produces. It is
         // answered against the element's subtree by `El::match_non_ts_pseudo_class`,
         // so the audit must let it through — an unrecognised custom
@@ -4862,6 +4862,36 @@ mod tests {
         let states =
             engine.compute_node(box_node(), None, &Rc::new(Vars::default()), None, env, &mut diags);
         (states.base, diags)
+    }
+
+    #[test]
+    fn drawer_pseudo_inset_initial_and_variable_fallback_reset_to_auto() {
+        let engine = Engine::compile(
+            ".box::after { content: \"\"; inset: 12px } \
+             [data-vaul-drawer][data-vaul-drawer-direction=bottom]::after { \
+                 top: 100%; bottom: initial; left: 0; right: 0; height: 200% } \
+             .box { bottom: 16px; bottom: var(--missing-edge, initial) }",
+        );
+        let mut diagnostics = engine.diagnostics.clone();
+        let states = engine.compute_node(
+            Node {
+                tag: "div",
+                class: "box",
+                attrs: &[("data-vaul-drawer", ""), ("data-vaul-drawer-direction", "bottom")],
+            },
+            None,
+            &Rc::new(Vars::default()),
+            None,
+            &Env::default(),
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(states.base.inset.bottom, Some(gpui::Length::Auto));
+        let after = states.after.expect("the drawer extension is generated");
+        assert_eq!(after.style.inset.top, Some(gpui::relative(1.0).into()));
+        assert_eq!(after.style.inset.bottom, Some(gpui::Length::Auto));
+        assert_eq!(after.style.inset.left, Some(gpui::px(0.0).into()));
+        assert_eq!(after.style.inset.right, Some(gpui::px(0.0).into()));
     }
 
     fn titlebar_env(x: f32, y: f32, w: f32, h: f32) -> Env {

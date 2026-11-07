@@ -249,6 +249,7 @@ impl<'i, D: MatchDom> parcel_selectors::Element<'i> for El<D> {
             PseudoClass::Disabled => boolean_attr(&self.0, "disabled"),
             PseudoClass::Enabled => !boolean_attr(&self.0, "disabled"),
             PseudoClass::Checked => boolean_attr(&self.0, "checked"),
+            PseudoClass::Fullscreen(_) => self.0.attr(":fullscreen").is_some(),
             // `:has()`. parcel's matcher hits an `unreachable!()` on
             // `Component::Has`, so the sheet compiler rewrites every `:has(S)`
             // into a custom pseudo-class naming a stored copy of `S` and the

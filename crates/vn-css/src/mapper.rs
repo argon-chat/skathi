@@ -409,9 +409,8 @@ pub struct Extras {
     pub current_color_overrides: CurrentColorTargets,
     /// `filter: blur(<radius>)` — the radius, in px.
     ///
-    /// gpui still has no post-processing pass over an element's own painted
-    /// output, so this is NOT a general `filter` implementation and the
-    /// advisory for every other filter function stands. It exists because ONE
+    /// Blur is not a general post-processing pass; SVG color matrices use
+    /// an isolated compositor separately. This exists because ONE
     /// shape of blurred element is both extremely common and exactly
     /// expressible with what gpui already has: a leaf box with a solid
     /// background and no content — the decorative "glow blob" every modern
@@ -424,6 +423,8 @@ pub struct Extras {
     /// not an approximation at all. `crate::render` decides; anything with
     /// children, text or a gradient keeps the advisory and stays sharp.
     pub blur: Option<f32>,
+    /// A same-document SVG filter, resolved against the retained DOM at paint time.
+    pub filter_url: Option<Rc<str>>,
     /// `scrollbar-width: auto | thin | none` — how wide the overlay scrollbar
     /// this element's `overflow` produces should be, or that it should not be
     /// drawn at all.
@@ -732,6 +733,7 @@ impl Extras {
         if other.blur.is_some() {
             self.blur = other.blur;
             self.drop_shadow = other.drop_shadow;
+            self.filter_url = other.filter_url.clone();
         }
         if other.background_clip_text.is_some() {
             self.background_clip_text = other.background_clip_text;
@@ -1027,6 +1029,28 @@ fn value_text(p: &Property) -> Option<String> {
     Some(value.trim().to_string())
 }
 
+/// Physical inset sides reset by `initial` / `unset` (top, right, bottom,
+/// left). Insets do not inherit, so both keywords mean `auto`, including the
+/// logical spellings under this engine's horizontal-tb/ltr model.
+fn initial_inset_sides(
+    name: &str,
+    value: &lightningcss::properties::custom::TokenList<'_>,
+) -> u8 {
+    if !single_ident_is(value, "initial") && !single_ident_is(value, "unset") {
+        return 0;
+    }
+    match name {
+        "top" | "inset-block-start" => 0b0001,
+        "right" | "inset-inline-end" => 0b0010,
+        "bottom" | "inset-block-end" => 0b0100,
+        "left" | "inset-inline-start" => 0b1000,
+        "inset-block" => 0b0101,
+        "inset-inline" => 0b1010,
+        "inset" => 0b1111,
+        _ => 0,
+    }
+}
+
 /// A block's declarations as the author wrote them: `(property, value,
 /// important)` in source order, normal declarations first (which is the order
 /// the cascade folds them in).
@@ -1105,6 +1129,12 @@ fn channel(p: &Property, diagnostics: &mut Vec<String>) -> Channel {
         Property::Unparsed(u)
             if matches!(u.property_id, PropertyId::ClipPath(_)) && !has_substitution(&u.value) =>
         {
+            Channel::Static
+        }
+        // CSS-wide inset resets have a known static value. Keeping literal
+        // resets on the static channel also preserves their source order
+        // against another inset declaration in the same rule.
+        Property::Unparsed(u) if initial_inset_sides(u.property_id.name(), &u.value) != 0 => {
             Channel::Static
         }
         Property::Unparsed(u) => match value_text(p) {
@@ -6112,6 +6142,25 @@ fn apply_property(
         // unbalanced `var(` or a token stream that is not valid for the
         // property. Kept as a defensive advisory rather than silence.
         Unparsed(u) => {
+            // Vaul's drawer extension uses `bottom: initial` when its top
+            // edge is pinned. It is a valid reset, not an unresolved var().
+            // Write Auto explicitly so it cancels an earlier inset.
+            let reset = initial_inset_sides(u.property_id.name(), &u.value);
+            if reset != 0 {
+                if reset & 0b0001 != 0 {
+                    r.inset.top = Some(Length::Auto);
+                }
+                if reset & 0b0010 != 0 {
+                    r.inset.right = Some(Length::Auto);
+                }
+                if reset & 0b0100 != 0 {
+                    r.inset.bottom = Some(Length::Auto);
+                }
+                if reset & 0b1000 != 0 {
+                    r.inset.left = Some(Length::Auto);
+                }
+                return;
+            }
             // …with one exception that is not a failure: lightningcss has no
             // typed value for a list property's `none`, so `box-shadow: none`
             // (Tailwind's `shadow-none`, the commonest shadow declaration
@@ -6517,15 +6566,9 @@ fn apply_backdrop_filter(
     }
 }
 
-/// `filter` → [`Extras::blur`], for the one filter function that has a shape
-/// gpui can draw exactly.
-///
-/// gpui has no post-processing pass over an element's own painted output, so
-/// `filter` as a general property remains unimplemented and every function
-/// other than `blur()` is still advised away. `blur()` alone is recorded,
-/// because a Gaussian-blurred solid rounded rect is exactly gpui's drop-shadow
-/// primitive — see [`Extras::blur`] and `vn_tree::render` for the shape test
-/// that decides whether the recording is honoured or advised.
+/// Filter declarations share one cascade slot: a later declaration replaces
+/// the blur, shadow and referenced color matrix together. Blur and shadow
+/// have renderer-side shape restrictions; SVG matrices use an isolated layer.
 ///
 /// `filter: none` records `Some(0.0)` rather than `None`, for the same reason
 /// `backdrop-filter: none` maps to a 0px radius: "declared, and it is nothing"
@@ -6541,6 +6584,8 @@ fn apply_filter(
     let filters = match list {
         FilterList::None => {
             x.blur = Some(0.0);
+            x.drop_shadow = None;
+            x.filter_url = None;
             return;
         }
         FilterList::Filters(filters) => filters,
@@ -6548,6 +6593,7 @@ fn apply_filter(
 
     let mut blur_radius = None;
     let mut drop_shadow = None;
+    let mut filter_url = None;
     let mut others = Vec::new();
     for filter in filters.iter() {
         match filter {
@@ -6569,21 +6615,24 @@ fn apply_filter(
                 Some(_) => others.push("a second drop-shadow()"),
                 None => others.push("drop-shadow() with a non-absolute length"),
             },
-            Filter::Url(_) => others.push("url() SVG filters"),
+            Filter::Url(url) if filters.len() == 1 && url.url.starts_with('#') => {
+                filter_url = Some(Rc::from(url.url.as_ref()));
+            }
+            Filter::Url(_) => others.push("external or chained url() SVG filters"),
         }
     }
 
     x.blur = Some(blur_radius.unwrap_or(0.0));
     x.drop_shadow = drop_shadow;
+    x.filter_url = filter_url;
 
     if !others.is_empty() {
         once(
             diagnostics,
             format!(
-                "`filter`: gpui has no post-processing pass over an element's own painted \
-                 output, so only blur() and drop-shadow() are implemented, and only on a box \
-                 whose painted output IS its own rectangle (see the render-side advisory) — \
-                 dropped {}. `opacity` renders on its own",
+                "`filter`: supported functions are blur(), drop-shadow(), and a single \
+                 same-document SVG feColorMatrix URL. Blur and drop-shadow require the \
+                 painted shape described by the render-side advisory — dropped {}",
                 others.join(", ")
             ),
         );
@@ -7374,6 +7423,24 @@ mod tests {
         assert_eq!(r.inset.right, Some(Length::Definite(px(0.0).into())));
         assert_eq!(r.inset.left, Some(Length::Definite(relative(0.5))));
         assert_eq!(r.inset.top, Some(Length::Definite(px(8.0).into())));
+    }
+
+    #[test]
+    fn css_wide_inset_resets_clear_offsets_and_keep_literal_source_order() {
+        for keyword in ["initial", "unset"] {
+            let r = clean(&format!(
+                "inset: 9px; bottom: {keyword}; inset-inline-start: {keyword}"
+            ));
+            assert_eq!(r.inset.top, Some(px(9.0).into()));
+            assert_eq!(r.inset.right, Some(px(9.0).into()));
+            assert_eq!(r.inset.bottom, Some(Length::Auto));
+            assert_eq!(r.inset.left, Some(Length::Auto));
+            let r = clean(&format!("inset: {keyword}; bottom: 8px; inset-inline: 2px"));
+            assert_eq!(r.inset.top, Some(Length::Auto));
+            assert_eq!(r.inset.bottom, Some(px(8.0).into()));
+            assert_eq!(r.inset.left, Some(px(2.0).into()));
+            assert_eq!(r.inset.right, Some(px(2.0).into()));
+        }
     }
 
     /// `appearance` records whether a `<select>` keeps its native skin, in the
@@ -8190,6 +8257,17 @@ mod tests {
     // ---- filter: blur() / background-clip: text / the rem basis ----------
 
     #[test]
+    fn referenced_color_filter_is_replaced_by_later_none_in_one_rule_or_cascade() {
+        let (mut referenced, diagnostics) = extras("filter:url('#color-matrix')");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(referenced.filter_url.as_deref(), Some("#color-matrix"));
+        referenced.refine(&extras("filter:none").0);
+        assert!(referenced.filter_url.is_none());
+        assert!(extras("filter:url('#color-matrix'); filter:none").0.filter_url.is_none());
+        assert!(extras("filter:drop-shadow(1px 2px red); filter:none").0.drop_shadow.is_none());
+    }
+
+    #[test]
     fn a_lone_blur_is_recorded_and_the_other_filters_are_still_advised() {
         let (x, d) = extras("filter: blur(64px)");
         assert_eq!(x.blur, Some(64.0));
@@ -8343,7 +8421,7 @@ mod tests {
             ("user-select: contain", "user-select"),
             // `blur()` alone is recorded rather than advised (see `apply_filter`),
             // so the advisory this sweep is about needs a filter that is not it.
-            ("filter: grayscale(1)", "only blur() and drop-shadow() are implemented"),
+            ("filter: grayscale(1)", "supported functions are blur(), drop-shadow()"),
             ("border-collapse: collapse", "table properties"),
             ("clip: rect(0,0,10px,10px)", "legacy `clip"),
             ("font-variation-settings: \"wdth\" 80", "font-variation-settings"),

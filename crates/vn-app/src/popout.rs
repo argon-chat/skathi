@@ -155,6 +155,8 @@ struct Popout {
     last_metrics: (f32, f32),
     /// Last focus state reported to JS, for the `focus` / `blur` edges.
     last_focused: bool,
+    /// The latest native fullscreen state; cover windows remain monitor-sized.
+    fullscreen: bool,
     /// The window's HWND, captured when it opened (0 = none).
     hwnd: isize,
     /// Shown, as far as `visible` is concerned (§7.9). A hidden pop-out still
@@ -787,6 +789,59 @@ host_fn!(fn vn_window_map_rect(_g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&json)).0
 });
 
+/// Query or change the OS window owning an element-fullscreen session.
+/// `0` addresses the primary window; every other id must be an existing
+/// VnWindow root. Missing/closed owners never fall back to the primary.
+fn fullscreen_window(owner: u32, on: Option<bool>) -> bool {
+    if owner == 0 {
+        return crate::window::element_fullscreen(on);
+    }
+    let Some((handle, cover, current)) = POPOUTS.with(|popouts| {
+        popouts
+            .borrow()
+            .iter()
+            .find(|window| window.node == owner)
+            .map(|window| {
+                (
+                    window.handle,
+                    window.cover,
+                    window.cover || window.fullscreen,
+                )
+            })
+    }) else {
+        return false;
+    };
+    if let Some(on) = on {
+        with_app(|cx| {
+            cx.defer(move |cx| {
+                let _ = gpui::AnyWindowHandle::from(handle).update(cx, |_, window, _| {
+                    // A cover window already owns the monitor. Keep its
+                    // placement and ownership unchanged on enter and exit.
+                    if !cover && window.is_fullscreen() != on {
+                        window.toggle_fullscreen();
+                    }
+                    window.refresh();
+                    POPOUTS.with(|popouts| {
+                        if let Some(state) = popouts
+                            .borrow_mut()
+                            .iter_mut()
+                            .find(|state| state.id == handle.window_id())
+                        {
+                            state.fullscreen = window.is_fullscreen();
+                        }
+                    });
+                });
+            });
+        });
+    }
+    current
+}
+
+host_fn!(fn vn_fullscreen_window(_g, args) {
+    let owner = args.arg(0).as_number().unwrap_or(0.0) as u32;
+    Value::boolean(fullscreen_window(owner, args.arg(1).as_bool())).0
+});
+
 fn popout_of_node(node: u32) -> Option<usize> {
     POPOUTS.with(|p| p.borrow().iter().position(|w| w.node == node))
 }
@@ -869,6 +924,7 @@ fn report_metrics(id: u64, node: u32, window: &Window) {
         let focus_moved = w.last_focused != focused;
         w.last_metrics = viewport;
         w.last_focused = focused;
+        w.fullscreen = window.is_fullscreen();
         (w.on_event, resized, focus_moved)
     });
     if on_event == 0 {
@@ -1072,6 +1128,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             title_bar_height: opts.title_bar_height,
             last_metrics: (0.0, 0.0),
             last_focused: false,
+            fullscreen: false,
             hwnd,
             visible: opts.visible,
             cover: opts.cover,
@@ -1456,6 +1513,7 @@ pub(crate) fn repaint_all(cx: &mut App) {
 
 pub fn install(rt: &JsRuntime) {
     vn_tree::set_repaint_all(repaint_all);
+    rt.register("__vn_fullscreen_window", 2, vn_fullscreen_window as *const _);
     rt.register("__vn_window_open", 4, vn_window_open as *const _);
     rt.register("__vn_window_close", 1, vn_window_close_popout as *const _);
     rt.register("__vn_window_popouts", 0, vn_window_popouts as *const _);

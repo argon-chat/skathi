@@ -35,6 +35,7 @@
 // or fails with a name instead of silently.
 
 import { existsSync, readFileSync, realpathSync, statSync } from "fs";
+import { parse as parseSfc, type SFCTemplateBlock } from "@vue/compiler-sfc";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "path";
 
 const J = (v: unknown) => JSON.stringify(v);
@@ -1003,7 +1004,7 @@ export function devEsmInterop(body: string): { code: string; unresolved: number 
 const IMPORT_RULE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)\3)\s*([^;]*);/g;
 
 /** `url(x)`, `url('x')`, `url("x")` — group 2 is the URL. */
-const CSS_URL = /\burl\(\s*(['"]?)([^'")]*)\1\s*\)/gi;
+const CSS_URL = /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\burl\(\s*(['"]?)([^'")]*)\1\s*\)/gi;
 
 /**
  * A sheet's relative `url()`s, rewritten to say what they mean once the sheet
@@ -1012,24 +1013,37 @@ const CSS_URL = /\burl\(\s*(['"]?)([^'")]*)\1\s*\)/gi;
  * Lato/Lato-Bold.ttf`), which the host resolves against the app root as it
  * does an `<img src>`. Outside the root, a `file:` URL. Absolute, rooted,
  * `data:`, `#fragment` and aliased (`~`, `@`) URLs are left alone, and so are
- * `@import url(…)`s, which inlining resolves.
+ * `@import url(…)`s, which inlining resolves. When a production asset map is
+ * supplied, local files also enter the payload and outside-root files use
+ * the same portable keys as imported assets; URL query/fragment suffixes
+ * stay in CSS rather than becoming part of a filesystem name.
  *
  * Without this, `@font-face { src: url('./Lato/Lato-Bold.ttf') }` in
  * `packages/assets/fonts/fonts.css` named a file next to `index.html`.
  */
-export function rebaseCssUrls(css: string, from: string, docRoot: string): string {
+export function rebaseCssUrls(css: string, from: string, docRoot: string, assets?: Map<string, string>): string {
   if (!/url\(/i.test(css)) return css;
   const dir = dirname(from.replace(/\?.*$/, ""));
   return css.replace(CSS_URL, (whole, q: string, url: string, at: number, all: string) => {
+    // Comments and quoted CSS strings can contain text that looks like a URL.
+    if (url === undefined) return whole;
     const u = url.trim();
-    if (!u || u.includes("(") || /^([a-z][a-z0-9+.-]*:|[/#~@]|%23)/i.test(u)) return whole;
+    if (!u || u.includes("(") || u.startsWith("//") || /^([a-z][a-z0-9+.-]*:|[#~@]|%23)/i.test(u)) return whole;
     // `@import url(x)` is inlining's to resolve (a package path included).
     if (/@import\s*$/i.test(all.slice(Math.max(0, at - 16), at))) return whole;
     const [path, tail] = (() => {
       const i = u.search(/[?#]/);
       return i < 0 ? [u, ""] : [u.slice(0, i), u.slice(i)];
     })();
-    const abs = resolve(dir, path);
+    let decoded: string;
+    try { decoded = decodeURIComponent(path); } catch { return whole; }
+    const abs = u.startsWith("/") ? resolve(docRoot, "." + decoded) : resolve(dir, decoded);
+    if (assets && existsSync(abs) && statSync(abs).isFile()) {
+      const { key, url: packedUrl } = assetKey(abs, docRoot);
+      assets.set(key, abs);
+      return `url(${q || '"'}${packedUrl}${tail}${q || '"'})`;
+    }
+    if (u.startsWith("/")) return whole;
     const rel = relative(resolve(docRoot), abs);
     const out =
       rel && !rel.startsWith("..") && !isAbsolute(rel)
@@ -1056,8 +1070,9 @@ export function inlineCssImports(
   docRoot: string,
   warn: (m: string) => void,
   seen: Set<string> = new Set([resolve(from)]),
+  assets?: Map<string, string>,
 ): string {
-  css = rebaseCssUrls(css, from, docRoot);
+  css = rebaseCssUrls(css, from, docRoot, assets);
   if (!css.includes("@import")) return css;
   return css.replace(IMPORT_RULE, (whole, _q1, urlSpec: string | undefined, _q2, strSpec: string | undefined, media: string) => {
     const spec = (urlSpec ?? strSpec ?? "").trim();
@@ -1078,7 +1093,7 @@ export function inlineCssImports(
     const abs = resolve(target);
     if (seen.has(abs)) return ""; // a cycle, or a second import of the same sheet: postcss-import skips it too
     seen.add(abs);
-    const inner = inlineCssImports(readFileSync(abs, "utf8"), abs, docRoot, warn, seen);
+    const inner = inlineCssImports(readFileSync(abs, "utf8"), abs, docRoot, warn, seen, assets);
     const m = media.trim();
     return m && !/^(layer|supports)\b/.test(m) ? `@media ${m} {\n${inner}\n}` : inner;
   });
@@ -1104,6 +1119,8 @@ export interface LiftedHtml {
   rootAttrs: Record<string, string>;
   /** The app container stays a child of body, outside body-level portals. */
   mountElement?: { tag: string; attrs: Record<string, string> };
+  /** Standalone SVG definitions remain addressable by CSS url(#id). */
+  svgDefinitions?: string[];
   advisories: string[];
 }
 
@@ -1191,10 +1208,15 @@ export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
   // Preserve the app container: libraries transform it while their portals stay under body.
   const appTag = /<([\w-]+)\b[^>]*\bid\s*=\s*["']app["'][^>]*>/i.exec(html);
   if (appTag) out.mountElement = { tag: appTag[1]!.toLowerCase(), attrs: attrsOf(appTag[0]) };
+  // Hidden SVG definitions participate in the document even without a painted box.
+  out.svgDefinitions = [...html.matchAll(/<svg\b[^>]*>[\s\S]*?<\/svg\s*>/gi)]
+    .filter((match) => inBody(match.index ?? 0) && /<(?:defs|filter)\b/i.test(match[0]))
+    .map((match) => raw.slice(match.index!, match.index! + match[0].length));
   // Body markup that is neither the mount element nor a script/style: named,
   // because it is simply not there (a hidden SVG `<filter>` set, a splash).
   if (bodyTag) {
-    const body = html.slice(bodyTag.index + bodyTag[0].length).replace(re, "");
+    const body = html.slice(bodyTag.index + bodyTag[0].length).replace(re, "")
+      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg\s*>/gi, (svg) => /<(?:defs|filter)\b/i.test(svg) ? "" : svg);
     const tags = new Set<string>();
     for (const t of body.matchAll(/<([a-zA-Z][\w-]*)\b([^>]*)>/g)) {
       if (/\bid\s*=\s*["']app["']/i.test(t[2] ?? "")) continue;
@@ -1208,6 +1230,49 @@ export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
     }
   }
   return out;
+}
+
+type StaticSvgNode = NonNullable<SFCTemplateBlock["ast"]>["children"][number];
+
+/** Static SVG definitions become real, queryable DOM nodes. The runtime has
+ * no innerHTML parser, so parse once in the builder and emit its existing DOM
+ * operations instead. v-pre makes Vue syntax literal; it is not a template. */
+function staticSvgDom(svg: string): string {
+  const { descriptor, errors } = parseSfc(`<template><div v-pre>${svg}</div></template>`, {
+    templateParseOptions: { whitespace: "preserve", comments: true },
+  });
+  if (errors.length) {
+    throw new Error(`index.html: SVG definitions did not parse: ${errors.map(String).join("; ")}`);
+  }
+  const wrapper = descriptor.template?.ast?.children.find((node) => node.type === 1);
+  if (!wrapper || wrapper.type !== 1) throw new Error("index.html: SVG definitions have no root");
+  const namespaces = ["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg", "http://www.w3.org/1998/Math/MathML"];
+  const lines = ["{"];
+  let next = 0;
+  const append = (node: StaticSvgNode, parent: string): void => {
+    if (node.type === 1) {
+      const name = `svg${next++}`;
+      lines.push(`const ${name} = document.createElementNS(${J(namespaces[node.ns])}, ${J(node.tag)});`);
+      for (const prop of node.props) {
+        if (prop.type !== 6) continue;
+        const key = prop.name;
+        const value = prop.value?.content ?? "";
+        const namespace = key === "xmlns" || key.startsWith("xmlns:") ? "http://www.w3.org/2000/xmlns/"
+          : key.startsWith("xlink:") ? "http://www.w3.org/1999/xlink"
+          : key.startsWith("xml:") ? "http://www.w3.org/XML/1998/namespace" : null;
+        lines.push(namespace
+          ? `${name}.setAttributeNS(${J(namespace)}, ${J(key)}, ${J(value)});`
+          : `${name}.setAttribute(${J(key)}, ${J(value)});`);
+      }
+      for (const child of node.children) append(child, name);
+      lines.push(`${parent}.appendChild(${name});`);
+    } else if (node.type === 2) {
+      lines.push(`${parent}.appendChild(document.createTextNode(${J(node.content)}));`);
+    }
+  };
+  for (const child of wrapper.children) append(child, "document.body");
+  lines.push("}");
+  return lines.join("\n");
 }
 
 /** The module the lifted scripts and root attributes run in, ahead of the entry. */
@@ -1227,6 +1292,7 @@ export function htmlPreludeModule(lifted: LiftedHtml): string {
     for (const [k, v] of Object.entries(mount.attrs)) lines.push(`mount.setAttribute(${J(k)}, ${J(v)});`);
     lines.push(`if (!mount.parentNode) document.body.appendChild(mount); }`);
   }
+  for (const svg of lifted.svgDefinitions ?? []) lines.push(staticSvgDom(svg));
   for (const s of lifted.scripts) {
     // Global scope, as a classic <script> has (indirect eval); a throw is
     // reported and the next script still runs — a browser's rule.
