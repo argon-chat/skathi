@@ -383,7 +383,31 @@ interface VnGainNode extends VnAudioNode {
   readonly gain: VnAudioParam;
 }
 
+/** Rust DSP compiled into an audio-enabled host; no JS VM on the audio thread. */
+type VnNativeAudioProcessorName = "peak-meter-stereo" | "peak-meter-mono" | "stereo-to-mono" | "input-gate";
+interface VnNativeAudioWorkletOptions {
+  numberOfInputs?: 1;
+  numberOfOutputs?: 1;
+  outputChannelCount?: [2];
+  channelCount?: 2;
+  channelCountMode?: "explicit";
+  channelInterpretation?: "speakers" | "discrete";
+  parameterData?: Record<string, number>;
+}
+interface VnNativeAudioMessage<T = unknown> extends VnEvent { readonly data: T }
+interface VnNativeAudioWorkletPort extends VnEventTarget {
+  onmessage: ((event: VnNativeAudioMessage) => void) | null;
+  start(): void;
+  close(): void;
+}
+interface VnNativeAudioWorkletNode extends VnAudioNode {
+  readonly processorName: VnNativeAudioProcessorName;
+  readonly parameters: ReadonlyMap<string, VnAudioParam>;
+  readonly port: VnNativeAudioWorkletPort;
+}
+
 interface VnAudioContext {
+  loadNativeAudioWorklet(name: VnNativeAudioProcessorName, options?: VnNativeAudioWorkletOptions): VnNativeAudioWorkletNode;
   readonly destination: VnAudioNode;
   createRedStreamSource(options?: VnRedStreamSourceOptions): VnRedStreamSourceNode;
   createGain(): VnGainNode;
