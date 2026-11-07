@@ -14,6 +14,7 @@
 //! the shortest hue arc) — the same toolkit gpui's own springs use.
 
 use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -653,6 +654,8 @@ pub struct Animator {
     /// transition tracks because the two have different endpoints, different
     /// clocks and different lifetimes — see [`AnimRun`].
     anims: HashMap<u32, Vec<AnimRun>>,
+    /// The style and paint consumers share one registered-variable sample per frame.
+    registered_samples: RefCell<HashMap<u32, (Instant, Rc<(StyleRefinement, crate::Extras)>)>>,
     /// Queued `transitionend` / `animation*` events, drained once per frame by
     /// the host (which is the only place that has a `Window` to dispatch with).
     events: Vec<AnimEvent>,
@@ -696,6 +699,7 @@ impl Animator {
     /// also cancels whatever is running.
     pub fn set_reduce_motion(&mut self, reduce_motion: bool) {
         if reduce_motion && !self.reduce_motion {
+            self.registered_samples.get_mut().clear();
             self.nodes.clear();
             // A cancelled animation still reports `animationcancel`, which is
             // what lets a component that waits for the event stop waiting.
@@ -1041,6 +1045,7 @@ impl Animator {
         // A node that stopped existing cannot receive an `animationcancel`
         // (there is nothing to dispatch it to), so its runs are simply dropped.
         self.anims.retain(|&id, _| alive(id));
+        self.registered_samples.get_mut().retain(|&id, _| alive(id));
         self.states.retain(|&id, _| alive(id));
         self.events.retain(|e| alive(e.node));
         // A script animation outlives its target in a browser (its clock and
@@ -1053,6 +1058,7 @@ impl Animator {
     /// Explicitly resets CSS motion state. A stylesheet replacement instead
     /// rebinds its keyframes through `on_computed_animations`, preserving clocks.
     pub fn clear(&mut self) {
+        self.registered_samples.get_mut().clear();
         self.nodes.clear();
         self.states.clear();
         // This explicit reset discards CSS runs and their queued events.
@@ -1942,6 +1948,7 @@ mod tests {
 struct AnimRun {
     spec: AnimationSpec,
     frames: Rc<Keyframes>,
+    custom_context: Option<Rc<crate::CustomAnimationContext>>,
     /// When the run's clock started (i.e. when `animation-delay` began).
     start: Instant,
     /// The clock has not been anchored to a FRAME yet.
@@ -1983,6 +1990,17 @@ impl AnimRun {
     fn phase(&self, now: Instant) -> Phase {
         self.spec.phase(self.elapsed(now))
     }
+
+    fn paint_progress(&self, now: Instant) -> Option<f32> {
+        match self.phase(now) {
+            Phase::Running { progress, .. } => Some(progress),
+            Phase::Delayed if matches!(self.spec.fill, FillMode::Backwards | FillMode::Both) =>
+                Some(self.spec.phase(self.spec.delay).progress_or(0.0)),
+            Phase::Finished { progress } if matches!(self.spec.fill, FillMode::Forwards | FillMode::Both) => Some(progress),
+            _ => None,
+        }
+    }
+
 
     /// Seconds of animation actually run, for an event's `elapsedTime`.
     fn elapsed_seconds(&self, now: Instant) -> f32 {
@@ -2028,6 +2046,7 @@ impl Animator {
         now: Instant,
         resolve: &dyn Fn(&str) -> Option<Rc<Keyframes>>,
     ) {
+        self.registered_samples.get_mut().remove(&node);
         // `prefers-reduced-motion` suppresses animations exactly as it
         // suppresses transitions: they do not run at all.
         let wanted: Vec<AnimationSpec> = if self.reduce_motion {
@@ -2090,6 +2109,7 @@ impl Animator {
                     // already found this node's computed style different, so a
                     // steady frame pays nothing.
                     run.frames = frames;
+                    run.custom_context = new.custom_animation.clone();
                     runs.push(run);
                 }
                 None => {
@@ -2097,6 +2117,7 @@ impl Animator {
                         paused_at: (spec.play_state == PlayState::Paused).then_some(now),
                         spec,
                         frames,
+                        custom_context: new.custom_animation.clone(),
                         start: now,
                         pending: true,
                         started: false,
@@ -2124,6 +2145,7 @@ impl Animator {
     /// [`Animator::on_computed_animations`] for the node starts them afresh,
     /// which is the other half of that rule.
     pub fn cancel_animations(&mut self, node: u32, now: Instant) {
+        self.registered_samples.get_mut().remove(&node);
         if let Some(runs) = self.anims.remove(&node) {
             for run in runs {
                 self.cancel_event(node, &run, now);
@@ -2153,6 +2175,7 @@ impl Animator {
     /// Advances the animation clocks and queues `animationstart`/`animationend`.
     /// Call once per frame, before `overlay`.
     pub fn tick(&mut self, now: Instant) {
+        self.registered_samples.get_mut().clear();
         let mut events = Vec::new();
         for (&node, runs) in self.anims.iter_mut() {
             for run in runs.iter_mut() {
@@ -2243,6 +2266,41 @@ impl Animator {
         }
     }
 
+    /// Per-frame Extras dependent on a registered percentage custom property.
+    /// The retained recipe avoids selectors, tree mutation or a document restyle.
+    pub fn animated_extras(&self, node: u32, now: Instant) -> Option<crate::Extras> {
+        self.registered_overlay(node, now).map(|sample| sample.1.clone())
+    }
+
+    fn registered_overlay(&self, node: u32, now: Instant) -> Option<Rc<(StyleRefinement, crate::Extras)>> {
+        if let Some((at, sample)) = self.registered_samples.borrow().get(&node) {
+            if *at == now { return Some(sample.clone()); }
+        }
+        let runs = self.anims.get(&node)?;
+        let mut context = None;
+        let mut samples = Vec::new();
+        for run in runs {
+            let Some(scope) = &run.custom_context else { continue };
+            let Some(progress) = run.paint_progress(now) else { continue };
+            for registration in &scope.registrations {
+                if scope.important_custom.contains(&registration.name) { continue; }
+                let declares = |step: &crate::Keyframe| scope.keyframe_value(step, &registration.name).is_some();
+                let Some(segment) = run.frames.segment_steps(&declares, progress) else { continue };
+                let implicit = scope.vars.get(&registration.name).and_then(crate::registered::percentage).unwrap_or(registration.initial);
+                let from = segment.from.and_then(|step| scope.keyframe_value(step, &registration.name)).unwrap_or(implicit);
+                let to = segment.to.and_then(|step| scope.keyframe_value(step, &registration.name)).unwrap_or(implicit);
+                let t = segment.easing.unwrap_or(run.spec.easing).eval(segment.t.clamp(0., 1.));
+                samples.push((registration.name.clone(), from + (to - from) * t));
+                context = Some(scope);
+            }
+        }
+        context.map(|scope| {
+            let sample = Rc::new(scope.sample(&samples));
+            self.registered_samples.borrow_mut().insert(node, (now, sample.clone()));
+            sample
+        })
+    }
+
     /// The interpolated animation values for `node` this frame.
     ///
     /// The endpoints are the KEYFRAMES rather than the element's previous
@@ -2256,7 +2314,7 @@ impl Animator {
         now: Instant,
     ) -> Option<StyleRefinement> {
         let runs = self.anims.get(&node)?;
-        let mut out: Option<StyleRefinement> = None;
+        let mut out = self.registered_overlay(node, now).map(|sample| sample.0.clone());
         for run in runs {
             let progress = match run.phase(now) {
                 Phase::Running { progress, .. } => progress,

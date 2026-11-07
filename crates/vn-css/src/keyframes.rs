@@ -56,6 +56,8 @@ pub struct Keyframe {
     /// transform: … scale3d(var(--tw-enter-scale, 1), …) } }`), so dropping
     /// them made every `animate-in` / `animate-out` a correctly-timed no-op.
     pub dynamic: Option<Rc<crate::mapper::Decls>>,
+    /// Custom declarations retained for registered-property animation.
+    pub custom: Option<Rc<crate::mapper::Decls>>,
 }
 
 /// One compiled `@keyframes` rule: its steps, sorted by offset.
@@ -216,9 +218,13 @@ impl Keyframes {
         declares: &dyn Fn(&StyleRefinement) -> bool,
         progress: f32,
     ) -> Option<Segment<'a>> {
+        self.segment_steps(&|step| declares(&step.style), progress)
+    }
+
+    pub(crate) fn segment_steps<'a>(&'a self, declares: &dyn Fn(&Keyframe) -> bool, progress: f32) -> Option<Segment<'a>> {
         let mut before: Option<&Keyframe> = None;
         let mut after: Option<&Keyframe> = None;
-        for step in self.steps.iter().filter(|s| declares(&s.style)) {
+        for step in self.steps.iter().filter(|s| declares(s)) {
             if step.offset <= progress {
                 before = Some(step);
             } else {
@@ -853,18 +859,21 @@ mod tests {
                     easing: None,
                     style: Rc::new(zero),
                     dynamic: None,
+                    custom: None,
                 },
                 Keyframe {
                     offset: 0.5,
                     easing: None,
                     style: Rc::new(mid),
                     dynamic: None,
+                    custom: None,
                 },
                 Keyframe {
                     offset: 1.0,
                     easing: None,
                     style: Rc::new(one),
                     dynamic: None,
+                    custom: None,
                 },
             ],
             dynamic: false,

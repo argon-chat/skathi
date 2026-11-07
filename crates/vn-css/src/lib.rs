@@ -33,6 +33,7 @@ pub mod perf;
 mod share;
 mod transition;
 mod vars;
+mod registered;
 #[cfg(test)]
 mod em_tests;
 
@@ -57,7 +58,7 @@ pub use mapper::{
     accepts_declaration, parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
     set_font_source, set_font_metric_source, FontRelativeMetrics, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses, uses_viewport_units,
     viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl, PaintLayer,
-    CurrentColorTargets, Decls, Extras, InlineMotion, InlineStyle, ListMarker, MaskClips, MaskCompositing,
+    CurrentColorTargets, Decls, Extras, InlineMotion, InlineStyle, InlinePriority, ListMarker, MaskClips, MaskCompositing,
     MaskImages, ObjectFit, OverscrollBehavior, RadiusInherit, ScrollbarWidth, SvgPaint, TextFill, TextTransform,
     TileLength, UserSelect, WhiteSpaceMode, WindowControl, WindowDrag,
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
@@ -70,6 +71,8 @@ pub use keyframes::{
 #[doc(hidden)]
 pub use keyframes::AnimationDeclarations;
 pub use vars::Vars;
+#[doc(hidden)]
+pub use registered::CustomAnimationContext;
 pub use transition::{
     covered, parse_easing, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec, ANIMATABLE_COUNT,
 };
@@ -173,6 +176,11 @@ pub struct ComputedStates {
     /// Tailwind's `file:` variants and shadcn-vue's `<Input type="file">`
     /// write exactly these rules.
     pub file_selector_button: Option<Rc<StyleRefinement>>,
+    /// Native control parts, with their originating element's interaction states.
+    pub range_track: Option<Rc<ControlPseudo>>,
+    pub range_thumb: Option<Rc<ControlPseudo>>,
+    pub color_swatch: Option<Rc<ControlPseudo>>,
+    pub color_swatch_wrapper: Option<Rc<ControlPseudo>>,
     /// The element's resolved custom properties: what it inherited from its
     /// parent, overridden by what it declared. Children read this one, which is
     /// why the restyle pass must walk in document order.
@@ -180,6 +188,9 @@ pub struct ComputedStates {
     /// Shared with the parent by `Rc` when the element declares none of its own
     /// — so the `PartialEq` above stays O(1) for almost every node.
     pub vars: Rc<Vars>,
+    /// Retained dependency recipe only for nodes with registered animations.
+    #[doc(hidden)]
+    pub custom_animation: Option<Rc<CustomAnimationContext>>,
     /// The element's effective `color`: its own declaration, or the value
     /// threaded down from its parent.
     ///
@@ -218,6 +229,63 @@ pub enum PseudoElement {
     /// a generated box either: the renderer builds the button and refines it
     /// with this.
     FileSelectorButton,
+    RangeTrack,
+    RangeThumb,
+    ColorSwatch,
+    ColorSwatchWrapper,
+}
+
+impl PseudoElement {
+    fn control_index(self) -> Option<usize> {
+        match self {
+            Self::RangeTrack => Some(0), Self::RangeThumb => Some(1),
+            Self::ColorSwatch => Some(2), Self::ColorSwatchWrapper => Some(3),
+            _ => None,
+        }
+    }
+}
+
+/// A control's internal part shares its element's custom properties and states.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControlPseudo {
+    pub base: Rc<StyleRefinement>,
+    pub extras: Extras,
+    pub states: [Option<(Rc<StyleRefinement>, Extras)>; STATE_RUNGS],
+}
+
+impl ControlPseudo {
+    pub fn resolve(&self, active: bool, hover: bool, focus_visible: bool, focus: bool, focus_within: bool)
+        -> (&StyleRefinement, &Extras) {
+        for (index, on) in [active, hover, focus_visible, focus, focus_within].into_iter().enumerate() {
+            if on {
+                if let Some((style, extras)) = &self.states[index] { return (style, extras); }
+            }
+        }
+        (&self.base, &self.extras)
+    }
+}
+
+struct ControlFold {
+    slots: Vec<(StyleRefinement, Extras)>,
+    states: [bool; STATE_RUNGS],
+}
+
+impl Default for ControlFold {
+    fn default() -> Self {
+        Self { slots: (0..=STATE_RUNGS).map(|_| Default::default()).collect(), states: [false; STATE_RUNGS] }
+    }
+}
+
+impl ControlFold {
+    fn finish(self) -> Rc<ControlPseudo> {
+        let mut slots = self.slots.into_iter();
+        let (base, extras) = slots.next().expect("base control style");
+        let states = std::array::from_fn(|index| {
+            let (style, extras) = slots.next().expect("control state");
+            self.states[index].then(|| (Rc::new(style), extras))
+        });
+        Rc::new(ControlPseudo { base: Rc::new(base), extras, states })
+    }
 }
 
 /// A `::before` / `::after` generated box, folded out of the cascade.
@@ -356,6 +424,13 @@ impl ComputedStates {
     /// have anything to hang the focus rungs on.
     pub fn needs_focus_handle(&self) -> bool {
         self.focus.is_some() || self.focus_visible.is_some() || self.focus_within.is_some()
+            || (2..STATE_RUNGS).any(|rung| self.control_state(rung))
+    }
+
+    /// Internal control parts repaint from the originating element's states.
+    pub fn control_state(&self, rung: usize) -> bool {
+        [&self.range_track, &self.range_thumb, &self.color_swatch, &self.color_swatch_wrapper]
+            .into_iter().flatten().any(|part| part.states[rung].is_some())
     }
 
     /// True when a pointer flip on this element (or on the `.group` ancestor it
@@ -399,6 +474,9 @@ struct RuleEntry {
     /// Owned (`Selector::into_owned`): the parsed sheet it came from is gone
     /// once the engine is built (see [`parse_author_sheet`]).
     selector: Selector<'static>,
+    /// Unknown vendor pseudo-elements have no parcel pseudo boundary. Match
+    /// their originating selector while keeping the original specificity/text.
+    control_origin: Option<Box<Selector<'static>>>,
     normal: Option<Rc<StyleRefinement>>,
     important: Option<Rc<StyleRefinement>>,
     normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
@@ -666,6 +744,7 @@ pub struct Engine {
     /// `@media` around any of them that is exactly CSS's "a later block with
     /// the same name wins", at the cost of one `Vec` of length 1.
     keyframes: std::collections::HashMap<Box<str>, Vec<KeyframesBlock>>,
+    percentage_properties: Vec<(Option<u32>, registered::PercentageRegistration)>,
     /// The declaration blocks that resolved a viewport unit, kept with the
     /// rules they fill, so a resize converts just these again
     /// ([`Engine::rebase_viewport`]).
@@ -1104,6 +1183,7 @@ impl Engine {
             sibling_combinators: false,
             group_states: false,
             keyframes: std::collections::HashMap::new(),
+            percentage_properties: Vec::new(),
             viewport_blocks: Vec::new(),
             viewport_unkept: false,
             generation: next_generation(),
@@ -1269,6 +1349,7 @@ impl Engine {
                     easing: step.easing,
                     style: Rc::new(style),
                     dynamic: None,
+                    custom: step.custom.clone(),
                 }
             })
             .collect();
@@ -1338,6 +1419,19 @@ impl Engine {
                             ),
                         ),
                     }
+                    continue;
+                }
+                CssRule::Property(property) => {
+                    use lightningcss::values::syntax::{ParsedComponent, SyntaxString, SyntaxComponentKind};
+                    let percentage = matches!(&property.syntax, SyntaxString::Components(parts)
+                        if parts.len() == 1 && matches!(parts[0].kind, SyntaxComponentKind::Percentage));
+                    if percentage {
+                        if let Some(ParsedComponent::Percentage(initial)) = &property.initial_value {
+                            self.percentage_properties.push((condition, registered::PercentageRegistration {
+                                name: property.name.0.to_string(), inherits: property.inherits, initial: initial.0,
+                            }));
+                        }
+                    } else { at_rule_ignored(rule, &mut self.diagnostics); }
                     continue;
                 }
                 CssRule::Keyframes(kf) => {
@@ -1412,6 +1506,10 @@ impl Engine {
                     continue;
                 };
                 let pseudo = sel.pseudo_element().and_then(pseudo_box);
+                let control_origin = if pseudo.is_some_and(|p| p.control_index().is_some()) {
+                    let Some(origin) = control_origin_selector(sel) else { continue };
+                    Some(Box::new(origin))
+                } else { None };
                 if !probe_runnable(sel) {
                     self.diagnostics.push(format!(
                         "selector rejected (matcher cannot run it — :has()/nesting?): {}",
@@ -1425,7 +1523,8 @@ impl Engine {
                 // A generated box is not in gpui's interactivity ladder — it is
                 // a plain child div with no hitbox of its own — so a
                 // `:hover::after` rule has nothing to install into.
-                if pseudo.is_some() && (states != 0 || ancestor.is_some()) {
+                if pseudo.is_some()
+                    && ((states != 0 && pseudo.is_some_and(|p| p.control_index().is_none())) || ancestor.is_some()) {
                     self.diagnostics.push(format!(
                         "a state-qualified pseudo-element rule is dropped (v1) — the generated                          box is not in the pointer-state ladder. Drive it from an ATTRIBUTE on                          the originating element instead (`[data-state=open]::after`), which does                          match: {}",
                         sel_text(sel)
@@ -1438,7 +1537,7 @@ impl Engine {
                 // `focus:z-10` utility whether or not anything is focusable.
                 let mut rule_diagnostics: Vec<String> =
                     converted.diagnostics.as_deref().cloned().unwrap_or_default();
-                if states != 0 || ancestor.is_some() {
+                if (states != 0 || ancestor.is_some()) && !pseudo.is_some_and(|p| p.control_index().is_some()) {
                     // The `Extras` have no state ladder to install into — gpui's
                     // `img()` carries ONE `ObjectFit` for the element, and the
                     // window hit test reads an already-PAINTED frame, so a
@@ -1478,6 +1577,7 @@ impl Engine {
                 let specificity = sel.specificity();
                 self.rules.push(RuleEntry {
                     selector: owned,
+                    control_origin,
                     normal: converted.normal.clone(),
                     important: converted.important.clone(),
                     normal_transitions: converted.normal_transitions.clone(),
@@ -1775,14 +1875,14 @@ impl Engine {
             // `ForStatelessPseudoElement`, which consumes the pseudo component
             // and runs the REST of the selector against the originating
             // element — exactly the question being asked here.
-            let mode = if rule.pseudo.is_some() {
+            let mode = if rule.pseudo.is_some() && rule.control_origin.is_none() {
                 MatchingMode::ForStatelessPseudoElement
             } else {
                 MatchingMode::Normal
             };
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
                 MatchingContext::new(mode, None, None, QuirksMode::NoQuirks);
-            if matches_selector(&rule.selector, 0, None, &el, &mut ctx, &mut |_, _| {}) {
+            if matches_selector(rule.control_origin.as_deref().unwrap_or(&rule.selector), 0, None, &el, &mut ctx, &mut |_, _| {}) {
                 matched.push(rule);
             }
         });
@@ -1861,11 +1961,19 @@ impl Engine {
                     }
                 }
             }
+            if let Some(inline) = inline {
+                if let Some(priority) = &inline.priority {
+                    if let Some(custom) = &priority[important_pass as usize].custom { own_custom.extend(custom.iter()); }
+                } else if !important_pass { own_custom.extend(inline.custom.iter()); }
+            }
         }
-        if let Some(inline) = inline {
-            own_custom.extend(inline.custom.iter());
+        let mut registrations = Vec::new();
+        for (condition, registration) in &self.percentage_properties {
+            if condition.is_some_and(|c| !self.conditions[c as usize].eval(env)) { continue; }
+            registrations.retain(|r: &registered::PercentageRegistration| r.name != registration.name);
+            registrations.push(registration.clone());
         }
-        let vars = vars::resolve(parent_vars, &own_custom, env, diagnostics);
+        let vars = vars::resolve_registered(parent_vars, &own_custom, &registrations, env, diagnostics);
         // Lazily, and only for the rungs that actually declare something: the
         // resolve is the expensive half of the cascade, and the overwhelming
         // majority of elements declare nothing on any rung.
@@ -1875,7 +1983,7 @@ impl Engine {
             }
             let mut combined = own_custom.clone();
             combined.extend(state_custom[rung].iter().copied());
-            Some(vars::resolve(parent_vars, &combined, env, diagnostics))
+            Some(vars::resolve_registered(parent_vars, &combined, &registrations, env, diagnostics))
         });
 
         // ---- 1b. the font size, before anything that reads an em: the base
@@ -1967,17 +2075,33 @@ impl Engine {
         let mut placeholder = (StyleRefinement::default(), Extras::default());
         let mut selection = (StyleRefinement::default(), Extras::default());
         let mut file_button = (StyleRefinement::default(), Extras::default());
+        let mut controls: [Option<ControlFold>; 4] = Default::default();
         let (mut any_before, mut any_after, mut any_placeholder) = (false, false, false);
         let (mut any_selection, mut any_file_button) = (false, false);
         for important_pass in [false, true] {
             for r in &matched {
                 if let Some(which) = r.pseudo {
+                    if let Some(index) = which.control_index() {
+                        let fold = controls[index].get_or_insert_with(ControlFold::default);
+                        let rung = rung_of(r.states);
+                        if let Some(rung) = rung { fold.states[rung] = true; }
+                        for slot_index in 0..=STATE_RUNGS {
+                            if rung.is_some_and(|rung| slot_index != rung + 1) { continue; }
+                            let vars = if slot_index == 0 { &vars } else { state_vars[slot_index-1].as_ref().unwrap_or(&vars) };
+                            let slot = &mut fold.slots[slot_index];
+                            slot.1.refine(if important_pass { &r.important_extras } else { &r.normal_extras });
+                            r.half(important_pass).apply(vars, env, font_size, font_size,
+                                &computed_font, &computed_font, &mut slot.0, &mut slot.1, diagnostics);
+                        }
+                        continue;
+                    }
                     let (slot, seen) = match which {
                         PseudoElement::Before => (&mut before, &mut any_before),
                         PseudoElement::After => (&mut after, &mut any_after),
                         PseudoElement::Placeholder => (&mut placeholder, &mut any_placeholder),
                         PseudoElement::Selection => (&mut selection, &mut any_selection),
                         PseudoElement::FileSelectorButton => (&mut file_button, &mut any_file_button),
+                        _ => unreachable!("control pseudo-elements handled above"),
                     };
                     *seen = true;
                     slot.1.refine(if important_pass {
@@ -2244,7 +2368,7 @@ impl Engine {
         mapper::compute_overflow(&mut before.0, &mut before.1);
         mapper::compute_overflow(&mut after.0, &mut after.1);
 
-        let states = ComputedStates {
+        let mut states = ComputedStates {
             base: Rc::new(base),
             hover: any_hover.then(|| Rc::new(hover)),
             active: any_active.then(|| Rc::new(active)),
@@ -2299,11 +2423,26 @@ impl Engine {
             placeholder: any_placeholder.then(|| Rc::new(placeholder.0)),
             selection: any_selection.then(|| Rc::new(selection.0)),
             file_selector_button: any_file_button.then(|| Rc::new(file_button.0)),
+            range_track: controls[0].take().map(ControlFold::finish),
+            range_thumb: controls[1].take().map(ControlFold::finish),
+            color_swatch: controls[2].take().map(ControlFold::finish),
+            color_swatch_wrapper: controls[3].take().map(ControlFold::finish),
             vars,
+            custom_animation: None,
             color: effective_color,
             font_size,
             computed_font,
         };
+        let animated_registrations: Vec<_> = registrations.into_iter().filter(|registration| {
+            states.animations.iter().any(|animation| self.keyframes(&animation.name, env).is_some_and(|frames| {
+                frames.steps.iter().any(|step| step.custom.as_ref().is_some_and(|declarations|
+                    declarations.iter().any(|(name, _)| name == &registration.name)))
+            }))
+        }).collect();
+        if !animated_registrations.is_empty() {
+            states.custom_animation = Some(Rc::new(CustomAnimationContext::new(animated_registrations, &states,
+                &matched, inline, *env, parent_font_size, parent_font)));
+        }
         if let Some(key) = share_key {
             share::insert(key, &states);
         }
@@ -2391,7 +2530,8 @@ impl Engine {
             // real refinement property now (`Style::vn_transform`, m13 item 2),
             // so `any` above already sees it and a keyframe carries it like any
             // other animatable value.
-            if !any && easing.is_none() && dynamic.is_none() {
+            let custom = converted.normal_custom;
+            if !any && easing.is_none() && dynamic.is_none() && custom.is_none() {
                 continue;
             }
             let style = Rc::new(style);
@@ -2415,6 +2555,7 @@ impl Engine {
                     easing,
                     style: style.clone(),
                     dynamic: dynamic.clone(),
+                    custom: custom.clone(),
                 });
             }
         }
@@ -2770,8 +2911,34 @@ fn pseudo_box(
         // `::-webkit-file-upload-button` is the same thing; lightningcss folds
         // the spellings into one variant here too.
         PE::FileSelectorButton(_) => Some(PseudoElement::FileSelectorButton),
+        PE::Custom { name } => match name.as_ref() {
+            "-webkit-slider-runnable-track" | "-moz-range-track" => Some(PseudoElement::RangeTrack),
+            "-webkit-slider-thumb" | "-moz-range-thumb" => Some(PseudoElement::RangeThumb),
+            "-webkit-color-swatch" | "-moz-color-swatch" => Some(PseudoElement::ColorSwatch),
+            "-webkit-color-swatch-wrapper" => Some(PseudoElement::ColorSwatchWrapper),
+            _ => None,
+        },
         _ => None,
     }
+}
+
+/// The vendor part is a CSS target, not a DOM descendant. LightningCSS calls
+/// it unknown and parcel stores it in the input's compound, so the stateless
+/// pseudo mode cannot consume it. Parse just the originating selector, owned
+/// by the rule; no sheet or per-recompile parse is leaked.
+fn control_origin_selector(sel: &Selector<'_>) -> Option<Selector<'static>> {
+    use lightningcss::selector::PseudoElement as PE;
+    use lightningcss::traits::IntoOwned as _;
+    let PE::Custom { name } = sel.pseudo_element()? else { return None };
+    let mut text = sel_text(sel);
+    let marker = format!("::{name}");
+    let start = text.rfind(&marker)?;
+    text.replace_range(start..start+marker.len(), "");
+    if text.trim().is_empty() || text.ends_with(char::is_whitespace) { text.push('*'); }
+    let source = format!("{text}{{color:red}}");
+    let parsed = StyleSheet::parse(&source, ParserOptions::default()).ok()?;
+    let CssRule::Style(style) = parsed.rules.0.first()? else { return None };
+    Some(style.selectors.0.first()?.clone().into_owned())
 }
 
 /// Pseudo-elements with no box to style here, for a reason that is not a CSS
@@ -3237,14 +3404,14 @@ impl Engine {
                     return;
                 }
             }
-            let mode = if rule.pseudo.is_some() {
+            let mode = if rule.pseudo.is_some() && rule.control_origin.is_none() {
                 MatchingMode::ForStatelessPseudoElement
             } else {
                 MatchingMode::Normal
             };
             let mut ctx: MatchingContext<'_, '_, element::Impl> =
                 MatchingContext::new(mode, None, None, QuirksMode::NoQuirks);
-            if matches_selector(&rule.selector, 0, None, &el, &mut ctx, &mut |_, _| {}) {
+            if matches_selector(rule.control_origin.as_deref().unwrap_or(&rule.selector), 0, None, &el, &mut ctx, &mut |_, _| {}) {
                 matched.push(rule);
             }
         });
@@ -3264,6 +3431,10 @@ impl Engine {
                     PseudoElement::Placeholder => "::placeholder",
                     PseudoElement::Selection => "::selection",
                     PseudoElement::FileSelectorButton => "::file-selector-button",
+                    PseudoElement::RangeTrack => "::-webkit-slider-runnable-track",
+                    PseudoElement::RangeThumb => "::-webkit-slider-thumb",
+                    PseudoElement::ColorSwatch => "::-webkit-color-swatch",
+                    PseudoElement::ColorSwatchWrapper => "::-webkit-color-swatch-wrapper",
                 }),
                 declarations: r.decls.as_deref().cloned().unwrap_or_default(),
                 diagnostics: r.diagnostics.as_deref().cloned().unwrap_or_default(),
@@ -5536,6 +5707,53 @@ mod tests {
         assert!(cascade(&engine, &d, &Env::default())[0].after.is_none());
     }
 
+    #[test]
+    fn control_parts_fold_custom_properties_and_state_styles() {
+        let engine = Engine::compile(
+            r#"input { --tip: rgb(1 2 3); --fill: 50% }
+               input::-webkit-slider-runnable-track {
+                 height: 4px; border-radius: 999px;
+                 background: linear-gradient(90deg, var(--tip) var(--fill), transparent var(--fill))
+               }
+               input::-webkit-slider-thumb { width: 11px; height: 11px; background: var(--tip) }
+               input:hover::-webkit-slider-thumb { width: 13px }
+               input:focus-visible::-webkit-slider-thumb { border: 2px solid red }
+               input::-webkit-color-swatch-wrapper { padding: 2px }
+               input::-webkit-color-swatch { border: none; border-radius: 6px }"#,
+        );
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+        let d = doc();
+        let states = cascade(&engine, &d, &Env::default());
+        let input = &states[3];
+        let track = input.range_track.as_ref().unwrap();
+        assert_eq!(track.base.size.height, Some(gpui::px(4.).into()));
+        assert!(!track.extras.resolve_background_layers().is_empty());
+        let thumb = input.range_thumb.as_ref().unwrap();
+        assert_eq!(thumb.base.size.width, Some(gpui::px(11.).into()));
+        assert!(thumb.base.background.is_some());
+        let (hover, _) = thumb.resolve(false, true, false, false, false);
+        assert_eq!(hover.size.width, Some(gpui::px(13.).into()));
+        assert_eq!(hover.size.height, thumb.base.size.height, "state retains the base declarations");
+        let (focus, _) = thumb.resolve(false, false, true, true, true);
+        assert_eq!(focus.border_widths.left, Some(gpui::px(2.).into()));
+        assert!(input.color_swatch.is_some());
+        assert!(input.color_swatch_wrapper.as_ref().unwrap().base.padding.left.is_some());
+        assert!(input.base.size.height.is_none(), "parts must not style the input itself");
+    }
+
+    #[test]
+    fn control_part_important_cascade_reaches_every_state() {
+        let engine = Engine::compile(
+            "input:hover::-moz-range-thumb { width: 30px } \
+             input::-moz-range-thumb { width: 17px !important }",
+        );
+        let d = doc();
+        let states = cascade(&engine, &d, &Env::default());
+        let thumb = states[3].range_thumb.as_ref().unwrap();
+        assert_eq!(thumb.base.size.width, Some(gpui::px(17.).into()));
+        assert_eq!(thumb.resolve(false, true, false, false, false).0.size.width, thumb.base.size.width);
+    }
+
     /// `::placeholder` is not a box — it styles the string the text-input
     /// widget paints — so it folds into its own refinement.
     #[test]
@@ -7407,6 +7625,167 @@ mod tests {
         let computed=engine.compute(box_node(),None,&Env::default());
         assert_eq!(computed.base.vn_border_colors.top,Some(Some(red)));
         assert_eq!(computed.before.as_ref().expect("generated box").style.vn_border_colors.top,Some(Some(gpui::rgb(0x00ff00).into())));
+    }
+
+    #[test]
+    fn registered_percentage_drift_remaps_background_position_without_overriding_hover_or_typed_animation() {
+        let engine = Engine::compile(r#"
+            @property --offset { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+            @keyframes travel { to { --offset: -200%; } }
+            @keyframes fade { to { opacity: 1; } }
+            .box { color: red; opacity: .4; background-image: linear-gradient(red, blue);
+                background-size: 200% 100%; background-position: var(--offset) 0;
+                animation: travel 6s linear infinite, fade 6s linear; }
+            .box:hover { color: blue; transform: translateX(9px); }
+            .box:focus { color: green; }
+        "#);
+        let env = Env::default();
+        let states = engine.compute(box_node(), None, &env);
+        assert_eq!(states.vars.get("--offset"), Some("0%"));
+        let frames = engine.keyframes_for("travel", &states.vars, &env, &mut Vec::new()).unwrap();
+        assert_eq!(frames.steps.len(), 1, "custom-only keyframes must survive compilation");
+        assert!(frames.steps[0].custom.is_some());
+        let now = Instant::now();
+        let mut animator = Animator::new();
+        animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
+        for (ms, expected) in [(0, 0.), (1500, -0.5), (3000, -1.), (4500, -1.5)] {
+            let at = now + Duration::from_millis(ms);
+            let extras = animator.animated_extras(1, at).expect("registered dependent paint");
+            assert_eq!(extras.background_position.as_ref().unwrap()[0].0, TileLength::Fraction(expected));
+            assert_eq!(extras.background_size, states.extras.background_size, "the travelling tile retains its authored size");
+            let overlay = animator.overlay(1, &states.base, at).unwrap();
+            assert!(overlay.text.color.is_none(), "unrelated base text must not override interaction rungs");
+            assert!(overlay.vn_transform.is_none());
+            assert!((overlay.opacity.unwrap() - (0.4 + 0.6 * ms as f32 / 6000.)).abs() < 1e-5);
+            let mut live = (*states.base).clone();
+            live.refine(&overlay);
+            live.refine(states.hover.as_ref().unwrap());
+            assert_eq!(live.text.color, Some(gpui::blue()));
+            assert!(live.vn_transform.is_some());
+            live.refine(states.focus.as_ref().unwrap());
+            assert_eq!(live.text.color, Some(gpui::rgb(0x008000).into()));
+        }
+    }
+
+    #[test]
+    fn registered_percentage_defaults_and_scoped_overrides_respect_inherits_false() {
+        let engine = Engine::compile(r#"
+            @property --local { syntax: "<percentage>"; inherits: false; initial-value: 7%; }
+            @property --shared { syntax: "<percentage>"; inherits: true; initial-value: 3%; }
+            :root { --local: 80%; --shared: 90%; }
+            .page { --local: 40%; }
+            .btn { background-position: var(--local) var(--shared); }
+        "#);
+        let states = cascade(&engine, &themed_doc(), &Env::default());
+        assert_eq!(states[0].vars.get("--local"), Some("80%"));
+        assert_eq!(states[1].vars.get("--local"), Some("40%"));
+        assert_eq!(states[2].vars.get("--local"), Some("7%"), "registered non-inherited values reset on each element");
+        assert_eq!(states[2].vars.get("--shared"), Some("90%"));
+        assert_eq!(states[2].extras.background_position.as_ref().unwrap()[0], (TileLength::Fraction(0.07), TileLength::Fraction(0.9)));
+    }
+
+    #[test]
+    fn registered_animation_preserves_important_custom_and_dependent_declarations() {
+        for important in ["--offset: 25% !important", "background-position: 75% 0 !important"] {
+            let engine = Engine::compile(&format!(r#"
+                @property --offset {{ syntax: "<percentage>"; inherits: false; initial-value: 0%; }}
+                @keyframes travel {{ to {{ --offset: -200%; }} }}
+                .box {{ background-position: var(--offset) 0; animation: travel 6s linear infinite; }}
+                .box {{ {important}; }}
+            "#));
+            let env = Env::default();
+            let states = engine.compute(box_node(), None, &env);
+            let now = Instant::now();
+            let mut animator = Animator::new();
+            animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
+            let extras = animator.animated_extras(1, now + Duration::from_secs(3)).unwrap_or_else(|| states.extras.clone());
+            let expected = if important.starts_with("--") { 0.25 } else { 0.75 };
+            assert_eq!(extras.background_position.as_ref().unwrap()[0].0, TileLength::Fraction(expected), "{important}");
+        }
+    }
+
+    #[test]
+    fn registered_animation_implicit_endpoint_uses_each_elements_own_variables_and_pauses() {
+        let engine = Engine::compile(r#"
+            @property --offset { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+            @keyframes travel { to { --offset: -200%; } }
+            .box { background-position: var(--offset) 0; animation: travel 6s linear infinite paused; }
+        "#);
+        let env = Env::default();
+        for initial in ["0%", "50%"] {
+            let inline = parse_inline_style(&format!("--offset:{initial}"), &mut Vec::new());
+            let states = engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &env, &mut Vec::new());
+            let now = Instant::now();
+            let mut animator = Animator::new();
+            animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
+            for elapsed in [0, 3000] {
+                let extras = animator.animated_extras(1, now + Duration::from_millis(elapsed)).unwrap();
+                assert_eq!(extras.background_position.as_ref().unwrap()[0].0,
+                    TileLength::Fraction(crate::registered::percentage(initial).unwrap()));
+            }
+        }
+    }
+
+    #[test]
+    fn registered_defaults_share_variables_and_unrelated_animations_keep_no_recipe() {
+        let engine = Engine::compile(r#"
+            @property --offset { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+            .btn { animation: spin 1s linear infinite; }
+        "#);
+        let states = cascade(&engine, &themed_doc(), &Env::default());
+        assert!(Rc::ptr_eq(&states[0].vars, &states[1].vars));
+        assert!(Rc::ptr_eq(&states[1].vars, &states[2].vars), "unchanged defaults retain the no-allocation inheritance path");
+        assert!(states[2].custom_animation.is_none(), "a spinner does not animate a registered property");
+    }
+
+    #[test]
+    fn registered_sample_is_invalidated_when_same_frame_computed_values_change() {
+        let engine = Engine::compile(r#"
+            @property --offset { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+            @keyframes travel { to { --offset: -200%; } }
+            .box { background-position: var(--offset) 0; animation: travel 6s linear infinite; }
+        "#);
+        let env = Env::default();
+        let now = Instant::now();
+        let mut animator = Animator::new();
+        for value in ["0%", "50%"] {
+            let inline = parse_inline_style(&format!("--offset:{value}"), &mut Vec::new());
+            let states = engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &env, &mut Vec::new());
+            animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
+            // Both consumers use the same cached sample; a same-frame rebind
+            // above must still observe the new element-scoped implicit value.
+            let _ = animator.overlay(1, &states.base, now);
+            let extras = animator.animated_extras(1, now).unwrap();
+            assert_eq!(extras.background_position.as_ref().unwrap()[0].0,
+                TileLength::Fraction(crate::registered::percentage(value).unwrap()));
+        }
+        animator.cancel_animations(1, now);
+        assert!(animator.animated_extras(1, now).is_none(), "cancel cannot reuse a cached paint sample");
+    }
+
+    #[test]
+    fn registered_replay_interleaves_inline_priority_and_fences_inline_important_custom_values() {
+        let env = Env::default();
+        for (sheet, inline_css, expected) in [
+            ("background-position:75% 0!important", "background-position:var(--offset) 0", 0.75),
+            ("background-position:75% 0!important", "background-position:35% 0!important", 0.35),
+            ("--offset:25%!important", "--offset:50%", 0.25),
+            ("--offset:25%!important", "--offset:30%!important", 0.30),
+        ] {
+            let engine = Engine::compile(&format!(r#"
+                @property --offset {{ syntax:"<percentage>"; inherits:false; initial-value:0%; }}
+                @keyframes travel {{ to {{ --offset:-200%; }} }}
+                .box {{ background-position:var(--offset) 0; animation:travel 6s linear infinite; {sheet} }}
+            "#));
+            let inline = parse_inline_style(inline_css, &mut Vec::new());
+            let states = engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &env, &mut Vec::new());
+            let now = Instant::now();
+            let mut animator = Animator::new();
+            animator.on_computed_animations(1, &states, now, &|name| engine.keyframes_for(name, &states.vars, &env, &mut Vec::new()));
+            let extras = animator.animated_extras(1, now + Duration::from_secs(3)).unwrap_or_else(|| states.extras.clone());
+            assert_eq!(extras.background_position.as_ref().unwrap()[0].0, TileLength::Fraction(expected), "sheet={sheet}, inline={inline_css}");
+        }
     }
 
 }

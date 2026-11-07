@@ -165,6 +165,8 @@ export interface DesktopApi {
    * ignored, as HTML allows).
    */
   pickForInput(req: InputPickRequest): Promise<unknown | null | undefined>;
+  /** The color picker: a selected #rrggbb, null on dismissal, undefined if busy. */
+  pickColorForInput(value: string): Promise<string | null | undefined>;
   /** `<a download>` for a `blob:` / `data:` URL: Save As, then the bytes. */
   download(url: string, downloadAttribute: string): void;
 }
@@ -443,6 +445,10 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       },
       pickForInput: () => {
         warnCompat("input-file:nohost", "<input type=file>: this host has no vn-desktop, so there is no file picker");
+        return Promise.resolve(undefined);
+      },
+      pickColorForInput: () => {
+        warnCompat("input-color:nohost", "<input type=color>: this host has no vn-desktop, so there is no color picker");
         return Promise.resolve(undefined);
       },
       download: () => warnCompat("download:nohost", "<a download>: this host has no vn-desktop; nothing was saved"),
@@ -882,6 +888,16 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
           // or be dropped; Chromium drops it.
           if (f.name === "NotAllowedError" && f.code === "EBUSY") return undefined;
           console.error(`[vue-native] <input type=file>: ${f.message ?? f.error ?? f.name}`);
+          return undefined;
+        },
+      );
+    },
+    pickColorForInput(value) {
+      return deps.call(fs.dialogOpen(JSON.stringify({ kind: "color", value }), null)).then(
+        (s) => s.payload.cancelled ? null : String(s.payload.color),
+        (f: DesktopFailure) => {
+          if (f.name === "NotAllowedError" && f.code === "EBUSY") return undefined;
+          console.error(`[vue-native] <input type=color>: ${f.message ?? f.error ?? f.name}`);
           return undefined;
         },
       );

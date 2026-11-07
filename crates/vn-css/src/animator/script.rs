@@ -495,6 +495,7 @@ pub fn script_keyframes(
             easing: frame.easing,
             style: Rc::new(style),
             dynamic: None,
+            custom: None,
         });
     }
     // The JS half hands them over in order already (it refuses offsets that

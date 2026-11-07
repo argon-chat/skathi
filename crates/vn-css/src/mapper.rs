@@ -278,6 +278,8 @@ pub struct Extras {
     /// The one native skin here is `<select>`'s: its arrow, and the padding
     /// Chromium keeps for it, which `none` takes away (vn-tree `select.rs`).
     pub appearance_none: Option<bool>,
+    /// Native control tint; Some(None) resets an earlier color to auto.
+    pub accent_color: Option<Option<Hsla>>,
     /// SVG `fill` — see [`SvgPaint`].
     pub fill: Option<SvgPaint>,
     /// SVG `stroke` — see [`SvgPaint`].
@@ -314,38 +316,14 @@ pub struct Extras {
     /// `Rc<str>` is why [`Extras`] is `Clone` rather than `Copy`; the clone is
     /// a refcount bump and the field is `None` on all but a handful of rules.
     pub content: Option<Rc<str>>,
-    /// `background-clip: text` (or its `-webkit-` spelling).
-    ///
-    /// Not paintable as CSS defines it — gpui rasterises a glyph run in one
-    /// solid colour, so there is nothing to clip a gradient *to*. But leaving
-    /// it unimplemented is worse than a stand-in, because the two utilities
-    /// always travel together:
-    ///
-    /// ```text
-    /// bg-gradient-to-r from-amber-400 … bg-clip-text text-transparent
-    /// ```
-    ///
-    /// and honouring only half of that pair paints the gradient as a filled BOX
-    /// with invisible text on it. On apps/meet-probe's header the β superscript
-    /// came out as a solid yellow bar under the wordmark.
-    ///
-    /// So `crate::render` takes the pair as one gesture: the background is
-    /// dropped and its representative colour ([`Extras::background_key_color`])
-    /// becomes the text colour. The glyphs are a flat colour rather than a
-    /// gradient — which is the honest version of the divergence, and reads
-    /// correctly at the size anyone uses this at.
+    /// `background-clip: text` (or its `-webkit-` spelling). The renderer
+    /// retains the background stack as a brush and masks it with glyph alpha.
     pub background_clip_text: Option<bool>,
-    /// `-webkit-text-fill-color`: the colour glyphs are filled with, over
-    /// `color`. Chromium honours it, and apps write it in exactly one idiom,
-    /// `-webkit-background-clip: text; -webkit-text-fill-color: transparent`,
-    /// where [`Extras::background_clip_text`] already gives the glyphs their
-    /// colour and this one is ignored. On its own it replaces the text colour
-    /// of the element it is declared on (`crate::render` in vn-tree).
+    /// `-webkit-text-fill-color` overrides foreground `color`, independently
+    /// of the background clipped behind the text.
     pub text_fill_color: Option<TextFill>,
-    /// The one colour that stands in for this element's background when it has
-    /// to be collapsed to a single value — see [`Extras::background_clip_text`],
-    /// its only consumer. A solid background contributes itself; a gradient
-    /// contributes the midpoint of its end stops.
+    /// Representative background metadata retained for style inspection.
+    /// Text clipping uses the complete background stack, not this colour.
     pub background_key_color: Option<gpui::Hsla>,
     /// The `background-image` layers, in CSS order — layer 0 paints on TOP.
     ///
@@ -690,6 +668,9 @@ impl Extras {
         }
         if other.appearance_none.is_some() {
             self.appearance_none = other.appearance_none;
+        }
+        if other.accent_color.is_some() {
+            self.accent_color = other.accent_color;
         }
         if other.z_index.is_some() {
             self.z_index = other.z_index;
@@ -1383,6 +1364,16 @@ impl InlineMotion {
 /// mapped declarations are: both depend on where the element sits in the tree,
 /// so they ride along as text and are resolved by [`Engine::compute_node`]
 /// (crate::Engine) exactly like a rule's are.
+/// One priority half retained when inline declarations depend on custom values.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InlinePriority {
+    pub refinement: Option<Rc<StyleRefinement>>,
+    pub extras: Extras,
+    pub custom: Option<Rc<Decls>>,
+    pub dynamic: Option<Rc<Decls>>,
+    pub font: Option<FontDecls>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct InlineStyle {
     /// Optional parsed normal/important motion declarations, folded at their
@@ -1413,6 +1404,9 @@ pub struct InlineStyle {
     /// font size ([`FontDecls`]). An inline `padding: .5em` is the element's
     /// own em, which the parse cannot know.
     pub font: Option<FontDecls>,
+    /// Normal and important halves for registered-variable dependency replay.
+    #[doc(hidden)]
+    pub priority: Option<Rc<[InlinePriority; 2]>>,
 }
 
 impl InlineStyle {
@@ -1479,6 +1473,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     let mut dynamic: Decls = Vec::new();
     let mut font: Option<Vec<Property<'static>>> = None;
     let mut styled = false;
+    let mut priority = None;
     // CSS's error handling, as for the stylesheet (`Engine::compile`): a
     // malformed declaration (`0: d`, a stray `}`) is dropped and the rest of
     // the body still applies. Without it one bad declaration cost the element
@@ -1520,6 +1515,17 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
                 }
             }
             }
+            if !custom.is_empty() || !dynamic.is_empty() || !block.important_declarations.is_empty() {
+                let converted = convert_block(&block);
+                let half = |important| InlinePriority {
+                    refinement: if important { converted.important.clone() } else { converted.normal.clone() },
+                    extras: if important { converted.important_extras.clone() } else { converted.normal_extras.clone() },
+                    custom: if important { converted.important_custom.clone() } else { converted.normal_custom.clone() },
+                    dynamic: if important { converted.important_dynamic.clone() } else { converted.normal_dynamic.clone() },
+                    font: if important { converted.important_font.clone() } else { converted.normal_font.clone() },
+                };
+                priority = Some(Rc::new([half(false), half(true)]));
+            }
         }
         Err(e) => diagnostics.push(format!("inline style parse error: {e} in {body:?}")),
     }
@@ -1539,6 +1545,7 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
         custom,
         dynamic,
         font: font.map(Rc::new),
+        priority,
     }
 }
 
@@ -4924,15 +4931,6 @@ fn apply_property(
             use lightningcss::properties::background::BackgroundClip as BC;
             if matches!(v.first(), Some(BC::Text)) {
                 x.background_clip_text = Some(true);
-                warn_once(
-                    diagnostics,
-                    "`background-clip: text` paints the text in ONE colour (v1) — gpui rasterises \
-                     a glyph run in a solid colour, so a gradient cannot be clipped to the \
-                     glyphs. Rather than paint the gradient as a filled box behind invisible \
-                     text (which is what `bg-clip-text text-transparent` would otherwise \
-                     produce), the background is dropped and its representative colour — a \
-                     gradient's midpoint — becomes the text colour",
-                );
             } else {
                 warn_once(
                     diagnostics,
@@ -6054,6 +6052,13 @@ fn apply_property(
         // other value is the skin Chromium draws for a select too (`menulist`,
         // `menulist-button`, `auto`…), and on any other element nothing
         // changes, so there is nothing to advise.
+        AccentColor(c) => {
+            use lightningcss::properties::ui::ColorOrAuto;
+            x.accent_color = Some(match c {
+                ColorOrAuto::Auto => None,
+                ColorOrAuto::Color(c) => color(c),
+            });
+        }
         Appearance(a, _) => x.appearance_none = Some(matches!(a, lightningcss::properties::ui::Appearance::None)),
         // `tab-size` sizes a preserved tab. Whitespace is always collapsed here
         // (`white-space` says so, once, where the divergence actually is), so a
@@ -8290,14 +8295,38 @@ mod tests {
     }
 
     #[test]
-    fn background_clip_text_records_the_colour_to_paint_the_glyphs_in() {
+    fn nickname_six_color_and_thirteen_stop_travelling_gradients_keep_every_stop() {
+        let palette = [0xff3355, 0xffaa00, 0x00ff44, 0x0088ff, 0x9933ff, 0xff55bb];
+        for travelling in [false, true] {
+            let colors: Vec<_> = if travelling { palette.iter().chain(palette.iter()).chain(palette[..1].iter()).copied().collect() }
+                else { palette.to_vec() };
+            let css = format!("background-image:linear-gradient(90deg,{});background-clip:text;color:transparent;background-size:200% 100%;background-position:-100% 0",
+                colors.iter().map(|color| format!("#{color:06x}")).collect::<Vec<_>>().join(","));
+            let (extras, diagnostics) = extras(&css);
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            let layers = extras.background_images.as_ref().expect("gradient brush stack");
+            for (index, color) in colors.iter().enumerate() {
+                let expected: Hsla = gpui::rgb(*color).into();
+                let position = index as f32 / (colors.len() - 1) as f32;
+                assert!(layers.iter().flat_map(|layer| layer.background.live_stops()).any(|stop|
+                    stop.color == expected && (stop.percentage - position).abs() < 1e-5),
+                    "stop {index}/{} must survive transparent-band packing", colors.len());
+            }
+            assert!(layers.iter().all(|layer| layer.background.live_stops().len() <= gpui::GRADIENT_STOPS));
+            assert_eq!(extras.background_clip_text, Some(true));
+            assert_eq!(extras.background_position.as_ref().unwrap()[0].0, TileLength::Fraction(-1.));
+        }
+    }
+
+    #[test]
+    fn background_clip_text_records_the_clip_and_background_metadata() {
         let (x, _) = extras(
             "background-image: linear-gradient(to right, #fbbf24, #eab308); \
              background-clip: text; color: transparent",
         );
         assert_eq!(x.background_clip_text, Some(true));
-        // The midpoint of the two stops, which is what the renderer paints the
-        // text in. Both are saturated ambers, so the midpoint is one too.
+        // Representative metadata remains available, independently of the
+        // actual multi-stop text brush. Both endpoints are saturated amber.
         let key = x.background_key_color.expect("a gradient contributes a key colour");
         assert!(key.s > 0.8 && key.l > 0.4 && key.l < 0.7, "{key:?}");
         assert!(key.h < 0.15, "an amber ramp must not average to a cold hue: {key:?}");

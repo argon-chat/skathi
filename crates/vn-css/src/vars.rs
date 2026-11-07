@@ -65,6 +65,38 @@ impl Vars {
     }
 }
 
+/// Resolve registered defaults and inheritance before ordinary var() substitution.
+pub(crate) fn resolve_registered(parent: &Rc<Vars>, own: &[&(String, String)],
+    registrations: &[crate::registered::PercentageRegistration], env: &crate::Env,
+    diagnostics: &mut Vec<String>) -> Rc<Vars> {
+    if registrations.is_empty() { return resolve(parent, own, env, diagnostics); }
+    let defaults_needed = registrations.iter().any(|r| if r.inherits { parent.get(&r.name).is_none() }
+        else { parent.get(&r.name).and_then(crate::registered::percentage) != Some(r.initial) });
+    let owns_registered = own.iter().any(|(name, _)| registrations.iter().any(|r| r.name == *name));
+    if !defaults_needed && !owns_registered {
+        // Common descendants share the parent's Rc; unrelated Tailwind custom
+        // declarations keep the ordinary resolver's no-allocation fast paths.
+        return resolve(parent, own, env, diagnostics);
+    }
+    let defaults: Vec<(String, String)> = registrations.iter().filter(|r| !r.inherits || parent.get(&r.name).is_none())
+        .map(|r| (r.name.clone(), format!("{}%", r.initial * 100.))).collect();
+    let basis = resolve(parent, &defaults.iter().collect::<Vec<_>>(), env, diagnostics);
+    let declarations: Vec<(String, String)> = own.iter().map(|(name, raw)| {
+        let Some(registration) = registrations.iter().find(|r| r.name == *name) else { return (name.clone(), raw.clone()); };
+        let keyword = raw.trim();
+        let value = if keyword.eq_ignore_ascii_case("inherit") {
+            parent.get(name).map(str::to_owned).unwrap_or_else(|| format!("{}%", registration.initial * 100.))
+        } else if keyword.eq_ignore_ascii_case("initial") || (!registration.inherits && ["unset", "revert", "revert-layer"].iter().any(|v| keyword.eq_ignore_ascii_case(v))) {
+            format!("{}%", registration.initial * 100.)
+        } else { raw.clone() };
+        (name.clone(), value)
+    }).collect();
+    let computed = resolve(&basis, &declarations.iter().collect::<Vec<_>>(), env, diagnostics);
+    let invalid: Vec<(String, String)> = registrations.iter().filter(|r| computed.get(&r.name).and_then(crate::registered::percentage).is_none())
+        .map(|r| (r.name.clone(), basis.get(&r.name).unwrap_or("0%").to_owned())).collect();
+    resolve(&computed, &invalid.iter().collect::<Vec<_>>(), env, diagnostics)
+}
+
 /// The reason a declaration is invalid at computed-value time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum VarError {

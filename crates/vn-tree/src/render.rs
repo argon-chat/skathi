@@ -2071,7 +2071,7 @@ fn build_fullscreen<V: 'static>(
     let mut text = gpui::TextStyleRefinement::default();
     for ancestor in ancestors.into_iter().rev() {
         if let Some(node) = t.node(ancestor) {
-            let extras = extras_of(node);
+            let extras = tree::animated_extras(ancestor, now).unwrap_or_else(|| extras_of(node));
             inherited.case = extras.text_transform.or(inherited.case);
             inherited.ws = extras.white_space.or(inherited.ws);
             if let Some(computed) = &node.computed {
@@ -2296,7 +2296,7 @@ fn build_node<V: 'static>(
     // vn-css has no inherited properties at all, so the fold happens here, on
     // the way down. A browser allows the property on a replaced element too,
     // hence `<img>` and `<lottie>` get the same treatment.
-    let extras = extras_of(node);
+    let extras = tree::animated_extras(id, now).unwrap_or_else(|| extras_of(node));
     // `text-transform` INHERITS, and vn-css folds no inherited property — so
     // the effective value is threaded down here, the same way `window-drag` is.
     // A text node has no declarations of its own, so the parent's value is the
@@ -2450,7 +2450,7 @@ fn build_node<V: 'static>(
             let bg_stack = extras.resolve_background_stack();
             let bg_radii = bg_stack.as_ref().map(|_| padding_box_radii(d.style(), window.rem_size()));
             apply_background_layers(d.style(), &extras, bg_stack.is_some());
-            apply_background_clip_text(d.style(), &extras);
+            apply_background_clip_text(d.style(), &extras, id as u64);
             apply_self_blur(d.style(), t, id, node, &extras);
             apply_drop_shadow(
                 d.style(),
@@ -2554,7 +2554,9 @@ fn build_node<V: 'static>(
             // picker from its click. It keeps the ordinary wrapper's focus
             // handle, so Enter and Space reach it as keydown/keyup.
             let is_file_input = crate::aria::is_file_input(t, id);
-            let is_input = matches!(t.name(node.tag), "input" | "textarea") && !is_file_input;
+            let is_range = crate::range::is_range(t, id);
+            let is_color = t.name(node.tag) == "input" && t.prop(id, "type").is_some_and(|v| v.trim().eq_ignore_ascii_case("color"));
+            let is_input = matches!(t.name(node.tag), "input" | "textarea") && !is_file_input && !is_range && !is_color;
             // Both are tabbable by default in HTML; a plain <div> is not. A
             // disabled file input is not focusable at all.
             let file_tab = is_file_input && !t.prop(id, "disabled").is_some_and(|v| v != "false");
@@ -2564,7 +2566,7 @@ fn build_node<V: 'static>(
             // could not focus a dialog's first button).
             let disabled = !is_input && actually_disabled(t, id);
             let tab_index = tab_index_of(t, id)
-                .or((is_input || file_tab).then_some(0))
+                .or((is_input || file_tab || is_range || is_color).then_some(0))
                 .or_else(|| default_tab_index(t, id))
                 .filter(|_| !disabled);
 
@@ -2619,6 +2621,9 @@ fn build_node<V: 'static>(
             if is_select && !disabled {
                 d = crate::select::bind_press(d, id);
             }
+            if is_range && !disabled && extras.pointer_events_none != Some(true) {
+                d = crate::range::bind_press(d, id);
+            }
             // Copy / cut / paste outside a text field: the root is on every
             // keystroke's path, and its listener (bound AFTER its own keydown
             // one, so it runs after every keydown handler) is the last stop.
@@ -2634,6 +2639,7 @@ fn build_node<V: 'static>(
                 // A `<select>`'s keys: its popup's before the page's, a closed
                 // one's after them.
                 d = crate::select::bind_root(d);
+                d = crate::range::bind_root(d);
                 // …and the keyboard click a key event owes, last of all.
                 d = bind_root_key_clicks(d);
             }
@@ -2647,7 +2653,14 @@ fn build_node<V: 'static>(
                 }));
             }
 
-            if is_input {
+            if is_range {
+                d.style().size.width.get_or_insert(gpui::px(129.).into());
+                d.style().size.height.get_or_insert(gpui::px(16.).into());
+                d.child(crate::range::children(t, id, window)).into_any_element()
+            } else if is_color {
+                crate::color::defaults(d.style());
+                d.child(crate::color::children(t, id, node, window)).into_any_element()
+            } else if is_input {
                 let inert = extras.pointer_events_none == Some(true);
                 let (input, focus_target) = build_input(t, id, node, tab_index, window, cx);
                 // The editor's own handle carries this node's focus identity
@@ -2835,47 +2848,28 @@ pub(crate) fn warn_missing_font(family: &str, used: Option<&str>) {
     );
 }
 
-/// `background-clip: text` — paint the TEXT, not a box.
+/// `background-clip: text` retains the CSS brush as a text-only fill.
 ///
-/// The property cannot be implemented as CSS defines it (gpui rasterises a
-/// glyph run in one solid colour, so there is no per-glyph mask to clip a
-/// gradient to), but it also cannot be *ignored*, because it never appears
-/// alone. The Tailwind idiom is three utilities that only make sense together:
-///
-/// ```text
-/// bg-gradient-to-r from-amber-400 via-yellow-500 to-amber-400
-/// bg-clip-text text-transparent
-/// ```
-///
-/// Honouring the gradient and the transparent text while dropping the clip —
-/// which is what "ignore it" means — paints a filled gradient RECTANGLE with
-/// nothing legible on it. That is how apps/meet-probe's tiny β superscript
-/// became a solid yellow bar under the header wordmark, and it is strictly
-/// worse than either doing it properly or not doing it at all.
-///
-/// Taking the three as one gesture instead: drop the background, and give the
-/// text the colour that background stands for
-/// (`vn_css::Extras::background_key_color` — a gradient's midpoint). Flat
-/// instead of ramped, which at the size this idiom is used at is a difference
-/// nobody can see, and the advisory in `vn_css::mapper` says so out loud.
-///
-/// The text colour is overwritten rather than defaulted: `text-transparent` is
-/// an explicit `color: transparent` and would otherwise win.
-fn apply_background_clip_text(style: &mut gpui::StyleRefinement, extras: &vn_css::Extras) {
+/// The background stack is retained as a brush and painted through descendant
+/// glyph alpha. Glyph layout, text selection, decorations and shadows stay in
+/// their existing paths; no filled background rectangle is emitted.
+fn apply_background_clip_text(style: &mut gpui::StyleRefinement, extras: &vn_css::Extras, id: u64) {
+    if let Some(vn_css::TextFill::Color(fill)) = extras.text_fill_color {
+        style.text.color = Some(fill);
+    }
     if extras.background_clip_text != Some(true) {
-        // `-webkit-text-fill-color` on its own fills the glyphs over `color`.
-        // Beside `background-clip: text` it is the `transparent` half of the
-        // idiom, which the key colour below already stands in for.
-        if let Some(vn_css::TextFill::Color(fill)) = extras.text_fill_color {
-            style.text.color = Some(fill);
-        }
         return;
     }
-    if let Some(key) = extras.background_key_color {
-        style.background = Some(gpui::Fill::Color(gpui::transparent_black().into()));
-        style.background_layers = Some(Vec::new());
-        style.text.color = Some(key);
+    let mut backgrounds = Vec::new();
+    if let Some(background) = &style.background {
+        backgrounds.push(background.color().unwrap_or_default());
     }
+    if let Some(layers) = &style.background_layers {
+        backgrounds.extend_from_slice(layers);
+    }
+    style.vn_text_fill = Some(gpui::VnTextFill { group_id: id, backgrounds });
+    style.background = Some(gpui::Fill::Color(gpui::transparent_black().into()));
+    style.background_layers = Some(Vec::new());
 }
 
 /// The `background-image` stack, folded together with `background-size`,
@@ -4314,6 +4308,7 @@ fn apply_press_focus(window: &mut Window, cx: &mut App) {
     sync_focus_events(window, cx);
     // …and a press on a `<select>` opens it, now that it has the focus.
     crate::select::press_settled(press.cancelled, window, cx);
+    crate::range::press_settled(press.cancelled, window, cx);
 }
 
 /// Reports gpui's focus to JS now, if it moved past what JS was last told:
@@ -5291,6 +5286,7 @@ pub(crate) fn ime(id: u32, text: &str, commit: bool, window: &mut Window, cx: &m
 /// `value` prop, so it reflects typing that JS has not echoed back yet.
 pub(crate) fn input_value(id: u32, cx: &App) -> Option<String> {
     INPUT_STATES.with(|m| m.borrow().get(&id).map(|s| s.read(cx).text().to_string()))
+        .or_else(|| tree::read_tree(|t| crate::range::is_range(t, id).then(|| crate::range::value(t, id))))
 }
 
 /// Drives a scroll container's own [`ScrollHandle`] by `(dx, dy)` CSS pixels

@@ -31,11 +31,13 @@ use crate::Fail;
 pub enum Answer {
     Paths(Vec<PathBuf>),
     Button(usize),
+    Color(String),
     Cancel,
 }
 
 /// What a waiting dialog takes as an answer.
 enum Expect {
+    Color,
     /// A file dialog: paths, checked against its kind.
     Paths { kind: Kind, multiple: bool },
     /// A question: one of its buttons, by label (without `&`).
@@ -111,6 +113,13 @@ pub(super) fn ask(q: &Ask, window: u64, cancel: &Cancellation) -> Option<usize> 
     }
 }
 
+pub(super) fn color(value: &str, window: u64, cancel: &Cancellation) -> Result<Option<String>, Fail> {
+    Ok(match wait(window, "color", Expect::Color, json!({ "kind": "color", "value": value }), "color picker".into(), cancel) {
+        Some(Answer::Color(color)) => Some(color),
+        _ => None,
+    })
+}
+
 /// `dialog list`: every dialog waiting for an answer, oldest first.
 pub fn list() -> Json {
     let p = PENDING.lock().unwrap_or_else(|p| p.into_inner());
@@ -160,6 +169,7 @@ pub fn answer(id: u64, paths: Vec<PathBuf>) -> Result<Json, String> {
     let mut pending = PENDING.lock().unwrap_or_else(|p| p.into_inner());
     let i = pending.iter().position(|x| x.id == id).ok_or_else(|| format!("no dialog #{id} is waiting"))?;
     match &pending[i].expect {
+        Expect::Color => return Err(format!("dialog #{id} is a color picker: use `choose` with #rrggbb")),
         Expect::Paths { kind, multiple } => validate(*kind, *multiple, &paths)?,
         Expect::Button { labels } => {
             return Err(format!("dialog #{id} is a question: answer it with `choose` and one of {labels:?}"))
@@ -188,14 +198,22 @@ fn button_index(labels: &[String], button: &str) -> Option<usize> {
 pub fn choose(id: u64, button: &str) -> Result<Json, String> {
     let mut pending = PENDING.lock().unwrap_or_else(|p| p.into_inner());
     let i = pending.iter().position(|x| x.id == id).ok_or_else(|| format!("no dialog #{id} is waiting"))?;
+    if matches!(pending[i].expect, Expect::Color) {
+        let color = super::color::normalize(button).ok_or("a color picker needs #rrggbb")?;
+        let dialog = pending.remove(i);
+        drop(pending);
+        dialog.tx.send(Answer::Color(color.clone())).map_err(|_| format!("dialog #{id} is gone"))?;
+        return Ok(json!({ "id": id, "color": color }));
+    }
     let index = match &pending[i].expect {
         Expect::Button { labels } => button_index(labels, button)
             .ok_or_else(|| format!("dialog #{id} has no button {button:?}: its buttons are {labels:?}"))?,
+        Expect::Color => unreachable!(),
         Expect::Paths { .. } => return Err(format!("dialog #{id} is a file dialog: answer it with `answer` and paths")),
     };
     let label = match &pending[i].expect {
         Expect::Button { labels } => labels[index].clone(),
-        Expect::Paths { .. } => unreachable!(),
+        Expect::Color | Expect::Paths { .. } => unreachable!(),
     };
     let p = pending.remove(i);
     drop(pending);

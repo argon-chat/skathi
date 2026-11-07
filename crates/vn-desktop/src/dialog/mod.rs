@@ -57,6 +57,7 @@ use crate::fs::{self, fail_io, Access};
 use crate::{Done, Fail};
 
 pub mod ask;
+pub mod color;
 pub mod scripted;
 
 pub use ask::{ask, Ask, Reply};
@@ -74,6 +75,9 @@ mod imp {
     }
     pub(super) fn ask(_: &Ask, _: isize, _: &Cancellation) -> Result<Option<usize>, Fail> {
         Err(Fail::new("NotSupportedError", "native questions are not implemented on this platform yet"))
+    }
+    pub(super) fn color(_: &str, _: isize, _: &Cancellation) -> Result<Option<String>, Fail> {
+        Err(Fail::new("NotSupportedError", "color pickers are not implemented on this platform yet"))
     }
     pub(super) fn known_folder(_: Known) -> Option<PathBuf> {
         None
@@ -666,6 +670,9 @@ fn cancelled() -> String {
 
 /// `__vn_dialog_open`: the pickers and `<input type=file>`.
 pub fn start_open(req: &str, prev: Vec<PathBuf>) -> String {
+    if let Ok(request) = serde_json::from_str::<Json>(req) {
+        if request["kind"] == "color" { return color::start(request["value"].as_str().unwrap_or("#000000")); }
+    }
     match parse(req, prev) {
         Ok((native, then)) => start(native, then, "picker"),
         Err(f) => f.to_sync_json(),

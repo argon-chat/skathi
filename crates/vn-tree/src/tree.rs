@@ -637,7 +637,7 @@ impl Tree {
     /// subtree holding one renders again. `false` when nothing hangs off its
     /// hover (then no frame is owed).
     pub(crate) fn touch_hover_styled(&mut self, id: u32) -> bool {
-        let own = self.node(id).and_then(|n| n.computed.as_ref()).is_some_and(|cs| cs.hover.is_some());
+        let own = self.node(id).and_then(|n| n.computed.as_ref()).is_some_and(|cs| cs.hover.is_some() || cs.control_state(1));
         if own {
             self.touch(id);
         }
@@ -2307,6 +2307,11 @@ pub fn animation_overlay(
     now: std::time::Instant,
 ) -> Option<gpui::StyleRefinement> {
     ANIMATOR.with(|a| a.borrow().overlay(id, base, now))
+}
+
+/// Animated non-layout CSS values, including var()-dependent background paint.
+pub fn animated_extras(id: u32, now: std::time::Instant) -> Option<vn_css::Extras> {
+    ANIMATOR.with(|animator| animator.borrow().animated_extras(id, now))
 }
 
 thread_local! {

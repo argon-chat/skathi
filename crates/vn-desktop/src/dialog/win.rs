@@ -338,3 +338,32 @@ unsafe fn show(n: &Native, owner: isize) -> Result<Option<Vec<PathBuf>>, Fail> {
     }
     Ok(Some(out))
 }
+
+/// The classic system color dialog runs on the same cancellable owner thread.
+pub(super) fn color(value: &str, owner: isize, cancel: &Cancellation) -> Result<Option<String>, Fail> {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::UI::Controls::Dialogs::{ChooseColorW, CommDlgExtendedError, CHOOSECOLORW, CC_FULLOPEN, CC_RGBINIT};
+    if cancel.is_requested() { return Ok(None); }
+    let _timer = CancellationTimer::new(cancel.clone())?;
+    let number = u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap_or(0);
+    let rgb = ((number & 0xff) << 16) | (number & 0xff00) | ((number >> 16) & 0xff);
+    let mut custom = [COLORREF(0xffffff); 16];
+    let mut options = CHOOSECOLORW {
+        lStructSize: std::mem::size_of::<CHOOSECOLORW>() as u32,
+        hwndOwner: HWND(owner as *mut _),
+        rgbResult: COLORREF(rgb),
+        lpCustColors: custom.as_mut_ptr(),
+        Flags: CC_FULLOPEN | CC_RGBINIT,
+        ..Default::default()
+    };
+    if unsafe { ChooseColorW(&mut options) }.as_bool() {
+        let value = options.rgbResult.0;
+        let rgb = ((value & 0xff) << 16) | (value & 0xff00) | ((value >> 16) & 0xff);
+        Ok(Some(format!("#{rgb:06x}")))
+    } else {
+        let error = unsafe { CommDlgExtendedError() }.0;
+        if error == 0 { Ok(None) } else {
+            Err(Fail::new("InvalidStateError", format!("the color dialog failed ({error})")).code("EIO"))
+        }
+    }
+}

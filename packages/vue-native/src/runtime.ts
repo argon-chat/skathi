@@ -363,6 +363,8 @@ interface MirrorElement extends MirrorNodeBase {
   _value: string;
   /** `checked` once something assigned it; until then it follows the `checked` attribute. */
   _checked?: boolean;
+  /** Range: IDL/user edits stop value/defaultValue attributes replacing the live value. */
+  _rangeDirty?: boolean;
   /** `:true-value` / `:false-value`, kept as given for v-model's checkbox, as runtime-dom keeps them. */
   _trueValue?: unknown;
   _falseValue?: unknown;
@@ -2114,6 +2116,8 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
     // `v-text` compiles to this DOM property; runtime-dom assigns it, and
     // ignores a null.
     if (next != null) (el as { textContent: unknown }).textContent = next;
+  } else if (key === "value" && isRangeInput(el) && !foreignNamespace(namespace)) {
+    writeControlValue(el, next);
   } else if (key === "value" && (isSelectEl(el) || isOptionEl(el)) && !foreignNamespace(namespace)) {
     patchSelectValue(el, next);
   } else if (key === "selected" && isOptionEl(el) && !foreignNamespace(namespace)) {
@@ -2200,7 +2204,9 @@ function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
   }
   // The host has the value already (the generic channel, above); only the
   // mirror's storage follows, so the accessor does not push it twice.
-  if (key === "value") el._value = next == null ? "" : String(next);
+  if (key === "value" && !(isRangeInput(el) && el._rangeDirty)) el._value = next == null ? "" : String(next);
+  if (isRangeInput(el) && ["value", "type", "min", "max", "step"].includes(key)) syncRangeValue(el);
+  if (isColorInput(el) && (key === "value" || key === "type")) writeControlValue(el, el._value);
   // An option's `selected` attribute is its default selectedness: it selects
   // (or deselects) an option nothing has selected by hand yet (HTML §4.10.10).
   // A select's `multiple` and `size` change what its selection may be.
@@ -2330,17 +2336,17 @@ function syncListenerFlag(self: MirrorNode, name: string): void {
   }
   // …and a link listens for its own click (its activation behaviour), so
   // removing the last `@click` from an `<a href>` must not switch it off. So
-  // do a `<label>` and an `<input type=file>`, which also hears Enter (keydown)
+  // do a `<label>` and file/color inputs, which also hear Enter (keydown)
   // and Space (keyup) — the keys that click it.
   // A submit or reset button submits or resets its form, and a text-like
   // `<input>` submits its form on Enter (implicit submission).
   if (!on && code === EV_CODES.click) {
     const n = self;
-    if (n && (isLabel(n) || isFileInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n))) on = true;
+    if (n && (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n))) on = true;
   }
   if (!on && (code === EV_CODES.keydown || code === EV_CODES.keyup)) {
     const n = self;
-    if (isFileInput(n) || (code === EV_CODES.keydown && blocksImplicitSubmission(n))) on = true;
+    if (isFileInput(n) || isColorInput(n) || (code === EV_CODES.keydown && blocksImplicitSubmission(n))) on = true;
   }
   // …and a text control hears its own `input`, which is how its `value` keeps
   // up with what the user types (the dispatcher writes it before propagating).
@@ -4078,6 +4084,7 @@ function activate(target: MirrorNode, bubbles: boolean): void {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
     if (hasActivationBehaviour(n)) {
       if (isFileInput(n)) showFilePicker(fileInputOps(n), null);
+      else if (isColorInput(n)) showColorPicker(n, null);
       else if (isLabel(n)) activateLabel(n, target);
       else if (isLink(n)) followLink(n);
       else if (isSubmitButton(n) || isResetButton(n)) activateFormButton(n);
@@ -4172,13 +4179,62 @@ function isFileInput(n: unknown): boolean {
   return !!e && e.kind === 1 && e.tag === "input" && String(e.attrs?.type ?? "").trim().toLowerCase() === "file";
 }
 
+/** The color control has a swatch and picker, not an editable text field. */
+function isColorInput(n: unknown): boolean {
+  const e = n as MirrorElement | null | undefined;
+  return !!e && e.kind === 1 && e.tag === "input" && String(e.attrs?.type ?? "").trim().toLowerCase() === "color";
+}
+
+/** The opaque sRGB value understood by the native common color dialog. */
+function colorValue(value: unknown): string {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(text)) return text;
+  if (/^#[0-9a-f]{3,4}$/.test(text)) return "#" + [...text.slice(1, 4)].map((c) => c + c).join("");
+  if (/^#[0-9a-f]{8}$/.test(text)) return text.slice(0, 7);
+  if (text) warnCompat("input-color:value", "<input type=color> currently accepts hex colors (#rgb, #rgba, #rrggbb, #rrggbbaa); other CSS color values normalize to #000000");
+  return "#000000";
+}
+
+// A picker is asynchronous. An already-open picker cannot be replaced by a
+// second click, and its result belongs to the original control.
+const colorPickers = new WeakSet<object>();
+function showColorPicker(el: MirrorElement | Detached, via: "showPicker" | null): void {
+  const mirror = isMirrorNode(el);
+  if (mirror ? isDisabledControl(el as MirrorElement) : !!el.disabled) return;
+  if (colorPickers.has(el)) return;
+  if (via === null && !activation.isActive()) {
+    console.warn("Color chooser dialog can only be shown with a user activation.");
+    return;
+  }
+  const before = colorValue(el.value);
+  const id = mirror ? (el as MirrorElement).__vnId : 0;
+  activation.consume();
+  colorPickers.add(el);
+  void desktopApi.pickColorForInput(before).then((selected) => {
+    if (selected == null) return;
+    const next = colorValue(selected);
+    if (mirror) {
+      const control = el as MirrorElement;
+      if (control.__vnId !== id || !isColorInput(control) || next === colorValue(control.value)) return;
+      writeControlValue(control, next);
+      propagate(control, "input", fileEvent("input"));
+      propagate(control, "change", fileEvent("change"));
+    } else {
+      if (String(el.type).trim().toLowerCase() !== "color" || next === colorValue(el.value)) return;
+      el.value = next;
+      fireDetached(el, "input");
+      fireDetached(el, "change");
+    }
+  }).finally(() => colorPickers.delete(el));
+}
+
 /**
- * Is this one of the host's text widgets? An `<input>` other than a file input,
+ * Is this one of the host's text widgets? An `<input>` other than file/range/color,
  * or a `<textarea>`: the host's own rule (`vn-tree` `build_node`).
  */
 function isTextWidget(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;
-  return !!e && e.kind === 1 && (e.tag === "textarea" || (e.tag === "input" && !isFileInput(e)));
+  return !!e && e.kind === 1 && (e.tag === "textarea" || (e.tag === "input" && !isFileInput(e) && !isRangeInput(e) && !isColorInput(e)));
 }
 
 /** Is this a mirror `<label>`? */
@@ -4425,16 +4481,16 @@ function activateLabel(label: MirrorElement, target: MirrorNode): void {
   control.click();
 }
 
-/** A `change` or `cancel` listener on something that neither is nor wraps a file input. */
+/** Advise when no supported control beneath the listener can fire this event. */
 function adviseJsSourced(el: MirrorElement, name: string, via: string): void {
   const key = `event:${name}`;
   if (warned.has(key)) return;
   queueMicrotask(() => {
-    if (warned.has(key) || firstInTree(el, (n) => isFileInput(n) || (name === "change" && isSelectEl(n)))) return;
+    if (warned.has(key) || firstInTree(el, (n) => isFileInput(n) || (name === "change" && (isSelectEl(n) || isColorInput(n) || (n.tag === "input" && String(n.attrs.type).toLowerCase() === "range"))))) return;
     warnCompat(
       key,
       `${via} — this event type is not delivered by the native host yet: only <input type=file> ` +
-        `(and <select>, for \`change\`) fires it here, so on this element it will never fire`,
+        `(and <select>, <input type=range/color>, for \`change\`) fires it here, so on this element it will never fire`,
     );
   });
 }
@@ -4490,7 +4546,14 @@ function wrapDetached(el: Detached, tag: string): void {
   const other = { value: String(el.value ?? "") };
   const acc = fileAccessors(state, () => String(el.type ?? "").trim().toLowerCase() === "file", other);
   try {
-    Object.defineProperties(el, { files: acc.files, value: acc.value });
+    Object.defineProperties(el, {
+      files: acc.files,
+      value: {
+        ...acc.value,
+        get: () => String(el.type ?? "").toLowerCase() === "color" ? colorValue(other.value) : acc.value.get(),
+        set: (v: unknown) => acc.value.set(String(el.type ?? "").toLowerCase() === "color" ? colorValue(v) : v),
+      },
+    });
   } catch {
     /* as above */
   }
@@ -4536,12 +4599,14 @@ function activateDetached(target: object): void {
     followHref(String(el.href), el.download == null ? null : String(el.download));
   } else if (tag === "INPUT" && String(el.type ?? "").trim().toLowerCase() === "file") {
     showFilePicker(detachedFileOps(el), null);
+  } else if (tag === "INPUT" && String(el.type ?? "").trim().toLowerCase() === "color") {
+    showColorPicker(el, null);
   }
 }
 
 // -- showPicker() (HTML): the picker without the click. Chromium's checks and
 //    words: an immutable control is InvalidStateError, no user activation is
-//    NotAllowedError. Only file pickers exist here (A-F6).
+//    NotAllowedError. File and color inputs have native pickers.
 defineDom("showPicker", function (this: MirrorElement) {
   const mirror = isMirrorNode(this);
   const raw = this as unknown as Detached;
@@ -4553,12 +4618,13 @@ defineDom("showPicker", function (this: MirrorElement) {
   const type = String((mirror ? this.attrs.type : raw.type) ?? "text").trim().toLowerCase();
   const fail = (name: string, msg: string) =>
     new DOMException(`Failed to execute 'showPicker' on 'HTMLInputElement': ${msg}`, name);
-  if (attr("disabled") || (type !== "file" && attr("readonly"))) {
+  if ((mirror ? isDisabledControl(this) : attr("disabled")) || (type !== "file" && type !== "color" && attr("readonly"))) {
     throw fail("InvalidStateError", "HTMLInputElement::showPicker() cannot be used on immutable controls.");
   }
   if (!activation.isActive()) throw fail("NotAllowedError", "HTMLInputElement::showPicker() requires a user gesture.");
+  if (type === "color") return showColorPicker(mirror ? this : raw, "showPicker");
   if (type !== "file") {
-    warnCompat(`showPicker:${type}`, `showPicker() on <input type=${type}> is a no-op: only file pickers exist here (A-F6)`);
+    warnCompat(`showPicker:${type}`, `showPicker() on <input type=${type}> is a no-op: only file and color pickers exist here (A-F6)`);
     return;
   }
   showFilePicker(mirror ? fileInputOps(this) : detachedFileOps(raw), "showPicker");
@@ -4790,11 +4856,19 @@ function submitForm(form: MirrorElement, submitter: MirrorElement | null, fromSu
   if (proceed) adviseNoNavigation("a submit event nobody cancelled");
 }
 
-/** HTML "reset": the `reset` event; the controls are not restored (advisory). */
+/** HTML reset: cancellable event, then range defaults; unsupported controls advise. */
 function resetForm(form: MirrorElement): void {
   const init = { bubbles: true, cancelable: true };
   const ev = typeof Event === "function" ? new Event("reset", init) : new CustomEvent("reset", init);
   if (propagate(form, "reset", ev)) {
+    const controls = formControls(form);
+    for (const control of controls) {
+      if (!isRangeInput(control)) continue;
+      control._rangeDirty = false;
+      control._value = control.attrs.value ?? "";
+      syncRangeValue(control);
+    }
+    if (!controls.some(c => !isRangeInput(c) && (c.tag === "input" || c.tag === "textarea" || c.tag === "select"))) return;
     warnCompat(
       "form:reset",
       "form reset (a reset button or form.reset()) fired `reset` but cannot restore the controls: the " +
@@ -6429,7 +6503,7 @@ const ACTIVATING_EVENTS = new Set(["keydown", "mousedown", "pointerdown", "mouse
 
 function activatableOnPath(target: MirrorNode): boolean {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
-    if (isLabel(n) || isFileInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n)) return true;
+    if (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n)) return true;
   }
   return false;
 }
@@ -6492,6 +6566,13 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   // A pick in a select's popup, or a key on a closed one: `a` is the option's
   // index. The selection changes, then `input` and `change` fire.
   if (name === "input" && isSelectEl(target)) return pickOption(target as MirrorElement, a);
+  // Range controls use the input channel twice: b=0 is a live edit,
+  // b=1 commits the gesture. Only the latter dispatches change.
+  if (name === "input" && isRangeInput(target as MirrorElement)) (target as MirrorElement)._rangeDirty = true;
+  if (name === "input" && isRangeInput(target as MirrorElement) && b === 1) {
+    if (key != null) (target as MirrorElement)._value = rangeValue(target as MirrorElement, key);
+    return propagate(target, "change", synthesize("change", 0, 0, 0, 0, undefined));
+  }
   if ((name === "input" || name === "change") && key != null)
     // The storage, not the accessor: the host already holds this value, and
     // the accessor would push it straight back.
@@ -8044,6 +8125,44 @@ function isMirrorEl(x: unknown): x is MirrorElement {
   return !!x && typeof x === "object" && Object.prototype.hasOwnProperty.call(x, "_value");
 }
 
+/** HTML range value sanitization (WHATWG input range state). */
+function isRangeInput(el: MirrorElement): boolean {
+  return el.kind === 1 && el.tag === "input" && String(el.attrs?.type ?? "").toLowerCase() === "range";
+}
+function rangeNumber(value: unknown): number | undefined {
+  const s = String(value ?? "");
+  if (!/^-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(s)) return undefined;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : undefined;
+}
+function rangeSpec(el: MirrorElement): { min: number; max: number; step: number | null; base: number } {
+  const min = rangeNumber(el.attrs.min);
+  const step = rangeNumber(el.attrs.step);
+  return {
+    min: min ?? 0, max: rangeNumber(el.attrs.max) ?? 100,
+    step: String(el.attrs.step ?? "").toLowerCase() === "any" ? null : step != null && step > 0 ? step : 1,
+    base: min ?? rangeNumber(el.attrs.value) ?? 0,
+  };
+}
+function rangeValue(el: MirrorElement, raw: unknown): string {
+  const { min, max, step, base } = rangeSpec(el);
+  if (max < min) return String(min);
+  let value = Math.min(max, Math.max(min, rangeNumber(raw) ?? (min / 2 + max / 2)));
+  if (step !== null) {
+    const lo = Math.ceil((min - base) / step - 1e-10), hi = Math.floor((max - base) / step + 1e-10);
+    if (lo <= hi) {
+      const index = Math.min(hi, Math.max(lo, Math.floor((value - base) / step + 0.5 + 1e-10)));
+      value = Math.min(max, Math.max(min, Number((base + index * step).toPrecision(15))));
+    }
+  }
+  return String(value);
+}
+function syncRangeValue(el: MirrorElement): void {
+  const base = rangeSpec(el).base;
+  __vn_set_prop(el.__vnId, I(":range-base"), String(base));
+  writeControlValue(el, el._value, false);
+}
+
 /** Tags whose `value` is the live value of a control the host draws. */
 const VALUE_TAGS = new Set(["input", "textarea", "select"]);
 
@@ -8054,8 +8173,9 @@ const VALUE_TAGS = new Set(["input", "textarea", "select"]);
  * browser. No `input` / `change` fires (HTML: setting the IDL attribute is not
  * a user edit). `<input>` / `<textarea>` take null as "" ([LegacyNullToEmptyString]).
  */
-function writeControlValue(el: MirrorElement, v: unknown): void {
-  const s = v == null && el.tag !== "select" ? "" : String(v);
+function writeControlValue(el: MirrorElement, v: unknown, dirty = true): void {
+  if (dirty && isRangeInput(el)) el._rangeDirty = true;
+  const s = isRangeInput(el) ? rangeValue(el, v) : isColorInput(el) ? colorValue(v) : v == null && el.tag !== "select" ? "" : String(v);
   el._value = s;
   __vn_set_prop(el.__vnId, I("value"), s);
 }
@@ -8073,6 +8193,8 @@ defineDomGet(
     // attribute, else its text (the select model, below).
     if (isSelectEl(this)) return selectValue(this);
     if (isOptionEl(this)) return optionValue(this);
+    if (isRangeInput(this)) return rangeValue(this, this._value);
+    if (isColorInput(this)) return colorValue(this._value);
     return this._value;
   },
   function (this: MirrorElement, v: unknown) {
@@ -8086,6 +8208,31 @@ defineDomGet(
     else this._value = v as string;
   } as (value: never) => void,
 );
+
+defineDomGet(
+  "valueAsNumber",
+  function (this: MirrorElement) {
+    if (!isMirrorEl(this) || this.tag !== "input") return NaN;
+    return isRangeInput(this) ? Number(rangeValue(this, this._value))
+      : String(this.attrs.type ?? "").toLowerCase() === "number" ? rangeNumber(this._value) ?? NaN : NaN;
+  },
+  function (this: MirrorElement, raw: unknown) {
+    if (!isMirrorEl(this) || this.tag !== "input") return;
+    const value = Number(raw);
+    if (!Number.isFinite(value) && !Number.isNaN(value)) throw new TypeError("The provided value is non-finite.");
+    if (isRangeInput(this)) writeControlValue(this, Number.isNaN(value) ? "" : String(value));
+    else if (String(this.attrs.type ?? "").toLowerCase() === "number") writeControlValue(this, Number.isNaN(value) ? "" : String(value));
+    else throw new DOMException("This input element does not support Number values.", "InvalidStateError");
+  } as (value: never) => void,
+);
+function stepRange(el: MirrorElement, count: unknown, direction: number): void {
+  if (!isRangeInput(el)) throw new DOMException("This input element does not support stepping.", "InvalidStateError");
+  const { step } = rangeSpec(el);
+  if (step === null) throw new DOMException("This input element does not support stepping.", "InvalidStateError");
+  writeControlValue(el, Number(rangeValue(el, el._value)) + direction * toLong(count === undefined ? 1 : count) * step);
+}
+defineDom("stepUp", function (this: MirrorElement, n?: unknown) { stepRange(this, n, 1); });
+defineDom("stepDown", function (this: MirrorElement, n?: unknown) { stepRange(this, n, -1); });
 
 /** `defaultChecked`: the `checked` attribute's presence ("false" is Vue's spelling of absent). */
 function attrChecked(el: MirrorElement): boolean {
