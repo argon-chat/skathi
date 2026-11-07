@@ -187,8 +187,6 @@ export interface AppConfig {
   id: string;
   /** The launch keys, defaults applied (docs/LAUNCH.md). */
   launch: LaunchConfig;
-  /** TEMPORARY (m26): `"argonSecure": true` runs the host's ArgonSecure producer. */
-  argonSecure: boolean;
   warnings: string[];
 }
 
@@ -217,8 +215,6 @@ const TOP_LEVEL = new Set([
   "singleInstance",
   "raiseOnSecondInstance",
   "protocols",
-  // TEMPORARY (m26): the host's ArgonSecure producer, crates/vn-app/src/temp_argon_secure.rs.
-  "argonSecure",
 ]);
 
 /** RFC 3986 scheme, lowercase, as the host registers it. */
@@ -327,10 +323,13 @@ const str = (v: unknown, where: string): string | undefined => {
   return v.trim() || undefined;
 };
 
-export function loadAppConfig(target: string): AppConfig {
+/** A config override changes configuration only; entry and relative assets keep the target's app root. */
+export function loadAppConfig(target: string, options: { configPath?: string } = {}): AppConfig {
   const { appRoot, entry } = resolveApp(target);
-  const configPath = join(appRoot, "vn.config.json");
+  if (options.configPath !== undefined && !options.configPath.trim()) throw new ConfigError("--config needs a path");
+  const configPath = options.configPath === undefined ? join(appRoot, "vn.config.json") : resolve(options.configPath);
   const has = existsSync(configPath);
+  if (options.configPath !== undefined && !has) throw new ConfigError(`${configPath}: no such config file`);
   const raw = has ? readJson(configPath) : {};
   const where = (k: string) => `vn.config.json ${k}`;
   const warnings: string[] = [];
@@ -439,9 +438,6 @@ export function loadAppConfig(target: string): AppConfig {
     windows.variant = selectVariant(windows, where('"windows"'));
   }
 
-  if (raw.argonSecure !== undefined && typeof raw.argonSecure !== "boolean") {
-    throw new ConfigError('vn.config.json "argonSecure" must be true or false');
-  }
   if (raw.httpCache !== undefined && raw.httpCache !== false) {
     const c = raw.httpCache as Record<string, unknown> | null;
     const mb = c && typeof c === "object" ? c.maxMB : undefined;
@@ -449,7 +445,6 @@ export function loadAppConfig(target: string): AppConfig {
       throw new ConfigError('vn.config.json "httpCache" must be false or { "maxMB": <MB, 0 = no cache> }');
     }
   }
-  const argonSecure = raw.argonSecure === true;
 
   const exeName = sanitizeExeName(windows.exeName ?? productName) || sanitizeExeName(name) || "app";
   let iconPath: string | null = null;
@@ -477,7 +472,6 @@ export function loadAppConfig(target: string): AppConfig {
     iconPath,
     id: launch.id,
     launch,
-    argonSecure,
     warnings,
   };
 }

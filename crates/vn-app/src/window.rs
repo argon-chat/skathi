@@ -629,6 +629,12 @@ mod win {
         hwnd().is_some_and(|h| unsafe { IsIconic(h) }.as_bool())
     }
 
+    /// The HWND's shown/hidden state, independently of minimization or focus.
+    /// A not-yet-captured HWND keeps the ordinary visible-start default.
+    pub fn is_visible() -> bool {
+        hwnd().is_none_or(|h| unsafe { IsWindowVisible(h) }.as_bool())
+    }
+
     pub fn restore() {
         if let Some(h) = hwnd() {
             let _ = unsafe { ShowWindowAsync(h, SW_RESTORE) };
@@ -820,6 +826,7 @@ mod win {
     pub fn window_rect() -> Option<(f32, f32, f32, f32)> { None }
     pub fn is_zoomed() -> bool { false }
     pub fn is_iconic() -> bool { false }
+    pub fn is_visible() -> bool { true }
     pub fn restore() {}
     pub fn set_position(_x: f32, _y: f32) {}
     pub fn set_outer_size(_w: f32, _h: f32) {}
@@ -944,6 +951,8 @@ pub struct Snapshot {
     pub scale: f32,
     pub maximized: bool,
     pub minimized: bool,
+    /// Whether the OS window is shown; minimizing and cloaking remain separate.
+    pub visible: bool,
     pub fullscreen: bool,
     pub focused: bool,
     pub cloaked: bool,
@@ -974,6 +983,7 @@ impl Default for Snapshot {
             scale: 1.0,
             maximized: false,
             minimized: false,
+            visible: true,
             fullscreen: false,
             focused: false,
             cloaked: false,
@@ -996,6 +1006,9 @@ thread_local! {
     /// The snapshot every getter reads. Published once per frame, so a getter
     /// never needs a phase and never lies about which frame it is describing.
     static SNAPSHOT: RefCell<Snapshot> = RefCell::new(Snapshot::default());
+    /// DOM visibility is published at window initialization, before any app JS.
+    /// Keep its edge separate from PREV, whose first funnel still emits boot.
+    static PAGE_HIDDEN: Cell<Option<bool>> = const { Cell::new(None) };
     /// The registered JS observer (`__vn_window_observe`), protected against GC.
     static OBSERVER: Cell<u64> = const { Cell::new(0) };
     /// Mutators that arrived outside `Phase::Commit` (module scope, or from
@@ -1090,6 +1103,9 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     let dark = effective_dark(window);
     let s = SNAPSHOT.with(|c| c.borrow().clone());
     vn_tree::set_env(css_env(&s, dark, cx.reduce_motion()));
+    // A hidden initial window may never receive a platform frame. Publish now
+    // so module-scope document.hidden already describes the real HWND.
+    publish_visibility(&s);
     // `visibilitychange` on the platform's edge rather than the frame's: a
     // minimised window paints no frames, so the per-frame diff below only ever
     // saw `minimized` flip at the moment it was restored — and then compared
@@ -1105,8 +1121,8 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
 /// from inside the update that minimised the window.
 ///
 /// Runs the same funnel the frame does, out of band: the snapshot reads
-/// `minimized` from the OS, the diff against `PREV` turns it into
-/// `redjs_dom_set_visibility` + `minimize` / `restore`, and the next frame's
+/// shown/hidden and minimized state from the OS, then publishes DOM visibility
+/// independently of the `minimize` / `restore` events. The next frame's
 /// diff then sees nothing new, so nothing fires twice.
 fn visibility_changed(window: &mut Window, cx: &mut gpui::App) {
     if vn_runtime::bridge::poisoned()
@@ -1139,9 +1155,28 @@ pub fn cloaked() -> bool {
     win::is_cloaked()
 }
 
-/// `document.hidden` for a snapshot: minimised, or on another virtual desktop.
+/// A background-but-shown window remains visible; hidden, minimized and
+/// cloaked windows are hidden pages, independently of one another.
 fn hidden(s: &Snapshot) -> bool {
-    s.minimized || s.cloaked
+    !s.visible || s.minimized || s.cloaked
+}
+
+fn visibility_delta(previous: Option<bool>, snapshot: &Snapshot) -> Option<bool> {
+    let hidden = hidden(snapshot);
+    (previous != Some(hidden)).then_some(hidden)
+}
+
+fn publish_visibility(snapshot: &Snapshot) {
+    let Some(hidden) = PAGE_HIDDEN.with(|previous| {
+        let hidden = visibility_delta(previous.get(), snapshot)?;
+        previous.set(Some(hidden));
+        Some(hidden)
+    }) else { return; };
+    JsRuntime::with(|rt| unsafe {
+        vn_runtime::redjs::ffi::redjs_dom_set_visibility(rt.raw(), hidden as i32)
+    });
+    // Paint-only presents must follow the same visibility as the DOM.
+    vn_tree::set_page_hidden(hidden);
 }
 
 /// Whether the host still draws its own titlebar strip.
@@ -1303,6 +1338,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         scale,
         maximized: win::is_zoomed() || window.is_maximized(),
         minimized: win::is_iconic(),
+        visible: win::is_visible(),
         fullscreen: window.is_fullscreen(),
         focused: window.is_window_active(),
         cloaked: win::is_cloaked(),
@@ -1513,6 +1549,7 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("devicePixelRatio", Json::n(s.scale)),
         ("maximized", Json::Bool(s.maximized)),
         ("minimized", Json::Bool(s.minimized)),
+        ("visible", Json::Bool(s.visible)),
         ("fullscreen", Json::Bool(s.fullscreen)),
         ("focused", Json::Bool(s.focused)),
         ("cloaked", Json::Bool(s.cloaked)),
@@ -1608,7 +1645,7 @@ thread_local! {
 /// 3. `redjs_dom_resize` when the viewport or the DPI moved — this is what
 ///    updates `innerWidth`/`innerHeight`/`devicePixelRatio` and fires the
 ///    trusted `resize`;
-/// 4. `redjs_dom_set_visibility` when hidden-ness (minimised or cloaked) moved;
+/// 4. `redjs_dom_set_visibility` when shown/minimised/cloaked hidden-ness moved;
 /// 5. the JS observer, with the state delta.
 ///
 /// Step 3 before step 5 is what makes `fullscreenchange` fire AFTER the
@@ -1662,25 +1699,16 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         };
     }
 
+    // This also seeds visibility if no window-init publication was made.
+    // The separate cache prevents an extra visibilitychange on the first pump.
+    publish_visibility(&s);
+
     let mut kinds: Vec<&str> = Vec::new();
     match &prev {
         None => kinds.push("boot"),
         Some(p) => {
             if viewport_moved {
                 kinds.push("resize");
-            }
-            // "Hidden" means MINIMISED or CLOAKED (on another virtual desktop),
-            // not unfocused: a browser does not report a background-but-visible
-            // window as hidden, and ours keeps rendering when inactive by
-            // design. Chromium's Windows occlusion tracker does count a cloaked
-            // window as hidden, and so do we (`cloaked`). The minimise edge
-            // normally arrives through `visibility_changed`; a cloak has no
-            // window message, so its edge is this diff, run by the background
-            // tick while the pump declines frames.
-            if hidden(p) != hidden(&s) {
-                unsafe { vn_runtime::redjs::ffi::redjs_dom_set_visibility(ctx, hidden(&s) as i32) };
-                // …and no paint-only presents meanwhile (vn-tree's `live`).
-                vn_tree::set_page_hidden(hidden(&s));
             }
             if p.maximized != s.maximized {
                 kinds.push(if s.maximized { "maximize" } else { "unmaximize" });
@@ -2028,6 +2056,12 @@ fn submit(op: Op) {
 /// (src/embed.rs). Main thread.
 pub(crate) fn request_close() {
     submit(Op::Close);
+}
+
+/// The embedder shows the main window through gpui's activation path, which
+/// applies an initially hidden window's stored placement before showing it.
+pub(crate) fn request_activate() {
+    submit(Op::Activate(true));
 }
 
 /// `submit` needs the op twice (apply it, or queue it) and `Op` is not `Clone`
@@ -2428,15 +2462,33 @@ mod tests {
 
         let min = Snapshot { minimized: true, ..base.clone() };
         assert_eq!(titlebar_area(&min), (false, (0.0, 0.0, 0.0, 0.0)));
-        // Hidden is minimised OR cloaked (another virtual desktop); unfocused is not.
         let cloaked = Snapshot { cloaked: true, ..base.clone() };
         let unfocused = Snapshot { focused: false, ..base.clone() };
-        assert_eq!((hidden(&base), hidden(&min), hidden(&cloaked), hidden(&unfocused)), (false, true, true, false));
+        let not_shown = Snapshot { visible: false, ..base.clone() };
+        assert!(!not_shown.minimized, "a hidden window need not be minimized");
+        assert_eq!((hidden(&base), hidden(&min), hidden(&cloaked), hidden(&unfocused), hidden(&not_shown)), (false, true, true, false, true));
 
         // A host-drawn cluster takes its width off the RIGHT on Windows, so the
         // content area keeps x = 0 and loses width (3 x 46 px).
         let overlaid = Snapshot { overlay: Some(Overlay::default()), ..base.clone() };
         assert_eq!(titlebar_area(&overlaid), (true, (0.0, 0.0, 862.0, 32.0)));
+    }
+
+    #[test]
+    fn visibility_is_seeded_at_boot_and_only_actual_hidden_edges_publish() {
+        let shown = Snapshot::default();
+        let hidden = Snapshot { visible: false, ..shown.clone() };
+        assert_eq!(visibility_delta(None, &shown), Some(false));
+        assert_eq!(visibility_delta(None, &hidden), Some(true));
+        assert_eq!(visibility_delta(Some(true), &hidden), None, "the first pump must not repeat the boot publication");
+        assert_eq!(visibility_delta(Some(true), &shown), Some(false), "showing restores DOM visibility");
+        assert_eq!(visibility_delta(Some(false), &hidden), Some(true), "hiding does not require minimization");
+        let minimized = Snapshot { minimized: true, ..shown.clone() };
+        let cloaked = Snapshot { cloaked: true, ..shown.clone() };
+        assert_eq!(visibility_delta(Some(true), &minimized), None, "hidden-to-minimized is still a hidden page");
+        assert_eq!(visibility_delta(Some(true), &cloaked), None);
+        let unfocused = Snapshot { focused: false, ..shown };
+        assert_eq!(visibility_delta(Some(false), &unfocused), None, "focus is independent of visibility");
     }
 
     /// The rect the CSS side resolves `env(titlebar-area-*)` from is the SAME

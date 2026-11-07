@@ -400,7 +400,7 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       if (root) windowRoots.delete(root);
     });
 
-    // The LIVE props. `title` renames the window; `alwaysOnTop` re-stacks it;
+    // The LIVE props. `bounds` moves/resizes the same window; `title` renames it; `alwaysOnTop` re-stacks it;
     // `visible` shows or hides it; `fullResolution` pins its images' decodes;
     // `ignoreMouseEvents`, `contentProtection` and `monitor` are an overlay's
     // (§7.11). Everything else is creation-time-only in gpui and the host
@@ -409,6 +409,10 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       () =>
         [
           props.title,
+          props.bounds?.x,
+          props.bounds?.y,
+          props.bounds?.width,
+          props.bounds?.height,
           props.alwaysOnTop,
           props.visible,
           props.fullResolution,

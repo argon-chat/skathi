@@ -31,6 +31,7 @@ usage
 
 build options
   --out <dir>                  output directory (default <app>/dist)
+  --config <path>              external config; entry and relative assets stay under [app]
   --host <exe>                 the bare host to stamp (default: VN_HOST, the checkout's
                                target/…/release/vn-app.exe, then the local cache)
   selection — which engine parts the host carries (default: vn.config.json
@@ -111,6 +112,7 @@ async function main(argv: string[]): Promise<number> {
   if (command === "build" || command === "run") {
     const result = await buildApp({
       target: args[0] ?? ".",
+      configPath: typeof flags.config === "string" ? flags.config : undefined,
       out: typeof flags.out === "string" ? flags.out : undefined,
       host: typeof flags.host === "string" ? flags.host : undefined,
       variant: variantOf(flags),

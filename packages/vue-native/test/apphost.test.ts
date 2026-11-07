@@ -30,6 +30,9 @@ afterEach(() => {
   delete G.__vn_host_set_dispatcher;
   delete G.__vn_host_call;
   delete G.__vn_host_functions;
+  (G.__VN_HOST_LIFECYCLE__ as { reset?: () => void } | undefined)?.reset?.();
+  delete G.__VN_HOST__;
+  delete G.__VN_HOST_LIFECYCLE__;
 });
 
 test("in the exe appHost is unavailable, and a call rejects and says why once", async () => {
@@ -98,4 +101,23 @@ test("events reach their listeners until they unsubscribe, past one that throws"
     console.error = error;
   }
   expect(got).toEqual([{ online: true }]);
+});
+
+test("the public global is the same facade and reload retires old listeners and calls", async () => {
+  const h = embed(["slow"]);
+  const first = await load();
+  expect(G.__VN_HOST__).toBe(first.appHost);
+  const seen: unknown[] = [];
+  first.appHost.on("change", (data) => seen.push(data));
+  const old = first.appHost.call("slow").catch((error: Error) => error);
+  first.resetAppHost();
+  expect((await old).message).toContain("page unloaded");
+  h.dispatch(0, true, '{"event":"change","data":"stale"}');
+  expect(seen).toEqual([]);
+  const second = await load();
+  expect(G.__VN_HOST__).toBe(second.appHost);
+  second.appHost.on("change", (data) => seen.push(data));
+  h.dispatch(1, true, '"late answer"');
+  h.dispatch(0, true, '{"event":"change","data":"current"}');
+  expect(seen).toEqual(["current"]);
 });

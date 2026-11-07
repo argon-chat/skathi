@@ -76,6 +76,7 @@ fn run(rt: &JsRuntime) {
         eprintln!("[vn] reload teardown: {}\n{}", e.header, e.stack);
     }
     end_media(rt, "location.reload()");
+    crate::js::reload(rt.ctx());
     // The Network panel's divider between the two runs (devtools/net.rs).
     #[cfg(vn_devtools)]
     crate::devtools::mark_reload("location.reload()");

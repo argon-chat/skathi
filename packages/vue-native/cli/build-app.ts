@@ -34,6 +34,8 @@ export const MAX_PAYLOAD_BYTES = 1536 * 1024 * 1024;
 export interface BuildOptions {
   /** An app directory, its entry module, or its vn.config.json. */
   target: string;
+  /** Read this config instead of <appRoot>/vn.config.json; paths still belong to appRoot. */
+  configPath?: string;
   /** Output directory. Default `<appRoot>/dist`. */
   out?: string;
   host?: string;
@@ -95,15 +97,13 @@ export function appMeta(config: AppConfig, variant: Variant, host: ResolvedHost 
     // Read by the host before anything else exists (docs/LAUNCH.md): the
     // single-instance check and the per-user protocol registration.
     launch: config.launch,
-    // TEMPORARY (m26): crates/vn-app/src/temp_argon_secure.rs. Only when on.
-    ...(config.argonSecure ? { argonSecure: true } : {}),
   });
 }
 
 export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const log = options.log ?? console.log;
   const t0 = performance.now();
-  const config = loadAppConfig(options.target);
+  const config = loadAppConfig(options.target, { configPath: options.configPath });
   const warnings = [...config.warnings];
   // `--variant` / `--features` / `--without` (vn.ts) over vn.config.json's.
   const variant: Variant = options.variant ?? config.windows.variant;
@@ -129,7 +129,11 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   rmSync(assetsJson, { force: true });
   const tb = performance.now();
   const defineArgs = (options.defines ?? []).map((d) => `--define=${d}`);
-  const r = spawnSync(process.execPath, [PROD_TS, config.entry, jsOut, ...defineArgs], { cwd: PKG_DIR, encoding: "utf8" });
+  const pathArgs = [
+    `--app-root=${config.appRoot}`,
+    ...(config.configPath ? [`--config=${config.configPath}`] : []),
+  ];
+  const r = spawnSync(process.execPath, [PROD_TS, config.entry, jsOut, ...pathArgs, ...defineArgs], { cwd: PKG_DIR, encoding: "utf8" });
   if (r.status !== 0 || !existsSync(jsOut)) {
     throw new Error(`bun prod.ts failed for ${config.entry}\n${r.stdout ?? ""}${r.stderr ?? ""}`);
   }

@@ -62,6 +62,7 @@ mod http_client;
 #[global_allocator]
 static GLOBAL: heapcount::Counting = heapcount::Counting;
 mod dialogs; // the window a file dialog belongs to, and closing it safely
+pub mod js; // direct JavaScriptCore values and VM-thread dispatch for embedders
 pub mod embed; // vue-native as a library: another program runs it on a thread (docs/EMBEDDING.md)
 #[cfg(vn_devtools)]
 mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child registry
@@ -77,10 +78,6 @@ mod quiet; // VN_WINDOW_FOCUS=never: test hosts open behind and never take the f
 mod reload; // `location.reload()`: the restart path, on request
 mod shutdown; // a close hides the windows at once; the teardown runs under a deadline
 mod slot; // which dist slot this process is — the one thing dev, prod and devtools all ask
-// TEMPORARY (m26): the Argon client's `ArgonSecure` cookie, opt-in. One file,
-// one call below; delete both to remove it.
-#[cfg(feature = "storages")]
-mod temp_argon_secure;
 mod window; // windowing & chrome (docs/WINDOWING.md)
 
 #[cfg(not(feature = "prod"))]
@@ -1230,7 +1227,9 @@ pub(crate) fn run_embedded() {
     let args = vn_desktop::args::process();
     // Records the launch `appLaunch` reports. With no launch config there is
     // no single-instance check, so this always runs on.
-    let _ = vn_desktop::launch::start(args, None, boot_mode::app_name(), None);
+    if !embed::desktop_launch_prepared() {
+        let _ = vn_desktop::launch::start(args, None, boot_mode::app_name(), None);
+    }
     run_app();
     shutdown::finish();
 }
@@ -1271,6 +1270,10 @@ fn run_app() {
         // after a close, which already did.
         std::mem::forget(cx.on_app_quit(|_| {
             shutdown::begin("quit");
+            std::future::ready(())
+        }));
+        std::mem::forget(cx.on_app_quit(|_| {
+            JsRuntime::try_with(|runtime| js::shutdown(runtime.ctx()));
             std::future::ready(())
         }));
         #[cfg(vn_devtools)]
@@ -1379,7 +1382,7 @@ fn run_app() {
         vn_desktop::network::install();
 
         JsRuntime::init();
-        JsRuntime::with(|rt| {
+        let setup_result = JsRuntime::with(|rt| -> Result<(), String> {
             rt.register("__vn_set_status", 1, vn_set_status as *const _);
             rt.register("__vn_log", 1, vn_log as *const _);
             rt.register("__vn_perf_mark", 1, vn_perf_mark as *const _);
@@ -1451,14 +1454,10 @@ fn run_app() {
             // last for the run.
             #[cfg(feature = "storages")]
             vn_permissions::set_decisions_file(vn_storage::cookies::folder().map(|f| f.join("permissions.json")));
-            // TEMPORARY (m26): the Argon client's `ArgonSecure` cookie, when the
-            // build or `VN_ARGON_SECURE` opts in. After the jar's file is loaded
-            // (just above) and before any JS (src/temp_argon_secure.rs).
-            #[cfg(feature = "storages")]
-            {
-                if !devtools_mode && temp_argon_secure::wanted(boot_mode::argon_secure()) {
-                    temp_argon_secure::run();
-                }
+            // Embedding plugins initialize against the installed storage and cookie
+            // jar, before any application JS or window can make its first request.
+            if !devtools_mode {
+                embed::setup(rt)?;
             }
             #[cfg(vn_devtools)]
             devtools::install(rt);
@@ -1469,7 +1468,15 @@ fn run_app() {
             // `__vn_host_*` for `appHost`, when another program embeds us
             // (src/embed.rs). In the exe they do not exist.
             embed::install(rt);
+            Ok(())
         });
+        if let Err(error) = setup_result {
+            let summary = format!("host setup failed: {error}");
+            eprintln!("[embed] {summary}");
+            embed::finished(false, summary);
+            cx.quit();
+            return;
+        }
 
         let bounds = Bounds::centered(None, size(px(cfg.width), px(cfg.height)), cx);
         cx.open_window(
@@ -1501,6 +1508,7 @@ fn run_app() {
                 // without taking the caret out of whatever you were typing.
                 // An ordinary app is unaffected (`focus: true` is gpui's own
                 // default and what every other host here has always used).
+                show: embed::visible(),
                 focus: !devtools_mode && !quiet::never_focus() && embed::activates(),
                 ..Default::default()
             },
@@ -1638,6 +1646,12 @@ fn run_app() {
                 window::content_loaded();
             });
         });
+        // An initially hidden window has no platform frame callback to own
+        // the boot wave. Start its background clock only AFTER bundle evaluation,
+        // so timers, native completions and reload work without showing a window.
+        if !embed::visible() {
+            background::note_frame();
+        }
         // An inspector never comes to the front on its own — see
         // `inspector::install_hotkey`. Everything else does, exactly as before.
         if !devtools_mode && !quiet::never_focus() && embed::activates() {

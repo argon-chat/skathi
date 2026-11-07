@@ -40,6 +40,11 @@ const host: HostFns | null =
     ? { setDispatcher: __vn_host_set_dispatcher, call: __vn_host_call, functions: __vn_host_functions }
     : null;
 
+// A reload keeps the JS realm. Retire the previous facade before replacing
+// its native dispatcher, so old subscriptions and promises cannot enter the next app.
+const lifecycle = globalThis as { __VN_HOST__?: AppHost; __VN_HOST_LIFECYCLE__?: { reset: () => void } };
+lifecycle.__VN_HOST_LIFECYCLE__?.reset();
+
 const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void; name: string }>();
 const listeners = new Map<string, Set<(data: unknown) => void>>();
 let names: readonly string[] | null = null;
@@ -158,3 +163,15 @@ export const appHost: AppHost = {
     listeners.get(event)?.delete(handler);
   },
 };
+
+/** Runtime lifecycle hook; this is not part of the application's AppHost API. */
+export function resetAppHost(): void {
+  listeners.clear();
+  for (const p of pending.values()) p.reject(hostError(p.name, "the page unloaded before the host answered"));
+  pending.clear();
+}
+
+// Public lightweight access for app-owned adapters that also build without the
+// vue-native module alias. Replaced on reload together with its dispatcher.
+lifecycle.__VN_HOST__ = appHost;
+lifecycle.__VN_HOST_LIFECYCLE__ = { reset: resetAppHost };

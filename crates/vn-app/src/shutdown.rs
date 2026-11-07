@@ -60,6 +60,10 @@ static HIDDEN: Mutex<usize> = Mutex::new(0);
 /// Set by whichever of `finish` and the deadline ends the process first.
 static ENDING: AtomicBool = AtomicBool::new(false);
 
+pub(crate) fn is_closing() -> bool {
+    BEGAN.get().is_some()
+}
+
 /// A close was accepted (`why` names it): hide every window, tell the
 /// single-instance server, arm the deadline. Idempotent; main thread.
 pub fn begin(why: &'static str) {

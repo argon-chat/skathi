@@ -242,6 +242,7 @@ export function createRuntime(
   IMPORT_LINE.lastIndex = 0;
   const body = raw
     .replace(IMPORT_LINE, "")
+    .replace(/^\s*import\s*["'][^"']+["'];?[^\S\n]*$/gm, "")
     .replace(STAR_REEXPORT, "")
     .replace(NAMED_REEXPORT, "")
     .replace(LOCAL_EXPORT, "")

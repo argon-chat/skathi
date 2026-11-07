@@ -183,6 +183,8 @@ struct Popout {
     /// `(x, y, width, height)`, CSS px. `None` once placed, and for a cover
     /// window, which the monitor places.
     first_place: Option<(Option<f32>, Option<f32>, f32, f32)>,
+    /// Last declarative geometry; unrelated prop updates preserve user placement.
+    requested_bounds: [Option<f32>; 4],
     /// When the show in progress was asked for, until its first frame.
     show_asked: Option<Instant>,
     /// The first frame of the show in progress was drawn: when.
@@ -252,6 +254,7 @@ pub fn count() -> usize {
 // ---------------------------------------------------------------------------
 
 struct Options {
+    bounds: [Option<f32>; 4],
     title: String,
     x: Option<f32>,
     y: Option<f32>,
@@ -317,7 +320,12 @@ fn parse_options(raw: &str) -> Options {
             None
         }
     });
+    let bounds = ["x", "y", "width", "height"].map(|key| {
+        num(key).map(|n| n as f32).filter(|n| n.is_finite()
+            && (matches!(key, "x" | "y") || *n > 0.0))
+    });
     Options {
+        bounds,
         title: text("title").unwrap_or_else(|| "vue-native".to_string()),
         x: num("x").map(|n| n as f32),
         y: num("y").map(|n| n as f32),
@@ -522,7 +530,7 @@ host_fn!(fn vn_window_set_options(g, args) {
     // compares against them) and applied with the rest, out of this update:
     // a style change re-frames the window, and gpui hears of that through its
     // window proc.
-    let (hwnd, click_through, protection, monitor_moved) = POPOUTS.with(|p| {
+    let (hwnd, click_through, protection, monitor_moved, bounds_moved) = POPOUTS.with(|p| {
         let mut p = p.borrow_mut();
         let w = &mut p[i];
         w.always_on_top = always_on_top;
@@ -532,12 +540,23 @@ host_fn!(fn vn_window_set_options(g, args) {
         w.content_protection = opts.content_protection;
         let monitor_moved = w.monitor != opts.monitor;
         w.monitor = opts.monitor;
-        (w.hwnd, click_through, protection, monitor_moved)
+        let bounds_moved = w.requested_bounds != opts.bounds && !w.cover;
+        w.requested_bounds = opts.bounds;
+        if bounds_moved {
+            if let Some((x, y, width, height)) = w.first_place.as_mut() {
+                *x = opts.bounds[0].or(*x);
+                *y = opts.bounds[1].or(*y);
+                *width = opts.bounds[2].unwrap_or(*width);
+                *height = opts.bounds[3].unwrap_or(*height);
+            }
+        }
+        (w.hwnd, click_through, protection, monitor_moved, bounds_moved)
     });
     // A shown cover window that is asked for another monitor moves there now
     // (a game moved monitors); a hidden one takes it on its next show.
     let replace = monitor_moved && old_cover && old_visible && visible && hwnd != 0;
     let monitor = opts.monitor;
+    let bounds_request = bounds_moved.then_some(opts.bounds);
     let id = handle.window_id();
     with_app(|cx| {
         cx.defer(move |cx| {
@@ -562,6 +581,18 @@ host_fn!(fn vn_window_set_options(g, args) {
                     })
                     .detach();
                 }
+            }
+            if let Some(bounds) = bounds_request {
+                // SetWindowPos may synchronously send WM_SIZE/WM_DPICHANGED.
+                // Run outside App/Window borrows, on the existing HWND, without activation.
+                cx.spawn(async move |_| {
+                    if let (Some(window), Some(client)) =
+                        (popout_win::window_rect(hwnd), popout_win::client_rect_on_screen(hwnd))
+                    {
+                        let rect = live_client_rect(window, client, crate::window::primary_scale(), bounds);
+                        let _ = popout_win::set_rect(hwnd, rect);
+                    }
+                }).detach();
             }
             if visible_moved {
                 if visible {
@@ -1054,6 +1085,7 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             // Every window created hidden takes its `bounds` on its first
             // show — gpui never applied them — except a cover window, which
             // the monitor places.
+            requested_bounds: opts.bounds,
             first_place: ((!opts.visible || hidden_first) && !opts.cover)
                 .then_some((opts.x, opts.y, opts.width, opts.height)),
             show_asked: None,
@@ -1302,6 +1334,19 @@ fn still_hidden(id: WindowId, epoch: u64, cx: &mut App) -> bool {
 /// `bounds` now — the client size asked for, at `x`/`y` or centred on the main
 /// window's monitor, CSS px at the main window's scale. The window rect that
 /// makes, for the caller to move it to.
+/// Merge partial CSS-pixel bounds into the current client rect while preserving
+/// the native frame. The coordinate space matches initial VnWindow placement.
+fn live_client_rect(window: popout_win::Rect, client: popout_win::Rect, scale: f32,
+    bounds: [Option<f32>; 4]) -> popout_win::Rect
+{
+    let border = [client[0] - window[0], client[1] - window[1], window[2] - client[2], window[3] - client[3]];
+    let x = bounds[0].map_or(client[0], |n| (n * scale).round() as i32);
+    let y = bounds[1].map_or(client[1], |n| (n * scale).round() as i32);
+    let width = bounds[2].map_or(client[2] - client[0], |n| (n * scale).round().max(1.0) as i32);
+    let height = bounds[3].map_or(client[3] - client[1], |n| (n * scale).round().max(1.0) as i32);
+    [x - border[0], y - border[1], x + width + border[2], y + height + border[3]]
+}
+
 fn first_rect(
     hwnd: isize,
     main: Option<isize>,
@@ -1421,6 +1466,15 @@ pub fn install(rt: &JsRuntime) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn live_partial_bounds_preserve_frame_and_untouched_dimensions() {
+        let window = [90, 70, 530, 420];
+        let client = [100, 100, 520, 410];
+        assert_eq!(super::live_client_rect(window, client, 1.5, [Some(200.0), None, Some(300.0), None]),
+            [290, 70, 760, 420]);
+        assert_eq!(super::live_client_rect(window, client, 1.0, [None; 4]), window);
+    }
+
     use super::*;
 
     #[test]

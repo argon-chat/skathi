@@ -69,6 +69,7 @@ fn main() {
     no_identical_code_folding();
     thread_stack_commit();
     host_identity();
+    standalone_manifest();
 
     // The opt-OUT. Cargo features are additive across a graph, so this is the
     // one shape a "remove code" flag can take: the absence of the cfg is the
@@ -99,9 +100,18 @@ fn main() {
     // inspector's own sources AND the framework runtime it is compiled against.
     watch_tree(&repo.join("apps/devtools"));
     watch_tree(&repo.join("packages/vue-native/src"));
-    println!("cargo:rerun-if-changed={}", disp(&repo.join("packages/vue-native/prod.ts")));
-    println!("cargo:rerun-if-changed={}", disp(&repo.join("packages/vue-native/tailwind.ts")));
-    println!("cargo:rerun-if-changed={}", disp(&repo.join("packages/vue-native/package.json")));
+    println!(
+        "cargo:rerun-if-changed={}",
+        disp(&repo.join("packages/vue-native/prod.ts"))
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        disp(&repo.join("packages/vue-native/tailwind.ts"))
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        disp(&repo.join("packages/vue-native/package.json"))
+    );
 
     if let Some(prebuilt) = std::env::var_os("VN_DEVTOOLS_BUNDLE") {
         let prebuilt = PathBuf::from(prebuilt);
@@ -130,11 +140,35 @@ fn main() {
 
     match status {
         Ok(s) if s.success() => {}
-        Ok(s) => panic!("{}", failure(&pkg, &entry, &bundle, &format!("`bun prod.ts` exited with {s}"))),
-        Err(e) => panic!("{}", failure(&pkg, &entry, &bundle, &format!("`bun` could not be run: {e}"))),
+        Ok(s) => panic!(
+            "{}",
+            failure(
+                &pkg,
+                &entry,
+                &bundle,
+                &format!("`bun prod.ts` exited with {s}")
+            )
+        ),
+        Err(e) => panic!(
+            "{}",
+            failure(
+                &pkg,
+                &entry,
+                &bundle,
+                &format!("`bun` could not be run: {e}")
+            )
+        ),
     }
     if !bundle.is_file() {
-        panic!("{}", failure(&pkg, &entry, &bundle, "`bun prod.ts` reported success but wrote no bundle"));
+        panic!(
+            "{}",
+            failure(
+                &pkg,
+                &entry,
+                &bundle,
+                "`bun prod.ts` reported success but wrote no bundle"
+            )
+        );
     }
     // prod.ts always writes one beside the bundle; belt and braces, because an
     // `include_str!` of a missing file is the error message this file exists to
@@ -350,7 +384,9 @@ fn failure(pkg: &Path, entry: &Path, bundle: &Path, why: &str) -> String {
 /// is also a change.
 fn watch_tree(dir: &Path) {
     println!("cargo:rerun-if-changed={}", disp(dir));
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name();
@@ -368,4 +404,25 @@ fn watch_tree(dir: &Path) {
 
 fn disp(p: &Path) -> String {
     p.display().to_string().replace('\\', "/")
+}
+
+/// A library must not inject executable identity into its consumer. The generic
+/// host still owns the default Windows DPI/common-controls manifest.
+fn standalone_manifest() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let resources = root.join("../../vendor/zed/crates/gpui/resources/windows");
+    println!(
+        "cargo:rerun-if-changed={}",
+        resources.join("gpui.manifest.xml").display()
+    );
+    embed_resource::compile_for(
+        resources.join("gpui.rc"),
+        ["vn-app"],
+        embed_resource::ParamsIncludeDirs([resources]),
+    )
+    .manifest_required()
+    .unwrap();
 }

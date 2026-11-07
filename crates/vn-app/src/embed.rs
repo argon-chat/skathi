@@ -39,6 +39,23 @@ use std::time::Duration;
 use vn_runtime::redjs::api::Value;
 use vn_runtime::{JsRuntime, host_fn};
 
+mod host_context;
+pub use host_context::{HostContext, HostCookie, SameSite};
+
+type Setup = Box<dyn FnOnce(&HostContext) -> Result<(), String> + Send + 'static>;
+
+#[derive(Default)]
+struct SetupHook(Mutex<Option<Setup>>);
+
+impl SetupHook {
+    fn run(&self, context: &HostContext) -> Result<(), String> {
+        let setup = self.0.lock().map_err(|_| "host setup lock was poisoned".to_string())?.take();
+        let Some(setup) = setup else { return Ok(()) };
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| setup(context)))
+            .unwrap_or_else(|_| Err("host setup panicked".into()))
+    }
+}
+
 /// The vue-native thread's stack: the exe's own (`/STACK` in build.rs), which
 /// is what JSC's recursion limit is sized for.
 const STACK: usize = 8 * 1024 * 1024;
@@ -50,6 +67,9 @@ const DRAIN_CAP: usize = 16;
 pub type Handler = Arc<dyn Fn(Call) + Send + Sync + 'static>;
 
 struct Config {
+    visible: bool,
+    desktop_launch: bool,
+    setup: SetupHook,
     functions: HashMap<String, Handler>,
     activate: bool,
     #[cfg_attr(not(vn_devtools), allow(dead_code))]
@@ -64,10 +84,23 @@ pub(crate) fn active() -> bool {
     CONFIG.get().is_some()
 }
 
+/// This embedding binary already prepared the desktop launch policy in spawn.
+pub(crate) fn desktop_launch_prepared() -> bool {
+    CONFIG.get().is_some_and(|config| config.desktop_launch)
+}
+
 /// Does the app take the foreground at startup? Always, unless embedded with
 /// [`Builder::activate`]`(false)`.
 pub(crate) fn activates() -> bool {
-    CONFIG.get().is_none_or(|c| c.activate)
+    CONFIG.get().is_none_or(|c| requests_activation(c.activate, c.visible))
+}
+
+pub(crate) fn visible() -> bool {
+    CONFIG.get().is_none_or(|c| c.visible)
+}
+
+fn requests_activation(activate: bool, visible: bool) -> bool {
+    activate && visible
 }
 
 /// The exe F12 starts as the inspector, embedded (src/inspector.rs).
@@ -102,6 +135,9 @@ pub enum Error {
     Payload(String),
     /// Something read this process's arguments before `spawn`.
     ArgsAlreadyRead,
+    /// Desktop launch policy forwarded this invocation, or refused a duplicate.
+    /// The embedding main should return this exit code (0 means forwarded).
+    LaunchExit(i32),
     /// The thread could not be started.
     Spawn(std::io::Error),
 }
@@ -116,6 +152,7 @@ impl std::fmt::Display for Error {
             }
             Error::Payload(e) => write!(f, "{e}"),
             Error::ArgsAlreadyRead => write!(f, "vue-native's arguments were read before spawn"),
+            Error::LaunchExit(code) => write!(f, "desktop launch finished with exit code {code}"),
             Error::Spawn(e) => write!(f, "the vue-native thread did not start: {e}"),
         }
     }
@@ -138,6 +175,9 @@ impl std::error::Error for Error {}
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct Builder {
+    visible: bool,
+    desktop_launch: bool,
+    setup: Option<Setup>,
     payload: Option<PayloadSource>,
     args: Vec<String>,
     functions: HashMap<String, Handler>,
@@ -153,7 +193,28 @@ impl Default for Builder {
 
 impl Builder {
     pub fn new() -> Self {
-        Builder { payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None }
+        Builder { visible: true, desktop_launch: false, setup: None, payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None }
+    }
+
+    /// Lets this embedding binary own the payload's single-instance and custom
+    /// protocol policy. Uses the real process command line, including a deep
+    /// link's verbatim raw URL; `args` applies only to the default embedding mode.
+    /// A forwarded launch returns `Error::LaunchExit(0)` before creating a VM or window.
+    pub fn desktop_launch(mut self, enabled: bool) -> Self {
+        self.desktop_launch = enabled;
+        self
+    }
+
+    /// Runs once on the vue-native thread, after storage installation and before
+    /// any application JavaScript or window. An error or panic prevents startup;
+    /// the returned Handle reports an unclean Exit instead of opening the app.
+    /// Keep this short; prepare expensive plugin work before `spawn`.
+    pub fn setup<F>(mut self, setup: F) -> Self
+    where
+        F: FnOnce(&HostContext) -> Result<(), String> + Send + 'static,
+    {
+        self.setup = Some(Box::new(setup));
+        self
     }
 
     /// The app, as the `.vnpk` file `vn build` writes (`dist/.vn/app.vnpk`).
@@ -190,6 +251,15 @@ impl Builder {
         self
     }
 
+    /// Whether the primary window is shown at startup (default true). Hidden
+    /// applications still boot JS and pump background work; the embedding app
+    /// owns the tray or other UI that shows the window later. Hidden starts do
+    /// not activate the application or raise an already running desktop instance.
+    pub fn visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
+    }
+
     /// Whether the app's window takes the foreground when it opens (default
     /// `true`, as the exe does). `false` leaves the embedder's console or
     /// window where it is.
@@ -217,11 +287,24 @@ impl Builder {
             STARTED.store(false, Ordering::SeqCst);
             return Err(e);
         }
-        let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        if !vn_desktop::args::set_embedded(exe, self.args) {
-            return Err(Error::ArgsAlreadyRead);
+        if self.desktop_launch {
+            // Preserve GetCommandLineW protocol recovery; rejoining Builder.args
+            // would corrupt quotes and repeated spaces inside a deep link.
+            let args = vn_desktop::args::process();
+            let launch = crate::boot_mode::launch_config();
+            if let vn_desktop::launch::Outcome::Exit(code) =
+                vn_desktop::launch::start_with_activation(args, launch.as_deref(), crate::boot_mode::app_name(), None, requests_activation(self.activate, self.visible))
+            {
+                return Err(Error::LaunchExit(code));
+            }
+            vn_desktop::launch::register_declared();
+        } else {
+            let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            if !vn_desktop::args::set_embedded(exe, self.args) {
+                return Err(Error::ArgsAlreadyRead);
+            }
         }
-        let config = Config { functions: self.functions, activate: self.activate, inspector_exe: self.inspector_exe };
+        let config = Config { visible: self.visible, desktop_launch: self.desktop_launch, setup: SetupHook(Mutex::new(self.setup)), functions: self.functions, activate: self.activate, inspector_exe: self.inspector_exe };
         if CONFIG.set(config).is_err() {
             return Err(Error::AlreadyStarted);
         }
@@ -298,6 +381,7 @@ pub struct Exit {
 static EXIT: Mutex<Option<Exit>> = Mutex::new(None);
 static EXIT_CV: Condvar = Condvar::new();
 static CLOSE: AtomicBool = AtomicBool::new(false);
+static SHOW: AtomicBool = AtomicBool::new(false);
 
 /// The app has closed (src/shutdown.rs). The first report wins.
 pub(crate) fn finished(clean: bool, summary: String) {
@@ -348,6 +432,18 @@ impl Handle {
         let json = format!("{{\"event\":{},\"data\":{data}}}", crate::json::quote(event));
         push(Item::Event { json });
         Ok(())
+    }
+
+    /// Queues a show/activation on the UI thread, including the first show of
+    /// an initially hidden window. Returns whether it was accepted; closed or
+    /// closing applications refuse it. Uses the toolkit's placement/restore path.
+    pub fn show(&self) -> bool {
+        if self.is_closed() || crate::shutdown::is_closing() || CLOSE.load(Ordering::Acquire) {
+            return false;
+        }
+        SHOW.store(true, Ordering::Release);
+        wake();
+        true
     }
 
     /// Closes the app as `appWindow.close()` does: the windows go at once and
@@ -546,11 +642,20 @@ fn deliver(token: u32, ok: bool, text: &str) {
     });
 }
 
+/// After storage installation, before any application JS or window creation.
+pub(crate) fn setup(runtime: &JsRuntime) -> Result<(), String> {
+    let Some(config) = CONFIG.get() else { return Ok(()) };
+    config.setup.run(&HostContext::installed(Some(runtime)))
+}
+
 /// In the frame's JS wave (lib.rs `js_wave`): a close the embedder asked for.
 pub(crate) fn pump() {
+    let show = SHOW.swap(false, Ordering::AcqRel);
     if CLOSE.swap(false, Ordering::AcqRel) {
         vn_tree::log::record("embed", "[embed] the embedder closed the app");
         crate::window::request_close();
+    } else if show && !crate::shutdown::is_closing() {
+        crate::window::request_activate();
     }
 }
 
@@ -561,7 +666,10 @@ pub(crate) fn pump() {
 host_fn!(fn vn_host_set_dispatcher(g, args) {
     let f = args.arg(0);
     unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
-    DISPATCHER.with(|d| d.set(f.0));
+    let old = DISPATCHER.with(|d| d.replace(f.0));
+    if old != 0 {
+        unsafe { vn_runtime::redjs::ffi::redjs_unprotect(g, old) };
+    }
     // Whatever was emitted before the app was ready is deliverable now.
     wake();
     Value::undefined().0
@@ -638,6 +746,32 @@ mod tests {
             .collect();
         QUEUED.store(0, Ordering::Release);
         out
+    }
+
+    #[test]
+    fn startup_visibility_controls_initial_focus_and_secondary_activation() {
+        let normal = Builder::new();
+        assert!(normal.visible && requests_activation(normal.activate, normal.visible));
+        let hidden = Builder::new().visible(false);
+        assert!(!hidden.visible && !requests_activation(hidden.activate, hidden.visible));
+        let inactive = Builder::new().activate(false);
+        assert!(inactive.visible && !requests_activation(inactive.activate, inactive.visible));
+    }
+
+    #[test]
+    fn setup_receives_installed_context_once_and_propagates_failure() {
+        let called = Arc::new(AtomicUsize::new(0));
+        let observed = called.clone();
+        let hook = SetupHook(Mutex::new(Some(Box::new(move |ctx| {
+            assert_eq!(ctx.storage_dir().ok(), HostContext::installed(None).storage_dir().ok());
+            observed.fetch_add(1, Ordering::SeqCst);
+            Err("bootstrap refused".into())
+        }))));
+        assert_eq!(hook.run(&HostContext::installed(None)), Err("bootstrap refused".into()));
+        assert!(hook.run(&HostContext::installed(None)).is_ok());
+        assert_eq!(called.load(Ordering::SeqCst), 1);
+        let panic = SetupHook(Mutex::new(Some(Box::new(|_| panic!("plugin panic")))));
+        assert_eq!(panic.run(&HostContext::installed(None)), Err("host setup panicked".into()));
     }
 
     // One test, because the queue is the process's.

@@ -308,13 +308,6 @@ pub fn launch_config() -> Option<String> {
     Some(v.get("launch")?.to_json())
 }
 
-/// The manifest's `argonSecure`, copied by `build.ts` from `vn.config.json`
-/// (src/temp_argon_secure.rs). TEMPORARY.
-pub fn argon_secure() -> bool {
-    let Ok(text) = std::fs::read_to_string(dist("manifest.json")) else { return false };
-    json::parse(&text).and_then(|v| v.get("argonSecure").and_then(json::Json::as_bool)).unwrap_or(false)
-}
-
 /// The app's own name — what a per-app place on disk is named after
 /// (`%LOCALAPPDATA%\<app name>\storage`, see crates/vn-storage).
 ///
@@ -445,6 +438,7 @@ fn cold_restart(rt: &JsRuntime) {
     // old rooms: end them, and the old page's captures and AudioContexts, as
     // a reload does. (A hot restart keeps them — the shim reseeds.)
     crate::reload::end_media(rt, "cold restart");
+    crate::js::reload(rt.ctx());
     // The Network panel's divider between the two runs (devtools/net.rs).
     #[cfg(vn_devtools)]
     crate::devtools::mark_reload("cold restart: vendor.js changed");

@@ -333,7 +333,7 @@ fn raise_refusal(app_raises: bool, sender_raises: bool, quiet_here: bool, disabl
     let reasons: Vec<&str> = [
         (!app_raises, "\"raiseOnSecondInstance\" is false"),
         (quiet_here, "this instance is quiet (VN_WINDOW_FOCUS=never)"),
-        (!sender_raises, "the second launch was quiet (VN_WINDOW_FOCUS=never)"),
+        (!sender_raises, "the second launch did not request activation"),
         (disabled, "VN_LAUNCH_RAISE=off"),
     ]
     .into_iter()
@@ -426,6 +426,10 @@ fn raise() -> bool {
 // start: the first thing main() does
 // ---------------------------------------------------------------------------
 
+fn sender_requests_raise(activate: bool, quiet_sender: bool) -> bool {
+    activate && !quiet_sender
+}
+
 /// What `main()` should do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -454,6 +458,13 @@ pub const CLOSING_PATIENCE_MS: u64 = 6_000;
 /// name and the user — not the slot: two dev hosts of one app share a
 /// storage folder whatever their slots, so they are one instance too.
 pub fn start(args: &Args, config_json: Option<&str>, build_name: Option<String>, dev_slot: Option<PathBuf>) -> Outcome {
+    start_with_activation(args, config_json, build_name, dev_slot, true)
+}
+
+/// The same launch arbitration with an explicit sender activation policy. A
+/// background embedding start can forward its argv without foregrounding the
+/// existing instance; the primary instance's policy is otherwise unchanged.
+pub fn start_with_activation(args: &Args, config_json: Option<&str>, build_name: Option<String>, dev_slot: Option<PathBuf>, activate: bool) -> Outcome {
     let config = LaunchConfig::parse(config_json);
     let identity = resolve_identity(&config, build_name);
     if !args.ignored.is_empty() {
@@ -499,7 +510,7 @@ pub fn start(args: &Args, config_json: Option<&str>, build_name: Option<String>,
                 args: args.app_args.clone(),
                 cwd: info.cwd.clone(),
                 url: info.url.clone(),
-                raise: !quiet(),
+                raise: sender_requests_raise(activate, quiet()),
             };
             match instance::claim(&identity.id, &storage_name(&identity.name), &fwd) {
                 instance::Claim::Primary => holds = true,
@@ -736,14 +747,22 @@ mod tests {
     /// reason that holds is named, so a test that sets the seam as well still
     /// reads the quiet rule.
     #[test]
+    fn background_senders_forward_without_raising_the_existing_instance() {
+        assert!(sender_requests_raise(true, false));
+        assert!(!sender_requests_raise(false, false));
+        assert!(!sender_requests_raise(true, true));
+        assert!(!sender_requests_raise(false, true));
+    }
+
+    #[test]
     fn who_may_raise_the_window() {
         assert_eq!(raise_refusal(true, true, false, false), None);
         assert_eq!(raise_refusal(false, true, false, false).unwrap(), "\"raiseOnSecondInstance\" is false");
         assert_eq!(raise_refusal(true, true, true, false).unwrap(), "this instance is quiet (VN_WINDOW_FOCUS=never)");
-        assert_eq!(raise_refusal(true, false, false, false).unwrap(), "the second launch was quiet (VN_WINDOW_FOCUS=never)");
+        assert_eq!(raise_refusal(true, false, false, false).unwrap(), "the second launch did not request activation");
         assert_eq!(raise_refusal(true, true, false, true).unwrap(), "VN_LAUNCH_RAISE=off");
         let all = raise_refusal(true, false, true, true).unwrap();
-        assert!(all.contains("this instance is quiet") && all.contains("the second launch was quiet") && all.contains("VN_LAUNCH_RAISE"), "{all}");
+        assert!(all.contains("this instance is quiet") && all.contains("the second launch did not request activation") && all.contains("VN_LAUNCH_RAISE"), "{all}");
     }
 
     /// The key's name half is the storage folder's name, so the names one

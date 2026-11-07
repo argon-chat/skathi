@@ -36,6 +36,7 @@ import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/
 // module of its own with its dependencies injected (see its header); it has no
 // tier-2 surface to re-export, so it is installed here rather than re-exported.
 import { installDesktop } from "./desktop";
+import "./apphost";
 import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWire } from "./desktop";
 // `<canvas>`'s bitmap and its 2D context, keyed by the host node id (the
 // host+media stream's module). `nodeOps.createElement` adopts every canvas,
@@ -5131,6 +5132,7 @@ const realm = (() => {
     } catch (e) {
       __vn_log("reload: teardown: " + e);
     }
+    (globalThis as { __VN_HOST_LIFECYCLE__?: { reset: () => void } }).__VN_HOST_LIFECYCLE__?.reset();
     realm.close();
     // The host keeps calling the observer step it was given until the next
     // runtime installs its own; with nothing observed, the old one does

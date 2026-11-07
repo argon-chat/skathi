@@ -1,6 +1,6 @@
 // vue-native PRODUCTION builder: one self-contained IIFE, no loader, no HMR.
 //
-// Usage: bun prod.ts [app-entry.js] [out-file] [--define=KEY=VALUE ...]
+// Usage: bun prod.ts [app-entry.js] [out-file] [--config <path>] [--app-root <path>] [--define=KEY=VALUE ...]
 //
 //   dist/app.prod.js   IIFE — @vue/runtime-core + src/runtime.ts + every app
 //                      module + every SFC <style>, minified, __DEV__ = false.
@@ -82,7 +82,19 @@ import {
 // ---- paths ----------------------------------------------------------------
 
 const { defines: cliDefines, rest: argv } = takeDefineArgs(process.argv.slice(2));
-const positional = argv.filter((a) => !a.startsWith("--"));
+let configOverride: string | undefined;
+let appRootOverride: string | undefined;
+const positional: string[] = [];
+for (let i = 0; i < argv.length; i++) {
+  const arg = argv[i]!;
+  const flag = arg.split("=", 1)[0];
+  if (flag === "--config" || flag === "--app-root") {
+    const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[++i];
+    if (!value?.trim() || value.startsWith("--")) throw new Error(`${flag} needs a path`);
+    if (flag === "--config") configOverride = resolve(value);
+    else appRootOverride = resolve(value);
+  } else if (!arg.startsWith("--")) positional.push(arg);
+}
 
 const PKG_DIR = import.meta.dir; // .../packages/vue-native
 const WS_ROOT = resolve(PKG_DIR, "../.."); // repo root — module ids are relative to this
@@ -105,17 +117,24 @@ const OUT_FILE = resolve(positional[1] ?? join(PKG_DIR, "dist", "app.prod.js"));
 // root: `APP_ROOT` below walks up to the nearest `package.json`/`node_modules`
 // for module resolution and can land a level higher. Same name, same rule and
 // same reason as `build.ts`'s `VN_CONFIG_DIR`.
-const VN_CONFIG_DIR = APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR;
+const VN_CONFIG_DIR = appRootOverride ?? (APP_SRC_DIR.endsWith(`${sep}src`) ? dirname(APP_SRC_DIR) : APP_SRC_DIR);
+const VN_CONFIG_PATH = configOverride ?? join(VN_CONFIG_DIR, "vn.config.json");
 const WINDOW_JSON = join(dirname(OUT_FILE), "window.json");
 const ASSETS_JSON = join(dirname(OUT_FILE), "assets.json");
 
 function readVnConfig(): Record<string, unknown> {
-  const path = join(VN_CONFIG_DIR, "vn.config.json");
-  if (!existsSync(path)) return {};
+  const path = VN_CONFIG_PATH;
+  if (!existsSync(path)) {
+    if (configOverride) throw new Error(`${path}: no such config file`);
+    return {};
+  }
   try {
     const cfg = JSON.parse(readFileSync(path, "utf8"));
-    return cfg && typeof cfg === "object" && !Array.isArray(cfg) ? cfg : {};
+    if (cfg && typeof cfg === "object" && !Array.isArray(cfg)) return cfg;
+    if (configOverride) throw new Error("not a JSON object");
+    return {};
   } catch (e) {
+    if (configOverride) throw new Error(`${path}: ${e}`);
     console.error(`[prod] ${path}: ${e}`);
     return {};
   }
@@ -185,7 +204,7 @@ const advise = (m: string) => advisories.add(m);
 
 // ---- defines --------------------------------------------------------------
 
-const APP_DEFINES = appDefines(VN_CONFIG.define, cliDefines, join(VN_CONFIG_DIR, "vn.config.json"));
+const APP_DEFINES = appDefines(VN_CONFIG.define, cliDefines, VN_CONFIG_PATH);
 if (APP_DEFINES.errors.length) {
   for (const e of APP_DEFINES.errors) console.error(`[prod] ${e}`);
   process.exit(1);

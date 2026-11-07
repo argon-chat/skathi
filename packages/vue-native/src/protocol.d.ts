@@ -733,6 +733,8 @@ declare function __vn_host_set_dispatcher(fn: (token: number, ok: boolean, text:
 declare function __vn_host_call(name: string, argsJson: string): number;
 /** The names of the embedder's functions, as a JSON array of strings. */
 declare function __vn_host_functions(): string;
+/** Public appHost facade, also available to app-owned adapters without a module alias. */
+declare const __VN_HOST__: import("./apphost").AppHost;
 
 // ---------------------------------------------------------------------------
 // desktop — crates/vn-desktop/src/lib.rs (docs/SHELL.md, docs/LAUNCH.md)

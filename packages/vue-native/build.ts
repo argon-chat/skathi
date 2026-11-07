@@ -249,20 +249,6 @@ function readLaunchConfig(): Record<string, unknown> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
-// TEMPORARY (m26): `"argonSecure": true` turns on the host's ArgonSecure cookie
-// producer (crates/vn-app/src/temp_argon_secure.rs) for the Argon client. It is
-// copied only when it is exactly `true`; anything else is omitted, and the host
-// reads a missing key as off. Goes away with the producer.
-function readArgonSecure(): true | undefined {
-  const cfg = readVnConfig();
-  if (cfg?.argonSecure === undefined) return undefined;
-  if (typeof cfg.argonSecure !== "boolean") {
-    console.error(`[build] ${VN_CONFIG_PATH}: "argonSecure" must be true or false and was ignored`);
-    return undefined;
-  }
-  return cfg.argonSecure ? true : undefined;
-}
-
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const encId = (id: string) => id.split("/").join("__") + ".js";
 const J = (v: unknown) => JSON.stringify(v);
@@ -1453,7 +1439,6 @@ function writeManifest(files: string[]) {
         deps,
         window: readWindowConfig(),
         launch: readLaunchConfig(),
-        argonSecure: readArgonSecure(),
       },
       null,
       2,
