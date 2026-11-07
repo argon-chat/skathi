@@ -32,7 +32,7 @@ const TIMEOUT_MS = 8000;
  * process, which is attachable too — the inspector inspecting itself is a
  * legitimate (and useful) thing to do.
  */
-export function listTargets(): TargetList {
+async function discoverTargets(): Promise<TargetList> {
   const empty: TargetList = { preferred: null, self: null, targets: [] };
   // `__vn_devtools_targets` is registered by every host that HAS devtools and
   // by no other (`devtools::install`), so the probe is the honest question
@@ -47,10 +47,28 @@ export function listTargets(): TargetList {
     };
   }
   try {
-    return { ...empty, ...(JSON.parse(globalThis.__vn_devtools_targets()) as Partial<TargetList>) };
+    const deadline = Date.now() + 30000;
+    while (true) {
+      const found = JSON.parse(globalThis.__vn_devtools_targets()) as Partial<TargetList> & {
+        pending?: boolean;
+      };
+      if (!found.pending) return { ...empty, ...found };
+      if (Date.now() >= deadline) return { ...empty, error: "target discovery timed out" };
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
   } catch (e) {
     return { ...empty, error: `the target list did not parse: ${e}` };
   }
+}
+
+let discovery: Promise<TargetList> | null = null;
+
+/** Share one background scan between startup, the refresh button and the clock. */
+export function listTargets(): Promise<TargetList> {
+  if (!discovery) {
+    discovery = discoverTargets().finally(() => { discovery = null; });
+  }
+  return discovery;
 }
 
 // One command at a time, in order. Every command costs the TARGET a frame

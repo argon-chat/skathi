@@ -22,7 +22,7 @@
 //   | picker 150 ms poll        | unchanged — it is a pointer question       |
 //   | targets 3000 ms           | unchanged — no target is involved          |
 
-import { reactive } from "vue";
+import { markRaw, reactive } from "vue";
 import { Push, devtoolsArgs, listTargets, message, send } from "./wire";
 import { nodeLabel, rowVisible } from "./dump";
 import { gcSummary, sampleOf, type MemSample } from "./memfmt";
@@ -347,8 +347,8 @@ function cmd<T>(name: string, cmdArgs: Record<string, unknown> = {}, timeoutMs?:
 // attachment
 // ---------------------------------------------------------------------------
 
-export function refreshTargets(): TargetList {
-  const found = listTargets();
+export async function refreshTargets(): Promise<TargetList> {
+  const found = await listTargets();
   state.targets = found.targets || [];
   state.error = found.error || "";
   return found;
@@ -408,6 +408,8 @@ export function detach(): void {
 }
 
 function resetInspection(): void {
+  inspectionEpoch++;
+  cancelTreeRefresh();
   state.tree = null;
   state.rows = [];
   state.byId = {};
@@ -505,7 +507,7 @@ function onPush(msg: PushMessage): void {
       state.treeRev = msg.rev;
       // The tree is REFETCHED only when somebody is looking at it. A revision
       // number is free; a `tree` command is a frame of the target's budget.
-      if (state.tab === "elements") void refreshTree();
+      if (state.tab === "elements") scheduleTreeRefresh();
       break;
     case "status":
       state.logStatus = msg.text;
@@ -570,23 +572,54 @@ export function currentWindow(): WindowInfo | null {
 // ---------------------------------------------------------------------------
 
 let treeBusy = false;
+let inspectionEpoch = 0;
+let treeTimer: ReturnType<typeof setTimeout> | null = null;
+let lastTreeRefresh = -Infinity;
+const TREE_REFRESH_MS = 200;
+
+function cancelTreeRefresh(): void {
+  if (treeTimer !== null) clearTimeout(treeTimer);
+  treeTimer = null;
+}
+
+/** Collapse a frame-rate revision stream into at most five snapshots a second. */
+function scheduleTreeRefresh(): void {
+  if (treeBusy || treeTimer !== null || !state.target || state.tab !== "elements") return;
+  treeTimer = setTimeout(() => {
+    treeTimer = null;
+    if (state.target && state.tab === "elements") void refreshTree();
+  }, Math.max(0, lastTreeRefresh + TREE_REFRESH_MS - Date.now()));
+}
 
 export async function refreshTree(): Promise<void> {
   if (!state.target || treeBusy) return;
+  cancelTreeRefresh();
   treeBusy = true;
+  lastTreeRefresh = Date.now();
+  const epoch = inspectionEpoch;
+  const revision = state.treeRev;
+  const target = state.target;
+  const window = state.window;
   try {
     // Depth 14 covers every app in this repo whole; anything deeper comes back
     // as a `truncated` count and is fetched on demand when the row is opened.
     const tree = await cmd<TreeNode>("tree", { depth: 14 });
-    state.tree = tree;
+    if (epoch !== inspectionEpoch || target !== state.target || window !== state.window) return;
+    // Wire snapshots are replaced as a whole. Proxying every node and row
+    // adds thousands of reactive reads to each refresh without observing edits.
+    state.tree = markRaw(tree);
     state.treeError = "";
-    state.seenRev = state.treeRev;
+    state.seenRev = revision;
     if (!Object.keys(state.expanded).length) expandInitial(tree, 0);
     reindex();
   } catch (e) {
-    state.treeError = fail(e);
+    if (epoch === inspectionEpoch && target === state.target) state.treeError = fail(e);
   } finally {
     treeBusy = false;
+    if (
+      state.status === "attached" &&
+      (epoch !== inspectionEpoch || target !== state.target || window !== state.window || state.treeRev !== revision)
+    ) scheduleTreeRefresh();
   }
 }
 
@@ -640,8 +673,8 @@ export function reindex(): void {
   };
   walk(state.tree, 0);
 
-  state.rows = rows;
-  state.byId = byId;
+  state.rows = markRaw(rows);
+  state.byId = markRaw(byId);
   state.matches = matches;
   if (state.matchIndex >= matches.length) state.matchIndex = 0;
 }

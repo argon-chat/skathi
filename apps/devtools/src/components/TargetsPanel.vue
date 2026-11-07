@@ -32,8 +32,8 @@ const activeWindow = computed(() =>
   state.window === null ? state.windows.find((w) => w.kind === "main")?.id ?? null : state.window,
 );
 
-function rescan(): void {
-  const found = refreshTargets();
+async function rescan(): Promise<void> {
+  const found = await refreshTargets();
   if (!state.target || state.status === "lost") {
     const next = bestTarget(found);
     if (next) void attach(next);

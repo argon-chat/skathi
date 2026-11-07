@@ -157,12 +157,12 @@ onMounted(async () => {
   stopViewport = trackViewport();
   offKey = onKeydown(onKey);
 
-  const found = refreshTargets();
+  const found = await refreshTargets();
   const target = bestTarget(found);
   if (target) await attach(target);
 
   every(150, () => pickStep());
-  every(3000, () => refreshTargets());
+  every(3000, () => { void refreshTargets(); });
   every(SELECT_REFRESH_MS, () => {
     if (state.selected !== null && state.status === "attached" && !state.picking) {
       highlight(state.selected, SELECT_REFRESH_MS + 2000);

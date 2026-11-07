@@ -39,7 +39,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use gpui::{App, Window};
 use vn_runtime::{with_commit, JsRuntime};
@@ -660,7 +660,7 @@ fn scan_roots() -> Vec<std::path::PathBuf> {
     roots
 }
 
-fn targets_json() -> String {
+fn collect_targets_json() -> String {
     let preferred = std::env::var("VN_DEVTOOLS_TARGET").unwrap_or_default();
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     if !preferred.is_empty() {
@@ -685,6 +685,64 @@ fn targets_json() -> String {
         ("targets", Json::arr(targets)),
     ])
     .to_json()
+}
+
+#[derive(Default)]
+struct TargetScan {
+    running: bool,
+    ready: Option<String>,
+}
+
+/// Discovery probes stale loopback ports. On Windows each refused connection
+/// can consume its whole timeout; none of that may run on the JS/UI thread.
+#[derive(Clone, Default)]
+struct TargetDiscovery(Arc<Mutex<TargetScan>>);
+
+impl TargetDiscovery {
+    fn poll(
+        &self,
+        collect: impl FnOnce() -> String + Send + 'static,
+    ) -> std::io::Result<Option<String>> {
+        let mut scan = self.0.lock().unwrap();
+        if let Some(result) = scan.ready.take() {
+            return Ok(Some(result));
+        }
+        if scan.running {
+            return Ok(None);
+        }
+        scan.running = true;
+        drop(scan);
+        let shared = self.0.clone();
+        let worker = std::thread::Builder::new()
+            .name("vn-devtools-discovery".into())
+            .spawn(move || {
+                let result = collect();
+                let mut scan = shared.lock().unwrap();
+                scan.ready = Some(result);
+                scan.running = false;
+            });
+        if let Err(error) = worker {
+            self.0.lock().unwrap().running = false;
+            return Err(error);
+        }
+        Ok(None)
+    }
+}
+
+fn targets_json() -> String {
+    static DISCOVERY: OnceLock<TargetDiscovery> = OnceLock::new();
+    match DISCOVERY
+        .get_or_init(TargetDiscovery::default)
+        .poll(collect_targets_json)
+    {
+        Ok(Some(result)) => result,
+        Ok(None) => "{\"pending\":true}".into(),
+        Err(error) => Json::obj(vec![(
+            "error",
+            Json::s(format!("target discovery: {error}")),
+        )])
+        .to_json(),
+    }
 }
 
 /// Registers the devtools host fns. Call before the app bundle boots.
@@ -3079,6 +3137,45 @@ fn cmd_screenshot(path: Option<&str>, backend: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{http_request_line, parse_keystroke, resolve_initial};
+
+    #[test]
+    fn target_discovery_does_not_block_or_duplicate_a_running_scan() {
+        let discovery = super::TargetDiscovery::default();
+        let owner = std::thread::current().id();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        assert!(discovery
+            .poll(move || {
+                assert_ne!(std::thread::current().id(), owner);
+                started_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap();
+                "snapshot".into()
+            })
+            .unwrap()
+            .is_none());
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(discovery
+            .poll(|| panic!("a running scan must be shared"))
+            .unwrap()
+            .is_none());
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Some(result) = discovery
+                .poll(|| panic!("consume the finished scan first"))
+                .unwrap()
+            {
+                assert_eq!(result, "snapshot");
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
 
     /// DOM `KeyboardEvent.key` names map to gpui's, the inverse of
     /// `render::dom_key`. If one of them is missed, the `key` command
