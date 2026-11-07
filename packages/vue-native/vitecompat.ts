@@ -638,6 +638,8 @@ export function svgAsSfc(svg: string): string {
 // ---------------------------------------------------------------------------
 
 export interface ShapesOptions {
+  /** Observe typed source before Bun erases types; production AOT input archiving only. */
+  sourceLoaded?: (file: string, source: string, transformed: string) => void;
   /** The document root: where `vn.config.json` / `index.html` live. URLs and `/` globs start here. */
   docRoot: string;
   /** Workspace root — module ids in messages are relative to it. */
@@ -816,8 +818,8 @@ export function viteShapesPlugin(o: ShapesOptions) {
       // hands the file back to Bun's own loader untouched.
       build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async (args: any) => {
         const src = await Bun.file(args.path).text();
-        if (!src.includes("import.meta.glob") && !src.includes("new URL")) return undefined;
-        const code = transformSource(src, args.path, o);
+        const code = src.includes("import.meta.glob") || src.includes("new URL") ? transformSource(src, args.path, o) : null;
+        o.sourceLoaded?.(args.path, src, code ?? src);
         return code === null ? undefined : { contents: code, loader: loaderOf(args.path) };
       });
     },

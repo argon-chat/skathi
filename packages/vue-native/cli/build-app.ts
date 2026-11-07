@@ -48,6 +48,8 @@ export interface BuildOptions {
   allowHostMismatch?: boolean;
   /** `--define K=V`, each passed to prod.ts on top of vn.config.json `define`. */
   defines?: string[];
+  /** Retain typed source/SFC inputs for a future AOT frontend, outside the payload. */
+  aotInputs?: boolean;
   log?: (line: string) => void;
 }
 
@@ -76,6 +78,7 @@ export interface BuildResult {
   assets: AssetFile[];
   bundleBytes: number;
   payloadBytes: number;
+  aotInputs: string | null;
   warnings: string[];
   ms: { bundle: number; assets: number; stamp: number; total: number };
 }
@@ -132,6 +135,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const pathArgs = [
     `--app-root=${config.appRoot}`,
     ...(config.configPath ? [`--config=${config.configPath}`] : []),
+    ...(options.aotInputs ? [`--aot-inputs=${join(work, "aot-inputs")}`] : []),
   ];
   const r = spawnSync(process.execPath, [PROD_TS, config.entry, jsOut, ...pathArgs, ...defineArgs], { cwd: PKG_DIR, encoding: "utf8" });
   if (r.status !== 0 || !existsSync(jsOut)) {
@@ -235,6 +239,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     stamp: stamped,
     assets: collected.files,
     bundleBytes: script.length,
+    aotInputs: options.aotInputs ? join(work, "aot-inputs", "manifest.json") : null,
     payloadBytes: stamped?.payloadBytes ?? readFileSync(vnpk).length,
     warnings,
     ms: {

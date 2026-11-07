@@ -43,6 +43,8 @@ build options
   parts: ${OPTIONAL.join(", ")}
   --console                    keep the console subsystem (a console window opens with it)
   --payload-only               write dist/.vn/app.vnpk and stop; no host needed
+  --aot-inputs                 retain typed TS/Vue source inputs in dist/.vn/aot-inputs/
+                               (preparation archive; does not enable native AOT)
   --allow-host-mismatch        stamp a host from another vue-native version (maintainers)
   --define K=V                 a Vite-style define on top of vn.config.json "define"
                                (V is an expression: --define __FLAG__=true,
@@ -51,7 +53,7 @@ build options
 `;
 
 type Flags = Record<string, string | boolean>;
-const BOOLEAN = new Set(["console", "payload-only", "allow-host-mismatch", "help", "json"]);
+const BOOLEAN = new Set(["console", "payload-only", "allow-host-mismatch", "aot-inputs", "help", "json"]);
 /** Flags that may be given more than once; collected in order into `repeated`. */
 const REPEATABLE = new Set(["define"]);
 
@@ -120,6 +122,7 @@ async function main(argv: string[]): Promise<number> {
       payloadOnly: flags["payload-only"] === true,
       allowHostMismatch: flags["allow-host-mismatch"] === true,
       defines: repeated.define,
+      aotInputs: flags["aot-inputs"] === true,
     });
     if (flags.json) {
       // One line, for scripts and specs — the summary minus the prose.
@@ -128,6 +131,7 @@ async function main(argv: string[]): Promise<number> {
         JSON.stringify({
           exe: result.exe,
           vnpk: result.vnpk,
+          aotInputs: result.aotInputs,
           name: result.config.name,
           productName: result.config.productName,
           version: result.config.version,

@@ -53,6 +53,7 @@ import { resolve, dirname, join, relative, sep } from "path";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 
 import { asciiOnly, checkAscii, nonAsciiCount } from "./ascii";
+import { AotInputs, aotEngineIdentity } from "./aot-inputs";
 import { pruneVendorPrefixes } from "./css-prefixes";
 import {
   TW_ID,
@@ -84,14 +85,16 @@ import {
 const { defines: cliDefines, rest: argv } = takeDefineArgs(process.argv.slice(2));
 let configOverride: string | undefined;
 let appRootOverride: string | undefined;
+let aotInputsDir: string | undefined;
 const positional: string[] = [];
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i]!;
   const flag = arg.split("=", 1)[0];
-  if (flag === "--config" || flag === "--app-root") {
+  if (flag === "--config" || flag === "--app-root" || flag === "--aot-inputs") {
     const value = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[++i];
     if (!value?.trim() || value.startsWith("--")) throw new Error(`${flag} needs a path`);
     if (flag === "--config") configOverride = resolve(value);
+    else if (flag === "--aot-inputs") aotInputsDir = resolve(value);
     else appRootOverride = resolve(value);
   } else if (!arg.startsWith("--")) positional.push(arg);
 }
@@ -476,6 +479,7 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
   }
   if (cssChunks.length) cssById.set(id, cssChunks.join("\n"));
 
+  AOT_INPUTS?.vue(absPath, source, code, isTS ? "ts" : "js", [descriptor.script?.content, descriptor.scriptSetup?.content].filter(Boolean).join("\n"));
   return { contents: code, loader: isTS ? "ts" : "js" };
 }
 
@@ -495,15 +499,6 @@ let appOwnsUtilities = false;
 
 /** payload key -> absolute path: every asset an import referred to by URL. */
 const ASSETS = new Map<string, string>();
-const SHAPE_NOTES = new Map<string, number>();
-const SHAPES = {
-  docRoot: VN_CONFIG_DIR,
-  wsRoot: WS_ROOT,
-  svgDefault: svgDefaultOf(APP_PKG),
-  compileSfc: (absPath: string, source: string) => compileVue(absPath, source),
-  assets: ASSETS,
-  notes: SHAPE_NOTES,
-};
 
 // pinia / vue-router: the app's own copy when it declares one (an app on
 // pinia 3 gets pinia 3, as in its Vite build), vue-native's otherwise.
@@ -530,6 +525,27 @@ const APP_HAS_LIVEKIT = (() => {
     return false;
   }
 })();
+
+const AOT_INPUTS = aotInputsDir ? new AotInputs({
+  out: aotInputsDir,
+  appRoot: VN_CONFIG_DIR,
+  entry: ENTRY_ABS,
+  typescript: runtimeRequire("typescript"),
+  aliases: { vue: RUNTIME_ENTRY, "vue-native": RUNTIME_ENTRY, "livekit-client": LIVEKIT_ENTRY, ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])) },
+  sourceRoots: { sdk: PKG_DIR },
+  declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: join(PKG_DIR, "src"), absolute: true })],
+}) : null;
+
+const SHAPE_NOTES = new Map<string, number>();
+const SHAPES = {
+  sourceLoaded: AOT_INPUTS ? (file: string, source: string, transformed: string) => AOT_INPUTS.source(file, source, transformed) : undefined,
+  docRoot: VN_CONFIG_DIR,
+  wsRoot: WS_ROOT,
+  svgDefault: svgDefaultOf(APP_PKG),
+  compileSfc: (absPath: string, source: string) => compileVue(absPath, source),
+  assets: ASSETS,
+  notes: SHAPE_NOTES,
+};
 
 const vuePlugin = {
   name: "vue-sfc-prod",
@@ -754,6 +770,12 @@ async function build() {
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([key, path]) => ({ key, path }));
   writeAtomic(ASSETS_JSON, JSON.stringify(assets, null, 2) + "\n");
+  if (AOT_INPUTS) {
+    const pinsPath = join(WS_ROOT, "vendor", "redjs", "pins.txt");
+    const engine = aotEngineIdentity(existsSync(pinsPath) ? readFileSync(pinsPath, "utf8") : null);
+    const manifest = AOT_INPUTS.write({ script: out, scriptUrl: "vn://app.prod.js", defines: DEFINES, engine, sdkVersion: runtimeRequire("./package.json").version });
+    console.log(`[prod] typed AOT inputs: ${manifest} (source archive; native AOT compilation not enabled)`);
+  }
 
   for (const [what, n] of SHAPE_NOTES) console.log(`[prod] ${what}: ${n}`);
   if (LIFTED) {
