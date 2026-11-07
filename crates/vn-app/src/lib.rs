@@ -1437,6 +1437,12 @@ fn run_app() {
             // `boot_mode::app_name` is what names the default folder in a dev
             // host, where one exe runs many apps. See docs/STORAGE.md.
             #[cfg(feature = "storages")]
+            if !devtools_mode {
+                if let Some(directory) = embed::data_dir() {
+                    vn_storage::set_storage_folder(directory, None)?;
+                }
+            }
+            #[cfg(feature = "storages")]
             vn_storage::install(
                 rt,
                 if devtools_mode { Some("vn-devtools".to_string()) } else { boot_mode::app_name() },
@@ -1448,7 +1454,11 @@ fn run_app() {
             // which loads nothing worth keeping.
             #[cfg(feature = "storages")]
             if !devtools_mode {
-                vn_storage::http_cache::install(http_cache_mb);
+                if let Some(directory) = embed::data_dir() {
+                    vn_storage::http_cache::install_at(http_cache_mb, directory.join("cache").join("http"));
+                } else {
+                    vn_storage::http_cache::install(http_cache_mb);
+                }
             }
             // The answers to the app's own permission prompt live beside its
             // localStorage, in the storage folder as of now

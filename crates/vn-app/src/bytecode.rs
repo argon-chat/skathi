@@ -106,6 +106,9 @@ fn cache_folder() -> Option<PathBuf> {
     {
         return Some(PathBuf::from(folder));
     }
+    if let Some(directory) = crate::embed::data_dir() {
+        return Some(directory.join("cache").join("jsc"));
+    }
     local_data_folder().map(|base| {
         base.join(crate::payload::slot_name())
             .join("cache")

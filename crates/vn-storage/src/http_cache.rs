@@ -92,6 +92,15 @@ pub fn install(max_mb: u64) {
             return;
         }
     };
+    install_at(max_mb, dir);
+}
+
+/// Installs an explicitly located cache without changing the storage folder.
+/// The embedder chooses this before any requests or application JavaScript.
+pub fn install_at(max_mb: u64, dir: PathBuf) {
+    if max_mb == 0 {
+        return;
+    }
     let sealed = dir.join(KEY_NAME).exists() || storage_is_encrypted(&crate::current_folder());
     apply(dir, max_mb.saturating_mul(1 << 20), sealed);
 }

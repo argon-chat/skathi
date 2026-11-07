@@ -31,7 +31,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
@@ -43,6 +43,7 @@ mod host_context;
 pub use host_context::{HostContext, HostCookie, SameSite};
 
 type Setup = Box<dyn FnOnce(&HostContext) -> Result<(), String> + Send + 'static>;
+type PrepareDataDir = Box<dyn FnOnce(&Path) -> Result<(), String> + Send + 'static>;
 
 #[derive(Default)]
 struct SetupHook(Mutex<Option<Setup>>);
@@ -67,6 +68,7 @@ const DRAIN_CAP: usize = 16;
 pub type Handler = Arc<dyn Fn(Call) + Send + Sync + 'static>;
 
 struct Config {
+    data_dir: Option<PathBuf>,
     visible: bool,
     desktop_launch: bool,
     setup: SetupHook,
@@ -97,6 +99,34 @@ pub(crate) fn activates() -> bool {
 
 pub(crate) fn visible() -> bool {
     CONFIG.get().is_none_or(|c| c.visible)
+}
+
+/// The persistent root chosen before storage and cookies are installed.
+pub(crate) fn data_dir() -> Option<&'static Path> {
+    CONFIG.get()?.data_dir.as_deref()
+}
+
+fn resolve_data_dir(configured: Option<PathBuf>, override_dir: Option<std::ffi::OsString>) -> Result<Option<PathBuf>, Error> {
+    let directory = override_dir.filter(|path| !path.is_empty()).map(PathBuf::from).or(configured);
+    if let Some(path) = &directory {
+        if !path.is_absolute() {
+            return Err(Error::DataDirectory(format!("data directory must be absolute: {}", path.display())));
+        }
+    }
+    Ok(directory)
+}
+
+fn prepare_directory(directory: Option<&Path>, prepare: Option<PrepareDataDir>) -> Result<(), Error> {
+    let Some(directory) = directory else {
+        return if prepare.is_some() { Err(Error::DataDirectory("prepare_data_dir requires a data directory".into())) } else { Ok(()) };
+    };
+    if let Some(prepare) = prepare {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare(directory)))
+            .unwrap_or_else(|_| Err("data directory preparation panicked".into()))
+            .map_err(Error::DataDirectory)?;
+    }
+    std::fs::create_dir_all(directory)
+        .map_err(|error| Error::DataDirectory(format!("could not create {}: {error}", directory.display())))
 }
 
 fn requests_activation(activate: bool, visible: bool) -> bool {
@@ -138,6 +168,8 @@ pub enum Error {
     /// Desktop launch policy forwarded this invocation, or refused a duplicate.
     /// The embedding main should return this exit code (0 means forwarded).
     LaunchExit(i32),
+    /// The configured profile directory could not be prepared.
+    DataDirectory(String),
     /// The thread could not be started.
     Spawn(std::io::Error),
 }
@@ -153,6 +185,7 @@ impl std::fmt::Display for Error {
             Error::Payload(e) => write!(f, "{e}"),
             Error::ArgsAlreadyRead => write!(f, "vue-native's arguments were read before spawn"),
             Error::LaunchExit(code) => write!(f, "desktop launch finished with exit code {code}"),
+            Error::DataDirectory(e) => write!(f, "data directory: {e}"),
             Error::Spawn(e) => write!(f, "the vue-native thread did not start: {e}"),
         }
     }
@@ -175,6 +208,8 @@ impl std::error::Error for Error {}
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct Builder {
+    data_dir: Option<PathBuf>,
+    prepare_data_dir: Option<PrepareDataDir>,
     visible: bool,
     desktop_launch: bool,
     setup: Option<Setup>,
@@ -193,7 +228,27 @@ impl Default for Builder {
 
 impl Builder {
     pub fn new() -> Self {
-        Builder { visible: true, desktop_launch: false, setup: None, payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None }
+        Builder { data_dir: None, prepare_data_dir: None, visible: true, desktop_launch: false, setup: None, payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None }
+    }
+
+    /// Sets the persistent profile root before cookies, localStorage,
+    /// IndexedDB, permission decisions and host secrets are loaded. HTTP and
+    /// bytecode caches live in its `cache/http` and `cache/jsc` subdirectories.
+    /// `VN_DATA_DIR` overrides this path for isolated dev/test processes.
+    /// Paths must be absolute. Without either option, existing defaults apply.
+    pub fn data_dir(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.data_dir = Some(directory.into());
+        self
+    }
+
+    /// Prepares/migrates the configured profile after desktop single-instance
+    /// handling, before directory creation or any storage/VM initialization.
+    /// An error or panic stops startup; no default profile is substituted.
+    pub fn prepare_data_dir<F>(mut self, prepare: F) -> Self
+    where F: FnOnce(&Path) -> Result<(), String> + Send + 'static,
+    {
+        self.prepare_data_dir = Some(Box::new(prepare));
+        self
     }
 
     /// Lets this embedding binary own the payload's single-instance and custom
@@ -279,7 +334,8 @@ impl Builder {
     /// Starts vue-native on a thread of its own and returns at once; the
     /// window opens a moment later. Events emitted before the app is ready
     /// wait for it.
-    pub fn spawn(self) -> Result<Handle, Error> {
+    pub fn spawn(mut self) -> Result<Handle, Error> {
+        let data_dir = resolve_data_dir(self.data_dir.take(), std::env::var_os("VN_DATA_DIR"))?;
         if STARTED.swap(true, Ordering::SeqCst) {
             return Err(Error::AlreadyStarted);
         }
@@ -304,7 +360,8 @@ impl Builder {
                 return Err(Error::ArgsAlreadyRead);
             }
         }
-        let config = Config { visible: self.visible, desktop_launch: self.desktop_launch, setup: SetupHook(Mutex::new(self.setup)), functions: self.functions, activate: self.activate, inspector_exe: self.inspector_exe };
+        prepare_directory(data_dir.as_deref(), self.prepare_data_dir.take())?;
+        let config = Config { data_dir, visible: self.visible, desktop_launch: self.desktop_launch, setup: SetupHook(Mutex::new(self.setup)), functions: self.functions, activate: self.activate, inspector_exe: self.inspector_exe };
         if CONFIG.set(config).is_err() {
             return Err(Error::AlreadyStarted);
         }
@@ -746,6 +803,30 @@ mod tests {
             .collect();
         QUEUED.store(0, Ordering::Release);
         out
+    }
+
+    #[test]
+    fn data_directory_override_and_preparation_precede_storage() {
+        let base = std::env::temp_dir().join(format!("vn-data-dir-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let configured = base.join("configured");
+        let overridden = base.join("override");
+        assert_eq!(resolve_data_dir(Some(configured.clone()), Some(overridden.clone().into_os_string())).unwrap(), Some(overridden));
+        assert_eq!(resolve_data_dir(Some(configured.clone()), Some("".into())).unwrap(), Some(configured.clone()));
+        assert_eq!(resolve_data_dir(None, None).unwrap(), None);
+        assert!(resolve_data_dir(Some(PathBuf::from("relative")), None).is_err());
+        assert!(prepare_directory(None, Some(Box::new(|_| Ok(())))).is_err());
+        let refused = base.join("refused");
+        assert!(prepare_directory(Some(&refused), Some(Box::new(|_| Err("migration refused".into())))).is_err());
+        assert!(!refused.exists());
+        prepare_directory(Some(&configured), Some(Box::new(|path| {
+            assert!(!path.exists());
+            std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+            std::fs::write(path.join("prepared"), "profile").map_err(|e| e.to_string())
+        }))).unwrap();
+        assert_eq!(std::fs::read_to_string(configured.join("prepared")).unwrap(), "profile");
+        std::fs::remove_file(configured.join("prepared")).unwrap();
+        std::fs::remove_dir(configured).unwrap();
+        std::fs::remove_dir(base).unwrap();
     }
 
     #[test]
