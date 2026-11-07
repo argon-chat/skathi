@@ -66,8 +66,11 @@ static GLOBAL: heapcount::Counting = heapcount::Counting;
 mod dialogs; // the window a file dialog belongs to, and closing it safely
 pub mod js; // direct JavaScriptCore values and VM-thread dispatch for embedders
 pub mod embed; // vue-native as a library: another program runs it on a thread (docs/EMBEDDING.md)
+pub mod tray; // native application tray for Rust embedders and direct JavaScript callbacks
 #[cfg(vn_devtools)]
 mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child registry
+#[cfg(all(vn_devtools, feature = "native-aot"))]
+mod native_aot; // explicitly selected, ABI-checked native inspector images
 mod json; // the dev transport, the devtools wire and vn.config.json share one codec
 mod owner; // VN_OWNER_PID: a test host dies with the runner that launched it
 mod payload; // the app stamped into a packaged exe (VNPK), and `--vn-host-info`
@@ -1383,6 +1386,22 @@ fn run_app() {
         // advisory, delivered to the log ring by `vn_desktop::pump()`.
         vn_desktop::network::install();
 
+        #[cfg(all(vn_devtools, not(feature = "native-aot")))]
+        if devtools_mode && std::env::var_os("VN_DEVTOOLS_NATIVE_IMAGE").is_some() {
+            let summary = "native inspector requested, but this host was built without native-aot".to_string();
+            eprintln!("[native-aot] {summary}");
+            embed::finished(false, summary);
+            cx.quit();
+            return;
+        }
+        #[cfg(all(vn_devtools, feature = "native-aot"))]
+        if let Err(error) = native_aot::prepare(devtools_mode) {
+            let summary = format!("native inspector preparation failed: {error}");
+            eprintln!("[native-aot] {summary}");
+            embed::finished(false, summary);
+            cx.quit();
+            return;
+        }
         JsRuntime::init();
         let setup_result = JsRuntime::with(|rt| -> Result<(), String> {
             rt.register("__vn_set_status", 1, vn_set_status as *const _);
@@ -1438,8 +1457,14 @@ fn run_app() {
             // host, where one exe runs many apps. See docs/STORAGE.md.
             #[cfg(feature = "storages")]
             if !devtools_mode {
-                if let Some(directory) = embed::data_dir() {
-                    vn_storage::set_storage_folder(directory, None)?;
+                let encrypted = embed::storage_encrypted();
+                if embed::data_dir().is_some() || encrypted.is_some() {
+                    let directory = embed::data_dir().map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| vn_storage::default_folder(boot_mode::app_name().as_deref()));
+                    vn_storage::set_storage_folder(&directory, encrypted)?;
+                    if encrypted == Some(true) {
+                        vn_storage::encrypt_local_storage_at(&directory)?;
+                    }
                 }
             }
             #[cfg(feature = "storages")]
@@ -1469,6 +1494,7 @@ fn run_app() {
             // Embedding plugins initialize against the installed storage and cookie
             // jar, before any application JS or window can make its first request.
             if !devtools_mode {
+                tray::install(rt)?;
                 embed::setup(rt)?;
             }
             #[cfg(vn_devtools)]
@@ -1623,13 +1649,25 @@ fn run_app() {
         });
 
         // Startup eval: host fns called at top level land in Phase::App.
+        #[cfg(vn_devtools)]
+        let mut startup_error: Option<String> = None;
         with_published_app(cx, || {
             JsRuntime::with(|rt| {
                 if let Err(e) = perf::boot_eval("preludes", || rt.eval(PRELUDE_JS, "vn://prelude.js")) {
                     eprintln!("[js boot] {}\n{}", e.header, e.stack);
+                    #[cfg(all(vn_devtools, feature = "native-aot"))]
+                    if vn_runtime::redjs::aot::is_active() {
+                        startup_error = Some(format!("native inspector prelude failed: {}", e.header));
+                        return;
+                    }
                 }
                 if let Err(e) = perf::boot_eval("preludes", || rt.eval(WINDOW_PRELUDE_JS, "vn://window.js")) {
                     eprintln!("[js boot] {}\n{}", e.header, e.stack);
+                    #[cfg(all(vn_devtools, feature = "native-aot"))]
+                    if vn_runtime::redjs::aot::is_active() {
+                        startup_error = Some(format!("native inspector prelude failed: {}", e.header));
+                        return;
+                    }
                 }
                 // `VN_SCENARIO=<name>` — a harness app can pin itself to one
                 // screen at boot so a measurement is one process, one scenario,
@@ -1666,7 +1704,10 @@ fn run_app() {
                 }
                 #[cfg(vn_devtools)]
                 if devtools_mode {
-                    inspector::boot(rt);
+                    if let Err(error) = inspector::boot(rt) {
+                        startup_error = Some(error);
+                        return;
+                    }
                 } else {
                     boot_mode::boot(rt);
                 }
@@ -1679,6 +1720,14 @@ fn run_app() {
                 window::content_loaded();
             });
         });
+        #[cfg(vn_devtools)]
+        if let Some(error) = startup_error {
+            let summary = format!("inspector startup failed: {error}");
+            eprintln!("[native-aot] {summary}");
+            embed::finished(false, summary);
+            cx.quit();
+            return;
+        }
         // An initially hidden window has no platform frame callback to own
         // the boot wave. Start its background clock only AFTER bundle evaluation,
         // so timers, native completions and reload work without showing a window.

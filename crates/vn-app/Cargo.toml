@@ -9,6 +9,8 @@ publish = false
 build = "build.rs"
 
 [features]
+# Experimental native inspector backend; explicit manifest required.
+native-aot = ["vn-runtime/native-aot"]
 # The BARE HOST (m25, docs/PACKAGING.md): the dev manifest/HMR polling is
 # compiled out, and the app — bundle, window config, name, assets — is the VNPK
 # payload `vn build` stamps into a COPY of this exe (src/payload.rs, src/prod.rs).

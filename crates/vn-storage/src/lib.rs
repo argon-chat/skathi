@@ -102,11 +102,14 @@
 //!
 //! The cost, stated: a hard kill in that window loses the last frame's writes.
 //! `appStorage.flush()` is the synchronous escape hatch for code that wants the
-//! guarantee at a specific moment.
+//! guarantee at a specific moment. Persistent write failures retain the latest
+//! snapshot and retry automatically at most once per second; explicit flush
+//! always retries immediately.
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use vn_runtime::redjs::webapi::storage::{self as api, StorageHost};
 use vn_runtime::redjs::webapi::util::read_string;
@@ -149,6 +152,8 @@ struct State {
     loaded: bool,
     /// A staged write waiting for [`pump`].
     dirty: bool,
+    /// Persistent I/O failures must not re-encrypt and fsync on every frame.
+    retry_after: Option<Instant>,
     /// The last thing that went wrong, for `appStorage.info()`.
     error: Option<String>,
     /// A plaintext file that was migrated into a sealed one (or the reverse)
@@ -268,13 +273,25 @@ impl FileStorage {
         }
     }
 
+    /// Automatic retries are bounded; explicit flush/relocation bypass this delay.
+    fn write_due(&self, st: &mut State, now: Instant) -> Result<bool, String> {
+        if st.retry_after.is_some_and(|retry| now < retry) {
+            return Ok(false);
+        }
+        let result = self.write_now(st);
+        if result.is_err() {
+            st.retry_after = Some(now + Duration::from_secs(1));
+        }
+        result
+    }
+
     /// Writes the staged snapshot now. Returns `Ok(false)` when there was
     /// nothing to write.
     fn write_now(&self, st: &mut State) -> Result<bool, String> {
         if !st.dirty {
             return Ok(false);
         }
-        st.dirty = false;
+        // Keep the snapshot pending until persistence and plaintext retirement succeed.
         let json = file::encode(&st.snapshot);
         let (path, bytes) = if st.encrypted {
             let p = crypt::provider().ok_or_else(|| {
@@ -287,11 +304,16 @@ impl FileStorage {
         file::write_atomic(&path, &bytes)
             .map_err(|e| format!("could not write {}: {e}", path.display()))?;
         // Only once the new file is safely on disk.
-        if let Some(old) = st.retire.take() {
-            if let Err(e) = std::fs::remove_file(&old) {
-                eprintln!("[storage] could not remove the migrated {}: {e}", old.display());
+        if let Some(old) = &st.retire {
+            match std::fs::remove_file(old) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("could not retire migrated {}: {error}", old.display())),
             }
+            st.retire = None;
         }
+        st.dirty = false;
+        st.retry_after = None;
         st.error = None;
         Ok(true)
     }
@@ -447,6 +469,7 @@ fn relocate(folder: &Path, encrypted: Option<bool>) -> Result<(), String> {
     };
     let moved = !same_folder || was_encrypted != encrypted;
     st.folder = folder.clone();
+    if moved { st.retry_after = None; }
     st.encrypted = encrypted;
     st.error = None;
     if moved && st.loaded {
@@ -505,6 +528,57 @@ fn strip_verbatim(p: &Path) -> PathBuf {
     }
 }
 
+/// Converts an existing localStorage file without loading or changing the
+/// process-wide backend. The source is removed only after a verified sealed
+/// file exists; unreadable/corrupt storage is never replaced with empty data.
+/// Call before any process opens this profile for writes.
+pub fn encrypt_local_storage_at(folder: &Path) -> Result<bool, String> {
+    let provider = crypt::provider().ok_or("localStorage encryption is unavailable on this platform")?;
+    encrypt_local_storage_with(folder, provider)
+}
+
+fn encrypt_local_storage_with(folder: &Path, provider: &dyn crypt::SecretProvider) -> Result<bool, String> {
+    if !folder.is_absolute() {
+        return Err("localStorage encryption requires an absolute profile directory".into());
+    }
+    let plain = file::plain_path(folder);
+    let sealed = file::sealed_path(folder);
+    let read_sealed = |bytes: &[u8]| -> Result<Vec<(String, String)>, String> {
+        file::decode(&file::unseal(provider, bytes)?)
+    };
+    let mut changed = false;
+    match std::fs::read(&sealed) {
+        Ok(bytes) => {
+            // Match the backend's precedence: an existing sealed area is authoritative.
+            read_sealed(&bytes).map_err(|e| format!("verifying {}: {e}", sealed.display()))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let source = match std::fs::read(&plain) {
+                Ok(source) => source,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => return Err(format!("reading {}: {error}", plain.display())),
+            };
+            let text = std::str::from_utf8(&source).map_err(|e| format!("reading {}: {e}", plain.display()))?;
+            let entries = file::decode(text).map_err(|e| format!("reading {}: {e}", plain.display()))?;
+            let bytes = file::seal(provider, &file::encode(&entries))?;
+            file::write_atomic(&sealed, &bytes)
+                .map_err(|e| format!("sealing {}: {e}", plain.display()))?;
+            let written = std::fs::read(&sealed).map_err(|e| format!("verifying {}: {e}", sealed.display()))?;
+            if read_sealed(&written)? != entries {
+                return Err("encrypted localStorage did not round-trip; keeping plaintext source".into());
+            }
+            changed = true;
+        }
+        Err(error) => return Err(format!("reading {}: {error}", sealed.display())),
+    }
+    match std::fs::remove_file(&plain) {
+        Ok(()) => changed = true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("could not retire plaintext {}: {error}", plain.display())),
+    }
+    Ok(changed)
+}
+
 /// Writes the staged area now, synchronously. The escape hatch behind
 /// `appStorage.flush()`.
 pub fn flush() -> Result<bool, String> {
@@ -530,9 +604,9 @@ pub fn pump() {
     if !st.dirty {
         return;
     }
-    if let Err(e) = s.write_now(&mut st) {
-        // Once per distinct message: a folder that cannot be written will fail
-        // on every frame, and a log line per frame is not a diagnostic.
+    if let Err(e) = s.write_due(&mut st, Instant::now()) {
+        // Once per distinct message, with at most one automatic retry per second.
+        // Keep the latest snapshot pending through disk/retirement failures.
         if st.error.as_deref() != Some(e.as_str()) {
             eprintln!("[storage] {e}");
         }
@@ -696,6 +770,82 @@ pub fn install(rt: &JsRuntime, app_name: Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_sealed_write_or_plaintext_retirement_keeps_the_snapshot_pending() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let base = std::env::temp_dir().join(format!("vn-sealed-retry-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&base).unwrap();
+        let entries = vec![("preference".to_string(), "preserved".to_string())];
+        let plain = file::plain_path(&base);
+        let sealed = file::sealed_path(&base);
+        std::fs::write(&plain, file::encode(&entries)).unwrap();
+        let backend = FileStorage { state: Mutex::new(State::default()) };
+        let mut state = State { folder: base.clone(), encrypted: true, loaded: true,
+            dirty: true, snapshot: entries.clone(), retire: Some(plain.clone()), ..State::default() };
+        std::fs::create_dir(&sealed).unwrap();
+        let now = Instant::now();
+        assert!(backend.write_due(&mut state, now).is_err());
+        assert!(state.dirty && plain.exists());
+        std::fs::remove_dir(&sealed).unwrap();
+        // Even after the destination becomes writable, automatic pump calls
+        // during the delay do no disk work and retain the complete snapshot.
+        assert!(!backend.write_due(&mut state, now + Duration::from_millis(500)).unwrap());
+        assert!(!sealed.exists());
+        let locked = std::fs::OpenOptions::new().read(true).share_mode(1).open(&plain).unwrap();
+        assert!(backend.write_due(&mut state, now + Duration::from_secs(1)).is_err());
+        assert!(state.dirty && state.retire.is_some() && plain.exists());
+        drop(locked);
+        assert!(!backend.write_due(&mut state, now + Duration::from_millis(1500)).unwrap());
+        assert!(plain.exists());
+        // A manual flush bypasses the automatic delay and recovers immediately.
+        assert!(backend.write_now(&mut state).unwrap());
+        assert!(!state.dirty && state.retry_after.is_none() && state.retire.is_none() && !plain.exists());
+        let bytes = std::fs::read(&sealed).unwrap();
+        assert_eq!(file::decode(&file::unseal(crypt::provider().unwrap(), &bytes).unwrap()).unwrap(), entries);
+        std::fs::remove_file(sealed).unwrap();
+        std::fs::remove_dir(base).unwrap();
+    }
+
+    #[test]
+    fn startup_encryption_preserves_values_and_retires_plaintext_only_after_verification() {
+        struct Protector;
+        impl crypt::SecretProvider for Protector {
+            fn name(&self) -> &'static str { "test envelope" }
+            fn id(&self) -> u8 { 98 }
+            fn protect(&self, bytes: &[u8]) -> Result<Vec<u8>, String> { Ok(bytes.iter().map(|byte| byte ^ 0x5a).collect()) }
+            fn unprotect(&self, bytes: &[u8]) -> Result<Vec<u8>, String> { self.protect(bytes) }
+        }
+        let base = std::env::temp_dir().join(format!("vn-encrypt-startup-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&base).unwrap();
+        let entries = vec![("settings".to_string(), "private value π".to_string())];
+        std::fs::write(file::plain_path(&base), file::encode(&entries)).unwrap();
+        assert!(encrypt_local_storage_with(&base, &Protector).unwrap());
+        assert!(!file::plain_path(&base).exists());
+        let sealed = std::fs::read(file::sealed_path(&base)).unwrap();
+        assert_eq!(file::decode(&file::unseal(&Protector, &sealed).unwrap()).unwrap(), entries);
+        assert!(!sealed.windows(b"private value".len()).any(|bytes| bytes == b"private value"));
+        assert!(!encrypt_local_storage_with(&base, &Protector).unwrap());
+        // An older duplicate must not resurrect data over the active sealed area.
+        std::fs::write(file::plain_path(&base), file::encode(&[("stale".into(), "old".into())])).unwrap();
+        assert!(encrypt_local_storage_with(&base, &Protector).unwrap());
+        assert_eq!(std::fs::read(file::sealed_path(&base)).unwrap(), sealed);
+        // A corrupt sealed file cannot retire the recovery plaintext.
+        std::fs::write(file::plain_path(&base), file::encode(&entries)).unwrap();
+        std::fs::write(file::sealed_path(&base), b"broken ciphertext").unwrap();
+        assert!(encrypt_local_storage_with(&base, &Protector).is_err());
+        assert!(file::plain_path(&base).is_file());
+        std::fs::remove_file(file::plain_path(&base)).unwrap();
+        std::fs::remove_file(file::sealed_path(&base)).unwrap();
+        // A malformed source stays intact without publishing an empty encrypted area.
+        std::fs::write(file::plain_path(&base), b"broken json").unwrap();
+        assert!(encrypt_local_storage_with(&base, &Protector).is_err());
+        assert_eq!(std::fs::read(file::plain_path(&base)).unwrap(), b"broken json");
+        assert!(!file::sealed_path(&base).exists());
+        std::fs::remove_file(file::plain_path(&base)).unwrap();
+        std::fs::remove_dir(base).unwrap();
+    }
 
     #[test]
     fn an_app_name_becomes_a_folder_name_that_windows_will_accept() {

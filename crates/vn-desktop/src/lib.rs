@@ -65,6 +65,7 @@ pub mod launch;
 pub mod network;
 mod pool;
 pub mod shell;
+pub mod tray;
 
 // ---------------------------------------------------------------------------
 // failures, as they cross into JS

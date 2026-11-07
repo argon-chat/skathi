@@ -363,6 +363,7 @@ pub fn host_info_json() -> String {
     let mut features: Vec<Json> = Vec::new();
     for (on, name) in [
         (cfg!(feature = "prod"), "prod"),
+        (cfg!(feature = "native-aot"), "native-aot"),
         (cfg!(feature = "no-devtools"), "no-devtools"),
         (cfg!(feature = "audio"), "audio"),
         (cfg!(feature = "storages"), "storages"),

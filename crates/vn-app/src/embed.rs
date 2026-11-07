@@ -69,6 +69,8 @@ pub type Handler = Arc<dyn Fn(Call) + Send + Sync + 'static>;
 
 struct Config {
     data_dir: Option<PathBuf>,
+    #[cfg(feature = "storages")]
+    storage_encrypted: Option<bool>,
     visible: bool,
     desktop_launch: bool,
     setup: SetupHook,
@@ -99,6 +101,20 @@ pub(crate) fn activates() -> bool {
 
 pub(crate) fn visible() -> bool {
     CONFIG.get().is_none_or(|c| c.visible)
+}
+
+/// Seals a dormant profile's localStorage before application-owned migration.
+/// It uses the SDK storage format and OS provider, with no plaintext fallback.
+pub fn encrypt_local_storage_at(directory: &Path) -> Result<bool, String> {
+    #[cfg(feature = "storages")]
+    { vn_storage::encrypt_local_storage_at(directory) }
+    #[cfg(not(feature = "storages"))]
+    { let _ = directory; Err("enable the storages feature to encrypt localStorage".into()) }
+}
+
+#[cfg(feature = "storages")]
+pub(crate) fn storage_encrypted() -> Option<bool> {
+    CONFIG.get()?.storage_encrypted
 }
 
 /// The persistent root chosen before storage and cookies are installed.
@@ -209,6 +225,7 @@ impl std::error::Error for Error {}
 /// ```
 pub struct Builder {
     data_dir: Option<PathBuf>,
+    storage_encrypted: Option<bool>,
     prepare_data_dir: Option<PrepareDataDir>,
     visible: bool,
     desktop_launch: bool,
@@ -228,7 +245,7 @@ impl Default for Builder {
 
 impl Builder {
     pub fn new() -> Self {
-        Builder { data_dir: None, prepare_data_dir: None, visible: true, desktop_launch: false, setup: None, payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None }
+        Builder { data_dir: None, storage_encrypted: None, prepare_data_dir: None, visible: true, desktop_launch: false, setup: None, payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None }
     }
 
     /// Sets the persistent profile root before cookies, localStorage,
@@ -238,6 +255,14 @@ impl Builder {
     /// Paths must be absolute. Without either option, existing defaults apply.
     pub fn data_dir(mut self, directory: impl Into<PathBuf>) -> Self {
         self.data_dir = Some(directory.into());
+        self
+    }
+
+    /// Sets storage encryption before any cookie, database or app code runs.
+    /// `true` requires an OS encryption provider and seals existing plaintext
+    /// localStorage before boot. Without this option the sticky/default policy applies.
+    pub fn storage_encrypted(mut self, encrypted: bool) -> Self {
+        self.storage_encrypted = Some(encrypted);
         self
     }
 
@@ -336,6 +361,10 @@ impl Builder {
     /// wait for it.
     pub fn spawn(mut self) -> Result<Handle, Error> {
         let data_dir = resolve_data_dir(self.data_dir.take(), std::env::var_os("VN_DATA_DIR"))?;
+        #[cfg(not(feature = "storages"))]
+        if self.storage_encrypted.is_some() {
+            return Err(Error::DataDirectory("storage_encrypted requires the storages feature".into()));
+        }
         if STARTED.swap(true, Ordering::SeqCst) {
             return Err(Error::AlreadyStarted);
         }
@@ -361,7 +390,14 @@ impl Builder {
             }
         }
         prepare_directory(data_dir.as_deref(), self.prepare_data_dir.take())?;
-        let config = Config { data_dir, visible: self.visible, desktop_launch: self.desktop_launch, setup: SetupHook(Mutex::new(self.setup)), functions: self.functions, activate: self.activate, inspector_exe: self.inspector_exe };
+        let config = Config {
+            data_dir,
+            #[cfg(feature = "storages")]
+            storage_encrypted: self.storage_encrypted,
+            visible: self.visible, desktop_launch: self.desktop_launch,
+            setup: SetupHook(Mutex::new(self.setup)), functions: self.functions,
+            activate: self.activate, inspector_exe: self.inspector_exe,
+        };
         if CONFIG.set(config).is_err() {
             return Err(Error::AlreadyStarted);
         }

@@ -62,7 +62,7 @@ const INSPECTOR_JS_DEFLATE: &[u8] =
 
 /// The bundle's source, inflated for the one eval that needs it and dropped
 /// after it.
-fn inspector_js() -> std::io::Result<String> {
+pub(crate) fn inspector_js() -> std::io::Result<String> {
     use std::io::Read;
     let mut js = String::with_capacity(INSPECTOR_JS_DEFLATE.len() * 4);
     flate2::read::DeflateDecoder::new(INSPECTOR_JS_DEFLATE).read_to_string(&mut js)?;
@@ -146,7 +146,7 @@ pub fn init() {
 /// The bundle is `bun prod.ts`'s output, so it carries its own stylesheet
 /// (`__VN_CSS__` pushes ahead of the IIFE) and mounts itself — exactly what
 /// [`crate::prod::boot`] evaluates, from a different `include_str!`.
-pub fn boot(rt: &JsRuntime) {
+pub fn boot(rt: &JsRuntime) -> Result<(), String> {
     let mode = mode();
     // What the UI needs and cannot derive: which window of the target this
     // inspector was opened for, and whether it is a child at all (a child adds
@@ -180,16 +180,25 @@ pub fn boot(rt: &JsRuntime) {
     if let Err(e) = rt.eval(&js, "vn://devtools-args.js") {
         eprintln!("[devtools-host] args: {}\n{}", e.header, e.stack);
     }
+    #[cfg(feature = "native-aot")]
+    match crate::native_aot::boot(rt) {
+        Ok(true) => return Ok(()),
+        Ok(false) => {},
+        Err(error) => {
+            return Err(format!("native inspector: {error}; restart without VN_DEVTOOLS_NATIVE_IMAGE for JIT"));
+        }
+    }
     let js = match inspector_js() {
         Ok(js) => js,
         Err(e) => {
             eprintln!("[devtools-host] inspector bundle: cannot inflate the embedded copy: {e}");
-            return;
+            return Ok(());
         }
     };
     if let Err(e) = rt.eval(&js, "vn://devtools.prod.js") {
         eprintln!("[devtools-host] inspector bundle: {}\n{}", e.header, e.stack);
     }
+    Ok(())
 }
 
 /// The inspector's own window block — the same JSON `apps/devtools/vn.config.json`

@@ -11903,6 +11903,8 @@ export type { VnWindowBounds, VnWindowMetrics, VnWindowTarget } from "./vnwindow
 // `appHost` — the functions and events of a program that embeds vue-native as
 // a library (docs/EMBEDDING.md). Inert, and saying so, in the exe.
 export { appHost } from "./apphost";
+export { appTray } from "./tray";
+export type { AppTray, TrayOptions, TrayPixels, TrayMenuItem, TrayMenuEntry } from "./tray";
 export type { AppHost, AppHostError } from "./apphost";
 
 // Compiled SFC code and app code import everything Vue-ish from here
