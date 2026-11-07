@@ -1588,6 +1588,27 @@ fn run_app() {
         // time a sheet maps a `font-family`, and before any JS has run.
         let text_system = cx.text_system().clone();
         vn_css::set_font_source(move || text_system.all_font_names());
+        let metric_system = cx.text_system().clone();
+        let metric_text = RefCell::new((0usize, gpui::WindowTextSystem::new(metric_system.clone())));
+        vn_css::set_font_metric_source(move |font, size| {
+            let mut cache = metric_text.borrow_mut();
+            let (queries, text) = &mut *cache;
+            // This metric-only window is not frame-pumped. Bound its line cache
+            // when animated font sizes or many families produce new cache keys.
+            if *queries >= 128 {
+                *text = gpui::WindowTextSystem::new(metric_system.clone());
+                *queries = 0;
+            }
+            *queries += 1;
+            let run = gpui::TextRun { len: 1, font: font.clone(), color: gpui::black(), ..Default::default() };
+            let lines = text.shape_text("0".into(), gpui::px(size), &[run], None, None).ok()?;
+            let line = lines.first()?;
+            let font_id = line.runs().first()?.font_id;
+            Some(vn_css::FontRelativeMetrics {
+                zero_advance: f32::from(line.size(gpui::px(size)).width),
+                x_height: f32::from(text.x_height(font_id, gpui::px(size))),
+            })
+        });
 
         // Startup eval: host fns called at top level land in Phase::App.
         with_published_app(cx, || {

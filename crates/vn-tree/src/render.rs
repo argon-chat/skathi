@@ -2270,7 +2270,14 @@ fn build_node<V: 'static>(
                 // drag is recording (`crate::selection`).
                 text => {
                     let lead = text.as_ptr() as usize - collapsed.as_ptr() as usize;
-                    crate::selection::text_element(t, id, &node.text, ws, lead, text, case)
+                    let text = crate::selection::text_element(t, id, &node.text, ws, lead, text, case);
+                    if synthetic_inline_item(t, node) {
+                        let mut anonymous = div();
+                        anonymous.style().min_size.width = Some(gpui::px(0.0).into());
+                        anonymous.child(text).into_any_element()
+                    } else {
+                        text
+                    }
                 }
             }
         }
@@ -2363,6 +2370,7 @@ fn build_node<V: 'static>(
                 node_prefix(t, id)
             });
             apply_inline_row(d.style(), t, node, align);
+            apply_inline_item_minimum(d.style(), t, node);
             apply_inline_align(d.style(), t, node, &extras, align);
             apply_button_content_box(d.style(), t, node);
             advise_inline_level(t, id, node, &extras, d.style());
@@ -2676,6 +2684,9 @@ fn build_node<V: 'static>(
                     split.set(true);
                     kids = split_in_flow(kids, background_kids, &stacking);
                 }
+                // A cache wrapper owns the resolved outer box. Keep its root
+                // from resolving authored percentages and margins a second time.
+                crate::cache::normalize_inner_root(id, d.style());
                 d.children(kids).into_any_element()
             }
         })),
@@ -2979,6 +2990,27 @@ fn apply_inline_row(
             Some(gpui::TextAlign::Right) => Some(gpui::JustifyContent::End),
             _ => None,
         };
+    }
+}
+
+// A synthesized inline row uses flex only because taffy has no inline
+// formatting context. Its text must not inherit a flex item's automatic
+// min-content floor: `overflow-wrap: break-word` deliberately excludes its
+// emergency breaks from min-content sizing, so one long word otherwise paints
+// outside the paragraph whenever a timestamp or styled span sits beside it.
+fn synthetic_inline_item(t: &Tree, node: &crate::tree::Node) -> bool {
+    let Some(parent) = t.node(node.parent) else { return false };
+    let display = parent.computed.as_ref().and_then(|style| style.base.display);
+    inline_row_applies(t, parent, display)
+}
+
+fn apply_inline_item_minimum(style: &mut gpui::StyleRefinement, t: &Tree, node: &crate::tree::Node) {
+    let declared = node.computed.as_ref().and_then(|computed| computed.base.display);
+    if synthetic_inline_item(t, node)
+        && !matches!(declared, Some(gpui::Display::Flex) | Some(gpui::Display::Grid))
+        && style.size.width.is_none()
+    {
+        style.min_size.width.get_or_insert(gpui::px(0.0).into());
     }
 }
 
@@ -7463,4 +7495,26 @@ mod tests {
             assert!(spoke(KEY), "inside a scroll container it really does not stay put");
         });
     }
+    #[test]
+    fn synthetic_inline_rows_allow_text_to_shrink_but_keep_authored_flex_minimums() {
+        with_tree(|tree| {
+            let div=tree.intern("div");let span=tree.intern("span");
+            let parent=tree.create_element(div);
+            let text=tree.create_text();tree.set_text(text,"unbrokenword".repeat(60));tree.insert(text,parent,0);
+            let timestamp=tree.create_element(span);tree.set_element_text(timestamp,"11:55".into());tree.insert(timestamp,parent,0);
+            assert!(synthetic_inline_item(tree,tree.node(text).expect("text")));
+            let mut style=gpui::StyleRefinement::default();
+            apply_inline_item_minimum(&mut style,tree,tree.node(timestamp).expect("timestamp"));
+            assert_eq!(style.min_size.width,Some(gpui::px(0.0).into()));
+            style.min_size.width=Some(gpui::px(12.0).into());
+            apply_inline_item_minimum(&mut style,tree,tree.node(timestamp).expect("timestamp"));
+            assert_eq!(style.min_size.width,Some(gpui::px(12.0).into()),"an authored minimum remains authoritative");
+            let parent_node=tree.node_mut(parent).expect("parent");
+            let mut computed=vn_css::ComputedStates::default();
+            computed.base=std::rc::Rc::new(gpui::StyleRefinement{display:Some(gpui::Display::Flex),..Default::default()});
+            parent_node.computed=Some(computed);
+            assert!(!synthetic_inline_item(tree,tree.node(text).expect("text")),"a real flex container keeps CSS min-content behavior");
+        });
+    }
+
 }

@@ -35,6 +35,7 @@ use crate::ComputedStates;
 enum Animatable {
     Number(f32),
     Color(Hsla),
+    BorderColors([Hsla; 4]),
     Pixels(Pixels),
     Rems(Rems),
     /// `--shading`. The whole spec travels together because only the eight
@@ -136,7 +137,21 @@ fn slot_of(r: &StyleRefinement, p: &TransitionProperty) -> Slot {
                 None => Slot::Opaque(Opaque::NonSolidFill),
             },
         },
-        BorderColor => slot_color(r.border_color),
+        BorderColor => {
+            let side_colors = [&r.vn_border_colors.top, &r.vn_border_colors.right,
+                &r.vn_border_colors.bottom, &r.vn_border_colors.left];
+            if r.border_color.is_none() && side_colors.iter().all(|color| color.is_none()) {
+                Slot::Missing
+            } else {
+                let fallback = r.border_color.unwrap_or_default();
+                let colors = side_colors.map(|color| color.flatten().unwrap_or(fallback));
+                if colors.iter().all(|color| *color == colors[0]) {
+                    Slot::Value(Animatable::Color(colors[0]))
+                } else {
+                    Slot::Value(Animatable::BorderColors(colors))
+                }
+            }
+        },
         // CSS applies one colour to every decoration line the element has, so
         // whichever line is present answers and both are written.
         TextDecorationColor => slot_color(
@@ -263,7 +278,22 @@ fn install(r: &mut StyleRefinement, base: &StyleRefinement, p: &TransitionProper
         }
         Color => r.text.color = color(),
         BackgroundColor => r.background = color().map(|c| gpui::Fill::Color(c.into())),
-        BorderColor => r.border_color = color(),
+        BorderColor => match v {
+            Animatable::BorderColors(colors) => {
+                r.border_color = Some(colors[0]);
+                r.vn_border_colors.top = Some(Some(colors[0]));
+                r.vn_border_colors.right = Some(Some(colors[1]));
+                r.vn_border_colors.bottom = Some(Some(colors[2]));
+                r.vn_border_colors.left = Some(Some(colors[3]));
+            }
+            Animatable::Color(color) => {
+                r.border_color = Some(color);
+                r.vn_border_colors = gpui::EdgesRefinement {
+                    top: Some(None), right: Some(None), bottom: Some(None), left: Some(None),
+                };
+            }
+            _ => {}
+        },
         // The decoration is a whole struct in gpui, so the overlay has to carry
         // a COMPLETE one — thickness, waviness and offset copied from the base,
         // colour replaced. Writing a bare `UnderlineStyle { color }` would
@@ -357,7 +387,10 @@ fn clear(r: &mut StyleRefinement, p: &TransitionProperty) {
         // never moved.
         Fill | Stroke => {}
         BackgroundColor => r.background = None,
-        BorderColor => r.border_color = None,
+        BorderColor => {
+            r.border_color = None;
+            r.vn_border_colors = Default::default();
+        },
         Width => r.size.width = None,
         Height => r.size.height = None,
         MinWidth => r.min_size.width = None,
@@ -405,7 +438,10 @@ fn copy_property(dst: &mut StyleRefinement, src: &StyleRefinement, p: &Transitio
         // there, so there is nothing to copy.
         Fill | Stroke => {}
         BackgroundColor => dst.background = src.background.clone(),
-        BorderColor => dst.border_color = src.border_color,
+        BorderColor => {
+            dst.border_color = src.border_color;
+            dst.vn_border_colors = src.vn_border_colors.clone();
+        },
         Width => dst.size.width = src.size.width,
         Height => dst.size.height = src.size.height,
         MinWidth => dst.min_size.width = src.min_size.width,
@@ -497,6 +533,9 @@ fn unify(a: Animatable, b: Animatable) -> Option<(Animatable, Animatable)> {
         (Number(_), Number(_)) | (Color(_), Color(_)) | (Pixels(_), Pixels(_)) | (Rems(_), Rems(_)) => {
             Some((a, b))
         }
+        (BorderColors(_), BorderColors(_)) => Some((a, b)),
+        (Color(color), BorderColors(colors)) => Some((BorderColors([color; 4]), BorderColors(colors))),
+        (BorderColors(colors), Color(color)) => Some((BorderColors(colors), BorderColors([color; 4]))),
         // Two `--shading` endpoints interpolate only when they are the SAME
         // effect: `frost(0.2)` -> `frost(0.8)` is a parameter sweep, but
         // `frost(…)` -> `glow(…)` is a different fragment pipeline with a
@@ -520,6 +559,8 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
     match (from, to) {
         (Number(a), Number(b)) => Number(f32::interpolate(a, b, t)),
         (Color(a), Color(b)) => Color(clamp_hsla(Hsla::interpolate(a, b, t))),
+        (BorderColors(a), BorderColors(b)) => BorderColors(std::array::from_fn(|index|
+            clamp_hsla(Hsla::interpolate(a[index], b[index], t)))),
         (Pixels(a), Pixels(b)) => Pixels(gpui::Pixels::interpolate(a, b, t)),
         (Rems(a), Rems(b)) => Rems(gpui::Rems::interpolate(a, b, t)),
         (Effect(a), Effect(b)) => {
@@ -1009,14 +1050,14 @@ impl Animator {
         self.script_nodes.retain(|_, node| alive(*node));
     }
 
-    /// Forgets everything (e.g. on a stylesheet swap that resets the tree).
+    /// Explicitly resets CSS motion state. A stylesheet replacement instead
+    /// rebinds its keyframes through `on_computed_animations`, preserving clocks.
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.states.clear();
-        // A stylesheet swap can redefine or delete any `@keyframes` block, and
-        // a run holds the block it started with — so every run is dropped
-        // rather than left sampling a rule the sheet no longer has. This is the
-        // HMR path; a browser restarts CSS animations on a sheet swap too.
+        // This explicit reset discards CSS runs and their queued events.
+        // Ordinary style/font recompilation must not use it: unchanged motion
+        // survives and same-name keyframes rebind on their existing timeline.
         self.anims.clear();
         self.events.clear();
         // Script animations stay: nothing in a sheet defines them, and the
@@ -2012,6 +2053,17 @@ impl Animator {
             // retargets a RUNNING animation rather than replaying it. Matching
             // by name (the first unused run carrying it) is what gives that.
             let existing = previous.iter().position(|r| r.spec.name == spec.name);
+            let Some(frames) = resolve(&spec.name) else {
+                // A removed/conditional keyframes block cannot leave its old
+                // run sampling a stale definition. Keep it in `previous` so
+                // the usual leftover path queues animationcancel.
+                self.warn_once(format!(
+                    "`animation-name: {}` names no @keyframes block in the stylesheet — \
+                     nothing animates (a browser behaves the same way)",
+                    spec.name
+                ));
+                continue;
+            };
             match existing {
                 Some(i) => {
                     let mut run = previous.remove(i);
@@ -2037,23 +2089,10 @@ impl Animator {
                     // custom properties change. Only reached on a pass that
                     // already found this node's computed style different, so a
                     // steady frame pays nothing.
-                    if let Some(frames) = resolve(&run.spec.name) {
-                        run.frames = frames;
-                    }
+                    run.frames = frames;
                     runs.push(run);
                 }
                 None => {
-                    let Some(frames) = resolve(&spec.name) else {
-                        // A name with no `@keyframes` block animates nothing —
-                        // which is what a browser does too, so this is a likely
-                        // author error rather than a divergence.
-                        self.warn_once(format!(
-                            "`animation-name: {}` names no @keyframes block in the stylesheet — \
-                             nothing animates (a browser behaves the same way)",
-                            spec.name
-                        ));
-                        continue;
-                    };
                     runs.push(AnimRun {
                         paused_at: (spec.play_state == PlayState::Paused).then_some(now),
                         spec,
@@ -2303,5 +2342,29 @@ fn apply_keyframes(
         };
         let easing = segment.easing.unwrap_or(spec.easing);
         install(out, base, &property, lerp(a, b, easing.eval(segment.t.clamp(0.0, 1.0))));
+    }
+}
+
+#[cfg(test)]
+mod border_colors_regressions {
+    use super::*;
+    #[test]
+    fn transition_interpolates_each_border_side_and_uniform_shorthand_resets_it() {
+        let mut before = StyleRefinement::default();
+        before.border_color = Some(gpui::red());
+        before.vn_border_colors.left = Some(Some(gpui::blue()));
+        let mut after = StyleRefinement::default();
+        after.border_color = Some(gpui::green());
+        let (Slot::Value(a), Slot::Value(b)) = (slot_of(&before, &TransitionProperty::BorderColor),
+            slot_of(&after, &TransitionProperty::BorderColor)) else { panic!("border endpoints missing") };
+        let (a, b) = unify(a, b).expect("uniform and per-side colours interpolate");
+        let mut overlay = StyleRefinement::default();
+        install(&mut overlay, &after, &TransitionProperty::BorderColor, lerp(a, b, 0.5));
+        assert_ne!(overlay.vn_border_colors.left, overlay.vn_border_colors.top);
+        install(&mut overlay, &before, &TransitionProperty::BorderColor, Animatable::Color(gpui::green()));
+        assert_eq!(overlay.vn_border_colors.left, Some(None));
+        clear(&mut overlay, &TransitionProperty::BorderColor);
+        assert_eq!(overlay.vn_border_colors.left, None);
+        assert_eq!(overlay.border_color, None);
     }
 }

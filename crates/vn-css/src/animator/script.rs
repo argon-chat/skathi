@@ -401,6 +401,7 @@ fn css_value(v: Animatable) -> Option<String> {
     Some(match v {
         Animatable::Number(n) => format!("{n}"),
         Animatable::Color(c) => css_color(c),
+        Animatable::BorderColors(colors) => colors.map(css_color).join(" "),
         Animatable::Pixels(p) => format!("{}px", p.as_f32()),
         Animatable::Rems(r) => format!("{}rem", r.0),
         Animatable::Transform(t) => {
@@ -768,5 +769,15 @@ mod tests {
         assert!(crate::transition::animates("padding"));
         assert!(!crate::transition::animates("filter"));
         assert!(!crate::transition::animates("--shading"));
+    }
+}
+
+#[cfg(test)]
+mod border_css_regression {
+    use super::*;
+    #[test]
+    fn committed_border_animation_keeps_four_side_colours() {
+        let colors=[gpui::red(), gpui::green(), gpui::blue(), Hsla::transparent_black()];
+        assert_eq!(css_value(Animatable::BorderColors(colors)), Some(colors.map(css_color).join(" ")));
     }
 }

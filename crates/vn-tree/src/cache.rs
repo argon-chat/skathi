@@ -449,12 +449,43 @@ fn wrapper_style(node: &Node, size: (f32, f32)) -> gpui::StyleRefinement {
     st.flex_shrink = Some(0.0);
     if let Some(cs) = &node.computed {
         // Margin is the node's spacing in its PARENT's layout, so it belongs
-        // out here; the inner element keeps its own copy and taffy applies it
-        // to a root node too, which is harmless because both agree.
+        // only here. normalize_inner_root removes its inner duplicate.
         st.margin = cs.base.margin.clone();
         st.align_self = cs.base.align_self;
     }
     st
+}
+
+/// The cached view already resolved its root's outer geometry. Resolving
+/// percentage widths or max-width against that pinned box a second time makes
+/// an 85%-wide chat column 85% of itself; right-aligned bubbles then jump each
+/// time a hover frame switches between a cached and an ordinary build.
+/// Descendants retain their authored geometry, padding, borders and alignment.
+pub(crate) fn normalize_inner_root(id: u32, style: &mut gpui::StyleRefinement) {
+    if IN_RENDER.with(Cell::get) != id {
+        return;
+    }
+    let size = ENTRIES.with(|entries| entries.borrow().get(&id).and_then(|entry| entry.size));
+    if let Some(size) = size {
+        pin_inner_style(style, size);
+    }
+}
+
+fn pin_inner_style(style: &mut gpui::StyleRefinement, size: (f32, f32)) {
+    style.size.width = Some(gpui::px(size.0).into());
+    style.size.height = Some(gpui::px(size.1).into());
+    style.min_size.width = Some(gpui::px(0.0).into());
+    style.min_size.height = Some(gpui::px(0.0).into());
+    style.max_size.width = Some(gpui::Length::Auto);
+    style.max_size.height = Some(gpui::Length::Auto);
+    style.flex_basis = Some(gpui::Length::Auto);
+    style.flex_grow = Some(0.0);
+    style.flex_shrink = Some(0.0);
+    style.align_self = None;
+    style.margin.top = Some(gpui::px(0.0).into());
+    style.margin.right = Some(gpui::px(0.0).into());
+    style.margin.bottom = Some(gpui::px(0.0).into());
+    style.margin.left = Some(gpui::px(0.0).into());
 }
 
 /// The view a boundary hands to gpui. It owns nothing but the coordinates of
@@ -806,6 +837,48 @@ mod tests {
         });
         forget_shapes();
         assert_eq!(shape(row), (5, false), "the row plus its four cells");
+    }
+
+    #[test]
+    fn cached_root_uses_resolved_border_box_without_reapplying_percent_constraints() {
+        let mut diagnostics = Vec::new();
+        let parsed = vn_css::parse_inline_style(
+            "width: 85%; max-width: 85%; min-width: 50%; height: 50%; max-height: 75%; \
+             padding: 12px; border: 2px solid red; margin: 7px 9px; \
+             display: flex; flex-direction: column; align-items: flex-end; flex: 1 1 30%",
+            &mut diagnostics,
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let mut inner = (*parsed.refinement.unwrap()).clone();
+        let padding = inner.padding.clone();
+        let border = inner.border_widths.clone();
+        let alignment = inner.align_items;
+        pin_inner_style(&mut inner, (520.0, 148.0));
+        assert_eq!(inner.size.width, Some(gpui::px(520.0).into()), "520px must not become 85% of 520px");
+        assert_eq!(inner.size.height, Some(gpui::px(148.0).into()));
+        assert_eq!(inner.max_size.width, Some(gpui::Length::Auto));
+        assert_eq!(inner.max_size.height, Some(gpui::Length::Auto));
+        assert_eq!(inner.min_size.width, Some(gpui::px(0.0).into()));
+        assert_eq!(inner.min_size.height, Some(gpui::px(0.0).into()));
+        assert_eq!(inner.padding, padding, "padding remains inside the recorded border box");
+        assert_eq!(inner.border_widths, border);
+        assert_eq!(inner.align_items, alignment, "right-aligned children keep their alignment");
+        assert_eq!(inner.flex_direction, Some(gpui::FlexDirection::Column));
+        assert_eq!(inner.flex_basis, Some(gpui::Length::Auto));
+        assert_eq!(inner.margin.left, Some(gpui::px(0.0).into()), "the cache wrapper alone owns the margin");
+        assert_eq!(inner.margin.top, Some(gpui::px(0.0).into()));
+    }
+
+    #[test]
+    fn ordinary_nodes_keep_authored_percent_geometry() {
+        let mut diagnostics = Vec::new();
+        let parsed = vn_css::parse_inline_style("max-width: 85%; margin-left: auto; padding: 8px", &mut diagnostics);
+        let mut style = (*parsed.refinement.unwrap()).clone();
+        let authored = style.clone();
+        let previous = IN_RENDER.replace(1234);
+        normalize_inner_root(5678, &mut style);
+        IN_RENDER.set(previous);
+        assert_eq!(style, authored, "normalization is only for the current cached root");
     }
 
     /// A scroll container no longer refuses the boundary — anywhere inside it,

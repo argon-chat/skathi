@@ -233,6 +233,11 @@ does not reset a duration or easing declared by another rule. Names determine
 the number of animation slots; `none` keeps its position for list alignment,
 reports `none` in computed style, and starts no animation.
 
+A late stylesheet, font registration, or basis recompile preserves running CSS
+animation and transition clocks. Same-name keyframes rebind to their current
+definition without restarting; deleting the definition cancels the old run even
+when the element's `animation-*` declarations are unchanged.
+
 Motion declarations fold in this priority order: normal stylesheet, normal
 inline, stylesheet `!important`, inline `!important`. A stylesheet's important
 reduced-motion or power-saving duration therefore overrides Vaul's normal inline
@@ -349,10 +354,13 @@ project's browser-compat-first policy.
    declarations are kept parsed beside the compiled refinement and folded
    again per element (`mapper::FontDecls`). A `line-height` number stays a
    number, and `1.5em` or `150%` becomes px. `rem` stays on the root.
-   - **`ch` and `ex`** (and `rch` / `rex`) are half an em of the element.
-     css-values-4 tells a UA to assume that value when the glyph cannot be
-     measured, and the cascade does not know the face, so a `1ch` in a narrow
-     face is a little too wide. `mapper.rs`, `HALF_EM`.
+   - **`ch` and `ex`** use the computed face, including inherited family,
+     weight, style and features. `vn-app` installs `set_font_metric_source`
+     with its text system: the shaped zero's advance and the selected face's
+     x-height. `Engine::compute_node_with_font` accepts the inherited face;
+     the older methods remain available with the system default. Half an em
+     is only the fallback when no host metric is available. `rch` / `rex`
+     retain the half-root-em fallback (v1).
    - **State rules.** A `:hover` / `:active` / `:focus*` rule that changes
      the font size folds its own em at that size, and gets the base's em
      declarations folded again under it, so `padding: 1em` grows with a

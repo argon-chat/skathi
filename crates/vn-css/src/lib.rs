@@ -55,7 +55,7 @@ pub use element::{Interaction, MatchDom};
 pub use mapper::{set_composed_font_families, take_unreached_fonts};
 pub use mapper::{
     accepts_declaration, parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
-    set_font_source, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses, uses_viewport_units,
+    set_font_source, set_font_metric_source, FontRelativeMetrics, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses, uses_viewport_units,
     viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl, PaintLayer,
     CurrentColorTargets, Decls, Extras, InlineMotion, InlineStyle, ListMarker, MaskClips, MaskCompositing,
     MaskImages, ObjectFit, OverscrollBehavior, RadiusInherit, ScrollbarWidth, SvgPaint, TextFill, TextTransform,
@@ -196,6 +196,8 @@ pub struct ComputedStates {
     /// `font-size: 1.2em` resolve against it ([`Engine::compute_node_at`]).
     /// Threaded down the walk beside [`Self::color`].
     pub font_size: f32,
+    /// The inherited face resolved before `ch`/`ex`, including features and weight.
+    pub computed_font: gpui::Font,
 }
 
 /// Which generated box a rule targets.
@@ -487,6 +489,16 @@ impl RuleEntry {
     }
 }
 
+fn refine_font(parent: &gpui::Font, refinement: &gpui::TextStyleRefinement) -> gpui::Font {
+    gpui::Font {
+        family: refinement.font_family.clone().unwrap_or_else(|| parent.family.clone()),
+        features: refinement.font_features.clone().unwrap_or_else(|| parent.features.clone()),
+        fallbacks: refinement.font_fallbacks.clone().or_else(|| parent.fallbacks.clone()),
+        weight: refinement.font_weight.unwrap_or(parent.weight),
+        style: refinement.font_style.unwrap_or(parent.style),
+    }
+}
+
 /// One half of a matched rule (or an inline style), as the fold applies it.
 #[derive(Clone, Copy)]
 struct Half<'a> {
@@ -523,6 +535,8 @@ impl<'a> Half<'a> {
         env: &Env,
         basis: f32,
         parent: f32,
+        font: &gpui::Font,
+        parent_font: &gpui::Font,
         bucket: &mut StyleRefinement,
         extras: &mut Extras,
         diagnostics: &mut Vec<String>,
@@ -533,17 +547,40 @@ impl<'a> Half<'a> {
         if let Some(list) = self.font {
             for p in list.iter() {
                 let at = if mapper::sets_font_size(p) { parent } else { basis };
-                mapper::apply_at(p, at, bucket, extras, diagnostics);
+                let face = if mapper::sets_font_size(p) { parent_font } else { font };
+                mapper::with_font_face(face, || mapper::apply_at(p, at, bucket, extras, diagnostics));
             }
         }
         if let Some(list) = self.dynamic {
             for (name, raw) in list {
                 let at = if name == "font-size" { parent } else { basis };
-                mapper::with_font_basis(at, || {
+                let face = if name == "font-size" { parent_font } else { font };
+                mapper::with_font_face(face, || mapper::with_font_basis(at, || {
                     mapper::apply_dynamic(name, raw, vars, env, bucket, extras, diagnostics)
-                });
+                }));
             }
         }
+    }
+
+    fn font_descriptor(&self, vars: &Vars, env: &Env, into: &mut gpui::TextStyleRefinement) {
+        if let Some(refinement) = self.refinement { into.refine(&refinement.text); }
+        let mut scratch = StyleRefinement::default();
+        let mut extras = Extras::default();
+        let mut quiet = Vec::new();
+        if let Some(properties) = self.font {
+            for property in properties.iter().filter(|property| matches!(property,
+                lightningcss::properties::Property::FontFamily(_)
+                | lightningcss::properties::Property::FontWeight(_)
+                | lightningcss::properties::Property::FontStyle(_))) {
+                mapper::apply_at(property, mapper::rem_basis(), &mut scratch, &mut extras, &mut quiet);
+            }
+        }
+        if let Some(properties) = self.dynamic {
+            for (name, raw) in properties.iter().filter(|(name, _)| matches!(name.as_str(), "font-family" | "font-weight" | "font-style" | "font-feature-settings" | "font-variant-numeric")) {
+                mapper::apply_dynamic(name, raw, vars, env, &mut scratch, &mut extras, &mut quiet);
+            }
+        }
+        into.refine(&scratch.text);
     }
 
     /// The `font-size` this half leaves, if it sets one, against a parent of
@@ -1707,6 +1744,16 @@ impl Engine {
         env: &Env,
         diagnostics: &mut Vec<String>,
     ) -> ComputedStates {
+        self.compute_node_with_font(node, inline, parent_vars, parent_color, parent_font_size, &gpui::Font::default(), env, diagnostics)
+    }
+
+    /// The full cascade with the inherited face used by font-relative glyph units.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_node_with_font<D: MatchDom>(
+        &self, node: D, inline: Option<&InlineStyle>, parent_vars: &Rc<Vars>,
+        parent_color: Option<gpui::Hsla>, parent_font_size: f32, parent_font: &gpui::Font,
+        env: &Env, diagnostics: &mut Vec<String>,
+    ) -> ComputedStates {
         let probe = perf_on();
         let t0 = probe.then(std::time::Instant::now);
         let el = element::El(node);
@@ -1756,7 +1803,7 @@ impl Engine {
         let share_key = (self.share && inline.is_none() && !matched.iter().any(|r| r.ancestor.is_some()))
             .then(|| {
                 let rules = matched.iter().map(|r| index_of(r)).collect();
-                share::Key::new(self.generation, rules, parent_vars, parent_color, parent_font_size, env)
+                share::Key::new(self.generation, rules, parent_vars, parent_color, parent_font_size, parent_font, env)
             });
         if let Some(key) = &share_key {
             let hit = share::lookup(key);
@@ -1843,7 +1890,7 @@ impl Engine {
                 }
                 let rung = rung_of(r.states);
                 let scope = rung.and_then(|i| state_vars[i].as_ref()).unwrap_or(&vars);
-                if let Some(size) = r.half(important_pass).font_size(scope, env, parent_font_size) {
+                if let Some(size) = mapper::with_font_face(parent_font, || r.half(important_pass).font_size(scope, env, parent_font_size)) {
                     match rung {
                         None => font_size = Some(size),
                         Some(i) => rung_font[i] = Some(size),
@@ -1851,10 +1898,23 @@ impl Engine {
                 }
             }
         }
-        if let Some(size) = inline.and_then(|i| Half::of_inline(i).font_size(&vars, env, parent_font_size)) {
+        if let Some(size) = mapper::with_font_face(parent_font, || inline.and_then(|i| Half::of_inline(i).font_size(&vars, env, parent_font_size))) {
             font_size = Some(size);
         }
         let font_size = font_size.unwrap_or(parent_font_size);
+        let mut descriptor = gpui::TextStyleRefinement::default();
+        let mut rung_descriptors: [gpui::TextStyleRefinement; STATE_RUNGS] = Default::default();
+        for important in [false, true] {
+            for rule in matched.iter().filter(|rule| rule.pseudo.is_none() && rule.ancestor.is_none()) {
+                let rung = rung_of(rule.states);
+                let scope = rung.and_then(|index| state_vars[index].as_ref()).unwrap_or(&vars);
+                let target = rung.map_or(&mut descriptor, |index| &mut rung_descriptors[index]);
+                rule.half(important).font_descriptor(scope, env, target);
+            }
+        }
+        if let Some(inline) = inline { Half::of_inline(inline).font_descriptor(&vars, env, &mut descriptor); }
+        let computed_font = refine_font(parent_font, &descriptor);
+        let rung_faces: [gpui::Font; STATE_RUNGS] = std::array::from_fn(|index| refine_font(&computed_font, &rung_descriptors[index]));
         let t2 = probe.then(std::time::Instant::now);
 
         // A matched rule's declaration advisories are the ones that describe
@@ -1930,7 +1990,7 @@ impl Engine {
                     // em it declares (a box that also sets its own font size
                     // resolves the rest against the element's, v1).
                     r.half(important_pass).apply(
-                        &vars, env, font_size, font_size, &mut slot.0, &mut slot.1, diagnostics,
+                        &vars, env, font_size, font_size, &computed_font, &computed_font, &mut slot.0, &mut slot.1, diagnostics,
                     );
                     continue;
                 }
@@ -1973,7 +2033,7 @@ impl Engine {
                     // Its em is the base state's: the size a hovered ANCESTOR
                     // gives this element is not modelled (v1).
                     let svg_before = svg_base(&extras);
-                    half.apply(&vars, env, font_size, parent_font_size, bucket, &mut extras, diagnostics);
+                    half.apply(&vars, env, font_size, parent_font_size, &computed_font, parent_font, bucket, &mut extras, diagnostics);
                     if half.font_relative() {
                         keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                     }
@@ -2019,7 +2079,7 @@ impl Engine {
                 let basis = rung.and_then(|i| rung_font[i]).unwrap_or(font_size);
                 let radius_inherit = extras.radius_inherit;
                 let svg_before = rung.is_some().then(|| svg_base(&extras));
-                half.apply(scope, env, basis, parent_font_size, bucket, &mut extras, diagnostics);
+                half.apply(scope, env, basis, parent_font_size, rung.map_or(&computed_font, |index| &rung_faces[index]), parent_font, bucket, &mut extras, diagnostics);
                 if rung.is_some() && half.font_relative() {
                     keep_base_radius_inherit(&mut extras, radius_inherit, diagnostics);
                 }
@@ -2030,7 +2090,7 @@ impl Engine {
         }
         if let Some(inline) = inline {
             Half::of_inline(inline).apply(
-                &vars, env, font_size, parent_font_size, &mut base, &mut extras, diagnostics,
+                &vars, env, font_size, parent_font_size, &computed_font, parent_font, &mut base, &mut extras, diagnostics,
             );
             extras.refine(&inline.extras);
         }
@@ -2081,8 +2141,8 @@ impl Engine {
         if base_font_relative {
             let rungs = [&mut active, &mut hover, &mut focus_visible, &mut focus, &mut focus_within];
             for (i, bucket) in rungs.into_iter().enumerate() {
-                let Some(size) = rung_font[i] else { continue };
-                if size == font_size {
+                let size = rung_font[i].unwrap_or(font_size);
+                if size == font_size && rung_faces[i] == computed_font {
                     continue;
                 }
                 let mut again = StyleRefinement::default();
@@ -2091,13 +2151,13 @@ impl Engine {
                 for important_pass in [false, true] {
                     for r in matched.iter().filter(|r| r.pseudo.is_none() && r.ancestor.is_none() && r.states == 0) {
                         r.half(important_pass).apply(
-                            &vars, env, size, parent_font_size, &mut again, &mut scratch, &mut quiet,
+                            &vars, env, size, parent_font_size, &rung_faces[i], parent_font, &mut again, &mut scratch, &mut quiet,
                         );
                     }
                 }
                 if let Some(inline) = inline {
                     Half::of_inline(inline).apply(
-                        &vars, env, size, parent_font_size, &mut again, &mut scratch, &mut quiet,
+                        &vars, env, size, parent_font_size, &rung_faces[i], parent_font, &mut again, &mut scratch, &mut quiet,
                     );
                 }
                 again.refine(bucket);
@@ -2125,7 +2185,10 @@ impl Engine {
         // the same value: `color` itself is not in gpui's state ladder, so a
         // `:hover` rule cannot change what `currentColor` means.
         let effective_color = base.text.color.or(parent_color);
-        if extras.current_color != mapper::CurrentColorTargets::default() {
+        if extras.current_color != mapper::CurrentColorTargets::default()
+            || [&base, &hover, &active, &focus, &focus_visible, &focus_within]
+                .iter().any(|refinement| mapper::border_needs_current_color(refinement))
+        {
             let value = effective_color.unwrap_or_else(gpui::black);
             let targets = extras.current_color;
             for refinement in [
@@ -2140,6 +2203,18 @@ impl Engine {
             .flatten()
             {
                 mapper::apply_current_color(refinement, targets, value);
+            }
+        }
+        for (_, refinement) in group.hover.iter_mut().chain(group.active.iter_mut()) {
+            if mapper::border_needs_current_color(refinement) {
+                let color = refinement.text.color.or(effective_color).unwrap_or_else(gpui::black);
+                mapper::apply_current_color(refinement, CurrentColorTargets::default(), color);
+            }
+        }
+        for (refinement, _) in [&mut before, &mut after] {
+            if mapper::border_needs_current_color(refinement) {
+                let color = refinement.text.color.or(effective_color).unwrap_or_else(gpui::black);
+                mapper::apply_current_color(refinement, CurrentColorTargets::default(), color);
             }
         }
         // `text-underline-offset` and `text-decoration-line` are two properties
@@ -2227,6 +2302,7 @@ impl Engine {
             vars,
             color: effective_color,
             font_size,
+            computed_font,
         };
         if let Some(key) = share_key {
             share::insert(key, &states);
@@ -7191,4 +7267,116 @@ mod tests {
         // compiled with: capture is a property of the sheet, not of the reader.
         assert!(matched(&off)[0].declarations.is_empty());
     }
+    #[test]
+    fn border_currentcolor_cascades_per_side_without_overwriting_literal_edges() {
+        let engine = Engine::compile(".box { color:#0000ff; border:1px solid currentColor } .box { border-left-color:#ff0000 }");
+        let style=engine.compute(box_node(), None, &Env::default());
+        assert_eq!(style.base.vn_border_colors.top, Some(Some(gpui::rgb(0x0000ff).into())));
+        assert_eq!(style.base.vn_border_colors.left, Some(Some(gpui::rgb(0xff0000).into())));
+        let engine=Engine::compile(".box { color:#0000ff; border:1px solid #ff0000 } .box { border-left-color:currentColor }");
+        let style=engine.compute(box_node(), None, &Env::default());
+        assert_eq!(style.base.vn_border_colors.top, Some(Some(gpui::rgb(0xff0000).into())));
+        assert_eq!(style.base.vn_border_colors.left, Some(Some(gpui::rgb(0x0000ff).into())));
+    }
+
+    #[test]
+    fn scrollbar_color_uses_theme_variables_and_transparent_track() {
+        let engine=Engine::compile(".box { --muted-foreground:240 5% 64%; scrollbar-color:hsl(var(--muted-foreground) / .35) transparent }");
+        let style=engine.compute(box_node(), None, &Env::default());
+        let (thumb,track)=style.extras.scrollbar_color.expect("theme colour pair is retained");
+        assert!((thumb.a-0.35).abs()<0.01, "{thumb:?}");
+        assert!(track.is_transparent());
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+    }
+
+    fn test_font_metrics() -> impl Drop {
+        set_font_source(|| vec!["Arial".into(), "VN Metric Narrow".into(), "VN Metric Wide".into()]);
+        set_font_metric_source(|font, size| {
+            let ratio = match font.family.as_ref() {
+                "VN Metric Narrow" => if font.weight == gpui::FontWeight::BOLD { 0.6 } else { 0.55 },
+                "VN Metric Wide" => 0.8,
+                _ => return None,
+            };
+            Some(FontRelativeMetrics { zero_advance: ratio * size, x_height: 0.4 * size })
+        });
+        struct Reset;
+        impl Drop for Reset { fn drop(&mut self) { set_font_metric_source(|_, _| None); } }
+        Reset
+    }
+
+    #[test]
+    fn character_units_use_the_computed_face_weight_size_and_hover_face() {
+        let _metrics = test_font_metrics();
+        let engine = Engine::compile(".box { width:1ch; height:2ex; font-family:'VN Metric Narrow'; font-weight:bold; font-size:9px } .box:hover {font-family:'VN Metric Wide'; font-size:12px}");
+        let computed = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(computed.base.size.width, Some(gpui::px(5.4).into()));
+        assert_eq!(computed.base.size.height, Some(gpui::px(9.0 * 0.4 * 2.0).into()));
+        assert_eq!(computed.computed_font.weight, gpui::FontWeight::BOLD);
+        let hovered = computed.hover.expect("font state retained");
+        assert_eq!(hovered.size.width, Some(gpui::px(9.6).into()));
+    }
+
+    #[test]
+    fn character_units_in_font_size_use_the_parent_face() {
+        let _metrics = test_font_metrics();
+        let engine = Engine::compile(".box {font-family:'VN Metric Wide';font-size:2ch;width:1ch}");
+        let computed = engine.compute_node_with_font(box_node(), None, &Rc::new(Vars::default()), None, 10.0, &gpui::font("VN Metric Narrow"), &Env::default(), &mut Vec::new());
+        assert_eq!(computed.font_size, 11.0);
+        assert_eq!(computed.base.size.width, Some(gpui::px(11.0 * 0.8).into()));
+    }
+
+    #[test]
+    fn inherited_faces_separate_character_unit_share_cache_entries() {
+        let _metrics = test_font_metrics();
+        let engine = Engine::compile(".box {width:2ch}");
+        let vars = Rc::new(Vars::default());
+        let read = |family| engine.compute_node_with_font(box_node(), None, &vars, None, 10.0, &gpui::font(family), &Env::default(), &mut Vec::new());
+        assert_eq!(read("VN Metric Narrow").base.size.width, Some(gpui::px(11.0).into()));
+        assert_eq!(read("VN Metric Wide").base.size.width, Some(gpui::px(16.0).into()));
+        assert_eq!(read("VN Metric Narrow").base.size.width, Some(gpui::px(11.0).into()));
+    }
+
+    #[test]
+    fn dynamic_character_units_use_variable_font_family_and_provider_changes_invalidate_cache() {
+        let _metrics = test_font_metrics();
+        let engine = Engine::compile(".box {--face:'VN Metric Wide'; font-family:var(--face); width:calc(2ch + 1px);font-size:10px}");
+        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.size.width, Some(gpui::px(17.0).into()));
+        set_font_metric_source(|_, size| Some(FontRelativeMetrics {zero_advance:size * 0.9,x_height:size * 0.5}));
+        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.size.width, Some(gpui::px(19.0).into()));
+        set_font_metric_source(|_, _| None);
+        assert_eq!(engine.compute(box_node(), None, &Env::default()).base.size.width, Some(gpui::px(11.0).into()), "an unavailable glyph retains the CSS half-em fallback");
+    }
+
+    #[test]
+    fn border_currentcolor_is_resolved_per_state_without_mask_bleed() {
+        for (base_color, hover_color) in [("currentColor", "#0000ff"), ("#0000ff", "currentColor")] {
+            let css=format!(".box {{ color:#ff0000; border:2px solid {base_color} }} .box:hover {{ border-top-color:{hover_color} }}");
+            let computed=Engine::compile(&css).compute(box_node(), None, &Env::default());
+            let red=gpui::rgb(0xff0000).into();
+            let blue=gpui::rgb(0x0000ff).into();
+            let base=if base_color=="currentColor" {red} else {blue};
+            let hover=if hover_color=="currentColor" {red} else {blue};
+            assert_eq!(computed.base.vn_border_colors.top, Some(Some(base)), "{css}: base top");
+            assert_eq!(computed.base.vn_border_colors.right, Some(Some(base)), "{css}: base right");
+            assert_eq!(computed.hover.as_ref().expect("hover").vn_border_colors.top, Some(Some(hover)), "{css}: hovered top");
+        }
+    }
+
+    #[test]
+    fn border_currentcolor_resolves_group_and_generated_box_placeholders() {
+        let engine=Engine::compile(".icon {color:#ff0000;border:2px solid blue} .group:hover .icon {border-top-color:currentColor} .group:active .icon {border-left-color:currentColor}");
+        let document=group_doc();
+        let computed=cascade(&engine,&document,&Env::default());
+        let icon=&computed[2];
+        let red=gpui::rgb(0xff0000).into();
+        let blue=gpui::rgb(0x0000ff).into();
+        assert_eq!(icon.base.vn_border_colors.top,Some(Some(blue)));
+        assert_eq!(icon.group_hover.as_ref().expect("group hover").1.vn_border_colors.top,Some(Some(red)));
+        assert_eq!(icon.group_active.as_ref().expect("group active").1.vn_border_colors.left,Some(Some(red)));
+        let engine=Engine::compile(".box {color:blue;border:2px solid red} .box::before {content:'x';color:#00ff00;border-top:2px solid currentColor}");
+        let computed=engine.compute(box_node(),None,&Env::default());
+        assert_eq!(computed.base.vn_border_colors.top,Some(Some(red)));
+        assert_eq!(computed.before.as_ref().expect("generated box").style.vn_border_colors.top,Some(Some(gpui::rgb(0x00ff00).into())));
+    }
+
 }

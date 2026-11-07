@@ -1712,6 +1712,7 @@ impl Tree {
         let inherited_text = Inherited {
             color: parent_computed.and_then(|c| c.color),
             font_size: parent_computed.map_or(ROOT_PARENT_FONT_SIZE, |c| c.font_size),
+            font: parent_computed.map(|c| c.computed_font.clone()).unwrap_or_default(),
         };
         let inherited_radii = parent_computed.map(|c| vn_css::InheritedRadii::of(&c.base)).unwrap_or_default();
         (inherited, inherited_inert, inherited_text, inherited_radii, root_env)
@@ -1737,12 +1738,13 @@ impl Tree {
         // The matcher's sibling and content questions are recorded against
         // this element ([`sel`]).
         CASCADE_SUBJECT.with(|c| c.set(id));
-        let mut states = engine.compute_node_at(
+        let mut states = engine.compute_node_with_font(
             NodeRef { tree: self, id },
             n.inline.as_deref(),
             parent_vars,
             parent_text.color,
             parent_text.font_size,
+            &parent_text.font,
             env,
             diagnostics,
         );
@@ -1803,6 +1805,7 @@ impl Tree {
             let hands_down_the_same = old.vars == states.vars
                 && old.color == states.color
                 && old.font_size == states.font_size
+                && old.computed_font == states.computed_font
                 && old.extras.pointer_events_none == states.extras.pointer_events_none
                 && vn_css::InheritedRadii::of(&old.base) == child_radii;
             if hands_down_the_same {
@@ -1827,6 +1830,7 @@ impl Tree {
             forget_read_cache();
             note_parent_keys(engine);
         }
+        let sheet_changed = REBIND_ANIMATIONS.with(|pending| pending.replace(false));
         self.sibling_combinators = engine.uses_sibling_combinators();
         let pass = crate::perf::Span::start();
         let phase = crate::perf::Span::start();
@@ -1939,13 +1943,13 @@ impl Tree {
                         let (states, radii) = this.cascade_one(
                             engine,
                             id,
-                            (&parent_vars, parent_inert, parent_text, parent_radii),
+                            (&parent_vars, parent_inert, parent_text.clone(), parent_radii),
                             &here_env,
                             &mut diagnostics,
                         );
                         let inert = states.extras.pointer_events_none == Some(true);
                         let vars = states.vars.clone();
-                        let text = Inherited { color: states.color, font_size: states.font_size };
+                        let text = Inherited { color: states.color, font_size: states.font_size, font: states.computed_font.clone() };
                         out.push((id, states));
                         (vars, inert, text, radii)
                     } else {
@@ -1972,7 +1976,7 @@ impl Tree {
                             c,
                             child_vars.clone(),
                             child_inert,
-                            child_text,
+                            child_text.clone(),
                             child_radii,
                             child_env,
                         ));
@@ -2031,6 +2035,9 @@ impl Tree {
                 } else {
                     *env
                 };
+                // A stylesheet replacement can change the referenced block
+                // without changing any computed declaration. A pop-out can
+                // need the same rebinding against its own media environment.
                 // **A node painted by a pop-out can need its animations
                 // re-bound while its own computed style has not moved at all.**
                 // The element's declarations are identical in both windows; it
@@ -2039,7 +2046,7 @@ impl Tree {
                 // fires for it — and the run it started with, on the frame
                 // before its window had painted and `ROOTS` was still empty,
                 // was resolved against the PRIMARY's environment.
-                let rebind = node_env != *env && !states.animations.is_empty();
+                let rebind = (sheet_changed || node_env != *env) && !states.animations.is_empty();
                 // CSS Animations §3: nothing animates on an element that is
                 // `display: none`, or under one. Its runs are cancelled (with
                 // `animationcancel`) and none start; showing it again starts
@@ -2075,7 +2082,7 @@ impl Tree {
                         // This used to take the pass's fallback environment,
                         // which is the PRIMARY window's
                         // (m22/integration.md §6 item 4).
-                        if !hidden && (has_keyframes || !states.animations.is_empty()) {
+                        if !hidden && (has_keyframes || !states.animations.is_empty() || animator.has_animations(id)) {
                             animator.on_computed_animations(id, &states, now, &|name| {
                                 engine.keyframes_for(
                                     name,
@@ -2225,6 +2232,10 @@ thread_local! {
     /// and cascade right after it.
     static HEAD_SHEETS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static ANIMATOR: RefCell<vn_css::Animator> = RefCell::new(vn_css::Animator::new());
+    /// A replaced sheet can change a keyframes block without changing the
+    /// element's computed declarations. Re-resolve those blocks next cascade,
+    /// retaining each same-name animation's clock.
+    static REBIND_ANIMATIONS: Cell<bool> = const { Cell::new(false) };
     /// The `@media` environment the cascade is evaluated against **for
     /// everything the PRIMARY window paints** — the native stand-in for a
     /// browser's viewport + OS preferences. The host refreshes it every frame
@@ -2629,7 +2640,20 @@ fn sync_runtime_sheets() {
         ids.sort_unstable();
         let mut sheets = Vec::new();
         for id in ids {
-            if t.node(id).is_none() {
+            // Reused controls keep unopened content in detached fragments
+            // (Reka SelectViewport includes a <style> there). Such a sheet is
+            // inert until attached to a document or painted VnWindow root.
+            let mut ancestor = id;
+            let mut connected = false;
+            while ancestor != 0 {
+                if ancestor == t.root || crate::windows::window_of_root(ancestor).is_some() {
+                    connected = true;
+                    break;
+                }
+                let Some(node) = t.node(ancestor) else { break };
+                ancestor = node.parent;
+            }
+            if !connected {
                 continue;
             }
             fn walk(t: &Tree, id: u32, out: &mut String) {
@@ -2732,9 +2756,11 @@ pub(crate) fn recompile_for_fonts() {
 /// [`set_stylesheet`] is the path the host uses; this one is for tests and for
 /// the recompile inside [`restyle_all`], which already has the source.
 pub(crate) fn set_engine(engine: vn_css::Engine) {
-    // Every running `@keyframes` run holds the block it started with, and a new
-    // sheet can redefine or delete any of them.
-    ANIMATOR.with(|a| a.borrow_mut().clear());
+    // A font load, late component style or rem recompile must not erase a
+    // running animation/transition. Its computed declarations can stay equal,
+    // so explicitly rebind keyframes even when the ordinary change gate does
+    // not fire. Same-name runs keep their clocks; missing definitions cancel.
+    REBIND_ANIMATIONS.with(|pending| pending.set(true));
     // Through `warn_css`, so a recompile under a new rem/viewport basis does
     // not re-print what the same source already said. Compiling the sheet three
     // times at boot — once cold, once for the rem basis, once for the client
@@ -2818,8 +2844,8 @@ pub fn restyle_all() {
     // `vh` / `rem` are flattened to px at SHEET-COMPILE time, into one
     // process-wide basis, so two differently-sized windows sharing a
     // `vh`-using sheet would recompile the single `Engine` on every frame —
-    // and `set_engine` clears the animator, so every running transition would
-    // be cancelled while doing it. The basis therefore stays the PRIMARY
+    // and repeatedly compiling it would restyle both windows on every frame.
+    // The basis therefore stays the PRIMARY
     // window's, and we say so once.
     //
     // The gate is free for the apps that use no viewport unit, which is most of
@@ -3006,8 +3032,8 @@ fn recompile_sheet(reason: crate::perf::FullReason, why: &str) -> bool {
 /// engine cannot. A window drag does this on every step, and a recompile of the
 /// Argon client's sheet is ~60 ms (research/reports/m26/perf-mem-3.md §2).
 ///
-/// Unlike a recompile it keeps the engine, so running transitions and
-/// animations are not cancelled. The resize itself already marked the whole
+/// It keeps the engine and avoids a full sheet compilation; running motion
+/// keeps its clock on either path. The resize already marked the whole
 /// document for a restyle (`crate::set_env`); this marks it again for the
 /// callers that move the basis some other way.
 fn rebase_viewport(width: f32, height: f32) {
@@ -3039,11 +3065,12 @@ const ROOT_PARENT_FONT_SIZE: f32 = 16.0;
 /// The inherited text values the restyle walk threads into each element:
 /// what `currentColor` and `em` resolve against when the element declares
 /// no `color` or `font-size` of its own.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Inherited {
     color: Option<gpui::Hsla>,
     /// The parent's computed font size, px.
     font_size: f32,
+    font: gpui::Font,
 }
 
 
@@ -3396,6 +3423,65 @@ mod tests {
         assert_eq!(opacity(probe), Some(0.25), "removing the rules restores the build's sheet");
     }
 
+    fn runtime_sheet_probe() -> (u32, u32, u32, u32) {
+        set_stylesheet(".probe { opacity: 0.25 }".into());
+        with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let probe = t.create_element(div);
+            t.set_class(probe, "probe");
+            t.insert(probe, root, 0);
+            let detached = t.create_anchor();
+            let style = t.intern("style");
+            let sheet = t.create_element(style);
+            t.set_element_text(sheet, ".probe { opacity: 0.75 }".into());
+            t.insert(sheet, detached, 0);
+            (root, probe, detached, sheet)
+        })
+    }
+
+    fn runtime_sheet_opacity(node: u32) -> Option<f32> {
+        read_tree(|t| t.node(node).unwrap().computed.as_ref().unwrap().base.opacity)
+    }
+
+    #[test]
+    fn detached_fragment_styles_are_inert_until_connected_and_stop_on_detach() {
+        let (root, probe, fragment, sheet) = runtime_sheet_probe();
+        restyle_all();
+        assert_eq!(runtime_sheet_opacity(probe), Some(0.25), "closed Select fragments install no rules");
+
+        with_tree(|t| t.insert(fragment, root, 0));
+        restyle_all();
+        assert_eq!(runtime_sheet_opacity(probe), Some(0.75), "connecting the fragment activates its style");
+
+        with_tree(|t| {
+            let other_fragment = t.create_anchor();
+            t.insert(fragment, other_fragment, 0);
+        });
+        restyle_all();
+        assert_eq!(runtime_sheet_opacity(probe), Some(0.25), "detaching removes its rules without freeing the style");
+
+        with_tree(|t| t.set_element_text(sheet, ".probe { opacity: 0.9 }".into()));
+        restyle_all();
+        assert_eq!(runtime_sheet_opacity(probe), Some(0.25), "editing detached CSS remains inert");
+    }
+
+    #[test]
+    fn runtime_styles_in_a_painted_secondary_root_remain_connected() {
+        let (_, probe, secondary_root, _) = runtime_sheet_probe();
+        restyle_all();
+        assert_eq!(runtime_sheet_opacity(probe), Some(0.25));
+
+        crate::windows::set_painted_root(9001, secondary_root);
+        restyle_all();
+        assert_eq!(runtime_sheet_opacity(probe), Some(0.75), "VnWindow styles share the live document cascade");
+
+        crate::windows::set_painted_root(9001, 0);
+        restyle_all();
+        assert_eq!(runtime_sheet_opacity(probe), Some(0.25), "unpainting a detached root deactivates its style");
+        crate::windows::forget(9001);
+    }
+
     /// m26 client sweep #23: `fixed inset-0 … empty:hidden` overlays stayed
     /// laid out and painted, because the anchors Vue leaves in an empty
     /// container counted as children. A comment and a zero-length text node
@@ -3587,6 +3673,104 @@ mod tests {
             vec![".a { opacity: 0.6 }".to_string(), ".b {}".into(), ".c {}".into()],
             "the build's sheet, then each head text on its own"
         );
+    }
+
+    fn flush_motion_styles() {
+        // The JS host invalidates the tree after installing a changed sheet.
+        with_tree(|t| t.mark_dirty());
+        restyle_all();
+    }
+
+    fn motion_probe(sheet: &str) -> (u32, std::time::Instant) {
+        set_stylesheet(sheet.into());
+        let node = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let node = t.create_element(div);
+            t.set_class(node, "motion");
+            t.insert(node, root, 0);
+            node
+        });
+        flush_motion_styles();
+        let start = std::time::Instant::now();
+        ANIMATOR.with(|a| a.borrow_mut().tick(start));
+        let _ = take_anim_events();
+        (node, start)
+    }
+
+    fn motion_opacity_at(node: u32, at: std::time::Instant) -> Option<f32> {
+        let base = read_tree(|t| t.node(node).unwrap().computed.as_ref().unwrap().base.clone());
+        animation_overlay(node, &base, at).and_then(|style| style.opacity)
+    }
+
+    #[test]
+    fn late_stylesheet_and_font_recompile_preserve_a_running_animation_clock() {
+        let sheet = "@keyframes enter { from { opacity: 0 } to { opacity: 1 } } \
+                     .motion { animation: enter 500ms linear }";
+        let (node, start) = motion_probe(sheet);
+        let at = start + std::time::Duration::from_millis(200);
+        assert!((motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5);
+
+        // A synchronously mounted panel can append CSS while its surrounding
+        // Drawer is moving. The Drawer declarations do not change at all.
+        assert!(set_stylesheet_with_head(sheet.into(), vec![".late-panel { color: red }".into()]));
+        flush_motion_styles();
+        assert!((motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5,
+            "unrelated CSS must retain the elapsed clock, not drop/restart the run");
+
+        recompile_for_fonts();
+        flush_motion_styles();
+        assert!((motion_opacity_at(node, at).unwrap() - 0.4).abs() < 1e-5,
+            "registering a font must not erase the running animation");
+    }
+
+    #[test]
+    fn changed_keyframes_rebind_at_the_existing_clock_and_deleted_keyframes_cancel() {
+        let sheet = "@keyframes enter { from { opacity: 0 } to { opacity: 1 } } \
+                     .motion { animation: enter 500ms linear }";
+        let (node, start) = motion_probe(sheet);
+        let at = start + std::time::Duration::from_millis(200);
+        set_stylesheet(sheet.replace("opacity: 1", "opacity: 0.5"));
+        flush_motion_styles();
+        assert!((motion_opacity_at(node, at).unwrap() - 0.2).abs() < 1e-5,
+            "same-name definition changes sample new frames on the existing timeline");
+
+        set_stylesheet(".motion { animation: enter 500ms linear }".into());
+        flush_motion_styles();
+        assert!(motion_opacity_at(node, at).is_none(), "deleted frames must not keep painting");
+        let events = take_anim_events();
+        assert_eq!(events.iter().filter(|event| event.node == node
+            && event.kind == vn_css::AnimEventKind::AnimationCancel).count(), 1);
+    }
+
+    #[test]
+    fn removing_the_animation_and_last_keyframes_cancels_the_old_run() {
+        let (node, start) = motion_probe(
+            "@keyframes enter { from { opacity: 0 } to { opacity: 1 } } \
+             .motion { animation: enter 500ms linear }",
+        );
+        set_stylesheet(".motion { opacity: 1 }".into());
+        flush_motion_styles();
+        assert!(motion_opacity_at(node, start).is_none());
+        assert!(take_anim_events().iter().any(|event| event.node == node
+            && event.kind == vn_css::AnimEventKind::AnimationCancel));
+    }
+
+    #[test]
+    fn unrelated_stylesheet_preserves_a_running_transition_clock() {
+        let sheet = ".motion { opacity: 0; transition: opacity 500ms linear } \
+                     .motion.open { opacity: 1 }";
+        let (node, _) = motion_probe(sheet);
+        with_tree(|t| t.set_class(node, "motion open"));
+        flush_motion_styles();
+        let start = std::time::Instant::now();
+        let at = start + std::time::Duration::from_millis(200);
+        let before = motion_opacity_at(node, at).unwrap();
+        assert!(before > 0.39 && before < 0.42, "{before}");
+        assert!(set_stylesheet_with_head(sheet.into(), vec![".late-panel { color: red }".into()]));
+        flush_motion_styles();
+        assert!((motion_opacity_at(node, at).unwrap() - before).abs() < 1e-5,
+            "a late sheet must not snap or restart an unrelated transition");
     }
 
     /// **A `rem` recompile is the engine correcting its own basis, not the
@@ -4209,4 +4393,31 @@ mod tests {
         assert_eq!(leaves.iter().map(|&l| padding_top_of(l)).collect::<Vec<_>>(), vec![px_len(16.0), px_len(20.0)]);
         assert_eq!(font_size_of(leaves[1]), 20.0);
     }
+    #[test]
+    fn character_width_follows_inherited_face_and_restyles_descendants() {
+        vn_css::set_font_source(|| vec!["VN Metric Narrow".into(), "VN Metric Wide".into()]);
+        vn_css::set_font_metric_source(|font, size| Some(vn_css::FontRelativeMetrics {
+            zero_advance: size * if font.family.as_ref() == "VN Metric Wide" {0.8} else {0.6},
+            x_height: size * 0.4,
+        }));
+        struct Reset;
+        impl Drop for Reset {fn drop(&mut self) {vn_css::set_font_metric_source(|_, _| None);}}
+        let _reset = Reset;
+        set_stylesheet(".narrow {font-family:'VN Metric Narrow';font-size:10px} .wide {font-family:'VN Metric Wide';font-size:10px} .leaf{width:1ch}".into());
+        let (parent, leaves) = with_tree(|tree| {
+            let root=tree.create_root(); let tag=tree.intern("div"); let mut parents=Vec::new(); let mut leaves=Vec::new();
+            for class in ["narrow","wide"] {
+                let parent=tree.create_element(tag);tree.set_class(parent,class);tree.insert(parent,root,0);parents.push(parent);
+                let leaf=tree.create_element(tag);tree.set_class(leaf,"leaf");tree.insert(leaf,parent,0);leaves.push(leaf);
+            }
+            (parents[0], leaves)
+        });
+        let widths = || read_tree(|tree| leaves.iter().map(|&id| tree.node(id).and_then(|node|node.computed.as_ref()).and_then(|computed|computed.base.size.width)).collect::<Vec<_>>());
+        restyle_all();
+        assert_eq!(widths(),vec![Some(gpui::px(6.0).into()),Some(gpui::px(8.0).into())]);
+        with_tree(|tree|tree.set_class(parent,"wide"));
+        restyle_all();
+        assert_eq!(widths(),vec![Some(gpui::px(8.0).into()),Some(gpui::px(8.0).into())]);
+    }
+
 }

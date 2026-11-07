@@ -405,6 +405,8 @@ pub struct Extras {
     /// [`Engine::compute_node`] does the substitution; this records what to
     /// substitute into.
     pub current_color: CurrentColorTargets,
+    /// Border declarations clear an earlier currentColor on the affected side.
+    pub current_color_overrides: CurrentColorTargets,
     /// `filter: blur(<radius>)` — the radius, in px.
     ///
     /// gpui still has no post-processing pass over an element's own painted
@@ -804,9 +806,9 @@ impl Extras {
         if other.mask_composite.is_some() {
             self.mask_composite = other.mask_composite;
         }
-        // A bitmask, not a last-wins value: two rules can each contribute a
-        // different `currentColor` property to the same element.
-        self.current_color.0 |= other.current_color.0;
+        self.current_color.0 = (self.current_color.0 & !other.current_color_overrides.0)
+            | other.current_color.0;
+        self.current_color_overrides.0 |= other.current_color_overrides.0;
         self.radius_inherit.refine(&other.radius_inherit);
     }
 
@@ -1949,25 +1951,61 @@ fn length_value_px(v: &LengthValue) -> Option<f32> {
         LengthValue::Px(v) => Some(*v),
         LengthValue::Rem(v) => Some(v * rem_basis()),
         LengthValue::Em(v) => Some(v * em_basis()),
-        LengthValue::Ch(v) | LengthValue::Ex(v) => Some(v * HALF_EM * em_basis()),
+        LengthValue::Ch(v) => Some(v * character_basis(false)),
+        LengthValue::Ex(v) => Some(v * character_basis(true)),
         LengthValue::Rch(v) | LengthValue::Rex(v) => Some(v * HALF_EM * rem_basis()),
         other => viewport_value_px(other),
     }
 }
 
-/// `ch`, `ex` and their root spellings `rch` / `rex`, as a fraction of an em.
-///
-/// They are the advance of "0" and the x-height of the element's font. Nothing
-/// in the cascade measures a glyph: it knows the element's font size but not
-/// which face gpui will pick for it. So they take the value css-values-4
-/// §6.1.1 tells a UA to assume when the glyph cannot be measured: half an em.
-/// That is close to a real "0" in common UI fonts.
-///
-/// They used to be dropped as unresolved, which is not a narrower box but none:
-/// Argon's titlebar call timer (motionCounter/Digit.vue) sizes each digit's
-/// clipping cell `width: 1ch`, and every cell came out 0 px wide, so the
-/// timer never showed.
+// CSS Values 4's fallback when the host cannot measure a font.
 const HALF_EM: f32 = 0.5;
+
+/// Font-relative lengths supplied by the same text system that paints glyphs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FontRelativeMetrics {
+    /// The advance of the shaped `0` glyph, in CSS pixels.
+    pub zero_advance: f32,
+    /// The face's x-height, in CSS pixels.
+    pub x_height: f32,
+}
+
+thread_local! {
+    static FONT_METRIC_SOURCE: std::cell::RefCell<Option<Box<dyn Fn(&gpui::Font, f32) -> Option<FontRelativeMetrics>>>> = const { std::cell::RefCell::new(None) };
+    static FONT_METRIC_GENERATION: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static FONT_FACE: std::cell::RefCell<Option<gpui::Font>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Installs the host's font metrics. Replacing the source invalidates cached
+/// folds, so a style computed before host setup cannot retain fallback widths.
+pub fn set_font_metric_source(source: impl Fn(&gpui::Font, f32) -> Option<FontRelativeMetrics> + 'static) {
+    FONT_METRIC_SOURCE.with(|slot| *slot.borrow_mut() = Some(Box::new(source)));
+    FONT_METRIC_GENERATION.with(|generation| generation.set(generation.get().wrapping_add(1)));
+}
+
+pub(crate) fn font_metric_generation() -> u32 {
+    FONT_METRIC_GENERATION.with(|generation| generation.get())
+}
+
+pub(crate) fn with_font_face<R>(font: &gpui::Font, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<gpui::Font>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FONT_FACE.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(FONT_FACE.with(|slot| slot.replace(Some(font.clone()))));
+    f()
+}
+
+fn character_basis(x_height: bool) -> f32 {
+    let size = em_basis();
+    let font = FONT_FACE.with(|slot| slot.borrow().clone());
+    font.and_then(|font| FONT_METRIC_SOURCE.with(|slot| slot.borrow().as_ref().and_then(|source| source(&font, size))))
+        .map(|metrics| if x_height { metrics.x_height } else { metrics.zero_advance })
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(HALF_EM * size)
+}
 
 /// The px value of one `unit` of the font-relative lengths [`length_value_px`]
 /// resolves, reached from a raw token: the path a `var()`-composed declaration
@@ -1976,7 +2014,8 @@ fn font_unit_px(unit: &str, value: f32) -> Option<f32> {
     match unit {
         "rem" => Some(value * rem_basis()),
         "em" => Some(value * em_basis()),
-        "ch" | "ex" => Some(value * HALF_EM * em_basis()),
+        "ch" => Some(value * character_basis(false)),
+        "ex" => Some(value * character_basis(true)),
         "rch" | "rex" => Some(value * HALF_EM * rem_basis()),
         _ => None,
     }
@@ -2623,6 +2662,10 @@ impl CurrentColorTargets {
     pub const FILL: u16 = 1 << 3;
     pub const STROKE: u16 = 1 << 4;
     pub const DECORATION: u16 = 1 << 5;
+    pub const BORDER_TOP: u16 = 1 << 6;
+    pub const BORDER_RIGHT: u16 = 1 << 7;
+    pub const BORDER_BOTTOM: u16 = 1 << 8;
+    pub const BORDER_LEFT: u16 = 1 << 9;
 
     pub fn has(self, bit: u16) -> bool {
         self.0 & bit != 0
@@ -3430,8 +3473,21 @@ pub(crate) fn apply_current_color(
     targets: CurrentColorTargets,
     color: Hsla,
 ) {
-    if targets.has(CurrentColorTargets::BORDER) {
+    let sides = [r.vn_border_colors.top, r.vn_border_colors.right,
+        r.vn_border_colors.bottom, r.vn_border_colors.left];
+    if sides.iter().all(|side| *side == Some(None))
+        || (targets.has(CurrentColorTargets::BORDER) && r.border_color.is_none()
+            && sides.iter().all(Option::is_none))
+    {
         r.border_color = Some(color);
+    }
+    // A currentColor placeholder belongs to this refinement, not every
+    // state that contributed to Extras. A hover literal must not cancel a
+    // base placeholder, nor may hover currentColor repaint a base literal.
+    for slot in [&mut r.vn_border_colors.top, &mut r.vn_border_colors.right,
+        &mut r.vn_border_colors.bottom, &mut r.vn_border_colors.left]
+    {
+        if *slot == Some(None) { *slot = Some(Some(color)); }
     }
     if targets.has(CurrentColorTargets::OUTLINE) {
         if let Some(outline) = r.vn_outline.as_mut() {
@@ -3443,13 +3499,37 @@ pub(crate) fn apply_current_color(
     }
 }
 
-fn per_side_border_color_advisory(diagnostics: &mut Vec<String>) {
-    warn_once(
-        diagnostics,
-        "a per-side `border-*-color` sets the colour of ALL four sides (v1) — gpui's box has one \
-         border colour. Pair it with per-side border WIDTHS (which are honoured individually) so \
-         only the intended side is drawn",
-    );
+pub(crate) fn border_needs_current_color(r: &StyleRefinement) -> bool {
+    [r.vn_border_colors.top, r.vn_border_colors.right,
+        r.vn_border_colors.bottom, r.vn_border_colors.left].contains(&Some(None))
+}
+
+fn border_side_color(
+    slot: &mut Option<Option<Hsla>>, bit: u16, value: &CssColor,
+    extras: &mut Extras, diagnostics: &mut Vec<String>,
+) {
+    let resolved = match value {
+        CssColor::CurrentColor => None,
+        value => match color(value) {
+            Some(color) => Some(color),
+            None => { unresolved_color(diagnostics, "border-color"); return; }
+        },
+    };
+    *slot = Some(resolved);
+    extras.current_color_overrides.0 |= bit | CurrentColorTargets::BORDER;
+    extras.current_color.0 &= !(bit | CurrentColorTargets::BORDER);
+    if matches!(value, CssColor::CurrentColor) { extras.current_color.0 |= bit; }
+}
+
+fn all_border_colors(r: &mut StyleRefinement, x: &mut Extras, colors: [&CssColor; 4], diagnostics: &mut Vec<String>) {
+    border_side_color(&mut r.vn_border_colors.top, CurrentColorTargets::BORDER_TOP, colors[0], x, diagnostics);
+    border_side_color(&mut r.vn_border_colors.right, CurrentColorTargets::BORDER_RIGHT, colors[1], x, diagnostics);
+    border_side_color(&mut r.vn_border_colors.bottom, CurrentColorTargets::BORDER_BOTTOM, colors[2], x, diagnostics);
+    border_side_color(&mut r.vn_border_colors.left, CurrentColorTargets::BORDER_LEFT, colors[3], x, diagnostics);
+    r.border_color = color(colors[0]);
+    if colors.iter().all(|value| matches!(value, CssColor::CurrentColor)) {
+        x.current_color.0 |= CurrentColorTargets::BORDER;
+    }
 }
 
 fn unresolved_color(diagnostics: &mut Vec<String>, what: &str) {
@@ -3941,11 +4021,16 @@ fn single_length_px(value: &lightningcss::properties::custom::TokenList<'_>) -> 
 
 /// Does this token list reference `var()` or `env()` anywhere?
 fn has_substitution(value: &lightningcss::properties::custom::TokenList<'_>) -> bool {
-    use lightningcss::properties::custom::TokenOrValue;
-    value
-        .0
-        .iter()
-        .any(|t| matches!(t, TokenOrValue::Var(_) | TokenOrValue::Env(_)))
+    use lightningcss::properties::custom::{TokenOrValue, UnresolvedColor};
+    value.0.iter().any(|token| match token {
+        TokenOrValue::Var(_) | TokenOrValue::Env(_) => true,
+        TokenOrValue::Function(function) => has_substitution(&function.arguments),
+        TokenOrValue::UnresolvedColor(UnresolvedColor::RGB { alpha, .. }
+            | UnresolvedColor::HSL { alpha, .. }) => has_substitution(alpha),
+        TokenOrValue::UnresolvedColor(UnresolvedColor::LightDark { light, dark }) =>
+            has_substitution(light) || has_substitution(dark),
+        _ => false,
+    })
 }
 
 /// What a `content` declaration resolved to.
@@ -4099,54 +4184,29 @@ fn scrollbar_color(
     value: &lightningcss::properties::custom::TokenList,
     diagnostics: &mut Vec<String>,
 ) -> Option<(Hsla, Hsla)> {
-    use lightningcss::properties::custom::{Token, TokenOrValue};
-    let mut colors: Vec<Hsla> = Vec::new();
-    for t in value.0.iter() {
-        match t {
-            TokenOrValue::Token(Token::WhiteSpace(_)) => {}
-            TokenOrValue::Token(Token::Ident(id)) if id.as_ref() == "auto" => return None,
-            TokenOrValue::Color(c) => match color(c) {
-                Some(c) => colors.push(c),
-                None => return None,
-            },
-            // A NAMED colour (`red`, `transparent`, `rebeccapurple`) reaches an
-            // unknown property's token list as a bare `Ident`, not as
-            // `TokenOrValue::Color` — lightningcss only resolves the typed
-            // colour for the numeric syntaxes. `scrollbar-color: red blue` is
-            // as valid as `#f00 #00f`, so the ident is re-parsed as a colour
-            // before it is treated as garbage.
-            TokenOrValue::Token(Token::Ident(id)) => match named_color(id.as_ref()) {
-                Some(c) => colors.push(c),
-                None => {
-                    once(
-                        diagnostics,
-                        "`scrollbar-color` takes two colours (thumb then track) — the declaration                      was dropped"
-                            .to_string(),
-                    );
-                    return None;
+    use lightningcss::properties::custom::{CustomProperty, CustomPropertyName, Token, TokenOrValue};
+    let tokens: Vec<_> = value.0.iter().filter(|token| !token.is_whitespace()).collect();
+    if matches!(tokens.as_slice(), [TokenOrValue::Token(Token::Ident(id))] if id.as_ref().eq_ignore_ascii_case("auto")) {
+        return None;
+    }
+    // Unknown-property tokens can retain hsl()/rgb() functions after var()
+    // substitution. Parse the pair through the typed colour grammar rather
+    // than mistaking such a function for another list component.
+    let property = Property::Custom(CustomProperty {
+        name: CustomPropertyName::Unknown(lightningcss::values::ident::Ident("scrollbar-color".into())),
+        value: value.clone(),
+    });
+    if tokens.len() == 2 {
+        if let Some(raw) = value_text(&property) {
+            if let Ok(Property::BorderColor(pair)) = Property::parse_string(PropertyId::from("border-color"), &raw, ParserOptions::default()) {
+                if let (Some(thumb), Some(track)) = (color(&pair.top), color(&pair.right)) {
+                    return Some((thumb, track));
                 }
-            },
-            _ => {
-                once(
-                    diagnostics,
-                    "`scrollbar-color` takes two colours (thumb then track) — the declaration                      was dropped"
-                        .to_string(),
-                );
-                return None;
             }
         }
     }
-    match colors.len() {
-        2 => Some((colors[0], colors[1])),
-        _ => {
-            once(
-                diagnostics,
-                "`scrollbar-color` takes exactly two colours (thumb then track) — the                  declaration was dropped"
-                    .to_string(),
-            );
-            None
-        }
-    }
+    once(diagnostics, "`scrollbar-color` requires auto or two valid colours (thumb then track)".to_string());
+    None
 }
 
 /// `overscroll-behavior: auto | contain | none`, one axis at a time.
@@ -4880,16 +4940,7 @@ fn apply_property(
                 Some(webkit_mask_compositing(first.as_deref().unwrap_or("source-over")));
             advise_mask(x, diagnostics);
         }
-        BorderColor(v) => {
-            // gpui has one border color for all four sides — take the top.
-            match &v.top {
-                CssColor::CurrentColor => x.current_color.0 |= CurrentColorTargets::BORDER,
-                c => match color(c) {
-                    Some(c) => r.border_color = Some(c),
-                    None => unresolved_color(diagnostics, "border-color"),
-                },
-            }
-        }
+        BorderColor(v) => all_border_colors(r, x, [&v.top, &v.right, &v.bottom, &v.left], diagnostics),
         Border(b) => {
             if let Some(w) = border_width_px(&b.width) {
                 let w: AbsoluteLength = px(w).into();
@@ -4898,65 +4949,37 @@ fn apply_property(
                 r.border_widths.bottom = Some(w);
                 r.border_widths.left = Some(w);
             }
-            if let Some(c) = color(&b.color) {
-                r.border_color = Some(c);
-            }
+            all_border_colors(r, x, [&b.color; 4], diagnostics);
             set_border_style(r, b.style, diagnostics);
         }
-        // Tailwind emits the `border-width` shorthand for `border-2` and the
-        // per-side longhands for `border-t` / `border-x-2`.
         BorderWidth(v) => {
             r.border_widths.top = border_width_px(&v.top).map(|w| px(w).into());
             r.border_widths.right = border_width_px(&v.right).map(|w| px(w).into());
             r.border_widths.bottom = border_width_px(&v.bottom).map(|w| px(w).into());
             r.border_widths.left = border_width_px(&v.left).map(|w| px(w).into());
         }
-        // gpui has ONE border colour for the whole box. Mapping the longhands
-        // onto it (last wins) renders a single-side border — the shape every
-        // divider, table rule and `border-t` utility actually wants — instead
-        // of rendering nothing at all, which is what "not mapped" bought.
-        BorderTopColor(c) | BorderRightColor(c) | BorderBottomColor(c) | BorderLeftColor(c) => {
-            match c {
-                CssColor::CurrentColor => {
-                    per_side_border_color_advisory(diagnostics);
-                    x.current_color.0 |= CurrentColorTargets::BORDER;
-                }
-                c => match color(c) {
-                    Some(v) => {
-                        r.border_color = Some(v);
-                        per_side_border_color_advisory(diagnostics);
-                    }
-                    None => unresolved_color(diagnostics, "border-color"),
-                },
-            }
-        }
-        // `border-top: 1px solid X` — the per-side shorthand.
+        BorderTopColor(c) => border_side_color(&mut r.vn_border_colors.top, CurrentColorTargets::BORDER_TOP, c, x, diagnostics),
+        BorderRightColor(c) => border_side_color(&mut r.vn_border_colors.right, CurrentColorTargets::BORDER_RIGHT, c, x, diagnostics),
+        BorderBottomColor(c) => border_side_color(&mut r.vn_border_colors.bottom, CurrentColorTargets::BORDER_BOTTOM, c, x, diagnostics),
+        BorderLeftColor(c) => border_side_color(&mut r.vn_border_colors.left, CurrentColorTargets::BORDER_LEFT, c, x, diagnostics),
         BorderTop(b) => {
             r.border_widths.top = border_width_px(&b.width).map(|w| px(w).into());
-            if let Some(c) = color(&b.color) {
-                r.border_color = Some(c);
-            }
+            border_side_color(&mut r.vn_border_colors.top, CurrentColorTargets::BORDER_TOP, &b.color, x, diagnostics);
             set_border_style(r, b.style, diagnostics);
         }
         BorderRight(b) => {
             r.border_widths.right = border_width_px(&b.width).map(|w| px(w).into());
-            if let Some(c) = color(&b.color) {
-                r.border_color = Some(c);
-            }
+            border_side_color(&mut r.vn_border_colors.right, CurrentColorTargets::BORDER_RIGHT, &b.color, x, diagnostics);
             set_border_style(r, b.style, diagnostics);
         }
         BorderBottom(b) => {
             r.border_widths.bottom = border_width_px(&b.width).map(|w| px(w).into());
-            if let Some(c) = color(&b.color) {
-                r.border_color = Some(c);
-            }
+            border_side_color(&mut r.vn_border_colors.bottom, CurrentColorTargets::BORDER_BOTTOM, &b.color, x, diagnostics);
             set_border_style(r, b.style, diagnostics);
         }
         BorderLeft(b) => {
             r.border_widths.left = border_width_px(&b.width).map(|w| px(w).into());
-            if let Some(c) = color(&b.color) {
-                r.border_color = Some(c);
-            }
+            border_side_color(&mut r.vn_border_colors.left, CurrentColorTargets::BORDER_LEFT, &b.color, x, diagnostics);
             set_border_style(r, b.style, diagnostics);
         }
         BorderTopWidth(v) => r.border_widths.top = border_width_px(v).map(|w| px(w).into()),
@@ -8435,18 +8458,39 @@ mod tests {
         }
     }
 
-    /// A per-side border colour renders a one-sided border instead of nothing,
-    /// and says which half of that is a divergence.
     #[test]
-    fn per_side_border_colour_paints_and_advises() {
-        let (r, d) = map("border-top: 1px solid #ff0000");
+    fn per_side_border_colours_are_independent_and_silent() {
+        let (r, diagnostics) = map("border-top: 1px solid #ff0000; border-left-color: #00ff00");
         assert_eq!(r.border_widths.top, Some(px(1.0).into()));
         assert_eq!(r.border_widths.bottom, None);
-        assert!(r.border_color.is_some());
-        assert!(d.is_empty(), "the per-side SHORTHAND is exact: {d:?}");
-        let (r, d) = map("border-left-color: #00ff00");
-        assert!(r.border_color.is_some());
-        assert!(d.iter().any(|m| m.contains("ALL four sides")), "{d:?}");
+        assert_eq!(r.vn_border_colors.top, Some(Some(gpui::rgb(0xff0000).into())));
+        assert_eq!(r.vn_border_colors.left, Some(Some(gpui::rgb(0x00ff00).into())));
+        assert_eq!(r.vn_border_colors.right, None);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn border_color_shorthand_retains_four_colours_and_resets_side_overrides() {
+        let (r, diagnostics) = map("border-color: red green blue transparent");
+        assert_eq!(r.vn_border_colors.top, Some(Some(gpui::rgb(0xff0000).into())));
+        assert_eq!(r.vn_border_colors.right, Some(Some(gpui::rgb(0x008000).into())));
+        assert_eq!(r.vn_border_colors.bottom, Some(Some(gpui::rgb(0x0000ff).into())));
+        assert!(r.vn_border_colors.left.flatten().is_some_and(|c| c.is_transparent()));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let (r, diagnostics) = map("border-left-color: blue; border-color: red");
+        assert_eq!(r.vn_border_colors.left, Some(Some(gpui::rgb(0xff0000).into())));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn scrollbar_color_accepts_functional_colours() {
+        for body in ["scrollbar-color: hsl(240 5% 64% / 0.35) transparent",
+            "scrollbar-color: rgba(128, 24, 255, 0.5) #0000",
+            "scrollbar-color: hsl(0 0% 10%) transparent"] {
+            let (_, extras, diagnostics) = map_full(body);
+            assert!(extras.scrollbar_color.is_some(), "{body}: {diagnostics:?}");
+            assert!(diagnostics.is_empty(), "{body}: {diagnostics:?}");
+        }
     }
 
     // ---- transform-origin -----------------------------------------------

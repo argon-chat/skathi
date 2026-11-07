@@ -60,7 +60,8 @@ pub(crate) struct Key<'a> {
     /// parent's font size: every `em` the element resolves, and its own font
     /// size when it inherits one, follow from it, so two cousins under
     /// different font sizes must not share.
-    bases: [u32; 4],
+    bases: [u32; 5],
+    parent_font: &'a gpui::Font,
 }
 
 impl<'a> Key<'a> {
@@ -70,6 +71,7 @@ impl<'a> Key<'a> {
         parent_vars: &'a Rc<Vars>,
         parent_color: Option<gpui::Hsla>,
         parent_font_size: f32,
+        parent_font: &'a gpui::Font,
         env: &'a Env,
     ) -> Self {
         // FNV-1a: a cheap first filter before the slices are compared.
@@ -81,8 +83,8 @@ impl<'a> Key<'a> {
             }
         }
         let (w, h) = crate::mapper::viewport_basis();
-        let bases = [crate::mapper::rem_basis().to_bits(), w.to_bits(), h.to_bits(), parent_font_size.to_bits()];
-        Key { generation, hash, rules, parent_vars, parent_color, env, bases }
+        let bases = [crate::mapper::rem_basis().to_bits(), w.to_bits(), h.to_bits(), parent_font_size.to_bits(), crate::mapper::font_metric_generation()];
+        Key { generation, hash, rules, parent_vars, parent_color, parent_font, env, bases }
     }
 }
 
@@ -93,7 +95,8 @@ struct Entry {
     parent_vars: Rc<Vars>,
     parent_color: Option<gpui::Hsla>,
     env: Env,
-    bases: [u32; 4],
+    bases: [u32; 5],
+    parent_font: gpui::Font,
     states: ComputedStates,
 }
 
@@ -105,6 +108,7 @@ impl Entry {
             && color_bits(self.parent_color) == color_bits(key.parent_color)
             && self.env == *key.env
             && self.bases == key.bases
+            && self.parent_font == *key.parent_font
             && (Rc::ptr_eq(&self.parent_vars, key.parent_vars) || *self.parent_vars == **key.parent_vars)
     }
 }
@@ -139,6 +143,7 @@ pub(crate) fn insert(key: Key<'_>, states: &ComputedStates) {
         parent_color: key.parent_color,
         env: *key.env,
         bases: key.bases,
+        parent_font: key.parent_font.clone(),
         states: states.clone(),
     };
     RING.with(|ring| {
