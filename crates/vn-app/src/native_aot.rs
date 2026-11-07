@@ -3,6 +3,9 @@
 use crate::json::{self, Json};
 use std::{
     cell::RefCell,
+    ffi::OsStr,
+    fs::File,
+    io::Read,
     path::{Path, PathBuf},
 };
 use vn_runtime::{
@@ -57,7 +60,7 @@ fn validate(
     manifest: &Json,
     source: &[u8],
     preludes: &[u8],
-    bytes: &[u8],
+    image_digest: &str,
 ) -> Result<(u32, [u8; 16]), String> {
     equal(manifest, "schema", SCHEMA)?;
     if manifest.get("version").and_then(Json::as_f64) != Some(1.0) {
@@ -73,7 +76,7 @@ fn validate(
     equal(manifest, "transform", TRANSFORM)?;
     equal(manifest, "sourceBundleSha256", &aot::digest_hex(source))?;
     equal(manifest, "preludeSha256", &aot::digest_hex(preludes))?;
-    equal(manifest, "imageSha256", &aot::digest_hex(bytes))?;
+    equal(manifest, "imageSha256", image_digest)?;
     let entry = manifest
         .get("entry")
         .and_then(Json::as_f64)
@@ -83,6 +86,45 @@ fn validate(
     Ok((entry, id))
 }
 
+const MAX_MANIFEST_BYTES: u64 = 65_536;
+
+fn read_manifest(path: &Path) -> Result<String, String> {
+    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut text = String::new();
+    file.take(MAX_MANIFEST_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if text.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err("AOT manifest is too large".into());
+    }
+    Ok(text)
+}
+
+fn memory_profile(value: Option<&OsStr>) -> Result<aot::MemoryProfile, String> {
+    match value {
+        None => Ok(aot::MemoryProfile::Compact),
+        Some(value) => match value.to_str() {
+            Some("compact") => Ok(aot::MemoryProfile::Compact),
+            Some("default") => Ok(aot::MemoryProfile::Default),
+            _ => Err("VN_AOT_MEMORY_PROFILE must be compact or default".into()),
+        },
+    }
+}
+
+/// Hash and load this exact file object, including when a symlink is retargeted.
+/// The native loader duplicates the handle; in-place writes stay disabled.
+/// Atomic replacement leaves this original file object valid for execution.
+fn open_image(path: &Path) -> std::io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.access_mode(0x8000_0000 | 0x2000_0000); // GENERIC_READ | GENERIC_EXECUTE
+        options.share_mode(1 | 4); // FILE_SHARE_READ | FILE_SHARE_DELETE; no writes
+    }
+    options.open(path)
+}
 /// On the actual VM thread, before ANY JSC initialization. Failure cannot
 /// switch this process back to JIT: a caller must stop and launch a clean one.
 pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
@@ -95,10 +137,9 @@ pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
     };
     let path = std::fs::canonicalize(PathBuf::from(path))
         .map_err(|e| format!("native AOT manifest path: {e}"))?;
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if text.len() > 65536 {
-        return Err("AOT manifest is too large".into());
-    }
+    let profile = memory_profile(std::env::var_os("VN_AOT_MEMORY_PROFILE").as_deref())?;
+    let text = read_manifest(&path)?;
+
     let manifest = json::parse(&text).ok_or("invalid native AOT manifest JSON")?;
     let source =
         crate::inspector::inspector_js().map_err(|e| format!("embedded inspector: {e}"))?;
@@ -106,14 +147,25 @@ pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
     preludes.push(0);
     preludes.extend_from_slice(crate::WINDOW_PRELUDE_JS.as_bytes());
     let image = image_path(&manifest, path.parent().unwrap_or_else(|| Path::new(".")))?;
-    let bytes = std::fs::read(&image).map_err(|e| format!("{}: {e}", image.display()))?;
-    let (entry, id) = validate(&manifest, source.as_bytes(), &preludes, &bytes)?;
+    let mut file = open_image(&image).map_err(|e| format!("{}: {e}", image.display()))?;
+    let image_digest =
+        aot::digest_reader(&mut file).map_err(|e| format!("{}: {e}", image.display()))?;
+    let (entry, id) = validate(&manifest, source.as_bytes(), &preludes, &image_digest)?;
     // All inputs are application-selected trusted build artifacts. The manifest
     // is a compatibility/integrity check, not an authenticity signature.
-    unsafe { aot::load_image(&image, id) }?;
+    unsafe { aot::load_image_file_with_profile(&file, id, profile) }?;
+    drop(file);
+    if let Some(settings) = aot::memory_settings() {
+        eprintln!(
+            "[native-aot] structure heap {} KiB; cell cage {} MiB; source view read-only {}",
+            settings.structure_heap_size_kb,
+            settings.marked_block_cage_size_mb,
+            settings.initial_image_read_only
+        );
+    }
     PLAN.with(|plan| *plan.borrow_mut() = Some(Plan { entry }));
     eprintln!(
-        "[native-aot] selected inspector image {} (entry {entry})",
+        "[native-aot] selected inspector image {} (entry {entry}, memory {profile:?})",
         image.display()
     );
     Ok(())
@@ -145,6 +197,77 @@ pub(crate) fn boot(rt: &JsRuntime) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct TempArtifact(std::path::PathBuf);
+    impl TempArtifact {
+        fn new(bytes: &[u8]) -> Self {
+            use std::io::Write;
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "vn-aot-manifest-{}-{}.bin",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .unwrap();
+            file.write_all(bytes).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TempArtifact {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn rejects_oversized_manifest_before_parsing_or_starting_jsc() {
+        let exact = TempArtifact::new(&vec![b' '; MAX_MANIFEST_BYTES as usize]);
+        assert_eq!(
+            read_manifest(&exact.0).unwrap().len(),
+            MAX_MANIFEST_BYTES as usize
+        );
+        let oversized = TempArtifact::new(&vec![b' '; 2 * MAX_MANIFEST_BYTES as usize]);
+        assert_eq!(
+            read_manifest(&oversized.0).unwrap_err(),
+            "AOT manifest is too large"
+        );
+        let invalid_utf8 = TempArtifact::new(&[0xff]);
+        assert!(read_manifest(&invalid_utf8.0).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verified_image_handle_pins_original_bytes_across_atomic_replacement() {
+        let artifact = TempArtifact::new(b"trusted native image");
+        let mut image = open_image(&artifact.0).unwrap();
+        assert_eq!(
+            aot::digest_reader(&mut image).unwrap(),
+            aot::digest_hex(b"trusted native image")
+        );
+        assert!(std::fs::OpenOptions::new()
+            .write(true)
+            .open(&artifact.0)
+            .is_err());
+        let old = TempArtifact::new(b"placeholder");
+        std::fs::remove_file(&old.0).unwrap();
+        std::fs::rename(&artifact.0, &old.0).unwrap();
+        std::fs::write(&artifact.0, b"a new artifact at the same path").unwrap();
+        use std::io::Seek;
+        image.rewind().unwrap();
+        assert_eq!(
+            aot::digest_reader(&mut image).unwrap(),
+            aot::digest_hex(b"trusted native image")
+        );
+        assert!(std::fs::OpenOptions::new()
+            .write(true)
+            .open(&old.0)
+            .is_err());
+        drop(image);
+        assert!(std::fs::OpenOptions::new().write(true).open(&old.0).is_ok());
+    }
     fn valid() -> Json {
         Json::obj(vec![
             ("schema", Json::s(SCHEMA)),
@@ -173,7 +296,7 @@ mod tests {
     }
     #[test]
     fn rejects_stale_artifacts_before_loading_native_code() {
-        assert!(validate(&valid(), b"bundle", b"preludes", b"image").is_ok());
+        assert!(validate(&valid(), b"bundle", b"preludes", &aot::digest_hex(b"image")).is_ok());
         for name in [
             "kind",
             "frontend",
@@ -187,12 +310,29 @@ mod tests {
         ] {
             let mut document = valid();
             change(&mut document, name, Json::s("stale"));
-            assert!(validate(&document, b"bundle", b"preludes", b"image")
-                .unwrap_err()
-                .contains(name));
+            assert!(validate(
+                &document,
+                b"bundle",
+                b"preludes",
+                &aot::digest_hex(b"image")
+            )
+            .unwrap_err()
+            .contains(name));
         }
-        assert!(validate(&valid(), b"changed", b"preludes", b"image").is_err());
-        assert!(validate(&valid(), b"bundle", b"preludes", b"corrupt").is_err());
+        assert!(validate(
+            &valid(),
+            b"changed",
+            b"preludes",
+            &aot::digest_hex(b"image")
+        )
+        .is_err());
+        assert!(validate(
+            &valid(),
+            b"bundle",
+            b"preludes",
+            &aot::digest_hex(b"corrupt")
+        )
+        .is_err());
     }
     #[test]
     fn entries_are_finite_positive_one_based_ids() {
@@ -206,7 +346,13 @@ mod tests {
         ] {
             let mut document = valid();
             change(&mut document, "entry", Json::n(entry));
-            assert!(validate(&document, b"bundle", b"preludes", b"image").is_err());
+            assert!(validate(
+                &document,
+                b"bundle",
+                b"preludes",
+                &aot::digest_hex(b"image")
+            )
+            .is_err());
         }
     }
     #[test]

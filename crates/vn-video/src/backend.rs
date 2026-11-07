@@ -227,6 +227,9 @@ pub enum MediaSource {
         mime: String,
         data: Arc<Vec<u8>>,
     },
+    /// Immutable mapped package bytes. A backend reads/seek ranges directly;
+    /// it must not copy the entire asset or stage it to a temporary file.
+    StaticBytes { mime: String, data: &'static [u8] },
 }
 
 /// Compared to answer one question — "is this the source that is already
@@ -242,6 +245,8 @@ impl PartialEq for MediaSource {
             (Self::Path(a), Self::Path(b)) => a == b,
             (Self::Uri(a), Self::Uri(b)) => a == b,
             (Self::Bytes { data: a, .. }, Self::Bytes { data: b, .. }) => Arc::ptr_eq(a, b),
+            (Self::StaticBytes { data: a, .. }, Self::StaticBytes { data: b, .. }) =>
+                a.as_ptr() == b.as_ptr() && a.len() == b.len(),
             _ => false,
         }
     }

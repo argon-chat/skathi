@@ -139,6 +139,10 @@ vn-sticker = { path = "../vn-sticker" }
 # share. No dependencies — it is its own crate so the format is testable without
 # linking an engine.
 vn-payload = { path = "../vn-payload" }
+# Demand-paged external payloads, with owner-bound zero-copy parser views.
+# Both versions are already resolved by this workspace.
+memmap2 = "0.9"
+self_cell = "1"
 # The desktop surface (docs/SHELL.md, docs/LAUNCH.md): the ONE argv parser every
 # consumer of this process's command line reads (the inspector mode,
 # `--vn-host-info`, the protocol handler), plus the shell, single instance and

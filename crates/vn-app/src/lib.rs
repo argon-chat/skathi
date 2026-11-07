@@ -72,6 +72,7 @@ mod inspector; // the EMBEDDED inspector: F12, `--devtools` mode, the child regi
 #[cfg(all(vn_devtools, feature = "native-aot"))]
 mod native_aot; // explicitly selected, ABI-checked native inspector images
 mod json; // the dev transport, the devtools wire and vn.config.json share one codec
+mod mapped_file; // read-only disk payloads, borrowed without a full heap copy
 mod owner; // VN_OWNER_PID: a test host dies with the runner that launched it
 mod payload; // the app stamped into a packaged exe (VNPK), and `--vn-host-info`
 mod perf;

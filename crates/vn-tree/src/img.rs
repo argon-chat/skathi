@@ -1121,34 +1121,17 @@ pub(crate) fn resolve_media(tag: &str, src: &str) -> Result<vn_video::MediaSourc
         }
         "http" | "https" => Ok(vn_video::MediaSource::Uri(src.to_string())),
         "blob" => blob_media(tag, src, blob_target(src)),
-        // A packaged app: the payload entry, as bytes with the media type its
-        // extension names — the shape a `data:` URI already takes, so the
-        // backend's memory-stream path (and its temp-file fallback) is reused.
-        //
-        // v1 COPIES the clip once per source; a zero-copy `MediaSource` over
-        // the mapped image is phase 2 (research/reports/m25/packaging-design.md
-        // §6), and a big clip says so rather than silently costing memory.
+        // The payload is already mapped read-only. Preserve its process-life
+        // slice so Media Foundation reads/seek ranges through the native source.
         "" if asset_store().is_some() => {
             let (key, bytes) = stored(tag, src).expect("asset_store() is set")?;
-            if bytes.len() > LARGE_PACKAGED_MEDIA {
-                warn(format!(
-                    "<{tag} src=\"{src}\">: a packaged {} MiB clip is copied into memory to play — in a \
-                     dev host the OS streams it from disk. (A zero-copy source for packaged media is \
-                     planned; until then, ship clips this large beside the exe and use an absolute path.)",
-                    bytes.len() >> 20
-                ));
-            }
-            Ok(vn_video::MediaSource::Bytes {
-                mime: vn_payload::media_type_for(&key).to_string(),
-                data: std::sync::Arc::new(bytes.to_vec()),
+            Ok(vn_video::MediaSource::StaticBytes {
+                mime: vn_payload::media_type_for(&key).to_string(), data: bytes,
             })
         }
         _ => resolve_path(tag, src).map(vn_video::MediaSource::Path),
     }
 }
-
-/// Above this, a packaged `<video>` source gets an advisory about its copy.
-const LARGE_PACKAGED_MEDIA: usize = 64 << 20;
 
 fn scheme_of(src: &str) -> String {
     src.split_once(':')
@@ -1928,9 +1911,10 @@ mod tests {
         let miss = read_bytes("lottie", "assets/missing.tgs").unwrap_err();
         assert!(miss.contains("not in this app's package"), "{miss}");
         match resolve_media("video", "assets/clip.mp4") {
-            Ok(MediaSource::Bytes { mime, data }) => {
+            Ok(MediaSource::StaticBytes { mime, data }) => {
                 assert_eq!(mime, "video/mp4");
-                assert_eq!(data.as_slice(), &b"mp4bytes"[..]);
+                assert_eq!(data, &b"mp4bytes"[..]);
+                assert!(std::ptr::eq(data, fake_store("assets/clip.mp4").unwrap()), "mapped package bytes must be borrowed");
             }
             other => panic!("{other:?}"),
         }

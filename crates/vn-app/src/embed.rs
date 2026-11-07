@@ -166,6 +166,21 @@ enum PayloadSource {
     Bytes(Vec<u8>),
 }
 
+#[cfg(any(feature = "prod", test))]
+impl PayloadSource {
+    fn load(self) -> Result<(crate::payload::PayloadBytes, String), Error> {
+        use crate::payload::PayloadBytes;
+        match self {
+            Self::File(path) => {
+                let file = crate::mapped_file::MappedFile::open(&path)
+                    .map_err(|e| Error::Payload(format!("{}: {e}", path.display())))?;
+                Ok((PayloadBytes::File(file), path.display().to_string()))
+            }
+            Self::Bytes(bytes) => Ok((PayloadBytes::Owned(bytes), "bytes".into())),
+        }
+    }
+}
+
 /// Why [`Builder::spawn`] did not start vue-native.
 #[derive(Debug)]
 pub enum Error {
@@ -298,13 +313,15 @@ impl Builder {
     }
 
     /// The app, as the `.vnpk` file `vn build` writes (`dist/.vn/app.vnpk`).
-    /// A `--features prod` build only.
+    /// A `--features prod` build only. Read-only mapped for the app lifetime;
+    /// publish updates by atomic replacement, never by modifying it in place.
     pub fn payload_file(mut self, path: impl Into<PathBuf>) -> Self {
         self.payload = Some(PayloadSource::File(path.into()));
         self
     }
 
     /// The app, as the bytes of a `.vnpk` (an `include_bytes!` of one, say).
+    /// The provided Vec is moved into the payload owner without another clone.
     pub fn payload_bytes(mut self, bytes: impl Into<Vec<u8>>) -> Self {
         self.payload = Some(PayloadSource::Bytes(bytes.into()));
         self
@@ -410,21 +427,13 @@ impl Builder {
     }
 
     #[cfg(feature = "prod")]
-    fn load_payload(&self) -> Result<(), Error> {
-        let (bytes, label): (&'static [u8], String) = match &self.payload {
-            // Leaked on purpose: a payload lives as long as the process, like
-            // the mapped resource it stands in for (payload.rs).
-            Some(PayloadSource::File(p)) => {
-                let v = std::fs::read(p).map_err(|e| Error::Payload(format!("{}: {e}", p.display())))?;
-                (Box::leak(v.into_boxed_slice()), p.display().to_string())
-            }
-            Some(PayloadSource::Bytes(b)) => (Box::leak(b.clone().into_boxed_slice()), "bytes".into()),
+    fn load_payload(&mut self) -> Result<(), Error> {
+        let Some(source) = self.payload.take() else {
             // The embedder's own exe may carry one (`vn build` stamps any PE),
             // or `VN_PAYLOAD` may name one: the exe's own rules.
-            None => {
-                return if crate::payload::get().is_some() { Ok(()) } else { Err(Error::NoPayload) };
-            }
+            return if crate::payload::get().is_some() { Ok(()) } else { Err(Error::NoPayload) };
         };
+        let (bytes, label) = source.load()?;
         crate::payload::set_external(bytes, label).map_err(Error::Payload)
     }
 
@@ -839,6 +848,30 @@ mod tests {
             .collect();
         QUEUED.store(0, Ordering::Release);
         out
+    }
+
+    #[test]
+    fn payload_source_moves_builder_bytes_and_maps_files_without_cloning() {
+        let bytes = vec![1, 2, 3, 4];
+        let pointer = bytes.as_ptr();
+        let mut builder = Builder::new().payload_bytes(bytes);
+        let (owned, label) = builder.payload.take().unwrap().load().unwrap();
+        let crate::payload::PayloadBytes::Owned(owned) = owned else { panic!("owned bytes expected") };
+        assert_eq!(label, "bytes");
+        assert_eq!(owned.as_ptr(), pointer);
+        assert!(builder.payload.is_none());
+        let mut files = crate::mapped_file::tests::Files::new();
+        let path = files.write("app.vnpk", b"file bytes");
+        let mut builder = Builder::new().payload_file(&path);
+        let (mapped, label) = builder.payload.take().unwrap().load().unwrap();
+        let crate::payload::PayloadBytes::File(mapped) = mapped else { panic!("mapped file expected") };
+        assert_eq!(mapped.as_bytes(), b"file bytes");
+        assert_eq!(label, path.display().to_string());
+        assert!(builder.payload.is_none());
+        #[cfg(target_os = "windows")]
+        assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+        drop(mapped);
+        std::fs::write(&path, b"released").unwrap();
     }
 
     #[test]

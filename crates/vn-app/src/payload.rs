@@ -22,6 +22,12 @@
 //! and SHARED between instances of the same exe — the same memory story as the
 //! `include_str!` it replaces (design V7). The lookup costs 12–36 µs.
 //!
+//! **File** is read through a read-only file mapping. Its owner and source
+//! handle live with the parsed payload, without copying the whole file into a
+//! heap buffer or faulting in unused assets. Windows denies in-place writes
+//! while allowing atomic rename/replacement; POSIX publishers must likewise
+//! keep active files immutable and publish a new inode.
+//!
 //! **File** is honoured ONLY when nothing is embedded, i.e. on a bare host: it
 //! is the in-repo iteration loop (`VN_PAYLOAD=apps/hello/dist/.vn/app.vnpk
 //! vn-app.exe`) and nothing else. A stamped exe ignores it, with one line —
@@ -63,8 +69,57 @@ pub struct Meta {
     pub launch: Option<String>,
 }
 
+/// Owns the bytes for the parser. A mapped file remains alive until after its
+/// borrowed TOC view has been dropped; failed parses release the owner normally.
+pub(crate) enum PayloadBytes {
+    Embedded(&'static [u8]),
+    File(crate::mapped_file::MappedFile),
+    Owned(Vec<u8>),
+}
+
+impl PayloadBytes {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Embedded(bytes) => bytes,
+            Self::File(file) => file.as_bytes(),
+            Self::Owned(bytes) => bytes,
+        }
+    }
+}
+
+self_cell::self_cell! {
+    struct PayloadCell {
+        owner: PayloadBytes,
+        #[covariant]
+        dependent: Payload,
+    }
+}
+
+/// The parser borrows its owner, never a widened/fabricated `'static` slice.
+/// Only the process-wide Loaded reference makes successful app assets static.
+pub struct AppPayload(PayloadCell);
+
+impl AppPayload {
+    fn parse(bytes: PayloadBytes) -> Result<Self, String> {
+        PayloadCell::try_new(bytes, |bytes| Payload::parse(bytes.as_bytes()))
+            .map(Self)
+            .map_err(|e| format!("the app payload is unreadable — {e}"))
+    }
+
+    fn meta(&self) -> Option<&str> { self.0.borrow_dependent().meta() }
+    pub fn len(&self) -> usize { self.0.borrow_dependent().len() }
+    pub fn asset_count(&self) -> usize { self.0.borrow_dependent().asset_count() }
+    pub fn script(&self) -> Option<&str> { self.0.borrow_dependent().script() }
+    pub fn window_json(&self) -> Option<&str> { self.0.borrow_dependent().window_json() }
+    pub fn assets(&self) -> &[vn_payload::Entry<'_>] { self.0.borrow_dependent().assets() }
+    pub fn asset(&self, key: &str) -> Option<&[u8]> { self.0.borrow_dependent().asset(key) }
+    pub fn asset_ignoring_case(&self, key: &str) -> Option<(&str, &[u8])> {
+        self.0.borrow_dependent().asset_ignoring_case(key)
+    }
+}
+
 pub struct Loaded {
-    pub payload: Payload<'static>,
+    pub payload: AppPayload,
     pub meta: Meta,
     pub source: Source,
 }
@@ -82,8 +137,8 @@ pub fn get() -> Option<&'static Loaded> {
 /// embedder's `Err` rather than this module's [`fatal`]. Before the first
 /// [`get`]; it then wins over a stamped resource and `VN_PAYLOAD` alike, since
 /// the process that embeds vue-native is the one that says what it runs.
-pub(crate) fn set_external(bytes: &'static [u8], label: String) -> Result<(), String> {
-    let payload = Payload::parse(bytes).map_err(|e| format!("the app payload is unreadable — {e}"))?;
+pub(crate) fn set_external(bytes: PayloadBytes, label: String) -> Result<(), String> {
+    let payload = AppPayload::parse(bytes)?;
     let meta = payload.meta().map(parse_meta).unwrap_or_default();
     if !meta.vue_native.is_empty() && meta.vue_native != env!("VN_PKG_VERSION") {
         return Err(format!(
@@ -113,22 +168,20 @@ fn load() -> Option<Loaded> {
                      by a bare host, so a stamped — later signed — exe can never be made to run other JS.)"
                 );
             }
-            (bytes, Source::Embedded)
+            (PayloadBytes::Embedded(bytes), Source::Embedded)
         }
         None => {
             let path = std::env::var_os("VN_PAYLOAD").filter(|v| !v.is_empty())?;
             let path = std::path::PathBuf::from(path);
-            match std::fs::read(&path) {
-                // Leaked on purpose: a payload lives as long as the process,
-                // exactly like the mapped one it stands in for.
-                Ok(v) => (&*Box::leak(v.into_boxed_slice()), Source::File(path)),
+            match crate::mapped_file::MappedFile::open(&path) {
+                Ok(file) => (PayloadBytes::File(file), Source::File(path)),
                 Err(e) => fatal(&format!("VN_PAYLOAD={}: {e}", path.display())),
             }
         }
     };
-    let payload = match Payload::parse(bytes) {
+    let payload = match AppPayload::parse(bytes) {
         Ok(p) => p,
-        Err(e) => fatal(&format!("the app payload is unreadable — {e}")),
+        Err(e) => fatal(&e),
     };
     let meta = payload.meta().map(parse_meta).unwrap_or_default();
     if !meta.vue_native.is_empty() && meta.vue_native != env!("VN_PKG_VERSION") {
@@ -405,6 +458,74 @@ pub fn host_info_json() -> String {
 
 #[cfg(test)]
 mod tests {
+    const GOLDEN: &[u8] = include_bytes!("../../../packages/vue-native/test/fixtures/golden.vnpk");
+
+    #[test]
+    fn mapped_payload_golden_views_borrow_the_mapping_after_owner_moves() {
+        let mut files = crate::mapped_file::tests::Files::new();
+        let path = files.write("app.vnpk", GOLDEN);
+        let mapping = crate::mapped_file::MappedFile::open(&path).unwrap();
+        let address = mapping.as_bytes().as_ptr() as usize;
+        let payload = Box::new(super::AppPayload::parse(super::PayloadBytes::File(mapping)).unwrap());
+        assert_eq!(payload.0.borrow_owner().as_bytes().as_ptr() as usize, address);
+        assert_eq!(payload.len(), GOLDEN.len());
+        assert_eq!(payload.asset_count(), 4);
+        let script = payload.script().unwrap();
+        assert_eq!(script, "globalThis.__golden = 42;\n");
+        assert!((address..address + GOLDEN.len()).contains(&(script.as_ptr() as usize)));
+        assert_eq!(payload.window_json(), Some(r#"{"title":"Golden","width":640}"#));
+        assert_eq!(payload.asset("assets/hello.txt"), Some(&b"hello\n"[..]));
+        assert_eq!(payload.asset_ignoring_case("ASSETS/HELLO.TXT").unwrap().0, "assets/hello.txt");
+        assert_eq!(payload.assets().len(), 4);
+        assert_eq!(super::parse_meta(payload.meta().unwrap()).name, "golden");
+        drop(payload);
+        // A leaked map/handle would deny this in-place write on Windows.
+        std::fs::write(&path, b"released").unwrap();
+    }
+
+    #[test]
+    fn mapped_payload_empty_and_corrupt_parses_release_the_mapping() {
+        let mut files = crate::mapped_file::tests::Files::new();
+        for (name, bytes, diagnostic) in [
+            ("empty.vnpk", &b""[..], "shorter than its 64-byte header"),
+            ("corrupt.vnpk", &[0u8; 64][..], "does not start with"),
+        ] {
+            let path = files.write(name, bytes);
+            let mapping = crate::mapped_file::MappedFile::open(&path).unwrap();
+            let error = super::AppPayload::parse(super::PayloadBytes::File(mapping)).err().unwrap();
+            assert!(error.contains(diagnostic), "{error}");
+            std::fs::write(&path, b"released").unwrap();
+        }
+    }
+
+    #[test]
+    fn mapped_payload_version_rejection_releases_the_mapping() {
+        let mut files = crate::mapped_file::tests::Files::new();
+        let mut bytes = GOLDEN.to_vec();
+        let original = vn_payload::Payload::parse(GOLDEN).unwrap();
+        let version = super::parse_meta(original.meta().unwrap()).vue_native;
+        let field = format!("\"vueNative\":\"{version}\"");
+        let start = bytes.windows(field.len()).position(|part| part == field.as_bytes()).unwrap()
+            + "\"vueNative\":\"".len();
+        bytes[start..start + version.len()].fill(b'x');
+        let path = files.write("mismatch.vnpk", &bytes);
+        let mapping = crate::mapped_file::MappedFile::open(&path).unwrap();
+        let error = super::set_external(super::PayloadBytes::File(mapping), "test".into()).unwrap_err();
+        assert!(error.contains("rebuild it with the matching vn"), "{error}");
+        std::fs::write(&path, b"released").unwrap();
+    }
+
+    #[test]
+    fn payload_owned_bytes_and_embedded_resources_keep_their_original_allocations() {
+        let embedded = super::AppPayload::parse(super::PayloadBytes::Embedded(GOLDEN)).unwrap();
+        assert_eq!(embedded.0.borrow_owner().as_bytes().as_ptr(), GOLDEN.as_ptr());
+        let bytes = GOLDEN.to_vec();
+        let address = bytes.as_ptr();
+        let owned = super::AppPayload::parse(super::PayloadBytes::Owned(bytes)).unwrap();
+        assert_eq!(owned.0.borrow_owner().as_bytes().as_ptr(), address);
+        assert_eq!(owned.script(), embedded.script());
+    }
+
     #[test]
     fn meta_is_read_from_the_payload_json() {
         let m = super::parse_meta(

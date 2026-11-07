@@ -40,6 +40,7 @@
 mod codecs;
 mod notify;
 mod present;
+mod source;
 
 use std::ffi::c_void;
 use std::path::Path;
@@ -60,7 +61,7 @@ use windows::Win32::Media::MediaFoundation::{
     MF_BYTESTREAM_CONTENT_TYPE,
     CLSID_MFMediaEngineClassFactory, IMFMediaEngineEx, MFCreateMFByteStreamOnStream,
     MFSTARTUP_FULL, MF_MEDIA_ENGINE_CALLBACK,
-    MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC,
+    MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_PRELOAD_AUTOMATIC, MF_MEDIA_ENGINE_EXTENSION,
     MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
     MF_VERSION,
 };
@@ -245,6 +246,8 @@ pub struct MediaEngineBackend {
     wants_playing: bool,
     /// The `src` last handed to the engine, for the error advisories.
     current_src: String,
+    _source_extension: windows::Win32::Media::MediaFoundation::IMFMediaEngineExtension,
+    source_control: source::Control,
 }
 
 impl MediaEngineBackend {
@@ -309,6 +312,10 @@ impl MediaEngineBackend {
                     )
                 })?;
 
+        let (source_extension, source_control) = source::extension();
+        unsafe { attributes.SetUnknown(&MF_MEDIA_ENGINE_EXTENSION, &source_extension) }.map_err(|error| {
+            MediaError::new(MediaErrorCode::Decode, format!("media source extension: {error}"))
+        })?;
         // No playback HWND and no DirectComposition visual => frame-server
         // mode, which is what keeps the video inside our scene graph.
         let engine = unsafe { factory.CreateInstance(0, &attributes) }.map_err(|e| {
@@ -328,6 +335,8 @@ impl MediaEngineBackend {
             bytes_retry: None,
             wants_playing: false,
             current_src: String::new(),
+            _source_extension: source_extension,
+            source_control,
         })
     }
 
@@ -655,6 +664,7 @@ impl VideoBackend for MediaEngineBackend {
     fn load(&mut self, source: &MediaSource) -> Result<(), MediaError> {
         self.last_pts = i64::MIN;
         self.presenter.reset();
+        if !matches!(source, MediaSource::StaticBytes { .. }) { self.source_control.clear(); }
         match source {
             MediaSource::Path(path) => {
                 let url = file_url(path);
@@ -691,6 +701,13 @@ impl VideoBackend for MediaEngineBackend {
             // A `data:` URI. The bytes are already in memory, so they are
             // wrapped as an `IMFByteStream` over an `IStream` rather than
             // written out — see `set_source_bytes`.
+            MediaSource::StaticBytes { mime, data } => {
+                trace(format_args!("load package: {} bytes, mapped native source", data.len()));
+                self.bytes_retry = None;
+                self.current_src = format!("package:{mime} ({} bytes)", data.len());
+                let url = self.source_control.select(mime, data);
+                self.set_source_url(&url)?;
+            }
             MediaSource::Bytes { mime, data } => {
                 trace(format_args!(
                     "load data: {} bytes, mime {mime:?}",
