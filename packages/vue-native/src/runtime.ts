@@ -1392,8 +1392,9 @@ const nodeOps: Omit<RendererOptions<MirrorNode, MirrorElement>, "patchProp"> = {
   // `<VnWindow>` asks through `windowTeleport` instead, where they mean that
   // window's root.
   querySelector: (sel) => {
-    if (DOCUMENT_ROOTS.has(sel)) return appRoot;
-    return queryOne(sel, appRoot ? appRoot.__vnId : 0);
+    if (DOCUMENT_ROOTS.has(sel) && sel !== "#app") return appRoot;
+    // Prefer a real #app container; root-only native entries retain their legacy Teleport alias.
+    return queryOne(sel, appRoot ? appRoot.__vnId : 0) ?? (sel === "#app" ? appRoot : null);
   },
 };
 
@@ -2628,9 +2629,9 @@ function removeExtraListener(
 //   __vn_bounds         the rectangle gpui laid the node out at last frame
 //   __vn_computed_style the folded computed values + custom properties
 
-let appRoot: MirrorElement | null = null; // set by createApp().mount()
+let appRoot: MirrorElement | null = null; // created on mount or a pre-mount body insertion
 // Replays the pre-mount `documentElement` writes onto the real root. Installed by
-// the document surface below; called by mount().
+// the document surface below; called when the native root is first needed.
 let flushDocumentElement: ((root: MirrorElement) => void) | null = null;
 
 /**
@@ -5187,6 +5188,24 @@ defineDom("releasePointerCapture", function (this: MirrorElement, pointerId: num
 
 /** Tags `document.createElement` leaves to the engine (see there). */
 const ENGINE_TAGS = new Set(["a", "input", "style", "link", "script", "meta", "title", "base"]);
+/** Text supplied to a detached stylesheet, including renderer-owned Text nodes. */
+function stylesheetText(node: unknown): string {
+  if (node == null) return "";
+  if (typeof node === "string") return node;
+  const text = node as { textContent?: unknown; data?: unknown; nodeValue?: unknown; text?: unknown };
+  return String(text.textContent ?? text.data ?? text.nodeValue ?? text.text ?? "");
+}
+/** The engine's detached style element has inert child methods. Buffer its
+ * text from creation, before a library inserts the populated element in head. */
+function prepareStylesheetElement(element: Record<string, unknown>): void {
+  let text = stylesheetText(element);
+  for (const property of ["textContent", "innerHTML", "innerText", "text"]) {
+    Object.defineProperty(element, property, { get: () => text, set: (value) => { text = value == null ? "" : String(value); }, configurable: true });
+  }
+  const append = (child: unknown) => { text += stylesheetText(child); return child; };
+  Object.defineProperty(element, "appendChild", { value: append, configurable: true, writable: true });
+  Object.defineProperty(element, "append", { value: (...children: unknown[]) => { children.forEach(append); }, configurable: true, writable: true });
+}
 /** DOM's "valid element local name" (the 2025 relaxed rule): no whitespace, NUL, `/` or `>`, and a letter, `:`, `_` or non-ASCII first. */
 const VALID_ELEMENT_NAME = /^[A-Za-z:_\u0080-￿][^\t\n\f\r \/>\0]*$/;
 /** The head-style bookkeeping's hook (set below): an engine `<style>`/`<link>` inserted or removed anywhere. */
@@ -6520,14 +6539,97 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
 
 const renderer = createRenderer({ ...nodeOps, patchProp });
 
+/** Also releases a root created by index.html when the entry throws before Vue mounts. */
+function teardownDocumentRoot(root: MirrorElement, unmount?: () => void): void {
+  if (!root.__vnId) return;
+  try {
+    unmount?.();
+  } catch (e) {
+    __vn_log("teardown: " + e);
+  }
+  __vn_remove(root.__vnId);
+  // Detached-but-live nodes: <KeepAlive> creates its cache container with
+  // createElement and NEVER inserts or removes it (Vue moves subtrees in
+  // and out of it), so nothing above ever tells us to free it. After
+  // app.unmount() every node Vue owns is gone from the mirror, so whatever
+  // is left is exactly that kind of orphan — free it or the host arena
+  // grows by one node per KeepAlive on every hot restart.
+  for (const id of Array.from(nodesById.keys())) __vn_remove(id);
+  // …and every loose subtree, whether or not script still holds it: the
+  // old app is going, and the next one's nodes will reuse these ids.
+  for (const [id, r] of looseRoots) __vn_remove(r.box || id);
+  for (const n of nodesById.values()) n.__vnId = 0;
+  for (const ref of looseById.values()) {
+    const n = ref.deref();
+    if (n) n.__vnId = 0;
+  }
+  root.__vnId = 0;
+  nodesById.clear();
+  looseById.clear();
+  looseRoots.clear();
+  globalThis.__VN_CSS__ = [];
+  globalThis.__VN_TEARDOWN__ = undefined;
+  appRoot = null;
+  observers.clear();
+  globalHandlers.clear();
+}
+
+/** The viewport root also hosts body-level portals, independently of an app mount element. */
+function ensureDocumentRoot(): MirrorElement {
+  if (appRoot) return appRoot;
+  // `HTML`, not `ROOT`. The retained tree has one root box and it answers to
+  // `document.documentElement` AND `document.body` (see the block that
+  // installs them), so whatever `nodeName` it reports is what every
+  // DOM-walking library sees at the top of the chain — and the walk has to
+  // TERMINATE there.
+  //
+  // @floating-ui/dom, which every reka-ui popper rides on, walks with
+  //
+  //     getParentNode(n) = n.assignedSlot || n.parentNode || getDocumentElement(n)
+  //     isLastTraversableNode(n) = ['html','body','#document'].includes(nodeName)
+  //
+  // and `getNearestOverflowAncestor` recurses on `getParentNode` until
+  // `isLastTraversableNode`. Our root has no `parentNode`, so `getParentNode`
+  // falls through to `getDocumentElement`, which IS the root — a self-loop.
+  // Called "ROOT" the loop never terminates, and `getOverflowAncestors(floating)`
+  // (the FIRST thing `autoUpdate` does, before it ever calls `update()`)
+  // blew the JS stack. `computePosition` then never ran: reka's PopperContent
+  // was left at its unplaced `translate(0, -200%)` with an inline
+  // `animation: none`, so every tooltip/popover/dropdown painted two of its
+  // own heights above the window origin, never animated, and — because the
+  // throw also ate the queued `useGraceArea` effect that installs the
+  // pointer-exit watcher — never closed. Naming the root `html` is the whole
+  // fix: `isLastTraversableNode` is true one step earlier, and floating-ui's
+  // own `if (getNodeName(node) === 'html') return node` guard exists for
+  // exactly this shape. See research/reports/m19/hover-anim-tooltips.md.
+  //
+  // The Rust tag stays "root" — `vn_css::element::has_local_name` already
+  // answers `html` and `body` off `is_root()`, so the cascade is unaffected
+  // and devtools still names the box for what it is.
+  const root = mk(__vn_create_root(), 1, "html");
+  // The document roots a reused browser component reaches for (`<Teleport
+  // to="body">`, `document.querySelectorAll`, `document.body.contains`) all
+  // mean this node.
+  appRoot = root;
+  globalThis.__VN_TEARDOWN__ = () => teardownDocumentRoot(root);
+  // `document`/`window` listeners added at module scope, before there was a
+  // root to carry their bit (`addGlobalListener` only syncs one that exists):
+  // without this a `document.addEventListener("copy", …)` from before
+  // `mount()` was never delivered.
+  for (const m of globalHandlers.values()) for (const name of Object.keys(m)) syncListenerFlag(root, name);
+  // Anything module-scope theme code wrote to `document.documentElement`
+  // before there was a root — the `dark` class, the `--radius` overrides —
+  // lands now, BEFORE the first render, so the first paint is themed.
+  if (flushDocumentElement) flushDocumentElement(root);
+  return root;
+}
+
 /**
  * What `createApp` hands back: Vue's own `App`, with ONE signature different.
  *
- * `mount()` takes NO container here — the window is the root — and Vue's
- * `App["mount"]` requires one, so `createApp(App).mount()` did not type-check
- * against the upstream type and every app in this repository had to cast around
- * it. A container argument is still ACCEPTED, for browser parity, and ignored
- * with an advisory; the optional parameter is what records that.
+ * `mount()` without a container keeps the native window-root shorthand. A
+ * selector or Element mounts into that element, as in a browser, so body-level
+ * portals remain outside an app container's transforms.
  *
  * It EXTENDS `App` rather than `Omit`-ing `mount` out of it, and that is not a
  * style choice: `use`, `component`, `directive` and `provide` all return
@@ -6541,7 +6643,7 @@ export interface VnApp extends App<MirrorElement> {
   mount(container?: unknown): ComponentPublicInstance;
 }
 
-/// App entry point. No container argument — the window IS the root.
+/// App entry point. An omitted container uses the native viewport root.
 export function createApp(
   rootComponent: unknown,
   rootProps: Record<string, unknown> | null = null,
@@ -6549,94 +6651,40 @@ export function createApp(
   const app = renderer.createApp(rootComponent as never, rootProps);
   const mount = app.mount.bind(app);
   app.mount = (container?: unknown) => {
-    if (container != null)
-      warnCompat(
-        "mount:container",
-        `app.mount(${JSON.stringify(container)}) — container arguments are accepted for ` +
-          `browser parity but ignored: the window is the root in vue-native`,
-      );
     // SFC styles collected at module-eval time (see build.ts) become the
     // stylesheet, installed before first mount so the first paint is styled.
     if (globalThis.__VN_CSS__?.length) {
       installStylesheet(globalThis.__VN_CSS__.join("\n"));
     }
-    // `HTML`, not `ROOT`. The retained tree has one root box and it answers to
-    // `document.documentElement` AND `document.body` (see the block that
-    // installs them), so whatever `nodeName` it reports is what every
-    // DOM-walking library sees at the top of the chain — and the walk has to
-    // TERMINATE there.
-    //
-    // @floating-ui/dom, which every reka-ui popper rides on, walks with
-    //
-    //     getParentNode(n) = n.assignedSlot || n.parentNode || getDocumentElement(n)
-    //     isLastTraversableNode(n) = ['html','body','#document'].includes(nodeName)
-    //
-    // and `getNearestOverflowAncestor` recurses on `getParentNode` until
-    // `isLastTraversableNode`. Our root has no `parentNode`, so `getParentNode`
-    // falls through to `getDocumentElement`, which IS the root — a self-loop.
-    // Called "ROOT" the loop never terminates, and `getOverflowAncestors(floating)`
-    // (the FIRST thing `autoUpdate` does, before it ever calls `update()`)
-    // blew the JS stack. `computePosition` then never ran: reka's PopperContent
-    // was left at its unplaced `translate(0, -200%)` with an inline
-    // `animation: none`, so every tooltip/popover/dropdown painted two of its
-    // own heights above the window origin, never animated, and — because the
-    // throw also ate the queued `useGraceArea` effect that installs the
-    // pointer-exit watcher — never closed. Naming the root `html` is the whole
-    // fix: `isLastTraversableNode` is true one step earlier, and floating-ui's
-    // own `if (getNodeName(node) === 'html') return node` guard exists for
-    // exactly this shape. See research/reports/m19/hover-anim-tooltips.md.
-    //
-    // The Rust tag stays "root" — `vn_css::element::has_local_name` already
-    // answers `html` and `body` off `is_root()`, so the cascade is unaffected
-    // and devtools still names the box for what it is.
-    const root = mk(__vn_create_root(), 1, "html");
-    // The document roots a reused browser component reaches for (`<Teleport
-    // to="body">`, `document.querySelectorAll`, `document.body.contains`) all
-    // mean this node.
-    appRoot = root;
-    // `document`/`window` listeners added at module scope, before there was a
-    // root to carry their bit (`addGlobalListener` only syncs one that exists):
-    // without this a `document.addEventListener("copy", …)` from before
-    // `mount()` was never delivered.
-    for (const m of globalHandlers.values()) for (const name of Object.keys(m)) syncListenerFlag(root, name);
-    // Anything module-scope theme code wrote to `document.documentElement`
-    // before there was a root — the `dark` class, the `--radius` overrides —
-    // lands now, BEFORE the first render, so the first paint is themed.
-    if (flushDocumentElement) flushDocumentElement(root);
-    const vm = mount(root);
+    const root = ensureDocumentRoot();
+    let target: MirrorElement = root;
+    let explicitContainer = container != null;
+    if (typeof container === "string") {
+      // Root-only native entries historically use '#app' without an index.html container.
+      // Prefer a real element when one exists; preserve only that legacy selector alias.
+      const resolved = (globalThis.document?.querySelector as ((selector: string) => MirrorElement | null) | undefined)?.(container);
+      const legacyRoot = !resolved && container === "#app";
+      if (legacyRoot) explicitContainer = false;
+      const found = resolved ?? (legacyRoot ? root : null);
+      if (!found) {
+        warnCompat("mount:container", `app.mount(${JSON.stringify(container)}) found no element; the app was not mounted`);
+        return undefined as never;
+      }
+      target = found as MirrorElement;
+    } else if (container != null) {
+      if (!isMirrorNode(container) || container.kind !== 1) {
+        throw new TypeError("app.mount() expects an Element or a CSS selector");
+      }
+      target = container as MirrorElement;
+    }
+    if (explicitContainer) target.textContent = "";
+    const vm = mount(target);
+    if (explicitContainer) {
+      target.removeAttribute("v-cloak");
+      target.setAttribute("data-v-app", "");
+    }
     // Dev hot-restart: the host calls this before re-evaling a new bundle.
-    globalThis.__VN_TEARDOWN__ = () => {
-      try {
-        app.unmount();
-      } catch (e) {
-        __vn_log("teardown: " + e);
-      }
-      __vn_remove(root.__vnId);
-      // Detached-but-live nodes: <KeepAlive> creates its cache container with
-      // createElement and NEVER inserts or removes it (Vue moves subtrees in
-      // and out of it), so nothing above ever tells us to free it. After
-      // app.unmount() every node Vue owns is gone from the mirror, so whatever
-      // is left is exactly that kind of orphan — free it or the host arena
-      // grows by one node per KeepAlive on every hot restart.
-      for (const id of Array.from(nodesById.keys())) __vn_remove(id);
-      // …and every loose subtree, whether or not script still holds it: the
-      // old app is going, and the next one's nodes will reuse these ids.
-      for (const [id, r] of looseRoots) __vn_remove(r.box || id);
-      for (const n of nodesById.values()) n.__vnId = 0;
-      for (const ref of looseById.values()) {
-        const n = ref.deref();
-        if (n) n.__vnId = 0;
-      }
-      root.__vnId = 0;
-      nodesById.clear();
-      looseById.clear();
-      looseRoots.clear();
-      globalThis.__VN_CSS__ = [];
-      globalThis.__VN_TEARDOWN__ = undefined;
-      appRoot = null;
-      observers.clear();
-      globalHandlers.clear();
-    };
+    globalThis.__VN_TEARDOWN__ = () => teardownDocumentRoot(root, () => app.unmount());
     __vn_log(`Vue ${version} app mounted (vue-native runtime)`);
     return vm;
   };
@@ -9080,8 +9128,10 @@ if (doc) {
   const forceDoc = (name: string, value: unknown) =>
     Object.defineProperty(doc, name, { value, configurable: true, writable: true });
   const rootId = () => (appRoot ? appRoot.__vnId : 0);
-  forceDoc("querySelector", (sel: string) => queryOne(sel, rootId()));
-  forceDoc("querySelectorAll", (sel: string) => staticList(NodeListProto, hostQuery(sel, rootId(), 0)));
+  // A Document's candidates include documentElement; an Element's queries
+  // still search descendants only (mode 0), never the element itself.
+  forceDoc("querySelector", (sel: string) => queryOne(sel, rootId(), 3));
+  forceDoc("querySelectorAll", (sel: string) => staticList(NodeListProto, hostQuery(sel, rootId(), 3)));
   // Live, over the whole tree (`getElementsByTagName` is with `<head>`, below).
   defDoc("getElementsByClassName", (classNames: unknown) => {
     const test = classTest(classNames);
@@ -9120,6 +9170,7 @@ if (doc) {
     if (nativeCreate && ENGINE_TAGS.has(t)) {
       const el = nativeCreate(tag, opts);
       if ((t === "a" || t === "input") && el && typeof el === "object") wrapDetached(el as Detached, t);
+      if (t === "style" && el && typeof el === "object") prepareStylesheetElement(el as Record<string, unknown>);
       return el;
     }
     return looseCreated(nodeOps.createElement(t));
@@ -9260,9 +9311,9 @@ if (doc) {
   // `el.parentNode === document.body` lie. `document.head` stays a property bag
   // — it is not a box at all.
   //
-  // Before `mount()` the root does not exist, and module-scope theme code
-  // (which runs first, by construction) writes to these. So the pre-mount
-  // object BUFFERS, and `mount()` replays it onto the real root.
+  // Before a body insertion or `mount()` the root does not exist, while
+  // module-scope theme code already writes to it. The pre-root object buffers
+  // those writes until the native viewport root is first needed.
   {
     const pending: {
       classes: string[];
@@ -9335,9 +9386,17 @@ if (doc) {
       querySelector: () => null,
       querySelectorAll: () => [],
       contains: () => false,
-      appendChild: (n: unknown) => n,
-      removeChild: (n: unknown) => n,
-      insertAdjacentElement: (_w: unknown, n: unknown) => n,
+      appendChild: (n: unknown) => preInsert(ensureDocumentRoot(), n, null, "appendChild"),
+      insertBefore: (n: unknown, anchor: unknown) => preInsert(ensureDocumentRoot(), n, anchor, "insertBefore"),
+      removeChild(n: unknown) {
+        const root = ensureDocumentRoot();
+        const child = nodeArg(n, "removeChild", "Node", 1);
+        if (!child) { foreignNode(n as object, false, "removeChild"); return n; }
+        if (child.parentNode !== root) throw domError("removeChild", "Node", "NotFoundError", "The node to be removed is not a child of this node.");
+        detachNode(child);
+        return child;
+      },
+      insertAdjacentElement: (where: unknown, n: unknown) => ensureDocumentRoot().insertAdjacentElement(String(where), n as MirrorElement),
       addEventListener: () => {},
       removeEventListener: () => {},
       getBoundingClientRect: () => ({ ...viewportRect(), toJSON() { return this; } }),
@@ -9361,7 +9420,7 @@ if (doc) {
     ] as [string, "width" | "height"][]) {
       Object.defineProperty(preRoot, name, { get: () => viewportRect()[axis], configurable: true });
     }
-    // Called by mount(), once the root node exists.
+    // Called when the viewport root is first needed, before app rendering.
     flushDocumentElement = (root) => {
       for (const c of pending.classes) root.classList.add(c);
       for (const k of Object.keys(pending.style)) root.style.setProperty(k, pending.style[k]);
@@ -9594,13 +9653,7 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
         if (base !== null) install(base);
       });
     };
-    const textOf = (n: unknown): string => {
-      if (n == null) return "";
-      if (typeof n === "string") return n;
-      const o = n as { text?: unknown; data?: unknown; textContent?: unknown; nodeValue?: unknown };
-      const v = o.text ?? o.data ?? o.textContent ?? o.nodeValue;
-      return v == null ? "" : String(v);
-    };
+    const textOf = stylesheetText;
     const isStyle = (n: unknown) =>
       !!n && typeof n === "object" && String((n as { tagName?: unknown }).tagName ?? "").toUpperCase() === "STYLE";
     const isLink = (n: unknown) =>
@@ -9614,7 +9667,7 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
         refresh();
       };
       try {
-        for (const prop of ["textContent", "innerHTML", "innerText"]) {
+        for (const prop of ["textContent", "innerHTML", "innerText", "text"]) {
           Object.defineProperty(el, prop, { get: () => entry.text, set, configurable: true });
         }
         const append = (child: unknown) => {

@@ -29,6 +29,9 @@ pub enum QueryMode {
     /// `root.querySelectorAll(sel)` — every DESCENDANT of `root` that matches,
     /// in document order. `root` itself is never a candidate, as in the DOM.
     Descendants,
+    /// `document.querySelectorAll(sel)` — the document element followed by
+    /// every descendant, in document order.
+    Document,
     /// `el.matches(sel)` — the node itself, nothing else.
     SelfOnly,
     /// `el.closest(sel)` — the node, then its ancestors, nearest first; the
@@ -50,6 +53,7 @@ pub fn query(selector: &str, root: u32, mode: QueryMode) -> Result<Vec<u32>, Str
         }
         let ids: Vec<u32> = match mode {
             QueryMode::Descendants => descendants(t, root),
+            QueryMode::Document => std::iter::once(root).chain(descendants(t, root)).collect(),
             QueryMode::SelfOnly => vec![root],
             QueryMode::Closest => ancestors_from(t, root),
         };
@@ -379,7 +383,9 @@ pub fn computed_style(id: u32) -> Option<String> {
             let join = |f: &dyn Fn(&vn_css::AnimationSpec) -> String| {
                 cs.animations.iter().map(f).collect::<Vec<_>>().join(", ")
             };
-            put("animation-name", join(&|s| s.name.to_string()));
+            put("animation-name", join(&|s| {
+                if s.name.is_empty() { "none".into() } else { s.name.to_string() }
+            }));
             put("animation-duration", join(&|s| secs(s.duration)));
             put("animation-delay", join(&|s| secs(s.delay)));
             put(
@@ -524,6 +530,23 @@ mod tests {
             .unwrap_or_default()
     }
 
+    #[test]
+    fn document_queries_include_the_document_element_but_element_queries_exclude_self() {
+        let (root, child) = tree::with_tree(|tree| {
+            let root = tree.create_root();
+            tree.set_class(root, "match");
+            let tag = tree.intern("div");
+            let child = tree.create_element(tag);
+            tree.set_class(child, "match");
+            tree.insert(child, root, 0);
+            (root, child)
+        });
+        assert_eq!(query(".match", root, QueryMode::Document).unwrap(), vec![root, child]);
+        assert_eq!(query(".match", root, QueryMode::Descendants).unwrap(), vec![child]);
+        assert_eq!(query(":root", root, QueryMode::Document).unwrap(), vec![root]);
+        assert!(query(":root", root, QueryMode::Descendants).unwrap().is_empty());
+    }
+
     /// m26 client sweep #30. `font-size` and `color` inherit, so a child that
     /// declares neither reports its ancestor's, as a browser computes them; a
     /// CustomEmojiSegment sized itself off `parentElement.fontSize` and got "".
@@ -553,6 +576,44 @@ mod tests {
         for name in ["width", "height", "position", "direction", "animation-name", "transition-delay", "transition-duration"] {
             assert!(!prop(inner, name).is_empty(), "{name}");
         }
+    }
+
+    #[test]
+    fn computed_animation_none_cancels_presence_and_preserves_mixed_list_slots() {
+        let (single, mixed) = tree::with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let single = t.create_element(div);
+            t.set_class(single, "single");
+            t.insert(single, root, 0);
+            let mixed = t.create_element(div);
+            t.set_class(mixed, "mixed");
+            t.insert(mixed, root, 1);
+            (single, mixed)
+        });
+        tree::set_engine(vn_css::Engine::compile(
+            "@keyframes spin { from { opacity: 0 } to { opacity: 1 } } \
+             @keyframes fade { from { opacity: 1 } to { opacity: 0 } } \
+             .single { animation-name: spin; animation-duration: 250ms; animation-fill-mode: forwards } \
+             .mixed { animation-name: none, spin, none, fade; animation-duration: 100ms, 300ms; animation-delay: 20ms }",
+        ));
+        tree::restyle_all();
+        assert_eq!(prop(single, "animation-name"), "spin");
+        assert_eq!(prop(mixed, "animation-name"), "none, spin, none, fade");
+        assert_eq!(prop(mixed, "animation-duration"), "0.1s, 0.3s, 0.1s, 0.3s");
+        assert_eq!(prop(mixed, "animation-delay"), "0.02s, 0.02s, 0.02s, 0.02s");
+
+        // Presence cancels via a single inline longhand. The none slot keeps
+        // the other components, but must serialize the literal keyword so it
+        // does not wait for animationend from an inert animation.
+        tree::with_tree(|t| {
+            let name = t.intern("animation-name");
+            t.set_style(single, name, "none".into());
+        });
+        tree::restyle_all();
+        assert_eq!(prop(single, "animation-name"), "none");
+        assert_eq!(prop(single, "animation-duration"), "0.25s");
+        assert_eq!(prop(single, "animation-fill-mode"), "forwards");
     }
 
     /// css-overflow-3 §3.1, across rules: `.list` declares only `overflow-y:

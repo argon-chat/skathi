@@ -57,7 +57,7 @@ pub use mapper::{
     accepts_declaration, parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
     set_font_source, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses, uses_viewport_units,
     viewport_basis, BackgroundLayer, BackgroundSize, BackgroundUrl, PaintLayer,
-    CurrentColorTargets, Decls, Extras, InlineStyle, ListMarker, MaskClips, MaskCompositing,
+    CurrentColorTargets, Decls, Extras, InlineMotion, InlineStyle, ListMarker, MaskClips, MaskCompositing,
     MaskImages, ObjectFit, OverscrollBehavior, RadiusInherit, ScrollbarWidth, SvgPaint, TextFill, TextTransform,
     TileLength, UserSelect, WhiteSpaceMode, WindowControl, WindowDrag,
     INITIAL_REM_BASIS, INITIAL_VIEWPORT_BASIS,
@@ -67,6 +67,8 @@ pub use keyframes::{
     AnimationPatch, AnimationSpec, Direction as AnimationDirection, FillMode, Keyframe, Keyframes,
     PlayState,
 };
+#[doc(hidden)]
+pub use keyframes::AnimationDeclarations;
 pub use vars::Vars;
 pub use transition::{
     covered, parse_easing, spec_for, Easing, StepPosition, TransitionProperty, TransitionSpec, ANIMATABLE_COUNT,
@@ -399,6 +401,8 @@ struct RuleEntry {
     important: Option<Rc<StyleRefinement>>,
     normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
     important_transitions: Option<Rc<Vec<TransitionSpec>>>,
+    normal_transition_declarations: Option<Rc<transition::Collector>>,
+    important_transition_declarations: Option<Rc<transition::Collector>>,
     normal_animations: Option<Rc<Vec<AnimationSpec>>>,
     important_animations: Option<Rc<Vec<AnimationSpec>>>,
     normal_animation_patch: Option<keyframes::AnimationPatch>,
@@ -448,10 +452,12 @@ impl RuleEntry {
         self.important = c.important.clone();
         self.normal_transitions = c.normal_transitions.clone();
         self.important_transitions = c.important_transitions.clone();
+        self.normal_transition_declarations = c.normal_transition_declarations.clone();
+        self.important_transition_declarations = c.important_transition_declarations.clone();
         self.normal_animations = c.normal_animations.clone();
         self.important_animations = c.important_animations.clone();
-        self.normal_animation_patch = c.normal_animation_patch;
-        self.important_animation_patch = c.important_animation_patch;
+        self.normal_animation_patch = c.normal_animation_patch.clone();
+        self.important_animation_patch = c.important_animation_patch.clone();
         self.normal_extras = c.normal_extras.clone();
         self.important_extras = c.important_extras.clone();
         self.normal_custom = c.normal_custom.clone();
@@ -1439,10 +1445,12 @@ impl Engine {
                     important: converted.important.clone(),
                     normal_transitions: converted.normal_transitions.clone(),
                     important_transitions: converted.important_transitions.clone(),
+                    normal_transition_declarations: converted.normal_transition_declarations.clone(),
+                    important_transition_declarations: converted.important_transition_declarations.clone(),
                     normal_animations: converted.normal_animations.clone(),
                     important_animations: converted.important_animations.clone(),
-                    normal_animation_patch: converted.normal_animation_patch,
-                    important_animation_patch: converted.important_animation_patch,
+                    normal_animation_patch: converted.normal_animation_patch.clone(),
+                    important_animation_patch: converted.important_animation_patch.clone(),
                     normal_extras: converted.normal_extras.clone(),
                     important_extras: converted.important_extras.clone(),
                     normal_custom: converted.normal_custom.clone(),
@@ -1876,12 +1884,12 @@ impl Engine {
         // card typically matches three or four `group-hover:` rules pointing at
         // the same ancestor.
         let mut group = GroupFold::default();
-        // Transitions do not merge: the last base-state rule that declares any
-        // `transition` replaces the whole list (`transition: none` therefore
-        // clears it). State-rule transitions are rejected at compile time.
+        // Aggregate lists remain the compatibility fallback. Parsed motion
+        // component lists are folded independently in priority order below.
+        // State-rule transitions are rejected at compile time.
         let mut transitions: Option<Rc<Vec<TransitionSpec>>> = None;
-        // Same rule for `animation`: the last base-state rule that declares any
-        // `animation-*` replaces the whole list.
+        // Animation component lists cascade independently; zip them only after
+        // all matched rules and the inline style have declared their longhands.
         let mut animations: Option<Rc<Vec<AnimationSpec>>> = None;
         // Longhand-only `animation-*` declarations, folded in cascade order and
         // applied over whichever list wins.
@@ -1944,44 +1952,6 @@ impl Engine {
                 }
                 if let Some(before) = svg_before {
                     keep_base_svg_paint(&mut extras, before, diagnostics);
-                }
-                if r.states == 0 {
-                    let declared = if important_pass {
-                        &r.important_transitions
-                    } else {
-                        &r.normal_transitions
-                    };
-                    if let Some(t) = declared {
-                        transitions = Some(t.clone());
-                    }
-                    let declared = if important_pass {
-                        &r.important_animations
-                    } else {
-                        &r.normal_animations
-                    };
-                    if let Some(a) = declared {
-                        animations = Some(a.clone());
-                        // A rule that supplies the LIST declares the longhands
-                        // in it, so it beats every patch that lost the cascade
-                        // to it. Without this reset, `.duration-200`
-                        // (specificity 0,1,0) overrode the `animation-duration:
-                        // 150ms` that shadcn's
-                        // `.data-[state=open]:animate-in[data-state=open]`
-                        // (0,2,0) declares beside its `animation-name`, and the
-                        // dialog animated for 200 ms where a browser gives it
-                        // 150. Patches from rules that come LATER in this
-                        // sorted walk — higher specificity, or an inline style
-                        // — still apply, which is the whole point of the patch.
-                        animation_patch = keyframes::AnimationPatch::default();
-                    }
-                    let patch = if important_pass {
-                        &r.important_animation_patch
-                    } else {
-                        &r.normal_animation_patch
-                    };
-                    if let Some(p) = patch {
-                        p.apply_over(&mut animation_patch);
-                    }
                 }
                 let half = r.half(important_pass);
                 if half.is_empty() {
@@ -2062,17 +2032,41 @@ impl Engine {
             Half::of_inline(inline).apply(
                 &vars, env, font_size, parent_font_size, &mut base, &mut extras, diagnostics,
             );
-            if let Some(t) = &inline.transitions {
-                transitions = Some(t.clone());
-            }
-            if let Some(a) = &inline.animations {
-                animations = Some(a.clone());
-            }
-            if let Some(p) = &inline.animation_patch {
-                p.apply_over(&mut animation_patch);
-            }
             extras.refine(&inline.extras);
         }
+        // Motion has its own declared-component metadata. Fold it in CSS
+        // priority order without changing general StyleRefinement handling:
+        // normal sheet -> normal inline -> important sheet -> important inline.
+        let mut transition_components = transition::Collector::default();
+        for important in [false, true] {
+            for rule in &matched {
+                if rule.pseudo.is_some() || rule.states != 0 || rule.ancestor.is_some() { continue; }
+                let declarations = if important { &rule.important_transition_declarations } else { &rule.normal_transition_declarations };
+                if let Some(declarations) = declarations { transition_components.merge(declarations); }
+                let patch = if important { &rule.important_animation_patch } else { &rule.normal_animation_patch };
+                if let Some(patch) = patch { patch.apply_over(&mut animation_patch); }
+            }
+            if let Some(inline) = inline {
+                if inline.normal_motion.is_some() || inline.important_motion.is_some() {
+                    let motion = if important { &inline.important_motion } else { &inline.normal_motion };
+                    if let Some(motion) = motion {
+                        if let Some(declarations) = &motion.transitions { transition_components.merge(declarations); }
+                        if let Some(patch) = &motion.animations { patch.apply_over(&mut animation_patch); }
+                    }
+                } else if !important {
+                    // Legacy callers construct InlineStyle's aggregate public
+                    // fields directly. Treat those as normal inline shorthand.
+                    if let Some(list) = &inline.transitions { transition_components.merge(&transition::Collector::from_specs(list)); }
+                    if let Some(list) = &inline.animations {
+                        animations = Some(list.clone());
+                        if let Some(patch) = keyframes::AnimationCollector::from_specs(list).finish().1 { patch.apply_over(&mut animation_patch); }
+                    }
+                    if let Some(patch) = &inline.animation_patch { patch.apply_over(&mut animation_patch); }
+                }
+            }
+        }
+        if let Some(list) = transition_components.finish() { transitions = Some(Rc::new(list)); }
+
         // A state rung that changes the font size changes every em the BASE
         // resolved too: `.x { padding: 1em } .x:hover { font-size: 20px }`
         // pads 20px under the pointer. gpui's ladder lays the rung over the
@@ -2186,17 +2180,21 @@ impl Engine {
             group_active: group.active.map(|(key, r)| (key, Rc::new(r))),
             transitions: transitions.unwrap_or_default(),
             animations: {
-                let list = animations.unwrap_or_default();
-                if animation_patch.is_empty() || list.is_empty() {
-                    list
+                if let Some(list) = animation_patch.computed_list() {
+                    Rc::new(list)
                 } else {
-                    // A longhand set without a name patches the list rather
-                    // than replacing it (see `AnimationPatch`).
-                    let mut patched = (*list).clone();
-                    for spec in patched.iter_mut() {
-                        animation_patch.apply(spec);
+                    let list = animations.unwrap_or_default();
+                    if animation_patch.is_empty() || list.is_empty() {
+                        list
+                    } else {
+                        // Legacy scalar patches remain usable independently
+                        // of the declaration lists carried by parsed CSS.
+                        let mut patched = (*list).clone();
+                        for spec in patched.iter_mut() {
+                            animation_patch.apply(spec);
+                        }
+                        Rc::new(patched)
                     }
-                    Rc::new(patched)
                 }
             },
             extras,
@@ -3590,19 +3588,11 @@ mod tests {
         assert_eq!(states.transitions[0].delay, Duration::from_millis(20));
     }
 
-    /// Tailwind splits one CSS `transition` across TWO utility classes, and
-    /// vn-css folds transitions whole-list (README deviation 2). Pinned here
-    /// because the combination is what every Tailwind app writes:
-    ///
-    ///   .transition-colors  property list + cubic-bezier(.4,0,.2,1) + 150ms
-    ///   .duration-300       transition-duration: 300ms          <- emitted LAST
-    ///
-    /// A browser cascades the two per-longhand and keeps the property list. We
-    /// let the later rule replace the whole list, so the result is `all 300ms
-    /// ease`. Background-color still transitions (it is inside `all`), but the
-    /// property narrowing and Tailwind's easing curve are lost.
+    /// Tailwind splits transition properties/easing and duration across utility
+    /// classes. A duration-only rule overrides that component while preserving
+    /// the earlier property list and timing curve, as CSS longhands require.
     #[test]
-    fn tailwinds_transition_colors_plus_duration_300_folds_to_all() {
+    fn tailwinds_transition_colors_plus_duration_300_preserves_properties_and_easing() {
         let t = transitions(
             ".box { /* .transition-colors */ \
                transition-property: color, background-color, border-color, \
@@ -3611,12 +3601,15 @@ mod tests {
                transition-duration: 150ms } \
              .box { /* .duration-300 */ transition-duration: 300ms }",
         );
-        assert_eq!(t.len(), 1, "{t:?}");
-        assert_eq!(t[0].property, TransitionProperty::All);
-        assert_eq!(t[0].duration, Duration::from_millis(300));
-        assert_eq!(t[0].easing, Easing::Ease, "Tailwind's curve does not survive");
-        // The point that matters for the demo card: background-color IS covered.
+        assert_eq!(t.iter().map(|transition| transition.property.clone()).collect::<Vec<_>>(), vec![
+            TransitionProperty::Color, TransitionProperty::BackgroundColor,
+            TransitionProperty::BorderColor, TransitionProperty::TextDecorationColor,
+            TransitionProperty::Fill, TransitionProperty::Stroke,
+        ]);
+        assert!(t.iter().all(|transition| transition.duration == Duration::from_millis(300)
+            && transition.easing == Easing::CubicBezier(0.4, 0.0, 0.2, 1.0)));
         assert!(spec_for(&t, &TransitionProperty::BackgroundColor).is_some());
+        assert!(spec_for(&t, &TransitionProperty::Width).is_none(), "the color-only utility must not start animating layout");
     }
 
     /// `transition-colors` on its own keeps Tailwind's list and curve.
@@ -4028,6 +4021,8 @@ mod tests {
                 && a.important == b.important
                 && a.normal_transitions == b.normal_transitions
                 && a.important_transitions == b.important_transitions
+                && a.normal_transition_declarations == b.normal_transition_declarations
+                && a.important_transition_declarations == b.important_transition_declarations
                 && a.normal_animations == b.normal_animations
                 && a.important_animations == b.important_animations
                 && a.normal_animation_patch == b.normal_animation_patch
@@ -4856,6 +4851,23 @@ mod tests {
         assert!(diags.is_empty(), "{diags:?}");
         assert_eq!(base.padding.left, Some(gpui::px(0.0).into()));
         assert_eq!(base.padding.bottom, Some(gpui::px(0.0).into()));
+    }
+
+    /// Vaul moves a scaled background with a safe-area expression, rather
+    /// than a literal pixel translation. The desktop env substitution must
+    /// preserve the authored transform and its transition.
+    #[test]
+    fn drawer_background_transform_resolves_safe_area_calc() {
+        let (style, diagnostics) = computed_with_env(
+            ".box { transform: scale(0.96) translate3d(0, calc(env(safe-area-inset-top) + 14px), 0); \
+             transition: transform .5s cubic-bezier(.32,.72,0,1) }",
+            &Env::default(),
+        );
+        let transform = style.vn_transform.expect("the background transform is retained");
+        assert_eq!(transform.translate.1, gpui::TransformLength::Pixels(14.0));
+        assert!((transform.scale.0 - 0.96).abs() < 1e-6);
+        assert!((transform.scale.1 - 0.96).abs() < 1e-6);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     /// An unknown name behaves exactly as CSS says: the fallback applies, and
@@ -6830,6 +6842,89 @@ mod tests {
         );
         let cs = engine.compute(node, None, &Env::default());
         assert_eq!(cs.animations[0].duration, Duration::from_millis(200));
+    }
+
+    #[test]
+    fn animation_name_does_not_reset_separately_cascaded_component_lists() {
+        let engine = Engine::compile(
+            "@keyframes slide { from { transform: translateY(100%) } to { transform: translateY(0) } } \
+             [data-drawer] { animation-duration: 500ms; animation-timing-function: linear; animation-delay: 20ms } \
+             [data-drawer][data-state=open] { animation-name: slide }",
+        );
+        let node = Node { tag: "div", class: "", attrs: &[("data-drawer", ""), ("data-state", "open")] };
+        let computed = engine.compute(node, None, &Env::default());
+        assert_eq!(computed.animations[0].duration, Duration::from_millis(500));
+        assert_eq!(computed.animations[0].delay, Duration::from_millis(20));
+        assert_eq!(computed.animations[0].easing, Easing::Linear);
+    }
+
+    #[test]
+    fn animation_component_lists_cycle_after_names_and_inline_longhands_cascade() {
+        let engine = Engine::compile(
+            ".box { animation-duration: 100ms, 250ms; animation-iteration-count: 2, 3; animation-delay: 30ms } \
+             .box.on { animation-name: first, second, third }",
+        );
+        let node = Node { tag: "div", class: "box on", attrs: &[] };
+        let computed = engine.compute(node, None, &Env::default());
+        assert_eq!(computed.animations.iter().map(|animation| animation.duration).collect::<Vec<_>>(), vec![Duration::from_millis(100), Duration::from_millis(250), Duration::from_millis(100)]);
+        assert_eq!(computed.animations.iter().map(|animation| animation.iterations).collect::<Vec<_>>(), vec![2.0, 3.0, 2.0]);
+        let fold_inline = |source: &str| {
+            let inline = parse_inline_style(source, &mut Vec::new());
+            engine.compute_node(node, Some(&inline), &Rc::new(Vars::default()), None, &Env::default(), &mut Vec::new())
+        };
+        let computed = fold_inline("animation-duration: 400ms, 600ms; animation-fill-mode: forwards");
+        assert_eq!(computed.animations.iter().map(|animation| animation.duration).collect::<Vec<_>>(), vec![Duration::from_millis(400), Duration::from_millis(600), Duration::from_millis(400)]);
+        assert!(computed.animations.iter().all(|animation| animation.fill == FillMode::Forwards && animation.delay == Duration::from_millis(30)));
+        let computed = fold_inline("animation: replacement 75ms ease-in");
+        assert_eq!(computed.animations.len(), 1);
+        assert_eq!(computed.animations[0].duration, Duration::from_millis(75));
+        assert_eq!(computed.animations[0].delay, Duration::ZERO);
+        assert_eq!(computed.animations[0].iterations, 1.0);
+        assert_eq!(computed.animations[0].easing, Easing::EaseIn);
+    }
+
+    #[test]
+    fn important_motion_longhands_override_normal_inline_but_preserve_other_components() {
+        let engine = Engine::compile(".box { animation: slide 2s ease-in-out; transition: opacity 2s linear } .box { animation-duration: 10ms !important; animation-iteration-count: 1 !important; transition-duration: 12ms !important }");
+        let fold = |source: &str| {
+            let inline = parse_inline_style(source, &mut Vec::new());
+            engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &Env::default(), &mut Vec::new())
+        };
+        let computed = fold("animation-duration: 500ms; animation-fill-mode: forwards; animation-iteration-count: 3; transition-property: transform, border-radius; transition-duration: 500ms; transition-timing-function: ease-in");
+        assert_eq!(computed.animations[0].duration, Duration::from_millis(10));
+        assert_eq!(computed.animations[0].iterations, 1.0);
+        assert_eq!(computed.animations[0].fill, FillMode::Forwards);
+        assert_eq!(computed.transitions.len(), 5);
+        assert_eq!(computed.transitions[0].property, TransitionProperty::Transform);
+        assert!(computed.transitions.iter().all(|transition| transition.duration == Duration::from_millis(12) && transition.easing == Easing::EaseIn));
+        let computed = fold("animation-duration: 500ms; animation-duration: 75ms !important; transition-property: transform; transition-duration: 500ms; transition-duration: 80ms !important");
+        assert_eq!(computed.animations[0].duration, Duration::from_millis(75));
+        assert_eq!(computed.transitions[0].property, TransitionProperty::Transform);
+        assert_eq!(computed.transitions[0].duration, Duration::from_millis(80));
+        let legacy = Rc::new(vec![TransitionSpec { property: TransitionProperty::Width, duration: Duration::from_millis(900), delay: Duration::ZERO, easing: Easing::Linear }]);
+        let computed = engine.compute_with(box_node(), None, Some(&legacy), &Env::default());
+        assert_eq!(computed.transitions[0].property, TransitionProperty::Width);
+        assert_eq!(computed.transitions[0].duration, Duration::from_millis(12));
+    }
+
+    #[test]
+    fn important_motion_shorthand_resets_normal_inline_components_and_inline_important_wins() {
+        let engine = Engine::compile(".box { animation: sheet 10ms linear !important; transition: transform 20ms ease-in !important }");
+        let fold = |source: &str| {
+            let inline = parse_inline_style(source, &mut Vec::new());
+            engine.compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &Env::default(), &mut Vec::new())
+        };
+        let computed = fold("animation: normal 500ms ease-out; animation-fill-mode: forwards; transition: opacity 500ms linear");
+        assert_eq!(&*computed.animations[0].name, "sheet");
+        assert_eq!(computed.animations[0].duration, Duration::from_millis(10));
+        assert_eq!(computed.animations[0].fill, FillMode::None);
+        assert_eq!(computed.transitions[0].property, TransitionProperty::Transform);
+        assert_eq!(computed.transitions[0].duration, Duration::from_millis(20));
+        let computed = fold("animation: own 75ms ease-out !important; animation-duration: 900ms; transition: opacity 80ms linear !important; transition-duration: 900ms");
+        assert_eq!(&*computed.animations[0].name, "own");
+        assert_eq!(computed.animations[0].duration, Duration::from_millis(75));
+        assert_eq!(computed.transitions[0].property, TransitionProperty::Opacity);
+        assert_eq!(computed.transitions[0].duration, Duration::from_millis(80));
     }
 
     /// A run's clock is anchored to the first FRAME, not to the cascade that

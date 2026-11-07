@@ -163,6 +163,17 @@ describe("selector matching goes to the host's real matcher", () => {
     expect(rt.advisories()).toEqual([]);
   });
 
+  test("Document queries include the document element while Element queries keep excluding self", () => {
+    const rt = createRuntime();
+    rt.createApp({ render: () => null }).mount();
+    const root = rt.global.document.documentElement;
+    rt.host.queryAnswers.set("[data-wrapper]|3", String(root.__vnId));
+    expect(rt.global.document.querySelector("[data-wrapper]")).toBe(root);
+    expect([...rt.global.document.querySelectorAll("[data-wrapper]")]).toEqual([root]);
+    expect(root.querySelector("[data-wrapper]")).toBeNull();
+    expect(rt.host.queryCalls.slice(-3).map((call) => call.mode)).toEqual([3, 3, 0]);
+  });
+
   test("a selector the engine cannot run explains itself instead of saying `no match`", () => {
     const rt = createRuntime();
     const { root } = tree(rt);

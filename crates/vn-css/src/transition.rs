@@ -399,7 +399,7 @@ fn steps(count: u32, position: StepPosition, t: f32) -> f32 {
 // ---------------------------------------------------------------------------
 
 /// Accumulates one declaration block's transition longhands/shorthand.
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Collector {
     /// One inner `Vec` per list entry (a shorthand name expands in place).
     properties: Option<Vec<Vec<TransitionProperty>>>,
@@ -410,6 +410,42 @@ pub(crate) struct Collector {
 }
 
 impl Collector {
+    pub(crate) fn declarations(&self) -> Option<Rc<Self>> {
+        self.seen.then(|| Rc::new(self.clone()))
+    }
+
+    pub(crate) fn merge(&mut self, later: &Self) {
+        if later.properties.is_some() {
+            self.properties = later.properties.clone();
+        }
+        if later.durations.is_some() {
+            self.durations = later.durations.clone();
+        }
+        if later.delays.is_some() {
+            self.delays = later.delays.clone();
+        }
+        if later.easings.is_some() {
+            self.easings = later.easings.clone();
+        }
+        self.seen |= later.seen;
+    }
+
+    /// Aggregate legacy inline callers declare a complete list, not a patch.
+    pub(crate) fn from_specs(specs: &[TransitionSpec]) -> Self {
+        Self {
+            properties: Some(
+                specs
+                    .iter()
+                    .map(|spec| vec![spec.property.clone()])
+                    .collect(),
+            ),
+            durations: Some(specs.iter().map(|spec| spec.duration).collect()),
+            delays: Some(specs.iter().map(|spec| spec.delay).collect()),
+            easings: Some(specs.iter().map(|spec| spec.easing).collect()),
+            seen: true,
+        }
+    }
+
     /// Consumes `p` when it is a transition declaration; returns whether it did.
     pub(crate) fn take(&mut self, p: &Property, diagnostics: &mut Vec<String>) -> bool {
         match p {
@@ -424,7 +460,11 @@ impl Collector {
                         Expansion::None => {}
                         Expansion::Props(props) => properties.push(props),
                     }
-                    durations.push(duration_of(&entry.duration, "transition-duration", diagnostics));
+                    durations.push(duration_of(
+                        &entry.duration,
+                        "transition-duration",
+                        diagnostics,
+                    ));
                     delays.push(duration_of(&entry.delay, "transition-delay", diagnostics));
                     easings.push(easing_of(&entry.timing_function, diagnostics));
                 }
@@ -636,7 +676,9 @@ pub(crate) fn animates(name: &str) -> bool {
             .any(|p| {
                 !matches!(
                     p,
-                    TransitionProperty::All | TransitionProperty::Other(_) | TransitionProperty::Shading
+                    TransitionProperty::All
+                        | TransitionProperty::Other(_)
+                        | TransitionProperty::Shading
                 )
             }),
     }
@@ -765,10 +807,19 @@ mod tests {
             specs(body).into_iter().map(|s| s.property).collect()
         };
         use TransitionProperty::*;
-        assert_eq!(props("transition: margin-inline 1s"), vec![MarginLeft, MarginRight]);
-        assert_eq!(props("transition: padding-block 1s"), vec![PaddingTop, PaddingBottom]);
+        assert_eq!(
+            props("transition: margin-inline 1s"),
+            vec![MarginLeft, MarginRight]
+        );
+        assert_eq!(
+            props("transition: padding-block 1s"),
+            vec![PaddingTop, PaddingBottom]
+        );
         assert_eq!(props("transition: margin-inline-end 1s"), vec![MarginRight]);
-        assert_eq!(props("transition: padding-block-start 1s"), vec![PaddingTop]);
+        assert_eq!(
+            props("transition: padding-block-start 1s"),
+            vec![PaddingTop]
+        );
     }
 
     #[test]
@@ -890,7 +941,9 @@ mod tests {
         let (s, diags) = parse("transition: opacity 1s -200ms");
         assert_eq!(s.unwrap()[0].delay, Duration::ZERO);
         assert!(
-            diags.iter().any(|d| d.contains("negative transition-delay")),
+            diags
+                .iter()
+                .any(|d| d.contains("negative transition-delay")),
             "{diags:?}"
         );
     }
@@ -904,8 +957,7 @@ mod tests {
     #[test]
     fn no_transition_declaration_yields_none() {
         let mut diagnostics = Vec::new();
-        let block =
-            DeclarationBlock::parse_string("color: red", ParserOptions::default()).unwrap();
+        let block = DeclarationBlock::parse_string("color: red", ParserOptions::default()).unwrap();
         let mut collector = Collector::default();
         for p in block.declarations.iter() {
             assert!(!collector.take(p, &mut diagnostics));
@@ -1053,14 +1105,23 @@ mod tests {
         assert_eq!(s[0].easing, Easing::Steps(1, StepPosition::JumpEnd));
 
         let (s, diags) = parse("transition: opacity 1s steps(1, jump-none)");
-        assert_eq!(s.unwrap()[0].easing, Easing::Steps(2, StepPosition::JumpNone));
+        assert_eq!(
+            s.unwrap()[0].easing,
+            Easing::Steps(2, StepPosition::JumpNone)
+        );
         assert!(diags.iter().any(|d| d.contains("jump-none")), "{diags:?}");
     }
 
     #[test]
     fn out_of_range_bezier_x_is_clamped_with_advisory() {
         let (s, diags) = parse("transition: opacity 1s cubic-bezier(1.5, 0, -0.2, 1)");
-        assert_eq!(s.unwrap()[0].easing, Easing::CubicBezier(1.0, 0.0, 0.0, 1.0));
-        assert!(diags.iter().any(|d| d.contains("cubic-bezier")), "{diags:?}");
+        assert_eq!(
+            s.unwrap()[0].easing,
+            Easing::CubicBezier(1.0, 0.0, 0.0, 1.0)
+        );
+        assert!(
+            diags.iter().any(|d| d.contains("cubic-bezier")),
+            "{diags:?}"
+        );
     }
 }

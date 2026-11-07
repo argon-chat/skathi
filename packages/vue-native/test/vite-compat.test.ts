@@ -262,6 +262,15 @@ describe("CSS @import inlining", () => {
 });
 
 describe("index.html", () => {
+  test("app classes and attributes stay separate from html/body theme classes", () => {
+    const root = scratch({ "index.html": `<html class="dark"><body class="body-theme"><main id="app" class="app-layout" vaul-drawer-wrapper style="height:100%"></main></body></html>` });
+    const lifted = liftIndexHtml(join(root, "index.html"), root);
+    expect(lifted.rootClasses).toEqual(["dark", "body-theme"]);
+    expect(lifted.rootAttrs).toEqual({});
+    expect(lifted.mountElement).toEqual({ tag: "main", attrs: {
+      id: "app", class: "app-layout", "vaul-drawer-wrapper": "", style: "height:100%",
+    } });
+  });
   test("head and body CSS, the classic script, the mount element's attributes, and what is not carried", () => {
     const lifted = liftIndexHtml(join(FIXTURE, "index.html"), FIXTURE);
     expect(lifted.headCss.map((p) => p.text.trim().split("\n")[0])).toEqual([
@@ -271,7 +280,8 @@ describe("index.html", () => {
     expect(lifted.bodyCss).toEqual([]);
     expect(lifted.scripts.map((s) => s.text.trim())).toEqual([`window.__fixTheme = "dark";`]);
     expect(lifted.rootClasses).toEqual(["body-cls"]);
-    expect(lifted.rootAttrs).toEqual({ "data-wrapper": "" });
+    expect(lifted.rootAttrs).toEqual({});
+    expect(lifted.mountElement).toEqual({ tag: "div", attrs: { id: "app", "data-wrapper": "" } });
     expect(lifted.advisories.join("\n")).toContain("remote stylesheet https://example.invalid/remote.css");
     expect(lifted.advisories.join("\n")).toContain("<svg>, <filter>");
   });

@@ -336,8 +336,8 @@ declare function __vn_anim_values(id: number): string | null;
 // the DOM surface — crates/vn-tree/src/dom.rs
 // ---------------------------------------------------------------------------
 
-/** `__vn_query`'s mode: 0 descendants, 1 self only (`matches`), 2 `closest`. */
-type VnQueryMode = 0 | 1 | 2;
+/** `__vn_query`'s mode: 0 descendants, 1 self (`matches`), 2 `closest`, 3 document subtree (root included). */
+type VnQueryMode = 0 | 1 | 2 | 3;
 
 /**
  * Selector matching through the CASCADE'S OWN matcher — never a second JS-side

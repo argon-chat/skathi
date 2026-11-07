@@ -220,10 +220,26 @@ Semantics implemented:
 
 ### Cascade folding
 
-`transition` does **not** merge across rules: the last base-state rule that
-declares any transition **replaces the whole list**, `!important` on top, inline
-last. `transition: none` therefore clears it. `ComputedStates::transitions` is an
-`Rc<Vec<TransitionSpec>>`; empty means "no transitions".
+Transition component lists cascade independently across rules and inline
+styles. A later `transition-duration` changes only duration: Tailwind's
+`transition-colors duration-300` keeps the color property list and easing while
+using 300 ms. The shorthand resets all four component lists; `transition: none`
+clears the property list. The lists are zipped after the cascade, cycling shorter
+lists. `ComputedStates::transitions` remains an `Rc<Vec<TransitionSpec>>`; empty
+means "no transitions".
+
+CSS animation component lists follow the same rule: changing `animation-name`
+does not reset a duration or easing declared by another rule. Names determine
+the number of animation slots; `none` keeps its position for list alignment,
+reports `none` in computed style, and starts no animation.
+
+Motion declarations fold in this priority order: normal stylesheet, normal
+inline, stylesheet `!important`, inline `!important`. A stylesheet's important
+reduced-motion or power-saving duration therefore overrides Vaul's normal inline
+duration while preserving its transform property list. `InlineStyle` retains its
+aggregate fields for callers constructing it directly; parsed styles additionally
+carry normal/important motion metadata. This priority handling is specific to
+animation and transition declarations.
 
 ---
 
@@ -312,10 +328,10 @@ project's browser-compat-first policy.
    declared there cannot run. Transitions declared on the *base* rule still do
    not animate the hover ladder — v1 animates class/inline-driven base changes,
    which is what Vue apps overwhelmingly use.
-2. **Transitions fold whole-list, not per-longhand.** A later rule that sets only
-   `transition-duration` replaces the earlier rule's whole transition list rather
-   than cascading that one longhand. Within a single declaration block the
-   longhands compose correctly.
+2. **Resolved: whole-list transition folding.** Component lists now cascade
+   independently across rules and inline styles, including `!important` priority
+   (see [Cascade folding](#cascade-folding)). This former limitation no longer
+   applies.
 3. **Negative `transition-delay` is clamped to 0.** CSS starts such a transition
    already partway through; `std::time::Duration` cannot be negative.
 4. **No reversing-shortening rule.** CSS shortens a transition that reverses
@@ -563,9 +579,10 @@ project's browser-compat-first policy.
   one-shot folding of `--*` declarations and of repeated unmapped properties,
   the `currentColor` advisory, and an end-to-end block of real Tailwind v3.4
   output.
-* `tests` in `lib.rs` (11) — cascade folding: specificity, later-rule
-  replacement, `transition: none`, `!important`, state-rule rejection, inline
-  override via `compute_with`, no false "property not mapped" diagnostics,
-  `ComputedStates` value equality (the change-detection primitive from §1.1),
-  and the two Tailwind `transition-colors` / `duration-*` cases that pin how
-  deviation 2 (whole-list folding) plays out for utility CSS.
+* `tests` in `lib.rs` — cascade folding: specificity, shorthand reset,
+  `transition: none`, normal/important stylesheet and inline motion priority,
+  state-rule rejection, legacy inline aggregate fields via `compute_with`, and
+  no false "property not mapped" diagnostics. Regressions cover Tailwind's
+  `transition-colors` / `duration-*` composition, independently declared animation
+  names and durations, component-list cycling, inline cancellation, and
+  `ComputedStates` value equality (the change-detection primitive from §1.1).

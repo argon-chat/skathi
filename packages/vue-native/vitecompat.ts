@@ -1099,9 +1099,11 @@ export interface LiftedHtml {
   bodyCss: CssPiece[];
   /** Inline classic `<script>`s, document order: they run before the entry module, as in a browser. */
   scripts: { text: string; label: string }[];
-  /** Attributes to put on the root (`<html class>`, `<body class>`, the mount element's own). */
+  /** Attributes for the document root (`<html class>` and `<body class>`). */
   rootClasses: string[];
   rootAttrs: Record<string, string>;
+  /** The app container stays a child of body, outside body-level portals. */
+  mountElement?: { tag: string; attrs: Record<string, string> };
   advisories: string[];
 }
 
@@ -1186,18 +1188,9 @@ export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
     }
   }
 
-  // The mount element (`<div id="app" …>`): in vue-native the window root IS
-  // the container Vue mounts into, so its own attributes go onto the root —
-  // which is where a selector like `[vaul-drawer-wrapper]` then matches.
+  // Preserve the app container: libraries transform it while their portals stay under body.
   const appTag = /<([\w-]+)\b[^>]*\bid\s*=\s*["']app["'][^>]*>/i.exec(html);
-  if (appTag) {
-    const a = attrsOf(appTag[0]);
-    for (const [k, v] of Object.entries(a)) {
-      if (k === "id") continue;
-      if (k === "class") out.rootClasses.push(...v.split(/\s+/).filter(Boolean));
-      else out.rootAttrs[k] = v;
-    }
-  }
+  if (appTag) out.mountElement = { tag: appTag[1]!.toLowerCase(), attrs: attrsOf(appTag[0]) };
   // Body markup that is neither the mount element nor a script/style: named,
   // because it is simply not there (a hidden SVG `<filter>` set, a splash).
   if (bodyTag) {
@@ -1227,6 +1220,12 @@ export function htmlPreludeModule(lifted: LiftedHtml): string {
   if (lifted.rootClasses.length) lines.push(`document.documentElement.classList.add(...${J(lifted.rootClasses)});`);
   for (const [k, v] of Object.entries(lifted.rootAttrs)) {
     lines.push(`document.documentElement.setAttribute(${J(k)}, ${J(v)});`);
+  }
+  if (lifted.mountElement) {
+    const mount = lifted.mountElement;
+    lines.push(`{ const mount = document.getElementById("app") || document.createElement(${J(mount.tag)});`);
+    for (const [k, v] of Object.entries(mount.attrs)) lines.push(`mount.setAttribute(${J(k)}, ${J(v)});`);
+    lines.push(`if (!mount.parentNode) document.body.appendChild(mount); }`);
   }
   for (const s of lifted.scripts) {
     // Global scope, as a classic <script> has (indirect eval); a throw is

@@ -268,6 +268,7 @@ host_fn!(fn vn_query(g, args) {
     let mode = match arg_id(args.arg(2)) {
         1 => dom::QueryMode::SelfOnly,
         2 => dom::QueryMode::Closest,
+        3 => dom::QueryMode::Document,
         _ => dom::QueryMode::Descendants,
     };
     let out = match dom::query(&selector, root, mode) {

@@ -123,6 +123,24 @@ describe("a <style> injected into document.head", () => {
     expect(rt.host.sheets).toEqual([".bundle{}\n.spinner{}"]);
   });
 
+  test("a stylesheet populated before head insertion retains text and keyframes (Vaul order)", async () => {
+    const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
+    const doc = rt.global.document;
+    const style = doc.createElement("style");
+    const css = "[data-drawer]{animation:slide .5s}@keyframes slide{from{transform:translateY(100%)}to{transform:translateY(0)}}";
+    const child = doc.createTextNode(css);
+    expect(style.appendChild(child)).toBe(child);
+    expect(style.textContent).toBe(css);
+    expect(style.text).toBe(css);
+    doc.head.appendChild(style);
+    rt.createApp({ render: () => null }).mount();
+    expect(rt.host.sheets.at(-1)).toBe(".bundle{}\n" + css);
+    style.text = ".replacement{}";
+    await Promise.resolve();
+    expect(rt.host.sheets.at(-1)).toBe(".bundle{}\n.replacement{}");
+    expect(style.textContent).toBe(".replacement{}");
+  });
+
   test("after mount: an edit re-sets the sheet once per microtask, and removal takes it out", async () => {
     const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
     rt.createApp({ render: () => null }).mount();

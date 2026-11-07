@@ -139,16 +139,28 @@ impl AnimationSpec {
         }
         let running = elapsed - self.delay;
         if self.duration.is_zero() {
-            return Phase::Finished { progress: self.direct(self.iterations.max(1.0), 1.0) };
+            return Phase::Finished {
+                progress: self.direct(self.iterations.max(1.0), 1.0),
+            };
         }
         let raw = running.as_secs_f64() / self.duration.as_secs_f64();
         if raw >= self.iterations as f64 {
             // CSS: the final value is the end of the LAST iteration, which for
             // a fractional count is part way through it.
             let last = self.iterations.max(0.0);
-            let whole = if last.fract() == 0.0 { (last - 1.0).max(0.0) } else { last.floor() };
-            let frac = if last.fract() == 0.0 { 1.0 } else { last.fract() };
-            return Phase::Finished { progress: self.direct(whole, frac) };
+            let whole = if last.fract() == 0.0 {
+                (last - 1.0).max(0.0)
+            } else {
+                last.floor()
+            };
+            let frac = if last.fract() == 0.0 {
+                1.0
+            } else {
+                last.fract()
+            };
+            return Phase::Finished {
+                progress: self.direct(whole, frac),
+            };
         }
         let iteration = raw.floor() as f32;
         Phase::Running {
@@ -166,7 +178,11 @@ impl AnimationSpec {
             Direction::Alternate => odd,
             Direction::AlternateReverse => !odd,
         };
-        if reverse { 1.0 - progress } else { progress }
+        if reverse {
+            1.0 - progress
+        } else {
+            progress
+        }
     }
 }
 
@@ -176,10 +192,15 @@ pub enum Phase {
     /// Inside `animation-delay` — nothing is applied unless `fill-mode`
     /// includes `backwards`.
     Delayed,
-    Running { iteration: f32, progress: f32 },
+    Running {
+        iteration: f32,
+        progress: f32,
+    },
     /// Past the last iteration; `progress` is the value it settled on, applied
     /// only when `fill-mode` includes `forwards`.
-    Finished { progress: f32 },
+    Finished {
+        progress: f32,
+    },
 }
 
 impl Keyframes {
@@ -211,7 +232,11 @@ impl Keyframes {
         // timeline, it does not sit at the start until the last instant.
         let span = |a: f32, b: f32| {
             let width = b - a;
-            if width > 0.0 { ((progress - a) / width).clamp(0.0, 1.0) } else { 1.0 }
+            if width > 0.0 {
+                ((progress - a) / width).clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
         };
         match (before, after) {
             (None, None) => None,
@@ -253,7 +278,6 @@ impl Keyframes {
             }),
         }
     }
-
 }
 
 /// The `animation-*` LONGHANDS a block declares without naming an animation.
@@ -267,7 +291,18 @@ impl Keyframes {
 /// `style.animationFillMode = "forwards"` on an element mid-exit-animation to
 /// pin its last frame, and without the patch that single inline longhand
 /// cancelled the very animation it was trying to freeze.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Aggregate callers may still construct a scalar patch with struct update:
+/// ```
+/// use std::time::Duration;
+/// use vn_css::{AnimationDeclarations, AnimationPatch};
+/// let patch = AnimationPatch {
+///     duration: Some(Duration::from_millis(200)),
+///     ..Default::default()
+/// };
+/// assert_eq!(patch.duration, Some(Duration::from_millis(200)));
+/// let _: AnimationDeclarations = Default::default();
+/// ```
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AnimationPatch {
     pub duration: Option<Duration>,
     pub delay: Option<Duration>,
@@ -276,6 +311,11 @@ pub struct AnimationPatch {
     pub direction: Option<Direction>,
     pub fill: Option<FillMode>,
     pub play_state: Option<PlayState>,
+    // Preserve independently declared lists until the complete cascade has
+    // folded. A later animation-name must not reset an earlier duration, and
+    // duration lists must keep cycling even when a later rule changes names.
+    #[doc(hidden)]
+    pub declarations: Option<Rc<AnimationDeclarations>>,
 }
 
 impl AnimationPatch {
@@ -307,6 +347,39 @@ impl AnimationPatch {
         if self.play_state.is_some() {
             into.play_state = self.play_state;
         }
+        if let Some(declarations) = &self.declarations {
+            let mut merged = into.declarations.as_deref().cloned().unwrap_or_default();
+            merged.merge(declarations);
+            into.declarations = Some(Rc::new(merged));
+        } else if self.duration.is_some()
+            || self.delay.is_some()
+            || self.easing.is_some()
+            || self.iterations.is_some()
+            || self.direction.is_some()
+            || self.fill.is_some()
+            || self.play_state.is_some()
+        {
+            let legacy = AnimationCollector {
+                durations: self.duration.map(|value| vec![value]),
+                delays: self.delay.map(|value| vec![value]),
+                easings: self.easing.map(|value| vec![value]),
+                iterations: self.iterations.map(|value| vec![value]),
+                directions: self.direction.map(|value| vec![value]),
+                fills: self.fill.map(|value| vec![value]),
+                play_states: self.play_state.map(|value| vec![value]),
+                seen: true,
+                ..Default::default()
+            };
+            let mut merged = into.declarations.as_deref().cloned().unwrap_or_default();
+            merged.merge(&legacy);
+            into.declarations = Some(Rc::new(merged));
+        }
+    }
+
+    pub(crate) fn computed_list(&self) -> Option<Vec<AnimationSpec>> {
+        self.declarations
+            .as_ref()
+            .map(|declarations| declarations.specs())
     }
 
     pub fn apply(&self, spec: &mut AnimationSpec) {
@@ -355,8 +428,9 @@ pub struct Segment<'a> {
 /// same reason: the four (here eight) component lists are independent and CSS
 /// zips them by CYCLING the shorter ones, with `animation-name` deciding how
 /// many animations there are.
-#[derive(Default)]
-pub(crate) struct AnimationCollector {
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AnimationDeclarations {
     names: Option<Vec<Rc<str>>>,
     durations: Option<Vec<Duration>>,
     delays: Option<Vec<Duration>>,
@@ -372,15 +446,17 @@ pub(crate) struct AnimationCollector {
     named: bool,
 }
 
-impl AnimationCollector {
+pub(crate) type AnimationCollector = AnimationDeclarations;
+
+impl AnimationDeclarations {
     /// Consumes `p` when it is an animation declaration; returns whether it did.
     pub(crate) fn take(
         &mut self,
         p: &lightningcss::properties::Property,
         diagnostics: &mut Vec<String>,
     ) -> bool {
-        use lightningcss::properties::Property as P;
         use lightningcss::properties::animation as a;
+        use lightningcss::properties::Property as P;
 
         fn name_of(n: &a::AnimationName) -> Rc<str> {
             match n {
@@ -426,12 +502,20 @@ impl AnimationCollector {
                 self.names = Some(list.iter().map(|e| name_of(&e.name)).collect());
                 self.durations = Some(
                     list.iter()
-                        .map(|e| crate::transition::duration_of(&e.duration, "animation-duration", diagnostics))
+                        .map(|e| {
+                            crate::transition::duration_of(
+                                &e.duration,
+                                "animation-duration",
+                                diagnostics,
+                            )
+                        })
                         .collect(),
                 );
                 self.delays = Some(
                     list.iter()
-                        .map(|e| crate::transition::duration_of(&e.delay, "animation-delay", diagnostics))
+                        .map(|e| {
+                            crate::transition::duration_of(&e.delay, "animation-delay", diagnostics)
+                        })
                         .collect(),
                 );
                 self.easings = Some(
@@ -443,7 +527,10 @@ impl AnimationCollector {
                 self.directions = Some(list.iter().map(|e| dir_of(&e.direction)).collect());
                 self.fills = Some(list.iter().map(|e| fill_of(&e.fill_mode)).collect());
                 self.play_states = Some(list.iter().map(|e| play_of(&e.play_state)).collect());
-                if list.iter().any(|e| !matches!(e.timeline, a::AnimationTimeline::Auto)) {
+                if list
+                    .iter()
+                    .any(|e| !matches!(e.timeline, a::AnimationTimeline::Auto))
+                {
                     crate::mapper::once(
                         diagnostics,
                         "`animation-timeline` is not supported (v1) — scroll/view timelines have \
@@ -463,7 +550,9 @@ impl AnimationCollector {
                 self.seen = true;
                 self.durations = Some(
                     list.iter()
-                        .map(|t| crate::transition::duration_of(t, "animation-duration", diagnostics))
+                        .map(|t| {
+                            crate::transition::duration_of(t, "animation-duration", diagnostics)
+                        })
                         .collect(),
                 );
                 true
@@ -532,48 +621,86 @@ impl AnimationCollector {
         }
     }
 
-    /// Zips the component lists into specs, cycling the shorter ones —
-    /// `animation-name` decides how many animations there are, exactly as CSS
-    /// does.
-    ///
-    /// Returns the LIST when the block named an animation, and a PATCH when it
-    /// only set longhands (see [`AnimationPatch`]); `(None, None)` when it
-    /// declared nothing animation-related at all.
+    /// Cascade each declared longhand independently. A shorthand populated
+    /// every list in take(), so it resets all eight; a name-only rule replaces
+    /// names alone. Keep original list lengths until the final zip.
+    pub(crate) fn merge(&mut self, later: &Self) {
+        macro_rules! field {
+            ($field:ident) => {
+                if later.$field.is_some() {
+                    self.$field = later.$field.clone();
+                }
+            };
+        }
+        field!(names);
+        field!(durations);
+        field!(delays);
+        field!(easings);
+        field!(iterations);
+        field!(directions);
+        field!(fills);
+        field!(play_states);
+        self.seen |= later.seen;
+        self.named |= later.named;
+    }
+
+    pub(crate) fn from_specs(specs: &[AnimationSpec]) -> Self {
+        Self {
+            names: Some(specs.iter().map(|spec| spec.name.clone()).collect()),
+            durations: Some(specs.iter().map(|spec| spec.duration).collect()),
+            delays: Some(specs.iter().map(|spec| spec.delay).collect()),
+            easings: Some(specs.iter().map(|spec| spec.easing).collect()),
+            iterations: Some(specs.iter().map(|spec| spec.iterations).collect()),
+            directions: Some(specs.iter().map(|spec| spec.direction).collect()),
+            fills: Some(specs.iter().map(|spec| spec.fill).collect()),
+            play_states: Some(specs.iter().map(|spec| spec.play_state).collect()),
+            seen: true,
+            named: true,
+        }
+    }
+
+    /// Per-block list remains available to keyframe compilation and diagnostics;
+    /// the patch also carries declared lists for the per-element cascade.
     pub(crate) fn finish(self) -> (Option<Vec<AnimationSpec>>, Option<AnimationPatch>) {
         if !self.seen {
             return (None, None);
         }
-        if !self.named {
-            let patch = AnimationPatch {
-                duration: self.durations.as_ref().and_then(|l| l.first().copied()),
-                delay: self.delays.as_ref().and_then(|l| l.first().copied()),
-                easing: self.easings.as_ref().and_then(|l| l.first().copied()),
-                iterations: self.iterations.as_ref().and_then(|l| l.first().copied()),
-                direction: self.directions.as_ref().and_then(|l| l.first().copied()),
-                fill: self.fills.as_ref().and_then(|l| l.first().copied()),
-                play_state: self.play_states.as_ref().and_then(|l| l.first().copied()),
-            };
-            return (None, (!patch.is_empty()).then_some(patch));
-        }
-        let names = self.names.unwrap_or_default();
-        if names.is_empty() {
-            // `animation: none` / `animation-name: none` clears the list. An
-            // empty list is NOT the same as `None`: the rule still overrides
-            // an earlier one's animations.
-            return (Some(Vec::new()), None);
-        }
-        let pick = |list: &Option<Vec<Duration>>, i: usize| -> Duration {
-            match list {
-                Some(l) if !l.is_empty() => l[i % l.len()],
-                _ => Duration::ZERO,
-            }
+        let list = self.named.then(|| self.specs());
+        let patch = AnimationPatch {
+            duration: self
+                .durations
+                .as_ref()
+                .and_then(|list| list.first().copied()),
+            delay: self.delays.as_ref().and_then(|list| list.first().copied()),
+            easing: self.easings.as_ref().and_then(|list| list.first().copied()),
+            iterations: self
+                .iterations
+                .as_ref()
+                .and_then(|list| list.first().copied()),
+            direction: self
+                .directions
+                .as_ref()
+                .and_then(|list| list.first().copied()),
+            fill: self.fills.as_ref().and_then(|list| list.first().copied()),
+            play_state: self
+                .play_states
+                .as_ref()
+                .and_then(|list| list.first().copied()),
+            declarations: Some(Rc::new(self)),
         };
+        (list, Some(patch))
+    }
+
+    /// Zip after the cascade, cycling each shorter component list. Names alone
+    /// determine the number of animations, including a name that is none.
+    fn specs(&self) -> Vec<AnimationSpec> {
+        let names = self.names.as_deref().unwrap_or_default();
         let mut out = Vec::with_capacity(names.len());
         for (i, name) in names.iter().enumerate() {
             out.push(AnimationSpec {
                 name: name.clone(),
-                duration: pick(&self.durations, i),
-                delay: pick(&self.delays, i),
+                duration: cycle(&self.durations, i, Duration::ZERO),
+                delay: cycle(&self.delays, i, Duration::ZERO),
                 iterations: cycle(&self.iterations, i, 1.0),
                 direction: cycle(&self.directions, i, Direction::Normal),
                 fill: cycle(&self.fills, i, FillMode::None),
@@ -581,7 +708,7 @@ impl AnimationCollector {
                 play_state: cycle(&self.play_states, i, PlayState::Running),
             });
         }
-        (Some(out), None)
+        out
     }
 }
 
@@ -613,16 +740,52 @@ mod tests {
     fn direction_reverses_the_right_iterations() {
         let alt = spec(4.0, Direction::Alternate);
         // Iteration 0 forwards, 1 backwards, 2 forwards…
-        assert_eq!(alt.phase(Duration::from_millis(250)), Phase::Running { iteration: 0.0, progress: 0.25 });
-        assert_eq!(alt.phase(Duration::from_millis(1250)), Phase::Running { iteration: 1.0, progress: 0.75 });
-        assert_eq!(alt.phase(Duration::from_millis(2250)), Phase::Running { iteration: 2.0, progress: 0.25 });
+        assert_eq!(
+            alt.phase(Duration::from_millis(250)),
+            Phase::Running {
+                iteration: 0.0,
+                progress: 0.25
+            }
+        );
+        assert_eq!(
+            alt.phase(Duration::from_millis(1250)),
+            Phase::Running {
+                iteration: 1.0,
+                progress: 0.75
+            }
+        );
+        assert_eq!(
+            alt.phase(Duration::from_millis(2250)),
+            Phase::Running {
+                iteration: 2.0,
+                progress: 0.25
+            }
+        );
 
         let rev = spec(2.0, Direction::Reverse);
-        assert_eq!(rev.phase(Duration::from_millis(250)), Phase::Running { iteration: 0.0, progress: 0.75 });
+        assert_eq!(
+            rev.phase(Duration::from_millis(250)),
+            Phase::Running {
+                iteration: 0.0,
+                progress: 0.75
+            }
+        );
 
         let altrev = spec(2.0, Direction::AlternateReverse);
-        assert_eq!(altrev.phase(Duration::from_millis(250)), Phase::Running { iteration: 0.0, progress: 0.75 });
-        assert_eq!(altrev.phase(Duration::from_millis(1250)), Phase::Running { iteration: 1.0, progress: 0.25 });
+        assert_eq!(
+            altrev.phase(Duration::from_millis(250)),
+            Phase::Running {
+                iteration: 0.0,
+                progress: 0.75
+            }
+        );
+        assert_eq!(
+            altrev.phase(Duration::from_millis(1250)),
+            Phase::Running {
+                iteration: 1.0,
+                progress: 0.25
+            }
+        );
     }
 
     #[test]
@@ -630,12 +793,21 @@ mod tests {
         // An even count on `alternate` ends where it STARTED, because the last
         // iteration ran backwards. This is the classic fill-mode surprise.
         let alt = spec(2.0, Direction::Alternate);
-        assert_eq!(alt.phase(Duration::from_millis(5000)), Phase::Finished { progress: 0.0 });
+        assert_eq!(
+            alt.phase(Duration::from_millis(5000)),
+            Phase::Finished { progress: 0.0 }
+        );
         let alt3 = spec(3.0, Direction::Alternate);
-        assert_eq!(alt3.phase(Duration::from_millis(5000)), Phase::Finished { progress: 1.0 });
+        assert_eq!(
+            alt3.phase(Duration::from_millis(5000)),
+            Phase::Finished { progress: 1.0 }
+        );
         // A fractional count stops part way.
         let half = spec(1.5, Direction::Normal);
-        assert_eq!(half.phase(Duration::from_millis(5000)), Phase::Finished { progress: 0.5 });
+        assert_eq!(
+            half.phase(Duration::from_millis(5000)),
+            Phase::Finished { progress: 0.5 }
+        );
     }
 
     #[test]
@@ -655,7 +827,10 @@ mod tests {
         assert_eq!(s.phase(Duration::from_millis(200)), Phase::Delayed);
         assert_eq!(
             s.phase(Duration::from_millis(750)),
-            Phase::Running { iteration: 0.0, progress: 0.25 }
+            Phase::Running {
+                iteration: 0.0,
+                progress: 0.25
+            }
         );
         assert_eq!(s.total(), Some(Duration::from_millis(1500)));
     }
@@ -673,9 +848,24 @@ mod tests {
 
         let frames = Keyframes {
             steps: vec![
-                Keyframe { offset: 0.0, easing: None, style: Rc::new(zero), dynamic: None },
-                Keyframe { offset: 0.5, easing: None, style: Rc::new(mid), dynamic: None },
-                Keyframe { offset: 1.0, easing: None, style: Rc::new(one), dynamic: None },
+                Keyframe {
+                    offset: 0.0,
+                    easing: None,
+                    style: Rc::new(zero),
+                    dynamic: None,
+                },
+                Keyframe {
+                    offset: 0.5,
+                    easing: None,
+                    style: Rc::new(mid),
+                    dynamic: None,
+                },
+                Keyframe {
+                    offset: 1.0,
+                    easing: None,
+                    style: Rc::new(one),
+                    dynamic: None,
+                },
             ],
             dynamic: false,
         };

@@ -924,6 +924,8 @@ pub(crate) struct Converted {
     pub important: Option<Rc<StyleRefinement>>,
     pub normal_transitions: Option<Rc<Vec<TransitionSpec>>>,
     pub important_transitions: Option<Rc<Vec<TransitionSpec>>>,
+    pub normal_transition_declarations: Option<Rc<Collector>>,
+    pub important_transition_declarations: Option<Rc<Collector>>,
     /// The folded `animation` list each half declares (`None` = none declared,
     /// which is what lets a later rule's `animation` override an earlier one
     /// without an empty list being mistaken for `animation: none`).
@@ -975,6 +977,7 @@ pub type FontDecls = Rc<Vec<Property<'static>>>;
 struct Half {
     refinement: Option<Rc<StyleRefinement>>,
     transitions: Option<Rc<Vec<TransitionSpec>>>,
+    transition_declarations: Option<Rc<Collector>>,
     animations: Option<Rc<Vec<AnimationSpec>>>,
     animation_patch: Option<AnimationPatch>,
     extras: Extras,
@@ -1168,6 +1171,7 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
         let (animation_list, animation_patch) = animations.finish();
         Half {
             refinement: styled.then(|| Rc::new(r)),
+            transition_declarations: transitions.declarations(),
             transitions: transitions.finish().map(Rc::new),
             animations: animation_list.map(Rc::new),
             animation_patch,
@@ -1185,6 +1189,8 @@ pub(crate) fn convert_block(block: &DeclarationBlock) -> Converted {
         important: important.refinement,
         normal_transitions: normal.transitions,
         important_transitions: important.transitions,
+        normal_transition_declarations: normal.transition_declarations,
+        important_transition_declarations: important.transition_declarations,
         normal_animations: normal.animations,
         important_animations: important.animations,
         normal_animation_patch: normal.animation_patch,
@@ -1328,6 +1334,17 @@ pub fn parse_inline_full(
     )
 }
 
+/// Motion-only priority metadata. Aggregate InlineStyle fields remain usable
+/// by legacy callers; parsed declarations additionally retain these channels.
+#[derive(Clone, Debug, Default)]
+pub struct InlineMotion {
+    pub(crate) transitions: Option<Rc<Collector>>,
+    pub(crate) animations: Option<AnimationPatch>,
+}
+impl InlineMotion {
+    fn is_empty(&self) -> bool { self.transitions.is_none() && self.animations.is_none() }
+}
+
 /// Everything an inline `style` body contributes to the cascade.
 ///
 /// The custom-property and `var()` halves cannot be folded here the way the
@@ -1336,6 +1353,10 @@ pub fn parse_inline_full(
 /// (crate::Engine) exactly like a rule's are.
 #[derive(Clone, Debug, Default)]
 pub struct InlineStyle {
+    /// Optional parsed normal/important motion declarations, folded at their
+    /// own priority without changing general refinement handling.
+    pub normal_motion: Option<InlineMotion>,
+    pub important_motion: Option<InlineMotion>,
     pub refinement: Option<Rc<StyleRefinement>>,
     /// `None` = the body declared no `transition` at all (which is what lets a
     /// matched rule's list survive); `Some([])` is `transition: none`.
@@ -1418,8 +1439,10 @@ pub fn accepts_declaration(name: &str, value: &str) -> bool {
 pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineStyle {
     let mut r = StyleRefinement::default();
     let mut extras = Extras::default();
-    let mut transitions = Collector::default();
-    let mut animations = AnimationCollector::default();
+    let mut normal_transitions = Collector::default();
+    let mut important_transitions = Collector::default();
+    let mut normal_animations = AnimationCollector::default();
+    let mut important_animations = AnimationCollector::default();
     let mut custom: Decls = Vec::new();
     let mut dynamic: Decls = Vec::new();
     let mut font: Option<Vec<Property<'static>>> = None;
@@ -1442,7 +1465,10 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
     }
     match parsed {
         Ok(block) => {
-            for p in block.declarations.iter().chain(block.important_declarations.iter()) {
+            for (important, declarations) in [(false, &block.declarations), (true, &block.important_declarations)] {
+            let transitions = if important { &mut important_transitions } else { &mut normal_transitions };
+            let animations = if important { &mut important_animations } else { &mut normal_animations };
+            for p in declarations {
                 if crate::prefix::property_dropped(p) {
                     continue;
                 }
@@ -1461,13 +1487,20 @@ pub fn parse_inline_style(body: &str, diagnostics: &mut Vec<String>) -> InlineSt
                     }
                 }
             }
+            }
         }
         Err(e) => diagnostics.push(format!("inline style parse error: {e} in {body:?}")),
     }
-    let (animation_list, animation_patch) = animations.finish();
+    let normal_motion = InlineMotion { transitions: normal_transitions.declarations(), animations: normal_animations.clone().finish().1 };
+    let important_motion = InlineMotion { transitions: important_transitions.declarations(), animations: important_animations.clone().finish().1 };
+    normal_transitions.merge(&important_transitions);
+    normal_animations.merge(&important_animations);
+    let (animation_list, animation_patch) = normal_animations.finish();
     InlineStyle {
+        normal_motion: (!normal_motion.is_empty()).then_some(normal_motion),
+        important_motion: (!important_motion.is_empty()).then_some(important_motion),
         refinement: styled.then(|| Rc::new(r)),
-        transitions: transitions.finish().map(Rc::new),
+        transitions: normal_transitions.finish().map(Rc::new),
         animations: animation_list.map(Rc::new),
         animation_patch,
         extras,
