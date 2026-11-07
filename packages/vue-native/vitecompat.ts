@@ -1344,13 +1344,13 @@ export interface FrameworkDep {
 }
 
 /**
- * Which copy of `name` (pinia / vue-router) a prod bundle uses.
+ * Which copy of `name` (pinia / vue-router) either builder uses.
  *
  * The app's OWN when it declares the package and it is installed — an app that
  * asks for pinia 3 gets pinia 3, exactly as its Vite build does. Otherwise
- * vue-native's (what the dev builder's vendor.js carries). A major version that
- * differs between the copy used and vue-native's own is said out loud, because
- * that is a dev/prod divergence or a silent swap either way.
+ * vue-native's. Both builders use this choice, so an installed app dependency
+ * has the same major in dev and prod. An unavailable declared dependency that
+ * falls back to a different runtime major remains an actionable warning.
  */
 export function frameworkDep(
   name: string,
@@ -1383,12 +1383,7 @@ export function frameworkDep(
     return { path: runtimePath, from: "vue-native", version: runtimeVersion, warning };
   }
   const appVersion = versionAt(pkgJsonOf(appPath, name) ?? "");
-  const warning =
-    major(appVersion) !== major(runtimeVersion)
-      ? `using the app's own ${name} ${appVersion}; vue-native's dev builder (vendor.js) carries ${name} ` +
-        `${runtimeVersion} — dev and prod run different majors`
-      : undefined;
-  return { path: appPath, from: "app", version: appVersion, warning };
+  return { path: appPath, from: "app", version: appVersion };
 }
 
 /** The app's package.json, or null. */

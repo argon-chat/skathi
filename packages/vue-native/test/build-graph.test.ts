@@ -120,6 +120,28 @@ describe("manifest", () => {
   });
 });
 
+describe("app-owned framework versions", () => {
+  test("dev vendor and prod use the declared app package instead of a different runtime major", () => {
+    const dir = mkdtempSync(join(FIXTURES, "framework-app-"));
+    const dist = mkdtempSync(join(tmpdir(), "vn-framework-"));
+    tmpDirs.push(dir, dist);
+    mkdirSync(join(dir, "src"), { recursive: true });
+    mkdirSync(join(dir, "node_modules/pinia"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { pinia: "3.0.4" } }));
+    writeFileSync(join(dir, "node_modules/pinia/package.json"), JSON.stringify({ name: "pinia", version: "3.0.4", main: "index.js" }));
+    writeFileSync(join(dir, "node_modules/pinia/index.js"), 'exports.createPinia = () => "app-owned-pinia-three";');
+    writeFileSync(join(dir, "src/main.ts"), 'import { createPinia } from "pinia"; globalThis.__frameworkProbe = createPinia();');
+    const dev = Bun.spawnSync(["bun", "build.ts", join(dir, "src/main.ts"), dist], { cwd: PKG_DIR });
+    expect(dev.exitCode).toBe(0);
+    expect(readFileSync(join(dist, "vendor.js"), "utf8")).toContain("app-owned-pinia-three");
+    expect(dev.stdout.toString()).toContain("pinia 3.0.4: the app's copy");
+    const prod = Bun.spawnSync(["bun", "prod.ts", join(dir, "src/main.ts"), join(dist, "app.prod.js")], { cwd: PKG_DIR });
+    expect(prod.exitCode).toBe(0);
+    expect(readFileSync(join(dist, "app.prod.js"), "utf8")).toContain("app-owned-pinia-three");
+    expect(prod.stderr.toString()).not.toContain("different majors");
+  });
+});
+
 // This repo writes no JavaScript any more — the fixtures above are `.ts`, like
 // everything else. An APP is not bound by that rule: `SOURCE_EXT` and
 // `CANDIDATE_EXTS` both still list `.js`, `vn-test` resolves `apps/<x>/src/

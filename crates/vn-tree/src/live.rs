@@ -132,23 +132,8 @@ pub(crate) fn present_count() -> u64 {
     PRESENTS.load(Ordering::Relaxed)
 }
 
-/// Can a pixel of node `id` be on screen in window `win`? Its painted box (laid
-/// out, or as transformed) meets that window's viewport, by the last drawn
-/// frame's bounds. A node that was not painted (inside `display: none`, never
-/// built) has none. Clipping by an ancestor is not considered: a clipped box
-/// counts as on screen, the safe side. A window with no published viewport yet
-/// counts everything as on screen.
-pub(crate) fn on_screen(id: u32, win: WinKey) -> bool {
-    windows::peek(win, |w| {
-        let Some(env) = w.env.as_ref() else { return true };
-        let (vw, vh) = (env.viewport_width, env.viewport_height);
-        let meets = |&(x, y, bw, bh): &windows::Rect| x + bw > 0.0 && y + bh > 0.0 && x < vw && y < vh;
-        w.bounds.get(&id).is_some_and(meets) || w.transformed.get(&id).is_some_and(meets)
-    })
-    .unwrap_or(true)
-}
-
-/// [`on_screen`], and not clipped away by an ancestor: node `id`'s painted box,
+/// Can a pixel of node `id` be on screen without being clipped by an ancestor?
+/// The node's painted box,
 /// cut to the viewport and to every ancestor that clips its overflow on an
 /// axis (`hidden`, `clip`, `scroll`, `auto`), is not empty. A message scrolled
 /// out of a chat list is inside the window but shows nothing.
@@ -305,6 +290,23 @@ impl LiveTile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Can a pixel of node `id` be on screen in window `win`? Its painted box (laid
+    /// out, or as transformed) meets that window's viewport, by the last drawn
+    /// frame's bounds. A node that was not painted (inside `display: none`, never
+    /// built) has none. Clipping by an ancestor is not considered: a clipped box
+    /// counts as on screen, the safe side. A window with no published viewport yet
+    /// counts everything as on screen.
+    fn on_screen(id: u32, win: WinKey) -> bool {
+        windows::peek(win, |w| {
+            let Some(env) = w.env.as_ref() else { return true };
+            let (vw, vh) = (env.viewport_width, env.viewport_height);
+            let meets = |&(x, y, bw, bh): &windows::Rect| x + bw > 0.0 && y + bh > 0.0 && x < vw && y < vh;
+            w.bounds.get(&id).is_some_and(meets) || w.transformed.get(&id).is_some_and(meets)
+        })
+        .unwrap_or(true)
+    }
+
 
     #[test]
     fn a_write_in_place_is_a_present_and_a_new_tile_a_draw() {

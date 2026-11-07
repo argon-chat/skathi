@@ -5189,11 +5189,23 @@ fn apply_property(
              the named grid is not modelled. Declare `grid-template-columns`/`-rows` and place \
              items with `grid-column`/`grid-row` line numbers",
         ),
-        GridAutoColumns(_) | GridAutoRows(_) => unsupported(
-            diagnostics,
-            "grid-auto-columns / grid-auto-rows — implicit tracks size as `auto`; give the \
-             explicit track list on `grid-template-columns`/`-rows` instead",
-        ),
+        GridAutoColumns(list) | GridAutoRows(list) => {
+            match list.0.iter().map(track_size).collect::<Option<Vec<_>>>() {
+                Some(tracks) => {
+                    if matches!(p, GridAutoColumns(_)) {
+                        r.vn_grid_auto_cols = Some(tracks);
+                    } else {
+                        r.vn_grid_auto_rows = Some(tracks);
+                    }
+                }
+                None => unsupported(
+                    diagnostics,
+                    "grid-auto-columns / grid-auto-rows — fit-content() and percentage-dependent calc() \
+                     track sizes are not modelled; use lengths, percentages, auto, min-content, \
+                     max-content, flex, or minmax()",
+                ),
+            }
+        }
         // taffy honours the inline axis too; gpui had only ever exposed the
         // block one (`align-items`).
         JustifyItems(v) => {
@@ -7137,6 +7149,22 @@ mod tests {
         assert_eq!(r.grid_location.unwrap().column.start, P::Line(3));
         let (_, d) = map("grid-column: sidebar / main");
         assert!(d.iter().any(|m| m.contains("NAMED line")), "{d:?}");
+    }
+
+    #[test]
+    fn implicit_track_lists_map_fractional_and_repeating_patterns() {
+        use gpui::{GridTrack, GridTrackSize as Track};
+        assert_eq!(clean("grid-auto-columns: 1fr").vn_grid_auto_cols, Some(vec![GridTrack::fr(1.0)]));
+        assert_eq!(clean("grid-auto-rows: 20px 2rem 25% minmax(min-content, 1fr)").vn_grid_auto_rows,
+            Some(vec![GridTrack::fixed(Track::Px(20.0)), GridTrack::fixed(Track::Px(32.0)),
+                GridTrack::fixed(Track::Percent(0.25)), GridTrack { min: Track::MinContent, max: Track::Fr(1.0) }]));
+        // lightningcss canonicalizes a sole `auto` to an empty track list.
+        // It must remain Some so the cascade can reset an earlier pattern.
+        assert_eq!(clean("grid-auto-rows: 20px; grid-auto-rows: auto").vn_grid_auto_rows,
+            Some(Vec::new()));
+        let (style, diagnostics) = map("grid-auto-columns: 12px fit-content(30px)");
+        assert!(style.vn_grid_auto_cols.is_none(), "unsupported tracks cannot leave a truncated pattern");
+        assert!(diagnostics.iter().any(|message| message.contains("grid-auto-columns / grid-auto-rows")), "{diagnostics:?}");
     }
 
     #[test]

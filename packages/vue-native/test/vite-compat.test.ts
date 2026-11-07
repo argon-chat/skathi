@@ -364,7 +364,7 @@ describe("index.html", () => {
 });
 
 describe("framework packages", () => {
-  test("the app's own copy when it declares and installs one, with a warning on a major mismatch", () => {
+  test("both builders use the app's installed copy and warn only about incompatible missing-dependency fallback", () => {
     const root = scratch({
       "app/node_modules/pinia/package.json": JSON.stringify({ name: "pinia", version: "3.0.4" }),
       "app/node_modules/pinia/index.js": "",
@@ -375,7 +375,11 @@ describe("framework packages", () => {
     const vnResolve = () => join(root, "vn/node_modules/pinia/index.js");
     const own = frameworkDep("pinia", { dependencies: { pinia: "^3.0.4" } }, appResolve, vnResolve);
     expect(own).toMatchObject({ from: "app", version: "3.0.4" });
-    expect(own.warning).toContain("different majors");
+    expect(own.warning).toBeUndefined();
+    const missing = frameworkDep("pinia", { dependencies: { pinia: "^3.0.4" } }, () => { throw new Error("not installed"); }, vnResolve);
+    expect(missing).toMatchObject({ from: "vue-native", version: "4.0.3" });
+    expect(missing.warning).toContain("not installed");
+    expect(missing.warning).toContain("different major");
     const theirs = frameworkDep("pinia", { dependencies: {} }, appResolve, vnResolve);
     expect(theirs).toMatchObject({ from: "vue-native", version: "4.0.3" });
     expect(theirs.warning).toBeUndefined();

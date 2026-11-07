@@ -110,6 +110,7 @@ import {
   appDefines,
   devEsmInterop,
   devImportsPlugin,
+  frameworkDep,
   importerDir,
   inlineCssImports,
   readPackageJson,
@@ -271,6 +272,13 @@ function findAppRoot(startDir: string, stopDir: string): string {
 }
 const APP_ROOT = findAppRoot(APP_SRC_DIR, WS_ROOT);
 const appRequire = createRequire(join(APP_ROOT, "package.json"));
+const runtimeRequire = createRequire(join(PKG_DIR, "package.json"));
+const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
+const FRAMEWORK = new Map(
+  ["vue-router", "pinia"].map((name) => [name, frameworkDep(
+    name, APP_PKG, (spec) => appRequire.resolve(spec), (spec) => runtimeRequire.resolve(spec),
+  )] as const),
+);
 
 /**
  * Resolves a bare specifier from the APP root with BROWSER/ESM conditions —
@@ -511,6 +519,10 @@ function ensureDirs() {
 // ---- tier 1: vendor.js ----------------------------------------------------
 
 async function buildVendor() {
+  for (const [name, dep] of FRAMEWORK) {
+    if (dep.warning) devAdvise(dep.warning);
+    console.log(`${stamp()} ${name} ${dep.version ?? "unknown"}: the ${dep.from === "app" ? "app's" : "runtime's"} copy`);
+  }
   const result = await Bun.build({
     entrypoints: [LOADER_ENTRY],
     format: "iife",
@@ -524,6 +536,11 @@ async function buildVendor() {
         name: "vendor-vue-alias",
         setup(b: any) {
           b.onResolve({ filter: /^vue$/ }, () => ({ path: join(RUNTIME_SRC_DIR, "runtime.ts") }));
+          // The app owns these packages in both dev and prod; mixing majors
+          // breaks store/router identity before an application module runs.
+          b.onResolve({ filter: /^(vue-router|pinia)$/ }, (args: any) => ({
+            path: FRAMEWORK.get(args.path)!.path,
+          }));
         },
       },
     ],
@@ -712,7 +729,6 @@ const vuePlugin = {
 // `() => import(…)`, which `devEsmInterop` routes through require), and the
 // asset URLs are not packed: the dev host serves `/<key>` from the app root.
 
-const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
 /** What the shapes plugin did during a full build: printed after it, as prod.ts prints its own. */
 const SHAPE_NOTES = new Map<string, number>();
 /** The files the module being built inlined (`?raw`, `.json`, `.svg`, …), for `buildModule`. */

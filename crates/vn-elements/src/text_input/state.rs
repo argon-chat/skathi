@@ -1220,10 +1220,6 @@ impl TextInputState {
         }
     }
 
-    pub(crate) fn scroll_left(&self) -> Pixels {
-        self.scroll_left
-    }
-
     pub fn scroll_top(&self) -> Pixels {
         self.scroll_top
     }
