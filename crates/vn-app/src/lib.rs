@@ -1311,7 +1311,11 @@ fn run_app() {
         #[cfg(feature = "storages")]
         std::mem::forget(cx.on_app_quit(|_| {
             shutdown::step("storage", || {
-                vn_storage::pump();
+                // The last attempt must bypass the automatic retry delay: a
+                // file may have become writable just before the app closes.
+                if let Err(e) = vn_storage::flush() {
+                    eprintln!("[storage] localStorage: the last change was not written: {e}");
+                }
                 if let Err(e) = vn_storage::cookies::flush() {
                     eprintln!("[storage] cookies: the last change was not written: {e}");
                 }
