@@ -7901,6 +7901,8 @@ dependencies = [
 name = "vn-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "image",
  "serde_json",
  "vn-runtime",
  "windows 0.62.2",
@@ -8015,6 +8017,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "image",
+ "vn-resample",
  "windows 0.62.2",
  "windows-core 0.62.2",
 ]
@@ -8032,6 +8035,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "vn-runtime",
+ "vn-video",
  "webrtc-sys",
  "webrtc-sys-build",
  "windows 0.62.2",

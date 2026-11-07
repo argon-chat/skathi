@@ -58,6 +58,7 @@ use vn_runtime::redjs::api::Value;
 use vn_runtime::{host_fn, JsRuntime};
 
 pub mod args;
+pub mod capture;
 pub mod dialog;
 pub mod fs;
 pub mod launch;
@@ -410,6 +411,14 @@ host_fn!(fn vn_shell_trash(g, args) {
     js_string(&shell::start_trash(&path))
 });
 
+// Enumeration and thumbnail capture run on the I/O pool; only the result
+// crosses the JS thread. IDs remain strings so native handles lose no bits.
+host_fn!(fn vn_desktop_get_screen_sources(g, args) {
+    let types = read_arg_string(g, args.arg(0).0);
+    let options = read_arg_string(g, args.arg(1).0);
+    js_string(&capture::start_sources(&types, &options))
+});
+
 // ---- File System Access (fs/mod.rs) — every argument is a handle id -------
 
 fn arg_id(args: &vn_runtime::redjs::api::HostArgs, i: u32) -> u64 {
@@ -691,6 +700,7 @@ host_fn!(fn vn_launch_is_protocol_registered(g, args) {
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_desktop_set_dispatcher", 1, vn_desktop_set_dispatcher as *const _),
+        ("__vn_desktop_get_screen_sources", 2, vn_desktop_get_screen_sources as *const _),
         ("__vn_shell_open_external", 2, vn_shell_open_external as *const _),
         ("__vn_shell_open_path", 2, vn_shell_open_path as *const _),
         ("__vn_shell_show_item", 1, vn_shell_show_item as *const _),

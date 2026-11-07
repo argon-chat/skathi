@@ -22,6 +22,8 @@ vn-runtime = { path = "../vn-runtime", default-features = false }
 # parsed STRICTLY — a hand-rolled reader for input that crosses a process
 # boundary is the wrong place to economise.
 serde_json = "1"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # 0.62, matching vn-permissions / vn-storage / vn-video (this crate shares no
@@ -44,10 +46,13 @@ serde_json = "1"
 #                          itself is resolved at run time, dialog/win.rs)
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_Storage_Packaging_Appx",
+    "Win32_Storage_Xps",
     "Win32_System_Com",
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
@@ -58,6 +63,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
 # `#[implement(IFileOperationProgressSink)]` expands to `::windows_core::…`

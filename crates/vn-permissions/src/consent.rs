@@ -1,4 +1,4 @@
-//! The app's own prompt for the microphone, layered over the platform's
+//! The app's own prompts for the microphone and camera, layered over the platform's
 //! consent store (docs/PERMISSIONS.md §5.1).
 //!
 //! # Why a prompt of our own
@@ -6,8 +6,8 @@
 //! Windows never asks an unpackaged process (F-4): its microphone toggles are
 //! machine-wide and answered in Settings. A browser asks per site, and the
 //! user expects the same of an app: nothing records until they said yes to
-//! *this* app. So for the capabilities in [`prompts`] (the microphone; the
-//! only capture there is), [`AppConsent`] puts a decision of the app's own
+//! *this* app. So for the capabilities in [`prompts`] (microphone and
+//! camera), [`AppConsent`] puts a decision of the app's own
 //! on top of the platform's answer:
 //!
 //! | platform (OS) | the app's decision | `status` |
@@ -52,7 +52,7 @@ use crate::decisions::{Decision, Entry, Store};
 
 /// The capabilities this layer asks about itself.
 pub fn prompts(cap: Capability) -> bool {
-    cap == Capability::Microphone
+    matches!(cap, Capability::Microphone | Capability::Camera)
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,22 @@ fn russian_ui() -> bool {
 
 /// The microphone question, in the user's language.
 pub fn question(cap: Capability, app: &str, russian: bool) -> Question {
-    let (instruction, content, allow, block) = if russian {
+    let camera = cap == Capability::Camera;
+    let (instruction, content, allow, block) = if russian && camera {
+        (
+            format!("{app} запрашивает доступ к камере"),
+            format!("Если разрешить, {app} сможет записывать видео с камеры — сейчас и в следующий раз. Выбор запоминается для этого приложения."),
+            "&Разрешить",
+            "&Блокировать",
+        )
+    } else if camera {
+        (
+            format!("{app} wants to use your camera"),
+            format!("If you allow it, {app} can record video from your camera, now and next time. Your choice is remembered for this app."),
+            "&Allow",
+            "&Block",
+        )
+    } else if russian {
         (
             format!("{app} запрашивает доступ к микрофону"),
             format!(
@@ -499,7 +514,7 @@ mod tests {
 
     fn consent_over(os: PermissionState, hooks: Hooks) -> AppConsent {
         let os: &'static StubHost = Box::leak(Box::new(
-            StubHost::scripted("test", &[(Capability::Microphone, os), (Capability::Camera, Denied)]).granting(Granted),
+            StubHost::scripted("test", &[(Capability::Microphone, os), (Capability::Camera, Denied), (Capability::DisplayCapture, Denied)]).granting(Granted),
         ));
         AppConsent::new(os, hooks)
     }
@@ -602,10 +617,10 @@ mod tests {
     #[test]
     fn other_capabilities_are_the_platforms_under_tokens_of_ours() {
         let h = consent(Granted);
-        assert_eq!(h.status(Capability::Camera), Denied);
-        assert!(h.denied_by_system(Capability::Camera));
+        assert_eq!(h.status(Capability::DisplayCapture), Denied);
+        assert!(h.denied_by_system(Capability::DisplayCapture));
         let mic = pending(h.request(Capability::Microphone));
-        let cam = pending(h.request(Capability::Camera));
+        let cam = pending(h.request(Capability::DisplayCapture));
         assert_ne!(mic, cam, "one namespace for both kinds of request");
         assert_eq!(h.drain_settled(), vec![(cam, Granted)], "the platform's answer, as it gave it");
         answer(Some(0));
@@ -635,5 +650,31 @@ mod tests {
         let q = question(Capability::Microphone, "Argon", true);
         assert_eq!(q.instruction, "Argon запрашивает доступ к микрофону");
         assert_eq!(q.buttons, vec!["&Разрешить".to_string(), "&Блокировать".to_string()]);
+        let q = question(Capability::Camera, "Argon", true);
+        assert_eq!(q.instruction, "Argon запрашивает доступ к камере");
+        assert!(q.content.contains("записывать видео"));
+        assert!(!q.content.contains("микрофон"));
+        assert_eq!(question(Capability::Camera, "Argon", false).instruction, "Argon wants to use your camera");
+    }
+
+    #[test]
+    fn camera_consent_is_separate_from_microphone_consent() {
+        let os = Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Microphone, Granted), (Capability::Camera, Granted)])));
+        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+        let mic = pending(h.request(Capability::Microphone));
+        answer(Some(0));
+        assert_eq!(h.drain_settled(), vec![(mic, Granted)]);
+        assert_eq!(h.status(Capability::Camera), Prompt);
+        let cam = pending(h.request(Capability::Camera));
+        assert_eq!(ASKED.with(|q| q.borrow()[0].0.capability), Capability::Camera);
+        answer(Some(1));
+        assert_eq!(h.drain_settled(), vec![(cam, Denied)]);
+        assert_eq!(h.status(Capability::Microphone), Granted);
+        assert_eq!(h.status(Capability::Camera), Denied);
+        assert!(!h.denied_by_system(Capability::Camera));
+        let cam = pending(h.request(Capability::Camera));
+        answer(Some(0));
+        assert_eq!(h.drain_settled(), vec![(cam, Granted)]);
+        assert_eq!(h.status(Capability::Camera), Granted);
     }
 }

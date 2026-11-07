@@ -851,6 +851,15 @@ declare function __vn_voice_snapshot(roomId: number): VnJson;
  * (docs/VOICE.md D-23).
  */
 declare function __vn_voice_remote_track(roomId: number, trackSid: string): object | null;
+declare function __vn_voice_video_create(optionsJson: string): string;
+declare function __vn_voice_video_state(captureId: number): string;
+declare function __vn_voice_video_stop(captureId: number): void;
+declare function __vn_voice_video_devices(): string;
+declare function __vn_voice_screen_audio_create(optionsJson: string): string;
+declare function __vn_voice_screen_audio_state(captureId: number): string;
+declare function __vn_voice_screen_audio_stop(captureId: number): void;
+declare function __vn_voice_screen_audio_track(captureId: number): object | null;
+declare function __vn_desktop_get_screen_sources(typesJson: string, optionsJson: string): VnJson;
 /** Installs the one callback every room's results and events arrive through. */
 declare function __vn_voice_set_dispatcher(fn: VnVoiceDispatcher): void;
 /** Posts Shutdown and JOINS the thread, so no callback can still be in flight. */
@@ -909,6 +918,8 @@ type VnVoiceConnectionQuality = "excellent" | "good" | "poor" | "lost" | "unknow
 /** `TrackState::json()` — all eight keys are always present on the wire. */
 interface VnVoiceTrackState {
   sid: string;
+  videoSrc?: string;
+  audioCaptureId?: number;
   name?: string;
   /** Present on the track itself, in addition to the event's flat `identity`. */
   ownerIdentity?: string;

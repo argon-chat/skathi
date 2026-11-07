@@ -671,6 +671,7 @@ export function createRuntime(
     "__vn_devtools_set_enabled",
     "__vn_devtools_open",
     "__vn_desktop_set_dispatcher",
+    "__vn_desktop_get_screen_sources",
     "__vn_shell_open_external",
     "__vn_shell_open_path",
     "__vn_shell_show_item",
@@ -1027,6 +1028,7 @@ export function createRuntime(
     (fn) => {
       host.desktop.dispatcher = fn;
     },
+    (types, options) => shellCall("screenSources", JSON.parse(types), JSON.parse(options)),
     (url, content) => {
       if (content && !/^(https?|mailto):/i.test(url)) {
         return JSON.stringify({ error: "content links only open http, https and mailto", name: "NotAllowedError", code: "ESCHEME" });
@@ -1186,7 +1188,7 @@ export function createRuntime(
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, nodeById, looseById, looseRoots, sweepLoose, Transition, TransitionGroup, resolveTransitionProps,
        writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
-       appDevtools, appShell, appLaunch, vModelText, vModelSelect, vShow, desktopApi, activation, noteActivation,
+       appDevtools, appShell, appCapture, appLaunch, vModelText, vModelSelect, vShow, desktopApi, activation, noteActivation,
        render, useCssVars, useCssModule, VueElement, defineCustomElement, createSSRApp, hydrate,
        useHost, useShadowRoot, initDirectivesForSSR };`,
   )(...args);

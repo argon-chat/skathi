@@ -474,6 +474,7 @@ interface MirrorElement extends MirrorNodeBase {
   loop: boolean;
   readonly videoWidth: number;
   readonly videoHeight: number;
+  srcObject: unknown;
   readonly buffered: MirrorTimeRanges;
   readonly seekable: MirrorTimeRanges;
   readonly error: { code: number; message: string } | null;
@@ -2009,6 +2010,10 @@ function isOn(key: string): boolean {
  * `writeAttribute`.)
  */
 function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown, namespace?: unknown): void {
+  if (key === "srcObject" && el.tag === "video") {
+    el.srcObject = next;
+    return;
+  }
   if (key === "style") {
     // A string is `cssText`, a record is diffed, `null` clears: runtime-dom's
     // `patchStyle`. A null/undefined VALUE in a record clears its property
@@ -5102,6 +5107,7 @@ const realm = (() => {
   // The host calls this instead of `__VN_TEARDOWN__` for a reload.
   g.__VN_UNLOAD__ = () => {
     g.__VN_UNLOAD__ = undefined;
+    delete (globalThis as { __VN_SCREEN_SOURCE__?: unknown }).__VN_SCREEN_SOURCE__;
     warnCompat(
       "location.reload",
       "location.reload() re-runs the app in the SAME JavaScript realm: its timers, animation frames, " +
@@ -5496,6 +5502,24 @@ const MEDIA_CALL = {
   loop: 6,
 } as const satisfies Record<string, VnMediaVerb>;
 const MEDIA_TAGS = new Set<string>(["VIDEO", "AUDIO"]);
+const mediaStreams = new WeakMap<MirrorElement, unknown>();
+defineDomGet("srcObject", function (this: MirrorElement) {
+  return isMediaEl(this) ? mediaStreams.get(this) ?? null : undefined;
+}, function (this: MirrorElement, value: unknown) {
+  if (!isMediaEl(this)) return;
+  if (value == null) {
+    mediaStreams.delete(this);
+    if (this.getAttribute("src")?.startsWith("vn-stream://")) this.removeAttribute("src");
+    return;
+  }
+  const stream = value as { getVideoTracks?: () => { __vnVideoSrc?: string }[] };
+  const track = typeof stream.getVideoTracks === "function" ? stream.getVideoTracks()[0] : undefined;
+  if (!track?.__vnVideoSrc?.startsWith("vn-stream://")) {
+    throw new TypeError("video.srcObject requires a native video MediaStream");
+  }
+  mediaStreams.set(this, value);
+  this.setAttribute("src", track.__vnVideoSrc);
+});
 /** A media element is an ELEMENT with a media tag — hence the type guard. */
 const isMediaEl = (n: MirrorNode | null | undefined): n is MirrorElement =>
   !!n && MEDIA_TAGS.has((n as MirrorElement).tagName);
@@ -10474,6 +10498,7 @@ export const appStorage: AppStorage = storageHost
 /** The host fns, gathered so the inert branch is a single `null` check. */
 interface DesktopHost {
   setDispatcher: typeof __vn_desktop_set_dispatcher;
+  screenSources: typeof __vn_desktop_get_screen_sources | null;
   openExternal: typeof __vn_shell_open_external;
   openPath: typeof __vn_shell_open_path;
   showItem: typeof __vn_shell_show_item;
@@ -10486,6 +10511,7 @@ const desktopHost: DesktopHost | null =
   typeof __vn_desktop_set_dispatcher === "function"
     ? {
         setDispatcher: __vn_desktop_set_dispatcher,
+        screenSources: typeof __vn_desktop_get_screen_sources === "function" ? __vn_desktop_get_screen_sources : null,
         openExternal: __vn_shell_open_external,
         openPath: __vn_shell_open_path,
         showItem: __vn_shell_show_item,
@@ -10805,6 +10831,44 @@ const inertShell = new Proxy(
 );
 
 export const appShell: AppShell = desktopHost ? createShell(desktopHost) : (inertShell as unknown as AppShell);
+
+/** Native desktop sources. IDs are shared with the capture worker, never translated in JS. */
+export interface ScreenCaptureSource {
+  id: string;
+  name: string;
+  thumbnailDataUrl: string;
+  appIconDataUrl: string | null;
+  displayId: string;
+  [key: string]: unknown;
+}
+export const appCapture = {
+  async requestPermission(source: "camera" | "screen_share"): Promise<VnPermissionState> {
+    if (source !== "camera" && source !== "screen_share") throw new TypeError("unknown capture source");
+    return appPermissions.request(source === "camera" ? "camera" : "display-capture");
+  },
+  async getSources(types: string[] = ["screen", "window"], options: Record<string, unknown> = {}): Promise<ScreenCaptureSource[]> {
+    if (!Array.isArray(types) || types.some((t) => t !== "screen" && t !== "window")) {
+      throw new TypeError("capture source types must be screen or window");
+    }
+    if (!desktopHost?.screenSources) {
+      throw desktopError({ name: "NotSupportedError", message: "this host has no desktop capture backend", code: "ENOSYS" });
+    }
+    const result: unknown = await desktopCall(desktopHost.screenSources(JSON.stringify(types), JSON.stringify(options)));
+    if (!Array.isArray(result)) throw new TypeError("the desktop capture host returned an invalid source list");
+    return result as ScreenCaptureSource[];
+  },
+  setPendingSource(sourceId: string, includeAudio = false): boolean {
+    if (typeof sourceId !== "string" || !/^(screen|window):[0-9]+$/.test(sourceId)) {
+      throw new TypeError("capture source must be a screen or window ID from getSources()");
+    }
+    (globalThis as { __VN_SCREEN_SOURCE__?: { sourceId: string; includeAudio: boolean } }).__VN_SCREEN_SOURCE__ = {
+      sourceId, includeAudio: !!includeAudio,
+    };
+    return true;
+  },
+};
+// An app also built by Vite cannot import vue-native, so it uses this same API.
+(globalThis as { __VN_CAPTURE__?: typeof appCapture }).__VN_CAPTURE__ = mark(appCapture);
 
 // ---- launch (docs/LAUNCH.md) ------------------------------------------------
 //

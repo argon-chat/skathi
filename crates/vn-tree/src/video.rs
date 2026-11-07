@@ -440,6 +440,16 @@ fn load(src: &str) -> Option<VideoState> {
         // not-yet-resolved binding hits this on its first frame).
         return None;
     }
+    if src.starts_with(vn_video::stream::PREFIX) {
+        return match vn_video::stream::backend(src) {
+            Ok(backend) => {
+                let mut state = VideoState::new(backend);
+                state.set_source(MediaSource::Uri(src.to_string())).ok()?;
+                Some(state)
+            }
+            Err(error) => { report(src, &error); None }
+        };
+    }
     let source = match crate::img::resolve_media("video", src) {
         Ok(source) => source,
         Err(msg) => {
