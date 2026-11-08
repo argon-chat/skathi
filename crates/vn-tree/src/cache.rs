@@ -148,6 +148,9 @@ struct Entry {
     /// `bounds: null` for every tab in its nav the moment a Shift+Tab made the
     /// outer boundary replay.
     ids: Vec<u32>,
+    // The host's chrome registry is reset every build. GPUI carries its own
+    // caption hitboxes on replay, but cannot refill these SDK-side facts.
+    controls: Vec<(u32, gpui::WindowControlArea)>,
     /// The run of `vn_elements::scrollbar` registry entries this subtree
     /// contributed the last time it was painted for real.
     ///
@@ -561,6 +564,7 @@ pub(crate) fn boundary<V: 'static>(
             // itself and offer on one frame's measurement — see [`Entry::size`].
             size: None,
             ids: Vec::new(),
+            controls: Vec::new(),
             chain: Default::default(),
             rendered: false,
             misses: 0,
@@ -601,6 +605,7 @@ pub(crate) fn boundary<V: 'static>(
             e.parent_rect = parent_rect;
             e.size = Some(size);
             e.ids.clear();
+            e.controls.clear();
             e.chain = Default::default();
             e.offered = false;
             return None;
@@ -620,6 +625,7 @@ pub(crate) fn boundary<V: 'static>(
         if !std::mem::replace(&mut e.offered, true) {
             e.entity = None;
             e.ids.clear();
+            e.controls.clear();
             e.chain = Default::default();
         }
         let entity = e
@@ -721,6 +727,17 @@ impl Element for Boundary {
     ) {
         let mark = vn_elements::scrollbar::chain_mark();
         self.inner.paint(window, cx);
+        let win = windows::key(window);
+        with_entry(self.id, |entry| {
+            if entry.rendered {
+                // Nested cached entities render after the outer build has
+                // returned. Snapshot after paint so their areas are included.
+                entry.controls = windows::peek(win, |state| {
+                    state.control_hitboxes.iter()
+                        .filter(|(id, _)| entry.ids.contains(id)).copied().collect()
+                }).unwrap_or_default();
+            }
+        });
         let span = vn_elements::scrollbar::chain_since(mark);
         if span.is_empty() {
             // Nothing registered: either this subtree really has no scroll
@@ -758,6 +775,7 @@ fn carry_bounds(id: u32, win: WinKey) {
             return;
         }
         windows::of(win, |w| {
+            restore_controls(w, &entry.controls);
             for id in &entry.ids {
                 if let Some(r) = w.prev_bounds.get(id).copied() {
                     w.bounds.insert(*id, r);
@@ -768,6 +786,17 @@ fn carry_bounds(id: u32, win: WinKey) {
             }
         });
     });
+}
+
+fn restore_controls(state: &mut windows::WindowState, controls: &[(u32, gpui::WindowControlArea)]) {
+    for &(id, area) in controls {
+        state.any_drag_region |= area == gpui::WindowControlArea::Drag;
+        // Nested boundaries can be rendered while an ancestor's saved span
+        // has already been carried. Each node still contributes just once.
+        if !state.control_hitboxes.contains(&(id, area)) {
+            state.control_hitboxes.push((id, area));
+        }
+    }
 }
 
 /// Collects every node id in a subtree, in document order.
@@ -807,6 +836,29 @@ pub(crate) fn note_rendered(id: u32, ids: Vec<u32>) {
 mod tests {
     use super::*;
     use crate::tree::{read_tree, restyle_all, set_stylesheet, with_tree};
+
+    #[test]
+    fn cached_registry_keeps_caption_regions_after_frame_reset_and_nested_restore() {
+        let win = 81231;
+        let id = 81232;
+        let controls = vec![(id, gpui::WindowControlArea::Drag), (id + 1, gpui::WindowControlArea::NoDrag)];
+        ENTRIES.with(|entries| entries.borrow_mut().insert(id, Entry {
+            entity: None, sub_rev: 0, ctx: Default::default(), parent_rect: None,
+            size: Some((200., 40.)), offered: true, ids: vec![id, id + 1], controls: controls.clone(),
+            chain: Default::default(), rendered: false, misses: 0, cooldown: 0,
+        }));
+        for _ in 0..20 {
+            windows::of(win, |state| { state.control_hitboxes.clear(); state.any_drag_region = false; });
+            carry_bounds(id, win);
+            carry_bounds(id, win);
+            windows::of(win, |state| {
+                assert_eq!(state.control_hitboxes, controls, "nested restoration must not duplicate caption areas");
+                assert!(state.any_drag_region, "a replayed caption is still a painted drag region");
+            });
+        }
+        ENTRIES.with(|entries| entries.borrow_mut().remove(&id));
+        windows::forget(win);
+    }
 
     /// `(lowered nodes, blocked)` for a subtree, as the boundary predicate sees it.
     fn shape(id: u32) -> (u32, bool) {

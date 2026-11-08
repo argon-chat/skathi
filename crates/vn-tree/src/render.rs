@@ -936,8 +936,8 @@ impl MousePt {
 }
 
 /// One physical mouse-up, as the DOM sees it: a `mouseup`, then a `click`
-/// (left button, released on the box it was pressed on) or an `auxclick` (the
-/// middle or right button, the same rule), then — the right button, Chromium
+/// (left button, paired with its DOM press) or an `auxclick` (the middle or
+/// right button, the same rule), then — the right button, Chromium
 /// on Windows — a `contextmenu`. Each slot is claimed by the first listening
 /// box on the target's path, for the target the release resolved to
 /// (`crate::pointer`; a click's and an auxclick's is the common ancestor of
@@ -945,6 +945,8 @@ impl MousePt {
 /// rather than dispatched in place: `WindowState::up_waves`.
 #[derive(Default)]
 pub struct UpWave {
+    /// DOM identity survives a cached-view wrapper being inserted or replaced.
+    press: Option<Press>,
     mouseup: Option<(u32, MousePt)>,
     click: Option<(u32, MousePt)>,
     aux: Option<(u32, MousePt)>,
@@ -954,12 +956,21 @@ pub struct UpWave {
     cancelled: bool,
 }
 
+impl UpWave {
+    fn click_press(&self) -> Option<u32> {
+        let p = self.press.as_ref()?;
+        (p.clickable && !p.cancelled).then_some(p.target)
+    }
+}
+
 /// The press in progress in one window (`WindowState::press`).
 pub struct Press {
     /// The `mousedown` target — where a `pointercancel` goes.
     target: u32,
     button: f64,
     position: Point<gpui::Pixels>,
+    /// A disabled control or a native drag cannot become a click later.
+    clickable: bool,
     /// The host gave up on it ([`cancel_press`]): its mouse-up delivers nothing.
     cancelled: bool,
 }
@@ -967,6 +978,14 @@ pub struct Press {
 impl Press {
     pub(crate) fn is_active(&self) -> bool {
         !self.cancelled
+    }
+
+    fn take_for_release(press: &mut Option<Self>, button: f64) -> Option<Self> {
+        if press.as_ref().is_some_and(|p| p.button == button) {
+            press.take()
+        } else {
+            None
+        }
     }
 }
 
@@ -977,13 +996,11 @@ impl Press {
 fn open_up_wave(ev: &MouseUpEvent, window: &mut Window, cx: &mut App) {
     let button = button_code(ev.button);
     windows::here(window, |w| {
-        let cancelled = match &w.press {
-            Some(p) if p.button == button => w.press.take().is_some_and(|p| p.cancelled),
-            _ => false,
-        };
+        let press = Press::take_for_release(&mut w.press, button);
+        let cancelled = press.as_ref().is_some_and(|p| p.cancelled);
         // A wave nobody claimed a share of is never flushed: drop it here.
         w.up_waves.retain(|wave| wave.scheduled);
-        w.up_waves.push(UpWave { cancelled, ..Default::default() });
+        w.up_waves.push(UpWave { press, cancelled, ..Default::default() });
     });
     // A capture must receive its release even when no hovered element has a
     // mouse-up listener. Claim it from the root before any optional listeners.
@@ -1000,6 +1017,9 @@ fn open_up_wave(ev: &MouseUpEvent, window: &mut Window, cx: &mut App) {
 fn bind_root_mouse<E: gpui::InteractiveElement>(mut e: E) -> E {
     e = e.capture_any_mouse_down(|_, window, cx| {
         deliver_move_before_button(window, cx);
+        // Re-arm only when a DOM bubble listener actually receives this press.
+        // Native widgets may consume it before the DOM path is reached.
+        windows::here(window, |w| w.press = None);
         begin_press_focus(window, cx)
     });
     e = e.on_any_mouse_down(|_, window, _| windows::here(window, |w| w.press_focus.reached = true));
@@ -1054,6 +1074,26 @@ fn claim_up(
         // draw in them (`crate::off_input`).
         window.defer(cx, |window, cx| crate::off_input(|| flush_up_waves(window, cx)));
     }
+}
+
+/// Pair a physical release with its DOM press, independently of gpui's
+/// element-state path. Cached subtree wrappers may change that path between
+/// down and up; the DOM node IDs and this window's press remain stable.
+fn claim_mouse_click(
+    ev: &MouseUpEvent,
+    fallback: u32,
+    window: &mut Window,
+    cx: &mut App,
+    slot: fn(&mut UpWave) -> &mut Option<(u32, MousePt)>,
+) {
+    if cx.has_active_drag() {
+        return;
+    }
+    let down = windows::here(window, |w| w.up_waves.last().and_then(UpWave::click_press));
+    let Some(down) = down else { return };
+    let Some(target) = crate::pointer::click_target(window, down, fallback) else { return };
+    let payload = mouse_payload_n(ev.position, button_code(ev.button), &ev.modifiers, ev.click_count);
+    claim_up(window, cx, slot, target, &payload);
 }
 
 /// Delivers every claimed wave, in DOM order. Runs at the end of gpui's
@@ -4794,17 +4834,10 @@ where
     // every wave ([`bind_root_mouse`]).
     if bit(tree::EV_CLICK) {
         e = e.on_click(cx.listener(move |_, ev: &ClickEvent, window, cx| match ev {
-            // `detail` is the click count (UI Events §3.5): the second click
-            // of a double-click says 2, and the JS runtime fires `dblclick`
-            // after it.
-            // At the nearest common ancestor of the press's target and the
-            // release's (`pointer::click_target_or`): gpui clicks a box both
-            // landed on, which the narrowed hit test makes one of those.
-            ClickEvent::Mouse(m) => {
-                let payload = mouse_payload_n(m.up.position, 0.0, &m.up.modifiers, m.up.click_count);
-                let target = crate::pointer::click_target_or(window, id);
-                claim_up(window, &mut **cx, |w| &mut w.click, target, &payload);
-            }
+            // Physical mouse clicks are paired by DOM identity below. gpui's
+            // pending_mouse_down belongs to a cached view's element-state path,
+            // which may change during the redraw the press itself requests.
+            ClickEvent::Mouse(_) => {}
             // Space on the focused box reaches that box only, and is no part of
             // a mouse-up. gpui clicks on the key's RELEASE, which is
             // Chromium's rule for Space, but before the `keyup` handlers: the
@@ -4823,6 +4856,9 @@ where
                 js_dispatch(id, tree::EV_CLICK, &payload, window, cx);
             }
         }));
+        e = e.on_mouse_up(MouseButton::Left, move |ev, window, cx| {
+            claim_mouse_click(ev, id, window, cx, |w| &mut w.click);
+        });
         // Enter clicks the focused box on its PRESS (Chromium dispatches the
         // click from the keypress), after every `keydown` handler and only if
         // none cancelled it. gpui would click on the release, after `keyup`. A
@@ -4857,31 +4893,29 @@ where
         }
     }
     if bit(tree::EV_AUXCLICK) {
-        // `click`'s rule for the other two buttons (UI Events §3.5): pressed
-        // and released over one element, fired at the nearest common ancestor
-        // of the two targets. gpui hands a box its non-primary clicks here,
-        // once it holds an aux-click listener; it pairs the release with the
-        // LAST press on the box, whatever its button, so a release of another
-        // button than that press's is dropped here. The back and forward
-        // buttons get none, as they get no `mouseup` here either (the up wave
-        // knows three buttons). `detail` is the click count, as for a click;
-        // `buttons` is 0.
-        e = e.on_aux_click(cx.listener(move |_, ev: &ClickEvent, window, cx| {
-            let ClickEvent::Mouse(m) = ev else { return };
-            if m.down.button != m.up.button || !matches!(m.up.button, MouseButton::Middle | MouseButton::Right) {
-                return;
-            }
-            let payload = mouse_payload_n(m.up.position, button_code(m.up.button), &m.up.modifiers, m.up.click_count);
-            let target = crate::pointer::click_target_or(window, id);
-            claim_up(window, &mut **cx, |w| &mut w.aux, target, &payload);
-        }));
+        for button in [MouseButton::Middle, MouseButton::Right] {
+            e = e.on_mouse_up(button, move |ev, window, cx| {
+                claim_mouse_click(ev, id, window, cx, |w| &mut w.aux);
+            });
+        }
     }
     if bit(tree::EV_MOUSEDOWN) {
         e = e.capture_any_mouse_down(|_, window, _| windows::here(window, |w| w.down_claimed = false));
     }
-    if bit(tree::EV_MOUSEDOWN) || focusable {
+    if bit(tree::EV_MOUSEDOWN) || bit(tree::EV_CLICK) || bit(tree::EV_AUXCLICK) || focusable {
         let handle = click_focus;
         e = e.on_any_mouse_down(cx.listener(move |_, ev: &MouseDownEvent, window, cx| {
+            if windows::here(window, |w| w.press.is_none()) {
+                let target = crate::pointer::target_or(window, id);
+                let clickable = !cx.has_active_drag() && crate::pointer::click_target(window, target, id).is_some();
+                windows::here(window, |w| {
+                    w.press = Some(Press {
+                        target, button: button_code(ev.button), position: ev.position,
+                        clickable, cancelled: false,
+                    });
+                });
+                watch_activation(window, cx);
+            }
             if let Some(h) = &handle {
                 // Focus follows the press, as in a browser, once the mousedown
                 // is over; the focus/blur events come out of the subscription.
@@ -4890,10 +4924,6 @@ where
             if bit(tree::EV_MOUSEDOWN) && !windows::here(window, |w| std::mem::replace(&mut w.down_claimed, true)) {
                 let button = button_code(ev.button);
                 let target = crate::pointer::target_or(window, id);
-                windows::here(window, |w| {
-                    w.press = Some(Press { target, button, position: ev.position, cancelled: false })
-                });
-                watch_activation(window, cx);
                 let payload = mouse_payload_n(ev.position, button, &ev.modifiers, ev.click_count);
                 if !js_dispatch(target, tree::EV_MOUSEDOWN, &payload, window, cx) {
                     cancel_press_focus(window);
@@ -6532,6 +6562,37 @@ mod tests {
 
     use super::*;
     use crate::tree::with_tree;
+
+    fn dom_press(target: u32, button: f64) -> Press {
+        Press { target, button, position: Point::default(), clickable: true, cancelled: false }
+    }
+
+    #[test]
+    fn dom_press_survives_listener_rebuild_until_its_matching_release() {
+        // The pressed DOM node stays alive while its GPUI listeners/view
+        // wrappers are rebuilt. Pairing belongs to WindowState, not either
+        // listener's element state, and an unrelated release cannot consume it.
+        let mut state = windows::WindowState::default();
+        state.press = Some(dom_press(42, 0.0));
+        assert!(Press::take_for_release(&mut state.press, 2.0).is_none());
+        assert_eq!(state.press.as_ref().map(|p| p.target), Some(42));
+        let wave = UpWave { press: Press::take_for_release(&mut state.press, 0.0), ..Default::default() };
+        assert_eq!(wave.click_press(), Some(42));
+        assert!(state.press.is_none());
+        assert!(Press::take_for_release(&mut state.press, 0.0).is_none(), "one press cannot click twice");
+        assert_eq!(UpWave::default().click_press(), None, "a release without a press cannot click");
+    }
+
+    #[test]
+    fn cancelled_or_ineligible_dom_presses_cannot_click() {
+        let mut cancelled = dom_press(42, 0.0);
+        cancelled.cancelled = true;
+        assert!(!cancelled.is_active());
+        assert_eq!(UpWave { press: Some(cancelled), ..Default::default() }.click_press(), None);
+        let mut disabled_or_native_drag = dom_press(42, 0.0);
+        disabled_or_native_drag.clickable = false;
+        assert_eq!(UpWave { press: Some(disabled_or_native_drag), ..Default::default() }.click_press(), None);
+    }
 
     /// A POSITIONED box with this `z-index` (the dialog's `fixed z-50`, its
     /// header's `sticky z-10`): positioned, so the z applies.

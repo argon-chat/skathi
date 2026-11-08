@@ -174,15 +174,16 @@ pub struct WindowState {
     /// root opened in the capture phase, and one deferred flush delivers every
     /// wave in DOM order.
     pub up_waves: Vec<crate::render::UpWave>,
-    /// The press in progress: its `mousedown` target and button, until its
-    /// `mouseup` (`render::Press`).
+    /// The press in progress: its DOM target and button, including click-only
+    /// nodes. Kept outside gpui element state so cached/direct render switches
+    /// between down and up cannot lose it (`render::Press`).
     pub press: Option<crate::render::Press>,
     /// The element the press, release or wheel being dispatched is for — the
     /// topmost one under the pointer (`crate::pointer`), resolved before any
     /// listener ran. Last event's until the next one.
     pub hit: Option<u32>,
     /// [`Self::hit`] of the last press: with the release's, where its `click`
-    /// goes (`pointer::click_target_or`).
+    /// goes (`pointer::click_target`).
     pub down_hit: Option<u32>,
     /// What is hovered in this window, resolved once a frame
     /// (`pointer::resolve_hover`).

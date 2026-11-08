@@ -34,7 +34,7 @@
 //!   gpui's focus-on-press, the click tracking, the scroll containers a wheel
 //!   moves. The renderer then dispatches the DOM event AT the target
 //!   ([`target_or`]); a `click` goes to the nearest common ancestor of the
-//!   press's target and the release's ([`click_target_or`]), as in Chromium.
+//!   press's target and the release's ([`click_target`]), as in Chromium.
 //!
 //! `document.elementFromPoint` / `elementsFromPoint` ask the same question
 //! from script (`__vn_hit_at`), of the primary window's last painted frame.
@@ -268,17 +268,28 @@ pub(crate) fn target_or(window: &Window, fallback: u32) -> u32 {
     windows::here(window, |w| w.hit).unwrap_or(fallback)
 }
 
-/// Where a `click` goes: the nearest common inclusive ancestor of the press's
-/// target and the release's (Chromium; the press and the release need not be
-/// on the same element). `fallback` when either is unknown.
-pub(crate) fn click_target_or(window: &Window, fallback: u32) -> u32 {
-    if let Some(id) = captured_target(window) {
-        return id;
-    }
-    let Some((down, up)) = windows::here(window, |w| w.down_hit.zip(w.hit)) else {
-        return fallback;
+/// Where a `click` goes: the nearest common inclusive ancestor of the
+/// original DOM press and the current release. A removed/detached press or
+/// an actually-disabled control cannot be activated by the release.
+pub(crate) fn click_target(window: &Window, down: u32, fallback: u32) -> Option<u32> {
+    let capture = captured_target(window);
+    let up = windows::here(window, |w| w.hit).unwrap_or(fallback);
+    tree::read_tree(|t| click_target_in_tree(t, down, up, window_root(t, window), capture))
+}
+
+fn click_target_in_tree(t: &Tree, down: u32, up: u32, root: u32, capture: Option<u32>) -> Option<u32> {
+    // A span inside a disabled button is disabled for activation as well.
+    // A fieldset itself must not suppress the enabled first legend.
+    let enabled_path = |id| {
+        let path = capture_path(t, id, root)?;
+        (!path.iter().any(|&id| {
+            t.node(id).is_some_and(|n| t.name(n.tag) != "fieldset" && crate::render::actually_disabled(t, id))
+        })).then_some(())
     };
-    tree::read_tree(|t| common_ancestor(t, down, up)).unwrap_or(fallback)
+    enabled_path(down)?;
+    let up = capture.unwrap_or(up);
+    enabled_path(up)?;
+    capture.or_else(|| common_ancestor(t, down, up))
 }
 
 /// The nearest common inclusive ancestor of `a` and `b`.
@@ -722,6 +733,62 @@ mod tests {
             assert_eq!(common_ancestor(t, a1, a), Some(a), "an ancestor of the other");
             assert_eq!(common_ancestor(t, a1, b), Some(list), "two branches");
             assert_eq!(common_ancestor(t, root, b), Some(root));
+        });
+    }
+
+    #[test]
+    fn dom_click_pairing_rejects_removed_or_other_window_presses_and_keeps_capture() {
+        tree_of(|t| {
+            let root = t.create_root();
+            let other_window = t.create_root();
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            let down = t.create_element(div);
+            let up = t.create_element(div);
+            t.insert(parent, root, 0);
+            t.insert(down, parent, 0);
+            t.insert(up, parent, 1);
+            assert_eq!(click_target_in_tree(t, down, up, root, None), Some(parent));
+            assert_eq!(click_target_in_tree(t, down, up, root, Some(down)), Some(down));
+            assert_eq!(click_target_in_tree(t, down, up, other_window, None), None);
+            t.insert(down, other_window, 0);
+            assert_eq!(click_target_in_tree(t, down, up, root, None), None, "detached from the original window");
+            t.remove(down);
+            assert_eq!(click_target_in_tree(t, down, up, root, None), None, "removed press must not retarget to a listener");
+            vec![root, other_window, parent, up]
+        });
+    }
+
+    #[test]
+    fn disabled_dom_clicks_include_button_children_but_preserve_the_first_legend() {
+        tree_of(|t| {
+            let root = t.create_root();
+            let button_tag = t.intern("button");
+            let span_tag = t.intern("span");
+            let fieldset_tag = t.intern("fieldset");
+            let legend_tag = t.intern("legend");
+            let button = t.create_element(button_tag);
+            let child = t.create_element(span_tag);
+            t.insert(button, root, 0);
+            t.insert(child, button, 0);
+            assert_eq!(click_target_in_tree(t, child, child, root, None), Some(child));
+            let disabled = t.intern("disabled");
+            t.set_prop(button, disabled, Some(String::new()));
+            assert_eq!(click_target_in_tree(t, child, child, root, None), None);
+            assert_eq!(click_target_in_tree(t, root, child, root, None), None, "disabled release target");
+            t.set_prop(button, disabled, None);
+            let fieldset = t.create_element(fieldset_tag);
+            let legend = t.create_element(legend_tag);
+            let enabled = t.create_element(button_tag);
+            let disabled_button = t.create_element(button_tag);
+            t.insert(fieldset, root, 1);
+            t.insert(legend, fieldset, 0);
+            t.insert(enabled, legend, 0);
+            t.insert(disabled_button, fieldset, 1);
+            t.set_prop(fieldset, disabled, Some(String::new()));
+            assert_eq!(click_target_in_tree(t, enabled, enabled, root, None), Some(enabled));
+            assert_eq!(click_target_in_tree(t, disabled_button, disabled_button, root, None), None);
+            vec![root, button, child, fieldset, legend, enabled, disabled_button]
         });
     }
 
