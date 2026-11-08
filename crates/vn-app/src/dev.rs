@@ -216,6 +216,7 @@ struct Manifest {
     vendor_rev: f64,
     entry: String,
     modules: Vec<String>,
+    asset_files: std::collections::HashMap<String, std::path::PathBuf>,
 }
 
 fn read_manifest() -> Option<Manifest> {
@@ -225,6 +226,12 @@ fn read_manifest() -> Option<Manifest> {
         .ok()?;
     let v = json::parse(&text)?;
     Some(Manifest {
+        asset_files: match v.get("assetFiles") {
+            Some(json::Json::Obj(files)) => files.iter().filter_map(|(key, value)| {
+                Some((key.clone(), std::path::PathBuf::from(value.as_str()?)))
+            }).collect(),
+            _ => Default::default(),
+        },
         vendor_rev: v.get("vendorRev").and_then(json::Json::as_f64).unwrap_or(0.0),
         entry: v.get("entry").and_then(json::Json::as_str)?.to_string(),
         modules: v
@@ -369,7 +376,8 @@ fn install_asset_provider(rt: &JsRuntime) {
     ONCE.call_once(move || {
         rt.set_content_provider(move |raw| {
             let key = vn_payload::content_key(raw)?;
-            let path = base.join(key.replace('/', std::path::MAIN_SEPARATOR_STR));
+            let path = vn_tree::dev_asset_file(raw)
+                .unwrap_or_else(|| base.join(key.replace('/', std::path::MAIN_SEPARATOR_STR)));
             match std::fs::read(&path) {
                 Ok(bytes) => Some(bytes),
                 Err(_) => {
@@ -404,6 +412,7 @@ fn cwd_advisory(raw: &str) {
 pub fn boot(rt: &JsRuntime) {
     let Some(manifest) = read_manifest() else { return };
     publish_asset_base(&manifest.entry);
+    vn_tree::set_dev_asset_files(manifest.asset_files);
     // After the base exists, before any app code can `fetch()`.
     install_asset_provider(rt);
     if !eval_path(rt, &dist("vendor.js"), "vn://vendor.js", "vendor.js") {
@@ -472,6 +481,8 @@ pub fn poll_frame(frame_no: u32) {
     };
     let vendor_rev = changes.get("vendorRev").and_then(json::Json::as_f64).unwrap_or(0.0);
 
+    // Publish newly imported files before updated modules can request them.
+    if let Some(manifest) = read_manifest() { vn_tree::set_dev_asset_files(manifest.asset_files); }
     JsRuntime::with(|rt| {
         if VENDOR_REV.with(|v| v.get()) != vendor_rev {
             cold_restart(rt);

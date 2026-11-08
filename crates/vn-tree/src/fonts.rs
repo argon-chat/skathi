@@ -1201,6 +1201,20 @@ fn register_finished(cx: &mut App) {
             .filter(|x| x.in_set && !x.registered && x.ready.is_some())
         {
             let bytes = x.ready.take().unwrap();
+            // Canvas receives the original SFNT and CSS alias. GPUI's private
+            // per-face rename below must not leak into Canvas font matching.
+            vn_runtime::JsRuntime::try_with(|rt| {
+                if let Some(id) = vn_runtime::redjs::context::id_of(rt.raw()) {
+                    vn_runtime::redjs::webapi::canvas2d::text::register_font(
+                        id,
+                        vn_runtime::redjs::webapi::canvas2d::text::FontRegistration {
+                            family: x.desc.family.clone(), data: bytes.clone(),
+                            weight: x.desc.weight.clone(), style: x.desc.style.clone(),
+                            stretch: x.desc.stretch.clone(), unicode_range: x.desc.unicode_range.clone(),
+                        },
+                    );
+                }
+            });
             // A family of its own (`face_family`); the declared family is
             // composed of those (`compose`). A font that cannot be renamed
             // (a collection) is registered as it names itself.
@@ -1423,14 +1437,16 @@ fn plan(sources: &[Src]) -> Result<Fetch, String> {
                     .split_once(':')
                     .map(|(s, _)| s.to_ascii_lowercase())
                     .unwrap_or_default();
-                let in_memory = matches!(scheme.as_str(), "data" | "blob")
-                    || (scheme.is_empty() && crate::img::asset_store().is_some());
                 let got = if matches!(scheme.as_str(), "http" | "https") {
                     Ok(Fetch::Http(url.clone()))
-                } else if in_memory {
-                    crate::img::read_bytes("font", url).map(Fetch::Bytes)
                 } else {
-                    crate::img::resolve_path("font", url).map(Fetch::Path)
+                    // The same resolver as images/lottie/video: inline and
+                    // packaged bytes stay in memory; mapped dev imports and
+                    // ordinary files are read on the background executor.
+                    crate::img::readable("font", url).map(|source| match source {
+                        crate::img::Readable::Bytes(bytes) => Fetch::Bytes(bytes),
+                        crate::img::Readable::File(path) => Fetch::Path(path),
+                    })
                 };
                 match got {
                     Ok(f) => return Ok(f),
@@ -2424,6 +2440,39 @@ mod tests {
         assert!(e.contains("not a font file"), "{e}");
     }
 
+    #[test]
+    fn generated_dev_font_urls_share_the_explicit_file_map_with_media_and_fetch() {
+        let root = std::env::temp_dir().join(format!("vn-font-assets-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let app = root.join("app");
+        let external = root.join("shared");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        let path = external.join("A%20 Font[wght].ttf");
+        let data = font("Mapped Asset Font");
+        std::fs::write(&path, &data).unwrap();
+        let key = "_vn/fs/1234/A%20 Font[wght].ttf".to_string();
+        crate::img::set_asset_base(app.clone());
+        crate::img::set_dev_asset_files([(key.clone(), path.clone()),
+            ("../outside.ttf".to_string(), path.clone()),
+            ("_vn/fs/invalid/relative.ttf".to_string(), PathBuf::from("relative.ttf"))].into_iter().collect());
+        let url = "/_vn/fs/1234/A%2520%20Font%5Bwght%5D.ttf?v=2#face";
+        match plan(&[Src::Url { url: url.into(), format: Some("truetype".into()) }]).unwrap() {
+            Fetch::Path(got) => assert_eq!(got, path),
+            _ => panic!("a dev font must stream from its explicitly mapped file"),
+        }
+        assert_eq!(crate::img::read_bytes("font", url).unwrap(), data);
+        assert_eq!(crate::img::resolve_path("img", url).unwrap(), path);
+        assert!(matches!(crate::img::resolve_media("video", url), Ok(vn_video::MediaSource::Path(got)) if got == path));
+        let fetched_path = std::thread::spawn(move || crate::dev_asset_file(url)).join().unwrap();
+        assert_eq!(fetched_path, Some(path));
+        assert!(crate::dev_asset_file("../outside.ttf").is_none());
+        assert!(crate::dev_asset_file("/_vn/fs/invalid/relative.ttf").is_none());
+        assert!(crate::dev_asset_file("/_vn/fs/missing/font.ttf").is_none());
+        assert_eq!(crate::img::resolve_path("font", "/assets/local.ttf").unwrap(), app.join("assets").join("local.ttf"));
+        crate::img::set_dev_asset_files(Default::default());
+        std::fs::remove_dir_all(root).unwrap();
+    }
     /// A minimal sfnt: `head` and a `name` table naming `family`.
     fn font(family: &str) -> Vec<u8> {
         let enc = |s: &str| {

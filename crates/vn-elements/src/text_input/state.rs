@@ -20,8 +20,54 @@ use std::time::{Duration, Instant};
 use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable, KeyDownEvent,
     KeystrokeEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Subscription, Task,
-    TextInputConfiguration, UTF16Selection, Window, WrappedLine, px,
+    TextInputConfiguration, TransformationMatrix, UTF16Selection, Window, WrappedLine, px,
 };
+
+/// GPUI paints affine matrices in device pixels, while pointer events and
+/// platform IME queries use logical window pixels. The untransformed layout
+/// bounds alone are therefore insufficient for either direction of mapping.
+#[derive(Clone, Copy)]
+struct InputTransform {
+    matrix: TransformationMatrix,
+    scale_factor: f32,
+}
+
+impl Default for InputTransform {
+    fn default() -> Self {
+        Self { matrix: TransformationMatrix::unit(), scale_factor: 1.0 }
+    }
+}
+
+impl InputTransform {
+    fn map(&self, matrix: TransformationMatrix, point: Point<Pixels>) -> Point<Pixels> {
+        let scale = self.scale_factor;
+        let device = matrix.apply(Point::new(px(f32::from(point.x) * scale), px(f32::from(point.y) * scale)));
+        Point::new(px(f32::from(device.x) / scale), px(f32::from(device.y) / scale))
+    }
+
+    fn layout_point(&self, window_point: Point<Pixels>) -> Option<Point<Pixels>> {
+        let local = self.map(self.matrix.inverse()?, window_point);
+        (f32::from(local.x).is_finite() && f32::from(local.y).is_finite()).then_some(local)
+    }
+
+    /// IME candidate windows need an axis-aligned rectangle in WINDOW space.
+    /// Transform every corner: rotating only the origin leaves the wrong
+    /// height and a shear can move the opposite corner beyond both diagonals.
+    fn window_bounds(&self, local: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+        self.matrix.inverse()?; // A collapsed input has no visible caret.
+        let corners = [local.origin, Point::new(local.right(), local.top()),
+            Point::new(local.left(), local.bottom()), local.bottom_right()];
+        let mut min = Point::new(px(f32::INFINITY), px(f32::INFINITY));
+        let mut max = Point::new(px(f32::NEG_INFINITY), px(f32::NEG_INFINITY));
+        for corner in corners {
+            let p = self.map(self.matrix, corner);
+            if !f32::from(p.x).is_finite() || !f32::from(p.y).is_finite() { return None; }
+            min.x = min.x.min(p.x); min.y = min.y.min(p.y);
+            max.x = max.x.max(p.x); max.y = max.y.max(p.y);
+        }
+        Some(Bounds::from_corners(min, max))
+    }
+}
 
 use super::boundaries;
 use super::{
@@ -259,6 +305,7 @@ pub struct TextInputState {
     // them back to paint.
     lines: Vec<LineBox>,
     last_bounds: Option<Bounds<Pixels>>,
+    input_transform: InputTransform,
     line_height: Pixels,
     content_width: Pixels,
     /// `line_height * total visual rows` — what the vertical scroll clamps to.
@@ -351,6 +398,7 @@ impl TextInputState {
             reported_config: None,
             lines: Vec::new(),
             last_bounds: None,
+            input_transform: InputTransform::default(),
             line_height: px(20.0),
             content_width: px(0.0),
             content_height: px(0.0),
@@ -419,6 +467,18 @@ impl TextInputState {
     /// Move keyboard focus to this input.
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.focus_handle, cx);
+    }
+
+    /// Set the field mode before its initial controlled value is sanitized.
+    /// Frameworks must do this before sync_value, not only when painting.
+    pub fn set_multiline(&mut self, multiline: bool) {
+        self.multiline = multiline;
+    }
+
+    /// Programmatic HTMLInputElement/HTMLTextAreaElement.select(). Selects the
+    /// native buffer, including Unicode and line breaks, without editing it.
+    pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
+        self.set_selection(0..self.content.len(), cx);
     }
 
     /// The selection, as byte offsets into [`Self::text`].
@@ -850,7 +910,7 @@ impl TextInputState {
     }
 
     pub(crate) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.set_selection(0..self.content.len(), cx);
+        self.select_all_text(cx);
     }
 
     /// `Home` — the start of the VISUAL row in a textarea (what a browser
@@ -1081,7 +1141,10 @@ impl TextInputState {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle, cx);
-        let index = self.index_for_position(event.position);
+        let Some(index) = self.index_for_window_position(event.position) else {
+            self.is_selecting = false;
+            return;
+        };
         match event.click_count {
             0 | 1 => {
                 self.is_selecting = true;
@@ -1110,7 +1173,10 @@ impl TextInputState {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle, cx);
-        let index = self.index_for_position(event.position);
+        let Some(index) = self.index_for_window_position(event.position) else {
+            self.is_selecting = false;
+            return;
+        };
         if !secondary_press_keeps(&self.selected_range, index) {
             self.move_to(index, cx);
         }
@@ -1127,7 +1193,10 @@ impl TextInputState {
         if !self.is_selecting {
             return;
         }
-        let index = self.index_for_position(event.position);
+        let Some(index) = self.index_for_window_position(event.position) else {
+            self.is_selecting = false;
+            return;
+        };
         self.select_to(index, cx);
     }
 
@@ -1136,6 +1205,13 @@ impl TextInputState {
     }
 
     // ----------------------------------------------------------- layout hooks
+
+    /// The actual composed matrix in force while this field is drawn. Capture
+    /// it during prepaint and paint, because cached layout can be reused under
+    /// a wrapper whose affine transform changed in the meantime.
+    pub(crate) fn set_input_transform(&mut self, matrix: TransformationMatrix, scale_factor: f32) {
+        self.input_transform = InputTransform { matrix, scale_factor };
+    }
 
     /// Called by the element every frame once the text has been shaped. The
     /// lines are MOVED in: `WrappedLine` is not `Clone`, so this is where they
@@ -1282,7 +1358,13 @@ impl TextInputState {
         )
     }
 
-    /// Map a window-space position to a byte offset in the content.
+    /// Map external pointer/IME coordinates into the field's layout frame.
+    fn index_for_window_position(&self, position: Point<Pixels>) -> Option<usize> {
+        Some(self.index_for_position(self.input_transform.layout_point(position)?))
+    }
+
+    /// Map an untransformed layout-space position to a byte offset. Keyboard
+    /// navigation already uses this frame and must not apply the inverse twice.
     pub(crate) fn index_for_position(&self, position: Point<Pixels>) -> usize {
         if self.display_is_placeholder || self.content.is_empty() {
             return 0;
@@ -1624,7 +1706,7 @@ impl EntityInputHandler for TextInputState {
         } else {
             (px(0.0), end.x.max(CARET_WIDTH))
         };
-        Some(Bounds::from_corners(
+        self.input_transform.window_bounds(Bounds::from_corners(
             gpui::point(left + x0, top),
             gpui::point(left + x1, top + self.line_height),
         ))
@@ -1636,7 +1718,7 @@ impl EntityInputHandler for TextInputState {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
-        Some(self.offset_to_utf16(self.index_for_position(point)))
+        Some(self.offset_to_utf16(self.index_for_window_position(point)?))
     }
 
     fn set_selected_text_range(
@@ -1683,6 +1765,59 @@ fn secondary_press_keeps(selection: &Range<usize>, index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_pointer_coordinates_invert_rotation_scale_and_shear_at_every_dpi() {
+        for dpi in [1.0, 1.25, 1.5, 2.0] {
+            let transform = InputTransform {
+                matrix: TransformationMatrix {
+                    rotation_scale: [[0.0, -2.0], [3.0, 0.5]],
+                    translation: [120.0 * dpi, -45.0 * dpi],
+                },
+                scale_factor: dpi,
+            };
+            // (12,34) -> (-68+120, 36+17-45), independently known window coordinates.
+            let local = transform.layout_point(gpui::point(px(52.0), px(8.0))).unwrap();
+            assert!((f32::from(local.x) - 12.0).abs() < 0.0001, "dpi {dpi}: {local:?}");
+            assert!((f32::from(local.y) - 34.0).abs() < 0.0001, "dpi {dpi}: {local:?}");
+            let reflected = InputTransform {
+                matrix: TransformationMatrix {
+                    rotation_scale: [[-1.0, 0.5], [0.0, 2.0]],
+                    translation: [200.0 * dpi, 50.0 * dpi],
+                },
+                scale_factor: dpi,
+            };
+            let local = reflected.layout_point(gpui::point(px(205.0), px(118.0))).unwrap();
+            assert!((f32::from(local.x) - 12.0).abs() < 0.0001);
+            assert!((f32::from(local.y) - 34.0).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn ime_anchor_bounds_follow_all_transformed_corners_at_fractional_dpi() {
+        for dpi in [1.0, 1.25, 1.5, 2.0] {
+            let transform = InputTransform {
+                matrix: TransformationMatrix {
+                    rotation_scale: [[0.0, -2.0], [3.0, 0.5]],
+                    translation: [120.0 * dpi, -45.0 * dpi],
+                },
+                scale_factor: dpi,
+            };
+            let local = Bounds::from_corners(gpui::point(px(10.0), px(20.0)), gpui::point(px(14.0), px(28.0)));
+            let window = transform.window_bounds(local).unwrap();
+            assert_eq!(window, Bounds::from_corners(gpui::point(px(64.0), px(-5.0)), gpui::point(px(80.0), px(11.0))), "dpi {dpi}");
+        }
+    }
+
+    #[test]
+    fn collapsed_input_transforms_cannot_accept_pointer_or_ime_geometry() {
+        let transform = InputTransform {
+            matrix: TransformationMatrix { rotation_scale: [[0.0, 0.0], [0.0, 1.0]], translation: [10.0, 20.0] },
+            scale_factor: 1.5,
+        };
+        assert!(transform.layout_point(gpui::point(px(15.0), px(25.0))).is_none());
+        assert!(transform.window_bounds(Bounds::from_corners(gpui::point(px(1.0), px(2.0)), gpui::point(px(3.0), px(4.0)))).is_none());
+    }
 
     #[test]
     fn a_right_press_keeps_only_the_selection_it_lands_in() {

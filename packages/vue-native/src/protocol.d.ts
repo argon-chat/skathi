@@ -316,6 +316,8 @@ declare function __vn_selection_rebase(element: VnNodeId, text: VnNodeId): void;
  * and `visibility: hidden` left out). `""` for a point outside the viewport.
  */
 declare function __vn_hit_at(x: number, y: number, all: 0 | 1): string;
+/** Retarget the active mouse pointer in the window painting this node. */
+declare function __vn_pointer_capture(nodeId: number, pointerId: number, capture: boolean): boolean;
 
 // ---------------------------------------------------------------------------
 // script animations — crates/vn-tree/src/lib.rs (src/waapi.ts)
@@ -420,6 +422,8 @@ declare function __vn_scroll_into_view(
  * `"blurred"` or `""`.
  */
 declare function __vn_focus(id: VnNodeId, op: 0 | 1): string;
+/** Select the native input/textarea buffer, including when its first build is pending. */
+declare function __vn_input_select(id: VnNodeId): boolean;
 
 /**
  * `location.reload()`: asks the host to unload and re-run the app at the next

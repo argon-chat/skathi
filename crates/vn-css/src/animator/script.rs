@@ -421,24 +421,7 @@ fn css_value(v: Animatable) -> Option<String> {
         Animatable::BorderColors(colors) => colors.map(css_color).join(" "),
         Animatable::Pixels(p) => format!("{}px", p.as_f32()),
         Animatable::Rems(r) => format!("{}rem", r.0),
-        Animatable::Transform(t) => {
-            if t.is_identity() {
-                return Some("none".into());
-            }
-            let len = |l: gpui::TransformLength| match l {
-                gpui::TransformLength::Pixels(p) => format!("{p}px"),
-                gpui::TransformLength::Fraction(f) => format!("{}%", f * 100.0),
-            };
-            let mut parts = Vec::new();
-            parts.push(format!("translate({}, {})", len(t.translate.0), len(t.translate.1)));
-            if t.rotate != 0.0 {
-                parts.push(format!("rotate({}deg)", t.rotate.to_degrees()));
-            }
-            if t.scale != (1.0, 1.0) {
-                parts.push(format!("scale({}, {})", t.scale.0, t.scale.1));
-            }
-            parts.join(" ")
-        }
+        Animatable::Transform(t) => crate::transform_css(t),
         Animatable::Effect(_) => return None,
     })
 }

@@ -47,7 +47,7 @@
 //! it are what `mouseenter` and `mouseleave` fire at. `:active` is gpui's
 //! ladder on the press's refined set, so it is the press target's path too.
 
-use gpui::{App, Pixels, Point, VnHitKind, Window};
+use gpui::{App, DispatchPhase, MouseMoveEvent, Pixels, Point, VnHitKind, Window};
 use vn_runtime::redjs::api::Value;
 use vn_runtime::{host_fn, JsRuntime};
 
@@ -160,18 +160,83 @@ pub(crate) fn target_at(window: &Window, p: Point<Pixels>) -> u32 {
     })
 }
 
+/// The explicit capture target, while it still belongs to this window's tree.
+/// CSS hit-testing does not revoke capture; removal or moving to another window does.
+pub(crate) fn captured_target(window: &Window) -> Option<u32> {
+    let id = windows::here(window, |w| w.pointer_capture)?;
+    let valid = tree::read_tree(|t| {
+        t.node(id).is_some_and(|n| n.kind == Kind::Element)
+            && windows::window_of_node_in(t, id) == windows::key(window)
+            && path_to(t, id, window_root(t, window))
+    });
+    if !valid {
+        windows::here(window, |w| w.pointer_capture = None);
+    }
+    valid.then_some(id)
+}
+
+fn capture_path(t: &Tree, id: u32, root: u32) -> Option<Vec<u32>> {
+    if t.node(id)?.kind != Kind::Element {
+        return None;
+    }
+    let mut path = Vec::with_capacity(16);
+    let mut cur = id;
+    for _ in 0..4096 {
+        let n = t.node(cur)?;
+        path.push(cur);
+        if cur == root {
+            return Some(path);
+        }
+        cur = n.parent;
+    }
+    None
+}
+
+/// gpui element moves only run while hovered. The OS captures the window,
+/// so a raw window listener must collect moves beyond the captured box and
+/// beyond the client area as well. Keep normal frame coalescing in both cases.
+pub(crate) fn capture_listeners(window: &mut Window) {
+    window.on_mouse_event(|ev: &MouseMoveEvent, phase, window, _cx| {
+        if phase != DispatchPhase::Capture {
+            return;
+        }
+        let Some(id) = captured_target(window) else { return };
+        windows::here(window, |w| {
+            w.pending_mouse_move = Some(windows::PendingMouseMove {
+                id,
+                position: ev.position,
+                button: match ev.pressed_button {
+                    Some(gpui::MouseButton::Left) => 0.0,
+                    Some(gpui::MouseButton::Middle) => 1.0,
+                    Some(gpui::MouseButton::Right) => 2.0,
+                    Some(gpui::MouseButton::Navigate(_)) => 3.0,
+                    None => -1.0,
+                },
+                modifiers: ev.modifiers,
+            });
+        });
+    });
+}
+
 /// The fork's hit refiner: run at the start of every press, release and wheel
 /// in a window, before any listener.
 fn refine(kind: VnHitKind, p: Point<Pixels>, window: &mut Window, cx: &mut App) {
-    // An open `<select>` popup takes what is on it, and the press that
-    // dismisses it (`crate::select`).
-    if crate::select::refine(kind, p, window, cx) {
+    let capture = (kind != VnHitKind::Scroll).then(|| captured_target(window)).flatten();
+    // Explicit capture owns pointer input before any physical hit target,
+    // including an open native <select> popup. Wheel input still hit-tests.
+    if capture.is_none() && crate::select::refine(kind, p, window, cx) {
         return;
     }
     let tags = window.vn_tags_at(p);
     let resolved = tree::read_tree(|t| {
         let root = window_root(t, window);
-        let r = resolve(t, tags, root);
+        let mut r = resolve(t, tags, root);
+        if let Some(id) = capture {
+            if let Some(path) = capture_path(t, id, root) {
+                r.target = id;
+                r.path = path;
+            }
+        }
         if kind == VnHitKind::Down {
             note_covered(t, &r, p);
         }
@@ -207,6 +272,9 @@ pub(crate) fn target_or(window: &Window, fallback: u32) -> u32 {
 /// target and the release's (Chromium; the press and the release need not be
 /// on the same element). `fallback` when either is unknown.
 pub(crate) fn click_target_or(window: &Window, fallback: u32) -> u32 {
+    if let Some(id) = captured_target(window) {
+        return id;
+    }
     let Some((down, up)) = windows::here(window, |w| w.down_hit.zip(w.hit)) else {
         return fallback;
     };
@@ -314,9 +382,45 @@ host_fn!(fn vn_hit_at(_g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&s).0)
 });
 
-/// Registers `__vn_hit_at`.
+// `(node, pointerId, capture)` — the JS mirror validates the active pointer;
+// ownership is per native window and is cleared even outside a commit wave
+// (unmount and app teardown do not necessarily run in an input callback).
+host_fn!(fn vn_pointer_capture(_g, args) {
+    let id = args.arg(0).as_number().unwrap_or(0.0) as u32;
+    let pointer = args.arg(1).as_number().unwrap_or(0.0);
+    if pointer != 1.0 {
+        return Value::boolean(false).0;
+    }
+    let capture = args.arg(2).as_bool().unwrap_or(false);
+    if !capture {
+        windows::each(|_, w| {
+            if w.pointer_capture == Some(id) {
+                w.pointer_capture = None;
+            }
+        });
+        return Value::boolean(true).0;
+    }
+    let k = windows::window_of_node(id);
+    // The OS capture is held by the window where the live press began. A
+    // script cannot transfer client-space input into another native window.
+    if !windows::peek(k, |w| w.press.as_ref().is_some_and(crate::render::Press::is_active)).unwrap_or(false) {
+        return Value::boolean(false).0;
+    }
+    let valid = tree::read_tree(|t| {
+        let root = match windows::root_of(k) { 0 => t.root, popped => popped };
+        capture_path(t, id, root).is_some()
+    });
+    if valid {
+        windows::each(|_, w| w.pointer_capture = None);
+        windows::of(k, |w| w.pointer_capture = Some(id));
+    }
+    Value::boolean(valid).0
+});
+
+/// Registers hit testing and explicit pointer capture.
 pub(crate) fn install(rt: &JsRuntime) {
     rt.register("__vn_hit_at", 3, vn_hit_at as *const std::ffi::c_void);
+    rt.register("__vn_pointer_capture", 3, vn_pointer_capture as *const std::ffi::c_void);
 }
 
 thread_local! {
@@ -635,6 +739,27 @@ mod tests {
         assert_eq!(boundary(&[3, 2, 1], &[]), (vec![3, 2, 1], vec![]));
         // Into it: everything enters, the root first.
         assert_eq!(boundary(&[], &[3, 2, 1]), (vec![], vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn capture_keeps_its_path_outside_hit_testing_but_not_after_removal() {
+        tree_of(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let parent = t.create_element(div);
+            let child = t.create_element(div);
+            let other = t.create_element(div);
+            t.insert(parent, root, 0);
+            t.insert(child, parent, 0);
+            t.insert(other, root, 1);
+            set(t, parent, Some(true), true);
+            assert!(path_if_hittable(t, child, root).is_none());
+            assert_eq!(capture_path(t, child, root), Some(vec![child, parent, root]));
+            assert_eq!(capture_path(t, child, other), None, "capture never crosses windows");
+            t.insert(child, other, 0);
+            assert_eq!(capture_path(t, child, parent), None, "detached from old painted root");
+            vec![root, parent, child, other]
+        });
     }
 
     #[test]

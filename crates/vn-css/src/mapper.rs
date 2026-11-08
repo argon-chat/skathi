@@ -5521,15 +5521,40 @@ fn apply_property(
         }
         Cursor(c) => {
             use lightningcss::properties::ui::CursorKeyword as K;
+            use gpui::CursorStyle as C;
             let mapped = match c.keyword {
-                K::Pointer => Some(gpui::CursorStyle::PointingHand),
-                K::Default | K::Auto => Some(gpui::CursorStyle::Arrow),
-                K::Text => Some(gpui::CursorStyle::IBeam),
-                _ => None,
+                K::Pointer => C::PointingHand,
+                K::Default | K::Auto => C::Arrow,
+                K::Text => C::IBeam,
+                K::VerticalText => C::IBeamCursorForVerticalLayout,
+                K::Crosshair | K::Cell => C::Crosshair,
+                K::Grab | K::Move | K::AllScroll => C::OpenHand,
+                K::Grabbing => C::ClosedHand,
+                K::EResize => C::ResizeRight,
+                K::WResize => C::ResizeLeft,
+                K::NResize => C::ResizeUp,
+                K::SResize => C::ResizeDown,
+                K::EwResize => C::ResizeLeftRight,
+                K::NsResize => C::ResizeUpDown,
+                // Use the actual platform shapes; the GPUI enum's CSS doc
+                // comments accidentally reverse these two diagonals.
+                K::NwResize | K::SeResize | K::NwseResize => C::ResizeUpLeftDownRight,
+                K::NeResize | K::SwResize | K::NeswResize => C::ResizeUpRightDownLeft,
+                K::ColResize => C::ResizeColumn,
+                K::RowResize => C::ResizeRow,
+                K::NotAllowed | K::NoDrop => C::OperationNotAllowed,
+                K::Alias => C::DragLink,
+                K::Copy => C::DragCopy,
+                K::ContextMenu => C::ContextualMenu,
+                K::None | K::Help | K::Progress | K::Wait | K::ZoomIn | K::ZoomOut => {
+                    diagnostics.push(format!(
+                        "`cursor: {:?}` has no native platform shape; using the arrow cursor",
+                        c.keyword
+                    ));
+                    C::Arrow
+                }
             };
-            if let Some(m) = mapped {
-                r.mouse_cursor = Some(m);
-            }
+            r.mouse_cursor = Some(mapped);
         }
         Filter(list, _) => apply_filter(list, x, diagnostics),
         // `backdrop-filter` — `blur()` is the one filter function the renderer
@@ -6343,25 +6368,9 @@ fn is_current_color(c: &lightningcss::values::color::CssColor) -> bool {
     matches!(c, lightningcss::values::color::CssColor::CurrentColor)
 }
 
-/// `transform` — translate as a layout offset, rotate/scale onto the SVG
-/// sprite matrix.
-///
-/// gpui applies transformation matrices to sprites (SVG paths), never to laid
-/// out element trees, so there is no way to rotate, scale or skew a box. What
-/// there IS a way to do is MOVE one, and translation is what the reused
-/// component libraries actually need: shadcn centres its dialog with
-/// `translate(-50%, -50%)`, slides its switch thumb with `translateX(1.25rem)`
-/// and drives its progress bar with `translateX(-38%)`.
-///
-/// The move is applied as a layout offset by the renderer, so — unlike a real
-/// transform — it participates in layout. For an absolutely positioned box
-/// (every centring case) the two are identical; for an in-flow one the
-/// following siblings shift too, which is what the advisory says.
-///
-/// Tailwind always emits the full identity chain
-/// (`translate(…) rotate(0) skewX(0) skewY(0) scaleX(1) scaleY(1)`), so
-/// identity components are recognised and pass silently — only a REAL rotate/
-/// scale/skew is advised about.
+/// CSS 2D transform lists are multiplied in authored order, then carried as
+/// translation plus a rotation/upper-triangular linear part. Percentage
+/// translations remain coefficients of the border box until paint/prepaint.
 fn apply_transform(
     list: &lightningcss::properties::transform::TransformList,
     r: &mut StyleRefinement,
@@ -6369,157 +6378,145 @@ fn apply_transform(
 ) {
     use lightningcss::properties::transform::Transform as T;
     use lightningcss::values::percentage::NumberOrPercentage;
-
-    fn len(v: &LengthPercentage) -> Option<TransformLength> {
+    const UNIT: [[f64; 2]; 2] = [[1.0, 0.0], [0.0, 1.0]];
+    const ZERO: [[f64; 3]; 2] = [[0.0; 3]; 2];
+    fn len(v: &LengthPercentage, axis: usize) -> Option<[f64; 3]> {
         match v {
-            DimensionPercentage::Dimension(l) => length_value_px(l).map(TransformLength::Pixels),
-            DimensionPercentage::Percentage(p) => Some(TransformLength::Fraction(p.0)),
-            DimensionPercentage::Calc(_) => {
-                calc_dropped();
-                None
+            DimensionPercentage::Dimension(l) => length_value_px(l).map(|p| [f64::from(p), 0.0, 0.0]),
+            DimensionPercentage::Percentage(p) => {
+                let mut row = [0.0; 3]; row[axis + 1] = f64::from(p.0); Some(row)
             }
+            DimensionPercentage::Calc(_) => { calc_dropped(); None }
         }
     }
-    fn is_one(v: &NumberOrPercentage) -> bool {
-        match v {
-            NumberOrPercentage::Number(n) => *n == 1.0,
-            NumberOrPercentage::Percentage(p) => p.0 == 1.0,
+    fn factor(v: &NumberOrPercentage) -> f64 {
+        f64::from(match v { NumberOrPercentage::Number(n) => *n, NumberOrPercentage::Percentage(p) => p.0 })
+    }
+    fn append(linear: &mut [[f64; 2]; 2], offset: &mut [[f64; 3]; 2], m: [[f64; 2]; 2], t: [[f64; 3]; 2]) {
+        let old = *linear;
+        for row in 0..2 {
+            for term in 0..3 { offset[row][term] += old[row][0] * t[0][term] + old[row][1] * t[1][term]; }
+            for column in 0..2 { linear[row][column] = old[row][0] * m[0][column] + old[row][1] * m[1][column]; }
         }
     }
-    fn factor(v: &NumberOrPercentage) -> f32 {
-        match v {
-            NumberOrPercentage::Number(n) => *n,
-            NumberOrPercentage::Percentage(p) => p.0,
-        }
+    fn slot(row: [f32; 3], axis: usize) -> Option<TransformLength> {
+        let own = row[axis + 1]; let cross = row[2 - axis];
+        if cross != 0.0 || (row[0] != 0.0 && own != 0.0) { None }
+        else if own != 0.0 { Some(TransformLength::Fraction(own)) }
+        else { Some(TransformLength::Pixels(row[0])) }
     }
-
-    let zero = TransformLength::ZERO;
-    let (mut tx, mut ty) = (zero, zero);
-    let mut rotate = 0.0f32;
-    let mut scale = (1.0f32, 1.0f32);
+    let mut linear = UNIT;
+    let mut offset = ZERO;
+    let mut authored_rotate = 0.0f64;
+    let mut authored_scale = (1.0f64, 1.0f64);
+    let mut affine = false;
     let mut dropped: Vec<&str> = Vec::new();
-    for t in &list.0 {
-        match t {
-            T::Translate(a, b) => match (len(a), len(b)) {
-                (Some(a), Some(b)) => (tx, ty) = (a, b),
-                _ => dropped.push("translate() with a calc() length"),
-            },
-            T::TranslateX(a) => match len(a) {
-                Some(a) => tx = a,
-                None => dropped.push("translateX() with a calc() length"),
-            },
-            T::TranslateY(b) => match len(b) {
-                Some(b) => ty = b,
-                None => dropped.push("translateY() with a calc() length"),
-            },
-            // `translate3d(x, y, 0)` is what @floating-ui writes for EVERY
-            // positioned element (it opts into GPU compositing); the Z axis is
-            // always 0 there, and a non-zero one has nothing to mean without a
-            // perspective transform.
-            T::Translate3d(a, b, z) => match (len(a), len(b)) {
-                (Some(a), Some(b)) => {
-                    (tx, ty) = (a, b);
-                    if !matches!(css_length_px(z), Some(0.0)) {
-                        dropped.push("the Z axis of a 3D translate");
-                    }
+    for transform in &list.0 {
+        let mut m = UNIT;
+        let mut t = ZERO;
+        match transform {
+            T::Translate(a, b) | T::Translate3d(a, b, _) => {
+                let (Some(x), Some(y)) = (len(a, 0), len(b, 1)) else { dropped.push("translate() with a calc() length"); continue; };
+                t = [x, y];
+                if let T::Translate3d(_, _, z) = transform {
+                    if !matches!(css_length_px(z), Some(0.0)) { dropped.push("the Z axis of a 3D translate"); }
                 }
-                _ => dropped.push("translate3d() with a calc() length"),
-            },
-            // Identity components (what Tailwind's transform stack is made of
-            // when only a translate utility is applied) are genuinely nothing.
-            T::Rotate(a) | T::RotateZ(a) | T::RotateX(a) | T::RotateY(a) if a.to_degrees() == 0.0 => {}
-            T::SkewX(a) | T::SkewY(a) if a.to_degrees() == 0.0 => {}
-            T::Skew(a, b) if a.to_degrees() == 0.0 && b.to_degrees() == 0.0 => {}
-            T::ScaleX(s) | T::ScaleY(s) | T::ScaleZ(s) if is_one(s) => {}
-            T::Scale(a, b) if is_one(a) && is_one(b) => {}
-            // Z-axis rotation is the one rotate a 2D matrix can carry, and with
-            // paint-level transforms it now reaches every element rather than
-            // only an `<svg>` leaf. `rotateX`/`rotateY` need a 3D projection
-            // and are dropped.
-            T::Rotate(a) | T::RotateZ(a) => rotate += a.to_degrees(),
-            T::RotateX(_) | T::RotateY(_) | T::Rotate3d(..) => dropped.push("rotate3d()/rotateX()/rotateY()"),
-            T::Scale(a, b) => {
-                scale = (scale.0 * factor(a), scale.1 * factor(b));
             }
-            T::ScaleX(s) => scale.0 *= factor(s),
-            T::ScaleY(s) => scale.1 *= factor(s),
-            // `scale3d(s, s, s)` is what `tailwindcss-animate` writes for EVERY
-            // `zoom-in-*` / `zoom-out-*` (it opts into GPU compositing the same
-            // way `translate3d` does), so the X and Y factors are the whole
-            // point — the same decomposition `translate3d` already got.
-            //
-            // The Z factor is dropped SILENTLY, and that is not a divergence:
-            // a Z scale is only ever visible through a perspective projection,
-            // `perspective()` / `perspective-property` are not supported (and
-            // say so on their own line), and without one the rendering is
-            // pixel-identical with Z ignored. Advising here would put a line in
-            // every log that uses a zoom utility and tell the reader nothing.
-            T::Scale3d(a, b, _z) => {
-                scale = (scale.0 * factor(a), scale.1 * factor(b));
+            T::TranslateX(v) => {
+                let Some(value) = len(v, 0) else { dropped.push("translateX() with a calc() length"); continue; }; t[0] = value;
             }
+            T::TranslateY(v) => {
+                let Some(value) = len(v, 1) else { dropped.push("translateY() with a calc() length"); continue; }; t[1] = value;
+            }
+            T::Rotate(a) | T::RotateZ(a) => {
+                let angle = f64::from(a.to_radians());
+                let (sin, cos) = angle.sin_cos(); m = [[cos, -sin], [sin, cos]]; authored_rotate += angle;
+            }
+            T::RotateX(a) | T::RotateY(a) if a.to_degrees() == 0.0 => {}
+            T::RotateX(_) | T::RotateY(_) | T::Rotate3d(..) => { dropped.push("rotate3d()/rotateX()/rotateY()"); continue; }
+            T::Scale(a, b) | T::Scale3d(a, b, _) => {
+                let (x, y) = (factor(a), factor(b)); m = [[x, 0.0], [0.0, y]];
+                authored_scale = (authored_scale.0 * x, authored_scale.1 * y);
+            }
+            T::ScaleX(value) => { let x = factor(value); m[0][0] = x; authored_scale.0 *= x; }
+            T::ScaleY(value) => { let y = factor(value); m[1][1] = y; authored_scale.1 *= y; }
             T::ScaleZ(_) => {}
-            T::Skew(..) | T::SkewX(_) | T::SkewY(_) => dropped.push("skew()"),
-            // `matrix(a, b, c, d, e, f)` DECOMPOSES: the CSS
-            // translate/rotate/scale triple is recoverable from the 2x2 plus
-            // the offset, and it is what @vueuse/motion and GSAP write when
-            // they compose a transform themselves. Only the SKEW component has
-            // nowhere to go, so only that is dropped.
-            T::Matrix(m) => {
-                let scale_x = (m.a * m.a + m.b * m.b).sqrt();
-                let det = m.a * m.d - m.b * m.c;
-                let scale_y = if scale_x == 0.0 { 0.0 } else { det / scale_x };
-                let shear = if scale_x == 0.0 {
-                    0.0
-                } else {
-                    (m.a * m.c + m.b * m.d) / (scale_x * scale_x)
-                };
-                if shear.abs() > 1e-4 {
-                    dropped.push("the skew component of a matrix()");
-                }
-                tx = TransformLength::Pixels(m.e);
-                ty = TransformLength::Pixels(m.f);
-                rotate += m.b.atan2(m.a).to_degrees();
-                scale = (scale.0 * scale_x, scale.1 * scale_y);
+            T::Skew(a, b) => { m = [[1.0, f64::from(a.to_radians()).tan()], [f64::from(b.to_radians()).tan(), 1.0]]; affine |= a.to_degrees() != 0.0 || b.to_degrees() != 0.0; }
+            T::SkewX(a) => { m[0][1] = f64::from(a.to_radians()).tan(); affine |= a.to_degrees() != 0.0; }
+            T::SkewY(a) => { m[1][0] = f64::from(a.to_radians()).tan(); affine |= a.to_degrees() != 0.0; }
+            T::Matrix(value) => {
+                m = [[f64::from(value.a), f64::from(value.c)], [f64::from(value.b), f64::from(value.d)]];
+                t[0][0] = f64::from(value.e); t[1][0] = f64::from(value.f); affine = true;
             }
-            T::Matrix3d(_) => dropped.push("matrix3d()"),
-            T::Perspective(_) => dropped.push("perspective()"),
-            T::TranslateZ(_) => dropped.push("the Z axis of a 3D translate"),
+            T::Matrix3d(_) => { dropped.push("matrix3d()"); continue; }
+            T::Perspective(_) => { dropped.push("perspective()"); continue; }
+            T::TranslateZ(_) => { dropped.push("the Z axis of a 3D translate"); continue; }
+        }
+        if m.iter().flatten().chain(t.iter().flatten()).any(|v| !v.is_finite()) {
+            dropped.push("a non-finite 2D transform"); continue;
+        }
+        append(&mut linear, &mut offset, m, t);
+    }
+    // Preserve authored turns for rotate(0)->rotate(360) animations whenever
+    // their ordered product is already the ordinary R*S representation.
+    let (sin, cos) = authored_rotate.sin_cos();
+    let expected = [[cos * authored_scale.0, -sin * authored_scale.1], [sin * authored_scale.0, cos * authored_scale.1]];
+    affine |= linear.iter().flatten().zip(expected.iter().flatten()).any(|(a,b)| (a-b).abs() > 1e-6 * a.abs().max(b.abs()).max(1.0));
+    let (mut rotate, mut scale, mut shear) = (authored_rotate as f32, (authored_scale.0 as f32, authored_scale.1 as f32), 0.0f32);
+    if affine {
+        let [[a, c], [b, d]] = linear;
+        let sx = a.hypot(b);
+        if sx != 0.0 {
+            rotate = b.atan2(a) as f32;
+            scale = (sx as f32, ((a*d-b*c)/sx) as f32);
+            shear = ((a*c+b*d)/sx) as f32;
+        } else {
+            // First column collapsed: the second one still carries a complete
+            // direction and length, including rank-one matrices.
+            rotate = (-c).atan2(d) as f32; scale = (0.0, c.hypot(d) as f32);
         }
     }
-    // Written UNCONDITIONALLY, including when it is the identity: `transform`
-    // is a shorthand for the whole list, so a later declaration whose list
-    // reduces to nothing has to cancel an earlier one. That is what
-    // `Option<TransformSpec>` buys over a bare `TransformSpec` -- `None` is
-    // "never declared", `Some(IDENTITY)` is `transform: none`.
-    //
-    // `transform-origin` is a SEPARATE property and must survive: a rule that
-    // declares both in either order has to end up with both.
-    let origin = r
-        .vn_transform
-        .map(|t| t.origin)
-        .unwrap_or(TransformSpec::CENTRE_ORIGIN);
-    r.vn_transform = Some(TransformSpec {
-        translate: (tx, ty),
-        rotate: rotate.to_radians(),
-        scale,
-        origin,
-    });
+    let basis = offset.map(|row| row.map(|value| value as f32));
+    let (x, y) = (slot(basis[0], 0), slot(basis[1], 1));
+    let origin = r.vn_transform.map(|t| t.origin).unwrap_or(TransformSpec::CENTRE_ORIGIN);
+    let mut spec = TransformSpec {
+        translate: (x.unwrap_or(TransformLength::ZERO), y.unwrap_or(TransformLength::ZERO)),
+        rotate, scale, shear, origin,
+        translation_basis: (x.is_none() || y.is_none()).then_some(basis),
+    };
+    if [rotate, scale.0, scale.1, shear].iter().chain(basis.iter().flatten()).any(|v| !v.is_finite()) {
+        dropped.push("an out-of-range 2D composition");
+        spec = TransformSpec { origin, ..TransformSpec::IDENTITY };
+    }
+    r.vn_transform = Some(spec);
     if !dropped.is_empty() {
-        dropped.sort_unstable();
-        dropped.dedup();
-        once(
-            diagnostics,
-            format!(
-                "`transform` supports translate(), rotate(), scale(), a decomposed matrix() and \
-                 `transform-origin` — dropped {}. What is supported is applied at PAINT time, to \
-                 this element and its whole subtree, and changes no layout, which is what a \
-                 browser does",
-                dropped.join(", ")
-            ),
-        );
+        dropped.sort_unstable(); dropped.dedup();
+        once(diagnostics, format!("`transform` supports ordered 2D translate(), rotate(), scale(), skew(), matrix() and `transform-origin` at paint time — dropped {}", dropped.join(", ")));
     }
 }
-
+/// Serializes the same affine transform for CSSOM and WAAPI commitStyles.
+/// Percentage cross-axis translations use cancelling rotation pairs, keeping
+/// box-relative units until layout rather than freezing a used pixel value.
+pub fn transform_css(spec: TransformSpec) -> String {
+    if spec.is_identity() { return "none".into(); }
+    let mut parts = Vec::new();
+    let len = |value: TransformLength| match value {
+        TransformLength::Pixels(value) => format!("{value}px"),
+        TransformLength::Fraction(value) => format!("{}%", value * 100.0),
+    };
+    if let Some([[px, width, cross_x], [py, cross_y, height]]) = spec.translation_basis {
+        if px != 0.0 || py != 0.0 { parts.push(format!("translate({px}px, {py}px)")); }
+        if width != 0.0 || height != 0.0 { parts.push(format!("translate({}%, {}%)", width * 100.0, height * 100.0)); }
+        if cross_x != 0.0 { parts.push(format!("rotate(-90deg) translateY({}%) rotate(90deg)", cross_x * 100.0)); }
+        if cross_y != 0.0 { parts.push(format!("rotate(90deg) translateX({}%) rotate(-90deg)", cross_y * 100.0)); }
+    } else if !spec.translate.0.is_zero() || !spec.translate.1.is_zero() {
+        parts.push(format!("translate({}, {})", len(spec.translate.0), len(spec.translate.1)));
+    }
+    if spec.rotate != 0.0 { parts.push(format!("rotate({}deg)", spec.rotate.to_degrees())); }
+    if spec.shear != 0.0 { parts.push(format!("matrix({},0,{},{},0,0)", spec.scale.0, spec.shear, spec.scale.1)); }
+    else if spec.scale != (1.0, 1.0) { parts.push(format!("scale({}, {})", spec.scale.0, spec.scale.1)); }
+    parts.join(" ")
+}
 /// `backdrop-filter` → `StyleRefinement::backdrop_blur`.
 ///
 /// The renderer implements exactly one filter function, `blur()`. The CSS
@@ -7432,6 +7429,33 @@ mod tests {
         assert_eq!(r.size.width, None);
     }
 
+    #[test]
+    fn editor_cursor_shapes_map_to_native_platform_shapes() {
+        use gpui::CursorStyle as C;
+        for (value, shape) in [
+            ("crosshair", C::Crosshair), ("grab", C::OpenHand), ("grabbing", C::ClosedHand),
+            ("move", C::OpenHand), ("all-scroll", C::OpenHand),
+            ("n-resize", C::ResizeUp), ("s-resize", C::ResizeDown),
+            ("e-resize", C::ResizeRight), ("w-resize", C::ResizeLeft),
+            ("ns-resize", C::ResizeUpDown), ("ew-resize", C::ResizeLeftRight),
+            ("nw-resize", C::ResizeUpLeftDownRight), ("se-resize", C::ResizeUpLeftDownRight),
+            ("nwse-resize", C::ResizeUpLeftDownRight),
+            ("ne-resize", C::ResizeUpRightDownLeft), ("sw-resize", C::ResizeUpRightDownLeft),
+            ("nesw-resize", C::ResizeUpRightDownLeft),
+            ("col-resize", C::ResizeColumn), ("row-resize", C::ResizeRow),
+            ("vertical-text", C::IBeamCursorForVerticalLayout),
+            ("not-allowed", C::OperationNotAllowed), ("no-drop", C::OperationNotAllowed),
+            ("alias", C::DragLink), ("copy", C::DragCopy), ("context-menu", C::ContextualMenu),
+        ] {
+            assert_eq!(clean(&format!("cursor: {value}")).mouse_cursor, Some(shape), "{value}");
+        }
+        // Custom brush cursors must at least honour their specified fallback.
+        assert_eq!(clean("cursor: url(brush.svg) 8 8, crosshair").mouse_cursor, Some(C::Crosshair));
+        let (style, diagnostics) = map("cursor: wait");
+        assert_eq!(style.mouse_cursor, Some(C::Arrow));
+        assert!(diagnostics.iter().any(|d| d.contains("no native platform shape")));
+    }
+
     // ---- positioning (compat roadmap G3) ---------------------------------
 
     fn extras(body: &str) -> (Extras, Vec<String>) {
@@ -7702,7 +7726,7 @@ mod tests {
         // the parts that DO work still land.
         let (r, d) = transform("transform: rotateY(30deg) skewX(10deg)");
         assert_eq!(r.expect("declared").rotate, 0.0);
-        assert!(d.iter().any(|m| m.contains("skew()")), "{d:?}");
+        assert!(d.iter().any(|m| m.contains("rotate3d()")), "{d:?}");
     }
 
     /// The transform-origin is the element's centre (CSS's initial value), so
@@ -8699,11 +8723,86 @@ mod tests {
             "{spec:?}"
         );
         assert!((spec.scale.0 - 1.0).abs() < 1e-4 && (spec.scale.1 - 1.0).abs() < 1e-4);
-        // Only the SKEW half is still dropped, and it says so.
+        // The full shear coefficient survives without an advisory.
         let (_, d) = map("transform: matrix(1, 0, 0.5, 1, 0, 0)");
-        assert!(d.iter().any(|m| m.contains("skew component")), "{d:?}");
+        assert!(d.is_empty(), "{d:?}");
     }
 
+    #[test]
+    fn finite_affine_matrices_keep_every_coefficient_including_singular_ones() {
+        use gpui::{Bounds, Point, Size};
+        let bounds = Bounds { origin: Point::new(px(100.0), px(50.0)), size: Size::new(px(200.0), px(100.0)) };
+        for [a,b,c,d,e,f] in [[1.0,0.25,0.5,1.0,10.0,20.0], [-2.0,0.0,0.5,3.0,-10.0,4.0],
+            [0.0,0.0,2.0,3.0,0.0,0.0], [1.0,2.0,2.0,4.0,0.0,0.0], [0.0;6]] {
+            let (spec, diagnostics) = transform(&format!("transform-origin:0 0; transform:matrix({a},{b},{c},{d},{e},{f})"));
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            let matrix = spec.unwrap().to_matrix(bounds, 1.0);
+            for (x,y) in [(0.0,0.0), (1.0,0.0), (0.0,1.0), (30.0,-17.0)] {
+                let point = matrix.apply(Point::new(px(100.0+x),px(50.0+y)));
+                assert!((f32::from(point.x)-(100.0+a*x+c*y+e)).abs()<0.001, "{matrix:?} {point:?}");
+                assert!((f32::from(point.y)-(50.0+b*x+d*y+f)).abs()<0.001, "{matrix:?} {point:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn projected_editor_matrix_preserves_centring_and_post_rotation_scale() {
+        use gpui::{Bounds, Point, Size};
+        let bounds = Bounds { origin: Point::new(px(0.0),px(0.0)), size: Size::new(px(200.0),px(100.0)) };
+        let (spec, diagnostics) = transform("transform:translate(-50%,-50%) matrix(1,.25,.5,1,0,0) rotate(90deg) scale(2,3)");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let spec = spec.unwrap(); assert!(spec.translation_basis.is_none());
+        let matrix = spec.to_matrix(bounds, 1.0);
+        for (x,y,ex,ey) in [(100.0,50.0,0.0,0.0),(101.0,50.0,1.0,2.0),(100.0,51.0,-3.0,-0.75)] {
+            let point=matrix.apply(Point::new(px(x),px(y)));
+            assert!((f32::from(point.x)-ex).abs()<0.001 && (f32::from(point.y)-ey).abs()<0.001, "{point:?} vs {ex},{ey}");
+        }
+    }
+
+    #[test]
+    fn ordered_translation_can_mix_pixels_and_both_box_axes_at_any_dpi() {
+        use gpui::{Bounds, Point, Size};
+        let bounds = Bounds { origin: Point::new(px(0.0),px(0.0)), size: Size::new(px(200.0),px(100.0)) };
+        for (css,x,y) in [
+            ("rotate(90deg) translate(50%,25%)", -25.0,100.0),
+            ("translate(-50%,25%) matrix(1,0,0,1,10,-4)", -90.0,21.0),
+            ("matrix(1,.25,.5,1,10,20) translate(8px,4px)", 20.0,26.0),
+        ] {
+            let (spec, diagnostics)=transform(&format!("transform-origin:0 0; transform:{css}"));
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            for dpi in [1.0,2.0] {
+                let point=spec.unwrap().to_matrix(bounds,dpi).apply(Point::new(px(0.0),px(0.0)));
+                assert!((f32::from(point.x)-x*dpi).abs()<0.001 && (f32::from(point.y)-y*dpi).abs()<0.001, "{css}: {point:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn shear_and_mixed_translation_survive_cssom_and_waapi_serialization() {
+        use gpui::{Bounds, Point, Size};
+        let bounds=Bounds {origin:Point::new(px(0.0),px(0.0)),size:Size::new(px(200.0),px(100.0))};
+        for css in ["matrix(1,.25,.5,1,10,20)","rotate(90deg) translate(50%,25%) skewX(20deg)","translate(-50%,25%) matrix(1,0,.5,1,10,-4)"] {
+            let original=transform(&format!("transform:{css}")).0.unwrap();
+            let text=transform_css(original);
+            let replayed=transform(&format!("transform:{text}")).0.unwrap();
+            for (x,y) in [(0.0,0.0),(20.0,30.0),(200.0,100.0)] {
+                let p=Point::new(px(x),px(y)); let a=original.to_matrix(bounds,1.0).apply(p); let b=replayed.to_matrix(bounds,1.0).apply(p);
+                assert!((f32::from(a.x)-f32::from(b.x)).abs()<0.001 && (f32::from(a.y)-f32::from(b.y)).abs()<0.001, "{css} -> {text}: {a:?} vs {b:?}");
+            }
+        }
+        let spin=transform("transform:rotate(360deg) skew(0deg,0deg)").0.unwrap();
+        assert!((TransformSpec::IDENTITY.interpolate(spin,0.5).rotate-std::f32::consts::PI).abs()<0.0001);
+        let shear=transform("transform:matrix(1,0,1,1,0,0)").0.unwrap();
+        assert!((TransformSpec::IDENTITY.interpolate(shear,0.5).shear-0.5).abs()<0.0001);
+    }
+
+    #[test]
+    fn resize_none_is_silent_and_user_resize_requests_keep_the_advisory() {
+        assert!(map("resize:none").1.is_empty());
+        for value in ["both","horizontal","vertical"] {
+            assert!(map(&format!("resize:{value}")).1.iter().any(|message|message.contains("`resize` is not applied")));
+        }
+    }
     /// about it.
     #[test]
     fn the_matrix_turns_about_the_box_centre() {

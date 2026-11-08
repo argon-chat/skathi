@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import {
   COMMANDS,
   buildRequest,
+  splitArgs,
   commandNames,
   mcpTools,
   toolName,
@@ -113,6 +114,19 @@ describe("MCP parity", () => {
 });
 
 describe("CLI parity", () => {
+  test("actual mouse argv preserves held and shift switches without consuming following flags", () => {
+    const { positional, flags } = splitArgs(["--json", "mouse", "--x", "35", "--y", "45", "--kind", "move", "--held", "--shift"]);
+    expect(flags.json).toBe(true);
+    expect(buildRequest(positional, flags)).toEqual({ cmd: "mouse", x: 35, y: 45, kind: "move", held: true, shift: true });
+  });
+
+  test("wheel modifiers and IME commit use their declared boolean types", () => {
+    const wheel = splitArgs(["wheel", ".list", "--dy", "10", "--ctrl", "--alt"]);
+    expect(buildRequest(wheel.positional, wheel.flags)).toMatchObject({ cmd: "wheel", ctrl: true, alt: true, dy: 10 });
+    const ime = splitArgs(["ime", "input", "text", "--commit"]);
+    expect(buildRequest(ime.positional, ime.flags)).toMatchObject({ cmd: "ime", commit: true });
+  });
+
   test("the two front-ends produce the same request for the same command", () => {
     const tools = mcpTools();
     const cases: [string[], Record<string, string | boolean>, Record<string, unknown>][] = [

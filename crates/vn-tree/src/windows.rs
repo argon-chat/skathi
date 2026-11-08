@@ -151,6 +151,8 @@ pub struct WindowState {
     /// The one `mousemove` THIS window is allowed to deliver this frame.
     /// Simultaneous moves in two windows used to drop one.
     pub pending_mouse_move: Option<PendingMouseMove>,
+    /// Explicit DOM pointer capture: events stay with this node outside its hitbox.
+    pub pointer_capture: Option<u32>,
     /// Has a node already taken THIS mouse-down? gpui runs
     /// `on_any_mouse_down` on every listening box under the pointer, innermost
     /// first; the browser has one target. Without the claim an outer

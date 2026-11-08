@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 // The command table is SHARED with mcp.ts (`commands.ts`). Neither front-end
 // has a command list of its own any more — that is what let the MCP server sit
 // on the m10 set for a milestone after the CLI grew six commands.
-import { buildRequest, usageBlock, UsageError, type Flags } from "./commands";
+import { buildRequest, usageBlock, UsageError, splitArgs } from "./commands";
 import { appSlot } from "./apps";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -59,23 +59,6 @@ function die(message: string, code = 1): never {
 // ---------------------------------------------------------------------------
 // argv
 // ---------------------------------------------------------------------------
-
-function splitArgs(argv: string[]): { positional: string[]; flags: Flags } {
-  const positional: string[] = [];
-  const flags: Flags = {};
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (!a.startsWith("--")) {
-      positional.push(a);
-      continue;
-    }
-    const name = a.slice(2);
-    // Booleans; everything else takes a value.
-    if (name === "json" || name === "help" || name === "clear" || name === "gc" || name === "code" || name === "regions" || name === "frames") flags[name] = true;
-    else flags[name] = argv[++i] ?? "";
-  }
-  return { positional, flags };
-}
 
 const { positional, flags } = splitArgs(process.argv.slice(2));
 if (flags.help || positional.length === 0) {

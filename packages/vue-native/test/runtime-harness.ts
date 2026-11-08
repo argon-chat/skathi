@@ -348,6 +348,7 @@ export function createRuntime(
      * topmost first, `""` outside the viewport — and every question asked, as
      * `[x, y, all]`.
      */
+    pointerCaptureCalls: [] as { id: number; pointerId: number; capture: boolean }[],
     hit: {
       answer: (_x: number, _y: number, _all: number) => "",
       calls: [] as number[][],
@@ -370,6 +371,8 @@ export function createRuntime(
      * (`"moved:<old>"`, `"already"`, `"pending"`, `"refused"`; `"blurred"` or
      * `""` for op 1). The default refuses every focus and every blur.
      */
+    inputSelectCalls: [] as number[],
+    inputSelectAnswer: true,
     focus: {
       calls: [] as { id: number; op: number }[],
       answer: ((_id: number, op: number) => (op === 1 ? "" : "refused")) as (id: number, op: number) => string,
@@ -654,6 +657,7 @@ export function createRuntime(
     "__vn_scroll",
     "__vn_scroll_into_view",
     "__vn_focus",
+    "__vn_input_select",
     "__vn_reload",
     "__vn_media_state",
     "__vn_media_call",
@@ -730,6 +734,7 @@ export function createRuntime(
     "__vn_selection_rebase",
     // `document.elementFromPoint` / `elementsFromPoint` (`host.hit`).
     "__vn_hit_at",
+    "__vn_pointer_capture",
     // waapi.ts's one export (see `loadInstallWaapi`), and the host's half of
     // `el.animate()` (`host.anim`).
     "installWaapi",
@@ -914,6 +919,7 @@ export function createRuntime(
       host.focus.calls.push({ id, op });
       return host.focus.answer(id, op);
     },
+    (id) => { host.inputSelectCalls.push(id); return host.inputSelectAnswer; },
     () => {
       host.reloads++;
     },
@@ -1138,6 +1144,10 @@ export function createRuntime(
     (x: number, y: number, all: number) => {
       host.hit.calls.push([x, y, all]);
       return host.hit.answer(x, y, all);
+    },
+    (id: number, pointerId: number, capture: boolean) => {
+      host.pointerCaptureCalls.push({ id, pointerId, capture });
+      return true;
     },
     loadInstallWaapi(),
     options.anim === false ? undefined : {

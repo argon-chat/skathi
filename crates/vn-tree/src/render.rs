@@ -57,6 +57,8 @@ thread_local! {
     /// undo, echo ring live across the per-frame element rebuild).
     static INPUT_STATES: RefCell<HashMap<u32, gpui::Entity<TextInputState>>> =
         RefCell::new(HashMap::new());
+    /// select() can run in nextTick before the input has its first native build.
+    static INPUT_SELECT_ALL: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     /// Persistent scroll offset per scroll container. gpui keys anonymous
     /// scroll state by `ElementId` too, but a handle we own is what lets us
     /// *read* the offset back out for `e.target.scrollTop`.
@@ -540,6 +542,7 @@ impl gpui::Element for BoundsProbe {
         // A text selection being dragged hears every move and the release
         // from here, wherever the pointer is (`crate::selection`).
         crate::selection::paint_listeners(window);
+        crate::pointer::capture_listeners(window);
         let span = crate::perf::Span::start();
         self.inner.paint(window, cx);
         crate::perf::note_paint(span.ms());
@@ -562,6 +565,7 @@ pub(crate) fn gc_node_state() {
     let live = |id: u32| tree::read_tree(|t| t.node(id).is_some());
     FOCUS_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_STATES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    INPUT_SELECT_ALL.with(|m| m.borrow_mut().retain(|&id| live(id)));
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SETTLING.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
@@ -585,6 +589,9 @@ pub(crate) fn gc_node_state() {
         w.transformed.retain(|&id, _| live(id));
         w.prev_transformed.retain(|&id, _| live(id));
         w.focus_subs.retain(|&id, _| live(id));
+        if w.pointer_capture.is_some_and(|id| !live(id) || !tree::read_tree(|t| reaches_root(t, id))) {
+            w.pointer_capture = None;
+        }
     });
     // The browser rule: **detaching the focused element blurs it.** A node can
     // stay allocated and yet stop being part of the document — `<KeepAlive>`
@@ -858,7 +865,10 @@ pub fn flush_pending_mouse_move(window: &mut Window, cx: &mut App) {
     crate::pointer::resolve_hover(window, cx);
     let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
-    let target = crate::pointer::target_at(window, p.position);
+    if p.button < 0.0 && crate::pointer::captured_target(window).is_some() {
+        cancel_press(window, cx);
+    }
+    let target = crate::pointer::captured_target(window).unwrap_or_else(|| crate::pointer::target_at(window, p.position));
     // The pump's, before gpui's draw: a forced layout may draw (`crate::off_input`).
     crate::off_input(|| js_dispatch_app(target, tree::EV_MOUSEMOVE, &payload, window, cx));
 }
@@ -950,11 +960,17 @@ pub struct Press {
     cancelled: bool,
 }
 
+impl Press {
+    pub(crate) fn is_active(&self) -> bool {
+        !self.cancelled
+    }
+}
+
 /// The capture phase of EVERY mouse-up opens its wave, from the build root —
 /// the first box painted, so the first capture listener gpui runs — whether
 /// the pointer is over it or not ([`bind_root_mouse`]). The release also ends
 /// the press in progress, if it is that press's button.
-fn open_up_wave(ev: &MouseUpEvent, window: &mut Window) {
+fn open_up_wave(ev: &MouseUpEvent, window: &mut Window, cx: &mut App) {
     let button = button_code(ev.button);
     windows::here(window, |w| {
         let cancelled = match &w.press {
@@ -965,6 +981,12 @@ fn open_up_wave(ev: &MouseUpEvent, window: &mut Window) {
         w.up_waves.retain(|wave| wave.scheduled);
         w.up_waves.push(UpWave { cancelled, ..Default::default() });
     });
+    // A capture must receive its release even when no hovered element has a
+    // mouse-up listener. Claim it from the root before any optional listeners.
+    if let Some(target) = crate::pointer::captured_target(window) {
+        let payload = mouse_payload_n(ev.position, button, &ev.modifiers, ev.click_count);
+        claim_up(window, cx, |w| &mut w.mouseup, target, &payload);
+    }
 }
 
 /// The root's share of every press: it starts each mouse-down's focus step
@@ -979,12 +1001,12 @@ fn bind_root_mouse<E: gpui::InteractiveElement>(mut e: E) -> E {
     e = e.on_any_mouse_down(|_, window, _| windows::here(window, |w| w.press_focus.reached = true));
     e = e.capture_any_mouse_up(|ev, window, cx| {
         deliver_move_before_button(window, cx);
-        open_up_wave(ev, window)
+        open_up_wave(ev, window, cx)
     });
     for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
         e = e.on_mouse_up_out(button, |ev, window, cx| {
             deliver_move_before_button(window, cx);
-            open_up_wave(ev, window)
+            open_up_wave(ev, window, cx)
         });
     }
     e
@@ -999,7 +1021,10 @@ fn bind_root_mouse<E: gpui::InteractiveElement>(mut e: E) -> E {
 fn deliver_move_before_button(window: &mut Window, cx: &mut App) {
     let Some(p) = windows::here(window, |w| w.pending_mouse_move.take()) else { return };
     let payload = mouse_payload(p.position, p.button, &p.modifiers);
-    let target = crate::pointer::target_at(window, p.position);
+    if p.button < 0.0 && crate::pointer::captured_target(window).is_some() {
+        cancel_press(window, cx);
+    }
+    let target = crate::pointer::captured_target(window).unwrap_or_else(|| crate::pointer::target_at(window, p.position));
     js_dispatch_app(target, tree::EV_MOUSEMOVE, &payload, window, cx);
 }
 
@@ -1042,6 +1067,7 @@ fn flush_up_waves(window: &mut Window, cx: &mut App) {
         }
         if let Some((id, p)) = wave.mouseup {
             js_dispatch_app(id, tree::EV_MOUSEUP, &p.payload(), window, cx);
+            windows::here(window, |w| w.pointer_capture = None);
         }
         if let Some((id, p)) = wave.click {
             js_dispatch_app(id, tree::EV_CLICK, &p.payload(), window, cx);
@@ -1063,22 +1089,24 @@ fn flush_up_waves(window: &mut Window, cx: &mut App) {
 /// [`flush_up_waves`]). Called when the window loses activation mid-press —
 /// the case where the release goes to some other window, or nowhere.
 fn cancel_press(window: &mut Window, cx: &mut App) {
-    // The release may never reach this window now: nothing is `:active`.
-    windows::here(window, |w| w.active = None);
-    let Some((target, position)) = windows::here(window, |w| match &mut w.press {
-        Some(p) if !p.cancelled => {
-            p.cancelled = true;
-            Some((p.target, p.position))
+    let captured = crate::pointer::captured_target(window);
+    let press = windows::here(window, |w| {
+        w.active = None;
+        match &mut w.press {
+            Some(p) if !p.cancelled => {
+                p.cancelled = true;
+                Some((captured.unwrap_or(p.target), p.position))
+            }
+            _ => None,
         }
-        _ => None,
-    }) else {
-        return;
-    };
-    if tree::read_tree(|t| t.node(target).is_none()) {
-        return;
+    });
+    if let Some((target, position)) = press {
+        if tree::read_tree(|t| t.node(target).is_some()) {
+            let payload = mouse_payload(position, -1.0, &gpui::Modifiers::default());
+            js_dispatch_app(target, tree::EV_POINTERCANCEL, &payload, window, cx);
+        }
     }
-    let payload = mouse_payload(position, -1.0, &gpui::Modifiers::default());
-    js_dispatch_app(target, tree::EV_POINTERCANCEL, &payload, window, cx);
+    windows::here(window, |w| w.pointer_capture = None);
 }
 
 /// Subscribes this window's activation observer once ([`cancel_press`]).
@@ -5282,6 +5310,42 @@ pub(crate) fn ime(id: u32, text: &str, commit: bool, window: &mut Window, cx: &m
     Ok(())
 }
 
+/// Select a text field's actual native editing buffer. A field mounted in
+/// this JS wave does not have an entity yet; preserve the request until its
+/// first build, after its controlled value has been synchronized. Key/input
+/// callbacks also defer, because their own TextInputState is already borrowed.
+pub(crate) fn select_input_text(id: u32) -> bool {
+    let info = tree::read_tree(|t| {
+        let node = t.node(id)?;
+        let multiline = t.name(node.tag) == "textarea";
+        if !multiline && (t.name(node.tag) != "input"
+            || matches!(t.prop(id, "type").unwrap_or("text").trim().to_ascii_lowercase().as_str(), "file" | "range" | "color")) {
+            return None;
+        }
+        let value = t.prop_write(id, "value").map(|(v, write)| (v.to_string(), write))
+            .or_else(|| multiline.then(|| (node.text.clone(), 0)));
+        Some((multiline, value))
+    });
+    let Some((multiline, value)) = info else { return false };
+    if !crate::in_input_dispatch() {
+        let state = INPUT_STATES.with(|m| m.borrow().get(&id).cloned());
+        if let Some(state) = state {
+            let applied = vn_runtime::with_app(|cx| state.update(cx, |s, cx| {
+                s.set_multiline(multiline);
+                if let Some((value, write)) = &value { s.sync_value(value, *write, cx); }
+                s.select_all_text(cx);
+            })).is_some();
+            if applied {
+                INPUT_SELECT_ALL.with(|m| m.borrow_mut().remove(&id));
+                return true;
+            }
+        }
+    }
+    INPUT_SELECT_ALL.with(|m| m.borrow_mut().insert(id));
+    tree::with_tree(|t| t.touch(id));
+    true
+}
+
 /// The live text of a native `<input>` — the widget's own buffer, not the
 /// `value` prop, so it reflects typing that JS has not echoed back yet.
 pub(crate) fn input_value(id: u32, cx: &App) -> Option<String> {
@@ -6135,6 +6199,7 @@ fn build_input<V: 'static>(
     });
 
     let multiline = t.name(node.tag) == "textarea";
+    state.update(cx, |s, _| s.set_multiline(multiline));
     // Web fonts load lazily: the field's value and placeholder ask for theirs.
     for shown in [t.prop(id, "value"), t.prop(id, "placeholder"), Some(node.text.as_str())].into_iter().flatten() {
         crate::fonts::want_for_text(t, id, shown);
@@ -6159,6 +6224,10 @@ fn build_input<V: 'static>(
         // once (write counter 0), so a later `value` assignment still wins.
         let value = node.text.clone();
         state.update(cx, |s, cx| s.sync_value(&value, 0, cx));
+    }
+
+    if INPUT_SELECT_ALL.with(|m| m.borrow_mut().remove(&id)) {
+        state.update(cx, |s, cx| s.select_all_text(cx));
     }
 
     let text_style = node.computed.as_ref().map(|cs| cs.base.text.clone());
@@ -6428,6 +6497,29 @@ fn input_configuration(t: &Tree, id: u32, multiline: bool) -> gpui::TextInputCon
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn select_on_an_unbuilt_text_field_is_preserved_until_build_and_removed_by_gc() {
+        let (field, other) = crate::tree::with_tree(|t| {
+            let root = t.create_root();
+            let textarea = t.intern("textarea");
+            let div = t.intern("div");
+            let field = t.create_element(textarea);
+            let other = t.create_element(div);
+            t.insert(field, root, 0);
+            t.insert(other, root, 0);
+            let value = t.intern("value");
+            t.set_prop(field, value, Some("Привет 🙂\nSecond line".to_string()));
+            (field, other)
+        });
+        assert!(super::select_input_text(field));
+        assert!(super::INPUT_SELECT_ALL.with(|m| m.borrow().contains(&field)));
+        assert!(!super::select_input_text(other));
+        assert!(!super::INPUT_SELECT_ALL.with(|m| m.borrow().contains(&other)));
+        crate::tree::with_tree(|t| t.remove(field));
+        super::gc_node_state();
+        assert!(!super::INPUT_SELECT_ALL.with(|m| m.borrow().contains(&field)));
+    }
+
     use super::*;
     use crate::tree::with_tree;
 

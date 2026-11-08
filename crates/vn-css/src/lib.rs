@@ -53,7 +53,7 @@ pub use animator::{
     ScriptKeyframeNotes, ScriptSample, ScriptTiming,
 };
 pub use element::{Interaction, MatchDom};
-pub use mapper::{set_composed_font_families, take_unreached_fonts};
+pub use mapper::{set_composed_font_families, take_unreached_fonts, transform_css};
 pub use mapper::{
     accepts_declaration, parse_inline, parse_inline_full, parse_inline_style, parse_inline_with_transitions, rem_basis,
     set_font_source, set_font_metric_source, FontRelativeMetrics, set_rem_basis, set_viewport_basis, set_web_font_families, take_font_misses, uses_viewport_units,
@@ -5141,9 +5141,23 @@ mod tests {
             &Env::default(),
         );
         let transform = style.vn_transform.expect("the background transform is retained");
-        assert_eq!(transform.translate.1, gpui::TransformLength::Pixels(14.0));
+        // CSS lists multiply left-to-right: the authored 14px translation is
+        // applied before scale(.96), so its used displacement is 13.44px.
+        assert_eq!(transform.translate.1, gpui::TransformLength::Pixels(13.44));
         assert!((transform.scale.0 - 0.96).abs() < 1e-6);
         assert!((transform.scale.1 - 0.96).abs() < 1e-6);
+        let bounds = gpui::Bounds::new(
+            gpui::point(gpui::px(20.0), gpui::px(30.0)),
+            gpui::size(gpui::px(200.0), gpui::px(100.0)),
+        );
+        let matrix = transform.to_matrix(bounds, 1.0);
+        let centre = matrix.apply(bounds.center());
+        assert!((f32::from(centre.x) - 120.0).abs() < 0.001);
+        assert!((f32::from(centre.y) - 93.44).abs() < 0.001);
+        // Centred scaling also moves the top-left inward by 4px/2px.
+        let corner = matrix.apply(bounds.origin);
+        assert!((f32::from(corner.x) - 24.0).abs() < 0.001);
+        assert!((f32::from(corner.y) - 45.44).abs() < 0.001);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 

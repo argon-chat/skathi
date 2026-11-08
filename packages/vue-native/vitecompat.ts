@@ -203,7 +203,7 @@ export const ASSET_EXT =
  * what vue-native's dev host already resolves a URL to on disk, so the same URL
  * works in a dev host and in the packaged exe. A file outside it (a hoisted
  * `node_modules`, another drive) gets a content-addressed key under `_vn/fs/`,
- * which only the payload carries.
+ * which a dev manifest explicitly maps to the original file and a production payload carries.
  */
 export function assetKey(absPath: string, docRoot: string): { key: string; url: string } {
   const rel = relative(docRoot, absPath);
@@ -737,12 +737,7 @@ export function viteShapesPlugin(o: ShapesOptions) {
   const idOf = (abs: string) => posix(relative(o.wsRoot, abs));
   const urlModule = (abs: string) => {
     const { key, url } = assetKey(abs, o.docRoot);
-    o.assets.set(key, abs);
-    if (o.dev && key.startsWith("_vn/fs/")) {
-      // The dev host reads `<app root>/<key>` from disk; a URL cannot climb
-      // above the app root (docs/PACKAGING.md §4).
-      note(o, `asset outside the app root, which the dev host does not serve (404 in dev; packed by vn build): ${idOf(abs)}`);
-    }
+    o.assets.set(key, realpathSync(abs));
     return `export default ${J(url)};\n`;
   };
   return {

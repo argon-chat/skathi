@@ -460,6 +460,7 @@ interface MirrorElement extends MirrorNodeBase {
   // -- focus and pointer capture
   focus(): void;
   blur(): void;
+  select(): void;
   setPointerCapture(pointerId: number): void;
   hasPointerCapture(pointerId: number): boolean;
   releasePointerCapture(pointerId: number): void;
@@ -500,7 +501,6 @@ interface MirrorElement extends MirrorNodeBase {
   _vtc?: Set<string>;
   _isLeaving?: boolean;
   _endId?: number;
-  _pointerCaptures?: Set<number>;
 }
 
 type MirrorNode = MirrorElement | MirrorText;
@@ -711,9 +711,11 @@ const POINTER_EVENTS = new Set<string>([
   "pointerenter",
   "pointerleave",
   "pointercancel",
+  "gotpointercapture",
+  "lostpointercapture",
 ]);
-/** Bubbles, but cannot be cancelled (Pointer Events §5: pointercancel). */
-const NOT_CANCELABLE = new Set<string>(["pointercancel"]);
+/** Events that bubble but cannot be cancelled. */
+const NOT_CANCELABLE = new Set<string>(["pointercancel", "gotpointercapture", "lostpointercapture", "select"]);
 // Vue hyphenates an `@camelCase` listener prop (`onLoopComplete` becomes
 // "loop-complete"), which is the well-known reason `@loopComplete` silently
 // misses a web component's camelCase event in a browser. We accept BOTH
@@ -888,6 +890,7 @@ function looseCreated<T extends MirrorNode>(n: T): T {
 function detachNode(child: MirrorNode, notify = true): void {
   const p = child.parentNode;
   if (!p) return;
+  releaseCapturesIn(child);
   const i = p.childNodes.indexOf(child);
   if (i >= 0) p.childNodes.splice(i, 1);
   child.parentNode = null;
@@ -905,6 +908,7 @@ function detachNode(child: MirrorNode, notify = true): void {
  * that outlives its node must not go on naming whatever gets the id next.
  */
 function forgetDeep(n: MirrorNode): void {
+  releaseCapturesIn(n);
   forEachDeep(n, (d) => {
     handlers.delete(d);
     if (nodesById.get(d.__vnId) === d) nodesById.delete(d.__vnId);
@@ -1547,6 +1551,7 @@ function windowDocument(root: MirrorElement): object {
  */
 function insertNode(child: MirrorNode, parent: MirrorElement, anchor: MirrorNode | null, notifyAdd: boolean): void {
   const old = child.parentNode;
+  if (old && (isLoose(parent) || windowRootOf(child) !== windowRootOf(parent))) releaseCapturesIn(child);
   if (old) {
     const cs = old.childNodes;
     const i = cs.indexOf(child);
@@ -2598,7 +2603,7 @@ const looksNative = (name: string): boolean => /^[a-z]+$/.test(name);
  * are kept; the "never fires" advisory is left for elements that neither are
  * nor wrap a file input (`adviseJsSourced`).
  */
-const JS_SOURCED_EVENTS = new Set<string>(["change", "cancel"]);
+const JS_SOURCED_EVENTS = new Set<string>(["change", "cancel", "gotpointercapture", "lostpointercapture"]);
 
 /// Events a BROWSER only ever fires on `window` (or `document`), never on an
 /// element. `el.addEventListener("resize", …)` is dead code in Chrome too, so
@@ -4237,6 +4242,20 @@ function isTextWidget(n: unknown): boolean {
   return !!e && e.kind === 1 && (e.tag === "textarea" || (e.tag === "input" && !isFileInput(e) && !isRangeInput(e) && !isColorInput(e)));
 }
 
+/** Select a field through its native editor; a JS-only range would not be
+ * replaced by the next keystroke, IME commit or clipboard operation. */
+defineDom("select", function (this: MirrorElement) {
+  if (!isMirrorEl(this) || (this.tag !== "input" && this.tag !== "textarea"))
+    throw new TypeError("Illegal invocation");
+  if (activeElement() !== this) this.focus();
+  if (!isTextWidget(this) || !__vn_input_select(this.__vnId)) return;
+  // HTML queues a bubbling, non-cancelable select event. It is not an edit:
+  // no input/change event or value assignment is manufactured here.
+  queueMicrotask(() => {
+    if (this.__vnId) propagate(this, "select", synthesize("select", 0, 0, 0, 0, undefined));
+  });
+});
+
 /** Is this a mirror `<label>`? */
 function isLabel(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;
@@ -4685,7 +4704,7 @@ defineDom("click", function (this: MirrorElement) {
 //    nothing; a reset does not restore the controls' values.
 
 /** Events the runtime itself fires, for which no host code exists. Their handlers are kept. */
-const RUNTIME_FIRED_EVENTS = new Set<string>(["submit", "reset", "fullscreenchange"]);
+const RUNTIME_FIRED_EVENTS = new Set<string>(["submit", "reset", "fullscreenchange", "gotpointercapture", "lostpointercapture", "select"]);
 
 /** HTML's boolean-attribute rule as patchProp stores it: present, and not the string "false". */
 const hasFlag = (n: MirrorElement, name: string): boolean => n.attrs?.[name] != null && n.attrs[name] !== "false";
@@ -5280,20 +5299,64 @@ const realm = (() => {
   };
 }
 
-// -- pointer capture. gpui captures the mouse implicitly for the duration of a
-//    press, which is what this API is FOR — so the capture itself is already
-//    the platform's behaviour and only the browser BOOKKEEPING has to exist,
-//    consistently. reka-ui's Select opens on `pointerdown` and immediately
-//    releases the capture it would otherwise hold; a missing
-//    `hasPointerCapture` is a TypeError that kills the open outright.
+// -- pointer capture. The OS captures the window during a press; the host
+// bridge additionally routes input to the captured DOM node, even outside its
+// hitbox. Keep one owner per pointer, not independent sets on each element.
+const pointerCaptures = new Map<number, MirrorElement>();
+const disconnectingCaptureRoots = new Set<MirrorNode>();
+let pointerButtons = 0;
+let pointerPosition = { x: 0, y: 0, button: -1, modifiers: 0 };
+
+function captureEvent(owner: MirrorElement, name: string): void {
+  if (hasListener(owner, name)) {
+    const p = pointerPosition;
+    propagate(owner, name, synthesize(name, p.x, p.y, p.button, p.modifiers, undefined));
+  }
+}
+function releaseCapturedPointer(pointerId: number, owner?: MirrorElement): void {
+  const current = pointerCaptures.get(pointerId);
+  if (!current || (owner && owner !== current)) return;
+  pointerCaptures.delete(pointerId);
+  __vn_pointer_capture(current.__vnId, pointerId, false);
+  captureEvent(current, "lostpointercapture");
+}
+function releaseCapturesIn(node: MirrorNode): void {
+  disconnectingCaptureRoots.add(node);
+  try {
+    for (const [pointerId, owner] of Array.from(pointerCaptures)) {
+      for (let n: MirrorNode | null = owner; n; n = n.parentNode) {
+        if (n === node) {
+          releaseCapturedPointer(pointerId, owner);
+          break;
+        }
+      }
+    }
+  } finally {
+    disconnectingCaptureRoots.delete(node);
+  }
+}
 defineDom("setPointerCapture", function (this: MirrorElement, pointerId: number) {
-  (this._pointerCaptures || (this._pointerCaptures = new Set())).add(pointerId);
+  if (pointerId !== 1) throw new DOMException("No active pointer with this id", "NotFoundError");
+  if (!pointerButtons) return;
+  if (!this.__vnId || (!this.parentNode && this !== appRoot))
+    throw new DOMException("The capture target is not connected", "InvalidStateError");
+  for (let n: MirrorNode | null = this; n; n = n.parentNode) {
+    if (disconnectingCaptureRoots.has(n)) return;
+  }
+  const previous = pointerCaptures.get(pointerId);
+  if (previous === this) return;
+  if (!__vn_pointer_capture(this.__vnId, pointerId, true)) return;
+  pointerCaptures.set(pointerId, this);
+  // A lost-capture listener may transfer capture again. Publish the new owner
+  // first and only announce it if that listener left it in place.
+  if (previous) captureEvent(previous, "lostpointercapture");
+  if (pointerCaptures.get(pointerId) === this) captureEvent(this, "gotpointercapture");
 });
 defineDom("hasPointerCapture", function (this: MirrorElement, pointerId: number) {
-  return !!this._pointerCaptures?.has(pointerId);
+  return pointerCaptures.get(pointerId) === this;
 });
 defineDom("releasePointerCapture", function (this: MirrorElement, pointerId: number) {
-  this._pointerCaptures?.delete(pointerId);
+  releaseCapturedPointer(pointerId, this);
 });
 
 // ---- imperative tree mutation (DOM §4.2.3–§4.2.8) — m26 client sweep #5a
@@ -5994,6 +6057,9 @@ const BUTTON_BITS = [1, 4, 2, 8, 16];
  */
 function buttonsFor(name: string, c: number): number {
   switch (name) {
+    case "gotpointercapture":
+    case "lostpointercapture":
+      return pointerButtons;
     case "mousedown":
     case "pointerdown":
     case "mousemove":
@@ -6510,8 +6576,23 @@ function activatableOnPath(target: MirrorNode): boolean {
 
 __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   const name = CODE_TO_NAME[evCode];
-  const target = nodeById(nodeId);
-  if (!name || !target) return true;
+  if (!name) return true;
+  if (name === "mousedown" || name === "mousemove" || name === "mouseup" || name === "pointercancel") {
+    pointerPosition = { x: a, y: b, button: c, modifiers: d };
+    pointerButtons = buttonsFor(name, c);
+    // A lost native release (capture stolen by another window, for example)
+    // must terminate the old gesture before an unpressed move is delivered.
+    if (name === "mousemove" && !pointerButtons) {
+      const captured = pointerCaptures.get(1);
+      if (captured) {
+        propagate(captured, "pointercancel", synthesize("pointercancel", a, b, -1, d, key));
+        releaseCapturedPointer(1);
+      }
+    }
+  }
+  const retarget = name === "mousemove" || name === "mouseup" || name === "pointercancel";
+  const target = (retarget && pointerCaptures.get(1)) || nodeById(nodeId);
+  if (!target) return true;
   if (name === "keydown" && key === "Escape" && globalThis.__VN_WINDOW__?.escapeFullscreen?.()) return false;
   // A wheel's pointer position rides beside its deltas (`VnDispatcher`); it
   // reaches `synthesize` as the event's data.
@@ -6676,6 +6757,7 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
         "already scrolled its own content (the boxes around it stay put) (docs/RUNTIME.md §5.9 W-1)",
     );
   }
+  if (name === "mouseup" || name === "pointercancel") releaseCapturedPointer(1);
   return proceed;
 });
 
@@ -6689,6 +6771,8 @@ function teardownDocumentRoot(root: MirrorElement, unmount?: () => void): void {
   } catch (e) {
     __vn_log("teardown: " + e);
   }
+  pointerButtons = 0;
+  for (const pointerId of Array.from(pointerCaptures.keys())) releaseCapturedPointer(pointerId);
   __vn_remove(root.__vnId);
   // Detached-but-live nodes: <KeepAlive> creates its cache container with
   // createElement and NEVER inserts or removes it (Vue moves subtrees in

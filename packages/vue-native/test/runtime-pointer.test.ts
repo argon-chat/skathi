@@ -184,3 +184,119 @@ describe("only what someone listens for is built", () => {
     expect(order).toEqual(["pointerdown", "mousedown"]);
   });
 });
+
+
+describe("pointer capture", () => {
+  const fire = (rt, node, name, x = 10, y = 20, button = 0) =>
+    rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], x, y, button, 0, undefined);
+
+  test("captured moves and the outside release target the owner and release capture", () => {
+    const rt = createRuntime();
+    const { root, inner } = tree(rt);
+    const seen = [];
+    inner.addEventListener("pointerdown", (e) => inner.setPointerCapture(e.pointerId));
+    for (const name of ["gotpointercapture", "pointermove", "pointerup", "lostpointercapture"])
+      inner.addEventListener(name, (e) => seen.push([e.type, e.target === inner, e.clientX, e.buttons]));
+    fire(rt, inner, "mousedown");
+    expect(inner.hasPointerCapture(1)).toBe(true);
+    fire(rt, root, "mousemove", -70, 150, 0);
+    fire(rt, root, "mouseup", -70, 150, 0);
+    expect(inner.hasPointerCapture(1)).toBe(false);
+    fire(rt, root, "mousemove", 5, 5, -1);
+    expect(seen).toEqual([
+      ["gotpointercapture", true, 10, 1], ["pointermove", true, -70, 1],
+      ["pointerup", true, -70, 0], ["lostpointercapture", true, -70, 0],
+    ]);
+    expect(rt.host.pointerCaptureCalls).toEqual([
+      { id: inner.__vnId, pointerId: 1, capture: true },
+      { id: inner.__vnId, pointerId: 1, capture: false },
+    ]);
+    expect(rt.advisories()).toEqual([]);
+  });
+
+  test("capture transfer has one owner, with lost before the new got event", () => {
+    const rt = createRuntime();
+    const { inner, outer } = tree(rt);
+    const seen = [];
+    inner.addEventListener("pointerdown", () => inner.setPointerCapture(1));
+    inner.addEventListener("lostpointercapture", (e) => { seen.push(e.type); expect(e.cancelable).toBe(false); });
+    outer.addEventListener("gotpointercapture", (e) => { if (e.target === outer) seen.push(e.type); });
+    fire(rt, inner, "mousedown");
+    outer.setPointerCapture(1);
+    expect(seen).toEqual(["lostpointercapture", "gotpointercapture"]);
+    expect(inner.hasPointerCapture(1)).toBe(false);
+    expect(outer.hasPointerCapture(1)).toBe(true);
+    inner.releasePointerCapture(1);
+    expect(outer.hasPointerCapture(1)).toBe(true);
+    fire(rt, inner, "mouseup");
+    expect(outer.hasPointerCapture(1)).toBe(false);
+  });
+
+  test("native cancellation and a move without a held button both stop captured gestures", () => {
+    for (const ending of ["pointercancel", "mousemove"]) {
+      const rt = createRuntime();
+      const { root, inner } = tree(rt);
+      const seen = [];
+      inner.addEventListener("pointerdown", () => inner.setPointerCapture(1));
+      inner.addEventListener("pointercancel", (e) => seen.push([e.type, e.target === inner, e.buttons]));
+      inner.addEventListener("lostpointercapture", () => seen.push(["lost"]));
+      inner.addEventListener("pointermove", () => seen.push(["stale move"]));
+      fire(rt, inner, "mousedown");
+      fire(rt, root, ending, 99, 99, -1);
+      expect(seen).toEqual([["pointercancel", true, 0], ["lost"]]);
+      expect(inner.hasPointerCapture(1)).toBe(false);
+    }
+  });
+
+  test("removing a captured subtree releases native capture before its ids are forgotten", () => {
+    const rt = createRuntime();
+    const { inner, outer } = tree(rt);
+    const lost = [];
+    inner.addEventListener("pointerdown", () => inner.setPointerCapture(1));
+    inner.addEventListener("lostpointercapture", () => lost.push(inner.__vnId));
+    fire(rt, inner, "mousedown");
+    const id = inner.__vnId;
+    rt.nodeOps.remove(outer);
+    expect(lost).toEqual([id]);
+    expect(inner.hasPointerCapture(1)).toBe(false);
+    expect(rt.host.pointerCaptureCalls.at(-1)).toEqual({ id, pointerId: 1, capture: false });
+  });
+
+  test("lost-capture listeners can transfer again without leaving an unannounced owner", () => {
+    const rt = createRuntime();
+    const { root, outer, inner } = tree(rt);
+    const third = rt.nodeOps.createElement("div");
+    rt.nodeOps.insert(third, root, null);
+    const seen = [];
+    inner.addEventListener("pointerdown", () => inner.setPointerCapture(1));
+    inner.addEventListener("lostpointercapture", () => { seen.push("inner lost"); third.setPointerCapture(1); });
+    outer.addEventListener("gotpointercapture", (e) => { if (e.target === outer) seen.push("outer got"); });
+    outer.addEventListener("lostpointercapture", (e) => { if (e.target === outer) seen.push("outer lost"); });
+    third.addEventListener("gotpointercapture", () => seen.push("third got"));
+    fire(rt, inner, "mousedown");
+    outer.setPointerCapture(1);
+    expect(outer.hasPointerCapture(1)).toBe(false);
+    expect(third.hasPointerCapture(1)).toBe(true);
+    expect(seen).toEqual(["inner lost", "outer lost", "third got"]);
+  });
+
+  test("a lost-capture listener cannot recapture a subtree being removed", () => {
+    const rt = createRuntime();
+    const { inner, outer } = tree(rt);
+    let lost = 0;
+    inner.addEventListener("pointerdown", () => inner.setPointerCapture(1));
+    inner.addEventListener("lostpointercapture", () => { lost++; inner.setPointerCapture(1); });
+    fire(rt, inner, "mousedown");
+    rt.nodeOps.remove(outer);
+    expect(lost).toBe(1);
+    expect(inner.hasPointerCapture(1)).toBe(false);
+  });
+
+  test("only the active mouse pointer can be captured", () => {
+    const rt = createRuntime();
+    const { inner } = tree(rt);
+    inner.setPointerCapture(1);
+    expect(inner.hasPointerCapture(1)).toBe(false);
+    expect(() => inner.setPointerCapture(42)).toThrow("No active pointer");
+  });
+});

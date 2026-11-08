@@ -484,37 +484,9 @@ fn css_rgb(c: gpui::Hsla) -> String {
     }
 }
 
-fn css_len(v: gpui::TransformLength) -> String {
-    match v {
-        gpui::TransformLength::Pixels(p) => format!("{p}px"),
-        gpui::TransformLength::Fraction(f) => format!("{}%", f * 100.0),
-    }
-}
-
-/// `getComputedStyle().transform`, as the function list the cascade computed.
-///
-/// A browser resolves the shorthand to a `matrix(...)`; we serialise the parts,
-/// which is strictly more informative and matches what every consumer in the
-/// reused-component set actually does with it (compare against `"none"`).
+/// CSSOM and WAAPI serialize the same full affine transform.
 fn transform_text(t: Option<gpui::TransformSpec>) -> String {
-    let Some(t) = t.filter(|t| !t.is_identity()) else {
-        return "none".into();
-    };
-    let mut parts: Vec<String> = Vec::new();
-    if !t.translate.0.is_zero() || !t.translate.1.is_zero() {
-        parts.push(format!(
-            "translate({}, {})",
-            css_len(t.translate.0),
-            css_len(t.translate.1)
-        ));
-    }
-    if t.rotate != 0.0 {
-        parts.push(format!("rotate({}deg)", t.rotate.to_degrees()));
-    }
-    if t.scale != (1.0, 1.0) {
-        parts.push(format!("scale({}, {})", t.scale.0, t.scale.1));
-    }
-    parts.join(" ")
+    t.map(vn_css::transform_css).unwrap_or_else(|| "none".into())
 }
 
 #[cfg(test)]

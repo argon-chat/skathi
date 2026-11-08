@@ -619,3 +619,63 @@ describe("location.reload()", () => {
     expect(rt.advisories().some((l: string) => l.includes("SAME JavaScript realm"))).toBe(true);
   });
 });
+
+
+describe("native text field select()", () => {
+  function field(tag = "input", type = "text") {
+    const rt = createRuntime();
+    const root = rt.nodeOps.createElement("div");
+    const input = rt.nodeOps.createElement(tag);
+    rt.nodeOps.insert(input, root, null);
+    if (tag === "input") rt.patchProp(input, "type", null, type);
+    rt.patchProp(input, "value", null, "Argon Привет 🙂\nSecond line");
+    rt.host.focus.answer = () => "moved:0";
+    return { rt, root, input };
+  }
+
+  test.each(["input", "textarea"])("%s.select() selects the native editor without manufacturing an edit", async tag => {
+    const { rt, root, input } = field(tag);
+    const seen: unknown[][] = [];
+    input.addEventListener("input", () => seen.push(["input"]));
+    input.addEventListener("change", () => seen.push(["change"]));
+    root.addEventListener("select", (e: any) => { seen.push([e.type, e.target === input, e.bubbles, e.cancelable]); e.preventDefault(); });
+    const before = input.value;
+    expect(input.select()).toBeUndefined();
+    expect(rt.host.inputSelectCalls).toEqual([input.__vnId]);
+    expect(rt.global.document.activeElement).toBe(input);
+    expect(input.value).toBe(before);
+    expect(seen).toEqual([]);
+    await new Promise<void>(resolve => queueMicrotask(resolve));
+    expect(seen).toEqual([["select", true, true, false]]);
+    expect(rt.advisories().every((note: string) => note.includes('addEventListener("change")'))).toBe(true);
+  });
+
+  test("nextTick select survives a native field whose first build/focus is pending", async () => {
+    const { rt, input } = field("textarea");
+    rt.host.focus.answer = () => "pending";
+    const selected: string[] = [];
+    rt.patchProp(input, "onSelect", null, () => selected.push(input.value));
+    input.select();
+    expect(rt.host.inputSelectCalls).toEqual([input.__vnId]);
+    expect(input.value).toBe("Argon Привет 🙂\nSecond line");
+    await new Promise<void>(resolve => queueMicrotask(resolve));
+    expect(selected).toEqual([input.value]);
+    expect(rt.advisories().every((line: string) => line.includes("element.focus()"))).toBe(true);
+  });
+
+  test("read-only and disabled text can be selected; only focus is refused when disabled", () => {
+    const { rt, input } = field();
+    rt.patchProp(input, "readonly", null, ""); input.select();
+    rt.patchProp(input, "disabled", null, ""); input.select();
+    expect(rt.host.inputSelectCalls).toEqual([input.__vnId, input.__vnId]);
+    expect(rt.host.focus.calls).toHaveLength(1);
+  });
+
+  test("non-text controls never create a native text selection", () => {
+    for (const type of ["file", "color", "range"]) {
+      const { rt, input } = field("input", type);
+      input.select();
+      expect(rt.host.inputSelectCalls).toEqual([]);
+    }
+  });
+});

@@ -89,6 +89,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   statSync,
   writeFileSync,
@@ -727,7 +728,7 @@ const vuePlugin = {
 // importer, as in prod's bundle. In dev, `import.meta.glob` imports by
 // importer-relative path (what the module registry resolves; lazy entries are
 // `() => import(…)`, which `devEsmInterop` routes through require), and the
-// asset URLs are not packed: the dev host serves `/<key>` from the app root.
+// asset URLs are served from the app root or an explicit dev manifest file map.
 
 /** What the shapes plugin did during a full build: printed after it, as prod.ts prints its own. */
 const SHAPE_NOTES = new Map<string, number>();
@@ -735,12 +736,14 @@ const SHAPE_NOTES = new Map<string, number>();
 let inlinedNow: Set<string> | null = null;
 const noteInlined = (abs: string) => void inlinedNow?.add(abs);
 
+// Both app modules and bundled npm modules contribute imported assets.
+const DEV_ASSET_FILES = new Map<string, string>();
 const shapesOptions = (dev: boolean) => ({
   docRoot: VN_CONFIG_DIR,
   wsRoot: WS_ROOT,
   svgDefault: svgDefaultOf(APP_PKG),
   compileSfc: (absPath: string, source: string) => compileVue(absPath, source, false),
-  assets: new Map<string, string>(),
+  assets: DEV_ASSET_FILES,
   notes: SHAPE_NOTES,
   dev,
   inlined: dev ? noteInlined : undefined,
@@ -1453,6 +1456,7 @@ function writeManifest(files: string[]) {
         entry: toId(ENTRY_ABS),
         name: readAppName(),
         modules: ids,
+        assetFiles: Object.fromEntries([...DEV_ASSET_FILES].filter(([key, path]) => key.startsWith("_vn/fs/") && existsSync(path)).map(([key, path]) => [key, realpathSync(path)]).sort(([a], [b]) => a.localeCompare(b))),
         deps,
         window: readWindowConfig(),
         launch: readLaunchConfig(),
@@ -1477,6 +1481,7 @@ function writeChanges(changed: { id: string; kind: Kind }[]) {
 const stamp = () => `[${new Date().toLocaleTimeString()}]`;
 
 async function fullBuild(reason: string) {
+  DEV_ASSET_FILES.clear();
   ensureDirs();
   const t0 = Date.now();
   const bytes = await buildVendor(); // also refreshes vendorRev

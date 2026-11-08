@@ -783,6 +783,25 @@ export function usageBlock(): string {
  * `["query", ".tab"]` + flags -> `{cmd: "query", selector: ".tab"}`.
  * Throws [`UsageError`] for an unknown verb or a malformed invocation.
  */
+/** Split actual CLI argv using the same boolean arguments the MCP schema exposes. */
+export function splitArgs(argv: string[]): { positional: string[]; flags: Flags } {
+  const switches = new Set([
+    "json", "help",
+    ...COMMANDS.flatMap(spec => Object.entries(spec.args).filter(([, arg]) => arg.type === "boolean").map(([name]) => name)),
+  ]);
+  const positional: string[] = [];
+  const flags: Flags = {};
+  for (let i = 0; i < argv.length; i++) {
+    const value = argv[i];
+    if (!value.startsWith("--")) positional.push(value);
+    else {
+      const name = value.slice(2);
+      flags[name] = switches.has(name) ? true : argv[++i] ?? "";
+    }
+  }
+  return { positional, flags };
+}
+
 export function buildRequest(argv: string[], flags: Flags): Record<string, unknown> {
   const [cmd, ...rest] = argv;
   const spec = COMMANDS.find((c) => c.cmd === cmd || (c.aliases ?? []).includes(cmd));

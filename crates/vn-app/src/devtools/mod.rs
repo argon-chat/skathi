@@ -2168,6 +2168,35 @@ struct MouseExtras {
     shift: bool,
 }
 
+/// The ordered physical input stream for one devtools mouse command. The
+/// hit-test move before a release still has its button held; MouseUp changes
+/// that state. An unpressed move first would falsely cancel a captured drag.
+fn mouse_inputs(
+    kind: &str,
+    button: gpui::MouseButton,
+    position: gpui::Point<gpui::Pixels>,
+    modifiers: gpui::Modifiers,
+    extras: &MouseExtras,
+) -> Vec<gpui::PlatformInput> {
+    let mut events = Vec::with_capacity(3);
+    events.push(gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+        position,
+        pressed_button: (extras.held || kind == "up").then_some(button),
+        modifiers,
+    }));
+    if matches!(kind, "down" | "click") {
+        events.push(gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+            button, position, modifiers, click_count: extras.clicks, first_mouse: false,
+        }));
+    }
+    if matches!(kind, "up" | "click") {
+        events.push(gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+            button, position, modifiers, click_count: extras.clicks,
+        }));
+    }
+    events
+}
+
 fn cmd_mouse(
     selector: Option<&str>,
     index: Option<f64>,
@@ -2239,41 +2268,8 @@ fn cmd_mouse(
     // `__vn_window_click` unnecessary — `mouse` addresses any window this
     // process paints, through the same real gpui hit test.
     let done = in_window(node, |window, app| {
-        // A move always comes first: gpui recomputes `mouse_hit_test` from the
-        // window's own `mouse_position`, and a press that arrives without one
-        // would be tested against wherever the pointer was last.
-        // `held`: the move of a drag, with the button down, as the OS reports
-        // one (the release that follows is a `kind: "up"`).
-        window.dispatch_event(
-            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
-                position,
-                pressed_button: extras.held.then_some(button),
-                modifiers,
-            }),
-            app,
-        );
-        if matches!(kind, "down" | "click") {
-            window.dispatch_event(
-                gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
-                    button,
-                    position,
-                    modifiers,
-                    click_count: extras.clicks,
-                    first_mouse: false,
-                }),
-                app,
-            );
-        }
-        if matches!(kind, "up" | "click") {
-            window.dispatch_event(
-                gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-                    button,
-                    position,
-                    modifiers,
-                    click_count: extras.clicks,
-                }),
-                app,
-            );
+        for input in mouse_inputs(kind, button, position, modifiers, &extras) {
+            window.dispatch_event(input, app);
         }
         // The hover ladder is read at PAINT time, so the frame that shows the
         // new state has to be asked for explicitly.
@@ -3137,6 +3133,28 @@ fn cmd_screenshot(path: Option<&str>, backend: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{http_request_line, parse_keystroke, resolve_initial};
+
+    #[test]
+    fn mouse_release_does_not_insert_an_unpressed_move_into_a_captured_drag() {
+        use gpui::{MouseButton, PlatformInput};
+        let at = gpui::point(gpui::px(120.0), gpui::px(-10.0));
+        let extras = super::MouseExtras { held: false, clicks: 2, shift: false };
+        let events = super::mouse_inputs("up", MouseButton::Left, at, Default::default(), &extras);
+        assert_eq!(events.len(), 2);
+        let PlatformInput::MouseMove(before_up) = &events[0] else { panic!("move must precede release") };
+        assert_eq!(before_up.pressed_button, Some(MouseButton::Left));
+        assert_eq!(before_up.position, at, "outside-window coordinates are preserved");
+        let PlatformInput::MouseUp(up) = &events[1] else { panic!("the button must release next") };
+        assert_eq!(up.button, MouseButton::Left);
+        assert_eq!(up.click_count, 2);
+        let events = super::mouse_inputs("move", MouseButton::Left, at, Default::default(), &extras);
+        let PlatformInput::MouseMove(hover) = &events[0] else { unreachable!() };
+        assert_eq!(hover.pressed_button, None, "an ordinary hover still reports no held button");
+        let held = super::MouseExtras { held: true, ..extras };
+        let events = super::mouse_inputs("move", MouseButton::Left, at, Default::default(), &held);
+        let PlatformInput::MouseMove(drag) = &events[0] else { unreachable!() };
+        assert_eq!(drag.pressed_button, Some(MouseButton::Left));
+    }
 
     #[test]
     fn target_discovery_does_not_block_or_duplicate_a_running_scan() {

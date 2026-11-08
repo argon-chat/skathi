@@ -48,7 +48,7 @@ pub mod windows;
 pub mod devtools;
 
 pub use observe::update_layout_observers;
-pub use img::{asset_base, asset_store, content_key, set_asset_base, set_asset_store, AssetLookup};
+pub use img::{asset_base, asset_store, content_key, dev_asset_file, set_asset_base, set_asset_store, set_dev_asset_files, AssetLookup};
 pub use render::{
     bounds_in, build_root, build_subtree, control_hitboxes, control_hitboxes_in,
     enable_pick_hitboxes, flush_pending_mouse_move, painted_bounds_in, painted_drag_region,
@@ -420,6 +420,11 @@ host_fn!(fn vn_focus(_g, args) {
     ret_string(&out)
 });
 
+// Select the native text field, or queue it until its first native build.
+host_fn!(fn vn_input_select(_g, args) {
+    Value::boolean(render::select_input_text(arg_id(args.arg(0)))).0
+});
+
 // ---------------------------------------------------------------------------
 // the `<video>` media surface (crates/vn-video/CONTRACT.md §6)
 // ---------------------------------------------------------------------------
@@ -520,6 +525,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_scroll", 4, vn_scroll as *const _),
         ("__vn_scroll_into_view", 3, vn_scroll_into_view as *const _),
         ("__vn_focus", 2, vn_focus as *const _),
+        ("__vn_input_select", 1, vn_input_select as *const _),
         ("__vn_media_state", 1, vn_media_state as *const _),
         ("__vn_media_prop", 2, vn_media_prop as *const _),
         ("__vn_media_call", 3, vn_media_call as *const _),

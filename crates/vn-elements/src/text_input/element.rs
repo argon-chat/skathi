@@ -158,6 +158,7 @@ impl Element for TextElement {
 
         let (scroll_top, selection_range, cursor, content_height) =
             self.state.update(cx, |state, _| {
+                state.set_input_transform(window.element_transform(), window.scale_factor());
                 state.set_layout(
                     bounds,
                     lines,
@@ -244,7 +245,10 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let focus_handle = self.state.read(cx).focus_handle();
+        let focus_handle = self.state.update(cx, |state, _| {
+            state.set_input_transform(window.element_transform(), window.scale_factor());
+            state.focus_handle()
+        });
         window.handle_input(
             &focus_handle,
             ElementInputHandler::new(bounds, self.state.clone()),

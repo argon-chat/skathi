@@ -55,8 +55,8 @@
 //! disk in both modes, because they say so.
 //!
 //! **Invariant:** every URL-taking feature resolves through this module, so
-//! CSS `url()` and `@font-face` (unsupported today) inherit the store when they
-//! land rather than growing a second resolver.
+//! CSS `url()` and `@font-face` inherit the store without a second resolver. They
+//! also share the explicit dev manifest map for imported files outside the app root.
 //!
 //! # Caching
 //!
@@ -72,6 +72,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
 
 use gpui::{Image, ImageFormat, ImageSource, Resource};
 pub use vn_payload::content_key;
@@ -83,6 +84,32 @@ use vn_runtime::JsRuntime;
 /// A packaged app's asset store: an app-root-relative key → the bytes, which
 /// live in the mapped exe for the life of the process.
 pub type AssetLookup = fn(&str) -> Option<&'static [u8]>;
+
+/// Explicit imported files outside a dev app's root. The builder publishes
+/// generated URL keys; the host never derives a filesystem path from a hash.
+fn dev_asset_files() -> &'static RwLock<HashMap<String, PathBuf>> {
+    static FILES: OnceLock<RwLock<HashMap<String, PathBuf>>> = OnceLock::new();
+    FILES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Replaces the dev manifest's imported-file map, also visible to fetch's
+/// background threads. Only canonical generated keys and absolute paths pass.
+/// Packaged apps install an asset store instead and never publish this map.
+pub fn set_dev_asset_files(files: HashMap<String, PathBuf>) {
+    let files = files.into_iter().filter(|(key, path)| {
+        key.starts_with("_vn/fs/") && path.is_absolute()
+            && !key.contains(['\\', '\0'])
+            && key.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+    }).collect();
+    *dev_asset_files().write().unwrap() = files;
+}
+
+/// Resolves one explicitly mapped dev URL with the same normalization as
+/// image/font/video URLs and fetch. Unknown keys never escape the app root.
+pub fn dev_asset_file(src: &str) -> Option<PathBuf> {
+    let key = content_key(src)?;
+    dev_asset_files().read().unwrap().get(&key).cloned()
+}
 
 thread_local! {
     /// The app root relative `src`s resolve against (see module docs).
@@ -1237,6 +1264,7 @@ fn path_source(p: PathBuf) -> ImageSource {
 /// [`content_key`], so the query is cut, escapes are decoded and `.`/`..` fold
 /// exactly as they do for `fetch()` and for a packaged exe's store.
 fn relative_to_base(tag: &str, src: &str) -> PathBuf {
+    if let Some(path) = dev_asset_file(src) { return path; }
     let base = match asset_base() {
         Some(b) => b,
         None => {
