@@ -86,6 +86,11 @@ describe("selection", () => {
 });
 
 describe("cargo", () => {
+  test("WebGPU survives other feature opt-outs and has an explicit opt-out", () => {
+    expect(cargoFeatureArgs("no-audio")[2].split(",")).toContain("webgpu");
+    expect(cargoFeatureArgs("no-webgpu")[2].split(",")).not.toContain("webgpu");
+  });
+
   test("the two pre-features hosts keep the command line they always had", () => {
     expect(cargoFeatureArgs("standard")).toEqual(["--features", "prod"]);
     expect(cargoFeatureArgs("no-devtools")).toEqual(["--features", "prod,no-devtools"]);
@@ -95,12 +100,12 @@ describe("cargo", () => {
     expect(cargoFeatureArgs("no-voice")).toEqual([
       "--no-default-features",
       "--features",
-      "prod,audio,clipboard,storages,indexeddb",
+      "prod,audio,clipboard,storages,indexeddb,webgpu",
     ]);
     expect(cargoFeatureArgs("no-devtools+no-voice+no-audio")).toEqual([
       "--no-default-features",
       "--features",
-      "prod,no-devtools,clipboard,storages,indexeddb",
+      "prod,no-devtools,clipboard,storages,indexeddb,webgpu",
     ]);
   });
 });
@@ -109,7 +114,7 @@ describe("vn.config.json", () => {
   test('"without", "features" and "host" each select a variant', () => {
     expect(loadAppConfig(app({ without: ["voice"] })).windows.variant).toBe("no-voice");
     expect(loadAppConfig(app({ features: ["audio", "storages"] })).windows.variant).toBe(
-      "no-devtools+no-voice+no-clipboard+no-indexeddb",
+      "no-devtools+no-voice+no-clipboard+no-indexeddb+no-webgpu",
     );
     expect(loadAppConfig(app({ host: "no-devtools" })).windows.variant).toBe("no-devtools");
     expect(loadAppConfig(app({})).windows.variant).toBe("standard");
@@ -127,4 +132,16 @@ test("the parts are the ones crates/vn-app/src/payload.rs names the host's varia
   const block = rs.slice(rs.indexOf("pub const OPTIONAL"), rs.indexOf("];", rs.indexOf("pub const OPTIONAL")));
   const names = [...block.matchAll(/\("([a-z]+)",/g)].map((m) => m[1]);
   expect(names).toEqual([...OPTIONAL]);
+});
+
+
+test("standard packaging refuses an old cached host without WebGPU", async () => {
+  const { checkHost, CLI_VERSION } = await import("../cli/host");
+  const info = { mode: "prod" as const, vueNative: CLI_VERSION, crate: "0.1.0", variant: "standard",
+    devtools: true, features: ["prod", "audio", "voice", "clipboard", "storages", "indexeddb"],
+    jscPin: "test", payloadFormat: 1, profile: "release" };
+  expect(checkHost("cached.exe", info, null, false)).toMatch(/lacks native WebGPU/);
+  expect(checkHost("cached.exe", info, "standard", false)).toMatch(/lacks native WebGPU/);
+  expect(checkHost("current.exe", { ...info, features: [...info.features, "webgpu"] }, "standard", false)).toBeNull();
+  expect(checkHost("explicit.exe", { ...info, variant: "no-webgpu" }, "no-webgpu", false)).toBeNull();
 });

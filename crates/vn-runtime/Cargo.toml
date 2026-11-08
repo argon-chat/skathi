@@ -6,7 +6,7 @@ publish = false
 
 [features]
 native-aot = ["redjs/native-aot"]
-# Experimental native compute/offscreen rendering; canvas presentation is not wired yet.
+# Native WebGPU; normal runtimes include it and the host supplies canvas presentation.
 webgpu = ["redjs/webgpu"]
 # Web Audio is ON by default: `AudioContext` is part of the web platform an app
 # written against a browser expects to find, and a renderer that silently lacks
@@ -40,7 +40,7 @@ webgpu = ["redjs/webgpu"]
 # thread and one fresh HTTP/1.1 connection per request. It is still correct,
 # just slower. See the module header of redjs/src/webapi/http.rs and
 # research/reports/m26/net-h2-pool.md.
-default = ["audio", "storages", "clipboard", "indexeddb", "net-h2"]
+default = ["audio", "storages", "clipboard", "indexeddb", "net-h2", "webgpu"]
 # `audio-codecs-extra` rides along: an app runtime's `decodeAudioData` input is
 # "whatever file the user has", not a curated asset pipeline, so AAC-LC/M4A,
 # ALAC, AIFF, CAF and MKV belong in the box. A game shipping its own .ogg does

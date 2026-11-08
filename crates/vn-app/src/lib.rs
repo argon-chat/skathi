@@ -81,7 +81,7 @@ mod popout_win; // a pop-out shown and hidden, owned, covering a monitor (MULTIW
 #[cfg(feature = "prod")]
 mod prod;
 #[cfg(all(feature = "webgpu", target_os = "windows"))]
-mod shared_gpu; // opt-in one-device D3D11On12 renderer/WebGPU generation
+mod shared_gpu; // one-device D3D11On12 renderer/WebGPU generation
 mod quiet; // VN_WINDOW_FOCUS=never: test hosts open behind and never take the foreground
 mod reload; // `location.reload()`: the restart path, on request
 mod shutdown; // a close hides the windows at once; the teardown runs under a deadline
@@ -1248,7 +1248,7 @@ fn run_app() {
     // Before anything gpui does, so the renderer's boot messages are visible.
     install_logger();
     #[cfg(all(feature = "webgpu", target_os = "windows"))]
-    shared_gpu::install_if_requested().expect("installing shared graphics device provider");
+    shared_gpu::install().expect("installing shared graphics device provider");
     perf::boot();
     // The Rust heap is being counted (src/heapcount.rs: a dev build, or `VN_MEMSTATS=1`), and
     // the painted-image registry the `mem` command reports is armed with it.

@@ -5,8 +5,8 @@ edition = "2021"
 publish = false
 
 [features]
-# Native WebGPU canvas readbacks share the existing bitmap presenter.
-# Off until the embedding application opts into vn-app/webgpu.
+# Native WebGPU canvas presentation. Hosts can opt out explicitly.
+default = ["webgpu"]
 webgpu = ["vn-runtime/webgpu"]
 
 [dependencies]

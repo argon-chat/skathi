@@ -29,7 +29,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { cargoFeatureArgs, type Variant } from "./config";
+import { cargoFeatureArgs, partsLeftOut, type Variant } from "./config";
 import { readPe, RT } from "./pe";
 import { PAYLOAD_NAME } from "./stamp";
 
@@ -101,9 +101,12 @@ export function cacheRoot(): string {
 
 export const cachedHost = (version: string, variant: Variant) => join(cacheRoot(), version, variant, "vn-host.exe");
 
-function check(exe: string, info: HostInfo, variant: Variant | null, allowMismatch: boolean): string | null {
+export function checkHost(exe: string, info: HostInfo, variant: Variant | null, allowMismatch: boolean): string | null {
   if (info.mode !== "prod") return `${exe} is a ${info.mode} host — vn build needs one built with --features prod`;
   if (variant && info.variant !== variant) return `${exe} is the ${info.variant} variant, not ${variant}`;
+  if (!partsLeftOut(variant ?? info.variant).includes("webgpu") && !info.features?.includes("webgpu")) {
+    return `${exe} lacks native WebGPU required by ${variant} — rebuild or replace the cached host`;
+  }
   if (info.vueNative !== CLI_VERSION && !allowMismatch) {
     return (
       `${exe} is vue-native ${info.vueNative}, this CLI is ${CLI_VERSION} — the bundle carries the JS half of the ` +
@@ -162,7 +165,7 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
   if (explicit) {
     const exe = resolve(explicit);
     const info = hostInfo(exe);
-    const problem = check(exe, info, options.variant, allow);
+    const problem = checkHost(exe, info, options.variant, allow);
     if (problem) throw new HostError(problem);
     return { exe, info, source: options.host ? "--host" : "VN_HOST" };
   }
@@ -171,7 +174,7 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
   if (REPO_RELEASE_EXE && existsSync(REPO_RELEASE_EXE)) {
     try {
       const info = hostInfo(REPO_RELEASE_EXE);
-      const problem = check(REPO_RELEASE_EXE, info, options.variant, allow);
+      const problem = checkHost(REPO_RELEASE_EXE, info, options.variant, allow);
       if (!problem) {
         if (statSync(REPO_RELEASE_EXE).mtimeMs < newestHostSource()) {
           log(
@@ -192,7 +195,7 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
   const cached = cachedHost(CLI_VERSION, options.variant);
   if (existsSync(cached)) {
     const info = hostInfo(cached);
-    const problem = check(cached, info, options.variant, allow);
+    const problem = checkHost(cached, info, options.variant, allow);
     if (!problem) return { exe: cached, info, source: "cache" };
     tried.push(`cache: ${problem}`);
   } else {
@@ -217,7 +220,7 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
 export function addHost(exe: string, log: (line: string) => void = () => {}): { path: string; info: HostInfo } {
   const src = resolve(exe);
   const info = hostInfo(src);
-  const problem = check(src, info, null, true);
+  const problem = checkHost(src, info, null, true);
   if (problem) throw new HostError(problem);
   const dest = cachedHost(info.vueNative, info.variant);
   mkdirSync(dirname(dest), { recursive: true });

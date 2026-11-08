@@ -11,7 +11,7 @@ build = "build.rs"
 [features]
 # Experimental native inspector backend; explicit manifest required.
 native-aot = ["vn-runtime/native-aot"]
-# Experimental native WebGPU, including bounded asynchronous canvas presentation.
+# Native WebGPU and canvas presentation; included in normal host builds.
 webgpu = ["vn-runtime/webgpu", "vn-tree/webgpu", "dep:wgpu", "dep:pollster"]
 # The BARE HOST (m25, docs/PACKAGING.md): the dev manifest/HMR polling is
 # compiled out, and the app — bundle, window config, name, assets — is the VNPK
@@ -61,7 +61,7 @@ devtools = []
 # default; `cargo build -p vn-app --no-default-features` builds a host with no
 # audio at all, which is ~40 fewer crates to compile. The reasoning for the
 # default living on rather than off is in crates/vn-runtime/Cargo.toml.
-default = ["audio", "storages", "clipboard", "indexeddb", "voice"]
+default = ["audio", "storages", "clipboard", "indexeddb", "voice", "webgpu"]
 # `vn-voice/audio` rides along: it is the flag that lets the voice mixer see
 # `redjs::webapi::pcm` and route a room's playout into the app's graph. The two
 # must move together — a host with `AudioContext` but no way to reach it from
@@ -132,7 +132,7 @@ vn-elements = { path = "../vn-elements" }
 # `storages`, `clipboard` and `indexeddb` above impossible to leave out. This
 # crate's features are the only ones that switch them; `net-h2` is not optional.
 vn-runtime = { path = "../vn-runtime", default-features = false, features = ["net-h2"] }
-vn-tree = { path = "../vn-tree" }
+vn-tree = { path = "../vn-tree", default-features = false }
 # `<vn-sticker>`'s engine: devtools `mem` reports its sources, engines, frames
 # and loop cache (`vn_sticker::stats`).
 vn-sticker = { path = "../vn-sticker" }

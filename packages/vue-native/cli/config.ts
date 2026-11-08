@@ -48,11 +48,12 @@ import { numericVersion } from "./versioninfo";
  * - `audio`     — Web Audio and `getUserMedia`;
  * - `clipboard` — `navigator.clipboard`;
  * - `storages`  — `localStorage` / `sessionStorage` / `appStorage`;
- * - `indexeddb` — `indexedDB` and `navigator.storage`.
+ * - `indexeddb` — `indexedDB` and `navigator.storage`;
+ * - `webgpu`    — native GPU compute/rendering and canvas presentation.
  *
  * Each but `devtools` is a default cargo feature of vn-app of the same name.
  */
-export const OPTIONAL = ["devtools", "voice", "audio", "clipboard", "storages", "indexeddb"] as const;
+export const OPTIONAL = ["devtools", "voice", "audio", "clipboard", "storages", "indexeddb", "webgpu"] as const;
 export type Part = (typeof OPTIONAL)[number];
 
 /**

@@ -26,6 +26,7 @@ pub use redjs;
 /// them. Features unify across the graph, so a host can only check that what
 /// it asked for is what it got (vn-app's payload tests do) by asking here.
 pub mod built {
+    pub const WEBGPU: bool = cfg!(feature = "webgpu");
     pub const AUDIO: bool = cfg!(feature = "audio");
     pub const STORAGES: bool = cfg!(feature = "storages");
     pub const CLIPBOARD: bool = cfg!(feature = "clipboard");

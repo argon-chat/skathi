@@ -386,13 +386,14 @@ pub fn slot_name() -> String {
 /// [`host_variant`] names them — the same list, in the same order, as
 /// `OPTIONAL` in packages/vue-native/cli/config.ts. `devtools` is the inverse
 /// of the `no-devtools` feature; the rest are default features of their own.
-pub const OPTIONAL: [(&str, bool); 6] = [
+pub const OPTIONAL: [(&str, bool); 7] = [
     ("devtools", cfg!(vn_devtools)),
     ("voice", cfg!(feature = "voice")),
     ("audio", cfg!(feature = "audio")),
     ("clipboard", cfg!(feature = "clipboard")),
     ("storages", cfg!(feature = "storages")),
     ("indexeddb", cfg!(feature = "indexeddb")),
+    ("webgpu", cfg!(feature = "webgpu")),
 ];
 
 /// This host's variant: `standard` when nothing optional was left out, else
@@ -423,6 +424,7 @@ pub fn host_info_json() -> String {
         (cfg!(feature = "clipboard"), "clipboard"),
         (cfg!(feature = "indexeddb"), "indexeddb"),
         (cfg!(feature = "voice"), "voice"),
+        (cfg!(feature = "webgpu"), "webgpu"),
     ] {
         if on {
             features.push(Json::s(name));
@@ -577,6 +579,7 @@ mod tests {
     #[test]
     fn the_runtime_carries_exactly_the_parts_this_host_names() {
         use vn_runtime::built;
+        assert_eq!(built::WEBGPU, cfg!(feature = "webgpu"), "webgpu");
         assert_eq!(built::AUDIO, cfg!(feature = "audio"), "audio");
         assert_eq!(built::STORAGES, cfg!(feature = "storages"), "storages");
         assert_eq!(built::CLIPBOARD, cfg!(feature = "clipboard"), "clipboard");
