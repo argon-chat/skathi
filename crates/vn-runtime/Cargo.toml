@@ -6,6 +6,8 @@ publish = false
 
 [features]
 native-aot = ["redjs/native-aot"]
+# Experimental native compute/offscreen rendering; canvas presentation is not wired yet.
+webgpu = ["redjs/webgpu"]
 # Web Audio is ON by default: `AudioContext` is part of the web platform an app
 # written against a browser expects to find, and a renderer that silently lacks
 # it is exactly the "diverge without saying so" failure this project refuses.
