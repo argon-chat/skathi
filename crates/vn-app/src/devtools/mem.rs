@@ -113,7 +113,13 @@ struct ProcessHeapEntry {
 #[link(name = "kernel32")]
 extern "system" {
     fn CloseHandle(handle: isize) -> i32;
-    fn ReadProcessMemory(process: isize, base: *const c_void, buf: *mut c_void, size: usize, read: *mut usize) -> i32;
+    fn ReadProcessMemory(
+        process: isize,
+        base: *const c_void,
+        buf: *mut c_void,
+        size: usize,
+        read: *mut usize,
+    ) -> i32;
     fn HeapLock(heap: isize) -> i32;
     fn HeapUnlock(heap: isize) -> i32;
     fn HeapWalk(heap: isize, entry: *mut ProcessHeapEntry) -> i32;
@@ -123,16 +129,42 @@ extern "system" {
 
 #[link(name = "ntdll")]
 extern "system" {
-    fn NtQueryInformationThread(thread: isize, class: u32, info: *mut c_void, len: u32, ret: *mut u32) -> i32;
-    fn NtGetNextThread(process: isize, thread: isize, access: u32, attributes: u32, flags: u32, next: *mut isize) -> i32;
+    fn NtQueryInformationThread(
+        thread: isize,
+        class: u32,
+        info: *mut c_void,
+        len: u32,
+        ret: *mut u32,
+    ) -> i32;
+    fn NtGetNextThread(
+        process: isize,
+        thread: isize,
+        access: u32,
+        attributes: u32,
+        flags: u32,
+        next: *mut isize,
+    ) -> i32;
 }
 
 #[link(name = "kernel32")]
 extern "system" {
     fn GetCurrentProcess() -> isize;
-    fn K32GetProcessMemoryInfo(process: isize, counters: *mut ProcessMemoryCountersEx2, cb: u32) -> i32;
-    fn K32GetMappedFileNameW(process: isize, address: *const c_void, name: *mut u16, size: u32) -> u32;
-    fn VirtualQuery(address: *const c_void, info: *mut MemoryBasicInformation, length: usize) -> usize;
+    fn K32GetProcessMemoryInfo(
+        process: isize,
+        counters: *mut ProcessMemoryCountersEx2,
+        cb: u32,
+    ) -> i32;
+    fn K32GetMappedFileNameW(
+        process: isize,
+        address: *const c_void,
+        name: *mut u16,
+        size: u32,
+    ) -> u32;
+    fn VirtualQuery(
+        address: *const c_void,
+        info: *mut MemoryBasicInformation,
+        length: usize,
+    ) -> usize;
     fn GetProcessHeap() -> isize;
     fn GetProcessHeaps(count: u32, heaps: *mut isize) -> u32;
     fn HeapSummary(heap: isize, flags: u32, summary: *mut HeapSummaryInfo) -> i32;
@@ -182,7 +214,12 @@ fn process() -> Counters {
     let mut c = ProcessMemoryCountersEx2 { cb: std::mem::size_of::<ProcessMemoryCountersEx2>() as u32, ..Default::default() };
     let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) } != 0;
     if !ok {
-        return Counters { working_set: 0.0, private_working_set: 0.0, private_bytes: 0.0, json: Json::Null };
+        return Counters {
+            working_set: 0.0,
+            private_working_set: 0.0,
+            private_bytes: 0.0,
+            json: Json::Null,
+        };
     }
     let private = c.private_usage as f64;
     Counters {
@@ -192,7 +229,11 @@ fn process() -> Counters {
         json: Json::obj(vec![
             ("workingSetMB", mb(c.working_set_size as f64)),
             ("privateWorkingSetMB", mb(c.private_working_set_size as f64)),
-            ("sharedWorkingSetMB", mb(c.working_set_size.saturating_sub(c.private_working_set_size) as f64)),
+            (
+                "sharedWorkingSetMB",
+                mb(c.working_set_size
+                    .saturating_sub(c.private_working_set_size) as f64),
+            ),
             ("privateBytesMB", mb(private)),
             ("peakWorkingSetMB", mb(c.peak_working_set_size as f64)),
             ("peakPrivateBytesMB", mb(c.peak_pagefile_usage as f64)),
@@ -303,7 +344,13 @@ fn file_name(path: &str) -> String {
 
 fn allocation_base(p: usize) -> Option<usize> {
     let mut info = std::mem::MaybeUninit::<MemoryBasicInformation>::zeroed();
-    let n = unsafe { VirtualQuery(p as *const c_void, info.as_mut_ptr(), std::mem::size_of::<MemoryBasicInformation>()) };
+    let n = unsafe {
+        VirtualQuery(
+            p as *const c_void,
+            info.as_mut_ptr(),
+            std::mem::size_of::<MemoryBasicInformation>(),
+        )
+    };
     (n != 0).then(|| unsafe { info.assume_init() }.allocation_base as usize)
 }
 
@@ -350,7 +397,14 @@ fn stack_bases() -> (HashMap<usize, String>, usize) {
     loop {
         let mut next: isize = 0;
         let status = unsafe {
-            NtGetNextThread(process, h, THREAD_QUERY_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION, 0, 0, &mut next)
+            NtGetNextThread(
+                process,
+                h,
+                THREAD_QUERY_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION,
+                0,
+                0,
+                &mut next,
+            )
         };
         if h != 0 {
             unsafe { CloseHandle(h) };
@@ -375,7 +429,13 @@ fn stack_bases() -> (HashMap<usize, String>, usize) {
             let mut tib = [0usize; 3];
             let mut read = 0usize;
             let ok = unsafe {
-                ReadProcessMemory(process, tbi.teb as *const c_void, tib.as_mut_ptr().cast(), 24, &mut read)
+                ReadProcessMemory(
+                    process,
+                    tbi.teb as *const c_void,
+                    tib.as_mut_ptr().cast(),
+                    24,
+                    &mut read,
+                )
             } != 0;
             if ok && tib[2] != 0 {
                 if let Some(base) = allocation_base(tib[2]) {
@@ -445,7 +505,11 @@ fn walk(stacks: &HashMap<usize, String>, threads: usize, heap: Option<&HashSet<u
     loop {
         let mut info = std::mem::MaybeUninit::<MemoryBasicInformation>::zeroed();
         let n = unsafe {
-            VirtualQuery(at as *const c_void, info.as_mut_ptr(), std::mem::size_of::<MemoryBasicInformation>())
+            VirtualQuery(
+                at as *const c_void,
+                info.as_mut_ptr(),
+                std::mem::size_of::<MemoryBasicInformation>(),
+            )
         };
         if n == 0 {
             break;
@@ -557,7 +621,14 @@ fn walk(stacks: &HashMap<usize, String>, threads: usize, heap: Option<&HashSet<u
     let process = unsafe { GetCurrentProcess() };
     for (base, bytes) in mapped_bases {
         let mut buf = [0u16; 520];
-        let n = unsafe { K32GetMappedFileNameW(process, base as *const c_void, buf.as_mut_ptr(), buf.len() as u32) } as usize;
+        let n = unsafe {
+            K32GetMappedFileNameW(
+                process,
+                base as *const c_void,
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+            )
+        } as usize;
         // No name: a pagefile-backed section (shared memory — the D3D runtime's,
         // the compositor's), which has no file behind it.
         let name = if n == 0 { String::new() } else { file_name(&String::from_utf16_lossy(&buf[..n])) };
@@ -587,7 +658,12 @@ fn address_json(w: &Walk, heap_walk: Option<(usize, f64)>) -> Json {
         .modules
         .iter()
         .take(8)
-        .map(|(name, bytes)| Json::obj(vec![("module", Json::s(name.clone())), ("committedMB", mb(*bytes as f64))]))
+        .map(|(name, bytes)| {
+            Json::obj(vec![
+                ("module", Json::s(name.clone())),
+                ("committedMB", mb(*bytes as f64)),
+            ])
+        })
         .collect();
     let mut o = vec![
         ("privateCommittedMB", mb(w.private as f64)),
@@ -630,7 +706,13 @@ fn address_json(w: &Walk, heap_walk: Option<(usize, f64)>) -> Json {
         ),
     ];
     if let Some((entries, took)) = heap_walk {
-        o.push(("heapWalk", Json::obj(vec![("entries", Json::n(entries as f64)), ("ms", Json::n((took * 10.0).round() / 10.0))])));
+        o.push((
+            "heapWalk",
+            Json::obj(vec![
+                ("entries", Json::n(entries as f64)),
+                ("ms", Json::n((took * 10.0).round() / 10.0)),
+            ]),
+        ));
         o.push((
             "largestUnattributed",
             Json::arr(
@@ -720,7 +802,11 @@ fn mimalloc() -> Mimalloc {
     let mut buf = vec![0u8; 64 * 1024];
     let p = unsafe { mi_stats_get_json(buf.len(), buf.as_mut_ptr().cast()) };
     if p.is_null() {
-        return Mimalloc { committed: 0.0, live: 0.0, json: Json::Null };
+        return Mimalloc {
+            committed: 0.0,
+            live: 0.0,
+            json: Json::Null,
+        };
     }
     let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     let text = String::from_utf8_lossy(&buf[..len]);
@@ -732,11 +818,17 @@ fn mimalloc() -> Mimalloc {
         live: normal + huge,
         json: Json::obj(vec![
             ("committedMB", mb(committed)),
-            ("reservedMB", mb(mi_current(&text, "reserved").unwrap_or(0.0))),
+            (
+                "reservedMB",
+                mb(mi_current(&text, "reserved").unwrap_or(0.0)),
+            ),
             ("mallocNormalMB", mb(normal)),
             ("mallocHugeMB", mb(huge)),
             ("pages", Json::n(mi_current(&text, "pages").unwrap_or(0.0))),
-            ("threads", Json::n(mi_current(&text, "threads").unwrap_or(0.0))),
+            (
+                "threads",
+                Json::n(mi_current(&text, "threads").unwrap_or(0.0)),
+            ),
         ]),
     }
 }
@@ -785,7 +877,12 @@ fn jsc_stats() -> Jsc {
 // ---------------------------------------------------------------------------
 
 /// `(name, LUID, hardware identity, adapter)`.
-type Adapter = (String, (u32, i32), [u32; 4], windows::Win32::Graphics::Dxgi::IDXGIAdapter3);
+type Adapter = (
+    String,
+    (u32, i32),
+    [u32; 4],
+    windows::Win32::Graphics::Dxgi::IDXGIAdapter3,
+);
 
 thread_local! {
     /// The adapters, enumerated once (a DXGI factory per `mem` costs
@@ -799,11 +896,17 @@ fn adapters() -> Vec<Adapter> {
     ADAPTERS.with(|cell| {
         cell.borrow_mut()
             .get_or_insert_with(|| {
-                let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return Vec::new() };
+                let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
+                    return Vec::new();
+                };
                 let mut out: Vec<Adapter> = Vec::new();
                 for i in 0.. {
-                    let Ok(adapter) = (unsafe { factory.EnumAdapters1(i) }) else { break };
-                    let Ok(desc) = (unsafe { adapter.GetDesc1() }) else { continue };
+                    let Ok(adapter) = (unsafe { factory.EnumAdapters1(i) }) else {
+                        break;
+                    };
+                    let Ok(desc) = (unsafe { adapter.GetDesc1() }) else {
+                        continue;
+                    };
                     let luid = (desc.AdapterLuid.LowPart, desc.AdapterLuid.HighPart);
                     if out.iter().any(|(_, l, ..)| *l == luid) {
                         continue;
@@ -811,7 +914,9 @@ fn adapters() -> Vec<Adapter> {
                     let n = desc.Description.iter().position(|&c| c == 0).unwrap_or(desc.Description.len());
                     let name = String::from_utf16_lossy(&desc.Description[..n]);
                     let hw = [desc.VendorId, desc.DeviceId, desc.SubSysId, desc.Revision];
-                    let Ok(a3) = adapter.cast::<IDXGIAdapter3>() else { continue };
+                    let Ok(a3) = adapter.cast::<IDXGIAdapter3>() else {
+                        continue;
+                    };
                     out.push((name, luid, hw, a3));
                 }
                 out
@@ -856,13 +961,20 @@ fn gpu() -> Gpu {
         shared_total += shared.CurrentUsage as f64;
         out.push(Json::obj(vec![
             ("adapter", Json::s(name)),
-            ("luid", Json::s(format!("{:08x}:{:08x}", luid.1 as u32, luid.0))),
+            (
+                "luid",
+                Json::s(format!("{:08x}:{:08x}", luid.1 as u32, luid.0)),
+            ),
             ("dedicatedMB", mb(local.CurrentUsage as f64)),
             ("sharedMB", mb(shared.CurrentUsage as f64)),
             ("dedicatedBudgetMB", mb(local.Budget as f64)),
         ]));
     }
-    Gpu { dedicated, shared: shared_total, json: Json::arr(out) }
+    Gpu {
+        dedicated,
+        shared: shared_total,
+        json: Json::arr(out),
+    }
 }
 
 struct Renderer {
@@ -876,7 +988,10 @@ struct Renderer {
 fn renderer(window: &Window) -> Renderer {
     let scale = window.scale_factor();
     let size = window.viewport_size();
-    let (w, h) = ((f32::from(size.width) * scale).round() as f64, (f32::from(size.height) * scale).round() as f64);
+    let (w, h) = (
+        (f32::from(size.width) * scale).round() as f64,
+        (f32::from(size.height) * scale).round() as f64,
+    );
     // `gpui_windows::directx_renderer`: a 3-buffer BGRA swap chain, a
     // single-sample and a 4x MSAA BGRA path target — 32 bytes a pixel.
     let targets = 32.0 * w * h;
@@ -938,8 +1053,14 @@ fn images(cx: &App) -> Images {
         .iter()
         .map(|(nw, nh, dw, dh, b)| {
             Json::obj(vec![
-                ("natural", Json::arr(vec![Json::n(f64::from(*nw)), Json::n(f64::from(*nh))])),
-                ("drawn", Json::arr(vec![Json::n(f64::from(*dw)), Json::n(f64::from(*dh))])),
+                (
+                    "natural",
+                    Json::arr(vec![Json::n(f64::from(*nw)), Json::n(f64::from(*nh))]),
+                ),
+                (
+                    "drawn",
+                    Json::arr(vec![Json::n(f64::from(*dw)), Json::n(f64::from(*dh))]),
+                ),
                 ("MB", mb(*b as f64)),
             ])
         })
@@ -972,7 +1093,9 @@ fn images(cx: &App) -> Images {
                         ("largest", Json::arr(largest)),
                     ])
                 } else {
-                    Json::s("off — the Rust heap is not being counted (VN_MEMSTATS=0, or a prod build)")
+                    Json::s(
+                        "off — the Rust heap is not being counted (VN_MEMSTATS=0, or a prod build)",
+                    )
                 },
             ),
             (
@@ -1004,7 +1127,10 @@ fn images(cx: &App) -> Images {
                             ("noCopy", Json::n(res.kept_full.no_copy as f64)),
                             ("smallSaving", Json::n(res.kept_full.small_saving as f64)),
                             ("canvasRead", Json::n(res.kept_full.canvas_read as f64)),
-                            ("fullResWindow", Json::n(res.kept_full.full_res_window as f64)),
+                            (
+                                "fullResWindow",
+                                Json::n(res.kept_full.full_res_window as f64),
+                            ),
                         ]),
                     ),
                 ]),
@@ -1015,7 +1141,13 @@ fn images(cx: &App) -> Images {
 
 fn tree() -> (Json, f64) {
     let m = vn_tree::devtools::tree_mem();
-    let per = |b: usize| if m.nodes > 0 { Json::n((b as f64 / m.nodes as f64).round()) } else { Json::Null };
+    let per = |b: usize| {
+        if m.nodes > 0 {
+            Json::n((b as f64 / m.nodes as f64).round())
+        } else {
+            Json::Null
+        }
+    };
     (
         Json::obj(vec![
             ("nodes", Json::n(m.nodes as f64)),
@@ -1064,7 +1196,9 @@ fn side() -> Vec<(&'static str, u64)> {
 /// `<vn-sticker>`'s engine: its sources, loaded engines, frames held and loop
 /// cache. `null` until something has used it.
 fn stickers() -> Json {
-    let Some(s) = vn_sticker::stats() else { return Json::Null };
+    let Some(s) = vn_sticker::stats() else {
+        return Json::Null;
+    };
     let n = |v: usize| Json::n(v as f64);
     Json::obj(vec![
         ("sources", n(s.sources)),
@@ -1092,7 +1226,14 @@ fn rust_json(rust: Option<(i64, i64, i64, u64)>) -> Json {
                 .into_iter()
                 .map(|(upper, b, n)| {
                     Json::obj(vec![
-                        ("upTo", if upper == u64::MAX { Json::Null } else { Json::n(upper as f64) }),
+                        (
+                            "upTo",
+                            if upper == u64::MAX {
+                                Json::Null
+                            } else {
+                                Json::n(upper as f64)
+                            },
+                        ),
                         ("bytes", bytes(b as f64)),
                         ("blocks", Json::n(n as f64)),
                     ])
@@ -1121,7 +1262,11 @@ fn item(label: impl Into<String>, b: f64) -> Json {
 /// A row that is NOT a slice of its category — a figure from another
 /// accountant (JSC's own GC heap count) shown beside the slices it overlaps.
 fn info(label: impl Into<String>, b: f64) -> Json {
-    Json::obj(vec![("label", Json::s(label)), ("bytes", bytes(b)), ("info", Json::Bool(true))])
+    Json::obj(vec![
+        ("label", Json::s(label)),
+        ("bytes", bytes(b)),
+        ("info", Json::Bool(true)),
+    ])
 }
 
 fn category(key: &str, label: &str, b: f64, note: &str, items: Vec<Json>) -> Json {
@@ -1161,13 +1306,21 @@ struct Inputs<'a> {
 /// Categories that sum to the committed address space, in bytes.
 fn breakdown(i: &Inputs) -> Json {
     let w = i.walk;
-    let side = |name: &str| i.side.iter().find(|(k, _)| *k == name).map_or(0.0, |(_, v)| *v as f64);
+    let side = |name: &str| {
+        i.side
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map_or(0.0, |(_, v)| *v as f64)
+    };
 
     // Images: the exe and every DLL, the biggest named.
     let mut image_items: Vec<Json> = w.modules.iter().take(10).map(|(n, b)| item(n.clone(), *b as f64)).collect();
     if w.modules.len() > 10 {
         let rest: usize = w.modules.iter().skip(10).map(|(_, b)| *b).sum();
-        image_items.push(item(format!("{} other modules", w.modules.len() - 10), rest as f64));
+        image_items.push(item(
+            format!("{} other modules", w.modules.len() - 10),
+            rest as f64,
+        ));
     }
 
     // Mapped files.
@@ -1175,23 +1328,44 @@ fn breakdown(i: &Inputs) -> Json {
         .mapped_files
         .iter()
         .take(8)
-        .map(|(n, b)| item(if n.is_empty() { "pagefile-backed sections (shared memory)".to_string() } else { n.clone() }, *b as f64))
+        .map(|(n, b)| {
+            item(
+                if n.is_empty() {
+                    "pagefile-backed sections (shared memory)".to_string()
+                } else {
+                    n.clone()
+                },
+                *b as f64,
+            )
+        })
         .collect();
     if w.mapped_files.len() > 8 {
         let rest: usize = w.mapped_files.iter().skip(8).map(|(_, b)| *b).sum();
-        mapped_items.push(item(format!("{} other files", w.mapped_files.len() - 8), rest as f64));
+        mapped_items.push(item(
+            format!("{} other files", w.mapped_files.len() - 8),
+            rest as f64,
+        ));
     }
 
     // JSC: its malloc (mimalloc, which the GC heap's blocks come out of too)
     // and its JIT's executable pages.
     let jsc_bytes = i.mi.committed + w.exec as f64;
     let jsc_items = vec![
-        item("mimalloc: live allocations (GC heap blocks, strings, bytecode, the bundle's source)", i.mi.live.min(i.mi.committed)),
-        item("mimalloc: committed, not allocated (pages it has not returned)", i.mi.committed - i.mi.live),
+        item(
+            "mimalloc: live allocations (GC heap blocks, strings, bytecode, the bundle's source)",
+            i.mi.live.min(i.mi.committed),
+        ),
+        item(
+            "mimalloc: committed, not allocated (pages it has not returned)",
+            i.mi.committed - i.mi.live,
+        ),
         item("JIT code (executable private pages)", w.exec as f64),
         info("by JSC's own count: GC heap in use", i.jsc.size),
         info("by JSC's own count: GC heap capacity", i.jsc.capacity),
-        info("by JSC's own count: extra memory (ArrayBuffers, external strings)", i.jsc.extra),
+        info(
+            "by JSC's own count: extra memory (ArrayBuffers, external strings)",
+            i.jsc.extra,
+        ),
     ];
 
     // The process heap: Rust's `System` allocator and the static CRT's malloc.
@@ -1200,14 +1374,29 @@ fn breakdown(i: &Inputs) -> Json {
     match i.rust_live {
         Some(live) => {
             let parts = [
-                ("retained tree (nodes, styles, vars) — estimate", i.tree_bytes),
-                ("decoded images (gpui asset cache; a reduced one is its copy's size)", i.images.decoded),
+                (
+                    "retained tree (nodes, styles, vars) — estimate",
+                    i.tree_bytes,
+                ),
+                (
+                    "decoded images (gpui asset cache; a reduced one is its copy's size)",
+                    i.images.decoded,
+                ),
                 ("downscaled image copies (resample LRU)", i.images.copies),
                 ("canvas surfaces (host copies)", side("canvasHostCopyBytes")),
                 ("SVG colour rasters", side("svgColourRasterBytes")),
-                ("encoded images held in memory, image src strings", side("imgEncodedInMemoryBytes") + side("imgSrcBytes")),
-                ("web fonts (font file bytes)", side("fontFacesRegisteredBytes") + side("fontFacesLoadedNotRegisteredBytes")),
-                ("devtools network tee (rows, bodies, metadata)", side("netRowBytes") + side("netBodyBytes") + side("netMetaBytes")),
+                (
+                    "encoded images held in memory, image src strings",
+                    side("imgEncodedInMemoryBytes") + side("imgSrcBytes"),
+                ),
+                (
+                    "web fonts (font file bytes)",
+                    side("fontFacesRegisteredBytes") + side("fontFacesLoadedNotRegisteredBytes"),
+                ),
+                (
+                    "devtools network tee (rows, bodies, metadata)",
+                    side("netRowBytes") + side("netBodyBytes") + side("netMetaBytes"),
+                ),
                 ("devtools log ring", side("logRingBytes")),
             ];
             let mut named: f64 = parts.iter().map(|(_, b)| *b).sum();
@@ -1230,13 +1419,22 @@ fn breakdown(i: &Inputs) -> Json {
                 "rest of the Rust heap (gpui, the cascade, text layout caches, the JS bridge — not itemised)",
                 live - named,
             ));
-            rust_items.push(item("C/C++ malloc on the same heap (allocated − Rust live)", i.heaps.main_allocated - live));
+            rust_items.push(item(
+                "C/C++ malloc on the same heap (allocated − Rust live)",
+                i.heaps.main_allocated - live,
+            ));
         }
         None => {
-            rust_items.push(item("allocated: Rust + C/C++ malloc (Rust heap counting is off)", i.heaps.main_allocated));
+            rust_items.push(item(
+                "allocated: Rust + C/C++ malloc (Rust heap counting is off)",
+                i.heaps.main_allocated,
+            ));
         }
     }
-    rust_items.push(item("heap slack (committed, not allocated)", i.heaps.main_committed - i.heaps.main_allocated));
+    rust_items.push(item(
+        "heap slack (committed, not allocated)",
+        i.heaps.main_committed - i.heaps.main_allocated,
+    ));
     if i.heaps.other_committed > 0.0 {
         rust_items.push(item("other Win32 heaps", i.heaps.other_committed));
     }
@@ -1249,23 +1447,40 @@ fn breakdown(i: &Inputs) -> Json {
         .stack_groups
         .iter()
         .take(6)
-        .map(|(name, n, committed, _)| item(format!("thread stacks: {name} ×{n}"), *committed as f64))
+        .map(|(name, n, committed, _)| {
+            item(format!("thread stacks: {name} ×{n}"), *committed as f64)
+        })
         .collect();
     if w.stack_groups.len() > 6 {
-        let (n, c) = w.stack_groups.iter().skip(6).fold((0, 0), |(n, c), g| (n + g.1, c + g.2));
-        other_items.push(item(format!("thread stacks: {} other threads", n), c as f64));
+        let (n, c) = w
+            .stack_groups
+            .iter()
+            .skip(6)
+            .fold((0, 0), |(n, c), g| (n + g.1, c + g.2));
+        other_items.push(item(
+            format!("thread stacks: {} other threads", n),
+            c as f64,
+        ));
     }
-    other_items.push(item("rest: D3D / GPU driver user-mode heaps, other VirtualAlloc users", other - stacks));
+    other_items.push(item(
+        "rest: D3D / GPU driver user-mode heaps, other VirtualAlloc users",
+        other - stacks,
+    ));
 
     // Resident bytes per row (only with `regions`: without the heap walk the
     // heap's pages and the unattributed ones cannot be told apart).
     let res = |classes: &[Resident]| {
         i.resident.map(|r| {
-            classes.iter().fold([0.0, 0.0], |acc, c| [acc[0] + r[*c as usize][0], acc[1] + r[*c as usize][1]])
+            classes.iter().fold([0.0, 0.0], |acc, c| {
+                [acc[0] + r[*c as usize][0], acc[1] + r[*c as usize][1]]
+            })
         })
     };
     if let Some(r) = i.resident {
-        other_items.push(info("resident: thread stacks", r[Resident::Stack as usize][0] + r[Resident::Stack as usize][1]));
+        other_items.push(info(
+            "resident: thread stacks",
+            r[Resident::Stack as usize][0] + r[Resident::Stack as usize][1],
+        ));
     }
 
     let total = (w.private + w.mapped + w.image) as f64;
@@ -1281,11 +1496,23 @@ fn breakdown(i: &Inputs) -> Json {
             res(&[Resident::Image]),
         ),
         with_resident(
-            category("mapped", "Mapped files", w.mapped as f64, "fonts, locale data, shared sections", mapped_items),
+            category(
+                "mapped",
+                "Mapped files",
+                w.mapped as f64,
+                "fonts, locale data, shared sections",
+                mapped_items,
+            ),
             res(&[Resident::Mapped]),
         ),
         with_resident(
-            category("jsc", "JSC", jsc_bytes, "mimalloc (JSC's malloc) + JIT code", jsc_items),
+            category(
+                "jsc",
+                "JSC",
+                jsc_bytes,
+                "mimalloc (JSC's malloc) + JIT code",
+                jsc_items,
+            ),
             res(&[Resident::Jsc]),
         ),
         with_resident(
@@ -1313,11 +1540,17 @@ fn breakdown(i: &Inputs) -> Json {
     let gpu_total = i.gpu.dedicated + i.gpu.shared;
     let gpu_named = a.iter().sum::<f64>() + i.renderer.targets;
     Json::obj(vec![
-        ("basis", Json::s("committed address space: private + mapped + image")),
+        (
+            "basis",
+            Json::s("committed address space: private + mapped + image"),
+        ),
         ("totalBytes", bytes(total)),
         ("privateBytes", bytes(i.counters.private_bytes)),
         ("workingSetBytes", bytes(i.counters.working_set)),
-        ("privateWorkingSetBytes", bytes(i.counters.private_working_set)),
+        (
+            "privateWorkingSetBytes",
+            bytes(i.counters.private_working_set),
+        ),
         ("rustCounting", Json::Bool(i.rust_live.is_some())),
         ("categories", Json::arr(cats)),
         (
@@ -1331,8 +1564,14 @@ fn breakdown(i: &Inputs) -> Json {
                         item("sprite atlas: monochrome (glyphs)", a[0]),
                         item("sprite atlas: polychrome (images, emoji, SVG)", a[1]),
                         item("sprite atlas: subpixel (glyphs)", a[2]),
-                        item("render targets (swap chain + path MSAA, estimate)", i.renderer.targets),
-                        item("rest (video surfaces, driver, D3D internals)", gpu_total - gpu_named),
+                        item(
+                            "render targets (swap chain + path MSAA, estimate)",
+                            i.renderer.targets,
+                        ),
+                        item(
+                            "rest (video surfaces, driver, D3D internals)",
+                            gpu_total - gpu_named,
+                        ),
                     ]),
                 ),
             ]),
@@ -1346,7 +1585,13 @@ fn breakdown(i: &Inputs) -> Json {
 /// `regions`: also walk the process heap (locked meanwhile), so the address
 /// walk can tell its reservations from the unattributed ones, and list the
 /// biggest of those.
-pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, cx: &mut App) -> Json {
+pub(crate) fn report(
+    gc: bool,
+    code: bool,
+    regions: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Json {
     let gc = gc || code;
     let before = if gc { Some((process(), jsc_stats())) } else { None };
     let gc_ms = if gc {
@@ -1400,12 +1645,18 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
         ("compiles", Json::n(compiles as f64)),
         ("ms", Json::n(compile_ms.round())),
         ("sourceBytes", bytes(compile_source as f64)),
-        ("netGrowthBytes", compile_growth.map_or(Json::Null, |g| Json::n(g as f64))),
+        (
+            "netGrowthBytes",
+            compile_growth.map_or(Json::Null, |g| Json::n(g as f64)),
+        ),
     ]);
     let mut o = vec![
         ("breakdown", breakdown),
         ("process", counters.json),
-        ("addressSpace", address_json(&walk, heap_walk.as_ref().map(|(_, n, took)| (*n, *took)))),
+        (
+            "addressSpace",
+            address_json(&walk, heap_walk.as_ref().map(|(_, n, took)| (*n, *took))),
+        ),
         ("heaps", heaps.json),
         ("rustHeap", rust_json(rust)),
         ("mimalloc", mi.json),
@@ -1439,23 +1690,49 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
             "gc",
             Json::obj(vec![
                 ("ms", Json::n(took)),
-                ("before", Json::obj(vec![("process", before_counters.json), ("jsc", before_jsc.json)])),
-                ("freedPrivateBytes", bytes(before_counters.private_bytes - counters.private_bytes)),
+                (
+                    "before",
+                    Json::obj(vec![
+                        ("process", before_counters.json),
+                        ("jsc", before_jsc.json),
+                    ]),
+                ),
+                (
+                    "freedPrivateBytes",
+                    bytes(before_counters.private_bytes - counters.private_bytes),
+                ),
                 ("freedJscHeapBytes", bytes(before_jsc.size - jsc.size)),
             ]),
         ));
     }
     #[cfg(feature = "webgpu")]
     {
-        let (native, readback, snapshots) = vn_runtime::redjs::webapi::webgpu::canvas::presentation_stats();
-        let (copies,fallbacks) = vn_tree::devtools::gpu_canvas_presentation_stats();
-        o.push(("webgpuPresentation", Json::obj(vec![
-            ("atlasGpuCopies", Json::n(copies as f64)),
-            ("atlasCpuFallbacks", Json::n(fallbacks as f64)),
-            ("nativeDisplayFrames", Json::n(native as f64)),
-            ("readbackDisplayFrames", Json::n(readback as f64)),
-            ("explicitSnapshots", Json::n(snapshots as f64)),
-        ])));
+        #[cfg(target_os = "windows")]
+        if let Some(shared) = crate::shared_gpu::stats() {
+            o.push((
+                "webgpuNative",
+                Json::obj(vec![
+                    ("rendererGeneration", Json::n(shared.generation as f64)),
+                    ("liveContexts", Json::n(shared.contexts as f64)),
+                    ("liveConverters", Json::n(shared.converters as f64)),
+                    ("liveFrames", Json::n(shared.frames as f64)),
+                    ("videoBridgeActive", Json::Bool(shared.video_bridge_active)),
+                ]),
+            ));
+        }
+        let (native, readback, snapshots) =
+            vn_runtime::redjs::webapi::webgpu::canvas::presentation_stats();
+        let (copies, fallbacks) = vn_tree::devtools::gpu_canvas_presentation_stats();
+        o.push((
+            "webgpuPresentation",
+            Json::obj(vec![
+                ("atlasGpuCopies", Json::n(copies as f64)),
+                ("atlasCpuFallbacks", Json::n(fallbacks as f64)),
+                ("nativeDisplayFrames", Json::n(native as f64)),
+                ("readbackDisplayFrames", Json::n(readback as f64)),
+                ("explicitSnapshots", Json::n(snapshots as f64)),
+            ]),
+        ));
     }
     Json::obj(o)
 }

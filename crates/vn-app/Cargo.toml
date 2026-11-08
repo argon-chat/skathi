@@ -12,6 +12,7 @@ build = "build.rs"
 # Experimental native inspector backend; explicit manifest required.
 native-aot = ["vn-runtime/native-aot"]
 # Native WebGPU and canvas presentation; included in normal host builds.
+native-dx12 = ["gpui_windows/native-dx12"]
 webgpu = ["vn-runtime/webgpu", "vn-tree/webgpu", "dep:wgpu", "dep:pollster"]
 # The BARE HOST (m25, docs/PACKAGING.md): the dev manifest/HMR polling is
 # compiled out, and the app — bundle, window config, name, assets — is the VNPK
@@ -61,7 +62,7 @@ devtools = []
 # default; `cargo build -p vn-app --no-default-features` builds a host with no
 # audio at all, which is ~40 fewer crates to compile. The reasoning for the
 # default living on rather than off is in crates/vn-runtime/Cargo.toml.
-default = ["audio", "storages", "clipboard", "indexeddb", "voice", "webgpu"]
+default = ["audio", "storages", "clipboard", "indexeddb", "voice", "webgpu", "native-dx12"]
 # `vn-voice/audio` rides along: it is the flag that lets the voice mixer see
 # `redjs::webapi::pcm` and route a room's playout into the app's graph. The two
 # must move together — a host with `AudioContext` but no way to reach it from
@@ -200,14 +201,13 @@ embed-resource = "=3.0.11"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# Same physical device as redjs; only the experimental shared-device host uses
-# these directly. The default host does not compile wgpu.
+# WebGPU joins the native renderer device on first requestAdapter.
+# Compiling the API does not initialize its guest device or shader caches.
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
 pollster = { version = "0.4", optional = true }
 anyhow = "1"
-# `<video>` decodes onto the renderer's own D3D11 device, and this is the only
-# crate that can see both halves: gpui_windows publishes the device, vn-tree
-# hands it to the Media Foundation backend. Nothing else here uses gpui_windows.
+# The host connects GPUI's native generation to WebGPU and lazily lends a
+# D3D11On12 facade to Media Foundation when the first video needs a decoder.
 gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features = false }
 windows = { version = "0.62", features = [
     "Win32_Foundation",

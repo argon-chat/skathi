@@ -45,7 +45,7 @@ mod source;
 use std::ffi::c_void;
 use std::path::Path;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 
 use windows::core::{Interface, BSTR, HSTRING};
 use windows::Win32::Foundation::HMODULE;
@@ -81,6 +81,27 @@ pub use notify::EngineNotify;
 
 static SHARED_DEVICE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static SHARED_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// An owned lease on a renderer generation, borrowed only while cloning the
+/// D3D11 COM interface. The lease prevents a concurrent device replacement from
+/// invalidating the raw ABI pointer before AddRef.
+pub struct SharedVideoDevice {
+    pub device: *mut c_void,
+    pub generation: u64,
+    pub keep_alive: Arc<dyn std::any::Any + Send + Sync>,
+}
+
+pub type SharedDeviceProvider = fn() -> Result<Option<SharedVideoDevice>, String>;
+static SHARED_DEVICE_PROVIDER: OnceLock<SharedDeviceProvider> = OnceLock::new();
+
+/// Installs a device factory without opening a decoder or initializing D3D11.
+/// The provider runs only when a Media Foundation backend needs a device.
+///
+/// # Safety
+/// A successful provider lease must own a live ID3D11Device through keep_alive.
+pub unsafe fn install_shared_device_provider(provider: SharedDeviceProvider) -> Result<(), &'static str> {
+    SHARED_DEVICE_PROVIDER.set(provider).map_err(|_| "video device provider already installed")
+}
 
 /// Publishes the renderer's `ID3D11Device` so decoded frames land on it.
 ///
@@ -127,22 +148,33 @@ pub(crate) unsafe fn release_texture(texture: *mut c_void) {
 
 /// The renderer's device if one was published, else a private one built the
 /// same way. `bool` = "this is the renderer's own device".
-fn device() -> Result<(ID3D11Device, bool), MediaError> {
+fn device() -> Result<(ID3D11Device, bool, Option<Arc<dyn std::any::Any + Send + Sync>>), MediaError> {
     // `VN_VIDEO_DEVICE=private` forces the fallback. An escape hatch worth
     // keeping: sharing the renderer's device is the whole zero-copy argument,
     // so when a machine misbehaves the first question is always "is it the
     // sharing?", and answering it should not need a rebuild.
     if std::env::var("VN_VIDEO_DEVICE").is_ok_and(|v| v == "private") {
-        return Ok((private_device()?, false));
+        return Ok((private_device()?, false, None));
+    }
+    if let Some(provider) = SHARED_DEVICE_PROVIDER.get() {
+        let lease = provider().map_err(|message| MediaError::new(MediaErrorCode::Decode, message))?;
+        if let Some(lease) = lease {
+            let borrowed = unsafe { ID3D11Device::from_raw_borrowed(&lease.device) }
+                .ok_or_else(|| MediaError::new(MediaErrorCode::Decode, "renderer video provider returned a null D3D11 device"))?;
+            return Ok((borrowed.clone(), true, Some(lease.keep_alive)));
+        }
+        // The provider owns its generations. Its old borrowed atomic pointer
+        // may already be dead, so do not fall through to the legacy cache.
+        return Ok((private_device()?, false, None));
     }
     let raw = SHARED_DEVICE.load(Ordering::Acquire);
     if !raw.is_null() {
         // SAFETY: the host publishes a device it owns for the process lifetime.
         if let Some(borrowed) = unsafe { ID3D11Device::from_raw_borrowed(&raw) } {
-            return Ok((borrowed.clone(), true));
+            return Ok((borrowed.clone(), true, None));
         }
     }
-    Ok((private_device()?, false))
+    Ok((private_device()?, false, None))
 }
 
 /// The fallback device: same flags the renderer uses, so the two paths differ
@@ -248,12 +280,15 @@ pub struct MediaEngineBackend {
     current_src: String,
     _source_extension: windows::Win32::Media::MediaFoundation::IMFMediaEngineExtension,
     source_control: source::Control,
+    /// Last field: release the host video facade only after engine and texture
+    /// COM references are gone, letting a pure-chat session return to idle.
+    _renderer_owner: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl MediaEngineBackend {
     pub fn new() -> Result<Self, MediaError> {
         ensure_platform()?;
-        let (device, shared_device) = device()?;
+        let (device, shared_device, renderer_owner) = device()?;
 
         // The DXGI device manager is how MF is told "decode onto THIS device".
         let mut token = 0u32;
@@ -337,6 +372,7 @@ impl MediaEngineBackend {
             current_src: String::new(),
             _source_extension: source_extension,
             source_control,
+            _renderer_owner: renderer_owner,
         })
     }
 

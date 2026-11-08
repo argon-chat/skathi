@@ -542,6 +542,27 @@ fn fetch_live(id: u32, win: WinKey, now: Instant, window: &mut Window) -> crate:
 #[cfg(feature = "webgpu")]
 fn upload_native(native: &NativePixels, window: &mut Window, win: WinKey) -> gpui::TileWrite {
     let mut write = gpui::TileWrite::Refused;
+    // A COM reference alone does not retain wgpu's allocation. Keep the frame
+    // owner until the renderer's copy fence retires it.
+    struct FrameLease {
+        _frame: Arc<dyn vn_runtime::redjs::webapi::webgpu::canvas::NativeFrame>,
+    }
+    let owner = Arc::new(FrameLease { _frame: native.frame.frame.clone() });
+    let result = native.frame.frame.copy_d3d12(&mut |resource, ready_fence, ready_value| {
+        match window.write_image_tile_d3d12(
+            &native.image, 0,
+            gpui::D3D12TextureHandle { resource, ready_fence, ready_value }, owner.clone(),
+        ) {
+            Ok(result) => write = result,
+            Err(error) => warn_compat("canvas:native-d3d12-copy", &format!("D3D12 canvas import failed: {error:#}")),
+        }
+        write != gpui::TileWrite::Refused
+    });
+    if result == Ok(true) && write != gpui::TileWrite::Refused {
+        native.uploaded.set(Some(win));
+        NATIVE_UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return write;
+    }
     let result = native.frame.frame.copy_d3d11(&mut |texture| {
         write = window
             .write_image_tile(

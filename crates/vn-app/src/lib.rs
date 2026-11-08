@@ -81,7 +81,7 @@ mod popout_win; // a pop-out shown and hidden, owned, covering a monitor (MULTIW
 #[cfg(feature = "prod")]
 mod prod;
 #[cfg(all(feature = "webgpu", target_os = "windows"))]
-mod shared_gpu; // one-device D3D11On12 renderer/WebGPU generation
+mod shared_gpu; // renderer/WebGPU generation interoperability
 mod quiet; // VN_WINDOW_FOCUS=never: test hosts open behind and never take the foreground
 mod reload; // `location.reload()`: the restart path, on request
 mod shutdown; // a close hides the windows at once; the teardown runs under a deadline
@@ -1092,15 +1092,38 @@ fn publish_app_root() {
 #[cfg(target_os = "windows")]
 fn publish_video_device() {
     use std::cell::Cell;
+    #[cfg(feature = "native-dx12")]
+    {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            fn provide() -> Result<Option<vn_tree::SharedVideoDevice>, String> {
+                gpui_windows::ensure_renderer_d3d11_device()
+                    .map(|lease| lease.map(|lease| vn_tree::SharedVideoDevice {
+                        device: lease.device,
+                        generation: lease.generation,
+                        keep_alive: lease.keep_alive,
+                    }))
+                    .map_err(|error| format!("Could not initialize renderer video bridge: {error:#}"))
+            }
+            // The renderer's owned lease keeps the raw COM pointer valid.
+            if let Err(error) = unsafe { vn_tree::install_video_device_provider(provide) } {
+                log::error!("Could not install lazy video device provider: {error}");
+            }
+        });
+    }
     thread_local! {
         /// 0 is never a live generation — `publish_device` pre-increments.
         static PUBLISHED: Cell<u64> = const { Cell::new(0) };
     }
     let (ptr, generation) = gpui_windows::renderer_d3d11_device();
-    if ptr.is_null() || PUBLISHED.with(Cell::get) == generation {
+    let previous = PUBLISHED.with(Cell::get);
+    if generation == 0 || previous == generation || (ptr.is_null() && previous == 0) {
         return;
     }
-    let first = PUBLISHED.with(Cell::get) == 0;
+    // A new native12 generation intentionally has no D3D11 bridge yet. Rebuild
+    // old decoders even when the new pointer is null; their next load asks the
+    // lazy provider for the new device, without allocating video state at boot.
+    let first = previous == 0;
     PUBLISHED.with(|p| p.set(generation));
     // SAFETY: the pointer comes straight from the live `DirectXDevices`.
     unsafe { vn_tree::set_video_device(ptr, generation) };

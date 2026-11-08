@@ -810,6 +810,18 @@ pub unsafe fn set_video_device(ptr: *mut c_void, generation: u64) {
     vn_video::mf::set_shared_device(ptr, generation);
 }
 
+/// A lazy renderer device provider, initialized when the first video backend
+/// asks for it. Installing it does not allocate any Direct3D11 resources.
+#[cfg(windows)]
+pub use vn_video::mf::{SharedDeviceProvider, SharedVideoDevice};
+
+/// # Safety
+/// The provider's successful lease must retain its live D3D11 device.
+#[cfg(windows)]
+pub unsafe fn install_video_device_provider(provider: SharedDeviceProvider) -> Result<(), &'static str> {
+    unsafe { vn_video::mf::install_shared_device_provider(provider) }
+}
+
 /// The renderer recreated its D3D11 device; rebuild every `<video>` on the new
 /// one, keeping position and transport state. Returns how many were rebuilt.
 ///
