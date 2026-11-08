@@ -55,6 +55,17 @@ import { installWaapi } from "./waapi";
 // document (`windowRootOf`).
 import { VnWindow, WINDOW_ROOT, windowRoots } from "./vnwindow";
 
+// Cache optional devtools controls before user code can replace globals.
+// A zero token is the inactive path; it adds no exception region around user JS.
+const traceCallbackGlobals = globalThis as unknown as {
+  __vn_trace_callback_begin?: (callback: unknown) => number;
+  __vn_trace_callback_end?: (token: number) => void;
+};
+const traceCallbackBegin = typeof traceCallbackGlobals.__vn_trace_callback_begin === "function" &&
+  typeof traceCallbackGlobals.__vn_trace_callback_end === "function"
+  ? traceCallbackGlobals.__vn_trace_callback_begin : undefined;
+const traceCallbackEnd = traceCallbackBegin ? traceCallbackGlobals.__vn_trace_callback_end : undefined;
+
 // ---- the realm a reload keeps (m26 client sweep #3) ------------------------
 //
 // `location.reload()` evaluates this module again in the SAME JavaScript realm
@@ -5144,7 +5155,10 @@ const realm = (() => {
         ? function (this: unknown, ...a: unknown[]) {
             live.delete(id);
             if (live === frames && typeof a[0] === "number") for (const stamp of frameStampers) stamp(a[0]);
-            return (cb as Fn).apply(this, a);
+            const token = traceCallbackBegin?.(cb) ?? 0;
+            if (token === 0) return (cb as Fn).apply(this, a);
+            try { return (cb as Fn).apply(this, a); }
+            finally { traceCallbackEnd!(token); }
           }
         : cb;
       id = set.call(g, run, ...rest);
@@ -6365,13 +6379,16 @@ function callListener(
   // no-op shadows the prototype's for the length of the call.
   const own = passive ? Object.getOwnPropertyDescriptor(ev, "preventDefault") : undefined;
   if (passive) Object.defineProperty(ev, "preventDefault", { value: () => {}, configurable: true, writable: true });
+  let traceToken = 0;
   try {
+    traceToken = traceCallbackBegin?.(fn) ?? 0;
     fn.call(self, ev);
   } catch (e) {
     (globalThis.queueMicrotask ?? queueMicrotask)(() => {
       throw e;
     });
   } finally {
+    if (traceToken !== 0) traceCallbackEnd!(traceToken);
     if (passive) {
       if (own) Object.defineProperty(ev, "preventDefault", own);
       else delete (ev as { preventDefault?: unknown }).preventDefault;

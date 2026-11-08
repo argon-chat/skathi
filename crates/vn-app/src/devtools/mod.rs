@@ -754,6 +754,28 @@ fn targets_json() -> String {
     }
 }
 
+// These controls must not use host_fn!: begin returns an open child span,
+// whose lifetime deliberately extends beyond this native call into JS.
+unsafe extern "sysv64" fn vn_trace_callback_begin(g: *mut core::ffi::c_void, cf: *mut core::ffi::c_void) -> u64 {
+    use vn_runtime::redjs::{api::{HostArgs, Value}, profiling};
+    if !profiling::enabled() { return Value::int32(0).0; }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let args = HostArgs::new(cf);
+        Value::number(profiling::external_callback_begin(g, args.arg(0).0) as f64).0
+    })) {
+        Ok(value) => value,
+        Err(_) => { log::error!("Frame profiler callback begin failed"); Value::int32(0).0 }
+    }
+}
+unsafe extern "sysv64" fn vn_trace_callback_end(_g: *mut core::ffi::c_void, cf: *mut core::ffi::c_void) -> u64 {
+    use vn_runtime::redjs::{api::{HostArgs, Value}, profiling};
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let token = HostArgs::new(cf).arg(0).as_number().filter(|value| value.is_finite() && *value > 0. && value.fract() == 0.).unwrap_or(0.) as u64;
+        profiling::external_callback_end(token);
+    })).is_err() { log::error!("Frame profiler callback end failed"); }
+    Value::undefined().0
+}
+
 /// Registers the devtools host fns. Call before the app bundle boots.
 ///
 /// Registration is unconditional — a host fn nobody calls costs one entry in a
@@ -761,6 +783,8 @@ fn targets_json() -> String {
 /// devtools are OFF (that is most of what it is for). The JS TEES are not: see
 /// [`install_tees_once`].
 pub fn install(rt: &JsRuntime) {
+    rt.register("__vn_trace_callback_begin", 1, vn_trace_callback_begin as *const _);
+    rt.register("__vn_trace_callback_end", 1, vn_trace_callback_end as *const _);
     rt.register("__vn_devtools_console", 3, vn_devtools_console as *const _);
     rt.register("__vn_devtools_emit", 1, vn_devtools_emit as *const _);
     // The inspector app's only host dependency (docs/DEVTOOLS-UI.md §3): the

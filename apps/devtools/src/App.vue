@@ -119,6 +119,7 @@ function onKey(event: VnKeyboardEvent): void {
   if (ctrl && event.key === "`") {
     event.preventDefault();
     state.consoleOpen = true;
+    resubscribe();
     ui.focusPrompt?.();
     return;
   }

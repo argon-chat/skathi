@@ -68,10 +68,8 @@ const LOG_LIMIT = 1000;
 const NET_LIMIT = 400;
 /** How many frame samples the Performance panel keeps for its chart. */
 const PERF_HISTORY = 240;
-/** …and how many memory samples (one per `mem` poll, every 2 s: four minutes). */
+/** How many explicitly requested memory snapshots the inspector retains. */
 const MEM_HISTORY = 120;
-/** The memory poll's period while the Performance panel is open. */
-export const MEM_POLL_MS = 2000;
 
 /** The console's severity buckets, in the order the filter bar shows them. */
 export const LEVELS = ["error", "warn", "info", "debug"] as const;
@@ -170,7 +168,7 @@ interface State {
   // -- performance
   perf: PerfReply | null;
   perfHistory: number[];
-  /** `mem`'s breakdown, polled every 2 s while the Performance panel is open. */
+  /** The last explicitly requested `mem` breakdown. */
   mem: MemBreakdown | null;
   memHistory: MemSample[];
   memError: string;
@@ -1060,9 +1058,9 @@ export async function refreshPerf(): Promise<void> {
 // ---------------------------------------------------------------------------
 //
 // `mem` is a COMMAND, not a push: it walks the target's address space and asks
-// three allocators, which is a few milliseconds of the target's frame — worth
-// it every 2 s while somebody is looking at the panel, not 4×/s for everyone.
-// A poll that finds the previous one still in flight is skipped.
+// three allocators. Request it explicitly; do not inject periodic main-thread
+// work into the very interaction the inspector is trying to diagnose.
+// A second snapshot is skipped while the previous one is still in flight.
 
 let memInFlight = false;
 

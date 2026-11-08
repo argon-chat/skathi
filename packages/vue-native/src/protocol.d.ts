@@ -583,6 +583,14 @@ declare function __vn_window_click(nodeId: VnNodeId, x: number, y: number): bool
  */
 declare function __vn_log(message: string): void;
 
+/** Optional recording controls; absent in hosts built without devtools.
+ * SDK wrappers pass the original callback at invocation, so callbacks registered
+ * before recording still retain their own executable source location.
+ * A nonzero token must be ended in finally; zero means recording is inactive.
+ */
+declare var __vn_trace_callback_begin: ((callback: unknown) => number) | undefined;
+declare var __vn_trace_callback_end: ((token: number) => void) | undefined;
+
 // ---------------------------------------------------------------------------
 // devtools discovery — crates/vn-app/src/devtools/mod.rs (docs/DEVTOOLS-UI.md)
 // ---------------------------------------------------------------------------
