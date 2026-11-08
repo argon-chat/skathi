@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+# Native WebGPU canvas readbacks share the existing bitmap presenter.
+# Off until the embedding application opts into vn-app/webgpu.
+webgpu = ["vn-runtime/webgpu"]
+
 [dependencies]
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
 vn-css = { path = "../vn-css" }

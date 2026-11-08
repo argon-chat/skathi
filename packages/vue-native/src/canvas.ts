@@ -1,8 +1,7 @@
-// `<canvas>`: its bitmap and its 2D context (the host+media stream's module).
+// `<canvas>`: its bitmap and native 2D or WebGPU context.
 //
-// The context is redjs's own `CanvasRenderingContext2D` (vendor/redjs
-// webapi/canvas2d): state, paths and pixels are native, and the same class
-// backs `OffscreenCanvas`. This module is the ELEMENT half HTML puts on
+// Both contexts live in redjs (`webapi/canvas2d` and `webapi/webgpu`),
+// alongside the OffscreenCanvas implementation. This module is the element half HTML puts on
 // `HTMLCanvasElement` — `width`/`height` reflected from the attributes (300 ×
 // 150 by default; setting either, even to the same value, clears the bitmap
 // and resets the context), `getContext`, `toDataURL`, `toBlob` — and the map
@@ -25,8 +24,10 @@
 // nothing here may touch a host function at module scope — every one is read
 // through `natives()` at call time.
 
-/** A 2D context, as redjs makes it. Opaque here. */
+/** Native contexts are opaque; rendering and capture stay in redjs. */
 type Context2D = object;
+type ContextGPU = object;
+type ContextSelection = { kind: "2d" | "webgpu"; value: object | null };
 
 /** The redjs natives behind the element half (redjs webapi/canvas2d/context.rs). */
 interface CanvasNatives {
@@ -35,6 +36,14 @@ interface CanvasNatives {
   __rjs_canvas_data_url(ctx: Context2D | null, width: number, height: number, type: string, quality: unknown): string;
   __rjs_canvas_blob(ctx: Context2D | null, width: number, height: number, type: string, quality: unknown): unknown;
   __rjs_canvas_source_hook(resolve: (value: unknown) => unknown): void;
+}
+
+/** The WebGPU element entry points are present only in a WebGPU-enabled engine. */
+interface WebGPUNatives {
+  __rjs_webgpu_context(canvas: object, width: number, height: number, key: number): ContextGPU | null;
+  __rjs_webgpu_resize(ctx: ContextGPU, width: number, height: number): void;
+  __rjs_webgpu_data_url(ctx: ContextGPU, type: string, quality: unknown): string;
+  __rjs_webgpu_blob(ctx: ContextGPU, type: string, quality: unknown): unknown;
 }
 
 /** The host's half (crates/vn-tree/src/lib.rs `vn_img_bitmap`). */
@@ -74,6 +83,12 @@ function natives(): CanvasNatives | null {
   return typeof g.__rjs_canvas_context === "function" ? (g as CanvasNatives) : null;
 }
 
+/** Look up canvas support directly; adapter availability does not imply presentation. */
+function gpuNatives(): WebGPUNatives | null {
+  const g = globalThis as unknown as Partial<WebGPUNatives>;
+  return typeof g.__rjs_webgpu_context === "function" ? (g as WebGPUNatives) : null;
+}
+
 /** The host's natives, looked up per call (absent under bun). */
 function host(): HostNatives | null {
   const g = globalThis as unknown as Partial<HostNatives>;
@@ -87,8 +102,8 @@ function advise(key: string, msg: string): void {
   console.warn(`[vue-native compat] ${msg}`);
 }
 
-/** Element → its 2D context. Weak: a dropped canvas takes its bitmap with it. */
-const contexts = new WeakMap<object, Context2D>();
+/** Context mode is fixed after a successful selection. Failed requests leave it unset. */
+const contexts = new WeakMap<object, ContextSelection>();
 
 /** HTML "rules for parsing non-negative integers", with the attribute's default. */
 function dimension(el: CanvasElement, name: "width" | "height"): number {
@@ -111,15 +126,34 @@ function tagOf(v: unknown): string {
     : "";
 }
 
-/** The element's context, made on first need (drawImage of a canvas nobody drew on yet). */
-function contextOf(el: CanvasElement, options?: unknown): Context2D | null {
-  let ctx = contexts.get(el);
-  if (ctx) return ctx;
-  const n = natives();
-  if (!n) return null;
-  ctx = n.__rjs_canvas_context(el, dimension(el, "width"), dimension(el, "height"), options, el.__vnId);
-  contexts.set(el, ctx);
-  return ctx;
+/** Select one native context without converting a canvas already using another mode. */
+function contextOf(el: CanvasElement, kind: "2d" | "webgpu", options?: unknown): object | null {
+  const selected = contexts.get(el);
+  if (selected) return selected.kind === kind ? selected.value : null;
+  const n = kind === "2d" ? natives() : null;
+  const gpu = kind === "webgpu" ? gpuNatives() : null;
+  if (!n && !gpu) return null;
+  // Native option getters may reenter getContext before creation completes.
+  const pending: ContextSelection = { kind, value: null };
+  contexts.set(el, pending);
+  let w: number, h: number;
+  try {
+    w = dimension(el, "width");
+    h = dimension(el, "height");
+    pending.value = n
+      ? n.__rjs_canvas_context(el, w, h, options, el.__vnId)
+      : gpu!.__rjs_webgpu_context(el, w, h, el.__vnId);
+  } catch (error) {
+    contexts.delete(el);
+    throw error;
+  }
+  if (!pending.value) {
+    contexts.delete(el);
+    return null;
+  }
+  // A getter may also have changed dimensions while no context was available.
+  if (w !== dimension(el, "width") || h !== dimension(el, "height")) resized(el);
+  return pending.value;
 }
 
 /** An `<img>`'s decoded pixels, for the `src` (and natural size) they were made for. */
@@ -175,7 +209,8 @@ function imageSource(el: ImageElement): unknown {
  * TypeError).
  */
 function resolveSource(v: unknown): unknown {
-  if (isCanvas(v)) return contextOf(v);
+  // Reading a blank canvas does not select a rendering mode for it.
+  if (isCanvas(v)) return contexts.get(v)?.value ?? null;
   const tag = tagOf(v);
   if (tag === "IMG" && typeof v === "object" && v !== null && "__vnId" in v) return imageSource(v as ImageElement);
   if (tag === "VIDEO") {
@@ -204,41 +239,41 @@ function toUnsignedLong(v: unknown): number {
   return Number.isFinite(x) ? Math.trunc(x) >>> 0 : 0;
 }
 
-function getContext(this: CanvasElement, type: unknown, options?: unknown): Context2D | null {
+function getContext(this: CanvasElement, type: unknown, options?: unknown): object | null {
   const kind = String(type);
-  if (kind === "2d") {
-    const ctx = contextOf(this, options);
-    if (!ctx) advise("canvas:engine", "getContext('2d'): this engine has no canvas support; it returns null");
-    return ctx;
-  }
-  // CV-10 (docs/RUNTIME.md §5.10).
-  advise(`canvas:${kind}`, `getContext('${kind}') is not available in this runtime (only '2d'); it returns null`);
+  if (kind === "2d" || kind === "webgpu") return contextOf(this, kind, options);
+  advise(`canvas:${kind}`, `getContext('${kind}') is not available in this runtime; it returns null`);
   return null;
 }
 
 function toDataURL(this: CanvasElement, type?: unknown, quality?: unknown): string {
-  const n = natives();
-  if (!n) return "data:,";
   const ty = type === undefined ? "image/png" : String(type);
-  return n.__rjs_canvas_data_url(contexts.get(this) ?? null, this.width, this.height, ty, quality);
+  const selected = contexts.get(this);
+  if (selected?.kind === "webgpu" && selected.value) return gpuNatives()?.__rjs_webgpu_data_url(selected.value, ty, quality) ?? "data:,";
+  return natives()?.__rjs_canvas_data_url(selected?.value ?? null, this.width, this.height, ty, quality) ?? "data:,";
 }
 
 function toBlob(this: CanvasElement, callback: unknown, type?: unknown, quality?: unknown): void {
   if (typeof callback !== "function") {
     throw new TypeError("HTMLCanvasElement.toBlob: the callback is not a function");
   }
-  const n = natives();
   const ty = type === undefined ? "image/png" : String(type);
-  // HTML encodes "in parallel" and calls back on a task: never synchronously.
-  const blob = n ? n.__rjs_canvas_blob(contexts.get(this) ?? null, this.width, this.height, ty, quality) : null;
+  const selected = contexts.get(this);
+  const blob = selected?.kind === "webgpu" && selected.value
+    ? gpuNatives()?.__rjs_webgpu_blob(selected.value, ty, quality) ?? null
+    : natives()?.__rjs_canvas_blob(selected?.value ?? null, this.width, this.height, ty, quality) ?? null;
+  // HTML calls back on a later task, including a zero-size canvas's null result.
   setTimeout(() => (callback as (b: unknown) => void)(blob), 0);
 }
 
 /** A width/height attribute changed: a fresh bitmap, the context at its defaults. */
 function resized(el: CanvasElement): void {
-  const ctx = contexts.get(el);
-  const n = natives();
-  if (ctx && n) n.__rjs_canvas_resize(ctx, dimension(el, "width"), dimension(el, "height"));
+  const selected = contexts.get(el);
+  if (!selected?.value) return;
+  const w = dimension(el, "width");
+  const h = dimension(el, "height");
+  if (selected.kind === "webgpu") gpuNatives()?.__rjs_webgpu_resize(selected.value, w, h);
+  else natives()?.__rjs_canvas_resize(selected.value, w, h);
 }
 
 /** Gives a mirror `<canvas>` its canvas members. */

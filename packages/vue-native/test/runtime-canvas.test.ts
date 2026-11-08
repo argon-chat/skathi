@@ -46,6 +46,10 @@ const NAMES = [
   "__rjs_canvas_data_url",
   "__rjs_canvas_blob",
   "__rjs_canvas_source_hook",
+  "__rjs_webgpu_context",
+  "__rjs_webgpu_resize",
+  "__rjs_webgpu_data_url",
+  "__rjs_webgpu_blob",
 ];
 
 let natives: ReturnType<typeof fakeNatives>;
@@ -154,9 +158,10 @@ describe("the source hook", () => {
     const c = doc.createElement("canvas");
     const hook = natives.hook()!;
     expect(typeof hook).toBe("function");
-    const ctx = hook(c) as Any;
-    expect(ctx.kind).toBe("ctx");
-    expect(c.getContext("2d")).toBe(ctx);
+    expect(hook(c)).toBeNull();
+    expect(natives.calls.filter((x) => x[0] === "context")).toEqual([]);
+    const ctx = c.getContext("2d");
+    expect(hook(c)).toBe(ctx);
     expect(hook(doc.createElement("video"))).toBeNull();
     expect(hook(doc.createElement("img"))).toBeNull();
     expect(hook({})).toBeUndefined();
@@ -264,5 +269,161 @@ describe("drawImage of an <img>", () => {
     }
     expect(host.asks.length).toBe(2); // not cached: it may decode later
     expect(said.filter((m) => m.includes("drawImage(<img>) draws nothing: the bytes are not an image"))).toHaveLength(1);
+  });
+});
+
+/** Native GPU presentation/capture remains opaque to the element layer. */
+function fakeGPU() {
+  const calls: Any[] = [];
+  const n = {
+    __rjs_webgpu_context(canvas: Any, w: number, h: number, key: number) {
+      const ctx = { kind: "gpu", canvas, size: [w, h], key };
+      calls.push(["context", w, h, key]);
+      return ctx;
+    },
+    __rjs_webgpu_resize(ctx: Any, w: number, h: number) {
+      ctx.size = [w, h];
+      calls.push(["resize", ctx, w, h]);
+    },
+    __rjs_webgpu_data_url(ctx: Any, type: string, q: unknown) {
+      calls.push(["dataUrl", ctx, type, q]);
+      return `data:${type};gpu`;
+    },
+    __rjs_webgpu_blob(ctx: Any, type: string, q: unknown) {
+      calls.push(["blob", ctx, type, q]);
+      return ctx.size.includes(0) ? null : { gpuBlob: type };
+    },
+  };
+  Object.assign(globalThis, n);
+  return { calls, ...n };
+}
+
+describe("WebGPU canvas selection", () => {
+  test("returns one native context with the element identity and rejects switching to 2D", () => {
+    const gpu = fakeGPU();
+    const { doc } = world();
+    const c = doc.createElement("canvas");
+    c.width = 40;
+    c.height = 30;
+    const context = c.getContext("webgpu");
+    expect(context.canvas).toBe(c);
+    expect(c.getContext("webgpu", { ignored: true })).toBe(context);
+    expect(c.getContext("2d")).toBeNull();
+    expect(gpu.calls).toEqual([["context", 40, 30, c.__vnId]]);
+    expect(natives.calls.filter((x) => x[0] === "context")).toEqual([]);
+  });
+
+  test("native option getters cannot choose another mode during creation", () => {
+    const gpu = fakeGPU();
+    const { doc } = world();
+    const c = doc.createElement("canvas");
+    c.width = 20;
+    const create = natives.__rjs_canvas_context;
+    (globalThis as Any).__rjs_canvas_context = (canvas: Any, w: number, h: number, options: Any, key: number) => {
+      void options.alpha;
+      return create(canvas, w, h, options, key);
+    };
+    const ctx = c.getContext("2d", {
+      get alpha() {
+        expect(c.getContext("webgpu")).toBeNull();
+        c.width = 80;
+        return true;
+      },
+    });
+    expect(ctx.kind).toBe("ctx");
+    expect(ctx.size).toEqual([80, 150]);
+    expect(c.getContext("webgpu")).toBeNull();
+    expect(c.getContext("2d")).toBe(ctx);
+    expect(gpu.calls).toEqual([]);
+  });
+
+  test("a 2D canvas cannot select WebGPU", () => {
+    const gpu = fakeGPU();
+    const { doc } = world();
+    const c = doc.createElement("canvas");
+    const context = c.getContext("2d");
+    expect(c.getContext("webgpu")).toBeNull();
+    expect(c.getContext("2d")).toBe(context);
+    expect(gpu.calls).toEqual([]);
+  });
+
+  test("unsupported and failed native requests leave the mode available", () => {
+    const { doc } = world();
+    const c = doc.createElement("canvas");
+    expect(c.getContext("webgl")).toBeNull();
+    expect(c.getContext("webgpu")).toBeNull();
+    expect(c.getContext("2d").kind).toBe("ctx");
+    fakeGPU();
+    (globalThis as Any).__rjs_webgpu_context = () => null;
+    const failed = doc.createElement("canvas");
+    expect(failed.getContext("webgpu")).toBeNull();
+    expect(failed.getContext("2d").kind).toBe("ctx");
+    (globalThis as Any).__rjs_webgpu_context = () => {
+      throw new Error("allocation failed");
+    };
+    const throwing = doc.createElement("canvas");
+    expect(() => throwing.getContext("webgpu")).toThrow("allocation failed");
+    expect(throwing.getContext("2d").kind).toBe("ctx");
+  });
+
+  test("GPU support is detected independently from the native 2D context factory", () => {
+    const gpu = fakeGPU();
+    delete (globalThis as Any).__rjs_canvas_context;
+    const { doc } = world();
+    const c = doc.createElement("canvas");
+    expect(c.getContext("webgpu").kind).toBe("gpu");
+    expect(gpu.calls).toHaveLength(1);
+  });
+
+  test("resizes GPU contexts for property, renderer and repeated-dimension writes", () => {
+    const gpu = fakeGPU();
+    const { rt, doc } = world();
+    const c = doc.createElement("canvas");
+    const context = c.getContext("webgpu");
+    c.width = 80;
+    c.width = 80;
+    rt.patchProp(c, "height", null, 50);
+    c.removeAttribute("height");
+    expect(gpu.calls.filter((x) => x[0] === "resize").map((x) => x.slice(2))).toEqual([
+      [80, 150], [80, 150], [80, 50], [80, 150],
+    ]);
+    expect(context.size).toEqual([80, 150]);
+    expect(c.getContext("webgpu")).toBe(context);
+    expect(natives.calls.filter((x) => x[0] === "resize")).toEqual([]);
+  });
+
+  test("source reads preserve a GPU context and do not select a mode for a blank canvas", () => {
+    const gpu = fakeGPU();
+    const { doc } = world();
+    const c = doc.createElement("canvas");
+    const hook = natives.hook()!;
+    expect(hook(c)).toBeNull();
+    const context = c.getContext("webgpu");
+    expect(hook(c)).toBe(context);
+    expect(gpu.calls).toHaveLength(1);
+    expect(natives.calls.filter((x) => x[0] === "context")).toEqual([]);
+  });
+
+  test("encodes GPU snapshots through native capture and invokes blob callbacks asynchronously", async () => {
+    const gpu = fakeGPU();
+    const { doc } = world();
+    const c = doc.createElement("canvas");
+    const context = c.getContext("webgpu");
+    expect(c.toDataURL("image/jpeg", 0.25)).toBe("data:image/jpeg;gpu");
+    let got: Any = "pending";
+    c.toBlob((value: Any) => (got = value), "image/webp", 0.75);
+    expect(got).toBe("pending");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(got).toEqual({ gpuBlob: "image/webp" });
+    expect(gpu.calls.filter((x) => x[0] !== "context")).toEqual([
+      ["dataUrl", context, "image/jpeg", 0.25], ["blob", context, "image/webp", 0.75],
+    ]);
+    expect(natives.calls.filter((x) => x[0] === "dataUrl" || x[0] === "blob")).toEqual([]);
+    c.width = 0;
+    got = "pending";
+    c.toBlob((value: Any) => (got = value));
+    expect(got).toBe("pending");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(got).toBeNull();
   });
 });

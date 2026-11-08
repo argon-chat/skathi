@@ -34,16 +34,16 @@
 //! It is a child module of `render` (declared there with `#[path]`) so that it
 //! builds with the replaced-element helpers `<img>` and `<video>` use.
 //!
-//! ## The seam step 2 swaps
+//! ## Pixel sources
 //!
-//! [`PixelSource`] is where the pixels come from, and the only thing step 2
-//! (a GPU raster backend, held for the owner's decision) changes. Today it is
-//! [`CpuBitmap`]: redjs rasterizes with vello_cpu into memory, and the bitmap
-//! is uploaded into the window's sprite atlas. Step 2 swaps in either a
-//! **readback ring** (the GPU renders, the bitmap is mapped back a frame later
-//! and takes the same atlas path) or a **shared texture** ([`Pixels`] gains a
-//! variant the element paints without a copy). The element, the generation
-//! check and the repaint signal stay as they are.
+//! [`PixelSource`] keeps presentation independent of the canvas backend. 2D
+//! canvases use [`CpuBitmap`]. With `webgpu`, [`CanvasBitmap`] also consumes
+//! completed, premultiplied RGBA frames from redjs's bounded asynchronous GPU
+//! readback service. Both use the same atlas, generation, live-tile and resize
+//! handling. Pending GPU work never blocks this UI thread.
+//!
+//! This is a readback bridge into the current D3D11 sprite atlas. It does not
+//! share the WebGPU D3D12 device or import native GPU textures without copies.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -53,6 +53,8 @@ use std::time::{Duration, Instant};
 use gpui::prelude::*;
 use gpui::{div, AnyElement, Context, ImageSource, RenderImage, Window, WindowControlArea};
 use vn_runtime::redjs::webapi::canvas2d as rjs;
+#[cfg(feature = "webgpu")]
+use vn_runtime::redjs::webapi::webgpu::canvas as gpu;
 
 use super::{
     apply_computed_style, bind_events, focus_handle_for, gpui_object_fit, pointer_mask, tab_index_of,
@@ -62,16 +64,20 @@ use crate::tree::Tree;
 use crate::windows::{self, WinKey};
 
 // ---------------------------------------------------------------------------
-// The pixel source: CPU bitmap now; readback ring or shared texture later
+// Pixel sources: 2D bitmaps and completed WebGPU readbacks
 // ---------------------------------------------------------------------------
 
-/// What a canvas paints. Step 2 grows this, not the element.
+/// What a canvas paints. A future shared-texture path grows this enum.
 #[derive(Clone)]
 pub(crate) enum Pixels {
     /// A bitmap uploaded into the painting window's sprite atlas: BGRA with
     /// straight alpha, as gpui's atlas takes it (its polychrome pipeline blends
     /// `SRC_ALPHA`, and its own decoders un-premultiply).
     Atlas(Arc<RenderImage>),
+    /// Configured, opaque WebGPU drawing buffer before a frame was drawn.
+    /// Keep only its intrinsic size; painting black needs no CPU image/atlas tile.
+    #[cfg(feature = "webgpu")]
+    SolidBlack { width: u32, height: u32 },
     // Step 2, shared-texture flavour: `Texture(..)`, a GPU texture the element
     // paints without a copy.
 }
@@ -87,8 +93,8 @@ pub(crate) enum Fetch {
     Changed(u64, Option<Pixels>),
 }
 
-/// Where a presented canvas's pixels come from: **the step-2 seam**. A CPU
-/// bitmap now ([`CpuBitmap`]); a GPU readback ring or a shared texture later.
+/// Where a presented canvas's pixels come from: CPU rasterization or a
+/// completed WebGPU readback. The element never waits for GPU completion.
 pub(crate) trait PixelSource {
     /// The bitmap published under `key`, compared against generation `since`
     /// (0: none seen yet).
@@ -103,35 +109,85 @@ pub(crate) struct CpuBitmap;
 /// `gpui_windows::directx_atlas`).
 const ATLAS_MAX_SIDE: u32 = 16384;
 
+/// Wrap a completed premultiplied RGBA frame for the painting window's atlas.
+/// Both sources go through this conversion, so alpha and atlas limits agree.
+fn atlas_frame(generation: u64, width: u32, height: u32, rgba: &[u8]) -> Fetch {
+    if width == 0 || height == 0 {
+        return Fetch::Changed(generation, None);
+    }
+    if width > ATLAS_MAX_SIDE || height > ATLAS_MAX_SIDE {
+        warn_compat(
+            "canvas:atlas-size",
+            &format!(
+                "a {width}x{height} <canvas> is not painted: the host's sprite atlas stops at {ATLAS_MAX_SIDE}px a side \
+                 (it still draws and reads back)",
+            ),
+        );
+        return Fetch::Changed(generation, None);
+    }
+    let expected = width as usize * height as usize * 4;
+    if rgba.len() != expected {
+        return Fetch::Changed(generation, None);
+    }
+    let Some(buffer) = image::RgbaImage::from_raw(width, height, to_bgra(rgba)) else {
+        return Fetch::Changed(generation, None);
+    };
+    // RgbaImage is a byte container here: the atlas consumes straight BGRA.
+    let render = RenderImage::new(vec![image::Frame::new(buffer)]);
+    Fetch::Changed(generation, Some(Pixels::Atlas(Arc::new(render))))
+}
+
 impl PixelSource for CpuBitmap {
     fn fetch(key: u64, since: u64) -> Fetch {
         let Some((generation, image)) = rjs::present(key, since) else {
-            return if rjs::present_size(key).is_some() { Fetch::Unchanged } else { Fetch::Unpublished };
+            return if rjs::present_size(key).is_some() {
+                Fetch::Unchanged
+            } else {
+                Fetch::Unpublished
+            };
         };
-        if image.width == 0 || image.height == 0 {
-            return Fetch::Changed(generation, None);
-        }
-        if image.width > ATLAS_MAX_SIDE || image.height > ATLAS_MAX_SIDE {
-            // CV-1 (docs/RUNTIME.md §5.10).
-            warn_compat(
-                "canvas:atlas-size",
-                &format!(
-                    "a {}x{} <canvas> is not painted: the host's sprite atlas stops at {ATLAS_MAX_SIDE}px a side \
-                     (it still draws and reads back)",
-                    image.width, image.height
-                ),
-            );
-            return Fetch::Changed(generation, None);
-        }
-        let bgra = to_bgra(&image.data);
-        let Some(buffer) = image::RgbaImage::from_raw(image.width, image.height, bgra) else {
-            return Fetch::Changed(generation, None);
-        };
-        // `RgbaImage` is a byte container here, not a colour claim: the bytes
-        // are BGRA, which is what the atlas uploads (vn-lottie does the same).
-        let render = RenderImage::new(vec![image::Frame::new(buffer)]);
-        Fetch::Changed(generation, Some(Pixels::Atlas(Arc::new(render))))
+        atlas_frame(generation, image.width, image.height, &image.data)
     }
+}
+
+/// A registered GPU context owns its key even before its first readback. Never
+/// fall through to a stale 2D bitmap while a GPU frame is pending. GPU frame
+/// generations occupy a separate domain from 2D generations in redjs.
+pub(crate) struct CanvasBitmap;
+
+impl PixelSource for CanvasBitmap {
+    fn fetch(key: u64, since: u64) -> Fetch {
+        #[cfg(feature = "webgpu")]
+        if gpu::present_size(key).is_some() {
+            return match gpu::present(key, since) {
+                Some((generation, frame)) => {
+                    if frame.opaque_blank {
+                        let size = gpu::present_size(key);
+                        return match size {
+                            Some((width, height)) if width > 0 && height > 0 =>
+                                Fetch::Changed(generation, Some(Pixels::SolidBlack { width, height })),
+                            _ => Fetch::Changed(generation, None),
+                        };
+                    }
+                    atlas_frame(generation, frame.width, frame.height, &frame.rgba)
+                }
+                None => Fetch::Unchanged,
+            };
+        }
+        CpuBitmap::fetch(key, since)
+    }
+}
+
+fn take_presented_changed() -> bool {
+    let cpu = rjs::take_presented_changed();
+    #[cfg(feature = "webgpu")]
+    {
+        // Evaluate both swaps even when the CPU source has already changed.
+        let gpu = gpu::take_presented_changed();
+        return cpu | gpu;
+    }
+    #[cfg(not(feature = "webgpu"))]
+    cpu
 }
 
 /// A canvas that changes again within this of its last change is animating.
@@ -149,6 +205,8 @@ fn as_painted(pixels: Pixels, moving: bool) -> Pixels {
             Pixels::Atlas(Arc::try_unwrap(image).map(|i| Arc::new(i.dynamic())).unwrap_or_else(|a| a))
         }
         Pixels::Atlas(image) => Pixels::Atlas(image),
+        #[cfg(feature = "webgpu")]
+        solid @ Pixels::SolidBlack { .. } => solid,
     }
 }
 
@@ -181,7 +239,7 @@ fn to_bgra(rgba: &[u8]) -> Vec<u8> {
 }
 
 /// The source this build paints from.
-type Source = CpuBitmap;
+type Source = CanvasBitmap;
 
 // ---------------------------------------------------------------------------
 // Per-node state
@@ -209,6 +267,8 @@ pub(crate) fn mem_stats() -> (usize, usize) {
             .values()
             .filter_map(|e| match &e.pixels {
                 Some(Pixels::Atlas(img)) => Some(img.as_bytes(0).map_or(0, <[u8]>::len)),
+                #[cfg(feature = "webgpu")]
+                Some(Pixels::SolidBlack { .. }) => None,
                 None => None,
             })
             .sum();
@@ -257,6 +317,8 @@ fn current_at(id: u32, win: WinKey, now: Instant) -> Option<Pixels> {
                     e.moving = false;
                     let still = match &e.pixels {
                         Some(Pixels::Atlas(image)) => still_copy(image),
+                        #[cfg(feature = "webgpu")]
+                        Some(Pixels::SolidBlack { .. }) => None,
                         None => None,
                     };
                     if let Some(still) = still {
@@ -288,12 +350,28 @@ fn current_at(id: u32, win: WinKey, now: Instant) -> Option<Pixels> {
 
 /// Drops the state of canvases that left the tree, their images included.
 pub(crate) fn gc(live: impl Fn(u32) -> bool) {
-    BUILT.with(|b| b.borrow_mut().retain(|&id, _| live(id)));
+    let mut dead = std::collections::HashSet::new();
+    BUILT.with(|b| {
+        b.borrow_mut().retain(|&id, _| {
+            let keep = live(id);
+            if !keep {
+                dead.insert(id);
+            }
+            keep
+        })
+    });
     let gone: Vec<Entry> = CANVASES.with(|m| {
         let mut m = m.borrow_mut();
-        let dead: Vec<u32> = m.keys().copied().filter(|&id| !live(id)).collect();
-        dead.into_iter().filter_map(|id| m.remove(&id)).collect()
+        dead.extend(m.keys().copied().filter(|&id| !live(id)));
+        dead.iter().filter_map(|id| m.remove(id)).collect()
     });
+    // GPU records retain a weak slot that build() can re-enable. Keep the
+    // previous 2D registry lifetime: it follows the JS context, so a retained
+    // 2D canvas can be reinserted without losing its presentation lookup.
+    #[cfg(feature = "webgpu")]
+    for id in dead {
+        gpu::unregister_present(id as u64);
+    }
     gone.into_iter().for_each(retire);
 }
 
@@ -309,7 +387,7 @@ pub(crate) fn gc(live: impl Fn(u32) -> bool) {
 /// new image), a resize, a canvas whose last frame was not painted, and a
 /// pop-out's canvas (its own build fetches it).
 pub(crate) fn tick(window: &mut Window) -> bool {
-    let presented = rjs::take_presented_changed();
+    let presented = take_presented_changed();
     let now = Instant::now();
     let still = STILL_AT.with(|s| match s.get() {
         Some(at) if now >= at => {
@@ -456,6 +534,55 @@ fn size_as_replaced(style: &mut gpui::StyleRefinement, iw: f32, ih: f32, rem: gp
     }
 }
 
+#[cfg(feature = "webgpu")]
+fn solid_bounds(
+    fit: &gpui::ObjectFit,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    width: u32,
+    height: u32,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    if width == 0 || height == 0 || bounds.size.width <= gpui::px(0.) || bounds.size.height <= gpui::px(0.) {
+        return None;
+    }
+    if !f32::from(bounds.size.width).is_finite() || !f32::from(bounds.size.height).is_finite() {
+        return None;
+    }
+    let size = gpui::size(
+        gpui::DevicePixels(i32::try_from(width).ok()?),
+        gpui::DevicePixels(i32::try_from(height).ok()?),
+    );
+    let fitted = if matches!(fit, gpui::ObjectFit::None) {
+        // Object-position defaults to the centre. GPUI's None helper anchors
+        // top-left, so centre this intrinsic-size drawing buffer explicitly.
+        let size = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
+        gpui::Bounds::new(
+            gpui::point(
+                bounds.origin.x + (bounds.size.width - size.width) / 2.,
+                bounds.origin.y + (bounds.size.height - size.height) / 2.,
+            ),
+            size,
+        )
+    } else {
+        fit.get_bounds(bounds, size)
+    };
+    Some(fitted)
+}
+
+#[cfg(feature = "webgpu")]
+fn solid_black(width: u32, height: u32, fit: gpui::ObjectFit) -> AnyElement {
+    gpui::canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            if let Some(fitted) = solid_bounds(&fit, bounds, width, height) {
+                let paint = fitted.intersect(&bounds);
+                if paint.size.width > gpui::px(0.) && paint.size.height > gpui::px(0.) {
+                    window.paint_quad(gpui::fill(paint, gpui::black()));
+                }
+            }
+        },
+    ).size_full().into_any_element()
+}
+
 /// `<canvas>`: a styled box at the bitmap's intrinsic size, with the bitmap
 /// painted over its content box.
 ///
@@ -472,6 +599,8 @@ pub(super) fn build<V: 'static>(
     control_area: Option<WindowControlArea>,
 ) -> AnyElement {
     let win = windows::key(window);
+    #[cfg(feature = "webgpu")]
+    gpu::register_present(id as u64);
     BUILT.with(|b| b.borrow_mut().insert(id, win));
     let pixels = current(id, win);
 
@@ -483,21 +612,23 @@ pub(super) fn build<V: 'static>(
     let (iw, ih) = intrinsic(t, id);
     size_as_replaced(d.style(), iw as f32, ih as f32, window.rem_size());
 
-    if let Some(Pixels::Atlas(image)) = pixels {
-        let fit = node
-            .computed
-            .as_ref()
-            .and_then(|cs| cs.extras.object_fit)
-            .map(gpui_object_fit)
-            // The CSS initial value, as for `<img>`.
-            .unwrap_or(gpui::ObjectFit::Fill);
-        let bitmap = gpui::img(ImageSource::Render(image))
-            .object_fit(fit)
-            .size_full()
-            .into_any_element();
-        // Clipped to the canvas's own rounded corners, as CSS does.
-        let bitmap = super::clip_replaced(bitmap, d.style(), window.rem_size());
-        d = d.child(bitmap);
+    let fit = node
+        .computed
+        .as_ref()
+        .and_then(|cs| cs.extras.object_fit)
+        .map(gpui_object_fit)
+        .unwrap_or(gpui::ObjectFit::Fill);
+    let picture = match pixels {
+        Some(Pixels::Atlas(image)) => Some(gpui::img(ImageSource::Render(image))
+            .object_fit(fit).size_full().into_any_element()),
+        #[cfg(feature = "webgpu")]
+        Some(Pixels::SolidBlack { width, height }) => Some(solid_black(width, height, fit)),
+        None => None,
+    };
+    if let Some(picture) = picture {
+        // Replaced content shares the element's rounded content clip.
+        let picture = super::clip_replaced(picture, d.style(), window.rem_size());
+        d = d.child(picture);
     }
 
     let mask = pointer_mask(node);
@@ -578,6 +709,61 @@ mod tests {
         assert_eq!(to_bgra(&[64, 0, 0, 64]), vec![0, 0, 255, 64]);
     }
 
+    #[test]
+    fn an_empty_or_incomplete_frame_clears_a_previous_atlas_image() {
+        let generation = 1 << 63;
+        assert!(
+            matches!(atlas_frame(generation, 0, 5, &[]), Fetch::Changed(g, None) if g == generation)
+        );
+        assert!(
+            matches!(atlas_frame(generation, 2, 1, &[0, 0, 0, 255]), Fetch::Changed(g, None) if g == generation)
+        );
+        let Fetch::Changed(g, Some(Pixels::Atlas(image))) =
+            atlas_frame(generation, 1, 1, &[128, 0, 0, 128])
+        else {
+            panic!("a complete GPU readback must reach the atlas");
+        };
+        assert_eq!(
+            g, generation,
+            "the GPU generation domain survives presentation"
+        );
+        assert_eq!(image.as_bytes(0).unwrap(), &[0, 0, 255, 128]);
+    }
+
+    #[cfg(feature = "webgpu")]
+    #[test]
+    fn opaque_blank_has_intrinsics_but_no_bitmap_memory() {
+        let id = 0xC0FF_EE02;
+        let before = mem_stats();
+        CANVASES.with(|m| m.borrow_mut().insert(id, Entry {
+            generation: 1 << 63,
+            pixels: Some(Pixels::SolidBlack { width: 8192, height: 4096 }),
+            window: windows::UNBOUND,
+            changed: Instant::now(),
+            moving: false,
+        }));
+        assert_eq!(mem_stats(), (before.0 + 1, before.1));
+        let pixels = CANVASES.with(|m| m.borrow_mut().remove(&id).unwrap().pixels);
+        assert!(matches!(as_painted(pixels.unwrap(), true), Pixels::SolidBlack { width: 8192, height: 4096 }));
+        assert_eq!(mem_stats(), before);
+    }
+
+    #[cfg(feature = "webgpu")]
+    #[test]
+    fn opaque_blank_obeys_object_fit_and_centres_intrinsic_size() {
+        use gpui::{point, px, size, Bounds, ObjectFit};
+        let bounds = Bounds::new(point(px(10.), px(20.)), size(px(200.), px(100.)));
+        let fitted = |fit| solid_bounds(&fit, bounds, 100, 100).unwrap();
+        assert_eq!(fitted(ObjectFit::Fill), bounds);
+        assert_eq!(fitted(ObjectFit::Contain), Bounds::new(point(px(60.), px(20.)), size(px(100.), px(100.))));
+        assert_eq!(fitted(ObjectFit::Cover), Bounds::new(point(px(10.), px(-30.)), size(px(200.), px(200.))));
+        assert_eq!(fitted(ObjectFit::None), Bounds::new(point(px(60.), px(20.)), size(px(100.), px(100.))));
+        assert_eq!(fitted(ObjectFit::ScaleDown), fitted(ObjectFit::None));
+        assert_eq!(solid_bounds(&ObjectFit::ScaleDown, bounds, 400, 200), Some(bounds));
+        assert!(solid_bounds(&ObjectFit::Fill, bounds, 0, 100).is_none());
+        assert!(solid_bounds(&ObjectFit::Fill, Bounds::new(bounds.origin, size(px(0.), px(100.))), 100, 100).is_none());
+    }
+
     /// Upload only when the surface moved: the second fetch at the same
     /// generation hands back nothing new, and a draw does.
     #[test]
@@ -622,7 +808,7 @@ mod tests {
         let put = |rgba: [u8; 4]| Cmd::Put { x: 0, y: 0, image: Arc::new(Image::from_premul(1, 1, rgba.to_vec(), true)) };
         let atlas = |p: Option<Pixels>| match p {
             Some(Pixels::Atlas(image)) => image,
-            None => panic!("a bitmap"),
+            _ => panic!("a bitmap"),
         };
         let t0 = Instant::now();
 
