@@ -19,6 +19,23 @@ import {
 
 const changed = (id, kind) => [{ id, kind: kind || "reload" }];
 
+describe("external app module ids", () => {
+  test("retains parents outside the SDK while resolving sibling modules", () => {
+    const w = createLoader();
+    const entry = "../../client/packages/editor/main.ts";
+    const helper = "../../client/packages/editor/gpu/draw.ts";
+    const shared = "../../client/packages/shared.ts";
+    w.VN.define(helper, (_require, module) => { module.exports = { draw: 42 }; });
+    w.VN.define(shared, (_require, module) => { module.exports = { shared: 17 }; });
+    w.VN.define(entry, (require, module) => {
+      module.exports = { value: require("./gpu/draw").draw + require("../shared").shared };
+    });
+    expect(w.VN.resolve("./gpu/draw", entry)).toBe(helper);
+    expect(w.VN.resolve("../shared", entry)).toBe(shared);
+    expect(w.VN.require(entry).value).toBe(59);
+  });
+});
+
 describe("boot", () => {
   test("requires every reachable module exactly once", () => {
     const w = bootStandardFixture();

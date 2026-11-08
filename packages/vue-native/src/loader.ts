@@ -152,7 +152,10 @@ function normalize(path: string): string {
   for (const seg of path.split("/")) {
     if (seg === "" || seg === ".") continue;
     if (seg === "..") {
-      out.pop();
+      // App sources can live outside the SDK workspace. Preserve unresolved
+      // parent segments so their registry ids match the builder's relative ids.
+      if (out.length && out[out.length - 1] !== "..") out.pop();
+      else out.push("..");
       continue;
     }
     out.push(seg);

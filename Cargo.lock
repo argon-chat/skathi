@@ -7854,6 +7854,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "vn-app"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "embed-resource",
  "flate2",
  "futures",
@@ -7864,6 +7865,7 @@ dependencies = [
  "livekit-api",
  "log",
  "memmap2",
+ "pollster",
  "raw-window-handle",
  "reqwest_client",
  "self_cell",
@@ -7879,6 +7881,7 @@ dependencies = [
  "vn-storage",
  "vn-tree",
  "vn-voice",
+ "wgpu",
  "windows 0.62.2",
 ]
 

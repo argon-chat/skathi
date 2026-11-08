@@ -12,7 +12,7 @@ build = "build.rs"
 # Experimental native inspector backend; explicit manifest required.
 native-aot = ["vn-runtime/native-aot"]
 # Experimental native WebGPU, including bounded asynchronous canvas presentation.
-webgpu = ["vn-runtime/webgpu", "vn-tree/webgpu"]
+webgpu = ["vn-runtime/webgpu", "vn-tree/webgpu", "dep:wgpu", "dep:pollster"]
 # The BARE HOST (m25, docs/PACKAGING.md): the dev manifest/HMR polling is
 # compiled out, and the app — bundle, window config, name, assets — is the VNPK
 # payload `vn build` stamps into a COPY of this exe (src/payload.rs, src/prod.rs).
@@ -200,6 +200,11 @@ embed-resource = "=3.0.11"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# Same physical device as redjs; only the experimental shared-device host uses
+# these directly. The default host does not compile wgpu.
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
+pollster = { version = "0.4", optional = true }
+anyhow = "1"
 # `<video>` decodes onto the renderer's own D3D11 device, and this is the only
 # crate that can see both halves: gpui_windows publishes the device, vn-tree
 # hands it to the Media Foundation backend. Nothing else here uses gpui_windows.
@@ -207,6 +212,8 @@ gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_Direct3D11on12",
+    "Win32_Graphics_Direct3D12",
     # `IDXGIAdapter3::QueryVideoMemoryInfo` — the GPU memory DXGI attributes to
     # this process, for the devtools `mem` command (src/devtools/mem.rs). Both
     # are already compiled for the graph (gpui_windows, vn-video).

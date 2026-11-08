@@ -796,7 +796,8 @@ function normalizeId(path: string): string {
   for (const seg of path.split("/")) {
     if (seg === "" || seg === ".") continue;
     if (seg === "..") {
-      out.pop();
+      if (out.length && out[out.length - 1] !== "..") out.pop();
+      else out.push("..");
       continue;
     }
     out.push(seg);
