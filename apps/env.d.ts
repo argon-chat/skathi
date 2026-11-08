@@ -37,6 +37,8 @@ export {};
 // deliberately carries no `resize` of its own, so this is the only spelling.
 
 declare global {
+  // selection.ts installs the native Selection object on the global and document.
+  function getSelection(): { toString(): string } | null;
   function addEventListener(
     type: string,
     listener: (ev: VnEvent) => void,

@@ -1821,6 +1821,7 @@ impl Tree {
     }
 
     fn restyle_with(&mut self, engine: &vn_css::Engine, env: &vn_css::Env) {
+        let _profile = vn_runtime::redjs::profiling::span("style", "Restyle DOM");
         // [`READ_CACHE`] is keyed by this sheet's string addresses; a pass
         // against a different engine starts it over ([`set_engine`] covers
         // the installed one, whose address never changes).

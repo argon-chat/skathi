@@ -57,6 +57,12 @@ mod devtools;
 // that wants the same row: it declares the allocator itself.
 #[cfg(vn_devtools)]
 pub mod heapcount;
+/// Allocator an embedding executable can install to enable native allocation
+/// recording. A build without devtools uses the system allocator directly.
+#[cfg(vn_devtools)]
+pub use heapcount::Counting as HostAllocator;
+#[cfg(not(vn_devtools))]
+pub use std::alloc::System as HostAllocator;
 // The HTTP client gpui loaders use: redjs's network stack, the one `fetch` uses.
 mod http_client;
 // The unit tests are the library's own binary, and some read the counts.
@@ -633,6 +639,8 @@ host_fn!(fn vn_log(g, args) {
 /// callbacks drain first), so `cx.notify()` from a host fn is picked up by the
 /// very same frame.
 fn pump_frame(window: &mut Window, cx: &mut App) {
+    #[cfg(vn_devtools)]
+    let _allocation_scope = crate::heapcount::recording::scope("runtime", "frame/pump");
     // On another virtual desktop: a hidden page, as when minimised. gpui keeps
     // asking a cloaked window to paint every vsync, so the pump declines — no
     // JS wave, no requestAnimationFrame — and, by not stamping the frame clock,
@@ -859,6 +867,8 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(vn_devtools)]
+        let _allocation_scope = crate::heapcount::recording::scope("render", "frame/build");
         perf::render_begin();
         let el = self.render_body(window, cx);
         perf::render_done();

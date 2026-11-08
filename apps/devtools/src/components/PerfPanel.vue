@@ -21,21 +21,23 @@
 // (`vn_tree::perf::take`). Reading them here would silently break the stderr
 // report of a host somebody is profiling. So the panel says whether the probe
 // is on and points at the environment variable instead of showing zeros that
-// read as "nothing costs anything". (`trace`, m26, is the per-frame record of
-// an interaction; it is a protocol command, not a panel yet.)
+// read as "nothing costs anything". (the Frames view records ordered CPU spans independently).
 //
 // ## Memory (m26)
 //
-// `mem`'s `breakdown`, polled every 2 s while this panel is open
+// `mem`'s `breakdown`, requested explicitly while this panel is open
 // (`store.refreshMem`): categories that SUM to the committed address space —
 // loaded images, mapped files, JSC, the Rust heap, and "other private", which is
 // whatever no allocator we can see accounts for, said as such. The bar is that
 // sum; the table opens each category into its slices; the history is the same
-// stack over the last four minutes. GPU memory is not in the bar: it is not in
+// stack over the bounded history of requested samples. GPU memory is not in the bar: it is not in
 // the address space, and adding it would double-count nothing and explain
 // nothing — it gets its own block.
-import { computed, reactive } from "vue";
-import { forceGc, measureResident, refreshPerf, state } from "../store";
+import { computed, reactive, ref } from "vue";
+import FrameTimeline from "./FrameTimeline.vue";
+import AllocationsPanel from "./AllocationsPanel.vue";
+import type { InspectorRequest } from "../inspector-model";
+import { forceGc, measureResident, refreshMem, refreshPerf, state } from "../store";
 import {
   GPU_COLOR,
   formatMem,
@@ -46,7 +48,13 @@ import {
   segments,
 } from "../memfmt";
 
-const props = defineProps<{ height: number }>();
+const props = defineProps<{ height: number; request?: InspectorRequest; sessionKey?: string | number }>();
+const emit = defineEmits<{ (event: "recording-change", active: boolean): void }>();
+const mode = ref<"overview" | "frames" | "allocations">("overview");
+const frameRecording = ref(false), allocationRecording = ref(false);
+const recording = computed(() => frameRecording.value || allocationRecording.value);
+function frameRecordingChanged(active: boolean) { frameRecording.value = active; emit("recording-change", recording.value); }
+function allocationRecordingChanged(active: boolean) { allocationRecording.value = active; emit("recording-change", recording.value); }
 
 const perf = computed(() => state.perf);
 const samples = computed(() => state.perfHistory);
@@ -120,18 +128,26 @@ function residentTitle(key: string): string {
   <section class="pane perf" :style="{ height: props.height + 'px' }">
     <header class="pane-head">
       <span class="label">Performance</span>
-      <span class="chip" title="The rolling ring is always on — no environment variable needed"
-        >live frame clock</span
+      <span class="chip" :title="mode === 'overview' ? 'The rolling frame clock is always on' : 'Record CPU work without restarting the target'"
+        >{{ mode === 'overview' ? 'live frame clock' : 'CPU capture' }}</span
       >
       <div class="spacer"></div>
-      <span v-if="perf && !perf.phases" class="chip" title="VN_PERF=1 in the target's environment"
+      <span v-if="mode === 'overview' && perf && !perf.phases" class="chip" title="VN_PERF=1 in the target's environment"
         >phase breakdown off · VN_PERF</span
       >
-      <span v-else-if="perf" class="chip ok">VN_PERF on · see the target's stderr</span>
-      <div class="btn" @click="refreshPerf()">↻</div>
+      <span v-else-if="mode === 'overview' && perf" class="chip ok">VN_PERF on · see the target's stderr</span>
+      <button v-if="mode === 'overview'" class="btn" :disabled="recording || state.captureActive" @click="refreshPerf()" aria-label="Refresh frame clock">Refresh</button>
     </header>
 
-    <div class="body scroll" :style="{ height: Math.max(0, props.height - 27) + 'px' }">
+    <nav class="perf-tabs" aria-label="Performance views">
+      <button class="btn" :class="{ on: mode === 'overview' }" :disabled="recording && mode !== 'overview'" :aria-pressed="mode === 'overview'" @click="mode = 'overview'">Overview</button>
+      <button class="btn" :class="{ on: mode === 'frames' }" :disabled="recording && mode !== 'frames'" :aria-pressed="mode === 'frames'" @click="mode = 'frames'">Frames</button>
+      <button class="btn" :class="{ on: mode === 'allocations' }" :disabled="recording && mode !== 'allocations'" :aria-pressed="mode === 'allocations'" @click="mode = 'allocations'">Allocations</button>
+      <span v-if="recording" class="recording-note">Stop the recording before switching views</span>
+    </nav>
+    <FrameTimeline v-if="mode === 'frames'" :height="Math.max(0, props.height - 57)" :request="request" :session-key="sessionKey" @recording-change="frameRecordingChanged" />
+    <AllocationsPanel v-else-if="mode === 'allocations'" :height="Math.max(0, props.height - 57)" :request="request" :session-key="sessionKey" @recording-change="allocationRecordingChanged" />
+    <div v-else class="body scroll" :style="{ height: Math.max(0, props.height - 57) + 'px' }">
       <div v-if="!perf" class="empty">
         Waiting for the first frame sample. If this stays empty the push channel is not connected —
         the titlebar says <b>polling</b> when that happens.
@@ -227,14 +243,15 @@ function residentTitle(key: string): string {
           >
         </template>
         <div class="spacer"></div>
+        <button class="btn" :disabled="recording || state.captureActive || !state.target" @click="refreshMem()" title="Request a fresh memory breakdown">Refresh memory</button>
         <span v-if="mem" class="chip" title="How long the target took to compute the breakdown"
-          >{{ state.memCollectMs.toFixed(1) }} ms · every 2 s</span
+          >{{ state.memCollectMs.toFixed(1) }} ms · on request</span
         >
         <div
           class="btn"
           :class="{ on: state.memResidentBusy }"
           title="Put every working-set page (RAM) in its category: mem --regions. Walks the target's heap, so it is taken on request, not every 2 s."
-          @click="measureResident()"
+          @click="!recording && !state.captureActive && measureResident()"
         >
           {{ state.memResidentBusy ? "measuring…" : "Measure RAM" }}
         </div>
@@ -242,7 +259,7 @@ function residentTitle(key: string): string {
           class="btn"
           :class="{ on: state.memGcBusy }"
           title="Two full synchronous JSC collections, then free pages back to the OS (mem --gc). Changes the target's state."
-          @click="forceGc()"
+          @click="!recording && !state.captureActive && forceGc()"
         >
           {{ state.memGcBusy ? "collecting…" : "Force GC" }}
         </div>
@@ -357,8 +374,7 @@ function residentTitle(key: string): string {
               </div>
             </div>
             <div class="legend">
-              committed memory by category, one column per sample · every 2 s while this panel is
-              open · the last four minutes
+              committed memory by category · one column per requested sample · bounded history
             </div>
           </div>
         </div>
@@ -368,6 +384,12 @@ function residentTitle(key: string): string {
 </template>
 
 <style scoped>
+.perf-tabs { min-height: 30px; display: flex; align-items: center; gap: 5px; padding: 4px 8px; box-sizing: border-box; border-bottom: 1px solid #232c3a; background: #0f1620; }
+.perf-tabs button { font-family: inherit; cursor: pointer; }
+.perf-tabs button:disabled { opacity: 0.45; cursor: default; }
+.perf-tabs button:focus-visible { outline: 2px solid #6cb6ff; outline-offset: -2px; }
+.recording-note { color: #e3b341; font-size: 10px; margin-left: auto; }
+
 .perf {
   flex: 1;
   min-width: 0;

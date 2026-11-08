@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ESNext", "module": "ESNext", "moduleResolution": "bundler",
+    "lib": ["ESNext"], "strict": true, "skipLibCheck": true, "noEmit": true,
+    "baseUrl": "../../..",
+    "paths": { "vue": ["packages/vue-native/node_modules/vue"], "vue-native": ["packages/vue-native/src/index.ts"] },
+    "types": []
+  },
+  "vueCompilerOptions": { "strictTemplates": true },
+  "include": [
+    "../src/App.vue", "../src/components/Toolbar.vue", "../src/components/FrameTimeline.vue", "../src/components/IndexedDbPanel.vue",
+    "../src/components/AllocationsPanel.vue", "../src/components/PerfPanel.vue", "../src/components/StoragePanel.vue",
+    "../src/inspector-model.ts", "../../../packages/vue-native/src/protocol.d.ts", "../../../packages/vue-native/src/engine.d.ts", "../../env.d.ts"
+  ]
+}

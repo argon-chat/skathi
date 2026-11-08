@@ -27,7 +27,7 @@
 //! a second for its stderr report; the two would steal each other's numbers,
 //! so a trace refuses to start while `VN_PERF` is on.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use vn_tree::perf::{DomOp, FullReason, Phases, SyncCaller};
@@ -81,6 +81,7 @@ struct Trace {
 
 thread_local! {
     static TRACE: RefCell<Option<Trace>> = const { RefCell::new(None) };
+    static NATIVE_PROFILE_WINDOW: Cell<usize> = const { Cell::new(0) };
 }
 
 fn epoch_ms() -> f64 {
@@ -124,6 +125,7 @@ pub(crate) fn start(cap: Option<usize>) -> Result<Json, String> {
 
 /// A label on the frame in progress (`trace mark`, `__vn_perf_mark`).
 pub(crate) fn mark(label: &str) {
+    vn_runtime::redjs::profiling::mark(label);
     TRACE.with(|t| {
         if let Some(tr) = t.borrow_mut().as_mut() {
             let at = tr.start.elapsed().as_secs_f64() * 1000.0;
@@ -174,6 +176,7 @@ impl Frame {
 
 /// `pump_frame` entry: closes the previous frame and opens this one.
 pub(crate) fn frame_start() {
+    vn_runtime::redjs::profiling::frame_start();
     if !active() {
         return;
     }
@@ -737,3 +740,120 @@ impl Totals {
         self.img_srcs += u64::from(p.img_srcs);
     }
 }
+
+
+pub(crate) fn recording_start(cap: Option<usize>) -> Result<Json, String> {
+    let limits = vn_runtime::redjs::profiling::Limits {
+        frames: cap.unwrap_or(1200), ..Default::default()
+    };
+    let context = vn_runtime::JsRuntime::try_with(|runtime| runtime.ctx().raw() as usize);
+    vn_tree::perf::set_tracing(true);
+    let status = vn_runtime::redjs::profiling::start(limits, context);
+    #[cfg(target_os = "windows")]
+    gpui_windows::set_frame_profiler(Some(gpui_windows::FrameProfilerCallbacks { begin: native_profile_begin, end: vn_runtime::redjs::profiling::external_end }));
+    Ok(recording_status_json(&status))
+}
+
+pub(crate) fn recording_stop() -> Result<Json, String> {
+    #[cfg(target_os = "windows")]
+    gpui_windows::set_frame_profiler(None);
+    let status = vn_runtime::redjs::profiling::stop().ok_or_else(|| "no frame recording exists".to_string())?;
+    if !active() { vn_tree::perf::set_tracing(false); }
+    Ok(recording_status_json(&status))
+}
+
+pub(crate) fn recording_status() -> Result<Json, String> {
+    let status = vn_runtime::redjs::profiling::status().unwrap_or(vn_runtime::redjs::profiling::Status {
+        recording: false, session_id: 0, start_epoch_ms: 0., limits: Default::default(), frame_count: 0, dropped_frames: 0, dropped_spans: 0,
+    });
+    Ok(recording_status_json(&status))
+}
+
+pub(crate) fn cancel_recording() {
+    #[cfg(target_os = "windows")]
+    gpui_windows::set_frame_profiler(None);
+    NATIVE_PROFILE_WINDOW.with(|target| target.set(0));
+    vn_runtime::redjs::profiling::clear();
+    TRACE.with(|trace| { trace.borrow_mut().take(); });
+    vn_tree::perf::set_tracing(false);
+}
+
+pub(crate) fn frame_page(offset: usize, limit: usize) -> Result<Json, String> {
+    let page = vn_runtime::redjs::profiling::frames(offset, limit).ok_or_else(|| "no frame recording exists".to_string())?;
+    Ok(Json::obj(vec![
+        ("sessionId", Json::n(page.status.session_id as f64)), ("recording", Json::Bool(page.status.recording)),
+        ("total", Json::n(page.total as f64)), ("offset", Json::n(page.offset as f64)),
+        ("nextOffset", offset_json(page.next_offset)),
+        ("frames", Json::arr(page.frames.iter().map(recording_frame_json).collect())),
+    ]))
+}
+
+pub(crate) fn frame_detail(frame_id: u64, offset: usize, limit: usize) -> Result<Json, String> {
+    let page = vn_runtime::redjs::profiling::frame_detail(frame_id, offset, limit)
+        .ok_or_else(|| "frame is unavailable (it may have been evicted by the recording limits)".to_string())?;
+    Ok(Json::obj(vec![
+        ("sessionId", Json::n(page.session_id as f64)), ("frame", recording_frame_json(&page.frame)),
+        ("offset", Json::n(page.offset as f64)), ("total", Json::n(page.total as f64)),
+        ("nextOffset", offset_json(page.next_offset)), ("truncated", Json::Bool(page.truncated)),
+        ("spans", Json::arr(page.spans.iter().map(recording_span_json).collect())),
+    ]))
+}
+
+fn offset_json(offset: Option<usize>) -> Json { offset.map_or(Json::Null, |offset| Json::n(offset as f64)) }
+fn milliseconds(value: f64) -> Json { Json::n((value * 1000.).round() / 1000.) }
+fn recording_status_json(status: &vn_runtime::redjs::profiling::Status) -> Json {
+    Json::obj(vec![
+        ("recording", Json::Bool(status.recording)), ("sessionId", Json::n(status.session_id as f64)),
+        ("startEpochMs", Json::n(status.start_epoch_ms)), ("frameCount", Json::n(status.frame_count as f64)),
+        ("droppedFrames", Json::n(status.dropped_frames as f64)), ("droppedSpans", Json::n(status.dropped_spans as f64)),
+        ("limits", Json::obj(vec![("frames", Json::n(status.limits.frames as f64)), ("spansPerFrame", Json::n(status.limits.spans_per_frame as f64)), ("totalSpans", Json::n(status.limits.total_spans as f64))])),
+        ("timing", Json::s("instrumented main-thread elapsed time; not GPU timestamps or sampled CPU cycles")),
+        ("coverage", Json::obj(vec![("javascript", Json::s("native-invoked callbacks and their host calls")), ("microtasks", Json::s("checkpoint batches; individual Promise reactions are not sampled"))])),
+    ])
+}
+fn recording_frame_json(frame: &vn_runtime::redjs::profiling::FrameSummary) -> Json {
+    Json::obj(vec![
+        ("id", Json::n(frame.id as f64)), ("startMs", milliseconds(frame.start_ms)),
+        ("durationMs", milliseconds(frame.duration_ms)), ("cpuMs", milliseconds(frame.cpu_ms)),
+        ("spanCount", Json::n(frame.span_count as f64)), ("droppedSpans", Json::n(frame.dropped_spans as f64)),
+        ("categories", Json::arr(frame.categories.iter().map(|category| Json::obj(vec![
+            ("category", Json::s(category.category)), ("selfMs", milliseconds(category.self_ms)),
+            ("totalMs", milliseconds(category.total_ms)), ("count", Json::n(category.count as f64)),
+        ])).collect())),
+        ("hints", Json::arr(frame.hints.iter().map(|hint| {
+            let mut values = vec![("code", Json::s(hint.code)), ("severity", Json::s(hint.severity)), ("message", Json::s(&hint.message)), ("count", Json::n(hint.count as f64))];
+            if let Some(id) = hint.span_id { values.push(("spanId", Json::n(id as f64))); }
+            Json::obj(values)
+        }).collect())),
+    ])
+}
+fn recording_span_json(span: &vn_runtime::redjs::profiling::EventSpan) -> Json {
+    let mut values = vec![
+        ("id", Json::n(span.id as f64)), ("parentId", span.parent_id.map_or(Json::Null, |id| Json::n(id as f64))),
+        ("category", Json::s(span.category)), ("name", Json::s(&span.name)),
+        ("startMs", milliseconds(span.start_ms)), ("durationMs", milliseconds(span.duration_ms)), ("selfMs", milliseconds(span.self_ms)),
+        ("depth", Json::n(span.depth as f64)), ("count", Json::n(1.)),
+    ];
+    if let Some(site) = &span.callsite {
+        let mut callsite = vec![("kind", Json::s(site.kind))];
+        if !site.function.is_empty() { callsite.push(("function", Json::s(&site.function))); }
+        if !site.url.is_empty() { callsite.push(("url", Json::s(&site.url))); }
+        if site.line > 0 { callsite.push(("line", Json::n(f64::from(site.line)))); }
+        if site.column > 0 { callsite.push(("column", Json::n(f64::from(site.column)))); }
+        values.push(("callsite", Json::obj(callsite)));
+    }
+    if !span.counters.is_empty() {
+        values.push(("counters", Json::Obj(span.counters.iter().map(|(name, value)| (name.clone(), Json::n(*value as f64))).collect())));
+    }
+    Json::obj(values)
+}
+
+
+pub(crate) fn set_recording_native_window(window: usize) { NATIVE_PROFILE_WINDOW.with(|target| target.set(window)); }
+#[cfg(target_os = "windows")]
+fn native_profile_begin(window: usize, category: &'static str, name: &'static str, file: &'static str, line: u32, column: u32) -> u64 {
+    if !NATIVE_PROFILE_WINDOW.with(|target| target.get() != 0 && target.get() == window) { return 0; }
+    vn_runtime::redjs::profiling::external_begin(category, name, file, line, column)
+}
+
+pub(crate) fn set_recording_window_id(window: u64) { vn_runtime::redjs::profiling::set_window_target(window); }

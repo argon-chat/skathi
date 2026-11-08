@@ -699,6 +699,11 @@ pub(crate) fn sync_layout_by(caller: perf::SyncCaller) {
     if IN_SYNC_LAYOUT.with(|c| c.get()) {
         return;
     }
+    let _profile = vn_runtime::redjs::profiling::span("layout", match caller {
+        perf::SyncCaller::Bounds => "Forced layout: bounds read",
+        perf::SyncCaller::Scroll => "Forced layout: scroll read",
+        perf::SyncCaller::Focus => "Forced layout: focus",
+    });
     if !perf::enabled() {
         sync_layout_inner();
         return;

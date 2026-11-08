@@ -71,21 +71,44 @@ export function listTargets(): Promise<TargetList> {
   return discovery;
 }
 
-// One command at a time, in order. Every command costs the TARGET a frame
-// (docs/DEVTOOLS.md: the queue is drained one per `pump_frame`), so firing a
-// second while one is in flight buys nothing and makes the failure mode
-// ("which of these three timed out?") much harder to read.
-let tail: Promise<unknown> = Promise.resolve();
+export interface SendOptions {
+  priority?: "interactive" | "background";
+  /** Checked before a queued request runs, e.g. after changing target. */
+  isCurrent?: () => boolean;
+}
+interface Queued {
+  background: boolean;
+  run: () => Promise<void>;
+}
+interface Lane { running: boolean; pending: Queued[] }
+const lanes = new Map<string, Lane>();
 
-function enqueue<T>(run: () => Promise<T>): Promise<T> {
-  const result = tail.then(run, run);
-  // The chain must survive a rejection: one failed command cannot be allowed to
-  // wedge every command after it.
-  tail = result.then(
-    () => {},
-    () => {},
-  );
-  return result;
+/** Order commands per target; a slow old target never blocks a new attachment.
+ * Interactive requests overtake queued maintenance, never an in-flight command. */
+function enqueue<T>(target: Target, run: () => Promise<T>, options: SendOptions): Promise<T> {
+  const key = `${target.pid}:${target.port}:${target.token}`;
+  let lane = lanes.get(key);
+  if (!lane) { lane = { running: false, pending: [] }; lanes.set(key, lane); }
+  const queue = lane;
+  return new Promise<T>((resolve, reject) => {
+    queue.pending.push({ background: options.priority === "background", run: async () => {
+      try {
+        if (options.isCurrent && !options.isCurrent()) throw new Error("attachment changed");
+        resolve(await run());
+      } catch (error) { reject(error); }
+    } });
+    if (!queue.running) void drain();
+    async function drain(): Promise<void> {
+      queue.running = true;
+      while (queue.pending.length) {
+        const interactive = queue.pending.findIndex((job) => !job.background);
+        const job = queue.pending.splice(interactive < 0 ? 0 : interactive, 1)[0]!;
+        await job.run();
+      }
+      queue.running = false;
+      if (lanes.get(key) === queue) lanes.delete(key);
+    }
+  });
 }
 
 /**
@@ -106,9 +129,10 @@ export function send<T>(
   cmd: string,
   args: Record<string, unknown> = {},
   timeoutMs = TIMEOUT_MS,
+  options: SendOptions = {},
 ): Promise<T> {
   if (!target) return Promise.reject(new Error("not attached to a target"));
-  return enqueue(() => request<T>(target, cmd, args, timeoutMs));
+  return enqueue(target, () => request<T>(target, cmd, args, timeoutMs), options);
 }
 
 async function request<T>(

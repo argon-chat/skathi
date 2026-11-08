@@ -271,7 +271,13 @@ function findAppRoot(startDir: string, stopDir: string): string {
     dir = parent;
   }
 }
-const APP_ROOT = findAppRoot(APP_SRC_DIR, WS_ROOT);
+// External qualification fixtures can use the application's dependencies and
+// Tailwind configuration without putting test sources inside its repository.
+const appRootArg = argv.find((arg) => arg.startsWith("--app-root="))?.slice("--app-root=".length);
+const APP_ROOT = appRootArg ? resolve(appRootArg) : findAppRoot(APP_SRC_DIR, WS_ROOT);
+if (appRootArg && !existsSync(join(APP_ROOT, "package.json"))) {
+  throw new Error(`--app-root must name an application with package.json: ${APP_ROOT}`);
+}
 const appRequire = createRequire(join(APP_ROOT, "package.json"));
 const runtimeRequire = createRequire(join(PKG_DIR, "package.json"));
 const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
@@ -1333,7 +1339,7 @@ async function syncNpmModules(): Promise<string[]> {
 // Absent a tailwind.config.*, EVERY line below is inert and the emitted
 // manifest/module set is byte-identical to a pre-Tailwind build.
 
-const TW_CONFIG = findConfig(APP_SRC_DIR, WS_ROOT);
+const TW_CONFIG = findConfig(appRootArg ? APP_ROOT : APP_SRC_DIR, WS_ROOT);
 /** Last generated utilities sheet — the change detector for watch mode. */
 let twCss: string | null = null;
 /** Constant: the factory body never changes, so define() never invalidates. */

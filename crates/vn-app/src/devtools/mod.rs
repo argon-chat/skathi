@@ -29,6 +29,10 @@
 //! The whole module is compiled out under `--features prod`.
 
 mod net; // the Network panel's feed (a JS-side fetch/XHR/WebSocket tee) and `net_detail`
+mod picker;
+mod allocations;
+mod leases;
+mod indexeddb;
 mod mem; // `mem`: where the process's memory is (m26 perf work)
 pub(crate) mod trace; // `trace`: a frame-by-frame record of where the time went (m26 perf work)
 mod screenshot;
@@ -54,6 +58,7 @@ const REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A queued request plus the channel its reply goes back on.
 struct Job {
+    generation: u64,
     req: Json,
     reply: Sender<String>,
 }
@@ -332,6 +337,10 @@ fn start_listener() {
 /// `TcpListener` closes the socket. One extra connection that is never served,
 /// no timeout, no polling loop, and no second thread to own the listener.
 fn stop_listener() {
+    leases::clear();
+    picker::stop();
+    trace::cancel_recording();
+    allocations::cancel_recording();
     let port = PORT.swap(0, Ordering::SeqCst);
     // Every in-flight and queued command is now unauthenticated: a blank token
     // never matches (`handle_request` refuses an empty one outright).
@@ -942,6 +951,7 @@ fn handle_request(line: &str) -> String {
     match json::parse(line) {
         None => err("request is not valid JSON"),
         Some(req) => {
+            let generation = ACCEPT_GEN.load(Ordering::SeqCst);
             // A BLANK token never matches, so a request that arrives on a
             // socket accepted moments before `disable()` is refused rather than
             // let through by an empty-equals-empty comparison.
@@ -951,7 +961,23 @@ fn handle_request(line: &str) -> String {
             if !ok_token {
                 err("bad or missing token — read it from <dist>/devtools.json")
             } else {
-                submit(req)
+                // Read-only database inspection and allocation aggregation own no
+                // JSC/Window values. Keep them off the target's UI frame pump.
+                match req.get("cmd").and_then(Json::as_str) {
+                    Some("indexeddb") => indexeddb::command(&req).map_or_else(err, ok),
+                    Some("allocations") => {
+                        let result = allocations::command_authenticated(&req, generation);
+                        if result.is_ok() && req.get("op").and_then(Json::as_str) == Some("start") {
+                            if let Some(ms) = req.get("leaseMs").and_then(Json::as_f64) { leases::arm(ms as u64); }
+                        }
+                        result.map_or_else(err, ok)
+                    },
+                    Some("capture-heartbeat") => {
+                        leases::refresh();
+                        ok(Json::obj(vec![("renewed", Json::Bool(true))]))
+                    },
+                    _ => submit(req, generation),
+                }
             }
         }
     }
@@ -1083,9 +1109,15 @@ fn http_reply(out: &mut TcpStream, status: &str, body: &str) {
 }
 
 /// Hands the request to the main thread and waits for the reply.
-fn submit(req: Json) -> String {
+fn submit(req: Json, generation: u64) -> String {
     let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
-    QUEUE.lock().unwrap().push_back(Job { req, reply: tx });
+    {
+        let mut queue = QUEUE.lock().unwrap();
+        if !enabled() || generation != ACCEPT_GEN.load(Ordering::SeqCst) {
+            return err("the app revoked this devtools session");
+        }
+        queue.push_back(Job { generation, req, reply: tx });
+    }
     match rx.recv_timeout(REPLY_TIMEOUT) {
         Ok(reply) => reply,
         // Disconnected rather than timed out: `stop_listener` cleared the
@@ -1127,6 +1159,7 @@ thread_local! {
 /// PAINT, and only when its handle is already focused. So the command focuses
 /// on frame N, gpui repaints, and the keystrokes go out on frame N+1.
 struct Pending {
+    generation: u64,
     node: u32,
     text: Option<String>,
     keys: Vec<String>,
@@ -1147,13 +1180,21 @@ const PENDING_MAX_FRAMES: u32 = 30;
 /// `with_published(Phase::Commit)` — so `with_commit` below always resolves and
 /// every command observes the same committed tree the JS pump just produced.
 pub fn pump() {
+    if leases::expired() {
+        let _ = trace::recording_stop();
+        allocations::stop_recording();
+    }
     let resumed = PENDING.with(|p| p.borrow_mut().take()).map(resume_pending);
     if let Some(still_pending) = resumed {
         PENDING.with(|p| *p.borrow_mut() = still_pending);
         return;
     }
     let Some(job) = QUEUE.lock().unwrap().pop_front() else { return };
-    let Job { req, reply } = job;
+    let Job { generation, req, reply } = job;
+    if !enabled() || generation != ACCEPT_GEN.load(Ordering::SeqCst) {
+        let _ = reply.send(err("the app revoked this devtools session"));
+        return;
+    }
     let response = run(&req, &reply);
     // The window a command addressed is scoped to that command and nothing
     // else: a parked `type` resumes against the published window, as it always
@@ -1163,7 +1204,10 @@ pub fn pump() {
         Outcome::Done(text) => {
             let _ = reply.send(text);
         }
-        Outcome::Parked(pending) => PENDING.with(|p| *p.borrow_mut() = Some(pending)),
+        Outcome::Parked(mut pending) => {
+            pending.generation = generation;
+            PENDING.with(|p| *p.borrow_mut() = Some(pending));
+        },
     }
 }
 
@@ -1173,6 +1217,10 @@ enum Outcome {
 }
 
 fn resume_pending(mut p: Pending) -> Option<Pending> {
+    if !enabled() || p.generation != ACCEPT_GEN.load(Ordering::SeqCst) {
+        let _ = p.reply.send(err("the app revoked this devtools session"));
+        return None;
+    }
     // Re-publish the window the command addressed for the duration of the
     // resume: "is it focused" and "deliver these keystrokes" are both questions
     // about ONE window's focus path.
@@ -1279,7 +1327,10 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
             arg("label"),
             window_arg,
         ),
-        "pick" => cmd_pick(window_arg),
+        "pick" => match arg("op") {
+            Some(op) => picker::command(&op),
+            None => cmd_pick(window_arg),
+        },
         "wheel" => cmd_wheel(
             arg("selector").as_deref(),
             num("index"),
@@ -1350,6 +1401,35 @@ fn run(req: &Json, reply: &Sender<String>) -> Outcome {
                 Some(data) => ok(data),
                 None => err("no such window"),
             }
+        }
+        "trace" if matches!(arg("op").as_deref(), Some("recording-start" | "recording-stop" | "recording-status" | "frames" | "frame")) => {
+            let result = match arg("op").as_deref() {
+                Some("recording-start") => {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let native = with_target(|window, _| crate::window::capture_hwnd(window))
+                            .flatten().unwrap_or(0);
+                        trace::set_recording_native_window(native as usize);
+                    }
+                    let result = trace::recording_start(num("cap").map(|n| n.max(0.0) as usize));
+                    if result.is_ok() {
+                        if let Some(ms) = num("leaseMs") { leases::arm(ms as u64); }
+                        if let Some(key) = with_target(|window, _| vn_tree::windows::key(window)) {
+                            trace::set_recording_window_id(key);
+                        }
+                    }
+                    result
+                },
+                Some("recording-stop") => trace::recording_stop(),
+                Some("recording-status") => trace::recording_status(),
+                Some("frames") => trace::frame_page(num("offset").unwrap_or(0.0).max(0.0) as usize, num("limit").unwrap_or(240.0).clamp(1.0, 240.0) as usize),
+                Some("frame") => match num("frameId") {
+                    Some(id) if id.is_finite() && id >= 0.0 && id.fract() == 0.0 => trace::frame_detail(id as u64, num("offset").unwrap_or(0.0).max(0.0) as usize, num("limit").unwrap_or(1000.0).clamp(1.0, 1000.0) as usize),
+                    _ => Err("trace frame needs an integer frameId".into()),
+                },
+                _ => unreachable!(),
+            };
+            result.map_or_else(err, ok)
         }
         "trace" => cmd_trace(
             arg("op").as_deref(),
@@ -2480,6 +2560,7 @@ fn start_input_command(cmd: &str, req: &Json, reply: &Sender<String>) -> Outcome
     // The window rides along: by the time this resumes, the next command has
     // already reset `TARGET_WINDOW`.
     Outcome::Parked(Pending {
+        generation: ACCEPT_GEN.load(Ordering::SeqCst),
         node,
         text,
         keys,

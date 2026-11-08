@@ -179,7 +179,7 @@ function onLineDown(line: ConsoleLine, event: VnMouseEvent): void {
 
 /** The text a drag selected, anywhere in the window ("" for none). */
 function selectedText(): string {
-  return window.getSelection?.()?.toString() ?? "";
+  return globalThis.getSelection?.()?.toString() ?? "";
 }
 
 function selectAll(): void {

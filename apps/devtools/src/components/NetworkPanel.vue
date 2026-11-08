@@ -267,7 +267,7 @@ function onKey(event: VnKeyboardEvent): void {
   const ctrl = event.ctrlKey || event.metaKey;
   if (ctrl && event.key.toLowerCase() === "c" && !event.shiftKey) {
     // Text selected in the details pane is the engine's to copy.
-    if (window.getSelection?.()?.toString()) return;
+    if (globalThis.getSelection?.()?.toString()) return;
     if (ui.copyTarget !== "network" || state.netSelected === null) return;
     const entry = state.net.find((e) => e.seq === state.netSelected);
     if (!entry) return;

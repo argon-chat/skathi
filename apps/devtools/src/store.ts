@@ -105,6 +105,8 @@ export function levelOf(kind: string): Level {
 
 interface State {
   // -- attachment
+  session: number;
+  captureActive: boolean;
   targets: Target[];
   target: Target | null;
   status: Status;
@@ -209,6 +211,8 @@ interface State {
 }
 
 export const state = reactive<State>({
+  session: 0,
+  captureActive: false,
   targets: [],
   target: null,
   status: "detached",
@@ -339,8 +343,22 @@ export const ui = reactive({
  * window switcher ends up half-working.
  */
 function cmd<T>(name: string, cmdArgs: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
+  const target = state.target, session = state.session;
   const scoped = state.window === null ? cmdArgs : { window: state.window, ...cmdArgs };
-  return send<T>(state.target, name, scoped, timeoutMs);
+  const current = () => state.session === session;
+  return send<T>(target, name, scoped, timeoutMs, { isCurrent: current }).then(reply => {
+    if (!current()) throw new Error("attachment changed");
+    return reply;
+  });
+}
+
+/** A detached inspector must not leave instrumentation running in its old target. */
+export function stopCapture(): void {
+  if (!state.target || !state.captureActive) return;
+  const target = state.target;
+  state.captureActive = false;
+  void send(target, "trace", { op: "recording-stop" }).catch(() => {});
+  void send(target, "allocations", { op: "stop" }).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -372,18 +390,23 @@ export function bestTarget(found?: TargetList | null): Target | null {
 let channel: Push | null = null;
 
 export async function attach(target: Target | null): Promise<void> {
+  stopCapture();
+  if (state.picking) void cancelPick();
   closePush();
   state.target = target;
   state.status = target ? "attaching" : "detached";
   state.error = "";
   resetInspection();
   if (!target) return;
+  const session = state.session;
   try {
     const pong = await send<PingReply>(target, "ping");
+    if (session !== state.session) return;
     state.status = "attached";
     state.logCursor = 0;
     note({ kind: "dev", text: `attached to ${target.slot} · pid ${pong.pid} · port ${target.port}` });
     await refreshWindows();
+    if (session !== state.session) return;
     // F12 opened this inspector for ONE window of the target. Honour that:
     // everything below is then about the window the key was pressed in.
     if (args.window !== null && state.windows.some((w) => w.id === args.window)) {
@@ -394,12 +417,15 @@ export async function attach(target: Target | null): Promise<void> {
     await pollLogs();
     await refreshNet();
   } catch (e) {
+    if (session !== state.session) return;
     state.status = "lost";
     state.error = message(e);
   }
 }
 
 export function detach(): void {
+  stopCapture();
+  if (state.picking) void cancelPick();
   if (state.target) clearHighlight();
   closePush();
   state.target = null;
@@ -409,6 +435,8 @@ export function detach(): void {
 
 function resetInspection(): void {
   inspectionEpoch++;
+  state.session++;
+  state.captureActive = false;
   cancelTreeRefresh();
   state.tree = null;
   state.rows = [];
@@ -443,6 +471,7 @@ function resetInspection(): void {
 /** Every failure funnels through here, so a dead target is reported once. */
 function fail(e: unknown): string {
   const text = message(e);
+  if (text === "attachment changed") return text;
   state.error = text;
   if (/cannot reach/.test(text)) state.status = "lost";
   return text;
@@ -454,11 +483,14 @@ function fail(e: unknown): string {
 
 /** Which streams the UI wants right now — the ones a visible panel reads. */
 function streams(): PushStream[] {
-  const want: PushStream[] = ["logs", "tree", "status", "net"];
+  const want: PushStream[] = ["status"];
+  if (state.consoleOpen) want.push("logs");
+  if (state.tab === "elements") want.push("tree");
+  if (state.tab === "network") want.push("net");
   // Frame stats are four messages a second. Asking for them while nobody is
   // looking at the Performance panel is exactly the kind of idle cost this
   // rewrite exists to remove.
-  if (state.tab === "performance") want.push("perf");
+  if (state.tab === "performance" && !state.captureActive) want.push("perf");
   return want;
 }
 
@@ -527,7 +559,7 @@ export function pollFallback(): void {
   if (state.status !== "attached" || state.pushLive) return;
   void pollLogs();
   if (state.tab === "elements") void refreshTree();
-  if (state.tab === "performance") void refreshPerf();
+  if (state.tab === "performance" && !state.captureActive) void refreshPerf();
   if (state.tab === "network") void refreshNet();
 }
 
@@ -553,6 +585,7 @@ export async function refreshWindows(): Promise<void> {
 }
 
 export async function selectWindow(id: WindowId | null): Promise<void> {
+  if (state.window !== id) { inspectionEpoch++; state.session++; cancelTreeRefresh(); }
   state.window = id;
   state.selected = null;
   state.styles = null;
@@ -819,64 +852,62 @@ export function clearHighlight(): Promise<void> {
   );
 }
 
-export function togglePick(): void {
-  state.picking = !state.picking;
+let pickBusy = false;
+let pickMode = 0;
+export async function cancelPick(): Promise<void> {
+  const target = state.target;
+  pickMode++;
+  state.picking = false;
   state.pickInfo = null;
-  if (!state.picking) clearHighlight();
+  if (target) await send(target, "pick", { op: "stop" }).catch(() => {});
 }
 
-/**
- * One picker step: ask the target where its pointer is, outline whatever is
- * under it, and LATCH when the pointer leaves the target's window.
- *
- * The latch is the whole design. Two windows, one mouse: the moment you move
- * back to the inspector to click something, the target's pointer is gone — so
- * "gone" is the gesture. Hover the element you want, come back here, and it is
- * selected. (A browser can intercept the click instead because the picker and
- * the page share a window; we do not.)
- *
- * v2: the poll asks with NO window argument, so the host answers for whichever
- * of the target's windows the pointer is actually in — and the picker follows
- * it there, switching the panel's window if you point at a pop-out.
- */
-export async function pickStep(): Promise<void> {
-  if (!state.picking || !state.target) return;
-  let info: PickReply;
+export async function togglePick(): Promise<void> {
+  if (state.picking) return cancelPick();
+  if (!state.target || state.status !== "attached") return;
+  const target = state.target, epoch = inspectionEpoch, mode = ++pickMode;
+  state.picking = true;
+  state.pickInfo = null;
   try {
-    info = await send<PickReply>(state.target, "pick", {}, 3000);
-  } catch (e) {
-    fail(e);
-    state.picking = false;
-    return;
+    await send(target, "pick", { op: "start" });
+    if (epoch !== inspectionEpoch || mode !== pickMode) return;
+    await pickStep();
+  } catch (error) {
+    if (epoch === inspectionEpoch && mode === pickMode) { state.picking = false; fail(error); }
   }
-  if (info.insideWindow && info.node) {
-    state.pickInfo = info;
-    void send(state.target, "highlight", {
-      node: info.node.id,
-      window: info.window,
-      ttlMs: PICK_TTL_MS,
-    }).catch(() => {});
-    return;
-  }
-  // Left the window with something under the pointer — that is the pick.
-  if (!info.insideWindow && state.pickInfo && state.pickInfo.node) {
-    const picked = state.pickInfo;
+}
+
+/** Poll only modal state; native input chooses the exact clicked painted box. */
+export async function pickStep(): Promise<void> {
+  if (!state.picking || !state.target || pickBusy) return;
+  pickBusy = true;
+  const target = state.target, epoch = inspectionEpoch, mode = pickMode;
+  try {
+    const info = await send<PickReply & { active: boolean; selected: boolean; cancelled: boolean }>(target, "pick", { op: "status" }, 3000,
+      { priority: "background", isCurrent: () => epoch === inspectionEpoch && mode === pickMode });
+    if (epoch !== inspectionEpoch || mode !== pickMode) return;
+    state.pickInfo = markRaw(info);
+    if (info.active) return;
     state.picking = false;
-    state.pickInfo = null;
-    // The pointer may have been in a pop-out. Follow it: a picker that selects
-    // a node the panel cannot then show is worse than no picker.
-    if (picked.window !== undefined && picked.window !== state.window) {
-      const target = state.windows.find((w) => w.id === picked.window);
-      if (target) {
-        state.window = target.kind === "main" ? null : target.id;
-        await refreshTree();
+    if (!info.selected || !info.node) return;
+    if (info.window !== undefined) {
+      const pickedWindow = state.windows.find((w) => w.id === info.window);
+      const next = pickedWindow?.kind === "main" ? null : info.window;
+      if (state.window !== next) {
+        state.window = next;
+        state.session++;
       }
     }
-    revealPath(picked.path);
-    const node = picked.node!;
-    await select(node.id);
-    note({ kind: "dev", text: `picked ${nodeLabel(node)} (node ${node.id})` });
-  }
+    state.tab = "elements";
+    resubscribe();
+    await refreshTree();
+    if (epoch !== inspectionEpoch || mode !== pickMode) return;
+    revealPath(info.path);
+    await select(info.node.id);
+    note({ kind: "dev", text: `picked ${nodeLabel(info.node)} (node ${info.node.id})` });
+  } catch (error) {
+    if (epoch === inspectionEpoch && mode === pickMode) { state.picking = false; fail(error); }
+  } finally { pickBusy = false; }
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,14 +1075,16 @@ function applyMem(reply: MemReply): void {
 }
 
 export async function refreshMem(): Promise<void> {
-  if (!state.target || memInFlight || state.memGcBusy) return;
+  if (!state.target || memInFlight || state.memGcBusy || state.captureActive) return;
+  const epoch = inspectionEpoch;
   memInFlight = true;
   try {
-    applyMem(await cmd<MemReply>("mem"));
+    const reply = await cmd<MemReply>("mem");
+    if (epoch === inspectionEpoch) applyMem(reply);
   } catch (e) {
     // A host older than `mem` answers "unknown command" — said once, in the
     // panel, rather than as the inspector-wide error banner.
-    state.memError = message(e);
+    if (epoch === inspectionEpoch) state.memError = message(e);
   } finally {
     memInFlight = false;
   }
@@ -1345,4 +1378,32 @@ export function setTab(tab: Tab): void {
 
 export function toggleConsole(): void {
   state.consoleOpen = !state.consoleOpen;
+  resubscribe();
+}
+
+/** Stable, attachment-scoped transport for lazy inspector panels. */
+export function panelRequest(): <T>(payload: Record<string, unknown>) => Promise<T> {
+  const target = state.target, window = state.window, session = state.session;
+  return async <T>(payload: Record<string, unknown>): Promise<T> => {
+    if (!target) throw new Error("not attached to a target");
+    const { cmd: name, ...args } = payload;
+    if (typeof name !== "string") throw new Error("missing inspector command");
+    const current = () => state.session === session && state.target?.port === target.port;
+    if (!current()) throw new Error("attachment changed");
+    const leased = (name === "trace" && args.op === "recording-start") || (name === "allocations" && args.op === "start");
+    const scoped = { ...(window === null ? {} : { window }), ...args, ...(leased ? { leaseMs: 15_000 } : {}) };
+    const reply = await send<T>(target, name, scoped, undefined, { isCurrent: current });
+    if (!current()) throw new Error("attachment changed");
+    return markRaw(reply as object) as T;
+  };
+}
+export function setCaptureActive(active: boolean): void {
+  state.captureActive = active;
+  resubscribe();
+}
+
+/** The target expires leased recordings if this inspector crashes or closes. */
+export function captureHeartbeat(): void {
+  if (!state.target || !state.captureActive) return;
+  void cmd("capture-heartbeat").catch(() => {});
 }

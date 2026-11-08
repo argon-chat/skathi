@@ -91,6 +91,8 @@ struct Sub {
     /// The log sequence this socket has been sent up to.
     cursor: u64,
     want: u32,
+    /// Shuts down both socket halves when devtools revoke this subscription.
+    socket: TcpStream,
 }
 
 static SUBS: Mutex<Vec<Sub>> = Mutex::new(Vec::new());
@@ -112,6 +114,7 @@ static TREE_REV: AtomicU64 = AtomicU64::new(0);
 /// is the client this exists for. Same token, same guard, same threat model as
 /// every other framing on this port.
 pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, reader: BufReader<TcpStream>) {
+    let generation = super::ACCEPT_GEN.load(Ordering::SeqCst);
     let header = |name: &str| {
         headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str()).unwrap_or("")
     };
@@ -129,7 +132,7 @@ pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, rea
         );
         return;
     }
-    if !token_ok(target) {
+    if !session_matches(super::enabled(), generation, super::ACCEPT_GEN.load(Ordering::SeqCst)) || !token_ok(target) {
         // Not a 401: this is the same "bad or missing token" the other two
         // framings answer, and a client that gets it should read the handshake
         // file rather than retry with credentials.
@@ -154,9 +157,13 @@ pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, rea
     let queued = Arc::new(AtomicUsize::new(0));
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let since = query_number(target, "since").unwrap_or(0.0) as u64;
+    let socket = match out.try_clone() { Ok(socket) => socket, Err(_) => return };
     {
-        let mut subs = SUBS.lock().unwrap();
-        subs.push(Sub { id, tx: tx.clone(), queued: queued.clone(), cursor: since, want: WANT_ALL });
+        // Linearize admission with close_all. A handshake that was accepted
+        // before disable cannot register after its session was revoked.
+        let mut subs = SUBS.lock().unwrap_or_else(|error| error.into_inner());
+        if !session_matches(super::enabled(), generation, super::ACCEPT_GEN.load(Ordering::SeqCst)) || !token_ok(target) { return; }
+        subs.push(Sub { id, tx: tx.clone(), queued: queued.clone(), cursor: since, want: WANT_ALL, socket });
     }
 
     // The writer owns the socket's write half for the rest of its life, so the
@@ -201,8 +208,12 @@ pub fn serve(target: &str, headers: &[(String, String)], mut out: TcpStream, rea
 
 fn token_ok(target: &str) -> bool {
     let Some(token) = query_string(target, "token") else { return false };
-    super::TOKEN.lock().map(|t| *t == token).unwrap_or(false)
+    super::TOKEN.lock().map(|expected| token_matches(&expected, &token)).unwrap_or(false)
 }
+
+fn token_matches(expected: &str, supplied: &str) -> bool { !expected.is_empty() && expected == supplied }
+fn session_matches(enabled: bool, requested: u64, current: u64) -> bool { enabled && requested == current }
+
 
 /// `/?token=abc&since=12` → the value of one parameter.
 fn query_string(target: &str, name: &str) -> Option<String> {
@@ -409,8 +420,14 @@ fn drop_sub(id: u64) {
 /// handshake would be politer and is not worth a second code path: the peer is
 /// a client that already treats a closed socket as "reattach or give up".
 pub fn close_all() {
-    if let Ok(mut subs) = SUBS.lock() {
-        subs.clear();
+    let subscribers = {
+        let mut subs = SUBS.lock().unwrap_or_else(|error| error.into_inner());
+        std::mem::take(&mut *subs)
+    };
+    // serve/read_loop also retain senders. Closing only the registry does not
+    // disconnect their writer channel; shutdown wakes both blocked I/O halves.
+    for subscriber in subscribers {
+        let _ = subscriber.socket.shutdown(std::net::Shutdown::Both);
     }
 }
 
@@ -581,5 +598,24 @@ fn broadcast(subs: &mut [Sub], want: u32, text: &str) {
         if sub.want & want != 0 {
             queue(&sub.tx, &sub.queued, frame.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    #[test]
+    fn blank_token_is_never_authorization_even_after_disable() {
+        assert!(!token_matches("", ""));
+        assert!(!token_matches("live", ""));
+        assert!(!token_matches("", "stale"));
+        assert!(token_matches("live", "live"));
+    }
+    #[test]
+    fn handshake_cannot_survive_disable_or_reenabled_generation() {
+        assert!(session_matches(true, 4, 4));
+        assert!(!session_matches(false, 4, 4));
+        assert!(!session_matches(true, 4, 5));
+        assert!(!session_matches(false, 4, 5));
     }
 }

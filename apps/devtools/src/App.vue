@@ -47,7 +47,12 @@ import {
   closeMenu,
   closeNetDetail,
   highlight,
-  MEM_POLL_MS,
+  cancelPick,
+  panelRequest,
+  setCaptureActive,
+  stopCapture,
+  captureHeartbeat,
+  resubscribe,
   pickStep,
   pollFallback,
   refreshMem,
@@ -60,6 +65,7 @@ import {
 } from "./store";
 
 const SELECT_REFRESH_MS = 4000;
+const request = computed(() => { void state.session; return panelRequest(); });
 
 const mainH = computed(() =>
   mainHeight(state.consoleOpen, state.consoleHeight, !!state.error),
@@ -124,6 +130,7 @@ function onKey(event: VnKeyboardEvent): void {
     return;
   }
   if (event.key === "Escape") {
+    if (state.picking) { event.preventDefault(); void cancelPick(); return; }
     // ONE owner for Escape. The layers close innermost first — the right-click
     // menu, the Elements search, the Network details pane — and the drawer
     // keeps its state until nothing is left over it. The panels do not handle
@@ -143,6 +150,7 @@ function onKey(event: VnKeyboardEvent): void {
       return;
     }
     state.consoleOpen = !state.consoleOpen;
+    resubscribe();
   }
 }
 
@@ -162,6 +170,7 @@ onMounted(async () => {
   if (target) await attach(target);
 
   every(150, () => pickStep());
+  every(3000, captureHeartbeat);
   every(3000, () => { void refreshTargets(); });
   every(SELECT_REFRESH_MS, () => {
     if (state.selected !== null && state.status === "attached" && !state.picking) {
@@ -178,14 +187,13 @@ onMounted(async () => {
   });
   // Only ever runs when the socket is not live; see `store.pollFallback`.
   every(1000, () => pollFallback());
-  // The memory breakdown is a command (`store.refreshMem`), polled only while
-  // the panel that shows it is open.
-  every(MEM_POLL_MS, () => {
-    if (state.status === "attached" && state.tab === "performance") void refreshMem();
-  });
+  // Heap/address-space walks are explicit snapshots, never a periodic UI task.
+
 });
 
 onUnmounted(() => {
+  stopCapture();
+  if (state.picking) void cancelPick();
   for (const t of timers) clearInterval(t);
   timers = [];
   offKey?.();
@@ -212,8 +220,8 @@ onUnmounted(() => {
         <StylesPanel :height="mainH" />
       </template>
       <NetworkPanel v-else-if="state.tab === 'network'" :height="mainH" @drag="startDrag('net', $event)" />
-      <PerfPanel v-else-if="state.tab === 'performance'" :height="mainH" />
-      <StoragePanel v-else-if="state.tab === 'storage'" :height="mainH" />
+      <PerfPanel v-else-if="state.tab === 'performance'" :height="mainH" :request="request" :session-key="state.session" @recording-change="setCaptureActive" />
+      <StoragePanel v-else-if="state.tab === 'storage'" :height="mainH" :request="request" :session-key="state.session" />
       <TargetsPanel v-else :height="mainH" />
     </div>
 
@@ -227,7 +235,7 @@ onUnmounted(() => {
 
     <footer class="statusbar mono">
       <span v-if="state.picking" class="mode">
-        ⌖ picking — hover the element in the app, then move back here
+        ⌖ click an element in the app · Esc to cancel
       </span>
       <span v-else-if="ui.flash" class="flash" :class="{ bad: ui.flashBad }">{{ ui.flash }}</span>
       <span v-else class="hint">

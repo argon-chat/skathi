@@ -49,6 +49,7 @@ macro_rules! host_fn {
         ) -> u64 {
             match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
                 let $g = g;
+                let _profile = $crate::redjs::profiling::host_span_at(g as usize, ::core::stringify!($name), ::core::file!(), ::core::line!(), ::core::column!());
                 let $args = unsafe { $crate::redjs::api::HostArgs::new(cf) };
                 let _ = &$args;
                 $body

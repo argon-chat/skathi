@@ -393,7 +393,9 @@ pub fn note_restyle(total_ms: f32, inline_ms: f32, cascade_ms: f32, store_ms: f3
     if !enabled() {
         return;
     }
+    vn_runtime::redjs::profiling::counter("nodesCascaded", nodes);
     let (rules, match_ms, vars_ms, fold_ms) = vn_css::perf::take();
+    vn_runtime::redjs::profiling::counter("selectorsTested", rules);
     let split = vn_css::perf::take_split();
     let (share_asked, share_hits) = vn_css::perf::take_share();
     with(|p| {
@@ -422,6 +424,7 @@ pub fn note_build(total_ms: f32, elements: u64) {
     if !enabled() {
         return;
     }
+    vn_runtime::redjs::profiling::counter("elementsBuilt", elements);
     with(|p| {
         p.build_passes += 1;
         p.build_ms += total_ms;
@@ -486,7 +489,9 @@ pub fn note_taffy_gap() {
         return;
     }
     let Some(t) = LAYOUT_DONE.with(|c| c.borrow_mut().take()) else { return };
-    let ms = t.elapsed().as_secs_f32() * 1000.0;
+    let ended = Instant::now();
+    let ms = ended.duration_since(t).as_secs_f32() * 1000.0;
+    vn_runtime::redjs::profiling::interval("layout", "Taffy layout", t, ended);
     with(|p| p.taffy_ms += ms);
 }
 
@@ -624,6 +629,7 @@ pub fn note_sync_layout(caller: SyncCaller, drew: bool, ms: f32) {
     if !enabled() {
         return;
     }
+    if drew { vn_runtime::redjs::profiling::counter("forcedLayouts", 1); }
     with(|p| {
         p.sync_by[caller as usize] += 1;
         if drew {
@@ -641,6 +647,10 @@ pub fn note_sync_layout(caller: SyncCaller, drew: bool, ms: f32) {
 pub fn note_dom(op: DomOp) {
     if !enabled() {
         return;
+    }
+    if vn_runtime::redjs::profiling::enabled() {
+        vn_runtime::redjs::profiling::counter("domWrites", 1);
+        vn_runtime::redjs::profiling::counter(&format!("dom.{}", DomOp::NAMES[op as usize]), 1);
     }
     let now = Instant::now();
     with(|p| {
@@ -667,6 +677,7 @@ pub fn note_read(kind: Read) {
     if !enabled() {
         return;
     }
+    vn_runtime::redjs::profiling::counter(match kind { Read::Layout => "layoutReads", Read::Scroll => "scrollReads", Read::Style => "styleReads", Read::Query => "selectorQueries" }, 1);
     with(|p| match kind {
         Read::Layout => p.layout_reads += 1,
         Read::Scroll => p.scroll_reads += 1,

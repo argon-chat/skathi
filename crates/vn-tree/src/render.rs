@@ -486,6 +486,8 @@ impl gpui::Element for BoundsProbe {
         if !self.root {
             return (self.inner.request_layout(window, cx), ());
         }
+        let _profile_window = vn_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
+        let _profile = vn_runtime::redjs::profiling::span("layout", "Layout requests");
         let span = crate::perf::Span::start();
         let layout = self.inner.request_layout(window, cx);
         crate::perf::note_layout_req(span.ms());
@@ -511,10 +513,10 @@ impl gpui::Element for BoundsProbe {
         // gets back the hitbox gpui made for IT, under the transform and
         // content mask it made it under (see [`pick_hitbox`]). The previous tag
         // is restored on the way out, so the parent's boxes stay the parent's.
-        let span = self.root.then(|| {
-            crate::perf::note_taffy_gap();
-            crate::perf::Span::start()
-        });
+        let _profile_window = self.root.then(|| vn_runtime::redjs::profiling::WindowScope::enter(windows::key(window)));
+        if self.root { crate::perf::note_taffy_gap(); }
+        let _profile = self.root.then(|| vn_runtime::redjs::profiling::span("paint", "Prepaint native tree"));
+        let span = self.root.then(crate::perf::Span::start);
         let (_, own) =
             window.with_hitbox_tag(self.id, |window| self.inner.prepaint(window, cx));
         if let Some(span) = span {
@@ -539,6 +541,8 @@ impl gpui::Element for BoundsProbe {
             self.inner.paint(window, cx);
             return;
         }
+        let _profile_window = vn_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
+        let _profile = vn_runtime::redjs::profiling::span("paint", "Paint native tree");
         // A text selection being dragged hears every move and the release
         // from here, wherever the pointer is (`crate::selection`).
         crate::selection::paint_listeners(window);
@@ -2023,6 +2027,8 @@ fn with_control_area<E: gpui::InteractiveElement>(
 /// This is the PRIMARY window's entry point; [`build_subtree`] is a pop-out's,
 /// and the two do the same per-window bookkeeping against their own window.
 pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyElement {
+    let _profile_window = vn_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
+    let _profile = vn_runtime::redjs::profiling::span("render", "Build native element tree");
     BUILDS.with(|c| c.set(c.get().wrapping_add(1)));
     LAYOUTS.with(|c| c.set(c.get().wrapping_add(1)));
     // ONE clock read per frame: nodes animating together must sample the same
@@ -2167,6 +2173,8 @@ fn build_fullscreen<V: 'static>(
 ///   fake the first two and could not fake the third at all, which is why a
 ///   pop-out could not hold keyboard focus.
 pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<V>) -> AnyElement {
+    let _profile_window = vn_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
+    let _profile = vn_runtime::redjs::profiling::span("render", "Build secondary window tree");
     LAYOUTS.with(|c| c.set(c.get().wrapping_add(1)));
     let now = std::time::Instant::now();
     // Per WINDOW, and a pop-out is a window of its own.
@@ -2254,6 +2262,8 @@ pub(crate) fn build_cached<V: 'static>(
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement {
+    let _profile_window = vn_runtime::redjs::profiling::WindowScope::enter(windows::key(window));
+    let _profile = vn_runtime::redjs::profiling::span("render", "Build cached subtree");
     let now = std::time::Instant::now();
     let span = crate::perf::Span::start();
     let before = BUILT.with(|c| c.get());

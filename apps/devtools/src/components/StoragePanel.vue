@@ -13,10 +13,13 @@
 // storage area is a key/value store with a specified setter, and "change this
 // flag and reload" is most of what a storage panel is for.
 import { ref } from "vue";
+import IndexedDbPanel from "./IndexedDbPanel.vue";
+import type { InspectorRequest } from "../inspector-model";
 import { PANE_HEAD_H } from "../layout";
 import { clearStorage, refreshStorage, removeStorage, setStorage, state, ui } from "../store";
 
-const props = defineProps<{ height: number }>();
+const props = defineProps<{ height: number; request?: InspectorRequest; sessionKey?: string | number }>();
+const indexed = ref(false);
 
 const editing = ref<string | null>(null);
 const draft = ref("");
@@ -41,6 +44,7 @@ async function add(): Promise<void> {
 }
 
 function switchArea(area: string): void {
+  indexed.value = false;
   state.storageArea = area;
   void refreshStorage();
 }
@@ -57,30 +61,34 @@ function size(value: string): string {
     <header class="pane-head">
       <span class="label">Storage</span>
       <div class="areas">
-        <div
+        <button
           class="area"
-          :class="{ on: state.storageArea === 'local' }"
+          :aria-pressed="!indexed && state.storageArea === 'local'"
+          :class="{ on: !indexed && state.storageArea === 'local' }"
           @click="switchArea('local')"
         >
           localStorage
-        </div>
-        <div
+        </button>
+        <button
           class="area"
-          :class="{ on: state.storageArea === 'session' }"
+          :aria-pressed="!indexed && state.storageArea === 'session'"
+          :class="{ on: !indexed && state.storageArea === 'session' }"
           @click="switchArea('session')"
         >
           sessionStorage
-        </div>
+        </button>
+        <button class="area" :class="{ on: indexed }" :aria-pressed="indexed" @click="indexed = true">IndexedDB</button>
       </div>
-      <span class="chip">{{ state.storage.length }} keys</span>
+      <span v-if="!indexed" class="chip">{{ state.storage.length }} keys</span>
       <div class="spacer"></div>
-      <div class="btn" @click="refreshStorage()">↻</div>
-      <div class="btn danger" title="Remove every key in this area" @click="clearStorage()">
+      <button v-if="!indexed" class="btn" @click="refreshStorage()" aria-label="Refresh storage">Refresh</button>
+      <button v-if="!indexed" class="btn danger" title="Remove every key in this area" @click="clearStorage()">
         clear
-      </div>
+      </button>
     </header>
 
-    <div v-if="state.storageError" class="empty t-red">{{ state.storageError }}</div>
+    <IndexedDbPanel v-if="indexed" :height="Math.max(0, props.height - PANE_HEAD_H - 1)" :request="request" :session-key="sessionKey" />
+    <div v-else-if="state.storageError" class="empty t-red">{{ state.storageError }}</div>
 
     <div v-else class="body">
       <div class="cols mono">
@@ -147,6 +155,9 @@ function size(value: string): string {
 </template>
 
 <style scoped>
+button.area { border: 0; background: transparent; cursor: pointer; }
+button:focus-visible { outline: 2px solid #6cb6ff; outline-offset: -2px; }
+
 .storage {
   flex: 1;
   min-width: 0;

@@ -9,7 +9,7 @@
 // "which window" is a question every panel's answer depends on.
 import { computed } from "vue";
 import type { Tab } from "../protocol";
-import { state, selectWindow, setTab, togglePick } from "../store";
+import { state, selectWindow, setTab, togglePick, toggleConsole } from "../store";
 
 const TABS: { id: Tab; label: string; key: string }[] = [
   { id: "elements", label: "Elements", key: "1" },
@@ -45,22 +45,25 @@ const errorCount = computed(() => state.logs.filter((l) => l.kind === "error").l
 
 <template>
   <div class="toolbar">
-    <!-- The picker, with a visible MODE indicator: while it is armed the whole
-         button is lit and the hint below says what the gesture is, because the
-         gesture is not the browser's (you hover in the app and come BACK — see
-         docs/DEVTOOLS-UI.md §5). -->
-    <div
+    <!-- Native picking consumes the click in the target before app dispatch. -->
+    <button
+      type="button"
       class="btn pick"
+      :disabled="state.status !== 'attached'"
+      :aria-pressed="state.picking"
       :class="{ on: state.picking }"
       title="Inspect an element  ·  Ctrl+Shift+C"
       @click="togglePick()"
     >
       <span class="glyph">⌖</span>
       <span>{{ state.picking ? "picking…" : "inspect" }}</span>
-    </div>
+    </button>
 
-    <div class="tabs">
-      <div
+    <div class="tabs" role="tablist" aria-label="Inspector panels">
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="state.tab === tab.id"
         v-for="tab in TABS"
         :key="tab.id"
         class="tab"
@@ -71,14 +74,15 @@ const errorCount = computed(() => state.logs.filter((l) => l.kind === "error").l
         {{ tab.label }}
         <span v-if="tab.id === 'network' && netCount" class="count">{{ netCount }}</span>
         <span v-if="tab.id === 'elements' && errorCount" class="count bad">{{ errorCount }}</span>
-      </div>
+      </button>
     </div>
 
     <div class="spacer"></div>
 
     <div v-if="showWindows" class="windows">
       <span class="label">window</span>
-      <div
+      <button
+        type="button"
         v-for="w in state.windows"
         :key="w.id"
         class="win"
@@ -87,21 +91,26 @@ const errorCount = computed(() => state.logs.filter((l) => l.kind === "error").l
         @click="pickWindow(w.id)"
       >
         {{ windowLabel(w.id) }}
-      </div>
+      </button>
     </div>
 
-    <div
+    <button
+      type="button"
       class="btn"
+      :aria-pressed="state.consoleOpen"
       :class="{ on: state.consoleOpen }"
       title="Console drawer  ·  Esc"
-      @click="state.consoleOpen = !state.consoleOpen"
+      @click="toggleConsole()"
     >
       console
-    </div>
+    </button>
   </div>
 </template>
 
 <style scoped>
+button { font-family: inherit; background: transparent; border-width: 0; cursor: pointer; }
+button:focus-visible { outline: 1px solid #6cb6ff; outline-offset: 1px; }
+button:disabled { opacity: 0.45; cursor: default; }
 .toolbar {
   display: flex;
   flex-direction: row;

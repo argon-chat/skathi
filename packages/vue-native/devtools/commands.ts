@@ -59,6 +59,16 @@ const compact = (o: Record<string, unknown>): Record<string, unknown> => {
   return o;
 };
 
+/** New paged APIs reject malformed numbers instead of silently dropping a flag. */
+const integerFlag = (value: unknown, name: string, minimum = 0, maximum = Number.MAX_SAFE_INTEGER): number | undefined => {
+  if (value === undefined) return undefined;
+  if (value === true || value === false || value === "") die(`${name} needs an integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) die(`${name} must be an integer between ${minimum} and ${maximum}`);
+  return parsed;
+};
+const stringFlag = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
+
 // ---------------------------------------------------------------------------
 // the schema vocabulary
 // ---------------------------------------------------------------------------
@@ -240,18 +250,19 @@ export const COMMANDS: CommandSpec[] = [
   },
   {
     cmd: "pick",
+    aliases: ["picker"],
     description:
-      "Where the pointer is over the app and which node is under it: {x, y, insideWindow, " +
-      "viewport, path[], node}. The hit test is over the painted bounds (deepest rectangle wins), " +
-      "not gpui's hitboxes. `insideWindow` is gpui's window hover flag — a synthesized pointer " +
-      "event does not set it, only a real cursor does. WITHOUT `window` every window is asked " +
-      "and the one the pointer is actually in answers; the reply always names it.",
-    usage: [
-      "  pick                               where the pointer is over the app and which",
-      "                                     node is under it (the picker's poll)",
-    ],
-    args: {},
-    cli: () => ({}),
+      "Without op, poll the node under the real pointer: {x,y,insideWindow,window,path,node}. " +
+      "With op=start, arm the native element picker; the next target click is consumed before " +
+      "application handlers and selects a node. op=status renews its 15-second lease and returns " +
+      "active/selected/cancelled, generation and selection. Escape or op=stop cancels.",
+    usage: ["  pick     [start|status|stop]         poll, or control the native click picker"],
+    args: { op: str('"start", "status" or "stop"; absent preserves stateless pointer polling') },
+    cli: (rest, flags) => {
+      const op = rest[0] ?? stringFlag(flags.op);
+      if (op !== undefined && !["start", "status", "stop"].includes(op)) die("pick op must be start, status or stop");
+      return compact({ op });
+    },
   },
   {
     cmd: "click",
@@ -535,29 +546,41 @@ export const COMMANDS: CommandSpec[] = [
   {
     cmd: "trace",
     description:
-      "A frame-by-frame record of where the host's time went during an interaction. `start` arms " +
-      "every phase counter; `stop` disarms and returns the summary (and, with `frames`, every " +
-      "non-idle frame: pump / JS / DOM ops and the span between the first and last one / layout " +
-      "and style reads / FORCED synchronous layouts and their callers / restyles, whole-document " +
-      "ones and why / sheet recompiles / build / gpui layout-request, taffy, prepaint, paint / " +
-      "text shaping misses / image resample copies / web fonts registered). `peek` reports " +
-      "without stopping; `mark` labels the frame in progress. Refused while VN_PERF is on.",
+      "Record instrumented main-thread elapsed time. recording-start/recording-stop/recording-status " +
+      "control bounded ordered captures; frames pages summaries and frame pages nested calls with " +
+      "parentId, selfMs, durationMs, counters, callsites and hints. These are CPU/host timings, " +
+      "not GPU timestamps or sampled CPU cycles. Legacy start/stop/peek/mark retain their aggregate " +
+      "phase report (and still refuse VN_PERF counter ownership conflicts).",
     usage: [
+      "  trace    recording-start [--cap N] | recording-stop | recording-status",
+      "  trace    frames [--offset N] [--limit N]",
+      "  trace    frame --frame-id ID [--offset N] [--limit N]",
       "  trace    start [--cap N] | stop [--frames] | peek [--frames] | mark <label>",
-      "                                     a frame-by-frame record of an interaction",
     ],
     args: {
-      op: str('"start", "stop", "peek" (default) or "mark"'),
-      frames: bool("include every stored frame, not only the summary"),
-      label: str("for op=mark: the label"),
-      cap: int("for op=start: the most active frames kept (default 20000)"),
+      op: str('recording-start | recording-stop | recording-status | frames | frame; legacy start | stop | peek (default) | mark'),
+      frameId: int("for op=frame: a captured frame id"),
+      offset: int("paged result offset, starting at zero"),
+      limit: int("page size: frames <=240, frame spans <=1000"),
+      frames: bool("legacy stop/peek: include every stored aggregate frame"),
+      label: str("legacy mark: the label"),
+      cap: int("recording-start: 16..10000 frames (default 1200); legacy start default 20000"),
     },
     cli: (rest, flags) => {
-      const op = rest[0] || "peek";
+      const op = rest[0] || stringFlag(flags.op) || "peek";
+      if (["recording-start", "recording-stop", "recording-status", "frames", "frame"].includes(op)) {
+        const frameId = integerFlag(flags["frame-id"] ?? flags.frameId ?? (op === "frame" ? rest[1] : undefined), "--frame-id");
+        if (op === "frame" && frameId === undefined) die("trace frame needs --frame-id ID");
+        return compact({
+          op, frameId,
+          offset: integerFlag(flags.offset, "--offset"),
+          limit: integerFlag(flags.limit, "--limit", 1, op === "frames" ? 240 : 1000),
+          cap: integerFlag(flags.cap, "--cap", 16, 10000),
+        });
+      }
+      if (!["start", "stop", "peek", "mark"].includes(op)) die("unknown trace op");
       if (op === "mark" && !rest[1] && typeof flags.label !== "string") die("trace mark needs a label");
-      return compact({
-        op,
-        frames: flags.frames ? true : undefined,
+      return compact({ op, frames: flags.frames ? true : undefined,
         label: op === "mark" ? (typeof flags.label === "string" ? flags.label : rest.slice(1).join(" ")) : undefined,
         cap: num(flags.cap),
       });
@@ -642,6 +665,65 @@ export const COMMANDS: CommandSpec[] = [
         key: typeof flags.key === "string" ? flags.key : undefined,
         value: typeof flags.value === "string" ? flags.value : undefined,
       }),
+  },
+  {
+    cmd: "indexeddb",
+    description:
+      "Read-only IndexedDB inspection without opening/upgrading databases or running application JS. " +
+      "list returns names/versions; schema returns stores, indexes, key paths and counts; records " +
+      "returns bounded typed structured-clone previews, primary/index keys and an opaque nextCursor. " +
+      "Blob bodies are not searched. Busy databases report an error to retry, never an upgrade.",
+    usage: [
+      "  indexeddb [list]                    database names and versions",
+      "  indexeddb schema <database>         object stores and indexes",
+      "  indexeddb records <database> <store> [--index NAME] [--after CURSOR]",
+      "            [--limit N] [--search TEXT] bounded typed previews (maximum 100 records)",
+    ],
+    args: {
+      op: str('"list" (default), "schema" or "records"'), database: str("database name"), store: str("object store name"),
+      index: str("optional index name; absent walks primary keys"), after: str("opaque hexadecimal nextCursor from the preceding page"),
+      limit: int("records per page, 1..100 (default 50)"), search: str("key and bounded preview search, up to 256 characters; excludes Blob bodies"),
+    },
+    cli: (rest, flags) => {
+      const op = rest[0] || stringFlag(flags.op) || "list";
+      if (!["list", "schema", "records"].includes(op)) die("indexeddb op must be list, schema or records");
+      const database = stringFlag(flags.database) ?? rest[1], store = stringFlag(flags.store) ?? rest[2];
+      if (op !== "list" && database === undefined) die(`indexeddb ${op} needs a database name`);
+      if (op === "records" && store === undefined) die("indexeddb records needs an object store name");
+      const search = stringFlag(flags.search), after = stringFlag(flags.after);
+      if (search !== undefined && [...search].length > 256) die("--search is limited to 256 characters");
+      if (after !== undefined && (!/^[a-f0-9]*$/i.test(after) || after.length % 2 !== 0)) die("--after must be the opaque hexadecimal nextCursor");
+      return compact({ op, database, store, index: stringFlag(flags.index), after, search, limit: integerFlag(flags.limit, "--limit", 1, 100) });
+    },
+  },
+  {
+    cmd: "allocations",
+    description:
+      "Bounded Rust allocator event capture: start/stop/status/snapshot, explicit scoped sites and " +
+      "size classes, observed churn and capture-born survivors. Pointer-hash sampling is not " +
+      "extrapolated; coverage states missing JS, JSC and native allocator hooks. Optional heap " +
+      "counter is separate from captured events. Dropped events/partial rows make complete=false.",
+    usage: [
+      "  allocations [status|snapshot] [--category TEXT] [--site TEXT]",
+      "              [--min-size N] [--max-size N] [--limit N]",
+      "  allocations start [--sample-every N] [--max-events N] | stop",
+    ],
+    args: {
+      op: str('"status" (default), "start", "stop" or "snapshot"'), sampleEvery: int("pointer-hash sample interval, 1..4096; observed counts are not extrapolated"),
+      maxEvents: int("event buffer capacity, 1024..65536"), category: str("category substring filter"), site: str("explicit site substring filter"),
+      minSize: int("minimum allocation size in bytes"), maxSize: int("maximum allocation size in bytes"), limit: int("maximum grouped rows, 1..2000 (default 300)"),
+    },
+    cli: (rest, flags) => {
+      const op = rest[0] || stringFlag(flags.op) || "status";
+      if (!["start", "stop", "status", "snapshot"].includes(op)) die("allocations op must be start, stop, status or snapshot");
+      const minSize = integerFlag(flags["min-size"] ?? flags.minSize, "--min-size"), maxSize = integerFlag(flags["max-size"] ?? flags.maxSize, "--max-size");
+      if (minSize !== undefined && maxSize !== undefined && minSize > maxSize) die("--min-size exceeds --max-size");
+      return compact({ op, minSize, maxSize, category: stringFlag(flags.category), site: stringFlag(flags.site),
+        sampleEvery: integerFlag(flags["sample-every"] ?? flags.sampleEvery, "--sample-every", 1, 4096),
+        maxEvents: integerFlag(flags["max-events"] ?? flags.maxEvents, "--max-events", 1024, 65536),
+        limit: integerFlag(flags.limit, "--limit", 1, 2000),
+      });
+    },
   },
   {
     cmd: "dialog",

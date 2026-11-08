@@ -126,6 +126,8 @@ pub fn update_layout_observers(window: &mut Window, cx: &mut App) {
 }
 
 fn step(f: u64, window: &mut Window, cx: &mut App) {
+    let _profile_window = vn_runtime::redjs::profiling::WindowScope::enter(crate::windows::key(window));
+    let _profile = vn_runtime::redjs::profiling::span("layout", "Resize / intersection observers");
     // "Recalculate styles and update layout": the frame's own draw, if this
     // frame is going to draw.
     if window.vn_is_dirty() {
