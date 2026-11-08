@@ -1445,5 +1445,17 @@ pub(crate) fn report(gc: bool, code: bool, regions: bool, window: &mut Window, c
             ]),
         ));
     }
+    #[cfg(feature = "webgpu")]
+    {
+        let (native, readback, snapshots) = vn_runtime::redjs::webapi::webgpu::canvas::presentation_stats();
+        let (copies,fallbacks) = vn_tree::devtools::gpu_canvas_presentation_stats();
+        o.push(("webgpuPresentation", Json::obj(vec![
+            ("atlasGpuCopies", Json::n(copies as f64)),
+            ("atlasCpuFallbacks", Json::n(fallbacks as f64)),
+            ("nativeDisplayFrames", Json::n(native as f64)),
+            ("readbackDisplayFrames", Json::n(readback as f64)),
+            ("explicitSnapshots", Json::n(snapshots as f64)),
+        ])));
+    }
     Json::obj(o)
 }

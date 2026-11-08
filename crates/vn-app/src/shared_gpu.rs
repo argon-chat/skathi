@@ -1,6 +1,7 @@
 //! Experimental one-physical-device Windows host (`VN_GPU_SHARED=1`). GPUI
 //! retains its D3D11 pipelines through D3D11On12; redjs borrows the same wgpu
-//! generation. Canvas presentation still uses the bounded readback bridge.
+//! generation. Canvas display imports native GPU textures; VN_GPU_PRESENT=readback
+//! selects the bounded readback bridge for controlled qualification.
 use std::sync::{Arc, Mutex};
 
 use anyhow::{ensure, Context as _, Result};
@@ -18,6 +19,8 @@ use windows::{
         Dxgi::{CreateDXGIFactory2, IDXGIDevice, IDXGIFactory6, DXGI_CREATE_FACTORY_FLAGS},
     },
 };
+
+mod presentation;
 
 static CURRENT: Mutex<Option<Arc<Context>>> = Mutex::new(None);
 
@@ -136,6 +139,13 @@ fn create_generation() -> Result<ExternalDirectXDevice> {
     );
     let adapter = unsafe { device.cast::<IDXGIDevice>()?.GetAdapter()?.cast()? };
     let dxgi_factory: IDXGIFactory6 = unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))? };
+    if std::env::var("VN_GPU_PRESENT").as_deref() != Ok("readback") {
+        vn_runtime::redjs::webapi::webgpu::canvas::set_presenter(Some(Arc::new(
+            presentation::Presenter::new(context.clone(), device.clone(), device_context.clone())?,
+        )));
+    } else {
+        vn_runtime::redjs::webapi::webgpu::canvas::set_presenter(None);
+    }
     backend::set_host(Some(Arc::new(SharedHost(context.clone()))));
     log::info!(
         "WebGPU/GPUI share the same physical device via D3D11On12: {}",

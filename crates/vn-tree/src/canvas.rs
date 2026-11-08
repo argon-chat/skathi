@@ -38,12 +38,11 @@
 //!
 //! [`PixelSource`] keeps presentation independent of the canvas backend. 2D
 //! canvases use [`CpuBitmap`]. With `webgpu`, [`CanvasBitmap`] also consumes
-//! completed, premultiplied RGBA frames from redjs's bounded asynchronous GPU
-//! readback service. Both use the same atlas, generation, live-tile and resize
-//! handling. Pending GPU work never blocks this UI thread.
-//!
-//! This is a readback bridge into the current D3D11 sprite atlas. It does not
-//! share the WebGPU D3D12 device or import native GPU textures without copies.
+//! native host frames or completed premultiplied RGBA readbacks. Both use the
+//! same atlas, generation, live-tile and resize handling. The shared Windows
+//! device imports textures through D3D11On12; other devices retain the bounded
+//! asynchronous readback. Only explicit export or exceptional import fallback
+//! may wait for GPU readback on this thread.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -67,7 +66,7 @@ use crate::windows::{self, WinKey};
 // Pixel sources: 2D bitmaps and completed WebGPU readbacks
 // ---------------------------------------------------------------------------
 
-/// What a canvas paints. A future shared-texture path grows this enum.
+/// What a canvas paints: CPU bitmap, native texture or allocation-free black.
 #[derive(Clone)]
 pub(crate) enum Pixels {
     /// A bitmap uploaded into the painting window's sprite atlas: BGRA with
@@ -78,8 +77,25 @@ pub(crate) enum Pixels {
     /// Keep only its intrinsic size; painting black needs no CPU image/atlas tile.
     #[cfg(feature = "webgpu")]
     SolidBlack { width: u32, height: u32 },
-    // Step 2, shared-texture flavour: `Texture(..)`, a GPU texture the element
-    // paints without a copy.
+    #[cfg(feature = "webgpu")]
+    Texture(NativePixels),
+}
+
+#[cfg(feature = "webgpu")]
+#[derive(Clone)]
+pub(crate) struct NativePixels {
+    frame: Arc<gpu::NativePresentation>,
+    image: Arc<RenderImage>,
+    uploaded: std::rc::Rc<Cell<Option<WinKey>>>,
+}
+#[cfg(feature = "webgpu")]
+static NATIVE_UPLOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "webgpu")]
+static NATIVE_FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(feature = "webgpu")]
+pub(crate) fn native_stats() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (NATIVE_UPLOADS.load(Relaxed), NATIVE_FALLBACKS.load(Relaxed))
 }
 
 /// One answer from a [`PixelSource`].
@@ -169,6 +185,16 @@ impl PixelSource for CanvasBitmap {
                             _ => Fetch::Changed(generation, None),
                         };
                     }
+                    if let Some(native) = &frame.native {
+                        if frame.width > 0 && frame.height > 0 && frame.width <= ATLAS_MAX_SIDE && frame.height <= ATLAS_MAX_SIDE {
+                            return Fetch::Changed(generation,Some(Pixels::Texture(NativePixels {
+                                frame:native.clone(),
+                                image:Arc::new(RenderImage::from_gpu(gpui::size(gpui::DevicePixels(frame.width as i32),gpui::DevicePixels(frame.height as i32)))),
+                                uploaded:std::rc::Rc::new(Cell::new(None)),
+                            })));
+                        }
+                        return Fetch::Changed(generation,None);
+                    }
                     atlas_frame(generation, frame.width, frame.height, &frame.rgba)
                 }
                 None => Fetch::Unchanged,
@@ -207,6 +233,8 @@ fn as_painted(pixels: Pixels, moving: bool) -> Pixels {
         Pixels::Atlas(image) => Pixels::Atlas(image),
         #[cfg(feature = "webgpu")]
         solid @ Pixels::SolidBlack { .. } => solid,
+        #[cfg(feature = "webgpu")]
+        native @ Pixels::Texture(_) => native,
     }
 }
 
@@ -268,7 +296,7 @@ pub(crate) fn mem_stats() -> (usize, usize) {
             .filter_map(|e| match &e.pixels {
                 Some(Pixels::Atlas(img)) => Some(img.as_bytes(0).map_or(0, <[u8]>::len)),
                 #[cfg(feature = "webgpu")]
-                Some(Pixels::SolidBlack { .. }) => None,
+                Some(Pixels::SolidBlack { .. } | Pixels::Texture(_)) => None,
                 None => None,
             })
             .sum();
@@ -291,10 +319,14 @@ thread_local! {
 /// (the scene that painted it has been presented by then), its resampled
 /// copies with it.
 fn retire_pixels(pixels: Option<Pixels>, window: WinKey) {
-    if let Some(Pixels::Atlas(image)) = pixels {
-        crate::resample::forget(&image);
-        windows::queue_drops(window, [image]);
-    }
+    let image = match pixels {
+        Some(Pixels::Atlas(image)) => image,
+        #[cfg(feature = "webgpu")]
+        Some(Pixels::Texture(native)) => native.image,
+        _ => return,
+    };
+    crate::resample::forget(&image);
+    windows::queue_drops(window,[image]);
 }
 
 fn retire(entry: Entry) {
@@ -313,12 +345,24 @@ fn current_at(id: u32, win: WinKey, now: Instant) -> Option<Pixels> {
         let since = m.get(&id).map_or(0, |e| e.generation);
         match Source::fetch(id as u64, since) {
             Fetch::Unchanged => {
+                #[cfg(feature = "webgpu")]
+                if let Some(e) = m.get_mut(&id).filter(|e| e.window != win) {
+                    if let Some(Pixels::Texture(native)) = &mut e.pixels {
+                        // A deferred drop in the old window must not remove a
+                        // tile created if this canvas moves back before it runs.
+                        let next = Arc::new(RenderImage::from_gpu(native.image.size(0)));
+                        let previous = std::mem::replace(&mut native.image, next);
+                        native.uploaded = std::rc::Rc::new(Cell::new(None));
+                        windows::queue_drops(e.window,[previous]);
+                        e.window = win;
+                    }
+                }
                 if let Some(e) = m.get_mut(&id).filter(|e| e.moving && now.duration_since(e.changed) >= STILL) {
                     e.moving = false;
                     let still = match &e.pixels {
                         Some(Pixels::Atlas(image)) => still_copy(image),
                         #[cfg(feature = "webgpu")]
-                        Some(Pixels::SolidBlack { .. }) => None,
+                        Some(Pixels::SolidBlack { .. } | Pixels::Texture(_)) => None,
                         None => None,
                     };
                     if let Some(still) = still {
@@ -435,9 +479,24 @@ fn fetch_live(id: u32, win: WinKey, now: Instant, window: &mut Window) -> crate:
                 None => Shown::Nowhere,
             },
             Fetch::Changed(generation, pixels) => {
+                #[cfg(feature = "webgpu")]
+                let mut pixels = pixels;
                 let moving = m.get(&id).is_some_and(|e| now.duration_since(e.changed) < MOVING);
                 if moving {
                     STILL_AT.with(|s| s.set(Some(now + STILL)));
+                }
+                #[cfg(feature = "webgpu")]
+                if let Some(Pixels::Texture(native)) = pixels.as_mut() {
+                    if let Some(e) = m.get(&id).filter(|e|e.window == win) {
+                        if let Some(Pixels::Texture(old)) = &e.pixels {
+                            if old.image.size(0) == native.image.size(0) { native.image=old.image.clone(); }
+                        }
+                    }
+                    let write=upload_native(native,window,win);
+                    let same_id=m.get(&id).is_some_and(|e|matches!(&e.pixels,Some(Pixels::Texture(old)) if old.image.id==native.image.id));
+                    let old=m.insert(id,Entry {generation,pixels,window:win,changed:now,moving});
+                    if !same_id { if let Some(old)=old {retire(old);} }
+                    return shown(write,visible);
                 }
                 // The next frame of a moving canvas, in place: the frame painted
                 // last is a live one (`dynamic`) of the same size, in this
@@ -478,6 +537,61 @@ fn fetch_live(id: u32, win: WinKey, now: Instant, window: &mut Window) -> crate:
             }
         }
     })
+}
+
+#[cfg(feature = "webgpu")]
+fn upload_native(native: &NativePixels, window: &mut Window, win: WinKey) -> gpui::TileWrite {
+    let mut write = gpui::TileWrite::Refused;
+    let result = native.frame.frame.copy_d3d11(&mut |texture| {
+        write = window
+            .write_image_tile(
+                &native.image,
+                0,
+                gpui::TileSource::Gpu(gpui::GpuTextureHandle(texture)),
+            )
+            .unwrap_or(gpui::TileWrite::Refused);
+        write != gpui::TileWrite::Refused
+    });
+    if result == Ok(true) && write != gpui::TileWrite::Refused {
+        native.uploaded.set(Some(win));
+        NATIVE_UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        write
+    } else {
+        gpui::TileWrite::Refused
+    }
+}
+#[cfg(feature = "webgpu")]
+fn native_image(
+    id: u32,
+    native: NativePixels,
+    window: &mut Window,
+    win: WinKey,
+) -> Option<Arc<RenderImage>> {
+    if native.uploaded.get() == Some(win) && window.has_image_atlas_tile(&native.image, 0) {
+        return Some(native.image);
+    }
+    if upload_native(&native, window, win) != gpui::TileWrite::Refused {
+        return Some(native.image);
+    }
+    NATIVE_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    warn_compat(
+        "canvas:native-import",
+        "native GPU canvas import was refused; falling back to an explicit CPU snapshot",
+    );
+    let snapshot = native.frame.snapshot().ok()?;
+    let Fetch::Changed(_, Some(Pixels::Atlas(cpu))) =
+        atlas_frame(0, snapshot.width, snapshot.height, &snapshot.rgba)
+    else {
+        return None;
+    };
+    CANVASES.with(|map| {
+        if let Some(e) = map.borrow_mut().get_mut(&id) {
+            let old = e.pixels.replace(Pixels::Atlas(cpu.clone()));
+            retire_pixels(old, e.window);
+            e.window = win;
+        }
+    });
+    Some(cpu)
 }
 
 // ---------------------------------------------------------------------------
@@ -623,6 +737,9 @@ pub(super) fn build<V: 'static>(
             .object_fit(fit).size_full().into_any_element()),
         #[cfg(feature = "webgpu")]
         Some(Pixels::SolidBlack { width, height }) => Some(solid_black(width, height, fit)),
+        #[cfg(feature = "webgpu")]
+        Some(Pixels::Texture(native)) => native_image(id,native,window,win).map(|image|
+            gpui::img(ImageSource::Render(image)).object_fit(fit).size_full().into_any_element()),
         None => None,
     };
     if let Some(picture) = picture {

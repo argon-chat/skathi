@@ -623,3 +623,7 @@ mod tests {
         assert_eq!(info(anchor).tag, "", "a fragment anchor has no tag name");
     }
 }
+
+/// Native canvas atlas copies and exceptional CPU fallbacks, for the inspector.
+#[cfg(feature = "webgpu")]
+pub fn gpu_canvas_presentation_stats() -> (u64,u64) { crate::render::canvas::native_stats() }
