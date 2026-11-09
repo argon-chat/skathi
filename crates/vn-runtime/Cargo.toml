@@ -5,6 +5,8 @@ edition = "2021"
 publish = false
 
 [features]
+# Optional Battery Status API; applications choose whether to expose it.
+battery = ["redjs/battery"]
 native-aot = ["redjs/native-aot"]
 # Native WebGPU; normal runtimes include it and the host supplies canvas presentation.
 webgpu = ["redjs/webgpu"]

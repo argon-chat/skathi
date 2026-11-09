@@ -269,7 +269,26 @@ interface VnPermissionStatus extends VnEventTarget {
   /** The three-word WEB projection: `"unsupported"` reads as `"denied"`. */
   readonly state: "granted" | "denied" | "prompt";
 }
+/** Battery Status API; available only when the host enables its `battery` feature. */
+interface VnBatteryManager extends VnEventTarget {
+  readonly charging: boolean;
+  /** Seconds until full, or Infinity when unavailable / discharging. */
+  readonly chargingTime: number;
+  /** Seconds until empty, or Infinity when unavailable / charging. */
+  readonly dischargingTime: number;
+  /** Remaining charge in the range 0..1. */
+  readonly level: number;
+  onchargingchange: ((this: VnBatteryManager, ev: VnEvent) => unknown) | null;
+  onchargingtimechange: ((this: VnBatteryManager, ev: VnEvent) => unknown) | null;
+  ondischargingtimechange: ((this: VnBatteryManager, ev: VnEvent) => unknown) | null;
+  onlevelchange: ((this: VnBatteryManager, ev: VnEvent) => unknown) | null;
+}
+/** Exposed for branding / instanceof; direct construction throws TypeError. */
+declare var BatteryManager: (Function & { readonly prototype: VnBatteryManager }) | undefined;
+
 interface VnNavigator {
+  /** One cached Promise / manager per context; absent when the feature is disabled. */
+  getBattery?(): Promise<VnBatteryManager>;
   permissions?: {
     query(descriptor: { name: string }): Promise<VnPermissionStatus>;
   };

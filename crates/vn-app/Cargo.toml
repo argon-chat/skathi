@@ -9,6 +9,8 @@ publish = false
 build = "build.rs"
 
 [features]
+# Optional Battery Status API; forwarded without changing generic host defaults.
+battery = ["vn-runtime/battery"]
 # Native image support for explicit diagnostic artifacts.
 native-aot = ["vn-runtime/native-aot"]
 # Shipped inspector policy: matching embedded bundle + image are mandatory.
