@@ -164,6 +164,7 @@ pub(crate) fn inspector_exe() -> Option<PathBuf> {
 enum PayloadSource {
     File(PathBuf),
     Bytes(Vec<u8>),
+    Static(&'static [u8]),
 }
 
 #[cfg(any(feature = "prod", test))]
@@ -177,6 +178,7 @@ impl PayloadSource {
                 Ok((PayloadBytes::File(file), path.display().to_string()))
             }
             Self::Bytes(bytes) => Ok((PayloadBytes::Owned(bytes), "bytes".into())),
+            Self::Static(bytes) => Ok((PayloadBytes::Embedded(bytes), "static bytes".into())),
         }
     }
 }
@@ -320,10 +322,18 @@ impl Builder {
         self
     }
 
-    /// The app, as the bytes of a `.vnpk` (an `include_bytes!` of one, say).
+    /// The app, as owned bytes of a `.vnpk`.
+    /// For `include_bytes!`, use [`Self::payload_static`] to avoid a heap copy.
     /// The provided Vec is moved into the payload owner without another clone.
     pub fn payload_bytes(mut self, bytes: impl Into<Vec<u8>>) -> Self {
         self.payload = Some(PayloadSource::Bytes(bytes.into()));
+        self
+    }
+
+    /// A static `.vnpk`, such as `include_bytes!`, borrowed without copying.
+    /// The executable's read-only mapping owns these bytes for the process lifetime.
+    pub fn payload_static(mut self, bytes: &'static [u8]) -> Self {
+        self.payload = Some(PayloadSource::Static(bytes));
         self
     }
 
@@ -860,6 +870,13 @@ mod tests {
         assert_eq!(label, "bytes");
         assert_eq!(owned.as_ptr(), pointer);
         assert!(builder.payload.is_none());
+        static STATIC_PAYLOAD: &[u8] = b"static payload bytes";
+        let mut builder = Builder::new().payload_static(STATIC_PAYLOAD);
+        let (borrowed, label) = builder.payload.take().unwrap().load().unwrap();
+        let crate::payload::PayloadBytes::Embedded(borrowed) = borrowed else { panic!("static bytes expected") };
+        assert_eq!(borrowed.as_ptr(), STATIC_PAYLOAD.as_ptr());
+        assert_eq!(borrowed.len(), STATIC_PAYLOAD.len());
+        assert_eq!(label, "static bytes");
         let mut files = crate::mapped_file::tests::Files::new();
         let path = files.write("app.vnpk", b"file bytes");
         let mut builder = Builder::new().payload_file(&path);

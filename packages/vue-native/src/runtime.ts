@@ -2521,6 +2521,20 @@ type GlobalTargetLike = {
   dispatchEvent?: (event: VnEvent) => boolean;
 };
 
+type GlobalEventMethods = {
+  add: GlobalTargetLike["addEventListener"];
+  remove: GlobalTargetLike["removeEventListener"];
+  dispatch: GlobalTargetLike["dispatchEvent"];
+};
+type GlobalEventSlot = {
+  native: GlobalEventMethods;
+  set(delegate: GlobalEventMethods): void;
+  clear(delegate: GlobalEventMethods): void;
+};
+function globalEventBridge(): { get(target: object): GlobalEventSlot | undefined } | undefined {
+  return (globalThis as { __VN_GLOBAL_EVENTS__?: { get(target: object): GlobalEventSlot | undefined } }).__VN_GLOBAL_EVENTS__;
+}
+
 /**
  * What a `window` / `document` listener the HOST does not source was handed
  * to: the target's own listener and dispatch methods as the FIRST runtime
@@ -2533,6 +2547,8 @@ function nativeListenFns(target: object): {
   remove: GlobalTargetLike["removeEventListener"];
   dispatch: GlobalTargetLike["dispatchEvent"];
 } {
+  const slot = globalEventBridge()?.get(target);
+  if (slot) return slot.native;
   const g = globalThis as { __VN_NATIVE_LISTEN__?: WeakMap<object, ReturnType<typeof nativeListenFns>> };
   const table = (g.__VN_NATIVE_LISTEN__ ??= new WeakMap());
   let fns = table.get(target);
@@ -2553,42 +2569,46 @@ function nativeListenFns(target: object): {
 
 /** The engine-side `window`/`document` listeners this runtime added, which `location.reload()` removes. */
 const passedThrough: { target: object; name: string; fn: EventHandler; opts: ListenerOptions }[] = [];
+const interceptedGlobals: { slot: GlobalEventSlot; delegate: GlobalEventMethods }[] = [];
 
 function interceptGlobalTarget(target: object | undefined): void {
   if (!target) return;
+  const bridge = globalEventBridge();
+  const slot = bridge?.get(target);
+  if (bridge && !slot) throw new TypeError("The host global-events bridge has no slot for this target");
   const { add: nativeAdd, remove: nativeRemove, dispatch: nativeDispatch } = nativeListenFns(target);
+  const delegate: GlobalEventMethods = {
+    dispatch: (event: VnEvent) => {
+      const name = event && typeof event.type === "string" ? canonicalEvent(event.type) : "";
+      if (RUNTIME_FIRED_EVENTS.has(name)) {
+        if (target === globalThis.document) return propagateAtDocument(name, event);
+        if (target === globalThis) return propagateAtGlobal(target, name, event);
+      }
+      return nativeDispatch?.(event) ?? true;
+    },
+    add: (name: string, fn: EventHandler, opts: ListenerOptions) => {
+      if (addGlobalListener(target, name, fn, opts)) return;
+      nativeAdd?.(name, fn, opts);
+      passedThrough.push({ target, name, fn, opts });
+    },
+    remove: (name: string, fn: EventHandler, opts: ListenerOptions) => {
+      if (removeGlobalListener(target, name, fn, opts)) return;
+      nativeRemove?.(name, fn, opts);
+      const i = passedThrough.findIndex((p) => p.target === target && p.name === name && p.fn === fn);
+      if (i >= 0) passedThrough.splice(i, 1);
+    },
+  };
+  if (slot) {
+    slot.set(delegate);
+    interceptedGlobals.push({ slot, delegate });
+    return;
+  }
+  // Older/JIT-only hosts have no bootstrap bridge. Keep their existing path;
+  // native AOT never redefines or weakens its sealed public methods.
   try {
-    Object.defineProperty(target, "dispatchEvent", {
-      value: (event: VnEvent) => {
-        const name = event && typeof event.type === "string" ? canonicalEvent(event.type) : "";
-        if (RUNTIME_FIRED_EVENTS.has(name)) {
-          if (target === globalThis.document) return propagateAtDocument(name, event);
-          if (target === globalThis) return propagateAtGlobal(target, name, event);
-        }
-        return nativeDispatch?.(event) ?? true;
-      },
-      configurable: true,
-      writable: true,
-    });
-    Object.defineProperty(target, "addEventListener", {
-      value: (name: string, fn: EventHandler, opts: ListenerOptions) => {
-        if (addGlobalListener(target, name, fn, opts)) return;
-        nativeAdd?.(name, fn, opts);
-        passedThrough.push({ target, name, fn, opts });
-      },
-      configurable: true,
-      writable: true,
-    });
-    Object.defineProperty(target, "removeEventListener", {
-      value: (name: string, fn: EventHandler, opts: ListenerOptions) => {
-        if (removeGlobalListener(target, name, fn, opts)) return;
-        nativeRemove?.(name, fn, opts);
-        const i = passedThrough.findIndex((p) => p.target === target && p.name === name && p.fn === fn);
-        if (i >= 0) passedThrough.splice(i, 1);
-      },
-      configurable: true,
-      writable: true,
-    });
+    for (const [name, value] of [["dispatchEvent", delegate.dispatch], ["addEventListener", delegate.add], ["removeEventListener", delegate.remove]] as const) {
+      Object.defineProperty(target, name, { value, configurable: true, writable: true });
+    }
   } catch (e) {
     warnCompat(
       "global-listeners",
@@ -5229,6 +5249,7 @@ const realm = (() => {
         /* already gone */
       }
     }
+    for (const { slot, delegate } of interceptedGlobals.splice(0)) slot.clear(delegate);
     for (const [ws, added] of sockets) {
       const remove = Object.getOwnPropertyDescriptor(ws, "removeEventListener")?.value as Fn | undefined;
       for (const a of added.splice(0)) remove?.call(ws, a.type, a.fn, a.opts);

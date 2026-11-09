@@ -59,6 +59,9 @@
 //! lines and scripts written before the inversion keep producing a working
 //! binary; combining it with `no-devtools` is a contradiction and fails here.
 
+#[path = "build_native_inspector.rs"]
+mod native_inspector;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -82,6 +85,9 @@ fn main() {
              `devtools` is the pre-m22 opt-IN and is now a no-op (every build has them);\n\
              `no-devtools` is the opt-OUT. Drop one — almost certainly `devtools`.\n"
         );
+    }
+    if opted_out && std::env::var_os("CARGO_FEATURE_NATIVE_INSPECTOR").is_some() {
+        panic!("native-inspector and no-devtools are contradictory");
     }
     if opted_out {
         return;
@@ -124,6 +130,7 @@ fn main() {
         let cfg = std::fs::read_to_string(&beside).unwrap_or_else(|_| "{}\n".into());
         std::fs::write(&window_json, cfg).expect("cannot write window.json into OUT_DIR");
         deflate_bundle(&bundle);
+        native_inspector::prepare(&repo, &out);
         return;
     }
 
@@ -177,6 +184,7 @@ fn main() {
         std::fs::write(&window_json, "{}\n").expect("cannot write a placeholder window.json");
     }
     deflate_bundle(&bundle);
+    native_inspector::prepare(&repo, &out);
 }
 
 /// `<bundle>.deflate`: the inspector bundle as raw deflate, which is what

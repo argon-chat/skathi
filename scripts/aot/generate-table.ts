@@ -4,6 +4,7 @@
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve, basename } from "node:path";
+import { canonicalTableReceipt } from "./toolchain";
 const FRONTEND = "7ca0042d3ba23ed60fd9cd8af1a1ce6ec3f8d074";
 const WEBKIT = "4d45755fed4aeef19e95beb90d3d0c884a2812bd";
 function argument(name: string): string {
@@ -52,5 +53,5 @@ for (const [name, code] of result.codegen) {
   writeFileSync(resolve(out, name), code.replace('#include "root.h"', '#include "config.h"'));
 }
 writeFileSync(resolve(out, "aot_builtin_table.json"), JSON.stringify(result.dump, null, 2));
-writeFileSync(resolve(out, ".redjs-aot-table"), `redjs.aot-builtin-table.v1\nfrontend=${FRONTEND}\nwebkit=${WEBKIT}\n`);
+writeFileSync(resolve(out, ".redjs-aot-table"), canonicalTableReceipt(FRONTEND, WEBKIT));
 console.log(`Generated ${result.codegen.size} matching native-AOT inputs in ${out}`);

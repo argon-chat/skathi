@@ -43,11 +43,14 @@
 //! A boundary is refused when its subtree contains anything whose per-frame
 //! work does not survive a replay:
 //!
-//! * **`<input>`/`<textarea>`, `<img>`, `<svg>`, `<video>`** — native widgets
+//! * **`<input>`/`<textarea>`, `<img>`, `<video>`** — native widgets
 //!   and decoders that repaint on their own clock. (`<lottie>` and
 //!   `<vn-sticker>` are not: their frames are written into a tile a replayed
 //!   sprite samples, and a tile that moves touches its node — `crate::lottie`,
 //!   `render::sticker`);
+//! * inline **`<svg>`** except the self-contained static monochrome geometry
+//!   accepted by `svg::can_replay`: its alpha-mask atlas entry has no decoder
+//!   clock. Colour rasters, external resources, and timelines stay excluded;
 //! * an **out-of-flow box** (`position: absolute|fixed`) or a **group anchor**
 //!   (`.group(name)` is registered during the paint walk);
 //! * a subtree holding a node whose transition or animation is moving this
@@ -132,6 +135,9 @@ struct Entry {
     /// `research/reports/m23/perf-retained.md` §4.2 describes and the rule it
     /// names, which until m23 the code did not actually implement.
     size: Option<(f32, f32)>,
+    /// Last observed raw bounds. A translated row cannot replay GPUI's
+    /// bounds-keyed recording, even when its dimensions are unchanged.
+    rect: Option<Rect>,
     /// Was a boundary actually offered last frame? A subtree that fell back to
     /// an ordinary build has no recording gpui can trust, so the first offer
     /// after one must force a render.
@@ -369,9 +375,10 @@ fn node_blocks(t: &Tree, id: u32, node: &Node) -> bool {
     if t.is_group_anchor(id) {
         return true;
     }
-    if matches!(
-        t.name(node.tag),
-        "input" | "textarea" | "img" | "svg" | "video" | "canvas" | "iframe"
+    let tag = t.name(node.tag);
+    if (tag == "svg" && !crate::svg::can_replay(t, id)) || matches!(
+        tag,
+        "input" | "textarea" | "img" | "video" | "canvas" | "iframe"
     ) {
         return true;
     }
@@ -429,10 +436,14 @@ fn stats(t: &Tree, id: u32) -> Stats {
         }
     }
     let mut out = Stats { nodes: 1, blocked: node_blocks(t, id, node) };
-    for &c in &node.children {
-        let s = stats(t, c);
-        out.nodes = out.nodes.saturating_add(s.nodes);
-        out.blocked |= s.blocked;
+    // SVG serializes its children into one leaf; counting shape nodes would
+    // offer a cache wrapper for a single native element with a large XML tree.
+    if node.kind != Kind::Element || t.name(node.tag) != "svg" {
+        for &c in &node.children {
+            let s = stats(t, c);
+            out.nodes = out.nodes.saturating_add(s.nodes);
+            out.blocked |= s.blocked;
+        }
     }
     STATS.with(|m| m.borrow_mut().insert(id, (rev, out)));
     out
@@ -544,7 +555,8 @@ pub(crate) fn boundary<V: 'static>(
     }
     // The box the subtree laid out to last frame. Nothing to pin on the first
     // frame a node is painted, so the first frame is always a real build.
-    let size = render::prev_size_of(id)?;
+    let rect = render::prev_rect_of(id).filter(|(_, _, width, height)| *width > 0.0 && *height > 0.0)?;
+    let size = (rect.2, rect.3);
 
     let parent_rect = (node.parent != 0).then(|| render::prev_rect_of(node.parent)).flatten();
 
@@ -553,6 +565,8 @@ pub(crate) fn boundary<V: 'static>(
     // `size` is in there for the reason spelled out on [`Entry::size`]; the rest
     // is "nothing inside changed" (`sub_rev`), "nothing an ancestor threads down
     // changed" (`ctx`) and "nothing outside resized me" (`parent_rect`).
+    // Refuse moved origins immediately once observed, without paying for three
+    // futile GPUI re-renders before the ordinary thrash cooldown.
     let offer = ENTRIES.with(|m| {
         let mut m = m.borrow_mut();
         let e = m.entry(id).or_insert_with(|| Entry {
@@ -563,6 +577,7 @@ pub(crate) fn boundary<V: 'static>(
             // NOT `Some(size)`: the first sighting must not compare equal to
             // itself and offer on one frame's measurement — see [`Entry::size`].
             size: None,
+            rect: None,
             ids: Vec::new(),
             controls: Vec::new(),
             chain: Default::default(),
@@ -594,7 +609,8 @@ pub(crate) fn boundary<V: 'static>(
             e.sub_rev == sub_rev
                 && e.ctx == ctx
                 && e.parent_rect == parent_rect
-                && e.size == Some(size);
+                && e.size == Some(size)
+                && e.rect == Some(rect);
         if !fresh {
             // Lower it the ordinary way this frame. That is what re-measures it
             // honestly — a wrapper would pin the very box we have just decided
@@ -604,6 +620,7 @@ pub(crate) fn boundary<V: 'static>(
             e.ctx = ctx.clone();
             e.parent_rect = parent_rect;
             e.size = Some(size);
+            e.rect = Some(rect);
             e.ids.clear();
             e.controls.clear();
             e.chain = Default::default();
@@ -844,7 +861,7 @@ mod tests {
         let controls = vec![(id, gpui::WindowControlArea::Drag), (id + 1, gpui::WindowControlArea::NoDrag)];
         ENTRIES.with(|entries| entries.borrow_mut().insert(id, Entry {
             entity: None, sub_rev: 0, ctx: Default::default(), parent_rect: None,
-            size: Some((200., 40.)), offered: true, ids: vec![id, id + 1], controls: controls.clone(),
+            size: Some((200., 40.)), rect: Some((0., 0., 200., 40.)), offered: true, ids: vec![id, id + 1], controls: controls.clone(),
             chain: Default::default(), rendered: false, misses: 0, cooldown: 0,
         }));
         for _ in 0..20 {
@@ -870,6 +887,205 @@ mod tests {
 
     fn forget_shapes() {
         STATS.with(|m| m.borrow_mut().clear());
+    }
+
+
+    fn mono_icon(t: &mut Tree, parent: u32) -> (u32, u32) {
+        let svg_tag = t.intern("svg");
+        let svg = t.create_element(svg_tag);
+        for (name, value) in [("viewBox", "0 0 24 24"), ("fill", "none"), ("stroke", "currentColor")] {
+            let key = t.intern(name);
+            t.set_prop(svg, key, Some(value.into()));
+        }
+        t.insert(svg, parent, 0);
+        let path_tag = t.intern("path");
+        let path = t.create_element(path_tag);
+        let geometry = t.intern("d");
+        t.set_prop(path, geometry, Some("M4 12l5 5L20 6".into()));
+        t.insert(path, svg, 0);
+        (svg, path)
+    }
+
+    #[test]
+    fn svg_fragment_cannot_hide_a_resource_dependency() {
+        set_stylesheet(String::new());
+        let svg = with_tree(|t| {
+            let root = t.create_root();
+            let (svg, path) = mono_icon(t, root);
+            let fragment = t.create_anchor();
+            t.insert(fragment, svg, 0);
+            t.insert(path, fragment, 0);
+            let href = t.intern("href");
+            t.set_prop(path, href, Some("https://example.invalid/shape".into()));
+            svg
+        });
+        restyle_all();
+        forget_shapes();
+        assert!(shape(svg).1, "transparent fragments must not hide dependencies from replay eligibility");
+    }
+
+    #[test]
+    fn self_contained_mono_svg_counts_as_one_lowered_leaf() {
+        set_stylesheet(String::new());
+        let (row, svg) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let row = t.create_element(div);
+            t.insert(row, root, 0);
+            let (svg, _) = mono_icon(t, row);
+            for _ in 0..10 {
+                let path_tag = t.intern("path");
+                let path = t.create_element(path_tag);
+                t.insert(path, svg, 0);
+            }
+            for _ in 0..3 {
+                let child = t.create_element(div);
+                t.insert(child, row, 0);
+            }
+            (row, svg)
+        });
+        restyle_all();
+        forget_shapes();
+        assert_eq!(shape(svg), (1, false));
+        assert_eq!(shape(row), (5, false), "SVG shape nodes are not native layout nodes");
+    }
+
+    #[test]
+    fn colour_and_external_svg_still_block_ancestors() {
+        set_stylesheet(String::new());
+        let (row, svg, path) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let row = t.create_element(div);
+            t.insert(row, root, 0);
+            let (svg, path) = mono_icon(t, row);
+            (row, svg, path)
+        });
+        restyle_all();
+        forget_shapes();
+        assert!(!shape(row).1);
+        with_tree(|t| {
+            let stroke = t.intern("stroke");
+            t.set_prop(svg, stroke, Some("red".into()));
+        });
+        restyle_all();
+        assert!(shape(row).1, "late concrete paint must invalidate the memoized eligibility");
+        with_tree(|t| {
+            let stroke = t.intern("stroke");
+            t.set_prop(svg, stroke, Some("currentColor".into()));
+            let href = t.intern("href");
+            t.set_prop(path, href, Some("https://example.invalid/icon.svg#shape".into()));
+        });
+        restyle_all();
+        assert!(shape(row).1, "an href blocks even when the classifier still says Mono");
+        with_tree(|t| {
+            let href = t.intern("href");
+            t.set_prop(path, href, None);
+        });
+        restyle_all();
+        assert!(!shape(row).1, "removing the resource dependency restores eligibility");
+    }
+
+    #[test]
+    fn svg_stylesheet_paints_and_currentcolor_invalidate_ancestor_revisions() {
+        set_stylesheet(".icon { color: red }".into());
+        let (row, svg) = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let row = t.create_element(div);
+            t.insert(row, root, 0);
+            let (svg, _) = mono_icon(t, row);
+            t.set_class(svg, "icon");
+            (row, svg)
+        });
+        restyle_all();
+        forget_shapes();
+        assert!(!shape(row).1);
+        let before = read_tree(|t| (t.sub_rev(row), t.node(svg).unwrap().computed.as_ref().unwrap().base.text.color));
+        set_stylesheet(".icon { color: blue }".into());
+        // Match __vn_set_stylesheet: a replacement marks the document dirty.
+        with_tree(|t| t.mark_dirty());
+        restyle_all();
+        let after = read_tree(|t| (t.sub_rev(row), t.node(svg).unwrap().computed.as_ref().unwrap().base.text.color));
+        assert_ne!(before.0, after.0, "a cached ancestor must rebuild its recorded tint");
+        assert_ne!(before.1, after.1);
+        assert!(!shape(row).1, "currentColor tint changes do not require a colour raster");
+        set_stylesheet(".icon { color: blue } .icon path { stroke: red }".into());
+        // Match __vn_set_stylesheet: a replacement marks the document dirty.
+        with_tree(|t| t.mark_dirty());
+        restyle_all();
+        assert!(shape(row).1, "a descendant's computed concrete stroke invalidates cached Stats");
+    }
+
+    #[test]
+    fn svg_resource_and_progress_forms_stay_excluded() {
+        for tag in ["use", "image", "text", "filter", "foreignObject", "animate", "animateTransform", "set", "svg"] {
+            set_stylesheet(String::new());
+            let svg = with_tree(|t| {
+                let root = t.create_root();
+                let (svg, _) = mono_icon(t, root);
+                let child_tag = t.intern(tag);
+                let child = t.create_element(child_tag);
+                t.insert(child, svg, 0);
+                svg
+            });
+            restyle_all();
+            forget_shapes();
+            assert!(shape(svg).1, "<{tag}> cannot enter static geometry replay");
+        }
+        for (name, value) in [("xlink:href", "#local"), ("begin", "1s"), ("dur", "2s"), ("clip-path", "url(#external)"), ("stroke", "context-stroke")] {
+            set_stylesheet(String::new());
+            let svg = with_tree(|t| {
+                let root = t.create_root();
+                let (svg, path) = mono_icon(t, root);
+                let key = t.intern(name);
+                t.set_prop(path, key, Some(value.into()));
+                svg
+            });
+            restyle_all();
+            forget_shapes();
+            assert!(shape(svg).1, "{name}={value} must stay excluded");
+        }
+        set_stylesheet(".icon { filter: drop-shadow(1px 1px 2px red) }".into());
+        let svg = with_tree(|t| {
+            let root = t.create_root();
+            let (svg, _) = mono_icon(t, root);
+            t.set_class(svg, "icon");
+            svg
+        });
+        restyle_all();
+        forget_shapes();
+        assert!(shape(svg).1, "drop-shadow selects the colour raster branch even for a Mono document");
+    }
+
+    #[test]
+    fn svg_own_hover_and_transition_keep_the_normal_hot_exclusion() {
+        set_stylesheet(".icon { color: red; transition: color 100ms } .icon:hover { color: blue }".into());
+        let svg = with_tree(|t| {
+            let root = t.create_root();
+            let (svg, _) = mono_icon(t, root);
+            t.set_class(svg, "icon");
+            svg
+        });
+        restyle_all();
+        forget_shapes();
+        read_tree(|t| {
+            let cs = t.node(svg).unwrap().computed.as_ref().unwrap();
+            assert!(cs.hover.is_some());
+            assert!(!cs.transitions.is_empty());
+        });
+        assert!(!shape(svg).1, "root states use native replayed listeners, not a raster clock");
+        let before_hover = std::time::Instant::now();
+        crate::tree::note_hover(svg, true);
+        let mut moving = HashSet::new();
+        crate::tree::moving_paths(before_hover, &mut moving);
+        assert!(moving.contains(&svg), "the eligible root's colour transition must remain HOT");
+        let parent = read_tree(|t| t.node(svg).unwrap().parent);
+        assert!(moving.contains(&parent), "a boundary over the icon must also be HOT");
+        moving.clear();
+        crate::tree::moving_paths(std::time::Instant::now() + std::time::Duration::from_millis(200), &mut moving);
+        assert!(!moving.contains(&svg), "finished transitions may become cacheable again");
+        crate::tree::note_hover(svg, false);
     }
 
     /// The node count is what decides whether a boundary is worth its ~18 µs,

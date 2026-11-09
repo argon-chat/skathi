@@ -49,7 +49,15 @@ pub fn send_to_back(window: &mut Window) {
     }
     window.set_assume_active(true);
     if let Some(h) = crate::window::capture_hwnd(window) {
-        to_bottom(h);
+        send_hwnd_to_back(h);
+    }
+}
+
+/// Reapply the background policy after a deferred native show, outside any
+/// App update. The earlier hidden-window ordering is not the final show.
+pub(crate) fn send_hwnd_to_back(raw: isize) {
+    if never_focus() {
+        to_bottom(raw);
     }
 }
 

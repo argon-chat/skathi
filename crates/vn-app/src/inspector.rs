@@ -49,6 +49,7 @@
 //! instead.
 
 use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::App;
@@ -141,6 +142,31 @@ pub fn init() {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EnginePolicy {
+    Auto,
+    Native,
+    Jit,
+}
+pub(crate) fn engine_policy(value: Option<&OsStr>) -> Result<EnginePolicy, String> {
+    match value.and_then(OsStr::to_str) {
+        None if value.is_none() => Ok(EnginePolicy::Auto),
+        Some("auto") => Ok(EnginePolicy::Auto),
+        Some("native") => Ok(EnginePolicy::Native),
+        Some("jit") => Ok(EnginePolicy::Jit),
+        _ => Err("VN_DEVTOOLS_ENGINE must be auto, native or jit".into()),
+    }
+}
+
+#[cfg(not(feature = "native-aot"))]
+pub(crate) fn engine_without_native(policy: Option<&std::ffi::OsStr>, external: bool) -> Result<(), String> {
+    match engine_policy(policy)? {
+        EnginePolicy::Jit => Ok(()),
+        EnginePolicy::Auto if !external => Ok(()),
+        _ => Err("native inspector requested, but this host was built without native-aot".into()),
+    }
+}
+
 /// Evaluates the embedded inspector. The `--devtools` half of `boot_mode::boot`.
 ///
 /// The bundle is `bun prod.ts`'s output, so it carries its own stylesheet
@@ -185,7 +211,7 @@ pub fn boot(rt: &JsRuntime) -> Result<(), String> {
         Ok(true) => return Ok(()),
         Ok(false) => {},
         Err(error) => {
-            return Err(format!("native inspector: {error}; restart without VN_DEVTOOLS_NATIVE_IMAGE for JIT"));
+            return Err(format!("native inspector: {error}; restart a fresh inspector with VN_DEVTOOLS_ENGINE=jit"));
         }
     }
     let js = match inspector_js() {
@@ -598,5 +624,19 @@ fn parent_alive(slot: &Path, expect_pid: Option<u32>) -> bool {
 pub fn poll_frame(cx: &mut App) {
     if PARENT_GONE.load(Ordering::Relaxed) {
         cx.quit();
+    }
+}
+
+#[cfg(all(test, not(feature = "native-aot")))]
+mod engine_policy_tests {
+    use super::*;
+    #[test]
+    fn unsupported_native_selection_fails_before_vm_init_but_jit_is_explicit() {
+        assert!(engine_without_native(None, false).is_ok());
+        assert!(engine_without_native(Some(OsStr::new("auto")), false).is_ok());
+        assert!(engine_without_native(Some(OsStr::new("native")), false).is_err());
+        assert!(engine_without_native(None, true).is_err());
+        assert!(engine_without_native(Some(OsStr::new("jit")), true).is_ok());
+        assert!(engine_without_native(Some(OsStr::new("JIT")), false).is_err());
     }
 }

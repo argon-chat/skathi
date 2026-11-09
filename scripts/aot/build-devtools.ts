@@ -5,7 +5,9 @@
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, copyFileSync, existsSync } from "node:fs";
 import { resolve, join, basename } from "node:path";
 import { createHash } from "node:crypto";
-const FRONTEND = "7ca0042d3ba23ed60fd9cd8af1a1ce6ec3f8d074";
+import { loadPin, verifyCompilerInfo, verifyEngine, verifyFile, verifyTable } from "./toolchain";
+const PIN = loadPin(resolve(import.meta.dir, "toolchain.lock.json"));
+const FRONTEND = PIN.frontend.revision;
 const TRANSFORM = "opaque-host-v1";
 const sdk = resolve(import.meta.dir, "../..");
 function argument(name: string, optional = false): string | undefined {
@@ -28,9 +30,12 @@ function run(command: string[], cwd = sdk): string {
   if (stderr.trim()) console.error(stderr.trim());
   return stdout;
 }
+verifyEngine(sdk, PIN);
+await verifyFile(frontend, PIN.frontend.executableSha256);
+await verifyTable(table, sdk, PIN);
 if (!run([frontend, "--revision"]).trim().endsWith(FRONTEND.slice(0, 9))) throw new Error(`Frontend must be Bun ${FRONTEND}`);
 const info = JSON.parse(run([compiler, "info"]));
-if (info.frontend !== FRONTEND || info.target !== "x86_64-windows") throw new Error("Compiler frontend/target differs");
+verifyCompilerInfo(info, PIN);
 mkdirSync(out, { recursive: true });
 const stage = mkdtempSync(join(out, ".native-stage-"));
 const bundle = argument("--bundle", true) ?? join(stage, "app.prod.js");
@@ -68,7 +73,9 @@ const prelude = Buffer.concat([readFileSync(join(sdk, "crates/vn-app/src/prelude
   readFileSync(join(sdk, "crates/vn-app/src/window.prelude.js"))]);
 const imageName = `${kind}.${imageSha256.slice(0, 16)}.image`;
 copyFileSync(image, join(out, imageName));
-copyFileSync(bundle, join(out, "app.prod.js"));
+if (resolve(bundle) !== resolve(out, "app.prod.js")) copyFileSync(bundle, join(out, "app.prod.js"));
+const windowConfig = join(resolve(bundle, ".."), "window.json");
+if (existsSync(windowConfig) && resolve(windowConfig) !== resolve(out, "window.json")) copyFileSync(windowConfig, join(out, "window.json"));
 writeFileSync(join(out, `${kind}.native.json`), JSON.stringify({
   schema: "vue-native.native-aot", version: 1, stage: "native-image", kind, ...info,
   image: imageName, imageSha256, entry: entries[0], identity: identity.toString("hex"),

@@ -548,6 +548,83 @@ fn sync_layout() {
     });
 }
 
+fn commit_boot_tree(runtime: &JsRuntime) {
+    // Vue's mount/load handlers may queue their final DOM writes in a
+    // microtask. This checkpoint waits for no network, font, timer or rAF.
+    runtime.ctx().drain_microtasks();
+    vn_tree::flush_changes();
+}
+
+#[cfg(test)]
+mod startup_tests {
+    #[test]
+    fn boot_microtask_styles_are_computed_before_any_frame_pump() {
+        vn_runtime::testing::on_js_thread(|| vn_runtime::JsRuntime::with(|runtime| {
+            vn_tree::install(runtime);
+            runtime.eval(
+                "globalThis.__startupRoot = __vn_create_root(); \
+                 globalThis.__startupNode = __vn_create_element(__vn_intern('button')); \
+                 __vn_insert(__startupNode, __startupRoot, 0); \
+                 __vn_set_style(__startupNode, __vn_intern('opacity'), '0.25'); \
+                 queueMicrotask(() => __vn_set_style(__startupNode, __vn_intern('opacity'), '0.75'));",
+                "vn://startup-regression.js",
+            ).expect("queue the mount/load microtask through the native DOM bridge");
+            super::commit_boot_tree(runtime);
+            let node = runtime.ctx().global_get("__startupNode").unwrap().as_number().unwrap() as u32;
+            // The inspector API reads existing computed state without forcing
+            // the cascade we are checking. DOM getComputedStyle would flush it.
+            let styles = vn_tree::devtools::computed_styles(node).expect("boot writes must already be cascaded");
+            let base = &styles.iter().find(|(name, _)| *name == "base").unwrap().1;
+            assert!(base.contains("0.75"), "the first draw must not await pump_frame to cascade boot opacity: {base}");
+        }));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_startup_window(cx: &mut App, activate: bool) {
+    let Some(handle) = MAIN_WINDOW.with(|window| window.get()) else {
+        window::cancel_startup_reveal();
+        return;
+    };
+    cx.spawn(async move |cx| {
+        if shutdown::is_closing() || vn_runtime::bridge::poisoned() {
+            window::cancel_startup_reveal();
+            return;
+        }
+        let hwnd = cx.update(|cx| handle.update(cx, |_, window, _| window::capture_hwnd(window)));
+        let Ok(Some(hwnd)) = hwnd else {
+            window::cancel_startup_reveal();
+            return;
+        };
+        // WM_PAINT takes the App itself, so it must run outside any update.
+        // This presents the styled frame while the native window is hidden.
+        popout_win::paint_now(hwnd);
+        if shutdown::is_closing() || vn_runtime::bridge::poisoned() {
+            window::cancel_startup_reveal();
+            return;
+        }
+        let shown = cx.update(|cx| handle.update(cx, |_, window, _| {
+            window.show_window(
+                activate,
+                || !shutdown::is_closing() && !vn_runtime::bridge::poisoned(),
+                move |shown| {
+                    window::cancel_startup_reveal();
+                    if shown {
+                        quiet::send_hwnd_to_back(hwnd);
+                    }
+                    if !shown && !shutdown::is_closing() {
+                        eprintln!("[window] the prepared startup window could not be shown");
+                    }
+                },
+            )
+        }));
+        if !matches!(shown, Ok(true)) {
+            window::cancel_startup_reveal();
+            eprintln!("[window] failed to reveal the prepared startup window");
+        }
+    }).detach();
+}
+
 /// Marks the primary window dirty *without* borrowing its root view.
 ///
 /// `notify_shell` goes through `Entity<Shell>::update`, which is correct from
@@ -1312,6 +1389,7 @@ fn run_app() {
         // the windows and arms the deadline here (src/shutdown.rs). A no-op
         // after a close, which already did.
         std::mem::forget(cx.on_app_quit(|_| {
+            window::cancel_startup_reveal();
             shutdown::begin("quit");
             std::future::ready(())
         }));
@@ -1429,8 +1507,10 @@ fn run_app() {
         vn_desktop::network::install();
 
         #[cfg(all(vn_devtools, not(feature = "native-aot")))]
-        if devtools_mode && std::env::var_os("VN_DEVTOOLS_NATIVE_IMAGE").is_some() {
-            let summary = "native inspector requested, but this host was built without native-aot".to_string();
+        if let Some(summary) = devtools_mode.then(|| inspector::engine_without_native(
+            std::env::var_os("VN_DEVTOOLS_ENGINE").as_deref(),
+            std::env::var_os("VN_DEVTOOLS_NATIVE_IMAGE").is_some(),
+        ).err()).flatten() {
             eprintln!("[native-aot] {summary}");
             embed::finished(false, summary);
             cx.quit();
@@ -1559,6 +1639,12 @@ fn run_app() {
         }
 
         let bounds = Bounds::centered(None, size(px(cfg.width), px(cfg.height)), cx);
+        let startup_visible = embed::visible();
+        let startup_focus = !devtools_mode && !quiet::never_focus() && embed::activates();
+        let defer_reveal = cfg!(target_os = "windows") && startup_visible;
+        if defer_reveal {
+            window::begin_startup_reveal();
+        }
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -1588,8 +1674,8 @@ fn run_app() {
                 // without taking the caret out of whatever you were typing.
                 // An ordinary app is unaffected (`focus: true` is gpui's own
                 // default and what every other host here has always used).
-                show: embed::visible(),
-                focus: !devtools_mode && !quiet::never_focus() && embed::activates(),
+                show: startup_visible && !defer_reveal,
+                focus: startup_focus,
                 ..Default::default()
             },
             |window, cx| {
@@ -1624,6 +1710,7 @@ fn run_app() {
                     // Accepted: the windows go NOW, and the teardown runs
                     // behind them under a deadline (src/shutdown.rs).
                     if closing {
+                        window::cancel_startup_reveal();
                         shutdown::begin("a close request (WM_CLOSE)");
                     }
                     // **D-M16 / docs/MULTIWINDOW.md §7.8.** The primary window
@@ -1760,6 +1847,7 @@ fn run_app() {
                 // and redjs has exported the hook since day one with nothing
                 // ever calling it.
                 window::content_loaded();
+                commit_boot_tree(rt);
             });
         });
         #[cfg(vn_devtools)]
@@ -1767,8 +1855,17 @@ fn run_app() {
             let summary = format!("inspector startup failed: {error}");
             eprintln!("[native-aot] {summary}");
             embed::finished(false, summary);
+            window::cancel_startup_reveal();
             cx.quit();
             return;
+        }
+        // The first frame callback deliberately waits for layout before running
+        // JS. It must not also postpone the initial cascade: both bundle and
+        // DOMContentLoaded writes must already be styled when that frame draws.
+        refresh_main(cx);
+        #[cfg(target_os = "windows")]
+        if defer_reveal {
+            reveal_startup_window(cx, startup_focus);
         }
         // An initially hidden window has no platform frame callback to own
         // the boot wave. Start its background clock only AFTER bundle evaluation,

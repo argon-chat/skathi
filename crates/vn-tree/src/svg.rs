@@ -179,6 +179,79 @@ pub(crate) fn document(t: &Tree, id: u32) -> Rc<SvgDoc> {
     })
 }
 
+/// Whether replay skips no raster clock or dependency outside this SVG.
+pub(crate) fn can_replay(t: &Tree, id: u32) -> bool {
+    if !replayable_geometry(t, id, true, false) {
+        return false;
+    }
+    let doc = document(t, id);
+    doc.paint == Paint::Mono && !doc.css_paint_server
+}
+
+fn replayable_geometry(t: &Tree, id: u32, root: bool, metadata: bool) -> bool {
+    let Some(node) = t.node(id) else { return false };
+    match node.kind {
+        Kind::Anchor => return !root && node.children.iter().all(|&child| replayable_geometry(t, child, false, metadata)),
+        Kind::Text => return !root && (metadata || node.text.trim().is_empty()),
+        Kind::Element => {}
+    }
+    let tag = t.name(node.tag);
+    let metadata = matches!(tag, "title" | "desc");
+    if (root && tag != "svg") || (!root && !matches!(
+        tag, "g" | "path" | "rect" | "circle" | "ellipse" | "line" | "polyline" | "polygon" | "title" | "desc"
+    )) {
+        return false;
+    }
+    // A strict geometry whitelist keeps text/font loading, <use>, embedded
+    // images, filters, foreignObject, and SMIL timelines out of a recording.
+    if (!metadata && !node.text.trim().is_empty()) || t.is_group_anchor(id) {
+        return false;
+    }
+    if let Some(cs) = &node.computed {
+        if cs.extras.drop_shadow.is_some() || cs.extras.filter_url.is_some() || !cs.animations.is_empty()
+            || cs.extras.background_urls.as_ref().is_some_and(|urls| !urls.is_empty())
+            || cs.extras.mask_images.is_some() {
+            return false;
+        }
+        // Descendants are serialized, not GPUI interactive elements. Restrict
+        // them to their base presentation; the root's own states still use
+        // GPUI's replayed listeners and the ordinary HOT animation exclusion.
+        if !root && (cs.hover.is_some() || cs.active.is_some() || cs.focus.is_some()
+            || cs.focus_visible.is_some() || cs.focus_within.is_some()
+            || cs.group_hover.is_some() || cs.group_active.is_some()
+            || !cs.transitions.is_empty()) {
+            return false;
+        }
+    }
+    for (key, value, _) in &node.props {
+        let name = t.name(*key);
+        if matches_ascii(name, &["href", "xlink:href", "src", "xml:base", "externalResourcesRequired",
+            "begin", "end", "dur", "repeatCount", "repeatDur", "keyTimes", "keySplines",
+            "calcMode", "attributeName", "attributeType", "restart", "syncBehavior", "syncTolerance"])
+            || (name.eq_ignore_ascii_case("style") && !value.trim().is_empty())
+            || replay_context_value(value)
+        {
+            return false;
+        }
+    }
+    for (key, value) in &node.style {
+        if t.name(*key).starts_with("animation") || replay_context_value(value) {
+            return false;
+        }
+    }
+    node.children.iter().all(|&child| replayable_geometry(t, child, false, metadata))
+}
+
+fn matches_ascii(value: &str, names: &[&str]) -> bool {
+    names.iter().any(|name| value.eq_ignore_ascii_case(name))
+}
+
+fn replay_context_value(value: &str) -> bool {
+    ["url(", "context-fill", "context-stroke", "@import"].into_iter().any(|dependency| {
+        value.as_bytes().windows(dependency.len()).any(|part| part.eq_ignore_ascii_case(dependency.as_bytes()))
+    })
+}
+
 fn build(t: &Tree, id: u32) -> SvgDoc {
     let mut out = String::with_capacity(256);
     let mut class = Class::default();

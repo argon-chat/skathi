@@ -25,3 +25,47 @@ globalThis.history = {
   back() {},
   forward() {}
 };
+(() => {
+  const host = globalThis;
+  if (host.__VN_GLOBAL_EVENTS__)
+    return;
+  const slots = new WeakMap;
+  const install = (target) => {
+    const source = target;
+    const bind = (name) => {
+      const method = source[name];
+      return typeof method === "function" ? method.bind(target) : undefined;
+    };
+    const native = Object.freeze({ add: bind("addEventListener"), remove: bind("removeEventListener"), dispatch: bind("dispatchEvent") });
+    let delegate;
+    const slot = Object.freeze({
+      native,
+      set(next) {
+        delegate = next;
+      },
+      clear(previous) {
+        if (delegate === previous)
+          delegate = undefined;
+      }
+    });
+    for (const [name, key] of [["addEventListener", "add"], ["removeEventListener", "remove"], ["dispatchEvent", "dispatch"]]) {
+      Object.defineProperty(target, name, {
+        value: (...args) => {
+          const method = delegate?.[key] ?? native[key];
+          return method ? method(...args) : key === "dispatch" ? true : undefined;
+        },
+        configurable: true,
+        writable: true
+      });
+    }
+    slots.set(target, slot);
+  };
+  install(globalThis);
+  if (host.document)
+    install(host.document);
+  Object.defineProperty(globalThis, "__VN_GLOBAL_EVENTS__", {
+    value: Object.freeze({ get: (target) => slots.get(target) }),
+    configurable: false,
+    writable: false
+  });
+})();

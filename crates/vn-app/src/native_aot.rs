@@ -1,6 +1,7 @@
-//! Opt-in inspector experiment. A selected image is trusted executable code.
+//! Embedded native inspector. A selected image is trusted executable code.
 //! Its compiler, host table, preludes and embedded Vue bundle must all match.
 use crate::json::{self, Json};
+use crate::inspector::{engine_policy, EnginePolicy};
 use std::{
     cell::RefCell,
     ffi::OsStr,
@@ -12,6 +13,9 @@ use vn_runtime::{
     redjs::{aot, api::Error},
     JsRuntime,
 };
+
+mod cache;
+include!(concat!(env!("OUT_DIR"), "/devtools/native_inspector.rs"));
 
 const SCHEMA: &str = "vue-native.native-aot";
 const TRANSFORM: &str = "opaque-host-v1";
@@ -125,34 +129,68 @@ fn open_image(path: &Path) -> std::io::Result<File> {
     }
     options.open(path)
 }
-/// On the actual VM thread, before ANY JSC initialization. Failure cannot
-/// switch this process back to JIT: a caller must stop and launch a clean one.
+/// On the actual VM thread, before ANY JSC initialization. The parent exits
+/// before even reading selectors or referencing compressed native-image bytes.
+/// Failure cannot switch a selected process back to JIT: launch a clean child.
 pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
-    // A parent client passes this selector through to its F12 child; it stays JIT.
     if !devtools {
         return Ok(());
     }
-    let Some(path) = std::env::var_os("VN_DEVTOOLS_NATIVE_IMAGE") else {
+    let policy = engine_policy(std::env::var_os("VN_DEVTOOLS_ENGINE").as_deref())?;
+    if policy == EnginePolicy::Jit {
+        if aot::is_active() {
+            return Err("cannot switch an initialized native inspector to JIT".into());
+        }
+        eprintln!("[native-aot] explicit JIT inspector selected before initialization");
+        return Ok(());
+    }
+    // This explicit diagnostic override remains application-selected native
+    // code. Ordinary releases select only the manifest signed into their exe.
+    let external = std::env::var_os("VN_DEVTOOLS_NATIVE_IMAGE").map(PathBuf::from);
+    let (text, external) = if let Some(path) = external {
+        let path =
+            std::fs::canonicalize(path).map_err(|e| format!("native AOT manifest path: {e}"))?;
+        (read_manifest(&path)?, Some(path))
+    } else if let Some(text) = EMBEDDED_MANIFEST {
+        (text.to_string(), None)
+    } else if policy == EnginePolicy::Native {
+        return Err(
+            "native inspector requested but this build has no embedded native image".into(),
+        );
+    } else {
         return Ok(());
     };
-    let path = std::fs::canonicalize(PathBuf::from(path))
-        .map_err(|e| format!("native AOT manifest path: {e}"))?;
     let profile = memory_profile(std::env::var_os("VN_AOT_MEMORY_PROFILE").as_deref())?;
-    let text = read_manifest(&path)?;
-
     let manifest = json::parse(&text).ok_or("invalid native AOT manifest JSON")?;
     let source =
         crate::inspector::inspector_js().map_err(|e| format!("embedded inspector: {e}"))?;
     let mut preludes = crate::PRELUDE_JS.as_bytes().to_vec();
     preludes.push(0);
     preludes.extend_from_slice(crate::WINDOW_PRELUDE_JS.as_bytes());
-    let image = image_path(&manifest, path.parent().unwrap_or_else(|| Path::new(".")))?;
-    let mut file = open_image(&image).map_err(|e| format!("{}: {e}", image.display()))?;
-    let image_digest =
-        aot::digest_reader(&mut file).map_err(|e| format!("{}: {e}", image.display()))?;
-    let (entry, id) = validate(&manifest, source.as_bytes(), &preludes, &image_digest)?;
-    // All inputs are application-selected trusted build artifacts. The manifest
-    // is a compatibility/integrity check, not an authenticity signature.
+    // Validate ABI and the actual embedded JS/preludes before cache writes or
+    // native initialization. The image hash is checked against the exact File.
+    let expected = field(&manifest, "imageSha256")?;
+    let (entry, id) = validate(&manifest, source.as_bytes(), &preludes, expected)?;
+    let (mut file, description) = if let Some(path) = external {
+        let image = image_path(&manifest, path.parent().unwrap_or_else(|| Path::new(".")))?;
+        let file = open_image(&image).map_err(|e| format!("{}: {e}", image.display()))?;
+        let size = file.metadata().map_err(|e| e.to_string())?.len();
+        if size == 0 || size > cache::MAX_IMAGE_BYTES {
+            return Err("native AOT image exceeds the supported size".into());
+        }
+        (file, image.display().to_string())
+    } else {
+        (
+            cache::materialize(EMBEDDED_IMAGE_DEFLATE, expected, EMBEDDED_IMAGE_BYTES)?,
+            format!("embedded sha256:{expected}"),
+        )
+    };
+    let image_digest = aot::digest_reader(&mut file).map_err(|e| format!("{description}: {e}"))?;
+    equal(&manifest, "imageSha256", &image_digest)?;
+    use std::io::Seek;
+    file.rewind().map_err(|e| e.to_string())?;
+    // The manifest embedded in a signed executable supplies provenance. A
+    // checksum on a manually selected external image is only integrity/ABI.
     unsafe { aot::load_image_file_with_profile(&file, id, profile) }?;
     drop(file);
     if let Some(settings) = aot::memory_settings() {
@@ -165,12 +203,10 @@ pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
     }
     PLAN.with(|plan| *plan.borrow_mut() = Some(Plan { entry }));
     eprintln!(
-        "[native-aot] selected inspector image {} (entry {entry}, memory {profile:?})",
-        image.display()
+        "[native-aot] selected inspector image {description} (entry {entry}, memory {profile:?})"
     );
     Ok(())
 }
-
 /// Returns false for ordinary JIT boots. A selected native image never falls
 /// through to source evaluation if its entry throws or remains pending.
 pub(crate) fn boot(rt: &JsRuntime) -> Result<bool, String> {
@@ -178,7 +214,10 @@ pub(crate) fn boot(rt: &JsRuntime) -> Result<bool, String> {
         return Ok(false);
     };
     let ctx = rt.ctx();
-    ctx.global_set("__VN_AOT_HOST__", ctx.global())
+    // JS sees the realm's globalThis proxy, not JSC's raw JSGlobalObject.
+    // Preserve identity for host WeakMaps and window/document event routing.
+    let host = ctx.global_get("globalThis").map_err(|error| error.to_string())?;
+    ctx.global_set("__VN_AOT_HOST__", host)
         .map_err(|e| e.to_string())?;
     match ctx.run_aot_module(entry) {
         Ok(aot::ModuleEvaluation::Fulfilled(_)) => {
@@ -196,6 +235,25 @@ pub(crate) fn boot(rt: &JsRuntime) -> Result<bool, String> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn engine_escape_is_explicit_and_invalid_policies_fail_closed() {
+        assert_eq!(engine_policy(None).unwrap(), EnginePolicy::Auto);
+        assert_eq!(
+            engine_policy(Some(OsStr::new("auto"))).unwrap(),
+            EnginePolicy::Auto
+        );
+        assert_eq!(
+            engine_policy(Some(OsStr::new("native"))).unwrap(),
+            EnginePolicy::Native
+        );
+        assert_eq!(
+            engine_policy(Some(OsStr::new("jit"))).unwrap(),
+            EnginePolicy::Jit
+        );
+        for policy in ["", "default", "fallback", "JIT"] {
+            assert!(engine_policy(Some(OsStr::new(policy))).is_err());
+        }
+    }
     use super::*;
     struct TempArtifact(std::path::PathBuf);
     impl TempArtifact {

@@ -216,6 +216,8 @@ export function createRuntime(
     desktop?: boolean;
     MouseEvent?: unknown;
     globals?: Record<string, unknown>;
+    /** Host bootstrap, before the runtime (including sealing builtin methods). */
+    beforeRuntime?: (global: Record<string, unknown>) => void;
     launch?: Record<string, unknown>;
     styleAccepts?: boolean;
     /** `false`: no `__vn_layout_watch` / `__vn_set_layout_hook` (an older host). */
@@ -1190,6 +1192,7 @@ export function createRuntime(
     for (let i = first; i <= last; i++) args[i] = undefined;
   }
 
+  options.beforeRuntime?.(fakeGlobal);
   // eslint-disable-next-line no-new-func
   const exports = new Function(
     ...params,

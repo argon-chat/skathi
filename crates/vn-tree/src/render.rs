@@ -233,10 +233,18 @@ fn node_prefix(t: &Tree, id: u32) -> String {
 /// devtools query and therefore every assertion about a pop-out.
 fn reset_bounds(win: WinKey) {
     windows::of(win, |w| {
-        let last = std::mem::take(&mut w.bounds);
-        w.prev_bounds = last;
-        let last = std::mem::take(&mut w.transformed);
-        w.prev_transformed = last;
+        // Reuse both generations' allocation: rebuilding a chat frame must
+        // not allocate and grow every bounds map from zero again.
+        std::mem::swap(&mut w.bounds, &mut w.prev_bounds);
+        w.bounds.clear();
+        if w.bounds.capacity() > w.prev_bounds.len().saturating_mul(4).max(1024) {
+            w.bounds.shrink_to(w.prev_bounds.len().saturating_mul(2));
+        }
+        std::mem::swap(&mut w.transformed, &mut w.prev_transformed);
+        w.transformed.clear();
+        if w.transformed.capacity() > w.prev_transformed.len().saturating_mul(4).max(1024) {
+            w.transformed.shrink_to(w.prev_transformed.len().saturating_mul(2));
+        }
     });
 }
 

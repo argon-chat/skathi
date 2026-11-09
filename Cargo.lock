@@ -7873,6 +7873,7 @@ dependencies = [
  "reqwest_client",
  "self_cell",
  "serde_json",
+ "sha2",
  "vn-clipboard",
  "vn-css",
  "vn-desktop",

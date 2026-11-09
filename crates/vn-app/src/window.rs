@@ -1009,6 +1009,9 @@ thread_local! {
     /// DOM visibility is published at window initialization, before any app JS.
     /// Keep its edge separate from PREV, whose first funnel still emits boot.
     static PAGE_HIDDEN: Cell<Option<bool>> = const { Cell::new(None) };
+    // The HWND stays hidden while its first styled frame is prepared. This is
+    // internal presentation state, not a page becoming document.hidden.
+    static STARTUP_REVEAL_PENDING: Cell<bool> = const { Cell::new(false) };
     /// The registered JS observer (`__vn_window_observe`), protected against GC.
     static OBSERVER: Cell<u64> = const { Cell::new(0) };
     /// Mutators that arrived outside `Phase::Commit` (module scope, or from
@@ -1281,6 +1284,25 @@ pub fn frame_budget_ms() -> Option<f32> {
     REFRESH_MS.with(|c| c.get())
 }
 
+pub(crate) fn begin_startup_reveal() {
+    STARTUP_REVEAL_PENDING.with(|pending| pending.set(true));
+}
+
+pub(crate) fn cancel_startup_reveal() {
+    STARTUP_REVEAL_PENDING.with(|pending| pending.set(false));
+}
+
+fn startup_visibility(native_visible: bool) -> bool {
+    STARTUP_REVEAL_PENDING.with(|pending| {
+        if native_visible {
+            pending.set(false);
+            true
+        } else {
+            pending.get()
+        }
+    })
+}
+
 /// Reads the window once. Everything derived — every event, every getter —
 /// comes from here, so nothing can observe two different frames at once.
 pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
@@ -1338,7 +1360,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         scale,
         maximized: win::is_zoomed() || window.is_maximized(),
         minimized: win::is_iconic(),
-        visible: win::is_visible(),
+        visible: startup_visibility(win::is_visible()),
         fullscreen: window.is_fullscreen(),
         focused: window.is_window_active(),
         cloaked: win::is_cloaked(),
@@ -2483,6 +2505,19 @@ mod tests {
         // content area keeps x = 0 and loses width (3 x 46 px).
         let overlaid = Snapshot { overlay: Some(Overlay::default()), ..base.clone() };
         assert_eq!(titlebar_area(&overlaid), (true, (0.0, 0.0, 862.0, 32.0)));
+    }
+
+    #[test]
+    fn startup_prewarm_does_not_publish_a_hidden_page_or_mask_later_hides() {
+        cancel_startup_reveal();
+        assert!(!startup_visibility(false), "visible(false) embedding remains hidden");
+        begin_startup_reveal();
+        assert!(startup_visibility(false), "the hidden HWND is only an internal first-frame warm-up");
+        assert!(startup_visibility(true), "the native show completes the warm-up");
+        assert!(!startup_visibility(false), "later explicit hides must be observable");
+        begin_startup_reveal();
+        cancel_startup_reveal();
+        assert!(!startup_visibility(false), "cancelled startup must not retain the override");
     }
 
     #[test]

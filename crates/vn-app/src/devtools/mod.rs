@@ -28,6 +28,7 @@
 //!
 //! The whole module is compiled out under `--features prod`.
 
+mod eval;
 mod net; // the Network panel's feed (a JS-side fetch/XHR/WebSocket tee) and `net_detail`
 mod picker;
 mod allocations;
@@ -513,12 +514,6 @@ vn_runtime::host_fn!(fn vn_devtools_console(g, args) {
     vn_runtime::redjs::api::Value::undefined().0
 });
 
-vn_runtime::host_fn!(fn vn_devtools_emit(g, args) {
-    let text = unsafe { vn_runtime::redjs::webapi::util::read_string(g, args.arg(0).0) }
-        .unwrap_or_default();
-    set_eval_result(text);
-    vn_runtime::redjs::api::Value::undefined().0
-});
 
 // `__vn_devtools_targets()` — which dev hosts are reachable right now, i.e.
 // the inspector's target list.
@@ -786,7 +781,6 @@ pub fn install(rt: &JsRuntime) {
     rt.register("__vn_trace_callback_begin", 1, vn_trace_callback_begin as *const _);
     rt.register("__vn_trace_callback_end", 1, vn_trace_callback_end as *const _);
     rt.register("__vn_devtools_console", 3, vn_devtools_console as *const _);
-    rt.register("__vn_devtools_emit", 1, vn_devtools_emit as *const _);
     // The inspector app's only host dependency (docs/DEVTOOLS-UI.md §3): the
     // list of attachable instances. Registered in every host — the app that
     // never calls it never notices.
@@ -2401,71 +2395,22 @@ fn cmd_mouse(
 // eval
 // ---------------------------------------------------------------------------
 
-thread_local! {
-    /// Where `__vn_devtools_emit` parks the JSON the eval helper produced. A
-    /// host fn cannot return a string to Rust, so the helper hands it over.
-    static EVAL_RESULT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-    static EVAL_HELPER_INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-pub(crate) fn take_eval_result() -> Option<String> {
-    EVAL_RESULT.with(|r| r.borrow_mut().take())
-}
-
-pub(crate) fn set_eval_result(text: String) {
-    EVAL_RESULT.with(|r| *r.borrow_mut() = Some(text));
-}
-
-/// Indirect `eval`, so the source sees global scope — what a browser devtools
-/// console does. The result is stringified INSIDE JS (the only place that can
-/// see the value) and handed back through `__vn_devtools_emit`.
-const EVAL_HELPER: &str = r#"
-globalThis.__VN_DEVTOOLS_EVAL__ = function (src) {
-  var out;
-  try {
-    var v = (0, eval)(src);
-    var json;
-    try { json = JSON.stringify(v); } catch (e) { json = undefined; }
-    // undefined, a function, a cycle, a BigInt — anything JSON cannot carry
-    // degrades to its String() form rather than to a missing field.
-    if (json === undefined) json = JSON.stringify(v === undefined ? null : String(v));
-    out = '{"value":' + json + ',"type":' + JSON.stringify(typeof v) + '}';
-  } catch (e) {
-    out = JSON.stringify({
-      exception: (e && e.name ? e.name + ": " + (e.message || "") : String(e)),
-      stack: (e && e.stack) ? String(e.stack) : "",
-    });
-  }
-  __vn_devtools_emit(out);
-};
-"#;
-
 fn cmd_eval(src: &str) -> String {
-    let result = JsRuntime::with(|rt| {
-        if !EVAL_HELPER_INSTALLED.with(|c| c.get()) {
-            if let Err(e) = rt.eval(EVAL_HELPER, "vn://devtools-eval-helper.js") {
-                return Err(format!("{}\n{}", e.header, e.stack));
-            }
-            EVAL_HELPER_INSTALLED.with(|c| c.set(true));
-        }
-        let call = format!("__VN_DEVTOOLS_EVAL__({});", json::quote(src));
-        if let Err(e) = rt.eval(&call, "vn://devtools-eval.js") {
-            return Err(format!("{}\n{}", e.header, e.stack));
-        }
-        Ok(take_eval_result())
-    });
+    let result = JsRuntime::with(|runtime| eval::evaluate(runtime.ctx(), src));
     match result {
         Err(e) => err(format!("eval helper failed: {e}")),
-        Ok(None) => err("eval produced no result (the helper did not report back)"),
-        Ok(Some(text)) => {
+        Ok(text) => {
             // Vue may have scheduled work; land it in this frame like every
             // other command does — in every window that paints the tree, as a
             // JS wave does: an eval that changes a pop-out's content has to
             // repaint the pop-out, not just the window the command ran in.
-            let _ = with_commit(|window, cx| {
+            let _ = with_commit(|_window, cx| {
                 if vn_tree::flush_changes() {
-                    window.refresh();
-                    crate::popout::repaint_all(cx);
+                    // A read-only eval can land after this wave's rAF wrote
+                    // one node. Preserve every unaffected cached subtree,
+                    // exactly as after_wave does for the same DOM change.
+                    crate::notify_shell(cx);
+                    crate::popout::notify_all(cx);
                 }
             });
             ok(Json::from(Raw(text)))
