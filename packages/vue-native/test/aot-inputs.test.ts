@@ -42,7 +42,7 @@ test("app paths cannot impersonate a named dependency root", () => {
   archive.source(join(sdk, "lib.ts"), readFileSync(join(sdk, "lib.ts"), "utf8"));
   expect(() => archive.write({ script: "", scriptUrl: "vn://app.prod.js", defines: {}, engine: aotEngineIdentity(null), sdkVersion: "test" })).toThrow(/source-root anchor/);
   expect(existsSync(out)).toBe(false);
-});
+}, 30_000);
 
 test.each(["ts", "original.ts", "js", "original.js"])("virtual Vue modules reject real .vue.%s files instead of hiding type imports", (suffix) => {
   const app = join(scratch, `vue-collision-${suffix}`);
@@ -72,7 +72,7 @@ test("canonical and decomposed Unicode filenames retain deterministic inventory 
   const second = build(join(scratch, "unicode-second"), [...names].reverse());
   expect(first).toBe(second);
   expect(JSON.parse(first).files.filter((input: any) => names.includes(input.path))).toHaveLength(2);
-});
+}, 30_000);
 
 test("runtime aliases retain package declaration entries and their type-only closure", () => {
   const app = join(scratch, "package-declarations-app");

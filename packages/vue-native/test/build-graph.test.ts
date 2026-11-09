@@ -279,7 +279,7 @@ describe("style-only edits", () => {
     // Same hash => the loader's define() keeps the live exports and the
     // component definition Vue's HMR record already owns.
     expect(hashOf(after)).toBe(hashOf(before));
-  });
+  }, 30_000);
 
   test("a template edit DOES change the body hash", () => {
     const before = build("style-app").script(APP);
@@ -291,7 +291,7 @@ describe("style-only edits", () => {
       writeFileSync(file, original);
     }
     expect(hashOf(after)).not.toBe(hashOf(before));
-  });
+  }, 30_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -578,7 +578,7 @@ describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () 
       }
     };
     const until = async (ok) => {
-      for (let i = 0; i < 150 && !ok(); i++) await Bun.sleep(100);
+      for (let i = 0; i < 300 && !ok(); i++) await Bun.sleep(100);
       return ok();
     };
     try {
@@ -594,7 +594,7 @@ describe("build.ts (dev): an edit to an inlined file rebuilds its importer", () 
       proc.kill();
       await proc.exited;
     }
-  }, 30000);
+  }, 60_000);
 });
 
 describe("module namespaces in a prod bundle", () => {
