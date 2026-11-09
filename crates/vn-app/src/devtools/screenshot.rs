@@ -48,8 +48,11 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+#[cfg(windows)]
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, TRUE};
+#[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{
     BITMAPINFO, BITMAPINFOHEADER, BI_RGB, ClientToScreen, CreateCompatibleDC, CreateDIBSection,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP, HDC, ReleaseDC, SelectObject,
@@ -57,7 +60,9 @@ use windows::Win32::Graphics::Gdi::{
 // `PrintWindow` lives under Storage::Xps in windows-rs' generated metadata
 // (it is a user32 export the XPS printing headers declare), while the flag it
 // takes is a plain `u32` constant in WindowsAndMessaging.
+#[cfg(windows)]
 use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
     PW_RENDERFULLCONTENT,
@@ -154,6 +159,7 @@ pub fn next_default_path() -> PathBuf {
 /// dependency's worth of coupling for something we can also derive from our own
 /// pid, and a screenshot is exactly the command you want to still work when
 /// something upstream moved.
+#[cfg(windows)]
 fn hwnd_of_window() -> Option<isize> {
     super::with_target(|window, _| {
         let handle = <gpui::Window as HasWindowHandle>::window_handle(window).ok()?;
@@ -167,6 +173,7 @@ fn hwnd_of_window() -> Option<isize> {
 }
 
 /// Robust fallback: the first visible top-level window owned by this process.
+#[cfg(windows)]
 fn hwnd_by_pid() -> Option<isize> {
     unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> windows::core::BOOL {
         let out = unsafe { &mut *(lparam.0 as *mut Option<isize>) };
@@ -186,6 +193,7 @@ fn hwnd_by_pid() -> Option<isize> {
 }
 
 /// RAII for the GDI objects, so an early return cannot leak a DC or a bitmap.
+#[cfg(windows)]
 struct Gdi {
     screen: HDC,
     mem: HDC,
@@ -193,6 +201,7 @@ struct Gdi {
     old: windows::Win32::Graphics::Gdi::HGDIOBJ,
 }
 
+#[cfg(windows)]
 impl Drop for Gdi {
     fn drop(&mut self) {
         unsafe {
@@ -202,6 +211,19 @@ impl Drop for Gdi {
             ReleaseDC(None, self.screen);
         }
     }
+}
+
+/// No HWND to report off Windows.
+#[cfg(not(windows))]
+fn hwnd_of_window() -> Option<isize> {
+    None
+}
+
+/// The compositor capture is `PrintWindow`'s, so Windows-only; `auto` reports
+/// the readback's failure through this.
+#[cfg(not(windows))]
+fn capture_print_window(_path: &Path) -> Result<Shot, String> {
+    Err("print_window is Windows-only; use render_to_image".into())
 }
 
 /// Capture through `backend`, writing a PNG to `path`.
@@ -228,9 +250,12 @@ fn capture_render_to_image(path: &Path) -> Result<Shot, String> {
     // something this path needs in order to work — the readback never touches
     // the HWND.
     let hwnd_raw = hwnd_of_window();
+    #[cfg(windows)]
     let iconic = hwnd_raw.is_some_and(|raw| {
         unsafe { IsIconic(HWND(raw as *mut core::ffi::c_void)) }.as_bool()
     });
+    #[cfg(not(windows))]
+    let iconic = false;
 
     let captured = super::with_target(|window, _| {
         (window.render_to_image(), window.scale_factor())
@@ -276,6 +301,7 @@ fn capture_render_to_image(path: &Path) -> Result<Shot, String> {
     })
 }
 
+#[cfg(windows)]
 fn capture_print_window(path: &Path) -> Result<Shot, String> {
     let hwnd_raw = hwnd_of_window()
         .ok_or_else(|| "could not find this process' window handle".to_string())?;
@@ -379,6 +405,7 @@ fn capture_print_window(path: &Path) -> Result<Shot, String> {
 ///
 /// Falls back to `(0, 0)` rather than failing: a screenshot with a slightly
 /// wrong offset is far more useful than no screenshot.
+#[cfg(windows)]
 fn client_origin(hwnd: HWND, window_rect: &RECT) -> (i32, i32) {
     let mut origin = POINT { x: 0, y: 0 };
     if unsafe { ClientToScreen(hwnd, &mut origin) }.as_bool() {

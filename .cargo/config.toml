@@ -19,6 +19,10 @@
 # land in target/x86_64-pc-windows-msvc/ (one tree, correct flags isolation)
 # instead of a second, subtly-different tree under target/debug. Before this
 # was set, the repo carried BOTH trees — ~100 GB of duplicated artifacts.
+#
+# A project config wins over the user's, so on macOS this has to be overridden
+# per command: `cargo build --target aarch64-apple-darwin` (or
+# CARGO_BUILD_TARGET), with artifacts in target/aarch64-apple-darwin/.
 [build]
 target = "x86_64-pc-windows-msvc"
 
@@ -26,14 +30,17 @@ target = "x86_64-pc-windows-msvc"
 rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608,1048576"]
 
 [env]
-# vue-native's OWN copy of the bun-webkit prebuilt, at the version pinned in
-# vendor/redjs/pins.txt. `vendor/redjs/setup.ps1` fetches it (and the mimalloc
-# sources redjs compiles) into the git-ignored vendor/redjs/prebuilt/, and
-# redjs's build.rs refuses to build against a prebuilt at any other version —
-# so after a submodule bump that moves the pin, the build says "run setup.ps1"
-# instead of quietly linking the old engine.
+# The bun-webkit prebuilt is vue-native's OWN copy, at the version pinned in
+# vendor/redjs/pins.txt: `vendor/redjs/setup.ps1` (`setup.sh` on macOS) fetches
+# it, and the mimalloc sources redjs compiles, into the git-ignored
+# vendor/redjs/prebuilt/. redjs's build.rs finds it there by itself — under
+# `bun-webkit` on Windows, `bun-webkit-<platform>` elsewhere — so no
+# `BUN_WEBKIT_DIR` is set here (one that is set still wins). It refuses to
+# build against a prebuilt at any other version, so after a submodule bump that
+# moves the pin the build says "run setup" instead of quietly linking the old
+# engine.
 #
-# `relative = true` resolves against this file's workspace root, so the path is
-# the same on every machine. (Until m24 this pointed into a PEWPEW checkout on
-# Z:, which tied the build to one machine and to PEWPEW's copy of the engine.)
-BUN_WEBKIT_DIR = { value = "vendor/redjs/prebuilt/bun-webkit", relative = true }
+# The oldest macOS the build targets, the one the JSC prebuilt was built for:
+# without it cc and rustc default to 11.0 on arm64 and ld warns about every
+# object of the engine. An environment that sets it keeps its own value.
+MACOSX_DEPLOYMENT_TARGET = "13.0"

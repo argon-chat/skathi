@@ -1,0 +1,77 @@
+name: macOS
+
+# Bring-up of the macOS host (docs/MACOS.md). It checks and builds vn-app for
+# Apple Silicon; nothing runs yet.
+# Expect it to fail until the port compiles end to end: it is not a required
+# check, and it is the only machine in this repo's CI with Apple's SDK.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Host (aarch64-apple-darwin)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      TARGET: aarch64-apple-darwin
+      # `runtime-shaders`: the runner image has Xcode but not necessarily its
+      # separately downloaded Metal toolchain.
+      FEATURES: runtime-shaders
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Set up Rust
+        # rust-toolchain.toml pins the channel; the target is this runner's own.
+        run: rustup target add "$TARGET"
+      - name: Install JS dependencies
+        # vn-app's build script bundles the devtools inspector with bun.
+        working-directory: packages/vue-native
+        run: bun install --frozen-lockfile
+      - name: Cache pinned native dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/redjs/prebuilt
+            vendor/redjs/redjs/cpp/mimalloc
+          key: redjs-native-macos-${{ runner.arch }}-${{ hashFiles('vendor/redjs/pins.txt') }}
+      - name: Fetch and verify native dependencies
+        run: bash vendor/redjs/setup.sh
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-macos-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-macos-${{ runner.arch }}-
+      - name: Check the host
+        run: cargo check --locked -p vn-app --target "$TARGET" --features "$FEATURES"
+      - name: Build the bare host
+        run: cargo build --locked --release -p vn-app --target "$TARGET" --features "prod,$FEATURES"
+      - name: Upload the host
+        uses: actions/upload-artifact@v4
+        with:
+          name: vn-app-aarch64-apple-darwin
+          path: target/aarch64-apple-darwin/release/vn-app
+          if-no-files-found: error

@@ -36,6 +36,7 @@ pub fn boot(rt: &JsRuntime) {
     let meta = &loaded.meta;
     let from = match &loaded.source {
         payload::Source::Embedded => "embedded".to_string(),
+        payload::Source::Bundled(p) => format!("the app bundle ({})", p.display()),
         payload::Source::File(p) => format!("VN_PAYLOAD={}", p.display()),
         payload::Source::Embedder(label) => format!("from the embedder ({label})"),
     };

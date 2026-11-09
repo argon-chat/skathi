@@ -34,7 +34,11 @@ mod picker;
 mod allocations;
 mod leases;
 mod indexeddb;
+#[cfg(windows)]
 mod mem; // `mem`: where the process's memory is (m26 perf work)
+#[cfg(not(windows))]
+#[path = "mem_stub.rs"]
+mod mem;
 pub(crate) mod trace; // `trace`: a frame-by-frame record of where the time went (m26 perf work)
 mod screenshot;
 pub mod ws; // the PUSH channel: a WebSocket server on this same port
@@ -751,7 +755,7 @@ fn targets_json() -> String {
 
 // These controls must not use host_fn!: begin returns an open child span,
 // whose lifetime deliberately extends beyond this native call into JS.
-unsafe extern "sysv64" fn vn_trace_callback_begin(g: *mut core::ffi::c_void, cf: *mut core::ffi::c_void) -> u64 {
+vn_runtime::raw_host_fn! { fn vn_trace_callback_begin(g, cf) {
     use vn_runtime::redjs::{api::{HostArgs, Value}, profiling};
     if !profiling::enabled() { return Value::int32(0).0; }
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -761,15 +765,15 @@ unsafe extern "sysv64" fn vn_trace_callback_begin(g: *mut core::ffi::c_void, cf:
         Ok(value) => value,
         Err(_) => { log::error!("Frame profiler callback begin failed"); Value::int32(0).0 }
     }
-}
-unsafe extern "sysv64" fn vn_trace_callback_end(_g: *mut core::ffi::c_void, cf: *mut core::ffi::c_void) -> u64 {
+} }
+vn_runtime::raw_host_fn! { fn vn_trace_callback_end(_g, cf) {
     use vn_runtime::redjs::{api::{HostArgs, Value}, profiling};
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let token = HostArgs::new(cf).arg(0).as_number().filter(|value| value.is_finite() && *value > 0. && value.fract() == 0.).unwrap_or(0.) as u64;
         profiling::external_callback_end(token);
     })).is_err() { log::error!("Frame profiler callback end failed"); }
     Value::undefined().0
-}
+} }
 
 /// Registers the devtools host fns. Call before the app bundle boots.
 ///

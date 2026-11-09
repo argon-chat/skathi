@@ -48,6 +48,9 @@ use vn_payload::Payload;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     Embedded,
+    /// `Contents/Resources/app.vnpk` of the macOS `.app` this executable is in
+    /// ([`bundled`]).
+    Bundled(std::path::PathBuf),
     File(std::path::PathBuf),
     /// Handed over by the process that embeds vue-native (src/embed.rs);
     /// the label says how (a path, or "bytes").
@@ -156,19 +159,26 @@ pub(crate) fn set_external(bytes: PayloadBytes, label: String) -> Result<(), Str
 /// Is a payload STAMPED into this exe? Unlike [`get`], `VN_PAYLOAD` does not
 /// count — this is the "bare host or app?" question `--vn-host-info` asks.
 pub fn embedded_present() -> bool {
-    embedded().is_some()
+    embedded().is_some() || bundled().is_some()
 }
 
 fn load() -> Option<Loaded> {
-    let (bytes, source) = match embedded() {
-        Some(bytes) => {
+    let carried = match embedded() {
+        Some(bytes) => Some((PayloadBytes::Embedded(bytes), Source::Embedded)),
+        None => bundled().map(|path| match crate::mapped_file::MappedFile::open(&path) {
+            Ok(file) => (PayloadBytes::File(file), Source::Bundled(path)),
+            Err(e) => fatal(&format!("{}: {e}", path.display())),
+        }),
+    };
+    let (bytes, source) = match carried {
+        Some(carried) => {
             if std::env::var_os("VN_PAYLOAD").is_some_and(|v| !v.is_empty()) {
                 eprintln!(
                     "[payload] VN_PAYLOAD is ignored: this exe carries its own app. (It is honoured only \
                      by a bare host, so a stamped — later signed — exe can never be made to run other JS.)"
                 );
             }
-            (PayloadBytes::Embedded(bytes), Source::Embedded)
+            carried
         }
         None => {
             let path = std::env::var_os("VN_PAYLOAD").filter(|v| !v.is_empty())?;
@@ -286,6 +296,36 @@ fn embedded() -> Option<&'static [u8]> {
 #[cfg(not(target_os = "windows"))]
 fn embedded() -> Option<&'static [u8]> {
     None
+}
+
+/// A macOS app's payload: `Name.app/Contents/Resources/app.vnpk`, beside the
+/// executable in `Contents/MacOS`. Stamping the Mach-O would break its code
+/// signature; a resource of the bundle is covered by it, so like the stamped
+/// resource on Windows it wins over `VN_PAYLOAD`.
+#[cfg(target_os = "macos")]
+fn bundled() -> Option<std::path::PathBuf> {
+    static PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let exe = std::env::current_exe().ok()?;
+        bundle_payload_path(&exe).filter(|path| path.is_file())
+    })
+    .clone()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn bundled() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Where an executable inside `*.app/Contents/MacOS/` finds its payload.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn bundle_payload_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    let is_app = bundle.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("app"));
+    (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && is_app)
+        .then(|| contents.join("Resources").join("app.vnpk"))
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +501,23 @@ pub fn host_info_json() -> String {
 #[cfg(test)]
 mod tests {
     const GOLDEN: &[u8] = include_bytes!("../../../packages/vue-native/test/fixtures/golden.vnpk");
+
+    #[test]
+    fn only_an_executable_inside_an_app_bundle_has_a_bundled_payload() {
+        use std::path::Path;
+        assert_eq!(
+            super::bundle_payload_path(Path::new("/Applications/Argon.app/Contents/MacOS/Argon")),
+            Some(Path::new("/Applications/Argon.app/Contents/Resources/app.vnpk").to_path_buf())
+        );
+        for exe in [
+            "/usr/local/bin/vn-app",
+            "/tmp/Contents/MacOS/vn-app",
+            "/Applications/Argon.app/Contents/Resources/vn-app",
+            "/Applications/Argon.app/vn-app",
+        ] {
+            assert_eq!(super::bundle_payload_path(Path::new(exe)), None, "{exe}");
+        }
+    }
 
     #[test]
     fn mapped_payload_golden_views_borrow_the_mapping_after_owner_moves() {

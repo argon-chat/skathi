@@ -17,6 +17,10 @@ native-aot = ["vn-runtime/native-aot"]
 native-inspector = ["native-aot"]
 # Native WebGPU and canvas presentation; included in normal host builds.
 native-dx12 = ["gpui_windows/native-dx12"]
+# macOS: compile the Metal shaders when the app starts instead of at build
+# time, for a machine without Xcode's Metal toolchain (`xcrun metal`).
+# Shipped builds keep the precompiled library.
+runtime-shaders = ["gpui_platform/runtime_shaders"]
 webgpu = ["vn-runtime/webgpu", "vn-tree/webgpu", "dep:wgpu", "dep:pollster"]
 # The BARE HOST (m25, docs/PACKAGING.md): the dev manifest/HMR polling is
 # compiled out, and the app — bundle, window config, name, assets — is the VNPK
@@ -205,6 +209,11 @@ sha2 = "0.10"
 embed-resource = "=3.0.11"
 # Deflates the inspector bundle before it is embedded. Host-side only.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# gpui's macOS text system (CoreText through font-kit). Off, the backend falls
+# back to a text system that renders no text at all.
+gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["font-kit"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # WebGPU joins the native renderer device on first requestAdapter.

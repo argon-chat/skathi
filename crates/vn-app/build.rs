@@ -68,9 +68,15 @@ use std::process::Command;
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(vn_devtools)");
     println!("cargo:rerun-if-env-changed=VN_DEVTOOLS_BUNDLE");
-    suppress_release_pdb();
-    no_identical_code_folding();
-    thread_stack_commit();
+    // link.exe switches: everything below them is spelled for MSVC.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        suppress_release_pdb();
+        no_identical_code_folding();
+        thread_stack_commit();
+    }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        macos_link();
+    }
     host_identity();
     standalone_manifest();
 
@@ -297,6 +303,28 @@ fn no_identical_code_folding() {
 /// keep the config's 1 MiB commit, which costs them nothing that matters.
 fn thread_stack_commit() {
     println!("cargo:rustc-link-arg-bins=/STACK:8388608,4096");
+}
+
+/// The macOS counterparts of the link.exe switches above, for vn-app's
+/// executable.
+///
+/// - `-ObjC`: libwebrtc's Objective-C categories (vn-voice) are only kept when
+///   the final link asks for them. webrtc-sys prints the flag itself, but a
+///   library's link args never reach the binary's link.
+/// - `-rpath /usr/lib/swift`: frameworks that load the system Swift runtime
+///   (ScreenCaptureKit, through libwebrtc) find it there, as Zed's own build
+///   sets it.
+/// - `-no_deduplicate`: ld64's identical-code folding, which would do to JSC's
+///   constructor identity what `/OPT:NOICF` prevents on Windows (see
+///   `no_identical_code_folding`). Not yet measured on a Mac: check that
+///   `class X extends BigInt {}` still throws only where a browser does.
+///
+/// The main thread's 8 MiB stack is already macOS's default, so no
+/// `-stack_size` is needed for JSC's headroom.
+fn macos_link() {
+    println!("cargo:rustc-link-arg-bins=-Wl,-ObjC");
+    println!("cargo:rustc-link-arg-bins=-Wl,-rpath,/usr/lib/swift");
+    println!("cargo:rustc-link-arg-bins=-Wl,-no_deduplicate");
 }
 
 /// What `vn-app --vn-host-info` reports and a payload is checked against

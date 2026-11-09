@@ -239,7 +239,7 @@ impl JsRuntime {
         }
     }
 
-    /// Registers a raw `extern "sysv64"` host function (written with
+    /// Registers a raw host function (written with `raw_host_fn!` or
     /// [`crate::host_fn!`]) as a global.
     pub fn register(&self, name: &str, arity: u32, f: *const c_void) {
         let v = unsafe { self.ctx.function_sysv(name, arity, f) }

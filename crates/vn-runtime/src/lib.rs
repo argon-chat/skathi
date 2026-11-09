@@ -34,7 +34,8 @@ pub mod built {
     pub const INDEXEDDB: bool = cfg!(feature = "indexeddb");
 }
 
-/// Defines a panic-shielded `extern "sysv64"` JSC host function.
+/// Defines a panic-shielded JSC host function, in redjs's host ABI
+/// ([`raw_host_fn!`]).
 ///
 /// The body receives `$g: *mut c_void` (the JSGlobalObject) and
 /// `$args: redjs::api::HostArgs`, and must evaluate to a `u64` (an encoded
@@ -44,10 +45,8 @@ pub mod built {
 #[macro_export]
 macro_rules! host_fn {
     ($vis:vis fn $name:ident($g:ident, $args:ident) $body:block) => {
-        $vis unsafe extern "sysv64" fn $name(
-            g: *mut ::core::ffi::c_void,
-            cf: *mut ::core::ffi::c_void,
-        ) -> u64 {
+        $crate::raw_host_fn! {
+        $vis fn $name(g, cf) {
             match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
                 let $g = g;
                 let _profile = $crate::redjs::profiling::host_span_at(g as usize, ::core::stringify!($name), ::core::file!(), ::core::line!(), ::core::column!());
@@ -59,5 +58,21 @@ macro_rules! host_fn {
                 Err(payload) => $crate::bridge::panic_to_js(g, payload),
             }
         }
+        }
+    };
+}
+
+/// A bare host function in redjs's host ABI (`redjs::webapi::util::HostFn`):
+/// `extern "sysv64"` on Windows x64, where the engine calls through the System
+/// V convention, and `extern "C"` everywhere else. The body sees `$g` (the
+/// JSGlobalObject) and `$cf` (the call frame) as `*mut c_void` and returns the
+/// encoded result. No panic shield: that is [`host_fn!`]'s.
+#[macro_export]
+macro_rules! raw_host_fn {
+    ($vis:vis fn $name:ident($g:ident, $cf:ident) $body:block) => {
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        $vis unsafe extern "sysv64" fn $name($g: *mut ::core::ffi::c_void, $cf: *mut ::core::ffi::c_void) -> u64 $body
+        #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
+        $vis unsafe extern "C" fn $name($g: *mut ::core::ffi::c_void, $cf: *mut ::core::ffi::c_void) -> u64 $body
     };
 }

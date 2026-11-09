@@ -104,12 +104,21 @@ impl Backdrop {
     pub fn to_gpui(self) -> WindowBackgroundAppearance {
         match self {
             Backdrop::None => WindowBackgroundAppearance::Opaque,
+            // macOS has one system material, the behind-window blur of an
+            // `NSVisualEffectView`, which is gpui's `Blurred` there. Mica and
+            // acrylic would otherwise reach gpui's macOS backend as plain
+            // transparency.
+            #[cfg(target_os = "macos")]
+            Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic => WindowBackgroundAppearance::Blurred,
+            #[cfg(not(target_os = "macos"))]
             Backdrop::Mica => WindowBackgroundAppearance::MicaBackdrop,
+            #[cfg(not(target_os = "macos"))]
             Backdrop::MicaAlt => WindowBackgroundAppearance::MicaAltBackdrop,
             // DWM's own acrylic, `DWMSBT_TRANSIENTWINDOW` — Electron's
             // `backgroundMaterial: 'acrylic'`. The fork draws the accent
             // policy's blur instead before 22621 ([`Backdrop::resolve_for_os`]
             // says so).
+            #[cfg(not(target_os = "macos"))]
             Backdrop::Acrylic => WindowBackgroundAppearance::AcrylicBackdrop,
             Backdrop::Transparent => WindowBackgroundAppearance::Transparent,
         }
@@ -933,9 +942,11 @@ fn has_system_backdrop() -> bool {
     })
 }
 
+/// macOS always has its system material (`NSVisualEffectView`), which every
+/// system backdrop maps to ([`Backdrop::to_gpui`]).
 #[cfg(not(target_os = "windows"))]
 fn has_system_backdrop() -> bool {
-    false
+    cfg!(target_os = "macos")
 }
 
 // ---------------------------------------------------------------------------

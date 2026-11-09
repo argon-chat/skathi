@@ -49,13 +49,16 @@ static CLASS_BLOCKS: [AtomicI64; CLASSES] = [ZERO; CLASSES];
 /// shipped one.
 const DEFAULT_ON: bool = !cfg!(feature = "prod");
 
+#[cfg(windows)]
 #[link(name = "kernel32")]
 extern "system" {
     fn GetEnvironmentVariableW(name: *const u16, buffer: *mut u16, size: u32) -> u32;
 }
 
-#[cold]
-fn probe() -> bool {
+/// `VN_MEMSTATS`: `None` unset or empty, `Some(false)` for "0", `Some(true)`
+/// for anything else. No allocation may happen here.
+#[cfg(windows)]
+fn memstats_env() -> Option<bool> {
     // "VN_MEMSTATS\0", by hand: no allocation may happen here.
     const NAME: [u16; 12] = [
         b'V' as u16,
@@ -73,12 +76,31 @@ fn probe() -> bool {
     ];
     let mut buf = [0u16; 8];
     let n = unsafe { GetEnvironmentVariableW(NAME.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+    (n != 0).then(|| !(n == 1 && buf[0] == b'0' as u16))
+}
+
+#[cfg(not(windows))]
+fn memstats_env() -> Option<bool> {
+    extern "C" {
+        fn getenv(name: *const core::ffi::c_char) -> *const core::ffi::c_char;
+    }
+    // `getenv` returns the environment's own storage: no copy, no allocation.
+    let value = unsafe { getenv(c"VN_MEMSTATS".as_ptr()) };
+    if value.is_null() {
+        return None;
+    }
+    let first = unsafe { *value } as u8;
+    if first == 0 {
+        return None;
+    }
+    let second = unsafe { *value.add(1) } as u8;
+    Some(!(first == b'0' && second == 0))
+}
+
+#[cold]
+fn probe() -> bool {
     // Unset or empty: the build's default. "0": off. Anything else: on.
-    let on = if n == 0 {
-        DEFAULT_ON
-    } else {
-        !(n == 1 && buf[0] == b'0' as u16)
-    };
+    let on = memstats_env().unwrap_or(DEFAULT_ON);
     STATE.store(if on { 2 } else { 1 }, Relaxed);
     on
 }
