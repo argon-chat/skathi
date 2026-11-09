@@ -13,6 +13,12 @@
 // and "publicDir".
 // The `.vnpk` is the exact blob that was stamped, so a bare host can run it
 // without a re-stamp while iterating: `VN_PAYLOAD=dist/.vn/app.vnpk <host>`.
+//
+// That picture is Windows. For macOS (`process.platform === "darwin"`, or
+// `--platform macos` with `--host <mac vn-app>` anywhere) the last step is
+// macos-bundle.ts instead: the host is copied into `<exeName>.app` untouched,
+// the same VNPK goes beside it in Contents/Resources, and the bundle is signed
+// (ad hoc unless an identity is given). `PACKAGERS` holds the two.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -21,9 +27,21 @@ import { collectAssets, type AssetFile } from "./assets";
 import { loadAppConfig, partsLeftOut, variantWarnings, type AppConfig, type Variant } from "./config";
 import { CLI_VERSION, PKG_DIR, resolveHost, type ResolvedHost } from "./host";
 import { iconImagesFrom } from "./icon";
+import {
+  entitlements,
+  icnsFrom,
+  ICON_NAME,
+  infoPlist,
+  plistXml,
+  signBundle,
+  signPlan,
+  writeAppBundle,
+  type AppBundleResult,
+} from "./macos-bundle";
+import { currentPlatform, type Platform } from "./platform";
 import { stamp, type StampResult } from "./stamp";
 import { buildVersionInfo, numericVersion } from "./versioninfo";
-import { FORMAT, KIND, NAMES, writeVnpk, type VnpkInput } from "./vnpk";
+import { FORMAT, KIND, NAMES, readHeader, skewFor, writeVnpk, type VnpkInput } from "./vnpk";
 
 export const PROD_TS = join(PKG_DIR, "prod.ts");
 
@@ -50,6 +68,10 @@ export interface BuildOptions {
   defines?: string[];
   /** Retain typed source/SFC inputs for a future AOT frontend, outside the payload. */
   aotInputs?: boolean;
+  /** What to package for. Default: the OS this runs on. */
+  platform?: Platform;
+  /** macOS: a codesign identity (`-` = ad hoc), or false for none; over `macos.sign`. */
+  sign?: string | false;
   log?: (line: string) => void;
 }
 
@@ -68,13 +90,29 @@ function readBuilderAssets(path: string): BuilderAsset[] {
   );
 }
 
+/** A macOS build's `.app`. */
+export interface MacBundle extends AppBundleResult {
+  bundleId: string;
+  /** The icon's pixel sizes, or empty for none. */
+  iconSizes: number[];
+  /** The identity it was signed with (`-`: ad hoc), or null when it was not. */
+  signed: string | null;
+  /** Why it was not signed, and how to sign it. */
+  signNote: string | null;
+  /** The entitlements a real identity signs with (dist/.vn/entitlements.plist). */
+  entitlements: string;
+}
+
 export interface BuildResult {
   config: AppConfig;
+  platform: Platform;
   variant: Variant;
+  /** What runs: the stamped exe, or the executable inside the `.app`. */
   exe: string | null;
   vnpk: string;
   host: ResolvedHost | null;
   stamp: StampResult | null;
+  bundle: MacBundle | null;
   assets: AssetFile[];
   bundleBytes: number;
   payloadBytes: number;
@@ -103,10 +141,151 @@ export function appMeta(config: AppConfig, variant: Variant, host: ResolvedHost 
   });
 }
 
+// ---------------------------------------------------------------------------
+// the last step, per platform: a payload and a host in, something to run out
+// ---------------------------------------------------------------------------
+
+interface PackageInput {
+  config: AppConfig;
+  host: ResolvedHost;
+  inputs: VnpkInput[];
+  outDir: string;
+  /** `dist/.vn/`, for intermediates. */
+  work: string;
+  options: BuildOptions;
+  /** Pushed to; the build prints them. */
+  warnings: string[];
+  log: (line: string) => void;
+}
+
+interface Packaged {
+  exe: string;
+  /** The exact VNPK that shipped, for `dist/.vn/app.vnpk`. */
+  payload: Uint8Array;
+  stamp: StampResult | null;
+  bundle: MacBundle | null;
+}
+
+/** Windows: stamp a copy of the host (stamp.ts). */
+function stampExe({ config, host, inputs, outDir, options, log }: PackageInput): Packaged {
+  const fv = numericVersion(config.version);
+  const exeFile = `${config.exeName}.exe`;
+  const exe = join(outDir, exeFile);
+  const w = config.windows;
+  const stamped = stamp({
+    host: host.exe,
+    out: exe,
+    payload: (skew) => writeVnpk(inputs, { skew }),
+    icons: config.iconPath ? iconImagesFrom(config.iconPath) : undefined,
+    versionInfo: buildVersionInfo({
+      fileVersion: [fv[0], fv[1], fv[2], 0],
+      strings: {
+        // Task Manager names a process by its FileDescription, so it is the
+        // product name and not a sentence — what Electron does too.
+        FileDescription: config.productName,
+        ProductName: config.productName,
+        ProductVersion: config.version,
+        FileVersion: `${fv[0]}.${fv[1]}.${fv[2]}.0`,
+        InternalName: config.name,
+        OriginalFilename: exeFile,
+        CompanyName: w.company,
+        LegalCopyright: w.copyright,
+        Comments: w.description,
+      },
+    }),
+    subsystem: options.console || w.console ? "console" : "gui",
+    log,
+  });
+  return { exe, payload: stamped.payload, stamp: stamped, bundle: null };
+}
+
+/** The Info.plist facts an AppConfig decides. */
+export function macInfoFor(config: AppConfig, hasIcon: boolean) {
+  const m = config.macos;
+  const fv = numericVersion(config.version);
+  return {
+    bundleId: m.bundleId,
+    name: config.productName,
+    executable: m.exeName,
+    // CFBundleShortVersionString is three integers; a prerelease tag has no place in it.
+    version: `${fv[0]}.${fv[1]}.${fv[2]}`,
+    iconFile: hasIcon ? ICON_NAME : null,
+    minimumSystemVersion: m.minimumSystemVersion,
+    category: m.category,
+    copyright: m.copyright,
+    microphoneUsageDescription: m.microphoneUsageDescription,
+    cameraUsageDescription: m.cameraUsageDescription,
+    urlSchemes: config.launch.protocols,
+  };
+}
+
+/** macOS: copy the host into `<exeName>.app` beside the payload, then sign it (macos-bundle.ts). */
+function macBundle({ config, host, inputs, outDir, work, options, warnings, log }: PackageInput): Packaged {
+  const m = config.macos;
+  if (m.bundleIdFrom === "id" && !m.bundleId.includes(".")) {
+    warnings.push(
+      `the bundle identifier is ${JSON.stringify(m.bundleId)} (from "id") — set vn.config.json "macos.bundleId" ` +
+        'to a reverse-DNS id such as "com.example.app"; signing and notarisation expect one',
+    );
+  }
+  // The host maps app.vnpk from offset 0, so the data region is page-aligned
+  // when the skew puts it on a page boundary of the FILE.
+  const unskewed = writeVnpk(inputs);
+  const skew = skewFor(0, readHeader(unskewed));
+  const payload = skew ? writeVnpk(inputs, { skew }) : unskewed;
+
+  const icon = m.iconPath ? icnsFrom(m.iconPath) : null;
+  if (icon && !icon.verbatim && Math.max(...icon.sizes) < 512) {
+    warnings.push(
+      `${m.iconPath} is ${Math.max(...icon.sizes)} px at most — the Dock and Finder draw up to 1024 px (512@2x); a 1024 px PNG stays sharp`,
+    );
+  }
+  const info = macInfoFor(config, !!icon);
+  const entitlementsPath = join(work, "entitlements.plist");
+  writeFileSync(entitlementsPath, plistXml(entitlements(info)));
+
+  const written = writeAppBundle({
+    host: host.exe,
+    out: join(outDir, `${m.exeName}.app`),
+    executable: m.exeName,
+    payload,
+    icns: icon?.bytes ?? null,
+    infoPlist: plistXml(infoPlist(info)),
+    log,
+  });
+
+  const onMac = process.platform === "darwin";
+  const plan = signPlan({
+    want: options.sign ?? m.sign,
+    app: written.app,
+    entitlements: entitlementsPath,
+    codesign: onMac ? Bun.which("codesign") : null,
+    onMac,
+  });
+  // The summary (or --json's signNote) carries plan.note.
+  if (plan.identity) signBundle(Bun.which("codesign")!, written.app, plan.identity, entitlementsPath, log);
+  return {
+    exe: written.executable,
+    payload,
+    stamp: null,
+    bundle: {
+      ...written,
+      bundleId: m.bundleId,
+      iconSizes: icon?.sizes ?? [],
+      signed: plan.identity,
+      signNote: plan.note,
+      entitlements: entitlementsPath,
+    },
+  };
+}
+
+const PACKAGERS: Record<Platform, (input: PackageInput) => Packaged> = { windows: stampExe, macos: macBundle };
+
 export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const log = options.log ?? console.log;
   const t0 = performance.now();
-  const config = loadAppConfig(options.target, { configPath: options.configPath });
+  const platform = options.platform ?? currentPlatform();
+  const config = loadAppConfig(options.target, { configPath: options.configPath, platform });
   const warnings = [...config.warnings];
   // `--variant` / `--features` / `--without` (vn.ts) over vn.config.json's.
   const variant: Variant = options.variant ?? config.windows.variant;
@@ -120,9 +299,10 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   // is spent on it.
   const host = options.payloadOnly
     ? null
-    : resolveHost({ host: options.host, variant, allowMismatch: options.allowHostMismatch, log });
+    : resolveHost({ host: options.host, variant, allowMismatch: options.allowHostMismatch, platform, log });
   if (host) {
     log(`[vn] host: ${host.exe} (${host.source}; ${host.info.variant}, vue-native ${host.info.vueNative}, ${host.info.profile})`);
+    if (host.unverified) warnings.push(host.unverified);
   }
 
   // 1. The bundle — the same `prod.ts` every prod build in this repo uses.
@@ -190,57 +370,31 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   ];
   const vnpk = join(work, "app.vnpk");
 
-  let stamped: StampResult | null = null;
-  let exe: string | null = null;
+  let packaged: Packaged | null = null;
   const ts = performance.now();
   if (options.payloadOnly || !host) {
     const blob = writeVnpk(inputs);
     writeFileSync(vnpk, blob);
   } else {
-    const fv = numericVersion(config.version);
-    const exeFile = `${config.exeName}.exe`;
-    exe = join(outDir, exeFile);
-    const w = config.windows;
-    stamped = stamp({
-      host: host.exe,
-      out: exe,
-      payload: (skew) => writeVnpk(inputs, { skew }),
-      icons: config.iconPath ? iconImagesFrom(config.iconPath) : undefined,
-      versionInfo: buildVersionInfo({
-        fileVersion: [fv[0], fv[1], fv[2], 0],
-        strings: {
-          // Task Manager names a process by its FileDescription, so it is the
-          // product name and not a sentence — what Electron does too.
-          FileDescription: config.productName,
-          ProductName: config.productName,
-          ProductVersion: config.version,
-          FileVersion: `${fv[0]}.${fv[1]}.${fv[2]}.0`,
-          InternalName: config.name,
-          OriginalFilename: exeFile,
-          CompanyName: w.company,
-          LegalCopyright: w.copyright,
-          Comments: w.description,
-        },
-      }),
-      subsystem: options.console || w.console ? "console" : "gui",
-      log,
-    });
-    writeFileSync(vnpk, stamped.payload);
+    packaged = PACKAGERS[platform]({ config, host, inputs, outDir, work, options, warnings, log });
+    writeFileSync(vnpk, packaged.payload);
   }
   const msStamp = performance.now() - ts;
 
   for (const w of warnings) log(`[vn] warning: ${w}`);
   return {
     config,
+    platform,
     variant,
-    exe,
+    exe: packaged?.exe ?? null,
     vnpk,
     host,
-    stamp: stamped,
+    stamp: packaged?.stamp ?? null,
+    bundle: packaged?.bundle ?? null,
     assets: collected.files,
     bundleBytes: script.length,
     aotInputs: options.aotInputs ? join(work, "aot-inputs", "manifest.json") : null,
-    payloadBytes: stamped?.payloadBytes ?? readFileSync(vnpk).length,
+    payloadBytes: packaged?.payload.length ?? readFileSync(vnpk).length,
     warnings,
     ms: {
       bundle: Math.round(msBundle),
@@ -257,7 +411,8 @@ const kib = (n: number) => `${(n / 1024).toFixed(0)} KiB`;
 export function summary(r: BuildResult): string {
   const lines: string[] = [];
   const c = r.config;
-  lines.push(`${c.productName} ${c.version} — name "${c.name}" (storage: %LOCALAPPDATA%\\${c.name}\\storage)`);
+  const storage = r.platform === "macos" ? `~/Library/Application Support/${c.name}/storage` : `%LOCALAPPDATA%\\${c.name}\\storage`;
+  lines.push(`${c.productName} ${c.version} — name "${c.name}" (storage: ${storage})`);
   lines.push(`  bundle   ${kib(r.bundleBytes)} in ${r.ms.bundle} ms`);
   lines.push(`  assets   ${r.assets.length} file(s), ${kib(r.assets.reduce((n, a) => n + a.size, 0))}`);
   lines.push(`  payload  ${kib(r.payloadBytes)} → ${r.vnpk}`);
@@ -268,6 +423,14 @@ export function summary(r: BuildResult): string {
         `${s.iconCount ? `${s.iconCount} icon` : "no icon"}, ${s.passes} pass(es), data ${s.dataAligned ? "page-aligned" : "NOT aligned"}`,
     );
     lines.push(`  stamp    ${s.ms.total} ms (copy ${s.ms.copy}, resources ${s.ms.resources}, verify ${s.ms.verify})`);
+  }
+  if (r.bundle) {
+    const b = r.bundle;
+    const icon = b.iconSizes.length ? `icon ${b.iconSizes.join("/")} px` : "no icon";
+    const signed = b.signed === "-" ? "signed ad hoc" : b.signed ? `signed as ${JSON.stringify(b.signed)}` : "NOT signed";
+    lines.push(`  app      ${b.app} — ${mib(b.bytes)}, ${r.variant} host, ${b.bundleId}, ${icon}, ${signed}`);
+    if (b.signNote) lines.push(`           ${b.signNote}`);
+    lines.push(`  package  ${b.ms.total} ms (copy ${b.ms.copy})`);
   }
   lines.push(`  total    ${r.ms.total} ms`);
   return lines.join("\n");

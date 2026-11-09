@@ -17,6 +17,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { ConfigError, loadAppConfig } from "./config";
 import { PKG_DIR, REPO_ROOT } from "./host";
+import { currentPlatform, hostsFor, repoHostExe } from "./platform";
 
 export async function dev(target: string, options: { exe?: string } = {}): Promise<number> {
   const config = loadAppConfig(target);
@@ -28,14 +29,12 @@ export async function dev(target: string, options: { exe?: string } = {}): Promi
         "`vn build` works from anywhere.",
     );
   }
-  const exe =
-    options.exe ??
-    process.env.VN_DEV_HOST ??
-    (REPO_ROOT ? join(REPO_ROOT, "target", "x86_64-pc-windows-msvc", "debug", "vn-app.exe") : "");
+  const hosts = hostsFor(currentPlatform());
+  const exe = options.exe ?? process.env.VN_DEV_HOST ?? (REPO_ROOT ? repoHostExe(REPO_ROOT, hosts, "debug") : "");
   if (!exe || !existsSync(exe)) {
     throw new Error(
-      `no dev host at ${exe || "(no checkout)"} — build one with \`cargo build -p vn-app\` in the vue-native ` +
-        "checkout, or pass --exe <dev vn-app.exe>",
+      `no dev host at ${exe || "(no checkout)"} — build one with \`${["cargo build -p vn-app", ...hosts.cargoTarget].join(" ")}\` ` +
+        `in the vue-native checkout, or pass --exe <dev ${hosts.exeFile}>`,
     );
   }
   const dist = join(config.appRoot, "dist", ".vn-dev");

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// vn — turn a vue-native app into a Windows exe, without a Rust toolchain.
+// vn — turn a vue-native app into a Windows exe or a macOS .app, without a Rust toolchain.
 //
 //   bun packages/vue-native/cli/vn.ts build apps/hello
 //
@@ -12,11 +12,13 @@ import { ConfigError, OPTIONAL, parseParts, partsLeftOut, selectVariant, VARIANT
 import { dev } from "./dev";
 import { addHost, buildHost, CLI_VERSION, HostError, hostInfo, resolveHost } from "./host";
 import { create } from "./create";
+import { currentPlatform, parsePlatform } from "./platform";
 
-const USAGE = `vn ${CLI_VERSION} — package a vue-native app as a Windows exe
+const USAGE = `vn ${CLI_VERSION} — package a vue-native app as a Windows exe or a macOS .app
 
 usage
   vn build [app] [options]     bundle the app, pack its assets, stamp a prebuilt host
+                               (macOS: copy it into <exeName>.app beside the payload)
   vn run   [app] [options]     build, then start the exe with its stderr in this terminal
   vn dev   [app] [--exe <h>]   the in-repo dev loop: build.ts --watch + the dev host (HMR)
   vn host info [exe]           what a host exe says about itself (--vn-host-info)
@@ -42,6 +44,11 @@ build options
                                a host variant by name ("standard" = every part)
   parts: ${OPTIONAL.join(", ")}
   --console                    keep the console subsystem (a console window opens with it)
+  --platform windows|macos     what to package for (default: this OS). Another OS's
+                               build needs --host <its vn-app>, and is not signed
+  --sign <identity>            macOS: codesign with this identity, hardened runtime and
+                               entitlements ("-" = ad hoc; over vn.config.json macos.sign)
+  --no-sign                    macOS: leave the bundle unsigned (default: ad hoc)
   --payload-only               write dist/.vn/app.vnpk and stop; no host needed
   --aot-inputs                 retain typed TS/Vue source inputs in dist/.vn/aot-inputs/
                                (preparation archive; does not enable native AOT)
@@ -53,7 +60,7 @@ build options
 `;
 
 type Flags = Record<string, string | boolean>;
-const BOOLEAN = new Set(["console", "payload-only", "allow-host-mismatch", "aot-inputs", "help", "json"]);
+const BOOLEAN = new Set(["console", "payload-only", "allow-host-mismatch", "aot-inputs", "help", "json", "no-sign"]);
 /** Flags that may be given more than once; collected in order into `repeated`. */
 const REPEATABLE = new Set(["define"]);
 
@@ -112,6 +119,14 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (command === "build" || command === "run") {
+    const platform = flags.platform === undefined ? undefined : parsePlatform(flags.platform);
+    if (command === "run" && platform && platform !== currentPlatform()) {
+      throw new ConfigError(`vn run starts the app here; a ${platform} build cannot run on ${process.platform} — use vn build`);
+    }
+    if (flags.sign !== undefined && (typeof flags.sign !== "string" || !flags.sign.trim())) {
+      throw new ConfigError('--sign needs a codesign identity ("-" for ad hoc)');
+    }
+    if (flags.sign !== undefined && flags["no-sign"]) throw new ConfigError("--sign and --no-sign contradict each other");
     const result = await buildApp({
       target: args[0] ?? ".",
       configPath: typeof flags.config === "string" ? flags.config : undefined,
@@ -123,6 +138,8 @@ async function main(argv: string[]): Promise<number> {
       allowHostMismatch: flags["allow-host-mismatch"] === true,
       defines: repeated.define,
       aotInputs: flags["aot-inputs"] === true,
+      platform,
+      sign: flags["no-sign"] ? false : typeof flags.sign === "string" ? flags.sign.trim() : undefined,
     });
     if (flags.json) {
       // One line, for scripts and specs — the summary minus the prose.
@@ -149,6 +166,20 @@ async function main(argv: string[]): Promise<number> {
             iconCount: s.iconCount,
             ms: s.ms,
           },
+          // Only a macOS build has these, so a Windows line is what it always was.
+          ...(result.bundle && {
+            platform: result.platform,
+            app: result.bundle.app,
+            bundle: {
+              bundleId: result.bundle.bundleId,
+              bytes: result.bundle.bytes,
+              iconSizes: result.bundle.iconSizes,
+              signed: result.bundle.signed,
+              signNote: result.bundle.signNote,
+              entitlements: result.bundle.entitlements,
+              ms: result.bundle.ms,
+            },
+          }),
           warnings: result.warnings,
           ms: result.ms,
         }),
@@ -177,7 +208,11 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     if (sub === "path") {
-      const h = resolveHost({ variant: variantOf(flags) ?? "standard", host: typeof flags.host === "string" ? flags.host : undefined });
+      const h = resolveHost({
+        variant: variantOf(flags) ?? "standard",
+        host: typeof flags.host === "string" ? flags.host : undefined,
+        platform: flags.platform === undefined ? undefined : parsePlatform(flags.platform),
+      });
       console.log(flags.json ? JSON.stringify({ exe: h.exe, source: h.source, info: h.info }, null, 2) : h.exe);
       return 0;
     }

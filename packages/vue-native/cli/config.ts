@@ -25,15 +25,23 @@
 //       "without": ["voice"]      the engine parts the host leaves out (OPTIONAL below);
 //                                 or "features": [...] — the parts it TAKES;
 //                                 or "host": "no-devtools" — a whole variant, by name
+//     },
+//     "macos": {                  the .app's identity — only `vn build --platform macos` uses it
+//       "bundleId": "gl.argon.hello",   CFBundleIdentifier — default "id"
+//       "exeName": "Hello", "icon": "icon.png", "category": "developer-tools",
+//       "minimumSystemVersion": "13.0", "copyright": "…",
+//       "microphoneUsageDescription": "…", "cameraUsageDescription": "…",
+//       "sign": "Developer ID Application: …"   or "-" (ad-hoc) or false
 //     }
 //   }
 //
-// Unknown keys under `windows` are ERRORS: a typo'd `"icno"` must not ship an
-// iconless exe without a word. Unknown top-level keys are warnings, because the
-// file is shared with the dev builder and other tools.
+// Unknown keys under `windows` and `macos` are ERRORS: a typo'd `"icno"` must
+// not ship an iconless exe without a word. Unknown top-level keys are warnings,
+// because the file is shared with the dev builder and other tools.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import type { Platform } from "./platform";
 import { numericVersion } from "./versioninfo";
 
 /**
@@ -165,6 +173,33 @@ export interface WindowsConfig {
   variant: Variant;
 }
 
+/** `"macos"`, defaults applied. Read on every platform, so a typo fails a Windows build too. */
+export interface MacConfig {
+  /** CFBundleIdentifier. */
+  bundleId: string;
+  bundleIdFrom: "macos.bundleId" | "id";
+  /** The bundle's name (`<exeName>.app`) and its executable's (`Contents/MacOS/<exeName>`). */
+  exeName: string;
+  /** `macos.icon`, else `windows.icon`: an `.icns`, a square PNG, or an `.ico` holding PNG images. */
+  iconPath: string | null;
+  /** LSApplicationCategoryType, always `public.app-category.<…>`. */
+  category: string | null;
+  /** LSMinimumSystemVersion. */
+  minimumSystemVersion: string;
+  /** NSHumanReadableCopyright: `macos.copyright`, else `windows.copyright`. */
+  copyright: string | null;
+  microphoneUsageDescription: string | null;
+  cameraUsageDescription: string | null;
+  /**
+   * A codesign identity; `"-"` signs ad hoc; `false` leaves the bundle as the
+   * copy made it. `undefined`: ad hoc wherever `codesign` exists.
+   */
+  sign: string | false | undefined;
+}
+
+/** What vue-native's macOS host is built for (.cargo/config.toml `MACOSX_DEPLOYMENT_TARGET`). */
+export const MACOS_MINIMUM = "13.0";
+
 export interface AppConfig {
   /** The directory a relative URL resolves against — `apps/<app>/`, where `vn.config.json` lives. */
   appRoot: string;
@@ -182,6 +217,7 @@ export interface AppConfig {
   /** `vn.config.json` `publicDir`, app-root-relative and `/`-separated; null when undeclared. */
   publicDir: string | null;
   windows: WindowsConfig;
+  macos: MacConfig;
   exeName: string;
   iconPath: string | null;
   /** `"id"`, or the name. */
@@ -212,6 +248,7 @@ const TOP_LEVEL = new Set([
   "publicDir",
   "define",
   "windows",
+  "macos",
   "id",
   "singleInstance",
   "raiseOnSecondInstance",
@@ -269,6 +306,109 @@ function readLaunch(raw: Record<string, unknown>, name: string): LaunchConfig {
   };
 }
 const WINDOWS_KEYS = new Set(["exeName", "icon", "company", "copyright", "description", "console", "host", "features", "without"]);
+const MACOS_KEYS = new Set([
+  "bundleId",
+  "exeName",
+  "icon",
+  "category",
+  "minimumSystemVersion",
+  "copyright",
+  "microphoneUsageDescription",
+  "cameraUsageDescription",
+  "sign",
+]);
+/** CFBundleIdentifier: a UTI — letters, digits, "-" and ".", reverse-DNS. */
+const BUNDLE_ID = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+const CATEGORY = /^public\.app-category\.[a-z]+(-[a-z]+)*$/;
+
+/**
+ * The `"macos"` block. `fallback` is what it inherits when a key is absent:
+ * the launch id for the bundle id, the Windows icon and copyright.
+ */
+function readMacos(
+  raw: unknown,
+  appRoot: string,
+  fallback: { id: string; productName: string; name: string; icon: string | null; copyright?: string },
+  warnings: string[],
+): MacConfig {
+  if (raw !== undefined && (!raw || typeof raw !== "object" || Array.isArray(raw))) {
+    throw new ConfigError('vn.config.json "macos" must be an object');
+  }
+  const m = (raw ?? {}) as Record<string, unknown>;
+  for (const key of Object.keys(m)) {
+    if (key.startsWith("$")) continue;
+    if (!MACOS_KEYS.has(key)) {
+      throw new ConfigError(`vn.config.json "macos": unknown key ${JSON.stringify(key)} — known keys are ${[...MACOS_KEYS].join(", ")}`);
+    }
+  }
+  const where = (k: string) => `vn.config.json macos.${k}`;
+
+  const explicitId = str(m.bundleId, where("bundleId"));
+  if (explicitId !== undefined && !BUNDLE_ID.test(explicitId)) {
+    throw new ConfigError(
+      `vn.config.json "macos.bundleId": ${JSON.stringify(explicitId)} is not a bundle identifier — reverse-DNS, ` +
+        'letters, digits, "-" and "." only, e.g. "gl.argon.notes"',
+    );
+  }
+  // "id" allows "_", which a bundle identifier does not.
+  const bundleId = explicitId ?? fallback.id.replace(/_/g, "-");
+
+  let category: string | null = null;
+  const cat = str(m.category, where("category"));
+  if (cat !== undefined) {
+    category = cat.startsWith("public.app-category.") ? cat : `public.app-category.${cat}`;
+    if (!CATEGORY.test(category)) {
+      throw new ConfigError(
+        `vn.config.json "macos.category": ${JSON.stringify(cat)} is not an app category — e.g. "developer-tools" ` +
+          'or "public.app-category.social-networking" (Apple\'s LSApplicationCategoryType list)',
+      );
+    }
+  }
+
+  const min = str(m.minimumSystemVersion, where("minimumSystemVersion")) ?? MACOS_MINIMUM;
+  if (!/^\d+(\.\d+){0,2}$/.test(min)) {
+    throw new ConfigError(`vn.config.json "macos.minimumSystemVersion": ${JSON.stringify(min)} is not a version like "13.0"`);
+  }
+  const [maj = 0, minor = 0] = min.split(".").map(Number);
+  const [wantMaj = 0, wantMinor = 0] = MACOS_MINIMUM.split(".").map(Number);
+  if (maj < wantMaj || (maj === wantMaj && minor < wantMinor)) {
+    warnings.push(
+      `vn.config.json "macos.minimumSystemVersion" ${min} is below ${MACOS_MINIMUM}, which the host is built for — ` +
+        "an older macOS will offer to open the app and then fail to load it",
+    );
+  }
+
+  let sign: MacConfig["sign"];
+  if (m.sign !== undefined) {
+    if (m.sign === false) sign = false;
+    else if (typeof m.sign === "string" && m.sign.trim()) sign = m.sign.trim();
+    else {
+      throw new ConfigError('vn.config.json "macos.sign" must be a codesign identity, "-" (ad hoc) or false (leave unsigned)');
+    }
+  }
+
+  let iconPath = fallback.icon;
+  const icon = str(m.icon, where("icon"));
+  if (icon) {
+    iconPath = isAbsolute(icon) ? icon : join(appRoot, icon);
+    if (!existsSync(iconPath)) throw new ConfigError(`vn.config.json "macos.icon": ${iconPath} does not exist`);
+  }
+
+  const exeName =
+    sanitizeExeName(str(m.exeName, where("exeName")) ?? fallback.productName) || sanitizeExeName(fallback.name) || "app";
+  return {
+    bundleId,
+    bundleIdFrom: explicitId ? "macos.bundleId" : "id",
+    exeName,
+    iconPath,
+    category,
+    minimumSystemVersion: min,
+    copyright: str(m.copyright, where("copyright")) ?? fallback.copyright ?? null,
+    microphoneUsageDescription: str(m.microphoneUsageDescription, where("microphoneUsageDescription")) ?? null,
+    cameraUsageDescription: str(m.cameraUsageDescription, where("cameraUsageDescription")) ?? null,
+    sign,
+  };
+}
 const ENTRY_CANDIDATES = ["src/main.ts", "src/main.js", "src/main.mts", "main.ts", "main.js"];
 
 export class ConfigError extends Error {}
@@ -324,8 +464,11 @@ const str = (v: unknown, where: string): string | undefined => {
   return v.trim() || undefined;
 };
 
-/** A config override changes configuration only; entry and relative assets keep the target's app root. */
-export function loadAppConfig(target: string, options: { configPath?: string } = {}): AppConfig {
+/**
+ * A config override changes configuration only; entry and relative assets keep the target's app root.
+ * `platform` (default `windows`) only picks which missing icon is worth a warning.
+ */
+export function loadAppConfig(target: string, options: { configPath?: string; platform?: Platform } = {}): AppConfig {
   const { appRoot, entry } = resolveApp(target);
   if (options.configPath !== undefined && !options.configPath.trim()) throw new ConfigError("--config needs a path");
   const configPath = options.configPath === undefined ? join(appRoot, "vn.config.json") : resolve(options.configPath);
@@ -452,7 +595,18 @@ export function loadAppConfig(target: string, options: { configPath?: string } =
   if (windows.icon) {
     iconPath = isAbsolute(windows.icon) ? windows.icon : join(appRoot, windows.icon);
     if (!existsSync(iconPath)) throw new ConfigError(`vn.config.json "windows.icon": ${iconPath} does not exist`);
-  } else {
+  }
+  const macos = readMacos(
+    raw.macos,
+    appRoot,
+    { id: launch.id, productName, name, icon: iconPath, copyright: windows.copyright },
+    warnings,
+  );
+  if (options.platform === "macos") {
+    if (!macos.iconPath) {
+      warnings.push('no icon: set vn.config.json "macos.icon" (or "windows.icon") to a square .png or an .icns — the app gets the generic macOS icon');
+    }
+  } else if (!windows.icon) {
     warnings.push('no icon: set vn.config.json "windows.icon" to an .ico or a square .png — the exe gets the default Windows icon');
   }
 
@@ -469,6 +623,7 @@ export function loadAppConfig(target: string, options: { configPath?: string } =
     assetsDeclared,
     publicDir,
     windows,
+    macos,
     exeName,
     iconPath,
     id: launch.id,
