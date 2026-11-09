@@ -47,13 +47,14 @@
 //! `VN_NO_CULL=1` turns it off.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, Pixels, Styled as _, Window,
 };
 
+use crate::idmap::IdMap;
 use crate::render::Inherited;
 use crate::tree::{Kind, Node, Tree};
 use crate::windows::{self, Rect, WinKey};
@@ -87,11 +88,11 @@ struct View {
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     static WINDOW: Cell<[f32; 4]> = const { Cell::new([0.0; 4]) };
-    static ENTRIES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
+    static ENTRIES: RefCell<IdMap<Entry>> = RefCell::new(IdMap::default());
     /// Per parent, for the build in progress.
-    static VIEWS: RefCell<HashMap<u32, View>> = RefCell::new(HashMap::new());
+    static VIEWS: RefCell<IdMap<View>> = RefCell::new(IdMap::default());
     /// Scroll offsets as of the last build that tested a container's children.
-    static OFFSETS: RefCell<HashMap<u32, (f32, f32)>> = RefCell::new(HashMap::new());
+    static OFFSETS: RefCell<IdMap<(f32, f32)>> = RefCell::new(IdMap::default());
     /// Moving nodes and their ancestors: refused as candidates.
     static HOT: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     /// Moving nodes only: no clip is known below them.
@@ -99,7 +100,7 @@ thread_local! {
     /// The focused and pointer-capturing nodes and their ancestors.
     static PINNED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     /// Whether a subtree holds something that refuses culling, by `sub_rev`.
-    static BLOCKED: RefCell<HashMap<u32, (u64, bool)>> = RefCell::new(HashMap::new());
+    static BLOCKED: RefCell<IdMap<(u64, bool)>> = RefCell::new(IdMap::default());
 }
 
 fn enabled() -> bool {

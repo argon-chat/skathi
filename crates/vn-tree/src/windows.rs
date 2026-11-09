@@ -53,6 +53,8 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+use crate::idmap::IdMap;
 use std::sync::Arc;
 
 use gpui::{FocusHandle, RenderImage, Subscription, Window, WindowControlArea};
@@ -132,20 +134,20 @@ pub struct WindowState {
     /// A rectangle from window B is meaningless in window A: they are different
     /// coordinate spaces that happen to share an origin name. Merging them is
     /// what made a hit test in one window return a node from the other.
-    pub bounds: HashMap<u32, Rect>,
+    pub bounds: IdMap<Rect>,
     /// The previous frame's [`Self::bounds`] — the element tree for frame N is
     /// BUILT before frame N's prepaint runs, so the only rectangle a builder
     /// can read is last frame's. `<lottie>` and `<video>` need it to rasterise
     /// into a box whose size CSS expresses relatively.
-    pub prev_bounds: HashMap<u32, Rect>,
+    pub prev_bounds: IdMap<Rect>,
     /// Where CSS `transform` put a node, for the nodes it moved: the bounding
     /// box of its border box under its own transform and its ancestors'. What
     /// a browser's `getBoundingClientRect()` reports. A node absent here was
     /// painted where it laid out, at its [`Self::bounds`].
-    pub transformed: HashMap<u32, Rect>,
+    pub transformed: IdMap<Rect>,
     /// The previous frame's [`Self::transformed`], rotated with
     /// [`Self::prev_bounds`].
-    pub prev_transformed: HashMap<u32, Rect>,
+    pub prev_transformed: IdMap<Rect>,
 
     // --- input (§5.2) ------------------------------------------------------
     /// The one `mousemove` THIS window is allowed to deliver this frame.

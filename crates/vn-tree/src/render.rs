@@ -169,7 +169,7 @@ pub fn popped_out(id: u32) -> bool {
 
 /// Browser-compat advisory: say what was dropped and what to do instead, once.
 pub(crate) fn warn_compat(key: &str, msg: &str) {
-    warn_compat_at(key, "", msg)
+    warn_compat_at(key, String::new, msg)
 }
 
 /// [`warn_compat`], with the node that tripped it named first.
@@ -178,11 +178,13 @@ pub(crate) fn warn_compat(key: &str, msg: &str) {
 /// but "somewhere on this page" is not a place a developer can go and look. The
 /// FIRST offender's id and selector are printed, and `ctl query`/`highlight`
 /// take a node id, so the line is a lead rather than a riddle. m19's own report
-/// listed "not pinned to a node" against four of these.
-pub(crate) fn warn_compat_at(key: &str, at: &str, msg: &str) {
+/// listed "not pinned to a node" against four of these. `at` is only called
+/// for the first offender: the checks run on every build of every node.
+pub(crate) fn warn_compat_at(key: &str, at: impl FnOnce() -> String, msg: &str) {
     WARNED.with(|w| {
-        if w.borrow_mut().insert(key.to_string()) {
-            let msg = crate::log::one_line(&format!("{at}{msg}"));
+        let mut warned = w.borrow_mut();
+        if !warned.contains(key) && warned.insert(key.to_string()) {
+            let msg = crate::log::one_line(&format!("{}{msg}", at()));
             eprintln!("[vue-native compat] {msg}");
             crate::log::record("advisory", msg);
         }
@@ -2560,7 +2562,7 @@ fn build_node<V: 'static>(
                 d.style(),
                 &extras,
                 node.computed.as_ref().and_then(|cs| cs.color),
-                &node_prefix(t, id),
+                || node_prefix(t, id),
             );
             apply_mask_ring(d.style(), &extras, bg_stack.is_some(), paints_children(t, node), || {
                 node_prefix(t, id)
@@ -3424,7 +3426,7 @@ fn apply_self_blur(
         }
         _ => warn_compat_at(
             "filter-blur-shape",
-            &node_prefix(t, node_id),
+            || node_prefix(t, node_id),
             "`filter: blur()` is honoured only on a LEAF box with a solid background colour \
              (v1) — gpui has no post-processing pass over an element's own painted output, so \
              the blur is drawn by repainting that box as its own Gaussian drop shadow, which \
@@ -3463,7 +3465,7 @@ fn apply_drop_shadow(
     style: &mut gpui::StyleRefinement,
     extras: &vn_css::Extras,
     inherited_color: Option<gpui::Hsla>,
-    at: &str,
+    at: impl Fn() -> String,
 ) {
     let Some(shadow) = extras.drop_shadow else { return };
     let opaque = style
@@ -3508,7 +3510,7 @@ fn apply_mask_ring(
     if painted_by_child {
         warn_compat_at(
             "mask-ring-url",
-            &at(),
+            &at,
             "a gradient-border `mask` over a `url()` background is not applied (v1). The \
              image stack paints from a child box the ring does not reach, so the whole box \
              shows",
@@ -3519,7 +3521,7 @@ fn apply_mask_ring(
     if has_children {
         warn_compat_at(
             "mask-ring-children",
-            &at(),
+            &at,
             "the children of an element with a gradient-border `mask` are not masked (v1). \
              Its background paints only in the padding and border ring, as in a browser, but \
              its content paints whole, where a browser cuts it to the ring too",
@@ -3543,7 +3545,7 @@ fn paints_children(t: &Tree, node: &crate::tree::Node) -> bool {
 
 /// The `drop-shadow()` this engine cannot draw, said once (from
 /// [`apply_drop_shadow`]; an inline `<svg>` draws its own, `crate::svg`).
-fn advise_drop_shadow_shape(at: &str) {
+fn advise_drop_shadow_shape(at: impl FnOnce() -> String) {
     warn_compat_at(
         "filter-drop-shadow-shape",
         at,
@@ -3930,7 +3932,7 @@ fn advise_inline_level(
     }
     warn_compat_at(
         "display-inline-level-stretches",
-        &node_prefix(t, id),
+        || node_prefix(t, id),
         "`display: inline-*` on an in-flow box whose siblings are block-level takes a LINE of          its own and fills the width (v1) — taffy models the inner display type (flex/grid/flow)          but has no line box, so there is nothing for an inline-level box to sit beside. Where          the parent is a flex or grid container, or the box is out of flow, CSS blockifies it          too and nothing diverges; where the parent's children are all inline content, the          renderer makes that parent a wrapping flex row and this does not arise either. Give the          box a width, or put it in a flex row, for the browser's result",
     );
 }
@@ -3979,14 +3981,14 @@ fn advise_out_of_flow(
     if extras.fixed == Some(true) && settled(id, !fixed_lands_on_the_viewport(t, node, win)) {
         warn_compat_at(
             "position-fixed-not-portalled",
-            &node_prefix(t, id),
+            || node_prefix(t, id),
             "`position: fixed` is laid out against a box that is NOT the viewport (v1)              — gpui/taffy have no viewport-relative position, so the element resolves              against its PARENT, and this element's parent is a different size from the              window. It is still painted in a deferred layer, so it stacks above its              siblings; portal it to the app root (Vue's `<Teleport to=\"body\">`, which              is what every overlay library already does) and the two agree exactly",
         );
     }
     if extras.sticky == Some(true) && scrolling_ancestor(t, node) {
         warn_compat_at(
             "position-sticky-in-scroller",
-            &node_prefix(t, id),
+            || node_prefix(t, id),
             "`position: sticky` inside a scroll container is laid out as `relative` (v1)              — it needs that container's scroll offset at LAYOUT time and taffy takes no              such input, so the box does not stay put as the content moves under it. A              header that must stay put belongs OUTSIDE the scroll container, as a flex              sibling of it. (Outside one this says nothing: with nothing scrolling above              it, `sticky` and `relative` paint the same box in a browser too.)",
         );
     }
@@ -5768,7 +5770,7 @@ fn build_svg<V: 'static>(
     if shadow.is_some() && paints_own_box(node) {
         warn_compat_at(
             "filter-drop-shadow-svg-box",
-            &node_prefix(t, id),
+            || node_prefix(t, id),
             "`filter: drop-shadow()` on an inline <svg> follows its shapes, as in a browser, but \
              the svg's own CSS background and border cast no shadow (v1): they are painted by \
              the box, outside the rasterised document the shadow is drawn in",

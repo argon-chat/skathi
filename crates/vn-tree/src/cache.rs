@@ -86,6 +86,7 @@ use gpui::{
     InspectorElementId, IntoElement, LayoutId, Pixels, Window,
 };
 
+use crate::idmap::IdMap;
 use crate::render::{self, Inherited};
 use crate::tree::{Kind, Node, Tree};
 use crate::windows::{self, Rect, WinKey};
@@ -200,7 +201,7 @@ const THRASH_LIMIT: u8 = 3;
 const COOLDOWN: u16 = 24;
 
 thread_local! {
-    static ENTRIES: RefCell<HashMap<u32, Entry>> = RefCell::new(HashMap::new());
+    static ENTRIES: RefCell<IdMap<Entry>> = RefCell::new(IdMap::default());
     /// Is caching allowed at all in the frame being built? Answered once per
     /// build by [`begin_frame`].
     static ACTIVE: Cell<bool> = const { Cell::new(false) };

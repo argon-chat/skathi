@@ -26,6 +26,7 @@ mod font_api;
 mod fonts;
 mod filter;
 mod fullscreen;
+mod idmap;
 mod img;
 mod live;
 mod live_state;
