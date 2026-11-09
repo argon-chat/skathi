@@ -1136,6 +1136,7 @@ fn submit(req: Json, generation: u64) -> String {
         }
         queue.push_back(Job { generation, req, reply: tx });
     }
+    vn_runtime::frames::wake();
     match rx.recv_timeout(REPLY_TIMEOUT) {
         Ok(reply) => reply,
         // Disconnected rather than timed out: `stop_listener` cleared the
@@ -1197,6 +1198,12 @@ const PENDING_MAX_FRAMES: u32 = 30;
 /// Called once per frame from `pump_frame`, INSIDE its
 /// `with_published(Phase::Commit)` — so `with_commit` below always resolves and
 /// every command observes the same committed tree the JS pump just produced.
+/// A command is queued or parked: the frame clock keeps the display rate
+/// (src/idle.rs).
+pub fn busy() -> bool {
+    PENDING.with(|p| p.borrow().is_some()) || !QUEUE.lock().unwrap().is_empty()
+}
+
 pub fn pump() {
     if leases::expired() {
         let _ = trace::recording_stop();

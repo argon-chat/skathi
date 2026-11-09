@@ -701,6 +701,7 @@ fn wake() {
     if id != 0 {
         vn_runtime::redjs::web::wake(vn_runtime::redjs::context::ContextId(id));
     }
+    vn_runtime::frames::wake();
 }
 
 fn is_ours(g: *mut c_void) -> bool {

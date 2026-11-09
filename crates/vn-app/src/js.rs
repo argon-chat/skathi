@@ -102,6 +102,7 @@ impl JsDispatcher {
         queue.push_back(Box::new(task));
         drop(queue);
         vn_runtime::redjs::web::wake(vn_runtime::redjs::context::ContextId(self.state.context_id));
+        vn_runtime::frames::wake();
         Ok(())
     }
 }

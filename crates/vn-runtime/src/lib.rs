@@ -13,6 +13,7 @@
 //!   pump, never acted on re-entrantly.
 
 pub mod bridge;
+pub mod frames;
 pub mod runtime;
 pub mod testing;
 

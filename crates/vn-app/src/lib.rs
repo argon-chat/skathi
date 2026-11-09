@@ -41,6 +41,8 @@ use vn_runtime::runtime::{PUMP_MICROTASKS, PUMP_RAF, PUMP_TIMERS};
 
 // The JS event loop while the window draws no frames (minimised, hidden).
 mod background;
+// The frame clock slows down while nothing happens (src/idle.rs).
+mod idle;
 #[cfg(feature = "prod")]
 mod bytecode;
 #[cfg(not(feature = "prod"))]
@@ -723,9 +725,10 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // JS wave, no requestAnimationFrame — and, by not stamping the frame clock,
     // hands the window to the background tick (timers, sockets, devtools every
     // 100 ms; src/background.rs), whose funnel reports `document.hidden`. Not
-    // before the first frame: that one owns the boot wave.
+    // before the first frame: that one owns the boot wave. Nor does it need
+    // every refresh to notice it is back (src/idle.rs).
     if background::pumped_once() && window::cloaked() {
-        window.on_next_frame(pump_frame);
+        idle::rearm_paced(window, pump_frame, idle::CLOAKED_INTERVAL);
         return;
     }
     // One `Instant` read per frame when VN_PERF is on, an atomic load when it
@@ -741,7 +744,7 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     }
     // One frame, once, so the first wave measures a tree that has been laid out.
     if first_wave_waits(window) {
-        window.on_next_frame(pump_frame);
+        idle::rearm_unpaced(window, pump_frame);
         return;
     }
     // The frame's ONE coalesced mousemove (browsers align move events to the
@@ -763,7 +766,12 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // an answer (docs/WINDOWING.md §4.2 mode 2).
     window::note_painted_frame();
     after_wave(window, cx);
-    window.on_next_frame(pump_frame);
+    // A devtools command is waiting or parked: answer it at the display rate.
+    #[cfg(vn_devtools)]
+    if devtools::busy() {
+        idle::note_moved();
+    }
+    idle::rearm(window, pump_frame);
     // Closes the `pump` bucket: everything after this is gpui's — its decision
     // to draw, the draw itself, the present, and the wait for the next vsync.
     perf::pump_done();
@@ -834,11 +842,20 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
             Wave::Background => PUMP_TIMERS | PUMP_MICROTASKS,
         };
         JsRuntime::with(|rt| {
-            #[cfg(vn_devtools)]
             let pumped = std::time::Instant::now();
-            rt.pump(flags);
+            let stats = rt.pump(flags);
+            let elapsed = pumped.elapsed();
+            if wave == Wave::Frame {
+                #[cfg_attr(not(feature = "audio"), allow(unused_mut))]
+                let mut report = idle::Wave::from_stats(&stats, elapsed);
+                #[cfg(feature = "audio")]
+                {
+                    report.audio = vn_runtime::redjs::webapi::audio::busy(rt.raw());
+                }
+                idle::note_wave(report);
+            }
             #[cfg(vn_devtools)]
-            devtools::trace::note_js(pumped.elapsed().as_secs_f32() * 1000.0);
+            devtools::trace::note_js(elapsed.as_secs_f32() * 1000.0);
             for err in rt.drain_errors() {
                 eprintln!("[js uncaught] {}\n{}", err.header, err.stack);
                 vn_tree::log::record(
@@ -933,6 +950,7 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
         notify_shell(cx);
     }
     if tree_moved || moving {
+        idle::note_moved();
         // The synchronous layout only draws the primary window. Popped-out
         // subtrees still need this wave (docs/MULTIWINDOW.md §6).
         popout::notify_all(cx);
@@ -1753,6 +1771,10 @@ fn run_app() {
         // Timers, sockets and devtools keep running while the window is
         // minimised: a gpui timer pumps the JS event loop whenever frames stop.
         background::start(cx);
+        // Results queued for JS on other threads ask the paced clock for a
+        // frame (src/idle.rs).
+        #[cfg(target_os = "windows")]
+        vn_runtime::frames::set_waker(gpui_windows::wake_frames);
 
         // A DOM layout read lays out, the way a browser's does. Installed
         // before any JS runs, because the very first thing that needs it is the
