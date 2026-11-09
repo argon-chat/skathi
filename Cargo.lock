@@ -5748,12 +5748,14 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 name = "redjs"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "bytes",
  "cc",
  "encoding_rs",
  "firewheel",
  "flate2",
  "fontdb",
+ "futures-lite",
  "getrandom 0.3.4",
  "h2",
  "half",
@@ -5779,6 +5781,7 @@ dependencies = [
  "url",
  "vello_cpu",
  "wgpu",
+ "zbus",
  "zstd-sys",
 ]
 
