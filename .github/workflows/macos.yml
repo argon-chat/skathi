@@ -29,9 +29,6 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       TARGET: aarch64-apple-darwin
-      # `runtime-shaders`: the runner image has Xcode but not necessarily its
-      # separately downloaded Metal toolchain.
-      FEATURES: runtime-shaders
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -40,6 +37,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - name: Install Xcode's Metal toolchain
+        # A separate download since Xcode 26. The shaders are compiled at build
+        # time rather than with `runtime-shaders`, so a Metal error fails here
+        # instead of at an app's first frame.
+        run: xcrun -f metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
       - name: Set up Rust
         # rust-toolchain.toml pins the channel; the target is this runner's own.
         run: rustup target add "$TARGET"
@@ -66,9 +68,9 @@ jobs:
           key: cargo-macos-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-macos-${{ runner.arch }}-
       - name: Check the host
-        run: cargo check --locked -p vn-app --target "$TARGET" --features "$FEATURES"
+        run: cargo check --locked -p vn-app --target "$TARGET"
       - name: Build the bare host
-        run: cargo build --locked --release -p vn-app --target "$TARGET" --features "prod,$FEATURES"
+        run: cargo build --locked --release -p vn-app --target "$TARGET" --features prod
       - name: Upload the host
         uses: actions/upload-artifact@v4
         with:

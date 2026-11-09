@@ -319,12 +319,30 @@ fn thread_stack_commit() {
 ///   `no_identical_code_folding`). Not yet measured on a Mac: check that
 ///   `class X extends BigInt {}` still throws only where a browser does.
 ///
+/// - `-U` for Bun's hooks: weak references in the JSC prebuilt that redjs
+///   leaves undefined, so JSC takes its generic RunLoop and error paths. ld64
+///   wants a definition even for a weak reference unless told it may be
+///   missing; dyld then binds it to null. The list is redjs's `BUN_HOOKS`
+///   (its build.rs passes the same flags for the images it links itself).
+///
 /// The main thread's 8 MiB stack is already macOS's default, so no
 /// `-stack_size` is needed for JSC's headroom.
 fn macos_link() {
     println!("cargo:rustc-link-arg-bins=-Wl,-ObjC");
     println!("cargo:rustc-link-arg-bins=-Wl,-rpath,/usr/lib/swift");
     println!("cargo:rustc-link-arg-bins=-Wl,-no_deduplicate");
+    for symbol in [
+        "Bun__reportUnhandledError",
+        "Bun__thisThreadHasVM",
+        "WTFTimer__cancel",
+        "WTFTimer__create",
+        "WTFTimer__deinit",
+        "WTFTimer__isActive",
+        "WTFTimer__secondsUntilTimer",
+        "WTFTimer__update",
+    ] {
+        println!("cargo:rustc-link-arg-bins=-Wl,-U,_{symbol}");
+    }
 }
 
 /// What `vn-app --vn-host-info` reports and a payload is checked against
