@@ -1061,6 +1061,11 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
             ..Default::default()
         },
         |window, cx| {
+            // Keep the generic GPUI default; enable retention only for VN windows.
+            // The override allows equivalent workloads to compare both paths.
+            if std::env::var_os("VN_RETAINED_LAYOUT").as_deref() != Some(std::ffi::OsStr::new("0")) {
+                window.vn_enable_retained_layout();
+            }
             crate::quiet::send_to_back(window);
             cx.new(|_| PopoutShell { node })
         },

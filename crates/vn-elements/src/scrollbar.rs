@@ -30,9 +30,9 @@
 //! * **The wheel is intercepted in the CAPTURE phase.** This is
 //!   `scrollable_mask.rs`'s job and it is `overscroll-behavior` in disguise:
 //!   gpui's own scroll listener runs on bubble and does NOT stop propagation,
-//!   so every ancestor scroll box scrolls at once. Capture, innermost first,
-//!   with an explicit decision about whether the ancestor gets the rest, is the
-//!   browser's model.
+//!   so every ancestor scroll box scrolls at once. Capture selects the inner
+//!   box by element ancestry, independently of deferred paint order, and
+//!   explicitly decides whether an ancestor gets the rest.
 //!
 //! What was *not* taken: their theme (`ActiveTheme`), their `ScalarTransition`
 //! easing pair, `schemars`/`serde` derives, the `ListState` and
@@ -226,16 +226,17 @@ const GESTURE_GAP: Duration = Duration::from_millis(180);
 struct ChainEntry {
     hitbox: gpui::HitboxId,
     handle: ScrollHandle,
+    ancestry: GlobalElementId,
+    overscroll: Overscroll,
     scrolls_x: bool,
     scrolls_y: bool,
 }
 
 thread_local! {
-    /// Every scroll container painted in the last frame, INNERMOST FIRST.
+    /// Every scroll container painted in the last frame, in paint order.
     ///
-    /// A scrollbar is its container's last child, so an inner container's
-    /// scrollbar paints before an outer one's — the order falls out of the
-    /// paint walk and does not have to be computed.
+    /// Deferred positioned children can paint after their ancestors' bars.
+    /// The element-id ancestry, not this order, decides which box is inner.
     ///
     /// This exists for one question, which gpui cannot answer on its own:
     /// `Hitbox::should_handle_scroll` is true for EVERY hitbox under the
@@ -364,8 +365,8 @@ pub fn reset_frame() {
 ///
 /// The embedder records a span with [`chain_mark`] + [`chain_since`] around the
 /// boundary's paint and re-registers it with [`chain_replay`] on the frames
-/// that replay. Order is preserved, and the span is re-pushed at the point in
-/// the walk the subtree occupied, so "innermost first" still holds.
+/// that replay. Re-pushing at the same point preserves paint order; every
+/// entry retains the ancestry that decides its place in the scroll chain.
 #[derive(Clone, Default)]
 pub struct ChainSpan(Vec<ChainEntry>);
 
@@ -418,6 +419,40 @@ pub fn chain_replay(span: &ChainSpan) {
 /// regression pin for "a replayed subtree still routes the wheel".
 pub fn chain_count() -> usize {
     chain_mark()
+}
+
+/// The bar is its container's last child, so its final id is not part of
+/// the container's ancestry. Deferred painting preserves this original path.
+fn container_path(id: &GlobalElementId) -> &[ElementId] {
+    match id.split_last() {
+        Some((_, ancestors)) => ancestors,
+        None => &[],
+    }
+}
+
+fn chain_position<'a, Id: PartialEq + 'a>(
+    own: &'a [Id],
+    entries: impl IntoIterator<Item = (&'a [Id], bool, bool)>,
+) -> (bool, bool) {
+    let mut outer_moves = false;
+    for (path, moves, chains) in entries {
+        if path.len() > own.len() && path.starts_with(own) && (moves || !chains) {
+            return (false, false);
+        }
+        if own.len() > path.len() && own.starts_with(path) && moves {
+            outer_moves = true;
+        }
+    }
+    (true, outer_moves)
+}
+
+fn effective_delta(axis: Axis, raw: Point<Pixels>, axes: (bool, bool)) -> (Axis, Pixels) {
+    match axis {
+        Axis::Vertical if !axes.1 && axes.0 => (Axis::Horizontal, raw.y),
+        Axis::Vertical => (Axis::Vertical, raw.y),
+        Axis::Horizontal if !axes.0 && axes.1 => (Axis::Vertical, raw.x),
+        Axis::Horizontal => (Axis::Horizontal, raw.x),
+    }
 }
 
 /// Can this box still move on `axis` in the direction `delta` points?
@@ -763,7 +798,7 @@ impl Element for Scrollbar {
 
     fn paint(
         &mut self,
-        _: Option<&GlobalElementId>,
+        global_id: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         _: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
@@ -787,14 +822,17 @@ impl Element for Scrollbar {
         // `overscroll-behavior` before it moves anything else.
         //
         // The router only takes over when it has to: when this box is the
-        // innermost scrollable under the pointer AND some ancestor scrollable
+        // nearest box that consumes or contains the wheel AND some ancestor
         // could also move. Everything else goes through gpui's listener
         // untouched, which is what keeps the renderer's own `wheel` / `scroll`
         // listeners - and `preventDefault` - behaving exactly as they did.
+        let ancestry = global_id.cloned().unwrap_or_default();
         CHAIN.with(|c| {
             c.borrow_mut().push(ChainEntry {
                 hitbox: viewport.id,
                 handle: self.handle.clone(),
+                ancestry: ancestry.clone(),
+                overscroll: self.overscroll,
                 scrolls_x: self.axes.0,
                 scrolls_y: self.axes.1,
             })
@@ -845,47 +883,36 @@ impl Element for Scrollbar {
                 // gpui maps a vertical delta onto the horizontal axis for a box
                 // that only scrolls that way, and so do we - that is what a
                 // browser does with a plain mouse wheel over a carousel.
-                let (axis, delta) = match axis {
-                    Axis::Vertical if !wants_y && wants_x => (Axis::Horizontal, raw.y),
-                    Axis::Vertical => (Axis::Vertical, raw.y),
-                    Axis::Horizontal if !wants_x && wants_y => (Axis::Vertical, raw.x),
-                    Axis::Horizontal => (Axis::Horizontal, raw.x),
-                };
+                let gesture_axis = axis;
+                let (axis, delta) = effective_delta(gesture_axis, raw, (wants_x, wants_y));
 
-                // Am I the innermost scrollable under the pointer, and is there
-                // an outer one that would also move? Both answers come out of
-                // one walk of the registry, which is innermost-first.
-                let (innermost, outer_moves) = CHAIN.with(|c| {
+                // Capture listeners and registry entries follow paint order,
+                // which deferred children can invert. Use the original element
+                // ancestry and its chaining decision: a child at its edge
+                // yields to the nearest ancestor that can use the wheel.
+                let (can_claim, outer_moves) = CHAIN.with(|c| {
                     let chain = c.borrow();
-                    let mut seen_self = false;
-                    let mut innermost = true;
-                    let mut outer_moves = false;
-                    for entry in chain.iter() {
-                        if !entry.hitbox.should_handle_scroll(window) {
-                            continue;
-                        }
-                        if entry.hitbox == hitbox_id {
-                            seen_self = true;
-                            continue;
-                        }
-                        if !seen_self {
-                            // A scrollable painted before me and under the
-                            // pointer is nested inside me.
-                            innermost = false;
-                            break;
-                        }
-                        let usable = match axis {
-                            Axis::Vertical => entry.scrolls_y,
-                            Axis::Horizontal => entry.scrolls_x,
-                        };
-                        if usable && can_move(&entry.handle, axis, delta) {
-                            outer_moves = true;
-                            break;
-                        }
-                    }
-                    (innermost, outer_moves)
+                    chain_position(
+                        container_path(&ancestry),
+                        chain.iter()
+                            .filter(|entry| entry.hitbox.should_handle_scroll(window))
+                            .map(|entry| {
+                                let (entry_axis, entry_delta) = effective_delta(
+                                    gesture_axis, raw, (entry.scrolls_x, entry.scrolls_y),
+                                );
+                                let usable = match entry_axis {
+                                    Axis::Vertical => entry.scrolls_y,
+                                    Axis::Horizontal => entry.scrolls_x,
+                                };
+                                (
+                                    container_path(&entry.ancestry),
+                                    usable && can_move(&entry.handle, entry_axis, entry_delta),
+                                    entry.overscroll.chains(entry_axis),
+                                )
+                            }),
+                    )
                 });
-                if !innermost || !outer_moves {
+                if !can_claim || !outer_moves {
                     return;
                 }
 
@@ -1197,6 +1224,67 @@ fn animate_width(state: &mut State, idx: usize, target: Pixels, now: Instant) ->
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_deferred_child_owns_the_wheel_in_every_paint_order() {
+        let root = [1u32];
+        let parent = [1, 2];
+        let child = [1, 2, 3];
+        let entries: [(&[u32], bool, bool); 3] = [(&root, true, true), (&parent, true, true), (&child, true, true)];
+        for order in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+            let painted = order.map(|index| entries[index]);
+            assert_eq!(chain_position(&child, painted), (true, true));
+            assert_eq!(chain_position(&parent, painted), (false, false));
+            assert_eq!(chain_position(&root, painted), (false, false));
+        }
+    }
+
+    #[test]
+    fn an_auto_child_at_its_edge_yields_only_to_the_nearest_movable_ancestor() {
+        let root = [1u32];
+        let parent = [1, 2];
+        let child = [1, 2, 3];
+        for child_chains in [true, false] {
+            let entries: [(&[u32], bool, bool); 3] = [(&root, true, true), (&parent, true, true), (&child, false, child_chains)];
+            for order in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+                let painted = order.map(|index| entries[index]);
+                assert_eq!(chain_position(&root, painted), (false, false));
+                assert_eq!(chain_position(&parent, painted), if child_chains { (true, true) } else { (false, false) });
+                assert_eq!(chain_position(&child, painted), (true, true));
+            }
+        }
+    }
+
+    #[test]
+    fn chain_membership_uses_ancestry_instead_of_path_depth_or_paint_position() {
+        let root = [1u32];
+        let child = [1, 2, 3];
+        let sibling = [1, 4, 5, 6];
+        let entries: [(&[u32], bool, bool); 3] = [(&sibling, true, false), (&root, false, true), (&child, true, true)];
+        assert_eq!(chain_position(&child, entries), (true, false));
+        let ancestors: [(&[u32], bool, bool); 2] = [(&root, true, true), (&child, false, true)];
+        assert_eq!(chain_position(&child, ancestors), (true, true));
+    }
+
+    #[test]
+    fn replaying_a_span_after_its_ancestor_keeps_the_child_as_wheel_owner() {
+        let root = [1u32];
+        let child = [1, 2, 3];
+        let recorded: Vec<(&[u32], bool, bool)> = vec![(&root, true, true), (&child, true, true)];
+        let span = span_since(&recorded, 1);
+        let mut replayed: Vec<(&[u32], bool, bool)> = vec![(&root, true, true)];
+        replayed.extend(span);
+        assert_eq!(chain_position(&root, replayed.iter().copied()), (false, false));
+        assert_eq!(chain_position(&child, replayed.iter().copied()), (true, true));
+    }
+
+    #[test]
+    fn each_chain_candidate_maps_the_gesture_to_its_own_scroll_axis() {
+        let raw = point(px(0.), px(-80.));
+        assert_eq!(effective_delta(Axis::Vertical, raw, (false, true)), (Axis::Vertical, px(-80.)));
+        assert_eq!(effective_delta(Axis::Vertical, raw, (true, false)), (Axis::Horizontal, px(-80.)));
+        assert_eq!(effective_delta(Axis::Vertical, raw, (true, true)), (Axis::Vertical, px(-80.)));
+    }
+
     /// The browser's proportion: a viewport that shows a quarter of the content
     /// gets a thumb a quarter of the track long, and one that shows almost all
     /// of it gets a nearly full one.
@@ -1220,11 +1308,8 @@ mod tests {
     /// A boundary records the run of registry entries its own paint added, and
     /// re-adds exactly that run — in order — on the frames it replays.
     ///
-    /// Order is the whole of it: the router reads the registry as
-    /// innermost-first, and that ordering is a property of WHERE in the paint
-    /// walk each entry was pushed. Re-pushing the span at the point the
-    /// subtree occupied is what keeps a nested box ahead of the box that
-    /// contains it.
+    /// Replay preserves registration order, while the router uses each
+    /// entry's element ancestry to identify nested boxes independently of it.
     #[test]
     fn a_recorded_span_replays_in_the_order_it_was_recorded() {
         // The walk so far: one outer container was registered before us.

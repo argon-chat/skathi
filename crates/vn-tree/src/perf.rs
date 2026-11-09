@@ -164,8 +164,9 @@ pub struct Phases {
     pub sync_by: [u32; SyncCaller::COUNT],
     /// JS waves whose changes were all flushed AND drawn by a forced layout
     /// ([`crate::Flush::DrawnBySync`]), and of those, the ones where nothing
-    /// else (an animation, a media frame, a lottie) asked the frame to draw:
-    /// a frame whose own draw only repeated the forced layout's.
+    /// else (an animation or a media frame) asked the primary window to draw.
+    /// The host skips that redundant notification; this is not a count of
+    /// repeated draws. Popped-out windows still receive the changed wave.
     pub sync_tail: u32,
     pub sync_tail_free: u32,
     /// The ResizeObserver / IntersectionObserver step after layout

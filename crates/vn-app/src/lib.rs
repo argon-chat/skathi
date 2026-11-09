@@ -923,15 +923,18 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
     // show them (crates/vn-lottie/CONTRACT.md §8.10).
     let moving = vn_tree::animating() || media_moved;
     if flush == vn_tree::Flush::DrawnBySync {
-        // Counted for the frame trace: a forced layout already drew this tree,
-        // so unless something else moves, the draw below only repeats it.
+        // Counted for the frame trace: a forced layout already drew this tree.
+        // With no newer work, the primary-window notification below is skipped.
         vn_tree::perf::note_sync_tail(!moving);
     }
-    if tree_moved || moving {
+    if flush == vn_tree::Flush::Changed || moving {
+        // A synchronous DOM measurement already built the primary window.
+        // Preserve that frame unless the wave left newer work to paint.
         notify_shell(cx);
-        // …and every window painting a popped-out subtree, in the SAME frame
-        // group. This is the line that makes the spike's claim true: one JS
-        // wave, N windows repainting off it (docs/MULTIWINDOW.md §6).
+    }
+    if tree_moved || moving {
+        // The synchronous layout only draws the primary window. Popped-out
+        // subtrees still need this wave (docs/MULTIWINDOW.md §6).
         popout::notify_all(cx);
     }
     // Push, not poll: whatever moved this frame — log lines, the tree
@@ -1681,6 +1684,11 @@ fn run_app() {
             |window, cx| {
                 // Before the first frame is presented, so a test host is never
                 // seen in front of the person's windows (src/quiet.rs).
+                // Keep the generic GPUI default; enable retention only for VN windows.
+                // The override allows equivalent workloads to compare both paths.
+                if std::env::var_os("VN_RETAINED_LAYOUT").as_deref() != Some(std::ffi::OsStr::new("0")) {
+                    window.vn_enable_retained_layout();
+                }
                 quiet::send_to_back(window);
                 // The renderer's device now exists (the window created it), so
                 // this is the first moment `<video>` can be told to decode onto
