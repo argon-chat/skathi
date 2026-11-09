@@ -1,0 +1,42 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    name: Runtime and builder
+    runs-on: [self-hosted, X64, Linux]
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/vue-native
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          # The AOT input tests read vendor/redjs/pins.txt; no native build is needed.
+          submodules: false
+      - name: Check out pinned redjs metadata
+        run: git -C ../.. submodule update --init --depth 1 -- vendor/redjs
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Check runtime types
+        run: bun run typecheck
+      - name: Run runtime and builder tests
+        # Native vn-test e2e and the Vue host still require Windows.
+        run: bun test ./test
