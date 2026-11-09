@@ -743,6 +743,9 @@
           break;
         case "fullscreenchange":
           onFullscreenWindowChanged(S.fullscreen);
+          // Window chrome follows native fullscreen even when no DOM element
+          // owns fullscreen (for example AppKit's green traffic-light button).
+          emit(appWindow, kind);
           break;
         case "geometrychange": {
           const ev = new Event("geometrychange");

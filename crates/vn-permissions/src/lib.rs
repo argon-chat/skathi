@@ -72,9 +72,9 @@ pub mod mac;
 pub use consent::{set_app_name, set_asker, Asker, Question};
 pub use vn_runtime::redjs::webapi::permissions::{Capability as Cap, PermissionState as State};
 
-/// How many settled requests one frame may deliver. A user cannot answer more
-/// than a handful of dialogs per frame; the cap only exists so that a
-/// misbehaving backend cannot lengthen a frame without bound.
+/// How many settled requests one frame may deliver. One native prompt can
+/// settle many waiting requests; the rest stay in the permission router for
+/// later waves instead of extending this frame's callback work without bound.
 const DRAIN_CAP: usize = 16;
 
 thread_local! {
@@ -314,11 +314,10 @@ pub fn pump() {
     }
     // Not the host's `drain_settled`: that queue also carries the requests
     // `getUserMedia` made, which redjs settles itself.
-    let mut settled = api::take_settled();
+    let settled = api::take_settled_up_to(DRAIN_CAP);
     if settled.is_empty() {
         return;
     }
-    settled.truncate(DRAIN_CAP);
 
     JsRuntime::with(|rt| {
         for (token, state) in settled {

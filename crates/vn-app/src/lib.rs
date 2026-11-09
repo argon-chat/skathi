@@ -1388,7 +1388,11 @@ fn run_app() {
         vn_tree::perf::set_live_bytes_probe(|| heapcount::snapshot().map(|s| s.0));
         vn_tree::devtools::set_image_tracking(true);
     }
-    let app = install_http_client(application());
+    // The primary window owns the JS pump; accepting its close ends this
+    // host on every OS. AppKit otherwise keeps a windowless app running and
+    // never reaches the SDK shutdown hooks or the embedding lifecycle callback.
+    let app = install_http_client(application())
+        .with_quit_mode(gpui::QuitMode::LastWindowClosed);
     // gpui reads `Resource::Embedded(key)` — what an `<img>` resolves to in a
     // packaged exe — through this, straight out of the mapped payload.
     #[cfg(feature = "prod")]
@@ -1679,6 +1683,10 @@ fn run_app() {
                     // `titleBarStyle` is creation-time only for exactly this
                     // reason (D-25).
                     appears_transparent: cfg.title_bar_style == window::TitleBarStyle::Hidden,
+                    traffic_light_position: window::traffic_light_position(
+                        cfg.title_bar_style == window::TitleBarStyle::Hidden,
+                        cfg.title_bar_height,
+                    ),
                     ..Default::default()
                 }),
                 is_resizable: cfg.resizable,

@@ -7966,6 +7966,9 @@ version = "0.1.0"
 name = "vn-permissions"
 version = "0.1.0"
 dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
  "serde_json",
  "vn-runtime",
  "windows 0.62.2",

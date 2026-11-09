@@ -1037,6 +1037,10 @@ fn open_now(node: u32, opts: Options, on_close: u64, on_event: u64, cx: &mut App
                 // region or the window is unmovable — exactly the tier-3
                 // contract `titleBarStyle: "hidden"` has in the primary window.
                 appears_transparent: !opts.os_chrome,
+                traffic_light_position: crate::window::traffic_light_position(
+                    !opts.os_chrome,
+                    opts.title_bar_height,
+                ),
                 ..Default::default()
             }),
             is_resizable: opts.resizable,

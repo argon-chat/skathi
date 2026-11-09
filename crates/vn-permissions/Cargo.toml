@@ -44,3 +44,10 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Versions already pinned by the SDK's AppKit backend. AVFoundation itself is
+# linked directly for its two microphone authorization class methods.
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString"] }

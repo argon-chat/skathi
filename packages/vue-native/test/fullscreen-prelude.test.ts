@@ -205,3 +205,27 @@ describe("element fullscreen lifecycle", () => {
     expect(w.document.fullscreenElement).toBeNull();
   });
 });
+
+
+describe("native window fullscreen notifications", () => {
+  test("window listeners see the new state without a DOM fullscreen owner", () => {
+    const observerSource = source.slice(source.indexOf("  __vn_window_observe("),
+      source.indexOf("  // The three return annotations"));
+    let observe: (kinds: string, json: string) => boolean;
+    const nativeChanges: boolean[] = [];
+    const appWindow = new Function("EventTarget", "Event", "emit", "onFullscreenWindowChanged", "__vn_window_observe", "liveQueries",
+      "let S; const appWindow = new EventTarget(); appWindow.isFullscreen = () => S.fullscreen;\n" +
+      new Bun.Transpiler({ loader: "ts" }).transformSync(observerSource) + "\nreturn appWindow;")(
+      EventTarget, Event, (target: EventTarget, kind: string) => target.dispatchEvent(new Event(kind)),
+      (on: boolean) => nativeChanges.push(on), (callback: typeof observe) => { observe = callback; }, [],
+    );
+    const seen: boolean[] = [];
+    appWindow.addEventListener("fullscreenchange", () => seen.push(appWindow.isFullscreen()));
+    observe!("sync", JSON.stringify({ fullscreen: false }));
+    expect(seen).toEqual([]);
+    observe!("fullscreenchange", JSON.stringify({ fullscreen: true }));
+    observe!("fullscreenchange", JSON.stringify({ fullscreen: false }));
+    expect(seen).toEqual([true, false]);
+    expect(nativeChanges).toEqual([true, false]);
+  });
+});

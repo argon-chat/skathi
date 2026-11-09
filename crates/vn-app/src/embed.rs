@@ -1,6 +1,8 @@
 //! vue-native as a LIBRARY: another program — a terminal UI, a game launcher,
 //! a service with a tray — runs the whole engine on a thread of its own and
 //! talks to the app through async functions and events (docs/EMBEDDING.md).
+//! On macOS, AppKit owns the process main thread: use
+//! `Builder::run_on_main_thread` with an application cleanup callback instead.
 //!
 //! ```text
 //!   embedder's threads                   the vue-native thread (gpui + JSC)
@@ -59,6 +61,7 @@ impl SetupHook {
 
 /// The vue-native thread's stack: the exe's own (`/STACK` in build.rs), which
 /// is what JSC's recursion limit is sized for.
+#[cfg(not(target_os = "macos"))]
 const STACK: usize = 8 * 1024 * 1024;
 
 /// How many queued items one drain may deliver, as in vn-desktop.
@@ -205,6 +208,8 @@ pub enum Error {
     DataDirectory(String),
     /// The thread could not be started.
     Spawn(std::io::Error),
+    /// AppKit must run on the process main thread, using `run_on_main_thread`.
+    MainThreadRequired,
 }
 
 impl std::fmt::Display for Error {
@@ -220,6 +225,7 @@ impl std::fmt::Display for Error {
             Error::LaunchExit(code) => write!(f, "desktop launch finished with exit code {code}"),
             Error::DataDirectory(e) => write!(f, "data directory: {e}"),
             Error::Spawn(e) => write!(f, "the vue-native thread did not start: {e}"),
+            Error::MainThreadRequired => write!(f, "AppKit requires the process main thread; call Builder::run_on_main_thread from main"),
         }
     }
 }
@@ -385,8 +391,60 @@ impl Builder {
 
     /// Starts vue-native on a thread of its own and returns at once; the
     /// window opens a moment later. Events emitted before the app is ready
-    /// wait for it.
-    pub fn spawn(mut self) -> Result<Handle, Error> {
+    /// wait for it. On macOS this returns `Error::MainThreadRequired`; use
+    /// `Self::run_on_main_thread` from the process main thread instead.
+    pub fn spawn(self) -> Result<Handle, Error> {
+        #[cfg(target_os = "macos")]
+        {
+            Err(Error::MainThreadRequired)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let handle = self.prepare()?;
+            std::thread::Builder::new()
+                .name("vue-native".into())
+                .stack_size(STACK)
+                .spawn(run_thread)
+                .map_err(Error::Spawn)?;
+            Ok(handle)
+        }
+    }
+
+    /// Runs AppKit and JSC on the process main thread until the app closes.
+    ///
+    /// On success this owns the remainder of the process lifetime. The cleanup
+    /// callback runs on a separate lifecycle thread after shutdown hooks finish
+    /// (or the shutdown deadline reports an unclean exit). It should stop and
+    /// join application workers and flush logs, then return the process exit
+    /// code. The process exits there, without destroying the UI thread's JSC
+    /// thread-locals. A callback panic exits with code 1.
+    ///
+    /// Startup validation errors return normally, before starting the UI.
+    /// Calls from a background thread fail before consuming the one-run state.
+    #[cfg(target_os = "macos")]
+    pub fn run_on_main_thread<F>(self, on_exit: F) -> Result<(), Error>
+    where
+        F: FnOnce(Exit) -> i32 + Send + 'static,
+    {
+        require_main_thread()?;
+        let handle = self.prepare()?;
+        std::thread::Builder::new()
+            .name("vue-native-lifecycle".into())
+            .spawn(move || {
+                let exit = handle.wait();
+                let code = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| on_exit(exit)))
+                    .unwrap_or_else(|_| {
+                        eprintln!("[embed] the application shutdown callback panicked");
+                        1
+                    });
+                std::process::exit(code);
+            })
+            .map_err(Error::Spawn)?;
+        run_thread();
+        Ok(())
+    }
+
+    fn prepare(mut self) -> Result<Handle, Error> {
         let data_dir = resolve_data_dir(self.data_dir.take(), std::env::var_os("VN_DATA_DIR"))?;
         #[cfg(not(feature = "storages"))]
         if self.storage_encrypted.is_some() {
@@ -428,11 +486,6 @@ impl Builder {
         if CONFIG.set(config).is_err() {
             return Err(Error::AlreadyStarted);
         }
-        std::thread::Builder::new()
-            .name("vue-native".into())
-            .stack_size(STACK)
-            .spawn(run_thread)
-            .map_err(Error::Spawn)?;
         Ok(Handle { _private: () })
     }
 
@@ -456,7 +509,19 @@ impl Builder {
     }
 }
 
-/// The vue-native thread.
+#[cfg(target_os = "macos")]
+fn require_main_thread() -> Result<(), Error> {
+    unsafe extern "C" {
+        fn pthread_main_np() -> std::ffi::c_int;
+    }
+    if unsafe { pthread_main_np() } == 0 {
+        Err(Error::MainThreadRequired)
+    } else {
+        Ok(())
+    }
+}
+
+/// The vue-native thread (the process main thread when hosted by AppKit).
 fn run_thread() {
     // `run_embedded` ends in `shutdown::finish`, which never returns; only a
     // panic out of gpui's loop gets past it. The thread must not end even then
@@ -914,6 +979,19 @@ mod tests {
         std::fs::remove_file(configured.join("prepared")).unwrap();
         std::fs::remove_dir(configured).unwrap();
         std::fs::remove_dir(base).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn appkit_rejects_worker_entry_before_startup_state_changes() {
+        std::thread::spawn(|| {
+            assert!(matches!(require_main_thread(), Err(Error::MainThreadRequired)));
+            assert!(matches!(Builder::new().spawn(), Err(Error::MainThreadRequired)));
+            assert!(matches!(
+                Builder::new().run_on_main_thread(|_| 0),
+                Err(Error::MainThreadRequired)
+            ));
+        }).join().unwrap();
     }
 
     #[test]

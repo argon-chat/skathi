@@ -254,9 +254,18 @@ impl Shared {
         self.os.status(cap)
     }
 
+    fn native_prompt(&self, cap: Capability) -> bool {
+        self.os.has_native_prompt(cap) && !(self.hooks.fake)()
+    }
+
     fn status(&self, cap: Capability) -> PermissionState {
         if !prompts(cap) {
             return self.os.status(cap);
+        }
+        // TCC already asks for this app. A saved app-level Allow must never
+        // turn its native Prompt/Denied state into an unearned grant.
+        if self.native_prompt(cap) {
+            return self.os_state(cap);
         }
         if self.os_state(cap) == PermissionState::Denied {
             return PermissionState::Denied;
@@ -429,6 +438,9 @@ impl PermissionHost for AppConsent {
         if (self.shared.hooks.forbidden)() {
             return RequestOutcome::Settled(PermissionState::Denied);
         }
+        if self.shared.native_prompt(cap) {
+            return self.os_request(cap);
+        }
         if self.shared.os_state(cap) == PermissionState::Denied {
             return self.os_request(cap);
         }
@@ -528,6 +540,58 @@ mod tests {
             RequestOutcome::Pending(t) => t,
             other => panic!("expected a pending request, got {other:?}"),
         }
+    }
+
+    struct NativeConsent {
+        state: Mutex<PermissionState>,
+        settled: Mutex<Vec<(u32, PermissionState)>>,
+        requested: std::sync::atomic::AtomicUsize,
+    }
+
+    impl PermissionHost for NativeConsent {
+        fn platform(&self) -> &'static str { "native-test" }
+        fn has_native_prompt(&self, cap: Capability) -> bool { cap == Capability::Microphone }
+        fn status(&self, _cap: Capability) -> PermissionState { *self.state.lock().unwrap() }
+        fn request(&self, _cap: Capability) -> RequestOutcome {
+            self.requested.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            RequestOutcome::Pending(37)
+        }
+        fn drain_settled(&self) -> Vec<(u32, PermissionState)> {
+            std::mem::take(&mut *self.settled.lock().unwrap())
+        }
+    }
+
+    #[test]
+    fn native_per_app_consent_bypasses_the_app_dialog_and_stored_answers() {
+        let os = Box::leak(Box::new(NativeConsent {
+            state: Mutex::new(Prompt), settled: Mutex::new(Vec::new()),
+            requested: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+        h.shared.lock_store().set(Capability::Microphone, Some(Decision::Allow));
+        assert_eq!(h.status(Capability::Microphone), Prompt, "a saved app Allow cannot grant TCC");
+        let token = pending(h.request(Capability::Microphone));
+        assert_eq!(asked(), 0, "the OS owns the only prompt");
+        assert!(h.drain_settled().is_empty());
+        *os.state.lock().unwrap() = Granted;
+        os.settled.lock().unwrap().push((37, Granted));
+        assert_eq!(h.drain_settled(), vec![(token, Granted)], "native token maps to the outer request exactly once");
+        assert!(h.drain_settled().is_empty());
+        assert_eq!(h.status(Capability::Microphone), Granted);
+        *os.state.lock().unwrap() = Denied;
+        assert_eq!(h.status(Capability::Microphone), Denied, "revoked native access overrides the saved app Allow");
+        assert!(h.denied_by_system(Capability::Microphone));
+
+        let fake = AppConsent::new(os, Hooks { forbidden: no, fake: yes, asker: with_asker });
+        let fake_token = pending(fake.request(Capability::Microphone));
+        assert_eq!(asked(), 1, "fake capture still uses this app's ordinary test consent");
+        answer(Some(0));
+        assert_eq!(fake.drain_settled(), vec![(fake_token, Granted)]);
+        assert_eq!(os.requested.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let forbidden = AppConsent::new(os, Hooks { forbidden: yes, fake: no, asker: with_asker });
+        assert_eq!(forbidden.request(Capability::Microphone), RequestOutcome::Settled(Denied));
+        assert_eq!(os.requested.load(std::sync::atomic::Ordering::SeqCst), 1, "the deny latch never calls native APIs");
     }
 
     #[test]

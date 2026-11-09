@@ -64,6 +64,15 @@ pub enum TitleBarStyle {
     Hidden,
 }
 
+/// Native AppKit controls remain visible in transparent custom titlebars.
+/// Center their 14px button row in the app's declared strip; AppKit restores
+/// the system position during fullscreen transitions.
+pub(crate) fn traffic_light_position(custom_titlebar: bool, height: f32) -> Option<gpui::Point<gpui::Pixels>> {
+    (cfg!(target_os = "macos") && custom_titlebar).then(|| {
+        gpui::point(gpui::px(12.0), gpui::px(((height - 14.0) / 2.0).max(0.0)))
+    })
+}
+
 /// The unified backdrop value space: Tauri's single list with Electron's
 /// lowercase spellings (D-26).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

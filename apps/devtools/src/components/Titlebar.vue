@@ -11,8 +11,15 @@
 // several instances and several windows per instance it is a table, not a row
 // of pills, and the titlebar is where you look for "what am I attached to",
 // not "what could I attach to".
-import { computed } from "vue";
+import { computed, ref, onMounted, onBeforeUnmount } from "vue";
+import { appWindow } from "vue-native";
 import { state, currentWindow, setTab } from "../store";
+
+const isMac = navigator.platform.startsWith("Mac");
+const isFullscreen = ref(appWindow.isFullscreen());
+const onFullscreenChanged = () => { isFullscreen.value = appWindow.isFullscreen(); };
+onMounted(() => appWindow.addEventListener("fullscreenchange", onFullscreenChanged));
+onBeforeUnmount(() => appWindow.removeEventListener("fullscreenchange", onFullscreenChanged));
 
 const attachedTo = computed(() => {
   if (state.status !== "attached" || !state.target) return null;
@@ -35,6 +42,8 @@ const statusText = computed(() => {
 
 <template>
   <header class="titlebar">
+    <!-- AppKit paints the native traffic lights above this client area. -->
+    <div v-if="isMac && !isFullscreen" class="native-controls" aria-hidden="true"></div>
     <span class="mark">◈</span>
     <span class="brand">devtools</span>
 
@@ -61,7 +70,7 @@ const statusText = computed(() => {
       <span>{{ state.pushLive ? "live" : "polling" }}</span>
     </div>
 
-    <div class="controls">
+    <div v-if="!isMac" class="controls">
       <div class="ctl min" title="Minimize">–</div>
       <div class="ctl max" title="Maximize">□</div>
       <div class="ctl close" title="Close">✕</div>
@@ -83,6 +92,12 @@ const statusText = computed(() => {
   background: #0a0e16cc;
   border-bottom-width: 1px;
   border-color: #1e2733;
+}
+.native-controls {
+  width: 70px;
+  height: 100%;
+  flex-shrink: 0;
+  window-drag: none;
 }
 .mark {
   margin-left: 11px;

@@ -27,11 +27,11 @@ pub struct JsError {
 /// (see `JsRuntime::init`).
 const NO_DISK_ROOT: &str = r"\\?\vue-native-no-disk-root";
 
-/// What `navigator.userAgent` says in a vue-native app. Set here, explicitly,
-/// rather than left to redjs's default (which happens to be the same string
-/// today): it is a product decision, and the one place that makes it is the
-/// one place that should change it. `appVersion` and `platform` follow it.
-pub const VN_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RedVue/1.0";
+/// What `navigator.userAgent` says in a vue-native app. The product adopts
+/// redjs's OS-specific RedVue identity explicitly, so startup cannot replace
+/// a Mac or Linux identity with a Windows one. `appVersion` and `platform`
+/// follow the same value.
+pub const VN_USER_AGENT: &str = redjs::webapi::navigator::DEFAULT_USER_AGENT;
 
 /// Process-wide and read per access, so it holds for every context — a
 /// worker's included — whenever it is called.
@@ -405,7 +405,7 @@ mod tests {
     /// same redjs install the app runs, not by asserting on the constant alone.
     #[test]
     fn navigator_reports_the_vue_native_user_agent() {
-        assert_eq!(VN_USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RedVue/1.0");
+        assert_eq!(VN_USER_AGENT, redjs::webapi::navigator::DEFAULT_USER_AGENT);
         unsafe { assert_eq!(ffi::redjs_init(std::ptr::null()), 0) };
         apply_user_agent();
         let ctx = Context::new();
@@ -416,7 +416,11 @@ mod tests {
         }
         let read = |src: &str| ctx.to_rust_string(ctx.eval(src).unwrap()).unwrap();
         assert_eq!(read("navigator.userAgent"), VN_USER_AGENT);
-        assert_eq!(read("navigator.appVersion"), "5.0 (Windows NT 10.0; Win64; x64) RedVue/1.0");
+        assert_eq!(read("navigator.appVersion"), redjs::webapi::navigator::app_version(VN_USER_AGENT));
+        assert_eq!(read("navigator.platform"), redjs::webapi::navigator::platform(VN_USER_AGENT));
+        #[cfg(target_os = "macos")]
+        assert_eq!(read("navigator.platform"), "MacIntel");
+        #[cfg(target_os = "windows")]
         assert_eq!(read("navigator.platform"), "Win32");
         assert_eq!(read("String(navigator instanceof Navigator)"), "true");
     }

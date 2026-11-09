@@ -543,6 +543,7 @@
           break;
         case "fullscreenchange":
           onFullscreenWindowChanged(S.fullscreen);
+          emit(appWindow, kind);
           break;
         case "geometrychange": {
           const ev = new Event("geometrychange");
