@@ -563,7 +563,7 @@ impl gpui::Element for BoundsProbe {
 
 /// Wraps a built element so its rectangle lands in the side map. Text and
 /// anchor nodes are skipped — they have no box a selector can ask about.
-fn probe(id: u32, inner: AnyElement) -> AnyElement {
+pub(crate) fn probe(id: u32, inner: AnyElement) -> AnyElement {
     probe_at(id, false, inner)
 }
 
@@ -582,6 +582,7 @@ pub(crate) fn gc_node_state() {
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SETTLING.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     crate::cache::gc(&live);
+    crate::cull::gc(&live);
     crate::scroll::gc(&live);
     img_src::gc(live);
     crate::lottie::gc(live);
@@ -2107,6 +2108,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     });
     arm_pick_hitboxes(window);
     crate::cache::begin_frame(window, now);
+    crate::cull::begin_frame(window, now);
     reset_stacking();
     let el = tree::read_tree(|t| {
         if t.root == 0 {
@@ -2242,6 +2244,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
         w.control_hitboxes.clear();
     });
     crate::cache::begin_frame(window, now);
+    crate::cull::begin_frame(window, now);
     reset_stacking();
     tree::read_tree(|t| {
         if t.node(id).is_none() {
@@ -2361,6 +2364,21 @@ fn build_node<V: 'static>(
     // The window this build is lowering into. gpui handed it to us; nothing is
     // inferred (docs/MULTIWINDOW.md §5.6).
     let win = windows::key(window);
+    // A subtree outside every clip around it paints nothing: it is lowered as
+    // a box of its last size instead, ahead of the cache, which would still
+    // have to build or replay it (`crate::cull`).
+    if !crate::fullscreen::is_active(id) {
+        let inherited = || Inherited {
+            drag: parent_drag,
+            case: parent_case,
+            ws: parent_ws,
+            align: parent_align,
+            stack: parent_stack.clone(),
+        };
+        if let Some(placeholder) = crate::cull::placeholder(t, id, node, root, inherited, win) {
+            return placeholder;
+        }
+    }
     // A cache boundary returns the ENTIRE node — probe, stacking wrapper and
     // all — because its recording already contains them (`crate::cache`). The
     // `active` gate is one `Cell` read, so a build with caching switched off

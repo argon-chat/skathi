@@ -456,7 +456,7 @@ fn stats(t: &Tree, id: u32) -> Stats {
 /// be here, and nothing that decides its INNER layout (padding, border) may be,
 /// or it would be counted twice. The size is the one the node just laid out to,
 /// which is what the two revision checks make safe to reuse.
-fn wrapper_style(node: &Node, size: (f32, f32)) -> gpui::StyleRefinement {
+pub(crate) fn wrapper_style(node: &Node, size: (f32, f32)) -> gpui::StyleRefinement {
     let mut st = gpui::StyleRefinement::default();
     st.size.width = Some(gpui::Length::Definite(gpui::px(size.0).into()));
     st.size.height = Some(gpui::Length::Definite(gpui::px(size.1).into()));

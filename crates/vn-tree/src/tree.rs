@@ -2463,6 +2463,13 @@ pub(crate) fn moving_paths(now: std::time::Instant, out: &mut std::collections::
     });
 }
 
+/// Only the nodes whose painted style the animator is moving at `now`, without
+/// their ancestors — the boxes under which `crate::cull` cannot trust layout
+/// rectangles to say where anything is.
+pub(crate) fn moving_nodes(now: std::time::Instant, out: &mut std::collections::HashSet<u32>) {
+    ANIMATOR.with(|a| out.extend(a.borrow().moving_nodes(now)));
+}
+
 /// Advances the animator's clock and queues whatever events crossing a boundary
 /// produced. Must run EVERY frame, from [`crate::frame_tick`] — it used to live
 /// inside [`animating`], which the host calls behind a `||` short-circuit, so a
