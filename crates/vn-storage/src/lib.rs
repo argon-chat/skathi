@@ -26,7 +26,7 @@
 //!                            vn_storage::FileStorage
 //!                                    │
 //!                     <folder>/localStorage.json   (plaintext)
-//!                     <folder>/localStorage.sealed (DPAPI)
+//!                     <folder>/localStorage.sealed (DPAPI; macOS: a Keychain key)
 //!
 //!   apps/*      ──indexedDB.open(…)── redjs::webapi::indexeddb (SQLite)
 //!                                    ▲  dyn IndexedDbHost
@@ -1145,8 +1145,30 @@ mod tests {
         assert!(e.contains("could not create"), "{e}");
     }
 
+    /// What Argon calls at boot on every platform, under the macOS envelope (a
+    /// fixed key stands in for the keychain).
     #[test]
-    #[cfg(not(target_os = "windows"))]
+    fn startup_encryption_under_the_keychain_envelope_round_trips() {
+        let p = crypt::envelope::FixedKey::new(8);
+        let t = Temp::new("envelope-startup");
+        std::fs::create_dir_all(&t.0).unwrap();
+        let base = std::fs::canonicalize(&t.0).unwrap();
+        let entries = vec![("session".to_string(), "private-token".to_string())];
+        std::fs::write(file::plain_path(&base), file::encode(&entries)).unwrap();
+        assert!(encrypt_local_storage_with(&base, &p).unwrap());
+        assert!(!file::plain_path(&base).exists());
+        let sealed = std::fs::read(file::sealed_path(&base)).unwrap();
+        assert_eq!(&sealed[..8], b"VNSTOR\x01\x02");
+        assert!(!sealed.windows(13).any(|w| w == b"private-token"));
+        assert_eq!(file::decode(&file::unseal(&p, &sealed).unwrap()).unwrap(), entries);
+        // Another key cannot open it, and the sealed file is not replaced.
+        let other = crypt::envelope::FixedKey::new(9);
+        assert!(encrypt_local_storage_with(&base, &other).unwrap_err().contains("different storage key"));
+        assert_eq!(std::fs::read(file::sealed_path(&base)).unwrap(), sealed);
+    }
+
+    #[test]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     fn asking_for_encryption_without_a_provider_is_refused_not_silently_plaintext() {
         let _g = serial();
         let t = Temp::new("no-provider");

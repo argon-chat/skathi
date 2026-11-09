@@ -46,3 +46,25 @@ windows = { version = "0.62", features = [
     "Win32_System_Com",
     "Win32_UI_Shell",
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The macOS provider (src/crypt/keychain.rs, docs/STORAGE.md §8). Every one of
+# these is already in the lockfile through rustls / native-tls, so this adds
+# edges, not packages:
+#   ring                AES-256-GCM (the envelope, the HTTP cache's entries) and
+#                       SystemRandom (`crypt::random_bytes`, IndexedDB's key).
+#   security-framework  the login keychain: one generic-password item holding
+#                       the 256-bit master key (SecItemCopyMatching/SecItemAdd).
+#   core-foundation     CFData for that item, and the main bundle's identifier
+#                       that names it.
+#   libc                statfs, for IndexedDB's quota.
+ring = "0.17.14"
+security-framework = { version = "3.7", default-features = false }
+core-foundation = "0.10.1"
+libc = "0.2.189"
+
+[dev-dependencies]
+# The envelope and the ring cipher are platform-neutral code compiled for
+# `cfg(any(target_os = "macos", test))`, so the Windows test run checks them
+# (and checks the ring cipher against CNG's, src/http_cache.rs).
+ring = "0.17.14"

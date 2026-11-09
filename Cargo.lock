@@ -8000,6 +8000,10 @@ dependencies = [
 name = "vn-storage"
 version = "0.1.0"
 dependencies = [
+ "core-foundation",
+ "libc",
+ "ring",
+ "security-framework",
  "vn-runtime",
  "windows 0.62.2",
 ]

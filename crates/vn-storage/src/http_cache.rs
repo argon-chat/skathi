@@ -33,6 +33,10 @@
 //!   from code that runs as the same user.
 //! - **Why not DPAPI per entry.** DPAPI is a call into the LSA per blob, and a
 //!   page of avatars is hundreds of blobs.
+//! - **macOS.** The same entries and the same `key.sealed`, with ring's
+//!   AES-256-GCM instead of CNG's and the Keychain provider instead of DPAPI
+//!   (`ring_gcm`). A keychain that cannot be read means no cache, and the key
+//!   file is left alone.
 //! - **Plaintext otherwise.** Without encrypted storage, entries are
 //!   plaintext, as every browser's are.
 //!
@@ -404,6 +408,17 @@ mod gcm {
             assert_ne!(a.seal(&plain).unwrap(), sealed);
         }
 
+        /// The macOS cipher (ring) is this one: either opens what the other
+        /// sealed under the same key.
+        #[test]
+        fn ring_and_cng_agree() {
+            let cng = Gcm::new(&[0x42; 32], "c".into()).unwrap();
+            let ring = super::super::ring_gcm::Gcm::new(&[0x42; 32], "r".into()).unwrap();
+            let plain = b"the same AES-256-GCM on both sides".repeat(3);
+            assert_eq!(ring.open(&cng.seal(&plain).unwrap()).unwrap(), plain);
+            assert_eq!(cng.open(&ring.seal(&plain).unwrap()).unwrap(), plain);
+        }
+
         #[test]
         fn the_key_file_is_made_once_and_read_back() {
             let dir = std::env::temp_dir().join(format!("vn-storage-http-key-{}", std::process::id()));
@@ -420,7 +435,177 @@ mod gcm {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// AES-256-GCM through ring: the macOS cipher. Compiled under `test` on every
+/// platform, where it is checked against CNG's (a sealed entry is the same
+/// `nonce (12) ‖ ciphertext ‖ tag (16)`).
+#[cfg(any(target_os = "macos", test))]
+mod ring_gcm {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use super::KEY_NAME;
+    use crate::crypt::envelope::{fill_random, Aes256Gcm};
+    use crate::crypt::SecretProvider;
+    use crate::file;
+    use vn_runtime::redjs::webapi::http::cache::Sealer;
+
+    pub struct Gcm {
+        aead: Aes256Gcm,
+        id: String,
+    }
+
+    impl Gcm {
+        pub fn new(secret: &[u8; 32], id: String) -> Result<Gcm, String> {
+            Ok(Gcm { aead: Aes256Gcm::new(secret)?, id })
+        }
+    }
+
+    impl Sealer for Gcm {
+        fn tag(&self) -> String {
+            format!("aes-256-gcm/{}", self.id)
+        }
+
+        fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, String> {
+            self.aead.seal(b"", plain)
+        }
+
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, String> {
+            self.aead.open(b"", sealed)
+        }
+    }
+
+    fn hex(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
+        if s.len() != N * 2 {
+            return None;
+        }
+        let mut out = [0u8; N];
+        for (i, b) in out.iter_mut().enumerate() {
+            *b = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+        }
+        Some(out)
+    }
+
+    /// The Windows `gcm::sealer`'s key file, under any provider: `key.sealed`
+    /// holds `<64 hex key> <16 hex id>` sealed by `p`.
+    pub fn sealer_with(dir: &Path, p: &dyn SecretProvider) -> Result<Arc<dyn Sealer>, String> {
+        // A locked or refused keychain says nothing about the key file: refuse
+        // (no cache this run) rather than replace a key that may be fine.
+        p.ready()?;
+        let path = dir.join(KEY_NAME);
+        let existing = match std::fs::read(&path) {
+            Ok(raw) => match file::unseal(p, &raw) {
+                Ok(mut text) => {
+                    let parsed = text.split_once(' ').and_then(|(k, id)| Some((unhex::<32>(k)?, unhex::<8>(id.trim())?)));
+                    unsafe { text.as_bytes_mut().fill(0) };
+                    parsed
+                }
+                Err(e) => {
+                    eprintln!("[storage] the HTTP cache key cannot be unsealed ({e}); making a new one");
+                    None
+                }
+            },
+            Err(_) => None,
+        };
+        let (mut key, id) = match existing {
+            Some(k) => k,
+            None => {
+                let mut key = [0u8; 32];
+                let mut id = [0u8; 8];
+                fill_random(&mut key)?;
+                fill_random(&mut id)?;
+                std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+                let mut text = format!("{} {}", hex(&key), hex(&id));
+                let sealed = file::seal(p, &text);
+                unsafe { text.as_bytes_mut().fill(0) };
+                file::write_atomic(&path, &sealed?).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+                (key, id)
+            }
+        };
+        let gcm = Gcm::new(&key, hex(&id));
+        key.fill(0);
+        Ok(Arc::new(gcm?))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::crypt::envelope::FixedKey;
+
+        #[test]
+        fn sealing_round_trips_and_refuses_another_key_or_a_flipped_bit() {
+            let a = Gcm::new(&[7u8; 32], "a".into()).unwrap();
+            let b = Gcm::new(&[8u8; 32], "b".into()).unwrap();
+            let plain = b"an entry's headers and body".repeat(40);
+            let sealed = a.seal(&plain).unwrap();
+            assert_eq!(sealed.len(), plain.len() + 12 + 16);
+            assert!(!sealed.windows(16).any(|w| w == &plain[..16]));
+            assert_eq!(a.open(&sealed).unwrap(), plain);
+            assert!(b.open(&sealed).is_err());
+            let mut bad = sealed.clone();
+            bad[12 + 5] ^= 1;
+            assert!(a.open(&bad).is_err());
+            assert!(a.open(&sealed[..20]).is_err());
+            assert_ne!(a.seal(&plain).unwrap(), sealed);
+        }
+
+        #[test]
+        fn the_key_file_is_made_once_read_back_and_replaced_only_when_unreadable() {
+            let dir = std::env::temp_dir().join(format!("vn-storage-http-ring-key-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let p = FixedKey::new(3);
+            let first = sealer_with(&dir, &p).unwrap();
+            let raw = std::fs::read(dir.join(KEY_NAME)).unwrap();
+            assert_eq!(&raw[..8], b"VNSTOR\x01\x02");
+            assert!(!raw.windows(8).any(|w| w.iter().all(|c| c.is_ascii_hexdigit())), "the key is legible");
+            let again = sealer_with(&dir, &p).unwrap();
+            assert_eq!(first.tag(), again.tag());
+            assert_eq!(again.open(&first.seal(b"x").unwrap()).unwrap(), b"x");
+            // Another key (another user, a replaced keychain item): a new
+            // cache key, so a new tag, and redjs purges the folder.
+            let other = sealer_with(&dir, &FixedKey::new(4)).unwrap();
+            assert_ne!(other.tag(), first.tag());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn a_provider_that_is_not_ready_leaves_the_key_file_alone() {
+            struct Locked;
+            impl SecretProvider for Locked {
+                fn name(&self) -> &'static str { "locked" }
+                fn id(&self) -> u8 { 2 }
+                fn ready(&self) -> Result<(), String> { Err("macOS Keychain: locked".into()) }
+                fn protect(&self, _: &[u8]) -> Result<Vec<u8>, String> { Err("locked".into()) }
+                fn unprotect(&self, _: &[u8]) -> Result<Vec<u8>, String> { Err("locked".into()) }
+            }
+            let dir = std::env::temp_dir().join(format!("vn-storage-http-ring-locked-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(KEY_NAME), b"an existing key file").unwrap();
+            assert!(sealer_with(&dir, &Locked).err().unwrap().contains("locked"));
+            assert_eq!(std::fs::read(dir.join(KEY_NAME)).unwrap(), b"an existing key file");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod gcm {
+    use std::path::Path;
+    use std::sync::Arc;
+    use vn_runtime::redjs::webapi::http::cache::Sealer;
+
+    /// The folder's key, sealed by the Keychain provider, as a [`Sealer`].
+    pub fn sealer(dir: &Path) -> Result<Arc<dyn Sealer>, String> {
+        let p = crate::crypt::provider().ok_or("no Keychain provider on this platform")?;
+        super::ring_gcm::sealer_with(dir, p)
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod gcm {
     use std::path::Path;
     use std::sync::Arc;

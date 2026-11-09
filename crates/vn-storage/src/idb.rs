@@ -26,7 +26,10 @@
 //! `localStorage.sealed`, so the same honest statement applies (it protects the
 //! files from other users and from being copied off the machine; not from code
 //! running as the same user). The plaintext key exists in this process's
-//! memory and in redjs's server thread, never on disk.
+//! memory and in redjs's server thread, never on disk. On macOS the 32 bytes
+//! come from `getentropy` (ring) and `key.sealed` is sealed by the Keychain
+//! provider (`crypt`); a keychain that cannot be read right now refuses the
+//! run and leaves `key.sealed` where it is, rather than moving it aside below.
 //!
 //! # Encryption is sticky — the same rule as `localStorage`
 //!
@@ -239,6 +242,12 @@ fn decide(
                 eprintln!("[storage] IndexedDB in {} is encrypted at rest (a new key, sealed by {})", dir.display(), p.name());
                 k
             }
+            // The provider itself is unavailable (a locked or refused
+            // keychain; never the case for DPAPI): that says nothing about
+            // the key file, so it stays where it is and this run is refused.
+            Err(e) if p.ready().is_err() => {
+                return Err(format!("the IndexedDB key {} cannot be unsealed right now ({e})", key_path.display()));
+            }
             Err(e) => {
                 let aside = move_aside(&key_path);
                 eprintln!(
@@ -322,7 +331,14 @@ fn new_key() -> Result<[u8; 32], String> {
     Ok(k)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn new_key() -> Result<[u8; 32], String> {
+    let mut k = [0u8; 32];
+    crypt::random_bytes(&mut k)?;
+    Ok(k)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn new_key() -> Result<[u8; 32], String> {
     Err(String::from("no key generator on this platform"))
 }
@@ -356,7 +372,25 @@ fn disk(dir: &Path) -> Option<(u64, u64)> {
     (total > 0).then_some((free, total))
 }
 
-#[cfg(not(target_os = "windows"))]
+/// `statfs` rather than `statvfs`: Darwin's `statvfs` has 32-bit block counts
+/// and rescales its block size to fit them, `statfs` is 64-bit throughout.
+/// `f_bavail` is what a non-root user may use; on APFS it does not count
+/// purgeable space, so the quota errs low.
+#[cfg(target_os = "macos")]
+fn disk(dir: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    // SAFETY: a NUL-terminated path and a zeroed, correctly typed out struct.
+    let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(path.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    let block = u64::from(st.f_bsize);
+    let (free, total) = (st.f_bavail.saturating_mul(block), st.f_blocks.saturating_mul(block));
+    (total > 0).then_some((free, total))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn disk(_dir: &Path) -> Option<(u64, u64)> {
     None
 }
@@ -437,6 +471,9 @@ fn persist_intent(dir: &Path, encrypted: bool) -> Result<(), String> {
     let retire = dir.join(RETIRE_NAME);
     if encrypted {
         let p = crypt::provider().ok_or("this platform has no encryption provider")?;
+        // Not ready (a locked keychain): an existing key must not be moved
+        // aside as "unreadable" below.
+        p.ready()?;
         let _ = std::fs::remove_file(&retire);
         let readable = matches!(read_key(p, &key_path), Ok(Some(_)));
         if !readable {
@@ -597,6 +634,44 @@ mod tests {
         // …unless that start asks for encryption again, which wins.
         assert_eq!(mode(&t, Some(true)).1, IdbEncryption::Encrypted(k));
         assert!(!t.dir().join(RETIRE_NAME).exists());
+    }
+
+    /// The macOS envelope under the same table (a fixed key stands in for the
+    /// keychain): sealed, sticky, and the key is not legible on disk.
+    #[test]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    fn the_sticky_rule_holds_under_the_keychain_envelope() {
+        let p: &'static dyn SecretProvider = Box::leak(Box::new(crypt::envelope::FixedKey::new(6)));
+        let t = Temp::new("envelope");
+        let (m, e) = decide(&t.dir(), &t.0, Some(true), Some(p)).unwrap();
+        assert_eq!(m, Mode::Encrypted);
+        let IdbEncryption::Encrypted(k) = e else { panic!("{e:?}") };
+        let raw = std::fs::read(t.dir().join(KEY_NAME)).unwrap();
+        assert_eq!(&raw[..8], b"VNSTOR\x01\x02");
+        let hex: String = k.iter().map(|b| format!("{b:02x}")).collect();
+        assert!(!raw.windows(64).any(|w| w == hex.as_bytes()));
+        assert_eq!(decide(&t.dir(), &t.0, None, Some(p)).unwrap().1, IdbEncryption::Encrypted(k));
+    }
+
+    /// A keychain that cannot be read is not an unreadable key: the run is
+    /// refused and `key.sealed` stays exactly where it was.
+    #[test]
+    fn a_provider_that_is_not_ready_refuses_without_moving_the_key_aside() {
+        struct Locked;
+        impl SecretProvider for Locked {
+            fn name(&self) -> &'static str { "locked" }
+            fn id(&self) -> u8 { 2 }
+            fn ready(&self) -> Result<(), String> { Err("macOS Keychain: locked".into()) }
+            fn protect(&self, _: &[u8]) -> Result<Vec<u8>, String> { Err("locked".into()) }
+            fn unprotect(&self, _: &[u8]) -> Result<Vec<u8>, String> { Err("locked".into()) }
+        }
+        static LOCKED: Locked = Locked;
+        let t = Temp::new("not-ready");
+        std::fs::write(t.dir().join(KEY_NAME), b"VNSTOR\x01\x02sealed key").unwrap();
+        assert!(decide(&t.dir(), &t.0, None, Some(&LOCKED)).is_err());
+        assert_eq!(std::fs::read(t.dir().join(KEY_NAME)).unwrap(), b"VNSTOR\x01\x02sealed key");
+        let others = std::fs::read_dir(t.dir()).unwrap().count();
+        assert_eq!(others, 1, "nothing was moved aside or created");
     }
 
     #[test]

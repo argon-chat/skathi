@@ -43,18 +43,37 @@
 //! default storage folder is `LOCALAPPDATA` — encrypted data that is explicitly
 //! machine-local cannot be surprised by roaming.
 //!
-//! # macOS (design; not compiled here)
+//! # macOS: a Keychain-held key and AES-256-GCM (provider id 2)
 //!
-//! The equivalent is a Keychain-derived key rather than a system-encrypt call:
-//! generate 32 random bytes on first use, store them as a generic password item
-//! (`SecItemAdd`, service `gl.argon.vue-native.storage`, account = the app
-//! name, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` so it neither
-//! syncs to iCloud Keychain nor is readable before first unlock), and encrypt
-//! the file with AES-256-GCM under it. `SecItemCopyMatching` on later runs. The
-//! ACL binds the item to the signed application, so the same
-//! same-user-can-read-it caveat applies, with the same honesty.
+//! macOS has no system-encrypt call, so the provider holds a key, and the
+//! keychain is where a key belongs: one random 256-bit master key per app, a
+//! generic-password item in the user's login keychain (service
+//! `gl.argon.vue-native.storage`, account = the main bundle's identifier, or
+//! `exe:<name>` for an unbundled binary). The login keychain is encrypted
+//! under the user's login password and unlocked by logging in, so this gives
+//! what DPAPI gives: bound to this user, unreadable by other users and off
+//! this machine, no prompt in the ordinary case. The item's ACL names the app
+//! that created it; another app asking makes macOS ask the user.
+//!
+//! Every blob is sealed by `envelope` (versioned, AES-256-GCM, random nonce,
+//! and DPAPI's entropy string `vue-native/storage/v1` as associated data, for
+//! the same "it has to know it was ours" reason), and the key
+//! is created on first use with add-only semantics so two processes racing to
+//! create it agree on one (`envelope::load_or_create`). The Keychain calls
+//! themselves are `keychain`; they are the only part that needs a Mac. The
+//! rest is compiled under `cfg(test)` everywhere and tested on Windows.
+//!
+//! A keychain that cannot be read (locked with no way to ask, the access prompt
+//! refused) is an error from `protect`/`unprotect`, latched for the process:
+//! never plaintext, and never a *new* key that would orphan the data sealed
+//! under the old one.
 //!
 //! [`CryptProtectData`]: https://learn.microsoft.com/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod envelope;
+#[cfg(target_os = "macos")]
+mod keychain;
 
 /// One way of turning bytes nobody else can read into bytes on a disk.
 ///
@@ -66,8 +85,18 @@ pub trait SecretProvider: Send + Sync {
 
     /// The byte that identifies this provider in a file header, so a file
     /// written by one provider is refused by another instead of decrypting to
-    /// garbage. `1` is DPAPI.
+    /// garbage. `1` is DPAPI, `2` the macOS Keychain provider.
     fn id(&self) -> u8;
+
+    /// Can this provider seal and open at all right now?
+    ///
+    /// What lets a caller tell "this blob is unreadable" (move it aside, make
+    /// a new key) from "the provider is unavailable" (a locked or refused
+    /// keychain: refuse, and touch nothing). DPAPI is always ready, which is
+    /// the default.
+    fn ready(&self) -> Result<(), String> {
+        Ok(())
+    }
 
     fn protect(&self, plaintext: &[u8]) -> Result<Vec<u8>, String>;
     fn unprotect(&self, ciphertext: &[u8]) -> Result<Vec<u8>, String>;
@@ -95,14 +124,20 @@ pub fn provider() -> Option<&'static dyn SecretProvider> {
         static P: Dpapi = Dpapi;
         Some(&P)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        static P: keychain::Keychain = keychain::Keychain::new();
+        Some(&P)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         None
     }
 }
 
-/// Fills `buf` from the OS's preferred CSPRNG (`BCryptGenRandom`). An error,
-/// never a weaker fallback, on a platform without one here.
+/// Fills `buf` from the OS's preferred CSPRNG (`BCryptGenRandom` on Windows;
+/// on macOS ring's `SystemRandom`, which is `getentropy`). An error, never a
+/// weaker fallback, on a platform without one here.
 pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -113,7 +148,11 @@ pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
         }
         Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        envelope::fill_random(buf)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = buf;
         Err(String::from("no random generator on this platform"))
@@ -261,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     fn a_platform_without_a_provider_says_so_rather_than_faking_one() {
         assert!(provider().is_none());
     }
