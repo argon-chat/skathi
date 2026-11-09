@@ -6335,6 +6335,10 @@ fn build_input<V: 'static>(
         .and_then(gpui::Fill::color)
         .and_then(|b| b.as_solid())
         .unwrap_or(gpui::Hsla { h: 0.6, s: 0.8, l: 0.6, a: 0.35 });
+    let masked = !multiline
+        && t
+            .prop(id, "type")
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("password"));
     let options = TextInputOptions {
         placeholder: t.prop(id, "placeholder").unwrap_or("").to_string().into(),
         text_color,
@@ -6368,7 +6372,19 @@ fn build_input<V: 'static>(
             .and_then(|v| v.trim().parse::<usize>().ok())
             .filter(|n| *n > 0)
             .unwrap_or(vn_elements::DEFAULT_ROWS),
-        input_config: input_configuration(t, id, multiline),
+        input_config: {
+            let mut config = input_configuration(t, id, multiline);
+            // A browser offers no corrections or suggestions for a password,
+            // whatever the attributes say: they would learn it.
+            if masked {
+                config.autocorrect = false;
+                config.suggestions = false;
+            }
+            config
+        },
+        // Read every frame, so a "show password" toggle that switches `type`
+        // to `text` unmasks the value on the next frame.
+        masked,
         // `pointer-events: none`, inherited (the cascade resolved it before the
         // states were stored). An inert field takes no press at all — see
         // `TextInputOptions::inert`.

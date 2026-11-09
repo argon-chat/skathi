@@ -89,6 +89,8 @@ const CARET_BLINK_MS: u64 = 500;
 /// Caret width, also the slack kept visible to the right of the caret when
 /// scrolling to follow it.
 pub(crate) const CARET_WIDTH: Pixels = px(2.0);
+/// What a password field paints for each character: Chromium's bullet.
+pub(crate) const MASK: char = '\u{2022}';
 
 fn caret_visible(ms_since_activity: u64) -> bool {
     (ms_since_activity / CARET_BLINK_MS) % 2 == 0
@@ -311,6 +313,10 @@ pub struct TextInputState {
     /// `line_height * total visual rows` — what the vertical scroll clamps to.
     content_height: Pixels,
     display_is_placeholder: bool,
+    /// `type="password"`: the shaped lines hold one [`MASK`] per character of
+    /// the content, so offsets cross between the two through
+    /// [`Self::display_index`] and [`Self::content_index`].
+    masked: bool,
     scroll_left: Pixels,
     /// Vertical scroll offset, always zero for a single-line input.
     scroll_top: Pixels,
@@ -403,6 +409,7 @@ impl TextInputState {
             content_width: px(0.0),
             content_height: px(0.0),
             display_is_placeholder: true,
+            masked: false,
             align_offset: px(0.0),
             scroll_left: px(0.0),
             scroll_top: px(0.0),
@@ -1044,14 +1051,15 @@ impl TextInputState {
     }
 
     pub(crate) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
+        // A browser never lets a password out of its field.
+        if self.masked || self.selected_range.is_empty() {
             return;
         }
         cx.write_to_clipboard(ClipboardItem::new_string(self.selected_text().to_owned()));
     }
 
     pub(crate) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only || self.selected_range.is_empty() {
+        if self.masked || self.read_only || self.selected_range.is_empty() {
             return;
         }
         // Chromium writes the clipboard BEFORE it asks `beforeinput`
@@ -1308,10 +1316,47 @@ impl TextInputState {
         &self.lines
     }
 
+    pub(crate) fn set_masked(&mut self, masked: bool) {
+        self.masked = masked;
+    }
+
+    /// The text the field paints: the content, or one [`MASK`] per character
+    /// of it.
+    pub(crate) fn display_text(&self) -> String {
+        if self.masked {
+            std::iter::repeat_n(MASK, self.content.chars().count()).collect()
+        } else {
+            self.content.clone()
+        }
+    }
+
+    /// The painted text's byte offset for a content byte offset.
+    pub(crate) fn display_index(&self, index: usize) -> usize {
+        if self.masked {
+            masked_offset(&self.content, index)
+        } else {
+            index
+        }
+    }
+
+    /// The content byte offset for a painted text's byte offset.
+    fn content_index(&self, display: usize) -> usize {
+        if self.masked {
+            unmasked_offset(&self.content, display)
+        } else {
+            display
+        }
+    }
+
     /// Round a byte offset to the nearest grapheme boundary in the content, so
     /// a bisection over indices can never land inside a character.
     pub(crate) fn snap_index(&self, index: usize) -> usize {
         boundaries::snap(&self.content, index.min(self.content.len()))
+    }
+
+    /// The grapheme boundary after `index` (or the end of the content).
+    pub(crate) fn next_index(&self, index: usize) -> usize {
+        boundaries::next_grapheme(&self.content, index)
     }
 
     pub(crate) fn line_height(&self) -> Pixels {
@@ -1338,6 +1383,7 @@ impl TextInputState {
         if self.display_is_placeholder {
             return Point::default();
         }
+        let index = self.display_index(index);
         let Some((line_box, local)) = self.line_at(index) else {
             return Point::default();
         };
@@ -1396,7 +1442,9 @@ impl TextInputState {
         else {
             return 0;
         };
-        if row >= line_box.row0 + line_box.rows && line_box.end() >= self.content.len() {
+        if row >= line_box.row0 + line_box.rows
+            && line_box.end() >= self.display_index(self.content.len())
+        {
             return self.content.len();
         }
         let within = Point::new(
@@ -1409,7 +1457,8 @@ impl TextInputState {
         {
             Ok(i) | Err(i) => i,
         };
-        boundaries::snap(&self.content, line_box.start + index.min(line_box.line.len()))
+        let index = self.content_index(line_box.start + index.min(line_box.line.len()));
+        boundaries::snap(&self.content, index)
     }
 
     /// The start (`forward = false`) or end of the VISUAL row `index` is on.
@@ -1762,9 +1811,44 @@ fn secondary_press_keeps(selection: &Range<usize>, index: usize) -> bool {
     !selection.is_empty() && selection.start <= index && index <= selection.end
 }
 
+/// The masked text's byte offset for `index` in `content`: one [`MASK`] per
+/// character before it.
+fn masked_offset(content: &str, index: usize) -> usize {
+    content.char_indices().take_while(|(at, _)| *at < index).count() * MASK.len_utf8()
+}
+
+/// The `content` byte offset of the character a masked offset points at, or
+/// the end.
+fn unmasked_offset(content: &str, masked: usize) -> usize {
+    content
+        .char_indices()
+        .nth(masked / MASK.len_utf8())
+        .map_or(content.len(), |(at, _)| at)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn masked_offsets_round_trip_across_multibyte_characters() {
+        // ASCII, two-byte Cyrillic, a four-byte emoji: every character is one
+        // three-byte bullet.
+        let content = "aж😀b";
+        let boundaries: Vec<usize> = content
+            .char_indices()
+            .map(|(at, _)| at)
+            .chain([content.len()])
+            .collect();
+        for (n, &at) in boundaries.iter().enumerate() {
+            assert_eq!(masked_offset(content, at), n * MASK.len_utf8());
+            assert_eq!(unmasked_offset(content, n * MASK.len_utf8()), at);
+        }
+        // A hit inside a bullet's bytes still names that character.
+        assert_eq!(unmasked_offset(content, 4), 1);
+        assert_eq!(unmasked_offset(content, 99), content.len());
+        assert_eq!(masked_offset("", 0), 0);
+    }
 
     #[test]
     fn input_pointer_coordinates_invert_rotation_scale_and_shear_at_every_dpi() {

@@ -373,6 +373,9 @@ pub struct TextInputOptions {
     /// for pixel on top of the live ones and would otherwise swallow every
     /// click and every keystroke aimed at them.
     pub inert: bool,
+    /// `<input type="password">`: every character paints as a bullet, and the
+    /// value cannot be copied or cut out of the field, as in a browser.
+    pub masked: bool,
 }
 
 impl Default for TextInputOptions {
@@ -392,6 +395,7 @@ impl Default for TextInputOptions {
             inherit_color: false,
             input_config: TextInputConfiguration::default(),
             inert: false,
+            masked: false,
         }
     }
 }

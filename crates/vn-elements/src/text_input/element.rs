@@ -122,10 +122,13 @@ impl Element for TextElement {
             self.options.caret_color = inherited;
             self.options.placeholder_color = gpui::Hsla { a: inherited.a * 0.45, ..inherited };
         }
-        let (content, marked_range) = {
-            let state = self.state.read(cx);
-            (state.text().to_owned(), state.marked_range())
-        };
+        let (content, marked_range) = self.state.update(cx, |state, _| {
+            state.set_masked(self.options.masked);
+            let marked = state
+                .marked_range()
+                .map(|range| state.display_index(range.start)..state.display_index(range.end));
+            (state.display_text(), marked)
+        });
 
         let is_placeholder = content.is_empty();
         let display: SharedString = if is_placeholder {
@@ -356,16 +359,38 @@ fn selection_quads(
 
 /// The largest index in `(lo, hi]` still on the visual row whose top is `y`.
 fn row_end(state: &TextInputState, lo: usize, hi: usize, y: Pixels) -> usize {
+    last_on_row(
+        lo,
+        hi,
+        |index| state.snap_index(index),
+        |index| state.next_index(index),
+        |index| state.position_for_index(index).y == y,
+    )
+}
+
+/// The bisection behind [`row_end`]. `snap` rounds down to a boundary, so a
+/// midpoint inside a multi-byte character can fall back to `low`; stepping to
+/// the next boundary instead keeps going rather than ending the row there.
+fn last_on_row(
+    lo: usize,
+    hi: usize,
+    snap: impl Fn(usize) -> usize,
+    next: impl Fn(usize) -> usize,
+    on_row: impl Fn(usize) -> bool,
+) -> usize {
     let (mut low, mut high) = (lo, hi);
     while low < high {
-        let mid = state.snap_index(low + (high - low + 1) / 2);
+        let mut mid = snap(low + (high - low + 1) / 2);
+        if mid <= low {
+            mid = next(low).min(high);
+        }
         if mid <= low {
             break;
         }
-        if state.position_for_index(mid).y == y {
+        if on_row(mid) {
             low = mid;
         } else {
-            high = state.snap_index(mid - 1).min(mid - 1);
+            high = snap(mid - 1).min(mid - 1);
             if high < low {
                 break;
             }
@@ -445,4 +470,23 @@ fn shape(
         start = (start + len + 1).min(text.len().max(start + len));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::boundaries;
+    use super::last_on_row;
+
+    #[test]
+    fn a_row_end_bisection_steps_over_multibyte_characters() {
+        // The midpoint of the first probe lands inside the emoji, and rounding
+        // it down used to end the row there, short of the selection.
+        let text = "Пароль ёж 😀!";
+        let snap = |index| boundaries::snap(text, index);
+        let next = |index| boundaries::next_grapheme(text, index);
+        assert_eq!(last_on_row(6, text.len(), snap, next, |_| true), text.len());
+        let wrap = "Пароль ёж".len();
+        assert_eq!(last_on_row(6, text.len(), snap, next, |index| index <= wrap), wrap);
+        assert_eq!(last_on_row(0, "😀".len(), snap, next, |_| true), "😀".len());
+    }
 }
