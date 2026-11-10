@@ -88,11 +88,14 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 # The file dialogs (src/dialog/mac.rs). The features only switch on more of
 # the same two crates (gpui's AppKit backend already builds objc2-app-kit
 # 0.3.2); none of them pulls in an optional dependency, so the graph is
-# unchanged. UTType has no binding here and is used by name.
+# unchanged. UTType has no binding here and is used by name. The tray
+# (src/tray/macos.rs) adds the status item, its menu items, NSImage with its
+# bitmap representations and NSEvent: again only more of the same crates.
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
     "block2",
     "NSArray",
+    "NSData",
     "NSEnumerator",
     "NSFileManager",
     "NSGeometry",
@@ -109,19 +112,28 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "block2",
     "NSAlert",
     "NSApplication",
+    "NSBitmapImageRep",
     "NSButton",
+    "NSCell",
     "NSColor",
     "NSColorPanel",
     "NSColorSpace",
     "NSControl",
+    "NSEvent",
     "NSGraphics",
+    "NSImage",
+    "NSImageRep",
     "NSMenu",
+    "NSMenuItem",
     "NSOpenPanel",
     "NSPanel",
     "NSPopUpButton",
     "NSResponder",
     "NSRunningApplication",
     "NSSavePanel",
+    "NSStatusBar",
+    "NSStatusBarButton",
+    "NSStatusItem",
     "NSText",
     "NSTextField",
     "NSView",

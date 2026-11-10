@@ -609,7 +609,7 @@ mod tests {
             })
         });
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn queued_js_callback_is_retired_when_rust_replaces_or_stops_model() {
         vn_runtime::testing::on_js_thread(|| {
@@ -629,7 +629,8 @@ mod tests {
                                 .unwrap(),
                         )
                         .unwrap();
-                    // A hidden controller without a notification icon needs no Explorer.
+                    // A controller without an icon needs no Explorer (Windows)
+                    // and no main queue (macOS creates its item there, lazily).
                     let tray = Tray::new().unwrap();
                     let revision = tray.set(None).unwrap();
                     STATE.with(|state| {

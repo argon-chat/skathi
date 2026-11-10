@@ -1,4 +1,6 @@
-//! Application-owned notification icons. OS callbacks never run on the JS thread.
+//! Application-owned notification icons. OS callbacks never run inside JS: on
+//! Windows they run on the tray's own thread; on macOS on the main thread
+//! (which is also the VM's), from AppKit's event dispatch.
 
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -10,7 +12,8 @@ pub struct Icon {
     pub width: u32,
     pub height: u32,
     pub rgba: Arc<[u8]>,
-    /// Render the alpha mask in the taskbar's foreground colour.
+    /// Render the alpha mask in the taskbar's foreground colour (on macOS, a
+    /// template image in the menu bar's text colour).
     pub template: bool,
 }
 
@@ -180,9 +183,17 @@ impl std::error::Error for Error {}
 mod windows;
 #[cfg(windows)]
 use windows::Controller;
-#[cfg(not(windows))]
+// The status item's AppKit half; what it is told is decided in mac_plan.rs,
+// unit-tested on every OS.
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::Controller;
+#[cfg(any(target_os = "macos", test))]
+mod mac_plan;
+#[cfg(not(any(windows, target_os = "macos")))]
 struct Controller;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl Controller {
     fn start() -> Result<Arc<Self>, Error> {
         Err(Error::Unsupported)
@@ -210,7 +221,7 @@ pub struct Tray {
 static APP: OnceLock<Mutex<Weak<Owner>>> = OnceLock::new();
 impl Tray {
     pub const fn is_available() -> bool {
-        cfg!(windows)
+        cfg!(any(windows, target_os = "macos"))
     }
     pub fn new() -> Result<Self, Error> {
         Ok(Self {

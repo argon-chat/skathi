@@ -826,6 +826,14 @@ pub(crate) fn setup(runtime: &JsRuntime) -> Result<(), String> {
     config.setup.run(&HostContext::installed(Some(runtime)))
 }
 
+/// The Dock icon was clicked while no window is visible (macOS
+/// `applicationShouldHandleReopen:`): the primary window comes back as
+/// [`Handle::show`] brings it, in the next frame. A closing app ignores it.
+#[cfg(target_os = "macos")]
+pub(crate) fn reopen() {
+    let _accepted = Handle { _private: () }.show();
+}
+
 /// In the frame's JS wave (lib.rs `js_wave`): a close the embedder asked for.
 pub(crate) fn pump() {
     let show = SHOW.swap(false, Ordering::AcqRel);

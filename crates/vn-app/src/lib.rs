@@ -1396,6 +1396,11 @@ fn run_app() {
     // never reaches the SDK shutdown hooks or the embedding lifecycle callback.
     let app = install_http_client(application())
         .with_quit_mode(gpui::QuitMode::LastWindowClosed);
+    // A primary window that is not on screen (a hidden start, `visible(false)`)
+    // comes back on a Dock click as on a tray click. AppKit asks only when no
+    // window is visible; the show is queued, never applied inside its callback.
+    #[cfg(target_os = "macos")]
+    app.on_reopen(|_| embed::reopen());
     // gpui reads `Resource::Embedded(key)` — what an `<img>` resolves to in a
     // packaged exe — through this, straight out of the mapped payload.
     #[cfg(feature = "prod")]

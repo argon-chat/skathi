@@ -3,7 +3,7 @@ export interface TrayPixels {
   readonly width: number;
   readonly height: number;
   readonly data: Uint8Array | Uint8ClampedArray;
-  /** Draw the alpha mask in the taskbar foreground colour. */
+  /** Draw the alpha mask in the taskbar foreground colour (a menu-bar template image on macOS). */
   readonly template?: boolean;
 }
 export type TrayMenuItem =
@@ -21,7 +21,7 @@ export interface TrayOptions {
   readonly onClick?: () => void;
 }
 export interface AppTray {
-  /** Windows currently. Unsupported hosts throw NotSupportedError on set(options). */
+  /** Windows and macOS. Unsupported hosts throw NotSupportedError on set(options). */
   readonly available: boolean;
   /** Replace the complete tray model; null removes it. Native updates coalesce. */
   set(options: TrayOptions | null): void;

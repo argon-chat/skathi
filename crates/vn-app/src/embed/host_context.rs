@@ -67,6 +67,13 @@ impl<'a> HostContext<'a> {
         crate::js::JsDispatcher::install(self.js())
     }
 
+    /// The running app's [`super::Handle`], for UI that outlives setup — a
+    /// tray icon that shows or closes the window. On macOS it is the only way
+    /// to one: `run_on_main_thread` keeps the process and returns no handle.
+    pub fn handle(&self) -> super::Handle {
+        super::Handle { _private: () }
+    }
+
     /// Called on the VM thread after old-page teardown, before its replacement.
     /// Clear and unprotect page-owned callbacks here. The namespace remains installed.
     pub fn on_reload(&self, hook: impl Fn(&crate::js::Context) + 'static) {
