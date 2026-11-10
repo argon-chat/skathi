@@ -60,14 +60,16 @@ use crate::decisions::{Decision, Entry, Store};
 /// The capabilities this layer asks about itself: the microphone, and the
 /// camera where this build can capture one. Asking about a device that could
 /// never open would only be followed by a `NotSupportedError`, so elsewhere
-/// the camera is the platform's (`unsupported` on macOS today).
+/// the camera is the platform's (`unsupported` on Linux today). On macOS
+/// both are TCC's to ask (`has_native_prompt`), which this layer defers to.
 pub fn prompts(cap: Capability) -> bool {
     prompts_with(cap, CAMERA_CAPTURE)
 }
 
 /// Whether vn-voice has a camera backend on this platform (`video.rs`:
-/// Media Foundation on Windows; macOS and Linux have none).
-const CAMERA_CAPTURE: bool = cfg!(target_os = "windows");
+/// Media Foundation and DirectShow on Windows, AVFoundation on macOS; Linux
+/// has none).
+const CAMERA_CAPTURE: bool = cfg!(any(target_os = "windows", target_os = "macos"));
 
 fn prompts_with(cap: Capability, camera_capture: bool) -> bool {
     match cap {
@@ -815,9 +817,9 @@ mod tests {
         assert!(prompts_with(Capability::Camera, true));
         assert!(!prompts_with(Capability::Camera, false), "no backend: the platform's own state");
         assert!(!prompts_with(Capability::DisplayCapture, true));
-        assert_eq!(prompts(Capability::Camera), cfg!(target_os = "windows"));
+        assert_eq!(prompts(Capability::Camera), cfg!(any(target_os = "windows", target_os = "macos")));
         if !prompts(Capability::Camera) {
-            // macOS: the backend reports the camera unsupported, and nothing asks.
+            // Linux: the backend reports the camera unsupported, and nothing asks.
             let os: &'static StubHost = Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Camera, Unsupported)])));
             let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
             assert_eq!(h.status(Capability::Camera), Unsupported);
@@ -890,8 +892,74 @@ mod tests {
         assert_eq!(question(Capability::Camera, "Argon", false).instruction, "Argon wants to use your camera");
     }
 
+    /// macOS: TCC asks for the camera as it does for the microphone, and the
+    /// app's own question and stored answers stay out of it.
+    #[test]
+    fn native_camera_consent_is_the_microphones_model() {
+        if !prompts(Capability::Camera) {
+            return;
+        }
+        struct NativeAv {
+            states: Mutex<Vec<(Capability, PermissionState)>>,
+            settled: Mutex<Vec<(u32, PermissionState)>>,
+            requested: Mutex<Vec<Capability>>,
+        }
+        impl NativeAv {
+            fn set(&self, cap: Capability, state: PermissionState) {
+                self.states.lock().unwrap().retain(|(c, _)| *c != cap);
+                self.states.lock().unwrap().push((cap, state));
+            }
+        }
+        impl PermissionHost for NativeAv {
+            fn platform(&self) -> &'static str { "native-test" }
+            fn has_native_prompt(&self, cap: Capability) -> bool {
+                matches!(cap, Capability::Microphone | Capability::Camera)
+            }
+            fn status(&self, cap: Capability) -> PermissionState {
+                self.states.lock().unwrap().iter().find(|(c, _)| *c == cap).map_or(Unsupported, |(_, s)| *s)
+            }
+            fn request(&self, cap: Capability) -> RequestOutcome {
+                self.requested.lock().unwrap().push(cap);
+                RequestOutcome::Pending(if cap == Capability::Camera { 38 } else { 37 })
+            }
+            fn drain_settled(&self) -> Vec<(u32, PermissionState)> {
+                std::mem::take(&mut *self.settled.lock().unwrap())
+            }
+        }
+        let os = Box::leak(Box::new(NativeAv {
+            states: Mutex::new(vec![(Capability::Microphone, Granted), (Capability::Camera, Prompt)]),
+            settled: Mutex::new(Vec::new()),
+            requested: Mutex::new(Vec::new()),
+        }));
+        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+        h.shared.lock_store().set(Capability::Camera, Some(Decision::Allow));
+        assert_eq!(h.status(Capability::Camera), Prompt, "a saved app Allow cannot grant TCC");
+        let token = pending(h.request(Capability::Camera));
+        assert_eq!(asked(), 0, "TCC owns the only prompt");
+        assert_eq!(*os.requested.lock().unwrap(), vec![Capability::Camera]);
+        assert!(h.in_flight(Capability::Camera));
+        os.set(Capability::Camera, Granted);
+        os.settled.lock().unwrap().push((38, Granted));
+        assert_eq!(h.drain_settled(), vec![(token, Granted)]);
+        assert!(!h.in_flight(Capability::Camera));
+        assert_eq!(h.status(Capability::Camera), Granted);
+        assert_eq!(h.status(Capability::Microphone), Granted, "the microphone's state is its own");
+        // Turned off in System Settings: the system's denial, whatever the
+        // app stored, and a request is the platform's (its Camera pane).
+        os.set(Capability::Camera, Denied);
+        assert_eq!(h.status(Capability::Camera), Denied);
+        assert!(h.denied_by_system(Capability::Camera));
+        let _ = h.request(Capability::Camera);
+        assert_eq!(os.requested.lock().unwrap().len(), 2);
+        assert_eq!(asked(), 0);
+        // The deny latch never reaches AVFoundation.
+        let forbidden = AppConsent::new(os, Hooks { forbidden: yes, fake: no, asker: with_asker });
+        assert_eq!(forbidden.request(Capability::Camera), RequestOutcome::Settled(Denied));
+        assert_eq!(os.requested.lock().unwrap().len(), 2);
+    }
+
     /// Only where the camera prompts at all (`prompts`).
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[test]
     fn camera_consent_is_separate_from_microphone_consent() {
         let os = Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Microphone, Granted), (Capability::Camera, Granted)])));

@@ -69,6 +69,9 @@ pub mod win;
 #[cfg(target_os = "macos")]
 pub mod mac;
 
+#[cfg(any(target_os = "macos", test))]
+mod tcc;
+
 pub use consent::{set_app_name, set_asker, Asker, Question};
 pub use vn_runtime::redjs::webapi::permissions::{Capability as Cap, PermissionState as State};
 
@@ -153,8 +156,11 @@ pub fn refusal_hint(cap: Capability) -> Option<String> {
     #[cfg(target_os = "macos")]
     match cap {
         Capability::DisplayCapture => return Some(screen_recording_hint(&consent::app_name())),
-        Capability::Microphone => return Some(mac_microphone_hint(&consent::app_name())),
-        _ => {}
+        _ => {
+            if let Some(media) = tcc::media(cap) {
+                return Some(mac_privacy_hint(&consent::app_name(), media.page, media.anchor));
+            }
+        }
     }
     #[cfg(target_os = "windows")]
     match cap {
@@ -174,11 +180,12 @@ fn screen_recording_hint(app: &str) -> String {
     )
 }
 
+/// A microphone or camera pane (`tcc::media`): its page and its anchor.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn mac_microphone_hint(app: &str) -> String {
+fn mac_privacy_hint(app: &str, page: &str, anchor: &str) -> String {
     format!(
-        "Turn on {app} in System Settings › Privacy & Security › Microphone \
-         (x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone)."
+        "Turn on {app} in System Settings › Privacy & Security › {page} \
+         (x-apple.systempreferences:com.apple.preference.security?{anchor})."
     )
 }
 
@@ -657,10 +664,17 @@ mod tests {
 
     #[test]
     fn a_refusal_hint_names_the_platforms_own_page() {
+        let mic = tcc::media(Capability::Microphone).unwrap();
         assert_eq!(
-            mac_microphone_hint("Argon"),
+            mac_privacy_hint("Argon", mic.page, mic.anchor),
             "Turn on Argon in System Settings › Privacy & Security › Microphone \
              (x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone)."
+        );
+        let camera = tcc::media(Capability::Camera).unwrap();
+        assert_eq!(
+            mac_privacy_hint("Argon", camera.page, camera.anchor),
+            "Turn on Argon in System Settings › Privacy & Security › Camera \
+             (x-apple.systempreferences:com.apple.preference.security?Privacy_Camera)."
         );
         assert_eq!(
             windows_hint("Camera", "camera", "privacy-webcam"),
@@ -673,7 +687,10 @@ mod tests {
             assert!(refusal_hint(Capability::Camera).unwrap().contains("ms-settings:privacy-webcam"));
         }
         #[cfg(target_os = "macos")]
-        assert!(refusal_hint(Capability::Microphone).unwrap().contains("Privacy_Microphone"));
+        {
+            assert!(refusal_hint(Capability::Microphone).unwrap().contains("Privacy_Microphone"));
+            assert!(refusal_hint(Capability::Camera).unwrap().contains("Privacy_Camera"));
+        }
         assert_eq!(refusal_hint(Capability::Geolocation), None);
     }
 

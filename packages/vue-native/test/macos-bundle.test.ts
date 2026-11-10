@@ -163,6 +163,7 @@ describe("Info.plist", () => {
     expect(d.NSHumanReadableCopyright).toBe("© 2026 Argon");
     expect(d.NSMicrophoneUsageDescription).toBe("Voice rooms use the microphone.");
     expect(d.NSCameraUsageDescription).toBe("Video calls use the camera.");
+    expect(d.NSCameraUseContinuityCameraDeviceType).toBe(true);
     expect(d.CFBundleURLTypes).toEqual([{ CFBundleURLName: "gl.argon.hello", CFBundleURLSchemes: ["argon", "argon-dev"] }]);
     expect(readPlist(plistXml(d))).toEqual(d);
   });

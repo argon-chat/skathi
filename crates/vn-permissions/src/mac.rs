@@ -1,7 +1,9 @@
-//! Native macOS consent through TCC: the microphone (AVFoundation) and
-//! screen recording (CoreGraphics).
+//! Native macOS consent through TCC: the microphone and the camera
+//! (AVFoundation) and screen recording (CoreGraphics).
 //!
-//! AVFoundation owns this app's microphone prompt. Its completion runs on an
+//! AVFoundation owns this app's microphone and camera prompts, one model for
+//! both (`tcc::media`): `authorizationStatusForMediaType:` with
+//! `AVMediaTypeAudio` or `AVMediaTypeVideo`. Its completion runs on an
 //! arbitrary queue and only writes to a Rust queue; the normal permission pump
 //! resolves JS promises and emits change events on the VM thread.
 //!
@@ -17,15 +19,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use block2::RcBlock;
 use objc2::{class, msg_send, runtime::Bool};
-use objc2_foundation::{ns_string, NSBundle, NSString};
+use objc2_foundation::{NSBundle, NSString};
 use vn_runtime::redjs::webapi::permissions::{
     Capability, PermissionHost, PermissionState, RequestOutcome,
 };
+
+use crate::tcc::{self, Media, Requests};
 
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {
     // An AVMediaType is an NSString constant owned by AVFoundation.
     static AVMediaTypeAudio: *const NSString;
+    static AVMediaTypeVideo: *const NSString;
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -37,65 +42,14 @@ unsafe extern "C" {
     fn CGRequestScreenCaptureAccess() -> bool;
 }
 
-#[derive(Default)]
-struct Requests {
-    next: u32,
-    /// Capabilities whose request is in flight.
-    asking: Vec<Capability>,
-    waiting: Vec<(u32, Capability)>,
-    settled: Vec<(u32, PermissionState)>,
-    changes: Vec<Capability>,
-    /// Screen recording was requested in this run and not granted: what
-    /// tells a refusal from a capability nobody has asked about yet.
-    screen_refused: bool,
-    /// The screen-recording state last reported, so that a read which sees
-    /// it move (a grant before relaunch, macOS 15's periodic re-ask) queues
-    /// a `change`.
-    screen_seen: Option<PermissionState>,
-}
-
-impl Requests {
-    fn begin(&mut self, cap: Capability) -> (u32, bool) {
-        self.next = self.next.wrapping_add(1).max(1);
-        self.waiting.push((self.next, cap));
-        let show = !self.asking.contains(&cap);
-        if show {
-            self.asking.push(cap);
+/// The AVMediaType of an AVFoundation capability.
+fn media_type(media: Media) -> &'static NSString {
+    // SAFETY: both constants are AVFoundation's, valid for the process.
+    unsafe {
+        match media.cap {
+            Capability::Camera => &*AVMediaTypeVideo,
+            _ => &*AVMediaTypeAudio,
         }
-        (self.next, show)
-    }
-
-    fn complete(&mut self, cap: Capability, state: PermissionState) {
-        self.asking.retain(|c| *c != cap);
-        if cap == Capability::DisplayCapture {
-            self.screen_refused = state != PermissionState::Granted;
-            self.screen_seen = Some(state);
-        }
-        let mut done = Vec::new();
-        self.waiting.retain(|&(token, c)| {
-            if c == cap {
-                done.push((token, state));
-            }
-            c != cap
-        });
-        self.settled.extend(done);
-        self.changed(cap);
-    }
-
-    fn changed(&mut self, cap: Capability) {
-        if !self.changes.contains(&cap) {
-            self.changes.push(cap);
-        }
-    }
-
-    /// One screen-recording read, `granted` being the preflight's answer.
-    fn screen(&mut self, granted: bool) -> PermissionState {
-        let state = screen_state(granted, self.screen_refused);
-        if self.screen_seen.is_some_and(|seen| seen != state) {
-            self.changed(Capability::DisplayCapture);
-        }
-        self.screen_seen = Some(state);
-        state
     }
 }
 
@@ -125,26 +79,36 @@ impl MacHost {
         self.lock().screen(granted)
     }
 
-    fn request_microphone(&self) -> RequestOutcome {
-        if !microphone_usage_description_present() {
-            static WARN: std::sync::Once = std::sync::Once::new();
-            WARN.call_once(|| eprintln!(
-                "[permissions] microphone access requires a macOS .app with a nonempty NSMicrophoneUsageDescription in Info.plist"
+    fn media_state(&self, media: Media) -> PermissionState {
+        let state = media_state(media);
+        self.lock().read(media.cap, state)
+    }
+
+    fn request_media(&self, media: Media) -> RequestOutcome {
+        if !usage_description_present(media.cap) {
+            static MICROPHONE: std::sync::Once = std::sync::Once::new();
+            static CAMERA: std::sync::Once = std::sync::Once::new();
+            let once = if media.cap == Capability::Camera { &CAMERA } else { &MICROPHONE };
+            once.call_once(|| eprintln!(
+                "[permissions] {} access requires a macOS .app with a nonempty {} in Info.plist",
+                media.cap.web_name(),
+                media.usage_key
             ));
             return RequestOutcome::Settled(PermissionState::Denied);
         }
-        let state = microphone_state();
+        let state = self.media_state(media);
         if state != PermissionState::Prompt {
             if state == PermissionState::Denied {
                 // TCC cannot re-prompt after a denial. A user's explicit
                 // request opens its recovery page without blocking the VM.
-                open_privacy_pane("Privacy_Microphone");
+                open_privacy_pane(media.anchor);
             }
             return RequestOutcome::Settled(state);
         }
-        let (token, show) = self.lock().begin(Capability::Microphone);
+        let (token, show) = self.lock().begin(media.cap);
         if show {
             let requests = Arc::clone(self.requests());
+            let cap = media.cap;
             let completion = RcBlock::new(move |granted: Bool| {
                 let state = if granted.as_bool() {
                     PermissionState::Granted
@@ -154,14 +118,16 @@ impl MacHost {
                 requests
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .complete(Capability::Microphone, state);
+                    .complete(cap, state);
             });
             // SAFETY: the framework copies the escaping completion block.
             // It captures only an Arc/Mutex queue, never a JS value or UI
-            // object. The method is asynchronous and may call back on any queue.
+            // object. The method is asynchronous (it returns at once, and
+            // TCC's prompt is the system's, not drawn on this thread) and
+            // may call back on any queue.
             unsafe {
                 let _: () = msg_send![class!(AVCaptureDevice),
-                    requestAccessForMediaType: &*AVMediaTypeAudio,
+                    requestAccessForMediaType: media_type(media),
                     completionHandler: &*completion
                 ];
             }
@@ -216,58 +182,41 @@ impl MacHost {
 /// Opens a Privacy & Security pane of System Settings without blocking.
 fn open_privacy_pane(anchor: &str) {
     let _ = std::process::Command::new("/usr/bin/open")
-        .arg(format!(
-            "x-apple.systempreferences:com.apple.preference.security?{anchor}"
-        ))
+        .arg(tcc::privacy_pane_url(anchor))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
 }
 
-fn microphone_usage_description_present() -> bool {
+/// Whether the app's Info.plist says why it wants `cap` (the microphone or
+/// the camera). TCC terminates an app that requests or captures without it,
+/// so nothing may touch the device unless this is true; vn-voice's camera
+/// checks it too before it opens one.
+pub fn usage_description_present(cap: Capability) -> bool {
+    let Some(media) = tcc::media(cap) else {
+        return false;
+    };
+    let key = NSString::from_str(media.usage_key);
     NSBundle::mainBundle()
-        .objectForInfoDictionaryKey(ns_string!("NSMicrophoneUsageDescription"))
+        .objectForInfoDictionaryKey(&key)
         .and_then(|value| value.downcast::<NSString>().ok())
         .is_some_and(|text| !text.to_string().trim().is_empty())
 }
 
-fn authorization_state(value: isize) -> PermissionState {
-    // AVAuthorizationStatus: notDetermined=0, restricted=1, denied=2,
-    // authorized=3. A future unknown value cannot be treated as a grant.
-    match value {
-        0 => PermissionState::Prompt,
-        3 => PermissionState::Granted,
-        _ => PermissionState::Denied,
-    }
-}
-
-/// Screen recording's state from the preflight and whether this run's
-/// request was refused. Without a refusal, a missing grant is `prompt`:
-/// TCC cannot tell "never asked" from "said no" before the app asks.
-fn screen_state(granted: bool, refused: bool) -> PermissionState {
-    if granted {
-        PermissionState::Granted
-    } else if refused {
-        PermissionState::Denied
-    } else {
-        PermissionState::Prompt
-    }
-}
-
-fn microphone_state() -> PermissionState {
-    if !microphone_usage_description_present() {
+fn media_state(media: Media) -> PermissionState {
+    if !usage_description_present(media.cap) {
         // TCC terminates an app that requests or captures without this key.
         // Refuse the capture gate before either API can be called, including
         // bare cargo-run hosts which do not have an application Info.plist.
         return PermissionState::Denied;
     }
-    // SAFETY: AVCaptureDevice and AVMediaTypeAudio are supplied by the linked
+    // SAFETY: AVCaptureDevice and the media type are supplied by the linked
     // framework. The SDK declares this class method with NSInteger result.
     let status: isize = unsafe {
-        msg_send![class!(AVCaptureDevice), authorizationStatusForMediaType: &*AVMediaTypeAudio]
+        msg_send![class!(AVCaptureDevice), authorizationStatusForMediaType: media_type(media)]
     };
-    authorization_state(status)
+    tcc::authorization_state(status)
 }
 
 impl PermissionHost for MacHost {
@@ -276,21 +225,21 @@ impl PermissionHost for MacHost {
     }
 
     fn has_native_prompt(&self, cap: Capability) -> bool {
-        matches!(cap, Capability::Microphone | Capability::DisplayCapture)
+        matches!(cap, Capability::Microphone | Capability::Camera | Capability::DisplayCapture)
     }
 
     fn status(&self, cap: Capability) -> PermissionState {
-        match cap {
-            Capability::Microphone => microphone_state(),
-            Capability::DisplayCapture => self.screen_capture_state(),
+        match (cap, tcc::media(cap)) {
+            (_, Some(media)) => self.media_state(media),
+            (Capability::DisplayCapture, None) => self.screen_capture_state(),
             _ => PermissionState::Unsupported,
         }
     }
 
     fn request(&self, cap: Capability) -> RequestOutcome {
-        match cap {
-            Capability::Microphone => self.request_microphone(),
-            Capability::DisplayCapture => self.request_screen_capture(),
+        match (cap, tcc::media(cap)) {
+            (_, Some(media)) => self.request_media(media),
+            (Capability::DisplayCapture, None) => self.request_screen_capture(),
             _ => RequestOutcome::Settled(self.status(cap)),
         }
     }
@@ -309,66 +258,5 @@ impl PermissionHost for MacHost {
                 .map(|q| std::mem::take(&mut q.lock().unwrap_or_else(|p| p.into_inner()).changes))
                 .unwrap_or_default(),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn avfoundation_statuses_do_not_promote_restrictions_or_unknowns() {
-        assert_eq!(authorization_state(0), PermissionState::Prompt);
-        assert_eq!(authorization_state(1), PermissionState::Denied);
-        assert_eq!(authorization_state(2), PermissionState::Denied);
-        assert_eq!(authorization_state(3), PermissionState::Granted);
-        assert_eq!(authorization_state(99), PermissionState::Denied);
-    }
-
-    #[test]
-    fn concurrent_requests_share_one_prompt_and_settle_every_token_once() {
-        let mut requests = Requests::default();
-        let (first, show) = requests.begin(Capability::Microphone);
-        assert!(show);
-        let (second, show) = requests.begin(Capability::Microphone);
-        assert!(!show);
-        assert_ne!(first, second);
-        requests.complete(Capability::Microphone, PermissionState::Granted);
-        assert_eq!(
-            std::mem::take(&mut requests.settled),
-            vec![
-                (first, PermissionState::Granted),
-                (second, PermissionState::Granted),
-            ]
-        );
-        assert!(requests.settled.is_empty());
-        assert_eq!(requests.changes, vec![Capability::Microphone]);
-        assert!(
-            requests.begin(Capability::Microphone).1,
-            "a completed request does not leave a prompt in flight"
-        );
-    }
-
-    #[test]
-    fn screen_recording_is_prompt_until_a_request_in_this_run_is_refused() {
-        assert_eq!(screen_state(true, false), PermissionState::Granted);
-        assert_eq!(screen_state(true, true), PermissionState::Granted, "a grant wins over an earlier refusal");
-        assert_eq!(screen_state(false, false), PermissionState::Prompt);
-        assert_eq!(screen_state(false, true), PermissionState::Denied);
-
-        let mut requests = Requests::default();
-        assert_eq!(requests.screen(false), PermissionState::Prompt);
-        let (mic, _) = requests.begin(Capability::Microphone);
-        let (screen, show) = requests.begin(Capability::DisplayCapture);
-        assert!(show, "the screen prompt is not the microphone's");
-        requests.complete(Capability::DisplayCapture, PermissionState::Denied);
-        assert_eq!(std::mem::take(&mut requests.settled), vec![(screen, PermissionState::Denied)]);
-        assert_eq!(requests.waiting, vec![(mic, Capability::Microphone)], "the microphone waiter stays");
-        assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::DisplayCapture]);
-        assert_eq!(requests.screen(false), PermissionState::Denied);
-        assert!(requests.changes.is_empty(), "a read that agrees is not a change");
-        // Granted in System Settings and visible to the preflight.
-        assert_eq!(requests.screen(true), PermissionState::Granted);
-        assert_eq!(std::mem::take(&mut requests.changes), vec![Capability::DisplayCapture]);
     }
 }
