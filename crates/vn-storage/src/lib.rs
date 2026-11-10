@@ -1168,7 +1168,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     fn asking_for_encryption_without_a_provider_is_refused_not_silently_plaintext() {
         let _g = serial();
         let t = Temp::new("no-provider");

@@ -435,10 +435,10 @@ mod gcm {
     }
 }
 
-/// AES-256-GCM through ring: the macOS cipher. Compiled under `test` on every
+/// AES-256-GCM through ring: the macOS and Linux cipher. Compiled under `test` on every
 /// platform, where it is checked against CNG's (a sealed entry is the same
 /// `nonce (12) ‖ ciphertext ‖ tag (16)`).
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod ring_gcm {
     use std::path::Path;
     use std::sync::Arc;
@@ -592,20 +592,21 @@ mod ring_gcm {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod gcm {
     use std::path::Path;
     use std::sync::Arc;
     use vn_runtime::redjs::webapi::http::cache::Sealer;
 
-    /// The folder's key, sealed by the Keychain provider, as a [`Sealer`].
+    /// The folder's key, sealed by the platform provider (Keychain, Secret
+    /// Service), as a [`Sealer`].
     pub fn sealer(dir: &Path) -> Result<Arc<dyn Sealer>, String> {
-        let p = crate::crypt::provider().ok_or("no Keychain provider on this platform")?;
+        let p = crate::crypt::provider().ok_or("no storage key provider on this platform")?;
         super::ring_gcm::sealer_with(dir, p)
     }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 mod gcm {
     use std::path::Path;
     use std::sync::Arc;

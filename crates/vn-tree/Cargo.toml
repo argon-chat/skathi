@@ -49,3 +49,8 @@ futures = "0.3"
 # WOFF and WOFF2 fonts are unpacked by DirectWrite (`UnpackFontFile`), the text
 # stack that then shapes them. The version and feature gpui_windows builds.
 windows = { version = "0.62", features = ["Win32_Graphics_DirectWrite"] }
+
+[target.'cfg(not(windows))'.dependencies]
+# WOFF and WOFF2 fonts are unpacked in Rust where there is no DirectWrite
+# (src/fonts.rs `unpack`): Core Text and cosmic-text take only sfnt.
+wuff = "0.2.10"

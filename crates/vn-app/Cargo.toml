@@ -223,6 +223,12 @@ gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-featur
 libc = "0.2"
 mach2 = "0.6"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# gpui's Linux display backends, both: a Wayland session where there is one,
+# X11 (XWayland included) elsewhere. Off, gpui_linux is a headless platform
+# that opens no window.
+gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["wayland", "x11"] }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # WebGPU joins the native renderer device on first requestAdapter.
 # Compiling the API does not initialize its guest device or shader caches.

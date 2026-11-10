@@ -63,6 +63,17 @@ security-framework = { version = "3.7", default-features = false }
 core-foundation = "0.10.1"
 libc = "0.2.189"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# The Linux provider (src/crypt/secret_service.rs): the macOS envelope over
+# ring, its master key in the Secret Service through oo7 — the client gpui's
+# Linux platform already links, at its revision and on its async-io runtime,
+# so this adds no packages — driven synchronously with futures-lite.
+# libc: statvfs, for IndexedDB's quota.
+ring = "0.17.14"
+oo7 = { git = "https://github.com/zed-industries/oo7", rev = "731c1215edb6905876c6137ab300428c7b8d7c13", default-features = false, features = ["async-std", "native_crypto"] }
+futures-lite = "2"
+libc = "0.2.189"
+
 [dev-dependencies]
 # The envelope and the ring cipher are platform-neutral code compiled for
 # `cfg(any(target_os = "macos", test))`, so the Windows test run checks them

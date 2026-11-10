@@ -119,15 +119,21 @@ impl Backdrop {
             // transparency.
             #[cfg(target_os = "macos")]
             Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic => WindowBackgroundAppearance::Blurred,
-            #[cfg(not(target_os = "macos"))]
+            // No material a Linux compositor is sure to draw: gpui's `Blurred`
+            // is a KDE protocol, and anything else non-opaque is plain
+            // see-through. The window is opaque and reads as `none`
+            // ([`effective_backdrop`]), so the app paints its own background.
+            #[cfg(target_os = "linux")]
+            Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic => WindowBackgroundAppearance::Opaque,
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             Backdrop::Mica => WindowBackgroundAppearance::MicaBackdrop,
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             Backdrop::MicaAlt => WindowBackgroundAppearance::MicaAltBackdrop,
             // DWM's own acrylic, `DWMSBT_TRANSIENTWINDOW` — Electron's
             // `backgroundMaterial: 'acrylic'`. The fork draws the accent
             // policy's blur instead before 22621 ([`Backdrop::resolve_for_os`]
             // says so).
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             Backdrop::Acrylic => WindowBackgroundAppearance::AcrylicBackdrop,
             Backdrop::Transparent => WindowBackgroundAppearance::Transparent,
         }
@@ -1535,7 +1541,11 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         displays,
         title: live.title,
         backdrop: live.backdrop,
-        effective_backdrop: effective_backdrop(live.backdrop, window.is_background_appearance_drawn()),
+        // Linux draws no material at all (`Backdrop::to_gpui`).
+        effective_backdrop: effective_backdrop(
+            live.backdrop,
+            window.is_background_appearance_drawn() && !cfg!(target_os = "linux"),
+        ),
         theme: live.theme,
         always_on_top: live.always_on_top,
         title_bar_height: live.title_bar_height,
@@ -2300,6 +2310,18 @@ pub(crate) fn element_fullscreen(on: Option<bool>) -> bool {
 /// (src/embed.rs). Main thread.
 pub(crate) fn request_close() {
     submit(Op::Close);
+}
+
+/// The caption's minimize and maximize buttons and double-click, where the
+/// app draws the caption (src/linux_chrome.rs). Main thread.
+#[cfg(target_os = "linux")]
+pub(crate) fn request_minimize() {
+    submit(Op::Minimize);
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn request_toggle_maximize() {
+    submit(Op::ToggleMaximize);
 }
 
 /// The embedder shows the main window through gpui's activation path, which

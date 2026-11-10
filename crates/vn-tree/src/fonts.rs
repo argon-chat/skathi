@@ -19,7 +19,8 @@
 //!    drawn with stays `unloaded`. The first `src` entry this build can use wins:
 //!    `url()` to the app's files (dev and packaged alike, through
 //!    [`crate::img`]'s URL grammar), `data:`, `blob:`, or http(s) through
-//!    gpui's HTTP client. WOFF and WOFF2 are unpacked by DirectWrite.
+//!    gpui's HTTP client. WOFF and WOFF2 are unpacked by DirectWrite on
+//!    Windows, by wuff elsewhere.
 //! 3. **Registered.** The font's bytes go to `TextSystem::add_fonts` once it is
 //!    loaded AND in `document.fonts` (always, for a CSS face), renamed to a
 //!    family of its own ([`face_family`]: `Manrope Variable (vn face 3)`).
@@ -1531,9 +1532,16 @@ fn unpack(bytes: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
+/// WOFF / WOFF2 → sfnt, by wuff (a Rust port of the reference decoders):
+/// Core Text and FreeType/cosmic-text take only the unpacked font.
 #[cfg(not(windows))]
-fn unpack(_bytes: &[u8]) -> Result<Vec<u8>, String> {
-    Err("WOFF and WOFF2 are unpacked by DirectWrite, which this platform does not have".into())
+fn unpack(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let unpacked = if bytes.starts_with(b"wOF2") {
+        wuff::decompress_woff2(bytes)
+    } else {
+        wuff::decompress_woff1(bytes)
+    };
+    unpacked.map_err(|e| format!("the WOFF container could not be unpacked: {e:?}"))
 }
 
 // ---------------------------------------------------------------------------

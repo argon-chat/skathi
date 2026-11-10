@@ -1,10 +1,11 @@
-//! The macOS provider's platform-neutral half: the sealed envelope, the
-//! AES-256-GCM cipher it (and the HTTP cache) uses, the first-run key
+//! The macOS and Linux providers' platform-neutral half: the sealed envelope,
+//! the AES-256-GCM cipher it (and the HTTP cache) uses, the first-run key
 //! creation protocol, and what a Keychain status code means.
 //!
-//! Compiled for `cfg(any(target_os = "macos", test))`: on a Mac it is the
-//! provider, everywhere else it exists only so `cargo test` can check it. None
-//! of it touches the keychain; `keychain.rs` is the few lines that do.
+//! Compiled for `cfg(any(target_os = "macos", target_os = "linux", test))`:
+//! on a Mac and on Linux it is the provider (the key in the Keychain, or in the
+//! Secret Service), elsewhere it exists only so `cargo test` can check it. None
+//! of it touches a key store; `keychain.rs` and `secret_service.rs` do.
 //!
 //! # The envelope (version 1)
 //!
@@ -37,6 +38,7 @@ use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 
 /// The byte in the `VNSTOR` file header that names this provider (DPAPI is 1).
+#[cfg(any(target_os = "macos", test))]
 pub const PROVIDER_ID: u8 = 2;
 /// The envelope layout above.
 pub const VERSION: u8 = 1;
@@ -50,8 +52,10 @@ const CONTEXT: &[u8] = b"vue-native/storage/v1";
 const AAD_LEN: usize = CONTEXT.len() + HEADER_LEN;
 
 /// `errSecItemNotFound`: no such item. The one "error" that means "make it".
+#[cfg(any(target_os = "macos", test))]
 pub const ERR_ITEM_NOT_FOUND: i32 = -25300;
 /// `errSecDuplicateItem`: someone else made it first. Re-read, never replace.
+#[cfg(any(target_os = "macos", test))]
 pub const ERR_DUPLICATE_ITEM: i32 = -25299;
 
 /// Fills `buf` from the system CSPRNG.
@@ -209,37 +213,57 @@ pub enum Origin {
 /// a locked keychain or a refused prompt does not mean the key is gone, and a
 /// new key would orphan everything sealed under the old one. Nor is an item
 /// that is not a 256-bit key replaced.
+#[cfg(any(target_os = "macos", test))]
 pub fn load_or_create(
-    mut read: impl FnMut() -> Result<Option<Vec<u8>>, i32>,
+    read: impl FnMut() -> Result<Option<Vec<u8>>, i32>,
     add: impl FnOnce(&[u8; KEY_LEN]) -> Result<(), i32>,
     fresh: impl FnOnce() -> Result<[u8; KEY_LEN], String>,
 ) -> Result<([u8; KEY_LEN], Origin), String> {
-    if let Some(bytes) = read().map_err(|code| keychain_error("read", code))? {
-        return take_key(bytes).map(|k| (k, Origin::Found));
+    load_or_create_in(
+        "macOS Keychain",
+        read,
+        add,
+        fresh,
+        |code| *code == ERR_DUPLICATE_ITEM,
+        |op, code| keychain_error(op, *code),
+    )
+}
+
+/// [`load_or_create`] over any key store: `store` names it in errors,
+/// `is_duplicate` says an add lost the race, `describe` turns a store error
+/// into the message for `op` (`read`, `re-read`, `store`).
+pub fn load_or_create_in<E>(
+    store: &str,
+    mut read: impl FnMut() -> Result<Option<Vec<u8>>, E>,
+    add: impl FnOnce(&[u8; KEY_LEN]) -> Result<(), E>,
+    fresh: impl FnOnce() -> Result<[u8; KEY_LEN], String>,
+    is_duplicate: impl Fn(&E) -> bool,
+    describe: impl Fn(&str, &E) -> String,
+) -> Result<([u8; KEY_LEN], Origin), String> {
+    if let Some(bytes) = read().map_err(|e| describe("read", &e))? {
+        return take_key(store, bytes).map(|k| (k, Origin::Found));
     }
     let mut key = fresh()?;
     match add(&key) {
         Ok(()) => Ok((key, Origin::Created)),
-        Err(ERR_DUPLICATE_ITEM) => {
+        Err(e) if is_duplicate(&e) => {
             key.fill(0);
-            match read().map_err(|code| keychain_error("re-read", code))? {
-                Some(bytes) => take_key(bytes).map(|k| (k, Origin::Raced)),
-                None => Err(String::from(
-                    "macOS Keychain: the storage key was reported both present (on add) and missing (on read)",
-                )),
+            match read().map_err(|e| describe("re-read", &e))? {
+                Some(bytes) => take_key(store, bytes).map(|k| (k, Origin::Raced)),
+                None => Err(format!("{store}: the storage key was reported both present (on add) and missing (on read)")),
             }
         }
-        Err(code) => {
+        Err(e) => {
             key.fill(0);
-            Err(keychain_error("store", code))
+            Err(describe("store", &e))
         }
     }
 }
 
-fn take_key(mut bytes: Vec<u8>) -> Result<[u8; KEY_LEN], String> {
+fn take_key(store: &str, mut bytes: Vec<u8>) -> Result<[u8; KEY_LEN], String> {
     let r = <[u8; KEY_LEN]>::try_from(bytes.as_slice()).map_err(|_| {
         format!(
-            "macOS Keychain: the storage key item holds {} bytes, not a 256-bit key; it is left as it is \
+            "{store}: the storage key item holds {} bytes, not a 256-bit key; it is left as it is \
              (replacing it would lose everything sealed under it)",
             bytes.len()
         )
@@ -250,6 +274,7 @@ fn take_key(mut bytes: Vec<u8>) -> Result<[u8; KEY_LEN], String> {
 
 /// What a Keychain `OSStatus` means for this crate's purposes, as an error
 /// for `appStorage.info()` and the boot error. Always carries the code.
+#[cfg(any(target_os = "macos", test))]
 pub fn keychain_error(op: &str, code: i32) -> String {
     let what = match code {
         ERR_ITEM_NOT_FOUND => "the item is not in the keychain",

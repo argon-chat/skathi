@@ -68,12 +68,32 @@
 //! never plaintext, and never a *new* key that would orphan the data sealed
 //! under the old one.
 //!
+//! # Linux: a Secret Service key, else a key file (provider id 3)
+//!
+//! The macOS design with the keyring the desktop has: the same envelope and
+//! master key, held by the Secret Service (`org.freedesktop.secrets`:
+//! gnome-keyring, KWallet, KeePassXC), which is per user, encrypted under the
+//! login password and unlocked by logging in. A locked or refused keyring is
+//! an error latched for the process, as on macOS.
+//!
+//! Many Linux sessions run no Secret Service at all (a bare window manager,
+//! WSLg). Refusing to start there is not an option for an app, so where the
+//! service does not exist on the session bus the key goes in a file readable
+//! by this user only, `$XDG_DATA_HOME/vue-native/keys/<account>.key` (what
+//! Chromium's "basic" store amounts to). That protects against other users
+//! and against the data folder alone being copied, not against the whole
+//! home directory. A key file, once made, is used from then on even if a
+//! keyring appears later: a second key would orphan the data. See
+//! `secret_service`.
+//!
 //! [`CryptProtectData`]: https://learn.microsoft.com/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(crate) mod envelope;
 #[cfg(target_os = "macos")]
 mod keychain;
+#[cfg(target_os = "linux")]
+mod secret_service;
 
 /// One way of turning bytes nobody else can read into bytes on a disk.
 ///
@@ -85,7 +105,7 @@ pub trait SecretProvider: Send + Sync {
 
     /// The byte that identifies this provider in a file header, so a file
     /// written by one provider is refused by another instead of decrypting to
-    /// garbage. `1` is DPAPI, `2` the macOS Keychain provider.
+    /// garbage. `1` is DPAPI, `2` the macOS Keychain provider, `3` the Linux one.
     fn id(&self) -> u8;
 
     /// Can this provider seal and open at all right now?
@@ -129,14 +149,19 @@ pub fn provider() -> Option<&'static dyn SecretProvider> {
         static P: keychain::Keychain = keychain::Keychain::new();
         Some(&P)
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        static P: secret_service::SecretService = secret_service::SecretService::new();
+        Some(&P)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         None
     }
 }
 
 /// Fills `buf` from the OS's preferred CSPRNG (`BCryptGenRandom` on Windows;
-/// on macOS ring's `SystemRandom`, which is `getentropy`). An error, never a
+/// on macOS and Linux ring's `SystemRandom`, `getentropy`/`getrandom`). An error, never a
 /// weaker fallback, on a platform without one here.
 pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -148,11 +173,11 @@ pub fn random_bytes(buf: &mut [u8]) -> Result<(), String> {
         }
         Ok(())
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         envelope::fill_random(buf)
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = buf;
         Err(String::from("no random generator on this platform"))
@@ -300,7 +325,13 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    fn linux_has_the_secret_service_provider() {
+        assert_eq!(provider().unwrap().id(), 3);
+    }
+
+    #[test]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     fn a_platform_without_a_provider_says_so_rather_than_faking_one() {
         assert!(provider().is_none());
     }

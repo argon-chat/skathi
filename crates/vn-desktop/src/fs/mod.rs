@@ -816,10 +816,11 @@ pub(crate) mod tests {
     fn handles_are_granted_and_released_by_id() {
         // By id, not by counting the table: other tests grant handles in
         // parallel.
-        let v = handle_json(PathBuf::from(r"C:\x\report.txt"), Kind::File);
+        let report = PathBuf::from(if cfg!(windows) { r"C:\x\report.txt" } else { "/x/report.txt" });
+        let v = handle_json(report.clone(), Kind::File);
         assert_eq!((v["name"].as_str(), v["kind"].as_str()), (Some("report.txt"), Some("file")));
         let id = v["h"].as_u64().unwrap();
-        assert_eq!(lookup(id).map(|e| e.path), Some(PathBuf::from(r"C:\x\report.txt")));
+        assert_eq!(lookup(id).map(|e| e.path), Some(report));
         release(id);
         assert!(lookup(id).is_none());
         // An unknown id answers synchronously, with no token.

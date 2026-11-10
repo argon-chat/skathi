@@ -331,14 +331,14 @@ fn new_key() -> Result<[u8; 32], String> {
     Ok(k)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn new_key() -> Result<[u8; 32], String> {
     let mut k = [0u8; 32];
     crypt::random_bytes(&mut k)?;
     Ok(k)
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn new_key() -> Result<[u8; 32], String> {
     Err(String::from("no key generator on this platform"))
 }
@@ -390,7 +390,23 @@ fn disk(dir: &Path) -> Option<(u64, u64)> {
     (total > 0).then_some((free, total))
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+/// `statvfs`, 64-bit on Linux. `f_bavail` is what a non-root user may use;
+/// sizes are in fragments (`f_frsize`), not `f_bsize`.
+#[cfg(target_os = "linux")]
+fn disk(dir: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    // SAFETY: a NUL-terminated path and a zeroed, correctly typed out struct.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    let block = st.f_frsize as u64;
+    let (free, total) = ((st.f_bavail as u64).saturating_mul(block), (st.f_blocks as u64).saturating_mul(block));
+    (total > 0).then_some((free, total))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn disk(_dir: &Path) -> Option<(u64, u64)> {
     None
 }
@@ -639,7 +655,7 @@ mod tests {
     /// The macOS envelope under the same table (a fixed key stands in for the
     /// keychain): sealed, sticky, and the key is not legible on disk.
     #[test]
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     fn the_sticky_rule_holds_under_the_keychain_envelope() {
         let p: &'static dyn SecretProvider = Box::leak(Box::new(crypt::envelope::FixedKey::new(6)));
         let t = Temp::new("envelope");

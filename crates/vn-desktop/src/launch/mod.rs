@@ -28,6 +28,10 @@ use crate::args::Args;
 mod instance_win;
 #[cfg(target_os = "windows")]
 use instance_win as instance;
+#[cfg(target_os = "linux")]
+mod instance_unix;
+#[cfg(target_os = "linux")]
+use instance_unix as instance;
 
 pub mod protocol;
 #[cfg(target_os = "windows")]
@@ -503,7 +507,7 @@ pub fn start_with_activation(args: &Args, config_json: Option<&str>, build_name:
     let mut outcome = Outcome::Run;
     let mut holds = false;
     if !skip {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         {
             let fwd = Forward {
                 argv: info.argv.clone(),
@@ -547,7 +551,7 @@ pub fn start_with_activation(args: &Args, config_json: Option<&str>, build_name:
                 }
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         {
             let _ = &dev_slot;
             eprintln!("[vue-native compat] singleInstance is not implemented on this platform yet; running as a separate instance");

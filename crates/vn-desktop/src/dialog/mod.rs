@@ -80,7 +80,13 @@ pub use mac::ns_window_of_view;
 #[cfg(any(target_os = "macos", test))]
 mod mac_plan;
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+// Linux: the desktop portal's pickers, zenity's or kdialog's questions.
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as imp;
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 mod imp {
     use super::*;
     pub(super) fn pick(_: &Native, _: isize, _: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
@@ -928,7 +934,7 @@ mod tests {
             assert_eq!(k.as_str(), s);
         }
         assert_eq!(Known::parse("Documents"), None, "the enum is case-sensitive, as in WebIDL");
-        if cfg!(any(windows, target_os = "macos")) {
+        if cfg!(any(windows, target_os = "macos", target_os = "linux")) {
             assert!(known_folder(Known::Downloads).is_some_and(|p| p.is_absolute()));
         }
     }

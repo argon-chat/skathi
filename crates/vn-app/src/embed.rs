@@ -81,6 +81,8 @@ struct Config {
     activate: bool,
     #[cfg_attr(not(vn_devtools), allow(dead_code))]
     inspector_exe: Option<PathBuf>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    desktop_id: Option<String>,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -156,6 +158,12 @@ fn requests_activation(activate: bool, visible: bool) -> bool {
 #[cfg_attr(not(vn_devtools), allow(dead_code))]
 pub(crate) fn inspector_exe() -> Option<PathBuf> {
     CONFIG.get()?.inspector_exe.clone()
+}
+
+/// The desktop entry id the embedder named ([`Builder::desktop_id`]).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn desktop_id() -> Option<String> {
+    CONFIG.get()?.desktop_id.clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +266,7 @@ pub struct Builder {
     functions: HashMap<String, Handler>,
     activate: bool,
     inspector_exe: Option<PathBuf>,
+    desktop_id: Option<String>,
 }
 
 impl Default for Builder {
@@ -268,7 +277,7 @@ impl Default for Builder {
 
 impl Builder {
     pub fn new() -> Self {
-        Builder { data_dir: None, storage_encrypted: None, prepare_data_dir: None, visible: true, desktop_launch: false, setup: None, payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None }
+        Builder { data_dir: None, storage_encrypted: None, prepare_data_dir: None, visible: true, desktop_launch: false, setup: None, payload: None, args: Vec::new(), functions: HashMap::new(), activate: true, inspector_exe: None, desktop_id: None }
     }
 
     /// Sets the persistent profile root before cookies, localStorage,
@@ -389,6 +398,15 @@ impl Builder {
         self
     }
 
+    /// The app's desktop entry id on Linux (`gl.example.App`, the name of its
+    /// `.desktop` file): the Wayland app id and X11 class of its windows, which
+    /// the desktop matches them to that entry by (the icon, the dock). Without
+    /// it the windows carry the app's `id`. Ignored elsewhere.
+    pub fn desktop_id(mut self, id: impl Into<String>) -> Self {
+        self.desktop_id = Some(id.into());
+        self
+    }
+
     /// Starts vue-native on a thread of its own and returns at once; the
     /// window opens a moment later. Events emitted before the app is ready
     /// wait for it. On macOS this returns `Error::MainThreadRequired`; use
@@ -482,6 +500,7 @@ impl Builder {
             visible: self.visible, desktop_launch: self.desktop_launch,
             setup: SetupHook(Mutex::new(self.setup)), functions: self.functions,
             activate: self.activate, inspector_exe: self.inspector_exe,
+            desktop_id: self.desktop_id,
         };
         if CONFIG.set(config).is_err() {
             return Err(Error::AlreadyStarted);

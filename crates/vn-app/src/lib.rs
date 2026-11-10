@@ -104,6 +104,8 @@ mod reload; // `location.reload()`: the restart path, on request
 mod shutdown; // a close hides the windows at once; the teardown runs under a deadline
 mod slot; // which dist slot this process is — the one thing dev, prod and devtools all ask
 mod window; // windowing & chrome (docs/WINDOWING.md)
+#[cfg(target_os = "linux")]
+mod linux_chrome; // the caption and resize edges a Linux window draws itself
 
 #[cfg(not(feature = "prod"))]
 use dev as boot_mode;
@@ -1020,6 +1022,8 @@ impl Shell {
             .size_full()
             .text_color(gpui::white())
             .font_family(".SystemUIFont");
+        #[cfg(target_os = "linux")]
+        let shell = linux_chrome::wrap(shell, window);
         if !window::fallback_titlebar() {
             // Custom chrome, mode 1: the app owns the WHOLE window — its own
             // titlebar included. No host padding, no host status panel; the
@@ -1749,6 +1753,13 @@ fn run_app() {
                 // default and what every other host here has always used).
                 show: startup_visible && !defer_reveal,
                 focus: startup_focus,
+                // The app draws its caption and edges (src/linux_chrome.rs);
+                // the app id is what the compositor and the .desktop file
+                // match the window by (its icon, its dock entry).
+                #[cfg(target_os = "linux")]
+                window_decorations: Some(gpui::WindowDecorations::Client),
+                #[cfg(target_os = "linux")]
+                app_id: embed::desktop_id().or_else(|| vn_desktop::launch::identity().map(|i| i.id.clone())),
                 ..Default::default()
             },
             |window, cx| {

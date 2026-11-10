@@ -140,3 +140,12 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSWindow",
     "objc2-core-foundation",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# flock, getuid and SO_PEERCRED for the single-instance socket (src/launch/instance_unix.rs).
+libc = "0.2"
+# The file pickers: the desktop portal (src/dialog/linux.rs). gpui's Linux
+# backends build the same ashpd 0.13 on async-io, so no crate is added.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "file_chooser"] }
+async-io = "2"
+futures-lite = "2"

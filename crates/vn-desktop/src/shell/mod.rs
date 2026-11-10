@@ -37,9 +37,14 @@ mod win;
 #[cfg(target_os = "windows")]
 use win as imp;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as imp;
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod stub;
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 use stub as imp;
 
 /// One shell request.
@@ -392,6 +397,7 @@ mod tests {
         assert_eq!(validate_external("https://x/\na", false).unwrap_err().name, "TypeError");
     }
 
+    #[cfg(windows)]
     #[test]
     fn paths_must_be_absolute_and_name_no_stream() {
         assert!(validate_path(r"C:\Users\x\a.txt", "t").is_ok());
@@ -402,6 +408,15 @@ mod tests {
         assert_eq!(validate_path("", "t").unwrap_err().name, "TypeError");
         assert_eq!(validate_path(r"C:\x\report.txt:evil.exe", "t").unwrap_err().name, "TypeError");
         assert_eq!(validate_path(r"\\?\C:\x\a.txt:s", "t").unwrap_err().name, "TypeError");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paths_must_be_absolute() {
+        assert!(validate_path("/home/x/a.txt", "t").is_ok());
+        assert_eq!(validate_path("a.txt", "t").unwrap_err().name, "TypeError");
+        assert_eq!(validate_path("../a.txt", "t").unwrap_err().name, "TypeError");
+        assert_eq!(validate_path("", "t").unwrap_err().name, "TypeError");
     }
 
     #[test]
@@ -430,7 +445,8 @@ mod tests {
         let nf = std::io::Error::from_raw_os_error(2);
         let f = fail_from_io(&nf, "openPath", "C:\\x");
         assert_eq!((f.name, f.code, f.os_error), ("NotFoundError", Some("ENOENT"), Some(2)));
-        let ad = std::io::Error::from_raw_os_error(5);
+        // ERROR_ACCESS_DENIED, EACCES.
+        let ad = std::io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
         assert_eq!(fail_from_io(&ad, "t", "x").name, "NotAllowedError");
     }
 
@@ -439,7 +455,8 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&start_open_external("file:///x", false)).unwrap();
         assert_eq!(v["name"], "TypeError");
         assert!(v.get("token").is_none());
-        let v: serde_json::Value = serde_json::from_str(&start_open_path(r"C:\x\setup.exe", false)).unwrap();
+        let setup = if cfg!(windows) { r"C:\x\setup.exe" } else { "/x/setup.exe" };
+        let v: serde_json::Value = serde_json::from_str(&start_open_path(setup, false)).unwrap();
         assert_eq!(v["name"], "NotAllowedError");
         assert_eq!(v["code"], "EEXECUTABLE");
     }
