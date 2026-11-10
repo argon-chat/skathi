@@ -426,6 +426,7 @@
     configurable: true,
     enumerable: true
   });
+  ro(appWindow, "effectiveBackdrop", () => S.effectiveBackdrop);
   Object.defineProperty(appWindow, "theme", {
     get: () => S.theme,
     set: (v) => {

@@ -605,6 +605,10 @@
     configurable: true,
     enumerable: true,
   });
+  // What the window draws of `backdrop`: `none` while macOS fullscreen leaves
+  // a system material nothing to blend with. `backdropchange` fires when
+  // either moves, so an app paints its own background exactly then.
+  ro(appWindow, "effectiveBackdrop", () => S.effectiveBackdrop);
   // Electron's `nativeTheme.themeSource`: the windows' dark mode (Mica's tint)
   // and `prefers-color-scheme`. Read back as `backdrop` is.
   Object.defineProperty(appWindow, "theme", {

@@ -171,6 +171,32 @@ fn resolve_backdrop(b: Backdrop, system_backdrop: bool) -> (Backdrop, Option<&'s
     }
 }
 
+/// The backdrop the primary window can draw right now: `appWindow.backdrop`
+/// unless the window is in macOS native fullscreen.
+///
+/// A fullscreen macOS window lives in a Space of its own, so the
+/// `NSVisualEffectView` that every system backdrop becomes there blends with
+/// nothing — the glass composites over black. macOS apps drop the material
+/// while fullscreen and take it back on leaving, and so does this: the window
+/// goes opaque, `appWindow.effectiveBackdrop` reads `none`, and
+/// `backdropchange` tells the app to paint its own background. `backdrop`
+/// keeps the app's choice. DWM draws Mica and acrylic behind a fullscreen
+/// window, so Windows is untouched.
+pub(crate) fn effective_backdrop(b: Backdrop, fullscreen: bool) -> Backdrop {
+    backdrop_in_fullscreen(b, fullscreen, cfg!(target_os = "macos"))
+}
+
+/// [`effective_backdrop`] with the platform passed in, so both answers are
+/// testable on one machine.
+fn backdrop_in_fullscreen(b: Backdrop, fullscreen: bool, blends_behind_window: bool) -> Backdrop {
+    match b {
+        Backdrop::Mica | Backdrop::MicaAlt | Backdrop::Acrylic if fullscreen && blends_behind_window => {
+            Backdrop::None
+        }
+        other => other,
+    }
+}
+
 /// `appWindow.theme`: which colour scheme the app's windows take, in place of
 /// the OS's. Electron's `nativeTheme.themeSource`, with its spellings.
 ///
@@ -1020,6 +1046,9 @@ pub struct Snapshot {
     pub displays: usize,
     pub title: String,
     pub backdrop: Backdrop,
+    /// What the window draws: `backdrop`, or `None` while macOS fullscreen has
+    /// nothing behind the window to blend ([`effective_backdrop`]).
+    pub effective_backdrop: Backdrop,
     pub theme: Theme,
     pub always_on_top: bool,
     pub title_bar_height: f32,
@@ -1051,6 +1080,7 @@ impl Default for Snapshot {
             displays: 1,
             title: String::new(),
             backdrop: Backdrop::Mica,
+            effective_backdrop: Backdrop::Mica,
             theme: Theme::System,
             always_on_top: false,
             title_bar_height: 32.0,
@@ -1085,6 +1115,9 @@ thread_local! {
     /// The mutable half of the chrome state: `backdrop`, `alwaysOnTop`,
     /// `titleBarHeight` and the fallback titlebar all change at runtime.
     static LIVE: RefCell<Live> = RefCell::new(Live::default());
+    /// The backdrop gpui last drew the primary window with, so the frame funnel
+    /// re-applies one only when [`effective_backdrop`] moves.
+    static APPLIED_BACKDROP: Cell<Option<Backdrop>> = const { Cell::new(None) };
 }
 
 #[derive(Clone, Debug)]
@@ -1139,6 +1172,8 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
             fallback_titlebar: cfg.title_bar_fallback,
         }
     });
+    // `open_window` created the window with this one (`window_background`).
+    APPLIED_BACKDROP.with(|a| a.set(Some(cfg.backdrop)));
     // Declared BEFORE anything per-window is published: `set_os_chrome` and
     // `set_env` below both address "the primary window", and until this runs
     // there is no such key (docs/MULTIWINDOW.md §5.6). `build_root` asserts the
@@ -1374,6 +1409,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
     let live = LIVE.with(|l| l.borrow().clone());
     let DisplayPart { screen, displays, .. } = display_part(window, cx);
     let scale = window.scale_factor();
+    let fullscreen = window.is_fullscreen();
     // `GetWindowRect` is in PHYSICAL pixels; everything else on this surface is
     // CSS px, which is what gpui's `Pixels` already are.
     let outer = win::window_rect()
@@ -1424,13 +1460,14 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         maximized: win::is_zoomed() || window.is_maximized(),
         minimized: win::is_iconic(),
         visible: startup_visibility(win::is_visible()),
-        fullscreen: window.is_fullscreen(),
+        fullscreen,
         focused: window.is_window_active(),
         cloaked: win::is_cloaked(),
         screen,
         displays,
         title: live.title,
         backdrop: live.backdrop,
+        effective_backdrop: effective_backdrop(live.backdrop, fullscreen),
         theme: live.theme,
         always_on_top: live.always_on_top,
         title_bar_height: live.title_bar_height,
@@ -1640,6 +1677,7 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("cloaked", Json::Bool(s.cloaked)),
         ("title", Json::s(s.title.clone())),
         ("backdrop", Json::s(s.backdrop.as_str())),
+        ("effectiveBackdrop", Json::s(s.effective_backdrop.as_str())),
         ("theme", Json::s(s.theme.as_str())),
         // The window's dark mode as DWM has it, read back like `systemBackdrop`.
         (
@@ -1737,6 +1775,10 @@ thread_local! {
 /// viewport has finished resizing, which the Fullscreen spec requires.
 pub fn pump(window: &mut Window, cx: &mut gpui::App) {
     drain_pending(window, cx);
+    // Before the snapshot, so the frame that first sees fullscreen is drawn
+    // opaque and tells the app so in the same wave: the app's own background
+    // and the window's are swapped in one frame, with no black one between.
+    sync_backdrop(window, false);
 
     let s = snapshot(window, cx);
     SNAPSHOT.with(|c| *c.borrow_mut() = s.clone());
@@ -1804,6 +1846,9 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
             if p.fullscreen != s.fullscreen {
                 kinds.push("fullscreenchange");
             }
+            if backdrop_moved(p, &s) {
+                kinds.push("backdropchange");
+            }
             if p.focused != s.focused {
                 kinds.push(if s.focused { "focus" } else { "blur" });
             }
@@ -1850,6 +1895,33 @@ pub fn pump(window: &mut Window, cx: &mut gpui::App) {
         notify("mediachange", &json);
         IN_DISPATCH.with(|f| f.set(false));
     }
+}
+
+/// `backdropchange`: the app's backdrop, or what the window can draw of it,
+/// moved since the last frame.
+fn backdrop_moved(p: &Snapshot, s: &Snapshot) -> bool {
+    p.backdrop != s.backdrop || p.effective_backdrop != s.effective_backdrop
+}
+
+/// Hands gpui the backdrop the primary window can draw now
+/// ([`effective_backdrop`]) when it is not the one gpui last got. `force`
+/// re-applies it regardless, as an explicit `appWindow.backdrop = …` always did.
+///
+/// gpui's macOS backend removes its `NSVisualEffectView` for every appearance
+/// but `Blurred` and adds one only when none is attached, so a fullscreen
+/// toggle swaps one view out and back in; it never stacks a second.
+fn sync_backdrop(window: &mut Window, force: bool) {
+    let want = effective_backdrop(LIVE.with(|l| l.borrow().backdrop), window.is_fullscreen());
+    if !force && APPLIED_BACKDROP.with(|a| a.get()) == Some(want) {
+        return;
+    }
+    APPLIED_BACKDROP.with(|a| a.set(Some(want)));
+    window.set_background_appearance(want.to_gpui());
+    // The renderer reads the appearance when it draws: `none` clears to
+    // opaque and every material to transparent, and text drops subpixel AA
+    // over a material. Until a frame is drawn, the window keeps the last one,
+    // so `material → none` left it see-through.
+    window.refresh();
 }
 
 /// Retires the fallback titlebar the first frame the app paints a drag region
@@ -2041,14 +2113,11 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
             win::set_always_on_top(on);
             LIVE.with(|l| l.borrow_mut().always_on_top = on);
         }
+        // Kept even while fullscreen suspends it: leaving fullscreen draws the
+        // backdrop the app asked for last.
         Op::SetBackdrop(b) => {
-            window.set_background_appearance(b.to_gpui());
             LIVE.with(|l| l.borrow_mut().backdrop = b);
-            // The renderer reads the appearance when it draws: `none` clears
-            // to opaque and every material to transparent, and text drops
-            // subpixel AA over a material. Until a frame is drawn, the window
-            // keeps the last one, so `material → none` left it see-through.
-            window.refresh();
+            sync_backdrop(window, true);
         }
         Op::SetTheme(t) => {
             apply_theme(t, window);
@@ -2568,6 +2637,44 @@ mod tests {
         // content area keeps x = 0 and loses width (3 x 46 px).
         let overlaid = Snapshot { overlay: Some(Overlay::default()), ..base.clone() };
         assert_eq!(titlebar_area(&overlaid), (true, (0.0, 0.0, 862.0, 32.0)));
+    }
+
+    /// macOS fullscreen has nothing behind the window for a system material to
+    /// blend with, so the window draws none there; Windows keeps Mica and
+    /// acrylic in fullscreen.
+    #[test]
+    fn a_system_backdrop_is_suspended_only_in_macos_fullscreen() {
+        for b in [Backdrop::Mica, Backdrop::MicaAlt, Backdrop::Acrylic] {
+            assert_eq!(backdrop_in_fullscreen(b, true, true), Backdrop::None, "{b:?} in macOS fullscreen");
+            assert_eq!(backdrop_in_fullscreen(b, false, true), b, "{b:?} windowed on macOS");
+            assert_eq!(backdrop_in_fullscreen(b, true, false), b, "{b:?} in Windows fullscreen");
+        }
+        // Not a system material: what the app asked for is what it gets.
+        for b in [Backdrop::None, Backdrop::Transparent] {
+            assert_eq!(backdrop_in_fullscreen(b, true, true), b);
+        }
+        assert_eq!(effective_backdrop(Backdrop::Mica, true) == Backdrop::None, cfg!(target_os = "macos"));
+    }
+
+    /// Entering and leaving fullscreen, and an explicit backdrop change, each
+    /// fire `backdropchange` once; a frame with neither fires nothing.
+    #[test]
+    fn backdropchange_follows_the_backdrop_and_what_the_window_draws() {
+        let windowed = Snapshot { backdrop: Backdrop::Acrylic, effective_backdrop: Backdrop::Acrylic, ..Snapshot::default() };
+        let full = Snapshot {
+            fullscreen: true,
+            effective_backdrop: backdrop_in_fullscreen(Backdrop::Acrylic, true, true),
+            ..windowed.clone()
+        };
+        let solid = Snapshot { backdrop: Backdrop::None, effective_backdrop: Backdrop::None, ..windowed.clone() };
+        assert!(backdrop_moved(&windowed, &full));
+        assert!(backdrop_moved(&full, &windowed));
+        assert!(backdrop_moved(&windowed, &solid));
+        assert!(!backdrop_moved(&full, &full.clone()));
+        // Asking for a material while fullscreen changes `backdrop` only, and
+        // still fires: the app's choice moved even though the window did not.
+        let full_solid = Snapshot { backdrop: Backdrop::None, ..full.clone() };
+        assert!(backdrop_moved(&full, &full_solid));
     }
 
     #[test]

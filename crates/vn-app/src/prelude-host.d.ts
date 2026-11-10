@@ -139,6 +139,8 @@ interface VnWindowState {
   cloaked: boolean;
   title: string;
   backdrop: string;
+  /** What the window draws of `backdrop`: `"none"` while macOS fullscreen suspends it. */
+  effectiveBackdrop: string;
   /** `appWindow.theme`: `"system"`, `"light"` or `"dark"`. */
   theme: string;
   /** The window's dark mode as DWM has it, read back — `null` when it will not say. */
