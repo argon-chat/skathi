@@ -6,3 +6,8 @@
 	url = https://github.com/argon-chat/zed.git
 	branch = vue-native
 	shallow = true
+[submodule "vendor/taffy"]
+	path = vendor/taffy
+	url = https://github.com/argon-chat/taffy.git
+	branch = vue-native
+	shallow = true

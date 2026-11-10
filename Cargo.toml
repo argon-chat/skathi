@@ -42,9 +42,10 @@ exclude = ["vendor", "crates/vn-thorvg-sys/tools/regen-bindings"]
 # futures were woken over and over).
 [patch.crates-io]
 async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
-# m26: taffy 0.15.0 (gpui pins `=0.15.0`, vendor/zed/Cargo.toml)
-# as published, plus three vue-native patches, each marked "vue-native patch"
-# in the source:
+# m26: taffy 0.15.0 (gpui pins `=0.15.0`, vendor/zed/Cargo.toml) from
+# vendor/taffy, the argon-chat/taffy fork: branch `vue-native` is upstream's
+# v0.15.0 tag plus one commit per vue-native patch, each marked "vue-native
+# patch" in the source:
 # - `TaffyTree::resolve_calc_value` decodes the calc() handle gpui packs for
 #   `DefiniteLength::Calc` (vendor/taffy/src/tree/taffy_tree.rs; upstream
 #   resolves every calc to 0).
@@ -60,8 +61,9 @@ async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "
 # Two patches carried on 0.13.0 are upstream now and were dropped: the
 # auto-margin `justify-content` fix (taffy 0.14) and a percentage `flex-basis`
 # the container cannot resolve being `content` (0.15; its tests stay, in
-# vendor/taffy/src/compute/mod.rs). Moving off the vendored copy means
-# carrying the three patches to the new taffy.
+# vendor/taffy/src/compute/mod.rs). A taffy update is a rebase of that branch
+# onto the new tag; the aspect-ratio and fit-content fixes are spec fixes
+# worth offering upstream, the calc one is gpui's encoding.
 taffy = { path = "vendor/taffy" }
 # m26: webrtc-sys 0.3.41 (pinned `=0.3.41` by crates/vn-voice) as published,
 # plus vue-native hooks libwebrtc has and the crate does not expose — the
