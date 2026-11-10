@@ -83,10 +83,7 @@ const KEY_FILE: &str = "Linux key file + AES-256-GCM (per-user, no Secret Servic
 
 /// This app's account name: see [`envelope::account_for`].
 fn account() -> String {
-    let stem = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()));
-    envelope::account_for(None, stem.as_deref())
+    envelope::account_for(None, crate::exe_stem().as_deref())
 }
 
 fn load(account: &str) -> Result<(MasterKey, &'static str), String> {

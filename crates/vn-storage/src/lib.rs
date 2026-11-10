@@ -372,11 +372,28 @@ pub fn default_folder(app_name: Option<&str>) -> PathBuf {
 
 pub(crate) fn resolve_app_name(from_embedder: Option<&str>) -> String {
     let env = std::env::var("VN_APP_NAME").ok();
-    let stem = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
-        .unwrap_or_default();
+    let stem = exe_stem().unwrap_or_default();
     pick_app_name(env.as_deref(), from_embedder, &stem)
+}
+
+/// The running program's file stem, which names its folder and its storage
+/// key. Started through the dynamic loader (`ld-linux-x86-64.so.2 ./Argon`,
+/// how a build is run against another glibc), `current_exe` is the loader;
+/// the loader hands the program its own path as `argv[0]`, so that names it.
+pub(crate) fn exe_stem() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let program = if cfg!(target_os = "linux") && is_dynamic_loader(&exe) {
+        PathBuf::from(std::env::args_os().next()?)
+    } else {
+        exe
+    };
+    program.file_stem().map(|s| s.to_string_lossy().into_owned())
+}
+
+fn is_dynamic_loader(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| ["ld-linux", "ld64.so", "ld-musl"].iter().any(|p| name.starts_with(p)))
 }
 
 /// The precedence rule on its own, so it is testable without mutating the

@@ -164,19 +164,19 @@ impl MasterKey {
 
     pub fn open(&self, blob: &[u8]) -> Result<Vec<u8>, String> {
         if blob.len() < HEADER_LEN {
-            return Err(String::from("a Keychain-sealed blob shorter than its header"));
+            return Err(String::from("a sealed blob shorter than its header"));
         }
         if blob[0] != VERSION {
             return Err(format!(
-                "Keychain envelope version {} — this build reads version {VERSION}",
+                "sealed envelope version {} — this build reads version {VERSION}",
                 blob[0]
             ));
         }
         let id = &blob[1..HEADER_LEN];
         if id != self.id {
             return Err(String::from(
-                "sealed under a different storage key (the keychain item was deleted or replaced, \
-                 or the file comes from another user or another Mac)",
+                "sealed under a different storage key (the key's keychain or keyring item was \
+                 deleted or replaced, or the file comes from another user or another machine)",
             ));
         }
         self.aead
