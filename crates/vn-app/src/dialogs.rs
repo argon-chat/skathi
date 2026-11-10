@@ -32,21 +32,31 @@ pub fn owner() -> Option<vn_desktop::dialog::Owner> {
     crate::window::dialog_parent_of(key).map(|hwnd| vn_desktop::dialog::Owner { key, hwnd })
 }
 
-/// vn-permissions' prompt, shown as vn-desktop's question dialog: a
-/// TaskDialog owned by the window asking, or under `VN_DIALOGS=scripted` a
-/// question the devtools answer (`dialog choose`).
+/// vn-permissions' prompt, asked as vn-desktop's question dialog, owned by
+/// the window asking: on Windows a window of our own (src/consent_window.rs),
+/// elsewhere the platform's alert, and under `VN_DIALOGS=scripted` a question
+/// the devtools answer (`dialog choose`).
 pub fn ask_permission(q: vn_permissions::Question, reply: Box<dyn FnOnce(Option<usize>) + Send>) {
-    vn_desktop::dialog::ask(
-        vn_desktop::dialog::Ask {
-            what: "permission",
-            title: q.title,
-            instruction: q.instruction,
-            content: q.content,
-            buttons: q.buttons,
-            default: q.default,
-        },
+    let capability = q.capability;
+    let ask = vn_desktop::dialog::Ask {
+        what: "permission",
+        title: q.title,
+        instruction: q.instruction,
+        content: q.content,
+        buttons: q.buttons,
+        default: q.default,
+    };
+    #[cfg(target_os = "windows")]
+    vn_desktop::dialog::ask_with(
+        ask,
+        Box::new(move |q, owner, cancel| crate::consent_window::present(capability, q, owner, cancel)),
         reply,
     );
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = capability;
+        vn_desktop::dialog::ask(ask, reply);
+    }
 }
 
 /// Removes `handle`'s window, after its file dialog if it has one open.

@@ -475,7 +475,16 @@ fn standalone_manifest() {
     embed_resource::compile_for(
         resources.join("gpui.rc"),
         ["vn-app"],
-        embed_resource::ParamsIncludeDirs([resources]),
+        embed_resource::ParamsIncludeDirs([&resources]),
+    )
+    .manifest_required()
+    .unwrap();
+    // The examples are this crate's own executables, and gpui's imports
+    // need the Common Controls 6 the manifest names: without it Windows
+    // refuses to load them (STATUS_ENTRYPOINT_NOT_FOUND).
+    embed_resource::compile_for_examples(
+        resources.join("gpui.rc"),
+        embed_resource::ParamsIncludeDirs([&resources]),
     )
     .manifest_required()
     .unwrap();

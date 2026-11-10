@@ -62,7 +62,7 @@ pub mod ask;
 pub mod color;
 pub mod scripted;
 
-pub use ask::{ask, Ask, Reply};
+pub use ask::{ask, ask_with, Ask, Present, Reply};
 
 #[cfg(target_os = "windows")]
 mod win;

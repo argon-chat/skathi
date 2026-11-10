@@ -16,6 +16,12 @@
 //! On Windows it is a TaskDialog (win.rs). TaskDialog makes it modal to its
 //! owner only, gives it the keyboard (Tab, the arrow keys, Enter, the `&`
 //! access keys) and makes Esc and the close box a dismissal.
+//!
+//! A caller may show the question itself instead ([`ask_with`]): vn-app's
+//! permission prompt is a window of its own on Windows. Everything above
+//! still holds for it (the owner, the queue, the close, the scripted seam);
+//! only the native dialog is replaced, and a presenter that fails falls back
+//! to it.
 
 use super::*;
 
@@ -45,7 +51,23 @@ pub type Reply = Box<dyn FnOnce(Option<usize>) + Send>;
 /// one outside a call). Never blocks: `reply` runs later, on the dialog's
 /// thread.
 pub fn ask(q: Ask, reply: Reply) {
-    ask_owned(RESOLVER.get().and_then(|f| f()), q, reply)
+    ask_owned(RESOLVER.get().and_then(|f| f()), q, None, reply)
+}
+
+/// Shows a question in place of the platform's dialog. It runs on the
+/// `vn-ask` thread once the question's turn has come, with the owner's native
+/// window (0 for none), and returns when the question has gone away: with the
+/// button, or `None` for a dismissal. While it runs it watches the
+/// [`Cancellation`]: its owner is closing, and is destroyed only after it has
+/// returned. An `Err` means it could not show the question at all, and the
+/// platform's dialog asks instead.
+pub type Present = Box<dyn FnOnce(&Ask, isize, &Cancellation) -> Result<Option<usize>, Fail> + Send>;
+
+/// [`ask`], shown by `present` rather than by the platform's dialog. Under
+/// `VN_DIALOGS=scripted` `present` is never called: the devtools answer, as
+/// they do for [`ask`].
+pub fn ask_with(q: Ask, present: Present, reply: Reply) {
+    ask_owned(RESOLVER.get().and_then(|f| f()), q, Some(present), reply)
 }
 
 /// The reply, sent once: with the answer, or with `None` when whatever holds
@@ -86,7 +108,7 @@ pub fn label_of(button: &str) -> String {
     out
 }
 
-pub(super) fn ask_owned(owner: Option<Owner>, q: Ask, reply: Reply) {
+pub(super) fn ask_owned(owner: Option<Owner>, q: Ask, present: Option<Present>, reply: Reply) {
     let key = owner.map(|o| o.key).unwrap_or(0);
     let hwnd = owner.map(|o| o.hwnd).unwrap_or(0);
     let st = owner_state(key);
@@ -107,7 +129,17 @@ pub(super) fn ask_owned(owner: Option<Owner>, q: Ask, reply: Reply) {
         let answer = if scripted_mode() {
             scripted::ask(&q, key, &cancel)
         } else {
-            match imp::ask(&q, hwnd, &cancel) {
+            let shown = match present {
+                Some(present) => present(&q, hwnd, &cancel).or_else(|f| {
+                    crate::log_later(
+                        "dialog",
+                        format!("[dialog] the {} window could not be shown ({}): asking natively", q.what, f.message),
+                    );
+                    imp::ask(&q, hwnd, &cancel)
+                }),
+                None => imp::ask(&q, hwnd, &cancel),
+            };
+            match shown {
                 Ok(a) => a,
                 Err(f) => {
                     crate::log_later("dialog", format!("[dialog] the {} dialog could not be shown: {}", q.what, f.message));
@@ -168,8 +200,20 @@ mod tests {
 
     fn asked(o: Option<Owner>) -> std::sync::mpsc::Receiver<Option<usize>> {
         let (tx, rx) = channel();
-        ask_owned(o, question(), Box::new(move |a| tx.send(a).unwrap()));
+        ask_owned(o, question(), None, Box::new(move |a| tx.send(a).unwrap()));
         rx
+    }
+
+    #[test]
+    fn a_presented_question_is_still_answered_by_the_script() {
+        let o = owner();
+        let key = o.unwrap().key;
+        let (tx, rx) = channel();
+        let present: Present = Box::new(|_, _, _| panic!("VN_DIALOGS=scripted must never show a window"));
+        ask_owned(o, question(), Some(present), Box::new(move |a| tx.send(a).unwrap()));
+        scripted::choose(pending_of(key), "allow").unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(20)).unwrap(), Some(0));
+        assert!(is_idle(key));
     }
 
     #[test]

@@ -975,7 +975,7 @@ pub fn dialog_parent_of(key: vn_tree::WinKey) -> Option<isize> {
 /// (22000) had Mica only through an undocumented attribute the fork never set,
 /// so it counts as before.
 #[cfg(target_os = "windows")]
-fn has_system_backdrop() -> bool {
+pub(crate) fn has_system_backdrop() -> bool {
     use std::sync::OnceLock;
     static HAS: OnceLock<bool> = OnceLock::new();
     *HAS.get_or_init(|| {
@@ -994,7 +994,7 @@ fn has_system_backdrop() -> bool {
 /// macOS always has its system material (`NSVisualEffectView`), which every
 /// system backdrop maps to ([`Backdrop::to_gpui`]).
 #[cfg(not(target_os = "windows"))]
-fn has_system_backdrop() -> bool {
+pub(crate) fn has_system_backdrop() -> bool {
     cfg!(target_os = "macos")
 }
 

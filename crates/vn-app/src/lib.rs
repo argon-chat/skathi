@@ -72,6 +72,9 @@ mod http_client;
 #[global_allocator]
 static GLOBAL: heapcount::Counting = heapcount::Counting;
 mod dialogs; // the window a file dialog belongs to, and closing it safely
+#[cfg(target_os = "windows")]
+#[doc(hidden)] // `preview` is examples/consent_prompt.rs's
+pub mod consent_window; // the permission prompt, a gpui window of its own (docs/PERMISSIONS.md §5.1)
 pub mod js; // direct JavaScriptCore values and VM-thread dispatch for embedders
 pub mod embed; // vue-native as a library: another program runs it on a thread (docs/EMBEDDING.md)
 pub mod tray; // native application tray for Rust embedders and direct JavaScript callbacks
@@ -1550,6 +1553,10 @@ fn run_app() {
             return;
         }
         JsRuntime::init();
+        // The task that opens the permission prompt's window, before any JS
+        // can ask for one (src/consent_window.rs).
+        #[cfg(target_os = "windows")]
+        consent_window::install(cx);
         let setup_result = JsRuntime::with(|rt| -> Result<(), String> {
             rt.register("__vn_set_status", 1, vn_set_status as *const _);
             rt.register("__vn_log", 1, vn_log as *const _);
@@ -1592,7 +1599,8 @@ fn run_app() {
             vn_desktop::dialog::set_owner_resolver(dialogs::owner);
             // The microphone prompt is vn-desktop's question dialog, owned
             // the same way, and named after the app's window title
-            // (docs/PERMISSIONS.md §5.1).
+            // (docs/PERMISSIONS.md §5.1). On Windows it is a window of our
+            // own, opened by a task on this thread (src/consent_window.rs).
             vn_permissions::set_asker(dialogs::ask_permission);
             vn_permissions::set_app_name(&cfg.title);
             // The backend behind redjs's `localStorage`, plus

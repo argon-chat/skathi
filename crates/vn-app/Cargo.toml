@@ -257,5 +257,10 @@ windows = { version = "0.62", features = [
     # `RtlGetVersion` — the only version query Windows does not lie about for an
     # unmanifested process, and the way `backdrop: "mica"` knows it is on Win11.
     "Wdk_System_SystemServices",
+    # `UISettings::GetColorValue` — the system accent the permission prompt's
+    # Allow button is filled with (src/consent_window.rs). Already compiled for
+    # the graph: gpui_windows reads the system theme through it.
+    "UI",
+    "UI_ViewManagement",
 ] }
 
