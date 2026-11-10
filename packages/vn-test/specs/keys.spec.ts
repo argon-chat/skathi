@@ -65,4 +65,21 @@ describe("one key, one keydown", () => {
     bunExpect(downs).toEqual(["document:keydown:a t=field", "document:keydown:b t=field", "document:keydown:c t=field"]);
     bunExpect(log.filter((l) => l.startsWith("field:keydown:")).length).toBe(3);
   }, T);
+
+  test("a field's keydown handler may ask where the focus is and focus the field", async () => {
+    // An emoji suggestion list picked with the arrows: Argon crashed with
+    // "cannot read TextInputState while it is already being updated".
+    const log = await logOf(async () => {
+      await app.locator("#suggest").press("ArrowDown");
+      await app.locator("#suggest").press("ArrowUp");
+      await app.locator("#suggest").press("Enter");
+    });
+    bunExpect(log.filter((l) => l.startsWith("suggest:"))).toEqual([
+      "suggest:keydown:ArrowDown active=suggest",
+      "suggest:keydown:ArrowUp active=suggest",
+      "suggest:keydown:Enter active=suggest",
+    ]);
+    // Still alive: a native panic poisons the bridge and JS stops answering.
+    bunExpect(await app.eval("1 + 1")).toBe(2);
+  }, T);
 });

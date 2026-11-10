@@ -57,6 +57,14 @@ thread_local! {
     /// undo, echo ring live across the per-frame element rebuild).
     static INPUT_STATES: RefCell<HashMap<u32, gpui::Entity<TextInputState>>> =
         RefCell::new(HashMap::new());
+    /// Each `<input>` editor's focus handle, as of its last build. Asking where
+    /// the focus is must not read the editor: a `keydown` handler runs inside
+    /// the focused editor's own update (its keystroke interceptor), and a
+    /// handler that moved or read the focus (`el.focus()`,
+    /// `document.activeElement`) read the editor being updated, which gpui
+    /// answers with a panic. The handle's identity never changes for an
+    /// editor's life; a tab index change rebuilds it, and the build records it.
+    static INPUT_FOCUS: RefCell<HashMap<u32, FocusHandle>> = RefCell::new(HashMap::new());
     /// select() can run in nextTick before the input has its first native build.
     static INPUT_SELECT_ALL: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
     /// Persistent scroll offset per scroll container. gpui keys anonymous
@@ -579,6 +587,7 @@ pub(crate) fn gc_node_state() {
     let live = |id: u32| tree::read_tree(|t| t.node(id).is_some());
     FOCUS_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_STATES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
+    INPUT_FOCUS.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     INPUT_SELECT_ALL.with(|m| m.borrow_mut().retain(|&id| live(id)));
     SCROLL_HANDLES.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
     SCROLL_REPORTED.with(|m| m.borrow_mut().retain(|&id, _| live(id)));
@@ -5095,9 +5104,11 @@ where
 /// `<input>` is the interesting case: its identity lives on the editor's own
 /// handle inside the native widget (see [`build_input`]), not on the wrapper —
 /// so focusing the wrapper's handle would focus nothing a keystroke can reach.
-fn focus_target_of(id: u32, cx: &App) -> Option<FocusHandle> {
-    if let Some(state) = INPUT_STATES.with(|m| m.borrow().get(&id).cloned()) {
-        return Some(state.read(cx).focus_handle());
+fn focus_target_of(id: u32, _cx: &App) -> Option<FocusHandle> {
+    // Not the editor itself: this runs from `el.focus()` in a keydown handler,
+    // inside that editor's update (`INPUT_FOCUS`).
+    if let Some(handle) = INPUT_FOCUS.with(|m| m.borrow().get(&id).cloned()) {
+        return Some(handle);
     }
     FOCUS_HANDLES.with(|m| m.borrow().get(&id).cloned())
 }
@@ -5345,13 +5356,14 @@ pub(crate) fn is_node_focused(id: u32, window: &Window, cx: &App) -> bool {
 
 /// Which node owns keyboard focus, by asking gpui. See
 /// [`crate::devtools::focused_node`] for why this is not simply `FOCUSED_NODE`.
-pub(crate) fn focused_node(window: &Window, cx: &App) -> Option<u32> {
+pub(crate) fn focused_node(window: &Window, _cx: &App) -> Option<u32> {
     // The editor's handle first: an `<input>`'s focus identity lives inside the
     // native widget, and its wrapper may ALSO have a handle (a `:focus` rule).
-    let from_inputs = INPUT_STATES.with(|m| {
+    // From the recorded handles, never the editors (`INPUT_FOCUS`).
+    let from_inputs = INPUT_FOCUS.with(|m| {
         m.borrow()
             .iter()
-            .find(|(_, state)| state.read(cx).focus_handle().is_focused(window))
+            .find(|(_, handle)| handle.is_focused(window))
             .map(|(id, _)| *id)
     });
     from_inputs.or_else(|| {
@@ -6518,6 +6530,7 @@ fn build_input<V: 'static>(
     };
 
     let focus_target = state.read(cx).focus_handle();
+    INPUT_FOCUS.with(|m| m.borrow_mut().insert(id, focus_target.clone()));
     // Edge-triggered: `None` on every frame until gpui has actually queried a
     // configuration this node has not reported yet. See
     // `TextInputState::newly_forwarded_configuration` for why that is the only

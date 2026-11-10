@@ -46,6 +46,21 @@ const App = {
           })
         : h("button", { id: "reopen", onClick: () => (fieldOpen.value = true) }, "reopen"),
       h("input", { id: "plain", style: { width: "200px" } }),
+      // An emoji suggestion list driven from the field: the arrow keys move the
+      // pick, and the handler asks where the focus is and keeps it on the field.
+      // It runs inside the field editor's own update, which a read of that
+      // editor used to answer with a native panic.
+      h("input", {
+        id: "suggest",
+        onKeydown: (e: KeyboardEvent) => {
+          if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter") return;
+          e.preventDefault();
+          const active = (document.activeElement as { id?: string } | null)?.id ?? "none";
+          (e.target as HTMLInputElement).focus();
+          out.log.push(`suggest:keydown:${e.key} active=${active}`);
+        },
+        style: { width: "200px" },
+      }),
     ]),
 };
 
