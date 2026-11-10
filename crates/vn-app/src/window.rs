@@ -1037,6 +1037,8 @@ pub struct Snapshot {
     pub fullscreen: bool,
     pub focused: bool,
     pub cloaked: bool,
+    /// Covered by other windows ([`occluded`]).
+    pub occluded: bool,
     pub screen: (f32, f32, f32, f32, f32, f32),
     pub displays: usize,
     pub title: String,
@@ -1072,6 +1074,7 @@ impl Default for Snapshot {
             fullscreen: false,
             focused: false,
             cloaked: false,
+            occluded: false,
             screen: (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
             displays: 1,
             title: String::new(),
@@ -1252,10 +1255,78 @@ pub fn cloaked() -> bool {
     win::is_cloaked()
 }
 
-/// A background-but-shown window remains visible; hidden, minimized and
-/// cloaked windows are hidden pages, independently of one another.
+/// Is every window of the app out of sight behind other windows
+/// (src/occlusion.rs)? The primary one covered, and each pop-out covered or
+/// not shown, since a popped-out call or stream someone is watching still
+/// needs the frame clock. A hidden page then, as a cloaked one is, with the
+/// same consequence in the pump (`crate::pump_frame`).
+///
+/// The answer stands for [`crate::occlusion::RECHECK`]; the pump asks every
+/// frame. Never in a test host that opens behind everything on purpose
+/// (src/quiet.rs), nor with `VN_OCCLUSION=0`.
+pub fn occluded() -> bool {
+    thread_local! {
+        static LAST: Cell<Option<(std::time::Instant, bool)>> = const { Cell::new(None) };
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var("VN_OCCLUSION").map_or(true, |v| v.trim() != "0")) || crate::quiet::never_focus() {
+        return false;
+    }
+    let Some(main) = hwnd_raw() else { return false };
+    let now = std::time::Instant::now();
+    if let Some((at, answer)) = LAST.with(Cell::get) {
+        // Brought to the front: drawing resumes at once, not on the next recheck.
+        if now.saturating_duration_since(at) < crate::occlusion::RECHECK && !(answer && is_foreground(main)) {
+            return answer;
+        }
+    }
+    let answer = crate::occlusion::hwnd_covered(main)
+        && crate::popout::ids().into_iter().filter_map(hwnd_of).all(crate::occlusion::hwnd_unseen);
+    LAST.with(|l| l.set(Some((now, answer))));
+    answer
+}
+
+/// Is the user in this app: a window of this process (the primary one, a
+/// pop-out, a dialog) is the foreground window. Not gpui's
+/// `App::active_window`, which asks Win32's `GetActiveWindow`: that is the
+/// thread's own notion and keeps naming our window after another app took the
+/// foreground, so an unfocused window read as focused.
+#[cfg(target_os = "windows")]
+pub fn app_focused(_cx: &gpui::App) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.0.is_null() {
+        return false;
+    }
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(fg, Some(&mut pid)) };
+    pid == std::process::id()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn app_focused(cx: &gpui::App) -> bool {
+    cx.active_window().is_some()
+}
+
+#[cfg(target_os = "windows")]
+fn is_foreground(raw: isize) -> bool {
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() }.0 as isize == raw
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_foreground(_raw: isize) -> bool {
+    false
+}
+
+/// What `document.hidden` reports right now.
+pub fn page_hidden() -> bool {
+    PAGE_HIDDEN.with(|h| h.get()).unwrap_or(false)
+}
+
+/// A background-but-shown window remains visible; hidden, minimized, cloaked
+/// and covered windows are hidden pages, independently of one another.
 fn hidden(s: &Snapshot) -> bool {
-    !s.visible || s.minimized || s.cloaked
+    !s.visible || s.minimized || s.cloaked || s.occluded
 }
 
 fn visibility_delta(previous: Option<bool>, snapshot: &Snapshot) -> Option<bool> {
@@ -1459,6 +1530,7 @@ pub fn snapshot(window: &Window, cx: &gpui::App) -> Snapshot {
         fullscreen,
         focused: window.is_window_active(),
         cloaked: win::is_cloaked(),
+        occluded: occluded(),
         screen,
         displays,
         title: live.title,
@@ -1671,6 +1743,7 @@ fn snapshot_json(s: &Snapshot) -> String {
         ("fullscreen", Json::Bool(s.fullscreen)),
         ("focused", Json::Bool(s.focused)),
         ("cloaked", Json::Bool(s.cloaked)),
+        ("occluded", Json::Bool(s.occluded)),
         ("title", Json::s(s.title.clone())),
         ("backdrop", Json::s(s.backdrop.as_str())),
         ("effectiveBackdrop", Json::s(s.effective_backdrop.as_str())),
@@ -2629,6 +2702,8 @@ mod tests {
         let not_shown = Snapshot { visible: false, ..base.clone() };
         assert!(!not_shown.minimized, "a hidden window need not be minimized");
         assert_eq!((hidden(&base), hidden(&min), hidden(&cloaked), hidden(&unfocused), hidden(&not_shown)), (false, true, true, false, true));
+        let covered = Snapshot { occluded: true, ..base.clone() };
+        assert!(hidden(&covered), "a window other windows cover is a hidden page");
 
         // A host-drawn cluster takes its width off the RIGHT on Windows, so the
         // content area keeps x = 0 and loses width (3 x 46 px).

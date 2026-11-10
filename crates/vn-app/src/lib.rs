@@ -86,7 +86,9 @@ mod json; // the dev transport, the devtools wire and vn.config.json share one c
 mod mapped_file; // read-only disk payloads, borrowed without a full heap copy
 mod owner; // VN_OWNER_PID: a test host dies with the runner that launched it
 mod payload; // the app stamped into a packaged exe (VNPK), and `--vn-host-info`
+mod occlusion; // a window other windows cover is a hidden page, as in Chromium
 mod perf;
+mod reclaim; // the JS engine's garbage goes back to the OS while nobody looks
 mod popout; // SPIKE: a Vue subtree painted by a second OS window (docs/MULTIWINDOW.md)
 mod popout_win; // a pop-out shown and hidden, owned, covering a monitor (MULTIWINDOW.md §7.9)
 #[cfg(feature = "prod")]
@@ -729,8 +731,9 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // hands the window to the background tick (timers, sockets, devtools every
     // 100 ms; src/background.rs), whose funnel reports `document.hidden`. Not
     // before the first frame: that one owns the boot wave. Nor does it need
-    // every refresh to notice it is back (src/idle.rs).
-    if background::pumped_once() && window::cloaked() {
+    // every refresh to notice it is back (src/idle.rs). A window other windows
+    // cover is the same hidden page (src/occlusion.rs).
+    if background::pumped_once() && (window::cloaked() || window::occluded()) {
         idle::rearm_paced(window, pump_frame, idle::CLOAKED_INTERVAL);
         return;
     }
@@ -774,7 +777,8 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     if devtools::busy() {
         idle::note_moved();
     }
-    idle::rearm(window, pump_frame);
+    // A test host's windows are never active and count as focused (src/quiet.rs).
+    idle::rearm(window, pump_frame, window::app_focused(cx) || quiet::never_focus());
     // Closes the `pump` bucket: everything after this is gpui's — its decision
     // to draw, the draw itself, the present, and the wait for the next vsync.
     perf::pump_done();
@@ -808,6 +812,9 @@ pub(crate) enum Wave {
 /// Shared by the frame and the background tick, so the two can never drift
 /// apart in what they deliver.
 pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
+    // For the collection while nobody looks (src/reclaim.rs). A test host's
+    // windows are never active and count as focused (src/quiet.rs).
+    let focused = window::app_focused(cx) || quiet::never_focus();
     with_published(window, cx, Phase::Commit, || {
         // Dev loop: poll dist/changes.json and apply HMR BEFORE the pump, so
         // everything Vue schedules while patching (its post-flush queue, the
@@ -866,6 +873,8 @@ pub(crate) fn js_wave(window: &mut Window, cx: &mut App, wave: Wave) {
                     format!("[js uncaught] {}\n{}", err.header, err.stack),
                 );
             }
+            // After the wave, so what it just dropped is garbage by now.
+            reclaim::after_wave(rt, focused, wave == Wave::Background || window::page_hidden());
         });
         // One queued devtools command per frame, in the SAME publication the
         // pump just used: a command can therefore never observe a half-applied
@@ -941,7 +950,12 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
     // Nor is a playing `<lottie>` any more: its frames are written into its
     // tile by the same tick, which asks for a draw only when a present cannot
     // show them (crates/vn-lottie/CONTRACT.md §8.10).
-    let moving = vn_tree::animating() || media_moved;
+    //
+    // A hidden page (minimised, cloaked, covered by other windows) paints no
+    // animation: nobody sees it, and a cloaked or covered window would draw
+    // every one of them. The first frame after it is shown again resumes them.
+    let animating = vn_tree::animating() && !window::page_hidden();
+    let moving = animating || media_moved;
     if flush == vn_tree::Flush::DrawnBySync {
         // Counted for the frame trace: a forced layout already drew this tree.
         // With no newer work, the primary-window notification below is skipped.
@@ -953,7 +967,13 @@ pub(crate) fn after_wave(window: &mut Window, cx: &mut App) {
         notify_shell(cx);
     }
     if tree_moved || moving {
-        idle::note_moved();
+        // Only CSS animations and transitions moving is not work: an
+        // unfocused window paces them (src/idle.rs).
+        if tree_moved || media_moved {
+            idle::note_moved();
+        } else {
+            idle::note_animating();
+        }
         // The synchronous layout only draws the primary window. Popped-out
         // subtrees still need this wave (docs/MULTIWINDOW.md §6).
         popout::notify_all(cx);

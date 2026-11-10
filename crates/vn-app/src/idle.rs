@@ -23,6 +23,16 @@
 //! is in flight. Anything else
 //! returns the clock to every refresh at once. `VN_IDLE_PACING=0` turns this
 //! off.
+//!
+//! **An unfocused window paces its CSS animations too.** While no window of
+//! the app is active, a frame whose only motion is a CSS animation or
+//! transition counts as quiet, so after [`QUIET_FRAMES`] of them the clock
+//! runs every [`IDLE_INTERVAL`]: an infinite animation in a window behind the
+//! one being used draws at ~30 fps rather than at the display rate (an Argon
+//! chat spent ~0.8 of a core drawing a username's colour drift at 156 fps).
+//! Everything that is work keeps the display rate: a tree change, a video
+//! frame, `requestAnimationFrame`, input (which wakes the clock anyway). A
+//! window nobody can see at all draws no animation (`crate::after_wave`).
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -72,11 +82,24 @@ impl Wave {
     }
 }
 
-/// The decision, pure: with the frame's wave and whether anything else moved,
+/// What else happened in the frame, besides its JS wave.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Frame {
+    /// The tree changed, a video presented a frame, or a devtools command is
+    /// in flight.
+    pub moved: bool,
+    /// A CSS animation or transition moved, and nothing else did.
+    pub animating: bool,
+    /// A window of the app is the active one.
+    pub focused: bool,
+}
+
+/// The decision, pure: with the frame's wave and what else happened in it,
 /// the quiet streak after this frame and, when it is long enough, the longest
 /// the clock may wait for the next frame.
-pub fn decide(streak: u32, wave: Option<Wave>, moved: bool) -> (u32, Option<Duration>) {
-    let quiet = !moved && wave.is_some_and(|w| w.quiet());
+pub fn decide(streak: u32, wave: Option<Wave>, frame: Frame) -> (u32, Option<Duration>) {
+    let still = !frame.moved && (!frame.animating || !frame.focused);
+    let quiet = still && wave.is_some_and(|w| w.quiet());
     if !quiet {
         return (0, None);
     }
@@ -92,6 +115,38 @@ thread_local! {
     static STREAK: Cell<u32> = const { Cell::new(0) };
     static WAVE: Cell<Option<Wave>> = const { Cell::new(None) };
     static MOVED: Cell<bool> = const { Cell::new(false) };
+    static ANIMATING: Cell<bool> = const { Cell::new(false) };
+    /// The last decision's inputs and answer, for the devtools `perf` reply.
+    static LAST: Cell<Option<(Option<Wave>, Frame, Option<Duration>)>> = const { Cell::new(None) };
+}
+
+/// Why the clock runs at the rate it does: the last frame's wave and motion,
+/// the quiet streak and the wait it chose (`None`: every refresh). The
+/// devtools `perf` reply's `idle`.
+#[cfg_attr(not(vn_devtools), allow(dead_code))]
+pub fn status() -> crate::json::Json {
+    use crate::json::Json;
+    let ms = |d: Duration| Json::n((d.as_secs_f64() * 10_000.0).round() / 10.0);
+    let Some((wave, frame, wait)) = LAST.with(Cell::get) else { return Json::Null };
+    let wave = wave.map_or(Json::Null, |w| {
+        Json::obj(vec![
+            ("quiet", Json::Bool(w.quiet())),
+            ("rafFired", Json::n(f64::from(w.raf_fired))),
+            ("rafPending", Json::n(f64::from(w.raf_pending))),
+            ("nextTimerMs", w.next_timer.map_or(Json::Null, ms)),
+            ("jsMs", ms(w.elapsed)),
+            ("audio", Json::Bool(w.audio)),
+        ])
+    });
+    Json::obj(vec![
+        ("enabled", Json::Bool(enabled())),
+        ("streak", Json::n(f64::from(STREAK.with(Cell::get)))),
+        ("waitMs", wait.map_or(Json::Null, ms)),
+        ("moved", Json::Bool(frame.moved)),
+        ("animating", Json::Bool(frame.animating)),
+        ("focused", Json::Bool(frame.focused)),
+        ("wave", wave),
+    ])
 }
 
 fn enabled() -> bool {
@@ -109,11 +164,22 @@ pub fn note_moved() {
     MOVED.with(|m| m.set(true));
 }
 
+/// Only a CSS animation or transition moved in this frame.
+pub fn note_animating() {
+    ANIMATING.with(|a| a.set(true));
+}
+
 /// Re-arms the pump for the next frame, paced when the window has been quiet.
-pub fn rearm(window: &mut gpui::Window, pump: Pump) {
+/// `focused`: a window of the app is the active one.
+pub fn rearm(window: &mut gpui::Window, pump: Pump, focused: bool) {
     let wave = WAVE.with(|w| w.take());
-    let moved = MOVED.with(|m| m.replace(false));
-    let (streak, wait) = decide(STREAK.with(Cell::get), wave, moved);
+    let frame = Frame {
+        moved: MOVED.with(|m| m.replace(false)),
+        animating: ANIMATING.with(|a| a.replace(false)),
+        focused,
+    };
+    let (streak, wait) = decide(STREAK.with(Cell::get), wave, frame);
+    LAST.with(|l| l.set(Some((wave, frame, wait))));
     STREAK.with(|s| s.set(streak));
     match wait {
         Some(wait) => rearm_paced(window, pump, wait),
@@ -126,7 +192,10 @@ pub fn rearm_paced(window: &mut gpui::Window, pump: Pump, wait: Duration) {
     #[cfg(target_os = "windows")]
     if enabled() {
         window.on_next_frame_passive(pump);
-        gpui_windows::pace_frames(Some(std::time::Instant::now() + wait));
+        // From the frame: the repaint the pump just asked for (a CSS
+        // animation's next step) is this frame's draw, not a reason to take
+        // the next refresh too.
+        gpui_windows::pace_frames_from_frame(std::time::Instant::now() + wait);
         return;
     }
     let _ = wait;
@@ -148,22 +217,43 @@ mod tests {
         Wave { elapsed: Duration::from_micros(40), ..Wave::default() }
     }
 
+    const STILL: Frame = Frame { moved: false, animating: false, focused: true };
+    const MOVED: Frame = Frame { moved: true, ..STILL };
+
     #[test]
     fn the_clock_slows_only_after_a_run_of_quiet_frames() {
         let mut streak = 0;
         for _ in 0..QUIET_FRAMES - 1 {
-            let (next, wait) = decide(streak, Some(idle()), false);
+            let (next, wait) = decide(streak, Some(idle()), STILL);
             assert_eq!(wait, None);
             streak = next;
         }
-        assert_eq!(decide(streak, Some(idle()), false), (QUIET_FRAMES, Some(IDLE_INTERVAL)));
+        assert_eq!(decide(streak, Some(idle()), STILL), (QUIET_FRAMES, Some(IDLE_INTERVAL)));
+    }
+
+    #[test]
+    fn an_unfocused_window_paces_its_css_animations() {
+        let animating = Frame { animating: true, ..STILL };
+        let paced = QUIET_FRAMES + 5;
+        assert_eq!(decide(paced, Some(idle()), animating), (0, None), "focused: the display rate");
+        let behind = Frame { focused: false, ..animating };
+        let mut streak = 0;
+        for _ in 0..QUIET_FRAMES - 1 {
+            let (next, wait) = decide(streak, Some(idle()), behind);
+            assert_eq!(wait, None, "a short transition (a hover) keeps the display rate");
+            streak = next;
+        }
+        assert_eq!(decide(streak, Some(idle()), behind), (QUIET_FRAMES, Some(IDLE_INTERVAL)));
+        // Work in an unfocused window still runs at the display rate.
+        assert_eq!(decide(paced, Some(idle()), Frame { moved: true, ..behind }), (0, None), "the tree moved");
+        assert_eq!(decide(paced, Some(Wave { raf_fired: 1, ..idle() }), behind), (0, None), "rAF");
     }
 
     #[test]
     fn any_activity_restores_the_display_rate() {
         let paced = QUIET_FRAMES + 5;
-        assert_eq!(decide(paced, Some(idle()), true), (0, None), "the tree moved");
-        assert_eq!(decide(paced, None, false), (0, None), "no wave ran");
+        assert_eq!(decide(paced, Some(idle()), MOVED), (0, None), "the tree moved");
+        assert_eq!(decide(paced, None, STILL), (0, None), "no wave ran");
         for busy in [
             Wave { raf_pending: 1, ..idle() },
             Wave { raf_fired: 1, ..idle() },
@@ -171,16 +261,16 @@ mod tests {
             Wave { next_timer: Some(Duration::ZERO), ..idle() },
             Wave { audio: true, ..idle() },
         ] {
-            assert_eq!(decide(paced, Some(busy), false), (0, None), "{busy:?}");
+            assert_eq!(decide(paced, Some(busy), STILL), (0, None), "{busy:?}");
         }
     }
 
     #[test]
     fn a_timer_due_sooner_than_the_interval_sets_the_wait() {
         let soon = Wave { next_timer: Some(Duration::from_millis(5)), ..idle() };
-        assert_eq!(decide(QUIET_FRAMES, Some(soon), false).1, Some(Duration::from_millis(5)));
+        assert_eq!(decide(QUIET_FRAMES, Some(soon), STILL).1, Some(Duration::from_millis(5)));
         let later = Wave { next_timer: Some(Duration::from_secs(10)), ..idle() };
-        assert_eq!(decide(QUIET_FRAMES, Some(later), false).1, Some(IDLE_INTERVAL));
+        assert_eq!(decide(QUIET_FRAMES, Some(later), STILL).1, Some(IDLE_INTERVAL));
     }
 
     #[test]

@@ -2905,6 +2905,8 @@ fn perf_data() -> Json {
             },
         ),
         ("samples", Json::arr(tail)),
+        // Why the frame clock runs at this rate (src/idle.rs).
+        ("idle", crate::idle::status()),
         ("nodes", Json::n(f64::from(vn_tree::devtools::node_count()))),
         // Since the process started: element-tree builds, and the frames shown
         // by a present alone (a `<video>` or moving `<canvas>` frame written

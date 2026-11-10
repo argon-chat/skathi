@@ -251,6 +251,12 @@ pub fn count() -> usize {
     POPOUTS.with(|p| p.borrow().len())
 }
 
+/// The open pop-outs' window keys (`vn_tree::windows::key`), which address
+/// their HWNDs (`window::hwnd_of`).
+pub fn ids() -> Vec<vn_tree::WinKey> {
+    POPOUTS.with(|p| p.borrow().iter().map(|w| w.id.as_u64()).collect())
+}
+
 // ---------------------------------------------------------------------------
 // options — `<VnWindow>`'s props, as the host sees them
 // ---------------------------------------------------------------------------
