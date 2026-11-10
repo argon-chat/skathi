@@ -71,3 +71,17 @@ windows = { version = "0.62", features = [
 # paths, so the crate has to be nameable here. Same 0.62 the `windows` crate
 # above already depends on.
 windows-core = "0.62"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Screen recording is TCC-gated: source thumbnails read the desktop, so
+# `capture::sources` asks first (vn_permissions::require_display_capture).
+vn-permissions = { path = "../vn-permissions" }
+# ScreenCaptureKit sources (src/capture/mac.rs). Versions already pinned by the
+# SDK's AppKit backend and vn-permissions, so no crate is added to the build.
+# ScreenCaptureKit and CoreGraphics have no binding in the graph: their classes
+# are looked up by name and the few C functions declared in place.
+block2 = "0.6.2"
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
+objc2 = "0.6.4"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CFCGTypes"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString"] }

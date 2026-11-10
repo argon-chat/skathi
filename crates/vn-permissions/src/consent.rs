@@ -17,7 +17,9 @@
 //! | granted / prompt / unsupported | Allow | `granted` |
 //! | granted / prompt / unsupported | Block | `denied` (by the user) |
 //!
-//! Every other capability is the platform's, untouched.
+//! Every other capability is the platform's, untouched, except that the
+//! capture latches below also apply to one the OS itself prompts for (macOS
+//! screen recording).
 //!
 //! # Asking
 //!
@@ -99,7 +101,7 @@ pub fn set_app_name(name: &str) {
     *APP_NAME.lock().unwrap_or_else(|p| p.into_inner()) = (!name.is_empty()).then(|| name.to_string());
 }
 
-fn app_name() -> String {
+pub(crate) fn app_name() -> String {
     APP_NAME.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(|| "This app".to_string())
 }
 
@@ -260,7 +262,9 @@ impl Shared {
 
     fn status(&self, cap: Capability) -> PermissionState {
         if !prompts(cap) {
-            return self.os.status(cap);
+            // The capture latches still govern one that only the OS asks
+            // about (macOS screen recording); the rest are the platform's.
+            return if self.os.has_native_prompt(cap) { self.os_state(cap) } else { self.os.status(cap) };
         }
         // TCC already asks for this app. A saved app-level Allow must never
         // turn its native Prompt/Denied state into an unearned grant.
@@ -433,6 +437,12 @@ impl PermissionHost for AppConsent {
 
     fn request(&self, cap: Capability) -> RequestOutcome {
         if !prompts(cap) {
+            // `deny` never raises the OS's prompt, and a fake capture reads
+            // nothing of the machine's for it to guard.
+            let latched = (self.shared.hooks.forbidden)() || (self.shared.hooks.fake)();
+            if latched && self.shared.os.has_native_prompt(cap) {
+                return RequestOutcome::Settled(self.shared.os_state(cap));
+            }
             return self.os_request(cap);
         }
         if (self.shared.hooks.forbidden)() {
@@ -592,6 +602,48 @@ mod tests {
         let forbidden = AppConsent::new(os, Hooks { forbidden: yes, fake: no, asker: with_asker });
         assert_eq!(forbidden.request(Capability::Microphone), RequestOutcome::Settled(Denied));
         assert_eq!(os.requested.load(std::sync::atomic::Ordering::SeqCst), 1, "the deny latch never calls native APIs");
+    }
+
+    /// macOS screen recording: the OS asks, and nothing in this layer does.
+    struct NativeScreen {
+        state: Mutex<PermissionState>,
+        requested: std::sync::atomic::AtomicUsize,
+    }
+
+    impl PermissionHost for NativeScreen {
+        fn platform(&self) -> &'static str { "native-test" }
+        fn has_native_prompt(&self, cap: Capability) -> bool { cap == Capability::DisplayCapture }
+        fn status(&self, _cap: Capability) -> PermissionState { *self.state.lock().unwrap() }
+        fn request(&self, _cap: Capability) -> RequestOutcome {
+            self.requested.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.state.lock().unwrap() = Denied;
+            RequestOutcome::Pending(51)
+        }
+        fn drain_settled(&self) -> Vec<(u32, PermissionState)> { vec![(51, Denied)] }
+    }
+
+    #[test]
+    fn native_screen_recording_is_the_oss_except_under_the_capture_latches() {
+        let os = Box::leak(Box::new(NativeScreen {
+            state: Mutex::new(Prompt),
+            requested: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let requested = || os.requested.load(std::sync::atomic::Ordering::SeqCst);
+
+        let forbidden = AppConsent::new(os, Hooks { forbidden: yes, fake: no, asker: with_asker });
+        assert_eq!(forbidden.status(Capability::DisplayCapture), Denied);
+        assert_eq!(forbidden.request(Capability::DisplayCapture), RequestOutcome::Settled(Denied));
+        let fake = AppConsent::new(os, Hooks { forbidden: no, fake: yes, asker: with_asker });
+        assert_eq!(fake.status(Capability::DisplayCapture), Granted, "a fake desktop is not the OS's to refuse");
+        assert_eq!(fake.request(Capability::DisplayCapture), RequestOutcome::Settled(Granted));
+        assert_eq!(requested(), 0, "neither latch raises the system prompt");
+
+        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+        assert_eq!(h.status(Capability::DisplayCapture), Prompt);
+        let token = pending(h.request(Capability::DisplayCapture));
+        assert_eq!((requested(), asked()), (1, 0), "the OS prompts; the app's dialog does not");
+        assert_eq!(h.drain_settled(), vec![(token, Denied)]);
+        assert!(h.denied_by_system(Capability::DisplayCapture));
     }
 
     #[test]

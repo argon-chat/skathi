@@ -403,6 +403,8 @@ export function createRuntime(
       requests: [],
       pendingToken: null,
       dispatcher: null,
+      /** `__vn_permissions_hint` answers, by name ("" when absent). */
+      hints: new Map(),
       /** The fake `navigator.permissions` PermissionStatus objects, by name. */
       statuses: new Map(),
     },
@@ -670,6 +672,7 @@ export function createRuntime(
     "__vn_permissions_query",
     "__vn_permissions_list",
     "__vn_permissions_request",
+    "__vn_permissions_hint",
     "__vn_permissions_set_dispatcher",
     "__vn_storage_user_folder",
     "__vn_storage_set_folder",
@@ -967,6 +970,7 @@ export function createRuntime(
       }
       return JSON.stringify({ state: permState(name) });
     },
+    (name) => host.permissions.hints.get(name) ?? "",
     (fn) => {
       host.permissions.dispatcher = fn;
     },

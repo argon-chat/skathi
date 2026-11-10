@@ -1,8 +1,10 @@
 //! Desktop capture sources and bounded PNG previews, off the frame thread.
 //!
-//! IDs use `screen:<HMONITOR>` / `window:<HWND>` on Windows. The decimal
+//! IDs use `screen:<HMONITOR>` / `window:<HWND>` on Windows and
+//! `screen:<CGDirectDisplayID>` / `window:<CGWindowID>` on macOS. The decimal
 //! handle is a string throughout JS and is the same handle capture consumes;
 //! display enumeration order and display names are not source identities.
+//! On macOS, enumeration first requires Screen Recording access (TCC).
 
 use base64::Engine;
 use image::ImageEncoder;
@@ -10,6 +12,10 @@ use serde_json::{json, Value};
 
 use crate::{Done, Fail};
 
+#[cfg(any(target_os = "macos", test))]
+mod listing;
+#[cfg(target_os = "macos")]
+mod mac;
 #[cfg(target_os = "windows")]
 mod win;
 
@@ -83,10 +89,29 @@ pub fn start_sources(types: &str, options: &str) -> String {
         Err(error) => return error.to_sync_json(),
     };
     let token = crate::next_token();
-    crate::pool::submit(token, move || {
-        let sources = sources(options)?;
-        Ok(Done::json(&Value::Array(sources).to_string()))
-    });
+    let enumerate = move || {
+        crate::pool::submit(token, move || {
+            let sources = sources(options)?;
+            Ok(Done::json(&Value::Array(sources).to_string()))
+        });
+    };
+    // The Screen Recording question can wait on the user. Like a dialog, it
+    // waits on its own thread rather than as a pool job, which the frame
+    // pump counts as in flight.
+    #[cfg(target_os = "macos")]
+    if options.screens || options.windows {
+        let asked = std::thread::Builder::new().name("vn-capture-consent".into()).spawn(move || {
+            match vn_permissions::require_display_capture() {
+                Ok(()) => enumerate(),
+                Err((name, message)) => crate::settle(token, Err(Fail::new(name, message))),
+            }
+        });
+        if asked.is_err() {
+            crate::settle(token, Err(Fail::new("OperationError", "could not start the screen recording check")));
+        }
+        return json!({"token": token}).to_string();
+    }
+    enumerate();
     json!({"token": token}).to_string()
 }
 
@@ -96,11 +121,21 @@ pub fn sources(options: Options) -> Result<Vec<Value>, Fail> {
     if !options.screens && !options.windows {
         return Ok(Vec::new());
     }
+    // Names and thumbnails are screen recording to TCC. Ask before reading
+    // any: the first time shows the system prompt, and without access the
+    // listing fails with where to turn it on rather than coming back blank.
+    // Never on the frame thread; `start_sources` has already waited.
+    #[cfg(target_os = "macos")]
+    vn_permissions::require_display_capture().map_err(|(name, message)| Fail::new(name, message))?;
     #[cfg(target_os = "windows")]
     {
         win::sources(options)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        mac::sources(options)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         Err(Fail::new(
             "NotSupportedError",

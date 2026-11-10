@@ -145,6 +145,78 @@ pub fn describe_json() -> String {
     s
 }
 
+/// Where the user turns a capability back on once the platform has refused
+/// it, for the message a refusal carries; `None` where the platform's own
+/// refusal says enough. Only macOS screen recording has one: TCC prompts once
+/// per app, ever, and a grant needs a relaunch.
+pub fn refusal_hint(cap: Capability) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    if cap == Capability::DisplayCapture {
+        return Some(screen_recording_hint(&consent::app_name()));
+    }
+    let _ = cap;
+    None
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn screen_recording_hint(app: &str) -> String {
+    format!(
+        "Turn on {app} in System Settings › Privacy & Security › Screen & System Audio Recording \
+         (Screen Recording before macOS 15), then quit and reopen {app}."
+    )
+}
+
+/// The refusal of a `display-capture` the platform does not allow, as a
+/// DOMException `(name, message)`: Chrome's "Permission denied by system",
+/// plus the [`refusal_hint`].
+pub fn display_capture_refusal() -> (&'static str, String) {
+    if (consent::Hooks::process().forbidden)() {
+        return ("NotAllowedError", "Permission denied: media capture is switched off for this process.".into());
+    }
+    let message = match refusal_hint(Capability::DisplayCapture) {
+        Some(hint) => format!("Permission denied by system. {hint}"),
+        None => "Permission denied by system".into(),
+    };
+    ("NotAllowedError", message)
+}
+
+/// Blocks a worker thread, never the VM's, until `display-capture` is
+/// decided, asking the platform first when nobody has. For native work that
+/// reads the desktop outside `getDisplayMedia` (source thumbnails). Without a
+/// host there is nobody to ask, and nothing is refused.
+pub fn require_display_capture() -> Result<(), (&'static str, String)> {
+    let Some(host) = api::host() else {
+        return Ok(());
+    };
+    match await_decision(host, Capability::DisplayCapture, std::time::Duration::from_secs(120)) {
+        PermissionState::Granted | PermissionState::Unsupported => Ok(()),
+        PermissionState::Denied => Err(display_capture_refusal()),
+        PermissionState::Prompt => Err(("NotAllowedError", "Permission dismissed".into())),
+    }
+}
+
+/// `cap`'s state once it is no longer `prompt`, requesting it if it is, or
+/// `prompt` when `timeout` passes first. The request's token settles into
+/// the router like any other and is ignored.
+fn await_decision(host: &dyn PermissionHost, cap: Capability, timeout: std::time::Duration) -> PermissionState {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut asked = false;
+    loop {
+        match host.status(cap) {
+            PermissionState::Prompt if !asked => {
+                asked = true;
+                if let RequestOutcome::Settled(state) = host.request(cap) {
+                    return state;
+                }
+            }
+            PermissionState::Prompt if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            state => return state,
+        }
+    }
+}
+
 fn json_string(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
@@ -247,6 +319,13 @@ host_fn!(fn vn_permissions_request(g, args) {
     JsRuntime::with(|rt| rt.ctx().string(&json).0)
 });
 
+// `__vn_permissions_hint(name) -> string` — the [`refusal_hint`], or `""`.
+host_fn!(fn vn_permissions_hint(g, args) {
+    let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
+    let hint = Capability::from_web_name(&name).and_then(refusal_hint).unwrap_or_default();
+    JsRuntime::with(|rt| rt.ctx().string(&hint).0)
+});
+
 host_fn!(fn vn_permissions_set_dispatcher(g, args) {
     let f = args.arg(0);
     unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
@@ -287,6 +366,7 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_permissions_query", 1, vn_permissions_query as *const _),
         ("__vn_permissions_list", 0, vn_permissions_list as *const _),
         ("__vn_permissions_request", 1, vn_permissions_request as *const _),
+        ("__vn_permissions_hint", 1, vn_permissions_hint as *const _),
         ("__vn_permissions_set_dispatcher", 1, vn_permissions_set_dispatcher as *const _),
     ];
     for (name, arity, f) in fns {
@@ -417,6 +497,46 @@ mod tests {
         h.set(Capability::Microphone, PermissionState::Denied);
         assert_eq!(h.drain_changes(), Some(vec![Capability::Microphone]));
         assert_eq!(h.drain_changes(), Some(vec![]), "a change is delivered once");
+    }
+
+    #[test]
+    fn a_worker_waits_for_a_decision_and_asks_only_from_prompt() {
+        use std::time::Duration;
+        let cap = Capability::DisplayCapture;
+        let h = StubHost::scripted("test", &[(cap, PermissionState::Prompt)]).granting(PermissionState::Denied);
+        assert_eq!(await_decision(&h, cap, Duration::from_secs(5)), PermissionState::Denied);
+        assert_eq!(h.drain_settled().len(), 1, "asked exactly once");
+        // Already decided: read, not asked again (a refused request would
+        // otherwise open System Settings on every thumbnail refresh).
+        assert_eq!(await_decision(&h, cap, Duration::from_secs(5)), PermissionState::Denied);
+        assert!(h.drain_settled().is_empty());
+        let h = StubHost::scripted("test", &[(cap, PermissionState::Granted)]);
+        assert_eq!(await_decision(&h, cap, Duration::from_secs(5)), PermissionState::Granted);
+        // A platform that cannot ask settles with the truth at once.
+        let h = StubHost::scripted("test", &[(cap, PermissionState::Prompt)]);
+        assert_eq!(await_decision(&h, cap, Duration::from_secs(5)), PermissionState::Prompt);
+
+        /// A request that never settles.
+        struct Stuck;
+        impl PermissionHost for Stuck {
+            fn platform(&self) -> &'static str { "test" }
+            fn status(&self, _: Capability) -> PermissionState { PermissionState::Prompt }
+            fn request(&self, _: Capability) -> RequestOutcome { RequestOutcome::Pending(1) }
+        }
+        assert_eq!(await_decision(&Stuck, cap, Duration::from_millis(60)), PermissionState::Prompt, "bounded");
+    }
+
+    #[test]
+    fn the_screen_recording_hint_names_the_app_the_pane_and_the_relaunch() {
+        let hint = screen_recording_hint("Argon");
+        assert_eq!(
+            hint,
+            "Turn on Argon in System Settings › Privacy & Security › Screen & System Audio Recording \
+             (Screen Recording before macOS 15), then quit and reopen Argon."
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(refusal_hint(Capability::DisplayCapture), None, "no other platform adds one");
+        assert_eq!(refusal_hint(Capability::Microphone), None);
     }
 
     #[test]

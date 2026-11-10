@@ -11237,6 +11237,11 @@ export const appCapture = {
     if (source !== "camera" && source !== "screen_share") throw new TypeError("unknown capture source");
     return appPermissions.request(source === "camera" ? "camera" : "display-capture");
   },
+  /** Where the user turns a refused source back on (macOS screen recording), or "". */
+  permissionHint(source: "camera" | "screen_share"): string {
+    if (typeof __vn_permissions_hint !== "function") return "";
+    return __vn_permissions_hint(source === "camera" ? "camera" : "display-capture");
+  },
   async getSources(types: string[] = ["screen", "window"], options: Record<string, unknown> = {}): Promise<ScreenCaptureSource[]> {
     if (!Array.isArray(types) || types.some((t) => t !== "screen" && t !== "window")) {
       throw new TypeError("capture source types must be screen or window");

@@ -700,6 +700,11 @@ declare function __vn_permissions_list(): VnJson;
  * deliver the result to the dispatcher under that token).
  */
 declare function __vn_permissions_request(name: string): VnJson;
+/**
+ * Where the user turns a refused permission back on, for the error a refusal
+ * carries (macOS screen recording); `""` where the platform adds nothing.
+ */
+declare function __vn_permissions_hint(name: string): string;
 /** Installs the callback the pump settles pending requests through. */
 declare function __vn_permissions_set_dispatcher(
   fn: (token: number, state: VnPermissionState) => void,

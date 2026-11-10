@@ -20,6 +20,14 @@ test("invalid source types and missing native capture reject explicitly", async 
   await expect(pending).rejects.toThrow("invalid source list");
 });
 
+test("a capture source's refusal hint is the platform's, by permission name", () => {
+  const rt = createRuntime();
+  expect(rt.appCapture.permissionHint("screen_share")).toBe("");
+  rt.host.permissions.hints.set("display-capture", "Turn on Argon in System Settings.");
+  expect(rt.appCapture.permissionHint("screen_share")).toBe("Turn on Argon in System Settings.");
+  expect(rt.appCapture.permissionHint("camera")).toBe("");
+});
+
 test("screen selection keeps the exact native source ID and rejects invalid IDs", () => {
   const rt = createRuntime();
   expect(rt.appCapture.setPendingSource("window:456", true)).toBe(true);
