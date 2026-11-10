@@ -67,8 +67,7 @@ indexeddb-disk = ["indexeddb", "redjs/indexeddb-sqlite"]
 net-h2 = ["redjs/net-h2"]
 
 [dependencies]
-# Lean redjs: no game-engine host classes (physics/mesh/css-host/yoga-host are
-# all off) — JSC, the web platform layer, timers/rAF/microtask pump, and (with
+# Lean redjs: JSC, the web platform layer, timers/rAF/microtask pump, and (with
 # the `audio` feature above) Web Audio over Firewheel. `svg-images` always: an
 # SVG `Image` (a data: URL, a Blob) decodes with the resvg gpui already builds.
 # `canvas` always: CanvasRenderingContext2D and a real OffscreenCanvas

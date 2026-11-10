@@ -73,10 +73,7 @@ taffy = { path = "vendor/taffy" }
 webrtc-sys = { path = "vendor/webrtc-sys" }
 
 # vendor/redjs is a git submodule (https://github.com/argon-chat/redjs) consumed as a
-# path dep (vendor/redjs/redjs). NOTE: it currently path-depends on `../../redcss`
-# (PEWPEW's CSS crate) unconditionally — until that dep is feature-gated upstream,
-# building redjs from this workspace requires either the PEWPEW checkout or a
-# vendor/redcss stub. Tracked in docs/ARCHITECTURE.md §5.
+# path dep (vendor/redjs/redjs).
 
 [profile.release]
 opt-level = 3
