@@ -181,7 +181,7 @@ describe("a same-realm reload", () => {
   });
 
   test("the unload deletes the globals the old app added, string and symbol keys alike, and keeps the rest", () => {
-    const first = createRuntime({ globals: { location: { href: "app://redpew/" }, preludeFlag: 1 } });
+    const first = createRuntime({ globals: { location: { href: "app://redjs/" }, preludeFlag: 1 } });
     const g = first.global as unknown as Record<PropertyKey, unknown>;
     const loaded = Symbol.for("mediabunny loaded");
     g.appState = { user: 1 };
@@ -194,7 +194,7 @@ describe("a same-realm reload", () => {
     expect(loaded in g).toBe(false);
     // What the realm had before the first runtime ran, and the host's names.
     expect(g.preludeFlag).toBe(1);
-    expect(g.location).toEqual(expect.objectContaining({ href: "app://redpew/" }));
+    expect(g.location).toEqual(expect.objectContaining({ href: "app://redjs/" }));
     expect(g.__VN_HOST_STATE__).toBe("host");
     expect(typeof g.__vn_host_fn).toBe("function");
     // A non-configurable one cannot go, and the advisory counts it.

@@ -551,7 +551,7 @@ describe("focus: a handler that moves the focus abandons the move it interrupts"
 
 describe("location.reload()", () => {
   test("asks the host, which re-runs the app at the next frame", () => {
-    const location: Record<string, unknown> = { href: "app://redpew/" };
+    const location: Record<string, unknown> = { href: "app://redjs/" };
     const rt = createRuntime({ globals: { location } });
     (location.reload as () => void)();
     expect(rt.host.reloads).toBe(1);

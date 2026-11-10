@@ -48,7 +48,7 @@ describe("blob: URLs on the host", () => {
   test("the app made its URLs, and fetch() of a live one reads its bytes", async () => {
     await expect(app.locator("#status")).toHaveText("ready");
     const urls = JSON.parse((await app.eval("JSON.stringify(__VN_TEST_BLOB__)")) as string);
-    bunExpect(urls.live).toMatch(/^blob:app:\/\/redpew\/[0-9a-f-]{36}$/);
+    bunExpect(urls.live).toMatch(/^blob:app:\/\/redjs\/[0-9a-f-]{36}$/);
     bunExpect(urls.results.fetch).toBe("200|image/png|75|true");
   }, T);
 

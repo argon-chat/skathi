@@ -260,7 +260,7 @@ const headerNotes = computed<string[]>(() => {
   const cred = det.request?.credentials;
   if (cred && cred !== "include" && !det.cookies?.sent) {
     out.push(
-      `No Cookie header, and no Set-Cookie stored: credentials "${cred}". The app's origin (app://redpew) is ` +
+      `No Cookie header, and no Set-Cookie stored: credentials "${cred}". The app's origin (app://redjs) is ` +
         `opaque, so no URL is same-origin with it — cookies are sent and stored only with credentials: ` +
         `"include" (withCredentials for XHR).`,
     );

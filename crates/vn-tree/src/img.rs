@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | data URL | `data:image/png;base64,iVBOR…` | `ImageSource::Image` (bytes decoded once, cached per node) |
 //! | http(s) URL | `https://host/a.png` | `Resource::Uri` — fetched by gpui's asset loader through the `ReqwestClient` `vn-app` installs |
-//! | blob URL | `blob:app://redpew/<uuid>` | a picked file: `Resource::Path` (no copy); a slice or bytes in memory: `ImageSource::Image` (see "blob: URLs" below) |
+//! | blob URL | `blob:app://redjs/<uuid>` | a picked file: `Resource::Path` (no copy); a slice or bytes in memory: `ImageSource::Image` (see "blob: URLs" below) |
 //! | `file://` URL | `file:///C:/x/a.png` | `Resource::Path` |
 //! | absolute path | `C:\x\a.png`, `C:/x/a.png` | `Resource::Path` |
 //! | root-relative | `/assets/a.png` | `Resource::Path` under the **app root** |
@@ -2013,7 +2013,7 @@ mod tests {
     #[test]
     fn a_whole_picked_file_loads_by_path_without_a_copy() {
         let f = Picked::new("pic.png", PNG_1PX);
-        let src = "blob:app://redpew/00000000-0000-4000-8000-000000000001";
+        let src = "blob:app://redjs/00000000-0000-4000-8000-000000000001";
         assert_eq!(as_path(blob_image(src, Some(f.target(None, "image/png")))), Some(f.0.clone()));
         assert!(matches!(
             blob_media("video", src, Some(f.target(None, "video/mp4"))),
@@ -2026,7 +2026,7 @@ mod tests {
         let mut body = b"xx".to_vec();
         body.extend_from_slice(PNG_1PX);
         let f = Picked::new("two.bin", &body);
-        let src = "blob:app://redpew/00000000-0000-4000-8000-000000000002";
+        let src = "blob:app://redjs/00000000-0000-4000-8000-000000000002";
         // A slice of a file: read here, sniffed (the type says nothing).
         let t = f.target(Some((2, PNG_1PX.len() as u64)), "");
         assert!(matches!(blob_image(src, Some(t)), Some(ImageSource::Image(_))));
@@ -2050,7 +2050,7 @@ mod tests {
     #[test]
     fn a_changed_file_or_an_unknown_url_fails_the_load() {
         let f = Picked::new("snap.png", PNG_1PX);
-        let src = "blob:app://redpew/00000000-0000-4000-8000-000000000003";
+        let src = "blob:app://redjs/00000000-0000-4000-8000-000000000003";
         let t = f.target(None, "image/png");
         std::fs::write(&f.0, b"a different file now").unwrap();
         assert!(blob_image(src, Some(t.clone())).is_none());
@@ -2125,7 +2125,7 @@ mod tests {
     #[test]
     fn a_file_picked_again_after_it_changed_evicts_the_old_decode() {
         let f = Picked::new("again.png", PNG_1PX);
-        let first = "blob:app://redpew/00000000-0000-4000-8000-0000000000a1";
+        let first = "blob:app://redjs/00000000-0000-4000-8000-0000000000a1";
         let t1 = f.target(None, "image/png");
         assert!(blob_image(first, Some(t1.clone())).is_some());
         assert!(take_evictions().is_empty(), "first sight: nothing of it is cached");
@@ -2135,7 +2135,7 @@ mod tests {
         edited.extend([0u8; 16]);
         std::fs::write(&f.0, &edited).unwrap();
         let t2 = f.target(None, "image/png");
-        assert!(blob_image("blob:app://redpew/00000000-0000-4000-8000-0000000000a2", Some(t2)).is_some());
+        assert!(blob_image("blob:app://redjs/00000000-0000-4000-8000-0000000000a2", Some(t2)).is_some());
         let ev = take_evictions();
         assert!(matches!(&ev[..], [ImageSource::Resource(Resource::Path(p))] if p.as_ref() == f.0), "{} queued", ev.len());
     }
