@@ -927,6 +927,46 @@ pub fn primary_scale() -> f32 {
 /// call against a window that no longer exists.
 pub fn forget_window(key: vn_tree::WinKey) {
     HWND_CACHE.with(|m| m.borrow_mut().remove(&key));
+    #[cfg(target_os = "macos")]
+    NS_WINDOW_CACHE.with(|m| m.borrow_mut().remove(&key));
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    /// Each window's `NSWindow`, captured as a dialog owner. Kept apart from
+    /// `HWND_CACHE`: every Win32 helper reads that one, and none of them may
+    /// be handed an `NSWindow`. vn-desktop only uses a pointer from here after
+    /// finding it in `[NSApp windows]`, so a stale one is harmless.
+    static NS_WINDOW_CACHE: RefCell<std::collections::HashMap<vn_tree::WinKey, isize>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// The native window a file dialog is owned by (vn-desktop `dialog::Owner`):
+/// the HWND on Windows; on macOS the `NSWindow` of gpui's `NSView` (its raw
+/// handle), which the dialog's sheet attaches to.
+pub fn dialog_parent(window: &Window) -> Option<isize> {
+    #[cfg(target_os = "macos")]
+    return capture_ns_window(window);
+    #[cfg(not(target_os = "macos"))]
+    return capture_hwnd(window);
+}
+
+#[cfg(target_os = "macos")]
+fn capture_ns_window(window: &Window) -> Option<isize> {
+    let handle = <Window as HasWindowHandle>::window_handle(window).ok()?;
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else { return None };
+    let ns_window = vn_desktop::dialog::ns_window_of_view(h.ns_view.as_ptr())?;
+    let key = vn_tree::windows::key(window);
+    NS_WINDOW_CACHE.with(|m| m.borrow_mut().insert(key, ns_window));
+    Some(ns_window)
+}
+
+/// [`dialog_parent`] of a window by key, once captured.
+pub fn dialog_parent_of(key: vn_tree::WinKey) -> Option<isize> {
+    #[cfg(target_os = "macos")]
+    return NS_WINDOW_CACHE.with(|m| m.borrow().get(&key).copied()).filter(|&w| w != 0);
+    #[cfg(not(target_os = "macos"))]
+    return hwnd_of(key);
 }
 
 /// Windows 11 22H2 = build 22621 or later: where `DWMWA_SYSTEMBACKDROP_TYPE`
@@ -1107,6 +1147,9 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     PRIMARY_WINDOW.with(|c| c.set(key));
     vn_tree::windows::set_primary(key);
     capture_hwnd(window);
+    // The primary's NSWindow, for a dialog asked outside any window's frame.
+    #[cfg(target_os = "macos")]
+    dialog_parent(window);
     // In OS-chrome mode the caption belongs to the OS, so `window-drag` and
     // `--window-control` must stop emitting hitboxes entirely — otherwise a
     // stray `move` region in the content would hand the OS `HTCAPTION` for a

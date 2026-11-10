@@ -9,7 +9,8 @@
 //!                                   ▼
 //!                       vn-dialog thread (an STA of its own, one per dialog)
 //!                         IFileDialog::Show(owner)   │ VN_DIALOGS=scripted: wait for
-//!                                                    │ the devtools `dialog` answer
+//!                         (macOS: a sheet on the     │ the devtools `dialog` answer
+//!                          main queue, mac.rs)       │
 //!                         stat / walk / truncate / write the download
 //!                                   │
 //!   JS ◀── settle (token) ─────────┘  {files} + FileList | {handles} | {saved} | {cancelled}
@@ -29,7 +30,8 @@
 //! A dialog is owned by the window it was asked from. When that window starts
 //! to close, [`owner_closing`] marks it: a dialog that has not reached the OS
 //! yet never will, and the open one is sent `WM_CLOSE` by a 100 ms timer on
-//! its own thread (`win.rs`). vn-app destroys the window only once
+//! its own thread (`win.rs`; on macOS the dialog thread's 100 ms check ends
+//! the sheet on the main queue, `mac.rs`). vn-app destroys the window only once
 //! [`is_idle`] says the native loop has exited, because destroying an owner
 //! while another thread's modal dialog still uses it hangs or crashes. The
 //! pending promise settles as a cancel (an `AbortError`, or `cancel` on an
@@ -67,7 +69,18 @@ mod win;
 #[cfg(target_os = "windows")]
 use win as imp;
 
-#[cfg(not(target_os = "windows"))]
+// macOS: AppKit panels on the main queue, sheets on the owner (mac.rs). What
+// they are told is decided in mac_plan.rs, unit-tested on every OS.
+#[cfg(target_os = "macos")]
+mod mac;
+#[cfg(target_os = "macos")]
+use mac as imp;
+#[cfg(target_os = "macos")]
+pub use mac::ns_window_of_view;
+#[cfg(any(target_os = "macos", test))]
+mod mac_plan;
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod imp {
     use super::*;
     pub(super) fn pick(_: &Native, _: isize, _: &Cancellation) -> Result<Option<Vec<PathBuf>>, Fail> {
@@ -479,7 +492,8 @@ pub fn data_of_blob_target(t: vn_runtime::redjs::webapi::url::BlobTarget) -> Dat
 // owners
 // ---------------------------------------------------------------------------
 
-/// The window a dialog belongs to: vn-tree's window key and its HWND.
+/// The window a dialog belongs to: vn-tree's window key and its native
+/// window, the HWND on Windows and the `NSWindow` on macOS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Owner {
     pub key: u64,
@@ -914,7 +928,7 @@ mod tests {
             assert_eq!(k.as_str(), s);
         }
         assert_eq!(Known::parse("Documents"), None, "the enum is case-sensitive, as in WebIDL");
-        if cfg!(windows) {
+        if cfg!(any(windows, target_os = "macos")) {
             assert!(known_folder(Known::Downloads).is_some_and(|p| p.is_absolute()));
         }
     }

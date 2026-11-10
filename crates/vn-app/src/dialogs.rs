@@ -4,7 +4,8 @@
 //!
 //! - **the owner** of a dialog asked for now: the window published for this
 //!   call (the one an event came from, the primary for a timer), as its
-//!   vn-tree key and HWND;
+//!   vn-tree key and native window (the HWND; the `NSWindow` on macOS, which
+//!   the dialog's sheet attaches to);
 //! - **closing a window that owns a dialog.** A dialog runs its modal loop on
 //!   its own thread, with this window as owner. Destroying the owner while
 //!   that loop still uses it hangs or crashes, so every close path goes
@@ -16,18 +17,19 @@ use std::time::Duration;
 
 use gpui::{AnyWindowHandle, App};
 
-/// vn-desktop's owner resolver.
+/// vn-desktop's owner resolver. The native window is the HWND on Windows and
+/// the `NSWindow` on macOS (`window::dialog_parent`).
 pub fn owner() -> Option<vn_desktop::dialog::Owner> {
     if let Some(o) = vn_runtime::with_commit(|window, _| {
         let key = vn_tree::windows::key(window);
-        crate::window::capture_hwnd(window).map(|hwnd| vn_desktop::dialog::Owner { key, hwnd })
+        crate::window::dialog_parent(window).map(|hwnd| vn_desktop::dialog::Owner { key, hwnd })
     }) {
         return o;
     }
     // Outside a Commit publication (a host callback with no window): the
     // primary, the window a timer's work belongs to.
     let key = vn_tree::windows::primary();
-    crate::window::hwnd_of(key).map(|hwnd| vn_desktop::dialog::Owner { key, hwnd })
+    crate::window::dialog_parent_of(key).map(|hwnd| vn_desktop::dialog::Owner { key, hwnd })
 }
 
 /// vn-permissions' prompt, shown as vn-desktop's question dialog: a

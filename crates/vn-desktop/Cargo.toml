@@ -84,4 +84,46 @@ block2 = "0.6.2"
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
 objc2 = "0.6.4"
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CFCGTypes"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString"] }
+# The file dialogs (src/dialog/mac.rs). The features only switch on more of
+# the same two crates (gpui's AppKit backend already builds objc2-app-kit
+# 0.3.2); none of them pulls in an optional dependency, so the graph is
+# unchanged. UTType has no binding here and is used by name.
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "NSArray",
+    "NSEnumerator",
+    "NSFileManager",
+    "NSGeometry",
+    "NSNotification",
+    "NSObject",
+    "NSOperation",
+    "NSPathUtilities",
+    "NSString",
+    "NSURL",
+    "NSUserDefaults",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "NSAlert",
+    "NSApplication",
+    "NSButton",
+    "NSColor",
+    "NSColorPanel",
+    "NSColorSpace",
+    "NSControl",
+    "NSGraphics",
+    "NSMenu",
+    "NSOpenPanel",
+    "NSPanel",
+    "NSPopUpButton",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSSavePanel",
+    "NSText",
+    "NSTextField",
+    "NSView",
+    "NSWindow",
+    "objc2-core-foundation",
+] }
