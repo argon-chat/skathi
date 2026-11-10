@@ -75,8 +75,8 @@ describe("appPermissions", () => {
     const rows = rt.appPermissions.list();
     expect(rows).toHaveLength(PERMISSION_NAMES.length);
     const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
-    expect(byName.microphone).toEqual({ name: "microphone", state: "granted", canRequest: false });
-    expect(byName.camera).toEqual({ name: "camera", state: "denied", canRequest: true });
+    expect(byName.microphone).toEqual({ name: "microphone", state: "granted", canRequest: false, deniedBySystem: false });
+    expect(byName.camera).toEqual({ name: "camera", state: "denied", canRequest: true, deniedBySystem: false });
     // Nothing to ask when the platform has no notion of it.
     expect(byName.geolocation.canRequest).toBe(false);
   });

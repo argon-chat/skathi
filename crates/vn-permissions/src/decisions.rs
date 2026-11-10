@@ -18,8 +18,14 @@
 //! every change: a decision must outlive a crash. It is written to a
 //! temporary file first, then renamed over the old one. A host with no
 //! storage folder (built without `storages`) keeps the answers for the run
-//! only, as a private browser window does. A file that cannot be read is
-//! left alone until the next answer replaces it, and the reason is logged.
+//! only, as a private browser window does. A file that is not JSON is left
+//! alone until the next answer replaces it, and the reason is logged. A file
+//! that could not be *read* (held open elsewhere) is read again at the next
+//! question, and is never written over before it has been read.
+//!
+//! The file is plain text, like `localStorage` beside it. It holds no secret,
+//! and anyone who can edit it already runs as this user and can capture
+//! without asking, so writing an Allow into it is not an escalation.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -85,19 +91,33 @@ impl Store {
         self.path.as_deref()
     }
 
+    /// Reads the file once. A read that fails for any reason but "not there"
+    /// (a sharing violation while something else holds it, a permissions
+    /// glitch) leaves the store unloaded: the next question reads again, and
+    /// meanwhile nothing is written, so one answer cannot replace a file
+    /// whose other answers were never seen.
     fn load(&mut self) {
         if self.loaded {
             return;
         }
-        self.loaded = true;
-        let Some(path) = &self.path else { return };
-        match std::fs::read_to_string(path) {
-            Ok(text) => match parse(&text) {
-                Ok(map) => self.map = map,
-                Err(e) => eprintln!("[permissions] {} is not readable ({e}); it is replaced at the next answer", path.display()),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => eprintln!("[permissions] could not read {}: {e}", path.display()),
+        let Some(path) = &self.path else {
+            self.loaded = true;
+            return;
+        };
+        match read(path) {
+            Ok(text) => {
+                self.loaded = true;
+                match parse(&text) {
+                    // Answers given while the file could not be read are newer.
+                    Ok(map) => {
+                        let newer = std::mem::replace(&mut self.map, map);
+                        self.map.extend(newer);
+                    }
+                    Err(e) => eprintln!("[permissions] {} is not readable ({e}); it is replaced at the next answer", path.display()),
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.loaded = true,
+            Err(e) => eprintln!("[permissions] could not read {}: {e} (read again at the next question)", path.display()),
         }
     }
 
@@ -124,7 +144,11 @@ impl Store {
             }
         }
         if let Some(path) = &self.path {
-            if let Err(e) = write(path, &encode(&self.map)) {
+            if !self.loaded {
+                // The file is there but could not be read: writing now would
+                // drop every answer in it but this one.
+                eprintln!("[permissions] {} was not read; the answer holds for this run and is not written", path.display());
+            } else if let Err(e) = write(path, &encode(&self.map)) {
                 eprintln!("[permissions] could not write {}: {e} (the answer holds for this run)", path.display());
             }
         }
@@ -167,19 +191,54 @@ fn parse(text: &str) -> Result<BTreeMap<&'static str, Entry>, String> {
     Ok(map)
 }
 
-/// Write-then-rename, so a crash mid-write leaves the old file whole.
+#[cfg(not(test))]
+fn read(path: &Path) -> std::io::Result<String> {
+    std::fs::read_to_string(path)
+}
+
+/// The tests' read: the real one, unless a test made it fail.
+#[cfg(test)]
+fn read(path: &Path) -> std::io::Result<String> {
+    if tests::FAIL_READS.with(|f| f.get() > 0) {
+        tests::FAIL_READS.with(|f| f.set(f.get() - 1));
+        return Err(std::io::Error::other("the process cannot access the file because it is being used by another process"));
+    }
+    std::fs::read_to_string(path)
+}
+
+/// Write-then-rename, so a crash mid-write leaves the old file whole. The
+/// temporary file's name is this process's and this write's own, so two
+/// processes (or two stores) never write through one, and it reaches the
+/// disk before it is renamed over the old file.
 fn write(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.{}-{seq}.tmp", std::process::id()));
+    let written = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()
+    })();
+    let renamed = written.and_then(|()| std::fs::rename(&tmp, path));
+    if renamed.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    renamed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// How many of this thread's next reads fail as a sharing violation does.
+        pub(super) static FAIL_READS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
 
     struct Scratch(PathBuf);
     impl Scratch {
@@ -216,7 +275,41 @@ mod tests {
         let mut third = Store::new();
         third.set_path(Some(file.clone()));
         assert_eq!(third.get(Capability::Microphone), None);
-        assert!(!file.with_extension("json.tmp").exists(), "no temporary file is left");
+        let left: Vec<_> = std::fs::read_dir(file.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["permissions.json".to_string()], "no temporary file is left");
+    }
+
+    #[test]
+    fn a_file_that_could_not_be_read_is_neither_lost_nor_overwritten() {
+        let dir = Scratch::new("transient");
+        let file = dir.0.join("permissions.json");
+        let mut s = Store::new();
+        s.set_path(Some(file.clone()));
+        assert!(s.set(Capability::Microphone, Some(Decision::Block)));
+        assert!(s.set(Capability::Camera, Some(Decision::Allow)));
+        // Another run, while something else holds the file open: the
+        // question's read and the answer's both fail.
+        let mut again = Store::new();
+        again.set_path(Some(file.clone()));
+        FAIL_READS.with(|f| f.set(2));
+        assert_eq!(again.get(Capability::Microphone), None, "unread: nothing known yet");
+        // An answer now holds for the run, and does not replace the file
+        // with a one-entry copy.
+        assert!(again.set(Capability::Geolocation, Some(Decision::Allow)));
+        let on_disk = parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(on_disk.len(), 2, "the camera's and the microphone's answers survive: {on_disk:?}");
+        // The next question reads again, and the earlier answers are back.
+        assert_eq!(again.get(Capability::Microphone).map(|e| e.decision), Some(Decision::Block));
+        assert_eq!(again.get(Capability::Camera).map(|e| e.decision), Some(Decision::Allow));
+        assert_eq!(again.get(Capability::Geolocation).map(|e| e.decision), Some(Decision::Allow), "and this run's answer stays");
+        assert!(again.set(Capability::Microphone, Some(Decision::Allow)));
+        let on_disk = parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(on_disk["microphone"].decision, Decision::Allow);
+        assert_eq!(on_disk["camera"].decision, Decision::Allow, "kept once read");
+        assert_eq!(on_disk["geolocation"].decision, Decision::Allow, "written with the rest");
     }
 
     #[test]

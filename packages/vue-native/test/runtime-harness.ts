@@ -405,6 +405,8 @@ export function createRuntime(
       dispatcher: null,
       /** `__vn_permissions_hint` answers, by name ("" when absent). */
       hints: new Map(),
+      /** Names whose `denied` is the platform's settings, not the user's Block. */
+      bySystem: new Set(),
       /** The fake `navigator.permissions` PermissionStatus objects, by name. */
       statuses: new Map(),
     },
@@ -958,6 +960,7 @@ export function createRuntime(
           name,
           state: permState(name),
           canRequest: permState(name) === "denied" || permState(name) === "prompt",
+          deniedBySystem: permState(name) === "denied" && host.permissions.bySystem.has(name),
         })),
       ),
     (name) => {

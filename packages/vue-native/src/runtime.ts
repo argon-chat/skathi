@@ -10484,6 +10484,12 @@ interface PermissionRow {
   name: string;
   state: VnPermissionState;
   canRequest: boolean;
+  /**
+   * A `denied` that the platform's own settings decide (a settings page is
+   * the way back), not the user's Block in the app's prompt (`request()` asks
+   * again). False for every other state.
+   */
+  deniedBySystem?: boolean;
 }
 
 /** The tier-2 surface, in both its live and its inert spelling. */
@@ -11232,15 +11238,57 @@ export interface ScreenCaptureSource {
   displayId: string;
   [key: string]: unknown;
 }
+/** A capture source, as `appCapture`'s permission calls name it. */
+export type CaptureSource = "microphone" | "camera" | "screen_share";
+/** `appCapture.permission()`: a capture source's permission, read without asking. */
+export interface CapturePermission {
+  state: VnPermissionState;
+  /** Whether `requestPermission` can do anything (not for granted or unsupported). */
+  canRequest: boolean;
+  /** A `denied` from the platform's own settings rather than the user's Block. */
+  deniedBySystem: boolean;
+}
+const CAPTURE_PERMISSIONS: Record<CaptureSource, VnPermissionName> = {
+  microphone: "microphone",
+  camera: "camera",
+  screen_share: "display-capture",
+};
+function capturePermissionName(source: unknown): VnPermissionName {
+  const name = Object.prototype.hasOwnProperty.call(CAPTURE_PERMISSIONS, source as string)
+    ? CAPTURE_PERMISSIONS[source as CaptureSource]
+    : undefined;
+  if (!name) throw new TypeError("unknown capture source");
+  return name;
+}
 export const appCapture = {
-  async requestPermission(source: "camera" | "screen_share"): Promise<VnPermissionState> {
-    if (source !== "camera" && source !== "screen_share") throw new TypeError("unknown capture source");
-    return appPermissions.request(source === "camera" ? "camera" : "display-capture");
+  /**
+   * The source's permission, read now and never asked for. A settings
+   * screen shows its "Grant access" from this; a capture asks only from
+   * `prompt` (after a Block it refuses without asking, as a browser does).
+   */
+  permission(source: CaptureSource): CapturePermission {
+    const name = capturePermissionName(source);
+    if (typeof __vn_permissions_list !== "function") return { state: "unsupported", canRequest: false, deniedBySystem: false };
+    const row = (JSON.parse(__vn_permissions_list()) as PermissionRow[]).find((r) => r.name === name);
+    return {
+      state: row ? row.state : "unsupported",
+      canRequest: !!row?.canRequest,
+      deniedBySystem: !!row?.deniedBySystem,
+    };
   },
-  /** Where the user turns a refused source back on (macOS screen recording), or "". */
-  permissionHint(source: "camera" | "screen_share"): string {
+  /**
+   * Asks for the source, as a "Grant access" button does: from `prompt` or
+   * the user's Block the app's own prompt, from a platform denial its
+   * settings page (`appPermissions.request`).
+   */
+  async requestPermission(source: CaptureSource): Promise<VnPermissionState> {
+    return appPermissions.request(capturePermissionName(source));
+  },
+  /** Where the user turns a source the platform refused back on, or "". */
+  permissionHint(source: CaptureSource): string {
+    const name = capturePermissionName(source);
     if (typeof __vn_permissions_hint !== "function") return "";
-    return __vn_permissions_hint(source === "camera" ? "camera" : "display-capture");
+    return __vn_permissions_hint(name);
   },
   async getSources(types: string[] = ["screen", "window"], options: Record<string, unknown> = {}): Promise<ScreenCaptureSource[]> {
     if (!Array.isArray(types) || types.some((t) => t !== "screen" && t !== "window")) {

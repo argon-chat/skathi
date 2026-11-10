@@ -24,6 +24,10 @@ vn-runtime = { path = "../vn-runtime", default-features = false }
 serde_json = "1"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Source thumbnails read the desktop, so `capture::sources` reads the
+# `display-capture` state first: on macOS it asks (TCC), on Windows a denied
+# consent-store toggle refuses (vn_permissions::require_display_capture/status).
+vn-permissions = { path = "../vn-permissions" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # 0.62, matching vn-permissions / vn-storage / vn-video (this crate shares no
@@ -73,9 +77,6 @@ windows = { version = "0.62", features = [
 windows-core = "0.62"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Screen recording is TCC-gated: source thumbnails read the desktop, so
-# `capture::sources` asks first (vn_permissions::require_display_capture).
-vn-permissions = { path = "../vn-permissions" }
 # ScreenCaptureKit sources (src/capture/mac.rs). Versions already pinned by the
 # SDK's AppKit backend and vn-permissions, so no crate is added to the build.
 # ScreenCaptureKit and CoreGraphics have no binding in the graph: their classes

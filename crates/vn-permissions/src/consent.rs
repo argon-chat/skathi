@@ -26,17 +26,22 @@
 //! [`PermissionHost::request`] on a capability that prompts:
 //!
 //! - an OS denial opens the platform's settings page, as before (the
-//!   platform's own `request`);
+//!   platform's own `request`). When the user turns it on there and this app
+//!   has no Allow yet, the same request goes straight on to the question, so
+//!   it does not settle `prompt` with nobody asked;
 //! - a stored Allow is granted at once;
 //! - otherwise, `prompt` or a stored Block, the question is asked. That makes
 //!   `appPermissions.request("microphone")` the way back from a Block.
 //!   `getUserMedia` asks only from `prompt`; a Block refuses it outright
 //!   (redjs `webapi/mediastream.rs`, "The capture gate").
 //!
-//! The question is the embedder's dialog ([`set_asker`]; vue-native shows a
-//! TaskDialog owned by the app window, crates/vn-desktop `dialog::ask`).
-//! Its first button is Allow, its second Block, and a dismissal (Esc, the
-//! close box, the window closing) decides nothing. Requests that arrive while
+//! The question is the embedder's dialog ([`set_asker`]; vue-native shows it
+//! owned by the app window through crates/vn-desktop `dialog::ask_with`: on
+//! Windows its own gpui prompt, vn-app `consent_window.rs`, falling back to a
+//! TaskDialog; on macOS an NSAlert sheet).
+//! Its first button is Allow, its second Block (the default, which Enter
+//! presses), and a dismissal (Esc, the close box, the window closing)
+//! decides nothing. Requests that arrive while
 //! it is up share it: one question, every waiter settled with its answer.
 //! Each settles with the state read after the answer, so a dismissal
 //! settles `prompt` (or `denied`, after an earlier Block).
@@ -52,16 +57,33 @@ use vn_runtime::redjs::webapi::permissions::{Capability, PermissionHost, Permiss
 
 use crate::decisions::{Decision, Entry, Store};
 
-/// The capabilities this layer asks about itself.
+/// The capabilities this layer asks about itself: the microphone, and the
+/// camera where this build can capture one. Asking about a device that could
+/// never open would only be followed by a `NotSupportedError`, so elsewhere
+/// the camera is the platform's (`unsupported` on macOS today).
 pub fn prompts(cap: Capability) -> bool {
-    matches!(cap, Capability::Microphone | Capability::Camera)
+    prompts_with(cap, CAMERA_CAPTURE)
+}
+
+/// Whether vn-voice has a camera backend on this platform (`video.rs`:
+/// Media Foundation on Windows; macOS and Linux have none).
+const CAMERA_CAPTURE: bool = cfg!(target_os = "windows");
+
+fn prompts_with(cap: Capability, camera_capture: bool) -> bool {
+    match cap {
+        Capability::Microphone => true,
+        Capability::Camera => camera_capture,
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
 // the question, and who shows it
 // ---------------------------------------------------------------------------
 
-/// What the embedder's dialog shows. Button 0 is Allow, button 1 Block.
+/// What the embedder's dialog shows. Button 0 is Allow, button 1 Block, and
+/// Block is the default: `getUserMedia` needs no gesture (a call rejoins on
+/// its own), so a stray Enter must not grant a capture for good.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Question {
     pub capability: Capability,
@@ -163,7 +185,7 @@ pub fn question(cap: Capability, app: &str, russian: bool) -> Question {
         instruction,
         content,
         buttons: vec![allow.to_string(), block.to_string()],
-        default: 0,
+        default: 1,
     }
 }
 
@@ -391,16 +413,31 @@ impl AppConsent {
         }
     }
 
+    /// Whether a request about `cap` is still waiting: its question on
+    /// screen, or the platform's own flow. What tells a dismissal (`prompt`,
+    /// nothing in flight) from a question not answered yet.
+    pub fn in_flight(&self, cap: Capability) -> bool {
+        self.shared.lock_inner().waiting.iter().any(|w| match w {
+            Waiter::Os { cap: c, .. } | Waiter::Asked { cap: c, .. } => *c == cap,
+        })
+    }
+
     fn ask(&self, cap: Capability) -> RequestOutcome {
-        let (outer, show) = {
+        let outer = self.shared.lock_inner().mint();
+        self.ask_as(outer, cap);
+        RequestOutcome::Pending(outer)
+    }
+
+    /// Puts the question about `cap` to the user for the request `outer`.
+    fn ask_as(&self, outer: u32, cap: Capability) {
+        let show = {
             let mut i = self.shared.lock_inner();
-            let outer = i.mint();
             i.waiting.push(Waiter::Asked { outer, cap });
             let show = !i.asking.contains(&cap);
             if show {
                 i.asking.push(cap);
             }
-            (outer, show)
+            show
         };
         if show {
             let shared = Arc::clone(&self.shared);
@@ -418,7 +455,6 @@ impl AppConsent {
                 }
             }
         }
-        RequestOutcome::Pending(outer)
     }
 }
 
@@ -463,6 +499,9 @@ impl PermissionHost for AppConsent {
 
     fn drain_settled(&self) -> Vec<(u32, PermissionState)> {
         let from_os = self.shared.os.drain_settled();
+        // Requests whose settings page let the capability through: they go on
+        // to the question, once the lock is let go (the asker may answer at once).
+        let mut chained = Vec::new();
         let mut i = self.shared.lock_inner();
         for (inner_token, os_state) in from_os {
             let pos = i.waiting.iter().position(|w| matches!(w, Waiter::Os { inner, .. } if *inner == inner_token));
@@ -473,14 +512,29 @@ impl PermissionHost for AppConsent {
             let state = if prompts(cap) {
                 drop(i);
                 let s = self.shared.status(cap);
+                // Started from an OS denial that the user has now lifted, with
+                // no Allow from them yet: what was asked for is this app's
+                // answer, so ask for it rather than settle `prompt` (or a
+                // Block this explicit request is the way back from).
+                let ask = s != PermissionState::Granted
+                    && !self.shared.native_prompt(cap)
+                    && self.shared.os_state(cap) != PermissionState::Denied;
                 i = self.shared.lock_inner();
+                if ask {
+                    chained.push((outer, cap));
+                    continue;
+                }
                 s
             } else {
                 os_state
             };
             i.settled.push((outer, state));
         }
-        std::mem::take(&mut i.settled)
+        drop(i);
+        for (outer, cap) in chained {
+            self.ask_as(outer, cap);
+        }
+        std::mem::take(&mut self.shared.lock_inner().settled)
     }
 
     fn drain_changes(&self) -> Option<Vec<Capability>> {
@@ -702,11 +756,74 @@ mod tests {
         let h = consent(Denied);
         assert_eq!(h.status(Capability::Microphone), Denied);
         assert!(h.denied_by_system(Capability::Microphone));
-        // A request opens the platform's settings (the stub grants it), and
-        // settles with the state read through the decision: undecided.
+        // A request opens the platform's settings, and the user turns the
+        // toggle on there (the stub grants it). Nobody has answered this
+        // app's question yet, so the same request goes on to ask it rather
+        // than settle `prompt`.
         let t = pending(h.request(Capability::Microphone));
-        assert_eq!(asked(), 0, "the OS is asked, not the user");
+        assert_eq!(asked(), 0, "the OS is asked first, not the user");
+        assert!(h.in_flight(Capability::Microphone));
+        assert!(h.drain_settled().is_empty(), "the OS let it through: the question is next");
+        assert_eq!(asked(), 1);
+        assert!(h.in_flight(Capability::Microphone), "still waiting, now on the question");
+        answer(Some(0));
+        assert_eq!(h.drain_settled(), vec![(t, Granted)]);
+        assert!(!h.in_flight(Capability::Microphone));
+    }
+
+    #[test]
+    fn an_os_request_that_ends_still_denied_settles_without_asking() {
+        // Settings closed, or the 180 s timeout, with the toggle still off.
+        let os: &'static StubHost =
+            Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Microphone, Denied)]).granting(Denied)));
+        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+        let t = pending(h.request(Capability::Microphone));
+        assert_eq!(h.drain_settled(), vec![(t, Denied)]);
+        assert_eq!(asked(), 0, "nothing to ask while the OS refuses");
+        assert!(h.denied_by_system(Capability::Microphone));
+    }
+
+    #[test]
+    fn a_lifted_os_denial_asks_again_after_an_earlier_block() {
+        let os: &'static StubHost =
+            Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Microphone, Denied)]).granting(Granted)));
+        let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+        h.shared.lock_store().set(Capability::Microphone, Some(Decision::Block));
+        let t = pending(h.request(Capability::Microphone));
+        assert!(h.drain_settled().is_empty());
+        assert_eq!(asked(), 1, "the explicit request is the way back from the Block too");
+        answer(None);
+        assert_eq!(h.drain_settled(), vec![(t, Denied)], "dismissed: the Block stands");
+        assert!(!h.denied_by_system(Capability::Microphone));
+    }
+
+    #[test]
+    fn in_flight_tells_a_dismissal_from_a_question_on_screen() {
+        let h = consent(Granted);
+        assert!(!h.in_flight(Capability::Microphone));
+        let t = pending(h.request(Capability::Microphone));
+        assert!(h.in_flight(Capability::Microphone));
+        assert_eq!(h.status(Capability::Microphone), Prompt);
+        answer(None);
+        assert!(!h.in_flight(Capability::Microphone), "dismissed: prompt, and nothing left to wait for");
         assert_eq!(h.drain_settled(), vec![(t, Prompt)]);
+    }
+
+    #[test]
+    fn the_camera_prompts_only_where_it_can_be_captured() {
+        assert!(prompts_with(Capability::Microphone, false));
+        assert!(prompts_with(Capability::Camera, true));
+        assert!(!prompts_with(Capability::Camera, false), "no backend: the platform's own state");
+        assert!(!prompts_with(Capability::DisplayCapture, true));
+        assert_eq!(prompts(Capability::Camera), cfg!(target_os = "windows"));
+        if !prompts(Capability::Camera) {
+            // macOS: the backend reports the camera unsupported, and nothing asks.
+            let os: &'static StubHost = Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Camera, Unsupported)])));
+            let h = AppConsent::new(os, Hooks { forbidden: no, fake: no, asker: with_asker });
+            assert_eq!(h.status(Capability::Camera), Unsupported);
+            assert_eq!(h.request(Capability::Camera), RequestOutcome::Settled(Unsupported));
+            assert_eq!(asked(), 0);
+        }
     }
 
     #[test]
@@ -762,7 +879,7 @@ mod tests {
         assert_eq!(q.title, "Argon");
         assert_eq!(q.instruction, "Argon wants to use your microphone");
         assert_eq!(q.buttons, vec!["&Allow".to_string(), "&Block".to_string()]);
-        assert_eq!(q.default, 0);
+        assert_eq!(q.default, 1, "Enter blocks: a stray key press never grants");
         let q = question(Capability::Microphone, "Argon", true);
         assert_eq!(q.instruction, "Argon запрашивает доступ к микрофону");
         assert_eq!(q.buttons, vec!["&Разрешить".to_string(), "&Блокировать".to_string()]);
@@ -773,6 +890,8 @@ mod tests {
         assert_eq!(question(Capability::Camera, "Argon", false).instruction, "Argon wants to use your camera");
     }
 
+    /// Only where the camera prompts at all (`prompts`).
+    #[cfg(target_os = "windows")]
     #[test]
     fn camera_consent_is_separate_from_microphone_consent() {
         let os = Box::leak(Box::new(StubHost::scripted("test", &[(Capability::Microphone, Granted), (Capability::Camera, Granted)])));

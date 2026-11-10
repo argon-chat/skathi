@@ -73,6 +73,14 @@
 //! time *any other application on the machine* touches a microphone. The watcher
 //! also re-computes the effective state and drops wakeups that did not change
 //! it, so a `change` event always corresponds to a real change.
+//!
+//! The keys are written lazily (`webcam\NonPackaged` appears the first time
+//! Settings writes it; the policy keys usually never do), so a missing key is
+//! watched through its nearest existing ancestor, for subkeys being created,
+//! and directly once it exists.
+//!
+//! Requests that arrive while a Settings page is already open for the same
+//! capability join that request: one window, one wait, settled together.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -87,10 +95,10 @@ use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegGetValueW, RegNotifyChangeKeyValue, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER,
-    HKEY_LOCAL_MACHINE, KEY_NOTIFY, KEY_READ, REG_NOTIFY_CHANGE_LAST_SET,
+    HKEY_LOCAL_MACHINE, KEY_NOTIFY, KEY_READ, REG_NOTIFY_CHANGE_LAST_SET, REG_NOTIFY_CHANGE_NAME,
     REG_NOTIFY_THREAD_AGNOSTIC, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
 };
-use windows::Win32::System::Threading::{CreateEventW, WaitForMultipleObjects, INFINITE};
+use windows::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForMultipleObjects, INFINITE};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -323,10 +331,34 @@ fn aumid() -> Option<String> {
 // The host
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy)]
 struct PendingRequest {
     cap: Capability,
     was: PermissionState,
     started: Instant,
+}
+
+/// Joins `token` to a request already waiting on `cap`'s Settings page, or,
+/// for the first one, opens the page. Requests that arrive while the page is
+/// open share it: one window, one wait, every token settled together.
+/// `false` when the page could not be opened.
+fn join_or_open(
+    pending: &Mutex<Vec<(u32, PendingRequest)>>,
+    token: u32,
+    cap: Capability,
+    now: PermissionState,
+    open: impl FnOnce() -> bool,
+) -> bool {
+    let joined = pending.lock().unwrap().iter().find(|(_, p)| p.cap == cap).map(|(_, p)| *p);
+    let request = match joined {
+        Some(p) => p,
+        // Not under the lock: ShellExecute is not instant, and the frame's
+        // drain must not wait on it.
+        None if open() => PendingRequest { cap, was: now, started: Instant::now() },
+        None => return false,
+    };
+    pending.lock().unwrap().push((token, request));
+    true
 }
 
 #[derive(Default)]
@@ -375,15 +407,11 @@ impl PermissionHost for WindowsHost {
         let Some(uri) = settings_uri(cap) else {
             return RequestOutcome::Settled(now);
         };
-        if !open_uri(uri) {
+        let token = self.next_token.fetch_add(1, Ordering::SeqCst).wrapping_add(1).max(1);
+        if !join_or_open(&self.pending, token, cap, now, || open_uri(uri)) {
             return RequestOutcome::Settled(now);
         }
         self.ensure_watcher();
-        let token = self.next_token.fetch_add(1, Ordering::SeqCst).wrapping_add(1).max(1);
-        self.pending.lock().unwrap().push((
-            token,
-            PendingRequest { cap, was: now, started: Instant::now() },
-        ));
         RequestOutcome::Pending(token)
     }
 
@@ -437,105 +465,211 @@ fn changes() -> &'static Mutex<Vec<Capability>> {
     C.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Every registry key whose `Value` participates in an effective state, paired
-/// with the capabilities that state belongs to.
-fn watched_keys() -> Vec<(String, Vec<Capability>)> {
-    let mut out: Vec<(String, Vec<Capability>)> = Vec::new();
+/// Every registry key whose values participate in an effective state, with
+/// its hive and the capabilities that state belongs to: both consent gates,
+/// the toast switches, and the group-policy overlay in both hives.
+fn watched_keys() -> Vec<(HKEY, String, Vec<Capability>)> {
+    let mut out: Vec<(HKEY, String, Vec<Capability>)> = Vec::new();
     for cap in Capability::ALL.iter().copied() {
         if let Some(key) = consent_key(cap) {
-            out.push((format!(r"{CONSENT}\{key}"), vec![cap]));
-            out.push((format!(r"{CONSENT}\{key}\NonPackaged"), vec![cap]));
+            out.push((HKEY_CURRENT_USER, format!(r"{CONSENT}\{key}"), vec![cap]));
+            out.push((HKEY_CURRENT_USER, format!(r"{CONSENT}\{key}\NonPackaged"), vec![cap]));
         }
     }
-    out.push((PUSH_NOTIFICATIONS.to_string(), vec![Capability::Notifications]));
+    out.push((HKEY_CURRENT_USER, PUSH_NOTIFICATIONS.to_string(), vec![Capability::Notifications]));
+    if let Some(id) = aumid() {
+        out.push((
+            HKEY_CURRENT_USER,
+            format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\{id}"),
+            vec![Capability::Notifications],
+        ));
+    }
+    let policed: Vec<Capability> = Capability::ALL.iter().copied().filter(|c| policy_value(*c).is_some()).collect();
+    for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+        out.push((root, APP_PRIVACY_POLICY.to_string(), policed.clone()));
+    }
     out
 }
 
-/// Waits on every consent key at once and reports only *effective* changes.
+fn open_key(root: HKEY, path: &str) -> Option<HKEY> {
+    let mut key = HKEY::default();
+    let wide = HSTRING::from(path);
+    (unsafe { RegOpenKeyExW(root, &wide, None, KEY_READ | KEY_NOTIFY, &mut key) } == ERROR_SUCCESS).then_some(key)
+}
+
+/// One key a state depends on, and the key actually watched for it.
+///
+/// The consent keys are written lazily: `webcam\NonPackaged` does not exist
+/// until the first time Settings writes it, and the policy keys usually not
+/// at all. Such a key is watched through its nearest existing ancestor, for
+/// subkeys being created (`REG_NOTIFY_CHANGE_NAME`, still not a subtree
+/// watch), and moved onto the key itself once it exists.
+struct Watch {
+    root: HKEY,
+    path: String,
+    key: Option<HKEY>,
+    /// How much of `path` the open key is (its length in bytes): all of it,
+    /// or an ancestor's.
+    open: usize,
+    armed: bool,
+    event: HANDLE,
+}
+
+impl Watch {
+    fn new(root: HKEY, path: String) -> Option<Watch> {
+        let event = unsafe { CreateEventW(None, true, false, None) }.ok()?;
+        let mut w = Watch { root, path, key: None, open: 0, armed: false, event };
+        w.reopen();
+        Some(w)
+    }
+
+    fn exact(&self) -> bool {
+        self.key.is_some() && self.open == self.path.len()
+    }
+
+    /// Opens the key, or its nearest existing ancestor while it is missing.
+    fn reopen(&mut self) {
+        if self.exact() {
+            return;
+        }
+        let path = self.path.clone();
+        let mut at = path.as_str();
+        loop {
+            if at.len() <= self.open && self.key.is_some() {
+                // Nothing deeper exists yet: keep the ancestor already watched.
+                return;
+            }
+            if let Some(key) = open_key(self.root, at) {
+                self.close();
+                self.key = Some(key);
+                self.open = at.len();
+                return;
+            }
+            match at.rfind('\\') {
+                Some(i) => at = &at[..i],
+                None => return,
+            }
+        }
+    }
+
+    /// Asks for the next change. A notification is one-shot, so this runs
+    /// again after every wakeup.
+    fn arm(&mut self) {
+        if self.armed {
+            return;
+        }
+        for _ in 0..2 {
+            let Some(key) = self.key else { return };
+            // NOT a subtree watch, and the key itself for LAST_SET only — see
+            // the module header: the per-exe telemetry keys underneath are
+            // written by every other app on the machine. An ancestor is
+            // watched for the missing key appearing.
+            let filter = if self.exact() { REG_NOTIFY_CHANGE_LAST_SET } else { REG_NOTIFY_CHANGE_NAME };
+            let rc = unsafe {
+                RegNotifyChangeKeyValue(key, false, filter | REG_NOTIFY_THREAD_AGNOSTIC, Some(self.event), true)
+            };
+            if rc == ERROR_SUCCESS {
+                self.armed = true;
+                return;
+            }
+            // Deleted under us: back to watching for it to come back.
+            self.close();
+            self.reopen();
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some(key) = self.key.take() {
+            unsafe {
+                let _ = RegCloseKey(key);
+            }
+        }
+        self.open = 0;
+        self.armed = false;
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.close();
+        unsafe {
+            let _ = CloseHandle(self.event);
+        }
+    }
+}
+
+/// Every watched key, waited on at once.
+struct Watcher {
+    watches: Vec<Watch>,
+}
+
+impl Watcher {
+    fn new(keys: impl IntoIterator<Item = (HKEY, String)>) -> Watcher {
+        Watcher { watches: keys.into_iter().filter_map(|(root, path)| Watch::new(root, path)).collect() }
+    }
+
+    /// Blocks until one of the keys changes (`Some(index)`), or `timeout_ms`
+    /// passes or the wait fails (`None`). A key created meanwhile is watched
+    /// directly from then on.
+    fn wait(&mut self, timeout_ms: u32) -> Option<usize> {
+        for w in &mut self.watches {
+            w.arm();
+        }
+        // WaitForMultipleObjects tops out at 64 handles; the table is ~13.
+        let handles: Vec<HANDLE> = self.watches.iter().map(|w| w.event).collect();
+        if handles.is_empty() {
+            return None;
+        }
+        let rc = unsafe { WaitForMultipleObjects(&handles, false, timeout_ms) };
+        let idx = rc.0 as usize;
+        if idx >= handles.len() {
+            return None;
+        }
+        let w = &mut self.watches[idx];
+        unsafe {
+            let _ = ResetEvent(w.event);
+        }
+        w.armed = false;
+        for w in &mut self.watches {
+            if !w.exact() {
+                let before = (w.key.is_some(), w.open);
+                w.reopen();
+                if (w.key.is_some(), w.open) != before {
+                    w.armed = false;
+                }
+            }
+        }
+        Some(idx)
+    }
+}
+
+/// Waits on every key at once and reports only *effective* changes.
 ///
 /// The diff is the load-bearing part. A wakeup means "something under this key
 /// was written", which on a busy machine happens whenever another application
 /// starts using a microphone; re-reading and comparing turns that into silence.
+/// Every capability is re-read, not only the woken key's: a key watched
+/// through its ancestor wakes for the ancestor, and the reads are cheap.
 fn watch_loop() {
-    struct Watch {
-        key: HKEY,
-        event: HANDLE,
-        caps: Vec<Capability>,
-    }
-
-    let mut watches: Vec<Watch> = Vec::new();
-    unsafe {
-        for (path, caps) in watched_keys() {
-            let mut key = HKEY::default();
-            let wide = HSTRING::from(path.as_str());
-            if RegOpenKeyExW(HKEY_CURRENT_USER, &wide, None, KEY_READ | KEY_NOTIFY, &mut key)
-                != ERROR_SUCCESS
-            {
-                // A capability whose key does not exist yet simply has no
-                // subscription; `status()` still reads it correctly.
-                continue;
-            }
-            let Ok(event) = CreateEventW(None, true, false, None) else {
-                let _ = RegCloseKey(key);
-                continue;
-            };
-            watches.push(Watch { key, event, caps });
-        }
-    }
-    if watches.is_empty() {
-        return;
-    }
-
+    let mut watcher = Watcher::new(watched_keys().into_iter().map(|(root, path, _)| (root, path)));
     let mut snapshot: HashMap<Capability, PermissionState> =
         Capability::ALL.iter().map(|c| (*c, read_state(*c))).collect();
-
-    // WaitForMultipleObjects tops out at 64 handles; the table is ~9.
-    let handles: Vec<HANDLE> = watches.iter().map(|w| w.event).collect();
-    loop {
-        unsafe {
-            for w in &watches {
-                // Re-arm every pass: a notification is one-shot.
-                let _ = RegNotifyChangeKeyValue(
-                    w.key,
-                    // NOT a subtree watch, and LAST_SET only — see the module
-                    // header: the per-exe telemetry keys underneath are written
-                    // by every other app on the machine.
-                    false,
-                    REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC,
-                    Some(w.event),
-                    true,
-                );
-            }
-            let rc = WaitForMultipleObjects(&handles, false, INFINITE);
-            let idx = rc.0 as usize;
-            if idx >= watches.len() {
-                break;
-            }
-            let _ = windows::Win32::System::Threading::ResetEvent(watches[idx].event);
-
-            let mut hit: Vec<Capability> = Vec::new();
-            for cap in watches[idx].caps.iter().copied() {
-                let now = read_state(cap);
-                if snapshot.get(&cap) != Some(&now) {
-                    snapshot.insert(cap, now);
-                    hit.push(cap);
-                }
-            }
-            if !hit.is_empty() {
-                let mut q = changes().lock().unwrap();
-                for c in hit {
-                    if !q.contains(&c) {
-                        q.push(c);
-                    }
-                }
+    while watcher.wait(INFINITE).is_some() {
+        let mut hit: Vec<Capability> = Vec::new();
+        for cap in Capability::ALL.iter().copied() {
+            let now = read_state(cap);
+            if snapshot.get(&cap) != Some(&now) {
+                snapshot.insert(cap, now);
+                hit.push(cap);
             }
         }
-    }
-
-    unsafe {
-        for w in watches {
-            let _ = CloseHandle(w.event);
-            let _ = RegCloseKey(w.key);
+        if !hit.is_empty() {
+            let mut q = changes().lock().unwrap();
+            for c in hit {
+                if !q.contains(&c) {
+                    q.push(c);
+                }
+            }
         }
     }
 }
@@ -629,8 +763,97 @@ mod tests {
             let Some(k) = consent_key(cap) else { continue };
             for suffix in ["", r"\NonPackaged"] {
                 let want = format!(r"{CONSENT}\{k}{suffix}");
-                assert!(keys.iter().any(|(p, c)| *p == want && c.contains(&cap)), "missing {want}");
+                assert!(
+                    keys.iter().any(|(r, p, c)| *r == HKEY_CURRENT_USER && *p == want && c.contains(&cap)),
+                    "missing {want}"
+                );
             }
         }
+        // The deny overlay is part of the state too, in both hives.
+        for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+            assert!(keys.iter().any(|(r, p, c)| *r == root && p == APP_PRIVACY_POLICY && c.contains(&Capability::Microphone)));
+        }
+    }
+
+    /// A key under `HKCU\Software` of this test's own, deleted at the end.
+    struct ScratchKey(String);
+    impl ScratchKey {
+        fn new(name: &str) -> ScratchKey {
+            let k = ScratchKey(format!(r"Software\vn-permissions-test-{name}-{}", std::process::id()));
+            k.delete();
+            k
+        }
+        fn set(&self, sub: &str, value: &str) {
+            use windows::Win32::System::Registry::{
+                RegCreateKeyExW, RegSetValueExW, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+            };
+            let path = HSTRING::from(format!(r"{}\{sub}", self.0));
+            let mut key = HKEY::default();
+            unsafe {
+                assert_eq!(
+                    RegCreateKeyExW(HKEY_CURRENT_USER, &path, None, None, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, None, &mut key, None),
+                    ERROR_SUCCESS
+                );
+                let wide: Vec<u16> = value.encode_utf16().chain([0]).collect();
+                let bytes = std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2);
+                assert_eq!(RegSetValueExW(key, &HSTRING::from("Value"), None, REG_SZ, Some(bytes)), ERROR_SUCCESS);
+                let _ = RegCloseKey(key);
+            }
+        }
+        fn delete(&self) {
+            let path = HSTRING::from(self.0.as_str());
+            unsafe {
+                let _ = windows::Win32::System::Registry::RegDeleteTreeW(HKEY_CURRENT_USER, &path);
+            }
+        }
+    }
+    impl Drop for ScratchKey {
+        fn drop(&mut self) {
+            self.delete();
+        }
+    }
+
+    #[test]
+    fn a_key_created_after_the_watch_began_is_watched_from_then_on() {
+        // `webcam\NonPackaged` is created the first time Settings writes it.
+        // Watching only the keys that existed at start would never see it.
+        let base = ScratchKey::new("lazy");
+        base.set("present", "Allow");
+        let lazy = format!(r"{}\webcam\NonPackaged", base.0);
+        let mut w = Watcher::new([(HKEY_CURRENT_USER, lazy.clone())]);
+        assert!(!w.watches[0].exact(), "missing: its nearest ancestor is watched");
+        assert_eq!(w.watches[0].open, base.0.len());
+        assert_eq!(w.wait(50), None, "nothing happened");
+
+        base.set(r"webcam\NonPackaged", "Deny");
+        assert_eq!(w.wait(5000), Some(0), "the ancestor saw the key created");
+        assert!(w.watches[0].exact(), "and the key itself is watched from now on");
+        // Drain a wakeup the creation's own value write may have left.
+        let _ = w.wait(100);
+        base.set(r"webcam\NonPackaged", "Allow");
+        assert_eq!(w.wait(5000), Some(0), "a toggle of the new key wakes the watcher");
+        assert_eq!(consent_value(&lazy), Some(true), "the value the watcher woke for");
+    }
+
+    #[test]
+    fn requests_made_while_settings_is_open_share_one_window_and_one_wait() {
+        let pending = Mutex::new(Vec::new());
+        let opened = std::cell::Cell::new(0);
+        let open = || {
+            opened.set(opened.get() + 1);
+            true
+        };
+        let cap = Capability::Camera;
+        assert!(join_or_open(&pending, 1, cap, PermissionState::Denied, open));
+        assert!(join_or_open(&pending, 2, cap, PermissionState::Denied, open));
+        assert_eq!(opened.get(), 1, "Settings is opened once");
+        assert!(join_or_open(&pending, 3, Capability::Microphone, PermissionState::Denied, open));
+        assert_eq!(opened.get(), 2, "another capability has a page of its own");
+        let p = pending.lock().unwrap();
+        assert_eq!(p[0].1.started, p[1].1.started, "one wait: the two settle together");
+        drop(p);
+        let failed = Mutex::new(Vec::new());
+        assert!(!join_or_open(&failed, 4, cap, PermissionState::Denied, || false));
+        assert!(failed.lock().unwrap().is_empty(), "nothing waits on a page that never opened");
     }
 }

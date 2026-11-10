@@ -4,7 +4,9 @@
 //! `screen:<CGDirectDisplayID>` / `window:<CGWindowID>` on macOS. The decimal
 //! handle is a string throughout JS and is the same handle capture consumes;
 //! display enumeration order and display names are not source identities.
-//! On macOS, enumeration first requires Screen Recording access (TCC).
+//! On macOS, enumeration first requires Screen Recording access (TCC); on
+//! Windows, a denied `display-capture` toggle refuses it. Under
+//! `VN_MEDIA_CAPTURE=fake` the list is one synthetic screen on every platform.
 
 use base64::Engine;
 use image::ImageEncoder;
@@ -121,14 +123,24 @@ pub fn sources(options: Options) -> Result<Vec<Value>, Fail> {
     if !options.screens && !options.windows {
         return Ok(Vec::new());
     }
+    // A fake capture shows no desktop of the machine's (vn-voice video.rs
+    // `fake_loop`), so its picker lists none either: one synthetic screen,
+    // on every platform, whatever the platform's state.
+    if fake_capture() {
+        return fake_sources(options);
+    }
     // Names and thumbnails are screen recording to TCC. Ask before reading
     // any: the first time shows the system prompt, and without access the
     // listing fails with where to turn it on rather than coming back blank.
     // Never on the frame thread; `start_sources` has already waited.
     #[cfg(target_os = "macos")]
     vn_permissions::require_display_capture().map_err(|(name, message)| Fail::new(name, message))?;
+    // Windows has no prompt for programmatic capture, only its consent-store
+    // toggle: read it, never ask, and refuse when it is off rather than hand
+    // out the thumbnails capture itself would be refused.
     #[cfg(target_os = "windows")]
     {
+        refuse_denied(vn_permissions::status(vn_permissions::Cap::DisplayCapture))?;
         win::sources(options)
     }
     #[cfg(target_os = "macos")]
@@ -142,6 +154,61 @@ pub fn sources(options: Options) -> Result<Vec<Value>, Fail> {
             "desktop capture sources are not implemented on this platform",
         ))
     }
+}
+
+/// `display-capture`'s refusal when its state is `denied`.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn refuse_denied(state: vn_permissions::State) -> Result<(), Fail> {
+    if state != vn_permissions::State::Denied {
+        return Ok(());
+    }
+    let (name, message) = vn_permissions::display_capture_refusal();
+    Err(Fail::new(name, message))
+}
+
+/// `VN_MEDIA_CAPTURE=fake` (any case), as vn-voice reads it.
+fn fake_capture() -> bool {
+    std::env::var("VN_MEDIA_CAPTURE").is_ok_and(|v| v.trim().eq_ignore_ascii_case("fake"))
+}
+
+/// The fake desktop: one 1920×1080 screen, `screen:1` (an id capture binds
+/// as a whole screen), its thumbnail the checkerboard the fake capture
+/// streams; no windows.
+fn fake_sources(options: Options) -> Result<Vec<Value>, Fail> {
+    if !options.screens {
+        return Ok(Vec::new());
+    }
+    let (sw, sh) = (1920u32, 1080u32);
+    let (w, h) = fit(sw, sh, options.thumbnail_width, options.thumbnail_height);
+    let thumbnail = if w == 0 || h == 0 {
+        String::new()
+    } else {
+        let mut rgba = vec![0u8; w as usize * h as usize * 4];
+        for y in 0..h {
+            for x in 0..w {
+                // The fake frame's 40-pixel squares, at thumbnail scale.
+                let (fx, fy) = (x * sw / w, y * sh / h);
+                let v = if (fx / 40 + fy / 40) % 2 == 0 { 220 } else { 40 };
+                let o = ((y * w + x) * 4) as usize;
+                rgba[o..o + 4].copy_from_slice(&[(fy % 256) as u8, (fx % 256) as u8, v, 255]);
+            }
+        }
+        png_url(&rgba, w, h)?
+    };
+    let bounds = json!({"x": 0, "y": 0, "width": sw, "height": sh});
+    Ok(vec![json!({
+        "id": "screen:1",
+        "name": "Screen 1",
+        "kind": "screen",
+        "displayId": "1",
+        "deviceName": "fake",
+        "bounds": bounds,
+        "workArea": bounds,
+        "width": sw, "height": sh,
+        "isPrimary": true,
+        "thumbnailDataUrl": thumbnail, "thumbnailError": Value::Null,
+        "appIconDataUrl": Value::Null,
+    })])
 }
 
 fn fit(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
@@ -202,6 +269,38 @@ mod tests {
         assert_eq!(fit(100, 200, 320, 180), (90, 180));
         assert_eq!(fit(100, 50, 320, 180), (100, 50));
         assert_eq!(fit(100, 50, 0, 180), (0, 0));
+    }
+
+    #[test]
+    fn a_denied_display_capture_refuses_the_listing() {
+        // Windows: the consent store's "Let desktop apps capture…" is off.
+        let refused = refuse_denied(vn_permissions::State::Denied).unwrap_err();
+        assert_eq!(refused.name, "NotAllowedError");
+        assert!(refused.message.starts_with("Permission denied"), "{}", refused.message);
+        for state in [vn_permissions::State::Granted, vn_permissions::State::Prompt, vn_permissions::State::Unsupported] {
+            assert!(refuse_denied(state).is_ok(), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn a_fake_capture_lists_one_synthetic_screen_and_no_windows() {
+        let all = Options::parse("[\"screen\",\"window\"]", "{}").unwrap();
+        let sources = fake_sources(all).unwrap();
+        assert_eq!(sources.len(), 1, "no window of the machine's");
+        let screen = &sources[0];
+        assert_eq!(screen["id"], "screen:1");
+        assert_eq!(screen["kind"], "screen");
+        let url = screen["thumbnailDataUrl"].as_str().unwrap();
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(url.strip_prefix("data:image/png;base64,").unwrap())
+            .unwrap();
+        let image = image::load_from_memory(&data).unwrap().into_rgba8();
+        assert_eq!(image.dimensions(), (320, 180));
+        assert_ne!(image.get_pixel(0, 0), image.get_pixel(12, 0), "the fake frame's checkerboard");
+        let windows = Options::parse("[\"window\"]", "{}").unwrap();
+        assert!(fake_sources(windows).unwrap().is_empty());
+        let none = Options::parse("[\"screen\"]", "{\"thumbnailSize\":{\"width\":0,\"height\":0}}").unwrap();
+        assert_eq!(fake_sources(none).unwrap()[0]["thumbnailDataUrl"], "");
     }
 
     #[test]
