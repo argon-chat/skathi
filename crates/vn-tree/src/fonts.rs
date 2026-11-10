@@ -223,6 +223,11 @@ struct Face {
     registered_as: Option<String>,
 }
 
+/// Whether the platform text system draws a family composed of faces
+/// registered under families of their own (`set_composed_families`). Only
+/// DirectWrite does; elsewhere each face keeps its declared family.
+const COMPOSES_FAMILIES: bool = cfg!(target_os = "windows");
+
 /// The family a face is registered under: one of its own, so that the text
 /// system draws exactly this file wherever the face draws (module docs,
 /// "Drawn"). Recognizable by [`is_face_family`].
@@ -1218,9 +1223,14 @@ fn register_finished(cx: &mut App) {
             });
             // A family of its own (`face_family`); the declared family is
             // composed of those (`compose`). A font that cannot be renamed
-            // (a collection) is registered as it names itself.
+            // (a collection) is registered as it names itself, and so is
+            // every face where the text system does not compose families:
+            // only DirectWrite implements `set_composed_families`, and on
+            // cosmic-text or Core Text a renamed face is found by no name the
+            // page uses, so `Inter` fell back to the system font.
             let own = face_family(&x.desc.family, x.id);
-            let bytes = match rename_family(&bytes, &own) {
+            let renamed = if COMPOSES_FAMILIES { rename_family(&bytes, &own) } else { None };
+            let bytes = match renamed {
                 Some(renamed) => {
                     x.registered_as = Some(own);
                     renamed
