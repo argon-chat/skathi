@@ -2030,7 +2030,9 @@ pub fn content_loaded() {
 /// `beforeunload` veto when `kind` is `close-requested`.
 fn notify(kind: &str, state_json: &str) -> bool {
     let f = OBSERVER.with(|o| o.get());
-    if f == 0 {
+    // No JS after a caught native panic (I9): nothing can veto a close, so
+    // the window's own X still closes an app whose crash dialog is gone.
+    if f == 0 || vn_runtime::bridge::poisoned() {
         return true;
     }
     // `close-requested` comes from gpui's should-close callback, outside any
@@ -2116,6 +2118,25 @@ fn resync_bounds(window: &mut Window, cx: &mut gpui::App) {
     window.bounds_changed(cx);
 }
 
+/// Closes the app as `appWindow.close()` does (`why` names it in the
+/// `[shutdown]` line): the windows go now, the pop-outs with the primary
+/// (docs/MULTIWINDOW.md §7.8), and the primary is removed (after a file
+/// dialog it owns has closed, dialogs.rs), so gpui quits through its quit
+/// hooks. Also the crash dialog's Restart and Close (src/crash_window.rs).
+pub(crate) fn close_primary(why: &'static str, window: &mut Window, cx: &mut gpui::App) {
+    crate::shutdown::begin(why);
+    if crate::popout::count() > 0 {
+        crate::popout::close_all(cx);
+    }
+    if !vn_desktop::dialog::owner_closing(vn_tree::windows::key(window)) {
+        window.remove_window();
+    } else {
+        // gpui's own handle, not raw-window-handle's (in scope here).
+        let handle = gpui::Window::window_handle(window);
+        cx.defer(move |cx| crate::dialogs::remove_window(handle, cx));
+    }
+}
+
 fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
     match op {
         Op::Title(t) => {
@@ -2141,19 +2162,7 @@ fn apply(op: Op, window: &mut Window, cx: &mut gpui::App) {
         // §7.8): left open, they would keep the app running with no window
         // on screen. Removed after a file dialog this window owns has closed
         // (dialogs.rs).
-        Op::Close => {
-            crate::shutdown::begin("close()");
-            if crate::popout::count() > 0 {
-                crate::popout::close_all(cx);
-            }
-            if !vn_desktop::dialog::owner_closing(vn_tree::windows::key(window)) {
-                window.remove_window();
-            } else {
-                // gpui's own handle, not raw-window-handle's (in scope here).
-                let handle = gpui::Window::window_handle(window);
-                cx.defer(move |cx| crate::dialogs::remove_window(handle, cx));
-            }
-        }
+        Op::Close => close_primary("close()", window, cx),
         // `toggle_fullscreen` is a TOGGLE, so guard every call with the live
         // state or a double `setFullscreen(true)` leaves fullscreen.
         Op::Fullscreen(on) => {

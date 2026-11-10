@@ -75,6 +75,10 @@ mod dialogs; // the window a file dialog belongs to, and closing it safely
 #[cfg(target_os = "windows")]
 #[doc(hidden)] // `preview` is examples/consent_prompt.rs's
 pub mod consent_window; // the permission prompt, a gpui window of its own (docs/PERMISSIONS.md §5.1)
+#[cfg(target_os = "windows")]
+mod content_dialog; // the Windows 11 ContentDialog both of those host windows are drawn as
+#[doc(hidden)] // `preview` is examples/crash_dialog.rs's
+pub mod crash_window; // the fatal surface: a poisoned runtime's dialog, Restart / Close (I9)
 pub mod js; // direct JavaScriptCore values and VM-thread dispatch for embedders
 pub mod embed; // vue-native as a library: another program runs it on a thread (docs/EMBEDDING.md)
 pub mod tray; // native application tray for Rust embedders and direct JavaScript callbacks
@@ -746,7 +750,12 @@ fn pump_frame(window: &mut Window, cx: &mut App) {
     // what an agent wants to read when the JS side has already given up.
     drain_log_tee();
     if vn_runtime::bridge::poisoned() {
-        return; // I9: no JS after a caught native panic.
+        // I9: no JS after a caught native panic. The pump is not re-armed;
+        // this one call, the first frame after the panic, puts up the fatal
+        // surface the app's own (JS) error screen cannot be: a dialog that
+        // restarts or closes the app (src/crash_window.rs).
+        crash_window::on_poisoned(cx);
+        return;
     }
     // One frame, once, so the first wave measures a tree that has been laid out.
     if first_wave_waits(window) {
@@ -1628,6 +1637,8 @@ fn run_app() {
             // own, opened by a task on this thread (src/consent_window.rs).
             vn_permissions::set_asker(dialogs::ask_permission);
             vn_permissions::set_app_name(&cfg.title);
+            // The crash dialog's title names the app the same way.
+            crash_window::set_app_name(&cfg.title);
             // The backend behind redjs's `localStorage`, plus
             // `__vn_storage_*` for the `appStorage` extension. Must happen
             // before any app code runs: the area is loaded lazily on first

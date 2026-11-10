@@ -38,7 +38,9 @@
 //! message loop, never inside the frame pump (one thread). It stands down when
 //! it finds itself inside a published phase (a nested message loop entered
 //! from a host fn), when the window is mid-update (`update` fails), and after
-//! a caught native panic, exactly like `window::visibility_changed`.
+//! a caught native panic, exactly like `window::visibility_changed`; after the
+//! panic it opens the crash dialog in the frame pump's place
+//! (src/crash_window.rs).
 //!
 //! **Divergence (doc only).** Chrome aligns a hidden page's timers to 1 s
 //! wake-ups (and chained timers to 1 min after five minutes hidden). Here they
@@ -116,10 +118,15 @@ pub fn start(cx: &mut App) {
 /// One background wave: the frame's JS wave without the animation frames,
 /// then the frame's flush.
 fn wave(window: &mut gpui::Window, cx: &mut App) {
-    if vn_runtime::bridge::poisoned()
-        // Nested inside a published phase: the outer wave owns the JS.
-        || vn_runtime::with_app(|_| ()).is_some()
-    {
+    // Nested inside a published phase: the outer wave owns the JS.
+    if vn_runtime::with_app(|_| ()).is_some() {
+        return;
+    }
+    // No JS after a caught native panic (I9). The frame pump puts up the
+    // crash dialog; a minimised, hidden or cloaked window draws no frame, so
+    // the tick does it here (src/crash_window.rs, once per process).
+    if vn_runtime::bridge::poisoned() {
+        crate::crash_window::on_poisoned(cx);
         return;
     }
     if !ACTIVE.with(|a| a.replace(true)) {

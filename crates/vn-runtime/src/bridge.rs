@@ -33,6 +33,9 @@ thread_local! {
     static PHASE: Cell<Phase> = const { Cell::new(Phase::None) };
     static POISONED: Cell<bool> = const { Cell::new(false) };
     static LAST_PANIC: Cell<Option<(String, String)>> = const { Cell::new(None) };
+    /// Why the runtime was poisoned: the first caught panic's message and
+    /// location, for the host's crash dialog (vn-app src/crash_window.rs).
+    static POISON_REASON: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static DRAIN_OWED: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -115,6 +118,30 @@ pub fn poisoned() -> bool {
 
 pub fn poison() {
     POISONED.with(|c| c.set(true));
+}
+
+/// Why the runtime is poisoned: `"<message> at <file:line:col>"` of the first
+/// caught panic, or `None` when it is not poisoned or was poisoned by a bare
+/// [`poison`] call that gave no reason.
+pub fn poison_reason() -> Option<String> {
+    POISON_REASON.with(|r| r.borrow().clone())
+}
+
+/// [`poison`], keeping the first reason given: the panic that broke the
+/// runtime, not one that followed from it.
+pub fn poison_with(reason: String) {
+    poison();
+    POISON_REASON.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.is_none() {
+            *r = Some(reason);
+        }
+    });
+}
+
+/// `"<message> at <location>"`, or the message alone without a location.
+pub fn describe_panic(message: &str, location: &str) -> String {
+    if location.is_empty() { message.to_string() } else { format!("{message} at {location}") }
 }
 
 struct Guard(*mut App, *mut Window, Phase);
@@ -220,13 +247,13 @@ pub fn throw_error(g: *mut c_void, kind: u32, msg: &str) -> u64 {
 /// `Error` and poisons the runtime (I9 — gpui state cannot be trusted after an
 /// unwound host fn; the pump checks `poisoned()` and stops scheduling JS).
 pub fn panic_to_js(g: *mut c_void, payload: Box<dyn Any + Send>) -> u64 {
-    poison();
     let (msg, loc) = LAST_PANIC.with(|c| c.take()).unwrap_or_default();
     let text = payload
         .downcast_ref::<&str>()
         .map(|s| s.to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or(msg);
+    poison_with(describe_panic(&text, &loc));
     throw_error(g, 0, &format!("native panic at {loc}: {text}"))
 }
 
@@ -305,5 +332,22 @@ mod tests {
             payload.downcast_ref::<String>().cloned().unwrap_or_default()
         });
         assert!(message.contains("vn_runtime::testing::on_js_thread"), "{message}");
+    }
+
+    /// The crash dialog names the panic that broke the runtime, not one that
+    /// followed from it. A test thread of its own: the poison is per thread.
+    #[test]
+    fn the_first_poison_reason_is_kept() {
+        std::thread::spawn(|| {
+            assert!(!poisoned());
+            assert_eq!(poison_reason(), None);
+            poison_with(describe_panic("index out of bounds", "crates/x/src/lib.rs:12:5"));
+            poison_with(describe_panic("already borrowed", "crates/y/src/lib.rs:1:1"));
+            assert!(poisoned());
+            assert_eq!(poison_reason().as_deref(), Some("index out of bounds at crates/x/src/lib.rs:12:5"));
+        })
+        .join()
+        .unwrap();
+        assert_eq!(describe_panic("boom", ""), "boom", "no location, no dangling `at`");
     }
 }

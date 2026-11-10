@@ -240,6 +240,10 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    # `GetUserDefaultUILanguage` — the crash dialog's language
+    # (src/crash_window.rs). Already compiled for the graph: vn-permissions
+    # picks its prompt's language the same way.
+    "Win32_Globalization",
     "Win32_Storage_Xps",
     # `FindResourceW` / `LoadResource` / `LockResource` — the stamped payload,
     # read in place out of the mapped image (src/payload.rs).
