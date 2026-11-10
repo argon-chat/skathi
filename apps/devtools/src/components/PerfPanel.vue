@@ -32,7 +32,10 @@
 // sum; the table opens each category into its slices; the history is the same
 // stack over the bounded history of requested samples. GPU memory is not in the bar: it is not in
 // the address space, and adding it would double-count nothing and explain
-// nothing — it gets its own block.
+// nothing — it gets its own block. A macOS host sums to the physical footprint
+// instead (`totalLabel: "footprint"`), and its GPU memory IS in the bar, as the
+// `graphics` category: Apple GPUs share the system's memory. A host on an OS
+// with no port answers `{supported: false, reason}`, and the panel says that.
 import { computed, reactive, ref } from "vue";
 import FrameTimeline from "./FrameTimeline.vue";
 import AllocationsPanel from "./AllocationsPanel.vue";
@@ -46,6 +49,7 @@ import {
   memColor,
   percent,
   segments,
+  totalLabel,
 } from "../memfmt";
 
 const props = defineProps<{ height: number; request?: InspectorRequest; sessionKey?: string | number }>();
@@ -98,6 +102,8 @@ function seconds(ms: number | null | undefined): string {
 // ---- memory ---------------------------------------------------------------
 
 const mem = computed(() => state.mem);
+/** Only a host that does not know the command is "older than m26". */
+const memTooOld = computed(() => /unknown command/i.test(state.memError));
 const bar = computed(() => (mem.value ? segments(mem.value) : []));
 const keys = computed(() => (mem.value ? mem.value.categories.map((c) => c.key) : []));
 const history = computed(() => historyColumns(state.memHistory, keys.value));
@@ -227,11 +233,15 @@ function residentTitle(key: string): string {
       <div class="mem-head">
         <span class="label">Memory</span>
         <template v-if="mem">
-          <span class="chip" :title="mem.basis">committed {{ formatMem(mem.totalBytes) }}</span>
-          <span class="chip" title="The commit charge (Task Manager: Commit size)"
+          <span class="chip" :title="mem.basis">{{ totalLabel(mem) }} {{ formatMem(mem.totalBytes) }}</span>
+          <span
+            class="chip"
+            title="Windows: the commit charge (Task Manager: Commit size). macOS: the kernel's physical footprint (Activity Monitor: Memory)"
             >private {{ formatMem(mem.privateBytes) }}</span
           >
-          <span class="chip" title="Task Manager: the Memory column"
+          <span
+            class="chip"
+            title="Windows: Task Manager's Memory column. macOS: anonymous memory in RAM (internal)"
             >private working set {{ formatMem(mem.privateWorkingSetBytes) }}</span
           >
           <span class="chip">working set {{ formatMem(mem.workingSetBytes) }}</span>
@@ -265,9 +275,13 @@ function residentTitle(key: string): string {
         </div>
       </div>
 
-      <div v-if="state.memError && !mem" class="empty">
-        The target did not answer <b>mem</b>: {{ state.memError }}. A host older than m26 has no
-        memory breakdown.
+      <div v-if="state.memUnsupported && !mem" class="empty">
+        This target has no memory breakdown: {{ state.memUnsupported }}.
+      </div>
+      <div v-else-if="state.memError && !mem" class="empty">
+        The target did not answer <b>mem</b>: {{ state.memError }}.<template v-if="memTooOld">
+          A host older than m26 has no memory breakdown.</template
+        >
       </div>
       <div v-else-if="!mem" class="empty">Asking the target where its memory is…</div>
 
@@ -286,7 +300,7 @@ function residentTitle(key: string): string {
           <div class="table">
             <div class="row head">
               <span class="tw"></span><span class="name"></span>
-              <span class="num" title="Committed: the commit charge's view">committed</span>
+              <span class="num" :title="mem.basis">{{ totalLabel(mem) }}</span>
               <span class="pct">share</span>
               <span
                 class="num res"
@@ -335,7 +349,11 @@ function residentTitle(key: string): string {
             <div class="row cat gpu" @click="toggle('gpu')">
               <span class="tw">{{ open.gpu ? "▾" : "▸" }}</span>
               <span class="sw" :style="{ background: GPU_COLOR }"></span>
-              <span class="name">GPU (not in the bar: outside the address space)</span>
+              <span class="name">{{
+                mem.gpu.inBar
+                  ? "GPU (unified memory: already in the bar, as graphics)"
+                  : "GPU (not in the bar: outside the address space)"
+              }}</span>
               <span class="num">{{ formatMem(gpuTotal) }}</span>
               <span class="pct"></span><span class="num res"></span>
             </div>
@@ -374,7 +392,7 @@ function residentTitle(key: string): string {
               </div>
             </div>
             <div class="legend">
-              committed memory by category · one column per requested sample · bounded history
+              {{ totalLabel(mem) }} memory by category · one column per requested sample · bounded history
             </div>
           </div>
         </div>

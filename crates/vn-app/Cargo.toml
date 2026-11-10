@@ -214,6 +214,11 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # gpui's macOS text system (CoreText through font-kit). Off, the backend falls
 # back to a text system that renders no text at all.
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["font-kit"] }
+# The devtools `mem` port (src/devtools/mem_mac.rs): Mach's `task_info`,
+# `mach_vm_region_recurse` and their structs from mach2, libproc / libmalloc /
+# libdyld / pthread from libc. Both are already in the graph (gpui_apple, cpal).
+libc = "0.2"
+mach2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # WebGPU joins the native renderer device on first requestAdapter.

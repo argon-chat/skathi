@@ -260,7 +260,10 @@ export interface MemItem {
 }
 
 export interface MemCategory {
-  /** `images` | `mapped` | `jsc` | `rust` | `other` — stable, the colour key. */
+  /**
+   * `images` | `mapped` | `jsc` | `rust` | `other`, and `graphics` from a macOS
+   * host — stable, the colour key.
+   */
   key: string;
   label: string;
   bytes: number;
@@ -277,18 +280,27 @@ export interface MemCategory {
 /** `mem`'s `breakdown`: categories that SUM to `totalBytes`. All in bytes. */
 export interface MemBreakdown {
   basis: string;
-  /** Committed address space: private + mapped + image. */
+  /**
+   * What `totalBytes` is called; absent means `"committed"`. Windows: the
+   * committed address space (private + mapped + image). macOS (`"footprint"`):
+   * the physical footprint, Activity Monitor's "Memory".
+   */
+  totalLabel?: string;
   totalBytes: number;
-  /** The commit charge (Task Manager's "Commit size"). */
+  /** Windows: the commit charge (Task Manager's "Commit size"). macOS: the kernel's physical footprint. */
   privateBytes: number;
   workingSetBytes: number;
-  /** Task Manager's "Memory" column. */
+  /** Windows: Task Manager's "Memory" column. macOS: anonymous memory in RAM (`internal`). */
   privateWorkingSetBytes: number;
   /** Is the Rust heap being counted (`VN_MEMSTATS`, on by default in a dev build)? */
   rustCounting: boolean;
   categories: MemCategory[];
-  /** NOT part of `totalBytes`: GPU memory lives outside the address space. */
-  gpu: { dedicatedBytes: number; sharedBytes: number; items: MemItem[] };
+  /**
+   * Windows: NOT part of `totalBytes` — GPU memory lives outside the address
+   * space. macOS (`inBar: true`): unified memory, so the GPU's allocations are
+   * the `graphics` category's bytes, already in the bar.
+   */
+  gpu: { dedicatedBytes: number; sharedBytes: number; inBar?: boolean; items: MemItem[] };
 }
 
 export interface MemReply {
@@ -297,6 +309,16 @@ export interface MemReply {
   collectMs: number;
   /** Present for `mem {gc: true}`. */
   gc?: { ms: number; freedPrivateBytes: number; freedJscHeapBytes: number };
+}
+
+/**
+ * `mem` from a host on an OS the breakdown has no port to
+ * (`crates/vn-app/src/devtools/mem_stub.rs`): an answer, not an error, with
+ * the host's reason.
+ */
+export interface MemUnsupported {
+  supported: false;
+  reason: string;
 }
 
 /** One exchange the network tee recorded (`crates/vn-app/src/devtools/net.rs`). */

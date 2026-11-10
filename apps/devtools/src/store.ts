@@ -25,7 +25,7 @@
 import { markRaw, reactive } from "vue";
 import { Push, devtoolsArgs, listTargets, message, send } from "./wire";
 import { nodeLabel, rowVisible } from "./dump";
-import { gcSummary, sampleOf, type MemSample } from "./memfmt";
+import { gcSummary, memUnsupported, sampleOf, type MemSample } from "./memfmt";
 import type {
   ConsoleLine,
   EvalReply,
@@ -39,6 +39,7 @@ import type {
   PoolStats,
   MemBreakdown,
   MemReply,
+  MemUnsupported,
   PerfReply,
   PickReply,
   PingReply,
@@ -172,6 +173,11 @@ interface State {
   mem: MemBreakdown | null;
   memHistory: MemSample[];
   memError: string;
+  /**
+   * The target answered `mem` without a breakdown: its OS has no port
+   * (`{supported: false, reason}`). The host's reason; "" otherwise.
+   */
+  memUnsupported: string;
   memCollectMs: number;
   /** A `Force GC` is running (it is a full synchronous collection in the target). */
   memGcBusy: boolean;
@@ -268,6 +274,7 @@ export const state = reactive<State>({
   mem: null,
   memHistory: [],
   memError: "",
+  memUnsupported: "",
   memCollectMs: 0,
   memGcBusy: false,
   memResident: null,
@@ -455,6 +462,7 @@ function resetInspection(): void {
   state.mem = null;
   state.memHistory = [];
   state.memError = "";
+  state.memUnsupported = "";
   state.memResident = null;
   state.net = [];
   state.netCursor = 0;
@@ -1064,12 +1072,26 @@ export async function refreshPerf(): Promise<void> {
 
 let memInFlight = false;
 
-function applyMem(reply: MemReply): void {
+/**
+ * Takes a `mem` reply into the state. Returns the reason when it carries no
+ * breakdown — a host on an OS without a port answers `{supported: false,
+ * reason}`, which is an answer to show, not a reply to dereference.
+ */
+function applyMem(reply: MemReply | MemUnsupported): string | null {
+  const unsupported = memUnsupported(reply);
+  if (unsupported !== null || !("breakdown" in reply)) {
+    state.mem = null;
+    state.memError = "";
+    state.memUnsupported = unsupported ?? "";
+    return unsupported;
+  }
   state.mem = reply.breakdown;
   state.memCollectMs = reply.collectMs;
   state.memError = "";
+  state.memUnsupported = "";
   state.memHistory.push(sampleOf(reply.breakdown, Date.now()));
   if (state.memHistory.length > MEM_HISTORY) state.memHistory.splice(0, state.memHistory.length - MEM_HISTORY);
+  return null;
 }
 
 export async function refreshMem(): Promise<void> {
@@ -1077,7 +1099,7 @@ export async function refreshMem(): Promise<void> {
   const epoch = inspectionEpoch;
   memInFlight = true;
   try {
-    const reply = await cmd<MemReply>("mem");
+    const reply = await cmd<MemReply | MemUnsupported>("mem");
     if (epoch === inspectionEpoch) applyMem(reply);
   } catch (e) {
     // A host older than `mem` answers "unknown command" — said once, in the
@@ -1097,9 +1119,10 @@ export async function measureResident(): Promise<void> {
   if (!state.target || state.memResidentBusy) return;
   state.memResidentBusy = true;
   try {
-    const reply = await cmd<MemReply>("mem", { regions: true }, 60_000);
-    applyMem(reply);
-    state.memResident = { at: Date.now(), breakdown: reply.breakdown };
+    const reply = await cmd<MemReply | MemUnsupported>("mem", { regions: true }, 60_000);
+    const unsupported = applyMem(reply);
+    if (unsupported !== null || !("breakdown" in reply)) flash(`RAM breakdown unavailable: ${unsupported}`, true);
+    else state.memResident = { at: Date.now(), breakdown: reply.breakdown };
   } catch (e) {
     flash(`RAM breakdown failed: ${message(e)}`, true);
   } finally {
@@ -1112,9 +1135,11 @@ export async function forceGc(): Promise<void> {
   if (!state.target || state.memGcBusy) return;
   state.memGcBusy = true;
   try {
-    const reply = await cmd<MemReply>("mem", { gc: true }, 60_000);
-    applyMem(reply);
-    if (reply.gc) flash(gcSummary(reply.gc));
+    const reply = await cmd<MemReply | MemUnsupported>("mem", { gc: true }, 60_000);
+    // A host without a port did not collect either: it never reads `gc`.
+    const unsupported = applyMem(reply);
+    if (unsupported !== null || !("breakdown" in reply)) flash(`Force GC unavailable: ${unsupported}`, true);
+    else if (reply.gc) flash(gcSummary(reply.gc));
   } catch (e) {
     flash(`Force GC failed: ${message(e)}`, true);
   } finally {

@@ -34,9 +34,16 @@ mod picker;
 mod allocations;
 mod leases;
 mod indexeddb;
+#[cfg(any(windows, target_os = "macos"))]
+mod mem_common; // what `mem` reports alike on every port: units, rows, allocators, host structures
+#[cfg(any(target_os = "macos", all(test, windows)))]
+mod mem_fold; // the macOS fold, free of Mach calls so its tests run on Windows too
 #[cfg(windows)]
 mod mem; // `mem`: where the process's memory is (m26 perf work)
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+#[path = "mem_mac.rs"]
+mod mem;
+#[cfg(not(any(windows, target_os = "macos")))]
 #[path = "mem_stub.rs"]
 mod mem;
 pub(crate) mod trace; // `trace`: a frame-by-frame record of where the time went (m26 perf work)

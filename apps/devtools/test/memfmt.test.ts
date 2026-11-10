@@ -8,8 +8,20 @@
 // said, or the panel is lying about where the memory is.
 
 import { describe, expect, test } from "bun:test";
-import { formatMem, gcSummary, historyColumns, itemsOf, percent, sampleOf, segments } from "../src/memfmt";
-import type { MemBreakdown } from "../src/protocol";
+import {
+  GPU_COLOR,
+  formatMem,
+  gcSummary,
+  historyColumns,
+  itemsOf,
+  memColor,
+  memUnsupported,
+  percent,
+  sampleOf,
+  segments,
+  totalLabel,
+} from "../src/memfmt";
+import type { MemBreakdown, MemReply, MemUnsupported } from "../src/protocol";
 
 const MB = 1024 * 1024;
 
@@ -93,6 +105,35 @@ describe("history", () => {
   });
   test("an empty history draws nothing", () => {
     expect(historyColumns([], ["jsc"]).columns).toEqual([]);
+  });
+});
+
+describe("memUnsupported", () => {
+  test("a host without a port says why, and that is what the panel shows", () => {
+    // `crates/vn-app/src/devtools/mem_stub.rs`. This reply used to reach
+    // `sampleOf` and throw "undefined is not an object (evaluating 'e.categories')".
+    const stub: MemUnsupported = { supported: false, reason: "it has no port to this OS yet" };
+    expect(memUnsupported(stub)).toBe("it has no port to this OS yet");
+    expect(memUnsupported({ supported: false, reason: "" })).toContain("no memory breakdown");
+  });
+  test("a reply without categories is unreadable, not a TypeError", () => {
+    expect(memUnsupported(undefined)).not.toBeNull();
+    expect(memUnsupported({ collectMs: 1 } as unknown as MemReply)).not.toBeNull();
+    expect(memUnsupported({ breakdown: {}, collectMs: 1 } as unknown as MemReply)).not.toBeNull();
+  });
+  test("a breakdown is drawable", () => {
+    expect(memUnsupported({ breakdown: breakdown(), collectMs: 3 })).toBeNull();
+  });
+});
+
+describe("a macOS breakdown", () => {
+  test("names its total and draws graphics in the GPU colour", () => {
+    const b = breakdown();
+    expect(totalLabel(b)).toBe("committed");
+    b.totalLabel = "footprint";
+    expect(totalLabel(b)).toBe("footprint");
+    b.categories.splice(4, 0, { key: "graphics", label: "Graphics", bytes: 0, note: "", items: [] });
+    expect(memColor("graphics")).toBe(GPU_COLOR);
   });
 });
 

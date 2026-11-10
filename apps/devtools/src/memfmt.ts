@@ -6,17 +6,39 @@
 // with whatever no allocator accounts for as a category of its own. This file
 // only lays that out — so a rounding choice here can never hide a megabyte.
 
-import type { MemBreakdown, MemCategory } from "./protocol";
+import type { MemBreakdown, MemCategory, MemReply, MemUnsupported } from "./protocol";
 
+export const GPU_COLOR = "#3a9e96";
 /** One colour per category key; unknown keys (a newer host) get the grey. */
 export const MEM_COLORS: Record<string, string> = {
   images: "#4a6fa5",
   mapped: "#7d6bb3",
   jsc: "#c99a2e",
   rust: "#d0703a",
+  // macOS: unified memory puts the GPU's allocations in the bar.
+  graphics: GPU_COLOR,
   other: "#5c6b80",
 };
-export const GPU_COLOR = "#3a9e96";
+
+/**
+ * Why a `mem` reply has no breakdown to draw, or `null` when it has one. A
+ * host on an OS without a port answers `{supported: false, reason}`
+ * (`mem_stub.rs`); anything else without `breakdown.categories` is a reply
+ * this inspector cannot read, said as such rather than thrown as a TypeError.
+ */
+export function memUnsupported(reply: MemReply | MemUnsupported | null | undefined): string | null {
+  if (reply && "supported" in reply && reply.supported === false) {
+    return reply.reason || "the target has no memory breakdown on this OS";
+  }
+  const b = reply && "breakdown" in reply ? reply.breakdown : undefined;
+  if (!b || !Array.isArray(b.categories)) return "the target's mem reply has no breakdown";
+  return null;
+}
+
+/** What the bar's total is called: `committed` (Windows), `footprint` (macOS). */
+export function totalLabel(b: MemBreakdown): string {
+  return b.totalLabel || "committed";
+}
 
 export function memColor(key: string): string {
   return MEM_COLORS[key] ?? MEM_COLORS.other;
