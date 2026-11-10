@@ -228,6 +228,8 @@ mach2 = "0.6"
 # X11 (XWayland included) elsewhere. Off, gpui_linux is a headless platform
 # that opens no window.
 gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false, features = ["wayland", "x11"] }
+# `kill(pid, 0)`: is a dev slot's process alive (src/slot.rs).
+libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # WebGPU joins the native renderer device on first requestAdapter.

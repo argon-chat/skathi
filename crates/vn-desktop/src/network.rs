@@ -21,6 +21,9 @@
 //! event is queued for the seed. Both functions are resolved at run time, so
 //! an older Windows still starts. There the state stays unset: redjs answers
 //! `true`, Chromium's answer when it cannot tell, and an advisory says so.
+//!
+//! On Linux the hints are rtnetlink's link and address changes, read the way
+//! Chromium's `AddressTrackerLinux` reads them (see `imp` there).
 
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -214,7 +217,117 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Linux, as Chromium's `AddressTrackerLinux`: a rtnetlink socket subscribed
+/// to link and address changes, each of which re-reads the interfaces. There
+/// is a network while some interface other than loopback is up and running
+/// and holds an address beyond IPv6 link-local.
+#[cfg(target_os = "linux")]
+mod imp {
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    use super::{calc, navigator, on_hint, Debounce};
+
+    const UNSET: &str = "so it reads true, Chromium's answer when it cannot tell, and online/offline never fire";
+
+    /// Is there a network now, by the interfaces' flags and addresses.
+    pub(super) fn online_now() -> io::Result<bool> {
+        let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
+        if unsafe { libc::getifaddrs(&mut list) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let wanted = (libc::IFF_UP | libc::IFF_RUNNING) as u32;
+        let mut online = false;
+        let mut cursor = list;
+        while !cursor.is_null() && !online {
+            // SAFETY: a node of the list getifaddrs returned, freed below.
+            let ifa = unsafe { &*cursor };
+            cursor = ifa.ifa_next;
+            if ifa.ifa_addr.is_null() || ifa.ifa_flags & wanted != wanted || ifa.ifa_flags & libc::IFF_LOOPBACK as u32 != 0 {
+                continue;
+            }
+            online = match i32::from(unsafe { (*ifa.ifa_addr).sa_family }) {
+                libc::AF_INET => true,
+                libc::AF_INET6 => {
+                    // SAFETY: an AF_INET6 address is a sockaddr_in6.
+                    let octets = unsafe { (*ifa.ifa_addr.cast::<libc::sockaddr_in6>()).sin6_addr.s6_addr };
+                    !(octets[0] == 0xfe && octets[1] & 0xc0 == 0x80)
+                }
+                _ => false,
+            };
+        }
+        unsafe { libc::freeifaddrs(list) };
+        Ok(online)
+    }
+
+    fn subscribe() -> io::Result<OwnedFd> {
+        let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, libc::NETLINK_ROUTE) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a descriptor this call just opened and nothing else owns.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let mut addr: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
+        addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
+        addr.nl_groups = (libc::RTMGRP_LINK | libc::RTMGRP_IPV4_IFADDR | libc::RTMGRP_IPV6_IFADDR) as u32;
+        let size = std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t;
+        if unsafe { libc::bind(fd.as_raw_fd(), (&addr as *const libc::sockaddr_nl).cast(), size) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(fd)
+    }
+
+    /// The `vn-netlink` thread: any message, or an overrun that lost some,
+    /// is a reason to look again. What changed does not matter.
+    fn watch(fd: OwnedFd) {
+        let mut buffer = [0u8; 16 * 1024];
+        loop {
+            let n = unsafe { libc::recv(fd.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), 0) };
+            if n < 0 {
+                let error = io::Error::last_os_error();
+                match error.raw_os_error() {
+                    Some(libc::EINTR) => continue,
+                    Some(libc::ENOBUFS) => {}
+                    _ => {
+                        crate::log_later("advisory", format!("navigator.onLine: the netlink socket failed ({error}); onLine keeps its last value"));
+                        return;
+                    }
+                }
+            }
+            if let Ok(online) = online_now() {
+                on_hint(online);
+            }
+        }
+    }
+
+    pub(super) fn install() {
+        // Subscribe, then read: a change in between is a message waiting on the socket.
+        let fd = match subscribe() {
+            Ok(fd) => fd,
+            Err(error) => {
+                crate::advise_later(&format!("navigator.onLine: no rtnetlink socket ({error}), {UNSET}"));
+                return;
+            }
+        };
+        let seed = match online_now() {
+            Ok(online) => online,
+            Err(error) => {
+                crate::advise_later(&format!("navigator.onLine: getifaddrs failed ({error}), {UNSET}"));
+                return;
+            }
+        };
+        *calc() = Some(Debounce::new(seed));
+        navigator::set_on_line(Some(seed));
+        let started = std::thread::Builder::new().name("vn-netlink".into()).spawn(move || watch(fd)).and_then(|_| {
+            std::thread::Builder::new().name("vn-net".into()).spawn(super::run)
+        });
+        if let Err(e) = started {
+            crate::advise_later(&format!("navigator.onLine: its threads did not start ({e}), so onLine keeps its startup value"));
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod imp {
     /// No provider: redjs answers `true` and advises on the first read.
     pub(super) fn install() {}
@@ -284,5 +397,15 @@ mod tests {
         assert_eq!(navigator::on_line_state(), Some(level_is_online(level)));
         install(); // once per process
         assert!(navigator::on_line_state().is_some());
+    }
+
+    /// The real OS: the interfaces are readable, and installing seeds redjs
+    /// with their answer.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn install_seeds_navigator_on_line_from_the_interfaces() {
+        let online = imp::online_now().expect("getifaddrs");
+        install();
+        assert_eq!(navigator::on_line_state(), Some(online));
     }
 }

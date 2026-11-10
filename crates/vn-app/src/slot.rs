@@ -173,7 +173,16 @@ fn pid_alive(pid: u32) -> bool {
             Err(e) => e.code() != ERROR_INVALID_PARAMETER.to_hresult(),
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(unix)]
+    {
+        // 0, or above i32::MAX, would name a process group; no process has such a pid.
+        let Some(pid) = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0) else { return false };
+        // Signal 0 checks without sending. EPERM is another user's process,
+        // alive; only ESRCH is "no such process".
+        let signalled = unsafe { libc::kill(pid, 0) } == 0;
+        signalled || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+    #[cfg(not(any(windows, unix)))]
     {
         let _ = pid;
         true

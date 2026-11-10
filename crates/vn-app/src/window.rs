@@ -163,7 +163,9 @@ impl Backdrop {
     /// back to acrylic, never silently no-op (Tauri's precedent), and acrylic
     /// is the older accent-policy blur, which says what it costs.
     fn resolve_for_os(self) -> (Backdrop, Option<&'static str>) {
-        resolve_backdrop(self, has_system_backdrop())
+        let (backdrop, note) = resolve_backdrop(self, has_system_backdrop());
+        // The notes name Windows builds; on Linux the backdrop is whatever the compositor makes of it.
+        (backdrop, note.filter(|_| cfg!(target_os = "windows")))
     }
 }
 
@@ -580,7 +582,7 @@ pub fn load_config(raw: Option<String>) -> Config {
     // Windows 11 snap layouts reject zones above 500 epx even though the
     // flyout still appears — an invisible failure, so it is worth a line
     // (A-21). Our default is no minimum at all, so this only bites opt-ins.
-    if cfg.min_width.is_some_and(|w| w > 500.0) {
+    if cfg!(target_os = "windows") && cfg.min_width.is_some_and(|w| w > 500.0) {
         advisories.push(format!(
             "`minWidth: {}` exceeds the 500 epx ceiling Windows 11 snap layouts require: the \
              flyout will still appear but the zones will reject. Microsoft recommends <= 330.",
@@ -2674,7 +2676,14 @@ mod tests {
     fn acrylic_is_the_system_material_and_only_its_fallback_is_advised() {
         assert_eq!(Backdrop::from_str("acrylic"), Some((Backdrop::Acrylic, None)));
         assert_eq!(Backdrop::from_str("blur"), Some((Backdrop::Acrylic, Some(A20))));
-        assert_eq!(Backdrop::Acrylic.to_gpui(), WindowBackgroundAppearance::AcrylicBackdrop);
+        let material = if cfg!(target_os = "macos") {
+            WindowBackgroundAppearance::Blurred
+        } else if cfg!(target_os = "linux") {
+            WindowBackgroundAppearance::Opaque
+        } else {
+            WindowBackgroundAppearance::AcrylicBackdrop
+        };
+        assert_eq!(Backdrop::Acrylic.to_gpui(), material);
 
         for b in [Backdrop::None, Backdrop::Mica, Backdrop::MicaAlt, Backdrop::Acrylic, Backdrop::Transparent] {
             assert_eq!(resolve_backdrop(b, true), (b, None), "{b:?} on 22621+");
@@ -2689,7 +2698,7 @@ mod tests {
         let cfg = load_config(Some(r#"{"backdrop":"acrylic"}"#.to_string()));
         assert_eq!(cfg.backdrop, Backdrop::Acrylic);
         let advised = ADVISED.with(|s| s.borrow().contains(A20C));
-        assert_eq!(advised, !has_system_backdrop());
+        assert_eq!(advised, cfg!(target_os = "windows") && !has_system_backdrop());
     }
 
     /// `titleBarOverlay.color` takes CSS hex, which is what Electron's option
