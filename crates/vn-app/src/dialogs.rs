@@ -34,8 +34,14 @@ pub fn owner() -> Option<vn_desktop::dialog::Owner> {
 
 /// vn-permissions' prompt, asked as vn-desktop's question dialog, owned by
 /// the window asking: on Windows a window of our own (src/consent_window.rs),
-/// elsewhere the platform's alert, and under `VN_DIALOGS=scripted` a question
+/// on macOS the platform's alert, and under `VN_DIALOGS=scripted` a question
 /// the devtools answer (`dialog choose`).
+///
+/// On Linux nobody is asked: Allow, as a desktop browser without a portal
+/// grants its own capture. The desktop has no per-app microphone permission
+/// to stand in for, and its only question dialogs (zenity, kdialog) are often
+/// not installed, which used to leave every call without a microphone. The
+/// answer is stored like any other.
 pub fn ask_permission(q: vn_permissions::Question, reply: Box<dyn FnOnce(Option<usize>) + Send>) {
     let capability = q.capability;
     let ask = vn_desktop::dialog::Ask {
@@ -52,7 +58,12 @@ pub fn ask_permission(q: vn_permissions::Question, reply: Box<dyn FnOnce(Option<
         Box::new(move |q, owner, cancel| crate::consent_window::present(capability, q, owner, cancel)),
         reply,
     );
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        let _ = capability;
+        vn_desktop::dialog::ask_with(ask, Box::new(|_, _, _| Ok(Some(0))), reply);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         let _ = capability;
         vn_desktop::dialog::ask(ask, reply);
