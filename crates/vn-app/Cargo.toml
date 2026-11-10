@@ -132,7 +132,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # was discarded. `VN_LOG=<level>` turns them on (see `logger` in lib.rs).
 log = "0.4"
 raw-window-handle = "0.6"
-gpui_platform = { path = "../../vendor/zed/crates/gpui_platform", default-features = false }
+# gpui's `HttpClient` returns anyhow results and no longer re-exports the
+# crate (zed#66430); the Windows dialogs and shared GPU code use it too.
+anyhow = "1"
+gpui_platform ={ path = "../../vendor/zed/crates/gpui_platform", default-features = false }
 vn-css = { path = "../vn-css" }
 vn-elements = { path = "../vn-elements" }
 # `default-features = false` here and in every crate that depends on
@@ -225,7 +228,6 @@ mach2 = "0.6"
 # Compiling the API does not initialize its guest device or shader caches.
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", default-features = false, features = ["std", "wgsl", "dx12"], optional = true }
 pollster = { version = "0.4", optional = true }
-anyhow = "1"
 # The host connects GPUI's native generation to WebGPU and lazily lends a
 # D3D11On12 facade to Media Foundation when the first video needs a decoder.
 gpui_windows = { path = "../../vendor/zed/crates/gpui_windows", default-features = false }
