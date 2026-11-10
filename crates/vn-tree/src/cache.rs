@@ -692,13 +692,6 @@ struct Boundary {
     inner: AnyElement,
 }
 
-impl IntoElement for Boundary {
-    type Element = Self;
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl Element for Boundary {
     type RequestLayoutState = ();
     type PrepaintState = ();

@@ -799,13 +799,6 @@ struct Placed {
     child: AnyElement,
 }
 
-impl IntoElement for Placed {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl gpui::Element for Placed {
     type RequestLayoutState = gpui::LayoutId;
     type PrepaintState = ();

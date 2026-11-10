@@ -475,13 +475,6 @@ struct BoundsProbe {
     inner: AnyElement,
 }
 
-impl gpui::IntoElement for BoundsProbe {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl gpui::Element for BoundsProbe {
     type RequestLayoutState = ();
     type PrepaintState = ();
@@ -5688,13 +5681,6 @@ struct SvgTint<E> {
     inner: E,
     /// False when the cascade already gave this node a `color` of its own.
     inherit: bool,
-}
-
-impl<E: gpui::Element + gpui::Styled> gpui::IntoElement for SvgTint<E> {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
 }
 
 impl<E: gpui::Element + gpui::Styled> gpui::Element for SvgTint<E> {

@@ -42,30 +42,26 @@ exclude = ["vendor", "crates/vn-thorvg-sys/tools/regen-bindings"]
 # futures were woken over and over).
 [patch.crates-io]
 async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
-# m26: taffy 0.13.0 (gpui pins `=0.13.0`, vendor/zed/Cargo.toml) with ONE
-# backported fix: `justify-content` no longer also distributes the free space
-# auto margins already took (a `mx-auto` item in a `justify-center` row moved
-# twice as far). Upstream fixed it in taffy 0.14.0; the vendored copy is the
-# 0.13.0 crate as published plus that change, marked in
-# vendor/taffy/src/compute/flexbox.rs. Drop the backport when gpui moves to a
-# taffy >= 0.14.
-# ...and one vue-native patch that stays: `TaffyTree::resolve_calc_value`
-# decodes the calc() handle gpui packs for `DefiniteLength::Calc`
-# (vendor/taffy/src/tree/taffy_tree.rs; upstream resolves every calc to 0).
-# ...and a second one: a min/max size transfers through `aspect-ratio` only
-# into an axis whose size is auto (`Size::maybe_transfer_aspect_ratio`,
-# vendor/taffy/src/geometry.rs; css-sizing-4 §5.2). Upstream caps a definite
-# `height: 100%` at `max-width / ratio`, so a picture under Tailwind's
-# `img { max-width: 100% }` kept its own shape in a box it should fill.
-# ...and a third: a percentage `flex-basis` the container cannot resolve is
-# `content` (CSS Flexbox §7.2.3), not the item's own width/height
-# (`determine_flex_base_size`, vendor/taffy/src/compute/flexbox.rs).
-# ...and a fourth: a row's auto width in a definite space is fit-content,
-# clamped to the space but not below the items' min-content (CSS Sizing 3
-# §5.1; `determine_container_main_size`). Upstream kept the max-content width,
-# so a long link in a chat bubble held the bubble wider than its column.
-# Moving off the vendored copy means carrying all four patches to the new
-# taffy.
+# m26: taffy 0.15.0 (gpui pins `=0.15.0`, vendor/zed/Cargo.toml)
+# as published, plus three vue-native patches, each marked "vue-native patch"
+# in the source:
+# - `TaffyTree::resolve_calc_value` decodes the calc() handle gpui packs for
+#   `DefiniteLength::Calc` (vendor/taffy/src/tree/taffy_tree.rs; upstream
+#   resolves every calc to 0).
+# - A min/max size transfers through `aspect-ratio` only into an axis whose
+#   size is auto (`Size::maybe_transfer_aspect_ratio`,
+#   vendor/taffy/src/geometry.rs; css-sizing-4 §5.2). Upstream caps a definite
+#   `height: 100%` at `max-width / ratio`, so a picture under Tailwind's
+#   `img { max-width: 100% }` kept its own shape in a box it should fill.
+# - A row's auto width in a definite space is fit-content, clamped to the
+#   space but not below the items' min-content (CSS Sizing 3 §5.1;
+#   `determine_container_main_size`). Upstream kept the max-content width, so
+#   a long link in a chat bubble held the bubble wider than its column.
+# Two patches carried on 0.13.0 are upstream now and were dropped: the
+# auto-margin `justify-content` fix (taffy 0.14) and a percentage `flex-basis`
+# the container cannot resolve being `content` (0.15; its tests stay, in
+# vendor/taffy/src/compute/mod.rs). Moving off the vendored copy means
+# carrying the three patches to the new taffy.
 taffy = { path = "vendor/taffy" }
 # m26: webrtc-sys 0.3.41 (pinned `=0.3.41` by crates/vn-voice) as published,
 # plus vue-native hooks libwebrtc has and the crate does not expose — the

@@ -942,13 +942,6 @@ impl gpui::Element for SvgRaster {
     }
 }
 
-impl gpui::IntoElement for SvgRaster {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl gpui::Styled for SvgRaster {
     fn style(&mut self) -> &mut gpui::StyleRefinement {
         &mut self.interactivity.base_style

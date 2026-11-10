@@ -340,7 +340,8 @@ mod tests {
     use super::*;
 
     fn stroke(s: &str) -> Keystroke {
-        Keystroke::parse(s).unwrap()
+        // `parse` wants a `&'static str` since zed#65970; a test may leak.
+        Keystroke::parse(s.to_owned().leak()).unwrap()
     }
 
     #[test]

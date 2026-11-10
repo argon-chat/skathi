@@ -418,13 +418,6 @@ fn note_build(
 /// alpha only, white, so the colour comes out exact.
 struct Tinted(AnyElement);
 
-impl IntoElement for Tinted {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl gpui::Element for Tinted {
     type RequestLayoutState = ();
     type PrepaintState = ();

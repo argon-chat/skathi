@@ -358,13 +358,6 @@ struct Placeholder {
     inner: AnyElement,
 }
 
-impl IntoElement for Placeholder {
-    type Element = Self;
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl Element for Placeholder {
     type RequestLayoutState = ();
     type PrepaintState = ();

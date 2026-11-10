@@ -21,7 +21,7 @@ use std::ops::Range;
 
 use gpui::{
     App, Bounds, ContentMask, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseMoveEvent,
+    GlobalElementId, Hsla, InspectorElementId, LayoutId, MouseButton, MouseMoveEvent,
     MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, TextAlign, TextRun, UnderlineStyle,
     Window, fill, point, px, relative, size,
 };
@@ -58,14 +58,6 @@ pub(crate) struct TextPrepaint {
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
     scrollbar: Option<PaintQuad>,
-}
-
-impl IntoElement for TextElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
 }
 
 impl Element for TextElement {

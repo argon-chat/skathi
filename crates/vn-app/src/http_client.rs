@@ -40,11 +40,10 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use anyhow::{anyhow, Result as AnyResult};
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
-use gpui::http_client::{
-    anyhow, http, AsyncBody, HttpClient, Inner, RedirectPolicy, RequestTimeout, Result as AnyResult, Url,
-};
+use gpui::http_client::{http, AsyncBody, HttpClient, Inner, RedirectPolicy, RequestTimeout, Url};
 use vn_runtime::redjs::webapi::{cookies::Credentials, http as net};
 
 /// A dead host must fail fast; `fetch` uses the same split (`fetch.rs`).

@@ -583,12 +583,18 @@ where
 
 fn bindings() -> Vec<KeyBinding> {
     let context = Some(KEY_CONTEXT);
-    // The platform's "do the thing" modifier, and the one that means "by word".
-    let (primary, word) = if cfg!(target_os = "macos") {
-        ("cmd", "alt")
-    } else {
-        ("ctrl", "ctrl")
-    };
+    // The platform's "do the thing" modifier, and the one that means "by word",
+    // spliced in at compile time: `KeyBinding::new` takes `&'static str`.
+    macro_rules! primary {
+        ($pre:literal, $key:literal) => {
+            if cfg!(target_os = "macos") { concat!($pre, "cmd-", $key) } else { concat!($pre, "ctrl-", $key) }
+        };
+    }
+    macro_rules! word {
+        ($pre:literal, $key:literal) => {
+            if cfg!(target_os = "macos") { concat!($pre, "alt-", $key) } else { concat!($pre, "ctrl-", $key) }
+        };
+    }
 
     let mut bindings = vec![
         KeyBinding::new("backspace", Backspace, context),
@@ -606,22 +612,22 @@ fn bindings() -> Vec<KeyBinding> {
     ];
 
     bindings.extend([
-        KeyBinding::new(&format!("{word}-left"), WordLeft, context),
-        KeyBinding::new(&format!("{word}-right"), WordRight, context),
-        KeyBinding::new(&format!("shift-{word}-left"), SelectWordLeft, context),
-        KeyBinding::new(&format!("shift-{word}-right"), SelectWordRight, context),
-        KeyBinding::new(&format!("{word}-backspace"), DeleteWordLeft, context),
-        KeyBinding::new(&format!("{word}-delete"), DeleteWordRight, context),
+        KeyBinding::new(word!("", "left"), WordLeft, context),
+        KeyBinding::new(word!("", "right"), WordRight, context),
+        KeyBinding::new(word!("shift-", "left"), SelectWordLeft, context),
+        KeyBinding::new(word!("shift-", "right"), SelectWordRight, context),
+        KeyBinding::new(word!("", "backspace"), DeleteWordLeft, context),
+        KeyBinding::new(word!("", "delete"), DeleteWordRight, context),
     ]);
 
     bindings.extend([
-        KeyBinding::new(&format!("{primary}-a"), SelectAll, context),
-        KeyBinding::new(&format!("{primary}-c"), Copy, context),
-        KeyBinding::new(&format!("{primary}-x"), Cut, context),
-        KeyBinding::new(&format!("{primary}-v"), Paste, context),
-        KeyBinding::new(&format!("{primary}-z"), Undo, context),
-        KeyBinding::new(&format!("{primary}-y"), Redo, context),
-        KeyBinding::new(&format!("shift-{primary}-z"), Redo, context),
+        KeyBinding::new(primary!("", "a"), SelectAll, context),
+        KeyBinding::new(primary!("", "c"), Copy, context),
+        KeyBinding::new(primary!("", "x"), Cut, context),
+        KeyBinding::new(primary!("", "v"), Paste, context),
+        KeyBinding::new(primary!("", "z"), Undo, context),
+        KeyBinding::new(primary!("", "y"), Redo, context),
+        KeyBinding::new(primary!("shift-", "z"), Redo, context),
     ]);
 
     // The IBM CUA clipboard keys every Windows and Linux edit control still
@@ -675,7 +681,7 @@ mod tests {
     use gpui::Action;
 
     /// What one keystroke is bound to in the input's context, by action name.
-    fn bound(keys: &str) -> Option<&'static str> {
+    fn bound(keys: &'static str) -> Option<&'static str> {
         let want = gpui::Keystroke::parse(keys).unwrap();
         bindings()
             .iter()

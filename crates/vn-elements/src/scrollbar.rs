@@ -56,7 +56,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     px, size, point, App, Axis, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, MouseDownEvent,
+    HitboxBehavior, Hsla, InspectorElementId, LayoutId, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Position, ScrollHandle, ScrollEvent, Style,
     Window, WindowControlArea, fill, relative,
 };
@@ -570,13 +570,6 @@ pub struct Prepaint {
     axes: Vec<AxisPaint>,
     state: Rc<Cell<State>>,
     opacity: f32,
-}
-
-impl IntoElement for Scrollbar {
-    type Element = Self;
-    fn into_element(self) -> Self::Element {
-        self
-    }
 }
 
 impl Element for Scrollbar {

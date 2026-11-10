@@ -825,13 +825,6 @@ struct Recorder {
     inner: StyledText,
 }
 
-impl IntoElement for Recorder {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl Element for Recorder {
     type RequestLayoutState = ();
     type PrepaintState = ();
