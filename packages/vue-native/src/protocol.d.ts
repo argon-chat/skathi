@@ -1120,10 +1120,10 @@ interface VnAppWindow extends VnEventTarget {
   setTitleBarOverlay(overlay: boolean | null | Record<string, unknown>): void;
   title: string;
   backdrop: string;
-  /** What the window draws of `backdrop`: the same value, or `"none"` while
-   *  macOS native fullscreen leaves a system material nothing behind the
-   *  window to blend with. `backdropchange` fires when either moves
-   *  (docs/WINDOWING.md §4.4). */
+  /** What the window draws of `backdrop`: the same value, or `"none"` while a
+   *  macOS native-fullscreen window cannot show the desktop picture under its
+   *  glass and draws a flat background instead. `backdropchange` fires when
+   *  either moves (docs/WINDOWING.md §4.4). */
   readonly effectiveBackdrop: string;
   /** `"system" | "light" | "dark"`: Electron's `nativeTheme.themeSource`
    *  (docs/WINDOWING.md §4.5). */

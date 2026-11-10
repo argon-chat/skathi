@@ -139,7 +139,7 @@ interface VnWindowState {
   cloaked: boolean;
   title: string;
   backdrop: string;
-  /** What the window draws of `backdrop`: `"none"` while macOS fullscreen suspends it. */
+  /** What the window draws of `backdrop`: `"none"` while macOS fullscreen has no desktop picture for the glass. */
   effectiveBackdrop: string;
   /** `appWindow.theme`: `"system"`, `"light"` or `"dark"`. */
   theme: string;

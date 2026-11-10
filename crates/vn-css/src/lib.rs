@@ -5859,6 +5859,30 @@ mod tests {
         assert!(tab.base.text.color.is_some(), "the palette reached a descendant");
     }
 
+    /// `html` and `body` are ONE element here, so a class set through
+    /// `documentElement.classList` is on `body` too, and a descendant
+    /// selector between them (`html.x body`) has no ancestor to match: an
+    /// app writes the compound form (`body.x`). Argon's fullscreen fallback
+    /// background shipped as `html.backdrop-suspended body` and never applied.
+    #[test]
+    fn a_class_on_the_root_is_matched_by_the_compound_form_not_the_descendant_one() {
+        let opacity = |css: &str| {
+            let engine = Engine::compile(css);
+            assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+            let mut d = doc();
+            d.nodes[1] = ("root", "suspended", 0, vec![]);
+            cascade(&engine, &d, &Env::default())[0].base.opacity
+        };
+        let base = "body:not(.oled) { opacity: 0.1 !important } ";
+        assert_eq!(opacity(&format!("{base}html.suspended body:not(.oled) {{ opacity: 0.5 !important }}")), Some(0.1));
+        assert_eq!(
+            opacity(&format!(
+                "{base}html.suspended body:not(.oled), body.suspended:not(.oled) {{ opacity: 0.5 !important }}"
+            )),
+            Some(0.5)
+        );
+    }
+
     #[test]
     fn query_all_uses_the_real_matcher() {
         let d = doc();
