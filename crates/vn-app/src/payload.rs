@@ -92,7 +92,6 @@ pub struct PackRef {
 /// The check reads the index only; the assets stay unread until asked for.
 pub struct Pack {
     pub name: String,
-    pub path: std::path::PathBuf,
     pub payload: AppPayload,
 }
 
@@ -205,7 +204,7 @@ fn open_packs(meta: &Meta, dir: Option<&std::path::Path>) -> Result<Vec<Pack>, S
                     r.id
                 ));
             }
-            Ok(Pack { name: r.name.clone(), path, payload })
+            Ok(Pack { name: r.name.clone(), payload })
         })
         .collect()
 }
