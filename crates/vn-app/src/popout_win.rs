@@ -304,9 +304,13 @@ mod imp {
     /// * `WS_EX_TOOLWINDOW` instead of `WS_EX_APPWINDOW`: no taskbar button,
     ///   no Alt-Tab entry, and no `HSHELL_WINDOWCREATED` — the shell does not
     ///   re-check the monitor's fullscreen state for a window it never hears
-    ///   of, which is what keeps the taskbar down over a borderless game;
-    /// * no `NonRudeHWND`, which gpui puts on every frameless window precisely
-    ///   so that the taskbar stays UP over it.
+    ///   of, which is what keeps the taskbar down over a borderless game.
+    ///
+    /// gpui's `NonRudeHWND` stays: an overlay laid over the desktop (drawing on
+    /// a shared screen) covers the monitor too, and without it the taskbar
+    /// steps back behind the click-through window and every click on it lands
+    /// on whatever is under. A HUD over a game that wants the taskbar down is a
+    /// `cover`, and [`make_cover`] takes the property off.
     ///
     /// Electron's `focusable: false` is the same promise, and on Windows it
     /// too means `skipTaskbar`. Done while the window is hidden: the taskbar
@@ -317,7 +321,6 @@ mod imp {
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             let want = (ex | (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW).0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
-            let _ = RemovePropW(hwnd, w!("NonRudeHWND"));
             let _ = SetWindowSubclass(hwnd, Some(no_activate_proc), NO_ACTIVATE, 0);
             let _ = SetWindowPos(
                 hwnd,
