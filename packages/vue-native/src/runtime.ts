@@ -2218,6 +2218,10 @@ function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
       notifyMutation(el, "attributes", { attributeName: key, oldValue: before ?? null });
     }
   }
+  if (key === "draggable" && !dndSeen && next != null && String(next) === "true") {
+    dndSeen = true;
+    dndRearm();
+  }
   // The host has the value already (the generic channel, above); only the
   // mirror's storage follows, so the accessor does not push it twice.
   if (key === "value" && !(isRangeInput(el) && el._rangeDirty)) el._value = next == null ? "" : String(next);
@@ -2331,6 +2335,29 @@ function bucketsAlive(b: Buckets): boolean {
   return !!(b.bubble || b.capture || b.extraB.length || b.extraC.length);
 }
 
+// ---- HTML drag and drop, within the app: state (the gesture is below, by the
+// dispatcher). It rides the APP ROOT's bits: a press once anything is
+// `draggable="true"`, then the moves, the release and Escape while a press on
+// one is pending or a drag is under way.
+/** Has anything been made `draggable="true"`? */
+let dndSeen = false;
+/** The press on a draggable element, then the drag it became (`dndDispatch`). */
+let dnd: DndGesture | null = null;
+/** A drag just ended: the release's `click` is not a click. */
+let dndSwallowClick = false;
+
+function dndWants(code: number): boolean {
+  if (code === EV_CODES.mousedown || code === EV_CODES.selectstart) return dndSeen;
+  if (code === EV_CODES.mousemove || code === EV_CODES.mouseup) return !!dnd;
+  if (code === EV_CODES.keydown) return dnd?.phase === "dragging";
+  return false;
+}
+
+function dndRearm(): void {
+  if (!appRoot) return;
+  for (const name of ["mousedown", "selectstart", "mousemove", "mouseup", "keydown"]) syncListenerFlag(appRoot, name);
+}
+
 /// Several event NAMES can share one host code (`pointerdown` rides
 /// `mousedown`), so the flag is the OR over every name that maps to it —
 /// switching a `pointerdown` listener off must not silence a `mousedown` one.
@@ -2349,6 +2376,7 @@ function syncListenerFlag(self: MirrorNode, name: string): void {
     on = NAMES_BY_CODE[code].some((n) =>
       [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)),
     );
+    if (!on && dndWants(code)) on = true;
   }
   // …and a link listens for its own click (its activation behaviour), so
   // removing the last `@click` from an `<a href>` must not switch it off. So
@@ -4749,7 +4777,11 @@ defineDom("click", function (this: MirrorElement) {
 //    nothing; a reset does not restore the controls' values.
 
 /** Events the runtime itself fires, for which no host code exists. Their handlers are kept. */
-const RUNTIME_FIRED_EVENTS = new Set<string>(["submit", "reset", "fullscreenchange", "gotpointercapture", "lostpointercapture", "select"]);
+const RUNTIME_FIRED_EVENTS = new Set<string>([
+  "submit", "reset", "fullscreenchange", "gotpointercapture", "lostpointercapture", "select",
+  // The drag of a `draggable="true"` element (`dndDispatch`).
+  "dragstart", "drag", "dragenter", "dragover", "dragleave", "drop", "dragend",
+]);
 
 /** HTML's boolean-attribute rule as patchProp stores it: present, and not the string "false". */
 const hasFlag = (n: MirrorElement, name: string): boolean => n.attrs?.[name] != null && n.attrs[name] !== "false";
@@ -6634,6 +6666,243 @@ function activatableOnPath(target: MirrorNode): boolean {
   return false;
 }
 
+// ---- HTML drag and drop, within the app (HTML §6.11) ------------------------
+// gpui has no drag-and-drop of DOM elements, so the runtime runs the gesture
+// itself off the host's mouse events: a left press on (or in) a
+// `draggable="true"` element, then a move past Chromium's 4 px threshold,
+// starts a drag. From there the moves are not mouse events any more: each one
+// fires `drag` at the source, `dragenter` / `dragleave` as the element under
+// the pointer changes, and `dragover` at it — a cancelled `dragover` is what
+// makes the element a drop target. The release fires `drop` at an accepting
+// target, then `dragend` at the source, and the release's `click` is
+// swallowed. Escape cancels. Each event is a DragEvent carrying one
+// DataTransfer for the whole drag.
+//
+// Divergences: the DataTransfer stays read/write for the whole drag (a
+// browser protects its data outside `dragstart` and `drop`); nothing is
+// painted under the pointer (no drag image — the page's own styling of the
+// dragged and the hovered elements is the feedback); a drag ends at the
+// window's edge (it does not leave the app); `dragover` fires on each move,
+// not every 350 ms while the pointer rests.
+
+/** Chromium's mouse drag threshold (`kDragThresholdX` / `Y`), in CSS px. */
+const DRAG_THRESHOLD = 4;
+
+interface DndGesture {
+  /**
+   * `pressed`: a left press on a draggable, not yet moved far enough.
+   * `dragging`: the drag is under way. `done`: cancelled (Escape, or a `drag`
+   * handler) while the button is still down, whose release is swallowed.
+   */
+  phase: "pressed" | "dragging" | "done";
+  source: MirrorElement;
+  x: number;
+  y: number;
+  dt: DataTransferLike | null;
+  /** The current target: the element the last `dragover` went to. */
+  over: MirrorElement | null;
+  /** The current drag operation: what the last `dragover` accepted, or "none". */
+  op: string;
+}
+
+interface DataTransferLike {
+  dropEffect: string;
+  effectAllowed: string;
+}
+
+/** The draggable element a press at `n` would drag: the nearest `draggable="true"` one at or above it. */
+function draggableAt(n: MirrorNode | null | undefined): MirrorElement | null {
+  // A press in a text field selects text in it, whatever is around it.
+  if (!n || isTextWidget(n)) return null;
+  for (let p: MirrorNode | null = n; p; p = p.parentNode) {
+    if (p.kind === 1 && (p as MirrorElement).attrs?.draggable === "true") return p as MirrorElement;
+  }
+  return null;
+}
+
+const DRAG_CANCELABLE = new Set(["dragstart", "drag", "dragenter", "dragover", "drop"]);
+
+function dragEvent(name: string, x: number, y: number, d: number, dt: DataTransferLike, related: MirrorNode | null): VnEvent {
+  const init = {
+    bubbles: true,
+    cancelable: DRAG_CANCELABLE.has(name),
+    composed: true,
+    ...mods(d),
+    clientX: x,
+    clientY: y,
+    button: 0,
+    // The button is still down for all but the two that follow its release.
+    buttons: name === "drop" || name === "dragend" ? 0 : 1,
+    dataTransfer: dt,
+  };
+  let ev: VnEvent;
+  try {
+    const Drag = theGlobal("DragEvent") as (new (type: string, init: Record<string, unknown>) => VnEvent) | undefined;
+    ev = typeof Drag === "function" ? new Drag(name, init) : withProps(new MouseEvent(name, init), { dataTransfer: dt });
+  } catch {
+    ev = withProps(new CustomEvent(name, init), { ...mods(d), clientX: x, clientY: y, button: 0, buttons: init.buttons, dataTransfer: dt });
+  }
+  return withRelatedTarget(ev, related);
+}
+
+/** The `dropEffect` a `dragenter` / `dragover` starts with, from `effectAllowed` (HTML §6.11.5). */
+function initialDropEffect(effectAllowed: string): string {
+  switch (effectAllowed) {
+    case "none":
+      return "none";
+    case "link":
+    case "linkMove":
+      return "link";
+    case "move":
+      return "move";
+    default:
+      return "copy";
+  }
+}
+
+/** Does `effectAllowed` allow the operation a `dragover` handler chose? */
+function dropAllowed(op: string, effectAllowed: string): boolean {
+  if (op === "none") return false;
+  if (effectAllowed === "all" || effectAllowed === "uninitialized") return true;
+  return effectAllowed.toLowerCase().includes(op);
+}
+
+/** A press the page did not cancel, on (or in) a draggable element, may become a drag. */
+function dndPress(target: MirrorNode, x: number, y: number, button: number, proceed: boolean): void {
+  const source = button === 0 && proceed ? draggableAt(target) : null;
+  if (!source) return;
+  dnd = { phase: "pressed", source, x, y, dt: null, over: null, op: "none" };
+  dndRearm();
+}
+
+function dndFinish(swallowClick: boolean): void {
+  dnd = null;
+  dndSwallowClick = swallowClick;
+  dndRearm();
+}
+
+/** Fires `dragstart`; false when a handler cancelled it, and there is no drag. */
+function dndStart(g: DndGesture, x: number, y: number, d: number): boolean {
+  // A browser cancels the pointer a drag takes over (Pointer Events §4.1.3.3).
+  const captured = pointerCaptures.get(1);
+  if (captured) {
+    propagate(captured, "pointercancel", synthesize("pointercancel", x, y, -1, d, undefined));
+    releaseCapturedPointer(1);
+  }
+  const DT = theGlobal("DataTransfer") as (new () => DataTransferLike) | undefined;
+  const dt: DataTransferLike = typeof DT === "function" ? new DT() : { dropEffect: "none", effectAllowed: "none" };
+  dt.effectAllowed = "uninitialized";
+  if (!propagate(g.source, "dragstart", dragEvent("dragstart", x, y, d, dt, null))) {
+    dndFinish(false);
+    return false;
+  }
+  g.phase = "dragging";
+  g.dt = dt;
+  dndRearm();
+  return true;
+}
+
+/** One move of the drag: `drag` at the source, then enter/leave and `dragover` at what is under the pointer. */
+function dndMove(g: DndGesture, under: MirrorNode | null | undefined, x: number, y: number, d: number): void {
+  const dt = g.dt!;
+  if (!propagate(g.source, "drag", dragEvent("drag", x, y, d, dt, null))) {
+    dndCancel(g, x, y, d, true);
+    return;
+  }
+  const over = under && under.kind === 1 ? (under as MirrorElement) : ((under?.parentNode as MirrorElement | null) ?? null);
+  if (over !== g.over) {
+    // The new element hears its `dragenter` before the old one its `dragleave`.
+    const prev = g.over;
+    g.over = over;
+    if (over) {
+      dt.dropEffect = initialDropEffect(dt.effectAllowed);
+      propagate(over, "dragenter", dragEvent("dragenter", x, y, d, dt, prev));
+    }
+    if (prev) propagate(prev, "dragleave", dragEvent("dragleave", x, y, d, dt, over));
+  }
+  g.op = "none";
+  if (g.over) {
+    dt.dropEffect = initialDropEffect(dt.effectAllowed);
+    if (!propagate(g.over, "dragover", dragEvent("dragover", x, y, d, dt, null)) && dropAllowed(dt.dropEffect, dt.effectAllowed))
+      g.op = dt.dropEffect;
+  }
+}
+
+/** The release: `drop` at an accepting target (`dragleave` at one that is not), then `dragend` at the source. */
+function dndDrop(g: DndGesture, x: number, y: number, d: number): void {
+  const dt = g.dt!;
+  let effect = "none";
+  if (g.over && g.op !== "none") {
+    dt.dropEffect = g.op;
+    // Only a drop the page handled (cancelled) did anything.
+    if (!propagate(g.over, "drop", dragEvent("drop", x, y, d, dt, null))) effect = dt.dropEffect;
+  } else if (g.over) {
+    propagate(g.over, "dragleave", dragEvent("dragleave", x, y, d, dt, null));
+  }
+  dt.dropEffect = effect;
+  dndFinish(true);
+  propagate(g.source, "dragend", dragEvent("dragend", x, y, d, dt, null));
+}
+
+/** Escape, a cancelled `drag`, or a release that never arrived: `dragleave`, then `dragend` with no effect. */
+function dndCancel(g: DndGesture, x: number, y: number, d: number, held: boolean): void {
+  const dt = g.dt!;
+  if (g.over) propagate(g.over, "dragleave", dragEvent("dragleave", x, y, d, dt, null));
+  dt.dropEffect = "none";
+  if (held) {
+    // The button is still down: its release ends the gesture, unheard.
+    g.phase = "done";
+    g.over = null;
+    dndRearm();
+  } else dndFinish(false);
+  propagate(g.source, "dragend", dragEvent("dragend", x, y, d, dt, null));
+}
+
+/**
+ * The drag's share of a host event, ahead of everything else the dispatcher
+ * does: the dispatcher's answer when the drag consumed it, undefined when it
+ * goes on as the event it is.
+ */
+function dndDispatch(name: string, nodeId: VnNodeId, x: number, y: number, d: number, key: string | undefined): boolean | undefined {
+  if (dndSwallowClick && (name === "click" || name === "mousedown" || name === "keydown")) {
+    dndSwallowClick = false;
+    if (name === "click") return false;
+  }
+  // A press in a draggable element starts no text selection (as in a browser).
+  if (name === "selectstart") return draggableAt(nodeById(nodeId)) ? false : undefined;
+  const g = dnd;
+  if (!g) return undefined;
+  const held = !!(pointerButtons & 1);
+  if (g.phase === "pressed") {
+    if (name === "mouseup" || (name === "mousemove" && !held)) dndFinish(false);
+    else if (name === "mousemove" && (Math.abs(x - g.x) > DRAG_THRESHOLD || Math.abs(y - g.y) > DRAG_THRESHOLD)) {
+      if (!dndStart(g, x, y, d)) return undefined;
+      dndMove(g, nodeById(nodeId), x, y, d);
+      return true;
+    }
+    return undefined;
+  }
+  if (g.phase === "done") {
+    if (name === "mouseup") dndFinish(true);
+    else if (name === "mousemove" && !held) dndFinish(false);
+    return name === "mouseup" || name === "mousemove" ? true : undefined;
+  }
+  switch (name) {
+    case "mousemove":
+      if (held) dndMove(g, nodeById(nodeId), x, y, d);
+      else dndCancel(g, x, y, d, false);
+      return true;
+    case "mouseup":
+      dndDrop(g, x, y, d);
+      return true;
+    case "keydown":
+      if (key !== "Escape") return undefined;
+      dndCancel(g, pointerPosition.x, pointerPosition.y, pointerPosition.modifiers, true);
+      return false;
+  }
+  return undefined;
+}
+
 __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   const name = CODE_TO_NAME[evCode];
   if (!name) return true;
@@ -6649,6 +6918,10 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
         releaseCapturedPointer(1);
       }
     }
+  }
+  if (dnd || dndSwallowClick || (name === "selectstart" && dndSeen)) {
+    const answer = dndDispatch(name, nodeId, a, b, d, key);
+    if (answer !== undefined) return answer;
   }
   const retarget = name === "mousemove" || name === "mouseup" || name === "pointercancel";
   const target = (retarget && pointerCaptures.get(1)) || nodeById(nodeId);
@@ -6818,6 +7091,8 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
     );
   }
   if (name === "mouseup" || name === "pointercancel") releaseCapturedPointer(1);
+  // After the press's own listeners: a cancelled `mousedown` drags nothing.
+  if (name === "mousedown" && dndSeen && !dnd) dndPress(target, a, b, c, proceed);
   return proceed;
 });
 
@@ -6833,6 +7108,9 @@ function teardownDocumentRoot(root: MirrorElement, unmount?: () => void): void {
   }
   pointerButtons = 0;
   for (const pointerId of Array.from(pointerCaptures.keys())) releaseCapturedPointer(pointerId);
+  dnd = null;
+  dndSeen = false;
+  dndSwallowClick = false;
   __vn_remove(root.__vnId);
   // Detached-but-live nodes: <KeepAlive> creates its cache container with
   // createElement and NEVER inserts or removes it (Vue moves subtrees in
@@ -6908,6 +7186,7 @@ function ensureDocumentRoot(): MirrorElement {
   // without this a `document.addEventListener("copy", …)` from before
   // `mount()` was never delivered.
   for (const m of globalHandlers.values()) for (const name of Object.keys(m)) syncListenerFlag(root, name);
+  dndRearm();
   // Anything module-scope theme code wrote to `document.documentElement`
   // before there was a root — the `dark` class, the `--radius` overrides —
   // lands now, BEFORE the first render, so the first paint is themed.

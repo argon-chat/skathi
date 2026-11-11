@@ -29,7 +29,7 @@ describe("patchProp: on* props", () => {
   test("the advisory is one per event name per session, not one per patch", () => {
     const rt = createRuntime();
     for (let i = 0; i < 5; i++) rt.patchProp(rt.el(i), "onMouseover", null, () => {});
-    rt.patchProp(rt.el(), "onDragstart", null, () => {});
+    rt.patchProp(rt.el(), "onTouchstart", null, () => {});
     expect(rt.advisories().length).toBe(2);
     // A *different* world starts over — the dedup set is per module instance.
     const other = createRuntime();
