@@ -180,16 +180,19 @@ enum PayloadSource {
 
 #[cfg(any(feature = "prod", test))]
 impl PayloadSource {
-    fn load(self) -> Result<(crate::payload::PayloadBytes, String), Error> {
+    /// The bytes, a label, and the folder its asset packs are in (`None`: the
+    /// executable's).
+    fn load(self) -> Result<(crate::payload::PayloadBytes, String, Option<PathBuf>), Error> {
         use crate::payload::PayloadBytes;
         match self {
             Self::File(path) => {
                 let file = crate::mapped_file::MappedFile::open(&path)
                     .map_err(|e| Error::Payload(format!("{}: {e}", path.display())))?;
-                Ok((PayloadBytes::File(file), path.display().to_string()))
+                let dir = path.parent().map(Path::to_path_buf);
+                Ok((PayloadBytes::File(file), path.display().to_string(), dir))
             }
-            Self::Bytes(bytes) => Ok((PayloadBytes::Owned(bytes), "bytes".into())),
-            Self::Static(bytes) => Ok((PayloadBytes::Embedded(bytes), "static bytes".into())),
+            Self::Bytes(bytes) => Ok((PayloadBytes::Owned(bytes), "bytes".into(), None)),
+            Self::Static(bytes) => Ok((PayloadBytes::Embedded(bytes), "static bytes".into(), None)),
         }
     }
 }
@@ -515,8 +518,8 @@ impl Builder {
             // or `VN_PAYLOAD` may name one: the exe's own rules.
             return if crate::payload::get().is_some() { Ok(()) } else { Err(Error::NoPayload) };
         };
-        let (bytes, label) = source.load()?;
-        crate::payload::set_external(bytes, label).map_err(Error::Payload)
+        let (bytes, label, dir) = source.load()?;
+        crate::payload::set_external(bytes, label, dir.as_deref()).map_err(Error::Payload)
     }
 
     #[cfg(not(feature = "prod"))]
@@ -958,14 +961,14 @@ mod tests {
         let bytes = vec![1, 2, 3, 4];
         let pointer = bytes.as_ptr();
         let mut builder = Builder::new().payload_bytes(bytes);
-        let (owned, label) = builder.payload.take().unwrap().load().unwrap();
+        let (owned, label, _) = builder.payload.take().unwrap().load().unwrap();
         let crate::payload::PayloadBytes::Owned(owned) = owned else { panic!("owned bytes expected") };
         assert_eq!(label, "bytes");
         assert_eq!(owned.as_ptr(), pointer);
         assert!(builder.payload.is_none());
         static STATIC_PAYLOAD: &[u8] = b"static payload bytes";
         let mut builder = Builder::new().payload_static(STATIC_PAYLOAD);
-        let (borrowed, label) = builder.payload.take().unwrap().load().unwrap();
+        let (borrowed, label, _) = builder.payload.take().unwrap().load().unwrap();
         let crate::payload::PayloadBytes::Embedded(borrowed) = borrowed else { panic!("static bytes expected") };
         assert_eq!(borrowed.as_ptr(), STATIC_PAYLOAD.as_ptr());
         assert_eq!(borrowed.len(), STATIC_PAYLOAD.len());
@@ -973,10 +976,11 @@ mod tests {
         let mut files = crate::mapped_file::tests::Files::new();
         let path = files.write("app.vnpk", b"file bytes");
         let mut builder = Builder::new().payload_file(&path);
-        let (mapped, label) = builder.payload.take().unwrap().load().unwrap();
+        let (mapped, label, dir) = builder.payload.take().unwrap().load().unwrap();
         let crate::payload::PayloadBytes::File(mapped) = mapped else { panic!("mapped file expected") };
         assert_eq!(mapped.as_bytes(), b"file bytes");
         assert_eq!(label, path.display().to_string());
+        assert_eq!(dir.as_deref(), path.parent());
         assert!(builder.payload.is_none());
         #[cfg(target_os = "windows")]
         assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());

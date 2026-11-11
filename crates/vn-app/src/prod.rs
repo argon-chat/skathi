@@ -40,13 +40,18 @@ pub fn boot(rt: &JsRuntime) {
         payload::Source::File(p) => format!("VN_PAYLOAD={}", p.display()),
         payload::Source::Embedder(label) => format!("from the embedder ({label})"),
     };
+    let packs: String = loaded
+        .packs
+        .iter()
+        .map(|p| format!(" + {} {} KiB", p.name, p.payload.len() / 1024))
+        .collect();
     eprintln!(
-        "[prod] {} {} (\"{}\") — payload {from}, {} KiB, {} asset(s)",
+        "[prod] {} {} (\"{}\") — payload {from}, {} KiB{packs}, {} asset(s)",
         meta.product_name,
         meta.version,
         meta.name,
         loaded.payload.len() / 1024,
-        loaded.payload.asset_count()
+        loaded.asset_count()
     );
     let variant = if cfg!(vn_devtools) {
         "standard"
@@ -72,7 +77,7 @@ pub fn boot(rt: &JsRuntime) {
                 // A miss is not an error — redjs answers with a browser-shaped
                 // 404. But a packaged app's author should hear WHY once per
                 // key, instead of debugging a silent 404.
-                let count = payload::get().map_or(0, |l| l.payload.asset_count());
+                let count = payload::get().map_or(0, payload::Loaded::asset_count);
                 payload::advise_once(
                     &k,
                     &format!(

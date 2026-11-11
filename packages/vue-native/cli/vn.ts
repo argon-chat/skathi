@@ -57,6 +57,9 @@ build options
                                (V is an expression: --define __FLAG__=true,
                                --define 'APP_NAME="argon"'); repeatable
   --json                       one JSON line instead of the summary (build, host path)
+
+  vn.config.json "packs" splits the assets into <name>.vnpk files beside the payload
+  (or the exe), e.g. [{ "name": "fonts", "match": ["**/*.woff2"] }, { "name": "assets" }].
 `;
 
 type Flags = Record<string, string | boolean>;
@@ -157,6 +160,8 @@ async function main(argv: string[]): Promise<number> {
           assets: result.assets.length,
           bundleBytes: result.bundleBytes,
           payloadBytes: result.payloadBytes,
+          // Only an app with vn.config.json `packs` has them.
+          ...(result.packs.length ? { packs: result.packs } : {}),
           stamp: s && {
             bytes: s.bytes,
             skew: s.skew,

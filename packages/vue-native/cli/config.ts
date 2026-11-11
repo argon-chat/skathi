@@ -18,6 +18,10 @@
 //     "protocols": ["hello"],     custom URL schemes, registered per-user at startup (prod)
 //     "assets": ["assets"],       what is packaged: dirs/globs relative to the app root
 //     "publicDir": "public",      Vite's public/: packaged with keys relative to IT (served at /)
+//     "packs": [                  assets in their own .vnpk files beside the payload, in this order;
+//       { "name": "fonts", "match": ["**/*.woff2"] },   the assets whose key a glob matches
+//       { "name": "assets" }      no "match": every asset no earlier pack took
+//     ],
 //     "define": { "K": … },       Vite's `define` — read by the builders (vitecompat.ts appDefines)
 //     "windows": {                Windows exe identity — only `vn build` reads it
 //       "exeName": "Hello", "icon": "icon.png", "company": "…", "copyright": "…",
@@ -216,6 +220,8 @@ export interface AppConfig {
   assetsDeclared: boolean;
   /** `vn.config.json` `publicDir`, app-root-relative and `/`-separated; null when undeclared. */
   publicDir: string | null;
+  /** `vn.config.json` `packs`: empty, and every asset is in the payload, when undeclared. */
+  packs: PackConfig[];
   windows: WindowsConfig;
   macos: MacConfig;
   exeName: string;
@@ -225,6 +231,43 @@ export interface AppConfig {
   /** The launch keys, defaults applied (docs/LAUNCH.md). */
   launch: LaunchConfig;
   warnings: string[];
+}
+
+/**
+ * One asset pack: `<name>.vnpk` beside the payload, holding the assets whose
+ * key one of `match` matches, or, with no `match`, every asset no earlier
+ * pack took. The host opens the packs the payload's META lists and checks
+ * each one's id (crates/vn-app/src/payload.rs `Pack`).
+ */
+export interface PackConfig {
+  name: string;
+  /** Globs over asset keys (`fonts/**`, `**\/*.woff2`); null takes the rest. */
+  match: string[] | null;
+}
+
+/** A pack's name: its file is `<name>.vnpk`, so a plain, lowercase file name that is not the payload's. */
+const PACK_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+function parsePacks(raw: unknown): PackConfig[] {
+  if (raw === undefined) return [];
+  const bad = (why: string) => new ConfigError(`vn.config.json "packs": ${why}`);
+  if (!Array.isArray(raw)) throw bad('must be an array of { "name": …, "match"?: [globs] }');
+  const seen = new Set<string>();
+  return raw.map((p, i) => {
+    if (!p || typeof p !== "object" || Array.isArray(p)) throw bad(`entry ${i} must be an object`);
+    const { name, match, ...rest } = p as Record<string, unknown>;
+    const extra = Object.keys(rest).filter((k) => !k.startsWith("$"));
+    if (extra.length) throw bad(`entry ${i} has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")} — known keys are name, match`);
+    if (typeof name !== "string" || !PACK_NAME.test(name) || name === "app") {
+      throw bad(`entry ${i}: "name" must be lowercase letters, digits, "-" or "_" (and not "app") — it names the file <name>.vnpk`);
+    }
+    if (seen.has(name)) throw bad(`two packs are named ${JSON.stringify(name)}`);
+    seen.add(name);
+    if (match !== undefined && (!Array.isArray(match) || !match.length || match.some((m) => typeof m !== "string" || !m.trim()))) {
+      throw bad(`${JSON.stringify(name)}: "match" must be a non-empty array of globs over asset keys, or left out to take the rest`);
+    }
+    return { name, match: match === undefined ? null : (match as string[]).map((m) => m.trim()) };
+  });
 }
 
 /** The `launch` object `vn build` writes into the payload's META. */
@@ -246,6 +289,7 @@ const TOP_LEVEL = new Set([
   "httpCache",
   "assets",
   "publicDir",
+  "packs",
   "define",
   "windows",
   "macos",
@@ -541,6 +585,7 @@ export function loadAppConfig(target: string, options: { configPath?: string; pl
     }
     publicDir = p;
   }
+  const packs = parsePacks(raw.packs);
   if (raw.define !== undefined && (!raw.define || typeof raw.define !== "object" || Array.isArray(raw.define))) {
     throw new ConfigError('vn.config.json "define" must be an object of { "NAME": value }');
   }
@@ -622,6 +667,7 @@ export function loadAppConfig(target: string, options: { configPath?: string; pl
     assets,
     assetsDeclared,
     publicDir,
+    packs,
     windows,
     macos,
     exeName,

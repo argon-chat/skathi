@@ -331,6 +331,15 @@ impl<'a> Payload<'a> {
         self.data_off
     }
 
+    /// The header, the table of contents and the names: everything before the
+    /// skew and the data. The TOC carries every entry's length and crc32, so
+    /// this names the content without reading it — what an asset pack's
+    /// identity is a hash of (`vn build`'s `packs`).
+    pub fn index(&self) -> &'a [u8] {
+        let end = self.data_off.saturating_sub(u64::from(self.skew)).min(self.bytes.len() as u64);
+        &self.bytes[..(end as usize).max(HEADER_SIZE.min(self.bytes.len()))]
+    }
+
     /// The blob's own address — for the alignment report in `--vn-host-info`.
     pub fn as_ptr(&self) -> *const u8 {
         self.bytes.as_ptr()
@@ -503,6 +512,8 @@ mod tests {
         // header rather than recomputed.
         let names_end = u32_at(GOLDEN, 16) as u64 + u32_at(GOLDEN, 20) as u64;
         assert_eq!(p.data_offset(), names_end + 100);
+        // The index is everything up to the names' end: no skew, no data.
+        assert_eq!(p.index(), &GOLDEN[..names_end as usize]);
     }
 
     #[test]

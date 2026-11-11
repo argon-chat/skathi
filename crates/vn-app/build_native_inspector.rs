@@ -53,7 +53,7 @@ pub fn prepare(repo: &Path, out: &Path) {
     println!("cargo:rerun-if-env-changed=VN_DEVTOOLS_NATIVE_MANIFEST");
     let generated = out.join("native_inspector.rs");
     if std::env::var_os("CARGO_FEATURE_NATIVE_INSPECTOR").is_none() {
-        std::fs::write(generated, "const EMBEDDED_MANIFEST: Option<&str> = None;\nconst EMBEDDED_IMAGE_DEFLATE: &[u8] = &[];\nconst EMBEDDED_IMAGE_BYTES: u64 = 0;\n")
+        std::fs::write(generated, "const EMBEDDED_MANIFEST: Option<&str> = None;\nconst EMBEDDED_IMAGE_DEFLATE: &[u8] = &[];\nconst EMBEDDED_IMAGE_DLL: Option<&str> = None;\nconst EMBEDDED_IMAGE_BYTES: u64 = 0;\n")
             .expect("cannot write native inspector policy");
         return;
     }
@@ -180,6 +180,21 @@ pub fn prepare(repo: &Path, out: &Path) {
         .expect("cannot flush native image");
     std::fs::write(out.join("inspector.native.json"), manifest_text)
         .expect("cannot embed native manifest");
-    std::fs::write(generated, format!("const EMBEDDED_MANIFEST: Option<&str> = Some(include_str!(concat!(env!(\"OUT_DIR\"), \"/devtools/inspector.native.json\")));\nconst EMBEDDED_IMAGE_DEFLATE: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/devtools/inspector.image.deflate\"));\nconst EMBEDDED_IMAGE_BYTES: u64 = {size};\n"))
+    // `VN_DEVTOOLS_NATIVE_IMAGE_DLL=inspector.dll`: the compressed image is the
+    // `VNINSPECTOR` RCDATA of that resource-only DLL beside the executable,
+    // not part of it. The manifest, and with it the image's SHA-256, stays in
+    // the executable, so the DLL is checked like the embedded copy is.
+    println!("cargo:rerun-if-env-changed=VN_DEVTOOLS_NATIVE_IMAGE_DLL");
+    let image = match std::env::var("VN_DEVTOOLS_NATIVE_IMAGE_DLL").ok().filter(|name| !name.is_empty()) {
+        Some(dll) => {
+            assert!(
+                dll != "." && dll != ".." && !dll.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0' | '"')),
+                "VN_DEVTOOLS_NATIVE_IMAGE_DLL must be a file name beside the executable"
+            );
+            format!("const EMBEDDED_IMAGE_DEFLATE: &[u8] = &[];\nconst EMBEDDED_IMAGE_DLL: Option<&str> = Some({dll:?});\n")
+        }
+        None => "const EMBEDDED_IMAGE_DEFLATE: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/devtools/inspector.image.deflate\"));\nconst EMBEDDED_IMAGE_DLL: Option<&str> = None;\n".to_string(),
+    };
+    std::fs::write(generated, format!("const EMBEDDED_MANIFEST: Option<&str> = Some(include_str!(concat!(env!(\"OUT_DIR\"), \"/devtools/inspector.native.json\")));\n{image}const EMBEDDED_IMAGE_BYTES: u64 = {size};\n"))
         .expect("cannot write embedded inspector declarations");
 }

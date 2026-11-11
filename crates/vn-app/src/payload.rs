@@ -70,6 +70,30 @@ pub struct Meta {
     /// The `launch` object (`id`, `singleInstance`, `raiseOnSecondInstance`,
     /// `protocols`) as JSON, when `vn build` wrote one (docs/LAUNCH.md).
     pub launch: Option<String>,
+    /// The asset packs this payload's assets continue in ([`Pack`]).
+    pub packs: Vec<PackRef>,
+}
+
+/// One asset pack the META names: `<file>` beside the payload, whose index
+/// (header, TOC and names — [`vn_payload::Payload::index`]) hashes to `id`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackRef {
+    pub name: String,
+    pub file: String,
+    /// Lowercase hex SHA-256 of the pack's index.
+    pub id: String,
+}
+
+/// An asset pack: a VNPK of assets only, written by `vn build` beside the
+/// app's payload (vn.config.json `packs`) so the parts of an app that change
+/// at different rates are different files — fonts, media, the script. Its
+/// assets are looked up after the payload's own. Its id is checked when it is
+/// opened: a pack from another build is refused, as a corrupt payload is.
+/// The check reads the index only; the assets stay unread until asked for.
+pub struct Pack {
+    pub name: String,
+    pub path: std::path::PathBuf,
+    pub payload: AppPayload,
 }
 
 /// Owns the bytes for the parser. A mapped file remains alive until after its
@@ -123,8 +147,67 @@ impl AppPayload {
 
 pub struct Loaded {
     pub payload: AppPayload,
+    /// The META's `packs`, opened, in its order.
+    pub packs: Vec<Pack>,
     pub meta: Meta,
     pub source: Source,
+}
+
+impl Loaded {
+    /// Every packaged asset: the payload's own, then each pack's.
+    pub fn asset_count(&self) -> usize {
+        self.payload.asset_count() + self.packs.iter().map(|p| p.payload.asset_count()).sum::<usize>()
+    }
+
+    /// Every packaged asset entry, the payload's first.
+    pub fn assets(&self) -> impl Iterator<Item = &vn_payload::Entry<'_>> {
+        self.payload.assets().iter().chain(self.packs.iter().flat_map(|p| p.payload.assets().iter()))
+    }
+}
+
+/// The lowercase hex SHA-256 of a payload's index: a pack's id.
+pub fn pack_id(payload: &AppPayload) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(payload.0.borrow_dependent().index()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Opens the packs `meta` names, from `dir`.
+fn open_packs(meta: &Meta, dir: Option<&std::path::Path>) -> Result<Vec<Pack>, String> {
+    if meta.packs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dir = match dir {
+        Some(dir) => dir.to_path_buf(),
+        None => std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+            .ok_or("the app's asset packs are beside the executable, whose folder is unknown")?,
+    };
+    meta.packs
+        .iter()
+        .map(|r| {
+            // A bare file name: the META is the app's, but a pack is never
+            // looked for outside the payload's own folder.
+            if r.file.is_empty() || r.file.contains(['/', '\\', ':']) || r.file.starts_with('.') {
+                return Err(format!("the asset pack {:?} has the file name {:?}, which is not a plain file name", r.name, r.file));
+            }
+            let path = dir.join(&r.file);
+            let file = crate::mapped_file::MappedFile::open(&path)
+                .map_err(|e| format!("the asset pack {:?} ({}): {e}", r.name, path.display()))?;
+            let payload = AppPayload::parse(PayloadBytes::File(file))
+                .map_err(|e| format!("the asset pack {:?} ({}): {e}", r.name, path.display()))?;
+            let id = pack_id(&payload);
+            if id != r.id {
+                return Err(format!(
+                    "the asset pack {} is from another build of the app (its id is {id}, the app expects {}) — \
+                     reinstall or rebuild so the app and its packs match",
+                    path.display(),
+                    r.id
+                ));
+            }
+            Ok(Pack { name: r.name.clone(), path, payload })
+        })
+        .collect()
 }
 
 static LOADED: OnceLock<Option<Loaded>> = OnceLock::new();
@@ -140,7 +223,10 @@ pub fn get() -> Option<&'static Loaded> {
 /// embedder's `Err` rather than this module's [`fatal`]. Before the first
 /// [`get`]; it then wins over a stamped resource and `VN_PAYLOAD` alike, since
 /// the process that embeds vue-native is the one that says what it runs.
-pub(crate) fn set_external(bytes: PayloadBytes, label: String) -> Result<(), String> {
+///
+/// `dir` is where its asset packs are: the payload file's folder, or `None`
+/// for the executable's.
+pub(crate) fn set_external(bytes: PayloadBytes, label: String, dir: Option<&std::path::Path>) -> Result<(), String> {
     let payload = AppPayload::parse(bytes)?;
     let meta = payload.meta().map(parse_meta).unwrap_or_default();
     if !meta.vue_native.is_empty() && meta.vue_native != env!("VN_PKG_VERSION") {
@@ -151,8 +237,9 @@ pub(crate) fn set_external(bytes: PayloadBytes, label: String) -> Result<(), Str
             env!("VN_PKG_VERSION")
         ));
     }
+    let packs = open_packs(&meta, dir)?;
     LOADED
-        .set(Some(Loaded { payload, meta, source: Source::Embedder(label) }))
+        .set(Some(Loaded { payload, packs, meta, source: Source::Embedder(label) }))
         .map_err(|_| "a payload was already resolved in this process".to_string())
 }
 
@@ -204,8 +291,14 @@ fn load() -> Option<Loaded> {
             env!("VN_PKG_VERSION")
         );
     }
+    let dir = match &source {
+        Source::Bundled(path) | Source::File(path) => path.parent().map(std::path::Path::to_path_buf),
+        Source::Embedded | Source::Embedder(_) => None,
+    };
+    let packs = open_packs(&meta, dir.as_deref()).unwrap_or_else(|e| fatal(&e));
     Some(Loaded {
         payload,
+        packs,
         meta,
         source,
     })
@@ -233,6 +326,16 @@ fn parse_meta(text: &str) -> Meta {
             .unwrap_or_default()
             .to_string(),
         launch: v.get("launch").map(crate::json::Json::to_json),
+        packs: v
+            .get("packs")
+            .and_then(crate::json::Json::as_arr)
+            .unwrap_or_default()
+            .iter()
+            .map(|p| {
+                let s = |k: &str| p.get(k).and_then(crate::json::Json::as_str).unwrap_or_default().to_string();
+                PackRef { name: s("name"), file: s("file"), id: s("id") }
+            })
+            .collect(),
     }
 }
 
@@ -343,10 +446,11 @@ fn bundle_payload_path(exe: &std::path::Path) -> Option<std::path::PathBuf> {
 /// thread-safe because gpui calls [`GpuiAssets`] from its loader threads.
 pub fn lookup(key: &str) -> Option<&'static [u8]> {
     let loaded = get()?;
-    if let Some(bytes) = loaded.payload.asset(key) {
+    let all = || std::iter::once(&loaded.payload).chain(loaded.packs.iter().map(|p| &p.payload));
+    if let Some(bytes) = all().find_map(|p| p.asset(key)) {
         return Some(bytes);
     }
-    let (stored, bytes) = loaded.payload.asset_ignoring_case(key)?;
+    let (stored, bytes) = all().find_map(|p| p.asset_ignoring_case(key))?;
     advise_once(
         key,
         &format!(
@@ -389,9 +493,7 @@ impl gpui::AssetSource for GpuiAssets {
             return Ok(Vec::new());
         };
         Ok(loaded
-            .payload
             .assets()
-            .iter()
             .filter(|e| e.name.starts_with(path))
             .map(|e| gpui::SharedString::from(e.name.to_string()))
             .collect())
@@ -569,7 +671,7 @@ mod tests {
         bytes[start..start + version.len()].fill(b'x');
         let path = files.write("mismatch.vnpk", &bytes);
         let mapping = crate::mapped_file::MappedFile::open(&path).unwrap();
-        let error = super::set_external(super::PayloadBytes::File(mapping), "test".into()).unwrap_err();
+        let error = super::set_external(super::PayloadBytes::File(mapping), "test".into(), None).unwrap_err();
         assert!(error.contains("rebuild it with the matching vn"), "{error}");
         std::fs::write(&path, b"released").unwrap();
     }
@@ -583,6 +685,35 @@ mod tests {
         let owned = super::AppPayload::parse(super::PayloadBytes::Owned(bytes)).unwrap();
         assert_eq!(owned.0.borrow_owner().as_bytes().as_ptr(), address);
         assert_eq!(owned.script(), embedded.script());
+    }
+
+    #[test]
+    fn asset_packs_open_beside_the_payload_and_must_match_their_id() {
+        let mut files = crate::mapped_file::tests::Files::new();
+        let path = files.write("fonts.vnpk", GOLDEN);
+        let dir = path.parent().unwrap();
+        let id = super::pack_id(&super::AppPayload::parse(super::PayloadBytes::Embedded(GOLDEN)).unwrap());
+        assert_eq!(id.len(), 64);
+        let meta_with = |file: &str, id: &str| {
+            super::parse_meta(&format!(r#"{{"name":"a","packs":[{{"name":"fonts","file":"{file}","id":"{id}"}}]}}"#))
+        };
+        let meta = meta_with("fonts.vnpk", &id);
+        assert_eq!(meta.packs, vec![super::PackRef { name: "fonts".into(), file: "fonts.vnpk".into(), id: id.clone() }]);
+        let packs = super::open_packs(&meta, Some(dir)).unwrap();
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0].payload.asset_count(), 4);
+        drop(packs);
+        let error = super::open_packs(&meta_with("fonts.vnpk", &"0".repeat(64)), Some(dir)).err().unwrap();
+        assert!(error.contains("another build"), "{error}");
+        for file in ["../fonts.vnpk", "sub/fonts.vnpk", "C:fonts.vnpk", ""] {
+            let error = super::open_packs(&meta_with(file, &id), Some(dir)).err().unwrap();
+            assert!(error.contains("not a plain file name"), "{error}");
+        }
+        let error = super::open_packs(&meta_with("missing.vnpk", &id), Some(dir)).err().unwrap();
+        assert!(error.contains("missing.vnpk"), "{error}");
+        // No `packs`: nothing is opened, wherever the payload is.
+        assert!(super::open_packs(&super::Meta::default(), None).unwrap().is_empty());
+        std::fs::write(&path, b"released").unwrap();
     }
 
     #[test]

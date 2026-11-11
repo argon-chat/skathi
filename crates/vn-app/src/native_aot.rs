@@ -129,6 +129,46 @@ fn open_image(path: &Path) -> std::io::Result<File> {
     }
     options.open(path)
 }
+/// The compressed image a build with `VN_DEVTOOLS_NATIVE_IMAGE_DLL` keeps in
+/// a resource-only DLL beside the executable: its `VNINSPECTOR` RCDATA. The
+/// DLL is mapped as data, never run, and stays mapped for the process; what
+/// it holds is trusted only once it inflates to the manifest's `imageSha256`.
+#[cfg(windows)]
+fn image_resource(dll: &str) -> Result<&'static [u8], String> {
+    use windows::core::{w, HSTRING, PCWSTR};
+    use windows::Win32::System::LibraryLoader::{
+        FindResourceW, LoadLibraryExW, LoadResource, LockResource, SizeofResource,
+        LOAD_LIBRARY_AS_DATAFILE, LOAD_LIBRARY_AS_IMAGE_RESOURCE,
+    };
+    const RT_RCDATA: PCWSTR = PCWSTR(10 as _);
+    let exe = std::env::current_exe().map_err(|e| format!("native inspector: {e}"))?;
+    let path = exe.parent().ok_or("native inspector: the executable has no folder")?.join(dll);
+    let missing = |what: &str| format!("{}: {what}", path.display());
+    unsafe {
+        let module = LoadLibraryExW(
+            &HSTRING::from(path.as_os_str()),
+            None,
+            LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE,
+        )
+        .map_err(|e| missing(&e.to_string()))?;
+        let resource = FindResourceW(Some(module), w!("VNINSPECTOR"), RT_RCDATA);
+        if resource.is_invalid() {
+            return Err(missing("no VNINSPECTOR resource"));
+        }
+        let global = LoadResource(Some(module), resource).map_err(|e| missing(&e.to_string()))?;
+        let pointer = LockResource(global) as *const u8;
+        let length = SizeofResource(Some(module), resource) as usize;
+        if pointer.is_null() || length == 0 {
+            return Err(missing("an empty VNINSPECTOR resource"));
+        }
+        // SAFETY: the module is never freed, and a data mapping is read-only.
+        Ok(std::slice::from_raw_parts(pointer, length))
+    }
+}
+#[cfg(not(windows))]
+fn image_resource(dll: &str) -> Result<&'static [u8], String> {
+    Err(format!("native inspector: {dll} is a Windows resource DLL"))
+}
 /// On the actual VM thread, before ANY JSC initialization. The parent exits
 /// before even reading selectors or referencing compressed native-image bytes.
 /// Failure cannot switch a selected process back to JIT: launch a clean child.
@@ -180,8 +220,12 @@ pub(crate) fn prepare(devtools: bool) -> Result<(), String> {
         }
         (file, image.display().to_string())
     } else {
+        let compressed = match EMBEDDED_IMAGE_DLL {
+            Some(dll) => image_resource(dll)?,
+            None => EMBEDDED_IMAGE_DEFLATE,
+        };
         (
-            cache::materialize(EMBEDDED_IMAGE_DEFLATE, expected, EMBEDDED_IMAGE_BYTES)?,
+            cache::materialize(compressed, expected, EMBEDDED_IMAGE_BYTES)?,
             format!("embedded sha256:{expected}"),
         )
     };

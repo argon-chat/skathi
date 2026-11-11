@@ -199,6 +199,9 @@ futures = "0.3"
 # (src/inspector.rs). Not a new crate in the image: redjs already links flate2
 # with the same miniz_oxide backend.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# An asset pack's id: the SHA-256 of its index (src/payload.rs `pack_id`). Not
+# a new crate in the image: redjs already links it.
+sha2 = "0.10"
 
 [dev-dependencies]
 # examples/embed.rs reads its calls' JSON arguments the way an embedder would.

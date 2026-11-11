@@ -21,10 +21,11 @@
 // (ad hoc unless an identity is given). `PACKAGERS` holds the two.
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { collectAssets, type AssetFile } from "./assets";
-import { loadAppConfig, partsLeftOut, variantWarnings, type AppConfig, type Variant } from "./config";
+import { loadAppConfig, partsLeftOut, variantWarnings, type AppConfig, type PackConfig, type Variant } from "./config";
 import { CLI_VERSION, PKG_DIR, resolveHost, type ResolvedHost } from "./host";
 import { iconImagesFrom } from "./icon";
 import {
@@ -116,6 +117,8 @@ export interface BuildResult {
   assets: AssetFile[];
   bundleBytes: number;
   payloadBytes: number;
+  /** The asset packs written beside the payload (vn.config.json `packs`). */
+  packs: { name: string; path: string; bytes: number; assets: number }[];
   aotInputs: string | null;
   warnings: string[];
   ms: { bundle: number; assets: number; stamp: number; total: number };
@@ -124,7 +127,13 @@ export interface BuildResult {
 const enc = new TextEncoder();
 
 /** The META entry. No timestamps — two builds of one tree are byte-identical. */
-export function appMeta(config: AppConfig, variant: Variant, host: ResolvedHost | null, assetCount: number): string {
+export function appMeta(
+  config: AppConfig,
+  variant: Variant,
+  host: ResolvedHost | null,
+  assetCount: number,
+  packs: BuiltPack[] = [],
+): string {
   const entry = relative(config.appRoot, config.entry).split(sep).join("/");
   return JSON.stringify({
     format: FORMAT,
@@ -138,7 +147,54 @@ export function appMeta(config: AppConfig, variant: Variant, host: ResolvedHost 
     // Read by the host before anything else exists (docs/LAUNCH.md): the
     // single-instance check and the per-user protocol registration.
     launch: config.launch,
+    // The asset packs beside the payload, which the host opens and checks.
+    ...(packs.length ? { packs: packs.map((p) => ({ name: p.name, file: p.file, id: p.id })) } : {}),
   });
+}
+
+// ---------------------------------------------------------------------------
+// asset packs (vn.config.json `packs`)
+// ---------------------------------------------------------------------------
+
+/** One written asset pack. */
+export interface BuiltPack {
+  name: string;
+  /** `<name>.vnpk`, beside the payload. */
+  file: string;
+  /** Lowercase hex SHA-256 of the pack's index (header, TOC, names) — crates/vn-payload `Payload::index`. */
+  id: string;
+  blob: Uint8Array;
+  assets: AssetFile[];
+}
+
+/**
+ * Deals the assets out to the packs, in the packs' order: a pack with `match`
+ * takes the assets one of its globs matches, one without takes the rest.
+ * Whatever no pack takes stays in the payload.
+ */
+export function splitPacks(files: AssetFile[], packs: PackConfig[]): { own: AssetFile[]; packs: { name: string; files: AssetFile[] }[] } {
+  let left = files;
+  const dealt = packs.map((p) => {
+    const globs = p.match?.map((m) => new Bun.Glob(m));
+    const taken = globs ? left.filter((f) => globs.some((g) => g.match(f.key))) : left;
+    left = left.filter((f) => !taken.includes(f));
+    return { name: p.name, files: taken };
+  });
+  return { own: left, packs: dealt };
+}
+
+/**
+ * An asset pack's blob: assets only, its data page-aligned in the FILE (the
+ * host maps it from offset 0), and its id.
+ */
+export function writePack(name: string, files: AssetFile[]): BuiltPack {
+  const inputs: VnpkInput[] = files.map((f) => ({ name: f.key, kind: KIND.ASSET, data: new Uint8Array(readFileSync(f.path)) }));
+  const unskewed = writeVnpk(inputs);
+  const header = readHeader(unskewed);
+  const skew = skewFor(0, header);
+  const blob = skew ? writeVnpk(inputs, { skew }) : unskewed;
+  const id = createHash("sha256").update(blob.subarray(0, header.namesOff + header.namesLen)).digest("hex");
+  return { name, file: `${name}.vnpk`, id, blob, assets: files };
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +205,8 @@ interface PackageInput {
   config: AppConfig;
   host: ResolvedHost;
   inputs: VnpkInput[];
+  /** The asset packs, which go wherever the host looks for them beside its payload. */
+  packs: BuiltPack[];
   outDir: string;
   /** `dist/.vn/`, for intermediates. */
   work: string;
@@ -166,8 +224,9 @@ interface Packaged {
   bundle: MacBundle | null;
 }
 
-/** Windows: stamp a copy of the host (stamp.ts). */
-function stampExe({ config, host, inputs, outDir, options, log }: PackageInput): Packaged {
+/** Windows: stamp a copy of the host (stamp.ts); the packs go beside it. */
+function stampExe({ config, host, inputs, packs, outDir, options, log }: PackageInput): Packaged {
+  for (const p of packs) writeFileSync(join(outDir, p.file), p.blob);
   const fv = numericVersion(config.version);
   const exeFile = `${config.exeName}.exe`;
   const exe = join(outDir, exeFile);
@@ -220,7 +279,7 @@ export function macInfoFor(config: AppConfig, hasIcon: boolean) {
 }
 
 /** macOS: copy the host into `<exeName>.app` beside the payload, then sign it (macos-bundle.ts). */
-function macBundle({ config, host, inputs, outDir, work, options, warnings, log }: PackageInput): Packaged {
+function macBundle({ config, host, inputs, packs, outDir, work, options, warnings, log }: PackageInput): Packaged {
   const m = config.macos;
   if (m.bundleIdFrom === "id" && !m.bundleId.includes(".")) {
     warnings.push(
@@ -253,6 +312,8 @@ function macBundle({ config, host, inputs, outDir, work, options, warnings, log 
     infoPlist: plistXml(infoPlist(info)),
     log,
   });
+  // Beside app.vnpk in Contents/Resources, before the seal covers it.
+  for (const p of packs) writeFileSync(join(written.app, "Contents", "Resources", p.file), p.blob);
 
   const onMac = process.platform === "darwin";
   const plan = signPlan({
@@ -361,22 +422,36 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     warnings.push(`the assets are ${(collected.totalBytes / 2 ** 20).toFixed(0)} MiB — every byte is inside the exe`);
   }
 
-  // 3. The payload.
+  // 3. The asset packs, then the payload, whose META names them.
+  const split = splitPacks(collected.files, config.packs);
+  const packs: BuiltPack[] = [];
+  for (const p of split.packs) {
+    if (!p.files.length) {
+      warnings.push(`vn.config.json "packs": ${JSON.stringify(p.name)} takes no asset — no ${p.name}.vnpk is written`);
+      continue;
+    }
+    packs.push(writePack(p.name, p.files));
+  }
   const inputs: VnpkInput[] = [
-    { name: NAMES.META, kind: KIND.META, data: enc.encode(appMeta(config, variant, host, collected.files.length)) },
+    { name: NAMES.META, kind: KIND.META, data: enc.encode(appMeta(config, variant, host, collected.files.length, packs)) },
     { name: NAMES.WINDOW, kind: KIND.WINDOW, data: windowJson },
     { name: NAMES.SCRIPT, kind: KIND.SCRIPT, data: script },
-    ...collected.files.map((f) => ({ name: f.key, kind: KIND.ASSET, data: new Uint8Array(readFileSync(f.path)) })),
+    ...split.own.map((f) => ({ name: f.key, kind: KIND.ASSET, data: new Uint8Array(readFileSync(f.path)) })),
   ];
   const vnpk = join(work, "app.vnpk");
+  // Beside app.vnpk in dist/.vn/, where a host run on it finds them.
+  for (const p of packs) writeFileSync(join(work, p.file), p.blob);
 
   let packaged: Packaged | null = null;
   const ts = performance.now();
   if (options.payloadOnly || !host) {
-    const blob = writeVnpk(inputs);
-    writeFileSync(vnpk, blob);
+    // An app split into packs ships its app.vnpk as a file, mapped from
+    // offset 0: page-align its data as the packs' is.
+    const unskewed = writeVnpk(inputs);
+    const skew = packs.length ? skewFor(0, readHeader(unskewed)) : 0;
+    writeFileSync(vnpk, skew ? writeVnpk(inputs, { skew }) : unskewed);
   } else {
-    packaged = PACKAGERS[platform]({ config, host, inputs, outDir, work, options, warnings, log });
+    packaged = PACKAGERS[platform]({ config, host, inputs, packs, outDir, work, options, warnings, log });
     writeFileSync(vnpk, packaged.payload);
   }
   const msStamp = performance.now() - ts;
@@ -395,6 +470,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     bundleBytes: script.length,
     aotInputs: options.aotInputs ? join(work, "aot-inputs", "manifest.json") : null,
     payloadBytes: packaged?.payload.length ?? readFileSync(vnpk).length,
+    packs: packs.map((p) => ({ name: p.name, path: join(work, p.file), bytes: p.blob.length, assets: p.assets.length })),
     warnings,
     ms: {
       bundle: Math.round(msBundle),
@@ -416,6 +492,7 @@ export function summary(r: BuildResult): string {
   lines.push(`  bundle   ${kib(r.bundleBytes)} in ${r.ms.bundle} ms`);
   lines.push(`  assets   ${r.assets.length} file(s), ${kib(r.assets.reduce((n, a) => n + a.size, 0))}`);
   lines.push(`  payload  ${kib(r.payloadBytes)} → ${r.vnpk}`);
+  for (const p of r.packs) lines.push(`  pack     ${p.name}: ${p.assets} asset(s), ${kib(p.bytes)} → ${p.path}`);
   if (r.stamp && r.exe) {
     const s = r.stamp;
     lines.push(
