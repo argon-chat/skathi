@@ -913,8 +913,23 @@ type VnVoiceTrackSource =
   | "screen_share"
   | "screen_share_audio"
   | "unknown";
-/** The shim's own projection; the actor never sends a stream state. */
+/** 45 TRACK_STREAM_STATE sends the first two; "unknown" is the shim's own. */
 type VnVoiceStreamState = "active" | "paused" | "unknown";
+
+/** livekit-client's `ParticipantPermission` — `permissions_json!` in engine.rs.
+ *  `canPublishSources` holds the protocol's TrackSource numbers. */
+interface VnVoicePermissions {
+  canSubscribe: boolean;
+  canPublish: boolean;
+  canPublishData: boolean;
+  canPublishSources: number[];
+  hidden: boolean;
+  recorder: boolean;
+  canUpdateMetadata: boolean;
+  agent: boolean;
+  canSubscribeMetrics: boolean;
+  canManageAgentSession: boolean;
+}
 /** `state_str` — engine.rs. "signalReconnecting" is the shim's own enum member
  *  and is never emitted: the Rust SDK exposes three states (voice:signal-substates). */
 type VnVoiceConnectionState =
@@ -962,14 +977,8 @@ interface VnVoiceParticipantState {
    *  before connect, and every participant after `reset_roster`. */
   connectionQuality?: VnVoiceConnectionQuality | "";
   tracks?: VnVoiceTrackState[];
-  /**
-   * `undefined`, and that is the whole type. `ParticipantState::json()` has no
-   * `permissions` key — the actor's mirror never built one — but the shim reads
-   * `state.permissions` to fill livekit-client's `Participant.permissions`.
-   * Typed as `undefined` rather than dropped so the read still compiles and
-   * says out loud what it produces: nothing, for every participant, always.
-   */
-  permissions?: undefined;
+  /** Absent until the server has sent the participant's permission. */
+  permissions?: VnVoicePermissions;
 }
 
 /** The union of every room event's payload (dispatcher `kind >= 16`). One flat
@@ -977,9 +986,9 @@ interface VnVoiceParticipantState {
  *  dispatcher's separate `kind` argument, not a field. The comment on each
  *  field names the event code that sends it. */
 interface VnVoiceEventData {
-  /** 17 CONNECTION_STATE. */
-  state?: VnVoiceConnectionState;
-  /** 18 CONNECTED — the room NAME. */
+  /** 17 CONNECTION_STATE; 45 TRACK_STREAM_STATE ("active" / "paused"). */
+  state?: VnVoiceConnectionState | VnVoiceStreamState;
+  /** 18 CONNECTED, 41 ROOM_MOVING, 42 MOVED — the room NAME. */
   room?: string;
   /** 18 CONNECTED. */
   localParticipant?: VnVoiceParticipantState;
@@ -988,9 +997,14 @@ interface VnVoiceEventData {
   /** 24 PARTICIPANT_ACTIVE, 26-34 track events, 36 PARTICIPANT_STATE,
    *  37 CONNECTION_QUALITY, 38 DATA_RECEIVED (`""` for an anonymous packet). */
   identity?: string;
-  /** 19 DISCONNECTED. NOT one of the exported `DisconnectReason` values on
-   *  every path — see the conversion report. */
+  /** 19 DISCONNECTED and 23 PARTICIPANT_DISCONNECTED: a `DisconnectReason`
+   *  name (`"PARTICIPANT_REMOVED"`). 44 TRACK_SUBSCRIPTION_FAILED: a
+   *  `SubscriptionError` name. */
   reason?: string;
+  /** 43 PARTICIPANT_PERMISSIONS; null when the server took them away. */
+  permissions?: VnVoicePermissions | null;
+  /** 44 TRACK_SUBSCRIPTION_FAILED, 45 TRACK_STREAM_STATE. */
+  trackSid?: string;
   /** 39 CONNECT_FAILED. Nothing in the shim reads it. */
   error?: string;
   /** 36 PARTICIPANT_STATE. */
