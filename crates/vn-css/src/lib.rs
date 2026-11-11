@@ -594,6 +594,39 @@ impl<'a> Half<'a> {
         }
     }
 
+    /// The inline style's declarations at one priority, with the extras that
+    /// go with them. The cascade folds them where CSS puts them: normal sheet,
+    /// normal inline, important sheet, important inline. So a sheet's
+    /// `display: none !important` holds against `style="display: block"`.
+    ///
+    /// A body with no `!important` of its own is one normal half, the
+    /// refinement the parse built. One that has some is folded from the two
+    /// halves `parse_inline_style` kept beside it.
+    fn of_inline_at(inline: &'a InlineStyle, important: bool) -> Option<(Self, &'a Extras)> {
+        let split = inline.priority.as_ref().filter(|halves| {
+            let important = &halves[1];
+            important.refinement.is_some()
+                || important.font.is_some()
+                || important.dynamic.is_some()
+                || important.extras != Extras::default()
+        });
+        match split {
+            Some(halves) => {
+                let half = &halves[important as usize];
+                Some((
+                    Half {
+                        refinement: half.refinement.as_ref(),
+                        font: half.font.as_ref(),
+                        dynamic: half.dynamic.as_deref().map(Vec::as_slice),
+                    },
+                    &half.extras,
+                ))
+            }
+            None if important => None,
+            None => Some((Half::of_inline(inline), &inline.extras)),
+        }
+    }
+
     fn is_empty(&self) -> bool {
         self.refinement.is_none() && self.font.is_none() && self.dynamic.is_none()
     }
@@ -2005,9 +2038,11 @@ impl Engine {
                     }
                 }
             }
-        }
-        if let Some(size) = mapper::with_font_face(parent_font, || inline.and_then(|i| Half::of_inline(i).font_size(&vars, env, parent_font_size))) {
-            font_size = Some(size);
+            // The inline style's half at this priority, over the sheet's.
+            let inline_half = inline.and_then(|i| Half::of_inline_at(i, important_pass));
+            if let Some(size) = mapper::with_font_face(parent_font, || inline_half.and_then(|(half, _)| half.font_size(&vars, env, parent_font_size))) {
+                font_size = Some(size);
+            }
         }
         let font_size = font_size.unwrap_or(parent_font_size);
         let mut descriptor = gpui::TextStyleRefinement::default();
@@ -2019,8 +2054,10 @@ impl Engine {
                 let target = rung.map_or(&mut descriptor, |index| &mut rung_descriptors[index]);
                 rule.half(important).font_descriptor(scope, env, target);
             }
+            if let Some((half, _)) = inline.and_then(|i| Half::of_inline_at(i, important)) {
+                half.font_descriptor(&vars, env, &mut descriptor);
+            }
         }
-        if let Some(inline) = inline { Half::of_inline(inline).font_descriptor(&vars, env, &mut descriptor); }
         let computed_font = refine_font(parent_font, &descriptor);
         let rung_faces: [gpui::Font; STATE_RUNGS] = std::array::from_fn(|index| refine_font(&computed_font, &rung_descriptors[index]));
         let t2 = probe.then(std::time::Instant::now);
@@ -2211,12 +2248,15 @@ impl Engine {
                     keep_base_svg_paint(&mut extras, before, diagnostics);
                 }
             }
-        }
-        if let Some(inline) = inline {
-            Half::of_inline(inline).apply(
-                &vars, env, font_size, parent_font_size, &computed_font, parent_font, &mut base, &mut extras, diagnostics,
-            );
-            extras.refine(&inline.extras);
+            // The inline style at this priority: after the sheet's normal
+            // rules and before its `!important` ones, or last of all
+            // (`Half::of_inline_at`).
+            if let Some((half, inline_extras)) = inline.and_then(|i| Half::of_inline_at(i, important_pass)) {
+                half.apply(
+                    &vars, env, font_size, parent_font_size, &computed_font, parent_font, &mut base, &mut extras, diagnostics,
+                );
+                extras.refine(inline_extras);
+            }
         }
         // Motion has its own declared-component metadata. Fold it in CSS
         // priority order without changing general StyleRefinement handling:
@@ -4812,6 +4852,35 @@ mod tests {
             &Env::default(),
         );
         assert_eq!(computed.extras.object_fit, Some(ObjectFit::Contain));
+    }
+
+    /// The base refinement of `.box` under `css` with the inline `style` body.
+    fn base_with_inline(css: &str, style: &str) -> Rc<StyleRefinement> {
+        let engine = Engine::compile(css);
+        let mut diags = Vec::new();
+        let inline = mapper::parse_inline_style(style, &mut diags);
+        assert!(diags.is_empty(), "{diags:?}");
+        engine
+            .compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &Env::default(), &mut diags)
+            .base
+    }
+
+    /// The four cascade levels, in CSS's order: normal sheet, normal inline,
+    /// important sheet, important inline. `.hidden { display: none !important }`
+    /// has to hold against a `style` attribute.
+    #[test]
+    fn a_sheets_important_beats_a_normal_inline_declaration() {
+        let sheet = ".box { opacity: 0.5 !important; font-size: 20px !important }";
+        let base = base_with_inline(sheet, "opacity: 0.9; font-size: 10px");
+        assert_eq!(base.opacity, Some(0.5));
+        assert_eq!(base.text.font_size, Some(gpui::px(20.0).into()));
+        // A normal sheet declaration still loses to the inline one.
+        assert_eq!(base_with_inline(".box { opacity: 0.5 }", "opacity: 0.9").opacity, Some(0.9));
+        // And an inline `!important` is the last word, beside a normal one
+        // that is not.
+        let base = base_with_inline(sheet, "opacity: 0.9 !important; font-size: 10px");
+        assert_eq!(base.opacity, Some(0.9));
+        assert_eq!(base.text.font_size, Some(gpui::px(20.0).into()));
     }
 
 
