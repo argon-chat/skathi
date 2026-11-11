@@ -207,6 +207,8 @@ thread_local! {
     /// One `App::on_window_closed` subscription for all of them: the callback
     /// is handed a `WindowId`, which is all the addressing we need.
     static CLOSED_SUB: RefCell<Option<Subscription>> = const { RefCell::new(None) };
+    /// [`notify_all`]'s paint task is queued and has not run yet.
+    static PAINT_ASKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Every popped-out window is marked dirty whenever the tree moves. That is
@@ -223,12 +225,38 @@ thread_local! {
 /// the *window* instead of its *view* borrows nothing: `update_window` on a
 /// window that is already being updated simply fails, and that window was going
 /// to be refreshed by the listener anyway.
+///
+/// **…and painted from a task, not left to `WM_PAINT`.** A refresh only marks
+/// the window dirty; its frame waits for a `WM_PAINT`, which Windows hands out
+/// only once no posted message is queued, and then one window at a time. While
+/// the app is busy (a screen share: the primary repainting its preview, the
+/// voice engine posting events) the primary's paint is the one handed out, and
+/// a pop-out whose only change is a `<canvas>` (the stream-drawing overlay)
+/// went seconds without a frame. A posted task is served first, and its
+/// [`popout_win::paint_now`] draws the pop-out there and then — or nothing,
+/// when it is not dirty. One task at a time, however many waves ask.
 pub fn notify_all(cx: &mut App) {
     let ids: Vec<WindowId> = POPOUTS.with(|p| p.borrow().iter().map(|w| w.id).collect());
+    if ids.is_empty() {
+        return;
+    }
     for id in ids {
         let _ = gpui::AnyWindowHandle::from(WindowHandle::<PopoutShell>::new(id))
             .update(cx, |_, window, _| window.refresh());
     }
+    if PAINT_ASKED.with(|asked| asked.replace(true)) {
+        return;
+    }
+    cx.spawn(async move |_| {
+        PAINT_ASKED.with(|asked| asked.set(false));
+        let shown: Vec<isize> = POPOUTS.with(|p| {
+            p.borrow().iter().map(|w| w.hwnd).filter(|&hwnd| hwnd != 0 && popout_win::is_visible(hwnd)).collect()
+        });
+        for hwnd in shown {
+            popout_win::paint_now(hwnd);
+        }
+    })
+    .detach();
 }
 
 /// Closes every pop-out. **D-M16 / §7.8**: the primary window owns the JS pump,
