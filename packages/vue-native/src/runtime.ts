@@ -5774,6 +5774,14 @@ defineDomGet("srcObject", function (this: MirrorElement) {
   const stream = value as { getVideoTracks?: () => { __vnVideoSrc?: string }[] };
   const track = typeof stream.getVideoTracks === "function" ? stream.getVideoTracks()[0] : undefined;
   if (!track?.__vnVideoSrc?.startsWith("vn-stream://")) {
+    // An <audio> given an audio stream is what pages do to keep a remote track alive while
+    // Web Audio plays it. The element keeps the stream and plays nothing itself: native audio
+    // reaches the speakers through the voice engine, not through an element.
+    if (this.tagName === "AUDIO") {
+      mediaStreams.set(this, value);
+      if (this.getAttribute("src")?.startsWith("vn-stream://")) this.removeAttribute("src");
+      return;
+    }
     throw new TypeError("video.srcObject requires a native video MediaStream");
   }
   mediaStreams.set(this, value);

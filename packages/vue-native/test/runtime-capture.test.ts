@@ -72,3 +72,15 @@ test("video srcObject and Vue binding retain the stream and route native frames"
   expect(el.srcObject).toBe(null);
   expect(() => { el.srcObject = { getVideoTracks: () => [] }; }).toThrow(TypeError);
 });
+
+test("audio srcObject keeps an audio-only stream without playing it", () => {
+  // A remote participant's track handed to a muted <audio> while Web Audio plays it.
+  const rt = createRuntime();
+  const el = rt.nodeOps.createElement("audio");
+  const stream = { getVideoTracks: () => [], getAudioTracks: () => [{}] };
+  el.srcObject = stream;
+  expect(el.srcObject).toBe(stream);
+  expect(el.getAttribute("src")).toBe(null);
+  el.srcObject = null;
+  expect(el.srcObject).toBe(null);
+});
