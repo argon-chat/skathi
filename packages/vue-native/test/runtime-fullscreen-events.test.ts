@@ -105,6 +105,44 @@ describe("fullscreen events across the mirror and global targets", () => {
 });
 
 
+describe("host event names dispatched at window or document", () => {
+  test("focus and blur dispatched at window reach window listeners", () => {
+    // The windowing prelude's `focus` / `blur` are exactly this dispatch.
+    const { g, calls } = world();
+    const seen: string[] = [];
+    g.addEventListener("focus", (event: Event) => {
+      expect(event.target).toBe(g);
+      seen.push(`focus:${event.eventPhase}`);
+    });
+    g.addEventListener("blur", () => seen.push("blur"));
+    g.dispatchEvent(new Event("blur"));
+    g.dispatchEvent(new Event("focus"));
+    expect(seen).toEqual(["blur", "focus:2"]);
+    expect(calls).toEqual([]);
+  });
+
+  test("a keydown dispatched at document reaches document and then window listeners", () => {
+    const { g, document } = world();
+    const seen: string[] = [];
+    g.addEventListener("keydown", () => seen.push("window"));
+    document.addEventListener("keydown", () => seen.push("document"));
+    document.dispatchEvent(new Event("keydown", { bubbles: true }));
+    expect(seen).toEqual(["document", "window"]);
+  });
+
+  test("names the engine fires itself still go to its EventTarget", () => {
+    const { g, calls } = world();
+    let resized = 0;
+    let loaded = 0;
+    g.addEventListener("resize", () => resized++);
+    g.addEventListener("load", () => loaded++);
+    g.dispatchEvent(new Event("resize"));
+    g.dispatchEvent(new Event("load"));
+    expect([resized, loaded]).toEqual([1, 1]);
+    expect(calls).toEqual(["window:resize", "window:load"]);
+  });
+});
+
 describe("fullscreen listener AbortSignal lifecycle", () => {
   test("aborting an actual player-style global listener removes it, including already-aborted signals", () => {
     const { document, target } = world();

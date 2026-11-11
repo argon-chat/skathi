@@ -1220,19 +1220,30 @@ pub fn init(cfg: &Config, window: &mut Window, cx: &mut gpui::App) {
     // two visible snapshots. `hidden` was never reported (measured before this
     // landed: minimise → restore delivered zero `visibilitychange` events).
     window
-        .observe_window_visibility(|_, window, cx| visibility_changed(window, cx))
+        .observe_window_visibility(|_, window, cx| platform_changed(window, cx))
+        .detach();
+    // `focus` / `blur` on the same edge, for the same reason: a window covered
+    // by another one draws no frames, so focus that left and came back while
+    // it was covered compared equal in the per-frame diff. Neither event fired,
+    // and `document.hasFocus()` answered from the stale snapshot — a page that
+    // paused its motion on `blur` stayed paused with the window in front.
+    window
+        .observe_window_activation(|window, cx| platform_changed(window, cx))
         .detach();
 }
 
-/// gpui's visibility observer — on Windows `IsWindowVisible && !IsIconic`,
-/// reported from a foreground task after `WM_SIZE` / `WM_SHOWWINDOW`, so never
-/// from inside the update that minimised the window.
+/// gpui's visibility and activation observers. Visibility is, on Windows,
+/// `IsWindowVisible && !IsIconic`, reported from a foreground task after
+/// `WM_SIZE` / `WM_SHOWWINDOW`, so never from inside the update that minimised
+/// the window; activation follows `WM_ACTIVATE` and its X11/Wayland/AppKit
+/// counterparts.
 ///
 /// Runs the same funnel the frame does, out of band: the snapshot reads
-/// shown/hidden and minimized state from the OS, then publishes DOM visibility
-/// independently of the `minimize` / `restore` events. The next frame's
-/// diff then sees nothing new, so nothing fires twice.
-fn visibility_changed(window: &mut Window, cx: &mut gpui::App) {
+/// shown/hidden, minimized and focused state from the OS, then publishes DOM
+/// visibility independently of the `minimize` / `restore` events and fires
+/// `focus` / `blur`. The next frame's diff then sees nothing new, so nothing
+/// fires twice.
+fn platform_changed(window: &mut Window, cx: &mut gpui::App) {
     if vn_runtime::bridge::poisoned()
         // Nested inside a published phase (a modal loop entered from a host
         // fn): the frame's own diff picks the change up afterwards.

@@ -2442,6 +2442,20 @@ function passiveOf(opts: ListenerOptions | undefined, target: object, name: stri
 /** Host event names a window/document listener must hear from the engine too. */
 const ALSO_NATIVE = new Set<string>(["load", "error"]);
 
+/**
+ * Does a `window` / `document` listener for this name live only in the
+ * runtime's registry (`addGlobalListener`), with no copy on the engine's own
+ * EventTarget? Then a `dispatchEvent` at that target has to walk the registry
+ * too, or the listener never hears it. The windowing prelude's `focus` and
+ * `blur` are dispatched exactly so, at `window`: they used to go to the
+ * engine's EventTarget, where no `addEventListener("focus")` had ever landed,
+ * and a page that paused on `blur` never heard either.
+ */
+function keptByRuntime(name: string): boolean {
+  if (ALSO_NATIVE.has(name)) return false;
+  return !!hostCode(name) || JS_SOURCED_EVENTS.has(name) || RUNTIME_FIRED_EVENTS.has(name);
+}
+
 function addGlobalListener(
   target: object,
   rawName: string,
@@ -2580,7 +2594,7 @@ function interceptGlobalTarget(target: object | undefined): void {
   const delegate: GlobalEventMethods = {
     dispatch: (event: VnEvent) => {
       const name = event && typeof event.type === "string" ? canonicalEvent(event.type) : "";
-      if (RUNTIME_FIRED_EVENTS.has(name)) {
+      if (keptByRuntime(name)) {
         if (target === globalThis.document) return propagateAtDocument(name, event);
         if (target === globalThis) return propagateAtGlobal(target, name, event);
       }
