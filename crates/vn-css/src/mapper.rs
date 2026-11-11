@@ -4978,7 +4978,7 @@ fn apply_property(
                 r.border_widths.left = Some(w);
             }
             all_border_colors(r, x, [&b.color; 4], diagnostics);
-            set_border_style(r, b.style, diagnostics);
+            set_border_style(r, b.style, SIDES_ALL, diagnostics);
         }
         BorderWidth(v) => {
             r.border_widths.top = border_width_px(&v.top).map(|w| px(w).into());
@@ -4993,33 +4993,41 @@ fn apply_property(
         BorderTop(b) => {
             r.border_widths.top = border_width_px(&b.width).map(|w| px(w).into());
             border_side_color(&mut r.vn_border_colors.top, CurrentColorTargets::BORDER_TOP, &b.color, x, diagnostics);
-            set_border_style(r, b.style, diagnostics);
+            set_border_style(r, b.style, SIDE_TOP, diagnostics);
         }
         BorderRight(b) => {
             r.border_widths.right = border_width_px(&b.width).map(|w| px(w).into());
             border_side_color(&mut r.vn_border_colors.right, CurrentColorTargets::BORDER_RIGHT, &b.color, x, diagnostics);
-            set_border_style(r, b.style, diagnostics);
+            set_border_style(r, b.style, SIDE_RIGHT, diagnostics);
         }
         BorderBottom(b) => {
             r.border_widths.bottom = border_width_px(&b.width).map(|w| px(w).into());
             border_side_color(&mut r.vn_border_colors.bottom, CurrentColorTargets::BORDER_BOTTOM, &b.color, x, diagnostics);
-            set_border_style(r, b.style, diagnostics);
+            set_border_style(r, b.style, SIDE_BOTTOM, diagnostics);
         }
         BorderLeft(b) => {
             r.border_widths.left = border_width_px(&b.width).map(|w| px(w).into());
             border_side_color(&mut r.vn_border_colors.left, CurrentColorTargets::BORDER_LEFT, &b.color, x, diagnostics);
-            set_border_style(r, b.style, diagnostics);
+            set_border_style(r, b.style, SIDE_LEFT, diagnostics);
         }
         BorderTopWidth(v) => r.border_widths.top = border_width_px(v).map(|w| px(w).into()),
         BorderRightWidth(v) => r.border_widths.right = border_width_px(v).map(|w| px(w).into()),
         BorderBottomWidth(v) => r.border_widths.bottom = border_width_px(v).map(|w| px(w).into()),
         BorderLeftWidth(v) => r.border_widths.left = border_width_px(v).map(|w| px(w).into()),
         // gpui has ONE border style for the whole box — take the top side, the
-        // same compromise `border-color` already makes.
-        BorderStyle(v) => set_border_style(r, v.top, diagnostics),
-        BorderTopStyle(v) | BorderRightStyle(v) | BorderBottomStyle(v) | BorderLeftStyle(v) => {
-            set_border_style(r, *v, diagnostics);
+        // same compromise `border-color` already makes. `none` is per side: it
+        // is a zero width, which gpui does have four of. The top goes last so
+        // that its dashed or solid is the one kept.
+        BorderStyle(v) => {
+            set_border_style(r, v.left, SIDE_LEFT, diagnostics);
+            set_border_style(r, v.bottom, SIDE_BOTTOM, diagnostics);
+            set_border_style(r, v.right, SIDE_RIGHT, diagnostics);
+            set_border_style(r, v.top, SIDE_TOP, diagnostics);
         }
+        BorderTopStyle(v) => set_border_style(r, *v, SIDE_TOP, diagnostics),
+        BorderRightStyle(v) => set_border_style(r, *v, SIDE_RIGHT, diagnostics),
+        BorderBottomStyle(v) => set_border_style(r, *v, SIDE_BOTTOM, diagnostics),
+        BorderLeftStyle(v) => set_border_style(r, *v, SIDE_LEFT, diagnostics),
         BorderRadius(v, _) => {
             let mut wrote = 0;
             if corner(&mut r.corner_radii.top_left, &mut r.vn_corner_radii.top_left, &v.top_left) {
@@ -6670,13 +6678,30 @@ fn drop_shadow_of(shadow: &lightningcss::properties::effects::DropShadow) -> Opt
 /// gpui models exactly two border styles. `none`/`hidden` are NOT a third: per
 /// CSS they compute `border-width` to 0, which is what we do here — that is
 /// also what makes Tailwind's `border-none` render as no border.
-fn set_border_style(r: &mut StyleRefinement, s: LineStyle, diagnostics: &mut Vec<String>) {
+const SIDE_TOP: u8 = 1;
+const SIDE_RIGHT: u8 = 2;
+const SIDE_BOTTOM: u8 = 4;
+const SIDE_LEFT: u8 = 8;
+const SIDES_ALL: u8 = SIDE_TOP | SIDE_RIGHT | SIDE_BOTTOM | SIDE_LEFT;
+
+/// The border style a declaration gives `sides`. `none` and `hidden` are a
+/// zero width on those sides only: `border-bottom: none` over
+/// `border: 1px solid` leaves the other three sides drawn.
+fn set_border_style(r: &mut StyleRefinement, s: LineStyle, sides: u8, diagnostics: &mut Vec<String>) {
     if matches!(s, LineStyle::None | LineStyle::Hidden) {
         let zero: AbsoluteLength = px(0.0).into();
-        r.border_widths.top = Some(zero);
-        r.border_widths.right = Some(zero);
-        r.border_widths.bottom = Some(zero);
-        r.border_widths.left = Some(zero);
+        if sides & SIDE_TOP != 0 {
+            r.border_widths.top = Some(zero);
+        }
+        if sides & SIDE_RIGHT != 0 {
+            r.border_widths.right = Some(zero);
+        }
+        if sides & SIDE_BOTTOM != 0 {
+            r.border_widths.bottom = Some(zero);
+        }
+        if sides & SIDE_LEFT != 0 {
+            r.border_widths.left = Some(zero);
+        }
         return;
     }
     r.border_style = Some(match s {
@@ -6929,6 +6954,31 @@ mod tests {
         assert_eq!(r.border_widths.right, Some(zero));
         assert_eq!(r.border_widths.bottom, Some(zero));
         assert_eq!(r.border_widths.left, Some(zero));
+    }
+
+    /// `none` on one side is that side's width only: a card that drops its
+    /// bottom border keeps the other three.
+    #[test]
+    fn border_style_none_on_one_side_leaves_the_others() {
+        let zero: AbsoluteLength = px(0.0).into();
+        let one: AbsoluteLength = px(1.0).into();
+        for body in [
+            "border: 1px solid red; border-bottom: none",
+            "border: 1px solid red; border-bottom: 0",
+            "border: 1px solid red; border-bottom-style: none",
+            "border: 1px solid red; border-style: solid solid none",
+        ] {
+            let r = clean(body);
+            assert_eq!(r.border_widths.bottom, Some(zero), "{body}");
+            assert_eq!(r.border_widths.top, Some(one), "{body}");
+            assert_eq!(r.border_widths.right, Some(one), "{body}");
+            assert_eq!(r.border_widths.left, Some(one), "{body}");
+            assert_eq!(r.border_style, Some(gpui::BorderStyle::Solid), "{body}");
+        }
+        // A side declared on its own writes nothing to the others.
+        let r = clean("border-right: none");
+        assert_eq!(r.border_widths.right, Some(zero));
+        assert_eq!(r.border_widths.top, None);
     }
 
     #[test]
