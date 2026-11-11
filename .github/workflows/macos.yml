@@ -71,9 +71,3 @@ jobs:
         run: cargo check --locked -p vn-app --target "$TARGET"
       - name: Build the bare host
         run: cargo build --locked --release -p vn-app --target "$TARGET" --features prod
-      - name: Upload the host
-        uses: actions/upload-artifact@v4
-        with:
-          name: vn-app-aarch64-apple-darwin
-          path: target/aarch64-apple-darwin/release/vn-app
-          if-no-files-found: error
