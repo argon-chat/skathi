@@ -363,6 +363,9 @@ fn loop_mode_from(raw: Option<&str>) -> LoopMode {
         None | Some("false") => LoopMode::None,
         Some("") | Some("true") => LoopMode::Loop,
         Some(v) => match v.parse::<f64>() {
+            // `loop="Infinity"` parses, and so does a count past `u32`: both
+            // loop forever, where `as u32 + 1` overflowed to a count of 0.
+            Ok(n) if n >= u32::MAX as f64 => LoopMode::Loop,
             Ok(n) if n >= 1.0 => LoopMode::Count(n as u32 + 1),
             // `loop="0"` is falsy in lottie-web, like `loop: 0`.
             Ok(_) => LoopMode::None,
@@ -884,6 +887,8 @@ mod tests {
         // `loop="2"` plays three times — Count(3) in the crate's counting.
         assert_eq!(loop_mode_from(Some("2")), LoopMode::Count(3));
         assert_eq!(loop_mode_from(Some("0")), LoopMode::None);
+        assert_eq!(loop_mode_from(Some("Infinity")), LoopMode::Loop);
+        assert_eq!(loop_mode_from(Some("1e10")), LoopMode::Loop);
     }
 
     #[test]

@@ -314,8 +314,13 @@ pub(crate) fn note_sheet(css: &str) {
                 .iter()
                 .position(|x| x.css && x.desc == desc && x.sources == sources)
             {
-                Some(i) if !keep[i] => keep[i] = true,
-                _ => added.push((desc, sources)),
+                Some(i) => keep[i] = true,
+                // The same block twice (two bundled chunks carry one
+                // `@font-face`) is one face. Taken for a new one, the second
+                // was dropped and added again, loaded and registered again,
+                // whenever any `@font-face` text changed.
+                None if added.iter().any(|(d, s)| *d == desc && *s == sources) => {}
+                None => added.push((desc, sources)),
             }
         }
         let mut i = 0;

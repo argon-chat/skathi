@@ -979,6 +979,16 @@ impl Element for Scrollbar {
             });
         }
 
+        // The release listener is the axis's own, below, so a drag whose track
+        // went away under it (the content shrank: a filter applied, the list
+        // emptied) would never hear its mouse-up. It stayed `dragging`, and
+        // once the box overflowed again every plain mouse move scrolled it.
+        let mut s = state.get();
+        if s.dragging.is_some_and(|axis| !prepaint.axes.iter().any(|ax| ax.axis == axis)) {
+            s.dragging = None;
+            state.set(s);
+        }
+
         if prepaint.axes.is_empty() || opacity <= 0.001 {
             return;
         }
