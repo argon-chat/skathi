@@ -187,6 +187,26 @@ pub fn with_published_app<R>(cx: &mut App, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// Runs `f`, a `Window::draw` made from inside a publication, as
+/// [`Phase::Draw`]: nothing is reachable through [`with_commit`] or
+/// [`with_app`] until it returns.
+///
+/// A real frame draws with nothing published. A layout forced from a script
+/// (`getBoundingClientRect` → the host's `sync_layout`) draws from inside the
+/// script's own `Phase::Commit`, whose pointers are the very `Window` and
+/// `App` gpui is then working through; anything in that draw that asked for
+/// them would be handed a second `&mut` to each. A gpui listener the draw
+/// runs publishes its own, as it does in a frame, and that is put back when
+/// it returns.
+pub fn with_draw<R>(f: impl FnOnce() -> R) -> R {
+    let _g = Guard(
+        APP.with(|c| c.get()),
+        WINDOW.with(|c| c.get()),
+        PHASE.with(|c| c.replace(Phase::Draw)),
+    );
+    f()
+}
+
 /// The commit-phase accessor: full `&mut Window` + `&mut App`. `None` when the
 /// thread is not inside a `Phase::Commit` publication — throw, don't fall back.
 #[inline]
@@ -320,6 +340,22 @@ mod tests {
                 assert_eq!(read(rt, "String(ran)"), "true", "the settle ran the checkpoint");
             });
         });
+    }
+
+    /// A draw made inside a publication hides it, and gives it back.
+    #[test]
+    fn a_draw_inside_a_publication_freezes_it() {
+        std::thread::spawn(|| {
+            PHASE.with(|c| c.set(Phase::Commit));
+            let inside = with_draw(|| {
+                let hidden = with_commit(|_, _| ()).is_none() && with_app(|_| ()).is_none();
+                (hidden, PHASE.with(|c| c.get()))
+            });
+            assert_eq!(inside, (true, Phase::Draw));
+            assert_eq!(PHASE.with(|c| c.get()), Phase::Commit);
+        })
+        .join()
+        .unwrap();
     }
 
     /// A second boot in one process is a panic that says what to do, not the

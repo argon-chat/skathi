@@ -550,13 +550,15 @@ thread_local! {
 ///   under both. The read stays stale there, and `__vn_bounds` says so.
 fn sync_layout() {
     let Some(handle) = MAIN_WINDOW.with(|w| w.get()) else { return };
-    let drew = vn_runtime::bridge::with_app(|cx| handle.update(cx, |_, window, cx| window.draw(cx).clear(cx)).is_ok());
+    // Drawn as a frame draws: with nothing published (`bridge::with_draw`).
+    let draw = |window: &mut gpui::Window, cx: &mut gpui::App| vn_runtime::bridge::with_draw(|| window.draw(cx).clear(cx));
+    let drew = vn_runtime::bridge::with_app(|cx| handle.update(cx, |_, window, cx| draw(window, cx)).is_ok());
     if drew != Some(false) || vn_tree::in_input_dispatch() {
         return;
     }
     vn_runtime::with_commit(|window, cx| {
         if window.window_handle() == handle {
-            window.draw(cx).clear(cx);
+            draw(window, cx);
         }
     });
 }
