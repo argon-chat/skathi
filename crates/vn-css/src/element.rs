@@ -65,6 +65,12 @@ pub trait MatchDom: Copy {
     /// unit-test doubles) yield nothing, which makes `:has()` false rather
     /// than wrong.
     fn each_child(&self, _f: &mut dyn FnMut(Self)) {}
+    /// Called on an element whose `:has(+ …)` / `:has(~ …)` is about to be
+    /// answered from its following siblings. The answer moves when one of
+    /// those siblings, or anything under one, changes, and the element asking
+    /// is neither their ancestor nor after them: a tree that restyles by
+    /// dependency has to hear of it here.
+    fn note_following_sibling_anchor(&self) {}
     /// Does [`Self::interaction`] answer the element's LIVE state? Then a
     /// script's query (`matches`, `querySelector`, `closest`) is filtered by
     /// it, as a browser's is ([`crate::query_all_in`]).

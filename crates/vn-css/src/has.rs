@@ -179,7 +179,12 @@ fn compile_new(argument: &str) -> Option<usize> {
             // unimplementable inner selector refuses the whole rewrite instead
             // of silently matching nothing.
             let mut probe = Vec::new();
-            if crate::classify_states(selector, &mut probe).is_none()
+            // An interaction state in the argument (`:has(input:focus-visible)`)
+            // has no rung to land on: the cascade answers `:hover` and
+            // `:focus` as true and leaves the rest to gpui's state ladder,
+            // which is the SUBJECT's. Compiled, such a rule applied always.
+            let stateless = matches!(crate::classify_states(selector, &mut probe), Some((0, None)));
+            if !stateless
                 || !crate::probe_runnable(selector)
                 || !crate::audit_selector(selector, &mut probe)
             {
@@ -226,6 +231,7 @@ pub(crate) fn matches<D: MatchDom>(name: &str, node: &D) -> bool {
                 found
             }
             Anchor::FollowingSibling => {
+                node.note_following_sibling_anchor();
                 let mut sibling = node.next_sibling();
                 while let Some(current) = sibling {
                     if matches_any(&entry.selectors, &current) {

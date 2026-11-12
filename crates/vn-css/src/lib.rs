@@ -4990,6 +4990,24 @@ mod tests {
         assert_eq!(states.base.text.underline.expect("an underline").color, None);
     }
 
+    /// An interaction state inside `:has()` is answered as true by the cascade
+    /// and has no rung of the subject's to land on, so the rule would apply
+    /// always. It is dropped, and said.
+    #[test]
+    fn a_has_argument_with_an_interaction_state_is_refused() {
+        for sheet in [
+            ".box:has(input:focus-visible) { opacity: 0.5 }",
+            ".box:has(.row:hover .icon) { opacity: 0.5 }",
+        ] {
+            let engine = Engine::compile(sheet);
+            assert!(engine.diagnostics.iter().any(|d| d.contains(":has()")), "{sheet}: {:?}", engine.diagnostics);
+            assert_eq!(engine.compute(box_node(), None, &Env::default()).base.opacity, None, "{sheet}");
+        }
+        // One without a state still compiles.
+        let engine = Engine::compile(".box:has(input[disabled]) { opacity: 0.5 }");
+        assert!(engine.diagnostics.is_empty(), "{:?}", engine.diagnostics);
+    }
+
     /// `position: sticky` reaches the computed extras, where the renderer
     /// reads it for its stacking layer and its advisory.
     #[test]

@@ -304,6 +304,11 @@ pub(crate) mod sel {
     /// `.dialog:has(.editor) .title`).
     pub const HAS_DESC: u8 = 64;
     pub const HAS: u8 = HAS_SELF | HAS_DESC;
+    /// A child's `:has(+ …)` / `:has(~ …)` read the children after it. That
+    /// child carries a [`HAS`] flag of its own; this one, on the parent, is
+    /// what tells a change under a later child to look back for it
+    /// ([`super::Tree::touch_mutated`]).
+    pub const HAS_NEXT: u8 = 128;
 }
 
 thread_local! {
@@ -1316,6 +1321,24 @@ impl Tree {
                 }
             }
             first = false;
+            // A `:has(+ …)` / `:has(~ …)` anchor among the EARLIER siblings
+            // reads this node and what is under it, and is neither above the
+            // change nor after it. `label:has(+ [data-invalid])` kept its
+            // style when the input beside it changed.
+            let earlier: Vec<u32> = match self.node(parent) {
+                Some(p) if p.sel_flags.get() & sel::HAS_NEXT != 0 => {
+                    p.children.iter().take_while(|&&c| c != cur).copied().collect()
+                }
+                _ => Vec::new(),
+            };
+            for sibling in earlier {
+                let flags = self.node(sibling).map_or(0, |n| n.sel_flags.get());
+                if flags & sel::HAS_DESC != 0 {
+                    whole.push(sibling);
+                } else if flags & sel::HAS_SELF != 0 {
+                    self.self_marks.push(sibling);
+                }
+            }
             match parent {
                 0 => break,
                 p => cur = p,
@@ -1436,13 +1459,25 @@ impl Tree {
     /// A scan of the slab, but only on a basis change, which is a resize.
     /// Returns how many nodes were marked.
     pub(crate) fn invalidate_viewport_inline(&mut self) -> usize {
+        self.invalidate_inline_where(has_viewport_unit)
+    }
+
+    /// The rem basis moved: the same for every inline body that names a `rem`.
+    /// A Vue-bound `width: 12rem` parsed at 16px stayed 192px after the root's
+    /// font size went to 14px (a UI-scale setting), where the sheet's `12rem`
+    /// followed it.
+    pub(crate) fn invalidate_rem_inline(&mut self) -> usize {
+        self.invalidate_inline_where(has_rem_unit)
+    }
+
+    fn invalidate_inline_where(&mut self, names_the_unit: fn(&str) -> bool) -> usize {
         let hits: Vec<u32> = self
             .nodes
             .iter()
             .enumerate()
             .filter_map(|(i, n)| {
                 let n = n.as_ref()?;
-                n.style.iter().any(|(_, v)| has_viewport_unit(v)).then_some(i as u32)
+                n.style.iter().any(|(_, v)| names_the_unit(v)).then_some(i as u32)
             })
             .collect();
         for &id in &hits {
@@ -2225,6 +2260,10 @@ thread_local! {
     static CSS_WARNED: RefCell<std::collections::HashSet<String>> =
         RefCell::new(std::collections::HashSet::new());
     static ENGINE: RefCell<Option<vn_css::Engine>> = const { RefCell::new(None) };
+    /// A root whose own `font-size` is in `rem`, settled: the basis CSS gives
+    /// it and the size the root computes to under that basis, which is not the
+    /// basis and must not be adopted as one ([`restyle_all`]).
+    static REM_SETTLED: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
     /// The text the current engine was compiled from, kept so the sheet can be
     /// compiled AGAIN against a different `rem` basis — see [`restyle_all`].
     static SHEET_SOURCE: RefCell<String> = const { RefCell::new(String::new()) };
@@ -2836,15 +2875,16 @@ pub(crate) fn with_engine<R>(f: impl FnOnce(Option<&vn_css::Engine>) -> R) -> R 
 /// Which is what this does, and the loop is the whole subtlety: the root's own
 /// `font-size` may itself be written in `rem` or `em`, so recompiling can
 /// change the very value that triggered the recompile. CSS resolves that by
-/// defining the root's own `rem` against the INITIAL font size; we get the same
-/// answer by iterating to a fixed point and capping it, which also terminates
-/// on the pathological `html { font-size: 2rem }`.
+/// defining the root's own `rem` against the INITIAL font size. An `em` or a
+/// percentage is reached by iterating to a fixed point; a `rem` has none, and
+/// is worked out from two passes instead (see the loop).
 ///
 /// In practice this fires at most once in an app's life — `@argon/theme` sets
 /// `documentElement.style.fontSize` once at boot — and never at all for an app
 /// that leaves the root font-size alone, which is the case the `changed` test
 /// keeps free.
 pub fn restyle_all() {
+    let pending = read_tree(|t| t.dirty);
     sync_runtime_sheets();
     let env = env();
     // Viewport units are flattened to px at sheet-compile time, exactly like
@@ -2905,22 +2945,63 @@ pub fn restyle_all() {
     // is cascaded exactly ONCE, under the settled basis. Which is also what a
     // browser does — `rem` is resolved at computed-value time, so an
     // intermediate computed style never exists to transition from.
-    for _ in 0..REM_BASIS_PASSES {
-        let Some(root_font_size) = ENGINE.with(|eng| {
+    //
+    // **The root's own `rem` is of the INITIAL font size** (CSS Values 4
+    // §6.1.1), so `html { font-size: 0.875rem }` is 14px. The sheet is
+    // flattened against the basis, though, so that rule's size follows
+    // whatever basis it was compiled with, and adopting what the root computes
+    // to has no fixed point: 14, 12.25, 10.7… — three recompiles on every
+    // flush until the basis fell out of range. Two samples that disagree say
+    // the root's size follows the basis. It is linear in it, so they give the
+    // size at the initial 16px, which is the basis CSS means. That basis and
+    // what the root computes to under it are remembered, so that the next
+    // flush sees a settled root instead of a moved one.
+    let probe = || {
+        ENGINE.with(|eng| {
             let eng = eng.borrow();
             read_tree(|t| t.probe_root_font_size(eng.as_ref(), &env))
-        }) else {
+        })
+    };
+    let mut earlier: Option<(f32, f32)> = None;
+    for _ in 0..REM_BASIS_PASSES {
+        let Some(root_font_size) = probe() else {
             break;
         };
-        if !vn_css::set_rem_basis(root_font_size) {
+        let basis = vn_css::rem_basis();
+        if REM_SETTLED.with(Cell::get) == Some((basis, root_font_size)) {
             break;
         }
-        if !recompile_sheet(crate::perf::FullReason::RemBasis, &format!(
-            "rem basis is now {root_font_size}px (the root element's font-size) — recompiling \n             the stylesheet"
-        )) {
+        let at_initial = earlier.and_then(|(b0, p0)| {
+            let moved = (root_font_size - p0).abs() > 1e-3 && (basis - b0).abs() > 1e-3;
+            moved.then(|| p0 + (root_font_size - p0) / (basis - b0) * (ROOT_PARENT_FONT_SIZE - b0))
+        });
+        earlier = Some((basis, root_font_size));
+        let next = at_initial.unwrap_or(root_font_size);
+        let moved = vn_css::set_rem_basis(next);
+        if moved {
+            // The inline styles flattened their `rem` when they were parsed.
+            with_tree(|t| t.invalidate_rem_inline());
+        }
+        let recompiled = moved
+            && recompile_sheet(crate::perf::FullReason::RemBasis, &format!(
+                "rem basis is now {next}px (the root element's font-size) — recompiling \n             the stylesheet"
+            ));
+        if at_initial.is_some() {
+            let settled = if recompiled { probe() } else { Some(root_font_size) };
+            REM_SETTLED.with(|c| c.set(settled.map(|size| (vn_css::rem_basis(), size))));
+            break;
+        }
+        REM_SETTLED.with(|c| c.set(None));
+        if !recompiled {
             break;
         }
     }
+    // The recompile and the re-resolve above mark the tree for the pass that
+    // follows, and that pass is this one. Left armed, the flag ran every such
+    // flush twice: a second restyle, gc and element build that changed
+    // nothing, on every step of a resize under a sheet with a `vh` in it.
+    // What the caller had pending it took before calling.
+    with_tree(|t| t.dirty = pending);
     ENGINE.with(|eng| {
         let eng = eng.borrow();
         with_tree(|t| t.restyle(eng.as_ref(), &env));
@@ -2935,6 +3016,17 @@ fn has_viewport_unit(value: &str) -> bool {
         "vw", "vh", "vi", "vb", "vmin", "vmax", "svw", "svh", "svi", "svb", "svmin", "svmax", "lvw", "lvh",
         "lvi", "lvb", "lvmin", "lvmax", "dvw", "dvh", "dvi", "dvb", "dvmin", "dvmax",
     ];
+    has_unit(value, &UNITS)
+}
+
+/// Does this CSS value text use `rem`, which is flattened against the root's
+/// font size the same way a viewport unit is against the window?
+fn has_rem_unit(value: &str) -> bool {
+    has_unit(value, &["rem"])
+}
+
+/// Is some number in `value` directly followed by one of `units`?
+fn has_unit(value: &str, units: &[&str]) -> bool {
     let b = value.as_bytes();
     let mut i = 0;
     while i < b.len() {
@@ -2947,7 +3039,7 @@ fn has_viewport_unit(value: &str) -> bool {
                 i += 1;
             }
             let unit = value[start..i].to_ascii_lowercase();
-            if UNITS.contains(&unit.as_str()) {
+            if units.contains(&unit.as_str()) {
                 return true;
             }
         } else if b[i].is_ascii_alphabetic()
@@ -3191,6 +3283,18 @@ impl<'t> vn_css::MatchDom for NodeRef<'t> {
     fn next_sibling(&self) -> Option<Self> {
         self.note_sibling_question(sel::NEXT_EDGE, sel::NEXT_WALK);
         self.element_sibling(true)
+    }
+    /// The anchor is flagged as one whose match reads other nodes, and its
+    /// parent as having such a child: the nodes it reads are its later
+    /// siblings' subtrees, which no ancestor walk from a change reaches.
+    fn note_following_sibling_anchor(&self) {
+        if CASCADE_SUBJECT.with(Cell::get) == 0 {
+            return;
+        }
+        self.note_content_question(sel::HAS);
+        if let Some(p) = self.tree.node(self.node().parent) {
+            p.sel_flags.set(p.sel_flags.get() | sel::HAS_NEXT);
+        }
     }
     /// Every ELEMENT child, for `:has()`.
     ///
@@ -4024,6 +4128,28 @@ mod tests {
         assert!(roots_of().is_empty(), "no walk at all");
     }
 
+    /// A `:has(+ …)` anchor reads the sibling AFTER it, so a change to that
+    /// sibling has to recheck the anchor, which is neither above the change
+    /// nor after it.
+    #[test]
+    fn a_following_sibling_has_anchor_is_rechecked_when_that_sibling_changes() {
+        let sheet = "div:has(+ [data-x]) { opacity: 0.5 }";
+        set_engine(vn_css::Engine::compile(sheet));
+        // `kids[0]` comes first: it is the anchor, and `kids[1]` what it reads.
+        let (root, kids, _) = cascaded_comb(2);
+        assert!(
+            read_tree(|t| t.node(root).unwrap().sel_flags.get() & sel::HAS_NEXT != 0),
+            "a child asked `:has(+ …)`"
+        );
+        let engine = vn_css::Engine::compile(sheet);
+        let env = env();
+        let x = with_tree(|t| t.intern("data-x"));
+        with_tree(|t| t.set_prop(kids[1], x, Some(String::new())));
+        let settled: Vec<u32> =
+            with_tree(|t| t.settle_self_marks(&engine, &env)).into_iter().map(|(id, _)| id).collect();
+        assert!(settled.contains(&kids[0]), "the earlier sibling's answer moved: {settled:?}");
+    }
+
     /// A class no selector reads on another element moves only the element's
     /// own style: restyled alone, no walk. One that IS read on others (`.on
     /// .leaf`, read by a `div`) walks the `div`s under it.
@@ -4319,6 +4445,36 @@ mod tests {
 
     fn px_len(v: f32) -> Option<gpui::DefiniteLength> {
         Some(gpui::px(v).into())
+    }
+
+    /// The root's own `rem` is of the initial 16px, so `0.875rem` is a 14px
+    /// basis — and stays one: adopting what the root computes to under each
+    /// new basis shrank it on every flush (14, 12.25, 10.7…). An inline `rem`
+    /// follows the basis too, and the pass leaves no restyle pending.
+    #[test]
+    fn a_root_font_size_in_rem_settles_on_the_initial_size() {
+        set_stylesheet(":root { font-size: 0.875rem } .w { width: 2rem }".into());
+        let w = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let w = t.create_element(div);
+            t.set_class(w, "w");
+            let height = t.intern("height");
+            t.set_style(w, height, "2rem".to_string());
+            t.insert(w, root, 0);
+            w
+        });
+        for pass in 0..4 {
+            with_tree(|t| t.take_dirty());
+            restyle_all();
+            assert_eq!(vn_css::rem_basis(), 14.0, "pass {pass}");
+            assert!(!read_tree(|t| t.dirty), "pass {pass} left a restyle pending");
+            let computed = read_tree(|t| t.node(w).and_then(|n| n.computed.as_ref()).map(|c| c.base.clone()))
+                .expect("cascaded");
+            let rem2 = Some(gpui::Length::Definite(gpui::px(28.0).into()));
+            assert_eq!(computed.size.width, rem2, "the sheet's 2rem, pass {pass}");
+            assert_eq!(computed.size.height, rem2, "the inline 2rem, pass {pass}");
+        }
     }
 
     /// CSS Values 4 §6.1.1 down a real walk: the root's `62.5%` is of the
