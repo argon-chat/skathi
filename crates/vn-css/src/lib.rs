@@ -2129,6 +2129,44 @@ impl Engine {
         // the rung inherits from the base (`OutlinePatch::inherit_from`).
         let mut rung_outline = [mapper::OutlinePatch::default(); STATE_RUNGS];
         let mut held_decoration: Option<mapper::DecorationPatch> = None;
+        // A declaration with no state, laid over the state buckets that
+        // already hold something. gpui lays a rung over the base whenever its
+        // state is on, so a rung beat the base whatever the cascade said:
+        // `#save { background: blue } .btn:hover { background: gray }` went
+        // gray under the pointer, and so did `style="background: blue"` and a
+        // base `!important`. The rules are folded in cascade order, so a
+        // stateless one that comes AFTER a rung's rule is the one that wins
+        // there too, for what it declares; one that comes before is under the
+        // rung already, in the base. A rung's own em and custom properties are
+        // what the declaration resolves against while its state is on.
+        macro_rules! over_state_buckets {
+            ($half:expr) => {{
+                let rungs = [
+                    (any_active, &mut active),
+                    (any_hover, &mut hover),
+                    (any_focus_visible, &mut focus_visible),
+                    (any_focus, &mut focus),
+                    (any_focus_within, &mut focus_within),
+                ];
+                for (index, (seen, bucket)) in rungs.into_iter().enumerate() {
+                    if !seen {
+                        continue;
+                    }
+                    let (mut scratch, mut quiet) = (extras.clone(), Vec::new());
+                    rung_outline[index].refine(&$half.outline);
+                    $half.apply(
+                        state_vars[index].as_ref().unwrap_or(&vars), env, rung_font[index].unwrap_or(font_size),
+                        parent_font_size, &rung_faces[index], parent_font, bucket, &mut scratch, &mut quiet,
+                    );
+                }
+                for (_, bucket) in group.hover.iter_mut().chain(group.active.iter_mut()) {
+                    let (mut scratch, mut quiet) = (extras.clone(), Vec::new());
+                    $half.apply(
+                        &vars, env, font_size, parent_font_size, &computed_font, parent_font, bucket, &mut scratch, &mut quiet,
+                    );
+                }
+            }};
+        }
         for important_pass in [false, true] {
             for r in &matched {
                 if let Some(decoration) = held_decoration.take() {
@@ -2273,6 +2311,9 @@ impl Engine {
                 if let Some(before) = svg_before {
                     keep_base_svg_paint(&mut extras, before, diagnostics);
                 }
+                if rung.is_none() {
+                    over_state_buckets!(half);
+                }
             }
             if let Some(decoration) = held_decoration.take() {
                 extras.decoration = decoration;
@@ -2285,6 +2326,7 @@ impl Engine {
                     &vars, env, font_size, parent_font_size, &computed_font, parent_font, &mut base, &mut extras, diagnostics,
                 );
                 extras.refine(inline_extras);
+                over_state_buckets!(half);
             }
         }
         // Motion has its own declared-component metadata. Fold it in CSS
@@ -5034,6 +5076,51 @@ mod tests {
         assert_eq!(base.text.font_size, Some(gpui::px(20.0).into()));
     }
 
+
+    /// What `.box` paints with the pointer over it: the base, and the hover
+    /// rung laid over it as gpui lays it.
+    fn hovered_opacity(css: &str, style: Option<&str>) -> Option<f32> {
+        use gpui::Refineable as _;
+        let engine = Engine::compile(css);
+        let mut diags = Vec::new();
+        let inline = style.map(|style| mapper::parse_inline_style(style, &mut diags));
+        let states = engine.compute_node(
+            box_node(), inline.as_ref(), &Rc::new(Vars::default()), None, &Env::default(), &mut diags,
+        );
+        let mut painted = (*states.base).clone();
+        if let Some(hover) = &states.hover {
+            painted.refine(hover);
+        }
+        painted.opacity
+    }
+
+    /// A state rule is one more rule in the cascade, not a layer over it: a
+    /// stateless declaration that outranks it holds while the state is on.
+    #[test]
+    fn a_state_rule_loses_to_a_stateless_one_that_outranks_it() {
+        // The ordinary case first: the hover rule is the later, stronger one.
+        assert_eq!(hovered_opacity(".box { opacity: 0.9 } .box:hover { opacity: 0.5 }", None), Some(0.5));
+        // Specificity: two classes and a tag against a class and a state.
+        let stronger = "div.box.box { opacity: 0.9 } .box:hover { opacity: 0.5 }";
+        assert_eq!(hovered_opacity(stronger, None), Some(0.9));
+        // Order, at equal specificity.
+        let later = ".box:hover { opacity: 0.5 } .box.box { opacity: 0.9 }";
+        assert_eq!(hovered_opacity(later, None), Some(0.9));
+        // `!important`, whatever the specificity.
+        let important = ".box { opacity: 0.9 !important } .box.box:hover { opacity: 0.5 }";
+        assert_eq!(hovered_opacity(important, None), Some(0.9));
+        // …unless the state rule is important too.
+        let both = ".box { opacity: 0.9 !important } .box:hover { opacity: 0.5 !important }";
+        assert_eq!(hovered_opacity(both, None), Some(0.5));
+        // The `style` attribute outranks every normal rule.
+        assert_eq!(hovered_opacity(".box:hover { opacity: 0.5 }", Some("opacity: 0.9")), Some(0.9));
+        let over_inline = ".box:hover { opacity: 0.5 !important }";
+        assert_eq!(hovered_opacity(over_inline, Some("opacity: 0.9")), Some(0.5));
+        // Only what the stronger rule declares: the rung keeps the rest.
+        let engine = Engine::compile(".box:hover { opacity: 0.5; width: 10px } .box.box { opacity: 0.9 }");
+        let hover = engine.compute(box_node(), None, &Env::default()).hover.expect("a hover rung");
+        assert_eq!(hover.size.width, Some(gpui::px(10.0).into()));
+    }
 
     /// The advisories a sheet produces for `.box`, from the two places they can
     /// now come from: the sheet compile (selector-level) and the cascade
