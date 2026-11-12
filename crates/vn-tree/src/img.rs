@@ -1318,10 +1318,24 @@ fn normalize(p: &Path) -> PathBuf {
 
 /// `file:///C:/x/a.png` → `C:\x\a.png`. Percent escapes are decoded; a host
 /// component (`file://server/share`) becomes a UNC path.
+///
+/// Off Windows `file:///home/u/a.png` is `/home/u/a.png`: the path is the
+/// URL's own, and a host (`file://localhost/x`) names this machine.
 fn file_url(src: &str) -> Option<PathBuf> {
+    file_url_for(src, cfg!(windows))
+}
+
+fn file_url_for(src: &str, windows: bool) -> Option<PathBuf> {
     let rest = src.get(5..)?; // after "file:"
     let rest = rest.strip_prefix("//").unwrap_or(rest);
     let decoded = percent_decode(rest);
+    if !windows {
+        let path = match decoded.find('/') {
+            Some(at) => &decoded[at..],
+            None => decoded.as_str(),
+        };
+        return Some(PathBuf::from(path));
+    }
     let decoded = decoded.replace('/', "\\");
     // "///C:/x" → "\C:\x": drop the empty authority's slash before a drive.
     let trimmed = decoded.strip_prefix('\\').unwrap_or(&decoded);
@@ -1783,11 +1797,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn file_urls_decode_to_paths() {
         assert_eq!(
             as_path(resolve("file:///C:/my%20pics/a.png")),
             Some(PathBuf::from("C:\\my pics\\a.png"))
         );
+    }
+
+    /// A `file:` URL is a Windows path only on Windows. Elsewhere the slashes
+    /// stay, or `file:///home/u/a.png` named a file `\home\u\a.png`.
+    #[test]
+    fn file_urls_keep_their_path_off_windows() {
+        let unix = |src| file_url_for(src, false).map(|p| p.to_string_lossy().into_owned());
+        assert_eq!(unix("file:///home/u/my%20pics/a.png").as_deref(), Some("/home/u/my pics/a.png"));
+        assert_eq!(unix("file://localhost/home/u/a.png").as_deref(), Some("/home/u/a.png"));
+        assert_eq!(unix("file:/home/u/a.png").as_deref(), Some("/home/u/a.png"));
+        let windows = |src| file_url_for(src, true).map(|p| p.to_string_lossy().into_owned());
+        assert_eq!(windows("file:///C:/x/a.png").as_deref(), Some("C:\\x\\a.png"));
     }
 
     #[test]
