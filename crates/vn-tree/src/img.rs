@@ -602,6 +602,23 @@ pub fn set_asset_store(lookup: AssetLookup) {
     STORE.with(|s| s.set(Some(lookup)));
 }
 
+/// The bytes of one of the app's own files, by the URL path a page names it
+/// with (`/games/pong/index.html`): out of the package in a packaged exe, off
+/// the disk under the app root (or its `public/`) in a dev host. What an
+/// `<iframe>`'s webview is served (`crate::iframe`).
+pub fn read_app_asset(src: &str) -> Option<Vec<u8>> {
+    let key = vn_payload::content_key(src)?;
+    if let Some(store) = asset_store() {
+        return store(&key).map(<[u8]>::to_vec);
+    }
+    if let Some(path) = dev_asset_file(src) {
+        return std::fs::read(path).ok();
+    }
+    let base = asset_base()?;
+    let relative = key.replace('/', std::path::MAIN_SEPARATOR_STR);
+    std::fs::read(base.join(&relative)).or_else(|_| std::fs::read(base.join("public").join(&relative))).ok()
+}
+
 /// The store, when this process is a packaged app.
 pub fn asset_store() -> Option<AssetLookup> {
     STORE.with(Cell::get)

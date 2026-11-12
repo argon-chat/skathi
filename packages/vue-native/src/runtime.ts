@@ -42,6 +42,8 @@ import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWir
 // host+media stream's module). `nodeOps.createElement` adopts every canvas,
 // the renderer's and `document.createElement`'s alike.
 import { adoptCanvas } from "./canvas";
+// The wire form of an `<iframe>`'s `postMessage` payloads (crates/vn-webview).
+import { decodeMessage, encodeMessage } from "./iframe";
 // `FontFace` and `document.fonts` over the host's `@font-face` loader (the
 // host+media stream's module; crates/vn-tree/src/fonts.rs).
 import { installFonts } from "./fonts";
@@ -640,6 +642,11 @@ const EV_CODES = {
   compositionstart: 49,
   compositionupdate: 50,
   compositionend: 51,
+  // An `<iframe>`'s document posted to its parent (crates/vn-tree/src/
+  // iframe.rs). Delivered at the iframe's node and retargeted to `window`,
+  // where a browser fires it; `key` is `{"o": origin, "d": wire}` with the
+  // payload in `iframe.ts`'s wire form.
+  message: 52,
 } as const;
 
 /**
@@ -2002,6 +2009,8 @@ reflect("string", "title lang accessKey", null);
 reflect("string", "placeholder", "input textarea");
 reflect("string", "name", "button fieldset form iframe input map meta object output select slot textarea");
 reflect("string", "alt", "area img input");
+reflect("string", "allow srcdoc", "iframe");
+reflect("string", "referrerPolicy loading", "iframe img");
 reflect("string", "accept min max step pattern", "input");
 reflect("string", "htmlFor=for", "label output");
 reflect("long", "tabIndex", null);
@@ -2468,7 +2477,9 @@ function passiveOf(opts: ListenerOptions | undefined, target: object, name: stri
 }
 
 /** Host event names a window/document listener must hear from the engine too. */
-const ALSO_NATIVE = new Set<string>(["load", "error"]);
+// `message`: the host delivers an `<iframe>` document's, the engine fires its
+// own (`window.postMessage`, and whatever dispatches one at the target).
+const ALSO_NATIVE = new Set<string>(["load", "error", "message"]);
 
 /**
  * Does a `window` / `document` listener for this name live only in the
@@ -5968,6 +5979,195 @@ defineDom("canPlayType", function (this: MirrorElement, type: unknown) {
   return __vn_media_can_play(this.__vnId, String(type));
 });
 
+// -- HTMLIFrameElement: `sandbox`, `contentWindow.postMessage`, `message` at
+//    `window`, `load` / `error` (docs/IFRAME.md).
+//
+//    The document is not here: it is in a platform webview the host owns
+//    (crates/vn-webview), drawn into the element's box. What a page can do
+//    with a cross-origin iframe is what there is: post to it, and hear from
+//    it. `contentWindow` is one object per element for the element's life, so
+//    `event.source === iframe.contentWindow` — the identity check a host makes
+//    for a sandboxed frame, whose origin is the string "null" — holds.
+const isFrameEl = (x: unknown): x is MirrorElement => isMirrorEl(x) && x.tag === "iframe";
+const frameWindows = new WeakMap<MirrorElement, object>();
+const frameOf = new WeakMap<object, MirrorElement>();
+
+/** `postMessage(message, targetOrigin)` and `postMessage(message, { targetOrigin })`. */
+function frameTargetOrigin(arg: unknown): string {
+  if (arg == null) return "/"; // the WindowPostMessageOptions default: same origin only
+  if (typeof arg === "object") {
+    const t = (arg as { targetOrigin?: unknown; transfer?: unknown[] }).targetOrigin;
+    if ((arg as { transfer?: unknown[] }).transfer?.length) {
+      throw new DOMException("Failed to execute 'postMessage': transferring is not supported for an <iframe>.", "DataCloneError");
+    }
+    return t == null ? "/" : String(t);
+  }
+  return String(arg);
+}
+
+function frameWindow(el: MirrorElement): object {
+  let win = frameWindows.get(el);
+  if (win) return win;
+  // No prototype: nothing of this realm (`constructor`, `__proto__`) is
+  // reachable through the handle to another origin's window.
+  win = Object.freeze(
+    Object.assign(Object.create(null) as Record<string, unknown>, {
+      postMessage(message: unknown, target?: unknown, transfer?: unknown[]) {
+        if (arguments.length === 0) throw new TypeError("Failed to execute 'postMessage': 1 argument required, but only 0 present.");
+        if (transfer?.length) {
+          throw new DOMException("Failed to execute 'postMessage': transferring is not supported for an <iframe>.", "DataCloneError");
+        }
+        const origin = frameTargetOrigin(target);
+        // Encoded now, in the sender, so a value that cannot cross throws HERE.
+        const wire = JSON.stringify(encodeMessage(message, (o) => isMirrorNode(o)));
+        // A detached element has no document to deliver to, as a detached
+        // iframe's window has none in a browser: dropped.
+        if (!el.__vnId || !el.isConnected || typeof __vn_iframe_post !== "function") return;
+        __vn_iframe_post(el.__vnId, wire, origin);
+      },
+      toString: () => "[object Window]",
+    }),
+  );
+  frameWindows.set(el, win);
+  frameOf.set(win, el);
+  return win;
+}
+
+defineDomGet("contentWindow", function (this: MirrorElement) {
+  if (!isFrameEl(this)) return undefined;
+  // HTML: null until the element is in a document.
+  return this.isConnected ? frameWindow(this) : null;
+});
+// Cross-origin, always: the relay page that hosts the document is not the
+// app's origin, and a sandboxed game's is opaque.
+defineDomGet("contentDocument", function (this: MirrorElement) {
+  return isFrameEl(this) ? null : undefined;
+});
+defineDom("getSVGDocument", function (this: MirrorElement) {
+  return null;
+});
+
+// `sandbox`: a DOMTokenList over the attribute, and `iframe.sandbox = "…"`
+// forwards to its `value` (WebIDL [PutForwards]).
+defineDomGet(
+  "sandbox",
+  function (this: MirrorElement) {
+    if (!isFrameEl(this)) return undefined;
+    const node = this;
+    const parts = () => (node.attrs.sandbox ?? "").split(/\s+/).filter(Boolean);
+    const write = (tokens: string[]) => node.setAttribute("sandbox", tokens.join(" "));
+    const list = {
+      get value() {
+        return node.attrs.sandbox ?? "";
+      },
+      set value(v: string) {
+        node.setAttribute("sandbox", String(v));
+      },
+      add(...names: string[]) {
+        const now = parts();
+        for (const n of names) if (!now.includes(n)) now.push(n);
+        write(now);
+      },
+      remove(...names: string[]) {
+        write(parts().filter((p) => !names.includes(p)));
+      },
+      toggle(name: string, force?: boolean) {
+        const on = force === undefined ? !parts().includes(name) : !!force;
+        if (on) list.add(name);
+        else list.remove(name);
+        return on;
+      },
+      replace(from: string, to: string) {
+        const now = parts();
+        const i = now.indexOf(from);
+        if (i < 0) return false;
+        now[i] = to;
+        write([...new Set(now)]);
+        return true;
+      },
+      contains: (name: string) => parts().includes(name),
+      supports: (name: string) => FRAME_SANDBOX_TOKENS.has(String(name).toLowerCase()),
+      get length() {
+        return parts().length;
+      },
+      item: (i: number) => parts()[i] ?? null,
+      forEach(fn: (token: string, index: number) => void) {
+        parts().forEach((t, i) => fn(t, i));
+      },
+      toString: () => node.attrs.sandbox ?? "",
+      [Symbol.iterator]: () => parts()[Symbol.iterator](),
+    };
+    Object.defineProperty(this, "sandbox", {
+      get: () => list,
+      set: (v: unknown) => node.setAttribute("sandbox", String(v)),
+      configurable: true,
+    });
+    return branded("DOMTokenList", list);
+  },
+  function (this: MirrorElement, v: unknown) {
+    if (!isFrameEl(this)) return ownExpando(this, "sandbox", v);
+    this.setAttribute("sandbox", String(v));
+  } as (value: never) => void,
+);
+const FRAME_SANDBOX_TOKENS = new Set([
+  "allow-downloads", "allow-forms", "allow-modals", "allow-orientation-lock", "allow-pointer-lock",
+  "allow-popups", "allow-popups-to-escape-sandbox", "allow-presentation", "allow-same-origin",
+  "allow-scripts", "allow-top-navigation", "allow-top-navigation-by-user-activation",
+  "allow-top-navigation-to-custom-protocols",
+]);
+
+/**
+ * A message from an iframe's document, as the `message` event a browser fires
+ * at the parent's `window`. `key` is the host's `{"o": origin, "d": wire}`.
+ */
+function deliverFrameMessage(target: MirrorNode, key: string | undefined): boolean {
+  if (!isFrameEl(target) || key == null) return true;
+  let origin = "null";
+  let data: unknown;
+  try {
+    const parsed = JSON.parse(key) as { o?: string; d?: unknown };
+    origin = String(parsed.o ?? "null");
+    data = decodeMessage(parsed.d);
+  } catch (e) {
+    // Not what the relay page writes: a host bug, never the page's.
+    console.error("[vue-native] an <iframe> message that could not be decoded was dropped:", e);
+    return true;
+  }
+  const source = frameWindow(target);
+  const init = { data, origin, source, lastEventId: "", ports: [] as unknown[] };
+  let ev: VnEvent;
+  const Ctor = (globalThis as { MessageEvent?: new (type: string, init: object) => VnEvent }).MessageEvent;
+  try {
+    // A real MessageEvent refuses a `source` that is not a WindowProxy or a
+    // port of ITS realm, so the fields are defined on it either way.
+    ev = Ctor ? new Ctor("message", { data, origin, lastEventId: "" }) : (new Event("message") as unknown as VnEvent);
+  } catch {
+    ev = new Event("message") as unknown as VnEvent;
+  }
+  for (const k of Object.keys(init) as (keyof typeof init)[]) {
+    Object.defineProperty(ev, k, { value: init[k], configurable: true, enumerable: true });
+  }
+  propagateAtGlobal(globalThis, "message", ev);
+  return true;
+}
+
+/**
+ * `vnFeatures`: what this host can do that a page has to ask about before it
+ * offers it. `iframe`: can an `<iframe>` show a document on this machine?
+ * `false` where the host has no webview backend (Linux, or Windows without
+ * the WebView2 runtime): the element still exists and lays out, and answers
+ * every `src` with `error`. Read live: cheap, synchronous, never cached.
+ */
+Object.defineProperty(globalThis, "vnFeatures", {
+  value: Object.freeze(
+    Object.defineProperty({}, "iframe", {
+      get: () => typeof __vn_iframe_supported === "function" && __vn_iframe_supported(),
+      enumerable: true,
+    }),
+  ),
+  configurable: true,
+});
+
 // -- HTMLImageElement: `src`, `complete`, `naturalWidth` / `naturalHeight`,
 //    `currentSrc`, `decode()`.
 //
@@ -6933,6 +7133,8 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   // The host delivers `selectionchange` at the root, whose listener bit the
   // document's listeners arm; a browser fires it AT the document.
   if (name === "selectionchange") return propagateAtDocument(name, synthesize(name, a, b, c, d, key));
+  // An `<iframe>`'s document posted to its parent: a MessageEvent at `window`.
+  if (name === "message") return deliverFrameMessage(target, key);
   // `document.activeElement` follows the host's focus moves (a click, Tab, a
   // queued `el.focus()`): blur arrives before the next focus, with nothing
   // focused in between. `a` is the move's other node (0: none), which is the
@@ -7029,7 +7231,7 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
   // learn that.
   const link = name === "click" && activatableOnPath(target);
   if (link || hasListener(target, name)) {
-    const ev = synthesize(name, a, b, c, d, key, data, isImg ? "img" : undefined);
+    const ev = synthesize(name, a, b, c, d, key, data, isImg || isFrameEl(target) ? "img" : undefined);
     if (focusChange) withRelatedTarget(ev, focusRelated);
     if (!proceed && ev.preventDefault) ev.preventDefault();
     proceed = propagate(target, name, ev) && proceed;

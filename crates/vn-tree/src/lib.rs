@@ -27,6 +27,7 @@ mod fonts;
 mod filter;
 mod fullscreen;
 mod idmap;
+pub mod iframe;
 mod img;
 mod live;
 mod live_state;
@@ -50,7 +51,7 @@ pub mod windows;
 pub mod devtools;
 
 pub use observe::update_layout_observers;
-pub use img::{asset_base, asset_store, content_key, dev_asset_file, set_asset_base, set_asset_store, set_dev_asset_files, AssetLookup};
+pub use img::{asset_base, asset_store, read_app_asset, content_key, dev_asset_file, set_asset_base, set_asset_store, set_dev_asset_files, AssetLookup};
 pub use render::{
     bounds_in, build_root, build_subtree, control_hitboxes, control_hitboxes_in,
     enable_pick_hitboxes, flush_pending_mouse_move, painted_bounds_in, painted_drag_region,
@@ -66,7 +67,7 @@ pub use tree::{
     EV_LOAD, EV_LOADEDDATA, EV_LOADEDMETADATA, EV_LOADSTART, EV_LOOPCOMPLETE, EV_MOUSEDOWN,
     EV_MOUSEENTER, EV_MOUSELEAVE, EV_MOUSEMOVE, EV_MOUSEUP, EV_PAUSE, EV_PLAY, EV_PLAYING,
     EV_POINTERCANCEL, EV_RATECHANGE, EV_SCROLL, EV_SEEKED, EV_SEEKING, EV_TIMEUPDATE,
-    EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL, EVENT_NAMES,
+    EV_MESSAGE, EV_VOLUMECHANGE, EV_WAITING, EV_WHEEL, EVENT_NAMES,
 };
 
 /// The numeric payload a native input event carries into JS. Meaning by event:
@@ -142,6 +143,7 @@ host_fn!(fn vn_insert(_g, args) {
     let (child, parent, anchor) = (arg_id(args.arg(0)), arg_id(args.arg(1)), arg_id(args.arg(2)));
     perf::note_dom(perf::DomOp::Insert);
     tree::with_tree(|t| t.insert(child, parent, anchor));
+    iframe::note_structure();
     UNDEF
 });
 
@@ -149,6 +151,7 @@ host_fn!(fn vn_remove(_g, args) {
     let id = arg_id(args.arg(0));
     perf::note_dom(perf::DomOp::Remove);
     tree::with_tree(|t| t.remove(id));
+    iframe::note_structure();
     UNDEF
 });
 
@@ -189,10 +192,16 @@ host_fn!(fn vn_set_prop(g, args) {
         unsafe { read_string(g, args.arg(2).0) }
     };
     perf::note_dom(perf::DomOp::Prop);
-    let img_src = tree::with_tree(|t| {
+    let (img_src, frame_attr) = tree::with_tree(|t| {
         t.set_prop(id, key, value);
-        t.name(key) == "src" && t.node(id).is_some_and(|n| t.name(n.tag) == "img")
+        let tag = t.node(id).map(|n| t.name(n.tag));
+        let name = t.name(key);
+        (name == "src" && tag == Some("img"), tag == Some("iframe") && iframe::is_frame_attr(name))
     });
+    // An `<iframe>`'s document follows these attributes (`iframe::tick`).
+    if frame_attr {
+        iframe::note(id);
+    }
     // An `<img>`'s `src` is answered with `load` / `error` (`img::tick`),
     // whether or not the element is ever painted.
     if img_src {
@@ -481,6 +490,21 @@ host_fn!(fn vn_media_events(_g, args) {
 // is nothing to draw yet, or a string saying why the image cannot be drawn.
 // Argument 1 is HTML's origin-clean flag for the image, which the bitmap
 // carries into the canvas that draws it.
+// `iframe.contentWindow.postMessage(message, targetOrigin)`: the payload's wire
+// text (packages/vue-native/src/iframe.ts) to the frame's document.
+host_fn!(fn vn_iframe_post(g, args) {
+    let id = arg_id(args.arg(0));
+    let wire = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
+    let target = unsafe { read_string(g, args.arg(2).0) }.unwrap_or_default();
+    iframe::post(id, &wire, &target);
+    UNDEF
+});
+
+// `vnFeatures.iframe`: is there a webview to show a document in?
+host_fn!(fn vn_iframe_supported(_g, _args) {
+    Value::boolean(iframe::supported()).0
+});
+
 host_fn!(fn vn_img_bitmap(g, args) {
     let id = arg_id(args.arg(0));
     let clean = args.arg(1).as_bool().unwrap_or(true);
@@ -534,6 +558,8 @@ pub fn install(rt: &JsRuntime) {
         ("__vn_media_can_play", 2, vn_media_can_play as *const _),
         ("__vn_media_events", 1, vn_media_events as *const _),
         ("__vn_img_bitmap", 2, vn_img_bitmap as *const _),
+        ("__vn_iframe_post", 3, vn_iframe_post as *const _),
+        ("__vn_iframe_supported", 0, vn_iframe_supported as *const _),
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
@@ -893,6 +919,9 @@ fn frame_tick_inner(window: &mut gpui::Window, cx: &mut gpui::App) -> bool {
     let scripted = tree::take_script_dirty();
     // `<img>` `load` / `error`, for every `src` written since the last tick.
     img::tick(window, cx);
+    // `<iframe>`: documents created, navigated, placed and dropped; their
+    // `load`, `error` and `message` dispatched.
+    iframe::tick(window, cx);
     let lottie_moved = lottie::tick(window, cx);
     let video_moved = video::tick(window, cx);
     // `<vn-sticker>`: fetches, targets, this window's tiles written, events.
@@ -984,6 +1013,7 @@ pub fn forget_window(key: windows::WinKey) {
     windows::forget(key);
     render::sticker::forget_window(key);
     lottie::forget_window(key);
+    iframe::forget_window(key);
 }
 
 /// The page became hidden or shown (minimised, or on another virtual desktop):

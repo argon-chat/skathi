@@ -285,7 +285,8 @@ type VnEventCode =
   | 48 // beforeinput       (a text field's edit, before it: cancelable but for the IME's)
   | 49 // compositionstart  (the IME composition, crates/vn-elements TextInputState)
   | 50 // compositionupdate
-  | 51; // compositionend
+  | 51 // compositionend
+  | 52; // message            (an <iframe>'s document to its parent; crates/vn-tree/src/iframe.rs)
 
 // ---------------------------------------------------------------------------
 // the text selection — crates/vn-tree/src/selection.rs (src/selection.ts)
@@ -476,6 +477,18 @@ declare function __vn_media_call(id: VnNodeId, verb: VnMediaVerb, arg: number): 
 
 /** `canPlayType(type)` — `"" | "maybe" | "probably"`, probed on THIS machine. */
 declare function __vn_media_can_play(id: VnNodeId, mime: string): "" | "maybe" | "probably";
+
+/**
+ * `<iframe>` (crates/vn-tree/src/iframe.rs). `wire` is the JSON text of the
+ * payload in `iframe.ts`'s wire form; `targetOrigin` is `"*"`, `"/"` (the
+ * app's own origin) or an origin. Dropped when the frame has no document or
+ * its origin does not match, as a browser drops it.
+ */
+declare function __vn_iframe_post(id: VnNodeId, wire: string, targetOrigin: string): void;
+/** Whether this host can show a document in an `<iframe>` at all. */
+declare function __vn_iframe_supported(): boolean;
+/** What a page asks before it offers a feature the host may not have. */
+declare var vnFeatures: { readonly iframe: boolean };
 
 /**
  * Drains the node's recent media events, comma-joined. A bridge and a TEST

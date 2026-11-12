@@ -1,0 +1,13 @@
+{
+  "$comment": "A fixture for packages/vn-test/specs/iframe.spec.ts: the <iframe> element's DOM surface and its document's lifecycle (docs/IFRAME.md). See ../README.md.",
+
+  "name": "vn-test-iframe",
+
+  "window": {
+    "title": "vue-native — iframe (fixture)",
+    "width": 640,
+    "height": 480,
+    "titleBarStyle": "hidden",
+    "titleBarFallback": false
+  }
+}

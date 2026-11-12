@@ -145,6 +145,8 @@ vn-elements = { path = "../vn-elements" }
 # crate's features are the only ones that switch them; `net-h2` is not optional.
 vn-runtime = { path = "../vn-runtime", default-features = false, features = ["net-h2"] }
 vn-tree = { path = "../vn-tree", default-features = false }
+# `<iframe>`: the platform webview behind `vn_tree::iframe` (WebView2 on Windows).
+vn-webview = { path = "../vn-webview" }
 # `<vn-sticker>`'s engine: devtools `mem` reports its sources, engines, frames
 # and loop cache (`vn_sticker::stats`).
 vn-sticker = { path = "../vn-sticker" }

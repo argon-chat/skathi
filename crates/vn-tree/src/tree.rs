@@ -120,6 +120,10 @@ pub const EV_BEFOREINPUT: u32 = 48;
 pub const EV_COMPOSITIONSTART: u32 = 49;
 pub const EV_COMPOSITIONUPDATE: u32 = 50;
 pub const EV_COMPOSITIONEND: u32 = 51;
+/// An `<iframe>`'s document posted to its parent (`crate::iframe`): at the
+/// iframe's node, `key` = `{"o": origin, "d": wire}`. The runtime fires it at
+/// `window`.
+pub const EV_MESSAGE: u32 = 52;
 
 /// Every host event code with the name JS knows it by — the ONE table, so a
 /// listing (devtools) can never lag the codes again. It did: `event_names` in
@@ -181,6 +185,7 @@ pub const EVENT_NAMES: &[(u32, &str)] = &[
     (EV_COMPOSITIONSTART, "compositionstart"),
     (EV_COMPOSITIONUPDATE, "compositionupdate"),
     (EV_COMPOSITIONEND, "compositionend"),
+    (EV_MESSAGE, "message"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -13,6 +13,7 @@ members = [
     "crates/vn-permissions",# platform permission backends behind redjs's navigator.permissions
     "crates/vn-storage",    # localStorage on a disk: folders, atomic writes, DPAPI at rest
     "crates/vn-clipboard",  # navigator.clipboard over the SAME gpui clipboard the <input> uses
+    "crates/vn-webview",    # <iframe>: a document in the platform webview (WebView2), under the app surface
     "crates/vn-thorvg-sys", # vendored ThorVG C++ + checked-in FFI (vn-lottie's `thorvg` feature)
     "crates/vn-vpx-sys",    # vendored libvpx VP9 decoder (cc, no nasm) + a safe wrapper (vn-sticker's video)
     "crates/vn-yuv",        # I420 + alpha to straight BGRA at any size, SIMD (optimised in dev, below)

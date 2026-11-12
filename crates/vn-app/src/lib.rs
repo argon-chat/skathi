@@ -1219,6 +1219,37 @@ fn publish_app_root() {
     }
 }
 
+/// Installs the webview behind `<iframe>`, if this platform has one.
+fn install_iframe_backend() {
+    // The browser's profile: beside the app's own storage, never inside it.
+    #[cfg(feature = "storages")]
+    let data = embed::data_dir()
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| vn_storage::default_folder(boot_mode::app_name().as_deref()).parent().map(std::path::Path::to_path_buf));
+    #[cfg(not(feature = "storages"))]
+    let data: Option<std::path::PathBuf> = None;
+    let user_data = data.unwrap_or_else(|| std::env::temp_dir().join("vue-native")).join("webview");
+    let config = vn_webview::Config {
+        assets: std::rc::Rc::new(|path| vn_tree::read_app_asset(path)),
+        user_data,
+        // redjs's `location.origin` (vendor/redjs, `cookies::PAGE_ORIGIN`).
+        page_origin: "app://redjs".into(),
+        devtools: !cfg!(feature = "prod"),
+    };
+    if let Some(backend) = vn_webview::backend(config) {
+        vn_tree::iframe::set_backend(backend, std::rc::Rc::new(vn_runtime::frames::wake));
+    }
+}
+
+/// On quit: every `<iframe>`'s document is closed, so no browser process
+/// outlives the app.
+fn close_iframes_on_quit(cx: &mut App) {
+    std::mem::forget(cx.on_app_quit(|_| {
+        vn_tree::iframe::shutdown();
+        std::future::ready(())
+    }));
+}
+
 /// Hands `<video>` the renderer's D3D11 device — and re-hands it every time
 /// the renderer recreates one.
 ///
@@ -1465,6 +1496,7 @@ fn run_app() {
             JsRuntime::try_with(|runtime| js::shutdown(runtime.ctx()));
             std::future::ready(())
         }));
+        close_iframes_on_quit(cx);
         #[cfg(vn_devtools)]
         {
             // F12, in EVERY window of this process, ahead of every element's
@@ -1628,6 +1660,14 @@ fn run_app() {
             // runs; the hook is read per call, so nothing else depends on the
             // order within this block. See docs/PERMISSIONS.md.
             vn_permissions::install(rt);
+            // `<iframe>`: the platform's webview behind `vn_tree::iframe`
+            // (crates/vn-webview). Nothing starts here — the browser is
+            // launched by the first iframe that has a document — and where
+            // there is no backend the element answers every `src` with
+            // `error` and `vnFeatures.iframe` is false.
+            if !devtools_mode {
+                install_iframe_backend();
+            }
             // `__vn_desktop_*` / `__vn_shell_*`: the settle dispatcher and the
             // shell behind `<a href>`, `window.open(url)` and `appShell`
             // (docs/SHELL.md). The shell thread's log lines ("recorded" under

@@ -1,0 +1,31 @@
+[package]
+name = "vn-webview"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The trait this crate implements (`vn_tree::iframe::Backend`) and the element
+# whose box the webview is drawn into.
+vn-tree = { path = "../vn-tree", default-features = false }
+gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
+serde_json = "1"
+raw-window-handle = "0.6"
+
+# Windows: WebView2 in composition mode. Its visual goes into the container
+# gpui keeps UNDER the app's surface (`Window::vn_composition_underlay`).
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_WinRT",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.62"

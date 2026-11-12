@@ -591,6 +591,7 @@ pub(crate) fn gc_node_state() {
     img_src::gc(live);
     crate::lottie::gc(live);
     crate::video::gc(live);
+    crate::iframe::gc(live);
     sticker::gc(live);
     crate::svg::gc(live);
     // A selection boundary in a node that went away, or past the end of a
@@ -1830,7 +1831,8 @@ fn tab_index_of(t: &Tree, id: u32) -> Option<isize> {
 fn default_tab_index(t: &Tree, id: u32) -> Option<isize> {
     let n = t.node(id)?;
     let focusable = match t.name(n.tag) {
-        "button" | "select" => true,
+        // An `<iframe>` is a focusable area: its document takes the keyboard.
+        "button" | "select" | "iframe" => true,
         "a" | "area" => t.prop(id, "href").is_some(),
         "summary" => summarizes_details(t, id),
         _ => false,
@@ -2127,6 +2129,7 @@ pub fn build_root<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> AnyEl
     // the bounds side map above. `render()` is the only entry point, so this is
     // the only place that can know a new element tree is being built.
     reset_bounds(win);
+    crate::iframe::drawing(win);
     windows::of(win, |w| {
         w.any_drag_region = false;
         w.control_hitboxes.clear();
@@ -2261,6 +2264,7 @@ pub fn build_subtree<V: 'static>(id: u32, window: &mut Window, cx: &mut Context<
     // tiles, `@media` environments and hit tests.
     windows::set_painted_root(win, id);
     reset_bounds(win);
+    crate::iframe::drawing(win);
     crate::aria::reset_frame();
     // …and the scroll-chain registry the wheel router walks (`vn_elements`).
     vn_elements::scrollbar::reset_frame();
@@ -2532,6 +2536,12 @@ fn build_node<V: 'static>(
             own.clone(),
             &extras,
             probe(id, build_video(t, id, node, window, cx, now, control_area)),
+        ),
+        // A document in the platform's webview, shown in the box (`crate::iframe`).
+        Kind::Element if t.name(node.tag) == "iframe" => stack(
+            own.clone(),
+            &extras,
+            probe(id, build_iframe(t, id, node, window, cx, now, control_area)),
         ),
         // vue-native's own: stickers and animated emoji (`sticker` below).
         Kind::Element if t.name(node.tag) == "vn-sticker" => stack(
@@ -6105,6 +6115,143 @@ fn video_fit(fit: vn_css::ObjectFit) -> vn_video::VideoFit {
 /// **`poster` is what paints before the first frame** — and it is a real
 /// `<img>`, resolved through the same `src` grammar, so a poster and an `<img>`
 /// with the same path share gpui's decoded-image cache.
+/// `<iframe>`: a replaced box, 300 × 150 unless CSS sizes it (HTML §15.4.3 —
+/// no intrinsic ratio, so each `auto` dimension takes its own default). The
+/// box paints nothing of the document: it reports where it is, and the
+/// platform's webview is composited there (`crate::iframe`).
+fn build_iframe<V: 'static>(
+    t: &Tree,
+    id: u32,
+    node: &crate::tree::Node,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    now: std::time::Instant,
+    control_area: Option<WindowControlArea>,
+) -> AnyElement {
+    let win = windows::key(window);
+    let mut d = with_control_area(div().id(id as usize), id, control_area, win);
+    d = crate::aria::apply(d, t, id, node);
+    if let Some(cs) = &node.computed {
+        d = apply_computed_style(d, cs, id, now);
+    }
+    presentational_size(t, id, d.style());
+    // Focusable, as in HTML: while it is the focused node its document has
+    // the keyboard (`crate::iframe`, `sync_focus`).
+    let tab_index = tab_index_of(t, id).or_else(|| default_tab_index(t, id));
+    let focusable = tab_index.is_some();
+    let handle = focusable.then(|| focus_handle_for(id, tab_index, cx));
+    if let Some(h) = &handle {
+        d = d.track_focus(h);
+        watch_focus(id, h, window, cx);
+    }
+    let auto = |l: Option<gpui::Length>| matches!(l, None | Some(gpui::Length::Auto));
+    if auto(d.style().size.width) {
+        d.style().size.width = Some(gpui::px(300.0).into());
+    }
+    if auto(d.style().size.height) {
+        d.style().size.height = Some(gpui::px(150.0).into());
+    }
+    // The document has no window of its own to take the mouse (it is
+    // composited under the app), so the box's listeners carry the pointer to
+    // it. They run only where the app's own hit test resolves to this box:
+    // under a menu or a tooltip the app drew over it, the pointer is the app's.
+    {
+        use crate::iframe::PointerKind;
+        use gpui::MouseButton;
+        let held = |b: Option<MouseButton>| match b {
+            Some(MouseButton::Left) => 1u8,
+            Some(MouseButton::Right) => 2,
+            Some(MouseButton::Middle) => 4,
+            _ => 0,
+        };
+        let dom_button = |b: MouseButton| match b {
+            MouseButton::Left => Some(0u8),
+            MouseButton::Middle => Some(1),
+            MouseButton::Right => Some(2),
+            _ => None,
+        };
+        let at = |p: gpui::Point<gpui::Pixels>, window: &Window| {
+            let s = window.scale_factor();
+            (f32::from(p.x) * s, f32::from(p.y) * s)
+        };
+        d = d
+            .on_mouse_move(move |ev: &gpui::MouseMoveEvent, window, _| {
+                let m = ev.modifiers;
+                crate::iframe::pointer(id, PointerKind::Move, at(ev.position, window), held(ev.pressed_button), m.shift, m.control);
+            })
+            .on_any_mouse_down(move |ev: &gpui::MouseDownEvent, window, _| {
+                let Some(button) = dom_button(ev.button) else { return };
+                let m = ev.modifiers;
+                crate::iframe::pointer(id, PointerKind::Down(button), at(ev.position, window), held(Some(ev.button)), m.shift, m.control);
+            })
+            .on_scroll_wheel(move |ev: &gpui::ScrollEvent, window, cx| {
+                // The wheel over a document is the document's: the app's
+                // scroll container under it does not move too (R6.4).
+                if crate::iframe::has_document(id) {
+                    cx.stop_propagation();
+                }
+                let delta = ev.delta.pixel_delta(window.line_height());
+                let s = window.scale_factor();
+                let m = ev.modifiers;
+                // gpui: positive is away from the user (up); the frame's is down.
+                let kind = PointerKind::Wheel(-f32::from(delta.x) * s, -f32::from(delta.y) * s);
+                crate::iframe::pointer(id, kind, at(ev.position, window), 0, m.shift, m.control);
+            })
+            .on_hover(move |hovered: &bool, window, _| {
+                if !*hovered {
+                    let p = window.mouse_position();
+                    crate::iframe::pointer(id, PointerKind::Leave, at(p, window), 0, false, false);
+                }
+            });
+        for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
+            d = d.on_mouse_up(button, move |ev: &gpui::MouseUpEvent, window, _| {
+                let Some(button) = dom_button(ev.button) else { return };
+                let m = ev.modifiers;
+                crate::iframe::pointer(id, PointerKind::Up(button), at(ev.position, window), 0, m.shift, m.control);
+            });
+        }
+    }
+    // Over the box the pointer is the document's to choose.
+    if let Some(style) = crate::iframe::cursor(id) {
+        d = d.cursor(style);
+    }
+    let opacity = d.style().opacity.unwrap_or(1.0);
+    let radii = d.style().corner_radii.clone();
+    // Laid out over the whole box, painting nothing: its paint is the one
+    // place that knows the box's rectangle and the clip it is painted under.
+    let reporter = gpui::canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            let mask = window.content_mask().bounds;
+            let rem = window.rem_size();
+            let radius = |r: Option<gpui::AbsoluteLength>| r.map_or(gpui::px(0.0), |r| r.to_pixels(rem));
+            let corners = gpui::Corners {
+                top_left: radius(radii.top_left),
+                top_right: radius(radii.top_right),
+                bottom_right: radius(radii.bottom_right),
+                bottom_left: radius(radii.bottom_left),
+            };
+            let s = window.scale_factor();
+            let device_radii = [corners.top_left, corners.top_right, corners.bottom_right, corners.bottom_left]
+                .map(|r| f32::from(r) * s);
+            let place = crate::iframe::placement(bounds, mask, device_radii, s, opacity);
+            crate::iframe::painted_in(id, window);
+            crate::iframe::placed(id, place);
+            // The document is composited UNDER the app's surface: erase what
+            // the app painted in the box so far, so it shows through. Only
+            // while there is a document; until then the box is its own CSS
+            // background (R5.7).
+            if crate::iframe::has_document(id) {
+                window.vn_paint_punch(bounds, corners);
+            }
+        },
+    )
+    .absolute()
+    .size_full();
+    // The element's own events, as any element's: a press focuses it.
+    bind_events(d.child(reporter), id, pointer_mask(node), handle, focusable, true, cx).into_any_element()
+}
+
 fn build_video<V: 'static>(
     t: &Tree,
     id: u32,
