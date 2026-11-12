@@ -556,12 +556,14 @@ impl RuleEntry {
                 refinement: self.important.as_ref(),
                 font: self.important_font.as_ref(),
                 dynamic: self.important_dynamic.as_deref().map(Vec::as_slice),
+                outline: self.important_extras.outline,
             }
         } else {
             Half {
                 refinement: self.normal.as_ref(),
                 font: self.normal_font.as_ref(),
                 dynamic: self.normal_dynamic.as_deref().map(Vec::as_slice),
+                outline: self.normal_extras.outline,
             }
         }
     }
@@ -583,6 +585,8 @@ struct Half<'a> {
     refinement: Option<&'a Rc<StyleRefinement>>,
     font: Option<&'a mapper::FontDecls>,
     dynamic: Option<&'a [(String, String)]>,
+    /// The `outline` longhands the half declares (`OutlinePatch::merge_over`).
+    outline: mapper::OutlinePatch,
 }
 
 impl<'a> Half<'a> {
@@ -591,6 +595,7 @@ impl<'a> Half<'a> {
             refinement: inline.refinement.as_ref(),
             font: inline.font.as_ref(),
             dynamic: (!inline.dynamic.is_empty()).then_some(inline.dynamic.as_slice()),
+            outline: inline.extras.outline,
         }
     }
 
@@ -618,6 +623,7 @@ impl<'a> Half<'a> {
                         refinement: half.refinement.as_ref(),
                         font: half.font.as_ref(),
                         dynamic: half.dynamic.as_deref().map(Vec::as_slice),
+                        outline: half.extras.outline,
                     },
                     &half.extras,
                 ))
@@ -652,9 +658,13 @@ impl<'a> Half<'a> {
         extras: &mut Extras,
         diagnostics: &mut Vec<String>,
     ) {
+        // A refinement's outline is a whole ring and replaces the bucket's;
+        // the half's longhands go over the ring the rules before it left.
+        let outline = bucket.vn_outline;
         if let Some(r) = self.refinement {
             bucket.refine(r);
         }
+        self.outline.merge_over(outline, &mut bucket.vn_outline);
         if let Some(list) = self.font {
             for p in list.iter() {
                 let at = if mapper::sets_font_size(p) { parent } else { basis };
@@ -2115,8 +2125,15 @@ impl Engine {
         let mut controls: [Option<ControlFold>; 4] = Default::default();
         let (mut any_before, mut any_after, mut any_placeholder) = (false, false, false);
         let (mut any_selection, mut any_file_button) = (false, false);
+        // What each state rung's rules declared of the outline, for the ring
+        // the rung inherits from the base (`OutlinePatch::inherit_from`).
+        let mut rung_outline = [mapper::OutlinePatch::default(); STATE_RUNGS];
+        let mut held_decoration: Option<mapper::DecorationPatch> = None;
         for important_pass in [false, true] {
             for r in &matched {
+                if let Some(decoration) = held_decoration.take() {
+                    extras.decoration = decoration;
+                }
                 if let Some(which) = r.pseudo {
                     if let Some(index) = which.control_index() {
                         let fold = controls[index].get_or_insert_with(ControlFold::default);
@@ -2161,6 +2178,12 @@ impl Engine {
                 // `.x { border-radius: inherit }` outside the hover, nor a
                 // hover's `inherit` apply when the pointer is elsewhere.
                 let state_rule = r.states != 0 || r.ancestor.is_some();
+                // Nor may a state rule's `text-decoration-*` reach the base
+                // decoration, which is the only one the folded values are
+                // applied to. Given back once the rule is folded.
+                if state_rule {
+                    held_decoration = Some(extras.decoration);
+                }
                 let radius_inherit = extras.radius_inherit;
                 let svg_before = state_rule.then(|| svg_base(&extras));
                 extras.refine(if important_pass {
@@ -2236,6 +2259,9 @@ impl Engine {
                 // rule; `focus-visible:ring-2` does the same one rung over,
                 // and the two must not see each other. Its em is the rung's
                 // font size when the rung declares one.
+                if let Some(index) = rung {
+                    rung_outline[index].refine(&half.outline);
+                }
                 let scope = rung.and_then(|i| state_vars[i].as_ref()).unwrap_or(&vars);
                 let basis = rung.and_then(|i| rung_font[i]).unwrap_or(font_size);
                 let radius_inherit = extras.radius_inherit;
@@ -2247,6 +2273,9 @@ impl Engine {
                 if let Some(before) = svg_before {
                     keep_base_svg_paint(&mut extras, before, diagnostics);
                 }
+            }
+            if let Some(decoration) = held_decoration.take() {
+                extras.decoration = decoration;
             }
             // The inline style at this priority: after the sheet's normal
             // rules and before its `!important` ones, or last of all
@@ -2344,6 +2373,16 @@ impl Engine {
             perf::note_node(tested, ms(t0, t1), ms(t1, t2), ms(t2, std::time::Instant::now()));
             perf::note_split(by_bucket, matched.len());
         }
+        // A rung's ring takes from the base ring what its own rules left
+        // undeclared, before `currentColor` is painted into either.
+        if let Some(ring) = base.vn_outline {
+            let rungs = [&mut active, &mut hover, &mut focus_visible, &mut focus, &mut focus_within];
+            for (index, bucket) in rungs.into_iter().enumerate() {
+                if let Some(own) = bucket.vn_outline.as_mut() {
+                    rung_outline[index].inherit_from(ring, own);
+                }
+            }
+        }
         // `currentColor` is the element's computed `color`, so it can only be
         // substituted now — after the whole cascade has run. Every rung gets
         // the same value: `color` itself is not in gpui's state ladder, so a
@@ -2401,6 +2440,14 @@ impl Engine {
                     underline.offset = gpui::px(offset);
                 }
             }
+        }
+        // So are the decoration's colour, style and thickness: Tailwind's
+        // `underline decoration-red-500 decoration-2` is three rules. The base
+        // decoration only: a state rung's is its own rule's
+        // (`mapper::DecorationPatch`).
+        extras.decoration.apply(&mut base.text);
+        for (refinement, own) in [&mut before, &mut after, &mut placeholder, &mut selection, &mut file_button] {
+            own.decoration.apply(&mut refinement.text);
         }
         // `overflow-x` and `overflow-y` compute as a pair (`overflow-y: auto`
         // alone scrolls both axes), and one rule may have declared each.
@@ -4863,6 +4910,92 @@ mod tests {
         engine
             .compute_node(box_node(), Some(&inline), &Rc::new(Vars::default()), None, &Env::default(), &mut diags)
             .base
+    }
+
+    /// `outline`'s longhands arrive from several rules (Tailwind's
+    /// `outline outline-2 outline-offset-2 outline-blue-500` is four), in
+    /// whatever order the sheet has them, and fold into one ring.
+    #[test]
+    fn outline_longhands_from_several_rules_fold_into_one_ring() {
+        let rules = [
+            ".box { outline-style: solid }",
+            ".box { outline-width: 2px }",
+            ".box { outline-offset: 4px }",
+            ".box { outline-color: #ff0000 }",
+        ];
+        let reversed: Vec<&str> = rules.iter().rev().copied().collect();
+        for sheet in [rules.join("\n"), reversed.join("\n")] {
+            let (base, d) = computed_with_env(&sheet, &Env::default());
+            assert!(d.is_empty(), "{d:?}");
+            let ring = base.vn_outline.expect("an outline");
+            assert_eq!(ring.width, gpui::px(2.0), "{sheet}");
+            assert_eq!(ring.offset, gpui::px(4.0), "{sheet}");
+            assert!((ring.color.a - 1.0).abs() < 1e-3 && ring.color.s > 0.9, "{sheet}: {ring:?}");
+        }
+        // A later `outline: none` still takes the ring away.
+        let (base, _) = computed_with_env(".box { outline: 2px solid #ff0000 } .box { outline: none }", &Env::default());
+        assert_eq!(base.vn_outline.expect("an outline").width, gpui::px(0.0));
+    }
+
+    /// A state rule that declares one longhand keeps the rest of the base
+    /// ring: `:focus { outline-offset: 4px }` must not make the outline vanish.
+    #[test]
+    fn a_state_rules_outline_longhand_keeps_the_base_ring() {
+        let engine = Engine::compile(
+            ".box { outline: 2px dashed #ff0000 } .box:focus { outline-offset: 4px } .box:hover { outline-color: #0000ff }",
+        );
+        let states = engine.compute(box_node(), None, &Env::default());
+        let base = states.base.vn_outline.expect("a base outline");
+        let focus = states.focus.as_ref().and_then(|r| r.vn_outline).expect("a focus outline");
+        assert_eq!(focus.offset, gpui::px(4.0));
+        assert_eq!((focus.width, focus.style, focus.color), (base.width, base.style, base.color));
+        let hover = states.hover.as_ref().and_then(|r| r.vn_outline).expect("a hover outline");
+        assert_eq!((hover.width, hover.style), (gpui::px(2.0), gpui::BorderStyle::Dashed));
+        assert_ne!(hover.color, base.color);
+        // A state's own `outline: none` is declared, not inherited over.
+        let engine = Engine::compile(".box { outline: 2px solid #ff0000 } .box:focus { outline: none }");
+        let states = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(states.focus.as_ref().and_then(|r| r.vn_outline).expect("a focus outline").width, gpui::px(0.0));
+    }
+
+    /// `text-decoration-color` and `-thickness` in rules of their own reach
+    /// the line another rule declares, whichever comes first.
+    #[test]
+    fn decoration_longhands_reach_a_line_from_another_rule() {
+        for sheet in [
+            ".box { text-decoration-line: underline } .box { text-decoration-color: #ff0000 } .box { text-decoration-thickness: 2px }",
+            ".box { text-decoration-thickness: 2px } .box { text-decoration-color: #ff0000 } .box { text-decoration-line: underline }",
+        ] {
+            let (base, d) = computed_with_env(sheet, &Env::default());
+            assert!(d.is_empty(), "{d:?}");
+            let underline = base.text.underline.expect("an underline");
+            assert_eq!(underline.thickness, gpui::px(2.0), "{sheet}");
+            assert!(underline.color.is_some_and(|c| c.s > 0.9), "{sheet}: {underline:?}");
+        }
+        // The shorthand resets the colour an earlier rule declared…
+        let (base, _) = computed_with_env(
+            ".box { text-decoration-color: #ff0000 } .box { text-decoration: underline }",
+            &Env::default(),
+        );
+        assert_eq!(base.text.underline.expect("an underline").color, None);
+        // …a cancelled line stays cancelled…
+        let (base, _) = computed_with_env(
+            ".box { text-decoration-thickness: 2px } .box { text-decoration-line: none }",
+            &Env::default(),
+        );
+        assert_eq!(base.text.underline.expect("the cancelling underline").thickness, gpui::px(0.0));
+        // …and a state rule's colour does not reach the base line.
+        let engine = Engine::compile(".box { text-decoration-line: underline } .box:hover { text-decoration-color: #ff0000 }");
+        let states = engine.compute(box_node(), None, &Env::default());
+        assert_eq!(states.base.text.underline.expect("an underline").color, None);
+    }
+
+    /// `position: sticky` reaches the computed extras, where the renderer
+    /// reads it for its stacking layer and its advisory.
+    #[test]
+    fn sticky_reaches_the_computed_extras() {
+        let engine = Engine::compile(".box { position: sticky; top: 0 }");
+        assert_eq!(engine.compute(box_node(), None, &Env::default()).extras.sticky, Some(true));
     }
 
     /// The four cascade levels, in CSS's order: normal sheet, normal inline,

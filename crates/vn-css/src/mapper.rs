@@ -374,6 +374,12 @@ pub struct Extras {
     /// the value is also kept here and applied to whatever underline the whole
     /// cascade ended up with.
     pub underline_offset: Option<f32>,
+    /// The `text-decoration-*` longhands this element declares, for the same
+    /// reason as [`Self::underline_offset`]: see [`DecorationPatch`].
+    pub decoration: DecorationPatch,
+    /// The `outline` longhands one declaration block declares: see
+    /// [`OutlinePatch`]. Read off a rule's own extras, not off the folded ones.
+    pub outline: OutlinePatch,
     /// Which properties on this element were written as `currentColor`.
     ///
     /// `currentColor` is the element's computed `color`, and vn-css folds no
@@ -651,6 +657,160 @@ impl SvgPaint {
     }
 }
 
+/// `text-decoration-color`, `-style` and `-thickness` as declared, beside the
+/// decoration they also land on when their own block declares the line.
+///
+/// A decoration's colour lives ON the decoration in gpui, and Tailwind's
+/// `underline decoration-red-500 decoration-2` is three rules: the colour's
+/// rule has no line to write to, whichever order the sheet puts them in. So
+/// the values are folded here in cascade order and applied to the decoration
+/// the whole cascade produced ([`Self::apply`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DecorationPatch {
+    /// `Some(None)` is the `text-decoration` shorthand's reset to
+    /// `currentColor`: it ends an earlier rule's colour.
+    pub color: Option<Option<Hsla>>,
+    pub thickness: Option<f32>,
+    pub wavy: Option<bool>,
+}
+
+impl DecorationPatch {
+    pub(crate) fn refine(&mut self, other: &Self) {
+        if other.color.is_some() {
+            self.color = other.color;
+        }
+        if other.thickness.is_some() {
+            self.thickness = other.thickness;
+        }
+        if other.wavy.is_some() {
+            self.wavy = other.wavy;
+        }
+    }
+
+    /// Writes the declared values onto the decorations `text` carries. A
+    /// decoration that stands for `text-decoration-line: none` (zero thickness
+    /// and transparent) is left alone: a thickness would draw it again.
+    pub(crate) fn apply(&self, text: &mut gpui::TextStyleRefinement) {
+        let cancelled = |thickness: gpui::Pixels, color: Option<Hsla>| {
+            thickness == px(0.0) && color == Some(gpui::transparent_black())
+        };
+        if let Some(underline) = text.underline.as_mut() {
+            if !cancelled(underline.thickness, underline.color) {
+                if let Some(Some(color)) = self.color {
+                    underline.color = Some(color);
+                }
+                if let Some(thickness) = self.thickness {
+                    underline.thickness = px(thickness);
+                }
+                if let Some(wavy) = self.wavy {
+                    underline.wavy = wavy;
+                }
+            }
+        }
+        if let (Some(strikethrough), Some(Some(color))) = (text.strikethrough.as_mut(), self.color) {
+            if !cancelled(strikethrough.thickness, strikethrough.color) {
+                strikethrough.color = Some(color);
+            }
+        }
+    }
+}
+
+/// The `outline` longhands one declaration block declares.
+///
+/// The block's refinement carries a whole [`gpui::Outline`], seeded at zero
+/// width, and a later rule's replaces an earlier one's whole: Tailwind's
+/// `outline-2 outline-blue-500 outline-offset-2` kept only the last of its
+/// three rules, and `:focus { outline-offset: 4px }` over `outline: 2px solid`
+/// drew nothing. With this beside it, the fold lays a block's longhands over
+/// the ring the rules before it produced ([`Self::merge_over`]), which is what
+/// a `var()`-composed declaration already did.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct OutlinePatch {
+    pub width: Option<f32>,
+    pub style: Option<gpui::BorderStyle>,
+    /// `outline-style: none` / `hidden`, which is a zero width.
+    pub hidden: Option<bool>,
+    /// `Some(None)` is `currentColor`, resolved after the cascade.
+    pub color: Option<Option<Hsla>>,
+    pub offset: Option<f32>,
+}
+
+impl OutlinePatch {
+    pub(crate) fn refine(&mut self, other: &Self) {
+        if other.width.is_some() {
+            self.width = other.width;
+        }
+        if other.style.is_some() {
+            self.style = other.style;
+        }
+        if other.hidden.is_some() {
+            self.hidden = other.hidden;
+        }
+        if other.color.is_some() {
+            self.color = other.color;
+        }
+        if other.offset.is_some() {
+            self.offset = other.offset;
+        }
+    }
+
+    /// `slot` holds the ring of the block these longhands come from. When the
+    /// rules before it had produced `earlier`, the block's ring becomes that
+    /// one with the block's longhands over it.
+    pub(crate) fn merge_over(&self, earlier: Option<gpui::Outline>, slot: &mut Option<gpui::Outline>) {
+        let Some(mut ring) = earlier else { return };
+        if *self == Self::default() {
+            return;
+        }
+        if self.hidden == Some(true) {
+            ring.width = px(0.0);
+        } else {
+            if let Some(style) = self.style {
+                ring.style = style;
+                // As in the `outline-style` arm: the initial width is `medium`.
+                if ring.width == px(0.0) {
+                    ring.width = px(3.0);
+                }
+            }
+            if let Some(width) = self.width {
+                ring.width = px(width);
+            }
+        }
+        if let Some(Some(color)) = self.color {
+            ring.color = color;
+        }
+        if let Some(offset) = self.offset {
+            ring.offset = px(offset);
+        }
+        *slot = Some(ring);
+    }
+
+    /// A state rung's ring is laid over the base style whole, so what the
+    /// rung's rules left undeclared has to be the base ring's, not the seed's:
+    /// `:focus { outline-offset: 4px }` keeps the width, style and colour of
+    /// `outline: 2px solid`. `self` is what the rung's rules declared; a value
+    /// that is not the seed's was declared too, through a `var()`.
+    pub(crate) fn inherit_from(&self, base: gpui::Outline, ring: &mut gpui::Outline) {
+        if self.width.is_none() && self.hidden != Some(true) {
+            // A style on its own made the ring `medium` wide (the
+            // `outline-style` arm), which is the base's width when it has one.
+            let medium = self.style.is_some() && ring.width == px(3.0) && base.width > px(0.0);
+            if ring.width == px(0.0) || medium {
+                ring.width = base.width;
+            }
+        }
+        if self.offset.is_none() && ring.offset == px(0.0) {
+            ring.offset = base.offset;
+        }
+        if self.color.is_none() && ring.color == Hsla::default() {
+            ring.color = base.color;
+        }
+        if self.style.is_none() && ring.style == gpui::BorderStyle::Solid {
+            ring.style = base.style;
+        }
+    }
+}
+
 impl Extras {
     /// Later-wins merge, matching `Refineable::refine` for the refinements.
     pub(crate) fn refine(&mut self, other: &Extras) {
@@ -665,6 +825,9 @@ impl Extras {
         }
         if other.fixed.is_some() {
             self.fixed = other.fixed;
+        }
+        if other.sticky.is_some() {
+            self.sticky = other.sticky;
         }
         if other.appearance_none.is_some() {
             self.appearance_none = other.appearance_none;
@@ -762,6 +925,8 @@ impl Extras {
         if other.underline_offset.is_some() {
             self.underline_offset = other.underline_offset;
         }
+        self.decoration.refine(&other.decoration);
+        self.outline.refine(&other.outline);
         if other.scrollbar_width.is_some() {
             self.scrollbar_width = other.scrollbar_width;
         }
@@ -4669,11 +4834,14 @@ fn apply_property(
             }
         }
         // A decoration's colour, style and thickness live ON the decoration in
-        // gpui, not beside it — so these only land when the same cascade has
+        // gpui, not beside it — so here they land only when this block has
         // already produced an underline or a strikethrough (which
         // `text-decoration-line`, or the `text-decoration` shorthand, does).
+        // A line another rule declares gets them after the cascade, from
+        // `Extras::decoration`.
         TextDecorationColor(c, _) => match color(c) {
             Some(v) => {
+                x.decoration.color = Some(Some(v));
                 let mut hit = false;
                 if let Some(u) = r.text.underline.as_mut() {
                     u.color = Some(v);
@@ -4693,6 +4861,7 @@ fn apply_property(
         },
         TextDecorationStyle(s, _) => {
             use lightningcss::properties::text::TextDecorationStyle as S;
+            x.decoration.wavy = Some(matches!(s, S::Wavy));
             if let Some(u) = r.text.underline.as_mut() {
                 u.wavy = matches!(s, S::Wavy);
             }
@@ -4707,8 +4876,11 @@ fn apply_property(
         TextDecorationThickness(t) => {
             use lightningcss::properties::text::TextDecorationThickness as T;
             if let T::LengthPercentage(DimensionPercentage::Dimension(l)) = t {
-                if let (Some(w), Some(u)) = (length_value_px(l), r.text.underline.as_mut()) {
-                    u.thickness = px(w);
+                if let Some(w) = length_value_px(l) {
+                    x.decoration.thickness = Some(w);
+                    if let Some(u) = r.text.underline.as_mut() {
+                        u.thickness = px(w);
+                    }
                 }
             }
         }
@@ -4722,6 +4894,9 @@ fn apply_property(
             if d.line.contains(TDL::LineThrough) {
                 r.text.strikethrough = Some(gpui::StrikethroughStyle::default());
             }
+            // The shorthand sets the colour too: its own, or `currentColor`,
+            // which ends a colour an earlier rule declared.
+            x.decoration.color = Some(color(&d.color));
             if let Some(c) = color(&d.color) {
                 if let Some(u) = r.text.underline.as_mut() {
                     u.color = Some(c);
@@ -5279,20 +5454,32 @@ fn apply_property(
                     }
                 }
             }
+            let style = out.style;
             // `outline: none` is the whole declaration: there is no width to
             // read and no colour to resolve (the shorthand's is the initial
             // `currentColor`, which would advise for nothing).
-            if !matches!(&o.style, OS::LineStyle(LineStyle::None | LineStyle::Hidden)) {
+            if matches!(&o.style, OS::LineStyle(LineStyle::None | LineStyle::Hidden)) {
+                x.outline.hidden = Some(true);
+            } else {
+                x.outline.hidden = Some(false);
+                x.outline.style = Some(style);
                 if let Some(w) = border_width_px(&o.width) {
                     r.vn_outline.as_mut().unwrap().width = px(w);
+                    x.outline.width = Some(w);
                 }
                 match &o.color {
                     // `outline-color`'s initial value IS `currentColor`, so the
                     // shorthand almost always carries it. Resolved after the
                     // cascade, like every other `currentColor`.
-                    CssColor::CurrentColor => x.current_color.0 |= CurrentColorTargets::OUTLINE,
+                    CssColor::CurrentColor => {
+                        x.current_color.0 |= CurrentColorTargets::OUTLINE;
+                        x.outline.color = Some(None);
+                    }
                     c => match color(c) {
-                        Some(c) => r.vn_outline.as_mut().unwrap().color = c,
+                        Some(c) => {
+                            r.vn_outline.as_mut().unwrap().color = c;
+                            x.outline.color = Some(Some(c));
+                        }
                         None => unresolved_color(diagnostics, "outline-color"),
                     },
                 }
@@ -5301,14 +5488,19 @@ fn apply_property(
         OutlineWidth(w) => {
             if let Some(v) = border_width_px(w) {
                 outline_mut(r).width = px(v);
+                x.outline.width = Some(v);
             }
         }
         OutlineColor(CssColor::CurrentColor) => {
             outline_mut(r);
             x.current_color.0 |= CurrentColorTargets::OUTLINE;
+            x.outline.color = Some(None);
         }
         OutlineColor(c) => match color(c) {
-            Some(v) => outline_mut(r).color = v,
+            Some(v) => {
+                outline_mut(r).color = v;
+                x.outline.color = Some(Some(v));
+            }
             None => unresolved_color(diagnostics, "outline-color"),
         },
         OutlineStyle(s) => {
@@ -5316,7 +5508,8 @@ fn apply_property(
             let out = outline_mut(r);
             match s {
                 OS::LineStyle(LineStyle::None) | OS::LineStyle(LineStyle::Hidden) => {
-                    out.width = px(0.0)
+                    out.width = px(0.0);
+                    x.outline.hidden = Some(true);
                 }
                 other => {
                     out.style = if matches!(
@@ -5327,6 +5520,8 @@ fn apply_property(
                     } else {
                         gpui::BorderStyle::Solid
                     };
+                    x.outline.hidden = Some(false);
+                    x.outline.style = Some(out.style);
                     // CSS's initial `outline-width` is `medium` (3px); a style
                     // on its own has to become visible.
                     if out.width == px(0.0) {
@@ -5680,7 +5875,10 @@ fn apply_property(
                 if name.0.as_ref() == "outline-offset" =>
             {
                 match single_length_px(&c.value) {
-                    Some(v) => outline_mut(r).offset = px(v),
+                    Some(v) => {
+                        outline_mut(r).offset = px(v);
+                        x.outline.offset = Some(v);
+                    }
                     None => unsupported(diagnostics, "outline-offset (a <length> is expected)"),
                 }
             }

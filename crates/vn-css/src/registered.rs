@@ -60,7 +60,7 @@ impl CustomAnimationContext {
                 if let Some(priority) = &inline.priority {
                     let half = &priority[important as usize];
                     cascade.push(CascadeHalf::new(Half { refinement: half.refinement.as_ref(), font: half.font.as_ref(),
-                        dynamic: half.dynamic.as_ref().map(|list| list.as_slice()) }, &half.extras));
+                        dynamic: half.dynamic.as_ref().map(|list| list.as_slice()), outline: half.extras.outline }, &half.extras));
                 } else if !important { cascade.push(CascadeHalf::new(Half::of_inline(inline), &inline.extras)); }
             }
         }
@@ -83,7 +83,7 @@ impl CustomAnimationContext {
         for half in &self.cascade {
             extras.refine(&half.extras);
             Half { refinement: half.refinement.as_ref(), font: half.font.as_ref(),
-                dynamic: half.dynamic.as_ref().map(|d| d.as_slice()) }.apply(
+                dynamic: half.dynamic.as_ref().map(|d| d.as_slice()), outline: half.extras.outline }.apply(
                 &vars, &self.env, self.font_size, self.parent_font_size, &self.font, &self.parent_font,
                 &mut style, &mut extras, &mut quiet);
         }
