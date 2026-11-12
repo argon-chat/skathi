@@ -425,6 +425,101 @@ fn has_inset(cs: &vn_css::ComputedStates) -> bool {
     i.top.is_some() || i.right.is_some() || i.bottom.is_some() || i.left.is_some()
 }
 
+fn block_flow(cs: &vn_css::ComputedStates) -> bool {
+    matches!(cs.base.display, None | Some(gpui::Display::Block))
+}
+
+/// Can a child's vertical margin adjoin this box's `bottom` (or top) edge? The
+/// conditions of CSS 2 §8.3.1 as taffy's block layout applies them: block flow,
+/// no new formatting context, in flow, no padding or border on that side, and
+/// for the bottom edge an `auto` height.
+fn edge_open(cs: &vn_css::ComputedStates, bottom: bool) -> bool {
+    use gpui::IsZero;
+    let b = &cs.base;
+    let visible = |o: Option<gpui::Overflow>| matches!(o, None | Some(gpui::Overflow::Visible));
+    let (padding, border) = if bottom {
+        (&b.padding.bottom, &b.border_widths.bottom)
+    } else {
+        (&b.padding.top, &b.border_widths.top)
+    };
+    block_flow(cs)
+        && visible(b.overflow.x)
+        && visible(b.overflow.y)
+        && b.position != Some(gpui::Position::Absolute)
+        && cs.extras.fixed != Some(true)
+        && padding.as_ref().is_none_or(|p| p.is_zero())
+        && border.as_ref().is_none_or(|w| w.is_zero())
+        && (!bottom || matches!(b.size.height, None | Some(gpui::Length::Auto)))
+}
+
+/// Does a descendant's margin collapse THROUGH one of this node's vertical
+/// edges, so that it spaces the node in its parent's flow?
+///
+/// [`wrapper_style`] reserves the node's box plus the node's OWN margin; a
+/// margin that reached the parent through the node is not in either. A channel
+/// group whose last row had `margin-bottom: 1px` was one pixel shorter in its
+/// parent whenever it replayed and one taller whenever a hover transition inside
+/// made it build, and every row below it stepped up and down with the pointer.
+/// Such a node is not offered; the boxes inside it that close the edge (or carry
+/// the margin themselves) still are. Erring towards `true` only costs a replay.
+fn margin_leaks(t: &Tree, node: &Node) -> bool {
+    let Some(cs) = &node.computed else {
+        return false;
+    };
+    // A flex or grid item is its own formatting context: nothing leaves it.
+    let parent = t.node(node.parent).and_then(|p| p.computed.as_ref());
+    if !block_flow(cs) || parent.is_some_and(|p| !block_flow(p)) {
+        return false;
+    }
+    [false, true].into_iter().any(|bottom| edge_leaks(t, node, bottom))
+}
+
+fn edge_leaks(t: &Tree, node: &Node, bottom: bool) -> bool {
+    use gpui::IsZero;
+    let mut at = node;
+    // Deep enough for any real wrapper chain; a chain that outruns it is
+    // refused rather than guessed at.
+    for _ in 0..32 {
+        if !at.computed.as_ref().is_some_and(|cs| edge_open(cs, bottom)) {
+            return false;
+        }
+        // The in-flow child nearest the edge. Anchors and collapsed whitespace
+        // make no box; `display: none` and out-of-flow boxes are not in the flow.
+        let in_flow = |&&c: &&u32| {
+            t.node(c).is_some_and(|n| match n.kind {
+                Kind::Anchor => false,
+                Kind::Text => !n.text.trim().is_empty(),
+                Kind::Element => n.computed.as_ref().is_none_or(|cs| {
+                    cs.base.display != Some(gpui::Display::None)
+                        && cs.base.position != Some(gpui::Position::Absolute)
+                        && cs.extras.fixed != Some(true)
+                }),
+            })
+        };
+        let child = if bottom {
+            at.children.iter().rev().find(in_flow)
+        } else {
+            at.children.iter().find(in_flow)
+        };
+        let Some(child) = child.and_then(|&c| t.node(c)) else {
+            return false;
+        };
+        if child.kind != Kind::Element {
+            return false;
+        }
+        let Some(cs) = &child.computed else {
+            return false;
+        };
+        let margin = if bottom { &cs.base.margin.bottom } else { &cs.base.margin.top };
+        // `auto` is zero on the block axis.
+        if matches!(margin, Some(gpui::Length::Definite(m)) if !m.is_zero()) {
+            return true;
+        }
+        at = child;
+    }
+    true
+}
+
 /// [`Stats`] for a subtree, memoised against its `sub_rev`.
 fn stats(t: &Tree, id: u32) -> Stats {
     let Some(node) = t.node(id) else {
@@ -545,7 +640,7 @@ pub(crate) fn boundary<V: 'static>(
         return None;
     }
     let shape = stats(t, id);
-    if shape.blocked || shape.nodes < min_nodes() {
+    if shape.blocked || shape.nodes < min_nodes() || margin_leaks(t, node) {
         return None;
     }
     // Something inside is moving: lower it this frame, and make sure the
@@ -881,6 +976,70 @@ mod tests {
 
     fn forget_shapes() {
         STATS.with(|m| m.borrow_mut().clear());
+    }
+
+    /// A group of rows as a channel list has them: `group > rows > row`, the
+    /// row carrying the margin. Returns `(group, rows, last row)`.
+    fn group_of_rows(css: &str) -> (u32, u32, u32) {
+        set_stylesheet(css.into());
+        let ids = with_tree(|t| {
+            let root = t.create_root();
+            let div = t.intern("div");
+            let mut make = |t: &mut Tree, class: &str, parent: u32| {
+                let el = t.create_element(div);
+                t.set_class(el, class.into());
+                t.insert(el, parent, 0);
+                el
+            };
+            let list = make(t, "list", root);
+            let group = make(t, "group", list);
+            let rows = make(t, "rows", group);
+            let _first = make(t, "row", rows);
+            let last = make(t, "row", rows);
+            (group, rows, last)
+        });
+        restyle_all();
+        ids
+    }
+
+    fn leaks(id: u32) -> bool {
+        read_tree(|t| margin_leaks(t, t.node(id).unwrap()))
+    }
+
+    #[test]
+    fn a_box_a_childs_margin_collapses_through_is_not_a_boundary() {
+        let (group, rows, last) = group_of_rows(".row { margin-bottom: 1px; height: 30px }");
+        assert!(leaks(group), "the last row's margin spaces the GROUP in the list");
+        assert!(leaks(rows));
+        assert!(!leaks(last), "a row's own margin is in its wrapper");
+    }
+
+    #[test]
+    fn a_closed_edge_keeps_the_margin_inside() {
+        for closed in [
+            ".rows { padding-bottom: 1px }",
+            ".rows { border-bottom: 1px solid red }",
+            ".rows { overflow: hidden }",
+            ".rows { height: 80px }",
+            ".rows { display: flex; flex-direction: column }",
+        ] {
+            let (group, rows, _) = group_of_rows(&format!(".row {{ margin-bottom: 1px; height: 30px }} {closed}"));
+            assert!(!leaks(group), "{closed}");
+            assert!(!leaks(rows), "{closed}");
+        }
+        let (group, _, _) = group_of_rows(".row { margin-bottom: 1px } .list { display: flex; flex-direction: column }");
+        assert!(!leaks(group), "a flex item is its own formatting context");
+        let (group, rows, _) = group_of_rows(".row { height: 30px }");
+        assert!(!leaks(group) && !leaks(rows), "no margin, nothing to lose");
+    }
+
+    #[test]
+    fn a_top_margin_leaks_like_a_bottom_one() {
+        let (group, rows, _) = group_of_rows(".row { margin-top: 4px }");
+        assert!(leaks(group) && leaks(rows));
+        let (group, rows, _) = group_of_rows(".row { margin-top: 4px } .group { padding-top: 2px }");
+        assert!(!leaks(group), "the group's padding stops it");
+        assert!(leaks(rows));
     }
 
 
