@@ -520,6 +520,12 @@ pub struct Tree {
     /// Taken from the pass because the mutators have no engine; a new sheet
     /// restyles the whole document anyway, so a stale value never matters.
     sibling_combinators: bool,
+    /// The last write counter [`Tree::set_prop`] handed out. One for the tree
+    /// and not one per slot: a prop removed and set again starts a new slot,
+    /// and a slot's own count would begin at 0 again — the count the first
+    /// assignment had, so the same string assigned after a removal read as
+    /// "nobody assigned".
+    prop_writes: u32,
     /// "Everything": a new stylesheet or a changed `@media` environment can
     /// flip any rule in the sheet, so no subtree is safe.
     dirty_all: bool,
@@ -742,6 +748,10 @@ impl Tree {
                 if self.node(parent).is_some_and(|p| p.sel_flags.get() & sel::EMPTY != 0) {
                     self.mark_with_followers(parent);
                 }
+                // …and a `:has(.badge:empty)` above reads the same answer
+                // from further away.
+                self.touch_mutated(id, false);
+                return;
             }
             self.touch(id);
         }
@@ -1010,15 +1020,17 @@ impl Tree {
 
     pub fn set_prop(&mut self, id: u32, key: u32, value: Option<String>) {
         let reach = reach_of([(self.name(key), NameKind::Attr)]);
+        self.prop_writes = self.prop_writes.wrapping_add(1);
+        let write = self.prop_writes;
         if let Some(n) = self.node_mut(id) {
             match value {
                 None => n.props.retain(|(k, _, _)| *k != key),
                 Some(v) => {
                     if let Some(slot) = n.props.iter_mut().find(|(k, _, _)| *k == key) {
                         slot.1 = v;
-                        slot.2 = slot.2.wrapping_add(1);
+                        slot.2 = write;
                     } else {
-                        n.props.push((key, v, 0));
+                        n.props.push((key, v, write));
                     }
                 }
             }
@@ -2686,28 +2698,39 @@ fn sheet_sources() -> Vec<String> {
 /// cannot re-trigger itself.
 fn sync_runtime_sheets() {
     let next = with_tree(|t| {
-        let mut ids: Vec<u32> = t.style_nodes.iter().copied().collect();
-        // Creation order stands in for document order: Vue creates a node
-        // before it inserts it, and a sheet appended later has to win.
-        ids.sort_unstable();
-        let mut sheets = Vec::new();
-        for id in ids {
+        // Document order, since a sheet later in the document has to win.
+        // Creation order used to stand in for it, by node id; but ids are
+        // handed out again, last freed first, so a `<style>` created after
+        // another was removed could sort before one that had been there all
+        // along, and a moved one kept its old place.
+        //
+        // A node's place is the child index at each level from its root down.
+        // The document's root sorts first, then each pop-out's.
+        let mut placed: Vec<((bool, u32, Vec<usize>), u32)> = Vec::new();
+        for &id in t.style_nodes.iter() {
             // Reused controls keep unopened content in detached fragments
             // (Reka SelectViewport includes a <style> there). Such a sheet is
             // inert until attached to a document or painted VnWindow root.
             let mut ancestor = id;
-            let mut connected = false;
-            while ancestor != 0 {
+            let mut path = Vec::new();
+            let mut top = None;
+            for _ in 0..4096 {
                 if ancestor == t.root || crate::windows::window_of_root(ancestor).is_some() {
-                    connected = true;
+                    top = Some(ancestor);
                     break;
                 }
                 let Some(node) = t.node(ancestor) else { break };
+                let Some(parent) = t.node(node.parent) else { break };
+                path.push(parent.children.iter().position(|&c| c == ancestor).unwrap_or(usize::MAX));
                 ancestor = node.parent;
             }
-            if !connected {
-                continue;
-            }
+            let Some(top) = top else { continue };
+            path.reverse();
+            placed.push(((top != t.root, top, path), id));
+        }
+        placed.sort();
+        let mut sheets = Vec::new();
+        for (_, id) in placed {
             fn walk(t: &Tree, id: u32, out: &mut String) {
                 let Some(n) = t.node(id) else { return };
                 out.push_str(&n.text);
@@ -3540,6 +3563,26 @@ mod tests {
         assert_eq!(opacity(probe), Some(0.25), "removing the rules restores the build's sheet");
     }
 
+    /// The sheets are taken in document order, not in the order their nodes
+    /// were created: a `<style>` put in front of an older one comes first.
+    #[test]
+    fn runtime_sheets_are_in_document_order() {
+        set_stylesheet(String::new());
+        with_tree(|t| {
+            let root = t.create_root();
+            let style = t.intern("style");
+            let older = t.create_element(style);
+            t.set_element_text(older, ".a { opacity: 0.5 }".into());
+            t.insert(older, root, 0);
+            let newer = t.create_element(style);
+            t.set_element_text(newer, ".b { opacity: 0.5 }".into());
+            t.insert(newer, root, older);
+        });
+        restyle_all();
+        let sheets = RUNTIME_CSS.with(|r| r.borrow().clone());
+        assert_eq!(sheets, vec![".b { opacity: 0.5 }".to_string(), ".a { opacity: 0.5 }".to_string()]);
+    }
+
     fn runtime_sheet_probe() -> (u32, u32, u32, u32) {
         set_stylesheet(".probe { opacity: 0.25 }".into());
         with_tree(|t| {
@@ -3961,11 +4004,10 @@ mod tests {
         );
     }
 
-    /// Two `<style>` elements concatenate in CREATION order, which stands in for
-    /// document order — Vue creates a node before it inserts it, and a sheet
-    /// appended later has to win at equal specificity.
+    /// Two `<style>` elements concatenate in document order: a sheet appended
+    /// later has to win at equal specificity.
     #[test]
-    fn several_style_elements_concatenate_in_creation_order() {
+    fn several_style_elements_concatenate_in_document_order() {
         let opacity = |id: u32| {
             read_tree(|t| t.node(id).and_then(|n| n.computed.as_ref()).and_then(|c| c.base.opacity))
         };
@@ -3977,13 +4019,13 @@ mod tests {
             t.set_class(probe, "probe");
             t.insert(probe, root, 0);
             let style_tag = t.intern("style");
-            for (i, css) in [".probe { opacity: 0.1 }", ".probe { opacity: 0.9 }"]
-                .into_iter()
-                .enumerate()
-            {
+            for css in [".probe { opacity: 0.1 }", ".probe { opacity: 0.9 }"] {
                 let sheet = t.create_element(style_tag);
                 t.set_element_text(sheet, css.into());
-                t.insert(sheet, root, 1 + i as u32);
+                // Appended. This passed `1 + i` as the node to insert before,
+                // which put the second sheet in front of the probe and so of
+                // the first; creation order hid it.
+                t.insert(sheet, root, 0);
             }
             probe
         });
@@ -4148,6 +4190,53 @@ mod tests {
         let settled: Vec<u32> =
             with_tree(|t| t.settle_self_marks(&engine, &env)).into_iter().map(|(id, _)| id).collect();
         assert!(settled.contains(&kids[0]), "the earlier sibling's answer moved: {settled:?}");
+    }
+
+    /// A text node's first character changes its element's `:empty` answer,
+    /// which a `:has()` further up reads through the element.
+    #[test]
+    fn a_text_node_filling_up_rechecks_the_has_anchor_that_reads_empty() {
+        let sheet = ".card:has(span:empty) { opacity: 0.5 }";
+        set_engine(vn_css::Engine::compile(sheet));
+        let (card, text) = with_tree(|t| {
+            let root = t.create_root();
+            let (div, span) = (t.intern("div"), t.intern("span"));
+            let card = t.create_element(div);
+            t.set_class(card, "card");
+            let badge = t.create_element(span);
+            let text = t.create_text();
+            t.insert(text, badge, 0);
+            t.insert(badge, card, 0);
+            t.insert(card, root, 0);
+            (card, text)
+        });
+        restyle_all();
+        let engine = vn_css::Engine::compile(sheet);
+        let env = env();
+        with_tree(|t| t.set_text(text, "3".into()));
+        let settled = with_tree(|t| t.settle_self_marks(&engine, &env));
+        let card_now = settled.iter().find(|(id, _)| *id == card).map(|(_, s)| s.base.opacity);
+        assert_eq!(card_now, Some(None), "the badge has text now: {:?}", settled.iter().map(|s| s.0).collect::<Vec<_>>());
+    }
+
+    /// A prop removed and assigned again is a new assignment, whatever the
+    /// string: the count does not start over with the slot.
+    #[test]
+    fn a_prop_set_again_after_a_removal_has_a_new_write_count() {
+        let (id, value) = with_tree(|t| {
+            t.create_root();
+            let input = t.intern("input");
+            let id = t.create_element(input);
+            (id, t.intern("value"))
+        });
+        let write = |v: Option<&str>| {
+            with_tree(|t| t.set_prop(id, value, v.map(str::to_string)));
+            read_tree(|t| t.prop_write(id, "value").map(|(_, write)| write))
+        };
+        let first = write(Some("a")).unwrap();
+        assert_ne!(write(Some("a")).unwrap(), first, "the same string again is still a write");
+        assert_eq!(write(None), None);
+        assert_ne!(write(Some("a")).unwrap(), first);
     }
 
     /// A class no selector reads on another element moves only the element's

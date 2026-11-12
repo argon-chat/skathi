@@ -1157,16 +1157,51 @@ impl Element for Scrollbar {
 
                 // ---- release ----------------------------------------------
                 {
+                    let handle = self.handle.clone();
                     let state = state.clone();
-                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                    let track = ax.track;
+                    let max_offset = ax.max_offset;
+                    let travel = ax.thumb_travel;
+                    let on_scrolled = self.on_scrolled.clone();
+                    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                         if !phase.bubble() {
                             return;
                         }
                         let mut s = state.get();
                         if s.dragging == Some(axis) {
+                            // The drag ends where the pointer is. The moves are
+                            // throttled, and the last one before the release
+                            // is usually among those dropped, which left the
+                            // thumb short of where it was let go.
+                            let vertical = axis == Axis::Vertical;
+                            let along = if vertical {
+                                event.position.y - track.origin.y
+                            } else {
+                                event.position.x - track.origin.x
+                            };
+                            let mut o = handle.offset();
+                            let current = if vertical { o.y } else { o.x };
+                            let next = if travel > px(0.) {
+                                -max_offset * ((along - s.grab) / travel).clamp(0., 1.)
+                            } else {
+                                current
+                            };
+                            // A press and release in place lands within rounding
+                            // of where it is; that is not a scroll.
+                            let moved = (next - current).abs() > px(0.5);
+                            if moved {
+                                if vertical { o.y = next } else { o.x = next }
+                                handle.set_offset(o);
+                                s.last_offset = o;
+                            }
                             s.dragging = None;
                             s.last_scroll = Some(Instant::now());
                             state.set(s);
+                            if moved {
+                                if let Some(f) = &on_scrolled {
+                                    f(window, cx);
+                                }
+                            }
                             cx.notify(view);
                         }
                     });

@@ -1185,7 +1185,7 @@ fn data_bytes(tag: &str, src: &str) -> Result<Vec<u8>, String> {
             )
         })
     } else {
-        Ok(percent_decode(payload).into_bytes())
+        Ok(percent_decode_bytes(payload))
     }
 }
 
@@ -1346,6 +1346,13 @@ fn file_url_for(src: &str, windows: bool) -> Option<PathBuf> {
 }
 
 fn percent_decode(s: &str) -> String {
+    String::from_utf8_lossy(&percent_decode_bytes(s)).into_owned()
+}
+
+/// The bytes a percent-encoded string stands for. A `data:` payload is bytes,
+/// not text: `%89PNG` through a `String` came out as U+FFFD and the image
+/// with it.
+fn percent_decode_bytes(s: &str) -> Vec<u8> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -1360,7 +1367,7 @@ fn percent_decode(s: &str) -> String {
         out.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -1549,7 +1556,7 @@ fn data_url(src: &str) -> Option<ImageSource> {
             }
         }
     } else {
-        percent_decode(payload).into_bytes()
+        percent_decode_bytes(payload)
     };
 
     let format = image_format(&mime).or_else(|| sniff(&bytes));
@@ -1890,6 +1897,12 @@ mod tests {
         };
         assert_eq!(img.format, ImageFormat::Svg);
         assert!(String::from_utf8_lossy(&img.bytes).starts_with("<svg"));
+
+        // Percent-encoded bytes that are not UTF-8 stay the bytes they are.
+        let Some(ImageSource::Image(img)) = resolve("data:image/png,%89PNG%0D%0A%1A%0A%FF%00") else {
+            panic!("percent-encoded binary data: URL did not resolve");
+        };
+        assert_eq!(&img.bytes[..], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0x00]);
     }
 
     #[test]
