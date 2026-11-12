@@ -559,9 +559,9 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
     use Animatable::*;
     match (from, to) {
         (Number(a), Number(b)) => Number(f32::interpolate(a, b, t)),
-        (Color(a), Color(b)) => Color(clamp_hsla(Hsla::interpolate(a, b, t))),
+        (Color(a), Color(b)) => Color(lerp_color(a, b, t)),
         (BorderColors(a), BorderColors(b)) => BorderColors(std::array::from_fn(|index|
-            clamp_hsla(Hsla::interpolate(a[index], b[index], t)))),
+            lerp_color(a[index], b[index], t))),
         (Pixels(a), Pixels(b)) => Pixels(gpui::Pixels::interpolate(a, b, t)),
         (Rems(a), Rems(b)) => Rems(gpui::Rems::interpolate(a, b, t)),
         (Effect(a), Effect(b)) => {
@@ -586,15 +586,35 @@ fn lerp(from: Animatable, to: Animatable, t: f32) -> Animatable {
     }
 }
 
+/// Two colours part way between each other, as CSS mixes legacy colours: in
+/// sRGB, premultiplied by alpha.
+///
+/// The colours are stored as HSLA, and mixing those channels is a different
+/// path: gray to blue swings through the hues between (gray's hue is 0, red),
+/// and `transparent` — black at alpha 0 — to white passes through half-opaque
+/// gray, where premultiplied it stays white the whole way and only its alpha
+/// moves.
+///
 /// An overshooting easing can push a channel out of range; browsers clamp the
-/// used color rather than painting garbage.
-fn clamp_hsla(c: Hsla) -> Hsla {
-    Hsla {
-        h: c.h,
-        s: c.s.clamp(0.0, 1.0),
-        l: c.l.clamp(0.0, 1.0),
-        a: c.a.clamp(0.0, 1.0),
+/// used colour rather than painting garbage.
+fn lerp_color(from: Hsla, to: Hsla, t: f32) -> Hsla {
+    if from == to {
+        return to;
     }
+    let (a, b) = (gpui::Rgba::from(from), gpui::Rgba::from(to));
+    let alpha = f32::interpolate(a.a, b.a, t).clamp(0.0, 1.0);
+    if alpha <= 0.0 {
+        // Nothing to un-premultiply; keep the hue of the side it is heading
+        // for so a later frame does not start from black.
+        return Hsla { a: 0.0, ..if t < 0.5 { from } else { to } };
+    }
+    let channel = |x: f32, y: f32| (f32::interpolate(x * a.a, y * b.a, t) / alpha).clamp(0.0, 1.0);
+    Hsla::from(gpui::Rgba {
+        r: channel(a.r, b.r),
+        g: channel(a.g, b.g),
+        b: channel(a.b, b.b),
+        a: alpha,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1361,7 +1381,7 @@ mod tests {
     }
 
     #[test]
-    fn colors_interpolate_through_hsla() {
+    fn colors_interpolate_in_srgb() {
         let mut a = Animator::new();
         let now = t0();
         let red: Hsla = Rgba {
@@ -1389,11 +1409,31 @@ mod tests {
 
         let half = a.overlay_test(1, now + Duration::from_millis(500)).unwrap();
         let c = half.background.unwrap().color().unwrap().as_solid().unwrap();
-        // Red is hue 0, blue is hue 2/3: the shortest arc runs backwards
-        // through magenta, landing on 5/6.
-        assert!((c.h - 5.0 / 6.0).abs() < 1e-3, "hue {}", c.h);
-        assert!((c.s - 1.0).abs() < 1e-3);
-        assert!((c.l - 0.5).abs() < 1e-3);
+        // Half of each channel: `rgb(128 0 128)`, the purple a browser shows,
+        // not the full-brightness magenta of the hue arc between them.
+        let c = Rgba::from(c);
+        assert!((c.r - 0.5).abs() < 1e-3 && c.g < 1e-3 && (c.b - 0.5).abs() < 1e-3, "{c:?}");
+    }
+
+    /// `transparent` is black at alpha 0. Mixed unpremultiplied, a background
+    /// fading in from it is gray at half alpha part way; a browser shows the
+    /// colour it is heading for, at a growing alpha.
+    #[test]
+    fn a_colour_fading_in_from_transparent_keeps_its_colour() {
+        let white: Hsla = Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }.into();
+        let clear = Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.0 };
+        let quarter = Rgba::from(lerp_color(clear, white, 0.25));
+        assert!((quarter.a - 0.25).abs() < 1e-3, "{quarter:?}");
+        assert!(quarter.r > 0.999 && quarter.g > 0.999 && quarter.b > 0.999, "{quarter:?}");
+        // Gray to blue goes straight there, without the hues from red on.
+        let gray: Hsla = Rgba { r: 0.5, g: 0.5, b: 0.5, a: 1.0 }.into();
+        let blue: Hsla = Rgba { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }.into();
+        let half = Rgba::from(lerp_color(gray, blue, 0.5));
+        assert!((half.r - 0.25).abs() < 1e-3 && (half.g - 0.25).abs() < 1e-3, "{half:?}");
+        assert!((half.b - 0.75).abs() < 1e-3, "{half:?}");
+        // An overshooting easing stays a colour.
+        let over = lerp_color(gray, blue, 1.4);
+        assert!((0.0..=1.0).contains(&over.l) && (0.0..=1.0).contains(&over.a));
     }
 
     #[test]

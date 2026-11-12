@@ -124,7 +124,11 @@ impl AnimationSpec {
         if !self.iterations.is_finite() {
             return None;
         }
-        Some(self.delay + self.duration.mul_f32(self.iterations.max(0.0)))
+        // A count that carries the end past what a `Duration` holds never
+        // ends as far as anyone watching can tell; `mul_f32` would panic.
+        let run = self.duration.as_secs_f64() * self.iterations.max(0.0) as f64;
+        let run = Duration::try_from_secs_f64(run).ok()?;
+        self.delay.checked_add(run)
     }
 
     /// Progress within one iteration at `elapsed` since the animation started,
@@ -142,32 +146,39 @@ impl AnimationSpec {
         let running = elapsed - self.delay;
         if self.duration.is_zero() {
             return Phase::Finished {
-                progress: self.direct(self.iterations.max(1.0), 1.0),
+                progress: self.final_progress(),
             };
         }
         let raw = running.as_secs_f64() / self.duration.as_secs_f64();
         if raw >= self.iterations as f64 {
-            // CSS: the final value is the end of the LAST iteration, which for
-            // a fractional count is part way through it.
-            let last = self.iterations.max(0.0);
-            let whole = if last.fract() == 0.0 {
-                (last - 1.0).max(0.0)
-            } else {
-                last.floor()
-            };
-            let frac = if last.fract() == 0.0 {
-                1.0
-            } else {
-                last.fract()
-            };
             return Phase::Finished {
-                progress: self.direct(whole, frac),
+                progress: self.final_progress(),
             };
         }
         let iteration = raw.floor() as f32;
         Phase::Running {
             iteration,
             progress: self.direct(iteration, (raw - raw.floor()) as f32),
+        }
+    }
+
+    /// Where the animation rests once it is over. CSS: the end of the LAST
+    /// iteration, which for a fractional count is part way through it, and for
+    /// a count of 0 is the start of the first. An instant animation that
+    /// repeats forever has no last iteration; it rests as one iteration does.
+    fn final_progress(&self) -> f32 {
+        let last = if self.iterations.is_finite() {
+            self.iterations.max(0.0)
+        } else {
+            1.0
+        };
+        if last == 0.0 {
+            return self.direct(0.0, 0.0);
+        }
+        if last.fract() == 0.0 {
+            self.direct(last - 1.0, 1.0)
+        } else {
+            self.direct(last.floor(), last.fract())
         }
     }
 
@@ -814,6 +825,42 @@ mod tests {
             half.phase(Duration::from_millis(5000)),
             Phase::Finished { progress: 0.5 }
         );
+    }
+
+    /// An instant animation rests where a timed one with the same count does:
+    /// one `alternate` iteration ends at the END, not back at the start.
+    #[test]
+    fn an_instant_animation_rests_where_a_timed_one_does() {
+        let mut one = spec(1.0, Direction::Alternate);
+        one.duration = Duration::ZERO;
+        assert_eq!(one.phase(Duration::ZERO), Phase::Finished { progress: 1.0 });
+        let mut two = spec(2.0, Direction::Alternate);
+        two.duration = Duration::ZERO;
+        assert_eq!(two.phase(Duration::ZERO), Phase::Finished { progress: 0.0 });
+    }
+
+    /// `animation-iteration-count: 0` never leaves the first keyframe.
+    #[test]
+    fn a_count_of_zero_rests_at_the_start() {
+        let none = spec(0.0, Direction::Normal);
+        assert_eq!(
+            none.phase(Duration::from_millis(10)),
+            Phase::Finished { progress: 0.0 }
+        );
+        let reversed = spec(0.0, Direction::Reverse);
+        assert_eq!(
+            reversed.phase(Duration::from_millis(10)),
+            Phase::Finished { progress: 1.0 }
+        );
+    }
+
+    /// A count times a duration that no `Duration` holds is "never ends", not a
+    /// panic in `mul_f32`.
+    #[test]
+    fn a_total_past_what_a_duration_holds_is_endless() {
+        let mut long = spec(1.0e30, Direction::Normal);
+        long.duration = Duration::from_secs(1_000_000_000);
+        assert_eq!(long.total(), None);
     }
 
     #[test]

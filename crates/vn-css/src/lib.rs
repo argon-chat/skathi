@@ -5866,6 +5866,20 @@ mod tests {
     // ::before / ::after / ::placeholder
     // -----------------------------------------------------------------------
 
+    /// `content: none` in a later rule takes the box back; it is a declared
+    /// value, not the absence of one.
+    #[test]
+    fn content_none_takes_back_an_earlier_rules_box() {
+        let engine = Engine::compile(
+            r#".nav::before { content: "|" } .nav::before { content: none }
+               .nav::after { content: none } .nav::after { content: "+" }"#,
+        );
+        let d = doc();
+        let states = cascade(&engine, &d, &Env::default());
+        assert!(states[0].before.is_none());
+        assert_eq!(&*states[0].after.as_ref().expect("an ::after box").content, "+");
+    }
+
     /// A `::before` rule styles a GENERATED BOX, not the element it matched —
     /// so its declarations must land on `ComputedStates::before` and nowhere
     /// near `base`. (Before this, the rule was dropped at compile time.)
@@ -6638,6 +6652,38 @@ mod tests {
         assert_eq!(opacity(1), Some(0.5), "the card that HAS a badge");
         assert_eq!(opacity(3), None, "the card that does not");
         assert_eq!(opacity(2), None, "the badge itself is not the subject");
+    }
+
+    /// `+` is the sibling right after; `~` is any later one.
+    #[test]
+    fn has_with_plus_only_looks_at_the_next_sibling() {
+        let doc = Doc {
+            nodes: vec![
+                ("", "", 0, vec![]),
+                ("label", "label", 0, vec![]),
+                ("span", "hint", 0, vec![]),
+                ("input", "bad", 0, vec![]),
+            ],
+        };
+        let next = Engine::compile(".label:has(+ .bad) { opacity: 0.5 } .hint:has(+ .bad) { opacity: 0.5 }");
+        let later = Engine::compile(".label:has(~ .bad) { opacity: 0.5 }");
+        let opacity = |engine: &Engine, i: usize| {
+            let mut d = Vec::new();
+            engine
+                .compute_node(
+                    DocRef { doc: &doc, i },
+                    None,
+                    &Rc::new(Vars::default()),
+                    None,
+                    &Env::default(),
+                    &mut d,
+                )
+                .base
+                .opacity
+        };
+        assert_eq!(opacity(&next, 1), None, "a hint sits between them");
+        assert_eq!(opacity(&next, 2), Some(0.5), "the hint is right before it");
+        assert_eq!(opacity(&later, 1), Some(0.5));
     }
 
     /// The child form only looks one level down, which is the whole point of

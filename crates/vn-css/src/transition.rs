@@ -725,8 +725,15 @@ pub(crate) fn duration_of(t: &Time, what: &str, diagnostics: &mut Vec<String>) -
         ));
         return Duration::ZERO;
     }
-    Duration::from_secs_f64(ms as f64 / 1000.0)
+    // `Duration::from_secs_f64` panics past `u64` seconds, and a track adds
+    // its delay and duration to an `Instant`, which panics on overflow too.
+    // `transition-delay: 9999999s` is a real idiom for "never"; three decades
+    // says the same and stays addable.
+    Duration::from_secs_f64((ms as f64 / 1000.0).min(MAX_TIME_SECS))
 }
+
+/// The longest `<time>` a transition or animation keeps: about 31 years.
+pub(crate) const MAX_TIME_SECS: f64 = 1.0e9;
 
 /// One `<easing-function>`. Shared with `keyframes.rs`.
 pub(crate) fn easing_of(e: &EasingFunction, diagnostics: &mut Vec<String>) -> Easing {
@@ -941,6 +948,16 @@ mod tests {
         assert_eq!(s[0].property, TransitionProperty::Transform);
         assert_eq!(s[0].property.name(), "transform");
         assert!(TransitionProperty::animatable().contains(&TransitionProperty::Transform));
+    }
+
+    /// `1e20s` is past what `Duration::from_secs_f64` takes, and a track adds
+    /// its times to an `Instant`.
+    #[test]
+    fn a_huge_time_is_capped_and_stays_addable() {
+        let s = specs("transition: opacity 1e20s 1e20s");
+        assert_eq!(s[0].duration, Duration::from_secs(1_000_000_000));
+        assert_eq!(s[0].delay, Duration::from_secs(1_000_000_000));
+        let _ = std::time::Instant::now() + s[0].delay + s[0].duration;
     }
 
     #[test]

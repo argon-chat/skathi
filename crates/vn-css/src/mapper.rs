@@ -316,6 +316,10 @@ pub struct Extras {
     /// `Rc<str>` is why [`Extras`] is `Clone` rather than `Copy`; the clone is
     /// a refcount bump and the field is `None` on all but a handful of rules.
     pub content: Option<Rc<str>>,
+    /// `content: none` / `normal` was declared: a later rule that says so
+    /// takes back the string an earlier one gave, where leaving `content`
+    /// unset says nothing.
+    pub content_none: bool,
     /// `background-clip: text` (or its `-webkit-` spelling). The renderer
     /// retains the background stack as a brush and masks it with glyph alpha.
     pub background_clip_text: Option<bool>,
@@ -870,6 +874,10 @@ impl Extras {
         }
         if other.content.is_some() {
             self.content = other.content.clone();
+            self.content_none = false;
+        } else if other.content_none {
+            self.content = None;
+            self.content_none = true;
         }
         // `blur` is `Some` for every `filter` declaration, and the
         // `drop-shadow()` is the same declaration's: a later `filter` replaces
@@ -2336,28 +2344,37 @@ fn absolute_font_size_px(k: &lightningcss::properties::font::AbsoluteFontSize) -
 /// Percentages are deliberately NOT evaluated: they need the containing block,
 /// which does not exist until layout. A `calc()` that mixes one in returns
 /// `None` and takes the ordinary "value is unresolved" path.
+///
+/// A result that is not a finite number is unresolved too: `calc(100px / 0)`
+/// is infinity, and an infinite or NaN length reaches layout as one.
 fn calc_px<V>(calc: &lightningcss::values::calc::Calc<V>, leaf: &dyn Fn(&V) -> Option<f32>) -> Option<f32> {
+    calc_term(calc, leaf).filter(|px| px.is_finite())
+}
+
+fn calc_term<V>(calc: &lightningcss::values::calc::Calc<V>, leaf: &dyn Fn(&V) -> Option<f32>) -> Option<f32> {
     use lightningcss::values::calc::{Calc, MathFunction};
     match calc {
         Calc::Value(v) => leaf(v),
         Calc::Number(n) => Some(*n),
-        Calc::Sum(a, b) => Some(calc_px(a, leaf)? + calc_px(b, leaf)?),
-        Calc::Product(n, v) => Some(n * calc_px(v, leaf)?),
+        Calc::Sum(a, b) => Some(calc_term(a, leaf)? + calc_term(b, leaf)?),
+        Calc::Product(n, v) => Some(n * calc_term(v, leaf)?),
         Calc::Function(f) => match &**f {
-            MathFunction::Calc(c) => calc_px(c, leaf),
+            MathFunction::Calc(c) => calc_term(c, leaf),
             MathFunction::Min(list) => list
                 .iter()
-                .map(|c| calc_px(c, leaf))
+                .map(|c| calc_term(c, leaf))
                 .try_fold(f32::INFINITY, |acc, v| Some(acc.min(v?))),
             MathFunction::Max(list) => list
                 .iter()
-                .map(|c| calc_px(c, leaf))
+                .map(|c| calc_term(c, leaf))
                 .try_fold(f32::NEG_INFINITY, |acc, v| Some(acc.max(v?))),
+            // CSS: `max(MIN, min(VAL, MAX))`, so a MIN above MAX wins.
+            // `f32::clamp` panics on that, and on a NaN bound.
             MathFunction::Clamp(lo, v, hi) => {
-                Some(calc_px(v, leaf)?.clamp(calc_px(lo, leaf)?, calc_px(hi, leaf)?))
+                Some(calc_term(v, leaf)?.min(calc_term(hi, leaf)?).max(calc_term(lo, leaf)?))
             }
-            MathFunction::Abs(v) => Some(calc_px(v, leaf)?.abs()),
-            MathFunction::Sign(v) => Some(calc_px(v, leaf)?.signum()),
+            MathFunction::Abs(v) => Some(calc_term(v, leaf)?.abs()),
+            MathFunction::Sign(v) => Some(calc_term(v, leaf)?.signum()),
             // round()/rem()/mod()/hypot() have no user in any sheet we serve;
             // they take the "unresolved" path with the ordinary advisory.
             _ => None,
@@ -5859,8 +5876,14 @@ fn apply_property(
                 if name.0.as_ref() == "content" =>
             {
                 match content_string(&c.value) {
-                    ContentValue::Text(t) => x.content = Some(t),
-                    ContentValue::None => x.content = None,
+                    ContentValue::Text(t) => {
+                        x.content = Some(t);
+                        x.content_none = false;
+                    }
+                    ContentValue::None => {
+                        x.content = None;
+                        x.content_none = true;
+                    }
                     ContentValue::Unsupported(what) => once(
                         diagnostics,
                         format!(
@@ -7606,6 +7629,18 @@ mod tests {
     }
 
     // ---- calc() over absolute lengths ------------------------------------
+
+    /// `clamp()` whose MIN is above its MAX resolves to MIN (`f32::clamp`
+    /// panics on it), and a division by zero is no length at all.
+    #[test]
+    fn calc_that_is_not_a_finite_length_does_not_reach_the_layout() {
+        let (r, _) = map("width: clamp(2rem, 5px, 1rem)");
+        assert_eq!(r.size.width, Some(Length::Definite(px(32.0).into())));
+        let (r, _) = map("width: calc(100px / 0)");
+        assert_eq!(r.size.width, None);
+        let (r, _) = map("padding-top: calc(1px * (1 / 0))");
+        assert_eq!(r.padding.top, None);
+    }
 
     #[test]
     fn calc_sums_and_products_resolve_to_pixels() {

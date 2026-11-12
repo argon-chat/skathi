@@ -31,8 +31,8 @@
 //! The relative selector may be a plain compound or complex selector, matched
 //! against DESCENDANTS (`:has(.x)`, `:has([data-selected])`,
 //! `:has(select:disabled)`), and the explicit child form `:has(> .x)`. The
-//! sibling combinators `:has(+ .x)` and `:has(~ .x)` are matched against the
-//! element's following siblings.
+//! sibling combinators are matched against the siblings after the element:
+//! `:has(+ .x)` the next one, `:has(~ .x)` any of them.
 //!
 //! Nested `:has()` inside a `:has()` is refused at rewrite time — the inner one
 //! would need its own registry entry keyed on a different subject, and no sheet
@@ -52,7 +52,9 @@ enum Anchor {
     Descendant,
     /// `:has(> .x)` — a direct child.
     Child,
-    /// `:has(+ .x)` / `:has(~ .x)` — a following sibling.
+    /// `:has(+ .x)` — the sibling right after.
+    NextSibling,
+    /// `:has(~ .x)` — any following sibling.
     FollowingSibling,
 }
 
@@ -154,9 +156,10 @@ fn compile(argument: &str) -> Option<usize> {
 fn compile_new(argument: &str) -> Option<usize> {
     let (anchor, body) = match argument.strip_prefix('>') {
         Some(rest) => (Anchor::Child, rest),
-        None => match argument.strip_prefix('+').or_else(|| argument.strip_prefix('~')) {
-            Some(rest) => (Anchor::FollowingSibling, rest),
-            None => (Anchor::Descendant, argument),
+        None => match (argument.strip_prefix('+'), argument.strip_prefix('~')) {
+            (Some(rest), _) => (Anchor::NextSibling, rest),
+            (_, Some(rest)) => (Anchor::FollowingSibling, rest),
+            _ => (Anchor::Descendant, argument),
         },
     };
     let body = body.trim();
@@ -229,6 +232,11 @@ pub(crate) fn matches<D: MatchDom>(name: &str, node: &D) -> bool {
                     found = found || matches_any(&entry.selectors, &child);
                 });
                 found
+            }
+            Anchor::NextSibling => {
+                node.note_following_sibling_anchor();
+                node.next_sibling()
+                    .is_some_and(|next| matches_any(&entry.selectors, &next))
             }
             Anchor::FollowingSibling => {
                 node.note_following_sibling_anchor();
