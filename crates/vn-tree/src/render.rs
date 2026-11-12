@@ -630,10 +630,31 @@ pub(crate) fn gc_node_state() {
         }
     });
     for (k, focused) in blur {
-        if !tree::read_tree(|t| reaches_painted_root(t, focused)) {
+        if !tree::read_tree(|t| keeps_focus(t, focused)) {
             windows::of(k, |w| w.pending_blur = focused);
         }
     }
+}
+
+/// May `id`, which has the focus, keep it? Not once it has left the document,
+/// and not once it stopped being a focusable area: a `<button>` that disabled
+/// itself (submit → loading), a `tabindex` that was removed, a box that is
+/// `display: none` or inside one.
+///
+/// Such a node is still allocated and its handle is still gpui's focus, but
+/// the build no longer binds the handle to an element. A key event then
+/// dispatches from the window's root node alone, where no element listener
+/// runs, and [`ensure_root_focus`] sees a focus and leaves it: every `keydown`
+/// on `document` was dead until the next press. A browser moves the focus to
+/// the body here.
+fn keeps_focus(t: &Tree, id: u32) -> bool {
+    let shown = |n: &tree::Node| {
+        !n.computed.as_ref().is_some_and(|c| c.base.display == Some(gpui::Display::None))
+    };
+    reaches_painted_root(t, id)
+        && could_take_focus(t, id)
+        && t.node(id).is_some_and(shown)
+        && !t.hidden_above(id)
 }
 
 /// Does `id` still hang off SOME painted root — the document root, or a node a
@@ -771,7 +792,7 @@ pub(crate) fn apply_pending_blur(window: &mut Window, cx: &mut App) {
     if pending == 0 || windows::focused_node(k) != pending {
         return;
     }
-    if tree::read_tree(|t| reaches_painted_root(t, pending)) {
+    if tree::read_tree(|t| keeps_focus(t, pending)) {
         return;
     }
     // gpui first — this is what stops keystrokes reaching the detached node.
@@ -6580,6 +6601,34 @@ fn input_configuration(t: &Tree, id: u32, multiline: bool) -> gpui::TextInputCon
 
 #[cfg(test)]
 mod tests {
+    /// A focused `<button>` that disables itself, or loses its place in the
+    /// document, gives the focus up: the keystrokes go back to the root.
+    #[test]
+    fn a_focused_node_that_stopped_being_focusable_does_not_keep_the_focus() {
+        crate::tree::with_tree(|t| {
+            let root = t.create_root();
+            let button = t.intern("button");
+            let div = t.intern("div");
+            let button = t.create_element(button);
+            let plain = t.create_element(div);
+            t.insert(button, root, 0);
+            t.insert(plain, root, 0);
+            assert!(super::keeps_focus(t, button));
+            assert!(!super::keeps_focus(t, plain), "a div was never a focusable area");
+            let tabindex = t.intern("tabindex");
+            t.set_prop(plain, tabindex, Some("0".to_string()));
+            assert!(super::keeps_focus(t, plain));
+            t.set_prop(plain, tabindex, None);
+            assert!(!super::keeps_focus(t, plain), "its tabindex was removed");
+            let disabled = t.intern("disabled");
+            t.set_prop(button, disabled, Some(String::new()));
+            assert!(!super::keeps_focus(t, button), "it disabled itself");
+            t.set_prop(button, disabled, None);
+            t.remove(button);
+            assert!(!super::keeps_focus(t, button), "it left the document");
+        });
+    }
+
     #[test]
     fn select_on_an_unbuilt_text_field_is_preserved_until_build_and_removed_by_gc() {
         let (field, other) = crate::tree::with_tree(|t| {
