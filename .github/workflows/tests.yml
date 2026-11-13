@@ -33,6 +33,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # vue-tsc patches tsc through Node's fs.readFileSync; run by bun (a runner with no node) it is plain tsc
+      # and every .vue import fails to resolve.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Check runtime types
@@ -50,6 +55,15 @@ jobs:
           persist-credentials: false
           # cargo metadata resolves the path dependencies in vendor/.
           submodules: recursive
+      - name: Install the pinned Rust toolchain
+        # cargo deny runs cargo metadata.
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.97.1 --profile minimal
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny

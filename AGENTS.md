@@ -26,7 +26,7 @@ In `packages/vue-native`:
 ```
 bun install
 bun test                 # unit tests
-bun run typecheck
+bun run typecheck         # needs Node on PATH: vue-tsc run by bun cannot resolve .vue imports
 bun run preludes         # regenerate crates/vn-app/src/{prelude,window.prelude}.js
 bun run preludes:check
 bun run shaders:check
