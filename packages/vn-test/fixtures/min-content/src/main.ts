@@ -22,10 +22,15 @@ const row = (w: number, nowrap: boolean) => {
     },
     [
       h("div", { id: `left-${id}`, style: { display: "flex", alignItems: "center", gap: "8px" } }, [
-        h("div", { style: { padding: "6px" } }, [h("div", { style: { width: "16px", height: "16px", background: "#3388ff" } })]),
+        h("div", { style: { padding: "6px" } }, [
+          h("div", { style: { width: "16px", height: "16px", background: "#3388ff" } }),
+        ]),
         h(
           "span",
-          { id: `label-${id}`, style: { fontSize: "12px", fontWeight: "500", whiteSpace: nowrap ? "nowrap" : "normal" } },
+          {
+            id: `label-${id}`,
+            style: { fontSize: "12px", fontWeight: "500", whiteSpace: nowrap ? "nowrap" : "normal" },
+          },
           "Time in Voice",
         ),
       ]),
@@ -36,8 +41,29 @@ const row = (w: number, nowrap: boolean) => {
 
 createApp({
   render: () =>
-    h("div", { id: "root", style: { fontFamily: "Arial, sans-serif", background: "#ffffff", color: "#000000", display: "flex", gap: "8px" } }, [
-      h("div", { id: "normal" }, WIDTHS.map((w) => row(w, false))),
-      h("div", { id: "nowrap" }, WIDTHS.map((w) => row(w, true))),
-    ]),
+    h(
+      "div",
+      {
+        id: "root",
+        style: {
+          fontFamily: "Arial, sans-serif",
+          background: "#ffffff",
+          color: "#000000",
+          display: "flex",
+          gap: "8px",
+        },
+      },
+      [
+        h(
+          "div",
+          { id: "normal" },
+          WIDTHS.map((w) => row(w, false)),
+        ),
+        h(
+          "div",
+          { id: "nowrap" },
+          WIDTHS.map((w) => row(w, true)),
+        ),
+      ],
+    ),
 }).mount();

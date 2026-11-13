@@ -7,10 +7,15 @@ import type ts from "typescript";
 
 type TypeScript = typeof ts;
 type InputKind = "source" | "vue" | "vue-module" | "vue-script" | "transformed-module" | "config";
-interface Input { path: string; kind: InputKind; text: string; loader?: string }
+interface Input {
+  path: string;
+  kind: InputKind;
+  text: string;
+  loader?: string;
+}
 const sha256 = (text: string | Uint8Array) => createHash("sha256").update(text).digest("hex");
 const slash = (path: string) => path.split(sep).join("/");
-const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 export interface AotEngineIdentity {
   jscPin: string | null;
@@ -62,14 +67,17 @@ export class AotInputs {
     const appPath = relative(this.options.appRoot, path);
     if (!isAbsolute(appPath) && appPath !== ".." && !appPath.startsWith(`..${sep}`)) {
       const first = slash(appPath).split("/", 1)[0]!;
-      const reserved = Object.keys(this.options.sourceRoots ?? {}).some((name) => first.toLowerCase() === `@${name}`.toLowerCase());
+      const reserved = Object.keys(this.options.sourceRoots ?? {}).some(
+        (name) => first.toLowerCase() === `@${name}`.toLowerCase(),
+      );
       if (reserved) throw new Error(`AOT app input ${appPath} collides with a named source-root anchor`);
       return slash(appPath);
     }
     for (const [name, root] of Object.entries(this.options.sourceRoots ?? {})) {
       if (!/^[a-z][a-z0-9-]*$/i.test(name)) throw new Error(`Invalid AOT source-root name: ${name}`);
       const rootPath = relative(root, path);
-      if (!isAbsolute(rootPath) && rootPath !== ".." && !rootPath.startsWith(`..${sep}`)) return `@${name}/${slash(rootPath)}`;
+      if (!isAbsolute(rootPath) && rootPath !== ".." && !rootPath.startsWith(`..${sep}`))
+        return `@${name}/${slash(rootPath)}`;
     }
     if (isAbsolute(appPath)) throw new Error(`AOT input ${path} is on another volume; add a stable sourceRoots anchor`);
     return slash(appPath);
@@ -132,9 +140,18 @@ export class AotInputs {
         visited.add(this.key(path));
         const config = typescript.readConfigFile(path, read);
         if (config.error) throw new Error(typescript.flattenDiagnosticMessageText(config.error.messageText, "\n"));
-        const parsed = typescript.parseJsonConfigFileContent(config.config, { ...typescript.sys, readFile: read }, dirname(path));
+        const parsed = typescript.parseJsonConfigFileContent(
+          config.config,
+          { ...typescript.sys, readFile: read },
+          dirname(path),
+        );
         const errors = parsed.errors.filter((diagnostic) => diagnostic.code !== 18003);
-        if (errors.length) throw new Error(errors.map((diagnostic) => typescript.flattenDiagnosticMessageText(diagnostic.messageText, "\n")).join("\n"));
+        if (errors.length)
+          throw new Error(
+            errors
+              .map((diagnostic) => typescript.flattenDiagnosticMessageText(diagnostic.messageText, "\n"))
+              .join("\n"),
+          );
         projects.push(parsed);
         for (const reference of parsed.projectReferences ?? []) {
           visit(typescript.resolveProjectReferencePath(reference));
@@ -142,34 +159,53 @@ export class AotInputs {
       };
       visit(configPath);
       // Use the entry's project (a Vue/Vite solution tsconfig has files: []) so its aliases and ambient types survive.
-      const selected = projects.find((project) => project.fileNames.some((path) => this.key(path) === this.key(entry))) ?? projects[0]!;
+      const selected =
+        projects.find((project) => project.fileNames.some((path) => this.key(path) === this.key(entry))) ??
+        projects[0]!;
       options = selected.options;
       roots = selected.fileNames.filter((path) => /\.[cm]?[jt]sx?$/i.test(path));
     }
     const host = typescript.createCompilerHost({ ...options, noEmit: true, allowJs: true });
     host.readFile = read;
     host.fileExists = (path) => this.virtual.has(this.key(path)) || typescript.sys.fileExists(path);
-    host.resolveModuleNames = (names, importer) => names.map((specifier) => {
-      const alias = aliases[specifier];
-      // Bun's resolved runtime modules are already roots; keep the package's declaration entry too,
-      // or .d.ts files and every type-only dependency behind them are dropped.
-      const resolved = typescript.resolveModuleName(specifier, importer, options, host).resolvedModule
-        ?? (specifier.endsWith(".vue") ? typescript.resolveModuleName(`${specifier}.ts`, importer, options, host).resolvedModule : undefined)
-        ?? (alias ? typescript.resolveModuleName(specifier, alias, options, host).resolvedModule : undefined)
-        ?? (alias ? { resolvedFileName: alias, extension: /\.[cm]?tsx?$/.test(alias) ? typescript.Extension.Ts : typescript.Extension.Js } : undefined);
-      if (!resolved) {
-        const value = { importer: this.pathId(importer), specifier };
-        this.unresolved.set(`${value.importer}:${specifier}`, value);
-      }
-      return resolved;
-    });
+    host.resolveModuleNames = (names, importer) =>
+      names.map((specifier) => {
+        const alias = aliases[specifier];
+        // Bun's resolved runtime modules are already roots; keep the package's declaration entry too,
+        // or .d.ts files and every type-only dependency behind them are dropped.
+        const resolved =
+          typescript.resolveModuleName(specifier, importer, options, host).resolvedModule ??
+          (specifier.endsWith(".vue")
+            ? typescript.resolveModuleName(`${specifier}.ts`, importer, options, host).resolvedModule
+            : undefined) ??
+          (alias ? typescript.resolveModuleName(specifier, alias, options, host).resolvedModule : undefined) ??
+          (alias
+            ? {
+                resolvedFileName: alias,
+                extension: /\.[cm]?tsx?$/.test(alias) ? typescript.Extension.Ts : typescript.Extension.Js,
+              }
+            : undefined);
+        if (!resolved) {
+          const value = { importer: this.pathId(importer), specifier };
+          this.unresolved.set(`${value.importer}:${specifier}`, value);
+        }
+        return resolved;
+      });
     // Override CompilerHost's getSourceFile so virtual Vue modules and post-plugin TS participate.
     host.getSourceFile = (path, languageVersion) => {
       const text = read(path);
       return text === undefined ? undefined : typescript.createSourceFile(path, text, languageVersion, true);
     };
     const program = typescript.createProgram({
-      rootNames: [...new Set([entry, ...roots, ...declarations, ...[...this.modules.values()].map((value) => value.path), ...[...this.virtual.values()].map((value) => value.path)])].sort(compare),
+      rootNames: [
+        ...new Set([
+          entry,
+          ...roots,
+          ...declarations,
+          ...[...this.modules.values()].map((value) => value.path),
+          ...[...this.virtual.values()].map((value) => value.path),
+        ]),
+      ].sort(compare),
       options: { ...options, noEmit: true, allowJs: true },
       host,
     });
@@ -178,11 +214,20 @@ export class AotInputs {
     return {
       version: typescript.version,
       config: configPath ? this.pathId(configPath) : null,
-      diagnostics: program.getOptionsDiagnostics().map((diagnostic) => ({ code: diagnostic.code, message: typescript.flattenDiagnosticMessageText(diagnostic.messageText, "\n") })),
+      diagnostics: program.getOptionsDiagnostics().map((diagnostic) => ({
+        code: diagnostic.code,
+        message: typescript.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+      })),
     };
   }
 
-  write(details: { script: string; scriptUrl: string; defines: Record<string, string>; engine: AotEngineIdentity; sdkVersion: string }): string {
+  write(details: {
+    script: string;
+    scriptUrl: string;
+    defines: Record<string, string>;
+    engine: AotEngineIdentity;
+    sdkVersion: string;
+  }): string {
     const typescript = this.collectTypes();
     const { out, entry, aliases } = this.options;
     const inputs = [...this.inputs.values()].map((input) => ({ ...input, id: this.pathId(input.path) }));
@@ -195,28 +240,45 @@ export class AotInputs {
     const blobs = join(out, "blobs");
     mkdirSync(blobs, { recursive: true });
     const written = new Set<string>();
-    const files = inputs.map((input) => {
-      const hash = sha256(input.text);
-      const blob = `blobs/${hash}`;
-      if (!written.has(hash)) {
-        const path = join(out, blob);
-        writeFileSync(`${path}.tmp`, input.text);
-        renameSync(`${path}.tmp`, path);
-        written.add(hash);
-      }
-      return { path: input.id, kind: input.kind, ...(input.loader ? { loader: input.loader } : {}), sha256: hash, bytes: Buffer.byteLength(input.text), blob };
-    }).sort((a, b) => compare(a.path, b.path) || compare(a.kind, b.kind));
+    const files = inputs
+      .map((input) => {
+        const hash = sha256(input.text);
+        const blob = `blobs/${hash}`;
+        if (!written.has(hash)) {
+          const path = join(out, blob);
+          writeFileSync(`${path}.tmp`, input.text);
+          renameSync(`${path}.tmp`, path);
+          written.add(hash);
+        }
+        return {
+          path: input.id,
+          kind: input.kind,
+          ...(input.loader ? { loader: input.loader } : {}),
+          sha256: hash,
+          bytes: Buffer.byteLength(input.text),
+          blob,
+        };
+      })
+      .sort((a, b) => compare(a.path, b.path) || compare(a.kind, b.kind));
     const manifest = {
-      schema: "vue-native.aot-inputs", version: 1, stage: "typed-source-inputs",
+      schema: "vue-native.aot-inputs",
+      version: 1,
+      stage: "typed-source-inputs",
       entry: this.pathId(entry),
       typescript,
       sdkVersion: details.sdkVersion,
       engine: details.engine,
       script: { url: details.scriptUrl, sha256: sha256(details.script), bytes: Buffer.byteLength(details.script) },
       defines: details.defines,
-      aliases: Object.fromEntries(Object.entries(aliases).sort(([a], [b]) => compare(a, b)).map(([key, value]) => [key, this.pathId(value)])),
+      aliases: Object.fromEntries(
+        Object.entries(aliases)
+          .sort(([a], [b]) => compare(a, b))
+          .map(([key, value]) => [key, this.pathId(value)]),
+      ),
       files,
-      unresolvedImports: [...this.unresolved.values()].sort((a, b) => compare(a.importer, b.importer) || compare(a.specifier, b.specifier)),
+      unresolvedImports: [...this.unresolved.values()].sort(
+        (a, b) => compare(a.importer, b.importer) || compare(a.specifier, b.specifier),
+      ),
       limitations: [
         "Source archive, not a native AOT image; no host ABI or builtin-effect descriptors are inferred from declarations.",
         "Original paths are app-root-relative or use a named source-root anchor; blob names are content hashes. An AOT frontend needs a resolver that maps these paths to blobs.",

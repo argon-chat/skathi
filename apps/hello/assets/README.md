@@ -41,22 +41,22 @@ boxborderw=18:x=(w-text_w)/2:y=(h-text_h)/2" \
   -c:a aac -b:a 64k -movflags +faststart clip-1080p.mp4
 ```
 
-Everything in it is there to be *verifiable*:
+Everything in it is there to be _verifiable_:
 
-* **H.264 High profile 8-bit + AAC-LC in MP4** is the guaranteed inbox baseline —
+- **H.264 High profile 8-bit + AAC-LC in MP4** is the guaranteed inbox baseline —
   the one combination that decodes on a clean Windows install with no Store
   codec extension (`crates/vn-video/CONTRACT.md` §8). The demo must work on the
   machine that has nothing.
-* **A burnt-in `HH:MM:SS.mmm` timecode**, so a screenshot proves *which frame*
+- **A burnt-in `HH:MM:SS.mmm` timecode**, so a screenshot proves _which frame_
   is on screen. Seek correctness is then a thing you can read rather than infer.
-* **A white bar sweeping left→right on a 4 s cycle**, so motion is visible even
+- **A white bar sweeping left→right on a 4 s cycle**, so motion is visible even
   in a crop that misses the timecode.
-* **SMPTE bars** as the background because they are static and compress to
+- **SMPTE bars** as the background because they are static and compress to
   nothing: 1080p for twelve seconds in 344 KB.
-* **A real 330 Hz audio track**, because the whole argument for
+- **A real 330 Hz audio track**, because the whole argument for
   `IMFMediaEngine` over a bare decoder is that the OS owns the audio clock. A
   silent clip would never exercise it.
-* **1080p** specifically: the memory and frame-time numbers in the m11/m12
+- **1080p** specifically: the memory and frame-time numbers in the m11/m12
   reports are quoted per 1080p stream, and a demo at 480p would not test them.
 
 `clip-1080p.poster.png` is frame 0 scaled to 640 px wide (`ffmpeg -i
@@ -73,7 +73,7 @@ ffmpeg -y -f lavfi -i "testsrc2=size=320x180:rate=15:duration=2"   -c:v ffv1 -le
 Theora in an Ogg container wearing an `.mp4` extension — which turned out to
 **play**: this machine has `Microsoft.WebMediaExtensions`, which adds an Ogg
 source that is not in Microsoft's documented inbox list. MPEG-4 Part 2 in AVI
-plays too. FFV1 is the case that actually fails, and it fails in the *more*
+plays too. FFV1 is the case that actually fails, and it fails in the _more_
 instructive way: Media Foundation reads the Matroska container perfectly well
 and has no decoder for the codec inside it, so the error is genuinely "this
 machine cannot decode this", not "I could not open the file".

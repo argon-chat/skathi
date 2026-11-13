@@ -39,7 +39,12 @@ createApp({
       sticker("once", "/src/steps.json", at(100, 140, 60), { once: "" }),
       sticker("bad", "/src/missing.json", at(180, 140, 60)),
       sticker("tint", "/src/half.json", { ...at(340, 140, 60), color: "#ff0000" }, { tint: "" }),
-      sticker("tint-half", "/src/steps.json", { ...at(20, 220, 60), color: "rgba(0, 0, 255, 0.5)" }, { tint: "", play: "off" }),
+      sticker(
+        "tint-half",
+        "/src/steps.json",
+        { ...at(20, 220, 60), color: "rgba(0, 0, 255, 0.5)" },
+        { tint: "", play: "off" },
+      ),
       h("div", { id: "clip", style: { ...at(260, 140, 60), overflow: "hidden", background: "#eee" } }, [
         h("div", { style: { height: "300px", paddingTop: "200px" } }, [
           sticker("far", "/src/steps.json", { width: "60px", height: "60px" }),

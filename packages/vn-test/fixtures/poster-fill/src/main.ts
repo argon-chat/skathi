@@ -87,13 +87,23 @@ const Grid = {
           cell(
             "c-video",
             100,
-            h("video", { id: "p-video", class: "va-poster", src: "/src/clip-tiny.mp4", muted: true, preload: "metadata" }),
+            h("video", {
+              id: "p-video",
+              class: "va-poster",
+              src: "/src/clip-tiny.mp4",
+              muted: true,
+              preload: "metadata",
+            }),
           ),
         ]),
         h("div", { class: "grid-row", style: { height: "120px" } }, [
           cell("c-contain", 200, h("img", { id: "p-contain", class: "va-poster", src: WIDE, alt: "" }), "contain"),
-          h("div", { class: "grid-cell", style: { width: "100px" } }, [h(Attachment, { id: "c-png-wide", src: "/src/wide.png" })]),
-          h("div", { class: "grid-cell", style: { width: "220px" } }, [h(Attachment, { id: "c-png-tall", src: "/src/tall.png" })]),
+          h("div", { class: "grid-cell", style: { width: "100px" } }, [
+            h(Attachment, { id: "c-png-wide", src: "/src/wide.png" }),
+          ]),
+          h("div", { class: "grid-cell", style: { width: "220px" } }, [
+            h(Attachment, { id: "c-png-tall", src: "/src/tall.png" }),
+          ]),
         ]),
         h("div", { class: "grid-row", style: { height: "120px" } }, [
           h("div", { class: "grid-cell", style: { width: "100px" } }, [h(Attachment, { id: "c-thumb" })]),

@@ -232,10 +232,20 @@ export function installSelection(env: SelectionEnv): void {
     compareBoundaryPoints(how: unknown, source: RangeImpl) {
       const h = Number(how);
       if (!(h >= 0 && h <= 3)) {
-        throw env.error("compareBoundaryPoints", "Range", "NotSupportedError", "The comparison method provided must be one of 'START_TO_START', 'START_TO_END', 'END_TO_END', or 'END_TO_START'.");
+        throw env.error(
+          "compareBoundaryPoints",
+          "Range",
+          "NotSupportedError",
+          "The comparison method provided must be one of 'START_TO_START', 'START_TO_END', 'END_TO_END', or 'END_TO_START'.",
+        );
       }
       if (rootOf(this._sc) !== rootOf(source._sc)) {
-        throw env.error("compareBoundaryPoints", "Range", "WrongDocumentError", "The source range is in a different document than this range.");
+        throw env.error(
+          "compareBoundaryPoints",
+          "Range",
+          "WrongDocumentError",
+          "The source range is in a different document than this range.",
+        );
       }
       const [tn, to] = h === 0 || h === 3 ? [this._sc, this._so] : [this._ec, this._eo];
       const [sn, so] = h === 0 || h === 1 ? [source._sc, source._so] : [source._ec, source._eo];
@@ -244,7 +254,12 @@ export function installSelection(env: SelectionEnv): void {
     comparePoint(node: unknown, offset: unknown) {
       const [n, o] = point(node, offset, "comparePoint", "Range");
       if (rootOf(n) !== rootOf(this._sc)) {
-        throw env.error("comparePoint", "Range", "WrongDocumentError", "The node provided and the Range are not in the same tree.");
+        throw env.error(
+          "comparePoint",
+          "Range",
+          "WrongDocumentError",
+          "The node provided and the Range are not in the same tree.",
+        );
       }
       if (compare(n, o, this._sc, this._so) < 0) return -1;
       if (compare(n, o, this._ec, this._eo) > 0) return 1;
@@ -379,7 +394,8 @@ export function installSelection(env: SelectionEnv): void {
       let ref: SelNode | null;
       if (isText(sc)) {
         parent = sc.parentNode!;
-        if (!parent) throw env.error("insertNode", "Range", "HierarchyRequestError", "The range's start has no parent.");
+        if (!parent)
+          throw env.error("insertNode", "Range", "HierarchyRequestError", "The range's start has no parent.");
         if (so === 0) ref = sc;
         else if (so >= (sc.text ?? "").length) ref = parent.childNodes[indexOf(sc) + 1] ?? null;
         else {
@@ -411,7 +427,12 @@ export function installSelection(env: SelectionEnv): void {
       this.selectNode(newParent);
     }
   }
-  for (const [k, v] of [["START_TO_START", 0], ["START_TO_END", 1], ["END_TO_END", 2], ["END_TO_START", 3]] as const) {
+  for (const [k, v] of [
+    ["START_TO_START", 0],
+    ["START_TO_END", 1],
+    ["END_TO_END", 2],
+    ["END_TO_START", 3],
+  ] as const) {
     Object.defineProperty(RangeImpl.prototype, k, { value: v });
   }
   Object.defineProperty(RangeImpl, "name", { value: "Range" });
@@ -442,7 +463,12 @@ export function installSelection(env: SelectionEnv): void {
   function adviseStructure(r: RangeImpl, method: string) {
     const common = r.commonAncestorContainer;
     const split = (n: SelNode) => n !== common && !isText(n);
-    if (split(r._sc) || split(r._ec) || (isText(r._sc) && r._sc.parentNode !== common) || (isText(r._ec) && r._ec.parentNode !== common)) {
+    if (
+      split(r._sc) ||
+      split(r._ec) ||
+      (isText(r._sc) && r._sc.parentNode !== common) ||
+      (isText(r._ec) && r._ec.parentNode !== common)
+    ) {
       env.warn(
         `range:${method}`,
         `Range.${method}() across element boundaries: the elements the range cuts through are not split ` +
@@ -594,7 +620,8 @@ export function installSelection(env: SelectionEnv): void {
     }
     extend(node: unknown, offset: unknown = 0) {
       const s = read();
-      if (!s) throw env.error("extend", "Selection", "InvalidStateError", "This Selection object doesn't have any Ranges.");
+      if (!s)
+        throw env.error("extend", "Selection", "InvalidStateError", "This Selection object doesn't have any Ranges.");
       const [n, o] = point(node, offset, "extend", "Selection");
       if (!inDocument(n)) return;
       this.tie(null);
@@ -645,7 +672,11 @@ export function installSelection(env: SelectionEnv): void {
     throw new TypeError("Illegal constructor");
   } as unknown as { prototype: object };
   Object.defineProperty(SelectionIface, "prototype", { value: SelectionImpl.prototype });
-  Object.defineProperty(SelectionImpl.prototype, "constructor", { value: SelectionIface, configurable: true, writable: true });
+  Object.defineProperty(SelectionImpl.prototype, "constructor", {
+    value: SelectionIface,
+    configurable: true,
+    writable: true,
+  });
 
   env.defineGlobal("Range", RangeImpl);
   env.defineGlobal("Selection", SelectionIface);

@@ -21,9 +21,7 @@ onDeactivated(() => console.log("[app] ListPage DEACTIVATED (scrollTop=" + scrol
     </div>
     <div class="hint">scrollTop: {{ scrollTop.toFixed(0) }}px (wheel over the box)</div>
     <div class="hint">last wheel ΔY over the card: {{ wheelY.toFixed(1) }}</div>
-    <div class="hint keep">
-      &lt;KeepAlive&gt;: leave and come back — the box stays where you left it
-    </div>
+    <div class="hint keep">&lt;KeepAlive&gt;: leave and come back — the box stays where you left it</div>
     <div class="hint store">pinia (same store as the header): {{ session.badge }}</div>
   </div>
 </template>

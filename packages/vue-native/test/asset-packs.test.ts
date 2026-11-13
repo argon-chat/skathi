@@ -65,7 +65,10 @@ test("splitPacks deals the assets out in the packs' order", () => {
     ["media", ["sounds/x.wav"]],
   ]);
   expect(split.own.map((x) => x.key)).toEqual(["assets/logo.png"]);
-  const rest = splitPacks(files, [{ name: "fonts", match: ["**/*.woff2"] }, { name: "assets", match: null }]);
+  const rest = splitPacks(files, [
+    { name: "fonts", match: ["**/*.woff2"] },
+    { name: "assets", match: null },
+  ]);
   expect(rest.own).toEqual([]);
   expect(rest.packs[1]!.files.map((x) => x.key)).toEqual(["assets/fonts/b.ttf", "assets/logo.png", "sounds/x.wav"]);
 });
@@ -73,23 +76,36 @@ test("splitPacks deals the assets out in the packs' order", () => {
 test("vn build writes the packs beside the payload and names them, with their ids, in its META", () => {
   const at = app("built", {
     assets: ["assets"],
-    packs: [{ name: "fonts", match: ["**/*.woff2", "**/*.ttf"] }, { name: "assets", match: ["**/*.wav"] }, { name: "empty", match: ["nothing/**"] }],
+    packs: [
+      { name: "fonts", match: ["**/*.woff2", "**/*.ttf"] },
+      { name: "assets", match: ["**/*.wav"] },
+      { name: "empty", match: ["nothing/**"] },
+    ],
   });
   const out = join(at, "dist");
   const cli = resolve(import.meta.dir, "../cli/vn.ts");
-  const result = Bun.spawnSync([process.execPath, cli, "build", at, "--out", out, "--payload-only", "--json"], { stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync([process.execPath, cli, "build", at, "--out", out, "--payload-only", "--json"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
   const output = new TextDecoder().decode(result.stdout);
   expect(output).toContain('\\"empty\\" takes no asset');
   const summary = JSON.parse(output.trim().split("\n").pop()!);
-  expect(summary.packs.map((p: { name: string; assets: number }) => [p.name, p.assets])).toEqual([["fonts", 2], ["assets", 1]]);
+  expect(summary.packs.map((p: { name: string; assets: number }) => [p.name, p.assets])).toEqual([
+    ["fonts", 2],
+    ["assets", 1],
+  ]);
 
   const payload = readVnpk(new Uint8Array(readFileSync(summary.vnpk)));
   const assets = payload.entries.filter((e) => e.kind === KIND.ASSET).map((e) => e.name);
   expect(assets).toEqual(["assets/logo.png"]);
   const meta = JSON.parse(new TextDecoder().decode(payload.bytes(payload.find(KIND.META, NAMES.META)!)));
   expect(meta.assets).toBe(4);
-  expect(meta.packs.map((p: { name: string; file: string }) => [p.name, p.file])).toEqual([["fonts", "fonts.vnpk"], ["assets", "assets.vnpk"]]);
+  expect(meta.packs.map((p: { name: string; file: string }) => [p.name, p.file])).toEqual([
+    ["fonts", "fonts.vnpk"],
+    ["assets", "assets.vnpk"],
+  ]);
 
   for (const ref of meta.packs as { name: string; file: string; id: string }[]) {
     const blob = new Uint8Array(readFileSync(join(out, ".vn", ref.file)));

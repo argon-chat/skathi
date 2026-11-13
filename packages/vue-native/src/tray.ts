@@ -8,7 +8,13 @@ export interface TrayPixels {
 }
 export type TrayMenuItem =
   | { readonly type: "separator" }
-  | { readonly label: string; readonly disabled?: boolean; readonly checked?: boolean; readonly default?: boolean; readonly onSelect?: () => void }
+  | {
+      readonly label: string;
+      readonly disabled?: boolean;
+      readonly checked?: boolean;
+      readonly default?: boolean;
+      readonly onSelect?: () => void;
+    }
   | { readonly label: string; readonly disabled?: boolean; readonly submenu: readonly TrayMenuEntry[] }
   | { readonly role: "quit"; readonly label?: string; readonly disabled?: boolean };
 export type TrayMenuEntry = TrayMenuItem | false | null | undefined;
@@ -32,7 +38,10 @@ const native = typeof __vn_appTray === "object" ? __vn_appTray : undefined;
 export const appTray: AppTray = Object.freeze({
   available: native?.available ?? false,
   set(options: TrayOptions | null): void {
-    if (native) { native.set(options); return; }
+    if (native) {
+      native.set(options);
+      return;
+    }
     if (options === null) return;
     const error = new Error("native tray is unavailable in this host");
     error.name = "NotSupportedError";

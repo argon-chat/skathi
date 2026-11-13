@@ -52,9 +52,7 @@ test("every host code fits the u64 listener bitset", () => {
 test("protocol.d.ts's VnEventCode lists the same codes", () => {
   const dts = readFileSync(join(HERE, "../src/protocol.d.ts"), "utf8");
   const block = dts.slice(dts.indexOf("type VnEventCode ="));
-  const listed = [...block.slice(0, block.indexOf(";")).matchAll(/\|\s*(\d+)/g)].map((m) =>
-    Number(m[1]),
-  );
+  const listed = [...block.slice(0, block.indexOf(";")).matchAll(/\|\s*(\d+)/g)].map((m) => Number(m[1]));
   const rust = Object.values(rustEventNames()).sort((a, b) => a - b);
   expect(listed.sort((a, b) => a - b)).toEqual(rust);
 });
@@ -75,4 +73,3 @@ test("EDIT_TYPES is vn-elements' InputType, code for code", () => {
   const fromTs = [...table.slice(0, table.indexOf("] as const")).matchAll(/"(\w*)"/g)].map((m) => m[1]);
   expect(fromTs).toEqual(fromRust);
 });
-

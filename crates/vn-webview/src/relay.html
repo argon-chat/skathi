@@ -1,154 +1,227 @@
 <!doctype html>
 <html>
-<head>
-<meta charset="utf-8">
-<meta name="referrer" content="origin">
-<style>
-  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
-  iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: transparent; }
-</style>
-</head>
-<body>
-<script>
-// Relay page: the webview's top-level document holds the app's one real <iframe>, so the
-// browser does the sandboxing; this page only carries messages.
-//   host -> here   {t:"nav", src|srcdoc, sandbox, allow, referrerpolicy, name, fullscreen}
-//                  {t:"post", w: wire, o: targetOrigin}     contentWindow.postMessage
-//                  {t:"focus"}
-//   here -> host   {t:"ready"}
-//                  {t:"msg", o: origin, w: wire}            window.parent.postMessage
-// `wire` is the codec of packages/vue-native/src/iframe.ts, repeated below in plain JS.
-(() => {
-  "use strict";
-  const bridge = window.chrome && window.chrome.webview;
-  if (!bridge) return;
-  const send = bridge.postMessage.bind(bridge);
-  const APP = location.origin;
-  let frame = null;
-
-  const VIEWS = ["Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
-    "Uint32Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array", "DataView"];
-
-  function toBase64(bytes) {
-    let out = "";
-    for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    return btoa(out);
-  }
-  function fromBase64(text) {
-    const bin = atob(text);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  }
-
-  function encode(value) {
-    const open = new Set();
-    const enc = (v) => {
-      switch (typeof v) {
-        case "undefined": return ["u"];
-        case "boolean": case "string": return v;
-        case "number":
-          if (Number.isFinite(v)) return Object.is(v, -0) ? ["f", "-0"] : v;
-          return ["f", String(v)];
-        case "bigint": return ["n", v.toString()];
-        case "function": case "symbol": throw new Error("uncloneable");
+  <head>
+    <meta charset="utf-8" />
+    <meta name="referrer" content="origin" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
       }
-      if (v === null) return null;
-      if (open.has(v)) throw new Error("cycle");
-      if (v instanceof Date) { const ms = v.getTime(); return ["d", Number.isNaN(ms) ? null : ms]; }
-      if (v instanceof ArrayBuffer) return ["b", toBase64(new Uint8Array(v))];
-      if (ArrayBuffer.isView(v)) {
-        const name = VIEWS.find((n) => v.constructor && v.constructor.name === n);
-        if (!name) throw new Error("uncloneable");
-        return ["t", name, toBase64(new Uint8Array(v.buffer, v.byteOffset, v.byteLength))];
+      iframe {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        display: block;
+        background: transparent;
       }
-      if (typeof Node === "function" && v instanceof Node) throw new Error("uncloneable");
-      open.add(v);
-      try {
-        if (Array.isArray(v)) { const items = []; for (let i = 0; i < v.length; i++) items.push(enc(v[i])); return ["a", items]; }
-        if (v instanceof Map) { const e = []; for (const [k, x] of v) e.push([enc(k), enc(x)]); return ["m", e]; }
-        if (v instanceof Set) { const e = []; for (const x of v) e.push(enc(x)); return ["s", e]; }
-        const entries = [];
-        for (const k of Object.keys(v)) entries.push([k, enc(v[k])]);
-        return ["o", entries];
-      } finally { open.delete(v); }
-    };
-    return enc(value);
-  }
+    </style>
+  </head>
+  <body>
+    <script>
+      // Relay page: the webview's top-level document holds the app's one real <iframe>, so the
+      // browser does the sandboxing; this page only carries messages.
+      //   host -> here   {t:"nav", src|srcdoc, sandbox, allow, referrerpolicy, name, fullscreen}
+      //                  {t:"post", w: wire, o: targetOrigin}     contentWindow.postMessage
+      //                  {t:"focus"}
+      //   here -> host   {t:"ready"}
+      //                  {t:"msg", o: origin, w: wire}            window.parent.postMessage
+      // `wire` is the codec of packages/vue-native/src/iframe.ts, repeated below in plain JS.
+      (() => {
+        "use strict";
+        const bridge = window.chrome && window.chrome.webview;
+        if (!bridge) return;
+        const send = bridge.postMessage.bind(bridge);
+        const APP = location.origin;
+        let frame = null;
 
-  function decode(wire) {
-    if (wire === null || typeof wire !== "object") return wire;
-    if (!Array.isArray(wire)) throw new TypeError("not a wire value");
-    const [tag, a, b] = wire;
-    switch (tag) {
-      case "u": return undefined;
-      case "f": return a === "-0" ? -0 : Number(a);
-      case "n": return BigInt(a);
-      case "d": return new Date(a === null ? NaN : a);
-      case "a": return a.map(decode);
-      case "o": {
-        const out = {};
-        for (const [k, v] of a) Object.defineProperty(out, k, { value: decode(v), enumerable: true, writable: true, configurable: true });
-        return out;
-      }
-      case "m": return new Map(a.map(([k, v]) => [decode(k), decode(v)]));
-      case "s": return new Set(a.map(decode));
-      case "b": return fromBase64(a).buffer;
-      case "t": {
-        if (!VIEWS.includes(a)) throw new TypeError("unknown view");
-        const bytes = fromBase64(b);
-        const Ctor = window[a];
-        return new Ctor(bytes.buffer, 0, bytes.byteLength / (Ctor.BYTES_PER_ELEMENT || 1));
-      }
-    }
-    throw new TypeError("unknown tag");
-  }
+        const VIEWS = [
+          "Int8Array",
+          "Uint8Array",
+          "Uint8ClampedArray",
+          "Int16Array",
+          "Uint16Array",
+          "Int32Array",
+          "Uint32Array",
+          "Float32Array",
+          "Float64Array",
+          "BigInt64Array",
+          "BigUint64Array",
+          "DataView",
+        ];
 
-  function navigate(m) {
-    if (frame) frame.remove();
-    frame = document.createElement("iframe");
-    // Only what the app wrote. An absent `sandbox` is no sandbox, as in HTML.
-    if (m.sandbox != null) frame.setAttribute("sandbox", m.sandbox);
-    if (m.allow != null) frame.setAttribute("allow", m.allow);
-    if (m.referrerpolicy != null) frame.setAttribute("referrerpolicy", m.referrerpolicy);
-    if (m.name != null) frame.setAttribute("name", m.name);
-    if (m.fullscreen) frame.setAttribute("allowfullscreen", "");
-    if (m.srcdoc != null) frame.srcdoc = m.srcdoc;
-    else frame.src = m.src;
-    document.body.appendChild(frame);
-  }
-
-  bridge.addEventListener("message", (e) => {
-    const m = e.data;
-    if (!m || typeof m !== "object") return;
-    switch (m.t) {
-      case "nav":
-        navigate(m);
-        break;
-      case "post":
-        if (frame && frame.contentWindow) {
-          let value;
-          try { value = decode(m.w); } catch (_) { return; }
-          frame.contentWindow.postMessage(value, m.o === "/" ? APP : m.o);
+        function toBase64(bytes) {
+          let out = "";
+          for (let i = 0; i < bytes.length; i += 0x8000)
+            out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+          return btoa(out);
         }
-        break;
-      case "focus":
-        if (frame) frame.focus({ preventScroll: true });
-        break;
-    }
-  });
+        function fromBase64(text) {
+          const bin = atob(text);
+          const out = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+          return out;
+        }
 
-  window.addEventListener("message", (e) => {
-    // Only the app's own iframe speaks to the app: not a frame nested in it,
-    // not this page, not a window it opened.
-    if (!frame || e.source !== frame.contentWindow) return;
-    let wire;
-    try { wire = encode(e.data); } catch (_) { return; }
-    send({ t: "msg", o: e.origin, w: wire });
-  });
+        function encode(value) {
+          const open = new Set();
+          const enc = (v) => {
+            switch (typeof v) {
+              case "undefined":
+                return ["u"];
+              case "boolean":
+              case "string":
+                return v;
+              case "number":
+                if (Number.isFinite(v)) return Object.is(v, -0) ? ["f", "-0"] : v;
+                return ["f", String(v)];
+              case "bigint":
+                return ["n", v.toString()];
+              case "function":
+              case "symbol":
+                throw new Error("uncloneable");
+            }
+            if (v === null) return null;
+            if (open.has(v)) throw new Error("cycle");
+            if (v instanceof Date) {
+              const ms = v.getTime();
+              return ["d", Number.isNaN(ms) ? null : ms];
+            }
+            if (v instanceof ArrayBuffer) return ["b", toBase64(new Uint8Array(v))];
+            if (ArrayBuffer.isView(v)) {
+              const name = VIEWS.find((n) => v.constructor && v.constructor.name === n);
+              if (!name) throw new Error("uncloneable");
+              return ["t", name, toBase64(new Uint8Array(v.buffer, v.byteOffset, v.byteLength))];
+            }
+            if (typeof Node === "function" && v instanceof Node) throw new Error("uncloneable");
+            open.add(v);
+            try {
+              if (Array.isArray(v)) {
+                const items = [];
+                for (let i = 0; i < v.length; i++) items.push(enc(v[i]));
+                return ["a", items];
+              }
+              if (v instanceof Map) {
+                const e = [];
+                for (const [k, x] of v) e.push([enc(k), enc(x)]);
+                return ["m", e];
+              }
+              if (v instanceof Set) {
+                const e = [];
+                for (const x of v) e.push(enc(x));
+                return ["s", e];
+              }
+              const entries = [];
+              for (const k of Object.keys(v)) entries.push([k, enc(v[k])]);
+              return ["o", entries];
+            } finally {
+              open.delete(v);
+            }
+          };
+          return enc(value);
+        }
 
-  send({ t: "ready" });
-})();
-</script>
-</body>
+        function decode(wire) {
+          if (wire === null || typeof wire !== "object") return wire;
+          if (!Array.isArray(wire)) throw new TypeError("not a wire value");
+          const [tag, a, b] = wire;
+          switch (tag) {
+            case "u":
+              return undefined;
+            case "f":
+              return a === "-0" ? -0 : Number(a);
+            case "n":
+              return BigInt(a);
+            case "d":
+              return new Date(a === null ? NaN : a);
+            case "a":
+              return a.map(decode);
+            case "o": {
+              const out = {};
+              for (const [k, v] of a)
+                Object.defineProperty(out, k, {
+                  value: decode(v),
+                  enumerable: true,
+                  writable: true,
+                  configurable: true,
+                });
+              return out;
+            }
+            case "m":
+              return new Map(a.map(([k, v]) => [decode(k), decode(v)]));
+            case "s":
+              return new Set(a.map(decode));
+            case "b":
+              return fromBase64(a).buffer;
+            case "t": {
+              if (!VIEWS.includes(a)) throw new TypeError("unknown view");
+              const bytes = fromBase64(b);
+              const Ctor = window[a];
+              return new Ctor(bytes.buffer, 0, bytes.byteLength / (Ctor.BYTES_PER_ELEMENT || 1));
+            }
+          }
+          throw new TypeError("unknown tag");
+        }
+
+        function navigate(m) {
+          if (frame) frame.remove();
+          frame = document.createElement("iframe");
+          // Only what the app wrote. An absent `sandbox` is no sandbox, as in HTML.
+          if (m.sandbox != null) frame.setAttribute("sandbox", m.sandbox);
+          if (m.allow != null) frame.setAttribute("allow", m.allow);
+          if (m.referrerpolicy != null) frame.setAttribute("referrerpolicy", m.referrerpolicy);
+          if (m.name != null) frame.setAttribute("name", m.name);
+          if (m.fullscreen) frame.setAttribute("allowfullscreen", "");
+          if (m.srcdoc != null) frame.srcdoc = m.srcdoc;
+          else frame.src = m.src;
+          document.body.appendChild(frame);
+        }
+
+        bridge.addEventListener("message", (e) => {
+          const m = e.data;
+          if (!m || typeof m !== "object") return;
+          switch (m.t) {
+            case "nav":
+              navigate(m);
+              break;
+            case "post":
+              if (frame && frame.contentWindow) {
+                let value;
+                try {
+                  value = decode(m.w);
+                } catch (_) {
+                  return;
+                }
+                frame.contentWindow.postMessage(value, m.o === "/" ? APP : m.o);
+              }
+              break;
+            case "focus":
+              if (frame) frame.focus({ preventScroll: true });
+              break;
+          }
+        });
+
+        window.addEventListener("message", (e) => {
+          // Only the app's own iframe speaks to the app: not a frame nested in it,
+          // not this page, not a window it opened.
+          if (!frame || e.source !== frame.contentWindow) return;
+          let wire;
+          try {
+            wire = encode(e.data);
+          } catch (_) {
+            return;
+          }
+          send({ t: "msg", o: e.origin, w: wire });
+        });
+
+        send({ t: "ready" });
+      })();
+    </script>
+  </body>
 </html>

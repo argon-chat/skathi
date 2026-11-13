@@ -9,8 +9,10 @@ function world() {
   rt.nodeOps.insert(input, root, null);
   rt.patchProp(input, "type", null, "color");
   const seen: string[] = [];
-  for (const name of ["input", "change"]) rt.patchProp(root, "on" + name[0].toUpperCase() + name.slice(1), null,
-    (event: any) => seen.push(name + ":" + event.target.value + ":" + event.bubbles + ":" + event.composed));
+  for (const name of ["input", "change"])
+    rt.patchProp(root, "on" + name[0].toUpperCase() + name.slice(1), null, (event: any) =>
+      seen.push(name + ":" + event.target.value + ":" + event.bubbles + ":" + event.composed),
+    );
   const calls = () => rt.host.desktop.fs.calls.filter((c: any) => c.op === "dialogOpen");
   const click = (node = input) => {
     rt.host.dispatcher(node.__vnId, rt.EV_CODES.mousedown, 0, 0, 0, 0, undefined);
@@ -148,5 +150,4 @@ describe("native color inputs", () => {
     expect(input.value).toBe("#000000");
     expect(rt.host.props.filter((p: any) => p.key === "value").at(-1)?.value).toBe("#000000");
   });
-
 });

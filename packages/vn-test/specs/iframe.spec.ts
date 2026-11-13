@@ -29,7 +29,14 @@ describe("<iframe> without a webview", () => {
       await app.locator("#plain").waitFor();
       const s = await state();
       expect(s.supported).toBe(false);
-      expect(s.plain).toEqual({ isIframe: true, tagName: "IFRAME", size: [300, 150], src: "", sandbox: "", contentDocument: null });
+      expect(s.plain).toEqual({
+        isIframe: true,
+        tagName: "IFRAME",
+        size: [300, 150],
+        src: "",
+        sandbox: "",
+        contentDocument: null,
+      });
     },
     T,
   );
@@ -39,9 +46,22 @@ describe("<iframe> without a webview", () => {
     async () => {
       await app.eval("__VN_TEST_IFRAME__.mount('/games/none/index.html')");
       const s = await state();
-      expect(s.frame.sandbox).toEqual(["allow-scripts allow-pointer-lock", 2, true, false, "allow-scripts allow-pointer-lock"]);
+      expect(s.frame.sandbox).toEqual([
+        "allow-scripts allow-pointer-lock",
+        2,
+        true,
+        false,
+        "allow-scripts allow-pointer-lock",
+      ]);
       expect(s.frame.sandboxAssign).toEqual(["allow-scripts", true, false]);
-      expect(s.frame.attrs).toEqual(["fullscreen 'none'", "fullscreen 'none'", "origin", "origin", "eager", "/games/none/index.html"]);
+      expect(s.frame.attrs).toEqual([
+        "fullscreen 'none'",
+        "fullscreen 'none'",
+        "origin",
+        "origin",
+        "eager",
+        "/games/none/index.html",
+      ]);
       expect(s.frame.box).toEqual([20, 10, 320, 240]);
       expect(s.frame.sameWindow).toBe(true);
       expect(s.frame.windowKeys).toEqual(["function", "undefined", null]);

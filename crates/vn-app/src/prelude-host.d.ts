@@ -32,13 +32,7 @@ declare function __vn_window_activate(raise: boolean): void;
  * `mask` selects which numbers apply (bit 0 x, 1 y, 2 width, 3 height); bit 4 targets the content
  * area instead of the window.
  */
-declare function __vn_window_set_bounds(
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  mask: number,
-): void;
+declare function __vn_window_set_bounds(x: number, y: number, w: number, h: number, mask: number): void;
 
 declare function __vn_window_set_always_on_top(on: boolean): void;
 declare function __vn_window_set_backdrop(name: string): void;
@@ -48,12 +42,7 @@ declare function __vn_window_set_theme(name: string): void;
  * `height` is `NaN` for "unchanged"; `mode` is -1 keep / 0 off / 1 on;
  * the two colours are CSS hex or `""` for the theme default.
  */
-declare function __vn_window_set_overlay(
-  height: number,
-  mode: number,
-  color: string,
-  symbolColor: string,
-): void;
+declare function __vn_window_set_overlay(height: number, mode: number, color: string, symbolColor: string): void;
 
 declare function __vn_window_match_media(query: string): string;
 
@@ -178,9 +167,7 @@ declare var open: () => null;
 declare var getScreenDetails: () => Promise<never>;
 
 /** `addEventListener` is optional because the prelude probes it with `?.`. */
-declare var addEventListener:
-  | ((type: string, fn: (ev: VnEvent) => void, options?: unknown) => void)
-  | undefined;
+declare var addEventListener: ((type: string, fn: (ev: VnEvent) => void, options?: unknown) => void) | undefined;
 declare function dispatchEvent(ev: VnEvent): boolean;
 
 /** What `emit()` needs of a target. Not `VnEventTarget`: the global's `addEventListener` is only probed. */
@@ -251,9 +238,7 @@ interface VnFullscreenOptions {
   screen?: unknown;
 }
 /** `| undefined` and probed, like `HTMLElement` in engine.d.ts: a redjs revision may not ship it. */
-declare var Element:
-  | { new (): VnFullscreenTarget; prototype: VnFullscreenTarget }
-  | undefined;
+declare var Element: { new (): VnFullscreenTarget; prototype: VnFullscreenTarget } | undefined;
 
 /** Read off `globalThis` by Vue's esm-bundler build. Must precede the bundle. */
 declare var __VUE_OPTIONS_API__: boolean;

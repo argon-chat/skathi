@@ -28,14 +28,20 @@ const compact = (o: Record<string, unknown>): Record<string, unknown> => {
   return o;
 };
 
-const integerFlag = (value: unknown, name: string, minimum = 0, maximum = Number.MAX_SAFE_INTEGER): number | undefined => {
+const integerFlag = (
+  value: unknown,
+  name: string,
+  minimum = 0,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number | undefined => {
   if (value === undefined) return undefined;
   if (value === true || value === false || value === "") die(`${name} needs an integer`);
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) die(`${name} must be an integer between ${minimum} and ${maximum}`);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum)
+    die(`${name} must be an integer between ${minimum} and ${maximum}`);
   return parsed;
 };
-const stringFlag = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
+const stringFlag = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
 export interface ArgSpec {
   type: "string" | "number" | "boolean";
@@ -48,13 +54,8 @@ const str = (description: string, required?: boolean): ArgSpec =>
 const int = (description: string): ArgSpec => ({ type: "number", description });
 const bool = (description: string): ArgSpec => ({ type: "boolean", description });
 
-const SELECTOR = str(
-  "a CSS selector, matched by the same vn-css cascade matcher the app styles with",
-);
-const SELECTOR_REQ = str(
-  "a CSS selector, matched by the same vn-css cascade matcher the app styles with",
-  true,
-);
+const SELECTOR = str("a CSS selector, matched by the same vn-css cascade matcher the app styles with");
+const SELECTOR_REQ = str("a CSS selector, matched by the same vn-css cascade matcher the app styles with", true);
 const INDEX = int("which match to use when the selector matches several (0-based)");
 const NODE = int("a node id from vn_tree/vn_query, when you already have one");
 const SINCE = int("first sequence number to return (the `next` from the last call)");
@@ -110,9 +111,7 @@ export const COMMANDS: CommandSpec[] = [
   {
     cmd: "text",
     description: "textContent of the matched subtree (or a native <input>'s live buffer).",
-    usage: [
-      "  text     <selector> [--index N]     textContent of the subtree (or an <input>'s buffer)",
-    ],
+    usage: ["  text     <selector> [--index N]     textContent of the subtree (or an <input>'s buffer)"],
     args: { selector: SELECTOR_REQ, index: INDEX },
     cli: (rest, flags) => {
       if (!rest[0]) die("text needs a selector");
@@ -131,8 +130,7 @@ export const COMMANDS: CommandSpec[] = [
       node: int("subtree root as a node id, when you already have one"),
       depth: int("levels to descend (default 6)"),
     },
-    cli: (rest, flags) =>
-      compact({ selector: rest[0] || undefined, node: num(flags.node), depth: num(flags.depth) }),
+    cli: (rest, flags) => compact({ selector: rest[0] || undefined, node: num(flags.node), depth: num(flags.depth) }),
   },
   {
     cmd: "styles",
@@ -252,7 +250,7 @@ export const COMMANDS: CommandSpec[] = [
     cmd: "ime",
     description:
       "Stand in for the IME on a text field: `text` becomes the composition's pre-edit, or with " +
-      "`commit` its committed text (\"\" cancels it). compositionstart, beforeinput, " +
+      '`commit` its committed text ("" cancels it). compositionstart, beforeinput, ' +
       "compositionupdate, input and compositionend fire in Chromium's order, from the widget's " +
       "own path. For testing where no IME is installed; no keystroke is sent.",
     usage: ["  ime      <selector> <text> [--commit] [--index N]"],
@@ -264,7 +262,10 @@ export const COMMANDS: CommandSpec[] = [
     },
     cli: (rest, flags) => {
       if (!rest[0]) die('ime needs a selector and text: ctl ime ".field" "か" [--commit]');
-      return withIndex(compact({ selector: rest[0], text: rest.slice(1).join(" "), commit: flags.commit === true || undefined }), flags);
+      return withIndex(
+        compact({ selector: rest[0], text: rest.slice(1).join(" "), commit: flags.commit === true || undefined }),
+        flags,
+      );
     },
   },
   {
@@ -336,10 +337,7 @@ export const COMMANDS: CommandSpec[] = [
     },
     cli: (rest, flags) => {
       if (!rest[0]) die("scroll needs a selector");
-      return withIndex(
-        { selector: rest[0], dx: num(flags.dx) ?? 0, dy: num(rest[1]) ?? num(flags.dy) ?? 0 },
-        flags,
-      );
+      return withIndex({ selector: rest[0], dx: num(flags.dx) ?? 0, dy: num(rest[1]) ?? num(flags.dy) ?? 0 }, flags);
     },
   },
   {
@@ -372,7 +370,11 @@ export const COMMANDS: CommandSpec[] = [
       const dy = num(flags.dy) ?? 0;
       const dx = num(flags.dx) ?? 0;
       if (!dy && !dx) die("wheel needs --dy (or --dx); DOM signs, so --dy 200 scrolls down");
-      const keys = { ...(flags.ctrl ? { ctrl: true } : {}), ...(flags.shift ? { shift: true } : {}), ...(flags.alt ? { alt: true } : {}) };
+      const keys = {
+        ...(flags.ctrl ? { ctrl: true } : {}),
+        ...(flags.shift ? { shift: true } : {}),
+        ...(flags.alt ? { alt: true } : {}),
+      };
       if (rest[0]) return withIndex({ selector: rest[0], dx, dy, ...keys }, flags);
       const x = num(flags.x);
       const y = num(flags.y);
@@ -442,7 +444,7 @@ export const COMMANDS: CommandSpec[] = [
       "The rolling frame window, always on: {frames, uptimeMs, bootMs, avgMs, p50Ms, p95Ms, " +
       "maxMs, fps, budgetMs, samples[], nodes, windows, phases}. `budgetMs` is the display's " +
       "refresh interval (null when unreported). One Instant read and one store per frame, " +
-      "so \"why is this janky\" can be asked of a host that is already running. `phases` reports " +
+      'so "why is this janky" can be asked of a host that is already running. `phases` reports ' +
       "whether VN_PERF's stderr breakdown is on rather than duplicating its counters (reading " +
       "them would clear them under the person profiling).",
     usage: [
@@ -482,7 +484,11 @@ export const COMMANDS: CommandSpec[] = [
       ),
     },
     cli: (_rest, flags) =>
-      compact({ gc: flags.gc ? true : undefined, code: flags.code ? true : undefined, regions: flags.regions ? true : undefined }),
+      compact({
+        gc: flags.gc ? true : undefined,
+        code: flags.code ? true : undefined,
+        regions: flags.regions ? true : undefined,
+      }),
   },
   {
     cmd: "trace",
@@ -499,7 +505,9 @@ export const COMMANDS: CommandSpec[] = [
       "  trace    start [--cap N] | stop [--frames] | peek [--frames] | mark <label>",
     ],
     args: {
-      op: str('recording-start | recording-stop | recording-status | frames | frame; legacy start | stop | peek (default) | mark'),
+      op: str(
+        "recording-start | recording-stop | recording-status | frames | frame; legacy start | stop | peek (default) | mark",
+      ),
       frameId: int("for op=frame: a captured frame id"),
       offset: int("paged result offset, starting at zero"),
       limit: int("page size: frames <=240, frame spans <=1000"),
@@ -510,10 +518,14 @@ export const COMMANDS: CommandSpec[] = [
     cli: (rest, flags) => {
       const op = rest[0] || stringFlag(flags.op) || "peek";
       if (["recording-start", "recording-stop", "recording-status", "frames", "frame"].includes(op)) {
-        const frameId = integerFlag(flags["frame-id"] ?? flags.frameId ?? (op === "frame" ? rest[1] : undefined), "--frame-id");
+        const frameId = integerFlag(
+          flags["frame-id"] ?? flags.frameId ?? (op === "frame" ? rest[1] : undefined),
+          "--frame-id",
+        );
         if (op === "frame" && frameId === undefined) die("trace frame needs --frame-id ID");
         return compact({
-          op, frameId,
+          op,
+          frameId,
           offset: integerFlag(flags.offset, "--offset"),
           limit: integerFlag(flags.limit, "--limit", 1, op === "frames" ? 240 : 1000),
           cap: integerFlag(flags.cap, "--cap", 16, 10000),
@@ -521,7 +533,9 @@ export const COMMANDS: CommandSpec[] = [
       }
       if (!["start", "stop", "peek", "mark"].includes(op)) die("unknown trace op");
       if (op === "mark" && !rest[1] && typeof flags.label !== "string") die("trace mark needs a label");
-      return compact({ op, frames: flags.frames ? true : undefined,
+      return compact({
+        op,
+        frames: flags.frames ? true : undefined,
         label: op === "mark" ? (typeof flags.label === "string" ? flags.label : rest.slice(1).join(" ")) : undefined,
         cap: num(flags.cap),
       });
@@ -579,7 +593,7 @@ export const COMMANDS: CommandSpec[] = [
       "The disk HTTP cache under fetch, XHR and every <img>/font load: its " +
       "folder, cap, entries and size, whether this instance owns the folder (`writable`) and seals " +
       "entries (`sealed`), and the counters since start (hits, revalidated, stored, misses, " +
-      "bypassed, evicted, errors). `op: \"clear\"` deletes every entry and answers `freed` (bytes). " +
+      'bypassed, evicted, errors). `op: "clear"` deletes every entry and answers `freed` (bytes). ' +
       "`null` when no cache is installed (VN_HTTP_CACHE=0, httpCache.maxMB 0, or no storage).",
     usage: ["  net_cache [stats|clear]            the disk HTTP cache: counters, or empty it"],
     args: { op: str('"stats" (default) or "clear"') },
@@ -621,20 +635,35 @@ export const COMMANDS: CommandSpec[] = [
       "            [--limit N] [--search TEXT] bounded typed previews (maximum 100 records)",
     ],
     args: {
-      op: str('"list" (default), "schema" or "records"'), database: str("database name"), store: str("object store name"),
-      index: str("optional index name; absent walks primary keys"), after: str("opaque hexadecimal nextCursor from the preceding page"),
-      limit: int("records per page, 1..100 (default 50)"), search: str("key and bounded preview search, up to 256 characters; excludes Blob bodies"),
+      op: str('"list" (default), "schema" or "records"'),
+      database: str("database name"),
+      store: str("object store name"),
+      index: str("optional index name; absent walks primary keys"),
+      after: str("opaque hexadecimal nextCursor from the preceding page"),
+      limit: int("records per page, 1..100 (default 50)"),
+      search: str("key and bounded preview search, up to 256 characters; excludes Blob bodies"),
     },
     cli: (rest, flags) => {
       const op = rest[0] || stringFlag(flags.op) || "list";
       if (!["list", "schema", "records"].includes(op)) die("indexeddb op must be list, schema or records");
-      const database = stringFlag(flags.database) ?? rest[1], store = stringFlag(flags.store) ?? rest[2];
+      const database = stringFlag(flags.database) ?? rest[1],
+        store = stringFlag(flags.store) ?? rest[2];
       if (op !== "list" && database === undefined) die(`indexeddb ${op} needs a database name`);
       if (op === "records" && store === undefined) die("indexeddb records needs an object store name");
-      const search = stringFlag(flags.search), after = stringFlag(flags.after);
+      const search = stringFlag(flags.search),
+        after = stringFlag(flags.after);
       if (search !== undefined && [...search].length > 256) die("--search is limited to 256 characters");
-      if (after !== undefined && (!/^[a-f0-9]*$/i.test(after) || after.length % 2 !== 0)) die("--after must be the opaque hexadecimal nextCursor");
-      return compact({ op, database, store, index: stringFlag(flags.index), after, search, limit: integerFlag(flags.limit, "--limit", 1, 100) });
+      if (after !== undefined && (!/^[a-f0-9]*$/i.test(after) || after.length % 2 !== 0))
+        die("--after must be the opaque hexadecimal nextCursor");
+      return compact({
+        op,
+        database,
+        store,
+        index: stringFlag(flags.index),
+        after,
+        search,
+        limit: integerFlag(flags.limit, "--limit", 1, 100),
+      });
     },
   },
   {
@@ -650,16 +679,28 @@ export const COMMANDS: CommandSpec[] = [
       "  allocations start [--sample-every N] [--max-events N] | stop",
     ],
     args: {
-      op: str('"status" (default), "start", "stop" or "snapshot"'), sampleEvery: int("pointer-hash sample interval, 1..4096; observed counts are not extrapolated"),
-      maxEvents: int("event buffer capacity, 1024..65536"), category: str("category substring filter"), site: str("explicit site substring filter"),
-      minSize: int("minimum allocation size in bytes"), maxSize: int("maximum allocation size in bytes"), limit: int("maximum grouped rows, 1..2000 (default 300)"),
+      op: str('"status" (default), "start", "stop" or "snapshot"'),
+      sampleEvery: int("pointer-hash sample interval, 1..4096; observed counts are not extrapolated"),
+      maxEvents: int("event buffer capacity, 1024..65536"),
+      category: str("category substring filter"),
+      site: str("explicit site substring filter"),
+      minSize: int("minimum allocation size in bytes"),
+      maxSize: int("maximum allocation size in bytes"),
+      limit: int("maximum grouped rows, 1..2000 (default 300)"),
     },
     cli: (rest, flags) => {
       const op = rest[0] || stringFlag(flags.op) || "status";
-      if (!["start", "stop", "status", "snapshot"].includes(op)) die("allocations op must be start, stop, status or snapshot");
-      const minSize = integerFlag(flags["min-size"] ?? flags.minSize, "--min-size"), maxSize = integerFlag(flags["max-size"] ?? flags.maxSize, "--max-size");
+      if (!["start", "stop", "status", "snapshot"].includes(op))
+        die("allocations op must be start, stop, status or snapshot");
+      const minSize = integerFlag(flags["min-size"] ?? flags.minSize, "--min-size"),
+        maxSize = integerFlag(flags["max-size"] ?? flags.maxSize, "--max-size");
       if (minSize !== undefined && maxSize !== undefined && minSize > maxSize) die("--min-size exceeds --max-size");
-      return compact({ op, minSize, maxSize, category: stringFlag(flags.category), site: stringFlag(flags.site),
+      return compact({
+        op,
+        minSize,
+        maxSize,
+        category: stringFlag(flags.category),
+        site: stringFlag(flags.site),
         sampleEvery: integerFlag(flags["sample-every"] ?? flags.sampleEvery, "--sample-every", 1, 4096),
         maxEvents: integerFlag(flags["max-events"] ?? flags.maxEvents, "--max-events", 1024, 65536),
         limit: integerFlag(flags.limit, "--limit", 1, 2000),
@@ -673,9 +714,9 @@ export const COMMANDS: CommandSpec[] = [
       "<a download>'s Save As, and the app's permission prompt — when the app runs with " +
       "VN_DIALOGS=scripted (nothing reaches the OS then). `list` names each one ({id, window, " +
       "what, kind, ...}: a file dialog's multiple, filters, startIn, suggestedName; a question's " +
-      "(kind \"ask\") instruction and buttons); `answer` finishes a file dialog with absolute " +
+      '(kind "ask") instruction and buttons); `answer` finishes a file dialog with absolute ' +
       "paths, checked as the OS dialog would check them; `choose` presses a question's button " +
-      "(its label, e.g. \"Allow\", or its index); `cancel` dismisses either, as Esc would. " +
+      '(its label, e.g. "Allow", or its index); `cancel` dismisses either, as Esc would. ' +
       "Without VN_DIALOGS=scripted every dialog is real and this command refuses.",
     usage: [
       "  dialog   [list]                     dialogs waiting for an answer (VN_DIALOGS=scripted)",
@@ -712,7 +753,7 @@ export const COMMANDS: CommandSpec[] = [
       "the answers stored for the app's own prompt (microphone: allow / block, and when) and the " +
       "file they live in (permissions.json in the app's storage folder). `reset` forgets a stored " +
       "answer, so the next getUserMedia shows the prompt again. That and the app's own " +
-      "appPermissions.request(\"microphone\") are the ways back after Block. It changes a real " +
+      'appPermissions.request("microphone") are the ways back after Block. It changes a real ' +
       "decision on any host, scripted or not.",
     usage: [
       "  permissions [list]                  states, stored answers, where they are kept",
@@ -789,8 +830,13 @@ export function usageBlock(): string {
 /** Split actual CLI argv using the same boolean arguments the MCP schema exposes. */
 export function splitArgs(argv: string[]): { positional: string[]; flags: Flags } {
   const switches = new Set([
-    "json", "help",
-    ...COMMANDS.flatMap(spec => Object.entries(spec.args).filter(([, arg]) => arg.type === "boolean").map(([name]) => name)),
+    "json",
+    "help",
+    ...COMMANDS.flatMap((spec) =>
+      Object.entries(spec.args)
+        .filter(([, arg]) => arg.type === "boolean")
+        .map(([name]) => name),
+    ),
   ]);
   const positional: string[] = [];
   const flags: Flags = {};
@@ -799,7 +845,7 @@ export function splitArgs(argv: string[]): { positional: string[]; flags: Flags 
     if (!value.startsWith("--")) positional.push(value);
     else {
       const name = value.slice(2);
-      flags[name] = switches.has(name) ? true : argv[++i] ?? "";
+      flags[name] = switches.has(name) ? true : (argv[++i] ?? "");
     }
   }
   return { positional, flags };

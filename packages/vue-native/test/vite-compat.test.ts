@@ -65,7 +65,7 @@ describe("define", () => {
   });
 
   test("--define wins over the file; Bun-unsafe values and builder-owned keys are refused", () => {
-    const ok = appDefines({ __A__: '"file"' }, ["__A__=\"cli\"", "__E__=window.foo"]);
+    const ok = appDefines({ __A__: '"file"' }, ['__A__="cli"', "__E__=window.foo"]);
     expect(ok.defines).toEqual({ __A__: '"cli"', __E__: "window.foo" });
     const bad = appDefines({ "import.meta.env": "{}", "a b": "1" }, ["NOVALUE", "__X__=1 + 1"]);
     expect(bad.errors.join("\n")).toContain("set by the builder");
@@ -76,7 +76,7 @@ describe("define", () => {
   });
 
   test("takeDefineArgs pulls both spellings out of an argv and leaves the positionals", () => {
-    expect(takeDefineArgs(["a.ts", "--define", "K=1", "out.js", "--define=J=\"x=y\""])).toEqual({
+    expect(takeDefineArgs(["a.ts", "--define", "K=1", "out.js", '--define=J="x=y"'])).toEqual({
       defines: ["K=1", 'J="x=y"'],
       rest: ["a.ts", "out.js"],
     });
@@ -141,7 +141,9 @@ describe("import.meta.glob", () => {
   });
 
   test("what Vite refuses is refused with the file and line", () => {
-    expect(() => expandGlobs(`\nimport.meta.glob("./x/*.ts", { eagr: true })`, ctx)).toThrow(/main\.ts:2: .*unknown option "eagr"/);
+    expect(() => expandGlobs(`\nimport.meta.glob("./x/*.ts", { eagr: true })`, ctx)).toThrow(
+      /main\.ts:2: .*unknown option "eagr"/,
+    );
     expect(() => expandGlobs(`import.meta.glob("@/kinds/*.ts")`, ctx)).toThrow(/alias/);
     expect(() => expandGlobs(`import.meta.glob(pattern)`, ctx)).toThrow();
     expect(expandGlobs(`type G = typeof import.meta.glob;`, ctx)).toBeNull();
@@ -154,7 +156,10 @@ describe("import.meta.glob", () => {
 
 describe("workers and svg", () => {
   test("new Worker(new URL(…, import.meta.url)) constructs a class that throws a named error", () => {
-    const r = stubWorkerUrls(`const w = new Worker(new URL("./w.ts", import.meta.url), { type: "module" });`, "src/a.ts")!;
+    const r = stubWorkerUrls(
+      `const w = new Worker(new URL("./w.ts", import.meta.url), { type: "module" });`,
+      "src/a.ts",
+    )!;
     expect(r.count).toBe(1);
     expect(r.code).toContain("new (class VnWorkerUnavailable");
     expect(r.code).toContain("NotSupportedError");
@@ -224,7 +229,9 @@ describe("CSS @import inlining", () => {
       "c.css": `.c{}`,
     });
     const warned: string[] = [];
-    const css = inlineCssImports(readFileSync(join(root, "a.css"), "utf8"), join(root, "a.css"), root, (m) => warned.push(m));
+    const css = inlineCssImports(readFileSync(join(root, "a.css"), "utf8"), join(root, "a.css"), root, (m) =>
+      warned.push(m),
+    );
     expect(css).toContain("@media screen {\n\n.b{}\n}");
     expect(css).toContain(".c{}");
     expect(css).toContain(`@import url("https://x.invalid/r.css");`);
@@ -302,18 +309,20 @@ describe("packaged CSS fonts", () => {
 describe("index.html", () => {
   test("lifted SVG definitions become queryable native nodes with case, namespaces and literal text intact", () => {
     const values = "1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0";
-    const filters = Array.from({ length: 6 }, (_, index) =>
-      `<filter id="filter-${index}"><feColorMatrix type="matrix" values="${values}" /></filter>`,
+    const filters = Array.from(
+      { length: 6 },
+      (_, index) => `<filter id="filter-${index}"><feColorMatrix type="matrix" values="${values}" /></filter>`,
     ).join("");
-    const root = scratch({ "index.html": `<body><svg style="display:none" viewBox="0 0 10 10" xmlns:xlink="http://www.w3.org/1999/xlink"><defs>${filters}</defs><use xlink:href="#shape" xml:lang="ru"/><title>A &amp; B {{literal}}</title></svg><div id="app"></div></body>` });
+    const root = scratch({
+      "index.html": `<body><svg style="display:none" viewBox="0 0 10 10" xmlns:xlink="http://www.w3.org/1999/xlink"><defs>${filters}</defs><use xlink:href="#shape" xml:lang="ru"/><title>A &amp; B {{literal}}</title></svg><div id="app"></div></body>`,
+    });
     const lifted = liftIndexHtml(join(root, "index.html"), root);
     const rt = createRuntime();
     const document = rt.global.document as Document;
     const source = htmlPreludeModule(lifted).replace(/^import "vue-native";\s*/m, "");
     new Function("document", source)(document);
-    const all = (node: Node): Element[] => Array.from(node.childNodes).flatMap((child) =>
-      child.nodeType === 1 ? [child as Element, ...all(child)] : [],
-    );
+    const all = (node: Node): Element[] =>
+      Array.from(node.childNodes).flatMap((child) => (child.nodeType === 1 ? [child as Element, ...all(child)] : []));
     const nodes = all(document.body);
     const svg = nodes.find((node) => node.localName === "svg")!;
     expect(svg.namespaceURI).toBe("http://www.w3.org/2000/svg");
@@ -321,7 +330,9 @@ describe("index.html", () => {
     expect(nodes.filter((node) => node.localName === "filter")).toHaveLength(6);
     const primitives = nodes.filter((node) => node.localName === "feColorMatrix");
     expect(primitives).toHaveLength(6);
-    expect(primitives.every((node) => node.namespaceURI === svg.namespaceURI && node.getAttribute("values") === values)).toBe(true);
+    expect(
+      primitives.every((node) => node.namespaceURI === svg.namespaceURI && node.getAttribute("values") === values),
+    ).toBe(true);
     expect(rt.host.props.filter((prop) => prop.key === "values")).toHaveLength(6);
     const use = nodes.find((node) => node.localName === "use")!;
     expect(use.getAttributeNS("http://www.w3.org/1999/xlink", "href")).toBe("#shape");
@@ -329,13 +340,21 @@ describe("index.html", () => {
     expect(nodes.find((node) => node.localName === "title")!.textContent).toBe("A & B {{literal}}");
   });
   test("app classes and attributes stay separate from html/body theme classes", () => {
-    const root = scratch({ "index.html": `<html class="dark"><body class="body-theme"><main id="app" class="app-layout" vaul-drawer-wrapper style="height:100%"></main></body></html>` });
+    const root = scratch({
+      "index.html": `<html class="dark"><body class="body-theme"><main id="app" class="app-layout" vaul-drawer-wrapper style="height:100%"></main></body></html>`,
+    });
     const lifted = liftIndexHtml(join(root, "index.html"), root);
     expect(lifted.rootClasses).toEqual(["dark", "body-theme"]);
     expect(lifted.rootAttrs).toEqual({});
-    expect(lifted.mountElement).toEqual({ tag: "main", attrs: {
-      id: "app", class: "app-layout", "vaul-drawer-wrapper": "", style: "height:100%",
-    } });
+    expect(lifted.mountElement).toEqual({
+      tag: "main",
+      attrs: {
+        id: "app",
+        class: "app-layout",
+        "vaul-drawer-wrapper": "",
+        style: "height:100%",
+      },
+    });
   });
   test("head and body CSS, the classic script, the mount element's attributes, and what is not carried", () => {
     const lifted = liftIndexHtml(join(FIXTURE, "index.html"), FIXTURE);
@@ -367,7 +386,14 @@ describe("framework packages", () => {
     const own = frameworkDep("pinia", { dependencies: { pinia: "^3.0.4" } }, appResolve, vnResolve);
     expect(own).toMatchObject({ from: "app", version: "3.0.4" });
     expect(own.warning).toBeUndefined();
-    const missing = frameworkDep("pinia", { dependencies: { pinia: "^3.0.4" } }, () => { throw new Error("not installed"); }, vnResolve);
+    const missing = frameworkDep(
+      "pinia",
+      { dependencies: { pinia: "^3.0.4" } },
+      () => {
+        throw new Error("not installed");
+      },
+      vnResolve,
+    );
     expect(missing).toMatchObject({ from: "vue-native", version: "4.0.3" });
     expect(missing.warning).toContain("not installed");
     expect(missing.warning).toContain("different major");
@@ -384,7 +410,10 @@ describe("Tailwind runs in the config's directory", () => {
       "src/A.vue": `<template><div class="pt-7 text-center"></div></template>`,
     });
     const before = process.cwd();
-    const [a, b] = await Promise.all([generate(join(root, "tailwind.config.ts")), generate(join(root, "tailwind.config.ts"))]);
+    const [a, b] = await Promise.all([
+      generate(join(root, "tailwind.config.ts")),
+      generate(join(root, "tailwind.config.ts")),
+    ]);
     expect(process.cwd()).toBe(before);
     for (const css of [a, b]) {
       expect(css).toContain(".pt-7");
@@ -406,7 +435,9 @@ describe("publicDir", () => {
 describe("prod.ts over test/fixtures/vite-app", () => {
   const out = mkdtempSync(join(tmpdir(), "vn-viteapp-"));
   tmpDirs.push(out);
-  const proc = Bun.spawnSync(["bun", "prod.ts", join(FIXTURE, "src/main.ts"), join(out, "app.prod.js")], { cwd: PKG_DIR });
+  const proc = Bun.spawnSync(["bun", "prod.ts", join(FIXTURE, "src/main.ts"), join(out, "app.prod.js")], {
+    cwd: PKG_DIR,
+  });
   const log = proc.stdout.toString() + proc.stderr.toString();
   const body = proc.exitCode === 0 ? readFileSync(join(out, "app.prod.js"), "utf8") : "";
   const has = (s: string) => body.includes(s);
@@ -434,7 +465,11 @@ describe("prod.ts over test/fixtures/vite-app", () => {
 
   test("workers and wasm are named failures, with the file in the message", () => {
     expect(has("work.ts?worker): vue-native has no Web Workers")).toBe(true);
-    expect(has(`new Worker(new URL("./work.ts", import.meta.url)) in packages/vue-native/test/fixtures/vite-app/src/main.ts`)).toBe(true);
+    expect(
+      has(
+        `new Worker(new URL("./work.ts", import.meta.url)) in packages/vue-native/test/fixtures/vite-app/src/main.ts`,
+      ),
+    ).toBe(true);
     expect(has("vn-unsupported:wasm/packages/vue-native/test/fixtures/vite-app/src/mod.wasm")).toBe(true);
   });
 
@@ -486,7 +521,9 @@ describe("prod.ts over test/fixtures/vite-app", () => {
 describe("build.ts (dev) over test/fixtures/vite-dev-app", () => {
   const dist = mkdtempSync(join(tmpdir(), "vn-vitedev-"));
   tmpDirs.push(dist);
-  const proc = Bun.spawnSync(["bun", "build.ts", join(HERE, "fixtures/vite-dev-app/src/main.ts"), dist], { cwd: PKG_DIR });
+  const proc = Bun.spawnSync(["bun", "build.ts", join(HERE, "fixtures/vite-dev-app/src/main.ts"), dist], {
+    cwd: PKG_DIR,
+  });
   const mod = (rel: string) =>
     readFileSync(join(dist, "modules", `packages__vue-native__test__fixtures__vite-dev-app__src__${rel}.js`), "utf8");
 
@@ -514,9 +551,10 @@ describe("build.ts (dev) over test/fixtures/vite-app", () => {
   tmpDirs.push(dist);
   const proc = Bun.spawnSync(["bun", "build.ts", join(FIXTURE, "src/main.ts"), dist], { cwd: PKG_DIR });
   const log = proc.stdout.toString() + proc.stderr.toString();
-  const main = proc.exitCode === 0
-    ? readFileSync(join(dist, "modules", "packages__vue-native__test__fixtures__vite-app__src__main.ts.js"), "utf8")
-    : "";
+  const main =
+    proc.exitCode === 0
+      ? readFileSync(join(dist, "modules", "packages__vue-native__test__fixtures__vite-app__src__main.ts.js"), "utf8")
+      : "";
   const has = (s: string) => main.includes(s);
 
   test("builds, with every import resolved", () => {
@@ -536,7 +574,10 @@ describe("build.ts (dev) over test/fixtures/vite-app", () => {
     const root = mkdtempSync(join(HERE, "fixtures", "svg-sfc-"));
     tmpDirs.push(root);
     mkdirSync(join(root, "src"), { recursive: true });
-    writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, devDependencies: { "vite-svg-loader": "*" } }));
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ private: true, devDependencies: { "vite-svg-loader": "*" } }),
+    );
     writeFileSync(join(root, "src/i.svg"), '<svg viewBox="0 0 1 1"><path d="M0 0h1"/></svg>');
     writeFileSync(
       join(root, "src/App.vue"),
@@ -554,7 +595,11 @@ describe("build.ts (dev) over test/fixtures/vite-app", () => {
 
   test("workers and wasm are the named failures prod gives", () => {
     expect(has("work.ts?worker): vue-native has no Web Workers")).toBe(true);
-    expect(has(`new Worker(new URL("./work.ts", import.meta.url)) in packages/vue-native/test/fixtures/vite-app/src/main.ts`)).toBe(true);
+    expect(
+      has(
+        `new Worker(new URL("./work.ts", import.meta.url)) in packages/vue-native/test/fixtures/vite-app/src/main.ts`,
+      ),
+    ).toBe(true);
     expect(has("vn-unsupported:wasm/packages/vue-native/test/fixtures/vite-app/src/mod.wasm")).toBe(true);
   });
 });

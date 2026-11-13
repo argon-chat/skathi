@@ -46,13 +46,9 @@ describe("bytes", () => {
   test("a hex row is offset, two groups of eight, then the printable bytes", () => {
     const bytes = new Uint8Array(18).map((_, i) => (i === 1 ? 0x41 : i));
     expect(hexRows(bytes.length)).toBe(2);
-    expect(hexLine(bytes, 0)).toBe(
-      "00000000  00 41 02 03 04 05 06 07  08 09 0a 0b 0c 0d 0e 0f  .A..............",
-    );
+    expect(hexLine(bytes, 0)).toBe("00000000  00 41 02 03 04 05 06 07  08 09 0a 0b 0c 0d 0e 0f  .A..............");
     // A short last row is padded so the ASCII column stays aligned.
-    expect(hexLine(bytes, 1)).toBe(
-      "00000010  10 11                                             ..",
-    );
+    expect(hexLine(bytes, 1)).toBe("00000010  10 11                                             ..");
     expect(hexLine(bytes, 1).indexOf("..")).toBe(hexLine(bytes, 0).indexOf(".A"));
     expect(hexDump(bytes).split("\n")).toHaveLength(2);
   });
@@ -108,9 +104,7 @@ describe("text", () => {
 
 describe("masking", () => {
   test("a Cookie header keeps every name and hides every value", () => {
-    expect(maskHeader("Cookie", "ArgonSecure=abc123; theme=dark")).toBe(
-      "ArgonSecure=•••••• (6); theme=•••••• (4)",
-    );
+    expect(maskHeader("Cookie", "ArgonSecure=abc123; theme=dark")).toBe("ArgonSecure=•••••• (6); theme=•••••• (4)");
   });
 
   test("a Set-Cookie line keeps its attributes", () => {

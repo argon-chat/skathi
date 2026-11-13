@@ -9,22 +9,34 @@ describe("native font attachment", () => {
   });
   test("legacy JSON font globals do not activate a script fallback", () => {
     let called = false;
-    const host = { __vn_fonts_list() { called = true; return "[]"; } };
+    const host = {
+      __vn_fonts_list() {
+        called = true;
+        return "[]";
+      },
+    };
     expect(installFonts(host, {})).toBeNull();
     expect(called).toBe(false);
   });
   test("the native attachment receives the exact mirror document", () => {
     const document = {};
     const nativeSet = {};
-    const host = { __vn_fonts_attach(value: object) {
-      expect(value).toBe(document);
-      return nativeSet;
-    }};
+    const host = {
+      __vn_fonts_attach(value: object) {
+        expect(value).toBe(document);
+        return nativeSet;
+      },
+    };
     expect(installFonts(host, document)).toBe(nativeSet);
   });
   test("a missing document does not allocate a native set", () => {
     let called = false;
-    const host = { __vn_fonts_attach() { called = true; return {}; } };
+    const host = {
+      __vn_fonts_attach() {
+        called = true;
+        return {};
+      },
+    };
     expect(installFonts(host, null)).toBeNull();
     expect(installFonts(host, undefined)).toBeNull();
     expect(called).toBe(false);

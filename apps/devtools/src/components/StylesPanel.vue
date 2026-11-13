@@ -30,7 +30,10 @@ function overridden(ruleIndex: number, declIndex: number, decl: Declaration): bo
 }
 
 const ordered = computed(() =>
-  rules.value.map((rule, i) => ({ rule, index: i })).slice().reverse(),
+  rules.value
+    .map((rule, i) => ({ rule, index: i }))
+    .slice()
+    .reverse(),
 );
 
 function stateBadge(rule: Rule): string {
@@ -93,18 +96,10 @@ function ruleText(rule: Rule): string {
       <span v-if="state.styles && state.styles.hovered" class="chip warn">:hover live</span>
       <div class="spacer"></div>
       <div class="stabs">
-        <div
-          class="stab"
-          :class="{ on: state.stylesTab === 'rules' }"
-          @click="state.stylesTab = 'rules'"
-        >
+        <div class="stab" :class="{ on: state.stylesTab === 'rules' }" @click="state.stylesTab = 'rules'">
           rules<span v-if="rules.length" class="n">{{ rules.length }}</span>
         </div>
-        <div
-          class="stab"
-          :class="{ on: state.stylesTab === 'computed' }"
-          @click="state.stylesTab = 'computed'"
-        >
+        <div class="stab" :class="{ on: state.stylesTab === 'computed' }" @click="state.stylesTab = 'computed'">
           computed
         </div>
       </div>
@@ -114,8 +109,7 @@ function ruleText(rule: Rule): string {
     <div v-if="state.selected === null" class="empty">
       Select an element on the left, or press <b>Ctrl+Shift+C</b> and hover it in the app.<br />
       <span class="t-faint"
-        >The picker latches when the pointer LEAVES the app's window — hover what you want, then
-        come back here.</span
+        >The picker latches when the pointer LEAVES the app's window — hover what you want, then come back here.</span
       >
     </div>
 
@@ -123,26 +117,20 @@ function ruleText(rule: Rule): string {
       <template v-if="state.stylesTab === 'rules'">
         <div v-if="state.rules && state.rules.note" class="note">{{ state.rules.note }}</div>
         <div v-if="!rules.length" class="empty">
-          No rule in any sheet matched this node. Its box comes from the element defaults and
-          whatever it inherits.
+          No rule in any sheet matched this node. Its box comes from the element defaults and whatever it inherits.
         </div>
         <div v-for="entry in ordered" :key="entry.index" class="rule">
           <div class="rule-head">
             <span class="selector mono">{{ entry.rule.selector }}</span>
             <div class="spacer"></div>
-            <span v-if="stateBadge(entry.rule)" class="badge state">{{
-              stateBadge(entry.rule)
-            }}</span>
+            <span v-if="stateBadge(entry.rule)" class="badge state">{{ stateBadge(entry.rule) }}</span>
             <span v-if="entry.rule.pseudo" class="badge pseudo">::{{ entry.rule.pseudo }}</span>
             <span class="badge spec" :title="`specificity ${entry.rule.specificity}, source order ${entry.rule.order}`"
               >{{ entry.rule.specificity }}·{{ entry.rule.order }}</span
             >
-            <span
-              class="btn copy"
-              :title="'Copy this rule'"
-              @click="copy(ruleText(entry.rule), 'r' + entry.index)"
-              >{{ copied === "r" + entry.index ? "✓" : "⧉" }}</span
-            >
+            <span class="btn copy" :title="'Copy this rule'" @click="copy(ruleText(entry.rule), 'r' + entry.index)">{{
+              copied === "r" + entry.index ? "✓" : "⧉"
+            }}</span>
           </div>
           <div v-if="entry.rule.media" class="media mono">@media {{ entry.rule.media }}</div>
           <div class="decls">
@@ -174,10 +162,7 @@ function ruleText(rule: Rule): string {
       <template v-else>
         <div v-if="state.stylesError" class="empty t-red">{{ state.stylesError }}</div>
         <div v-for="name in buckets" :key="name" class="bucket">
-          <div
-            class="bucket-head"
-            @click="openBuckets[name] = !openBuckets[name]"
-          >
+          <div class="bucket-head" @click="openBuckets[name] = !openBuckets[name]">
             <span class="twisty">{{ openBuckets[name] ? "▾" : "▸" }}</span>
             <span class="bucket-name mono">{{ name }}</span>
             <span v-if="name === 'live'" class="badge live">in effect this frame</span>
@@ -185,19 +170,13 @@ function ruleText(rule: Rule): string {
           </div>
           <div v-if="openBuckets[name]" class="decls">
             <div v-for="row in bucketRows(name)" :key="name + row.key" class="decl mono">
-              <span
-                v-if="row.swatch"
-                class="swatch"
-                :style="{ background: row.swatch }"
-              ></span>
+              <span v-if="row.swatch" class="swatch" :style="{ background: row.swatch }"></span>
               <span class="prop">{{ row.key }}</span>
               <span class="colon">:</span>
               <span class="val">{{ row.value }}</span>
-              <span
-                class="btn copy"
-                @click="copy(row.key + ': ' + row.value, name + row.key)"
-                >{{ copied === name + row.key ? "✓" : "⧉" }}</span
-              >
+              <span class="btn copy" @click="copy(row.key + ': ' + row.value, name + row.key)">{{
+                copied === name + row.key ? "✓" : "⧉"
+              }}</span>
             </div>
           </div>
         </div>

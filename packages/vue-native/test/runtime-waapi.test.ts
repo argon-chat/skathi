@@ -16,11 +16,25 @@ describe("el.animate() in the runtime", () => {
     const el: Any = rt.nodeOps.createElement("div");
     expect(typeof el.animate).toBe("function");
     expect(typeof el.getAnimations).toBe("function");
-    const a = el.animate([{ transform: "translateY(0px)" }, { transform: "translateY(-24px)" }], { duration: 30, easing: "ease-out" });
+    const a = el.animate([{ transform: "translateY(0px)" }, { transform: "translateY(-24px)" }], {
+      duration: 30,
+      easing: "ease-out",
+    });
     const set = rt.host.anim.calls.find((c) => c[0] === "set")!;
     expect(set[2]).toBe(el.__vnId);
-    expect(set[3].map((f: Any) => [f.computed, f.props])).toEqual([[0, [["transform", "translateY(0px)"]]], [1, [["transform", "translateY(-24px)"]]]]);
-    expect(set[4]).toMatchObject({ delay: 0, endDelay: 0, duration: 30, iterations: 1, iterationStart: 0, direction: "normal", fill: "auto" });
+    expect(set[3].map((f: Any) => [f.computed, f.props])).toEqual([
+      [0, [["transform", "translateY(0px)"]]],
+      [1, [["transform", "translateY(-24px)"]]],
+    ]);
+    expect(set[4]).toMatchObject({
+      delay: 0,
+      endDelay: 0,
+      duration: 30,
+      iterations: 1,
+      iterationStart: 0,
+      direction: "normal",
+      fill: "auto",
+    });
     expect(set[5]).toBe("ease-out");
     expect(rt.host.anim.calls.find((c) => c[0] === "clock")).toEqual(["clock", set[1], NaN, 0, 1]);
     expect(rt.advisories().filter((l) => l.includes("Element.animate() runs natively"))).toHaveLength(1);
@@ -46,7 +60,14 @@ describe("el.animate() in the runtime", () => {
   test("the globals and document.timeline", () => {
     const rt = createRuntime();
     const g = rt.global as Record<string, Any>;
-    for (const name of ["Animation", "KeyframeEffect", "AnimationEffect", "DocumentTimeline", "AnimationTimeline", "AnimationPlaybackEvent"]) {
+    for (const name of [
+      "Animation",
+      "KeyframeEffect",
+      "AnimationEffect",
+      "DocumentTimeline",
+      "AnimationTimeline",
+      "AnimationPlaybackEvent",
+    ]) {
       expect(typeof g[name]).toBe("function");
     }
     expect(typeof g.document.timeline.currentTime).toBe("number");
@@ -70,9 +91,13 @@ describe("el.animate() in the runtime", () => {
 
   test("a rAF callback stamps document.timeline with its timestamp", async () => {
     const TS = 1e9 + 0.5;
-    const rt = createRuntime({ globals: { requestAnimationFrame: (cb: (ts: number) => void) => setTimeout(() => cb(TS), 0) } });
+    const rt = createRuntime({
+      globals: { requestAnimationFrame: (cb: (ts: number) => void) => setTimeout(() => cb(TS), 0) },
+    });
     const g = rt.global as Record<string, Any>;
-    const seen = await new Promise((resolve) => g.requestAnimationFrame((ts: number) => resolve([ts, g.document.timeline.currentTime])));
+    const seen = await new Promise((resolve) =>
+      g.requestAnimationFrame((ts: number) => resolve([ts, g.document.timeline.currentTime])),
+    );
     expect(seen).toEqual([TS, TS]);
     // Still held after the callback, in its wave.
     expect(g.document.timeline.currentTime).toBe(TS);

@@ -260,7 +260,9 @@ export function iconImagesFrom(path: string): IconImage[] {
   }
   const img = decodePng(bytes, path);
   if (img.width !== img.height) {
-    throw new Error(`${path}: a PNG icon must be square (this one is ${img.width}×${img.height}) — give an .ico instead`);
+    throw new Error(
+      `${path}: a PNG icon must be square (this one is ${img.width}×${img.height}) — give an .ico instead`,
+    );
   }
   if (img.width < 16) throw new Error(`${path}: ${img.width}px is smaller than the smallest icon size (16)`);
   const sizes = PNG_ICON_SIZES.filter((s) => s <= img.width);
@@ -276,7 +278,10 @@ export function iconImagesFrom(path: string): IconImage[] {
   }));
 }
 
-export function groupIcon(images: IconImage[], firstId = 1): { icons: { id: number; data: Uint8Array }[]; group: Uint8Array } {
+export function groupIcon(
+  images: IconImage[],
+  firstId = 1,
+): { icons: { id: number; data: Uint8Array }[]; group: Uint8Array } {
   const group = new Uint8Array(6 + images.length * 14);
   const dv = new DataView(group.buffer);
   dv.setUint16(0, 0, true);

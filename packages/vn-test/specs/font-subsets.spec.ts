@@ -26,7 +26,8 @@ async function until<V>(read: () => Promise<V>, ok: (v: V) => boolean, ms = 10_0
 type Box = { x: number; y: number; w: number; h: number };
 const box = async (id: string): Promise<Box> => (await app.query(`#${id}`)).nodes[0]!.bounds!;
 const width = async (id: string) => (await app.query(`#${id}`)).nodes[0]?.bounds?.w ?? -1;
-const faces = async (): Promise<string[]> => JSON.parse(String(await app.eval("JSON.stringify(__VN_TEST_SUBSETS__.faces())")));
+const faces = async (): Promise<string[]> =>
+  JSON.parse(String(await app.eval("JSON.stringify(__VN_TEST_SUBSETS__.faces())")));
 
 async function settled() {
   await until(faces, (f) => f.filter((x) => x.includes(":loaded:")).length >= 6);
@@ -64,50 +65,78 @@ async function expectSamePixels(a: string, b: string, w?: number) {
 }
 
 describe("a family cut into unicode-range subsets", () => {
-  test("only the subsets the text needs load", async () => {
-    await settled();
-    const f = await faces();
-    expect(f).toContain("Mix:loaded:U+301");
-    expect(f).toContain("Mix:loaded:U+0-FF");
-    expect(f).toContain("Mix:unloaded:U+370-377");
-  }, T);
+  test(
+    "only the subsets the text needs load",
+    async () => {
+      await settled();
+      const f = await faces();
+      expect(f).toContain("Mix:loaded:U+301");
+      expect(f).toContain("Mix:loaded:U+0-FF");
+      expect(f).toContain("Mix:unloaded:U+370-377");
+    },
+    T,
+  );
 
-  test("Latin text is drawn with the latin subset's glyphs", async () => {
-    await settled();
-    expect(await width("lat")).toBeCloseTo(await width("lat-ref"), 1);
-    await expectSamePixels("lat", "lat-ref");
-  }, T);
+  test(
+    "Latin text is drawn with the latin subset's glyphs",
+    async () => {
+      await settled();
+      expect(await width("lat")).toBeCloseTo(await width("lat-ref"), 1);
+      await expectSamePixels("lat", "lat-ref");
+    },
+    T,
+  );
 
-  test("bold Latin and digits are the latin subset's 700", async () => {
-    await settled();
-    expect(await width("bold")).toBeCloseTo(await width("bold-ref"), 1);
-    await expectSamePixels("bold", "bold-ref");
-  }, T);
+  test(
+    "bold Latin and digits are the latin subset's 700",
+    async () => {
+      await settled();
+      expect(await width("bold")).toBeCloseTo(await width("bold-ref"), 1);
+      await expectSamePixels("bold", "bold-ref");
+    },
+    T,
+  );
 
-  test("Cyrillic text is drawn with the cyrillic subset's glyphs", async () => {
-    await settled();
-    expect(await width("cyr")).toBeCloseTo(await width("cyr-ref"), 1);
-    await expectSamePixels("cyr", "cyr-ref");
-  }, T);
+  test(
+    "Cyrillic text is drawn with the cyrillic subset's glyphs",
+    async () => {
+      await settled();
+      expect(await width("cyr")).toBeCloseTo(await width("cyr-ref"), 1);
+      await expectSamePixels("cyr", "cyr-ref");
+    },
+    T,
+  );
 
-  test("one run of Latin, Cyrillic and digits takes each character from its subset", async () => {
-    await settled();
-    const pieces = (await width("mixed-lat")) + (await width("mixed-cyr")) + (await width("mixed-num"));
-    expect(Math.abs((await width("mixed")) - pieces)).toBeLessThanOrEqual(3);
-    await expectSamePixels("mixed", "mixed-lat", (await width("mixed-lat")) - 6);
-  }, T);
+  test(
+    "one run of Latin, Cyrillic and digits takes each character from its subset",
+    async () => {
+      await settled();
+      const pieces = (await width("mixed-lat")) + (await width("mixed-cyr")) + (await width("mixed-num"));
+      expect(Math.abs((await width("mixed")) - pieces)).toBeLessThanOrEqual(3);
+      await expectSamePixels("mixed", "mixed-lat", (await width("mixed-lat")) - 6);
+    },
+    T,
+  );
 
-  test("a PUA-only family that leads the stack draws its own glyphs, and the next family the rest", async () => {
-    await settled();
-    const pieces = (await width("stack-lat")) + (await width("stack-pua"));
-    expect(Math.abs((await width("stack")) - pieces)).toBeLessThanOrEqual(2);
-    await expectSamePixels("stack", "stack-lat", (await width("stack-lat")) - 6);
-  }, T);
+  test(
+    "a PUA-only family that leads the stack draws its own glyphs, and the next family the rest",
+    async () => {
+      await settled();
+      const pieces = (await width("stack-lat")) + (await width("stack-pua"));
+      expect(Math.abs((await width("stack")) - pieces)).toBeLessThanOrEqual(2);
+      await expectSamePixels("stack", "stack-lat", (await width("stack-lat")) - 6);
+    },
+    T,
+  );
 
-  test("the app logged nothing broken", async () => {
-    const { entries } = await app.logs(0);
-    expect(entries.filter((e) => e.text.includes("missing-font"))).toEqual([]);
-    // The greek subset's file is missing on purpose, and nothing asks for it.
-    await app.expectNoErrors();
-  }, T);
+  test(
+    "the app logged nothing broken",
+    async () => {
+      const { entries } = await app.logs(0);
+      expect(entries.filter((e) => e.text.includes("missing-font"))).toEqual([]);
+      // The greek subset's file is missing on purpose, and nothing asks for it.
+      await app.expectNoErrors();
+    },
+    T,
+  );
 });

@@ -39,8 +39,10 @@ Standard Tailwind utility classes work in `.vue` templates — compiled by the
 `<style scoped>`:
 
 ```html
-<div class="flex flex-col gap-2 p-4 rounded-xl bg-white/10
-            hover:bg-white/25 transition-colors duration-300">
+<div
+  class="flex flex-col gap-2 p-4 rounded-xl bg-white/10
+            hover:bg-white/25 transition-colors duration-300"
+></div>
 ```
 
 An app opts in by dropping a `tailwind.config.js` next to its `src/`

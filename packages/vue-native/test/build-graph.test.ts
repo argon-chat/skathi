@@ -51,9 +51,7 @@ function build(fixture) {
   const entry = join(FIXTURES, fixture, "src/main.ts");
   const proc = Bun.spawnSync(["bun", "build.ts", entry, dist], { cwd: PKG_DIR });
   if (proc.exitCode !== 0) {
-    throw new Error(
-      `build.ts exited ${proc.exitCode}\n${proc.stdout.toString()}\n${proc.stderr.toString()}`,
-    );
+    throw new Error(`build.ts exited ${proc.exitCode}\n${proc.stdout.toString()}\n${proc.stderr.toString()}`);
   }
   const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8"));
   const changes = JSON.parse(readFileSync(join(dist, "changes.json"), "utf8"));
@@ -66,8 +64,7 @@ function build(fixture) {
   };
 }
 
-const id = (fixture, rel) =>
-  ["packages/vue-native/test/fixtures", fixture, "src", rel].filter(Boolean).join("/");
+const id = (fixture, rel) => ["packages/vue-native/test/fixtures", fixture, "src", rel].filter(Boolean).join("/");
 
 describe("manifest", () => {
   const out = build("graph-app");
@@ -117,14 +114,22 @@ describe("app-owned framework versions", () => {
     mkdirSync(join(dir, "src"), { recursive: true });
     mkdirSync(join(dir, "node_modules/pinia"), { recursive: true });
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { pinia: "3.0.4" } }));
-    writeFileSync(join(dir, "node_modules/pinia/package.json"), JSON.stringify({ name: "pinia", version: "3.0.4", main: "index.js" }));
+    writeFileSync(
+      join(dir, "node_modules/pinia/package.json"),
+      JSON.stringify({ name: "pinia", version: "3.0.4", main: "index.js" }),
+    );
     writeFileSync(join(dir, "node_modules/pinia/index.js"), 'exports.createPinia = () => "app-owned-pinia-three";');
-    writeFileSync(join(dir, "src/main.ts"), 'import { createPinia } from "pinia"; globalThis.__frameworkProbe = createPinia();');
+    writeFileSync(
+      join(dir, "src/main.ts"),
+      'import { createPinia } from "pinia"; globalThis.__frameworkProbe = createPinia();',
+    );
     const dev = Bun.spawnSync(["bun", "build.ts", join(dir, "src/main.ts"), dist], { cwd: PKG_DIR });
     expect(dev.exitCode).toBe(0);
     expect(readFileSync(join(dist, "vendor.js"), "utf8")).toContain("app-owned-pinia-three");
     expect(dev.stdout.toString()).toContain("pinia 3.0.4: the app's copy");
-    const prod = Bun.spawnSync(["bun", "prod.ts", join(dir, "src/main.ts"), join(dist, "app.prod.js")], { cwd: PKG_DIR });
+    const prod = Bun.spawnSync(["bun", "prod.ts", join(dir, "src/main.ts"), join(dist, "app.prod.js")], {
+      cwd: PKG_DIR,
+    });
     expect(prod.exitCode).toBe(0);
     expect(readFileSync(join(dist, "app.prod.js"), "utf8")).toContain("app-owned-pinia-three");
     expect(prod.stderr.toString()).not.toContain("different majors");
@@ -139,10 +144,7 @@ describe("a JavaScript app still builds", () => {
 
   test("resolves an extensionless import to a .js file and graphs it", () => {
     mkdirSync(join(dir, "src"), { recursive: true });
-    writeFileSync(
-      join(dir, "src/util.js"),
-      'export const greet = (who) => "hello " + who;\n',
-    );
+    writeFileSync(join(dir, "src/util.js"), 'export const greet = (who) => "hello " + who;\n');
     writeFileSync(
       join(dir, "src/main.js"),
       'import { createApp, h } from "vue-native";\n' +
@@ -260,7 +262,6 @@ describe("style-only edits", () => {
   }, 30_000);
 });
 
-
 describe("css entry modules", () => {
   const CSS_ID = id("css-app", "theme.css");
   const MAIN = id("css-app", "main.ts");
@@ -292,7 +293,7 @@ ${proc.stderr.toString()}`);
     }
     const bundle = readFileSync(out, "utf8");
     expect(bundle).toContain("--fixture-fg");
-    expect(bundle).not.toContain('.fixture-card { color');
+    expect(bundle).not.toContain(".fixture-card { color");
     expect(proc.stdout.toString()).toContain("css entry");
   });
 
@@ -403,12 +404,21 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
   );
   mkdirSync(join(dir, "node_modules"), { recursive: true });
   symlinkSync(join(dir, "packages/ctx-provider"), join(dir, "node_modules/ctx-provider"), "junction");
-  pkg("node_modules/ctx-consumer", "ctx-consumer", "1.0.0", 'import { inject } from "ctx-core";\nexport const injecting = (scope) => inject(scope);\n');
+  pkg(
+    "node_modules/ctx-consumer",
+    "ctx-consumer",
+    "1.0.0",
+    'import { inject } from "ctx-core";\nexport const injecting = (scope) => inject(scope);\n',
+  );
   pkg("node_modules/old-user", "old-user", "1.0.0", 'import { KEY } from "ctx-core";\nexport const oldKey = KEY;\n');
   pkg("node_modules/old-user/node_modules/ctx-core", "ctx-core", "1.0.0", core("old"));
   put(
     "node_modules/env-pick/package.json",
-    JSON.stringify({ name: "env-pick", version: "1.0.0", exports: { ".": { node: "./node.cjs", default: "./browser.cjs" } } }),
+    JSON.stringify({
+      name: "env-pick",
+      version: "1.0.0",
+      exports: { ".": { node: "./node.cjs", default: "./browser.cjs" } },
+    }),
   );
   put("node_modules/env-pick/node.cjs", 'exports.which = "node";\n');
   put("node_modules/env-pick/browser.cjs", 'exports.which = "browser";\n');
@@ -469,7 +479,10 @@ describe("build.ts (dev): npm packages share the packages they import", () => {
 
       const coreScript = script("ctx-core");
       await Bun.sleep(300);
-      writeFileSync(join(dir, "src/main.ts"), readFileSync(join(dir, "src/main.ts"), "utf8") + "export const edited = 1;\n");
+      writeFileSync(
+        join(dir, "src/main.ts"),
+        readFileSync(join(dir, "src/main.ts"), "utf8") + "export const edited = 1;\n",
+      );
       expect(await until(() => script(MAIN).includes("edited"))).toBe(true);
       const changes = JSON.parse(read("changes.json"));
       expect(changes.changed).toContainEqual({ id: MAIN, kind: "reload" });
@@ -536,8 +549,7 @@ describe("module namespaces in a prod bundle", () => {
     writeFileSync(join(dir, "src/pane.ts"), 'export default { name: "Pane" };\nexport const extra = 1;\n');
     writeFileSync(
       join(dir, "src/main.ts"),
-      'import * as all from "./pane";\n' +
-        '(globalThis as any).__nsProbe = { all, lazy: () => import("./pane") };\n',
+      'import * as all from "./pane";\n' + '(globalThis as any).__nsProbe = { all, lazy: () => import("./pane") };\n',
     );
     const out = join(mkdtempSync(join(tmpdir(), "vn-prod-ns-")), "app.prod.js");
     tmpDirs.push(dirname(out));

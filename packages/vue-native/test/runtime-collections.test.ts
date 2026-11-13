@@ -118,7 +118,12 @@ describe("querySelectorAll: a static NodeList", () => {
     expect(list[0]).toBe(a);
     expect(list.item(0)).toBe(a);
     expect(Object.keys(list)).toEqual(["0"]);
-    expect(Object.getOwnPropertyDescriptor(list, 0)).toEqual({ value: a, writable: false, enumerable: true, configurable: true });
+    expect(Object.getOwnPropertyDescriptor(list, 0)).toEqual({
+      value: a,
+      writable: false,
+      enumerable: true,
+      configurable: true,
+    });
     expect(typeof list.map).toBe("undefined");
     vue("i", root);
     expect(list.length).toBe(1);
@@ -219,7 +224,8 @@ describe("children and getElementsBy*: live HTMLCollections", () => {
   test("document.getElementsByTagName / ClassName / Name cover the mounted tree", () => {
     const { rt, g, doc } = world();
     rt.createApp({
-      render: () => h("main", [h("input", { name: "q", class: "f" }), h("input", { name: "r" }), h("b", { class: "f" })]),
+      render: () =>
+        h("main", [h("input", { name: "q", class: "f" }), h("input", { name: "r" }), h("b", { class: "f" })]),
     }).mount();
     const inputs = doc.getElementsByTagName("input");
     expect(inputs instanceof g.HTMLCollection).toBe(true);
@@ -241,10 +247,21 @@ describe("Node", () => {
     expect(typeof Node).toBe("function");
     expect(Node).not.toBe(g.Element);
     expect(() => new Node()).toThrow("Illegal constructor");
-    expect([Node.ELEMENT_NODE, Node.TEXT_NODE, Node.COMMENT_NODE, Node.DOCUMENT_NODE, Node.DOCUMENT_FRAGMENT_NODE]).toEqual([1, 3, 8, 9, 11]);
+    expect([
+      Node.ELEMENT_NODE,
+      Node.TEXT_NODE,
+      Node.COMMENT_NODE,
+      Node.DOCUMENT_NODE,
+      Node.DOCUMENT_FRAGMENT_NODE,
+    ]).toEqual([1, 3, 8, 9, 11]);
     expect(Node.DOCUMENT_POSITION_CONTAINED_BY).toBe(16);
     expect(Node.prototype.TEXT_NODE).toBe(3);
-    expect(Object.getOwnPropertyDescriptor(Node, "TEXT_NODE")).toEqual({ value: 3, writable: false, enumerable: true, configurable: false });
+    expect(Object.getOwnPropertyDescriptor(Node, "TEXT_NODE")).toEqual({
+      value: 3,
+      writable: false,
+      enumerable: true,
+      configurable: false,
+    });
     expect(Object.getPrototypeOf(Node.prototype)).toBe(EventTarget.prototype);
     expect(Object.getPrototypeOf(g.Element.prototype)).toBe(Node.prototype);
     expect(Object.getPrototypeOf(g.HTMLElement.prototype)).toBe(g.Element.prototype);
@@ -290,7 +307,11 @@ describe("namespaces: SVG and MathML elements", () => {
     const grad = defs.children[0];
     const text = svg.children[2];
     expect([svg.tagName, path.tagName, grad.tagName, svg.nodeName]).toEqual(["svg", "path", "linearGradient", "svg"]);
-    expect([svg.namespaceURI, svg.localName, grad.localName]).toEqual(["http://www.w3.org/2000/svg", "svg", "linearGradient"]);
+    expect([svg.namespaceURI, svg.localName, grad.localName]).toEqual([
+      "http://www.w3.org/2000/svg",
+      "svg",
+      "linearGradient",
+    ]);
     expect(svg instanceof g.SVGElement).toBe(true);
     expect(svg instanceof g.HTMLElement).toBe(false);
     expect(svg instanceof g.Element).toBe(true);
@@ -353,7 +374,13 @@ describe("interfaces over objects that already existed", () => {
     const t = new g.TransitionEvent("transitionend", { propertyName: "opacity", elapsedTime: "0.5", bubbles: true });
     expect(t instanceof g.TransitionEvent).toBe(true);
     expect(t instanceof Event).toBe(true);
-    expect([t.type, t.propertyName, t.elapsedTime, t.pseudoElement, t.bubbles]).toEqual(["transitionend", "opacity", 0.5, "", true]);
+    expect([t.type, t.propertyName, t.elapsedTime, t.pseudoElement, t.bubbles]).toEqual([
+      "transitionend",
+      "opacity",
+      0.5,
+      "",
+      true,
+    ]);
     expect(Object.keys(t)).not.toContain("propertyName");
     const a = new g.AnimationEvent("animationend", { animationName: "fade" });
     expect([a.animationName, a.elapsedTime]).toEqual(["fade", 0]);
@@ -362,7 +389,9 @@ describe("interfaces over objects that already existed", () => {
     const p = new g.PopStateEvent("popstate", { state: { page: 2 } });
     expect(p.state).toEqual({ page: 2 });
     expect(new g.ToggleEvent("toggle", { newState: "open" }).newState).toBe("open");
-    expect(() => Object.getOwnPropertyDescriptor(g.TransitionEvent.prototype, "propertyName").get.call({})).toThrow("Illegal invocation");
+    expect(() => Object.getOwnPropertyDescriptor(g.TransitionEvent.prototype, "propertyName").get.call({})).toThrow(
+      "Illegal invocation",
+    );
   });
 });
 
@@ -372,20 +401,37 @@ describe("touch, as desktop Chrome shows it on a machine without a touch screen"
     const el = vue("div");
     const t = new g.Touch({ identifier: 7, target: el, clientX: 10, clientY: "20" });
     expect(t instanceof g.Touch).toBe(true);
-    expect([t.identifier, t.target, t.clientX, t.clientY, t.pageX, t.force, t.touchType]).toEqual([7, el, 10, 20, 0, 0, "direct"]);
+    expect([t.identifier, t.target, t.clientX, t.clientY, t.pageX, t.force, t.touchType]).toEqual([
+      7,
+      el,
+      10,
+      20,
+      0,
+      0,
+      "direct",
+    ]);
     expect(() => new g.Touch({ target: el })).toThrow("identifier");
     const ev = new g.TouchEvent("touchstart", { touches: [t], changedTouches: [t], ctrlKey: true, bubbles: true });
     expect(ev instanceof g.TouchEvent).toBe(true);
     expect(ev instanceof Event).toBe(true);
     expect(ev.touches instanceof g.TouchList).toBe(true);
-    expect([ev.touches.length, ev.touches.item(0), ev.touches[0], ev.targetTouches.length, ev.ctrlKey, ev.bubbles]).toEqual([1, t, t, 0, true, true]);
+    expect([
+      ev.touches.length,
+      ev.touches.item(0),
+      ev.touches[0],
+      ev.targetTouches.length,
+      ev.ctrlKey,
+      ev.bubbles,
+    ]).toEqual([1, t, t, 0, true, true]);
     expect([...ev.changedTouches]).toEqual([t]);
     expect(() => new g.TouchEvent("touchstart", { touches: [{}] })).toThrow("Touch");
     expect(() => new g.TouchList()).toThrow("Illegal constructor");
     expect("ontouchstart" in g).toBe(false);
     expect("ontouchstart" in el).toBe(false);
     void rt;
-    const navigator: Any = { permissions: { query: () => Promise.resolve(Object.assign(new EventTarget(), { state: "granted" })) } };
+    const navigator: Any = {
+      permissions: { query: () => Promise.resolve(Object.assign(new EventTarget(), { state: "granted" })) },
+    };
     createRuntime({ navigator });
     expect(navigator.maxTouchPoints).toBe(0);
   });
@@ -423,7 +469,11 @@ describe("HTML element interfaces, by tag", () => {
     expect(audio instanceof g.HTMLElement).toBe(true);
     expect(Object.getPrototypeOf(g.HTMLVideoElement.prototype)).toBe(g.HTMLMediaElement.prototype);
     expect(Object.getPrototypeOf(g.HTMLMediaElement.prototype)).toBe(g.HTMLElement.prototype);
-    expect([g.HTMLMediaElement.HAVE_FUTURE_DATA, g.HTMLMediaElement.prototype.HAVE_ENOUGH_DATA, g.HTMLMediaElement.NETWORK_IDLE]).toEqual([3, 4, 1]);
+    expect([
+      g.HTMLMediaElement.HAVE_FUTURE_DATA,
+      g.HTMLMediaElement.prototype.HAVE_ENOUGH_DATA,
+      g.HTMLMediaElement.NETWORK_IDLE,
+    ]).toEqual([3, 4, 1]);
   });
 
   test("the AudioManager pattern: instanceof HTMLAudioElement inside a MutationObserver callback", async () => {

@@ -94,9 +94,7 @@ describe("layout", () => {
   });
 
   test("BYTECODE is page-aligned inside the data region, and flags say so", () => {
-    const pk = readVnpk(
-      writeVnpk([...small, { name: NAMES.BYTECODE, kind: KIND.BYTECODE, data: new Uint8Array(10) }]),
-    );
+    const pk = readVnpk(writeVnpk([...small, { name: NAMES.BYTECODE, kind: KIND.BYTECODE, data: new Uint8Array(10) }]));
     const bc = pk.find(KIND.BYTECODE, NAMES.BYTECODE)!;
     expect(bc.alignLog2).toBe(12);
     expect((bc.start - pk.header.dataOff) % PAGE).toBe(0);

@@ -67,7 +67,10 @@ const Root = defineComponent({
       const io = new IntersectionObserver((entries) => {
         for (const e of entries) {
           const r = e.boundingClientRect;
-          state.io[(e.target as HTMLElement).id] = { isIntersecting: e.isIntersecting, rect: [r.left, r.top, r.width, r.height] };
+          state.io[(e.target as HTMLElement).id] = {
+            isIntersecting: e.isIntersecting,
+            rect: [r.left, r.top, r.width, r.height],
+          };
         }
       });
       io.observe(document.getElementById("far")!);
@@ -83,7 +86,11 @@ const Root = defineComponent({
         ),
         menuOpen.value ? h(Popper, { id: "menu", anchor: "menu-btn" }, () => h("div", { class: "menu-body" })) : null,
         h("div", { id: "dialog", class: "dialog" }, [
-          h("div", { id: "select-trigger", class: "select-trigger", onClick: () => (selectOpen.value = !selectOpen.value) }),
+          h("div", {
+            id: "select-trigger",
+            class: "select-trigger",
+            onClick: () => (selectOpen.value = !selectOpen.value),
+          }),
         ]),
         selectOpen.value
           ? h(Popper, { id: "select", anchor: "select-trigger" }, () => h("div", { class: "select-body" }))

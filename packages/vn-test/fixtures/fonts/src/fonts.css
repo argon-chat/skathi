@@ -2,7 +2,9 @@
 
 @font-face {
   font-family: "VN Pixel";
-  src: local("VN Pixel Nowhere"), url("./fonts/PressStart2P-Regular.ttf") format("truetype");
+  src:
+    local("VN Pixel Nowhere"),
+    url("./fonts/PressStart2P-Regular.ttf") format("truetype");
   font-display: swap;
 }
 

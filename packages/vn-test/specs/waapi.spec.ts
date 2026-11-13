@@ -20,7 +20,9 @@ const opacityOf = (text: string): number => {
   return m ? Number(m[1]) : 1;
 };
 const translateYOf = (text: string): number => {
-  const m = /vn_transform:[\s\S]*?translate:\s*\(\s*Pixels\(\s*([-\d.eE]+),?\s*\),?\s*Pixels\(\s*([-\d.eE]+)/.exec(text);
+  const m = /vn_transform:[\s\S]*?translate:\s*\(\s*Pixels\(\s*([-\d.eE]+),?\s*\),?\s*Pixels\(\s*([-\d.eE]+)/.exec(
+    text,
+  );
   return m ? Number(m[2]) : NaN;
 };
 const digitColour = async (): Promise<string> => {
@@ -149,7 +151,11 @@ describe("el.animate()", () => {
       // Once near the end, it never goes back to the base value.
       expect(Math.min(...reds.slice(near))).toBeGreaterThan(180);
       expect(reds[reds.length - 1]).toBeGreaterThan(200);
-      expect(await app.eval(`[window.__settled, document.getElementById("settle").getAnimations().length, document.getElementById("settle").style.opacity]`)).toEqual([true, 0, "0.2"]);
+      expect(
+        await app.eval(
+          `[window.__settled, document.getElementById("settle").getAnimations().length, document.getElementById("settle").style.opacity]`,
+        ),
+      ).toEqual([true, 0, "0.2"]);
     },
     T,
   );

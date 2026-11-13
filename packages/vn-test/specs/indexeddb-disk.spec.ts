@@ -48,7 +48,14 @@ async function scenario(app: VnApp, name: string, ...args: string[]): Promise<st
   }
 }
 
-type IdbInfo = { folder: string; started: boolean; mode: string | null; encrypted: boolean | null; key: boolean; error: string | null };
+type IdbInfo = {
+  folder: string;
+  started: boolean;
+  mode: string | null;
+  encrypted: boolean | null;
+  key: boolean;
+  error: string | null;
+};
 async function info(app: VnApp): Promise<IdbInfo> {
   const i = JSON.parse(await scenario(app, "info")) as IdbInfo;
   folders.add(i.folder);
@@ -69,7 +76,9 @@ async function quit(app: VnApp) {
 }
 
 function files(dir: string): string[] {
-  return readdirSync(dir).filter((n) => !n.startsWith("key.")).map((n) => join(dir, n));
+  return readdirSync(dir)
+    .filter((n) => !n.startsWith("key."))
+    .map((n) => join(dir, n));
 }
 
 function spellings(s: string): Buffer[] {
@@ -85,129 +94,157 @@ function legible(dir: string, ...needles: string[]): string[] {
   return hits;
 }
 
-const logLines = (app: VnApp, needle: string) => readFileSync(app.hostLog, "utf8").split(/\r?\n/).filter((l) => l.includes(needle));
+const logLines = (app: VnApp, needle: string) =>
+  readFileSync(app.hostLog, "utf8")
+    .split(/\r?\n/)
+    .filter((l) => l.includes(needle));
 
 describe("IndexedDB on disk, dev host", () => {
-  test("what one host wrote is there for the next — after a kill, and after a graceful quit", async () => {
-    const value = `persisted-${run}-${Date.now()}`;
-    let a = await host("restart");
-    await expect(a.locator("#status")).toHaveText("ready");
-    const i = await info(a);
-    bunExpect(i.mode).toBe("plaintext");
-    bunExpect(await scenario(a, "put", "greeting", value)).toBe("ok");
-    bunExpect(logLines(a, "IN MEMORY ONLY")).toEqual([]);
-    bunExpect(readdirSync(i.folder).some((n) => n.endsWith(".sqlite3"))).toBe(true);
-    await kill(a);
-    bunExpect(readdirSync(i.folder).some((n) => n.endsWith(".sqlite3-wal")), "the WAL survives a kill").toBe(true);
+  test(
+    "what one host wrote is there for the next — after a kill, and after a graceful quit",
+    async () => {
+      const value = `persisted-${run}-${Date.now()}`;
+      let a = await host("restart");
+      await expect(a.locator("#status")).toHaveText("ready");
+      const i = await info(a);
+      bunExpect(i.mode).toBe("plaintext");
+      bunExpect(await scenario(a, "put", "greeting", value)).toBe("ok");
+      bunExpect(logLines(a, "IN MEMORY ONLY")).toEqual([]);
+      bunExpect(readdirSync(i.folder).some((n) => n.endsWith(".sqlite3"))).toBe(true);
+      await kill(a);
+      bunExpect(
+        readdirSync(i.folder).some((n) => n.endsWith(".sqlite3-wal")),
+        "the WAL survives a kill",
+      ).toBe(true);
 
-    a = await host("restart");
-    await expect(a.locator("#status")).toHaveText("ready");
-    bunExpect(await scenario(a, "get", "greeting")).toBe(value);
-    bunExpect(await scenario(a, "databases")).toBe("vn-test-persist@1");
-    await quit(a);
-    bunExpect(readdirSync(i.folder).filter((n) => n.endsWith("-wal")), "a graceful quit checkpoints the WAL away").toEqual([]);
-    bunExpect(logLines(a, "did not finish closing")).toEqual([]);
+      a = await host("restart");
+      await expect(a.locator("#status")).toHaveText("ready");
+      bunExpect(await scenario(a, "get", "greeting")).toBe(value);
+      bunExpect(await scenario(a, "databases")).toBe("vn-test-persist@1");
+      await quit(a);
+      bunExpect(
+        readdirSync(i.folder).filter((n) => n.endsWith("-wal")),
+        "a graceful quit checkpoints the WAL away",
+      ).toEqual([]);
+      bunExpect(logLines(a, "did not finish closing")).toEqual([]);
 
-    a = await host("restart");
-    await expect(a.locator("#status")).toHaveText("ready");
-    bunExpect(await scenario(a, "get", "greeting")).toBe(value);
-    await kill(a);
-  }, T);
+      a = await host("restart");
+      await expect(a.locator("#status")).toHaveText("ready");
+      bunExpect(await scenario(a, "get", "greeting")).toBe(value);
+      await kill(a);
+    },
+    T,
+  );
 
-  test("encrypted at rest: no plaintext on disk, sticky across a restart, decrypted only when asked", async () => {
-    const key = `vn-key-${run}`;
-    const value = `vn-secret-${run}-${Date.now()}`;
-    let a = await host("sealed", ["encrypt"]);
-    await expect(a.locator("#status")).toHaveText("ready");
-    let i = await info(a);
-    bunExpect(i.mode).toBe("encrypted");
-    bunExpect(i.key).toBe(true);
-    bunExpect(await scenario(a, "put", key, value)).toBe("ok");
-    await kill(a);
-    bunExpect(legible(i.folder, key, value), "plaintext in an encrypted folder").toEqual([]);
+  test(
+    "encrypted at rest: no plaintext on disk, sticky across a restart, decrypted only when asked",
+    async () => {
+      const key = `vn-key-${run}`;
+      const value = `vn-secret-${run}-${Date.now()}`;
+      let a = await host("sealed", ["encrypt"]);
+      await expect(a.locator("#status")).toHaveText("ready");
+      let i = await info(a);
+      bunExpect(i.mode).toBe("encrypted");
+      bunExpect(i.key).toBe(true);
+      bunExpect(await scenario(a, "put", key, value)).toBe("ok");
+      await kill(a);
+      bunExpect(legible(i.folder, key, value), "plaintext in an encrypted folder").toEqual([]);
 
-    a = await host("sealed");
-    await expect(a.locator("#status")).toHaveText("ready");
-    i = await info(a);
-    bunExpect(i.mode).toBe("encrypted");
-    bunExpect(await scenario(a, "get", key)).toBe(value);
-    bunExpect(await scenario(a, "put", `${key}-2`, `${value}-2`)).toBe("ok");
-    await quit(a);
-    bunExpect(legible(i.folder, key, value, `${value}-2`)).toEqual([]);
+      a = await host("sealed");
+      await expect(a.locator("#status")).toHaveText("ready");
+      i = await info(a);
+      bunExpect(i.mode).toBe("encrypted");
+      bunExpect(await scenario(a, "get", key)).toBe(value);
+      bunExpect(await scenario(a, "put", `${key}-2`, `${value}-2`)).toBe("ok");
+      await quit(a);
+      bunExpect(legible(i.folder, key, value, `${value}-2`)).toEqual([]);
 
-    a = await host("sealed", ["keep"]);
-    await expect(a.locator("#status")).toHaveText("ready");
-    i = await info(a);
-    bunExpect(i.mode).toBe("encrypted");
-    bunExpect(await scenario(a, "get", key)).toBe(value);
-    const kept = JSON.parse(await scenario(a, "late", "keep")) as IdbInfo;
-    bunExpect(kept.key).toBe(true);
-    bunExpect(existsSync(join(i.folder, "key.retire")), "no decryption was queued for the next start").toBe(false);
-    await quit(a);
-    bunExpect(legible(i.folder, key, value, `${value}-2`)).toEqual([]);
+      a = await host("sealed", ["keep"]);
+      await expect(a.locator("#status")).toHaveText("ready");
+      i = await info(a);
+      bunExpect(i.mode).toBe("encrypted");
+      bunExpect(await scenario(a, "get", key)).toBe(value);
+      const kept = JSON.parse(await scenario(a, "late", "keep")) as IdbInfo;
+      bunExpect(kept.key).toBe(true);
+      bunExpect(existsSync(join(i.folder, "key.retire")), "no decryption was queued for the next start").toBe(false);
+      await quit(a);
+      bunExpect(legible(i.folder, key, value, `${value}-2`)).toEqual([]);
 
-    a = await host("sealed", ["decrypt"]);
-    await expect(a.locator("#status")).toHaveText("ready");
-    i = await info(a);
-    bunExpect(i.mode).toBe("plaintext");
-    bunExpect(i.key).toBe(false);
-    bunExpect(await scenario(a, "get", key)).toBe(value);
-    await quit(a);
-    bunExpect(legible(i.folder, value).length).toBeGreaterThan(0);
-    bunExpect(existsSync(join(i.folder, "key.sealed"))).toBe(false);
-  }, T);
+      a = await host("sealed", ["decrypt"]);
+      await expect(a.locator("#status")).toHaveText("ready");
+      i = await info(a);
+      bunExpect(i.mode).toBe("plaintext");
+      bunExpect(i.key).toBe(false);
+      bunExpect(await scenario(a, "get", key)).toBe(value);
+      await quit(a);
+      bunExpect(legible(i.folder, value).length).toBeGreaterThan(0);
+      bunExpect(existsSync(join(i.folder, "key.sealed"))).toBe(false);
+    },
+    T,
+  );
 
-  test("a late { encrypted: true } applies at the next start, said once", async () => {
-    let a = await host("late");
-    await expect(a.locator("#status")).toHaveText("ready");
-    bunExpect((await info(a)).mode).toBe("plaintext");
-    const late = JSON.parse(await scenario(a, "late", "true")) as IdbInfo;
-    bunExpect(late.mode, "this run stays as it started").toBe("plaintext");
-    bunExpect(late.key, "but the key for the next start exists").toBe(true);
-    bunExpect(logLines(a, "applies at the next start").length).toBe(1);
-    bunExpect(await scenario(a, "put", "k", "late-value")).toBe("ok");
-    await quit(a);
+  test(
+    "a late { encrypted: true } applies at the next start, said once",
+    async () => {
+      let a = await host("late");
+      await expect(a.locator("#status")).toHaveText("ready");
+      bunExpect((await info(a)).mode).toBe("plaintext");
+      const late = JSON.parse(await scenario(a, "late", "true")) as IdbInfo;
+      bunExpect(late.mode, "this run stays as it started").toBe("plaintext");
+      bunExpect(late.key, "but the key for the next start exists").toBe(true);
+      bunExpect(logLines(a, "applies at the next start").length).toBe(1);
+      bunExpect(await scenario(a, "put", "k", "late-value")).toBe("ok");
+      await quit(a);
 
-    a = await host("late");
-    await expect(a.locator("#status")).toHaveText("ready");
-    const i = await info(a);
-    bunExpect(i.mode).toBe("encrypted");
-    bunExpect(await scenario(a, "get", "k")).toBe("late-value");
-    await quit(a);
-    bunExpect(legible(i.folder, "late-value")).toEqual([]);
-  }, T);
+      a = await host("late");
+      await expect(a.locator("#status")).toHaveText("ready");
+      const i = await info(a);
+      bunExpect(i.mode).toBe("encrypted");
+      bunExpect(await scenario(a, "get", "k")).toBe("late-value");
+      await quit(a);
+      bunExpect(legible(i.folder, "late-value")).toEqual([]);
+    },
+    T,
+  );
 
-  test("a second instance on the same folder gets UnknownError and an advisory, then recovers", async () => {
-    const first = await host("twice");
-    await expect(first.locator("#status")).toHaveText("ready");
-    bunExpect(await scenario(first, "put", "owner", "first")).toBe("ok");
-    await info(first);
+  test(
+    "a second instance on the same folder gets UnknownError and an advisory, then recovers",
+    async () => {
+      const first = await host("twice");
+      await expect(first.locator("#status")).toHaveText("ready");
+      bunExpect(await scenario(first, "put", "owner", "first")).toBe("ok");
+      await info(first);
 
-    const second = await host("twice");
-    await expect(second.locator("#status")).toHaveText("failed: UnknownError");
-    bunExpect(await second.eval("String(__VN_TEST_IDB__.results.boot)")).toContain("another instance");
-    bunExpect(await scenario(second, "databases")).toStartWith("ERR UnknownError");
-    const advisory = logLines(second, "[redjs] IndexedDB:").filter((l) => l.includes("another instance"));
-    bunExpect(advisory.length).toBeGreaterThan(0);
-    bunExpect(advisory[0]).toContain(`pid ${first.pid}`);
+      const second = await host("twice");
+      await expect(second.locator("#status")).toHaveText("failed: UnknownError");
+      bunExpect(await second.eval("String(__VN_TEST_IDB__.results.boot)")).toContain("another instance");
+      bunExpect(await scenario(second, "databases")).toStartWith("ERR UnknownError");
+      const advisory = logLines(second, "[redjs] IndexedDB:").filter((l) => l.includes("another instance"));
+      bunExpect(advisory.length).toBeGreaterThan(0);
+      bunExpect(advisory[0]).toContain(`pid ${first.pid}`);
 
-    await kill(first);
-    let opened = "";
-    for (let i = 0; i < 50 && opened !== "ok"; i++) {
-      opened = await scenario(second, "open");
-      if (opened !== "ok") await new Promise((r) => setTimeout(r, 100));
-    }
-    bunExpect(opened).toBe("ok");
-    bunExpect(await scenario(second, "get", "owner")).toBe("first");
-    await kill(second);
-  }, T);
+      await kill(first);
+      let opened = "";
+      for (let i = 0; i < 50 && opened !== "ok"; i++) {
+        opened = await scenario(second, "open");
+        if (opened !== "ok") await new Promise((r) => setTimeout(r, 100));
+      }
+      bunExpect(opened).toBe("ok");
+      bunExpect(await scenario(second, "get", "owner")).toBe("first");
+      await kill(second);
+    },
+    T,
+  );
 });
 
 describe("IndexedDB on disk, packaged exe", () => {
   test(
     "a packaged app's record survives its restart",
     async () => {
-      const p = await packagedExe({ app: join(REPO, "packages", "vn-test", "fixtures", "idb-persist"), label: "idb-persist" });
+      const p = await packagedExe({
+        app: join(REPO, "packages", "vn-test", "fixtures", "idb-persist"),
+        label: "idb-persist",
+      });
       const appDir = join(process.env.LOCALAPPDATA ?? "", p.name);
       rmSync(appDir, { recursive: true, force: true });
       const value = `packaged-${run}-${Date.now()}`;

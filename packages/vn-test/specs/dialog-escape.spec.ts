@@ -40,31 +40,39 @@ async function openDialog(): Promise<void> {
 }
 
 describe("a dialog opened from a context menu", () => {
-  test("the focus handed back to the menu's trigger never reaches it, and Escape closes the dialog", async () => {
-    await openDialog();
-    const open = await state();
-    bunExpect(open.log).toContain("scope:menu remembers tag");
-    const after = sinceDialog(open.log);
-    bunExpect(after).toContain("scope:menu returns to tag");
-    bunExpect(after.filter((l) => l.endsWith(":tag"))).toEqual([]);
-    bunExpect(open.layers).toEqual(["dialog"]);
-    bunExpect(open.active).toBe("dlg-btn");
-    await expect(app.locator("#tip")).toHaveCount(0);
+  test(
+    "the focus handed back to the menu's trigger never reaches it, and Escape closes the dialog",
+    async () => {
+      await openDialog();
+      const open = await state();
+      bunExpect(open.log).toContain("scope:menu remembers tag");
+      const after = sinceDialog(open.log);
+      bunExpect(after).toContain("scope:menu returns to tag");
+      bunExpect(after.filter((l) => l.endsWith(":tag"))).toEqual([]);
+      bunExpect(open.layers).toEqual(["dialog"]);
+      bunExpect(open.active).toBe("dlg-btn");
+      await expect(app.locator("#tip")).toHaveCount(0);
 
-    await app.press("Escape");
-    await expect(app.locator("#dialog")).toHaveCount(0);
-    bunExpect((await state()).log).toContain("escape:dialog");
-  }, T);
+      await app.press("Escape");
+      await expect(app.locator("#dialog")).toHaveCount(0);
+      bunExpect((await state()).log).toContain("escape:dialog");
+    },
+    T,
+  );
 
-  test("a press on a focusable button outside the trap: the button hears nothing, and the focus stays inside", async () => {
-    await openDialog();
-    await app.eval("__VN_TEST_ESCAPE__.log.length = 0");
-    await app.locator("#outside").click({ real: true });
-    await sleep(300);
-    const s = await state();
-    bunExpect(s.log.filter((l) => l.endsWith(":outside"))).toEqual([]);
-    bunExpect(s.active).toBe("dlg-btn");
-    await app.press("Escape");
-    await expect(app.locator("#dialog")).toHaveCount(0);
-  }, T);
+  test(
+    "a press on a focusable button outside the trap: the button hears nothing, and the focus stays inside",
+    async () => {
+      await openDialog();
+      await app.eval("__VN_TEST_ESCAPE__.log.length = 0");
+      await app.locator("#outside").click({ real: true });
+      await sleep(300);
+      const s = await state();
+      bunExpect(s.log.filter((l) => l.endsWith(":outside"))).toEqual([]);
+      bunExpect(s.active).toBe("dlg-btn");
+      await app.press("Escape");
+      await expect(app.locator("#dialog")).toHaveCount(0);
+    },
+    T,
+  );
 });

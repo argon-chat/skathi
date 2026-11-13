@@ -268,7 +268,9 @@ describe("drawImage of an <img>", () => {
       console.warn = warn;
     }
     expect(host.asks.length).toBe(2); // not cached: it may decode later
-    expect(said.filter((m) => m.includes("drawImage(<img>) draws nothing: the bytes are not an image"))).toHaveLength(1);
+    expect(said.filter((m) => m.includes("drawImage(<img>) draws nothing: the bytes are not an image"))).toHaveLength(
+      1,
+    );
   });
 });
 
@@ -385,7 +387,10 @@ describe("WebGPU canvas selection", () => {
     rt.patchProp(c, "height", null, 50);
     c.removeAttribute("height");
     expect(gpu.calls.filter((x) => x[0] === "resize").map((x) => x.slice(2))).toEqual([
-      [80, 150], [80, 150], [80, 50], [80, 150],
+      [80, 150],
+      [80, 150],
+      [80, 50],
+      [80, 150],
     ]);
     expect(context.size).toEqual([80, 150]);
     expect(c.getContext("webgpu")).toBe(context);
@@ -416,7 +421,8 @@ describe("WebGPU canvas selection", () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(got).toEqual({ gpuBlob: "image/webp" });
     expect(gpu.calls.filter((x) => x[0] !== "context")).toEqual([
-      ["dataUrl", context, "image/jpeg", 0.25], ["blob", context, "image/webp", 0.75],
+      ["dataUrl", context, "image/jpeg", 0.25],
+      ["blob", context, "image/webp", 0.75],
     ]);
     expect(natives.calls.filter((x) => x[0] === "dataUrl" || x[0] === "blob")).toEqual([]);
     c.width = 0;

@@ -37,7 +37,9 @@ const shoot = async () => {
     at: (x: number, y: number): Rgb => shot.at(Math.floor((x + 0.5) * k), Math.floor((y + 0.5) * k)),
     count: (b: Bounds, hit: (rgb: Rgb) => boolean) => {
       let n = 0;
-      for (let y = 0; y < b.h; y++) for (let x = 0; x < b.w; x++) if (hit(shot.at(Math.floor((b.x + x + 0.5) * k), Math.floor((b.y + y + 0.5) * k)))) n++;
+      for (let y = 0; y < b.h; y++)
+        for (let x = 0; x < b.w; x++)
+          if (hit(shot.at(Math.floor((b.x + x + 0.5) * k), Math.floor((b.y + y + 0.5) * k)))) n++;
       return n;
     },
   };
@@ -57,111 +59,148 @@ const corners = (b: Bounds, inset: number): [number, number][] => [
 ];
 
 describe("a round avatar (reka's AvatarRoot around an <img>)", () => {
-  test("the image is clipped to the circle", async () => {
-    const b = await box("#avatar");
-    bunExpect(b).toMatchObject({ w: 64, h: 64 });
-    const area = (s: Awaited<ReturnType<typeof shoot>>) => s.count(b, red);
-    // The image decodes asynchronously; wait for it to paint at all.
-    await until(async () => area(await shoot()), (n) => n > 1000);
-    const s = await shoot();
-    bunExpect(area(s)).toBeGreaterThan(3050);
-    bunExpect(area(s)).toBeLessThan(3400);
-    for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
-    bunExpect(red(s.at(b.x + 32, b.y + 32))).toBe(true);
-    bunExpect(red(s.at(b.x + 32, b.y + 2))).toBe(true);
-  }, T);
+  test(
+    "the image is clipped to the circle",
+    async () => {
+      const b = await box("#avatar");
+      bunExpect(b).toMatchObject({ w: 64, h: 64 });
+      const area = (s: Awaited<ReturnType<typeof shoot>>) => s.count(b, red);
+      // The image decodes asynchronously; wait for it to paint at all.
+      await until(
+        async () => area(await shoot()),
+        (n) => n > 1000,
+      );
+      const s = await shoot();
+      bunExpect(area(s)).toBeGreaterThan(3050);
+      bunExpect(area(s)).toBeLessThan(3400);
+      for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
+      bunExpect(red(s.at(b.x + 32, b.y + 32))).toBe(true);
+      bunExpect(red(s.at(b.x + 32, b.y + 2))).toBe(true);
+    },
+    T,
+  );
 
-  test("an <img> with `border-radius: 50%` is a disc too", async () => {
-    const b = await box("#round-img");
-    const s = await until(shoot, (s) => s.count(b, red) > 1000);
-    bunExpect(s.count(b, red)).toBeGreaterThan(3050);
-    bunExpect(s.count(b, red)).toBeLessThan(3400);
-    for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
-  }, T);
+  test(
+    "an <img> with `border-radius: 50%` is a disc too",
+    async () => {
+      const b = await box("#round-img");
+      const s = await until(shoot, (s) => s.count(b, red) > 1000);
+      bunExpect(s.count(b, red)).toBeGreaterThan(3050);
+      bunExpect(s.count(b, red)).toBeLessThan(3400);
+      for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
+    },
+    T,
+  );
 
-  test("`50%` on a box that is not square clips to a pill", async () => {
-    // 120x44: CSS draws 60x22 elliptical corners (area pi*60*22 = 4147). gpui's corners are
-    // circles, so the smaller radius makes a 22px pill: 76*44 + pi*22^2 = 4865.
-    const b = await box("#oval");
-    bunExpect(b).toMatchObject({ w: 120, h: 44 });
-    const s = await until(shoot, (s) => s.count(b, red) > 1000);
-    bunExpect(s.count(b, red)).toBeGreaterThan(4750);
-    bunExpect(s.count(b, red)).toBeLessThan(5000);
-    for (const [x, y] of corners(b, 2)) bunExpect(white(s.at(x, y))).toBe(true);
-    bunExpect(red(s.at(b.x + 60, b.y + 1))).toBe(true);
-    bunExpect(red(s.at(b.x + 1, b.y + 22))).toBe(true);
-    await app.eval(`document.getElementById("tick").style.right = "3px"`);
-    const said = await until(
-      async () => JSON.stringify((await app.logs()).entries),
-      (text) => text.includes("elliptical corner"),
-    );
-    bunExpect(said).toContain("elliptical corner");
-  }, T);
+  test(
+    "`50%` on a box that is not square clips to a pill",
+    async () => {
+      // 120x44: CSS draws 60x22 elliptical corners (area pi*60*22 = 4147). gpui's corners are
+      // circles, so the smaller radius makes a 22px pill: 76*44 + pi*22^2 = 4865.
+      const b = await box("#oval");
+      bunExpect(b).toMatchObject({ w: 120, h: 44 });
+      const s = await until(shoot, (s) => s.count(b, red) > 1000);
+      bunExpect(s.count(b, red)).toBeGreaterThan(4750);
+      bunExpect(s.count(b, red)).toBeLessThan(5000);
+      for (const [x, y] of corners(b, 2)) bunExpect(white(s.at(x, y))).toBe(true);
+      bunExpect(red(s.at(b.x + 60, b.y + 1))).toBe(true);
+      bunExpect(red(s.at(b.x + 1, b.y + 22))).toBe(true);
+      await app.eval(`document.getElementById("tick").style.right = "3px"`);
+      const said = await until(
+        async () => JSON.stringify((await app.logs()).entries),
+        (text) => text.includes("elliptical corner"),
+      );
+      bunExpect(said).toContain("elliptical corner");
+    },
+    T,
+  );
 });
 
 describe("`border-radius: inherit` (the Argon client's avatars and profile card)", () => {
-  test("an inline `inherit` on an <img> takes its round wrapper's radius", async () => {
-    const b = await box("#inh-img");
-    bunExpect(b).toMatchObject({ w: 64, h: 64 });
-    const s = await until(shoot, (s) => s.count(b, red) > 1000);
-    bunExpect(s.count(b, red)).toBeGreaterThan(3050);
-    bunExpect(s.count(b, red)).toBeLessThan(3400);
-    for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
-  }, T);
+  test(
+    "an inline `inherit` on an <img> takes its round wrapper's radius",
+    async () => {
+      const b = await box("#inh-img");
+      bunExpect(b).toMatchObject({ w: 64, h: 64 });
+      const s = await until(shoot, (s) => s.count(b, red) > 1000);
+      bunExpect(s.count(b, red)).toBeGreaterThan(3050);
+      bunExpect(s.count(b, red)).toBeLessThan(3400);
+      for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
+    },
+    T,
+  );
 
-  test("a card's layers round themselves from it, two levels down", async () => {
-    const b = await box("#pcard");
-    bunExpect(b).toMatchObject({ w: 88, h: 46 });
-    const s = await until(shoot, (s) => red(s.at(b.x + 44, b.y + 6)));
-    for (const [x, y] of corners(b, 2)) bunExpect(white(s.at(x, y))).toBe(true);
-    const [tl, tr, bl, br] = corners(b, 8);
-    for (const [x, y] of [tl, tr]) bunExpect(red(s.at(x, y))).toBe(true);
-    for (const [x, y] of [bl, br]) bunExpect(blue(s.at(x, y))).toBe(true);
-  }, T);
+  test(
+    "a card's layers round themselves from it, two levels down",
+    async () => {
+      const b = await box("#pcard");
+      bunExpect(b).toMatchObject({ w: 88, h: 46 });
+      const s = await until(shoot, (s) => red(s.at(b.x + 44, b.y + 6)));
+      for (const [x, y] of corners(b, 2)) bunExpect(white(s.at(x, y))).toBe(true);
+      const [tl, tr, bl, br] = corners(b, 8);
+      for (const [x, y] of [tl, tr]) bunExpect(red(s.at(x, y))).toBe(true);
+      for (const [x, y] of [bl, br]) bunExpect(blue(s.at(x, y))).toBe(true);
+    },
+    T,
+  );
 });
 
 describe("a rounded card around a list that scrolls", () => {
   const banded = (rgb: Rgb) => lime(rgb) || blue(rgb);
 
-  test("the rows clip at the card's curve, before and after scrolling", async () => {
-    const b = await box("#card-a");
-    const check = async () => {
-      const s = await shoot();
-      for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
-      for (const [x, y] of corners(b, 9)) bunExpect(banded(s.at(x, y))).toBe(true);
-      bunExpect(banded(s.at(b.x + 100, b.y))).toBe(true);
-      bunExpect(banded(s.at(b.x, b.y + 80))).toBe(true);
-    };
-    await until(shoot, (s) => banded(s.at(b.x + 100, b.y + 80)));
-    await check();
+  test(
+    "the rows clip at the card's curve, before and after scrolling",
+    async () => {
+      const b = await box("#card-a");
+      const check = async () => {
+        const s = await shoot();
+        for (const [x, y] of corners(b, 3)) bunExpect(white(s.at(x, y))).toBe(true);
+        for (const [x, y] of corners(b, 9)) bunExpect(banded(s.at(x, y))).toBe(true);
+        bunExpect(banded(s.at(b.x + 100, b.y))).toBe(true);
+        bunExpect(banded(s.at(b.x, b.y + 80))).toBe(true);
+      };
+      await until(shoot, (s) => banded(s.at(b.x + 100, b.y + 80)));
+      await check();
 
-    const top = await app.eval(`(() => { const l = document.getElementById("list-a"); l.scrollTop = 37; return l.scrollTop; })()`);
-    bunExpect(top).toBe(37);
-    await until(shoot, (s) => blue(s.at(b.x + 100, b.y + 10)));
-    await check();
-  }, T);
+      const top = await app.eval(
+        `(() => { const l = document.getElementById("list-a"); l.scrollTop = 37; return l.scrollTop; })()`,
+      );
+      bunExpect(top).toBe(37);
+      await until(shoot, (s) => blue(s.at(b.x + 100, b.y + 10)));
+      await check();
+    },
+    T,
+  );
 
-  test("a bordered scroller clips its rows to the inner radius", async () => {
-    const b = await box("#card-b");
-    const check = async () => {
-      const s = await shoot();
-      for (const [x, y] of corners(b, 2)) bunExpect(white(s.at(x, y))).toBe(true);
-      for (const [x, y] of corners(b, 8)) bunExpect(gray(s.at(x, y))).toBe(true);
-      bunExpect(banded(s.at(b.x + 100, b.y + 80))).toBe(true);
-    };
-    await until(shoot, (s) => banded(s.at(b.x + 100, b.y + 80)));
-    await check();
+  test(
+    "a bordered scroller clips its rows to the inner radius",
+    async () => {
+      const b = await box("#card-b");
+      const check = async () => {
+        const s = await shoot();
+        for (const [x, y] of corners(b, 2)) bunExpect(white(s.at(x, y))).toBe(true);
+        for (const [x, y] of corners(b, 8)) bunExpect(gray(s.at(x, y))).toBe(true);
+        bunExpect(banded(s.at(b.x + 100, b.y + 80))).toBe(true);
+      };
+      await until(shoot, (s) => banded(s.at(b.x + 100, b.y + 80)));
+      await check();
 
-    const top = await app.eval(`(() => { const l = document.getElementById("card-b"); l.scrollTop = 57; return l.scrollTop; })()`);
-    bunExpect(top).toBe(57);
-    await sleep(200);
-    await check();
-  }, T);
+      const top = await app.eval(
+        `(() => { const l = document.getElementById("card-b"); l.scrollTop = 57; return l.scrollTop; })()`,
+      );
+      bunExpect(top).toBe(57);
+      await sleep(200);
+      await check();
+    },
+    T,
+  );
 });
 
 describe("box-shadow outside the border box (CSS Backgrounds 3 §7.1)", () => {
-  test("a ring around a transparent box is a ring, and a blurred box stays filled", async () => {
-    await app.eval(`(() => {
+  test(
+    "a ring around a transparent box is a ring, and a blurred box stays filled",
+    async () => {
+      await app.eval(`(() => {
       const pad = document.createElement("div");
       pad.id = "shadow-pad";
       pad.setAttribute("style", "position: fixed; left: 540px; top: 380px; width: 170px; height: 130px; z-index: 100; background-color: rgb(255, 255, 255)");
@@ -175,23 +214,27 @@ describe("box-shadow outside the border box (CSS Backgrounds 3 §7.1)", () => {
       document.body.appendChild(pad);
       return 0;
     })()`);
-    const r = await box("#ring");
-    const b = await box("#blurred");
-    const s = await until(shoot, (s) => red(s.at(r.x - 3, r.y + 20)));
-    bunExpect(red(s.at(r.x - 3, r.y + 20))).toBe(true);
-    bunExpect(red(s.at(r.x + 40, r.y + r.h + 3))).toBe(true);
-    bunExpect(white(s.at(r.x + 40, r.y + 20))).toBe(true);
-    bunExpect(white(s.at(r.x + 3, r.y + 3))).toBe(true);
-    bunExpect(blue(s.at(b.x + 20, b.y + 20))).toBe(true);
-    await app.eval(`(document.getElementById("shadow-pad").remove(), 0)`);
-  }, T);
+      const r = await box("#ring");
+      const b = await box("#blurred");
+      const s = await until(shoot, (s) => red(s.at(r.x - 3, r.y + 20)));
+      bunExpect(red(s.at(r.x - 3, r.y + 20))).toBe(true);
+      bunExpect(red(s.at(r.x + 40, r.y + r.h + 3))).toBe(true);
+      bunExpect(white(s.at(r.x + 40, r.y + 20))).toBe(true);
+      bunExpect(white(s.at(r.x + 3, r.y + 3))).toBe(true);
+      bunExpect(blue(s.at(b.x + 20, b.y + 20))).toBe(true);
+      await app.eval(`(document.getElementById("shadow-pad").remove(), 0)`);
+    },
+    T,
+  );
 });
 
 describe("clip-path (CSS Masking 1 §5)", () => {
   // A rounded mask around the element's whole painting: background, border, shadow and subtree,
   // and its hit test, inside its transform (gpui `Style::vn_clip_path`).
-  test("inset() and circle() clip the painting and the hit test, inside the transform", async () => {
-    await app.eval(`(() => {
+  test(
+    "inset() and circle() clip the painting and the hit test, inside the transform",
+    async () => {
+      await app.eval(`(() => {
       const pad = document.createElement("div");
       pad.id = "cp-pad";
       pad.setAttribute("style", "position: fixed; left: 520px; top: 380px; width: 190px; height: 130px; z-index: 100; background-color: rgb(255, 255, 255)");
@@ -214,56 +257,62 @@ describe("clip-path (CSS Masking 1 §5)", () => {
       document.body.appendChild(pad);
       return 0;
     })()`);
-    const pad = await box("#cp-pad");
-    const i = await box("#cp-inset");
-    const c = await box("#cp-circle");
-    bunExpect(c).toMatchObject({ w: 60, h: 60 });
-    const s = await until(shoot, (s) => red(s.at(c.x + 30, c.y + 30)));
+      const pad = await box("#cp-pad");
+      const i = await box("#cp-inset");
+      const c = await box("#cp-circle");
+      bunExpect(c).toMatchObject({ w: 60, h: 60 });
+      const s = await until(shoot, (s) => red(s.at(c.x + 30, c.y + 30)));
 
-    bunExpect(red(s.at(i.x + 30, i.y + 20))).toBe(true);
-    bunExpect(red(s.at(i.x + 17, i.y + 20))).toBe(true);
-    for (const [x, y] of [
-      [i.x + 5, i.y + 20],
-      [i.x + 30, i.y + 3],
-      [i.x - 3, i.y + 20],
-      [i.x + 15, i.y + 8],
-    ]) bunExpect(white(s.at(x, y))).toBe(true);
+      bunExpect(red(s.at(i.x + 30, i.y + 20))).toBe(true);
+      bunExpect(red(s.at(i.x + 17, i.y + 20))).toBe(true);
+      for (const [x, y] of [
+        [i.x + 5, i.y + 20],
+        [i.x + 30, i.y + 3],
+        [i.x - 3, i.y + 20],
+        [i.x + 15, i.y + 8],
+      ])
+        bunExpect(white(s.at(x, y))).toBe(true);
 
-    bunExpect(s.count(c, red)).toBeGreaterThan(2700);
-    bunExpect(s.count(c, red)).toBeLessThan(2950);
-    for (const [x, y] of corners(c, 3)) bunExpect(white(s.at(x, y))).toBe(true);
+      bunExpect(s.count(c, red)).toBeGreaterThan(2700);
+      bunExpect(s.count(c, red)).toBeLessThan(2950);
+      for (const [x, y] of corners(c, 3)) bunExpect(white(s.at(x, y))).toBe(true);
 
-    bunExpect(red(s.at(pad.x + 45, pad.y + 100))).toBe(true);
-    bunExpect(white(s.at(pad.x + 75, pad.y + 100))).toBe(true);
-    bunExpect(white(s.at(pad.x + 20, pad.y + 100))).toBe(true);
+      bunExpect(red(s.at(pad.x + 45, pad.y + 100))).toBe(true);
+      bunExpect(white(s.at(pad.x + 75, pad.y + 100))).toBe(true);
+      bunExpect(white(s.at(pad.x + 20, pad.y + 100))).toBe(true);
 
-    bunExpect(s.count({ x: pad.x + 150, y: pad.y + 80, w: 30, h: 30 }, red)).toBe(0);
+      bunExpect(s.count({ x: pad.x + 150, y: pad.y + 80, w: 30, h: 30 }, red)).toBe(0);
 
-    const click = async (x: number, y: number) => {
-      await app.send("mouse", { x, y, kind: "click" });
-      await sleep(100);
-    };
-    await click(c.x + 3, c.y + 3);
-    await click(c.x + 30, c.y + 30);
-    await click(pad.x + 165, pad.y + 95);
-    await click(pad.x + 75, pad.y + 100);
-    await click(pad.x + 45, pad.y + 100);
-    const hits = await until(
-      async () => JSON.parse(String(await app.eval("JSON.stringify(globalThis.cpHits)"))) as string[],
-      (h) => h.length >= 5,
-    );
-    bunExpect(hits).toEqual(["pad", "cp-circle", "pad", "pad", "cp-moved"]);
-    await app.eval(`(document.getElementById("cp-pad").remove(), 0)`);
-  }, T);
+      const click = async (x: number, y: number) => {
+        await app.send("mouse", { x, y, kind: "click" });
+        await sleep(100);
+      };
+      await click(c.x + 3, c.y + 3);
+      await click(c.x + 30, c.y + 30);
+      await click(pad.x + 165, pad.y + 95);
+      await click(pad.x + 75, pad.y + 100);
+      await click(pad.x + 45, pad.y + 100);
+      const hits = await until(
+        async () => JSON.parse(String(await app.eval("JSON.stringify(globalThis.cpHits)"))) as string[],
+        (h) => h.length >= 5,
+      );
+      bunExpect(hits).toEqual(["pad", "cp-circle", "pad", "pad", "cp-moved"]);
+      await app.eval(`(document.getElementById("cp-pad").remove(), 0)`);
+    },
+    T,
+  );
 });
 
 describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
-  const PAD = "position: fixed; left: 10px; top: 10px; width: 700px; height: 220px; z-index: 200; background-color: rgb(255, 255, 255)";
+  const PAD =
+    "position: fixed; left: 10px; top: 10px; width: 700px; height: 220px; z-index: 200; background-color: rgb(255, 255, 255)";
   const NOTCH = "M0 0 C11 0 20 9 20 20 V40 Q20 60 40 60 H80 Q100 60 100 40 V20 C100 9 109 0 120 0 Z";
   const HOLE = "M0 0 h60 v60 h-60 z M15 15 h30 v30 h-30 z";
 
-  test("a polygon, a path with curves, and evenodd clip the painting and the hit test", async () => {
-    await app.eval(`(() => {
+  test(
+    "a polygon, a path with curves, and evenodd clip the painting and the hit test",
+    async () => {
+      await app.eval(`(() => {
       const pad = document.createElement("div");
       pad.id = "cps-pad";
       pad.setAttribute("style", ${JSON.stringify(PAD)});
@@ -289,57 +338,77 @@ describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
       document.body.appendChild(pad);
       return 0;
     })()`);
-    const t = await box("#cps-tri");
-    const n = await box("#cps-notch");
-    const h = await box("#cps-hole");
-    const z = await box("#cps-nonzero");
-    bunExpect(t).toMatchObject({ w: 80, h: 60 });
-    const s = await until(shoot, (s) => red(s.at(t.x + 40, t.y + 45)) && red(s.at(n.x + 60, n.y + 30)));
+      const t = await box("#cps-tri");
+      const n = await box("#cps-notch");
+      const h = await box("#cps-hole");
+      const z = await box("#cps-nonzero");
+      bunExpect(t).toMatchObject({ w: 80, h: 60 });
+      const s = await until(shoot, (s) => red(s.at(t.x + 40, t.y + 45)) && red(s.at(n.x + 60, n.y + 30)));
 
-    bunExpect(s.count(t, red)).toBeGreaterThan(2250);
-    bunExpect(s.count(t, red)).toBeLessThan(2550);
-    for (const [x, y] of [[t.x + 5, t.y + 5], [t.x + 75, t.y + 5], [t.x + 15, t.y + 15]]) bunExpect(white(s.at(x, y))).toBe(true);
-    for (const [x, y] of [[t.x + 40, t.y + 3], [t.x + 40, t.y + 57], [t.x + 5, t.y + 57]]) bunExpect(red(s.at(x, y))).toBe(true);
+      bunExpect(s.count(t, red)).toBeGreaterThan(2250);
+      bunExpect(s.count(t, red)).toBeLessThan(2550);
+      for (const [x, y] of [
+        [t.x + 5, t.y + 5],
+        [t.x + 75, t.y + 5],
+        [t.x + 15, t.y + 15],
+      ])
+        bunExpect(white(s.at(x, y))).toBe(true);
+      for (const [x, y] of [
+        [t.x + 40, t.y + 3],
+        [t.x + 40, t.y + 57],
+        [t.x + 5, t.y + 57],
+      ])
+        bunExpect(red(s.at(x, y))).toBe(true);
 
-    for (const [x, y] of [[n.x + 60, n.y + 30], [n.x + 25, n.y + 4], [n.x + 95, n.y + 4], [n.x + 60, n.y + 58]]) {
-      bunExpect(red(s.at(x, y))).toBe(true);
-    }
-    for (const [x, y] of [
-      [n.x + 5, n.y + 12],
-      [n.x + 3, n.y + 40],
-      [n.x + 116, n.y + 30],
-      [n.x + 21, n.y + 58],
-      [n.x + 99, n.y + 58],
-      [n.x + 60, n.y - 8],
-      [n.x - 10, n.y + 30],
-      [n.x + 60, n.y + 70],
-    ]) bunExpect(white(s.at(x, y))).toBe(true);
+      for (const [x, y] of [
+        [n.x + 60, n.y + 30],
+        [n.x + 25, n.y + 4],
+        [n.x + 95, n.y + 4],
+        [n.x + 60, n.y + 58],
+      ]) {
+        bunExpect(red(s.at(x, y))).toBe(true);
+      }
+      for (const [x, y] of [
+        [n.x + 5, n.y + 12],
+        [n.x + 3, n.y + 40],
+        [n.x + 116, n.y + 30],
+        [n.x + 21, n.y + 58],
+        [n.x + 99, n.y + 58],
+        [n.x + 60, n.y - 8],
+        [n.x - 10, n.y + 30],
+        [n.x + 60, n.y + 70],
+      ])
+        bunExpect(white(s.at(x, y))).toBe(true);
 
-    bunExpect(white(s.at(h.x + 30, h.y + 30))).toBe(true);
-    bunExpect(red(s.at(h.x + 5, h.y + 5))).toBe(true);
-    bunExpect(red(s.at(z.x + 30, z.y + 30))).toBe(true);
-    bunExpect(s.count(h, red)).toBeGreaterThan(2600);
-    bunExpect(s.count(h, red)).toBeLessThan(2800);
+      bunExpect(white(s.at(h.x + 30, h.y + 30))).toBe(true);
+      bunExpect(red(s.at(h.x + 5, h.y + 5))).toBe(true);
+      bunExpect(red(s.at(z.x + 30, z.y + 30))).toBe(true);
+      bunExpect(s.count(h, red)).toBeGreaterThan(2600);
+      bunExpect(s.count(h, red)).toBeLessThan(2800);
 
-    const click = async (x: number, y: number) => {
-      await app.send("mouse", { x, y, kind: "click" });
-      await sleep(100);
-    };
-    await click(t.x + 15, t.y + 15);
-    await click(t.x + 40, t.y + 45);
-    await click(n.x + 4, n.y + 40);
-    await click(n.x + 60, n.y + 30);
-    await click(n.x + 60, n.y - 8);
-    const hits = await until(
-      async () => JSON.parse(String(await app.eval("JSON.stringify(globalThis.cpsHits)"))) as string[],
-      (h) => h.length >= 5,
-    );
-    bunExpect(hits).toEqual(["pad", "cps-tri", "pad", "cps-notch", "pad"]);
-    await app.eval(`(document.getElementById("cps-pad").remove(), 0)`);
-  }, T);
+      const click = async (x: number, y: number) => {
+        await app.send("mouse", { x, y, kind: "click" });
+        await sleep(100);
+      };
+      await click(t.x + 15, t.y + 15);
+      await click(t.x + 40, t.y + 45);
+      await click(n.x + 4, n.y + 40);
+      await click(n.x + 60, n.y + 30);
+      await click(n.x + 60, n.y - 8);
+      const hits = await until(
+        async () => JSON.parse(String(await app.eval("JSON.stringify(globalThis.cpsHits)"))) as string[],
+        (h) => h.length >= 5,
+      );
+      bunExpect(hits).toEqual(["pad", "cps-tri", "pad", "cps-notch", "pad"]);
+      await app.eval(`(document.getElementById("cps-pad").remove(), 0)`);
+    },
+    T,
+  );
 
-  test("an inline path() rewritten every frame clips to the frame's shape", async () => {
-    await app.eval(`(() => {
+  test(
+    "an inline path() rewritten every frame clips to the frame's shape",
+    async () => {
+      await app.eval(`(() => {
       const pad = document.createElement("div");
       pad.id = "cps-pad";
       pad.setAttribute("style", ${JSON.stringify(PAD)});
@@ -363,35 +432,41 @@ describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
       });
       return 0;
     })()`);
-    const a = await box("#cps-anim");
-    // `eval` does not wait for a promise: the animation leaves its frame gaps in a global when it
-    // is done.
-    const animate = async (from: number, to: number) => {
-      await app.eval(`(globalThis.cpsGaps = null, cpsAnimate(${from}, ${to}, 40).then((g) => (globalThis.cpsGaps = g)), 0)`);
-      return (await until(
-        async () => JSON.parse(String(await app.eval("JSON.stringify(globalThis.cpsGaps)"))) as number[] | null,
-        (g) => g !== null,
-        10_000,
-      )) as number[];
-    };
-    const gaps = await animate(10, 60);
-    let s = await until(shoot, (s) => red(s.at(a.x + 55, a.y + 20)) && white(s.at(a.x + 75, a.y + 20)));
-    bunExpect(red(s.at(a.x + 55, a.y + 20))).toBe(true);
-    bunExpect(red(s.at(a.x + 63, a.y + 20))).toBe(true);
-    bunExpect(white(s.at(a.x + 75, a.y + 20))).toBe(true);
-    bunExpect(white(s.at(a.x + 62, a.y + 2))).toBe(true);
-    await animate(60, 120);
-    s = await until(shoot, (s) => red(s.at(a.x + 115, a.y + 20)));
-    bunExpect(red(s.at(a.x + 115, a.y + 20))).toBe(true);
-    bunExpect(white(s.at(a.x + 134, a.y + 20))).toBe(true);
-    const mean = gaps.reduce((x, y) => x + y, 0) / gaps.length;
-    console.log(`clip-path path() animation: ${gaps.length} frames, mean rAF gap ${mean.toFixed(2)} ms`);
-    bunExpect(mean).toBeLessThan(40);
-    await app.eval(`(document.getElementById("cps-pad").remove(), 0)`);
-  }, T);
+      const a = await box("#cps-anim");
+      // `eval` does not wait for a promise: the animation leaves its frame gaps in a global when it
+      // is done.
+      const animate = async (from: number, to: number) => {
+        await app.eval(
+          `(globalThis.cpsGaps = null, cpsAnimate(${from}, ${to}, 40).then((g) => (globalThis.cpsGaps = g)), 0)`,
+        );
+        return (await until(
+          async () => JSON.parse(String(await app.eval("JSON.stringify(globalThis.cpsGaps)"))) as number[] | null,
+          (g) => g !== null,
+          10_000,
+        )) as number[];
+      };
+      const gaps = await animate(10, 60);
+      let s = await until(shoot, (s) => red(s.at(a.x + 55, a.y + 20)) && white(s.at(a.x + 75, a.y + 20)));
+      bunExpect(red(s.at(a.x + 55, a.y + 20))).toBe(true);
+      bunExpect(red(s.at(a.x + 63, a.y + 20))).toBe(true);
+      bunExpect(white(s.at(a.x + 75, a.y + 20))).toBe(true);
+      bunExpect(white(s.at(a.x + 62, a.y + 2))).toBe(true);
+      await animate(60, 120);
+      s = await until(shoot, (s) => red(s.at(a.x + 115, a.y + 20)));
+      bunExpect(red(s.at(a.x + 115, a.y + 20))).toBe(true);
+      bunExpect(white(s.at(a.x + 134, a.y + 20))).toBe(true);
+      const mean = gaps.reduce((x, y) => x + y, 0) / gaps.length;
+      console.log(`clip-path path() animation: ${gaps.length} frames, mean rAF gap ${mean.toFixed(2)} ms`);
+      bunExpect(mean).toBeLessThan(40);
+      await app.eval(`(document.getElementById("cps-pad").remove(), 0)`);
+    },
+    T,
+  );
 
-  test("nested clips intersect: a circle inside a polygon, and a polygon inside a polygon", async () => {
-    await app.eval(`(() => {
+  test(
+    "nested clips intersect: a circle inside a polygon, and a polygon inside a polygon",
+    async () => {
+      await app.eval(`(() => {
       const pad = document.createElement("div");
       pad.id = "cps-pad";
       pad.setAttribute("style", ${JSON.stringify(PAD)});
@@ -420,21 +495,23 @@ describe("clip-path: polygon() and path() (CSS Shapes 1 §3.1)", () => {
       document.body.appendChild(pad);
       return 0;
     })()`);
-    const o1 = await box("#cps-o1");
-    const o2 = await box("#cps-o2");
-    const o3 = await box("#cps-o3");
-    const s = await until(shoot, (s) => red(s.at(o1.x + 35, o1.y + 35)) && red(s.at(o2.x + 50, o2.y + 20)));
-    bunExpect(red(s.at(o1.x + 35, o1.y + 35))).toBe(true);
-    bunExpect(white(s.at(o1.x + 12, o1.y + 12))).toBe(true);
-    bunExpect(white(s.at(o1.x + 62, o1.y + 62))).toBe(true);
-    bunExpect(red(s.at(o2.x + 50, o2.y + 20))).toBe(true);
-    bunExpect(white(s.at(o2.x + 20, o2.y + 50))).toBe(true);
-    bunExpect(white(s.at(o2.x + 80, o2.y + 50))).toBe(true);
-    bunExpect(s.count(o2, red)).toBeGreaterThan(2350);
-    bunExpect(s.count(o2, red)).toBeLessThan(2650);
-    bunExpect(red(s.at(o3.x + 30, o3.y + 30))).toBe(true);
-    bunExpect(white(s.at(o3.x + 4, o3.y + 4))).toBe(true);
-    bunExpect(white(s.at(o3.x + 60, o3.y + 60))).toBe(true);
-    await app.eval(`(document.getElementById("cps-pad").remove(), 0)`);
-  }, T);
+      const o1 = await box("#cps-o1");
+      const o2 = await box("#cps-o2");
+      const o3 = await box("#cps-o3");
+      const s = await until(shoot, (s) => red(s.at(o1.x + 35, o1.y + 35)) && red(s.at(o2.x + 50, o2.y + 20)));
+      bunExpect(red(s.at(o1.x + 35, o1.y + 35))).toBe(true);
+      bunExpect(white(s.at(o1.x + 12, o1.y + 12))).toBe(true);
+      bunExpect(white(s.at(o1.x + 62, o1.y + 62))).toBe(true);
+      bunExpect(red(s.at(o2.x + 50, o2.y + 20))).toBe(true);
+      bunExpect(white(s.at(o2.x + 20, o2.y + 50))).toBe(true);
+      bunExpect(white(s.at(o2.x + 80, o2.y + 50))).toBe(true);
+      bunExpect(s.count(o2, red)).toBeGreaterThan(2350);
+      bunExpect(s.count(o2, red)).toBeLessThan(2650);
+      bunExpect(red(s.at(o3.x + 30, o3.y + 30))).toBe(true);
+      bunExpect(white(s.at(o3.x + 4, o3.y + 4))).toBe(true);
+      bunExpect(white(s.at(o3.x + 60, o3.y + 60))).toBe(true);
+      await app.eval(`(document.getElementById("cps-pad").remove(), 0)`);
+    },
+    T,
+  );
 });

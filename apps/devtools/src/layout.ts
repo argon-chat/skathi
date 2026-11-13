@@ -34,10 +34,7 @@ export function trackViewport(): () => void {
 
 export function mainHeight(consoleOpen: boolean, consoleHeight: number, banner: boolean): number {
   const drawer = consoleOpen ? consoleHeight + SPLIT : 0;
-  return Math.max(
-    80,
-    viewport.h - TITLEBAR_H - TOOLBAR_H - STATUS_H - drawer - (banner ? 22 : 0),
-  );
+  return Math.max(80, viewport.h - TITLEBAR_H - TOOLBAR_H - STATUS_H - drawer - (banner ? 22 : 0));
 }
 
 /**

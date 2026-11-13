@@ -10,26 +10,37 @@ function world() {
   let originalMessages = 0;
   document.addEventListener("message", () => originalMessages++);
   let identities: Function[] = [];
-  const rt = createRuntime({ globals: {
-    document, Event, EventTarget,
-    addEventListener: nativeWindow.addEventListener.bind(nativeWindow),
-    removeEventListener: nativeWindow.removeEventListener.bind(nativeWindow),
-    dispatchEvent: nativeWindow.dispatchEvent.bind(nativeWindow),
-  }, beforeRuntime(global) {
-    new Function("globalThis", prelude)(global);
-    for (const target of [global, document]) {
-      for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
-        const value = (target as any)[name];
-        identities.push(value);
-        Object.defineProperty(target, name, { value, writable: false, configurable: false });
+  const rt = createRuntime({
+    globals: {
+      document,
+      Event,
+      EventTarget,
+      addEventListener: nativeWindow.addEventListener.bind(nativeWindow),
+      removeEventListener: nativeWindow.removeEventListener.bind(nativeWindow),
+      dispatchEvent: nativeWindow.dispatchEvent.bind(nativeWindow),
+    },
+    beforeRuntime(global) {
+      new Function("globalThis", prelude)(global);
+      for (const target of [global, document]) {
+        for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
+          const value = (target as any)[name];
+          identities.push(value);
+          Object.defineProperty(target, name, { value, writable: false, configurable: false });
+        }
       }
-    }
-  } });
+    },
+  });
   rt.createApp({ render: () => null }).mount();
   const target = rt.nodeOps.createElement("button");
   rt.nodeOps.insert(target, rt.global.document.body, null);
-  return { rt, g: rt.global as any, document: rt.global.document as any, target, identities,
-    originalMessages: () => originalMessages };
+  return {
+    rt,
+    g: rt.global as any,
+    document: rt.global.document as any,
+    target,
+    identities,
+    originalMessages: () => originalMessages,
+  };
 }
 
 describe("bootstrap global event forwarding with sealed builtin methods", () => {
@@ -43,8 +54,14 @@ describe("bootstrap global event forwarding with sealed builtin methods", () => 
     g.addEventListener("click", () => seen.push("window-b"));
     rt.host.dispatcher(target.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, "");
     expect(seen).toEqual(["window-c", "document-c", "target", "document-b", "window-b"]);
-    expect([g.addEventListener, g.removeEventListener, g.dispatchEvent,
-      document.addEventListener, document.removeEventListener, document.dispatchEvent]).toEqual(identities);
+    expect([
+      g.addEventListener,
+      g.removeEventListener,
+      g.dispatchEvent,
+      document.addEventListener,
+      document.removeEventListener,
+      document.dispatchEvent,
+    ]).toEqual(identities);
     expect(Object.getOwnPropertyDescriptor(document, "dispatchEvent")?.writable).toBe(false);
     expect(rt.advisories().some((warning: string) => warning.includes("could not be intercepted"))).toBe(false);
     g.__VN_UNLOAD__();
@@ -52,9 +69,14 @@ describe("bootstrap global event forwarding with sealed builtin methods", () => 
 
   test("runtime dispatch preserves cancellation/once while native listeners still receive native events", () => {
     const { rt, g, document, originalMessages } = world();
-    let captures = 0, bubbles = 0, pageMessages = 0;
+    let captures = 0,
+      bubbles = 0,
+      pageMessages = 0;
     document.addEventListener("fullscreenchange", () => captures++, { capture: true, once: true });
-    document.addEventListener("fullscreenchange", (event: Event) => { bubbles++; event.preventDefault(); });
+    document.addEventListener("fullscreenchange", (event: Event) => {
+      bubbles++;
+      event.preventDefault();
+    });
     expect(document.dispatchEvent(new Event("fullscreenchange", { bubbles: true, cancelable: true }))).toBe(false);
     expect(document.dispatchEvent(new Event("fullscreenchange", { bubbles: true, cancelable: true }))).toBe(false);
     expect([captures, bubbles]).toEqual([1, 2]);
@@ -71,7 +93,9 @@ describe("bootstrap global event forwarding with sealed builtin methods", () => 
 
   test("reload drops the old delegate and its native page listeners but keeps bootstrap/native listeners", () => {
     const { rt: first, g, document, originalMessages } = world();
-    let oldMessages = 0, newMessages = 0, newRuntimeEvents = 0;
+    let oldMessages = 0,
+      newMessages = 0,
+      newRuntimeEvents = 0;
     document.addEventListener("message", () => oldMessages++);
     document.dispatchEvent(new Event("message"));
     g.__VN_UNLOAD__();

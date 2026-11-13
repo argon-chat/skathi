@@ -95,18 +95,43 @@ g.__VN_TEST_IFRAME__ = {
         contentDocument: plain.contentDocument,
       },
       frame: f && {
-        sandbox: [f.sandbox.value, f.sandbox.length, f.sandbox.contains("allow-scripts"), f.sandbox.contains("allow-same-origin"), f.getAttribute("sandbox")],
+        sandbox: [
+          f.sandbox.value,
+          f.sandbox.length,
+          f.sandbox.contains("allow-scripts"),
+          f.sandbox.contains("allow-same-origin"),
+          f.getAttribute("sandbox"),
+        ],
         sandboxAssign: (() => {
           const probe = document.createElement("iframe") as Any;
           probe.sandbox = "allow-forms";
           probe.sandbox.add("allow-scripts", "allow-forms");
           probe.sandbox.remove("allow-forms");
-          return [probe.getAttribute("sandbox"), probe.sandbox.supports("allow-scripts"), probe.sandbox.supports("nope")];
+          return [
+            probe.getAttribute("sandbox"),
+            probe.sandbox.supports("allow-scripts"),
+            probe.sandbox.supports("nope"),
+          ];
         })(),
-        attrs: [f.allow, f.getAttribute("allow"), f.referrerPolicy, f.getAttribute("referrerpolicy"), f.getAttribute("loading"), f.src],
-        box: f.isConnected ? [Math.round(rect(f)[0] - slot.left), Math.round(rect(f)[1] - slot.top), rect(f)[2], rect(f)[3]] : null,
+        attrs: [
+          f.allow,
+          f.getAttribute("allow"),
+          f.referrerPolicy,
+          f.getAttribute("referrerpolicy"),
+          f.getAttribute("loading"),
+          f.src,
+        ],
+        box: f.isConnected
+          ? [Math.round(rect(f)[0] - slot.left), Math.round(rect(f)[1] - slot.top), rect(f)[2], rect(f)[3]]
+          : null,
         sameWindow: f.isConnected ? f.contentWindow === firstWindow && f.contentWindow === f.contentWindow : null,
-        windowKeys: f.isConnected ? [typeof f.contentWindow.postMessage, String(f.contentWindow.document), Object.getPrototypeOf(f.contentWindow)] : null,
+        windowKeys: f.isConnected
+          ? [
+              typeof f.contentWindow.postMessage,
+              String(f.contentWindow.document),
+              Object.getPrototypeOf(f.contentWindow),
+            ]
+          : null,
       },
     });
   },

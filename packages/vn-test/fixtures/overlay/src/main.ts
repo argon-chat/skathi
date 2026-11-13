@@ -33,7 +33,14 @@ createApp({
             h("div", { id: "hud-root", style: { position: "absolute", inset: "0" } }, [
               h("div", {
                 id: "hud-box",
-                style: { position: "absolute", left: "8px", top: "8px", width: "32px", height: "32px", background: S.color },
+                style: {
+                  position: "absolute",
+                  left: "8px",
+                  top: "8px",
+                  width: "32px",
+                  height: "32px",
+                  background: S.color,
+                },
               }),
             ]),
         ),
@@ -55,7 +62,14 @@ createApp({
             h("div", { id: "cover-root", style: { position: "absolute", inset: "0" } }, [
               h("div", {
                 id: "cover-box",
-                style: { position: "absolute", right: "24px", top: "24px", width: "48px", height: "48px", background: "#ff00ff" },
+                style: {
+                  position: "absolute",
+                  right: "24px",
+                  top: "24px",
+                  width: "48px",
+                  height: "48px",
+                  background: "#ff00ff",
+                },
               }),
             ]),
         ),

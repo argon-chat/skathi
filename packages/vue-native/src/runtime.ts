@@ -41,9 +41,11 @@ const traceCallbackGlobals = globalThis as unknown as {
   __vn_trace_callback_begin?: (callback: unknown) => number;
   __vn_trace_callback_end?: (token: number) => void;
 };
-const traceCallbackBegin = typeof traceCallbackGlobals.__vn_trace_callback_begin === "function" &&
+const traceCallbackBegin =
+  typeof traceCallbackGlobals.__vn_trace_callback_begin === "function" &&
   typeof traceCallbackGlobals.__vn_trace_callback_end === "function"
-  ? traceCallbackGlobals.__vn_trace_callback_begin : undefined;
+    ? traceCallbackGlobals.__vn_trace_callback_begin
+    : undefined;
 const traceCallbackEnd = traceCallbackBegin ? traceCallbackGlobals.__vn_trace_callback_end : undefined;
 
 // `location.reload()` and the dev host's cold restart re-evaluate this module in the SAME realm.
@@ -121,7 +123,8 @@ type ListenerSignal = {
   addEventListener(type: string, listener: () => void, options?: { once?: boolean }): void;
   removeEventListener(type: string, listener: () => void): void;
 };
-type ListenerOptions = boolean | { capture?: boolean; once?: boolean; passive?: boolean; signal?: ListenerSignal } | undefined;
+type ListenerOptions =
+  boolean | { capture?: boolean; once?: boolean; passive?: boolean; signal?: ListenerSignal } | undefined;
 
 interface ExtraListener {
   fn: EventHandler;
@@ -363,8 +366,7 @@ interface MirrorElement extends MirrorNodeBase {
 
 type MirrorNode = MirrorElement | MirrorText;
 
-type MirrorNodeInit = Omit<MirrorElement, "kind"> &
-  Omit<MirrorText, "kind"> & { kind: MirrorKind };
+type MirrorNodeInit = Omit<MirrorElement, "kind"> & Omit<MirrorText, "kind"> & { kind: MirrorKind };
 
 interface MirrorTimeRanges {
   length: number;
@@ -800,7 +802,9 @@ const LIVE_HANDLER: ProxyHandler<object> = {
       const i = indexOfKey(k);
       if (i >= 0) {
         const items = liveItems(s);
-        return i < items.length ? { value: items[i], writable: false, enumerable: true, configurable: true } : undefined;
+        return i < items.length
+          ? { value: items[i], writable: false, enumerable: true, configurable: true }
+          : undefined;
       }
       if (s.named && !(k in t)) {
         const n = namedMember(liveItems(s), k);
@@ -850,7 +854,8 @@ function staticList<T>(proto: object, items: readonly T[]): MirrorCollection<T> 
 function collectionProto(name: string, opts: { named?: boolean; iterable?: boolean } = {}): object {
   const proto: object = Object.create(Object.prototype);
   const required = (member: string, n: number) => {
-    if (n < 1) throw new TypeError(`Failed to execute '${member}' on '${name}': 1 argument required, but only 0 present.`);
+    if (n < 1)
+      throw new TypeError(`Failed to execute '${member}' on '${name}': 1 argument required, but only 0 present.`);
   };
   const members: Record<string, PropertyDescriptor> = {
     item: {
@@ -879,7 +884,12 @@ function collectionProto(name: string, opts: { named?: boolean; iterable?: boole
     for (const k of ["entries", "keys", "values", "forEach"] as const) members[k] = { value: Array.prototype[k] };
   }
   for (const [k, d] of Object.entries(members)) {
-    Object.defineProperty(proto, k, { ...d, enumerable: true, configurable: true, ...("value" in d ? { writable: true } : {}) });
+    Object.defineProperty(proto, k, {
+      ...d,
+      enumerable: true,
+      configurable: true,
+      ...("value" in d ? { writable: true } : {}),
+    });
   }
   Object.defineProperty(proto, Symbol.iterator, { value: Array.prototype.values, writable: true, configurable: true });
   Object.defineProperty(proto, Symbol.toStringTag, { value: name, configurable: true });
@@ -954,8 +964,7 @@ function mk(id: VnNodeId, kind: MirrorKind, tag: string): MirrorNode {
     // `scrollTop`/`scrollLeft` are prototype accessors over the host's `ScrollHandle`; an own data property would shadow them.
     // Own methods shadow the prototype's: they route into the registry the renderer's props use, so propagation sees both.
     n.addEventListener = (name, fn, opts) => addExtraListener(n as MirrorElement, name, fn, opts);
-    n.removeEventListener = (name, fn, opts) =>
-      removeExtraListener(n as MirrorElement, name, fn, opts);
+    n.removeEventListener = (name, fn, opts) => removeExtraListener(n as MirrorElement, name, fn, opts);
   }
   nodesById.set(id, n as MirrorNode);
   return n as MirrorNode;
@@ -1064,7 +1073,10 @@ interface MountingInstance {
  * before inserting the element, so a `<Teleport>` gets a container whose parents stop short of the window root; the
  * nearest `<VnWindow>` above the Teleport says which window it is in.
  */
-function mountingWindowRoot(container: MirrorNode | null | undefined, parent: MountingInstance | null | undefined): MirrorElement | null {
+function mountingWindowRoot(
+  container: MirrorNode | null | undefined,
+  parent: MountingInstance | null | undefined,
+): MirrorElement | null {
   if (windowRoots.size === 0 || !container) return null;
   for (let n: MirrorNode | null = container; n; n = n.parentNode) if (n === appRoot) return null;
   for (let i = parent; i; i = i.parent) {
@@ -1209,7 +1221,7 @@ function noteInlineSerialization(): void {
     "inline-style-serialize",
     "el.style.cssText / getAttribute('style') serialize the inline declarations as they were written: " +
       "values are not re-spelled (`#f00` stays `#f00`), a shorthand is not expanded into its longhands " +
-      "(after `margin: 0`, `el.style.marginTop` reads \"\"), and a value the engine rejects is still listed",
+      '(after `margin: 0`, `el.style.marginTop` reads ""), and a value the engine rejects is still listed',
   );
 }
 function styleAttribute(el: MirrorElement): string | null {
@@ -1558,8 +1570,7 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
       if (namespaced || !rest.includes(":")) {
         warnCompat(
           `event:${name}`,
-          `@${name} — this event type is not delivered by the native host yet; ` +
-            `the handler will never fire`,
+          `@${name} — this event type is not delivered by the native host yet; ` + `the handler will never fire`,
         );
       }
       return;
@@ -1594,7 +1605,8 @@ function patchProp(el: MirrorElement, key: string, prev: unknown, next: unknown,
   } else {
     if (key === "true-value") el._trueValue = next;
     else if (key === "false-value") el._falseValue = next;
-    else if (key === "checked" && el.tag === "input" && !foreignNamespace(namespace)) el._checked = next === "" || !!next;
+    else if (key === "checked" && el.tag === "input" && !foreignNamespace(namespace))
+      el._checked = next === "" || !!next;
     patchAttribute(el, ...attributeOf(el, key, next, namespace));
   }
 }
@@ -1614,7 +1626,15 @@ function attributeOf(el: MirrorElement, key: string, next: unknown, namespace: u
   return [r.attr, r.kind === "long" ? String(toLong(next)) : String(next)];
 }
 
-const SPECIAL_BOOLEAN_ATTRS = new Set(["itemscope", "allowfullscreen", "formnovalidate", "ismap", "nomodule", "novalidate", "readonly"]);
+const SPECIAL_BOOLEAN_ATTRS = new Set([
+  "itemscope",
+  "allowfullscreen",
+  "formnovalidate",
+  "ismap",
+  "nomodule",
+  "novalidate",
+  "readonly",
+]);
 
 function patchAttribute(el: MirrorElement, key: string, next: unknown): void {
   if (next == null) __vn_set_prop(el.__vnId, I(key), undefined);
@@ -1753,16 +1773,15 @@ function syncListenerFlag(self: MirrorNode, name: string): void {
   const m = handlers.get(self);
   let on = NAMES_BY_CODE[code].some((n) => m?.[n] && bucketsAlive(m[n]!));
   if (!on && appRoot && id === appRoot.__vnId) {
-    on = NAMES_BY_CODE[code].some((n) =>
-      [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)),
-    );
+    on = NAMES_BY_CODE[code].some((n) => [...globalHandlers.values()].some((g) => g[n] && bucketsAlive(g[n]!)));
     if (!on && dndWants(code)) on = true;
   }
   // Activation behaviour: a link, `<label>`, file/color input and submit/reset button listen for their own click;
   // file/color inputs also hear Enter/Space, and a text-like `<input>` submits on Enter.
   if (!on && code === EV_CODES.click) {
     const n = self;
-    if (n && (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n))) on = true;
+    if (n && (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n)))
+      on = true;
   }
   if (!on && (code === EV_CODES.keydown || code === EV_CODES.keyup)) {
     const n = self;
@@ -1793,9 +1812,7 @@ function syncListenerFlag(self: MirrorNode, name: string): void {
 // one level above the app root. Without it, outside-click and Escape dismissal never fire.
 const globalHandlers = new Map<object, HandlerMap>(); // target object -> { [event name]: buckets }
 const isMirrorNode = (n: unknown): n is MirrorNode =>
-  !!n &&
-  typeof (n as MirrorNode).__vnId === "number" &&
-  nodeById((n as MirrorNode).__vnId) === (n as MirrorNode);
+  !!n && typeof (n as MirrorNode).__vnId === "number" && nodeById((n as MirrorNode).__vnId) === (n as MirrorNode);
 
 type ListenerOptionsObject = { capture?: boolean; once?: boolean; passive?: boolean; signal?: ListenerSignal };
 
@@ -1864,12 +1881,7 @@ function disposeGlobalListener(entry: ExtraListener): void {
   cleanup?.();
 }
 
-function removeGlobalListener(
-  target: object,
-  rawName: string,
-  fn: EventHandler,
-  opts: ListenerOptions,
-): boolean {
+function removeGlobalListener(target: object, rawName: string, fn: EventHandler, opts: ListenerOptions): boolean {
   const name = canonicalEvent(rawName);
   const buckets = globalHandlers.get(target)?.[name];
   if (!buckets) return false;
@@ -1901,7 +1913,8 @@ type GlobalEventSlot = {
   clear(delegate: GlobalEventMethods): void;
 };
 function globalEventBridge(): { get(target: object): GlobalEventSlot | undefined } | undefined {
-  return (globalThis as { __VN_GLOBAL_EVENTS__?: { get(target: object): GlobalEventSlot | undefined } }).__VN_GLOBAL_EVENTS__;
+  return (globalThis as { __VN_GLOBAL_EVENTS__?: { get(target: object): GlobalEventSlot | undefined } })
+    .__VN_GLOBAL_EVENTS__;
 }
 
 /** The target's own listener and dispatch methods as the FIRST runtime found them, so a reload wraps the same function, not the previous wrapper. */
@@ -1966,7 +1979,11 @@ function interceptGlobalTarget(target: object | undefined): void {
   }
   // Older hosts have no bootstrap bridge; native AOT never redefines its sealed public methods.
   try {
-    for (const [name, value] of [["dispatchEvent", delegate.dispatch], ["addEventListener", delegate.add], ["removeEventListener", delegate.remove]] as const) {
+    for (const [name, value] of [
+      ["dispatchEvent", delegate.dispatch],
+      ["addEventListener", delegate.add],
+      ["removeEventListener", delegate.remove],
+    ] as const) {
       Object.defineProperty(target, name, { value, configurable: true, writable: true });
     }
   } catch (e) {
@@ -1987,9 +2004,21 @@ const JS_SOURCED_EVENTS = new Set<string>(["change", "cancel", "gotpointercaptur
 
 // Events a browser fires only on `window`/`document`: no advisory for an element listener (dead code in Chrome too).
 const WINDOW_ONLY_EVENTS = new Set<string>([
-  "resize", "load", "unload", "beforeunload", "pageshow", "pagehide",
-  "hashchange", "popstate", "online", "offline", "storage", "message",
-  "languagechange", "rejectionhandled", "unhandledrejection",
+  "resize",
+  "load",
+  "unload",
+  "beforeunload",
+  "pageshow",
+  "pagehide",
+  "hashchange",
+  "popstate",
+  "online",
+  "offline",
+  "storage",
+  "message",
+  "languagechange",
+  "rejectionhandled",
+  "unhandledrejection",
 ]);
 
 function addExtraListener(
@@ -2036,12 +2065,7 @@ function addExtraListener(
   syncListenerFlag(node, name);
 }
 
-function removeExtraListener(
-  node: MirrorElement,
-  rawName: string,
-  fn: EventHandler,
-  opts: ListenerOptions,
-): void {
+function removeExtraListener(node: MirrorElement, rawName: string, fn: EventHandler, opts: ListenerOptions): void {
   const name = canonicalEvent(rawName);
   const buckets = handlers.get(node)?.[name];
   if (!buckets) return;
@@ -2076,10 +2100,7 @@ function defineDomGet(
 ): void {
   for (const proto of protos) Object.defineProperty(proto, name, { get, set, configurable: true });
 }
-type TreeWalkerFilter =
-  | ((node: MirrorNode) => number)
-  | { acceptNode?: (node: MirrorNode) => number }
-  | null;
+type TreeWalkerFilter = ((node: MirrorNode) => number) | { acceptNode?: (node: MirrorNode) => number } | null;
 
 const NODE_MEMBERS: object[] = [ElementProto, TextProto];
 
@@ -2103,14 +2124,18 @@ function hostQuery(selector: string, rootId: VnNodeId, mode: VnQueryMode): Mirro
   }
   return out;
 }
-const queryOne = (
-  selector: string,
-  rootId: VnNodeId,
-  mode: VnQueryMode = 0,
-): MirrorElement | null => hostQuery(selector, rootId, mode)[0] ?? null;
+const queryOne = (selector: string, rootId: VnNodeId, mode: VnQueryMode = 0): MirrorElement | null =>
+  hostQuery(selector, rootId, mode)[0] ?? null;
 
 const ZERO_RECT = {
-  x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0,
+  x: 0,
+  y: 0,
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  width: 0,
+  height: 0,
 };
 
 /// The viewport as `document.documentElement` reports it: from the client-area origin (the space
@@ -2157,21 +2182,34 @@ function paintedRectOf(node: MirrorNode, kind?: string): MirrorRect {
   return rectFrom(boundsOf(node, kind), 4);
 }
 function rectFrom(raw: VnRect, at: 0 | 4): MirrorRect {
-  if (!raw) return { ...ZERO_RECT, toJSON() { return this; } };
+  if (!raw)
+    return {
+      ...ZERO_RECT,
+      toJSON() {
+        return this;
+      },
+    };
   const n = raw.split(",").map(Number);
   const [x, y, w, h] = n.length >= at + 4 ? n.slice(at, at + 4) : n;
   return {
-    x, y, width: w, height: h,
-    top: y, left: x, right: x + w, bottom: y + h,
-    toJSON() { return this; },
+    x,
+    y,
+    width: w,
+    height: h,
+    top: y,
+    left: x,
+    right: x + w,
+    bottom: y + h,
+    toJSON() {
+      return this;
+    },
   };
 }
 
 defineDom(
   "contains",
   function (this: MirrorNode, other: MirrorNode | null | undefined) {
-    for (let n: MirrorNode | null | undefined = other; n; n = n.parentNode)
-      if (n === this) return true;
+    for (let n: MirrorNode | null | undefined = other; n; n = n.parentNode) if (n === this) return true;
     return false;
   },
   NODE_MEMBERS,
@@ -2251,9 +2289,30 @@ function siblingOf(node: MirrorNode, step: 1 | -1): MirrorNode | null {
   const i = Array.prototype.indexOf.call(p.childNodes, node);
   return i >= 0 ? (p.childNodes[i + step] ?? null) : null;
 }
-defineDomGet("nextSibling", function (this: MirrorNode) { return siblingOf(this, 1); }, undefined, NODE_MEMBERS);
-defineDomGet("previousSibling", function (this: MirrorNode) { return siblingOf(this, -1); }, undefined, NODE_MEMBERS);
-defineDomGet("firstChild", function (this: MirrorNode) { return this.childNodes?.[0] ?? null; }, undefined, NODE_MEMBERS);
+defineDomGet(
+  "nextSibling",
+  function (this: MirrorNode) {
+    return siblingOf(this, 1);
+  },
+  undefined,
+  NODE_MEMBERS,
+);
+defineDomGet(
+  "previousSibling",
+  function (this: MirrorNode) {
+    return siblingOf(this, -1);
+  },
+  undefined,
+  NODE_MEMBERS,
+);
+defineDomGet(
+  "firstChild",
+  function (this: MirrorNode) {
+    return this.childNodes?.[0] ?? null;
+  },
+  undefined,
+  NODE_MEMBERS,
+);
 defineDomGet(
   "lastChild",
   function (this: MirrorNode) {
@@ -2263,7 +2322,13 @@ defineDomGet(
   undefined,
   NODE_MEMBERS,
 );
-defineDom("hasChildNodes", function (this: MirrorNode) { return !!this.childNodes?.length; }, NODE_MEMBERS);
+defineDom(
+  "hasChildNodes",
+  function (this: MirrorNode) {
+    return !!this.childNodes?.length;
+  },
+  NODE_MEMBERS,
+);
 defineDom(
   "getRootNode",
   function (this: MirrorNode) {
@@ -2351,7 +2416,11 @@ defineDom("querySelectorAll", function (this: MirrorElement, selector: string) {
 });
 
 // Live collections walk the mirror tree, not the selector matcher: `foo:bar` is a tag name here and an invalid selector there.
-function elementsUnder(root: MirrorNode | null, inclusive: boolean, test: (el: MirrorElement) => boolean): MirrorElement[] {
+function elementsUnder(
+  root: MirrorNode | null,
+  inclusive: boolean,
+  test: (el: MirrorElement) => boolean,
+): MirrorElement[] {
   const out: MirrorElement[] = [];
   if (!root) return out;
   const walk = (n: MirrorNode) => {
@@ -2374,7 +2443,9 @@ function tagTest(qualifiedName: unknown): (el: MirrorElement) => boolean {
   return (el) => (el._ns ? el.tag === q : el.tag.toLowerCase() === lower);
 }
 function classTest(classNames: unknown): (el: MirrorElement) => boolean {
-  const want = String(classNames).split(/[ \t\n\f\r]+/).filter(Boolean);
+  const want = String(classNames)
+    .split(/[ \t\n\f\r]+/)
+    .filter(Boolean);
   if (!want.length) return () => false;
   return (el) => {
     const have = el.attrs.class;
@@ -2463,13 +2534,7 @@ interface ScrollPos {
 }
 
 /** One host call for every scroll accessor; `null` when not a scroll container. `sizeMatters` enables the `noteStale` advisory. */
-function hostScroll(
-  node: MirrorElement,
-  op: 0 | 1 | 2,
-  x = NaN,
-  y = NaN,
-  sizeMatters = false,
-): ScrollPos | null {
+function hostScroll(node: MirrorElement, op: 0 | 1 | 2, x = NaN, y = NaN, sizeMatters = false): ScrollPos | null {
   if (!node.__vnId) return null;
   const raw = __vn_scroll(node.__vnId, op, x, y);
   if (!raw) return null;
@@ -2642,7 +2707,10 @@ function writeReflected(el: MirrorElement, prop: string, r: Reflected, v: unknow
   if (r.kind === "string") return el.setAttribute(r.attr, String(v));
   const n = toLong(v);
   if (n < 0 && prop !== "tabIndex") {
-    throw new DOMException(`Failed to set the '${prop}' property: The value provided (${n}) is negative.`, "IndexSizeError");
+    throw new DOMException(
+      `Failed to set the '${prop}' property: The value provided (${n}) is negative.`,
+      "IndexSizeError",
+    );
   }
   el.setAttribute(r.attr, String(n));
 }
@@ -2672,8 +2740,10 @@ defineDomGet(
   } as (value: never) => void,
 );
 const INPUT_TYPES = new Set(
-  ("hidden text search tel url email password date month week time datetime-local number range color " +
-    "checkbox radio file submit image reset button").split(" "),
+  (
+    "hidden text search tel url email password date month week time datetime-local number range color " +
+    "checkbox radio file submit image reset button"
+  ).split(" "),
 );
 const TYPE_STRING_TAGS = new Set(["a", "link", "ol", "li", "source", "embed", "object", "script", "style"]);
 // `type`: enumerated on <input> / <button>, read-only and derived on <select> / <textarea>, a plain string elsewhere.
@@ -2700,7 +2770,8 @@ defineDomGet(
   },
   function (this: MirrorElement, v: unknown) {
     if (!isMirrorEl(this)) return ownExpando(this, "type", v);
-    if (this.tag === "input" || this.tag === "button" || TYPE_STRING_TAGS.has(this.tag)) this.setAttribute("type", String(v));
+    if (this.tag === "input" || this.tag === "button" || TYPE_STRING_TAGS.has(this.tag))
+      this.setAttribute("type", String(v));
     else if (!["select", "textarea", "fieldset", "output"].includes(this.tag)) ownExpando(this, "type", v);
     // (read-only on those four: the assignment is ignored, as in sloppy-mode JS)
   } as (value: never) => void,
@@ -2821,7 +2892,12 @@ class AttrImpl {
   }
 }
 Object.defineProperty(AttrImpl, "name", { value: "Attr" });
-for (const [k, v] of [["ATTRIBUTE_NODE", 2], ["ELEMENT_NODE", 1], ["TEXT_NODE", 3], ["COMMENT_NODE", 8]] as const) {
+for (const [k, v] of [
+  ["ATTRIBUTE_NODE", 2],
+  ["ELEMENT_NODE", 1],
+  ["TEXT_NODE", 3],
+  ["COMMENT_NODE", 8],
+] as const) {
   Object.defineProperty(AttrImpl.prototype, k, { value: v, enumerable: true });
 }
 
@@ -2857,7 +2933,12 @@ function setAttrNode(el: MirrorElement, attr: unknown, method: string): AttrImpl
     throw new TypeError(`Failed to execute '${method}' on 'Element': parameter 1 is not of type 'Attr'.`);
   }
   if (attr._el && attr._el !== el) {
-    throw domError(method, "Element", "InUseAttributeError", "The node provided is an attribute node that is already an attribute of another Element; attribute nodes must be explicitly cloned.");
+    throw domError(
+      method,
+      "Element",
+      "InUseAttributeError",
+      "The node provided is an attribute node that is already an attribute of another Element; attribute nodes must be explicitly cloned.",
+    );
   }
   if (attr._el === el) return attr;
   const old = attrNode(el, attr._name);
@@ -2908,13 +2989,24 @@ class NamedNodeMapImpl {
   }
   removeNamedItem(name: unknown): AttrImpl {
     const a = attrNode(this._el, String(name));
-    if (!a) throw domError("removeNamedItem", "NamedNodeMap", "NotFoundError", `No item with name '${String(name)}' was found.`);
+    if (!a)
+      throw domError(
+        "removeNamedItem",
+        "NamedNodeMap",
+        "NotFoundError",
+        `No item with name '${String(name)}' was found.`,
+      );
     return removeAttrNode(this._el, a, "removeNamedItem", "NamedNodeMap");
   }
   removeNamedItemNS(ns: unknown, local: unknown): AttrImpl {
     const name = attrNameNS(this._el, ns, local);
     if (name === null) {
-      throw domError("removeNamedItemNS", "NamedNodeMap", "NotFoundError", `No item with name '${String(ns)}::${String(local)}' was found.`);
+      throw domError(
+        "removeNamedItemNS",
+        "NamedNodeMap",
+        "NotFoundError",
+        `No item with name '${String(ns)}::${String(local)}' was found.`,
+      );
     }
     return removeAttrNode(this._el, attrNode(this._el, name), "removeNamedItemNS", "NamedNodeMap");
   }
@@ -2951,7 +3043,8 @@ function namedNodeMapOf(el: MirrorElement): object {
     },
     getOwnPropertyDescriptor(t, k) {
       const i = index(k);
-      if (i >= 0) return i < t.length ? { value: t.item(i), enumerable: true, configurable: true, writable: false } : undefined;
+      if (i >= 0)
+        return i < t.length ? { value: t.item(i), enumerable: true, configurable: true, writable: false } : undefined;
       return Reflect.getOwnPropertyDescriptor(t, k);
     },
     set(t, k, v, receiver) {
@@ -3276,20 +3369,40 @@ function fileStatus(files: ArrayLike<{ name?: unknown }> | null): string {
 
 function isFileInput(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;
-  return !!e && e.kind === 1 && e.tag === "input" && String(e.attrs?.type ?? "").trim().toLowerCase() === "file";
+  return (
+    !!e &&
+    e.kind === 1 &&
+    e.tag === "input" &&
+    String(e.attrs?.type ?? "")
+      .trim()
+      .toLowerCase() === "file"
+  );
 }
 
 function isColorInput(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;
-  return !!e && e.kind === 1 && e.tag === "input" && String(e.attrs?.type ?? "").trim().toLowerCase() === "color";
+  return (
+    !!e &&
+    e.kind === 1 &&
+    e.tag === "input" &&
+    String(e.attrs?.type ?? "")
+      .trim()
+      .toLowerCase() === "color"
+  );
 }
 
 function colorValue(value: unknown): string {
-  const text = String(value ?? "").trim().toLowerCase();
+  const text = String(value ?? "")
+    .trim()
+    .toLowerCase();
   if (/^#[0-9a-f]{6}$/.test(text)) return text;
   if (/^#[0-9a-f]{3,4}$/.test(text)) return "#" + [...text.slice(1, 4)].map((c) => c + c).join("");
   if (/^#[0-9a-f]{8}$/.test(text)) return text.slice(0, 7);
-  if (text) warnCompat("input-color:value", "<input type=color> currently accepts hex colors (#rgb, #rgba, #rrggbb, #rrggbbaa); other CSS color values normalize to #000000");
+  if (text)
+    warnCompat(
+      "input-color:value",
+      "<input type=color> currently accepts hex colors (#rgb, #rgba, #rrggbb, #rrggbbaa); other CSS color values normalize to #000000",
+    );
   return "#000000";
 }
 
@@ -3308,34 +3421,40 @@ function showColorPicker(el: MirrorElement | Detached, via: "showPicker" | null)
   const id = mirror ? (el as MirrorElement).__vnId : 0;
   activation.consume();
   colorPickers.add(el);
-  void desktopApi.pickColorForInput(before).then((selected) => {
-    if (selected == null) return;
-    const next = colorValue(selected);
-    if (mirror) {
-      const control = el as MirrorElement;
-      if (control.__vnId !== id || !isColorInput(control) || next === colorValue(control.value)) return;
-      writeControlValue(control, next);
-      propagate(control, "input", fileEvent("input"));
-      propagate(control, "change", fileEvent("change"));
-    } else {
-      if (String(el.type).trim().toLowerCase() !== "color" || next === colorValue(el.value)) return;
-      el.value = next;
-      fireDetached(el, "input");
-      fireDetached(el, "change");
-    }
-  }).finally(() => colorPickers.delete(el));
+  void desktopApi
+    .pickColorForInput(before)
+    .then((selected) => {
+      if (selected == null) return;
+      const next = colorValue(selected);
+      if (mirror) {
+        const control = el as MirrorElement;
+        if (control.__vnId !== id || !isColorInput(control) || next === colorValue(control.value)) return;
+        writeControlValue(control, next);
+        propagate(control, "input", fileEvent("input"));
+        propagate(control, "change", fileEvent("change"));
+      } else {
+        if (String(el.type).trim().toLowerCase() !== "color" || next === colorValue(el.value)) return;
+        el.value = next;
+        fireDetached(el, "input");
+        fireDetached(el, "change");
+      }
+    })
+    .finally(() => colorPickers.delete(el));
 }
 
 /** Is this one of the host's text widgets? An `<input>` other than file/range/color, or a `<textarea>` (`vn-tree` `build_node`). */
 function isTextWidget(n: unknown): boolean {
   const e = n as MirrorElement | null | undefined;
-  return !!e && e.kind === 1 && (e.tag === "textarea" || (e.tag === "input" && !isFileInput(e) && !isRangeInput(e) && !isColorInput(e)));
+  return (
+    !!e &&
+    e.kind === 1 &&
+    (e.tag === "textarea" || (e.tag === "input" && !isFileInput(e) && !isRangeInput(e) && !isColorInput(e)))
+  );
 }
 
 /** Select a field through its native editor, so the next keystroke, IME commit or clipboard operation does not replace a JS-only range. */
 defineDom("select", function (this: MirrorElement) {
-  if (!isMirrorEl(this) || (this.tag !== "input" && this.tag !== "textarea"))
-    throw new TypeError("Illegal invocation");
+  if (!isMirrorEl(this) || (this.tag !== "input" && this.tag !== "textarea")) throw new TypeError("Illegal invocation");
   if (activeElement() !== this) this.focus();
   if (!isTextWidget(this) || !__vn_input_select(this.__vnId)) return;
   // HTML queues a bubbling, non-cancelable select event. It is not an edit:
@@ -3353,8 +3472,12 @@ function isLabel(n: unknown): boolean {
 function isFileList(v: unknown): boolean {
   const FL = (globalThis as { FileList?: unknown }).FileList;
   if (typeof FL === "function") return v instanceof (FL as new () => object);
-  return !!v && typeof v === "object" && typeof (v as { length?: unknown }).length === "number" &&
-    typeof (v as { item?: unknown }).item === "function";
+  return (
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as { length?: unknown }).length === "number" &&
+    typeof (v as { item?: unknown }).item === "function"
+  );
 }
 
 function emptyFileList(): unknown {
@@ -3379,7 +3502,8 @@ const FAKEPATH = "C:\\fakepath\\";
 const VALUE_REFUSED =
   "Failed to set the 'value' property on 'HTMLInputElement': This input element accepts a filename, " +
   "which may only be programmatically set to the empty string.";
-const FILES_REFUSED = "Failed to set the 'files' property on 'HTMLInputElement': The provided value is not of type 'FileList'.";
+const FILES_REFUSED =
+  "Failed to set the 'files' property on 'HTMLInputElement': The provided value is not of type 'FileList'.";
 
 /** HTML's `files` and filename-mode `value` over one state: `files` is always a FileList (setting it fires nothing); `value` is `C:\fakepath\<name>`, "" clears, anything else throws. */
 function fileAccessors(state: FileState, isFile: () => boolean, other?: { value: string }) {
@@ -3452,12 +3576,13 @@ function syncFileInput(el: MirrorElement): void {
       warnCompat(
         "input-file:look",
         "<input type=file>: the button and status are an approximation of Chromium's, with its " +
-          "English strings (\"Choose File\", \"No file chosen\"); restyle it with ::file-selector-button",
+          'English strings ("Choose File", "No file chosen"); restyle it with ::file-selector-button',
       );
     }
   } else if (!file && had) {
     fileStates.delete(el);
-    for (const k of ["files", "value", "accept", "multiple", "webkitdirectory"]) delete (el as unknown as Record<string, unknown>)[k];
+    for (const k of ["files", "value", "accept", "multiple", "webkitdirectory"])
+      delete (el as unknown as Record<string, unknown>)[k];
     el._value = "";
     __vn_set_prop(el.__vnId, I(":file-label"), undefined);
   }
@@ -3514,7 +3639,12 @@ function showFilePicker(ops: FileInputOps, via: "showPicker" | null): void {
 
 const LABELABLE = new Set(["button", "meter", "output", "progress", "select", "textarea"]);
 const isLabelable = (n: MirrorNode): n is MirrorElement =>
-  n.kind === 1 && (LABELABLE.has(n.tag) || (n.tag === "input" && String(n.attrs.type ?? "").trim().toLowerCase() !== "hidden"));
+  n.kind === 1 &&
+  (LABELABLE.has(n.tag) ||
+    (n.tag === "input" &&
+      String(n.attrs.type ?? "")
+        .trim()
+        .toLowerCase() !== "hidden"));
 
 function firstInTree(root: MirrorNode, pred: (n: MirrorElement) => boolean): MirrorElement | null {
   if (root.kind === 1 && pred(root)) return root;
@@ -3544,8 +3674,14 @@ function activateLabel(label: MirrorElement, target: MirrorNode): void {
   if (!control) return;
   for (let n: MirrorNode | null = target; n; n = n.parentNode) if (n === control) return;
   const textual =
-    control.tag === "textarea" || control.tag === "select" ||
-    (control.tag === "input" && !FOCUS_ONLY_TYPES.has(String(control.attrs.type ?? "text").trim().toLowerCase()));
+    control.tag === "textarea" ||
+    control.tag === "select" ||
+    (control.tag === "input" &&
+      !FOCUS_ONLY_TYPES.has(
+        String(control.attrs.type ?? "text")
+          .trim()
+          .toLowerCase(),
+      ));
   if (textual) control.focus();
   control.click();
 }
@@ -3554,7 +3690,19 @@ function adviseJsSourced(el: MirrorElement, name: string, via: string): void {
   const key = `event:${name}`;
   if (warned.has(key)) return;
   queueMicrotask(() => {
-    if (warned.has(key) || firstInTree(el, (n) => isFileInput(n) || (name === "change" && (isSelectEl(n) || isColorInput(n) || (n.tag === "input" && String(n.attrs.type).toLowerCase() === "range"))))) return;
+    if (
+      warned.has(key) ||
+      firstInTree(
+        el,
+        (n) =>
+          isFileInput(n) ||
+          (name === "change" &&
+            (isSelectEl(n) ||
+              isColorInput(n) ||
+              (n.tag === "input" && String(n.attrs.type).toLowerCase() === "range"))),
+      )
+    )
+      return;
     warnCompat(
       key,
       `${via} — this event type is not delivered by the native host yet: only <input type=file> ` +
@@ -3570,7 +3718,9 @@ function adviseJsSourced(el: MirrorElement, name: string, via: string): void {
 const REFLECTED_BOOL = new Set(["multiple", "webkitdirectory", "disabled"]);
 const REFLECTED_STR = new Set(["href", "download", "type", "accept", "rel", "target"]);
 const nativeDispatch =
-  typeof EventTarget === "function" ? (EventTarget.prototype.dispatchEvent as (this: object, ev: VnEvent) => boolean) : null;
+  typeof EventTarget === "function"
+    ? (EventTarget.prototype.dispatchEvent as (this: object, ev: VnEvent) => boolean)
+    : null;
 
 type Detached = Record<string, unknown>;
 
@@ -3607,13 +3757,20 @@ function wrapDetached(el: Detached, tag: string): void {
   const state: FileState = { files: null, changed: () => {} };
   fileStates.set(el, state);
   const other = { value: String(el.value ?? "") };
-  const acc = fileAccessors(state, () => String(el.type ?? "").trim().toLowerCase() === "file", other);
+  const acc = fileAccessors(
+    state,
+    () =>
+      String(el.type ?? "")
+        .trim()
+        .toLowerCase() === "file",
+    other,
+  );
   try {
     Object.defineProperties(el, {
       files: acc.files,
       value: {
         ...acc.value,
-        get: () => String(el.type ?? "").toLowerCase() === "color" ? colorValue(other.value) : acc.value.get(),
+        get: () => (String(el.type ?? "").toLowerCase() === "color" ? colorValue(other.value) : acc.value.get()),
         set: (v: unknown) => acc.value.set(String(el.type ?? "").toLowerCase() === "color" ? colorValue(v) : v),
       },
     });
@@ -3656,9 +3813,19 @@ function activateDetached(target: object): void {
   const tag = String(el.tagName ?? "").toUpperCase();
   if (tag === "A" && el.href != null) {
     followHref(String(el.href), el.download == null ? null : String(el.download));
-  } else if (tag === "INPUT" && String(el.type ?? "").trim().toLowerCase() === "file") {
+  } else if (
+    tag === "INPUT" &&
+    String(el.type ?? "")
+      .trim()
+      .toLowerCase() === "file"
+  ) {
     showFilePicker(detachedFileOps(el), null);
-  } else if (tag === "INPUT" && String(el.type ?? "").trim().toLowerCase() === "color") {
+  } else if (
+    tag === "INPUT" &&
+    String(el.type ?? "")
+      .trim()
+      .toLowerCase() === "color"
+  ) {
     showColorPicker(el, null);
   }
 }
@@ -3672,16 +3839,24 @@ defineDom("showPicker", function (this: MirrorElement) {
     throw new TypeError("Failed to execute 'showPicker': this element has no picker (only <input> has one here).");
   }
   const attr = (k: string) => (mirror ? this.attrs[k] != null && this.attrs[k] !== "false" : !!raw[k]);
-  const type = String((mirror ? this.attrs.type : raw.type) ?? "text").trim().toLowerCase();
+  const type = String((mirror ? this.attrs.type : raw.type) ?? "text")
+    .trim()
+    .toLowerCase();
   const fail = (name: string, msg: string) =>
     new DOMException(`Failed to execute 'showPicker' on 'HTMLInputElement': ${msg}`, name);
-  if ((mirror ? isDisabledControl(this) : attr("disabled")) || (type !== "file" && type !== "color" && attr("readonly"))) {
+  if (
+    (mirror ? isDisabledControl(this) : attr("disabled")) ||
+    (type !== "file" && type !== "color" && attr("readonly"))
+  ) {
     throw fail("InvalidStateError", "HTMLInputElement::showPicker() cannot be used on immutable controls.");
   }
   if (!activation.isActive()) throw fail("NotAllowedError", "HTMLInputElement::showPicker() requires a user gesture.");
   if (type === "color") return showColorPicker(mirror ? this : raw, "showPicker");
   if (type !== "file") {
-    warnCompat(`showPicker:${type}`, `showPicker() on <input type=${type}> is a no-op: only file and color pickers exist here`);
+    warnCompat(
+      `showPicker:${type}`,
+      `showPicker() on <input type=${type}> is a no-op: only file and color pickers exist here`,
+    );
     return;
   }
   showFilePicker(mirror ? fileInputOps(this) : detachedFileOps(raw), "showPicker");
@@ -3693,7 +3868,12 @@ const DISABLEABLE = new Set(["button", "input", "select", "textarea", "fieldset"
 const clicking = new Set<MirrorElement>();
 defineDom("click", function (this: MirrorElement) {
   const mirror: boolean = isMirrorNode(this);
-  if (mirror ? isDisabledControl(this) : DISABLEABLE.has(this.tag) && this.attrs.disabled != null && this.attrs.disabled !== "false") return;
+  if (
+    mirror
+      ? isDisabledControl(this)
+      : DISABLEABLE.has(this.tag) && this.attrs.disabled != null && this.attrs.disabled !== "false"
+  )
+    return;
   if (clicking.has(this)) return;
   clicking.add(this);
   try {
@@ -3714,8 +3894,19 @@ defineDom("click", function (this: MirrorElement) {
 // submit, and reset does not restore control values.
 
 const RUNTIME_FIRED_EVENTS = new Set<string>([
-  "submit", "reset", "fullscreenchange", "gotpointercapture", "lostpointercapture", "select",
-  "dragstart", "drag", "dragenter", "dragover", "dragleave", "drop", "dragend",
+  "submit",
+  "reset",
+  "fullscreenchange",
+  "gotpointercapture",
+  "lostpointercapture",
+  "select",
+  "dragstart",
+  "drag",
+  "dragenter",
+  "dragover",
+  "dragleave",
+  "drop",
+  "dragend",
 ]);
 
 const hasFlag = (n: MirrorElement, name: string): boolean => n.attrs?.[name] != null && n.attrs[name] !== "false";
@@ -3733,7 +3924,10 @@ function isDisabledControl(n: MirrorElement): boolean {
   }
   return false;
 }
-const typeOf = (n: MirrorElement): string => String(n.attrs?.type ?? "").trim().toLowerCase();
+const typeOf = (n: MirrorElement): string =>
+  String(n.attrs?.type ?? "")
+    .trim()
+    .toLowerCase();
 
 function isSubmitButton(n: unknown): n is MirrorElement {
   const e = n as MirrorElement | null | undefined;
@@ -3748,7 +3942,18 @@ function isResetButton(n: unknown): n is MirrorElement {
 }
 
 const IMPLICIT_SUBMIT_TYPES = new Set([
-  "text", "search", "url", "tel", "email", "password", "date", "month", "week", "time", "datetime-local", "number",
+  "text",
+  "search",
+  "url",
+  "tel",
+  "email",
+  "password",
+  "date",
+  "month",
+  "week",
+  "time",
+  "datetime-local",
+  "number",
 ]);
 function blocksImplicitSubmission(n: unknown): n is MirrorElement {
   const e = n as MirrorElement | null | undefined;
@@ -3819,7 +4024,11 @@ const ClipboardEventClass: (new (type: string, init?: ClipboardEventInit) => VnE
     }
   }
   try {
-    Object.defineProperty(globalThis, "ClipboardEvent", { value: mark(ClipboardEvent), configurable: true, writable: true });
+    Object.defineProperty(globalThis, "ClipboardEvent", {
+      value: mark(ClipboardEvent),
+      configurable: true,
+      writable: true,
+    });
   } catch {
     /* a frozen global: the class still serves this module */
   }
@@ -3864,7 +4073,9 @@ function submitForm(form: MirrorElement, submitter: MirrorElement | null, fromSu
   let proceed = true;
   try {
     const init = { bubbles: true, cancelable: true, submitter };
-    const ev = SubmitEventClass ? new SubmitEventClass("submit", init) : withProps(new CustomEvent("submit", init), { submitter });
+    const ev = SubmitEventClass
+      ? new SubmitEventClass("submit", init)
+      : withProps(new CustomEvent("submit", init), { submitter });
     proceed = propagate(form, "submit", ev);
   } finally {
     submitting.delete(form);
@@ -3883,7 +4094,8 @@ function resetForm(form: MirrorElement): void {
       control._value = control.attrs.value ?? "";
       syncRangeValue(control);
     }
-    if (!controls.some(c => !isRangeInput(c) && (c.tag === "input" || c.tag === "textarea" || c.tag === "select"))) return;
+    if (!controls.some((c) => !isRangeInput(c) && (c.tag === "input" || c.tag === "textarea" || c.tag === "select")))
+      return;
     warnCompat(
       "form:reset",
       "form reset (a reset button or form.reset()) fired `reset` but cannot restore the controls: the " +
@@ -3921,7 +4133,9 @@ defineDom("requestSubmit", function (this: MirrorElement, submitter?: unknown) {
   const form = asForm(this, "requestSubmit");
   if (submitter != null) {
     if (!isSubmitButton(submitter)) {
-      throw new TypeError("Failed to execute 'requestSubmit' on 'HTMLFormElement': The specified element is not a submit button.");
+      throw new TypeError(
+        "Failed to execute 'requestSubmit' on 'HTMLFormElement': The specified element is not a submit button.",
+      );
     }
     if (formOwner(submitter) !== form) {
       throw new DOMException(
@@ -4076,8 +4290,11 @@ const realm = (() => {
             if (live === frames && typeof a[0] === "number") for (const stamp of frameStampers) stamp(a[0]);
             const token = traceCallbackBegin?.(cb) ?? 0;
             if (token === 0) return (cb as Fn).apply(this, a);
-            try { return (cb as Fn).apply(this, a); }
-            finally { traceCallbackEnd!(token); }
+            try {
+              return (cb as Fn).apply(this, a);
+            } finally {
+              traceCallbackEnd!(token);
+            }
           }
         : cb;
       id = set.call(g, run, ...rest);
@@ -4170,7 +4387,11 @@ const realm = (() => {
 })();
 
 {
-  const g = globalThis as { location?: Record<string, unknown>; __VN_UNLOAD__?: () => void; __VN_TEARDOWN__?: () => void };
+  const g = globalThis as {
+    location?: Record<string, unknown>;
+    __VN_UNLOAD__?: () => void;
+    __VN_TEARDOWN__?: () => void;
+  };
   if (g.location && typeof __vn_reload === "function") {
     try {
       Object.defineProperty(g.location, "reload", {
@@ -4181,7 +4402,10 @@ const realm = (() => {
         writable: true,
       });
     } catch (e) {
-      warnCompat("location.reload:install", `location.reload() could not be installed on this engine and does nothing (${e})`);
+      warnCompat(
+        "location.reload:install",
+        `location.reload() could not be installed on this engine and does nothing (${e})`,
+      );
     }
   }
   g.__VN_UNLOAD__ = () => {
@@ -4300,11 +4524,26 @@ function stylesheetText(node: unknown): string {
 function prepareStylesheetElement(element: Record<string, unknown>): void {
   let text = stylesheetText(element);
   for (const property of ["textContent", "innerHTML", "innerText", "text"]) {
-    Object.defineProperty(element, property, { get: () => text, set: (value) => { text = value == null ? "" : String(value); }, configurable: true });
+    Object.defineProperty(element, property, {
+      get: () => text,
+      set: (value) => {
+        text = value == null ? "" : String(value);
+      },
+      configurable: true,
+    });
   }
-  const append = (child: unknown) => { text += stylesheetText(child); return child; };
+  const append = (child: unknown) => {
+    text += stylesheetText(child);
+    return child;
+  };
   Object.defineProperty(element, "appendChild", { value: append, configurable: true, writable: true });
-  Object.defineProperty(element, "append", { value: (...children: unknown[]) => { children.forEach(append); }, configurable: true, writable: true });
+  Object.defineProperty(element, "append", {
+    value: (...children: unknown[]) => {
+      children.forEach(append);
+    },
+    configurable: true,
+    writable: true,
+  });
 }
 /** DOM's "valid element local name" (the 2025 relaxed rule): no whitespace, NUL, `/` or `>`, and a letter, `:`, `_` or non-ASCII first. */
 const VALID_ELEMENT_NAME = /^[A-Za-z:_\u0080-￿][^\t\n\f\r \/>\0]*$/;
@@ -4317,10 +4556,12 @@ const domError = (method: string, iface: string, name: string, msg: string): Err
 /** A Node argument: a live mirror, or `null` for a node that is not ours (an engine element, or a freed mirror: `foreignNode`). Anything else is WebIDL's TypeError. */
 function nodeArg(x: unknown, method: string, iface: string, pos: number, type = "Node"): MirrorNode | null {
   if (isMirrorNode(x)) {
-    if (type === "Element" && x.kind !== 1) throw new TypeError(`Failed to execute '${method}' on '${iface}': parameter ${pos} is not of type 'Element'.`);
+    if (type === "Element" && x.kind !== 1)
+      throw new TypeError(`Failed to execute '${method}' on '${iface}': parameter ${pos} is not of type 'Element'.`);
     return x;
   }
-  if (x && typeof x === "object" && (typeof (x as { tagName?: unknown }).tagName === "string" || "__vnId" in x)) return null;
+  if (x && typeof x === "object" && (typeof (x as { tagName?: unknown }).tagName === "string" || "__vnId" in x))
+    return null;
   throw new TypeError(`Failed to execute '${method}' on '${iface}': parameter ${pos} is not of type '${type}'.`);
 }
 
@@ -4345,9 +4586,11 @@ function foreignNode(x: object, inserted: boolean, method: string): void {
 }
 
 function preInsertCheck(parent: MirrorNode, node: MirrorNode, method: string): void {
-  if (parent.kind !== 1) throw domError(method, "Node", "HierarchyRequestError", "This node type does not support this method.");
+  if (parent.kind !== 1)
+    throw domError(method, "Node", "HierarchyRequestError", "This node type does not support this method.");
   for (let a: MirrorNode | null = parent; a; a = a.parentNode) {
-    if (a === node) throw domError(method, "Node", "HierarchyRequestError", "The new child element contains the parent.");
+    if (a === node)
+      throw domError(method, "Node", "HierarchyRequestError", "The new child element contains the parent.");
   }
 }
 
@@ -4385,7 +4628,12 @@ function preInsert(parent: MirrorNode, node: unknown, child: unknown, method: st
   }
   preInsertCheck(parent, n, method);
   if (child != null && (!c || c.parentNode !== parent)) {
-    throw domError(method, "Node", "NotFoundError", "The node before which the new node is to be inserted is not a child of this node.");
+    throw domError(
+      method,
+      "Node",
+      "NotFoundError",
+      "The node before which the new node is to be inserted is not a child of this node.",
+    );
   }
   insertAll(parent as MirrorElement, [n], c === n ? n.nextSibling : c);
   return n;
@@ -4394,7 +4642,8 @@ function preInsert(parent: MirrorNode, node: unknown, child: unknown, method: st
 function convertNodes(parent: MirrorNode, args: unknown[], method: string, iface: string): (MirrorNode | object)[] {
   const items = args.map((a) => {
     if (isMirrorNode(a)) return a;
-    if (a && typeof a === "object" && (typeof (a as { tagName?: unknown }).tagName === "string" || "__vnId" in a)) return a;
+    if (a && typeof a === "object" && (typeof (a as { tagName?: unknown }).tagName === "string" || "__vnId" in a))
+      return a;
     return looseCreated(nodeOps.createText(String(a)));
   });
   for (const it of items) if (isMirrorNode(it)) preInsertCheckAs(parent, it, method, iface);
@@ -4593,29 +4842,33 @@ const MEDIA_CALL = {
 } as const satisfies Record<string, VnMediaVerb>;
 const MEDIA_TAGS = new Set<string>(["VIDEO", "AUDIO"]);
 const mediaStreams = new WeakMap<MirrorElement, unknown>();
-defineDomGet("srcObject", function (this: MirrorElement) {
-  return isMediaEl(this) ? mediaStreams.get(this) ?? null : undefined;
-}, function (this: MirrorElement, value: unknown) {
-  if (!isMediaEl(this)) return;
-  if (value == null) {
-    mediaStreams.delete(this);
-    if (this.getAttribute("src")?.startsWith("vn-stream://")) this.removeAttribute("src");
-    return;
-  }
-  const stream = value as { getVideoTracks?: () => { __vnVideoSrc?: string }[] };
-  const track = typeof stream.getVideoTracks === "function" ? stream.getVideoTracks()[0] : undefined;
-  if (!track?.__vnVideoSrc?.startsWith("vn-stream://")) {
-    // An <audio> given an audio stream (kept alive while Web Audio plays it) holds the stream and plays nothing.
-    if (this.tagName === "AUDIO") {
-      mediaStreams.set(this, value);
+defineDomGet(
+  "srcObject",
+  function (this: MirrorElement) {
+    return isMediaEl(this) ? (mediaStreams.get(this) ?? null) : undefined;
+  },
+  function (this: MirrorElement, value: unknown) {
+    if (!isMediaEl(this)) return;
+    if (value == null) {
+      mediaStreams.delete(this);
       if (this.getAttribute("src")?.startsWith("vn-stream://")) this.removeAttribute("src");
       return;
     }
-    throw new TypeError("video.srcObject requires a native video MediaStream");
-  }
-  mediaStreams.set(this, value);
-  this.setAttribute("src", track.__vnVideoSrc);
-});
+    const stream = value as { getVideoTracks?: () => { __vnVideoSrc?: string }[] };
+    const track = typeof stream.getVideoTracks === "function" ? stream.getVideoTracks()[0] : undefined;
+    if (!track?.__vnVideoSrc?.startsWith("vn-stream://")) {
+      // An <audio> given an audio stream (kept alive while Web Audio plays it) holds the stream and plays nothing.
+      if (this.tagName === "AUDIO") {
+        mediaStreams.set(this, value);
+        if (this.getAttribute("src")?.startsWith("vn-stream://")) this.removeAttribute("src");
+        return;
+      }
+      throw new TypeError("video.srcObject requires a native video MediaStream");
+    }
+    mediaStreams.set(this, value);
+    this.setAttribute("src", track.__vnVideoSrc);
+  },
+);
 const isMediaEl = (n: MirrorNode | null | undefined): n is MirrorElement =>
   !!n && MEDIA_TAGS.has((n as MirrorElement).tagName);
 function mediaState(node: MirrorNode | null | undefined): Record<string, string> | null {
@@ -4634,10 +4887,13 @@ const mediaCall = (node: MirrorNode, verb: VnMediaVerb, arg = 0): boolean =>
   isMediaEl(node) && node.__vnId ? __vn_media_call(node.__vnId, verb, arg) : false;
 function timeRanges(raw: string | undefined): MirrorTimeRanges {
   const list = raw
-    ? raw.split(",").filter(Boolean).map((pair) => {
-        const [start, end] = pair.split(":").map(Number);
-        return { start, end };
-      })
+    ? raw
+        .split(",")
+        .filter(Boolean)
+        .map((pair) => {
+          const [start, end] = pair.split(":").map(Number);
+          return { start, end };
+        })
     : [];
   return {
     length: list.length,
@@ -4753,7 +5009,10 @@ function frameTargetOrigin(arg: unknown): string {
   if (typeof arg === "object") {
     const t = (arg as { targetOrigin?: unknown; transfer?: unknown[] }).targetOrigin;
     if ((arg as { transfer?: unknown[] }).transfer?.length) {
-      throw new DOMException("Failed to execute 'postMessage': transferring is not supported for an <iframe>.", "DataCloneError");
+      throw new DOMException(
+        "Failed to execute 'postMessage': transferring is not supported for an <iframe>.",
+        "DataCloneError",
+      );
     }
     return t == null ? "/" : String(t);
   }
@@ -4767,9 +5026,13 @@ function frameWindow(el: MirrorElement): object {
   win = Object.freeze(
     Object.assign(Object.create(null) as Record<string, unknown>, {
       postMessage(message: unknown, target?: unknown, transfer?: unknown[]) {
-        if (arguments.length === 0) throw new TypeError("Failed to execute 'postMessage': 1 argument required, but only 0 present.");
+        if (arguments.length === 0)
+          throw new TypeError("Failed to execute 'postMessage': 1 argument required, but only 0 present.");
         if (transfer?.length) {
-          throw new DOMException("Failed to execute 'postMessage': transferring is not supported for an <iframe>.", "DataCloneError");
+          throw new DOMException(
+            "Failed to execute 'postMessage': transferring is not supported for an <iframe>.",
+            "DataCloneError",
+          );
         }
         const origin = frameTargetOrigin(target);
         // Encoded now, in the sender, so a value that cannot cross throws HERE.
@@ -4857,9 +5120,18 @@ defineDomGet(
   } as (value: never) => void,
 );
 const FRAME_SANDBOX_TOKENS = new Set([
-  "allow-downloads", "allow-forms", "allow-modals", "allow-orientation-lock", "allow-pointer-lock",
-  "allow-popups", "allow-popups-to-escape-sandbox", "allow-presentation", "allow-same-origin",
-  "allow-scripts", "allow-top-navigation", "allow-top-navigation-by-user-activation",
+  "allow-downloads",
+  "allow-forms",
+  "allow-modals",
+  "allow-orientation-lock",
+  "allow-pointer-lock",
+  "allow-popups",
+  "allow-popups-to-escape-sandbox",
+  "allow-presentation",
+  "allow-same-origin",
+  "allow-scripts",
+  "allow-top-navigation",
+  "allow-top-navigation-by-user-activation",
   "allow-top-navigation-to-custom-protocols",
 ]);
 
@@ -4920,35 +5192,23 @@ defineDomGet(
     patchProp(this, "src", undefined, String(v));
   } as (value: never) => void,
 );
-defineDomGet(
-  "currentSrc",
-  function (this: MirrorElement) {
-    if (!isImgEl(this)) return undefined;
-    return imgAnswer(this)?.ok ? this.attrs.src : "";
-  },
-);
-defineDomGet(
-  "complete",
-  function (this: MirrorElement) {
-    if (!isImgEl(this)) return undefined;
-    const src = this.attrs.src;
-    return src == null || src === "" || !!imgAnswer(this);
-  },
-);
-defineDomGet(
-  "naturalWidth",
-  function (this: MirrorElement) {
-    if (!isImgEl(this)) return undefined;
-    return imgAnswer(this)?.w ?? 0;
-  },
-);
-defineDomGet(
-  "naturalHeight",
-  function (this: MirrorElement) {
-    if (!isImgEl(this)) return undefined;
-    return imgAnswer(this)?.h ?? 0;
-  },
-);
+defineDomGet("currentSrc", function (this: MirrorElement) {
+  if (!isImgEl(this)) return undefined;
+  return imgAnswer(this)?.ok ? this.attrs.src : "";
+});
+defineDomGet("complete", function (this: MirrorElement) {
+  if (!isImgEl(this)) return undefined;
+  const src = this.attrs.src;
+  return src == null || src === "" || !!imgAnswer(this);
+});
+defineDomGet("naturalWidth", function (this: MirrorElement) {
+  if (!isImgEl(this)) return undefined;
+  return imgAnswer(this)?.w ?? 0;
+});
+defineDomGet("naturalHeight", function (this: MirrorElement) {
+  if (!isImgEl(this)) return undefined;
+  return imgAnswer(this)?.h ?? 0;
+});
 defineDom("decode", function (this: MirrorElement) {
   if (!isImgEl(this)) return Promise.resolve();
   const el = this;
@@ -4965,7 +5225,10 @@ defineDom("decode", function (this: MirrorElement) {
       const done = () => {
         el.removeEventListener("load", done);
         el.removeEventListener("error", done);
-        (settled() ?? Promise.reject(new DOMException("The source image cannot be decoded.", "EncodingError"))).then(resolve, reject);
+        (settled() ?? Promise.reject(new DOMException("The source image cannot be decoded.", "EncodingError"))).then(
+          resolve,
+          reject,
+        );
       };
       el.addEventListener("load", done);
       el.addEventListener("error", done);
@@ -4977,16 +5240,76 @@ defineDom("decode", function (this: MirrorElement) {
 // the handler changes; `null` removes it; a handler returning `false` cancels the event. On a non-mirror
 // object the property stays a plain expando (a detached `<input>`'s `onchange` is read by `fireDetached`).
 const HANDLER_ATTRS = [
-  "abort", "animationcancel", "animationend", "animationiteration", "animationstart", "auxclick",
-  "beforeinput", "blur", "cancel", "canplay", "canplaythrough", "change", "click", "close",
-  "contextmenu", "copy", "cut", "dblclick", "durationchange", "emptied", "ended", "error", "focus",
-  "input", "invalid", "keydown", "keypress", "keyup", "load", "loadeddata", "loadedmetadata",
-  "loadstart", "mousedown", "mouseenter", "mouseleave", "mousemove", "mouseout", "mouseover",
-  "mouseup", "paste", "pause", "play", "playing", "pointercancel", "pointerdown", "pointerenter",
-  "pointerleave", "pointermove", "pointerout", "pointerover", "pointerup", "progress", "ratechange",
-  "reset", "scroll", "scrollend", "seeked", "seeking", "select", "selectionchange", "selectstart",
-  "submit", "timeupdate", "toggle",
-  "transitioncancel", "transitionend", "transitionrun", "transitionstart", "volumechange", "waiting",
+  "abort",
+  "animationcancel",
+  "animationend",
+  "animationiteration",
+  "animationstart",
+  "auxclick",
+  "beforeinput",
+  "blur",
+  "cancel",
+  "canplay",
+  "canplaythrough",
+  "change",
+  "click",
+  "close",
+  "contextmenu",
+  "copy",
+  "cut",
+  "dblclick",
+  "durationchange",
+  "emptied",
+  "ended",
+  "error",
+  "focus",
+  "input",
+  "invalid",
+  "keydown",
+  "keypress",
+  "keyup",
+  "load",
+  "loadeddata",
+  "loadedmetadata",
+  "loadstart",
+  "mousedown",
+  "mouseenter",
+  "mouseleave",
+  "mousemove",
+  "mouseout",
+  "mouseover",
+  "mouseup",
+  "paste",
+  "pause",
+  "play",
+  "playing",
+  "pointercancel",
+  "pointerdown",
+  "pointerenter",
+  "pointerleave",
+  "pointermove",
+  "pointerout",
+  "pointerover",
+  "pointerup",
+  "progress",
+  "ratechange",
+  "reset",
+  "scroll",
+  "scrollend",
+  "seeked",
+  "seeking",
+  "select",
+  "selectionchange",
+  "selectstart",
+  "submit",
+  "timeupdate",
+  "toggle",
+  "transitioncancel",
+  "transitionend",
+  "transitionrun",
+  "transitionstart",
+  "volumechange",
+  "waiting",
   "wheel",
 ];
 for (const type of HANDLER_ATTRS) {
@@ -5175,8 +5498,7 @@ function synthesize(
         break;
       case "keydown":
       case "keyup":
-        if (typeof KeyboardEvent === "function")
-          return new KeyboardEvent(name, { ...common, ...M, key: key ?? "" });
+        if (typeof KeyboardEvent === "function") return new KeyboardEvent(name, { ...common, ...M, key: key ?? "" });
         break;
       case "focus":
       case "blur":
@@ -5217,8 +5539,10 @@ function synthesize(
       case "loopComplete":
       case "enterFrame":
         // Both shapes are served (lottie-player CustomEvent, lottie-web plain object): numbers on `detail` and the event.
-        return withProps(new CustomEvent(name, { ...common, detail: lottieDetail(name, a, b, c, d) }),
-                         lottieDetail(name, a, b, c, d));
+        return withProps(
+          new CustomEvent(name, { ...common, detail: lottieDetail(name, a, b, c, d) }),
+          lottieDetail(name, a, b, c, d),
+        );
     }
     if (MEDIA_EVENTS.has(name)) {
       // Plain Events in a browser, read off `e.target`; the numbers also ride on the event and `detail` so a
@@ -5236,31 +5560,40 @@ function synthesize(
       : name === "keydown" || name === "keyup"
         ? { key: key ?? "", ...M }
         : name === "input" || name === "beforeinput"
-          ? (({ data: d, inputType, isComposing }) => ({ data: d, inputType, isComposing }))(inputInit(name, a, b, data))
+          ? (({ data: d, inputType, isComposing }) => ({ data: d, inputType, isComposing }))(
+              inputInit(name, a, b, data),
+            )
           : name === "compositionstart" || name === "compositionupdate" || name === "compositionend"
             ? { data: typeof data === "string" ? data : "" }
-          : name === "transitionend"
-            ? { propertyName: key ?? "", elapsedTime: a, pseudoElement: "" }
-          : name === "animationstart" || name === "animationend" || name === "animationcancel"
-            ? { animationName: key ?? "", elapsedTime: a, pseudoElement: "" }
-          : name === "focus" || name === "blur" || name === "focusin" || name === "focusout" || name === "scroll"
-            ? {}
-            : name === "complete" || name === "loopComplete" || name === "enterFrame"
-              ? lottieDetail(name, a, b, c, d)
-              : MEDIA_EVENTS.has(name) && !(tag === "img" && name === "error")
-              ? mediaDetail(a, b, c, d)
-              : name === "load" || name === "error"
-                ? {}
-              : POINTER_EVENTS.has(name)
-                ? { clientX: a, clientY: b, button: buttonFor(name, c), buttons: buttonsFor(name, c), ...POINTER_INIT, ...M }
-                : {
-                    clientX: a,
-                    clientY: b,
-                    button: buttonFor(name, c),
-                    buttons: buttonsFor(name, c),
-                    detail: detailFor(name, d),
-                    ...M,
-                  };
+            : name === "transitionend"
+              ? { propertyName: key ?? "", elapsedTime: a, pseudoElement: "" }
+              : name === "animationstart" || name === "animationend" || name === "animationcancel"
+                ? { animationName: key ?? "", elapsedTime: a, pseudoElement: "" }
+                : name === "focus" || name === "blur" || name === "focusin" || name === "focusout" || name === "scroll"
+                  ? {}
+                  : name === "complete" || name === "loopComplete" || name === "enterFrame"
+                    ? lottieDetail(name, a, b, c, d)
+                    : MEDIA_EVENTS.has(name) && !(tag === "img" && name === "error")
+                      ? mediaDetail(a, b, c, d)
+                      : name === "load" || name === "error"
+                        ? {}
+                        : POINTER_EVENTS.has(name)
+                          ? {
+                              clientX: a,
+                              clientY: b,
+                              button: buttonFor(name, c),
+                              buttons: buttonsFor(name, c),
+                              ...POINTER_INIT,
+                              ...M,
+                            }
+                          : {
+                              clientX: a,
+                              clientY: b,
+                              button: buttonFor(name, c),
+                              buttons: buttonsFor(name, c),
+                              detail: detailFor(name, d),
+                              ...M,
+                            };
   for (const k in extra) Object.defineProperty(ev, k, { value: (extra as ExtraProps)[k], configurable: true });
   return ev;
 }
@@ -5293,12 +5626,7 @@ interface PropagationState {
 const EVENT_PHASE = { none: 0, capturing: 1, atTarget: 2, bubbling: 3 } as const;
 
 /** One listener call. A throwing listener does not end the dispatch: the error is reported from a microtask, after the walk. */
-function callListener(
-  fn: (this: unknown, ev: VnEvent) => unknown,
-  self: unknown,
-  ev: VnEvent,
-  passive = false,
-): void {
+function callListener(fn: (this: unknown, ev: VnEvent) => unknown, self: unknown, ev: VnEvent, passive = false): void {
   // A passive listener's `preventDefault()` does nothing (`passiveOf`). An own
   // no-op shadows the prototype's for the length of the call.
   const own = passive ? Object.getOwnPropertyDescriptor(ev, "preventDefault") : undefined;
@@ -5383,9 +5711,7 @@ function propagate(target: MirrorNode, name: string, ev: VnEvent): boolean {
     origStopIm?.();
   };
   const at = (node: PropagationTarget, phase: Phase) => {
-    const buckets = isMirrorNode(node)
-      ? handlers.get(node)?.[name]
-      : globalHandlers.get(node)?.[name];
+    const buckets = isMirrorNode(node) ? handlers.get(node)?.[name] : globalHandlers.get(node)?.[name];
     const eventPhase =
       node === target ? EVENT_PHASE.atTarget : phase === "capture" ? EVENT_PHASE.capturing : EVENT_PHASE.bubbling;
     if (buckets) invoke(buckets, phase, eventPhase, ev, node, name, state);
@@ -5436,7 +5762,8 @@ function propagateAtGlobal(target: object, name: string, ev: VnEvent): boolean {
       if (at) invoke(at, "capture", EVENT_PHASE.atTarget, ev, target, name, state);
       if (at && !state.immediate) invoke(at, "bubble", EVENT_PHASE.atTarget, ev, target, name, state);
     }
-    if (!windowTarget && ev.bubbles && win && !state.stopped) invoke(win, "bubble", EVENT_PHASE.bubbling, ev, globalThis, name, state);
+    if (!windowTarget && ev.bubbles && win && !state.stopped)
+      invoke(win, "bubble", EVENT_PHASE.bubbling, ev, globalThis, name, state);
   } finally {
     Object.defineProperty(ev, "currentTarget", { value: null, configurable: true });
     Object.defineProperty(ev, "eventPhase", { value: EVENT_PHASE.none, configurable: true });
@@ -5470,7 +5797,8 @@ const ACTIVATING_EVENTS = new Set(["keydown", "mousedown", "pointerdown", "mouse
 
 function activatableOnPath(target: MirrorNode): boolean {
   for (let n: MirrorNode | null = target; n; n = n.parentNode) {
-    if (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n)) return true;
+    if (isLabel(n) || isFileInput(n) || isColorInput(n) || isLink(n) || isSubmitButton(n) || isResetButton(n))
+      return true;
   }
   return false;
 }
@@ -5510,7 +5838,14 @@ function draggableAt(n: MirrorNode | null | undefined): MirrorElement | null {
 
 const DRAG_CANCELABLE = new Set(["dragstart", "drag", "dragenter", "dragover", "drop"]);
 
-function dragEvent(name: string, x: number, y: number, d: number, dt: DataTransferLike, related: MirrorNode | null): VnEvent {
+function dragEvent(
+  name: string,
+  x: number,
+  y: number,
+  d: number,
+  dt: DataTransferLike,
+  related: MirrorNode | null,
+): VnEvent {
   const init = {
     bubbles: true,
     cancelable: DRAG_CANCELABLE.has(name),
@@ -5525,9 +5860,17 @@ function dragEvent(name: string, x: number, y: number, d: number, dt: DataTransf
   let ev: VnEvent;
   try {
     const Drag = theGlobal("DragEvent") as (new (type: string, init: Record<string, unknown>) => VnEvent) | undefined;
-    ev = typeof Drag === "function" ? new Drag(name, init) : withProps(new MouseEvent(name, init), { dataTransfer: dt });
+    ev =
+      typeof Drag === "function" ? new Drag(name, init) : withProps(new MouseEvent(name, init), { dataTransfer: dt });
   } catch {
-    ev = withProps(new CustomEvent(name, init), { ...mods(d), clientX: x, clientY: y, button: 0, buttons: init.buttons, dataTransfer: dt });
+    ev = withProps(new CustomEvent(name, init), {
+      ...mods(d),
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: init.buttons,
+      dataTransfer: dt,
+    });
   }
   return withRelatedTarget(ev, related);
 }
@@ -5591,7 +5934,8 @@ function dndMove(g: DndGesture, under: MirrorNode | null | undefined, x: number,
     dndCancel(g, x, y, d, true);
     return;
   }
-  const over = under && under.kind === 1 ? (under as MirrorElement) : ((under?.parentNode as MirrorElement | null) ?? null);
+  const over =
+    under && under.kind === 1 ? (under as MirrorElement) : ((under?.parentNode as MirrorElement | null) ?? null);
   if (over !== g.over) {
     // The new element hears its `dragenter` before the old one its `dragleave`.
     const prev = g.over;
@@ -5605,7 +5949,10 @@ function dndMove(g: DndGesture, under: MirrorNode | null | undefined, x: number,
   g.op = "none";
   if (g.over) {
     dt.dropEffect = initialDropEffect(dt.effectAllowed);
-    if (!propagate(g.over, "dragover", dragEvent("dragover", x, y, d, dt, null)) && dropAllowed(dt.dropEffect, dt.effectAllowed))
+    if (
+      !propagate(g.over, "dragover", dragEvent("dragover", x, y, d, dt, null)) &&
+      dropAllowed(dt.dropEffect, dt.effectAllowed)
+    )
       g.op = dt.dropEffect;
   }
 }
@@ -5637,7 +5984,14 @@ function dndCancel(g: DndGesture, x: number, y: number, d: number, held: boolean
 }
 
 /** The drag's share of a host event: its answer when the drag consumed it, undefined otherwise. */
-function dndDispatch(name: string, nodeId: VnNodeId, x: number, y: number, d: number, key: string | undefined): boolean | undefined {
+function dndDispatch(
+  name: string,
+  nodeId: VnNodeId,
+  x: number,
+  y: number,
+  d: number,
+  key: string | undefined,
+): boolean | undefined {
   if (dndSwallowClick && (name === "click" || name === "mousedown" || name === "keydown")) {
     dndSwallowClick = false;
     if (name === "click") return false;
@@ -5774,7 +6128,11 @@ __vn_set_dispatcher((nodeId, evCode, a, b, c, d, key, data, x, y) => {
       );
     }
   }
-  if (proceed && isFileInput(target) && ((name === "keydown" && key === "Enter") || (name === "keyup" && key === " "))) {
+  if (
+    proceed &&
+    isFileInput(target) &&
+    ((name === "keydown" && key === "Enter") || (name === "keyup" && key === " "))
+  ) {
     (target as MirrorElement).click();
   }
   if (proceed && name === "keydown" && key === "Enter" && blocksImplicitSubmission(target)) {
@@ -5881,10 +6239,7 @@ export interface VnApp extends App<MirrorElement> {
   mount(container?: unknown): ComponentPublicInstance;
 }
 
-export function createApp(
-  rootComponent: unknown,
-  rootProps: Record<string, unknown> | null = null,
-): VnApp {
+export function createApp(rootComponent: unknown, rootProps: Record<string, unknown> | null = null): VnApp {
   const app = renderer.createApp(rootComponent as never, rootProps);
   const mount = app.mount.bind(app);
   app.mount = (container?: unknown) => {
@@ -5896,12 +6251,17 @@ export function createApp(
     let explicitContainer = container != null;
     if (typeof container === "string") {
       // Root-only native entries use '#app' without an index.html container: prefer a real element, else keep that alias.
-      const resolved = (globalThis.document?.querySelector as ((selector: string) => MirrorElement | null) | undefined)?.(container);
+      const resolved = (
+        globalThis.document?.querySelector as ((selector: string) => MirrorElement | null) | undefined
+      )?.(container);
       const legacyRoot = !resolved && container === "#app";
       if (legacyRoot) explicitContainer = false;
       const found = resolved ?? (legacyRoot ? root : null);
       if (!found) {
-        warnCompat("mount:container", `app.mount(${JSON.stringify(container)}) found no element; the app was not mounted`);
+        warnCompat(
+          "mount:container",
+          `app.mount(${JSON.stringify(container)}) found no element; the app was not mounted`,
+        );
         return undefined as never;
       }
       target = found as MirrorElement;
@@ -5951,8 +6311,11 @@ export function useCssVars(getter: (ctx: unknown) => Record<string, unknown>): v
   });
   onMounted(() => {
     watch(setVars, () => {}, { flush: "post" });
-    const MO = (globalThis as { MutationObserver?: new (cb: () => void) => { observe(n: unknown, o: unknown): void; disconnect(): void } })
-      .MutationObserver;
+    const MO = (
+      globalThis as {
+        MutationObserver?: new (cb: () => void) => { observe(n: unknown, o: unknown): void; disconnect(): void };
+      }
+    ).MutationObserver;
     const parent = (instance.subTree?.el as MirrorNode | null)?.parentNode;
     if (MO && parent) {
       const ob = new MO(setVars);
@@ -6070,7 +6433,10 @@ export function createSSRApp(rootComponent: unknown, rootProps: Record<string, u
   return createApp(rootComponent, rootProps);
 }
 export const hydrate: typeof render = (vnode, container) => {
-  warnCompat("hydrate", "hydrate() — nothing to hydrate in a vue-native window; it renders from scratch, as render() does");
+  warnCompat(
+    "hydrate",
+    "hydrate() — nothing to hydrate in a vue-native window; it renders from scratch, as render() does",
+  );
   render(vnode, container);
 };
 export const initDirectivesForSSR = (): void => {};
@@ -6145,20 +6511,77 @@ defineGlobal("CSS", {
 /// Properties `CSS.supports` answers `true` for. Conservative: a probe that
 /// says yes and then does nothing is worse than one that says no.
 const CSS_SUPPORTED = new Set<string>([
-  "animation", "animation-delay", "animation-direction", "animation-duration",
-  "animation-fill-mode", "animation-iteration-count", "animation-name",
-  "animation-play-state", "animation-timing-function",
-  "transition", "transition-delay", "transition-duration", "transition-property",
+  "animation",
+  "animation-delay",
+  "animation-direction",
+  "animation-duration",
+  "animation-fill-mode",
+  "animation-iteration-count",
+  "animation-name",
+  "animation-play-state",
+  "animation-timing-function",
+  "transition",
+  "transition-delay",
+  "transition-duration",
+  "transition-property",
   "transition-timing-function",
-  "align-items", "align-self", "background", "background-color", "border", "border-color",
-  "border-radius", "border-width", "bottom", "box-shadow", "color", "column-gap", "display",
-  "flex", "flex-basis", "flex-direction", "flex-grow", "flex-shrink", "flex-wrap", "font-size",
-  "font-style", "font-weight", "gap", "height", "inset", "justify-content", "left",
-  "line-height", "margin", "margin-bottom", "margin-left", "margin-right", "margin-top",
-  "max-height", "max-width", "min-height", "min-width", "opacity", "overflow", "overflow-x",
-  "overflow-y", "padding", "padding-bottom", "padding-left", "padding-right", "padding-top",
-  "pointer-events", "position", "right", "row-gap", "text-align", "top", "transform",
-  "visibility", "white-space", "width", "z-index",
+  "align-items",
+  "align-self",
+  "background",
+  "background-color",
+  "border",
+  "border-color",
+  "border-radius",
+  "border-width",
+  "bottom",
+  "box-shadow",
+  "color",
+  "column-gap",
+  "display",
+  "flex",
+  "flex-basis",
+  "flex-direction",
+  "flex-grow",
+  "flex-shrink",
+  "flex-wrap",
+  "font-size",
+  "font-style",
+  "font-weight",
+  "gap",
+  "height",
+  "inset",
+  "justify-content",
+  "left",
+  "line-height",
+  "margin",
+  "margin-bottom",
+  "margin-left",
+  "margin-right",
+  "margin-top",
+  "max-height",
+  "max-width",
+  "min-height",
+  "min-width",
+  "opacity",
+  "overflow",
+  "overflow-x",
+  "overflow-y",
+  "padding",
+  "padding-bottom",
+  "padding-left",
+  "padding-right",
+  "padding-top",
+  "pointer-events",
+  "position",
+  "right",
+  "row-gap",
+  "text-align",
+  "top",
+  "transform",
+  "visibility",
+  "white-space",
+  "width",
+  "z-index",
 ]);
 
 // Values `CSS.supports` rejects for a known property: `linear(…)` easing, which the parser lacks (stylesheets drop it,
@@ -6215,7 +6638,8 @@ function notifyMutation(
   },
 ): void {
   domEpoch++;
-  if (type === "attributes" && !noAttrNodes) attrChanged(target as MirrorElement, extra!.attributeName!, extra!.oldValue ?? null);
+  if (type === "attributes" && !noAttrNodes)
+    attrChanged(target as MirrorElement, extra!.attributeName!, extra!.oldValue ?? null);
   if (observers.size === 0) return;
   for (const ob of observers) {
     for (const entry of ob._targets) {
@@ -6251,8 +6675,7 @@ function notifyMutation(
 }
 
 function isAncestor(ancestor: MirrorNode, node: MirrorNode | null | undefined): boolean {
-  for (let n: MirrorElement | null | undefined = node?.parentNode; n; n = n.parentNode)
-    if (n === ancestor) return true;
+  for (let n: MirrorElement | null | undefined = node?.parentNode; n; n = n.parentNode) if (n === ancestor) return true;
   return false;
 }
 
@@ -6411,14 +6834,30 @@ function resizeEntry(target: MirrorElement, size: ResizeSize): ResizeEntryLike {
   const box = Object.freeze([Object.freeze(branded("ResizeObserverSize", { inlineSize: size.w, blockSize: size.h }))]);
   const dpr = Number((globalThis as { devicePixelRatio?: number }).devicePixelRatio) || 1;
   const device = Object.freeze([
-    Object.freeze(branded("ResizeObserverSize", { inlineSize: Math.round(size.w * dpr), blockSize: Math.round(size.h * dpr) })),
+    Object.freeze(
+      branded("ResizeObserverSize", { inlineSize: Math.round(size.w * dpr), blockSize: Math.round(size.h * dpr) }),
+    ),
   ]);
   const contentRect = asDomRect({
-    x: 0, y: 0, width: size.w, height: size.h,
-    top: 0, left: 0, right: size.w, bottom: size.h,
-    toJSON() { return this; },
+    x: 0,
+    y: 0,
+    width: size.w,
+    height: size.h,
+    top: 0,
+    left: 0,
+    right: size.w,
+    bottom: size.h,
+    toJSON() {
+      return this;
+    },
   });
-  return branded("ResizeObserverEntry", { target, contentRect, borderBoxSize: box, contentBoxSize: box, devicePixelContentBoxSize: device });
+  return branded("ResizeObserverEntry", {
+    target,
+    contentRect,
+    borderBoxSize: box,
+    contentBoxSize: box,
+    devicePixelContentBoxSize: device,
+  });
 }
 
 const RESIZE_LOOP_MESSAGE = "ResizeObserver loop completed with undelivered notifications.";
@@ -6484,7 +6923,10 @@ const ErrorEventClass: (new (type: string, init?: ErrorEventInit) => VnEvent) | 
   if (typeof g.ErrorEvent === "function" && !vacant(g, "ErrorEvent"))
     return g.ErrorEvent as new (type: string, init?: ErrorEventInit) => VnEvent;
   if (typeof Event !== "function") return null;
-  const fields = new WeakMap<object, Required<Pick<ErrorEventInit, "message" | "filename" | "lineno" | "colno">> & { error: unknown }>();
+  const fields = new WeakMap<
+    object,
+    Required<Pick<ErrorEventInit, "message" | "filename" | "lineno" | "colno">> & { error: unknown }
+  >();
   const field = <K extends "message" | "filename" | "lineno" | "colno" | "error">(ev: object, k: K, empty: unknown) =>
     fields.has(ev) ? fields.get(ev)![k] : empty;
   class ErrorEvent extends Event {
@@ -6550,7 +6992,8 @@ function layoutStep(op: number): number {
         raised = 1;
       }
       updateIntersections();
-      for (let i = resizeObservers.length - 1; i >= 0; i--) if (!resizeObservers[i]!._targets.size) resizeObservers.splice(i, 1);
+      for (let i = resizeObservers.length - 1; i >= 0; i--)
+        if (!resizeObservers[i]!._targets.size) resizeObservers.splice(i, 1);
       return raised | (observingLayout() ? 2 : 0);
     }
     default:
@@ -6567,7 +7010,10 @@ const QUIET_STEPS = 2;
 let fallbackQueued = false;
 let fallbackQuiet = 0;
 let fallbackTimer: unknown = null;
-const layoutTimers = globalThis as { setTimeout?: (cb: () => void, ms: number) => unknown; clearTimeout?: (id: unknown) => void };
+const layoutTimers = globalThis as {
+  setTimeout?: (cb: () => void, ms: number) => unknown;
+  clearTimeout?: (id: unknown) => void;
+};
 
 function layoutObserved(): void {
   if (hostSteps) {
@@ -6706,12 +7152,24 @@ function notifyIntersectionObservers(): void {
 }
 
 const ioRect = (x: number, y: number, width: number, height: number): MirrorRect => ({
-  x, y, width, height, top: y, left: x, right: x + width, bottom: y + height,
-  toJSON() { return this; },
+  x,
+  y,
+  width,
+  height,
+  top: y,
+  left: x,
+  right: x + width,
+  bottom: y + height,
+  toJSON() {
+    return this;
+  },
 });
 
 function parseIntersectionMargin(text: unknown, what: string): { v: number; pct: boolean }[] {
-  const parts = String(text ?? "0px").trim().split(/\s+/).filter(Boolean);
+  const parts = String(text ?? "0px")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
   const out = parts.map((p) => {
     const m = /^(-?\d*\.?\d+)(px|%)?$/.exec(p);
     if (!m || (!m[2] && Number(m[1]) !== 0)) {
@@ -6723,7 +7181,10 @@ function parseIntersectionMargin(text: unknown, what: string): { v: number; pct:
     return { v: Number(m[1]), pct: m[2] === "%" };
   });
   if (out.length < 1 || out.length > 4) {
-    throw new DOMException(`Failed to construct 'IntersectionObserver': ${what} must have 1 to 4 values.`, "SyntaxError");
+    throw new DOMException(
+      `Failed to construct 'IntersectionObserver': ${what} must have 1 to 4 values.`,
+      "SyntaxError",
+    );
   }
   const [t, r = t, b = t, l = r] = out as [{ v: number; pct: boolean }, ...{ v: number; pct: boolean }[]];
   return [t, r!, b!, l!];
@@ -6740,13 +7201,18 @@ class VnIntersectionObserver {
   declare thresholds: readonly number[];
   declare delay: number;
   declare trackVisibility: boolean;
-  constructor(callback: (entries: unknown[], ob: VnIntersectionObserver) => void, options: Record<string, unknown> = {}) {
+  constructor(
+    callback: (entries: unknown[], ob: VnIntersectionObserver) => void,
+    options: Record<string, unknown> = {},
+  ) {
     if (typeof callback !== "function") {
       throw new TypeError("Failed to construct 'IntersectionObserver': parameter 1 is not of type 'Function'.");
     }
     const opts = options ?? {};
     const root = opts.root ?? null;
-    const isDocument = !!root && (root === (globalThis as { document?: unknown }).document || (root as { nodeType?: number }).nodeType === 9);
+    const isDocument =
+      !!root &&
+      (root === (globalThis as { document?: unknown }).document || (root as { nodeType?: number }).nodeType === 9);
     if (root !== null && !isDocument && typeof (root as { nodeType?: number }).nodeType !== "number") {
       throw new TypeError("Failed to construct 'IntersectionObserver': root must be an Element, a Document or null.");
     }
@@ -6754,7 +7220,9 @@ class VnIntersectionObserver {
     const thresholds = (raw as unknown[]).map(Number);
     for (const t of thresholds) {
       if (!(t >= 0 && t <= 1)) {
-        throw new RangeError("Failed to construct 'IntersectionObserver': Threshold values must be numbers between 0 and 1");
+        throw new RangeError(
+          "Failed to construct 'IntersectionObserver': Threshold values must be numbers between 0 and 1",
+        );
       }
     }
     thresholds.sort((a, b) => a - b);
@@ -6773,7 +7241,9 @@ class VnIntersectionObserver {
   }
   observe(target: MirrorElement) {
     if (!target || typeof target !== "object") {
-      throw new TypeError("Failed to execute 'observe' on 'IntersectionObserver': parameter 1 is not of type 'Element'.");
+      throw new TypeError(
+        "Failed to execute 'observe' on 'IntersectionObserver': parameter 1 is not of type 'Element'.",
+      );
     }
     if (this._targets.has(target)) return;
     this._targets.set(target, { prevIndex: -1, prevIntersecting: false });
@@ -6800,7 +7270,12 @@ class VnIntersectionObserver {
       if (!appRoot) return null;
       r = viewportRect();
     }
-    const [t, rt, b, l] = this._margin as [{ v: number; pct: boolean }, { v: number; pct: boolean }, { v: number; pct: boolean }, { v: number; pct: boolean }];
+    const [t, rt, b, l] = this._margin as [
+      { v: number; pct: boolean },
+      { v: number; pct: boolean },
+      { v: number; pct: boolean },
+      { v: number; pct: boolean },
+    ];
     const px = (m: { v: number; pct: boolean }, of: number) => (m.pct ? (m.v / 100) * of : m.v);
     const top = r.top - px(t, r.height);
     const left = r.left - px(l, r.width);
@@ -6820,7 +7295,8 @@ class VnIntersectionObserver {
       let intersectionRect = ioRect(0, 0, 0, 0);
       const descendant = (() => {
         if (!this.root) return true;
-        for (let n: MirrorNode | null | undefined = target.parentNode; n; n = n.parentNode) if (n === this.root) return true;
+        for (let n: MirrorNode | null | undefined = target.parentNode; n; n = n.parentNode)
+          if (n === this.root) return true;
         return false;
       })();
       if (painted && rootBounds && descendant) {
@@ -7032,7 +7508,8 @@ function rangeSpec(el: MirrorElement): { min: number; max: number; step: number 
   const min = rangeNumber(el.attrs.min);
   const step = rangeNumber(el.attrs.step);
   return {
-    min: min ?? 0, max: rangeNumber(el.attrs.max) ?? 100,
+    min: min ?? 0,
+    max: rangeNumber(el.attrs.max) ?? 100,
     step: String(el.attrs.step ?? "").toLowerCase() === "any" ? null : step != null && step > 0 ? step : 1,
     base: min ?? rangeNumber(el.attrs.value) ?? 0,
   };
@@ -7040,9 +7517,10 @@ function rangeSpec(el: MirrorElement): { min: number; max: number; step: number 
 function rangeValue(el: MirrorElement, raw: unknown): string {
   const { min, max, step, base } = rangeSpec(el);
   if (max < min) return String(min);
-  let value = Math.min(max, Math.max(min, rangeNumber(raw) ?? (min / 2 + max / 2)));
+  let value = Math.min(max, Math.max(min, rangeNumber(raw) ?? min / 2 + max / 2));
   if (step !== null) {
-    const lo = Math.ceil((min - base) / step - 1e-10), hi = Math.floor((max - base) / step + 1e-10);
+    const lo = Math.ceil((min - base) / step - 1e-10),
+      hi = Math.floor((max - base) / step + 1e-10);
     if (lo <= hi) {
       const index = Math.min(hi, Math.max(lo, Math.floor((value - base) / step + 0.5 + 1e-10)));
       value = Math.min(max, Math.max(min, Number((base + index * step).toPrecision(15))));
@@ -7061,7 +7539,13 @@ const VALUE_TAGS = new Set(["input", "textarea", "select"]);
 /** `el.value = v` on a form control: updates mirror and host on EVERY assignment (the host's write counter re-forces a field the user typed over); fires no `input` / `change`. */
 function writeControlValue(el: MirrorElement, v: unknown, dirty = true): void {
   if (dirty && isRangeInput(el)) el._rangeDirty = true;
-  const s = isRangeInput(el) ? rangeValue(el, v) : isColorInput(el) ? colorValue(v) : v == null && el.tag !== "select" ? "" : String(v);
+  const s = isRangeInput(el)
+    ? rangeValue(el, v)
+    : isColorInput(el)
+      ? colorValue(v)
+      : v == null && el.tag !== "select"
+        ? ""
+        : String(v);
   el._value = s;
   __vn_set_prop(el.__vnId, I("value"), s);
 }
@@ -7093,15 +7577,19 @@ defineDomGet(
   "valueAsNumber",
   function (this: MirrorElement) {
     if (!isMirrorEl(this) || this.tag !== "input") return NaN;
-    return isRangeInput(this) ? Number(rangeValue(this, this._value))
-      : String(this.attrs.type ?? "").toLowerCase() === "number" ? rangeNumber(this._value) ?? NaN : NaN;
+    return isRangeInput(this)
+      ? Number(rangeValue(this, this._value))
+      : String(this.attrs.type ?? "").toLowerCase() === "number"
+        ? (rangeNumber(this._value) ?? NaN)
+        : NaN;
   },
   function (this: MirrorElement, raw: unknown) {
     if (!isMirrorEl(this) || this.tag !== "input") return;
     const value = Number(raw);
     if (!Number.isFinite(value) && !Number.isNaN(value)) throw new TypeError("The provided value is non-finite.");
     if (isRangeInput(this)) writeControlValue(this, Number.isNaN(value) ? "" : String(value));
-    else if (String(this.attrs.type ?? "").toLowerCase() === "number") writeControlValue(this, Number.isNaN(value) ? "" : String(value));
+    else if (String(this.attrs.type ?? "").toLowerCase() === "number")
+      writeControlValue(this, Number.isNaN(value) ? "" : String(value));
     else throw new DOMException("This input element does not support Number values.", "InvalidStateError");
   } as (value: never) => void,
 );
@@ -7111,8 +7599,12 @@ function stepRange(el: MirrorElement, count: unknown, direction: number): void {
   if (step === null) throw new DOMException("This input element does not support stepping.", "InvalidStateError");
   writeControlValue(el, Number(rangeValue(el, el._value)) + direction * toLong(count === undefined ? 1 : count) * step);
 }
-defineDom("stepUp", function (this: MirrorElement, n?: unknown) { stepRange(this, n, 1); });
-defineDom("stepDown", function (this: MirrorElement, n?: unknown) { stepRange(this, n, -1); });
+defineDom("stepUp", function (this: MirrorElement, n?: unknown) {
+  stepRange(this, n, 1);
+});
+defineDom("stepDown", function (this: MirrorElement, n?: unknown) {
+  stepRange(this, n, -1);
+});
 
 function attrChecked(el: MirrorElement): boolean {
   const a = el.attrs?.checked;
@@ -7145,7 +7637,8 @@ defineDomGet(
     return undefined;
   },
   function (this: MirrorElement, v: unknown) {
-    if (!isMirrorEl(this) || (this.tag !== "input" && this.tag !== "textarea")) return ownExpando(this, "defaultValue", v);
+    if (!isMirrorEl(this) || (this.tag !== "input" && this.tag !== "textarea"))
+      return ownExpando(this, "defaultValue", v);
     if (this.tag === "input") this.setAttribute("value", v == null ? "" : String(v));
     else (this as unknown as { textContent: string }).textContent = v == null ? "" : String(v);
   } as (value: never) => void,
@@ -7214,7 +7707,11 @@ function optionDisabled(o: MirrorElement): boolean {
   return attrOn(o, "disabled") || (!!o.parentNode && isOptGroup(o.parentNode) && attrOn(o.parentNode, "disabled"));
 }
 
-const stripCollapse = (s: string): string => s.split(/[ \t\n\f\r]+/).filter(Boolean).join(" ");
+const stripCollapse = (s: string): string =>
+  s
+    .split(/[ \t\n\f\r]+/)
+    .filter(Boolean)
+    .join(" ");
 
 function optionText(o: MirrorElement): string {
   return stripCollapse(String((o as unknown as { textContent: unknown }).textContent ?? ""));
@@ -7351,7 +7848,12 @@ function defineSelectMembers(sel: MirrorElement): void {
   });
   Object.defineProperties(sel, {
     options: acc(() => options),
-    selectedOptions: acc(() => staticList(HTMLCollectionProto, selectOptions(sel).filter((o) => o._selected))),
+    selectedOptions: acc(() =>
+      staticList(
+        HTMLCollectionProto,
+        selectOptions(sel).filter((o) => o._selected),
+      ),
+    ),
     selectedIndex: acc(
       () => selectedIndexOf(sel),
       (v) => setSelectedIndex(sel, toLong(v)),
@@ -7408,7 +7910,8 @@ for (const [name, spec] of Object.entries(TAG_CLASSES)) {
   const ours = vacant(globalThis, name);
   const parentName = TAG_PARENTS[name];
   const parentProto =
-    (parentName && (globalThis as Record<string, { prototype?: object } | undefined>)[parentName]?.prototype) || ElementProto;
+    (parentName && (globalThis as Record<string, { prototype?: object } | undefined>)[parentName]?.prototype) ||
+    ElementProto;
   if (typeof existing === "function" && !ours) {
     // The ENGINE's class (redjs's HTMLImageElement, for `new Image()`) knows
     // nothing of mirror elements; extend its `instanceof` to cover them.
@@ -7448,7 +7951,12 @@ for (const [name, spec] of Object.entries(TAG_CLASSES)) {
     // The wrong receiver throws, as in a browser. So does an object that
     // inherits from this prototype: delegating would land right back here.
     const check = (self: unknown, verb: string): Record<string, unknown> => {
-      if (!self || typeof self !== "object" || (self as MirrorElement).tagName !== tag || klass.prototype.isPrototypeOf(self)) {
+      if (
+        !self ||
+        typeof self !== "object" ||
+        (self as MirrorElement).tagName !== tag ||
+        klass.prototype.isPrototypeOf(self)
+      ) {
         throw new TypeError(`Failed to ${verb} the '${prop}' property on '${name}': Illegal invocation`);
       }
       return self as Record<string, unknown>;
@@ -7592,12 +8100,17 @@ const NodeIface: Iface | null = (() => {
   }
   Object.defineProperty(iface, Symbol.hasInstance, {
     value: (x: unknown) =>
-      !!x && typeof x === "object" && (proto.isPrototypeOf(x) || isMirrorNode(x) || isDocument(x) || x instanceof AttrImpl),
+      !!x &&
+      typeof x === "object" &&
+      (proto.isPrototypeOf(x) || isMirrorNode(x) || isDocument(x) || x instanceof AttrImpl),
   });
   try {
     Object.defineProperty(globalThis, "Node", { value: mark(iface), configurable: true, writable: true });
   } catch {
-    warnCompat("global:Node", "Node could not be installed over the engine's own: Node.TEXT_NODE and the other constants are missing");
+    warnCompat(
+      "global:Node",
+      "Node could not be installed over the engine's own: Node.TEXT_NODE and the other constants are missing",
+    );
     return null;
   }
   if (typeof engineElement === "function" && !vacant(globalThis, "Element")) {
@@ -7655,7 +8168,11 @@ defineInterface("Screen", (x) => x != null && x === theGlobal("screen"), ET);
 
 const mirrorKind = (x: unknown) =>
   !!x && typeof x === "object" && Object.getPrototypeOf(x) === TextProto ? (x as MirrorNode).kind : 0;
-const CharacterDataIface = defineInterface("CharacterData", (x) => mirrorKind(x) === 2 || mirrorKind(x) === 3, NodeIface);
+const CharacterDataIface = defineInterface(
+  "CharacterData",
+  (x) => mirrorKind(x) === 2 || mirrorKind(x) === 3,
+  NodeIface,
+);
 if (CharacterDataIface && Object.getPrototypeOf(TextProto) !== CharacterDataIface.prototype) {
   try {
     Object.setPrototypeOf(TextProto, CharacterDataIface.prototype);
@@ -7663,14 +8180,22 @@ if (CharacterDataIface && Object.getPrototypeOf(TextProto) !== CharacterDataIfac
     /* `instanceof` still holds, by kind */
   }
 }
-defineInterface("Text", (x) => mirrorKind(x) === 2, CharacterDataIface ?? null, (data) =>
-  looseCreated(nodeOps.createText(data === undefined ? "" : String(data))),
+defineInterface(
+  "Text",
+  (x) => mirrorKind(x) === 2,
+  CharacterDataIface ?? null,
+  (data) => looseCreated(nodeOps.createText(data === undefined ? "" : String(data))),
 );
-defineInterface("Comment", (x) => mirrorKind(x) === 3, CharacterDataIface ?? null, (data) => {
-  const c = looseCreated(nodeOps.createComment(data === undefined ? "" : String(data)));
-  c.text = data === undefined ? "" : String(data);
-  return c;
-});
+defineInterface(
+  "Comment",
+  (x) => mirrorKind(x) === 3,
+  CharacterDataIface ?? null,
+  (data) => {
+    const c = looseCreated(nodeOps.createComment(data === undefined ? "" : String(data)));
+    c.text = data === undefined ? "" : String(data);
+    return c;
+  },
+);
 defineInterface("ShadowRoot", () => false, theGlobal("DocumentFragment") as Iface | null);
 defineInterface("Attr", (x) => x instanceof AttrImpl, NodeIface);
 if (NodeIface && Object.getPrototypeOf(AttrImpl.prototype) !== NodeIface.prototype) {
@@ -7735,7 +8260,11 @@ const SVG_INTERFACES: readonly (readonly [name: string, parent: string, tags: re
   }
   for (const [name, parent] of SVG_INTERFACES) {
     const tags = tagsOf.get(name)!;
-    defineInterface(name, (x) => isSvg(x) && tags.has(x.tag), (theGlobal(parent) as Iface | undefined) ?? SVGElementIface ?? null);
+    defineInterface(
+      name,
+      (x) => isSvg(x) && tags.has(x.tag),
+      (theGlobal(parent) as Iface | undefined) ?? SVGElementIface ?? null,
+    );
   }
 }
 
@@ -7744,13 +8273,21 @@ for (const [name, set] of Object.entries(BRANDS)) {
 }
 defineInterface(
   "MediaQueryList",
-  (x) => !!ET && x instanceof (ET as unknown as typeof EventTarget) && typeof (x as { media?: unknown }).media === "string" && "matches" in x,
+  (x) =>
+    !!ET &&
+    x instanceof (ET as unknown as typeof EventTarget) &&
+    typeof (x as { media?: unknown }).media === "string" &&
+    "matches" in x,
   ET,
 );
 defineInterface("Performance", (x) => x != null && x === theGlobal("performance"), ET);
 defineInterface("Crypto", (x) => x != null && x === theGlobal("crypto"), null);
 
-const EVENT_INTERFACES: readonly (readonly [name: string, parent: "Event" | "UIEvent", members: Readonly<Record<string, unknown>>])[] = [
+const EVENT_INTERFACES: readonly (readonly [
+  name: string,
+  parent: "Event" | "UIEvent",
+  members: Readonly<Record<string, unknown>>,
+])[] = [
   ["TransitionEvent", "Event", { propertyName: "", elapsedTime: 0, pseudoElement: "" }],
   ["AnimationEvent", "Event", { animationName: "", elapsedTime: 0, pseudoElement: "" }],
   ["CompositionEvent", "UIEvent", { data: "" }],
@@ -7813,7 +8350,13 @@ const EVENT_INTERFACES: readonly (readonly [name: string, parent: "Event" | "UIE
   const IE = theGlobal("InputEvent");
   const proto = typeof IE === "function" ? (IE as { prototype: object }).prototype : null;
   if (proto && vacant(proto, "dataTransfer"))
-    Object.defineProperty(proto, "dataTransfer", { get: mark(function dataTransfer() { return null; }), enumerable: true, configurable: true });
+    Object.defineProperty(proto, "dataTransfer", {
+      get: mark(function dataTransfer() {
+        return null;
+      }),
+      enumerable: true,
+      configurable: true,
+    });
   if (proto && vacant(proto, "getTargetRanges"))
     Object.defineProperty(proto, "getTargetRanges", {
       value: mark(function getTargetRanges(): unknown[] {
@@ -7858,7 +8401,9 @@ adoptInterface("TouchList", TouchListProto, null);
       }
       for (const req of ["identifier", "target"]) {
         if (init[req] === undefined) {
-          throw new TypeError(`Failed to construct 'Touch': Failed to read the '${req}' property from 'TouchInit': Required member is undefined.`);
+          throw new TypeError(
+            `Failed to construct 'Touch': Failed to read the '${req}' property from 'TouchInit': Required member is undefined.`,
+          );
         }
       }
       const own: Record<string, unknown> = { identifier: Number(init.identifier) | 0, target: init.target };
@@ -7888,12 +8433,16 @@ adoptInterface("TouchList", TouchListProto, null);
     const touchList = (v: unknown, member: string): MirrorCollection<unknown> => {
       if (v == null) return staticList(TouchListProto, []);
       if (typeof (v as Iterable<unknown>)[Symbol.iterator] !== "function") {
-        throw new TypeError(`Failed to construct 'TouchEvent': Failed to read the '${member}' property from 'TouchEventInit': The provided value cannot be converted to a sequence.`);
+        throw new TypeError(
+          `Failed to construct 'TouchEvent': Failed to read the '${member}' property from 'TouchEventInit': The provided value cannot be converted to a sequence.`,
+        );
       }
       const items = [...(v as Iterable<unknown>)];
       for (const t of items) {
         if (!(TouchCtor && t instanceof (TouchCtor as unknown as new () => object))) {
-          throw new TypeError(`Failed to construct 'TouchEvent': Failed to read the '${member}' property from 'TouchEventInit': Failed to convert value to 'Touch'.`);
+          throw new TypeError(
+            `Failed to construct 'TouchEvent': Failed to read the '${member}' property from 'TouchEventInit': Failed to convert value to 'Touch'.`,
+          );
         }
       }
       return staticList(TouchListProto, items);
@@ -7949,9 +8498,14 @@ class DOMRectReadOnlyImpl {
   constructor(x: unknown = 0, y: unknown = 0, width: unknown = 0, height: unknown = 0) {
     const [nx, ny, nw, nh] = [x, y, width, height].map(Number);
     Object.assign(this, {
-      x: nx, y: ny, width: nw, height: nh,
-      top: Math.min(ny, ny + nh), left: Math.min(nx, nx + nw),
-      right: Math.max(nx, nx + nw), bottom: Math.max(ny, ny + nh),
+      x: nx,
+      y: ny,
+      width: nw,
+      height: nh,
+      top: Math.min(ny, ny + nh),
+      left: Math.min(nx, nx + nw),
+      right: Math.max(nx, nx + nw),
+      bottom: Math.max(ny, ny + nh),
     });
   }
   static fromRect(r: { x?: number; y?: number; width?: number; height?: number } = {}) {
@@ -8007,7 +8561,13 @@ function computedStyleFor(node: unknown) {
     return "";
   };
   return new Proxy(
-    { getPropertyValue: read, getPropertyPriority: () => "", get length() { return 0; } },
+    {
+      getPropertyValue: read,
+      getPropertyPriority: () => "",
+      get length() {
+        return 0;
+      },
+    },
     {
       get: (t, k) => (k in t ? t[k as keyof typeof t] : typeof k === "string" ? read(k) : undefined),
       has: () => true,
@@ -8055,21 +8615,22 @@ if (doc) {
       elementsUnder(appRoot, true, (el) => !el._ns && el.attrs.name === want),
     );
   });
-  forceDoc("getElementById", (id: unknown) =>
-    queryOne(`[id=${JSON.stringify(String(id))}]`, rootId()),
-  );
+  forceDoc("getElementById", (id: unknown) => queryOne(`[id=${JSON.stringify(String(id))}]`, rootId()));
   // A mirror element, loose until inserted. `ENGINE_TAGS` stay the engine's detached elements: `<a>`/`<input>` carry download and pick
   // idioms (see `wrapDetached`), and head-only tags are not boxes.
   // The engine's, not a previous runtime's wrapper (`original`): a reload would stack wrappers.
   const engineCreate = original(doc, "createElement", (doc as { createElement?: unknown }).createElement);
   const nativeCreate =
-    typeof engineCreate === "function"
-      ? (engineCreate as (tag: unknown, opts?: unknown) => unknown).bind(doc)
-      : null;
+    typeof engineCreate === "function" ? (engineCreate as (tag: unknown, opts?: unknown) => unknown).bind(doc) : null;
   forceDoc("createElement", (tag: unknown, opts?: unknown) => {
     const name = String(tag);
     if (!VALID_ELEMENT_NAME.test(name)) {
-      throw domError("createElement", "Document", "InvalidCharacterError", `The tag name provided ('${name}') is not a valid name.`);
+      throw domError(
+        "createElement",
+        "Document",
+        "InvalidCharacterError",
+        `The tag name provided ('${name}') is not a valid name.`,
+      );
     }
     const t = name.toLowerCase();
     if (nativeCreate && ENGINE_TAGS.has(t)) {
@@ -8085,7 +8646,12 @@ if (doc) {
     const name = String(qualifiedName);
     const local = name.slice(name.indexOf(":") + 1);
     if (!VALID_ELEMENT_NAME.test(local)) {
-      throw domError("createElementNS", "Document", "InvalidCharacterError", `The qualified name provided ('${name}') contains the invalid name-start character '${local[0] ?? ""}'.`);
+      throw domError(
+        "createElementNS",
+        "Document",
+        "InvalidCharacterError",
+        `The qualified name provided ('${name}') contains the invalid name-start character '${local[0] ?? ""}'.`,
+      );
     }
     if (ns === HTML_NS) return (doc.createElement as (t: string) => unknown)(local);
     const space = ns === SVG_NS ? "svg" : ns === MATHML_NS ? "mathml" : undefined;
@@ -8100,13 +8666,18 @@ if (doc) {
   defDoc("createAttribute", (name: unknown) => {
     const n = String(name);
     if (!VALID_ELEMENT_NAME.test(n)) {
-      throw domError("createAttribute", "Document", "InvalidCharacterError", `The localName provided ('${n}') contains an invalid character.`);
+      throw domError(
+        "createAttribute",
+        "Document",
+        "InvalidCharacterError",
+        `The localName provided ('${n}') contains an invalid character.`,
+      );
     }
     return new AttrImpl(n, "");
   });
-  defDoc("createDocumentFragment", () =>
-    new (globalThis as unknown as { DocumentFragment: new () => MirrorElement })
-      .DocumentFragment(),
+  defDoc(
+    "createDocumentFragment",
+    () => new (globalThis as unknown as { DocumentFragment: new () => MirrorElement }).DocumentFragment(),
   );
   defDoc("createTreeWalker", (root: MirrorNode | null, whatToShow = 0xffffffff, filter: TreeWalkerFilter = null) => {
     const flat: MirrorNode[] = [];
@@ -8193,7 +8764,9 @@ if (doc) {
         return pending.classes.join(" ");
       },
       set className(v: unknown) {
-        pending.classes = String(v ?? "").split(/\s+/).filter(Boolean);
+        pending.classes = String(v ?? "")
+          .split(/\s+/)
+          .filter(Boolean);
       },
       classList: {
         add(...names: string[]) {
@@ -8254,15 +8827,25 @@ if (doc) {
       removeChild(n: unknown) {
         const root = ensureDocumentRoot();
         const child = nodeArg(n, "removeChild", "Node", 1);
-        if (!child) { foreignNode(n as object, false, "removeChild"); return n; }
-        if (child.parentNode !== root) throw domError("removeChild", "Node", "NotFoundError", "The node to be removed is not a child of this node.");
+        if (!child) {
+          foreignNode(n as object, false, "removeChild");
+          return n;
+        }
+        if (child.parentNode !== root)
+          throw domError("removeChild", "Node", "NotFoundError", "The node to be removed is not a child of this node.");
         detachNode(child);
         return child;
       },
-      insertAdjacentElement: (where: unknown, n: unknown) => ensureDocumentRoot().insertAdjacentElement(String(where), n as MirrorElement),
+      insertAdjacentElement: (where: unknown, n: unknown) =>
+        ensureDocumentRoot().insertAdjacentElement(String(where), n as MirrorElement),
       addEventListener: () => {},
       removeEventListener: () => {},
-      getBoundingClientRect: () => ({ ...viewportRect(), toJSON() { return this; } }),
+      getBoundingClientRect: () => ({
+        ...viewportRect(),
+        toJSON() {
+          return this;
+        },
+      }),
       children: [],
       ownerDocument: doc,
       parentNode: null,
@@ -8315,8 +8898,7 @@ if (doc) {
           return prev;
         };
       }
-      if (typeof hs.getPropertyValue !== "function")
-        hs.getPropertyValue = (k: unknown) => hs[String(k)] ?? "";
+      if (typeof hs.getPropertyValue !== "function") hs.getPropertyValue = (k: unknown) => hs[String(k)] ?? "";
       if (!head.querySelector) head.querySelector = () => null;
       if (!head.querySelectorAll) head.querySelectorAll = () => [];
       if (!head.contains) head.contains = () => false;
@@ -8345,7 +8927,8 @@ if (typeof __vn_waapi_core === "object" && __vn_waapi_core !== null) {
     protos: svg && svg !== ElementProto ? [ElementProto, svg] : [ElementProto],
     nodeOf: (t) => (isMirrorEl(t) ? t.__vnId : 0),
     setStyle: (t, name, value) => (t as MirrorElement).style.setProperty(name, value),
-    contains: (root, node) => isMirrorNode(root) && isMirrorNode(node) && (root as MirrorElement).contains(node as MirrorNode),
+    contains: (root, node) =>
+      isMirrorNode(root) && isMirrorNode(node) && (root as MirrorElement).contains(node as MirrorNode),
     warn: warnCompat,
     now: () => (g.performance as { now(): number } | undefined)?.now() ?? Date.now(),
     frame: (cb) => {
@@ -8384,7 +8967,8 @@ installSelection({
   error: domError,
   defineGlobal,
   defineDoc: (name, value) => {
-    if (doc && vacant(doc, name)) Object.defineProperty(doc, name, { value: mark(value), configurable: true, writable: true });
+    if (doc && vacant(doc, name))
+      Object.defineProperty(doc, name, { value: mark(value), configurable: true, writable: true });
   },
 });
 for (const type of ["selectionchange", "selectstart"]) {
@@ -8468,7 +9052,10 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
     try {
       Object.defineProperty(globalThis, "__vn_set_stylesheet", { value: install, configurable: true, writable: true });
     } catch {
-      warnCompat("head-style:install", "the dev loader's stylesheet updates will drop <style> elements added to document.head");
+      warnCompat(
+        "head-style:install",
+        "the dev loader's stylesheet updates will drop <style> elements added to document.head",
+      );
     }
     const refresh = () => {
       domEpoch++; // `getElementsByTagName("style")` lists them
@@ -8527,7 +9114,9 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
       if (isStyle(n)) {
         if (!injected.some((s) => s.el === n)) track(n as Record<string, unknown>);
       } else if (isLink(n)) {
-        const rel = String((n as { rel?: unknown }).rel ?? (n as { getAttribute?(k: string): unknown }).getAttribute?.("rel") ?? "");
+        const rel = String(
+          (n as { rel?: unknown }).rel ?? (n as { getAttribute?(k: string): unknown }).getAttribute?.("rel") ?? "",
+        );
         if (/stylesheet/i.test(rel)) {
           warnCompat(
             "head-link",
@@ -8552,7 +9141,12 @@ let installStylesheet: (css: string) => void = (css) => __vn_set_stylesheet(css)
     // A previous runtime's getter (same-realm reload, see `REALM`) read ITS injected list, so it is replaced.
     if (vacant(head, "childNodes")) {
       Object.defineProperty(head, "childNodes", {
-        get: mark(() => staticList(NodeListProto, injected.map((s) => s.el))),
+        get: mark(() =>
+          staticList(
+            NodeListProto,
+            injected.map((s) => s.el),
+          ),
+        ),
         configurable: true,
       });
     }
@@ -8810,10 +9404,7 @@ const modifierGuards: Record<string, ((e: VnEvent, m: string[]) => unknown) | un
     ),
 };
 
-export function withModifiers(
-  fn: (event: VnEvent, ...args: unknown[]) => unknown,
-  modifiers: string[],
-) {
+export function withModifiers(fn: (event: VnEvent, ...args: unknown[]) => unknown, modifiers: string[]) {
   return (event: VnEvent, ...args: unknown[]) => {
     for (const m of modifiers) {
       const guard = modifierGuards[m];
@@ -8867,12 +9458,8 @@ const inertWindow = new Proxy(
   },
 );
 
-export const appWindow: VnAppWindow = windowHost
-  ? windowHost.appWindow
-  : (inertWindow as unknown as VnAppWindow);
-export const defineWindow: (options: Record<string, unknown>) => void = windowHost
-  ? windowHost.defineWindow
-  : missing;
+export const appWindow: VnAppWindow = windowHost ? windowHost.appWindow : (inertWindow as unknown as VnAppWindow);
+export const defineWindow: (options: Record<string, unknown>) => void = windowHost ? windowHost.defineWindow : missing;
 export const getCurrentWindow = (): VnAppWindow => appWindow;
 
 // `appPermissions` extends `navigator.permissions` with what the web lacks: requesting outside a
@@ -8940,9 +9527,7 @@ function createPermissions(host: PermissionsHost): AppPermissions {
         (status) => {
           statuses.set(name, status);
           status.addEventListener("change", () => {
-            target.dispatchEvent(
-              Object.assign(new Event("change"), { name, state: host.query(name) }),
-            );
+            target.dispatchEvent(Object.assign(new Event("change"), { name, state: host.query(name) }));
           });
         },
         () => {},
@@ -9009,8 +9594,7 @@ const inertPermissions = new Proxy(
       if (key === "names") return PERMISSION_NAMES.slice();
       if (key === "query") return () => "unsupported";
       if (key === "list")
-        return () =>
-          PERMISSION_NAMES.map((name) => ({ name, state: "unsupported", canRequest: false }));
+        return () => PERMISSION_NAMES.map((name) => ({ name, state: "unsupported", canRequest: false }));
       if (key === "request") return () => Promise.resolve("unsupported");
       return () => undefined;
     },
@@ -9105,10 +9689,7 @@ function createStorage(host: StorageHost): AppStorage {
     },
     /** Absolute path for a folder kind; creates nothing. Throws TypeError for an unknown kind or a `subfolder` that climbs out. */
     getUserFolder(kind: string, subfolder = "") {
-      return storageResult<{ path: string }>(
-        host.userFolder(String(kind), String(subfolder)),
-        "getUserFolder",
-      ).path;
+      return storageResult<{ path: string }>(host.userFolder(String(kind), String(subfolder)), "getUserFolder").path;
     },
     /**
      * Points `localStorage` at `path`, creating it; returns the canonical path.
@@ -9121,10 +9702,7 @@ function createStorage(host: StorageHost): AppStorage {
       // No `encrypted` means "keep the format", never "plaintext": a folder change must not silently decrypt.
       const said = options ? options.encrypted : undefined;
       const encrypted = said === undefined ? "keep" : said ? "true" : "false";
-      return storageResult<{ path: string }>(
-        host.setFolder(String(path), encrypted),
-        "setStorageFolder",
-      ).path;
+      return storageResult<{ path: string }>(host.setFolder(String(path), encrypted), "setStorageFolder").path;
     },
     info(): StorageInfo {
       return JSON.parse(host.info()) as StorageInfo;
@@ -9251,10 +9829,7 @@ function desktopError(f: DesktopFailure): AppDesktopError {
  * A pending call. `raw` ones (desktop.ts's) resolve `{payload, value}` and reject with the host's
  * failure object; the rest resolve the payload and reject with `desktopError`.
  */
-const desktopPending = new Map<
-  number,
-  { resolve: (v: unknown) => void; reject: (e: unknown) => void; raw: boolean }
->();
+const desktopPending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void; raw: boolean }>();
 const desktopEvents = new Map<string, (payload: Record<string, unknown>) => void>();
 
 if (desktopHost) {
@@ -9355,8 +9930,7 @@ function openContentUrl(url: string, via: string): void {
   if (!desktopHost) {
     warnCompat(
       "shell:absent",
-      `${via}: the desktop host is missing (vn_desktop::install did not run) — the link was not ` +
-        `opened.`,
+      `${via}: the desktop host is missing (vn_desktop::install did not run) — the link was not ` + `opened.`,
     );
     return;
   }
@@ -9438,7 +10012,11 @@ const inertShell = new Proxy(
       );
       return () =>
         Promise.reject(
-          desktopError({ name: "NotSupportedError", message: `appShell.${String(key)}: no desktop host`, code: "ENOSYS" }),
+          desktopError({
+            name: "NotSupportedError",
+            message: `appShell.${String(key)}: no desktop host`,
+            code: "ENOSYS",
+          }),
         );
     },
   },
@@ -9475,7 +10053,8 @@ function capturePermissionName(source: unknown): VnPermissionName {
 export const appCapture = {
   permission(source: CaptureSource): CapturePermission {
     const name = capturePermissionName(source);
-    if (typeof __vn_permissions_list !== "function") return { state: "unsupported", canRequest: false, deniedBySystem: false };
+    if (typeof __vn_permissions_list !== "function")
+      return { state: "unsupported", canRequest: false, deniedBySystem: false };
     const row = (JSON.parse(__vn_permissions_list()) as PermissionRow[]).find((r) => r.name === name);
     return {
       state: row ? row.state : "unsupported",
@@ -9492,14 +10071,23 @@ export const appCapture = {
     if (typeof __vn_permissions_hint !== "function") return "";
     return __vn_permissions_hint(name);
   },
-  async getSources(types: string[] = ["screen", "window"], options: Record<string, unknown> = {}): Promise<ScreenCaptureSource[]> {
+  async getSources(
+    types: string[] = ["screen", "window"],
+    options: Record<string, unknown> = {},
+  ): Promise<ScreenCaptureSource[]> {
     if (!Array.isArray(types) || types.some((t) => t !== "screen" && t !== "window")) {
       throw new TypeError("capture source types must be screen or window");
     }
     if (!desktopHost?.screenSources) {
-      throw desktopError({ name: "NotSupportedError", message: "this host has no desktop capture backend", code: "ENOSYS" });
+      throw desktopError({
+        name: "NotSupportedError",
+        message: "this host has no desktop capture backend",
+        code: "ENOSYS",
+      });
     }
-    const result: unknown = await desktopCall(desktopHost.screenSources(JSON.stringify(types), JSON.stringify(options)));
+    const result: unknown = await desktopCall(
+      desktopHost.screenSources(JSON.stringify(types), JSON.stringify(options)),
+    );
     if (!Array.isArray(result)) throw new TypeError("the desktop capture host returned an invalid source list");
     return result as ScreenCaptureSource[];
   },
@@ -9508,7 +10096,8 @@ export const appCapture = {
       throw new TypeError("capture source must be a screen or window ID from getSources()");
     }
     (globalThis as { __VN_SCREEN_SOURCE__?: { sourceId: string; includeAudio: boolean } }).__VN_SCREEN_SOURCE__ = {
-      sourceId, includeAudio: !!includeAudio,
+      sourceId,
+      includeAudio: !!includeAudio,
     };
     return true;
   },
@@ -9595,7 +10184,7 @@ class LaunchQueue {
       void this.#consumer!(params);
     } catch (e) {
       // A consumer that throws must not take the next launch with it.
-      console.error(`[vue-native] launchQueue consumer threw: ${e instanceof Error ? e.stack ?? e.message : e}`);
+      console.error(`[vue-native] launchQueue consumer threw: ${e instanceof Error ? (e.stack ?? e.message) : e}`);
     }
   }
 }
@@ -9733,10 +10322,7 @@ function notifyDevtools(enabled: boolean) {
       fn(enabled);
     } catch (e) {
       // One listener's throw must not stop the others or fail a successful `disable()`.
-      warnCompat(
-        "appDevtools.onChange",
-        `a change listener threw and was ignored: ${String(e)}`,
-      );
+      warnCompat("appDevtools.onChange", `a change listener threw and was ignored: ${String(e)}`);
     }
   }
 }
@@ -9795,8 +10381,7 @@ const inertDevtools: AppDevtools = {
   open: () => {
     warnCompat(
       "appDevtools",
-      "this host was built with `--features no-devtools` — `appDevtools.open()` has no " +
-        "inspector to open.",
+      "this host was built with `--features no-devtools` — `appDevtools.open()` has no " + "inspector to open.",
     );
     return false;
   },
@@ -9817,9 +10402,7 @@ const inertDevtools: AppDevtools = {
   },
 };
 
-export const appDevtools: AppDevtools = devtoolsHost
-  ? createDevtools(devtoolsHost)
-  : inertDevtools;
+export const appDevtools: AppDevtools = devtoolsHost ? createDevtools(devtoolsHost) : inertDevtools;
 
 // `<Transition>`/`<TransitionGroup>` live in runtime-dom, but libraries import them from "vue" at module scope, so
 // their absence breaks builds. Ported onto our transition engine.
@@ -9863,8 +10446,7 @@ function nextFrame(cb: () => void): void {
   else setTimeout(() => setTimeout(cb, 0), 0);
 }
 
-const toMs = (s: string): number =>
-  s === "auto" || !s ? 0 : Number(String(s).slice(0, -1).replace(",", ".")) * 1000;
+const toMs = (s: string): number => (s === "auto" || !s ? 0 : Number(String(s).slice(0, -1).replace(",", ".")) * 1000);
 function listTimeout(delays: string[], durations: string[]): number {
   while (delays.length < durations.length) delays = delays.concat(delays);
   return Math.max(0, ...durations.map((d: string, i: number) => toMs(d) + toMs(delays[i])));
@@ -9882,11 +10464,7 @@ function transitionTimeout(el: MirrorElement): number {
 let endId = 0;
 /// Ends a phase on the real `transitionend`, with the computed timeout as a safety net (the timer alone reports the
 /// declared duration even when the engine cut the transition short).
-function whenTransitionEnds(
-  el: MirrorElement,
-  explicitTimeout: number | null | undefined,
-  resolve: () => void,
-): void {
+function whenTransitionEnds(el: MirrorElement, explicitTimeout: number | null | undefined, resolve: () => void): void {
   const id = (el._endId = ++endId);
   let done = false;
   const resolveIfNotStale = () => {
@@ -10080,10 +10658,7 @@ export const TransitionGroup = /*@__PURE__*/ defineComponent({
       children = slots.default ? getTransitionRawChildren(slots.default()) : [];
       for (const child of children as VNode[]) {
         if (child.key != null) {
-          setTransitionHooks(
-            child,
-            resolveTransitionHooks(child, cssTransitionProps, state, instance!),
-          );
+          setTransitionHooks(child, resolveTransitionHooks(child, cssTransitionProps, state, instance!));
         }
       }
       return createVNode(tag as never, null, children as never);

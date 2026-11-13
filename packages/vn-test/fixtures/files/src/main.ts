@@ -7,7 +7,9 @@ type Handle = {
   queryPermission(d?: { mode?: string }): Promise<string>;
   isSameEntry(other: unknown): Promise<boolean>;
   getFile(): Promise<File>;
-  createWritable(o?: { keepExistingData?: boolean }): Promise<{ write(d: unknown): Promise<void>; close(): Promise<void> }>;
+  createWritable(o?: {
+    keepExistingData?: boolean;
+  }): Promise<{ write(d: unknown): Promise<void>; close(): Promise<void> }>;
   entries(): AsyncIterable<[string, Handle]>;
 };
 type FileReaderLike = {
@@ -92,11 +94,7 @@ async function openDir() {
 
 async function noGesture() {
   const out: string[] = [];
-  for (const call of [
-    () => g.showOpenFilePicker(),
-    () => g.showSaveFilePicker(),
-    () => g.showDirectoryPicker(),
-  ]) {
+  for (const call of [() => g.showOpenFilePicker(), () => g.showSaveFilePicker(), () => g.showDirectoryPicker()]) {
     try {
       await call();
       out.push("resolved");
@@ -126,26 +124,33 @@ createApp({
       shown.value = true;
     });
     return () =>
-      h("div", { id: "root", style: { padding: "12px", display: "flex", flexDirection: "column", gap: "8px", background: "#ffffff" } }, [
-        h("div", { id: "status" }, shown.value ? "ready" : "loading"),
-        h("input", {
-          id: "pick",
-          type: "file",
-          multiple: true,
-          accept: ".txt,text/plain",
-          onInput: () => events.push("input"),
-          onChange: (e: Event) => {
-            events.push("change");
-            void onChange(e);
-          },
-          onCancel: () => events.push("cancel"),
-        }),
-        h("label", { id: "label", for: "pick" }, "Choose text files"),
-        h("div", { style: { display: "flex", gap: "8px" } }, [
-          button("open", "Open", () => void openOne()),
-          button("dir", "Folder", () => void openDir()),
-          h("a", { id: "dl", href: csv, download: "report.csv" }, "Download"),
-        ]),
-      ]);
+      h(
+        "div",
+        {
+          id: "root",
+          style: { padding: "12px", display: "flex", flexDirection: "column", gap: "8px", background: "#ffffff" },
+        },
+        [
+          h("div", { id: "status" }, shown.value ? "ready" : "loading"),
+          h("input", {
+            id: "pick",
+            type: "file",
+            multiple: true,
+            accept: ".txt,text/plain",
+            onInput: () => events.push("input"),
+            onChange: (e: Event) => {
+              events.push("change");
+              void onChange(e);
+            },
+            onCancel: () => events.push("cancel"),
+          }),
+          h("label", { id: "label", for: "pick" }, "Choose text files"),
+          h("div", { style: { display: "flex", gap: "8px" } }, [
+            button("open", "Open", () => void openOne()),
+            button("dir", "Folder", () => void openDir()),
+            h("a", { id: "dl", href: csv, download: "report.csv" }, "Download"),
+          ]),
+        ],
+      );
   },
 }).mount();

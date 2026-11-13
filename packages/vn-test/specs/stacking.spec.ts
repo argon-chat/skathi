@@ -37,38 +37,54 @@ const clicks = async (): Promise<string[]> => {
 };
 
 describe("two `fixed z-50` overlays, the earlier with z 0 / 1 / 2 layers", () => {
-  test("the menu's items paint over the popover's glass zone", async () => {
-    const at = await painted();
-    bunExpect(lime(at(100, 200))).toBe(true);
-    bunExpect(lime(at(280, 300))).toBe(true);
-    bunExpect(blue(at(100, 80))).toBe(true);
-    for (const y of [176, 208, 240]) {
-      bunExpect(red(at(280, y))).toBe(true);
-      bunExpect(red(at(380, y))).toBe(true);
-    }
-  }, T);
+  test(
+    "the menu's items paint over the popover's glass zone",
+    async () => {
+      const at = await painted();
+      bunExpect(lime(at(100, 200))).toBe(true);
+      bunExpect(lime(at(280, 300))).toBe(true);
+      bunExpect(blue(at(100, 80))).toBe(true);
+      for (const y of [176, 208, 240]) {
+        bunExpect(red(at(280, y))).toBe(true);
+        bunExpect(red(at(380, y))).toBe(true);
+      }
+    },
+    T,
+  );
 
-  test("a click on an item reaches the menu, not the glass zone", async () => {
-    await app.locator("#item-3").click({ real: true });
-    await app.locator("#item-1").click({ real: true });
-    await app.send("mouse", { x: 100, y: 200, kind: "click" });
-    await sleep(300);
-    bunExpect(await clicks()).toEqual(["item-3", "item-1", "glass"]);
-  }, T);
+  test(
+    "a click on an item reaches the menu, not the glass zone",
+    async () => {
+      await app.locator("#item-3").click({ real: true });
+      await app.locator("#item-1").click({ real: true });
+      await app.send("mouse", { x: 100, y: 200, kind: "click" });
+      await sleep(300);
+      bunExpect(await clicks()).toEqual(["item-3", "item-1", "glass"]);
+    },
+    T,
+  );
 });
 
 describe("a negative z-index on an in-flow box", () => {
-  test("paints over its context's background and under its in-flow content", async () => {
-    const at = await painted();
-    bunExpect(lime(at(480, 85))).toBe(true);
-    bunExpect(red(at(480, 115))).toBe(true);
-    bunExpect(blue(at(480, 145))).toBe(true);
-  }, T);
+  test(
+    "paints over its context's background and under its in-flow content",
+    async () => {
+      const at = await painted();
+      bunExpect(lime(at(480, 85))).toBe(true);
+      bunExpect(red(at(480, 115))).toBe(true);
+      bunExpect(blue(at(480, 145))).toBe(true);
+    },
+    T,
+  );
 });
 
 describe("`opacity < 1` at z auto", () => {
-  test("keeps its z-100 box inside it, under a later z-10 sibling", async () => {
-    const at = await painted();
-    bunExpect(lime(at(450, 230))).toBe(true);
-  }, T);
+  test(
+    "keeps its z-100 box inside it, under a later z-10 sibling",
+    async () => {
+      const at = await painted();
+      bunExpect(lime(at(450, 230))).toBe(true);
+    },
+    T,
+  );
 });

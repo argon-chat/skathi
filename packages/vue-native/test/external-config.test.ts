@@ -13,10 +13,23 @@ mkdirSync(join(app, "assets"));
 mkdirSync(join(app, "public"));
 mkdirSync(join(root, "build"));
 writeFileSync(join(app, "src", "main.ts"), "globalThis.__externalConfigProbe = __EXTERNAL_CONFIG_VALUE__; ");
-writeFileSync(join(app, "vn.config.json"), JSON.stringify({ name: "tracked-config", version: "1.0.0", window: { title: "tracked-title" } }));
+writeFileSync(
+  join(app, "vn.config.json"),
+  JSON.stringify({ name: "tracked-config", version: "1.0.0", window: { title: "tracked-title" } }),
+);
 writeFileSync(join(app, "assets", "probe.txt"), "asset from app root");
 writeFileSync(join(app, "public", "public.txt"), "public from app root");
-writeFileSync(external, JSON.stringify({ name: "external-config", version: "2.0.0", assets: ["assets"], publicDir: "public", define: { __EXTERNAL_CONFIG_VALUE__: '"override-value"' }, window: { title: "external-title" } }));
+writeFileSync(
+  external,
+  JSON.stringify({
+    name: "external-config",
+    version: "2.0.0",
+    assets: ["assets"],
+    publicDir: "public",
+    define: { __EXTERNAL_CONFIG_VALUE__: '"override-value"' },
+    window: { title: "external-title" },
+  }),
+);
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 test("an external config replaces metadata while entry and relative assets retain the target root", () => {
@@ -35,12 +48,16 @@ test("an external config replaces metadata while entry and relative assets retai
 test("vn build propagates external window and define settings into the actual payload", () => {
   const out = join(root, "out");
   const cli = resolve(import.meta.dir, "../cli/vn.ts");
-  const result = Bun.spawnSync([process.execPath, cli, "build", app, "--config", external, "--out", out, "--payload-only", "--json"], { stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(
+    [process.execPath, cli, "build", app, "--config", external, "--out", out, "--payload-only", "--json"],
+    { stdout: "pipe", stderr: "pipe" },
+  );
   expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
   const summary = JSON.parse(new TextDecoder().decode(result.stdout).trim().split("\n").pop()!);
   expect(summary.name).toBe("external-config");
   const payload = readVnpk(new Uint8Array(readFileSync(summary.vnpk)));
-  const text = (name: string) => new TextDecoder().decode(payload.bytes(payload.entries.find((entry) => entry.name === name)!));
+  const text = (name: string) =>
+    new TextDecoder().decode(payload.bytes(payload.entries.find((entry) => entry.name === name)!));
   expect(JSON.parse(text(NAMES.WINDOW)).title).toBe("external-title");
   expect(text(NAMES.SCRIPT)).toContain("override-value");
   expect(payload.entries.some((entry) => entry.name === "assets/probe.txt")).toBe(true);

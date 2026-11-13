@@ -122,7 +122,9 @@ export const appHost: AppHost = {
     try {
       json = JSON.stringify(args);
     } catch (e) {
-      return Promise.reject(new TypeError(`appHost.call(${JSON.stringify(name)}): the arguments are not JSON: ${String(e)}`));
+      return Promise.reject(
+        new TypeError(`appHost.call(${JSON.stringify(name)}): the arguments are not JSON: ${String(e)}`),
+      );
     }
     const token = host.call(String(name), json);
     if (token === 0) {

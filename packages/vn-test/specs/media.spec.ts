@@ -26,15 +26,17 @@ async function inPage(body: string): Promise<unknown> {
   throw new Error("the page body never settled");
 }
 
-test("the classes are there, tagged as a browser tags them", async () => {
-  const got = await inPage(
-    "return ['MediaStream', 'MediaStreamTrack', 'MediaStreamAudioSourceNode', 'MediaStreamAudioDestinationNode']" +
-      ".map(n => Object.prototype.toString.call(globalThis[n].prototype)).join();",
-  );
-  expect(got).toEqual({
-    ok: "[object MediaStream],[object MediaStreamTrack],[object MediaStreamAudioSourceNode],[object MediaStreamAudioDestinationNode]",
-  });
-  const nodes = await inPage(`
+test(
+  "the classes are there, tagged as a browser tags them",
+  async () => {
+    const got = await inPage(
+      "return ['MediaStream', 'MediaStreamTrack', 'MediaStreamAudioSourceNode', 'MediaStreamAudioDestinationNode']" +
+        ".map(n => Object.prototype.toString.call(globalThis[n].prototype)).join();",
+    );
+    expect(got).toEqual({
+      ok: "[object MediaStream],[object MediaStreamTrack],[object MediaStreamAudioSourceNode],[object MediaStreamAudioDestinationNode]",
+    });
+    const nodes = await inPage(`
     const ctx = new AudioContext();
     const dest = ctx.createMediaStreamDestination();
     const tags = [dest, ctx.createMediaStreamSource(dest.stream), ctx.createGain(), ctx.destination]
@@ -42,27 +44,35 @@ test("the classes are there, tagged as a browser tags them", async () => {
     await ctx.close();
     return tags;
   `);
-  expect(nodes).toEqual({
-    ok: "[object MediaStreamAudioDestinationNode],[object MediaStreamAudioSourceNode],[object GainNode],[object AudioDestinationNode]",
-  });
-}, T);
+    expect(nodes).toEqual({
+      ok: "[object MediaStreamAudioDestinationNode],[object MediaStreamAudioSourceNode],[object GainNode],[object AudioDestinationNode]",
+    });
+  },
+  T,
+);
 
-test("getUserMedia refuses with NotAllowedError, and no input is named", async () => {
-  const refused = await inPage("await navigator.mediaDevices.getUserMedia({ audio: true }); return 'opened';");
-  expect(String((refused as { err: string }).err)).toContain("NotAllowedError");
-  const inputs = await inPage(
-    "return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput')" +
-      ".map(d => [d.deviceId, d.label, d instanceof InputDeviceInfo, JSON.stringify(d.getCapabilities())].join('|'));",
-  );
-  // At most one anonymous entry (a microphone exists, unnamed): never a device the page could
-  // offer and then fail to open.
-  const list = (inputs as { ok: string[] }).ok;
-  expect(list.length).toBeLessThanOrEqual(1);
-  for (const row of list) expect(row).toBe("||true|{}");
-}, T);
+test(
+  "getUserMedia refuses with NotAllowedError, and no input is named",
+  async () => {
+    const refused = await inPage("await navigator.mediaDevices.getUserMedia({ audio: true }); return 'opened';");
+    expect(String((refused as { err: string }).err)).toContain("NotAllowedError");
+    const inputs = await inPage(
+      "return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput')" +
+        ".map(d => [d.deviceId, d.label, d instanceof InputDeviceInfo, JSON.stringify(d.getCapabilities())].join('|'));",
+    );
+    // At most one anonymous entry (a microphone exists, unnamed): never a device the page could
+    // offer and then fail to open.
+    const list = (inputs as { ok: string[] }).ok;
+    expect(list.length).toBeLessThanOrEqual(1);
+    for (const row of list) expect(row).toBe("||true|{}");
+  },
+  T,
+);
 
-test("a destination node's track plays into a source node in the same graph", async () => {
-  const got = await inPage(`
+test(
+  "a destination node's track plays into a source node in the same graph",
+  async () => {
+    const got = await inPage(`
     const ctx = globalThis.__mctx = new AudioContext();
     const dest = ctx.createMediaStreamDestination();
     const osc = ctx.createOscillator();
@@ -80,16 +90,20 @@ test("a destination node's track plays into a source node in the same graph", as
     const moved = ctx.currentTime > 0;
     return { kind: track.kind, state: track.readyState, ports: [dest.numberOfInputs, dest.numberOfOutputs, src.numberOfInputs, src.numberOfOutputs], moved, heard: !moved || rms > 0.05, id: __rjs_mediaTrackId(track) > 0 };
   `);
-  console.log(`[media] ${JSON.stringify(got)}`);
-  expect(got).toEqual({
-    ok: { kind: "audio", state: "live", ports: [1, 0, 0, 1], moved: expect.any(Boolean), heard: true, id: true },
-  });
-}, T);
+    console.log(`[media] ${JSON.stringify(got)}`);
+    expect(got).toEqual({
+      ok: { kind: "audio", state: "live", ports: [1, 0, 0, 1], moved: expect.any(Boolean), heard: true, id: true },
+    });
+  },
+  T,
+);
 
 // The audio-atlas case (Argon's tone store, @argon/soundfx createAudioAtlas): `start(when, offset,
 // duration)` on a buffer holding many sounds must play the one slice.
-test("a sprite plays only its slice of the buffer: onended after its duration", async () => {
-  const got = await inPage(`
+test(
+  "a sprite plays only its slice of the buffer: onended after its duration",
+  async () => {
+    const got = await inPage(`
     const ctx = new AudioContext();
     const mute = ctx.createGain(); mute.gain.value = 0; mute.connect(ctx.destination);
     const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate); // 1 s
@@ -108,15 +122,19 @@ test("a sprite plays only its slice of the buffer: onended after its duration", 
     const loop = (() => { const s = new AudioContext().createBufferSource(); s.loopStart = 0.25; s.loopEnd = 0.5; return [s.loopStart, s.loopEnd]; })();
     return { moved, why, inTime: !moved || took < 0.3, loop };
   `);
-  console.log(`[media] sprite ${JSON.stringify(got)}`);
-  const r = (got as { ok: { moved: boolean; why: string } }).ok;
-  // With no output device the clock does not run and nothing ends; the slice itself is pinned by
-  // redjs's offline-graph tests.
-  if (r.moved) expect(got).toEqual({ ok: { moved: true, why: "ended", inTime: true, loop: [0.25, 0.5] } });
-}, T);
+    console.log(`[media] sprite ${JSON.stringify(got)}`);
+    const r = (got as { ok: { moved: boolean; why: string } }).ok;
+    // With no output device the clock does not run and nothing ends; the slice itself is pinned by
+    // redjs's offline-graph tests.
+    if (r.moved) expect(got).toEqual({ ok: { moved: true, why: "ended", inTime: true, loop: [0.25, 0.5] } });
+  },
+  T,
+);
 
-test("a fast dialpad: no full-scale burst, and no tone cut short by a collection", async () => {
-  await app.eval(`
+test(
+  "a fast dialpad: no full-scale burst, and no tone cut short by a collection",
+  async () => {
+    await app.eval(`
     globalThis.__dial = undefined;
     (async () => {
       const ctx = new AudioContext();
@@ -183,29 +201,35 @@ test("a fast dialpad: no full-scale burst, and no tone cut short by a collection
     })().then(v => { globalThis.__dial = JSON.stringify({ ok: v }); },
               e => { globalThis.__dial = JSON.stringify({ err: String(e && e.message) }); });
     'started'`);
-  let raw = "";
-  let collections = 0;
-  const until = Date.now() + 20_000;
-  while (!raw && Date.now() < until) {
-    await app.send("mem", { gc: true });
-    collections++;
-    await Bun.sleep(60);
-    raw = String((await app.eval("globalThis.__dial ?? ''")) ?? "");
-  }
-  const got = JSON.parse(raw || "{}");
-  console.log(`[media] dialpad ${JSON.stringify(got)}, ${collections} forced collections`);
-  const r = (got as { ok: { moved: boolean; presses: number; peak: number; loud: number; silent: number } }).ok;
-  expect(r.presses).toBe(60);
-  // With no output device the clock does not run and nothing plays; the envelope and the node
-  // lifetimes are then pinned by redjs's own tests.
-  if (r.moved) {
-    expect(r.peak).toBeGreaterThan(0.05);
-    expect(r.peak).toBeLessThan(0.6);
-    expect(r.loud).toBe(0);
-    expect(r.silent).toBe(0);
-  }
-}, T);
+    let raw = "";
+    let collections = 0;
+    const until = Date.now() + 20_000;
+    while (!raw && Date.now() < until) {
+      await app.send("mem", { gc: true });
+      collections++;
+      await Bun.sleep(60);
+      raw = String((await app.eval("globalThis.__dial ?? ''")) ?? "");
+    }
+    const got = JSON.parse(raw || "{}");
+    console.log(`[media] dialpad ${JSON.stringify(got)}, ${collections} forced collections`);
+    const r = (got as { ok: { moved: boolean; presses: number; peak: number; loud: number; silent: number } }).ok;
+    expect(r.presses).toBe(60);
+    // With no output device the clock does not run and nothing plays; the envelope and the node
+    // lifetimes are then pinned by redjs's own tests.
+    if (r.moved) {
+      expect(r.peak).toBeGreaterThan(0.05);
+      expect(r.peak).toBeLessThan(0.6);
+      expect(r.loud).toBe(0);
+      expect(r.silent).toBe(0);
+    }
+  },
+  T,
+);
 
-test("the app logged nothing broken", async () => {
-  await app.expectNoErrors();
-}, T);
+test(
+  "the app logged nothing broken",
+  async () => {
+    await app.expectNoErrors();
+  },
+  T,
+);

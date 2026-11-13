@@ -141,7 +141,11 @@ describe("<a href>: activation", () => {
   test("a failed open is a console warning, not an exception", async () => {
     const { rt, a, click } = linkWorld("mailto:x@example.com");
     click(a);
-    rt.host.desktop.settle(1, false, { name: "NotFoundError", message: "no application is associated", code: "ENOASSOC" });
+    rt.host.desktop.settle(1, false, {
+      name: "NotFoundError",
+      message: "no application is associated",
+      code: "ENOASSOC",
+    });
     await Promise.resolve();
     await Promise.resolve();
     expect(rt.host.logs.some((l: string) => l.includes("could not open") && l.includes("no application"))).toBe(true);
@@ -268,7 +272,7 @@ describe("appShell", () => {
 
   test("a synchronous refusal rejects at once; a TypeError stays a TypeError", async () => {
     const { rt } = linkWorld(null);
-    rt.host.desktop.refuse = { error: "openPath: \"a.txt\" is not an absolute path", name: "TypeError" };
+    rt.host.desktop.refuse = { error: 'openPath: "a.txt" is not an absolute path', name: "TypeError" };
     const e = await rt.appShell.openPath("a.txt").catch((x: unknown) => x);
     expect(e).toBeInstanceOf(TypeError);
     rt.host.desktop.refuse = { error: "it would run it", name: "NotAllowedError", code: "EEXECUTABLE" };

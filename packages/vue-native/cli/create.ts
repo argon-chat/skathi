@@ -33,10 +33,14 @@ export function create(target: string, options: { name?: string } = {}): string[
   const dir = resolve(target);
   const name = (options.name ?? basename(dir)).trim();
   if (!name) throw new Error("vn create: the app needs a name");
-  const productName = name.replace(/(^|[-_.\s])(\w)/g, (_, sep: string, c: string) => (sep ? " " : "") + c.toUpperCase()).trim();
+  const productName = name
+    .replace(/(^|[-_.\s])(\w)/g, (_, sep: string, c: string) => (sep ? " " : "") + c.toUpperCase())
+    .trim();
   const exeName = sanitizeExeName(productName) || "App";
   const runtime = relative(dir, join(PKG_DIR, "src")).split(sep).join("/");
-  const apps = relative(dir, join(PKG_DIR, "..", "..", "apps")).split(sep).join("/");
+  const apps = relative(dir, join(PKG_DIR, "..", "..", "apps"))
+    .split(sep)
+    .join("/");
 
   const files: Record<string, string | Uint8Array> = {
     "vn.config.json":
@@ -135,7 +139,8 @@ onMounted(async () => {
 
   const written: string[] = [];
   for (const rel of Object.keys(files)) {
-    if (existsSync(join(dir, rel))) throw new Error(`vn create: ${join(dir, rel)} already exists — nothing was written`);
+    if (existsSync(join(dir, rel)))
+      throw new Error(`vn create: ${join(dir, rel)} already exists — nothing was written`);
   }
   for (const [rel, body] of Object.entries(files)) {
     const path = join(dir, rel);
@@ -143,6 +148,8 @@ onMounted(async () => {
     writeFileSync(path, body);
     written.push(path);
   }
-  console.log(`[vn] created ${name} in ${dir}\n  next: bun ${relative(process.cwd(), join(PKG_DIR, "cli", "vn.ts"))} build ${relative(process.cwd(), dir) || "."}`);
+  console.log(
+    `[vn] created ${name} in ${dir}\n  next: bun ${relative(process.cwd(), join(PKG_DIR, "cli", "vn.ts"))} build ${relative(process.cwd(), dir) || "."}`,
+  );
   return written;
 }

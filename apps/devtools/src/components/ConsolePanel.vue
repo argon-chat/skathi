@@ -117,9 +117,17 @@ function onLineDown(line: ConsoleLine, event: VnMouseEvent): void {
   const text = selectedText();
   const items: MenuItem[] = [];
   if (text) items.push({ label: "Copy", hint: "Ctrl+C", run: () => void copyText(text, "the selection") });
-  items.push({ label: "Copy message", hint: !text && picked.length === 1 ? "Ctrl+C" : undefined, run: () => copyLine(line) });
+  items.push({
+    label: "Copy message",
+    hint: !text && picked.length === 1 ? "Ctrl+C" : undefined,
+    run: () => copyLine(line),
+  });
   if (picked.length > 1) {
-    items.push({ label: `Copy selected (${picked.length})`, hint: text ? undefined : "Ctrl+C", run: () => copyLines(picked) });
+    items.push({
+      label: `Copy selected (${picked.length})`,
+      hint: text ? undefined : "Ctrl+C",
+      run: () => copyLines(picked),
+    });
   }
   items.push({ label: `Copy all visible (${visible.length})`, run: () => copyLines(visible) });
   items.push({
@@ -376,17 +384,11 @@ function glyph(kind: string): string {
             class="text"
             :class="{ wrap: expanded[uidOf(row.line)] }"
           >
-            <span
-              v-for="(seg, i) in segments(row.line)"
-              :key="i"
-              class="seg"
-              :style="runStyle(seg.css)"
-              >{{ seg.text }}</span
-            >
+            <span v-for="(seg, i) in segments(row.line)" :key="i" class="seg" :style="runStyle(seg.css)">{{
+              seg.text
+            }}</span>
           </span>
-          <span v-else class="text plain" :class="{ wrap: expanded[uidOf(row.line)] }">{{
-            row.line.text
-          }}</span>
+          <span v-else class="text plain" :class="{ wrap: expanded[uidOf(row.line)] }">{{ row.line.text }}</span>
           <span class="copy" title="Copy message" @click.stop="copyLine(row.line)">⧉</span>
         </div>
       </div>
@@ -396,8 +398,8 @@ function glyph(kind: string): string {
         :style="{ top: list.thumb.top + 'px', height: list.thumb.height + 'px' }"
       ></div>
       <div v-if="!lines.length" class="empty">
-        Nothing in the ring yet. <b>console.log</b>, uncaught errors, CSS advisories and the host's
-        own `[window]` / `[storage]` lines all land here, live.
+        Nothing in the ring yet. <b>console.log</b>, uncaught errors, CSS advisories and the host's own `[window]` /
+        `[storage]` lines all land here, live.
       </div>
     </div>
 
@@ -407,15 +409,13 @@ function glyph(kind: string): string {
         ref="promptBox"
         v-model="draft"
         class="entry mono"
-        placeholder="evaluate in the target — document.title, or __VN__.require(&quot;<module id>&quot;)"
+        placeholder='evaluate in the target — document.title, or __VN__.require("<module id>")'
         @keydown="onPromptKey"
         @focus="ui.typing = true"
         @blur="ui.typing = false"
       />
       <div v-if="hint.length" class="hints mono">
-        <span v-for="(h, i) in hint" :key="h" class="hint" :class="{ first: i === 0 }" @click="accept(h)">{{
-          h
-        }}</span>
+        <span v-for="(h, i) in hint" :key="h" class="hint" :class="{ first: i === 0 }" @click="accept(h)">{{ h }}</span>
       </div>
     </div>
   </section>

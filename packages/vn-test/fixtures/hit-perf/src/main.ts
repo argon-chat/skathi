@@ -24,13 +24,17 @@ const App = {
         "div",
         { style: { display: "flex", flexWrap: "wrap", gap: "2px", overflow: "hidden", flexGrow: "1" } },
         cards.map((i) =>
-          h("div", { key: i, class: "card", style: { width: "56px", height: "28px", background: "#eef", display: "flex" } }, [
-            h("div", { style: { width: "8px", background: i % 2 ? "#cdf" : "#fdc" } }),
-            h("div", { style: { display: "flex", flexDirection: "column" } }, [
-              h("span", { style: { fontSize: "9px" } }, `#${i}`),
-              h("span", { style: { fontSize: "9px", color: "#666" } }, "card"),
-            ]),
-          ]),
+          h(
+            "div",
+            { key: i, class: "card", style: { width: "56px", height: "28px", background: "#eef", display: "flex" } },
+            [
+              h("div", { style: { width: "8px", background: i % 2 ? "#cdf" : "#fdc" } }),
+              h("div", { style: { display: "flex", flexDirection: "column" } }, [
+                h("span", { style: { fontSize: "9px" } }, `#${i}`),
+                h("span", { style: { fontSize: "9px", color: "#666" } }, "card"),
+              ]),
+            ],
+          ),
         ),
       ),
     ]),

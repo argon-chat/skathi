@@ -3,7 +3,15 @@ import { createRuntime } from "./runtime-harness";
 
 test("desktop source list crosses the asynchronous bridge as an array", async () => {
   const rt = createRuntime();
-  const sources = [{ id: "screen:123", name: "Display", thumbnailDataUrl: "data:image/png;base64,x", appIconDataUrl: null, displayId: "123" }];
+  const sources = [
+    {
+      id: "screen:123",
+      name: "Display",
+      thumbnailDataUrl: "data:image/png;base64,x",
+      appIconDataUrl: null,
+      displayId: "123",
+    },
+  ];
   const pending = rt.appCapture.getSources(["screen"], { withIcons: false });
   expect(rt.host.desktop.calls.at(-1)).toEqual({ op: "screenSources", args: [["screen"], { withIcons: false }] });
   rt.host.desktop.settle(1, true, sources);
@@ -14,7 +22,9 @@ test("invalid source types and missing native capture reject explicitly", async 
   const rt = createRuntime();
   await expect(rt.appCapture.getSources(["tab"])).rejects.toThrow(TypeError);
   expect(rt.host.desktop.calls).toEqual([]);
-  await expect(createRuntime({ desktop: false }).appCapture.getSources()).rejects.toMatchObject({ name: "NotSupportedError" });
+  await expect(createRuntime({ desktop: false }).appCapture.getSources()).rejects.toMatchObject({
+    name: "NotSupportedError",
+  });
   const pending = rt.appCapture.getSources();
   rt.host.desktop.settle(1, true, {});
   await expect(pending).rejects.toThrow("invalid source list");
@@ -36,7 +46,11 @@ test("a capture source's permission is read without asking, with whose denial it
   rt.host.permissions.bySystem.add("camera");
   expect(rt.appCapture.permission("microphone")).toEqual({ state: "denied", canRequest: true, deniedBySystem: false });
   expect(rt.appCapture.permission("camera")).toEqual({ state: "denied", canRequest: true, deniedBySystem: true });
-  expect(rt.appCapture.permission("screen_share")).toEqual({ state: "granted", canRequest: false, deniedBySystem: false });
+  expect(rt.appCapture.permission("screen_share")).toEqual({
+    state: "granted",
+    canRequest: false,
+    deniedBySystem: false,
+  });
   expect(rt.host.permissions.requests).toEqual([]);
   expect(() => rt.appCapture.permission("tab" as never)).toThrow(TypeError);
 });
@@ -70,7 +84,9 @@ test("video srcObject and Vue binding retain the stream and route native frames"
   el.srcObject = null;
   expect(el.getAttribute("src")).toBe(null);
   expect(el.srcObject).toBe(null);
-  expect(() => { el.srcObject = { getVideoTracks: () => [] }; }).toThrow(TypeError);
+  expect(() => {
+    el.srcObject = { getVideoTracks: () => [] };
+  }).toThrow(TypeError);
 });
 
 test("audio srcObject keeps an audio-only stream without playing it", () => {

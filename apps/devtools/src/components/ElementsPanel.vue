@@ -233,12 +233,9 @@ function scopeOf(row: Row): string {
           :style="{ paddingLeft: 6 + row.depth * 11 + 'px' }"
           @click="rowClick(row)"
         >
-          <span
-            class="twisty"
-            :class="{ open: row.open, leaf: !row.children }"
-            @click="twistyClick(row, $event)"
-            >{{ row.children ? (row.open ? "▾" : "▸") : "" }}</span
-          >
+          <span class="twisty" :class="{ open: row.open, leaf: !row.children }" @click="twistyClick(row, $event)">{{
+            row.children ? (row.open ? "▾" : "▸") : ""
+          }}</span>
           <template v-if="rowKind(row.node) === 'text'">
             <span class="t-faint">"</span><span class="text">{{ textOf(row) }}</span
             ><span class="t-faint">"</span>
@@ -270,12 +267,9 @@ function scopeOf(row: Row): string {
       <template v-if="crumbs.length">
         <template v-for="(node, i) in crumbs" :key="node.id">
           <span v-if="i" class="sep">›</span>
-          <span
-            class="crumb"
-            :class="{ on: node.id === state.selected }"
-            @click="select(node.id)"
-            >{{ nodeLabel(node) }}</span
-          >
+          <span class="crumb" :class="{ on: node.id === state.selected }" @click="select(node.id)">{{
+            nodeLabel(node)
+          }}</span>
         </template>
       </template>
       <span v-else class="t-faint">no selection — click a row, or press ⌖ inspect</span>

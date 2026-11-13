@@ -35,7 +35,19 @@ function escapeIdent(cp: number): string {
 
 /** Keywords after which a `/` starts a regular expression. Not `of`: a minifier may name a variable `of`. */
 const BEFORE_EXPRESSION = new Set([
-  "return", "typeof", "instanceof", "in", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await",
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
   "extends",
 ]);
 const PAREN_STATEMENT = new Set(["if", "while", "for", "with"]);
@@ -142,7 +154,7 @@ export function asciiOnly(src: string): AsciiResult {
     if (c === 47 && src.charCodeAt(i + 1) === 42) {
       const end = src.indexOf("*/", i + 2);
       if (end < 0) return { code: src, escaped: 0, kept: 0, failed: "an unterminated /* comment" };
-      for (let k = i + 2; k < end; ) {
+      for (let k = i + 2; k < end;) {
         const d = src.charCodeAt(k);
         if (d > 0x7f) {
           const [cp, len] = cpAt(k);

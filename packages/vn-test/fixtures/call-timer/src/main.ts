@@ -37,14 +37,35 @@ const Digit = {
         "div",
         {
           class: "cell",
-          style: { height: `${props.height}px`, position: "relative", width: "1ch", overflow: "hidden", fontVariantNumeric: "tabular-nums" },
+          style: {
+            height: `${props.height}px`,
+            position: "relative",
+            width: "1ch",
+            overflow: "hidden",
+            fontVariantNumeric: "tabular-nums",
+          },
         },
         [
           h(
             "div",
-            { ref: strip, class: "strip", style: { position: "absolute", top: 0, left: 0, right: 0, transform: offset(REST + mod10(at())) } },
+            {
+              ref: strip,
+              class: "strip",
+              style: { position: "absolute", top: 0, left: 0, right: 0, transform: offset(REST + mod10(at())) },
+            },
             CELLS.map((n) =>
-              h("span", { style: { height: `${props.height}px`, display: "flex", alignItems: "center", justifyContent: "center" } }, String(n)),
+              h(
+                "span",
+                {
+                  style: {
+                    height: `${props.height}px`,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  },
+                },
+                String(n),
+              ),
             ),
           ),
         ],

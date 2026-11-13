@@ -129,12 +129,19 @@ test("the parts are the ones crates/vn-app/src/payload.rs names the host's varia
   expect(names).toEqual([...OPTIONAL]);
 });
 
-
 test("standard packaging refuses an old cached host without WebGPU", async () => {
   const { checkHost, CLI_VERSION } = await import("../cli/host");
-  const info = { mode: "prod" as const, vueNative: CLI_VERSION, crate: "0.1.0", variant: "standard",
-    devtools: true, features: ["prod", "audio", "clipboard", "storages", "indexeddb"],
-    jscPin: "test", payloadFormat: 1, profile: "release" };
+  const info = {
+    mode: "prod" as const,
+    vueNative: CLI_VERSION,
+    crate: "0.1.0",
+    variant: "standard",
+    devtools: true,
+    features: ["prod", "audio", "clipboard", "storages", "indexeddb"],
+    jscPin: "test",
+    payloadFormat: 1,
+    profile: "release",
+  };
   expect(checkHost("cached.exe", info, null, false)).toMatch(/lacks native WebGPU/);
   expect(checkHost("cached.exe", info, "standard", false)).toMatch(/lacks native WebGPU/);
   expect(checkHost("current.exe", { ...info, features: [...info.features, "webgpu"] }, "standard", false)).toBeNull();

@@ -256,7 +256,9 @@ describe("beforeinput, input and the composition events", () => {
     const C = (rt.global as unknown as { CompositionEvent: new (t: string) => Event }).CompositionEvent;
     const seen: unknown[] = [];
     for (const t of ["compositionstart", "compositionupdate", "compositionend"])
-      outer.addEventListener(t, (e) => seen.push([e.type, (e as unknown as { data: string }).data, e instanceof C, e.bubbles]));
+      outer.addEventListener(t, (e) =>
+        seen.push([e.type, (e as unknown as { data: string }).data, e instanceof C, e.bubbles]),
+      );
     send(rt, el, "compositionstart", 0, "");
     send(rt, el, "compositionupdate", 0, "か");
     send(rt, el, "compositionend", 0, "火");
@@ -278,9 +280,14 @@ describe("beforeinput, input and the composition events", () => {
     send(rt, el, "input", 4, "k", 1, "ak");
     send(rt, el, "input", 4, "か", 1, "aか");
     expect(model).toEqual(["a"]);
-    const writes = () => rt.host.props.filter((p: { id: number; key: string }) => p.id === el.__vnId && p.key === "value").length;
+    const writes = () =>
+      rt.host.props.filter((p: { id: number; key: string }) => p.id === el.__vnId && p.key === "value").length;
     const before = writes();
-    rt.vModelText.beforeUpdate(el as never, { value: "a" }, { props: { "onUpdate:modelValue": (v: unknown) => model.push(v) } });
+    rt.vModelText.beforeUpdate(
+      el as never,
+      { value: "a" },
+      { props: { "onUpdate:modelValue": (v: unknown) => model.push(v) } },
+    );
     expect(writes()).toBe(before);
     send(rt, el, "compositionend", 0, "か");
     expect(model).toEqual(["a", "aか"]);
@@ -291,7 +298,9 @@ describe("beforeinput, input and the composition events", () => {
   test("InputEvent.prototype has a null dataTransfer and no target ranges, as a text field's has", () => {
     class EngineInputEvent extends Event {}
     const rt = createRuntime({ globals: { InputEvent: EngineInputEvent } });
-    const ie = new (rt.global as unknown as { InputEvent: typeof EngineInputEvent }).InputEvent("beforeinput") as unknown as {
+    const ie = new (rt.global as unknown as { InputEvent: typeof EngineInputEvent }).InputEvent(
+      "beforeinput",
+    ) as unknown as {
       dataTransfer: unknown;
       getTargetRanges(): unknown[];
     };
@@ -523,7 +532,9 @@ describe("pointercancel", () => {
 
 describe("<img> load and error", () => {
   const srcWrites = (rt: Rt, id: number) =>
-    rt.host.props.filter((p: { id: number; key: string }) => p.id === id && p.key === "src").map((p: { value: unknown }) => p.value);
+    rt.host.props
+      .filter((p: { id: number; key: string }) => p.id === id && p.key === "src")
+      .map((p: { value: unknown }) => p.value);
 
   const newImg = (rt: Rt) => rt.nodeOps.createElement("img") as unknown as El;
 

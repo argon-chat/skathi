@@ -123,7 +123,10 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
         this.settle(record.status, record.error);
         return;
       }
-      if (arguments.length < 2) throw new TypeError(`Failed to construct 'FontFace': 2 arguments required, but only ${arguments.length} present.`);
+      if (arguments.length < 2)
+        throw new TypeError(
+          `Failed to construct 'FontFace': 2 arguments required, but only ${arguments.length} present.`,
+        );
       this.family = String(family);
       const d = descriptors ?? {};
       for (const k of Object.keys(DEFAULTS) as (keyof Descriptors)[]) {
@@ -145,7 +148,9 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
       } else {
         src = String(source);
       }
-      const packed = PACKED.map((k) => (k === "unicodeRange" && this[k] === DEFAULTS.unicodeRange ? "" : this[k].replace(/\|/g, ""))).join("|");
+      const packed = PACKED.map((k) =>
+        k === "unicodeRange" && this[k] === DEFAULTS.unicodeRange ? "" : this[k].replace(/\|/g, ""),
+      ).join("|");
       const made = host.__vn_font_create(this.family, src, packed, binary);
       if (typeof made === "string") {
         this.#fail("SyntaxError", made);
@@ -188,7 +193,9 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
         this.#dropBlob();
       } else if (status === "error" && this.#status !== "error") {
         this.#status = "error";
-        this.#reject(domError(message || `A network error occurred loading the font '${this.family}'.`, "NetworkError"));
+        this.#reject(
+          domError(message || `A network error occurred loading the font '${this.family}'.`, "NetworkError"),
+        );
         this.#dropBlob();
       }
     }
@@ -291,7 +298,10 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     if (loading && setStatus === "loaded") {
       setStatus = "loading";
       if (!resolveReady) freshReady();
-      fire("loading", members().filter((f) => f.status === "loading"));
+      fire(
+        "loading",
+        members().filter((f) => f.status === "loading"),
+      );
     } else if (!loading && setStatus === "loading") {
       setStatus = "loaded";
       const [ok, bad] = [loadedSince, failedSince];
@@ -326,8 +336,13 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
 
     add(face: unknown): this {
       const f = face as FontFaceImpl;
-      if (!(face instanceof FontFaceImpl)) throw new TypeError("Failed to execute 'add' on 'FontFaceSet': parameter 1 is not of type 'FontFace'.");
-      if (f.cssConnected) throw domError("Failed to execute 'add' on 'FontFaceSet': Cannot add a CSS-connected FontFace.", "InvalidModificationError");
+      if (!(face instanceof FontFaceImpl))
+        throw new TypeError("Failed to execute 'add' on 'FontFaceSet': parameter 1 is not of type 'FontFace'.");
+      if (f.cssConnected)
+        throw domError(
+          "Failed to execute 'add' on 'FontFaceSet': Cannot add a CSS-connected FontFace.",
+          "InvalidModificationError",
+        );
       if (!added.includes(f)) {
         added.push(f);
         if (f.hostId) host.__vn_font_set(f.hostId, true);
@@ -369,7 +384,9 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     }
     entries(): IterableIterator<[FontFaceImpl, FontFaceImpl]> {
       fresh();
-      return members().map((f) => [f, f] as [FontFaceImpl, FontFaceImpl])[Symbol.iterator]();
+      return members()
+        .map((f) => [f, f] as [FontFaceImpl, FontFaceImpl])
+        [Symbol.iterator]();
     }
     [Symbol.iterator](): IterableIterator<FontFaceImpl> {
       return this.values();
@@ -378,7 +395,11 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     #matching(method: string, font: unknown, text: unknown): FontFaceImpl[] {
       fresh();
       const ids = host.__vn_fonts_match(String(font), text === undefined ? " " : String(text));
-      if (ids == null) throw domError(`Failed to execute '${method}' on 'FontFaceSet': Could not resolve '${String(font)}' as a font.`, "SyntaxError");
+      if (ids == null)
+        throw domError(
+          `Failed to execute '${method}' on 'FontFaceSet': Could not resolve '${String(font)}' as a font.`,
+          "SyntaxError",
+        );
       return ids
         .split(",")
         .filter(Boolean)
@@ -387,7 +408,8 @@ export function installFonts(g: Record<string, unknown>, doc: object | null | un
     }
 
     check(font: unknown, text?: unknown): boolean {
-      if (arguments.length < 1) throw new TypeError("Failed to execute 'check' on 'FontFaceSet': 1 argument required, but only 0 present.");
+      if (arguments.length < 1)
+        throw new TypeError("Failed to execute 'check' on 'FontFaceSet': 1 argument required, but only 0 present.");
       return this.#matching("check", font, text).every((f) => f.status === "loaded");
     }
 

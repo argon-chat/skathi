@@ -40,26 +40,34 @@ async function alive() {
   expect(await app.eval("1 + 1")).toBeTruthy();
 }
 
-test("a real click opens the popover, which focuses and measures itself, and the host lives", async () => {
-  await app.locator("#member").click({ real: true });
-  const s = await opened(1);
-  expect(s.opened).toBe(1);
-  await alive();
-  expect(s.active).toEqual(["content"]);
-  const after = await state();
-  expect(after.focusLog).toEqual(["focus-member", "blur-member", "focus-content"]);
-  const { trigger, content } = s.measured[0]!;
-  expect(trigger[2]).toBe(160);
-  expect(trigger[3]).toBe(36);
-  expect(content[2]).toBe(200);
-  expect(content[3]).toBeGreaterThan(0);
-}, T);
+test(
+  "a real click opens the popover, which focuses and measures itself, and the host lives",
+  async () => {
+    await app.locator("#member").click({ real: true });
+    const s = await opened(1);
+    expect(s.opened).toBe(1);
+    await alive();
+    expect(s.active).toEqual(["content"]);
+    const after = await state();
+    expect(after.focusLog).toEqual(["focus-member", "blur-member", "focus-content"]);
+    const { trigger, content } = s.measured[0]!;
+    expect(trigger[2]).toBe(160);
+    expect(trigger[3]).toBe(36);
+    expect(content[2]).toBe(200);
+    expect(content[3]).toBeGreaterThan(0);
+  },
+  T,
+);
 
-test("closing and opening it again from real clicks", async () => {
-  await app.locator("#member").click({ real: true });
-  await app.locator("#member").click({ real: true });
-  const s = await opened(2);
-  expect(s.opened).toBe(2);
-  await alive();
-  expect(s.measured[1]!.trigger[2]).toBe(160);
-}, T);
+test(
+  "closing and opening it again from real clicks",
+  async () => {
+    await app.locator("#member").click({ real: true });
+    await app.locator("#member").click({ real: true });
+    const s = await opened(2);
+    expect(s.opened).toBe(2);
+    await alive();
+    expect(s.measured[1]!.trigger[2]).toBe(160);
+  },
+  T,
+);

@@ -54,7 +54,13 @@ createApp({
         box("x-pre-wrap", "pre-wrap", A.slice(0, 40)),
         box("x-shy", "normal", SHY),
         box("x-shy-none", "normal no-hyphens", SHY),
-        h("div", { id: "x-wbr", class: "box normal" }, ["supercali", h("wbr"), "fragilistic", h("wbr"), "expialidocious"]),
+        h("div", { id: "x-wbr", class: "box normal" }, [
+          "supercali",
+          h("wbr"),
+          "fragilistic",
+          h("wbr"),
+          "expialidocious",
+        ]),
         h("div", { class: "mc-row" }, [h("div", { id: "mc-break-word", class: "break-word" }, A.slice(0, 60))]),
         h("div", { class: "mc-row" }, [h("div", { id: "mc-anywhere", class: "anywhere" }, A.slice(0, 60))]),
       ]),
@@ -62,7 +68,9 @@ createApp({
         h("div", { class: "fc" }, [h("a", { id: "fc-a", class: "url", href: URL }, URL)]),
         h("div", { class: "fc" }, [h("div", { id: "fc-text", class: "text" }, ["see ", url("u-fc-text"), " ok"])]),
         h("div", { class: "fc" }, [
-          h("div", { id: "fc-bubble", class: "bubble" }, [h("div", { class: "text" }, ["see ", url("u-fc-bubble"), " ok"])]),
+          h("div", { id: "fc-bubble", class: "bubble" }, [
+            h("div", { class: "text" }, ["see ", url("u-fc-bubble"), " ok"]),
+          ]),
         ]),
       ]),
     ]),

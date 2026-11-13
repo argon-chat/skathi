@@ -191,7 +191,8 @@ function getContext(this: CanvasElement, type: unknown, options?: unknown): obje
 function toDataURL(this: CanvasElement, type?: unknown, quality?: unknown): string {
   const ty = type === undefined ? "image/png" : String(type);
   const selected = contexts.get(this);
-  if (selected?.kind === "webgpu" && selected.value) return gpuNatives()?.__rjs_webgpu_data_url(selected.value, ty, quality) ?? "data:,";
+  if (selected?.kind === "webgpu" && selected.value)
+    return gpuNatives()?.__rjs_webgpu_data_url(selected.value, ty, quality) ?? "data:,";
   return natives()?.__rjs_canvas_data_url(selected?.value ?? null, this.width, this.height, ty, quality) ?? "data:,";
 }
 
@@ -201,9 +202,10 @@ function toBlob(this: CanvasElement, callback: unknown, type?: unknown, quality?
   }
   const ty = type === undefined ? "image/png" : String(type);
   const selected = contexts.get(this);
-  const blob = selected?.kind === "webgpu" && selected.value
-    ? gpuNatives()?.__rjs_webgpu_blob(selected.value, ty, quality) ?? null
-    : natives()?.__rjs_canvas_blob(selected?.value ?? null, this.width, this.height, ty, quality) ?? null;
+  const blob =
+    selected?.kind === "webgpu" && selected.value
+      ? (gpuNatives()?.__rjs_webgpu_blob(selected.value, ty, quality) ?? null)
+      : (natives()?.__rjs_canvas_blob(selected?.value ?? null, this.width, this.height, ty, quality) ?? null);
   // HTML calls back on a later task, including a zero-size canvas's null result.
   setTimeout(() => (callback as (b: unknown) => void)(blob), 0);
 }

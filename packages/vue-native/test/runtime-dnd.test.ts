@@ -39,7 +39,8 @@ function world() {
   rt.patchProp(a, "draggable", null, true);
   const log: string[] = [];
   const events: DragEv[] = [];
-  const name = (n: N) => (n === a ? "a" : n === b ? "b" : n === c ? "c" : n === list ? "list" : n === label ? "label" : "?");
+  const name = (n: N) =>
+    n === a ? "a" : n === b ? "b" : n === c ? "c" : n === list ? "list" : n === label ? "label" : "?";
   for (const ev of DRAG_EVENTS) {
     rt.patchProp(list, `on${ev[0].toUpperCase()}${ev.slice(1)}`, null, (e: DragEv) => {
       log.push(`${e.type}@${name(e.target)}`);
@@ -61,7 +62,11 @@ describe("arming", () => {
   test("a draggable element arms the root's press and selectstart; a pending press arms its moves", () => {
     const { rt, label, press, move, release } = world();
     const root = rt.global.document.body as N;
-    const on = (code: number) => rt.flagsFor(code).filter((l) => l.id === root.__vnId).at(-1)?.on ?? false;
+    const on = (code: number) =>
+      rt
+        .flagsFor(code)
+        .filter((l) => l.id === root.__vnId)
+        .at(-1)?.on ?? false;
     expect(on(rt.EV_CODES.mousedown)).toBe(true);
     expect(on(rt.EV_CODES.selectstart)).toBe(true);
     expect(on(rt.EV_CODES.mousemove)).toBe(false);
@@ -96,8 +101,14 @@ describe("the gesture", () => {
         e.dataTransfer.effectAllowed = "move";
       }
     };
-    (list as unknown as { addEventListener(n: string, f: (e: DragEv) => void): void }).addEventListener("dragover", accept);
-    (list as unknown as { addEventListener(n: string, f: (e: DragEv) => void): void }).addEventListener("dragstart", accept);
+    (list as unknown as { addEventListener(n: string, f: (e: DragEv) => void): void }).addEventListener(
+      "dragover",
+      accept,
+    );
+    (list as unknown as { addEventListener(n: string, f: (e: DragEv) => void): void }).addEventListener(
+      "dragstart",
+      accept,
+    );
     press(label, 10, 10);
     move(label, 12, 12); // inside the threshold: still a press
     expect(log).toEqual([]);

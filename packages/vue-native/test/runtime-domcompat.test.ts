@@ -122,7 +122,8 @@ describe("a <style> injected into document.head", () => {
     const rt = createRuntime({ globals: { __VN_CSS__: [".bundle{}"] } });
     const doc = rt.global.document;
     const style = doc.createElement("style");
-    const css = "[data-drawer]{animation:slide .5s}@keyframes slide{from{transform:translateY(100%)}to{transform:translateY(0)}}";
+    const css =
+      "[data-drawer]{animation:slide .5s}@keyframes slide{from{transform:translateY(100%)}to{transform:translateY(0)}}";
     const child = doc.createTextNode(css);
     expect(style.appendChild(child)).toBe(child);
     expect(style.textContent).toBe(css);

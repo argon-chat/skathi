@@ -70,8 +70,7 @@ function listenForStorage() {
     "context that ANOTHER wrote a key, and there is only one here.";
 }
 
-const describe = (e: unknown) =>
-  e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+const describe = (e: unknown) => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
 const nav = navigator!;
 
@@ -138,11 +137,21 @@ function tryExecCommand() {
         <span class="tier t3">tier 2 · appStorage</span>
       </div>
       <div class="grid" id="st-info">
-        <div class="prow"><span class="k">folder</span><span class="v">{{ info.folder }}</span></div>
-        <div class="prow"><span class="k">file</span><span class="v">{{ info.file }}</span></div>
-        <div class="prow"><span class="k">bytes</span><span class="v" id="st-bytes">{{ info.bytes }}</span></div>
-        <div class="prow"><span class="k">provider</span><span class="v">{{ info.provider || "none" }}</span></div>
-        <div class="prow" v-if="info.error"><span class="k">error</span><span class="v no">{{ info.error }}</span></div>
+        <div class="prow">
+          <span class="k">folder</span><span class="v">{{ info.folder }}</span>
+        </div>
+        <div class="prow">
+          <span class="k">file</span><span class="v">{{ info.file }}</span>
+        </div>
+        <div class="prow">
+          <span class="k">bytes</span><span class="v" id="st-bytes">{{ info.bytes }}</span>
+        </div>
+        <div class="prow">
+          <span class="k">provider</span><span class="v">{{ info.provider || "none" }}</span>
+        </div>
+        <div class="prow" v-if="info.error">
+          <span class="k">error</span><span class="v no">{{ info.error }}</span>
+        </div>
       </div>
       <div class="row">
         <span class="btn" id="st-move-local" @click="moveTo('LOCALAPPDATA', 'hello/storage', false)">
@@ -156,11 +165,9 @@ function tryExecCommand() {
         </span>
       </div>
       <div class="note">
-        Encryption is DPAPI, keyed by the Windows user — the key never exists in
-        this process. Turning it on migrates the plaintext area and deletes the
-        plaintext copy; turning it off does the reverse. It protects the file
-        from other users and from being copied off this machine, and not from
-        anything running as you.
+        Encryption is DPAPI, keyed by the Windows user — the key never exists in this process. Turning it on migrates
+        the plaintext area and deletes the plaintext copy; turning it off does the reverse. It protects the file from
+        other users and from being copied off this machine, and not from anything running as you.
       </div>
     </section>
 
@@ -180,11 +187,9 @@ function tryExecCommand() {
         <span class="pill" id="st-exec-out">{{ execCommandResult || "—" }}</span>
       </div>
       <div class="note">
-        The same OS clipboard the native &lt;input&gt; uses for Ctrl+C — one
-        owner, not two. `read()`/`write()` with images are not implemented in
-        v1, so they reject and `ClipboardItem` is deliberately undefined;
-        `execCommand` is inert and returns false, as a browser does when a
-        command cannot be executed.
+        The same OS clipboard the native &lt;input&gt; uses for Ctrl+C — one owner, not two. `read()`/`write()` with
+        images are not implemented in v1, so they reject and `ClipboardItem` is deliberately undefined; `execCommand` is
+        inert and returns false, as a browser does when a command cannot be executed.
       </div>
     </section>
 
@@ -194,11 +199,10 @@ function tryExecCommand() {
         <span class="btn" id="st-listen" @click="listenForStorage">addEventListener("storage")</span>
       </div>
       <div class="note">
-        In a browser `storage` fires on OTHER tabs of the same origin. There is
-        one context here, so nothing fires it — and the host says so on stderr
-        the first time an app adds the listener, rather than leaving a handler
-        that quietly never runs. `new StorageEvent("storage", {...})` plus
-        `dispatchEvent` still works if you want to notify your own components.
+        In a browser `storage` fires on OTHER tabs of the same origin. There is one context here, so nothing fires it —
+        and the host says so on stderr the first time an app adds the listener, rather than leaving a handler that
+        quietly never runs. `new StorageEvent("storage", {...})` plus `dispatchEvent` still works if you want to notify
+        your own components.
       </div>
     </section>
   </div>

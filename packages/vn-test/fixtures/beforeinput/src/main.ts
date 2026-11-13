@@ -21,7 +21,11 @@ const log = (where: string) => (e: Event) => {
         `${e.type}@${where}|${ie.inputType} data=${JSON.stringify(ie.data)} composing=${ie.isComposing} ` +
           `cancelable=${e.cancelable} v=${value(e)}`,
       );
-      if (e.type === "beforeinput" && cancel.type === ie.inputType && (cancel.data === undefined || cancel.data === ie.data))
+      if (
+        e.type === "beforeinput" &&
+        cancel.type === ie.inputType &&
+        (cancel.data === undefined || cancel.data === ie.data)
+      )
         e.preventDefault();
       break;
     }
@@ -62,20 +66,27 @@ const all = (where: string) => {
 createApp({
   setup() {
     return () =>
-      h("div", { id: "root", style: { padding: "12px", display: "flex", flexDirection: "column", gap: "8px", background: "#ffffff" } }, [
-        h("textarea", { id: "ta", rows: 2, style: { width: "300px", fontSize: "14px" }, ...all("ta") }),
-        withDirectives(
-          h("input", {
-            id: "vm",
-            style: { width: "300px", fontSize: "14px" },
-            "onUpdate:modelValue": (v: string) => (model.value = v),
-            onInput: log("vm"),
-            onCompositionstart: log("vm"),
-            onCompositionend: log("vm"),
-          }),
-          [[vModelText, model.value]],
-        ),
-        h("div", { id: "model" }, `model=${model.value}`),
-      ]);
+      h(
+        "div",
+        {
+          id: "root",
+          style: { padding: "12px", display: "flex", flexDirection: "column", gap: "8px", background: "#ffffff" },
+        },
+        [
+          h("textarea", { id: "ta", rows: 2, style: { width: "300px", fontSize: "14px" }, ...all("ta") }),
+          withDirectives(
+            h("input", {
+              id: "vm",
+              style: { width: "300px", fontSize: "14px" },
+              "onUpdate:modelValue": (v: string) => (model.value = v),
+              onInput: log("vm"),
+              onCompositionstart: log("vm"),
+              onCompositionend: log("vm"),
+            }),
+            [[vModelText, model.value]],
+          ),
+          h("div", { id: "model" }, `model=${model.value}`),
+        ],
+      );
   },
 }).mount();

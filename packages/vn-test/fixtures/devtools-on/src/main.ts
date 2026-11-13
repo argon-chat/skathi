@@ -5,6 +5,5 @@ import { appDevtools, createApp, h } from "vue-native";
 (globalThis as unknown as { __VN_TEST_DEVTOOLS__: unknown }).__VN_TEST_DEVTOOLS__ = appDevtools;
 
 createApp({
-  render: () =>
-    h("div", { class: "fixture" }, `devtools: ${appDevtools.isEnabled() ? "on" : "off"}`),
+  render: () => h("div", { class: "fixture" }, `devtools: ${appDevtools.isEnabled() ? "on" : "off"}`),
 }).mount();

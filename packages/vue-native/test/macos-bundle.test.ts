@@ -2,7 +2,16 @@
 // platform. Everything runs on any OS: the bundle is files, the plist text, the icns bytes, the host a fake Mach-O header.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../cli/build-app";
@@ -67,7 +76,7 @@ function readPlist(xml: string): PlistValue {
       if (empty) return out;
       for (;;) {
         skipWs();
-        if (tokens[i]![1] === "/") return i++, out;
+        if (tokens[i]![1] === "/") return (i++, out);
         out.push(value());
       }
     }
@@ -76,7 +85,7 @@ function readPlist(xml: string): PlistValue {
       if (empty) return out;
       for (;;) {
         skipWs();
-        if (tokens[i]![1] === "/") return i++, out;
+        if (tokens[i]![1] === "/") return (i++, out);
         expect(tokens[i++]![2]).toBe("key");
         const k = text("key");
         out[k] = value();
@@ -147,14 +156,16 @@ describe("Info.plist", () => {
     expect(d.NSMicrophoneUsageDescription).toBe("Voice rooms use the microphone.");
     expect(d.NSCameraUsageDescription).toBe("Video calls use the camera.");
     expect(d.NSCameraUseContinuityCameraDeviceType).toBe(true);
-    expect(d.CFBundleURLTypes).toEqual([{ CFBundleURLName: "gl.argon.hello", CFBundleURLSchemes: ["argon", "argon-dev"] }]);
+    expect(d.CFBundleURLTypes).toEqual([
+      { CFBundleURLName: "gl.argon.hello", CFBundleURLSchemes: ["argon", "argon-dev"] },
+    ]);
     expect(readPlist(plistXml(d))).toEqual(d);
   });
 
   test("text is escaped, and what XML cannot carry is an error rather than a broken plist", () => {
     const name = `Tom & Jerry's <"Show"> ]]> 東京 😀`;
     const xml = plistXml(infoPlist({ ...BASE_INFO, name }));
-    expect(xml).toContain("<string>Tom &amp; Jerry's &lt;\"Show\"&gt; ]]&gt; 東京 😀</string>");
+    expect(xml).toContain('<string>Tom &amp; Jerry\'s &lt;"Show"&gt; ]]&gt; 東京 😀</string>');
     expect((readPlist(xml) as Record<string, PlistValue>).CFBundleName).toBe(name);
     expect(() => plistXml({ k: "bell \u0007" })).toThrow(/U\+0007/);
     expect(() => plistXml({ k: "half \uD800 pair" })).toThrow(/U\+d800/);
@@ -238,7 +249,9 @@ describe("icns", () => {
   });
 
   test("non-square and tiny PNGs are errors", () => {
-    expect(() => icnsFromPng(encodePng({ width: 32, height: 16, data: new Uint8Array(32 * 16 * 4) }))).toThrow(/square/);
+    expect(() => icnsFromPng(encodePng({ width: 32, height: 16, data: new Uint8Array(32 * 16 * 4) }))).toThrow(
+      /square/,
+    );
     expect(() => icnsFromPng(encodePng(solid(8)))).toThrow(/smaller than/);
   });
 
@@ -269,7 +282,13 @@ describe("icns", () => {
       });
       return Buffer.concat([Buffer.from(head), ...images.map((i) => Buffer.from(i.data))]);
     };
-    writeFileSync(join(d, "a.ico"), ico([{ size: 32, data: encodePng(solid(32)) }, { size: 256, data: encodePng(solid(256)) }]));
+    writeFileSync(
+      join(d, "a.ico"),
+      ico([
+        { size: 32, data: encodePng(solid(32)) },
+        { size: 256, data: encodePng(solid(256)) },
+      ]),
+    );
     expect(icnsFrom(join(d, "a.ico")).sizes).toEqual([16, 32, 64, 128, 256]);
     writeFileSync(join(d, "bmp.ico"), ico([{ size: 32, data: new Uint8Array(40) }]));
     expect(() => icnsFrom(join(d, "bmp.ico"))).toThrow(/only BMP images/);
@@ -354,7 +373,9 @@ describe("the .app", () => {
     expect(() => write(out, join(d, "no-such-host"))).toThrow();
     expect([...readFileSync(join(out, "Contents", "Resources", "app.vnpk"))]).toEqual([9]);
     expect(existsSync(`${out}.partial`)).toBe(false);
-    expect(() => writeAppBundle({ host, out, executable: "a/b", payload: new Uint8Array(), infoPlist: "" })).toThrow(/file name/);
+    expect(() => writeAppBundle({ host, out, executable: "a/b", payload: new Uint8Array(), infoPlist: "" })).toThrow(
+      /file name/,
+    );
   });
 });
 
@@ -382,12 +403,22 @@ describe("codesign", () => {
     });
     const off = signPlan({ ...base, want: "Developer ID Application: X (T)", codesign: null, onMac: false });
     expect(off.identity).toBeNull();
-    expect(off.note).toContain("--entitlements /o/.vn/entitlements.plist --sign 'Developer ID Application: X (T)' /o/A.app");
-    expect(signPlan({ ...base, want: undefined, codesign: null, onMac: false }).note).toContain("codesign --force --sign - /o/A.app");
+    expect(off.note).toContain(
+      "--entitlements /o/.vn/entitlements.plist --sign 'Developer ID Application: X (T)' /o/A.app",
+    );
+    expect(signPlan({ ...base, want: undefined, codesign: null, onMac: false }).note).toContain(
+      "codesign --force --sign - /o/A.app",
+    );
     expect(signPlan({ ...base, want: undefined, codesign: null, onMac: true }).note).toMatch(/not on PATH/);
     expect(() => signPlan({ ...base, want: "X", codesign: null, onMac: true })).toThrow(/xcode-select/);
-    expect(signPlan({ ...base, want: undefined, codesign: "/usr/bin/codesign", onMac: true })).toEqual({ identity: "-", note: null });
-    expect(signPlan({ ...base, want: "X", codesign: "/usr/bin/codesign", onMac: true })).toEqual({ identity: "X", note: null });
+    expect(signPlan({ ...base, want: undefined, codesign: "/usr/bin/codesign", onMac: true })).toEqual({
+      identity: "-",
+      note: null,
+    });
+    expect(signPlan({ ...base, want: "X", codesign: "/usr/bin/codesign", onMac: true })).toEqual({
+      identity: "X",
+      note: null,
+    });
   });
 });
 
@@ -404,7 +435,11 @@ describe('vn.config.json "macos"', () => {
   test("defaults: the bundle id from id (no '_'), the name from productName, the icon and copyright from windows", () => {
     const m = loadAppConfig(
       app(
-        { id: "gl.argon.my_app", productName: "My App", windows: { icon: "i.png", copyright: "© X", exeName: "myapp-win" } },
+        {
+          id: "gl.argon.my_app",
+          productName: "My App",
+          windows: { icon: "i.png", copyright: "© X", exeName: "myapp-win" },
+        },
         { "i.png": encodePng(solid(16)) },
       ),
     ).macos;
@@ -492,7 +527,9 @@ describe("hosts per platform", () => {
     const m = hostsFor("macos", "arm64");
     expect(repoHostExe("R", m, "debug")).toBe(join("R", "target", "aarch64-apple-darwin", "debug", "vn-app"));
     expect(m.cargoTarget).toEqual(["--target", "aarch64-apple-darwin"]);
-    expect(cachedHost("1.2.3", "no-audio", "macos")).toMatch(/Library[\\/]Caches[\\/]vue-native[\\/]hosts[\\/]1\.2\.3[\\/]no-audio[\\/]vn-host$/);
+    expect(cachedHost("1.2.3", "no-audio", "macos")).toMatch(
+      /Library[\\/]Caches[\\/]vue-native[\\/]hosts[\\/]1\.2\.3[\\/]no-audio[\\/]vn-host$/,
+    );
   });
 
   test("--platform spellings", () => {
@@ -508,7 +545,9 @@ describe("hosts per platform", () => {
       const d = fresh("cross");
       expect(() => resolveHost({ variant: "standard", platform: "macos" })).toThrow(/needs the host named/);
       writeFileSync(join(d, "vn-app.exe"), new Uint8Array([0x4d, 0x5a, 0, 0, 0, 0, 0, 0]));
-      expect(() => resolveHost({ variant: "standard", platform: "macos", host: join(d, "vn-app.exe") })).toThrow(/not a Mach-O/);
+      expect(() => resolveHost({ variant: "standard", platform: "macos", host: join(d, "vn-app.exe") })).toThrow(
+        /not a Mach-O/,
+      );
 
       const host = fakeMachO(join(d, "vn-app"));
       const trusted = resolveHost({ variant: "no-audio", platform: "macos", host });
@@ -517,13 +556,20 @@ describe("hosts per platform", () => {
       expect(trusted.info.features).toContain("webgpu");
       expect(trusted.unverified).toMatch(/cannot be run/);
 
-      const info = { ...crossHostInfo(host, "standard", "macos").info, crate: "9.9.9", profile: "release", vueNative: "0.0.0-other" };
+      const info = {
+        ...crossHostInfo(host, "standard", "macos").info,
+        crate: "9.9.9",
+        profile: "release",
+        vueNative: "0.0.0-other",
+      };
       writeFileSync(join(d, "host.json"), JSON.stringify(info));
       expect(() => resolveHost({ variant: "standard", platform: "macos", host })).toThrow(/0\.0\.0-other/);
       const mismatchAllowed = resolveHost({ variant: "standard", platform: "macos", host, allowMismatch: true });
       expect(mismatchAllowed.info.profile).toBe("release");
       expect(mismatchAllowed.unverified).toMatch(/described by/);
-      expect(() => resolveHost({ variant: "no-audio", platform: "macos", host, allowMismatch: true })).toThrow(HostError);
+      expect(() => resolveHost({ variant: "no-audio", platform: "macos", host, allowMismatch: true })).toThrow(
+        HostError,
+      );
     });
 
     test("vn build --platform macos --host <fake>: a bundle whose app.vnpk is the build's payload", async () => {
@@ -577,7 +623,9 @@ describe("hosts per platform", () => {
         NSMicrophoneUsageDescription: "mic",
         CFBundleURLTypes: [{ CFBundleURLName: "com.example.e2e", CFBundleURLSchemes: ["e2e"] }],
       });
-      expect(parseIcns(new Uint8Array(readFileSync(join(app, "Contents", "Resources", "AppIcon.icns")))).length).toBe(4);
+      expect(parseIcns(new Uint8Array(readFileSync(join(app, "Contents", "Resources", "AppIcon.icns")))).length).toBe(
+        4,
+      );
       const ent = readPlist(readFileSync(r.bundle!.entitlements, "utf8"));
       expect(ent).toEqual({ "com.apple.security.cs.allow-jit": true, "com.apple.security.device.audio-input": true });
     }, 120_000);

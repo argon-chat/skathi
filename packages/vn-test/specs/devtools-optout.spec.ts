@@ -28,8 +28,7 @@ afterAll(() => {
     if (!child.pid) continue;
     try {
       spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-    } catch {
-    }
+    } catch {}
   }
 });
 
@@ -126,74 +125,84 @@ async function spawnHost(
 }
 
 describe("a shipped build carries its own devtools", () => {
-  test("`--features prod` answers on the wire and opens the inspector on F12", async () => {
-    const host = await featureExe({ features: ["prod"] });
-    const packed = await packagedExe({ app: "hello", host, label: "dt-prod" });
-    const app = await launch({
-      app: "hello",
-      exe: packed.exe,
-      packaged: packed.name,
-      window: [820, 600],
-      label: "dt-prod",
-      env: { VN_DEVTOOLS_RAISE: "off" },
-    });
-    try {
-      bunExpect((await app.send("ping")).pid).toBe(app.pid);
-      bunExpect(await app.eval("typeof globalThis.__VN__")).toBe("undefined");
-
-      bunExpect((await app.send("windows")).inspectors).toEqual([]);
-      await app.press("F12");
-      const after = await until("the inspector the shipped binary opened on itself", async () => {
-        const w = await app.send("windows");
-        return w.inspectors.length === 1 ? w : null;
+  test(
+    "`--features prod` answers on the wire and opens the inspector on F12",
+    async () => {
+      const host = await featureExe({ features: ["prod"] });
+      const packed = await packagedExe({ app: "hello", host, label: "dt-prod" });
+      const app = await launch({
+        app: "hello",
+        exe: packed.exe,
+        packaged: packed.name,
+        window: [820, 600],
+        label: "dt-prod",
+        env: { VN_DEVTOOLS_RAISE: "off" },
       });
-      bunExpect(after.inspectors[0].pid).toBeGreaterThan(0);
+      try {
+        bunExpect((await app.send("ping")).pid).toBe(app.pid);
+        bunExpect(await app.eval("typeof globalThis.__VN__")).toBe("undefined");
 
-      const state = JSON.parse(await app.eval("__vn_devtools_state()"));
-      bunExpect(state.enabled).toBe(true);
-      bunExpect(state.locked).toBe(false);
-      bunExpect(state.port).toBe(app.port);
-      bunExpect(state.inspectors).toBe(1);
-    } finally {
-      await app.close();
-    }
-  }, BUILD_T);
+        bunExpect((await app.send("windows")).inspectors).toEqual([]);
+        await app.press("F12");
+        const after = await until("the inspector the shipped binary opened on itself", async () => {
+          const w = await app.send("windows");
+          return w.inspectors.length === 1 ? w : null;
+        });
+        bunExpect(after.inspectors[0].pid).toBeGreaterThan(0);
 
-  test("`--features no-devtools` compiles, and the image has none of it", async () => {
-    // Two proofs on purpose: the marker says the inspector's bundle and window config are not in
-    // the file, and running it says no listener was started.
-    const without = await featureExe({ features: ["prod", "no-devtools"] });
-    const with_ = await featureExe({ features: ["prod"] });
+        const state = JSON.parse(await app.eval("__vn_devtools_state()"));
+        bunExpect(state.enabled).toBe(true);
+        bunExpect(state.locked).toBe(false);
+        bunExpect(state.port).toBe(app.port);
+        bunExpect(state.inspectors).toBe(1);
+      } finally {
+        await app.close();
+      }
+    },
+    BUILD_T,
+  );
 
-    bunExpect(await fileContains(with_, MARKER)).toBe(true);
-    bunExpect(await fileContains(without, MARKER)).toBe(false);
+  test(
+    "`--features no-devtools` compiles, and the image has none of it",
+    async () => {
+      // Two proofs on purpose: the marker says the inspector's bundle and window config are not in
+      // the file, and running it says no listener was started.
+      const without = await featureExe({ features: ["prod", "no-devtools"] });
+      const with_ = await featureExe({ features: ["prod"] });
 
-    // A bare host exits at once ("no app inside"), so the claim is made on a packaged one — the
-    // thing that would actually ship.
-    const packed = await packagedExe({ app: "hello", host: without, variant: "no-devtools", label: "dt-nodev" });
-    const { slot, child } = await spawnHost("hello", "dt-nodev", {}, packed.exe);
-    await sleep(8000);
-    bunExpect(child.exitCode).toBeNull();
-    bunExpect(existsSync(join(slot, "devtools.json"))).toBe(false);
-  }, BUILD_T);
+      bunExpect(await fileContains(with_, MARKER)).toBe(true);
+      bunExpect(await fileContains(without, MARKER)).toBe(false);
+
+      // A bare host exits at once ("no app inside"), so the claim is made on a packaged one — the
+      // thing that would actually ship.
+      const packed = await packagedExe({ app: "hello", host: without, variant: "no-devtools", label: "dt-nodev" });
+      const { slot, child } = await spawnHost("hello", "dt-nodev", {}, packed.exe);
+      await sleep(8000);
+      bunExpect(child.exitCode).toBeNull();
+      bunExpect(existsSync(join(slot, "devtools.json"))).toBe(false);
+    },
+    BUILD_T,
+  );
 });
 
 describe("the app owns the switch", () => {
-  test("disable() closes the listener; enable() binds a fresh one", async () => {
-    const app = await launch({
-      app: ON,
-      window: [420, 220],
-      label: "dt-switch",
-      env: { VN_DEVTOOLS_RAISE: "off" },
-    });
-    const firstPort = app.port;
-    try {
-      bunExpect(await portOpen(firstPort)).toBe(true);
-      bunExpect(await app.eval("__VN_TEST_DEVTOOLS__.isEnabled()")).toBe(true);
+  test(
+    "disable() closes the listener; enable() binds a fresh one",
+    async () => {
+      const app = await launch({
+        app: ON,
+        window: [420, 220],
+        label: "dt-switch",
+        env: { VN_DEVTOOLS_RAISE: "off" },
+      });
+      const firstPort = app.port;
+      try {
+        bunExpect(await portOpen(firstPort)).toBe(true);
+        bunExpect(await app.eval("__VN_TEST_DEVTOOLS__.isEnabled()")).toBe(true);
 
-      // The re-enable is scheduled BEFORE the disable, because the disable takes away the only way
-      // to ask for anything — this reply is the last thing that comes off this wire.
-      await app.eval(`
+        // The re-enable is scheduled BEFORE the disable, because the disable takes away the only way
+        // to ask for anything — this reply is the last thing that comes off this wire.
+        await app.eval(`
         globalThis.__SWITCH__ = {};
         setTimeout(() => {
           __SWITCH__.openedWhileOff = __VN_TEST_DEVTOOLS__.open();
@@ -203,65 +212,75 @@ describe("the app owns the switch", () => {
         __VN_TEST_DEVTOOLS__.disable();
       `);
 
-      await until("the listener to close", async () => (await portOpen(firstPort)) === false);
-      bunExpect(existsSync(join(app.slotDir, "devtools.json"))).toBe(false);
+        await until("the listener to close", async () => (await portOpen(firstPort)) === false);
+        bunExpect(existsSync(join(app.slotDir, "devtools.json"))).toBe(false);
 
-      // …and then the app turns them back on, on a NEW port with a NEW token, so a client that was
-      // shown the door cannot walk back in on the old one.
-      const shake = await until("a fresh handshake", async () =>
-        existsSync(join(app.slotDir, "devtools.json")) ? handshake(app.slotDir) : null,
-      );
-      bunExpect(shake.pid).toBe(app.pid);
-      bunExpect(shake.port).not.toBe(firstPort);
+        // …and then the app turns them back on, on a NEW port with a NEW token, so a client that was
+        // shown the door cannot walk back in on the old one.
+        const shake = await until("a fresh handshake", async () =>
+          existsSync(join(app.slotDir, "devtools.json")) ? handshake(app.slotDir) : null,
+        );
+        bunExpect(shake.pid).toBe(app.pid);
+        bunExpect(shake.port).not.toBe(firstPort);
 
-      const recorded = await command(shake.port, shake.token, "eval", {
-        js: "JSON.stringify(globalThis.__SWITCH__)",
+        const recorded = await command(shake.port, shake.token, "eval", {
+          js: "JSON.stringify(globalThis.__SWITCH__)",
+        });
+        const seen = JSON.parse(recorded.value);
+        bunExpect(seen.enabledWhileOff).toBe(false);
+        bunExpect(seen.openedWhileOff).toBe(false);
+        bunExpect(seen.reenabled).toBe(true);
+
+        const windows = await command(shake.port, shake.token, "windows");
+        bunExpect(windows.inspectors).toEqual([]);
+        const logs = await command(shake.port, shake.token, "logs", { since: 0 });
+        const text = logs.entries.map((e: { text: string }) => e.text).join("\n");
+        bunExpect(text).toMatch(/\[devtools\] disabled — the listener is closed/);
+        bunExpect(text).toMatch(/open\(\) did not open an inspector: the devtools are disabled/);
+      } finally {
+        await app.close();
+      }
+    },
+    T,
+  );
+
+  test(
+    '`"devtools": false` in vn.config.json means no port at all',
+    async () => {
+      // `launch()` cannot be used: it waits for a handshake this host is never going to write.
+      const { slot, child } = await spawnHost(OFF, "dt-cfgoff");
+      await sleep(8000);
+      bunExpect(child.exitCode).toBeNull();
+      bunExpect(existsSync(join(slot, "devtools.json"))).toBe(false);
+    },
+    T,
+  );
+
+  test(
+    "VN_DEVTOOLS=1 overrides the app, and refuses disable() out loud",
+    async () => {
+      const app = await launch({
+        app: OFF,
+        window: [420, 220],
+        label: "dt-forced",
+        env: { VN_DEVTOOLS: "1", VN_DEVTOOLS_RAISE: "off" },
       });
-      const seen = JSON.parse(recorded.value);
-      bunExpect(seen.enabledWhileOff).toBe(false);
-      bunExpect(seen.openedWhileOff).toBe(false);
-      bunExpect(seen.reenabled).toBe(true);
+      try {
+        bunExpect((await app.send("ping")).pid).toBe(app.pid);
+        const info = JSON.parse(await app.eval("JSON.stringify(__VN_TEST_DEVTOOLS__.info())"));
+        bunExpect(info.enabled).toBe(true);
+        bunExpect(info.locked).toBe(true);
 
-      const windows = await command(shake.port, shake.token, "windows");
-      bunExpect(windows.inspectors).toEqual([]);
-      const logs = await command(shake.port, shake.token, "logs", { since: 0 });
-      const text = logs.entries.map((e: { text: string }) => e.text).join("\n");
-      bunExpect(text).toMatch(/\[devtools\] disabled — the listener is closed/);
-      bunExpect(text).toMatch(/open\(\) did not open an inspector: the devtools are disabled/);
-    } finally {
-      await app.close();
-    }
-  }, T);
-
-  test('`"devtools": false` in vn.config.json means no port at all', async () => {
-    // `launch()` cannot be used: it waits for a handshake this host is never going to write.
-    const { slot, child } = await spawnHost(OFF, "dt-cfgoff");
-    await sleep(8000);
-    bunExpect(child.exitCode).toBeNull();
-    bunExpect(existsSync(join(slot, "devtools.json"))).toBe(false);
-  }, T);
-
-  test("VN_DEVTOOLS=1 overrides the app, and refuses disable() out loud", async () => {
-    const app = await launch({
-      app: OFF,
-      window: [420, 220],
-      label: "dt-forced",
-      env: { VN_DEVTOOLS: "1", VN_DEVTOOLS_RAISE: "off" },
-    });
-    try {
-      bunExpect((await app.send("ping")).pid).toBe(app.pid);
-      const info = JSON.parse(await app.eval("JSON.stringify(__VN_TEST_DEVTOOLS__.info())"));
-      bunExpect(info.enabled).toBe(true);
-      bunExpect(info.locked).toBe(true);
-
-      bunExpect(await app.eval("__VN_TEST_DEVTOOLS__.disable()")).toBe(true);
-      bunExpect(await portOpen(app.port)).toBe(true);
-      const { entries } = await app.logs(0);
-      bunExpect(
-        entries.some((e) => /disable\(\) was refused/.test(e.text) && /VN_DEVTOOLS=1/.test(e.text)),
-      ).toBe(true);
-    } finally {
-      await app.close();
-    }
-  }, T);
+        bunExpect(await app.eval("__VN_TEST_DEVTOOLS__.disable()")).toBe(true);
+        bunExpect(await portOpen(app.port)).toBe(true);
+        const { entries } = await app.logs(0);
+        bunExpect(entries.some((e) => /disable\(\) was refused/.test(e.text) && /VN_DEVTOOLS=1/.test(e.text))).toBe(
+          true,
+        );
+      } finally {
+        await app.close();
+      }
+    },
+    T,
+  );
 });

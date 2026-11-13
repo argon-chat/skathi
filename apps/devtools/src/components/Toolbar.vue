@@ -14,7 +14,7 @@ const TABS: { id: Tab; label: string; key: string }[] = [
 const showWindows = computed(() => state.windows.length > 1);
 
 const activeWindow = computed(() =>
-  state.window === null ? state.windows.find((w) => w.kind === "main")?.id ?? null : state.window,
+  state.window === null ? (state.windows.find((w) => w.kind === "main")?.id ?? null) : state.window,
 );
 
 function windowLabel(id: number): string {
@@ -98,9 +98,20 @@ const errorCount = computed(() => state.logs.filter((l) => l.kind === "error").l
 </template>
 
 <style scoped>
-button { font-family: inherit; background: transparent; border-width: 0; cursor: pointer; }
-button:focus-visible { outline: 1px solid #6cb6ff; outline-offset: 1px; }
-button:disabled { opacity: 0.45; cursor: default; }
+button {
+  font-family: inherit;
+  background: transparent;
+  border-width: 0;
+  cursor: pointer;
+}
+button:focus-visible {
+  outline: 1px solid #6cb6ff;
+  outline-offset: 1px;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 .toolbar {
   display: flex;
   flex-direction: row;
@@ -136,7 +147,9 @@ button:disabled { opacity: 0.45; cursor: default; }
   gap: 5px;
   font-size: 11px;
   color: #8494a8;
-  transition: background-color 110ms ease, color 110ms ease;
+  transition:
+    background-color 110ms ease,
+    color 110ms ease;
 }
 .tab:hover {
   background: #171e29;

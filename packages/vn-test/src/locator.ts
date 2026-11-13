@@ -40,7 +40,9 @@ export class Locator {
   /** A description of this locator for a failure message. */
   get description() {
     const i = this.options.index;
-    return i === undefined ? `locator(${JSON.stringify(this.selector)})` : `locator(${JSON.stringify(this.selector)}).nth(${i})`;
+    return i === undefined
+      ? `locator(${JSON.stringify(this.selector)})`
+      : `locator(${JSON.stringify(this.selector)}).nth(${i})`;
   }
 
   nth(index: number): Locator {
@@ -187,7 +189,11 @@ export class Locator {
   }
 
   /** Drives the element's own `ScrollHandle` and fires `scroll`. */
-  async scroll(dy: number, dx = 0, options: { timeout?: number } = {}): Promise<{ scrollLeft: number; scrollTop: number }> {
+  async scroll(
+    dy: number,
+    dx = 0,
+    options: { timeout?: number } = {},
+  ): Promise<{ scrollLeft: number; scrollTop: number }> {
     const { index } = await this.resolve(options.timeout ?? this.timeout);
     return this.app.send("scroll", { selector: this.selector, index, dx, dy });
   }

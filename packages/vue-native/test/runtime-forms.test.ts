@@ -29,15 +29,29 @@ function formWorld(options: { button?: string | null; fields?: number; novalidat
   }
   const submits: { submitter: unknown; cancelable: boolean; bubbles: boolean; type: string }[] = [];
   let cancel = true;
-  rt.patchProp(form, "onSubmit", null, (e: { submitter: unknown; cancelable: boolean; bubbles: boolean; type: string; preventDefault(): void }) => {
-    submits.push({ submitter: e.submitter, cancelable: e.cancelable, bubbles: e.bubbles, type: e.type });
-    if (cancel) e.preventDefault();
-  });
+  rt.patchProp(
+    form,
+    "onSubmit",
+    null,
+    (e: { submitter: unknown; cancelable: boolean; bubbles: boolean; type: string; preventDefault(): void }) => {
+      submits.push({ submitter: e.submitter, cancelable: e.cancelable, bubbles: e.bubbles, type: e.type });
+      if (cancel) e.preventDefault();
+    },
+  );
   const click = (n: Node) => rt.host.dispatcher(n.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
   const enter = (n: Node) => rt.host.dispatcher(n.__vnId, rt.EV_CODES.keydown, 0, 0, 0, 0, "Enter");
   const navigations = () => rt.advisories().filter((l: string) => l.includes("no document to navigate")).length;
   return {
-    rt, root, form, fields, field: fields[0], button, submits, click, enter, navigations,
+    rt,
+    root,
+    form,
+    fields,
+    field: fields[0],
+    button,
+    submits,
+    click,
+    enter,
+    navigations,
     keep: () => {
       cancel = false;
     },
@@ -123,7 +137,7 @@ describe("forms: a submit button's activation", () => {
     expect(rt.advisories().filter((l: string) => l.includes("<fieldset disabled>")).length).toBe(1);
   });
 
-  test("`:disabled=\"false\"` is not disabled", () => {
+  test('`:disabled="false"` is not disabled', () => {
     const { rt, button, submits, click } = formWorld();
     rt.patchProp(button!, "disabled", null, false);
     click(button!);
@@ -275,10 +289,17 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
     rt.nodeOps.insert(b, root, null);
     const name = (n: unknown) => (n === a ? "a" : n === b ? "b" : String(n));
     const log: string[] = [];
-    for (const [n, label] of [[a, "a"], [b, "b"]] as const) {
+    for (const [n, label] of [
+      [a, "a"],
+      [b, "b"],
+    ] as const) {
       for (const type of ["focus", "blur", "focusin", "focusout"]) {
-        rt.patchProp(n, `on${type[0].toUpperCase()}${type.slice(1)}`, null, (e: { relatedTarget?: unknown; type: string }) =>
-          log.push(`${e.type}@${label}(${name(e.relatedTarget ?? null)})`),
+        rt.patchProp(
+          n,
+          `on${type[0].toUpperCase()}${type.slice(1)}`,
+          null,
+          (e: { relatedTarget?: unknown; type: string }) =>
+            log.push(`${e.type}@${label}(${name(e.relatedTarget ?? null)})`),
         );
       }
     }
@@ -295,13 +316,7 @@ describe("focus: el.focus(), el.blur(), document.activeElement", () => {
     expect(rt.global.document.activeElement).toBe(a);
     log.length = 0;
     focus(b);
-    expect(log).toEqual([
-      "blur@a(b)",
-      "focusout@a(b)",
-      "focus@b(a)",
-      "focusin@b(a)",
-      "focusin^root:b",
-    ]);
+    expect(log).toEqual(["blur@a(b)", "focusout@a(b)", "focus@b(a)", "focusin@b(a)", "focusin^root:b"]);
     expect(rt.global.document.activeElement).toBe(b);
   });
 
@@ -369,10 +384,15 @@ describe("focus: a handler that moves the focus abandons the move it interrupts"
     const extra: Record<string, ((e: unknown) => void)[]> = {};
     for (const [id, n] of Object.entries(nodes)) {
       for (const type of ["focus", "blur", "focusin", "focusout"]) {
-        rt.patchProp(n, `on${type[0].toUpperCase()}${type.slice(1)}`, null, (e: { relatedTarget?: unknown; type: string }) => {
-          log.push(`${e.type}@${id}(${name(e.relatedTarget ?? null)}) active=${active()}`);
-          for (const f of extra[`${id}:${type}`]?.splice(0) ?? []) f(e);
-        });
+        rt.patchProp(
+          n,
+          `on${type[0].toUpperCase()}${type.slice(1)}`,
+          null,
+          (e: { relatedTarget?: unknown; type: string }) => {
+            log.push(`${e.type}@${id}(${name(e.relatedTarget ?? null)}) active=${active()}`);
+            for (const f of extra[`${id}:${type}`]?.splice(0) ?? []) f(e);
+          },
+        );
       }
     }
     const on = (id: string, type: string, f: (e: unknown) => void) => (extra[`${id}:${type}`] ??= []).push(f);
@@ -601,7 +621,6 @@ describe("location.reload()", () => {
   });
 });
 
-
 describe("native text field select()", () => {
   function field(tag = "input", type = "text") {
     const rt = createRuntime();
@@ -614,22 +633,28 @@ describe("native text field select()", () => {
     return { rt, root, input };
   }
 
-  test.each(["input", "textarea"])("%s.select() selects the native editor without manufacturing an edit", async tag => {
-    const { rt, root, input } = field(tag);
-    const seen: unknown[][] = [];
-    input.addEventListener("input", () => seen.push(["input"]));
-    input.addEventListener("change", () => seen.push(["change"]));
-    root.addEventListener("select", (e: any) => { seen.push([e.type, e.target === input, e.bubbles, e.cancelable]); e.preventDefault(); });
-    const before = input.value;
-    expect(input.select()).toBeUndefined();
-    expect(rt.host.inputSelectCalls).toEqual([input.__vnId]);
-    expect(rt.global.document.activeElement).toBe(input);
-    expect(input.value).toBe(before);
-    expect(seen).toEqual([]);
-    await new Promise<void>(resolve => queueMicrotask(resolve));
-    expect(seen).toEqual([["select", true, true, false]]);
-    expect(rt.advisories().every((note: string) => note.includes('addEventListener("change")'))).toBe(true);
-  });
+  test.each(["input", "textarea"])(
+    "%s.select() selects the native editor without manufacturing an edit",
+    async (tag) => {
+      const { rt, root, input } = field(tag);
+      const seen: unknown[][] = [];
+      input.addEventListener("input", () => seen.push(["input"]));
+      input.addEventListener("change", () => seen.push(["change"]));
+      root.addEventListener("select", (e: any) => {
+        seen.push([e.type, e.target === input, e.bubbles, e.cancelable]);
+        e.preventDefault();
+      });
+      const before = input.value;
+      expect(input.select()).toBeUndefined();
+      expect(rt.host.inputSelectCalls).toEqual([input.__vnId]);
+      expect(rt.global.document.activeElement).toBe(input);
+      expect(input.value).toBe(before);
+      expect(seen).toEqual([]);
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(seen).toEqual([["select", true, true, false]]);
+      expect(rt.advisories().every((note: string) => note.includes('addEventListener("change")'))).toBe(true);
+    },
+  );
 
   test("nextTick select survives a native field whose first build/focus is pending", async () => {
     const { rt, input } = field("textarea");
@@ -639,15 +664,17 @@ describe("native text field select()", () => {
     input.select();
     expect(rt.host.inputSelectCalls).toEqual([input.__vnId]);
     expect(input.value).toBe("Argon Привет 🙂\nSecond line");
-    await new Promise<void>(resolve => queueMicrotask(resolve));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
     expect(selected).toEqual([input.value]);
     expect(rt.advisories().every((line: string) => line.includes("element.focus()"))).toBe(true);
   });
 
   test("read-only and disabled text can be selected; only focus is refused when disabled", () => {
     const { rt, input } = field();
-    rt.patchProp(input, "readonly", null, ""); input.select();
-    rt.patchProp(input, "disabled", null, ""); input.select();
+    rt.patchProp(input, "readonly", null, "");
+    input.select();
+    rt.patchProp(input, "disabled", null, "");
+    input.select();
     expect(rt.host.inputSelectCalls).toEqual([input.__vnId, input.__vnId]);
     expect(rt.host.focus.calls).toHaveLength(1);
   });

@@ -37,7 +37,13 @@ function concat(parts: Uint8Array[]): Uint8Array {
 
 const pad4 = (b: Uint8Array) => (b.length % 4 ? concat([b, new Uint8Array(4 - (b.length % 4))]) : b);
 
-function node(key: string, type: 0 | 1, value: Uint8Array | null, valueLen: number, children: Uint8Array[]): Uint8Array {
+function node(
+  key: string,
+  type: 0 | 1,
+  value: Uint8Array | null,
+  valueLen: number,
+  children: Uint8Array[],
+): Uint8Array {
   let body = pad4(concat([new Uint8Array(6), utf16(key)]));
   if (value) body = pad4(concat([body, value]));
   for (const c of children) body = pad4(concat([body, c]));
@@ -52,7 +58,12 @@ function node(key: string, type: 0 | 1, value: Uint8Array | null, valueLen: numb
 export function numericVersion(v: string): [number, number, number, number] {
   const m = /^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?\s*$/.exec(v);
   if (!m) throw new Error(`${JSON.stringify(v)} is not a version (expected a.b.c, semver)`);
-  const parts = [m[1], m[2], m[3], m[4]].map((p) => (p === undefined ? 0 : Number(p))) as [number, number, number, number];
+  const parts = [m[1], m[2], m[3], m[4]].map((p) => (p === undefined ? 0 : Number(p))) as [
+    number,
+    number,
+    number,
+    number,
+  ];
   for (const p of parts) {
     if (p > 0xffff) throw new Error(`${JSON.stringify(v)}: each version part must be <= 65535 for VERSIONINFO`);
   }

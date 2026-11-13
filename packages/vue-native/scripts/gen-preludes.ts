@@ -108,11 +108,7 @@ function main(): void {
 
     if (check) {
       if (got === want) continue;
-      stale.push(
-        got === undefined
-          ? `  ${path}\n    missing`
-          : `  ${path}\n${summarize(want, got)}`,
-      );
+      stale.push(got === undefined ? `  ${path}\n    missing` : `  ${path}\n${summarize(want, got)}`);
       continue;
     }
 

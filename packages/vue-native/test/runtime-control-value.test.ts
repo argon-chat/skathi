@@ -115,7 +115,9 @@ describe("value", () => {
     const el = rt.nodeOps.createElement("input") as unknown as El;
     rt.patchProp(el, "value", null, "x");
     expect(el.value).toBe("x");
-    expect(rt.host.props.filter((p: { id: number; key: string }) => p.id === el.__vnId && p.key === "value").length).toBe(1);
+    expect(
+      rt.host.props.filter((p: { id: number; key: string }) => p.id === el.__vnId && p.key === "value").length,
+    ).toBe(1);
   });
 
   test("v-model: typing updates the model, and a model reset reaches the field", () => {
@@ -138,7 +140,9 @@ describe("value", () => {
     const obj = { a: 1 };
     div.value = obj;
     expect(div.value).toBe(obj);
-    expect(rt.host.props.some((p: { id: number; key: string }) => p.id === div.__vnId && p.key === "value")).toBe(false);
+    expect(rt.host.props.some((p: { id: number; key: string }) => p.id === div.__vnId && p.key === "value")).toBe(
+      false,
+    );
 
     const file = rt.nodeOps.createElement("input") as unknown as El;
     rt.patchProp(file, "type", null, "file");

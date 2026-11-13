@@ -4,8 +4,15 @@ import { createRuntime } from "./runtime-harness";
 import { htmlPreludeModule } from "../vitecompat";
 
 function htmlContainer(rt: ReturnType<typeof createRuntime>) {
-  const source = htmlPreludeModule({ headCss: [], bodyCss: [], scripts: [], rootClasses: ["dark"], rootAttrs: {},
-    mountElement: { tag: "div", attrs: { id: "app", class: "application", "vaul-drawer-wrapper": "" } }, advisories: [] });
+  const source = htmlPreludeModule({
+    headCss: [],
+    bodyCss: [],
+    scripts: [],
+    rootClasses: ["dark"],
+    rootAttrs: {},
+    mountElement: { tag: "div", attrs: { id: "app", class: "application", "vaul-drawer-wrapper": "" } },
+    advisories: [],
+  });
   new Function("document", source.replace(/^import .*;$/gm, ""))(rt.global.document);
   const body = rt.global.document.body;
   const container = body.children[0];
@@ -24,8 +31,11 @@ describe("native and browser mount containers", () => {
     expect(body.hasAttribute("vaul-drawer-wrapper")).toBe(false);
     expect(container.className).toBe("application");
     expect(container.hasAttribute("vaul-drawer-wrapper")).toBe(true);
-    const app = rt.createApp({ setup: () => ({ marker: "mounted" }), render: () =>
-      h("main", null, [h("p", null, "background"), h(Teleport, { to: "body" }, [h("aside", null, "drawer")])]) });
+    const app = rt.createApp({
+      setup: () => ({ marker: "mounted" }),
+      render: () =>
+        h("main", null, [h("p", null, "background"), h(Teleport, { to: "body" }, [h("aside", null, "drawer")])]),
+    });
     const vm = app.mount("#app");
     expect(vm.marker).toBe("mounted");
     expect(container.parentNode).toBe(body);
@@ -80,13 +90,18 @@ describe("native and browser mount containers", () => {
 
   test("mount() and a legacy root-only #app Teleport keep working without index markup", () => {
     const rt = createRuntime();
-    const app = rt.createApp({ render: () => h("main", null,
-      [h(Teleport, { to: "#app" }, [h("aside", null, "legacy")])]) });
+    const app = rt.createApp({
+      render: () => h("main", null, [h(Teleport, { to: "#app" }, [h("aside", null, "legacy")])]),
+    });
     expect(app.mount()).toBeDefined();
     const body = rt.global.document.body;
     expect(body).toBe(rt.global.document.documentElement);
     expect(body.hasAttribute("data-v-app")).toBe(false);
-    expect(elements(body).map((el) => el.tag).sort()).toEqual(["aside", "main"]);
+    expect(
+      elements(body)
+        .map((el) => el.tag)
+        .sort(),
+    ).toEqual(["aside", "main"]);
     rt.global.__VN_TEARDOWN__();
     expect(rt.nodesById.size).toBe(0);
   });
@@ -98,12 +113,22 @@ describe("native and browser mount containers", () => {
       const preserved = rt.global.document.createElement("nav");
       preserved.textContent = "native sibling";
       rt.global.document.body.appendChild(preserved);
-      const app = rt.createApp({ setup: () => ({ generation }), render: () => h("main", null,
-        [h("span", null, `app ${generation}`), h(Teleport, { to: "body" }, [h("aside", null, "portal")])]) });
+      const app = rt.createApp({
+        setup: () => ({ generation }),
+        render: () =>
+          h("main", null, [
+            h("span", null, `app ${generation}`),
+            h(Teleport, { to: "body" }, [h("aside", null, "portal")]),
+          ]),
+      });
       expect(app.mount("#app").generation).toBe(generation);
       const body = rt.global.document.body;
       expect(body).toBe(rt.global.document.documentElement);
-      expect(elements(body).map((el) => el.tag).sort()).toEqual(["aside", "main", "nav"]);
+      expect(
+        elements(body)
+          .map((el) => el.tag)
+          .sort(),
+      ).toEqual(["aside", "main", "nav"]);
       expect(preserved.parentNode).toBe(body);
       expect(body.hasAttribute("data-v-app")).toBe(false);
       expect(elements(body).some((el) => el.attrs.id === "app")).toBe(false);
@@ -120,16 +145,18 @@ describe("native and browser mount containers", () => {
   test("same-realm reload rebuilds exactly one app container with body portals outside it", () => {
     const first = createRuntime();
     const old = htmlContainer(first);
-    first.createApp({ render: () => h("main", null,
-      [h(Teleport, { to: "body" }, [h("aside", null, "old drawer")])]) }).mount(old.container);
+    first
+      .createApp({ render: () => h("main", null, [h(Teleport, { to: "body" }, [h("aside", null, "old drawer")])]) })
+      .mount(old.container);
     first.global.__VN_UNLOAD__();
     expect(first.nodesById.size).toBe(0);
     expect(old.body.__vnId).toBe(0);
     expect(old.container.__vnId).toBe(0);
     const second = createRuntime({ realm: first.global });
     const current = htmlContainer(second);
-    second.createApp({ render: () => h("main", null,
-      [h(Teleport, { to: "body" }, [h("aside", null, "new drawer")])]) }).mount(current.container);
+    second
+      .createApp({ render: () => h("main", null, [h(Teleport, { to: "body" }, [h("aside", null, "new drawer")])]) })
+      .mount(current.container);
     expect(elements(current.body).filter((el) => el.attrs.id === "app")).toEqual([current.container]);
     const drawer = elements(current.body).find((el) => el.tag === "aside");
     expect(drawer.textContent).toBe("new drawer");

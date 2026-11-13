@@ -31,13 +31,7 @@ import {
   rmSync,
 } from "fs";
 
-import {
-  TW_ID,
-  declaresUtilities,
-  findConfig,
-  generate as generateTailwind,
-  needsTailwindPass,
-} from "./tailwind";
+import { TW_ID, declaresUtilities, findConfig, generate as generateTailwind, needsTailwindPass } from "./tailwind";
 import { pruneVendorPrefixes } from "./css-prefixes";
 import {
   GLOB_TRIPWIRE,
@@ -113,10 +107,7 @@ function foldHttpCache(
 
 function readWindowConfig(): Record<string, unknown> | undefined {
   const cfg = readVnConfig();
-  const win =
-    cfg && typeof cfg.window === "object" && cfg.window
-      ? (cfg.window as Record<string, unknown>)
-      : undefined;
+  const win = cfg && typeof cfg.window === "object" && cfg.window ? (cfg.window as Record<string, unknown>) : undefined;
   return foldHttpCache(cfg, foldDevtoolsFlag(cfg, win));
 }
 
@@ -169,9 +160,18 @@ const appRequire = createRequire(join(APP_ROOT, "package.json"));
 const runtimeRequire = createRequire(join(PKG_DIR, "package.json"));
 const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
 const FRAMEWORK = new Map(
-  ["vue-router", "pinia"].map((name) => [name, frameworkDep(
-    name, APP_PKG, (spec) => appRequire.resolve(spec), (spec) => runtimeRequire.resolve(spec),
-  )] as const),
+  ["vue-router", "pinia"].map(
+    (name) =>
+      [
+        name,
+        frameworkDep(
+          name,
+          APP_PKG,
+          (spec) => appRequire.resolve(spec),
+          (spec) => runtimeRequire.resolve(spec),
+        ),
+      ] as const,
+  ),
 );
 
 /** Resolves a bare specifier from the app root with browser/ESM conditions; createRequire cannot see ESM-only `exports` maps. */
@@ -198,13 +198,11 @@ async function entryCandidates(spec: string, from = APP_ROOT): Promise<string[]>
     const req = from === APP_ROOT ? appRequire : createRequire(join(from, "package.json"));
     const cjs = req.resolve(spec);
     if (isAbsolute(cjs) && !out.includes(cjs)) out.push(cjs);
-  } catch {
-  }
+  } catch {}
   try {
     const esm = Bun.resolveSync(spec, from);
     if (isAbsolute(esm) && !out.includes(esm)) out.push(esm);
-  } catch {
-  }
+  } catch {}
   return out;
 }
 
@@ -254,7 +252,9 @@ const isPreseeded = (spec: string) => PRESEEDED.includes(spec);
 {
   const aliases = readVnConfig()?.aliases;
   if (aliases && typeof aliases === "object" && Object.keys(aliases).length) {
-    console.warn(`[build] vn.config.json "aliases" (${Object.keys(aliases).join(", ")}) are applied by vn build only; this dev build resolves them from node_modules`);
+    console.warn(
+      `[build] vn.config.json "aliases" (${Object.keys(aliases).join(", ")}) are applied by vn build only; this dev build resolves them from node_modules`,
+    );
   }
 }
 
@@ -277,8 +277,7 @@ for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
   if (!k.startsWith("import.meta.env.")) continue;
   try {
     VITE_ENV_DEV[k.slice("import.meta.env.".length)] = JSON.parse(v);
-  } catch {
-  }
+  } catch {}
 }
 
 const DEFINES: Record<string, string> = {
@@ -327,7 +326,9 @@ function ensureDirs() {
 async function buildVendor() {
   for (const [name, dep] of FRAMEWORK) {
     if (dep.warning) devAdvise(dep.warning);
-    console.log(`${stamp()} ${name} ${dep.version ?? "unknown"}: the ${dep.from === "app" ? "app's" : "runtime's"} copy`);
+    console.log(
+      `${stamp()} ${name} ${dep.version ?? "unknown"}: the ${dep.from === "app" ? "app's" : "runtime's"} copy`,
+    );
   }
   const result = await Bun.build({
     entrypoints: [LOADER_ENTRY],
@@ -450,9 +451,7 @@ async function compileVue(
   // Replaces plugin-vue's import.meta.hot epilogue; createRecord is idempotent, so re-evaluating a
   // module keeps the record that holds the live instances.
   chunks.push(`_sfc_main.__hmrId = ${J(id)};`);
-  chunks.push(
-    `if (typeof __VUE_HMR_RUNTIME__ !== "undefined") __VUE_HMR_RUNTIME__.createRecord(${J(id)}, _sfc_main);`,
-  );
+  chunks.push(`if (typeof __VUE_HMR_RUNTIME__ !== "undefined") __VUE_HMR_RUNTIME__.createRecord(${J(id)}, _sfc_main);`);
   chunks.push("export default _sfc_main;");
 
   const cssChunks: string[] = [];
@@ -576,8 +575,7 @@ function depsOf(id: string, body: string, ids: Set<string>, skip: Set<string>): 
     const hit = CANDIDATE_EXTS.map((ext) => base + ext).find((cand) => ids.has(cand));
     if (!hit) {
       console.warn(
-        `${stamp()} ${id}: import ${J(spec)} resolves to no built module — ` +
-          `require() will throw at runtime`,
+        `${stamp()} ${id}: import ${J(spec)} resolves to no built module — ` + `require() will throw at runtime`,
       );
       continue;
     }
@@ -615,7 +613,7 @@ function cssImportsOf(absPath: string, body: string, cssSpecs: Set<string>): str
   for (let m = REQUIRE_RE.exec(body); m; m = REQUIRE_RE.exec(body)) {
     const spec = unquote(m[1]);
     if (spec === null) continue;
-    const relative_ = spec.charCodeAt(0) === 46 /* . */;
+    const relative_ = spec.charCodeAt(0) === 46; /* . */
     let abs: string;
     if (relative_) {
       if (!spec.endsWith(".css")) continue;
@@ -695,7 +693,6 @@ const appOwnsUtilities = () =>
     const abs = cssModules.get(id);
     return !!abs && declaresUtilities(readFileSync(abs, "utf-8"));
   });
-
 
 const moduleInlined = new Map<string, Map<string, number>>();
 
@@ -786,7 +783,7 @@ function splitSpec(spec: string): [string, string] {
 
 const pkgNameAt = new Map<string, string | null>();
 function packageRootOf(file: string, name: string): string | null {
-  for (let dir = dirname(file); ; ) {
+  for (let dir = dirname(file); ;) {
     let found = pkgNameAt.get(dir);
     if (found === undefined) {
       found = null;
@@ -883,8 +880,7 @@ async function buildNpmModule(id: string): Promise<boolean> {
     if (result?.success) break;
     if (i + 1 < candidates.length) {
       console.warn(
-        `${stamp()} npm ${id}: ${toId(candidate)} did not build — retrying with ` +
-          `${toId(candidates[i + 1])}`,
+        `${stamp()} npm ${id}: ${toId(candidate)} did not build — retrying with ` + `${toId(candidates[i + 1])}`,
       );
     }
   }
@@ -976,9 +972,7 @@ async function buildTailwind(): Promise<boolean> {
       `}, ${J(TW_HASH)});`,
     ].join("\n"),
   );
-  console.log(
-    `${stamp()} tailwind: ${(css.length / 1024).toFixed(1)} KB of utilities in ${Date.now() - t0} ms`,
-  );
+  console.log(`${stamp()} tailwind: ${(css.length / 1024).toFixed(1)} KB of utilities in ${Date.now() - t0} ms`);
   return true;
 }
 
@@ -1053,7 +1047,12 @@ function writeManifest(files: string[]) {
         entry: toId(ENTRY_ABS),
         name: readAppName(),
         modules: ids,
-        assetFiles: Object.fromEntries([...DEV_ASSET_FILES].filter(([key, path]) => key.startsWith("_vn/fs/") && existsSync(path)).map(([key, path]) => [key, realpathSync(path)]).sort(([a], [b]) => a.localeCompare(b))),
+        assetFiles: Object.fromEntries(
+          [...DEV_ASSET_FILES]
+            .filter(([key, path]) => key.startsWith("_vn/fs/") && existsSync(path))
+            .map(([key, path]) => [key, realpathSync(path)])
+            .sort(([a], [b]) => a.localeCompare(b)),
+        ),
         deps,
         window: readWindowConfig(),
         launch: readLaunchConfig(),
@@ -1067,10 +1066,7 @@ function writeManifest(files: string[]) {
 function writeChanges(changed: { id: string; kind: Kind }[]) {
   // Written LAST, and it is the file the host polls: once its mtime moves, every module script
   // and the manifest are already on disk.
-  writeAtomic(
-    join(DIST, "changes.json"),
-    JSON.stringify({ rev, vendorRev, changed }) + "\n",
-  );
+  writeAtomic(join(DIST, "changes.json"), JSON.stringify({ rev, vendorRev, changed }) + "\n");
 }
 
 const stamp = () => `[${new Date().toLocaleTimeString()}]`;
@@ -1169,10 +1165,7 @@ async function incrementalBuild() {
   rev++;
   writeManifest(files);
   writeChanges(changed);
-  console.log(
-    `${stamp()} rev ${rev}: ` +
-      (changed.map((c) => `${c.kind} ${c.id}`).join(", ") || "module set changed"),
-  );
+  console.log(`${stamp()} rev ${rev}: ` + (changed.map((c) => `${c.kind} ${c.id}`).join(", ") || "module set changed"));
 }
 
 await fullBuild("startup").catch((e) => {

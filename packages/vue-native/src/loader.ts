@@ -178,9 +178,7 @@ function requireId(id: ModuleId, fromId: ModuleId | null): Record<string, unknow
   if (hit) return hit.exports;
   const factory = factories.get(id);
   if (!factory) {
-    throw new Error(
-      "[vn] module not found: " + id + (fromId ? " (required from " + fromId + ")" : ""),
-    );
+    throw new Error("[vn] module not found: " + id + (fromId ? " (required from " + fromId + ")" : ""));
   }
   const mod = { id, exports: {} };
   cache.set(id, mod);
@@ -232,8 +230,7 @@ vueExports.createApp = function (...args: Parameters<typeof origCreateApp>) {
     const vm = mount(...mountArgs);
     mountCount++;
     try {
-      if (!(app._context as VueDevContext).reload)
-        (app._context as VueDevContext).reload = rootReload;
+      if (!(app._context as VueDevContext).reload) (app._context as VueDevContext).reload = rootReload;
     } catch (e) {
       log("could not install appContext.reload: " + e);
     }

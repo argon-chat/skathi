@@ -10,13 +10,27 @@
 // camera need. Notarisation is the author's step. The rest is platform-free, so it is tested on Windows.
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { decodePng, encodePng, isPng, parseIco, resizeRgba } from "./icon";
 
 export type PlistValue = string | number | boolean | PlistValue[] | { [key: string]: PlistValue };
 
-const XML_INVALID = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const XML_INVALID =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 export function xmlText(s: string, where = "plist"): string {
   const bad = XML_INVALID.exec(s);
@@ -111,7 +125,9 @@ export function infoPlist(m: MacInfo): { [key: string]: PlistValue } {
   return d;
 }
 
-export function entitlements(m: Pick<MacInfo, "microphoneUsageDescription" | "cameraUsageDescription">): { [key: string]: PlistValue } {
+export function entitlements(m: Pick<MacInfo, "microphoneUsageDescription" | "cameraUsageDescription">): {
+  [key: string]: PlistValue;
+} {
   const d: { [key: string]: PlistValue } = { "com.apple.security.cs.allow-jit": true };
   if (m.microphoneUsageDescription) d["com.apple.security.device.audio-input"] = true;
   if (m.cameraUsageDescription) d["com.apple.security.device.camera"] = true;
@@ -168,7 +184,7 @@ export function parseIcns(bytes: Uint8Array, label = "icns"): IcnsEntry[] {
     throw new Error(`${label}: the header says ${dv.getUint32(4)} bytes, the file is ${bytes.length}`);
   }
   const entries: IcnsEntry[] = [];
-  for (let o = 8; o < bytes.length; ) {
+  for (let o = 8; o < bytes.length;) {
     if (o + 8 > bytes.length) throw new Error(`${label}: truncated entry header at ${o}`);
     const len = dv.getUint32(o + 4);
     if (len < 8 || o + len > bytes.length) throw new Error(`${label}: entry ${tag(o)} at ${o} claims ${len} bytes`);
@@ -188,11 +204,14 @@ function sourcePng(path: string, bytes: Uint8Array): Uint8Array {
   if (extname(path).toLowerCase() === ".ico") {
     const pngs = parseIco(bytes, path).filter((img) => isPng(img.data));
     if (!pngs.length) {
-      throw new Error(`${path}: the .ico holds only BMP images — give macos.icon a square .png (1024 px is best) or an .icns`);
+      throw new Error(
+        `${path}: the .ico holds only BMP images — give macos.icon a square .png (1024 px is best) or an .icns`,
+      );
     }
     return pngs.reduce((a, b) => (b.width > a.width ? b : a)).data;
   }
-  if (!isPng(bytes)) throw new Error(`${path}: a macOS icon must be an .icns, a square .png, or an .ico holding PNG images`);
+  if (!isPng(bytes))
+    throw new Error(`${path}: a macOS icon must be an .icns, a square .png, or an .ico holding PNG images`);
   return bytes;
 }
 
@@ -230,7 +249,12 @@ export function icnsFrom(path: string): Icns {
   return icnsFromPng(sourcePng(path, bytes), path);
 }
 
-const CPU: Record<number, string> = { 0x0100000c: "arm64", 0x01000007: "x86_64", 0x0000000c: "arm", 0x00000007: "i386" };
+const CPU: Record<number, string> = {
+  0x0100000c: "arm64",
+  0x01000007: "x86_64",
+  0x0000000c: "arm",
+  0x00000007: "i386",
+};
 
 export function machOArchs(path: string): string[] | null {
   let head: Uint8Array;
@@ -248,7 +272,8 @@ export function machOArchs(path: string): string[] | null {
   if (head.length < 8) return null;
   const dv = new DataView(head.buffer, head.byteOffset, head.byteLength);
   const le = dv.getUint32(0, true);
-  if (le === 0xfeedfacf || le === 0xfeedface) return [CPU[dv.getUint32(4, true)] ?? `cpu 0x${dv.getUint32(4, true).toString(16)}`];
+  if (le === 0xfeedfacf || le === 0xfeedface)
+    return [CPU[dv.getUint32(4, true)] ?? `cpu 0x${dv.getUint32(4, true).toString(16)}`];
   const be = dv.getUint32(0);
   if (be === 0xcafebabe || be === 0xcafebabf) {
     const n = dv.getUint32(4);
@@ -323,7 +348,9 @@ export function writeAppBundle(options: AppBundleOptions): AppBundleResult {
       try {
         rmSync(options.out, { recursive: true, force: true });
       } catch (e) {
-        throw new Error(`${options.out} cannot be replaced — is it running? Quit it and build again. (${(e as Error).message})`);
+        throw new Error(
+          `${options.out} cannot be replaced — is it running? Quit it and build again. (${(e as Error).message})`,
+        );
       }
     }
     renameSync(partial, options.out);
@@ -331,7 +358,11 @@ export function writeAppBundle(options: AppBundleOptions): AppBundleResult {
     const app = options.out;
     const executable = join(app, "Contents", "MacOS", options.executable);
     const bytes =
-      statSync(executable).size + options.payload.length + (options.icns?.length ?? 0) + Buffer.byteLength(options.infoPlist) + 8;
+      statSync(executable).size +
+      options.payload.length +
+      (options.icns?.length ?? 0) +
+      Buffer.byteLength(options.infoPlist) +
+      8;
     return {
       app,
       executable,
@@ -388,8 +419,14 @@ export function signPlan(input: {
     };
   }
   if (!codesign) {
-    if (want) throw new Error(`codesign is not on PATH, so ${app} cannot be signed as ${JSON.stringify(want)} — xcode-select --install`);
-    return { identity: null, note: "not signed: codesign is not on PATH (xcode-select --install) — the executable keeps only its linker signature" };
+    if (want)
+      throw new Error(
+        `codesign is not on PATH, so ${app} cannot be signed as ${JSON.stringify(want)} — xcode-select --install`,
+      );
+    return {
+      identity: null,
+      note: "not signed: codesign is not on PATH (xcode-select --install) — the executable keeps only its linker signature",
+    };
   }
   return { identity: want ?? AD_HOC, note: null };
 }

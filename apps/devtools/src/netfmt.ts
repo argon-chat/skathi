@@ -304,8 +304,10 @@ function caveats(d: NetDetail): string[] {
   const info = d.request?.bodyInfo;
   if (body?.truncated) out.push(`the body was cut at ${formatBytes(body.stored)} by the devtools tee`);
   if (body?.evicted) out.push("the body was evicted from the devtools ring and is left out");
-  if (info?.kind === "formdata" && info.fields?.some((f) => f.file)) out.push("file parts are named but their bytes were not captured");
-  if (body && !body.evicted && body.data === undefined && body.note && info?.kind !== "formdata") out.push(`no body: ${body.note}`);
+  if (info?.kind === "formdata" && info.fields?.some((f) => f.file))
+    out.push("file parts are named but their bytes were not captured");
+  if (body && !body.evicted && body.data === undefined && body.note && info?.kind !== "formdata")
+    out.push(`no body: ${body.note}`);
   return out;
 }
 

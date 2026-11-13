@@ -12,8 +12,14 @@ Object.defineProperty(globalThis, "isVn", { value: true, writable: false, enumer
 // redjs ships no `history`; vue-router's dev build touches it at startup. Inert stub.
 // TODO: move into redjs as a native class.
 globalThis.history = {
-  state: null, length: 1, scrollRestoration: "auto",
-  pushState() {}, replaceState() {}, go() {}, back() {}, forward() {},
+  state: null,
+  length: 1,
+  scrollRestoration: "auto",
+  pushState() {},
+  replaceState() {},
+  go() {},
+  back() {},
+  forward() {},
 };
 
 // AOT locks engine builtins before entering the compiled application. Keep
@@ -32,13 +38,26 @@ globalThis.history = {
       const method = source[name];
       return typeof method === "function" ? method.bind(target) : undefined;
     };
-    const native = Object.freeze({ add: bind("addEventListener"), remove: bind("removeEventListener"), dispatch: bind("dispatchEvent") });
-    let delegate: Methods | undefined;
-    const slot = Object.freeze({ native,
-      set(next: Methods) { delegate = next; },
-      clear(previous: Methods) { if (delegate === previous) delegate = undefined; },
+    const native = Object.freeze({
+      add: bind("addEventListener"),
+      remove: bind("removeEventListener"),
+      dispatch: bind("dispatchEvent"),
     });
-    for (const [name, key] of [["addEventListener", "add"], ["removeEventListener", "remove"], ["dispatchEvent", "dispatch"]] as const) {
+    let delegate: Methods | undefined;
+    const slot = Object.freeze({
+      native,
+      set(next: Methods) {
+        delegate = next;
+      },
+      clear(previous: Methods) {
+        if (delegate === previous) delegate = undefined;
+      },
+    });
+    for (const [name, key] of [
+      ["addEventListener", "add"],
+      ["removeEventListener", "remove"],
+      ["dispatchEvent", "dispatch"],
+    ] as const) {
       Object.defineProperty(target, name, {
         value: (...args: unknown[]) => {
           const method = delegate?.[key] ?? native[key];
@@ -46,7 +65,8 @@ globalThis.history = {
         },
         // The window prelude still composes its bootstrap wrapper; AOT applies
         // its existing builtin locks after both preludes have completed.
-        configurable: true, writable: true,
+        configurable: true,
+        writable: true,
       });
     }
     slots.set(target, slot);
@@ -55,6 +75,7 @@ globalThis.history = {
   if (host.document) install(host.document);
   Object.defineProperty(globalThis, "__VN_GLOBAL_EVENTS__", {
     value: Object.freeze({ get: (target: object) => slots.get(target) }),
-    configurable: false, writable: false,
+    configurable: false,
+    writable: false,
   });
 })();

@@ -5,7 +5,16 @@
 
 import { spawn } from "node:child_process";
 import { buildApp, summary } from "./build-app";
-import { ConfigError, OPTIONAL, parseParts, partsLeftOut, selectVariant, VARIANTS, variantFor, type Variant } from "./config";
+import {
+  ConfigError,
+  OPTIONAL,
+  parseParts,
+  partsLeftOut,
+  selectVariant,
+  VARIANTS,
+  variantFor,
+  type Variant,
+} from "./config";
 import { dev } from "./dev";
 import { addHost, buildHost, CLI_VERSION, HostError, hostInfo, resolveHost } from "./host";
 import { create } from "./create";
@@ -63,7 +72,12 @@ type Flags = Record<string, string | boolean>;
 const BOOLEAN = new Set(["console", "payload-only", "allow-host-mismatch", "aot-inputs", "help", "json", "no-sign"]);
 const REPEATABLE = new Set(["define"]);
 
-function parse(argv: string[]): { positional: string[]; flags: Flags; repeated: Record<string, string[]>; rest: string[] } {
+function parse(argv: string[]): {
+  positional: string[];
+  flags: Flags;
+  repeated: Record<string, string[]>;
+  rest: string[];
+} {
   const positional: string[] = [];
   const flags: Flags = {};
   const repeated: Record<string, string[]> = {};
@@ -93,11 +107,13 @@ function variantOf(flags: Flags): Variant | undefined {
   const list = (name: string) => {
     const v = flags[name];
     if (v === undefined) return undefined;
-    if (typeof v !== "string" || !v.trim()) throw new ConfigError(`--${name} needs a list of parts (${OPTIONAL.join(", ")})`);
+    if (typeof v !== "string" || !v.trim())
+      throw new ConfigError(`--${name} needs a list of parts (${OPTIONAL.join(", ")})`);
     return parseParts(v, `--${name}`);
   };
   const host = flags.variant;
-  if (host !== undefined && (typeof host !== "string" || !host.trim())) throw new ConfigError("--variant needs a variant name");
+  if (host !== undefined && (typeof host !== "string" || !host.trim()))
+    throw new ConfigError("--variant needs a variant name");
   const sel = { features: list("features"), without: list("without"), host: host as string | undefined };
   if (!sel.features && !sel.without && !sel.host) return undefined;
   // Normalised: `no-audio+no-devtools` and `no-devtools+no-audio` are one host.
@@ -119,12 +135,15 @@ async function main(argv: string[]): Promise<number> {
   if (command === "build" || command === "run") {
     const platform = flags.platform === undefined ? undefined : parsePlatform(flags.platform);
     if (command === "run" && platform && platform !== currentPlatform()) {
-      throw new ConfigError(`vn run starts the app here; a ${platform} build cannot run on ${process.platform} — use vn build`);
+      throw new ConfigError(
+        `vn run starts the app here; a ${platform} build cannot run on ${process.platform} — use vn build`,
+      );
     }
     if (flags.sign !== undefined && (typeof flags.sign !== "string" || !flags.sign.trim())) {
       throw new ConfigError('--sign needs a codesign identity ("-" for ad hoc)');
     }
-    if (flags.sign !== undefined && flags["no-sign"]) throw new ConfigError("--sign and --no-sign contradict each other");
+    if (flags.sign !== undefined && flags["no-sign"])
+      throw new ConfigError("--sign and --no-sign contradict each other");
     const result = await buildApp({
       target: args[0] ?? ".",
       configPath: typeof flags.config === "string" ? flags.config : undefined,

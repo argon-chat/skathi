@@ -236,10 +236,7 @@ describe("<video> media events and the HTMLMediaElement surface", () => {
   test("an errored element reports a MediaError with the advisory text", () => {
     const rt = createRuntime();
     const node = video(rt);
-    rt.host.mediaById.set(
-      node.__vnId,
-      "error=4\nerrorMessage=this machine has no HEVC decoder; re-encode to H.264",
-    );
+    rt.host.mediaById.set(node.__vnId, "error=4\nerrorMessage=this machine has no HEVC decoder; re-encode to H.264");
     expect(node.error.code).toBe(4);
     expect(node.error.message).toContain("H.264");
   });
@@ -261,7 +258,13 @@ describe("the listener flag is only written when it changes", () => {
     rt.patchProp(el, "onClick", null, () => {});
     expect(rt.flagsFor(rt.EV_CODES.click)).toEqual([{ id: el.__vnId, code: 1, on: true }]);
 
-    for (let i = 0; i < 10; i++) rt.patchProp(el, "onClick", () => {}, () => {});
+    for (let i = 0; i < 10; i++)
+      rt.patchProp(
+        el,
+        "onClick",
+        () => {},
+        () => {},
+      );
     expect(rt.flagsFor(rt.EV_CODES.click).length).toBe(1);
   });
 

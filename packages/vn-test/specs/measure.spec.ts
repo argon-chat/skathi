@@ -82,9 +82,13 @@ describe("a layout read lays out", () => {
     T,
   );
 
-  test("no errors and no advisories on the way", async () => {
-    await app.expectNoErrors();
-  }, T);
+  test(
+    "no errors and no advisories on the way",
+    async () => {
+      await app.expectNoErrors();
+    },
+    T,
+  );
 });
 
 describe("a rem recompile is not a style change", () => {
@@ -113,9 +117,13 @@ describe("a rem recompile is not a style change", () => {
     T,
   );
 
-  test("no errors and no advisories on the way", async () => {
-    await rem.expectNoErrors();
-  }, T);
+  test(
+    "no errors and no advisories on the way",
+    async () => {
+      await rem.expectNoErrors();
+    },
+    T,
+  );
 });
 
 /**
@@ -135,31 +143,51 @@ describe("a later wave", () => {
     bunExpect(Math.round(bubble.node.bounds?.w ?? 0)).toBe(Math.round(w * 0.6));
   }
 
-  test("mounted from a timer", async () => {
-    await check("timeout");
-  }, T);
+  test(
+    "mounted from a timer",
+    async () => {
+      await check("timeout");
+    },
+    T,
+  );
 
-  test("mounted after a fetch completes", async () => {
-    await late.eval(`__VN_TEST_LATE__.fetchMount(${JSON.stringify(`http://127.0.0.1:${server.port}/chats`)})`);
-    await check("fetch");
-  }, T);
+  test(
+    "mounted after a fetch completes",
+    async () => {
+      await late.eval(`__VN_TEST_LATE__.fetchMount(${JSON.stringify(`http://127.0.0.1:${server.port}/chats`)})`);
+      await check("fetch");
+    },
+    T,
+  );
 
-  test("mounted from a click, synthesized and real", async () => {
-    await late.locator("#mount-click").click();
-    await check("click");
-    await late.locator("#mount-realclick").click({ real: true });
-    await check("realclick");
-  }, T);
+  test(
+    "mounted from a click, synthesized and real",
+    async () => {
+      await late.locator("#mount-click").click();
+      await check("click");
+      await late.locator("#mount-realclick").click({ real: true });
+      await check("realclick");
+    },
+    T,
+  );
 
-  test("mounted from a mousedown and a keydown, under gpui's listener", async () => {
-    // Both handlers run inside gpui's dispatch, where no frame can be drawn.
-    await late.locator("#mount-down").click({ real: true });
-    await check("mousedown");
-    await late.locator("#mount-key").press("k");
-    await check("keydown");
-  }, T);
+  test(
+    "mounted from a mousedown and a keydown, under gpui's listener",
+    async () => {
+      // Both handlers run inside gpui's dispatch, where no frame can be drawn.
+      await late.locator("#mount-down").click({ real: true });
+      await check("mousedown");
+      await late.locator("#mount-key").press("k");
+      await check("keydown");
+    },
+    T,
+  );
 
-  test("no errors and no advisories on the way", async () => {
-    await late.expectNoErrors();
-  }, T);
+  test(
+    "no errors and no advisories on the way",
+    async () => {
+      await late.expectNoErrors();
+    },
+    T,
+  );
 });

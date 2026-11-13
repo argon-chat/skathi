@@ -30,12 +30,24 @@ const Tones = defineComponent({
             ref: root,
             id: "tones",
             role: "menu",
-            style: { position: "fixed", display: "flex", gap: "4px", padding: "4px", background: "#dde", ...position.value },
+            style: {
+              position: "fixed",
+              display: "flex",
+              gap: "4px",
+              padding: "4px",
+              background: "#dde",
+              ...position.value,
+            },
           },
           [0, 1, 2].map((i) =>
             h(
               "button",
-              { id: `tone-${i}`, role: "menuitemradio", "aria-checked": i === 1 ? "true" : "false", style: { width: "36px", height: "36px" } },
+              {
+                id: `tone-${i}`,
+                role: "menuitemradio",
+                "aria-checked": i === 1 ? "true" : "false",
+                style: { width: "36px", height: "36px" },
+              },
               String(i),
             ),
           ),
@@ -58,16 +70,39 @@ const srOnly = {
 
 const App = {
   render: () =>
-    h("div", { id: "page", style: { position: "relative", display: "flex", flexDirection: "column", gap: "8px", padding: "16px", background: "#fff", height: "100%" } }, [
-      h("button", { id: "opener", style: { width: "120px", height: "32px" }, onClick: () => (tonesOpen.value = !tonesOpen.value) }, "tones"),
-      h("button", { id: "other", style: { width: "120px", height: "32px" } }, "other"),
-      h("div", { id: "hbox", style: { visibility: "hidden", display: "flex", gap: "4px" } }, [
-        h("button", { id: "hchild", style: { width: "120px", height: "32px" } }, "hidden"),
-      ]),
-      h("div", { id: "nbox", style: { display: "none" } }, [h("button", { id: "nchild" }, "gone")]),
-      h("input", { id: "sr", style: srOnly }),
-      tonesOpen.value ? h(Tones) : null,
-    ]),
+    h(
+      "div",
+      {
+        id: "page",
+        style: {
+          position: "relative",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          padding: "16px",
+          background: "#fff",
+          height: "100%",
+        },
+      },
+      [
+        h(
+          "button",
+          {
+            id: "opener",
+            style: { width: "120px", height: "32px" },
+            onClick: () => (tonesOpen.value = !tonesOpen.value),
+          },
+          "tones",
+        ),
+        h("button", { id: "other", style: { width: "120px", height: "32px" } }, "other"),
+        h("div", { id: "hbox", style: { visibility: "hidden", display: "flex", gap: "4px" } }, [
+          h("button", { id: "hchild", style: { width: "120px", height: "32px" } }, "hidden"),
+        ]),
+        h("div", { id: "nbox", style: { display: "none" } }, [h("button", { id: "nchild" }, "gone")]),
+        h("input", { id: "sr", style: srOnly }),
+        tonesOpen.value ? h(Tones) : null,
+      ],
+    ),
 };
 
 createApp(App).mount("#app");

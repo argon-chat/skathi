@@ -78,7 +78,9 @@ describe("<iframe> with a document", () => {
       const s = await until((s) => messages(s, "echo").length >= 21);
       const echoes = messages(s, "echo");
       expect(echoes.slice(0, 20).map((m) => m.data.data.n)).toEqual([...Array(20).keys()]);
-      expect(echoes.every((m) => m.who === "mine" && m.origin === "null" && m.data.sourceIsParent && m.data.originIsStable)).toBe(true);
+      expect(
+        echoes.every((m) => m.who === "mine" && m.origin === "null" && m.data.sourceIsParent && m.data.originIsStable),
+      ).toBe(true);
       expect(echoes[20].data.kinds).toEqual({
         type: "[object String]",
         when: "[object Date]",

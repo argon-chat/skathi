@@ -207,9 +207,9 @@ test(
       return String(await app.eval(`__VN_TEST_MIC__.settings[${before}]`));
     };
     expect(await opened("{ audio: true }")).toBe("false|false|false|1");
-    expect(await opened("{ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }")).toBe(
-      "false|false|false|1",
-    );
+    expect(
+      await opened("{ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }"),
+    ).toBe("false|false|false|1");
     await app.eval("__VN_TEST_MIC__.stopAll(), 0");
   },
   T,
@@ -221,7 +221,9 @@ test(
     await app.close();
     app = await host("deny", "deny");
     expect(await state(app)).toBe("denied");
-    expect(await open(app)).toBe("err:NotAllowedError: Permission denied: microphone capture is switched off for this process.");
+    expect(await open(app)).toBe(
+      "err:NotAllowedError: Permission denied: microphone capture is switched off for this process.",
+    );
     expect(await listed(app, "audioinput")).toBe(
       "err:NotAllowedError: Permission denied: microphone capture is switched off for this process.",
     );

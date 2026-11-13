@@ -170,7 +170,6 @@ describe("only what someone listens for is built", () => {
   });
 });
 
-
 describe("pointer capture", () => {
   const fire = (rt, node, name, x = 10, y = 20, button = 0) =>
     rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], x, y, button, 0, undefined);
@@ -189,8 +188,10 @@ describe("pointer capture", () => {
     expect(inner.hasPointerCapture(1)).toBe(false);
     fire(rt, root, "mousemove", 5, 5, -1);
     expect(seen).toEqual([
-      ["gotpointercapture", true, 10, 1], ["pointermove", true, -70, 1],
-      ["pointerup", true, -70, 0], ["lostpointercapture", true, -70, 0],
+      ["gotpointercapture", true, 10, 1],
+      ["pointermove", true, -70, 1],
+      ["pointerup", true, -70, 0],
+      ["lostpointercapture", true, -70, 0],
     ]);
     expect(rt.host.pointerCaptureCalls).toEqual([
       { id: inner.__vnId, pointerId: 1, capture: true },
@@ -204,8 +205,13 @@ describe("pointer capture", () => {
     const { inner, outer } = tree(rt);
     const seen = [];
     inner.addEventListener("pointerdown", () => inner.setPointerCapture(1));
-    inner.addEventListener("lostpointercapture", (e) => { seen.push(e.type); expect(e.cancelable).toBe(false); });
-    outer.addEventListener("gotpointercapture", (e) => { if (e.target === outer) seen.push(e.type); });
+    inner.addEventListener("lostpointercapture", (e) => {
+      seen.push(e.type);
+      expect(e.cancelable).toBe(false);
+    });
+    outer.addEventListener("gotpointercapture", (e) => {
+      if (e.target === outer) seen.push(e.type);
+    });
     fire(rt, inner, "mousedown");
     outer.setPointerCapture(1);
     expect(seen).toEqual(["lostpointercapture", "gotpointercapture"]);
@@ -254,9 +260,16 @@ describe("pointer capture", () => {
     rt.nodeOps.insert(third, root, null);
     const seen = [];
     inner.addEventListener("pointerdown", () => inner.setPointerCapture(1));
-    inner.addEventListener("lostpointercapture", () => { seen.push("inner lost"); third.setPointerCapture(1); });
-    outer.addEventListener("gotpointercapture", (e) => { if (e.target === outer) seen.push("outer got"); });
-    outer.addEventListener("lostpointercapture", (e) => { if (e.target === outer) seen.push("outer lost"); });
+    inner.addEventListener("lostpointercapture", () => {
+      seen.push("inner lost");
+      third.setPointerCapture(1);
+    });
+    outer.addEventListener("gotpointercapture", (e) => {
+      if (e.target === outer) seen.push("outer got");
+    });
+    outer.addEventListener("lostpointercapture", (e) => {
+      if (e.target === outer) seen.push("outer lost");
+    });
     third.addEventListener("gotpointercapture", () => seen.push("third got"));
     fire(rt, inner, "mousedown");
     outer.setPointerCapture(1);
@@ -270,7 +283,10 @@ describe("pointer capture", () => {
     const { inner, outer } = tree(rt);
     let lost = 0;
     inner.addEventListener("pointerdown", () => inner.setPointerCapture(1));
-    inner.addEventListener("lostpointercapture", () => { lost++; inner.setPointerCapture(1); });
+    inner.addEventListener("lostpointercapture", () => {
+      lost++;
+      inner.setPointerCapture(1);
+    });
     fire(rt, inner, "mousedown");
     rt.nodeOps.remove(outer);
     expect(lost).toBe(1);

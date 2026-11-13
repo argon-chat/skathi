@@ -25,16 +25,12 @@ createApp({
     });
     return () =>
       h("div", { id: "root" }, [
-        h(
-          "div",
-          { id: "probe-box", style: { overflow: "hidden", height: boxHeight.value } },
-          [
-            h("div", { id: "probe-content", style: { padding: "20px" } }, [
-              h("div", { style: { height: "60px", background: "#cc3333" } }, "one"),
-              h("div", { style: { height: "60px", background: "#33cc33" } }, "two"),
-            ]),
-          ],
-        ),
+        h("div", { id: "probe-box", style: { overflow: "hidden", height: boxHeight.value } }, [
+          h("div", { id: "probe-content", style: { padding: "20px" } }, [
+            h("div", { style: { height: "60px", background: "#cc3333" } }, "one"),
+            h("div", { style: { height: "60px", background: "#33cc33" } }, "two"),
+          ]),
+        ]),
         // One box per stage, so the vnode SHAPE never changes across a patch and only the text
         // does — the spec reads them by id.
         h(

@@ -102,9 +102,7 @@ const MQ = {
   fullscreen: matchMedia("(display-mode: fullscreen)"),
 };
 const mq = ref<Partial<Record<keyof typeof MQ, boolean>>>({});
-const readMq = () => (mq.value = Object.fromEntries(
-  Object.entries(MQ).map(([k, v]) => [k, v.matches]),
-));
+const readMq = () => (mq.value = Object.fromEntries(Object.entries(MQ).map(([k, v]) => [k, v.matches])));
 onMounted(() => Object.values(MQ).forEach((m) => m.addEventListener("change", readMq)));
 onUnmounted(() => Object.values(MQ).forEach((m) => m.removeEventListener("change", readMq)));
 
@@ -116,9 +114,7 @@ const grow = (d: number) => resizeBy(d, d);
 // `documentElement` is `unknown` on `VnDocument` and cannot be narrowed by a merge (apps/env.d.ts
 // says why), so it is cast at this one use.
 const toggleFullscreen = () =>
-  doc.fullscreenElement
-    ? doc.exitFullscreen()
-    : (doc.documentElement as VnElement).requestFullscreen();
+  doc.fullscreenElement ? doc.exitFullscreen() : (doc.documentElement as VnElement).requestFullscreen();
 </script>
 
 <template>
@@ -131,27 +127,47 @@ const toggleFullscreen = () =>
     <section class="card">
       <div class="cap">chrome mode</div>
       <div class="grid">
-        <div class="kv"><span class="k">titleBarStyle</span><span class="v">{{ chrome.titleBarStyle }}</span></div>
-        <div class="kv"><span class="k">display-mode</span><span class="v">{{ chrome.displayMode }}</span></div>
-        <div class="kv"><span class="k">host fallback titlebar</span><span class="v">{{ chrome.fallbackTitleBar ? "on" : "retired" }}</span></div>
-        <div class="kv"><span class="k">WCO visible</span><span class="v">{{ chrome.overlayVisible }}</span></div>
-        <div class="kv"><span class="k">titlebar area rect</span><span class="v">{{ bar.x }}, {{ bar.y }} — {{ bar.width }} x {{ bar.height }}</span></div>
-        <div class="kv"><span class="k">client area</span><span class="v">{{ chrome.client.width }} x {{ chrome.client.height }}</span></div>
-        <div class="kv"><span class="k">content inset</span><span class="v">{{ chrome.contentInset.left }}, {{ chrome.contentInset.top }}, {{ chrome.contentInset.right }}, {{ chrome.contentInset.bottom }}</span></div>
+        <div class="kv">
+          <span class="k">titleBarStyle</span><span class="v">{{ chrome.titleBarStyle }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">display-mode</span><span class="v">{{ chrome.displayMode }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">host fallback titlebar</span
+          ><span class="v">{{ chrome.fallbackTitleBar ? "on" : "retired" }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">WCO visible</span><span class="v">{{ chrome.overlayVisible }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">titlebar area rect</span
+          ><span class="v">{{ bar.x }}, {{ bar.y }} — {{ bar.width }} x {{ bar.height }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">client area</span
+          ><span class="v">{{ chrome.client.width }} x {{ chrome.client.height }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">content inset</span
+          ><span class="v"
+            >{{ chrome.contentInset.left }}, {{ chrome.contentInset.top }}, {{ chrome.contentInset.right }},
+            {{ chrome.contentInset.bottom }}</span
+          >
+        </div>
       </div>
       <div class="row">
         <div class="chip" :class="{ on: !hostControls }" @click="setHostControls(false)">app controls</div>
-        <div class="chip" :class="{ on: hostControls }" @click="setHostControls(true)">host controls (titleBarOverlay)</div>
+        <div class="chip" :class="{ on: hostControls }" @click="setHostControls(true)">
+          host controls (titleBarOverlay)
+        </div>
       </div>
       <div class="note">
-        The strip at the top of this window is the app's own &lt;header&gt;,
-        marked `window-drag: move`; its height and left inset come from
-        `env(titlebar-area-height)` / `env(titlebar-area-x)`, the same rect the
-        JS getter above reports. Its three buttons carry `--window-control`,
-        which is what makes Windows 11 offer snap layouts when you hover the
-        maximize one. The host's built-in titlebar retired on the first frame
-        this app painted a drag region — which is also why `content inset` is
-        zero on all four sides: the app owns the whole client area, so
+        The strip at the top of this window is the app's own &lt;header&gt;, marked `window-drag: move`; its height and
+        left inset come from `env(titlebar-area-height)` / `env(titlebar-area-x)`, the same rect the JS getter above
+        reports. Its three buttons carry `--window-control`, which is what makes Windows 11 offer snap layouts when you
+        hover the maximize one. The host's built-in titlebar retired on the first frame this app painted a drag region —
+        which is also why `content inset` is zero on all four sides: the app owns the whole client area, so
         `innerWidth`/`innerHeight` and the client area are the same rectangle.
       </div>
     </section>
@@ -163,22 +179,15 @@ const toggleFullscreen = () =>
         <div class="btn" @click="applyTitle">Set title</div>
       </div>
       <div class="note">
-        Drives the OS window title: taskbar, Alt-Tab, window enumeration. The
-        getter normalises whitespace exactly as HTML says, so leading, trailing
-        and repeated spaces come back collapsed.
+        Drives the OS window title: taskbar, Alt-Tab, window enumeration. The getter normalises whitespace exactly as
+        HTML says, so leading, trailing and repeated spaces come back collapsed.
       </div>
     </section>
 
     <section class="card">
       <div class="cap">backdrop material <span class="tier t3">tier 3</span></div>
       <div class="row">
-        <div
-          v-for="m in MATERIALS"
-          :key="m"
-          class="chip"
-          :class="{ on: backdrop === m }"
-          @click="setBackdrop(m)"
-        >
+        <div v-for="m in MATERIALS" :key="m" class="chip" :class="{ on: backdrop === m }" @click="setBackdrop(m)">
           {{ m }}
         </div>
       </div>
@@ -213,31 +222,53 @@ const toggleFullscreen = () =>
     <section class="card">
       <div class="cap">geometry &amp; screen <span class="tier t1">tier 1</span></div>
       <div class="grid">
-        <div class="kv"><span class="k">innerWidth x innerHeight</span><span class="v">{{ geom.inner }}</span></div>
-        <div class="kv"><span class="k">outerWidth x outerHeight</span><span class="v">{{ geom.outer }}</span></div>
-        <div class="kv"><span class="k">screenX, screenY</span><span class="v">{{ geom.screenXY }}</span></div>
-        <div class="kv"><span class="k">devicePixelRatio</span><span class="v">{{ geom.dpr }}</span></div>
-        <div class="kv"><span class="k">screen</span><span class="v">{{ geom.screen }}</span></div>
-        <div class="kv"><span class="k">screen.avail*</span><span class="v">{{ geom.avail }}</span></div>
-        <div class="kv"><span class="k">screen.isExtended</span><span class="v">{{ geom.extended }}</span></div>
+        <div class="kv">
+          <span class="k">innerWidth x innerHeight</span><span class="v">{{ geom.inner }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">outerWidth x outerHeight</span><span class="v">{{ geom.outer }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">screenX, screenY</span><span class="v">{{ geom.screenXY }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">devicePixelRatio</span><span class="v">{{ geom.dpr }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">screen</span><span class="v">{{ geom.screen }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">screen.avail*</span><span class="v">{{ geom.avail }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">screen.isExtended</span><span class="v">{{ geom.extended }}</span>
+        </div>
       </div>
       <div class="note">
-        outer − inner is the invisible resize border, not the titlebar height —
-        read the titlebar height from the WCO rect above.
+        outer − inner is the invisible resize border, not the titlebar height — read the titlebar height from the WCO
+        rect above.
       </div>
     </section>
 
     <section class="card">
       <div class="cap">matchMedia <span class="tier t1">tier 1</span></div>
       <div class="grid">
-        <div class="kv"><span class="k">(min-width: 800px)</span><span class="v">{{ mq.wide }}</span></div>
-        <div class="kv"><span class="k">(min-resolution: {{ geom.dpr }}dppx)</span><span class="v">{{ mq.dpr }}</span></div>
-        <div class="kv"><span class="k">(display-mode: window-controls-overlay)</span><span class="v">{{ mq.wco }}</span></div>
-        <div class="kv"><span class="k">(display-mode: fullscreen)</span><span class="v">{{ mq.fullscreen }}</span></div>
+        <div class="kv">
+          <span class="k">(min-width: 800px)</span><span class="v">{{ mq.wide }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">(min-resolution: {{ geom.dpr }}dppx)</span><span class="v">{{ mq.dpr }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">(display-mode: window-controls-overlay)</span><span class="v">{{ mq.wco }}</span>
+        </div>
+        <div class="kv">
+          <span class="k">(display-mode: fullscreen)</span><span class="v">{{ mq.fullscreen }}</span>
+        </div>
       </div>
       <div class="responsive">
-        this box is styled by a real @media (min-width: 800px) rule — it and the
-        JS answer above come from the same evaluator, so they cannot disagree
+        this box is styled by a real @media (min-width: 800px) rule — it and the JS answer above come from the same
+        evaluator, so they cannot disagree
       </div>
     </section>
   </div>
@@ -343,7 +374,9 @@ const toggleFullscreen = () =>
   color: #ffffffb0;
   background: #ffffff10;
   cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
 }
 .chip:hover {
   background: #ffffff24;

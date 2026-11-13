@@ -109,12 +109,9 @@ const cls = (state: string) =>
           <span class="s" :class="cls(r.webState)">{{ r.webState }}</span>
           <span class="s" :class="cls(r.state)" :data-state="r.state">{{ r.state }}</span>
           <span class="a">
-            <span
-              v-if="r.canRequest"
-              class="btn"
-              :class="{ busy: r.requesting }"
-              @click="request(r)"
-            >{{ r.requesting ? "waiting…" : "Request" }}</span>
+            <span v-if="r.canRequest" class="btn" :class="{ busy: r.requesting }" @click="request(r)">{{
+              r.requesting ? "waiting…" : "Request"
+            }}</span>
             <span v-else class="pill">{{ r.state === "granted" ? "nothing to ask" : "no one to ask" }}</span>
           </span>
         </div>
@@ -127,10 +124,9 @@ const cls = (state: string) =>
       <div class="grid" id="perm-changes">
         <div v-for="(c, i) in changes" :key="i" class="v">{{ c }}</div>
         <div v-if="!changes.length" class="note">
-          Nothing yet. Flip a toggle in Settings &gt; Privacy &amp; security &gt;
-          Microphone while this page is open and a row will appear here — the
-          host subscribes to the consent store with `RegNotifyChangeKeyValue`,
-          so this is a real OS notification and not a poll.
+          Nothing yet. Flip a toggle in Settings &gt; Privacy &amp; security &gt; Microphone while this page is open and
+          a row will appear here — the host subscribes to the consent store with `RegNotifyChangeKeyValue`, so this is a
+          real OS notification and not a poll.
         </div>
       </div>
     </section>
@@ -138,16 +134,13 @@ const cls = (state: string) =>
     <section class="card">
       <div class="cap">why the two columns differ</div>
       <div class="note">
-        Tier 1 is the W3C API and only knows three words, so a capability this
-        platform has no notion of has to read "denied" there. Tier 2 adds a
-        fourth, "unsupported", and an advisory naming the platform — that is the
-        compat-first rule: never diverge silently, and never widen a web enum to
-        say something the web cannot say.
+        Tier 1 is the W3C API and only knows three words, so a capability this platform has no notion of has to read
+        "denied" there. Tier 2 adds a fourth, "unsupported", and an advisory naming the platform — that is the
+        compat-first rule: never diverge silently, and never widen a web enum to say something the web cannot say.
       </div>
       <div class="note">
-        On Windows there is no "prompt" state at all. Consent is pre-answered in
-        Settings before the app runs, so the honest answer is always granted or
-        denied, and Request opens the right Settings page rather than raising a
+        On Windows there is no "prompt" state at all. Consent is pre-answered in Settings before the app runs, so the
+        honest answer is always granted or denied, and Request opens the right Settings page rather than raising a
         dialog this process is not allowed to raise.
       </div>
     </section>

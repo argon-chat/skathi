@@ -6,14 +6,19 @@ function world() {
   const document = Object.assign(new EventTarget(), { head: {} });
   const calls: string[] = [];
   const dispatchWindow = nativeWindow.dispatchEvent.bind(nativeWindow);
-  const rt = createRuntime({ globals: {
-    document,
-    Event,
-    EventTarget,
-    addEventListener: nativeWindow.addEventListener.bind(nativeWindow),
-    removeEventListener: nativeWindow.removeEventListener.bind(nativeWindow),
-    dispatchEvent: (event: Event) => { calls.push(`window:${event.type}`); return dispatchWindow(event); },
-  } });
+  const rt = createRuntime({
+    globals: {
+      document,
+      Event,
+      EventTarget,
+      addEventListener: nativeWindow.addEventListener.bind(nativeWindow),
+      removeEventListener: nativeWindow.removeEventListener.bind(nativeWindow),
+      dispatchEvent: (event: Event) => {
+        calls.push(`window:${event.type}`);
+        return dispatchWindow(event);
+      },
+    },
+  });
   rt.createApp({ render: () => null }).mount();
   const parent = rt.nodeOps.createElement("section");
   const target = rt.nodeOps.createElement("div");
@@ -47,10 +52,14 @@ describe("fullscreen events across the mirror and global targets", () => {
     target.remove();
     const seen: string[] = [];
     g.addEventListener("fullscreenchange", (event: Event) => seen.push(`window-c:${event.eventPhase}`), true);
-    document.addEventListener("fullscreenchange", (event: Event) => {
-      expect(event.target).toBe(document);
-      seen.push(`document-c:${event.eventPhase}`);
-    }, { capture: true, once: true });
+    document.addEventListener(
+      "fullscreenchange",
+      (event: Event) => {
+        expect(event.target).toBe(document);
+        seen.push(`document-c:${event.eventPhase}`);
+      },
+      { capture: true, once: true },
+    );
     document.addEventListener("fullscreenchange", (event: Event) => {
       event.preventDefault();
       seen.push(`document-b:${event.eventPhase}`);
@@ -71,11 +80,15 @@ describe("fullscreen events across the mirror and global targets", () => {
     const { g, document } = world();
     const seen: string[] = [];
     document.addEventListener("fullscreenchange", () => seen.push("document"));
-    g.addEventListener("fullscreenchange", (event: Event) => {
-      expect(event.target).toBe(g);
-      event.stopPropagation();
-      seen.push(`capture:${event.eventPhase}`);
-    }, { capture: true, once: true });
+    g.addEventListener(
+      "fullscreenchange",
+      (event: Event) => {
+        expect(event.target).toBe(g);
+        event.stopPropagation();
+        seen.push(`capture:${event.eventPhase}`);
+      },
+      { capture: true, once: true },
+    );
     g.addEventListener("fullscreenchange", (event: Event) => seen.push(`bubble:${event.eventPhase}`));
     g.dispatchEvent(new Event("fullscreenchange"));
     expect(seen).toEqual(["capture:2", "bubble:2"]);
@@ -103,7 +116,6 @@ describe("fullscreen events across the mirror and global targets", () => {
     }
   });
 });
-
 
 describe("host event names dispatched at window or document", () => {
   test("focus and blur dispatched at window reach window listeners", () => {
@@ -162,7 +174,10 @@ describe("fullscreen listener AbortSignal lifecycle", () => {
     const { document } = world();
     const controller = new AbortController();
     const seen: string[] = [];
-    document.addEventListener("fullscreenchange", () => { seen.push("first"); controller.abort(); });
+    document.addEventListener("fullscreenchange", () => {
+      seen.push("first");
+      controller.abort();
+    });
     document.addEventListener("fullscreenchange", () => seen.push("aborted"), { signal: controller.signal });
     document.dispatchEvent(new Event("fullscreenchange"));
     expect(seen).toEqual(["first"]);

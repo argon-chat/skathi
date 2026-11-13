@@ -65,9 +65,7 @@ function send(port: number, payload: string): Promise<string> {
       const nl = buffer.indexOf("\n");
       if (nl >= 0) finish(() => resolveReply(buffer.slice(0, nl)));
     });
-    socket.on("error", (e) =>
-      finish(() => reject(new Error(`cannot reach 127.0.0.1:${port}: ${e.message}`))),
-    );
+    socket.on("error", (e) => finish(() => reject(new Error(`cannot reach 127.0.0.1:${port}: ${e.message}`))));
     socket.on("close", () => finish(() => reject(new Error("connection closed before a reply"))));
   });
 }
@@ -78,13 +76,9 @@ async function call(request: Record<string, unknown>) {
   return JSON.parse(line) as { ok?: boolean; data?: unknown; error?: string };
 }
 
-
 const TOOLS = mcpTools();
 
-const server = new Server(
-  { name: "vn-devtools", version: "1.0.0" },
-  { capabilities: { tools: {} } },
-);
+const server = new Server({ name: "vn-devtools", version: "1.0.0" }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),

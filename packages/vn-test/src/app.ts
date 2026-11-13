@@ -123,9 +123,7 @@ function hookExit() {
  * Where this harness last put the pointer: a node (resolved fresh every time, because a re-render
  * moves boxes) or a window coordinate.
  */
-export type PointerIntent =
-  | { kind: "node"; selector: string; index: number }
-  | { kind: "point"; x: number; y: number };
+export type PointerIntent = { kind: "node"; selector: string; index: number } | { kind: "point"; x: number; y: number };
 
 export class VnApp {
   readonly locatorDefaults: LocatorOptions;
@@ -397,15 +395,13 @@ function requireBun() {
   bunChecked = true;
   const have = typeof Bun !== "undefined" ? Bun.version : "";
   if (!have) {
-    throw new Error(
-      "vn-test runs on bun (`bun test packages/vn-test/specs`) — this process is not bun.",
-    );
+    throw new Error("vn-test runs on bun (`bun test packages/vn-test/specs`) — this process is not bun.");
   }
   if (olderThan(have, MIN_BUN)) {
     throw new Error(
       `vn-test needs bun >= ${MIN_BUN}; this is ${have}.\n` +
         "  Older bun aborts the whole runner with STATUS_HEAP_CORRUPTION (exit 116) inside the\n" +
-        "  `spawnSync(\"taskkill\")` that VnApp.killSync uses to make sure no host survives the\n" +
+        '  `spawnSync("taskkill")` that VnApp.killSync uses to make sure no host survives the\n' +
         "  run. The abort takes the process, not a test, so a run on an old bun looks like a\n" +
         "  crash rather than a failure.\n" +
         "  Upgrade with `bun upgrade` (or `npm i -g bun`), then re-run.",
@@ -492,9 +488,7 @@ export async function launch(options: LaunchOptions): Promise<VnApp> {
       spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
       closeSync(logFd);
     } catch {}
-    return new Error(
-      `${label}: ${why}\n  exe:      ${exe}\n  dist:     ${slotDir}\n  host log: ${hostLog}`,
-    );
+    return new Error(`${label}: ${why}\n  exe:      ${exe}\n  dist:     ${slotDir}\n  host log: ${hostLog}`);
   };
 
   // It was deleted from the slot before the spawn (see `allocateSlot`), so its reappearance is a

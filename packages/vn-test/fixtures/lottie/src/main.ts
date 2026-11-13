@@ -25,7 +25,7 @@ const lottie = (id: string, src: string, style: Record<string, string>, extra: R
     src,
     style,
     ...extra,
-    "onLoopComplete": (e: CustomEvent<Detail>) => events.push(`loopComplete:${id}:${e.detail?.currentLoop}`),
+    onLoopComplete: (e: CustomEvent<Detail>) => events.push(`loopComplete:${id}:${e.detail?.currentLoop}`),
     onComplete: (e: CustomEvent<Detail>) => events.push(`complete:${id}:${e.detail?.loops}`),
     ...(id === "play" ? { onEnterFrame: () => frames.play++ } : {}),
   });

@@ -22,8 +22,12 @@ describe("external app module ids", () => {
     const entry = "../../client/packages/editor/main.ts";
     const helper = "../../client/packages/editor/gpu/draw.ts";
     const shared = "../../client/packages/shared.ts";
-    w.VN.define(helper, (_require, module) => { module.exports = { draw: 42 }; });
-    w.VN.define(shared, (_require, module) => { module.exports = { shared: 17 }; });
+    w.VN.define(helper, (_require, module) => {
+      module.exports = { draw: 42 };
+    });
+    w.VN.define(shared, (_require, module) => {
+      module.exports = { shared: 17 };
+    });
     w.VN.define(entry, (require, module) => {
       module.exports = { value: require("./gpu/draw").draw + require("../shared").shared };
     });
@@ -81,9 +85,7 @@ describe("shared plain module changed", () => {
     expect(newApp.__version).toBe(1); // App's own code did not change...
     expect(newApp.imported["./util.js"].version).toBe(2); // ...but its import did
     expect(w.hmr.records.get(COUNTER).imported["../util.js"].version).toBe(2);
-    expect(newApp.imported["./util.js"]).toBe(
-      w.hmr.records.get(COUNTER).imported["../util.js"],
-    );
+    expect(newApp.imported["./util.js"]).toBe(w.hmr.records.get(COUNTER).imported["../util.js"]);
   });
 
   test("createRecord stays idempotent across the reload", () => {
@@ -391,10 +393,16 @@ describe("style-only edits", () => {
   test("do not invalidate the require cache", () => {
     const w = bootStandardFixture();
     const before = w.VN.require(APP).default;
-    redefineCssOnly(w, APP, [
-      { spec: "./util.js", id: UTIL },
-      { spec: "./components/Counter.vue", id: COUNTER },
-    ], 1, ".app { color: green }");
+    redefineCssOnly(
+      w,
+      APP,
+      [
+        { spec: "./util.js", id: UTIL },
+        { spec: "./components/Counter.vue", id: COUNTER },
+      ],
+      1,
+      ".app { color: green }",
+    );
     applyChanges(w, changed(APP, "css-only"));
 
     expect(w.runs(APP)).toBe(1); // never re-executed

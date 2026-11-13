@@ -33,13 +33,7 @@ const clicked = ref(-1);
       <div class="hint" id="clicked">clicked {{ clicked }}</div>
     </div>
     <div id="list" class="list" tabindex="0" @scroll="onScroll">
-      <div
-        v-for="row in rows"
-        :key="row.id"
-        class="row"
-        :data-row="row.id"
-        @click="clicked = row.id"
-      >
+      <div v-for="row in rows" :key="row.id" class="row" :data-row="row.id" @click="clicked = row.id">
         <div class="idx">{{ row.id }}</div>
         <div class="label">{{ row.label }}</div>
         <div class="meta">{{ row.meta }}</div>

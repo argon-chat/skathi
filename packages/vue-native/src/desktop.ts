@@ -123,7 +123,8 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
 
   const domError = (name: string, message: string): Error =>
     name === "TypeError" ? new TypeError(message) : new DOMException(message, name);
-  const fromFailure = (f: DesktopFailure): Error => domError(f.name || "InvalidStateError", f.message ?? f.error ?? f.name);
+  const fromFailure = (f: DesktopFailure): Error =>
+    domError(f.name || "InvalidStateError", f.message ?? f.error ?? f.name);
   const settle = (json: Json): Promise<DesktopSettle> =>
     deps.call(json).catch((f: unknown) => {
       throw f instanceof Error ? f : fromFailure(f as DesktopFailure);
@@ -139,7 +140,10 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
         return Promise.resolve(undefined);
       },
       pickColorForInput: () => {
-        warnCompat("input-color:nohost", "<input type=color>: this host has no vn-desktop, so there is no color picker");
+        warnCompat(
+          "input-color:nohost",
+          "<input type=color>: this host has no vn-desktop, so there is no color picker",
+        );
         return Promise.resolve(undefined);
       },
       download: () => warnCompat("download:nohost", "<a download>: this host has no vn-desktop; nothing was saved"),
@@ -180,7 +184,9 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
         const a = idOf(this, "isSameEntry", "FileSystemHandle");
         const b = other instanceof FileSystemHandle ? ids.get(other) : undefined;
         if (b === undefined) {
-          throw new TypeError(failed("isSameEntry", "FileSystemHandle", "parameter 1 is not of type 'FileSystemHandle'."));
+          throw new TypeError(
+            failed("isSameEntry", "FileSystemHandle", "parameter 1 is not of type 'FileSystemHandle'."),
+          );
         }
         if ((other as FileSystemHandle).#kind !== this.#kind) return Promise.resolve(false);
         return settle(fs.same(a, b)).then((s) => s.payload.same === true);
@@ -204,23 +210,33 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     warnCompat(
       "fsa:grant",
       "FileSystemHandle: a handle restored from storage was granted on a user activation with no " +
-        "prompt. Chromium asks the user first (\"Allow this site to view/edit …?\"); this host has no such prompt yet.",
+        'prompt. Chromium asks the user first ("Allow this site to view/edit …?"); this host has no such prompt yet.',
     );
   };
 
-  const permission = (h: object, method: string, d: { mode?: string } | undefined, request: boolean): Promise<"granted" | "prompt"> => {
+  const permission = (
+    h: object,
+    method: string,
+    d: { mode?: string } | undefined,
+    request: boolean,
+  ): Promise<"granted" | "prompt"> => {
     try {
       const id = idOf(h, method, "FileSystemHandle");
       const mode = d?.mode ?? "read";
       if (mode !== "read" && mode !== "readwrite") {
         throw new TypeError(
-          failed(method, "FileSystemHandle", `The provided value '${mode}' is not a valid enum value of type FileSystemPermissionMode.`),
+          failed(
+            method,
+            "FileSystemHandle",
+            `The provided value '${mode}' is not a valid enum value of type FileSystemPermissionMode.`,
+          ),
         );
       }
       const state = fs.permission(id, false);
       if (!request || state === "granted") return Promise.resolve(state);
       // Chromium's browser-side words: no "Failed to execute" prefix.
-      if (!activation.isActive()) throw new DOMException("User activation is required to request permissions.", "SecurityError");
+      if (!activation.isActive())
+        throw new DOMException("User activation is required to request permissions.", "SecurityError");
       grantOnGesture(id);
       return Promise.resolve(fs.permission(id, false));
     } catch (e) {
@@ -270,7 +286,9 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       try {
         const id = idOf(this, method, "FileSystemDirectoryHandle");
         if (options?.create) writeAccess(id);
-        return settle(fs.child(id, String(name), dir, !!options?.create)).then((s) => makeHandle(s.payload as unknown as HandleWire));
+        return settle(fs.child(id, String(name), dir, !!options?.create)).then((s) =>
+          makeHandle(s.payload as unknown as HandleWire),
+        );
       } catch (e) {
         return Promise.reject(e);
       }
@@ -289,9 +307,13 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
         const id = idOf(this, "resolve", "FileSystemDirectoryHandle");
         const other = possibleDescendant instanceof FileSystemHandle ? ids.get(possibleDescendant) : undefined;
         if (other === undefined) {
-          throw new TypeError(failed("resolve", "FileSystemDirectoryHandle", "parameter 1 is not of type 'FileSystemHandle'."));
+          throw new TypeError(
+            failed("resolve", "FileSystemDirectoryHandle", "parameter 1 is not of type 'FileSystemHandle'."),
+          );
         }
-        return settle(fs.resolve(id, other)).then((s) => (Array.isArray(s.payload.path) ? (s.payload.path as string[]) : null));
+        return settle(fs.resolve(id, other)).then((s) =>
+          Array.isArray(s.payload.path) ? (s.payload.path as string[]) : null,
+        );
       } catch (e) {
         return Promise.reject(e);
       }
@@ -326,7 +348,11 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     if (data instanceof ArrayBuffer) return new Uint8Array(data);
     if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     throw new TypeError(
-      failed(method, "FileSystemWritableFileStream", "The provided value is not of type '(ArrayBuffer or ArrayBufferView or Blob or USVString or WriteParams)'."),
+      failed(
+        method,
+        "FileSystemWritableFileStream",
+        "The provided value is not of type '(ArrayBuffer or ArrayBufferView or Blob or USVString or WriteParams)'.",
+      ),
     );
   };
 
@@ -343,20 +369,44 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       super({
         write(chunk: unknown) {
           const c = chunk as { type?: unknown; data?: unknown; position?: unknown; size?: unknown } | null;
-          if (c !== null && typeof c === "object" && !(c instanceof engine.Blob) && !ArrayBuffer.isView(c) && !(c instanceof ArrayBuffer)) {
+          if (
+            c !== null &&
+            typeof c === "object" &&
+            !(c instanceof engine.Blob) &&
+            !ArrayBuffer.isView(c) &&
+            !(c instanceof ArrayBuffer)
+          ) {
             const pos = (v: unknown) => (v === undefined || v === null ? -1 : Number(v));
             switch (c.type) {
               case "write":
-                if (c.data === undefined) throw new DOMException(failed("write", "FileSystemWritableFileStream", "write requires a data argument"), "SyntaxError");
+                if (c.data === undefined)
+                  throw new DOMException(
+                    failed("write", "FileSystemWritableFileStream", "write requires a data argument"),
+                    "SyntaxError",
+                  );
                 return settle(fs.writableWrite(id, pos(c.position), asData(c.data, "write"))).then(() => undefined);
               case "seek":
-                if (typeof c.position !== "number") throw new DOMException(failed("write", "FileSystemWritableFileStream", "seek requires a position argument"), "SyntaxError");
+                if (typeof c.position !== "number")
+                  throw new DOMException(
+                    failed("write", "FileSystemWritableFileStream", "seek requires a position argument"),
+                    "SyntaxError",
+                  );
                 return settle(fs.writableSeek(id, c.position)).then(() => undefined);
               case "truncate":
-                if (typeof c.size !== "number") throw new DOMException(failed("write", "FileSystemWritableFileStream", "truncate requires a size argument"), "SyntaxError");
+                if (typeof c.size !== "number")
+                  throw new DOMException(
+                    failed("write", "FileSystemWritableFileStream", "truncate requires a size argument"),
+                    "SyntaxError",
+                  );
                 return settle(fs.writableTruncate(id, c.size)).then(() => undefined);
               default:
-                throw new TypeError(failed("write", "FileSystemWritableFileStream", `The provided value '${String(c.type)}' is not a valid enum value of type WriteCommandType.`));
+                throw new TypeError(
+                  failed(
+                    "write",
+                    "FileSystemWritableFileStream",
+                    `The provided value '${String(c.type)}' is not a valid enum value of type WriteCommandType.`,
+                  ),
+                );
             }
           }
           return settle(fs.writableWrite(id, -1, asData(chunk, "write"))).then(() => undefined);
@@ -432,7 +482,8 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     if (o.startIn !== undefined) {
       if (o.startIn instanceof FileSystemHandle) req.startIn = { h: ids.get(o.startIn) };
       else if ((WELL_KNOWN as readonly string[]).includes(String(o.startIn))) req.startIn = String(o.startIn);
-      else throw fail(`The provided value '${String(o.startIn)}' is not a valid enum value of type WellKnownDirectory.`);
+      else
+        throw fail(`The provided value '${String(o.startIn)}' is not a valid enum value of type WellKnownDirectory.`);
     }
     if (o.types !== undefined) {
       const types: { description: string; accept: Record<string, string[]> }[] = [];
@@ -440,7 +491,8 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
         const accept: Record<string, string[]> = {};
         for (const [mime, raw] of Object.entries(t?.accept ?? {})) {
           const [type, sub, ...rest] = mime.trim().split("/");
-          if (rest.length || !type || !sub || !TOKEN_RE.test(type) || !TOKEN_RE.test(sub)) throw fail(`Invalid type: ${mime}`);
+          if (rest.length || !type || !sub || !TOKEN_RE.test(type) || !TOKEN_RE.test(sub))
+            throw fail(`Invalid type: ${mime}`);
           const exts = typeof raw === "string" ? [raw] : Array.from(raw ?? [], String);
           for (const e of exts) {
             if (!e.startsWith(".")) throw fail(`Extension '${e}' must start with '.'.`);
@@ -474,7 +526,10 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       if (kind === "open") req.multiple = !!o?.multiple;
       if (kind === "save" && o?.suggestedName !== undefined) req.suggestedName = String(o.suggestedName);
       if (!activation.isActive()) {
-        throw new DOMException(failed(method, "Window", "Must be handling a user gesture to show a file picker."), "SecurityError");
+        throw new DOMException(
+          failed(method, "Window", "Must be handling a user gesture to show a file picker."),
+          "SecurityError",
+        );
       }
       activation.consume();
       return deps.call(fs.dialogOpen(JSON.stringify(req), null)).then(
@@ -496,13 +551,17 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
 
   const pickers = {
     showOpenFilePicker(options?: PickerOptions): Promise<FileSystemFileHandle[]> {
-      return picker("showOpenFilePicker", "open", options).then((ws) => ws.map((w) => makeHandle(w) as FileSystemFileHandle));
+      return picker("showOpenFilePicker", "open", options).then((ws) =>
+        ws.map((w) => makeHandle(w) as FileSystemFileHandle),
+      );
     },
     showSaveFilePicker(options?: PickerOptions): Promise<FileSystemFileHandle> {
       return picker("showSaveFilePicker", "save", options).then((ws) => makeHandle(ws[0]) as FileSystemFileHandle);
     },
     showDirectoryPicker(options?: PickerOptions): Promise<FileSystemDirectoryHandle> {
-      return picker("showDirectoryPicker", "folder", options).then((ws) => makeHandle(ws[0]) as FileSystemDirectoryHandle);
+      return picker("showDirectoryPicker", "folder", options).then(
+        (ws) => makeHandle(ws[0]) as FileSystemDirectoryHandle,
+      );
     },
   };
   for (const [k, v] of Object.entries(pickers)) {
@@ -528,7 +587,8 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
         (t.startsWith(".") && t.length > 1) ||
         (!rest.length && !!type && !!sub && TOKEN_RE.test(type) && TOKEN_RE.test(sub));
       if (ok) out.push(t);
-      else warnCompat(`accept:${t}`, `<input accept>: the token "${t}" is not an extension or MIME type and was ignored`);
+      else
+        warnCompat(`accept:${t}`, `<input accept>: the token "${t}" is not an extension or MIME type and was ignored`);
     }
     return out;
   };
@@ -553,7 +613,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
     },
     pickColorForInput(value) {
       return deps.call(fs.dialogOpen(JSON.stringify({ kind: "color", value }), null)).then(
-        (s) => s.payload.cancelled ? null : String(s.payload.color),
+        (s) => (s.payload.cancelled ? null : String(s.payload.color)),
         (f: DesktopFailure) => {
           if (f.name === "NotAllowedError" && f.code === "EBUSY") return undefined;
           console.error(`[vue-native] <input type=color>: ${f.message ?? f.error ?? f.name}`);
@@ -565,7 +625,7 @@ export function installDesktop(target: Record<string, unknown>, deps: DesktopDep
       warnCompat(
         "download:saveas",
         "<a download>: the file is saved through a Save As dialog, starting in Downloads. Chromium " +
-          "saves to Downloads without asking unless \"Ask where to save each file\" is on",
+          'saves to Downloads without asking unless "Ask where to save each file" is on',
       );
       deps.call(fs.download(url, attr)).then(
         () => {},

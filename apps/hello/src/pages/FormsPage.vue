@@ -66,9 +66,7 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
       @focus="focused = 'textarea'"
       @blur="focused = 'nothing'"
     />
-    <div class="hint">
-      textarea v-model: {{ noteLines }} line(s), {{ notes.length }} chars — survives a tab switch
-    </div>
+    <div class="hint">textarea v-model: {{ noteLines }} line(s), {{ notes.length }} chars — survives a tab switch</div>
 
     <input
       class="field search"
@@ -95,15 +93,14 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
       @blur="focused = 'nothing'"
     />
     <div class="hint">
-      the two fields above declare different text assistance; `logs` shows the
-      TextInputConfiguration gpui was handed when each takes focus
+      the two fields above declare different text assistance; `logs` shows the TextInputConfiguration gpui was handed
+      when each takes focus
     </div>
     <div class="hint">Enter-submitted: {{ submittedText }}</div>
     <div class="hint">last e.key: {{ lastKey }} — digits blocked by preventDefault: {{ blocked }}</div>
     <div class="hint">focus → {{ focused }}</div>
     <div class="hint keep">
-      &lt;KeepAlive&gt;: setup ran once · onActivated fired {{ activations }}× — the text above
-      survives a tab switch
+      &lt;KeepAlive&gt;: setup ran once · onActivated fired {{ activations }}× — the text above survives a tab switch
     </div>
 
     <div class="store">
@@ -117,8 +114,7 @@ onDeactivated(() => console.log("[app] FormsPage DEACTIVATED"));
       </div>
       <div class="hint">store.badge (a computed inside the store): {{ session.badge }}</div>
       <div class="hint">
-        store.notes ({{ session.noteCount }}): {{ session.notes.join(" · ") || "—" }} — Enter above
-        appends here too
+        store.notes ({{ session.noteCount }}): {{ session.notes.join(" · ") || "—" }} — Enter above appends here too
       </div>
     </div>
   </div>

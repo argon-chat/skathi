@@ -97,7 +97,9 @@ onUnmounted(() => {
   justify-content: center;
   font-size: 12px;
   color: #ffffffcc;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 /* Ours is painted by this stylesheet, off the NC mouse-move gpui forwards into the content tree. */
 .ctl:hover {

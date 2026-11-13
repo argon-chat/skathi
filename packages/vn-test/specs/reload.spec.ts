@@ -23,34 +23,42 @@ async function until(cond: string): Promise<boolean> {
   return false;
 }
 
-test("after location.reload() the runtime's classes are new, ResizeObserver fires, and the old app's globals are gone", async () => {
-  await until("document.querySelector('#trigger')");
-  await js(`(() => {
+test(
+  "after location.reload() the runtime's classes are new, ResizeObserver fires, and the old app's globals are gone",
+  async () => {
+    await until("document.querySelector('#trigger')");
+    await js(`(() => {
     globalThis.oldAppGlobal = 1;
     globalThis[Symbol.for("vn-test loaded")] = true;
     globalThis.__VN_TEST_OLD__ = { RO: ResizeObserver, MO: MutationObserver, Window: Window };
     location.reload();
     return "asked";
   })()`);
-  expect(await until("typeof oldAppGlobal === 'undefined' && document.querySelector('#trigger')")).toBe(true);
-  expect(await js("String(globalThis[Symbol.for('vn-test loaded')])")).toBe("undefined");
-  expect(
-    await js("[ResizeObserver !== __VN_TEST_OLD__.RO, MutationObserver !== __VN_TEST_OLD__.MO, Window !== __VN_TEST_OLD__.Window, window.constructor === Window].join()"),
-  ).toBe("true,true,true,true");
-  // The observer that stopped firing after a reload, before the fix.
-  await js(`(() => {
+    expect(await until("typeof oldAppGlobal === 'undefined' && document.querySelector('#trigger')")).toBe(true);
+    expect(await js("String(globalThis[Symbol.for('vn-test loaded')])")).toBe("undefined");
+    expect(
+      await js(
+        "[ResizeObserver !== __VN_TEST_OLD__.RO, MutationObserver !== __VN_TEST_OLD__.MO, Window !== __VN_TEST_OLD__.Window, window.constructor === Window].join()",
+      ),
+    ).toBe("true,true,true,true");
+    // The observer that stopped firing after a reload, before the fix.
+    await js(`(() => {
     globalThis.__VN_TEST_RO_SEEN__ = 0;
     new ResizeObserver(() => { __VN_TEST_RO_SEEN__++; }).observe(document.querySelector("#trigger"));
     return "observing";
   })()`);
-  expect(await until("__VN_TEST_RO_SEEN__ > 0")).toBe(true);
-  const { entries } = await app.logs(0);
-  expect(entries.some((e) => e.text.includes("re-runs the app in the SAME JavaScript realm"))).toBe(true);
-}, T);
+    expect(await until("__VN_TEST_RO_SEEN__ > 0")).toBe(true);
+    const { entries } = await app.logs(0);
+    expect(entries.some((e) => e.text.includes("re-runs the app in the SAME JavaScript realm"))).toBe(true);
+  },
+  T,
+);
 
-test("location.reload() ends the old page's AudioContexts", async () => {
-  expect(await until("document.querySelector('#trigger')")).toBe(true);
-  await js(`(() => {
+test(
+  "location.reload() ends the old page's AudioContexts",
+  async () => {
+    expect(await until("document.querySelector('#trigger')")).toBe(true);
+    await js(`(() => {
     const ctx = new AudioContext();
     const mute = ctx.createGain(); mute.gain.value = 0; mute.connect(ctx.destination);
     const src = ctx.createBufferSource();
@@ -60,18 +68,19 @@ test("location.reload() ends the old page's AudioContexts", async () => {
     location.reload();
     return "asked";
   })()`);
-  expect(await until("typeof mediaOldApp === 'undefined' && document.querySelector('#trigger')")).toBe(true);
-  expect(await js("__VN_TEST_MEDIA__.ctx.state")).toBe("closed");
-  // The host's own line (stderr, so the host log rather than the JS ring).
-  const ended = readFileSync(app.hostLog, "utf8")
-    .split(/\r?\n/)
-    .find((t) => t.includes("the old page's media ended"));
-  expect(ended).toBeDefined();
-  expect(ended).toContain("1 AudioContext(s) closed");
-  const { entries } = await app.logs(0);
-  expect(entries.some((e) => e.text.includes("window/document listeners, media tracks"))).toBe(true);
-}, T);
-
+    expect(await until("typeof mediaOldApp === 'undefined' && document.querySelector('#trigger')")).toBe(true);
+    expect(await js("__VN_TEST_MEDIA__.ctx.state")).toBe("closed");
+    // The host's own line (stderr, so the host log rather than the JS ring).
+    const ended = readFileSync(app.hostLog, "utf8")
+      .split(/\r?\n/)
+      .find((t) => t.includes("the old page's media ended"));
+    expect(ended).toBeDefined();
+    expect(ended).toContain("1 AudioContext(s) closed");
+    const { entries } = await app.logs(0);
+    expect(entries.some((e) => e.text.includes("window/document listeners, media tracks"))).toBe(true);
+  },
+  T,
+);
 
 // The ring is the host's, so it goes on across the reload, and the host puts a marker row between
 // the runs.
@@ -155,24 +164,32 @@ async function networkAcrossReload(host: Host, mounted: string): Promise<void> {
   }
 }
 
-test("the devtools Network panel records fetch and WebSocket across location.reload()", async () => {
-  await networkAcrossReload(app, "document.querySelector('#trigger')");
-}, T);
+test(
+  "the devtools Network panel records fetch and WebSocket across location.reload()",
+  async () => {
+    await networkAcrossReload(app, "document.querySelector('#trigger')");
+  },
+  T,
+);
 
-test("…and does when the app turned the devtools on itself, after the runtime ran", async () => {
-  const late = await launch({
-    app: "packages/vn-test/fixtures/devtools-late/src/main.ts",
-    window: [420, 220],
-    label: "reload-late",
-  });
-  try {
-    // The order this test is for: off at boot, so the tee went in after the runtime (the host logs
-    // the boot state).
-    const { entries } = await late.logs(0);
-    expect(entries.some((e) => e.text.includes("[devtools] disabled at boot"))).toBe(true);
-    expect(await untilOn(late, "document.querySelector('#late')")).toBe(true);
-    await networkAcrossReload(late, "document.querySelector('#late')");
-  } finally {
-    await late.close();
-  }
-}, T);
+test(
+  "…and does when the app turned the devtools on itself, after the runtime ran",
+  async () => {
+    const late = await launch({
+      app: "packages/vn-test/fixtures/devtools-late/src/main.ts",
+      window: [420, 220],
+      label: "reload-late",
+    });
+    try {
+      // The order this test is for: off at boot, so the tee went in after the runtime (the host logs
+      // the boot state).
+      const { entries } = await late.logs(0);
+      expect(entries.some((e) => e.text.includes("[devtools] disabled at boot"))).toBe(true);
+      expect(await untilOn(late, "document.querySelector('#late')")).toBe(true);
+      await networkAcrossReload(late, "document.querySelector('#late')");
+    } finally {
+      await late.close();
+    }
+  },
+  T,
+);

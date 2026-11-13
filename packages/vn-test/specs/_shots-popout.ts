@@ -49,28 +49,21 @@ try {
   await shoot("multiwindow-panel-at-home");
 
   await app.locator(".btn.pop").click();
-  await until("the palette window", async () =>
-    (await windows()).find((w) => w.title.startsWith("Palette")),
-  );
+  await until("the palette window", async () => (await windows()).find((w) => w.title.startsWith("Palette")));
   // …and now the same element is painted by a 380 px window, so the same rule is ON.
   await new Promise((r) => setTimeout(r, 400));
   hues.paletteWindow = await panelBackground();
   hues.paletteWindowBox = await panelBox();
 
   await app.locator(".btn.pop-player").click();
-  await until("the player window", async () =>
-    (await windows()).find((w) => w.title.toLowerCase().includes("player")),
-  );
+  await until("the player window", async () => (await windows()).find((w) => w.title.toLowerCase().includes("player")));
   await app.locator(".btn.pop-notes").click();
-  await until("the notes window", async () =>
-    (await windows()).find((w) => w.title.toLowerCase().includes("note")),
-  );
+  await until("the notes window", async () => (await windows()).find((w) => w.title.toLowerCase().includes("note")));
   await new Promise((r) => setTimeout(r, 2500));
 
   const all = await windows();
   console.log(all.map((w) => `${w.id} ${w.kind} ${JSON.stringify(w.title)}`).join("\n"));
-  const pick = (needle: string) =>
-    all.find((w) => w.title.toLowerCase().includes(needle))?.id;
+  const pick = (needle: string) => all.find((w) => w.title.toLowerCase().includes(needle))?.id;
 
   await shoot("multiwindow-main", all.find((w) => w.kind === "main")?.id);
   await shoot("multiwindow-palette", pick("palette"));

@@ -258,10 +258,11 @@ export const ui = reactive({
 });
 
 function cmd<T>(name: string, cmdArgs: Record<string, unknown> = {}, timeoutMs?: number): Promise<T> {
-  const target = state.target, session = state.session;
+  const target = state.target,
+    session = state.session;
   const scoped = state.window === null ? cmdArgs : { window: state.window, ...cmdArgs };
   const current = () => state.session === session;
-  return send<T>(target, name, scoped, timeoutMs, { isCurrent: current }).then(reply => {
+  return send<T>(target, name, scoped, timeoutMs, { isCurrent: current }).then((reply) => {
     if (!current()) throw new Error("attachment changed");
     return reply;
   });
@@ -472,7 +473,11 @@ export async function refreshWindows(): Promise<void> {
 }
 
 export async function selectWindow(id: WindowId | null): Promise<void> {
-  if (state.window !== id) { inspectionEpoch++; state.session++; cancelTreeRefresh(); }
+  if (state.window !== id) {
+    inspectionEpoch++;
+    state.session++;
+    cancelTreeRefresh();
+  }
   state.window = id;
   state.selected = null;
   state.styles = null;
@@ -499,10 +504,13 @@ function cancelTreeRefresh(): void {
 
 function scheduleTreeRefresh(): void {
   if (treeBusy || treeTimer !== null || !state.target || state.tab !== "elements") return;
-  treeTimer = setTimeout(() => {
-    treeTimer = null;
-    if (state.target && state.tab === "elements") void refreshTree();
-  }, Math.max(0, lastTreeRefresh + TREE_REFRESH_MS - Date.now()));
+  treeTimer = setTimeout(
+    () => {
+      treeTimer = null;
+      if (state.target && state.tab === "elements") void refreshTree();
+    },
+    Math.max(0, lastTreeRefresh + TREE_REFRESH_MS - Date.now()),
+  );
 }
 
 export async function refreshTree(): Promise<void> {
@@ -529,7 +537,8 @@ export async function refreshTree(): Promise<void> {
     if (
       state.status === "attached" &&
       (epoch !== inspectionEpoch || target !== state.target || window !== state.window || state.treeRev !== revision)
-    ) scheduleTreeRefresh();
+    )
+      scheduleTreeRefresh();
   }
 }
 
@@ -621,10 +630,7 @@ export function ancestors(id: NodeId | null): TreeNode[] {
   return path;
 }
 
-export async function select(
-  id: NodeId | null,
-  options: { highlight?: boolean } = {},
-): Promise<void> {
+export async function select(id: NodeId | null, options: { highlight?: boolean } = {}): Promise<void> {
   state.selected = id;
   state.styles = null;
   state.rules = null;
@@ -712,7 +718,9 @@ export async function cancelPick(): Promise<void> {
 export async function togglePick(): Promise<void> {
   if (state.picking) return cancelPick();
   if (!state.target || state.status !== "attached") return;
-  const target = state.target, epoch = inspectionEpoch, mode = ++pickMode;
+  const target = state.target,
+    epoch = inspectionEpoch,
+    mode = ++pickMode;
   state.picking = true;
   state.pickInfo = null;
   try {
@@ -720,17 +728,27 @@ export async function togglePick(): Promise<void> {
     if (epoch !== inspectionEpoch || mode !== pickMode) return;
     await pickStep();
   } catch (error) {
-    if (epoch === inspectionEpoch && mode === pickMode) { state.picking = false; fail(error); }
+    if (epoch === inspectionEpoch && mode === pickMode) {
+      state.picking = false;
+      fail(error);
+    }
   }
 }
 
 export async function pickStep(): Promise<void> {
   if (!state.picking || !state.target || pickBusy) return;
   pickBusy = true;
-  const target = state.target, epoch = inspectionEpoch, mode = pickMode;
+  const target = state.target,
+    epoch = inspectionEpoch,
+    mode = pickMode;
   try {
-    const info = await send<PickReply & { active: boolean; selected: boolean; cancelled: boolean }>(target, "pick", { op: "status" }, 3000,
-      { priority: "background", isCurrent: () => epoch === inspectionEpoch && mode === pickMode });
+    const info = await send<PickReply & { active: boolean; selected: boolean; cancelled: boolean }>(
+      target,
+      "pick",
+      { op: "status" },
+      3000,
+      { priority: "background", isCurrent: () => epoch === inspectionEpoch && mode === pickMode },
+    );
     if (epoch !== inspectionEpoch || mode !== pickMode) return;
     state.pickInfo = markRaw(info);
     if (info.active) return;
@@ -752,8 +770,13 @@ export async function pickStep(): Promise<void> {
     await select(info.node.id);
     note({ kind: "dev", text: `picked ${nodeLabel(info.node)} (node ${info.node.id})` });
   } catch (error) {
-    if (epoch === inspectionEpoch && mode === pickMode) { state.picking = false; fail(error); }
-  } finally { pickBusy = false; }
+    if (epoch === inspectionEpoch && mode === pickMode) {
+      state.picking = false;
+      fail(error);
+    }
+  } finally {
+    pickBusy = false;
+  }
 }
 
 let logsBusy = false;
@@ -1004,9 +1027,12 @@ export async function loadNetDetail(seq: number, attempt = 0): Promise<void> {
       (detail.entry.kind !== "ws" && res !== undefined && res.body === null && !detail.error) ||
       !!detail.cookies?.pending;
     if (waiting && attempt < 4) {
-      setTimeout(() => {
-        if (state.netSelected === seq) void loadNetDetail(seq, attempt + 1);
-      }, 250 * (attempt + 1));
+      setTimeout(
+        () => {
+          if (state.netSelected === seq) void loadNetDetail(seq, attempt + 1);
+        },
+        250 * (attempt + 1),
+      );
     }
   } catch (e) {
     if (state.netSelected !== seq) return;
@@ -1157,14 +1183,17 @@ export function toggleConsole(): void {
 }
 
 export function panelRequest(): <T>(payload: Record<string, unknown>) => Promise<T> {
-  const target = state.target, window = state.window, session = state.session;
+  const target = state.target,
+    window = state.window,
+    session = state.session;
   return async <T>(payload: Record<string, unknown>): Promise<T> => {
     if (!target) throw new Error("not attached to a target");
     const { cmd: name, ...args } = payload;
     if (typeof name !== "string") throw new Error("missing inspector command");
     const current = () => state.session === session && state.target?.port === target.port;
     if (!current()) throw new Error("attachment changed");
-    const leased = (name === "trace" && args.op === "recording-start") || (name === "allocations" && args.op === "start");
+    const leased =
+      (name === "trace" && args.op === "recording-start") || (name === "allocations" && args.op === "start");
     const scoped = { ...(window === null ? {} : { window }), ...args, ...(leased ? { leaseMs: 15_000 } : {}) };
     const reply = await send<T>(target, name, scoped, undefined, { isCurrent: current });
     if (!current()) throw new Error("attachment changed");

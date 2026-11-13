@@ -28,10 +28,7 @@ const Root = defineComponent({
           h("div", { id: "item-2", class: "item", onClick: clicked("item-2") }),
           h("div", { id: "item-3", class: "item", onClick: clicked("item-3") }),
         ]),
-        h("div", { id: "neg", class: "neg" }, [
-          h("div", { class: "neg-content" }),
-          h("div", { class: "neg-behind" }),
-        ]),
+        h("div", { id: "neg", class: "neg" }, [h("div", { class: "neg-content" }), h("div", { class: "neg-behind" })]),
         h("div", { class: "flow" }, [
           h("div", { id: "faded", class: "faded" }, [h("div", { class: "lifted" })]),
           h("div", { id: "cover", class: "cover" }),

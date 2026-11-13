@@ -229,11 +229,16 @@ export const VnWindow = /*@__PURE__*/ defineComponent({
       // no handle is returned; use `@open`. Un-painting is immediate: a node in two element trees
       // for one frame aliases gpui's scroll state and hitboxes.
       sent = options();
-      __vn_window_open(node.__vnId, sent, () => {
-        closed = true;
-        windowId.value = 0;
-        emit("close");
-      }, onEvent);
+      __vn_window_open(
+        node.__vnId,
+        sent,
+        () => {
+          closed = true;
+          windowId.value = 0;
+          emit("close");
+        },
+        onEvent,
+      );
     });
 
     // `onBeforeUnmount`, not `onUnmounted`: the node must exist when the close is requested; after

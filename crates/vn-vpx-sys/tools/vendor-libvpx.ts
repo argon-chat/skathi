@@ -25,7 +25,17 @@
  * The output is deterministic: re-running it on the same release must leave `git status` clean.
  */
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
@@ -92,7 +102,8 @@ const RTCD: [sym: string, defs: string][] = [
 ];
 
 /** Headers of other architectures: reachable only under their `#if`s. */
-const FOREIGN = /(^|\/)(arm|mips|ppc|loongarch)(\/|$)|(^|\/)vpx_ports\/(arm|arm_cpudetect|mips|ppc|loongarch|aarch64_cpudetect)\b/;
+const FOREIGN =
+  /(^|\/)(arm|mips|ppc|loongarch)(\/|$)|(^|\/)vpx_ports\/(arm|arm_cpudetect|mips|ppc|loongarch|aarch64_cpudetect)\b/;
 
 const LICENCE_FILES = ["LICENSE", "PATENTS", "AUTHORS"];
 
@@ -185,12 +196,25 @@ function generate(src: string, cfg: Config, work: string): Map<string, string> {
   console.log(`configure --target=${cfg.target}`);
   run(["bash", configure, `--target=${cfg.target}`, ...COMMON_FLAGS, ...cfg.flags], dir, cfg.env);
   const mk = `libs-${cfg.target}.mk`;
-  const options = /^RTCD_OPTIONS = (.*)$/m.exec(lf(readFileSync(join(dir, mk), "utf8")))?.[1].trim().split(/\s+/).filter(Boolean) ?? [];
+  const options =
+    /^RTCD_OPTIONS = (.*)$/m
+      .exec(lf(readFileSync(join(dir, mk), "utf8")))?.[1]
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean) ?? [];
   const headers = new Map<string, string>();
   headers.set("vpx_config.h", lf(readFileSync(join(dir, "vpx_config.h"), "utf8")));
   for (const [sym, defs] of RTCD) {
     const text = run(
-      ["perl", slash(join(src, "build/make/rtcd.pl")), `--arch=${cfg.arch}`, `--sym=${sym}`, `--config=${mk}`, ...options, slash(join(src, defs))],
+      [
+        "perl",
+        slash(join(src, "build/make/rtcd.pl")),
+        `--arch=${cfg.arch}`,
+        `--sym=${sym}`,
+        `--config=${mk}`,
+        ...options,
+        slash(join(src, defs)),
+      ],
       dir,
     );
     headers.set(`${sym}.h`, lf(text));
@@ -301,7 +325,9 @@ async function main() {
       cpSync(join(src, f), to);
     }
     const [files, bytes] = sizeOf(dest);
-    console.log(`libvpx/: ${all.length} sources, ${headers.length} headers, ${LICENCE_FILES.length} licence files (${files} files, ${(bytes / 1024).toFixed(0)} KiB)`);
+    console.log(
+      `libvpx/: ${all.length} sources, ${headers.length} headers, ${LICENCE_FILES.length} licence files (${files} files, ${(bytes / 1024).toFixed(0)} KiB)`,
+    );
     console.log("next: bun crates/vn-vpx-sys/tools/prefix-symbols.ts (the symbol prefix, VENDOR.md)");
   } finally {
     if (!argv.includes("--keep-temp")) rmSync(work, { recursive: true, force: true });

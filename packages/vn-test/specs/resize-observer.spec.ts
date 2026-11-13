@@ -24,11 +24,19 @@ async function until<V>(read: () => Promise<V>, ok: (v: V) => boolean, ms = 5_00
 const js = <V>(src: string) => app.eval(src) as Promise<V>;
 const state = <V>(path: string) => js<V>(`JSON.parse(JSON.stringify(globalThis.__VN_TEST_RO__.${path} ?? null))`);
 
-type Grow = { at: number; seen: { frame: number; height: number }[]; next: { frame: number; panel: number; list: number } | null };
+type Grow = {
+  at: number;
+  seen: { frame: number; height: number }[];
+  next: { frame: number; panel: number; list: number } | null;
+};
 type Err = { via: string; frame: number; message: string; args?: unknown[] };
 const LOOP = "ResizeObserver loop completed with undelivered notifications.";
 
-await until(() => state<{ width: number }[]>("outer"), (o) => (o?.length ?? 0) >= 1, 10_000);
+await until(
+  () => state<{ width: number }[]>("outer"),
+  (o) => (o?.length ?? 0) >= 1,
+  10_000,
+);
 
 describe("ResizeObserver after layout", () => {
   test(
@@ -36,7 +44,10 @@ describe("ResizeObserver after layout", () => {
     async () => {
       await app.send("trace", { op: "start" });
       await js("__VN_TEST_RO__.run('grow')");
-      const g = await until(() => state<Grow>("grow"), (v) => !!v?.next);
+      const g = await until(
+        () => state<Grow>("grow"),
+        (v) => !!v?.next,
+      );
       const trace = await app.send("trace", { op: "stop" });
       bunExpect(g.seen).toEqual([{ frame: g.at, height: 100 }]);
       // Its response did not wait a frame.

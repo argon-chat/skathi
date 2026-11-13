@@ -60,7 +60,9 @@ describe("ClipboardEvent", () => {
   test("it bubbles to an ancestor, then to document and window", () => {
     const { rt, input, box, fire } = world();
     const order: string[] = [];
-    rt.patchProp(box, "onCopy", null, (e: Ev) => order.push(`box:${(e.target as { __vnId: number }).__vnId === input.__vnId}`));
+    rt.patchProp(box, "onCopy", null, (e: Ev) =>
+      order.push(`box:${(e.target as { __vnId: number }).__vnId === input.__vnId}`),
+    );
     rt.global.document.addEventListener("copy", (e: Ev) => order.push(`document:${e.clipboardData !== null}`));
     expect(fire(input, "copy", store())).toBe(true);
     expect(order).toEqual(["box:true", "document:true"]);

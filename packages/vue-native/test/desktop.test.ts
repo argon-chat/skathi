@@ -159,7 +159,10 @@ describe("FileSystemHandle and its two kinds", () => {
     expect(await f.queryPermission({ mode: "readwrite" })).toBe("prompt");
     const denied = await f.requestPermission().catch((e: Error) => e);
     expect(denied).toBeInstanceOf(DOMException);
-    expect([denied.name, denied.message]).toEqual(["SecurityError", "User activation is required to request permissions."]);
+    expect([denied.name, denied.message]).toEqual([
+      "SecurityError",
+      "User activation is required to request permissions.",
+    ]);
     expect(rt.host.desktop.fs.prompt.has(8)).toBe(true);
     gesture(rt);
     expect(await f.requestPermission()).toBe("granted");
@@ -176,7 +179,12 @@ describe("FileSystemHandle and its two kinds", () => {
     const dir = handle(rt, 8, "restored", "directory");
     rt.host.desktop.fs.answers.set("remove", (d: number) =>
       rt.host.desktop.fs.prompt.has(d)
-        ? { sync: { error: "The request is not allowed by the user agent or the platform in the current context.", name: "NotAllowedError" } }
+        ? {
+            sync: {
+              error: "The request is not allowed by the user agent or the platform in the current context.",
+              name: "NotAllowedError",
+            },
+          }
         : { payload: {} },
     );
     const refused = await dir.removeEntry("x").catch((e: Error) => e);
@@ -195,7 +203,13 @@ describe("FileSystemHandle and its two kinds", () => {
     const dir = handle(rt, 5, "proj", "directory");
     rt.host.desktop.fs.answers.set("child", (_d: number, name: string, isDir: boolean) =>
       name === "missing.txt"
-        ? { ok: false, payload: { name: "NotFoundError", message: "A requested file or directory could not be found at the time an operation was processed." } }
+        ? {
+            ok: false,
+            payload: {
+              name: "NotFoundError",
+              message: "A requested file or directory could not be found at the time an operation was processed.",
+            },
+          }
         : name === ".."
           ? { sync: { error: "Name is not allowed.", name: "TypeError" } }
           : { payload: { h: 9, name, kind: isDir ? "directory" : "file" } },
@@ -221,7 +235,15 @@ describe("FileSystemHandle and its two kinds", () => {
     rt.host.desktop.fs.answers.set("dirNext", () => {
       batch++;
       return batch === 1
-        ? { payload: { entries: [{ h: 20, name: "a.txt", kind: "file" }, { h: 21, name: "sub", kind: "directory" }], done: false } }
+        ? {
+            payload: {
+              entries: [
+                { h: 20, name: "a.txt", kind: "file" },
+                { h: 21, name: "sub", kind: "directory" },
+              ],
+              done: false,
+            },
+          }
         : { payload: { entries: [{ h: 22, name: "z.txt", kind: "file" }], done: true } };
     });
     const names: string[] = [];
@@ -332,7 +354,9 @@ function fileWorld(attrs: Record<string, string> = {}) {
   for (const [k, v] of Object.entries(attrs)) rt.patchProp(input, k, null, v);
   const seen: string[] = [];
   for (const t of ["input", "change", "cancel"]) {
-    rt.patchProp(root, `on${t[0].toUpperCase()}${t.slice(1)}`, null, (e: any) => seen.push(`${t}:${e.bubbles}:${e.target === input}`));
+    rt.patchProp(root, `on${t[0].toUpperCase()}${t.slice(1)}`, null, (e: any) =>
+      seen.push(`${t}:${e.bubbles}:${e.target === input}`),
+    );
   }
   const host = (node: { id: number }, name: "click" | "keydown" | "keyup" | "mousedown", key?: string) =>
     rt.host.dispatcher(node.__vnId, rt.EV_CODES[name], 5, 6, 0, 0, key);
@@ -340,7 +364,9 @@ function fileWorld(attrs: Record<string, string> = {}) {
     host(node, "mousedown");
     host(node, "click");
   };
-  const label = () => rt.host.props.filter((p: { id: number; key: string }) => p.id === input.__vnId && p.key === ":file-label").at(-1)?.value;
+  const label = () =>
+    rt.host.props.filter((p: { id: number; key: string }) => p.id === input.__vnId && p.key === ":file-label").at(-1)
+      ?.value;
   return { rt, root, input: input as Record<string, any>, seen, host, userClick, label };
 }
 
@@ -431,8 +457,14 @@ describe("<input type=file> (HTML)", () => {
     expect((calls(rt, "dialogOpen")[0].args[0] as any).kind).toBe("folder");
     input.multiple = true;
     input.accept = "image/*";
-    expect(rt.host.props.filter((p: any) => p.id === input.__vnId && ["multiple", "accept"].includes(p.key)).map((p: any) => [p.key, p.value]))
-      .toEqual([["multiple", ""], ["accept", "image/*"]]);
+    expect(
+      rt.host.props
+        .filter((p: any) => p.id === input.__vnId && ["multiple", "accept"].includes(p.key))
+        .map((p: any) => [p.key, p.value]),
+    ).toEqual([
+      ["multiple", ""],
+      ["accept", "image/*"],
+    ]);
     rt.patchProp(input, "disabled", null, "");
     userClick(input);
     input.click();
@@ -469,7 +501,9 @@ describe("<input type=file> (HTML)", () => {
     expect(thrown(input)).toBe("no throw");
     expect(calls(rt, "dialogOpen").length).toBe(1);
     rt.patchProp(input, "disabled", null, "");
-    expect(thrown(input)).toContain("InvalidStateError: Failed to execute 'showPicker' on 'HTMLInputElement': HTMLInputElement::showPicker() cannot be used on immutable controls.");
+    expect(thrown(input)).toContain(
+      "InvalidStateError: Failed to execute 'showPicker' on 'HTMLInputElement': HTMLInputElement::showPicker() cannot be used on immutable controls.",
+    );
     const text = rt.nodeOps.createElement("input");
     expect(thrown(text)).toBe("no throw");
     expect(rt.advisories().some((l: string) => l.includes("no-op"))).toBe(true);
@@ -535,7 +569,10 @@ describe("<label> activation (HTML)", () => {
     rt.host.dispatcher(label.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
     rt.host.dispatcher(label.__vnId, rt.EV_CODES.click, 0, 0, 0, 0, undefined);
     expect(clicked).toBe(2);
-    expect(rt.host.focus.calls).toEqual([{ id: input.__vnId, op: 0 }, { id: input.__vnId, op: 0 }]);
+    expect(rt.host.focus.calls).toEqual([
+      { id: input.__vnId, op: 0 },
+      { id: input.__vnId, op: 0 },
+    ]);
     expect(rt.global.document.activeElement).toBe(input);
   });
 });

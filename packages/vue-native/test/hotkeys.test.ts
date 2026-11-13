@@ -3,27 +3,50 @@ import type { HotkeyBinding, HotkeyEvent } from "../src/hotkeys";
 
 const globals = globalThis as Record<string, unknown>;
 let sequence = 0;
-const load = async (): Promise<typeof import("../src/hotkeys")> => import(`../src/hotkeys.ts?hotkeys-case=${++sequence}`);
-afterEach(() => { delete globals.__vn_appHotkeys; });
+const load = async (): Promise<typeof import("../src/hotkeys")> =>
+  import(`../src/hotkeys.ts?hotkeys-case=${++sequence}`);
+afterEach(() => {
+  delete globals.__vn_appHotkeys;
+});
 
 test("hotkeys pass bindings and listeners to the native object unchanged", async () => {
   const received: unknown[] = [];
   let fire!: (event: HotkeyEvent) => void;
   const off = () => received.push("off");
-  const chord = { buttons: [{ device: 0, code: 0xa2 }, { device: 1, code: 4 }] };
+  const chord = {
+    buttons: [
+      { device: 0, code: 0xa2 },
+      { device: 1, code: 4 },
+    ],
+  };
   const status = { running: true, platform: "windows", accessibilityGranted: true, error: null, restarts: 0 };
   globals.__vn_appHotkeys = {
     available: true,
-    setBindings: (bindings: readonly HotkeyBinding[]) => { received.push(bindings); return true; },
+    setBindings: (bindings: readonly HotkeyBinding[]) => {
+      received.push(bindings);
+      return true;
+    },
     status: () => status,
     requestAccessibility: () => true,
     restart: () => true,
     captureOnce: () => Promise.resolve(chord),
     cancelCapture: () => received.push("cancel"),
-    onFired: (listener: typeof fire) => { fire = listener; return off; },
+    onFired: (listener: typeof fire) => {
+      fire = listener;
+      return off;
+    },
   };
   const { appHotkeys } = await load();
-  const bindings = [{ id: "talk", chord, suppress: true, toJSON(): never { throw new Error("bindings must never be serialized"); } }];
+  const bindings = [
+    {
+      id: "talk",
+      chord,
+      suppress: true,
+      toJSON(): never {
+        throw new Error("bindings must never be serialized");
+      },
+    },
+  ];
   expect(appHotkeys.available).toBe(true);
   expect(appHotkeys.setBindings(bindings)).toBe(true);
   expect(received[0]).toBe(bindings);
@@ -58,9 +81,16 @@ test("a host without hotkeys reports it and still allows clearing", async () => 
   expect(appHotkeys.requestAccessibility()).toBe(false);
   expect(() => appHotkeys.cancelCapture()).not.toThrow();
   expect(typeof appHotkeys.onFired(() => {})).toBe("function");
-  for (const call of [() => appHotkeys.setBindings([{ id: "x", chord: { buttons: [{ device: 0, code: 65 }] } }]), () => appHotkeys.restart()]) {
-    try { call(); throw new Error("expected unsupported"); }
-    catch (error) { expect((error as Error).name).toBe("NotSupportedError"); }
+  for (const call of [
+    () => appHotkeys.setBindings([{ id: "x", chord: { buttons: [{ device: 0, code: 65 }] } }]),
+    () => appHotkeys.restart(),
+  ]) {
+    try {
+      call();
+      throw new Error("expected unsupported");
+    } catch (error) {
+      expect((error as Error).name).toBe("NotSupportedError");
+    }
   }
   const failure = await appHotkeys.captureOnce().catch((error: Error) => error);
   expect((failure as Error).name).toBe("NotSupportedError");

@@ -28,7 +28,9 @@ function watch(rt: Any, target: Any) {
   const tag = (n: Any) => (n.nodeType === 3 ? `#${n.data}` : n.tagName.toLowerCase());
   new rt.global.MutationObserver((records: Any[]) => {
     for (const r of records) {
-      seen.push(`${tag(r.target)}:${Array.from(r.addedNodes, (n: Any) => "+" + tag(n)).join("")}${Array.from(r.removedNodes, (n: Any) => "-" + tag(n)).join("")}`);
+      seen.push(
+        `${tag(r.target)}:${Array.from(r.addedNodes, (n: Any) => "+" + tag(n)).join("")}${Array.from(r.removedNodes, (n: Any) => "-" + tag(n)).join("")}`,
+      );
     }
   }).observe(target, { childList: true, subtree: true });
   return seen;
@@ -124,7 +126,9 @@ describe("Node: appendChild, insertBefore, removeChild, replaceChild", () => {
     expect(() => inner.appendChild(outer)).toThrow("The new child element contains the parent.");
     expect(() => outer.appendChild(outer)).toThrow(expect.objectContaining({ name: "HierarchyRequestError" }));
     const t = doc.createTextNode("t");
-    expect(() => t.appendChild(doc.createElement("b"))).toThrow(expect.objectContaining({ name: "HierarchyRequestError" }));
+    expect(() => t.appendChild(doc.createElement("b"))).toThrow(
+      expect.objectContaining({ name: "HierarchyRequestError" }),
+    );
     expect(() => outer.appendChild({})).toThrow("parameter 1 is not of type 'Node'");
     expect(() => outer.appendChild("text")).toThrow(TypeError);
   });
@@ -167,7 +171,9 @@ describe("Node: appendChild, insertBefore, removeChild, replaceChild", () => {
     expect(row.childNodes).toEqual([a, x, c]);
     expect(shape(row)).toEqual(["span", "strong", "span"]);
     expect(b.parentNode).toBeNull();
-    expect(() => row.replaceChild(doc.createElement("i"), b)).toThrow(expect.objectContaining({ name: "NotFoundError" }));
+    expect(() => row.replaceChild(doc.createElement("i"), b)).toThrow(
+      expect.objectContaining({ name: "NotFoundError" }),
+    );
   });
 });
 
@@ -205,7 +211,8 @@ describe("ChildNode and ParentNode", () => {
       parent.appendChild(el);
       return el;
     });
-    const names = () => parent.childNodes.map((c: Any) => (c.nodeType === 3 ? `'${c.data}'` : c.getAttribute("data-k")));
+    const names = () =>
+      parent.childNodes.map((c: Any) => (c.nodeType === 3 ? `'${c.data}'` : c.getAttribute("data-k")));
     return { parent, kids, names };
   }
 
@@ -276,8 +283,12 @@ describe("insertAdjacentElement / insertAdjacentText", () => {
     expect(shape(parent)).toEqual(["header", "main", "footer"]);
     expect(shape(mid)).toEqual(["h1", "p", "#text:!"]);
     expect(mk("x").insertAdjacentElement("beforebegin", mk("y"))).toBeNull();
-    expect(() => mid.insertAdjacentElement("inside", mk("y"))).toThrow(expect.objectContaining({ name: "SyntaxError" }));
-    expect(() => mid.insertAdjacentElement("beforeend", doc.createTextNode("t"))).toThrow("parameter 2 is not of type 'Element'");
+    expect(() => mid.insertAdjacentElement("inside", mk("y"))).toThrow(
+      expect.objectContaining({ name: "SyntaxError" }),
+    );
+    expect(() => mid.insertAdjacentElement("beforeend", doc.createTextNode("t"))).toThrow(
+      "parameter 2 is not of type 'Element'",
+    );
   });
 });
 

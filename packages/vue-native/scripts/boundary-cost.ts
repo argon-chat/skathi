@@ -26,11 +26,7 @@ const bench = (label: string, n: number, body: string, setup = "") => ({
 const BENCHES = [
   // -- the floor: a host fn taking one integer and returning the empty string.
   bench("__vn_bounds(0) — the crossing floor", 200_000, `__vn_bounds(0);`),
-  bench(
-    "__vn_intern (hot: name already interned)",
-    200_000,
-    `__vn_intern("div");`,
-  ),
+  bench("__vn_intern (hot: name already interned)", 200_000, `__vn_intern("div");`),
   bench(
     "__vn_set_style (detached node)",
     100_000,
@@ -113,9 +109,7 @@ async function main() {
     console.log("-".repeat(width + 22));
     for (const b of BENCHES) {
       const ns = (await app.eval(b.js)) as number;
-      console.log(
-        `${b.label.padEnd(width)} ${String(b.n).padStart(9)} ${ns.toFixed(1).padStart(10)}`,
-      );
+      console.log(`${b.label.padEnd(width)} ${String(b.n).padStart(9)} ${ns.toFixed(1).padStart(10)}`);
     }
     console.log();
   } finally {

@@ -1,0 +1,23 @@
+vendor/
+target/
+**/node_modules/
+*.lock
+bun.lock
+*.toml
+crates/vn-effects/tools/slang.manifest.json
+scripts/aot/toolchain.lock.json
+
+# Generated, checked byte for byte against their generators.
+crates/vn-app/src/prelude.js
+crates/vn-app/src/window.prelude.js
+crates/vn-effects/generated/
+apps/shadcn/tailwind.config.ts
+
+# Third-party sources and test data.
+crates/vn-vpx-sys/libvpx/
+crates/vn-vpx-sys/config/
+crates/vn-thorvg-sys/thorvg/
+crates/vn-lottie/tests/fixtures/
+packages/vue-native/test/fixtures/
+packages/vn-test/fixtures/**/public/
+!bunfig.toml

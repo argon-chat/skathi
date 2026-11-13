@@ -21,13 +21,7 @@ describe("appStorage", () => {
 
   test("every kind the host knows is reachable", () => {
     const rt = createRuntime();
-    expect(rt.appStorage.kinds).toEqual([
-      "APPDATA",
-      "LOCALAPPDATA",
-      "TEMP",
-      "DOCUMENTS",
-      "HOME",
-    ]);
+    expect(rt.appStorage.kinds).toEqual(["APPDATA", "LOCALAPPDATA", "TEMP", "DOCUMENTS", "HOME"]);
     for (const kind of rt.appStorage.kinds) {
       expect(rt.appStorage.getUserFolder(kind)).toStartWith("C:\\Users\\test");
     }
@@ -104,7 +98,6 @@ describe("appStorage", () => {
 });
 
 describe("appStorage without a host", () => {
-
   test("the two path verbs throw rather than answering with a plausible path", () => {
     const rt = createRuntime({ storage: false });
     expect(() => rt.appStorage.getUserFolder("APPDATA")).toThrow(/no storage host/);

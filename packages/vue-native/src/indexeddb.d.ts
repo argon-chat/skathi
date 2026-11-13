@@ -60,7 +60,10 @@ declare global {
       mode?: "readonly" | "readwrite",
       options?: { durability?: "default" | "strict" | "relaxed" },
     ): VnIDBTransaction;
-    createObjectStore(name: string, options?: { keyPath?: string | string[] | null; autoIncrement?: boolean }): VnIDBObjectStore;
+    createObjectStore(
+      name: string,
+      options?: { keyPath?: string | string[] | null; autoIncrement?: boolean },
+    ): VnIDBObjectStore;
     deleteObjectStore(name: string): void;
     close(): void;
     onversionchange: ((ev: VnIDBVersionChangeEvent) => void) | null;
@@ -91,8 +94,14 @@ declare global {
     getAll(query?: VnIDBValidKey | VnIDBKeyRange | null, count?: number): VnIDBRequest<unknown[]>;
     getAllKeys(query?: VnIDBValidKey | VnIDBKeyRange | null, count?: number): VnIDBRequest<VnIDBValidKey[]>;
     count(query?: VnIDBValidKey | VnIDBKeyRange): VnIDBRequest<number>;
-    openCursor(query?: VnIDBValidKey | VnIDBKeyRange | null, direction?: VnIDBCursorDirection): VnIDBRequest<VnIDBCursorWithValue | null>;
-    openKeyCursor(query?: VnIDBValidKey | VnIDBKeyRange | null, direction?: VnIDBCursorDirection): VnIDBRequest<VnIDBCursor | null>;
+    openCursor(
+      query?: VnIDBValidKey | VnIDBKeyRange | null,
+      direction?: VnIDBCursorDirection,
+    ): VnIDBRequest<VnIDBCursorWithValue | null>;
+    openKeyCursor(
+      query?: VnIDBValidKey | VnIDBKeyRange | null,
+      direction?: VnIDBCursorDirection,
+    ): VnIDBRequest<VnIDBCursor | null>;
   }
   interface VnIDBObjectStore extends VnIDBReadable {
     readonly autoIncrement: boolean;
@@ -103,7 +112,11 @@ declare global {
     delete(query: VnIDBValidKey | VnIDBKeyRange): VnIDBRequest<undefined>;
     clear(): VnIDBRequest<undefined>;
     index(name: string): VnIDBIndex;
-    createIndex(name: string, keyPath: string | string[], options?: { unique?: boolean; multiEntry?: boolean }): VnIDBIndex;
+    createIndex(
+      name: string,
+      keyPath: string | string[],
+      options?: { unique?: boolean; multiEntry?: boolean },
+    ): VnIDBIndex;
     deleteIndex(name: string): void;
   }
   interface VnIDBIndex extends VnIDBReadable {

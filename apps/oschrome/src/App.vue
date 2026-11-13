@@ -32,9 +32,9 @@ onUnmounted(() => removeEventListener("resize", read));
   <main class="page">
     <h1 class="h">OS chrome</h1>
     <p class="lede">
-      The titlebar above is Windows', not this app's. `titleBarStyle: "default"`
-      in vn.config.json, which is creation-time only — a window style cannot
-      change mid-session without desyncing gpui's cached frame metrics (D-25).
+      The titlebar above is Windows', not this app's. `titleBarStyle: "default"` in vn.config.json, which is
+      creation-time only — a window style cannot change mid-session without desyncing gpui's cached frame metrics
+      (D-25).
     </p>
 
     <div class="fakebar">window-drag: move — inert here (advisory A-25)</div>
@@ -47,9 +47,33 @@ onUnmounted(() => removeEventListener("resize", read));
     </div>
 
     <div class="row">
-      <button class="btn" @click="appWindow.backdrop = 'mica'; read()">mica</button>
-      <button class="btn" @click="appWindow.backdrop = 'acrylic'; read()">acrylic</button>
-      <button class="btn" @click="appWindow.backdrop = 'none'; read()">none</button>
+      <button
+        class="btn"
+        @click="
+          appWindow.backdrop = 'mica';
+          read();
+        "
+      >
+        mica
+      </button>
+      <button
+        class="btn"
+        @click="
+          appWindow.backdrop = 'acrylic';
+          read();
+        "
+      >
+        acrylic
+      </button>
+      <button
+        class="btn"
+        @click="
+          appWindow.backdrop = 'none';
+          read();
+        "
+      >
+        none
+      </button>
       <button class="btn" @click="appWindow.maximize()">maximize</button>
       <button class="btn" @click="appWindow.unmaximize()">restore</button>
     </div>

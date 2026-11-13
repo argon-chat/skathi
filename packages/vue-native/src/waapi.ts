@@ -53,21 +53,47 @@ type Composite = "replace" | "add" | "accumulate" | "auto";
 const COMPOSITES: readonly Composite[] = ["replace", "add", "accumulate", "auto"];
 
 interface Timing {
-  delay: number; endDelay: number; fill: FillMode; iterationStart: number;
-  iterations: number; duration: number | "auto"; direction: PlaybackDirection; easing: string;
+  delay: number;
+  endDelay: number;
+  fill: FillMode;
+  iterationStart: number;
+  iterations: number;
+  duration: number | "auto";
+  direction: PlaybackDirection;
+  easing: string;
 }
-const DEFAULT_TIMING: Timing = { delay: 0, endDelay: 0, fill: "auto", iterationStart: 0,
-  iterations: 1, duration: "auto", direction: "normal", easing: "linear" };
+const DEFAULT_TIMING: Timing = {
+  delay: 0,
+  endDelay: 0,
+  fill: "auto",
+  iterationStart: 0,
+  iterations: 1,
+  duration: "auto",
+  direction: "normal",
+  easing: "linear",
+};
 interface Frame {
-  offset: number | null; computed: number; easing: string; composite: Composite;
+  offset: number | null;
+  computed: number;
+  easing: string;
+  composite: Composite;
   props: [string, string][];
 }
 interface ComputedTiming {
-  fill: Exclude<FillMode, "auto">; duration: number; endTime: number; activeDuration: number;
-  localTime: number | null; progress: number | null; currentIteration: number | null;
+  fill: Exclude<FillMode, "auto">;
+  duration: number;
+  endTime: number;
+  activeDuration: number;
+  localTime: number | null;
+  progress: number | null;
+  currentIteration: number | null;
 }
 export interface WaapiEffectNotes {
-  accepted: boolean; error: string | null; ignored: string[]; diagnostics: string[]; hyphenated: string[];
+  accepted: boolean;
+  error: string | null;
+  ignored: string[];
+  diagnostics: string[];
+  hyphenated: string[];
 }
 export interface WaapiCore {
   keyframes(input: unknown, where: string): Frame[];
@@ -130,12 +156,13 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     e.name = name;
     return e;
   };
-  const EventBase = (d.Event ?? class {
-    type: string;
-    constructor(type: string) {
-      this.type = type;
-    }
-  }) as new (type: string, init?: object) => object;
+  const EventBase = (d.Event ??
+    class {
+      type: string;
+      constructor(type: string) {
+        this.type = type;
+      }
+    }) as new (type: string, init?: object) => object;
   const TargetBase = (d.EventTarget ?? class {}) as new () => {
     dispatchEvent?(ev: object): boolean;
   };
@@ -211,8 +238,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
 
     getComputedTiming(): Record<string, unknown> {
       const anim = this._animation;
-      return { ...this._timing, ...core.computed(this._timing,
-        anim ? anim.currentTime : null, (anim?.playbackRate ?? 1) < 0) };
+      return {
+        ...this._timing,
+        ...core.computed(this._timing, anim ? anim.currentTime : null, (anim?.playbackRate ?? 1) < 0),
+      };
     }
 
     updateTiming(timing?: unknown): void {
@@ -252,7 +281,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       super();
       if (target instanceof KeyframeEffectImpl) {
         this.#target = target.#target;
-        this.#frames = target.#frames.map((f) => ({ ...f, props: f.props.map(([key, value]) => [key, value] as [string, string]) }));
+        this.#frames = target.#frames.map((f) => ({
+          ...f,
+          props: f.props.map(([key, value]) => [key, value] as [string, string]),
+        }));
         this._timing = { ...target._timing };
         this.#composite = target.#composite;
         return;
@@ -265,7 +297,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
         if (o.composite !== undefined) this.composite = o.composite as Composite;
         if (o.pseudoElement !== undefined && o.pseudoElement !== null) this.pseudoElement = String(o.pseudoElement);
         if (o.iterationComposite !== undefined && o.iterationComposite !== "replace") {
-          d.warn("waapi:iterationComposite", "Element.animate(): iterationComposite other than 'replace' is not supported — iterations do not accumulate");
+          d.warn(
+            "waapi:iterationComposite",
+            "Element.animate(): iterationComposite other than 'replace' is not supported — iterations do not accumulate",
+          );
         }
       }
       this.#adviseComposites();
@@ -284,7 +319,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     set pseudoElement(v: string | null) {
       this.#pseudo = v === null || v === undefined ? null : String(v);
       if (this.#pseudo !== null) {
-        d.warn("waapi:pseudo", `Element.animate(): a pseudo-element target (${this.#pseudo}) cannot be animated here — the timing and events run, nothing is painted`);
+        d.warn(
+          "waapi:pseudo",
+          `Element.animate(): a pseudo-element target (${this.#pseudo}) cannot be animated here — the timing and events run, nothing is painted`,
+        );
       }
       this._changed();
     }
@@ -304,7 +342,12 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
 
     getKeyframes(): Record<string, unknown>[] {
       return this.#frames.map((f) => {
-        const out: Record<string, unknown> = { offset: f.offset, computedOffset: f.computed, easing: f.easing, composite: f.composite };
+        const out: Record<string, unknown> = {
+          offset: f.offset,
+          computedOffset: f.computed,
+          easing: f.easing,
+          composite: f.composite,
+        };
         for (const [k, v] of f.props) out[k] = v;
         return out;
       });
@@ -317,9 +360,14 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }
 
     #adviseComposites(): void {
-      const odd = this.#composite !== "replace" || this.#frames.some((f) => f.composite === "add" || f.composite === "accumulate");
+      const odd =
+        this.#composite !== "replace" ||
+        this.#frames.some((f) => f.composite === "add" || f.composite === "accumulate");
       if (odd) {
-        d.warn("waapi:composite", "Element.animate(): composite 'add' / 'accumulate' is not supported — the keyframes replace the underlying value");
+        d.warn(
+          "waapi:composite",
+          "Element.animate(): composite 'add' / 'accumulate' is not supported — the keyframes replace the underlying value",
+        );
       }
     }
 
@@ -338,21 +386,30 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       if (!target || this.#pseudo !== null) return false;
       const node = d.nodeOf(target);
       if (!node) {
-        d.warn("waapi:target", "Element.animate() on an element vue-native does not render (not a mirror node) runs its timing and events but paints nothing");
+        d.warn(
+          "waapi:target",
+          "Element.animate() on an element vue-native does not render (not a mirror node) runs its timing and events but paints nothing",
+        );
         return false;
       }
       const notes = host.setEffect(id, node, this.#frames, this._timing);
       for (const idl of notes.hyphenated) {
-        d.warn(`waapi:hyphen:${idl}`, `Element.animate(): the keyframe member '${idl}' is ignored, as in a browser — keyframes take camelCase names ('${idl.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())}')`);
+        d.warn(
+          `waapi:hyphen:${idl}`,
+          `Element.animate(): the keyframe member '${idl}' is ignored, as in a browser — keyframes take camelCase names ('${idl.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())}')`,
+        );
       }
       if (!notes.accepted) {
         const why = notes.error ?? "invalid effect";
         d.warn(`waapi:refused:${why}`, `Element.animate(): the host refused the effect (${why}) — nothing is painted`);
       }
       for (const property of notes.ignored) {
-        d.warn(`waapi:property:${property}`, property.startsWith("--")
-          ? `Element.animate(): custom property '${property}' is not animated here — the rest of the keyframes still are`
-          : `Element.animate(): '${property}' is not animatable here (the animator's set is the transition one) — the rest of the keyframes still animate`);
+        d.warn(
+          `waapi:property:${property}`,
+          property.startsWith("--")
+            ? `Element.animate(): custom property '${property}' is not animated here — the rest of the keyframes still are`
+            : `Element.animate(): '${property}' is not animatable here (the animator's set is the transition one) — the rest of the keyframes still animate`,
+        );
       }
       for (const diagnostic of notes.diagnostics) {
         d.warn(`waapi:diag:${diagnostic}`, `Element.animate(): ${diagnostic}`);
@@ -401,7 +458,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       this.#ready.resolve(this);
       this.#timeline = tl === undefined ? timeline : (tl as AnimationTimelineImpl | null);
       if (tl !== undefined && tl !== null && tl !== timeline) {
-        d.warn("waapi:timeline", "new Animation(effect, timeline): only document.timeline drives animations here — the animation runs on it");
+        d.warn(
+          "waapi:timeline",
+          "new Animation(effect, timeline): only document.timeline drives animations here — the animation runs on it",
+        );
         this.#timeline = timeline;
       }
       if (effect !== undefined && effect !== null) this.effect = effect as AnimationEffectImpl;
@@ -437,7 +497,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }
     set effect(e: AnimationEffectImpl | null) {
       if (e === this.#effect) return;
-      if (e !== null && !(e instanceof AnimationEffectImpl)) throw new TypeError("Failed to set the 'effect' property on 'Animation': The provided value is not of type 'AnimationEffect'.");
+      if (e !== null && !(e instanceof AnimationEffectImpl))
+        throw new TypeError(
+          "Failed to set the 'effect' property on 'Animation': The provided value is not of type 'AnimationEffect'.",
+        );
       if (this.#native) {
         host.drop(this.#nid);
         this.#native = false;
@@ -455,7 +518,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }
     set timeline(v: AnimationTimelineImpl | null) {
       if (v === this.#timeline) return;
-      d.warn("waapi:timeline", "Animation.timeline: only document.timeline drives animations here — the animation stays on it");
+      d.warn(
+        "waapi:timeline",
+        "Animation.timeline: only document.timeline drives animations here — the animation stays on it",
+      );
     }
 
     get startTime(): number | null {
@@ -484,7 +550,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }
     set currentTime(v: number | null) {
       const seek = v === null || v === undefined ? null : Number(v);
-      if (seek !== null && Number.isNaN(seek)) throw new TypeError("Failed to set the 'currentTime' property on 'Animation': The provided double value is non-finite.");
+      if (seek !== null && Number.isNaN(seek))
+        throw new TypeError(
+          "Failed to set the 'currentTime' property on 'Animation': The provided double value is non-finite.",
+        );
       this.#silentSeek(seek);
       if (this.#pending === "pause") {
         this.#hold = seek;
@@ -539,7 +608,8 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       if (this.#current() === null) {
         if (this.#rate >= 0) seek = 0;
         else {
-          if (this.#end() === Infinity) throw domError("Cannot pause an animation with an infinite end, playing backwards.", "InvalidStateError");
+          if (this.#end() === Infinity)
+            throw domError("Cannot pause an animation with an infinite end, playing backwards.", "InvalidStateError");
           seek = this.#end();
         }
       }
@@ -560,7 +630,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       const rate = this.#effectiveRate();
       const end = this.#end();
       if (rate === 0 || (rate > 0 && end === Infinity)) {
-        throw domError("Cannot finish an animation with a playback rate of zero, or an infinite end.", "InvalidStateError");
+        throw domError(
+          "Cannot finish an animation with a playback rate of zero, or an infinite end.",
+          "InvalidStateError",
+        );
       }
       this.#applyPendingRate();
       const limit = this.#rate > 0 ? end : 0;
@@ -600,7 +673,8 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     }
 
     reverse(): void {
-      if (this.#timelineTime() === null) throw domError("Cannot reverse an animation with no active timeline.", "InvalidStateError");
+      if (this.#timelineTime() === null)
+        throw domError("Cannot reverse an animation with no active timeline.", "InvalidStateError");
       const original = this.#pendingRate;
       this.#pendingRate = -this.#effectiveRate();
       try {
@@ -638,7 +712,8 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
 
     commitStyles(): void {
       const target = this.#effect?._target();
-      if (!target) throw domError("Animation.commitStyles(): the effect has no target element.", "NoModificationAllowedError");
+      if (!target)
+        throw domError("Animation.commitStyles(): the effect has no target element.", "NoModificationAllowedError");
       if (!this.#native) return;
       const raw = host.values(this.#nid);
       if (!raw) return;
@@ -647,7 +722,10 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
 
     #silentSeek(seek: number | null): void {
       if (seek === null) {
-        if (this.#current() !== null) throw new TypeError("Failed to set the 'currentTime' property on 'Animation': currentTime may not be changed from resolved to unresolved.");
+        if (this.#current() !== null)
+          throw new TypeError(
+            "Failed to set the 'currentTime' property on 'Animation': currentTime may not be changed from resolved to unresolved.",
+          );
         return;
       }
       const tl = this.#timelineTime();
@@ -666,7 +744,8 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       const end = this.#end();
       if (rate > 0 && autoRewind && (cur === null || cur < 0 || cur >= end)) seek = 0;
       else if (rate < 0 && autoRewind && (cur === null || cur <= 0 || cur > end)) {
-        if (end === Infinity) throw domError("Cannot play reversed an animation with an infinite end.", "InvalidStateError");
+        if (end === Infinity)
+          throw domError("Cannot play reversed an animation with an infinite end.", "InvalidStateError");
         seek = end;
       } else if (rate === 0 && cur === null) seek = 0;
       if (seek !== null) {
@@ -816,11 +895,14 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
       const target = this.#rate > 0 ? this.#end() : 0;
       const ms = (target - cur) / this.#rate;
       if (!Number.isFinite(ms)) return;
-      this.#timer = d.setTimer(() => {
-        this.#timer = null;
-        this.#updateFinished(false, false);
-        this.#sync();
-      }, Math.max(0, ms));
+      this.#timer = d.setTimer(
+        () => {
+          this.#timer = null;
+          this.#updateFinished(false, false);
+          this.#sync();
+        },
+        Math.max(0, ms),
+      );
     }
 
     _effectChanged(): void {
@@ -876,10 +958,16 @@ export function installWaapi(d: WaapiDeps): { Animation: unknown; KeyframeEffect
     const effect = new KeyframeEffectImpl(this, keyframes, options);
     const o = options && typeof options === "object" ? (options as Record<string, unknown>) : null;
     if (o && o.timeline !== undefined && o.timeline !== timeline) {
-      d.warn("waapi:timeline", "Element.animate({ timeline }): only document.timeline drives animations here — the animation runs on it");
+      d.warn(
+        "waapi:timeline",
+        "Element.animate({ timeline }): only document.timeline drives animations here — the animation runs on it",
+      );
     }
     if (o && (o.rangeStart !== undefined || o.rangeEnd !== undefined)) {
-      d.warn("waapi:range", "Element.animate({ rangeStart, rangeEnd }): scroll-driven ranges are not supported — the animation runs on document.timeline");
+      d.warn(
+        "waapi:range",
+        "Element.animate({ rangeStart, rangeEnd }): scroll-driven ranges are not supported — the animation runs on document.timeline",
+      );
     }
     const anim = new AnimationImpl(effect, timeline);
     if (o && o.id !== undefined) anim.id = String(o.id);

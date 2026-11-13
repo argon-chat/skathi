@@ -19,9 +19,7 @@ const paletteRoot = computed(() => paletteWin.value?.el ?? null);
 const paletteSize = ref<VnWindowMetrics>({ width: 0, height: 0, scale: 1 });
 const paletteFocused = ref(false);
 const paletteMetrics = computed(() =>
-  paletteSize.value.width
-    ? `${Math.round(paletteSize.value.width)}x${Math.round(paletteSize.value.height)}`
-    : "none",
+  paletteSize.value.width ? `${Math.round(paletteSize.value.width)}x${Math.round(paletteSize.value.height)}` : "none",
 );
 
 const note = ref("");
@@ -34,17 +32,17 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
     <h1 class="h">One app, three windows</h1>
 
     <p class="lede">
-      Everything below lives in this one component. A VnWindow moves a subtree's
-      PAINT into a second OS window and leaves it in this tree.
+      Everything below lives in this one component. A VnWindow moves a subtree's PAINT into a second OS window and
+      leaves it in this tree.
     </p>
 
     <div class="card mirror">
       window A sees count = <span class="num">{{ count }}</span>
     </div>
     <div class="card meta">
-      brush = <span class="num brush-mirror">{{ brush }}</span>
-      · palette viewport = <span class="num pal-size">{{ paletteMetrics }}</span>
-      · focused = <span class="num pal-focus">{{ paletteFocused }}</span>
+      brush = <span class="num brush-mirror">{{ brush }}</span> · palette viewport =
+      <span class="num pal-size">{{ paletteMetrics }}</span> · focused =
+      <span class="num pal-focus">{{ paletteFocused }}</span>
     </div>
 
     <!-- Distinct classes rather than positions: `v-show` keeps a hidden button in the tree
@@ -66,9 +64,7 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
 
     <div class="pulse pulse-main" />
 
-    <p class="hint" v-show="palette">
-      The panel is being painted by the palette window. It is still in this tree.
-    </p>
+    <p class="hint" v-show="palette">The panel is being painted by the palette window. It is still in this tree.</p>
 
     <div class="card note-mirror" v-show="notes">
       note = <span class="num note-text">{{ note || "(empty)" }}</span>
@@ -84,13 +80,7 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
         <button class="btn big inc-b" @click="count++">+1</button>
 
         <div class="swatches">
-          <button
-            v-for="s in swatches"
-            :key="s"
-            class="swatch"
-            :class="{ on: brush === s }"
-            @click="brush = s"
-          >
+          <button v-for="s in swatches" :key="s" class="swatch" :class="{ on: brush === s }" @click="brush = s">
             {{ s }}
           </button>
         </div>
@@ -119,7 +109,6 @@ const paletteTitle = computed(() => `Palette - ${brush.value}`);
            the run starts in the window that paints it. -->
       <div class="pulse pulse-palette" />
     </VnWindow>
-
 
     <VnWindow
       v-if="player"

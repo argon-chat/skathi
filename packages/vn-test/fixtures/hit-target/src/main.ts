@@ -3,7 +3,7 @@ import { createApp, h, ref } from "vue-native";
 const state = { log: [] as string[] };
 (globalThis as unknown as { __VN_TEST_HIT__: unknown }).__VN_TEST_HIT__ = state;
 
-const idOf = (e: Event) => ((e.target as HTMLElement | null)?.id || (e.target as HTMLElement | null)?.className || "?");
+const idOf = (e: Event) => (e.target as HTMLElement | null)?.id || (e.target as HTMLElement | null)?.className || "?";
 const note = (what: string) => (e: Event) => state.log.push(`${e.type}:${what} t=${idOf(e)}`);
 
 document.addEventListener("mousedown", (e) => state.log.push(`mousedown:document t=${idOf(e)}`));
@@ -43,15 +43,15 @@ const App = {
         },
         [h("div", { id: "pic", style: { width: "40px", height: "40px", margin: "25px", background: "#88a" } })],
       ),
-      h(
-        "button",
-        { id: "btn", style: abs(330, 10, 120, 40), onClick: note("btn") },
-        [h("span", { id: "btn-label" }, "Label")],
-      ),
-      h("div", { id: "under", style: abs(10, 110, 150, 60, { background: "#dfd" }), onClick: note("under") }),
-      h("div", { id: "decor", style: abs(10, 110, 150, 60, { pointerEvents: "none", background: "rgba(0,0,0,0.1)" }) }, [
-        h("div", { id: "decor-auto", style: abs(110, 0, 40, 60, { pointerEvents: "auto", background: "#afa" }) }),
+      h("button", { id: "btn", style: abs(330, 10, 120, 40), onClick: note("btn") }, [
+        h("span", { id: "btn-label" }, "Label"),
       ]),
+      h("div", { id: "under", style: abs(10, 110, 150, 60, { background: "#dfd" }), onClick: note("under") }),
+      h(
+        "div",
+        { id: "decor", style: abs(10, 110, 150, 60, { pointerEvents: "none", background: "rgba(0,0,0,0.1)" }) },
+        [h("div", { id: "decor-auto", style: abs(110, 0, 40, 60, { pointerEvents: "auto", background: "#afa" }) })],
+      ),
       h("div", { id: "parent", style: abs(170, 110, 150, 30, { background: "#fdd" }), onClick: note("parent") }, [
         h("div", { id: "outside", style: abs(0, 40, 150, 20, { background: "#faa" }) }),
       ]),
@@ -60,7 +60,9 @@ const App = {
       h(
         "div",
         { id: "list", style: abs(10, 190, 150, 80, { overflow: "auto", background: "#eef" }) },
-        Array.from({ length: 12 }, (_, i) => h("div", { id: `line${i + 1}`, style: { height: "24px" } }, `Line ${i + 1}`)),
+        Array.from({ length: 12 }, (_, i) =>
+          h("div", { id: `line${i + 1}`, style: { height: "24px" } }, `Line ${i + 1}`),
+        ),
       ),
       h("div", { id: "list-cover", style: abs(10, 190, 150, 30, { background: "rgba(255,0,0,0.2)" }) }),
       h("div", { id: "row", style: abs(170, 190, 150, 40, { display: "flex" }), onClick: note("row") }, [
@@ -71,14 +73,32 @@ const App = {
         "div",
         { id: "clist", style: abs(330, 190, 150, 160) },
         Array.from({ length: 4 }, (_, i) =>
-          h("div", { class: "crow", id: `crow${i}`, style: { height: "36px", marginBottom: "4px" }, onClick: note(`crow${i}`) }, [
-            h("div", { class: "c-under", id: `cu${i}`, style: { height: "20px", background: "#cfc" }, onClick: note(`cu${i}`) }),
-            h("div", { class: "c-cover", id: `cc${i}`, style: { height: "20px", marginTop: "-20px", background: "#9c9" } }),
-            h("div", { class: "c-foot", style: { height: "16px", display: "flex" } }, [
-              h("span", { style: { width: "40px" } }, "a"),
-              h("span", { style: { width: "40px" } }, "b"),
-            ]),
-          ]),
+          h(
+            "div",
+            {
+              class: "crow",
+              id: `crow${i}`,
+              style: { height: "36px", marginBottom: "4px" },
+              onClick: note(`crow${i}`),
+            },
+            [
+              h("div", {
+                class: "c-under",
+                id: `cu${i}`,
+                style: { height: "20px", background: "#cfc" },
+                onClick: note(`cu${i}`),
+              }),
+              h("div", {
+                class: "c-cover",
+                id: `cc${i}`,
+                style: { height: "20px", marginTop: "-20px", background: "#9c9" },
+              }),
+              h("div", { class: "c-foot", style: { height: "16px", display: "flex" } }, [
+                h("span", { style: { width: "40px" } }, "a"),
+                h("span", { style: { width: "40px" } }, "b"),
+              ]),
+            ],
+          ),
         ),
       ),
       h("div", { id: "tick", style: abs(10, 370, 200, 20) }, `tick ${tick.value}`),

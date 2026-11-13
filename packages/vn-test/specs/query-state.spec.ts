@@ -48,62 +48,123 @@ const red = ([r, g, b]: Rgb) => r > 200 && g < 60 && b < 60;
 const blue = ([r, g, b]: Rgb) => b > 200 && r < 60 && g < 60;
 
 describe("focus in a query", () => {
-  test("a click focuses a button without showing it; the focus is the only :focus", async () => {
-    await app.locator("#a").click({ real: true });
-    await until(() => js<string>("return document.activeElement.id"), (id) => id === "a");
-    bunExpect(
-      await matches([
-        ["a", ":focus"],
-        ["a", ":focus-visible"],
-        ["row", ":focus-within"],
-        ["page", ":focus-within"],
-        ["b", ":focus"],
-        ["b", ":focus-within"],
-      ]),
-    ).toEqual([true, false, true, true, false, false]);
-    bunExpect(await ids(":focus")).toEqual(["a"]);
-    bunExpect(await ids("button:not(:focus)")).toEqual(["b"]);
-    bunExpect(await js<string>('return document.getElementById("a").closest(":focus-within:not(:focus)").id')).toBe("row");
-  }, T);
+  test(
+    "a click focuses a button without showing it; the focus is the only :focus",
+    async () => {
+      await app.locator("#a").click({ real: true });
+      await until(
+        () => js<string>("return document.activeElement.id"),
+        (id) => id === "a",
+      );
+      bunExpect(
+        await matches([
+          ["a", ":focus"],
+          ["a", ":focus-visible"],
+          ["row", ":focus-within"],
+          ["page", ":focus-within"],
+          ["b", ":focus"],
+          ["b", ":focus-within"],
+        ]),
+      ).toEqual([true, false, true, true, false, false]);
+      bunExpect(await ids(":focus")).toEqual(["a"]);
+      bunExpect(await ids("button:not(:focus)")).toEqual(["b"]);
+      bunExpect(await js<string>('return document.getElementById("a").closest(":focus-within:not(:focus)").id')).toBe(
+        "row",
+      );
+    },
+    T,
+  );
 
-  test("Tab shows the focus, in the query and on screen", async () => {
-    await app.press("Tab");
-    await until(() => js<string>("return document.activeElement.id"), (id) => id === "b");
-    bunExpect(await matches([["b", ":focus-visible"], ["a", ":focus"]])).toEqual([true, false]);
-    bunExpect(await ids(":focus-visible")).toEqual(["b"]);
-    const b = await box("#b");
-    const s = await until(shoot, (s) => blue(s.at(b.x - 2, b.y + b.h / 2)));
-    bunExpect(blue(s.at(b.x - 2, b.y + b.h / 2))).toBe(true);
-  }, T);
+  test(
+    "Tab shows the focus, in the query and on screen",
+    async () => {
+      await app.press("Tab");
+      await until(
+        () => js<string>("return document.activeElement.id"),
+        (id) => id === "b",
+      );
+      bunExpect(
+        await matches([
+          ["b", ":focus-visible"],
+          ["a", ":focus"],
+        ]),
+      ).toEqual([true, false]);
+      bunExpect(await ids(":focus-visible")).toEqual(["b"]);
+      const b = await box("#b");
+      const s = await until(shoot, (s) => blue(s.at(b.x - 2, b.y + b.h / 2)));
+      bunExpect(blue(s.at(b.x - 2, b.y + b.h / 2))).toBe(true);
+    },
+    T,
+  );
 
-  test("a click into a text field shows its focus, as in Chromium", async () => {
-    await app.locator("#field").click({ real: true });
-    await until(() => js<string>("return document.activeElement.id"), (id) => id === "field");
-    bunExpect(await matches([["field", ":focus-visible"], ["b", ":focus-visible"]])).toEqual([true, false]);
-    const f = await box("#field");
-    const s = await until(shoot, (s) => red(s.at(f.x - 2, f.y + f.h / 2)));
-    bunExpect(red(s.at(f.x - 2, f.y + f.h / 2))).toBe(true);
-    const b = await box("#b");
-    bunExpect(blue(s.at(b.x - 2, b.y + b.h / 2))).toBe(false);
-  }, T);
+  test(
+    "a click into a text field shows its focus, as in Chromium",
+    async () => {
+      await app.locator("#field").click({ real: true });
+      await until(
+        () => js<string>("return document.activeElement.id"),
+        (id) => id === "field",
+      );
+      bunExpect(
+        await matches([
+          ["field", ":focus-visible"],
+          ["b", ":focus-visible"],
+        ]),
+      ).toEqual([true, false]);
+      const f = await box("#field");
+      const s = await until(shoot, (s) => red(s.at(f.x - 2, f.y + f.h / 2)));
+      bunExpect(red(s.at(f.x - 2, f.y + f.h / 2))).toBe(true);
+      const b = await box("#b");
+      bunExpect(blue(s.at(b.x - 2, b.y + b.h / 2))).toBe(false);
+    },
+    T,
+  );
 });
 
 describe("the pointer in a query", () => {
-  test(":hover is the element under the pointer and its ancestors", async () => {
-    await app.locator("#pad-inner").hover();
-    const hovered = await until(() => ids("#page :hover"), (v) => v.length === 2);
-    bunExpect(hovered).toEqual(["pad", "pad-inner"]);
-    bunExpect(await matches([["pad-inner", ":hover"], ["a", ":hover"], ["page", ":hover"]])).toEqual([true, false, true]);
-    bunExpect(await ids("#row > :not(:hover)")).toEqual(["a", "b"]);
-    await app.locator("#pad-inner").unhover();
-    bunExpect(await until(() => ids("#page :hover"), (v) => v.length === 0)).toEqual([]);
-  }, T);
+  test(
+    ":hover is the element under the pointer and its ancestors",
+    async () => {
+      await app.locator("#pad-inner").hover();
+      const hovered = await until(
+        () => ids("#page :hover"),
+        (v) => v.length === 2,
+      );
+      bunExpect(hovered).toEqual(["pad", "pad-inner"]);
+      bunExpect(
+        await matches([
+          ["pad-inner", ":hover"],
+          ["a", ":hover"],
+          ["page", ":hover"],
+        ]),
+      ).toEqual([true, false, true]);
+      bunExpect(await ids("#row > :not(:hover)")).toEqual(["a", "b"]);
+      await app.locator("#pad-inner").unhover();
+      bunExpect(
+        await until(
+          () => ids("#page :hover"),
+          (v) => v.length === 0,
+        ),
+      ).toEqual([]);
+    },
+    T,
+  );
 
-  test(":active is the pressed element and its ancestors, until the release", async () => {
-    await app.send("mouse", { selector: "#pad-inner", index: 0, kind: "down" });
-    bunExpect(await matches([["pad-inner", ":active"], ["pad", ":active"], ["a", ":active"]])).toEqual([true, true, false]);
-    bunExpect(await ids("#page :active")).toEqual(["pad", "pad-inner"]);
-    await app.send("mouse", { selector: "#pad-inner", index: 0, kind: "up" });
-    bunExpect(await ids("#page :active")).toEqual([]);
-  }, T);
+  test(
+    ":active is the pressed element and its ancestors, until the release",
+    async () => {
+      await app.send("mouse", { selector: "#pad-inner", index: 0, kind: "down" });
+      bunExpect(
+        await matches([
+          ["pad-inner", ":active"],
+          ["pad", ":active"],
+          ["a", ":active"],
+        ]),
+      ).toEqual([true, true, false]);
+      bunExpect(await ids("#page :active")).toEqual(["pad", "pad-inner"]);
+      await app.send("mouse", { selector: "#pad-inner", index: 0, kind: "up" });
+      bunExpect(await ids("#page :active")).toEqual([]);
+    },
+    T,
+  );
 });

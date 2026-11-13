@@ -80,16 +80,17 @@ describe("no windowing host", () => {
   });
 });
 
-
 describe("native fullscreen Escape", () => {
   test("one Escape leaves fullscreen before app listeners, then normal key delivery resumes", () => {
     let active = true;
     const { host } = fakeHost();
-    Object.assign(host, { escapeFullscreen: () => {
-      if (!active) return false;
-      active = false;
-      return true;
-    } });
+    Object.assign(host, {
+      escapeFullscreen: () => {
+        if (!active) return false;
+        active = false;
+        return true;
+      },
+    });
     globalThis.__VN_WINDOW__ = host;
     const rt = createRuntime();
     rt.createApp({ render: () => null }).mount();

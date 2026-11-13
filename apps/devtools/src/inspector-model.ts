@@ -1,22 +1,152 @@
 export type InspectorRequest = <T>(command: Record<string, unknown>) => Promise<T>;
-export interface TraceHint { code: string; severity: string; message: string; count: number; spanId?: number }
-export interface TraceCategory { category: string; selfMs: number; totalMs: number; count: number }
-export interface TraceFrame { id: number; startMs: number; durationMs: number; cpuMs: number; spanCount: number; droppedSpans: number; categories: TraceCategory[]; hints: TraceHint[] }
-export interface TraceSpan { id: number; parentId: number | null; category: string; name: string; startMs: number; durationMs: number; selfMs: number; depth: number; count: number; callsite?: { kind: string; function?: string; url?: string; line?: number; column?: number }; counters?: Record<string, number>; hints?: string[] }
-export interface TraceStatus { recording: boolean; sessionId: number; frameCount: number; droppedFrames: number; droppedSpans: number; limits: { frames: number; spansPerFrame: number; totalSpans: number } }
-export interface TraceFrames { sessionId: number; recording: boolean; total: number; offset: number; nextOffset: number | null; frames: TraceFrame[] }
-export interface TraceDetail { sessionId: number; frame: TraceFrame; offset: number; total: number; nextOffset: number | null; truncated: boolean; spans: TraceSpan[] }
-export interface Preview { type: string; preview: string; children?: { name: string; value: Preview }[]; size?: number; mime?: string; name?: string; ref?: number; truncated?: boolean }
-export interface DatabaseList { available: boolean; backend: string; databases: { name: string; version: number }[] }
-export interface DatabaseIndex { name: string; keyPath: unknown; unique: boolean; multiEntry: boolean; count: number }
-export interface DatabaseStore { name: string; keyPath: unknown; autoIncrement: boolean; count: number; indexes: DatabaseIndex[] }
-export interface DatabaseSchema { database: string; version: number; stores: DatabaseStore[] }
-export interface DatabaseRecord { key: Preview; primaryKey: Preview; value: Preview; encodedBytes: number }
-export interface DatabaseRecords { records: DatabaseRecord[]; nextCursor: string | null; hasMore: boolean; scanned: number; truncated: boolean }
-export interface AllocationRow { category: string; site: string; sizeClass: string | number; allocatedBytes: number; freedBytes: number; liveBytes: number; allocations: number; frees: number; liveBlocks: number }
-export interface AllocationSnapshot { session: number; recording: boolean; available: boolean; coverage: Record<string, boolean | string | number>; droppedEvents: number; totals: Omit<AllocationRow, "category" | "site" | "sizeClass"> & { netBytes?: number }; sampleEvery: number; capturedEvents?: number; maxEvents?: number; heap?: { liveBytes: number; liveBlocks: number; deltaBytes: number; deltaBlocks: number; allocationsSinceStart: number } | null; matchedRows?: number; truncated?: boolean; rows: AllocationRow[]; startedAtMs: number; elapsedMs: number; complete: boolean }
+export interface TraceHint {
+  code: string;
+  severity: string;
+  message: string;
+  count: number;
+  spanId?: number;
+}
+export interface TraceCategory {
+  category: string;
+  selfMs: number;
+  totalMs: number;
+  count: number;
+}
+export interface TraceFrame {
+  id: number;
+  startMs: number;
+  durationMs: number;
+  cpuMs: number;
+  spanCount: number;
+  droppedSpans: number;
+  categories: TraceCategory[];
+  hints: TraceHint[];
+}
+export interface TraceSpan {
+  id: number;
+  parentId: number | null;
+  category: string;
+  name: string;
+  startMs: number;
+  durationMs: number;
+  selfMs: number;
+  depth: number;
+  count: number;
+  callsite?: { kind: string; function?: string; url?: string; line?: number; column?: number };
+  counters?: Record<string, number>;
+  hints?: string[];
+}
+export interface TraceStatus {
+  recording: boolean;
+  sessionId: number;
+  frameCount: number;
+  droppedFrames: number;
+  droppedSpans: number;
+  limits: { frames: number; spansPerFrame: number; totalSpans: number };
+}
+export interface TraceFrames {
+  sessionId: number;
+  recording: boolean;
+  total: number;
+  offset: number;
+  nextOffset: number | null;
+  frames: TraceFrame[];
+}
+export interface TraceDetail {
+  sessionId: number;
+  frame: TraceFrame;
+  offset: number;
+  total: number;
+  nextOffset: number | null;
+  truncated: boolean;
+  spans: TraceSpan[];
+}
+export interface Preview {
+  type: string;
+  preview: string;
+  children?: { name: string; value: Preview }[];
+  size?: number;
+  mime?: string;
+  name?: string;
+  ref?: number;
+  truncated?: boolean;
+}
+export interface DatabaseList {
+  available: boolean;
+  backend: string;
+  databases: { name: string; version: number }[];
+}
+export interface DatabaseIndex {
+  name: string;
+  keyPath: unknown;
+  unique: boolean;
+  multiEntry: boolean;
+  count: number;
+}
+export interface DatabaseStore {
+  name: string;
+  keyPath: unknown;
+  autoIncrement: boolean;
+  count: number;
+  indexes: DatabaseIndex[];
+}
+export interface DatabaseSchema {
+  database: string;
+  version: number;
+  stores: DatabaseStore[];
+}
+export interface DatabaseRecord {
+  key: Preview;
+  primaryKey: Preview;
+  value: Preview;
+  encodedBytes: number;
+}
+export interface DatabaseRecords {
+  records: DatabaseRecord[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  scanned: number;
+  truncated: boolean;
+}
+export interface AllocationRow {
+  category: string;
+  site: string;
+  sizeClass: string | number;
+  allocatedBytes: number;
+  freedBytes: number;
+  liveBytes: number;
+  allocations: number;
+  frees: number;
+  liveBlocks: number;
+}
+export interface AllocationSnapshot {
+  session: number;
+  recording: boolean;
+  available: boolean;
+  coverage: Record<string, boolean | string | number>;
+  droppedEvents: number;
+  totals: Omit<AllocationRow, "category" | "site" | "sizeClass"> & { netBytes?: number };
+  sampleEvery: number;
+  capturedEvents?: number;
+  maxEvents?: number;
+  heap?: {
+    liveBytes: number;
+    liveBlocks: number;
+    deltaBytes: number;
+    deltaBlocks: number;
+    allocationsSinceStart: number;
+  } | null;
+  matchedRows?: number;
+  truncated?: boolean;
+  rows: AllocationRow[];
+  startedAtMs: number;
+  elapsedMs: number;
+  complete: boolean;
+}
 
-export function milliseconds(value: number): string { return Number.isFinite(value) ? `${value < 1 ? value.toFixed(3) : value.toFixed(2)} ms` : "—"; }
+export function milliseconds(value: number): string {
+  return Number.isFinite(value) ? `${value < 1 ? value.toFixed(3) : value.toFixed(2)} ms` : "—";
+}
 export function byteLabel(value: number, signed = false): string {
   if (!Number.isFinite(value)) return "—";
   const absolute = Math.abs(value);
@@ -25,7 +155,10 @@ export function byteLabel(value: number, signed = false): string {
 }
 export function rowWindow(count: number, scroll: number, height: number, rowHeight = 24, overscan = 3) {
   count = Math.max(0, Math.floor(count));
-  const top = Math.max(0, Math.min(Math.max(0, count * rowHeight - Math.max(0, height)), Number.isFinite(scroll) ? scroll : 0));
+  const top = Math.max(
+    0,
+    Math.min(Math.max(0, count * rowHeight - Math.max(0, height)), Number.isFinite(scroll) ? scroll : 0),
+  );
   const start = Math.max(0, Math.floor(top / rowHeight) - overscan);
   const end = Math.min(count, Math.ceil((top + Math.max(0, height)) / rowHeight) + overscan);
   return { start, end, top, padTop: start * rowHeight, padBottom: Math.max(0, (count - end) * rowHeight) };
@@ -36,7 +169,8 @@ export function frameBuckets(frames: TraceFrame[], maximum = 180) {
   for (let offset = 0; offset < frames.length; offset += stride) {
     let frame = frames[offset];
     const end = Math.min(frames.length, offset + stride);
-    for (let index = offset + 1; index < end; index++) if (frames[index].durationMs > frame.durationMs) frame = frames[index];
+    for (let index = offset + 1; index < end; index++)
+      if (frames[index].durationMs > frame.durationMs) frame = frames[index];
     buckets.push({ frame, count: end - offset });
   }
   return buckets;
@@ -49,7 +183,9 @@ export function spanRows(spans: TraceSpan[], collapsed: ReadonlySet<number> = ne
   const roots: TraceSpan[] = [];
   for (const span of unique.values()) {
     if (span.parentId !== null && span.parentId !== span.id && unique.has(span.parentId)) {
-      const group = children.get(span.parentId) || []; group.push(span); children.set(span.parentId, group);
+      const group = children.get(span.parentId) || [];
+      group.push(span);
+      children.set(span.parentId, group);
     } else roots.push(span);
   }
   for (const group of children.values()) group.sort(compare);
@@ -64,7 +200,8 @@ export function spanRows(spans: TraceSpan[], collapsed: ReadonlySet<number> = ne
       visited.add(item.span.id);
       const nested = children.get(item.span.id) || [];
       if (!item.hidden) rows.push({ span: item.span, depth: item.depth, hasChildren: nested.length > 0 });
-      for (let index = nested.length - 1; index >= 0; index--) stack.push({ span: nested[index], depth: item.depth + 1, hidden: item.hidden || collapsed.has(item.span.id) });
+      for (let index = nested.length - 1; index >= 0; index--)
+        stack.push({ span: nested[index], depth: item.depth + 1, hidden: item.hidden || collapsed.has(item.span.id) });
     }
   }
   for (const root of roots) visit(root);
@@ -82,19 +219,41 @@ export function zoomRange(start: number, end: number, duration: number, factor: 
   const width = (end - start) * Math.max(0.01, factor);
   return timeRange(center - width / 2, center + width / 2, duration);
 }
-export function allocationKey(row: AllocationRow): string { return JSON.stringify([row.category, row.site, row.sizeClass]); }
+export function allocationKey(row: AllocationRow): string {
+  return JSON.stringify([row.category, row.site, row.sizeClass]);
+}
 export function allocationDiff(before: AllocationRow[], after: AllocationRow[]): AllocationRow[] {
-  const rows = new Map(after.map(row => [allocationKey(row), { ...row }]));
+  const rows = new Map(after.map((row) => [allocationKey(row), { ...row }]));
   for (const old of before) {
     const key = allocationKey(old);
-    const row = rows.get(key) || { ...old, allocatedBytes: 0, freedBytes: 0, liveBytes: 0, allocations: 0, frees: 0, liveBlocks: 0 };
-    for (const field of ["allocatedBytes", "freedBytes", "liveBytes", "allocations", "frees", "liveBlocks"] as const) row[field] -= old[field];
+    const row = rows.get(key) || {
+      ...old,
+      allocatedBytes: 0,
+      freedBytes: 0,
+      liveBytes: 0,
+      allocations: 0,
+      frees: 0,
+      liveBlocks: 0,
+    };
+    for (const field of ["allocatedBytes", "freedBytes", "liveBytes", "allocations", "frees", "liveBlocks"] as const)
+      row[field] -= old[field];
     rows.set(key, row);
   }
-  return [...rows.values()].sort((left, right) => Math.abs(right.liveBytes) - Math.abs(left.liveBytes) || allocationKey(left).localeCompare(allocationKey(right)));
+  return [...rows.values()].sort(
+    (left, right) =>
+      Math.abs(right.liveBytes) - Math.abs(left.liveBytes) || allocationKey(left).localeCompare(allocationKey(right)),
+  );
 }
 export function callsiteLabel(span: TraceSpan): string {
   const site = span.callsite;
   if (!site) return "No callsite captured";
-  return [site.function, site.url && `${site.url}${site.line === undefined ? "" : `:${site.line}${site.column === undefined ? "" : `:${site.column}`}`}`].filter(Boolean).join(" · ") || site.kind;
+  return (
+    [
+      site.function,
+      site.url &&
+        `${site.url}${site.line === undefined ? "" : `:${site.line}${site.column === undefined ? "" : `:${site.column}`}`}`,
+    ]
+      .filter(Boolean)
+      .join(" · ") || site.kind
+  );
 }

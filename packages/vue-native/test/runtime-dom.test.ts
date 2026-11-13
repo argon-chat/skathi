@@ -218,7 +218,14 @@ describe("layout comes from the host's painted bounds", () => {
     const rt = createRuntime();
     const { button } = tree(rt);
     rt.host.boundsById.set(button.__vnId, "0,0,100,40,290,195,120,50");
-    expect(button.getBoundingClientRect()).toMatchObject({ x: 290, y: 195, width: 120, height: 50, right: 410, bottom: 245 });
+    expect(button.getBoundingClientRect()).toMatchObject({
+      x: 290,
+      y: 195,
+      width: 120,
+      height: 50,
+      right: 410,
+      bottom: 245,
+    });
     expect(button.getClientRects()[0]).toMatchObject({ left: 290, top: 195, width: 120 });
     expect(button.offsetWidth).toBe(100);
     expect(button.clientHeight).toBe(40);
@@ -492,7 +499,8 @@ describe("the attribute channel", () => {
 });
 
 describe("props that are DOM properties, as runtime-dom sets them", () => {
-  const hostProp = (rt, el, key: string) => rt.host.props.filter((p) => p.id === el.__vnId && p.key === key).at(-1)?.value;
+  const hostProp = (rt, el, key: string) =>
+    rt.host.props.filter((p) => p.id === el.__vnId && p.key === key).at(-1)?.value;
   const make = (rt, tag: string) => rt.nodeOps.createElement(tag);
 
   test("a boolean property is present as '' or absent, never the string 'false'", () => {
@@ -848,7 +856,9 @@ describe("custom events and dispatchEvent", () => {
     const seen = [];
     const who = (t) => (t === inner ? "inner" : t === outer ? "outer" : String(t));
     const note = (where) => (e) =>
-      seen.push(`${where}:${e.eventPhase}:${who(e.currentTarget)}:${e.composedPath()[0] === inner}:${e.composedPath()[1] === outer}`);
+      seen.push(
+        `${where}:${e.eventPhase}:${who(e.currentTarget)}:${e.composedPath()[0] === inner}:${e.composedPath()[1] === outer}`,
+      );
     outer.addEventListener("x.probe", note("capture"), { capture: true });
     inner.addEventListener("x.probe", note("target"));
     outer.addEventListener("x.probe", note("bubble"));
@@ -1213,11 +1223,19 @@ describe("missing globals (G5)", () => {
     expect(rt.advisories().some((a) => a.includes("getComputedStyle"))).toBe(true);
   });
 
-  test("getComputedStyle: a node the host has no style for reads \"\" for everything, without an advisory", () => {
+  test('getComputedStyle: a node the host has no style for reads "" for everything, without an advisory', () => {
     const rt = createRuntime();
     const { button } = tree(rt);
     const cs = rt.global.getComputedStyle(button);
-    for (const k of ["width", "height", "position", "direction", "animationName", "transitionDelay", "transitionDuration"]) {
+    for (const k of [
+      "width",
+      "height",
+      "position",
+      "direction",
+      "animationName",
+      "transitionDelay",
+      "transitionDuration",
+    ]) {
       expect(cs[k]).toBe("");
     }
     expect(cs.getPropertyValue("--chat-width")).toBe("");

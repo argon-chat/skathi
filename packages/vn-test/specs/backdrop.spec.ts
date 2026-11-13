@@ -50,7 +50,8 @@ async function shoot(): Promise<Shot> {
   const r = await app.send("screenshot", { backend: "print_window" });
   hwnd = BigInt(r.hwnd);
   const shot = readPng(r.path);
-  const at = (x: number, y: number) => shot.at(Math.round(x * r.scale + r.clientX), Math.round(y * r.scale + r.clientY));
+  const at = (x: number, y: number) =>
+    shot.at(Math.round(x * r.scale + r.clientX), Math.round(y * r.scale + r.clientY));
   const sum: Rgb = [0, 0, 0];
   let n = 0;
   let lo = 255;
@@ -72,16 +73,20 @@ const luma = (c: Rgb) => (c[0] + c[1] + c[2]) / 3;
 const close = (a: Rgb, b: Rgb, tol = 6) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
 
 describe("backdrop", () => {
-  test("opens on acrylic from vn.config.json: DWM's own, read back, and nothing advised", async () => {
-    await sleep(500);
-    const s = await state();
-    expect(s.backdrop).toBe("acrylic");
-    expect(s.system).toBe(DWMSBT.acrylic);
-    const { entries } = await app.logs(0);
-    expect(entries.filter((l) => l.kind === "advisory" && /acrylic/.test(l.text))).toEqual([]);
-    const shot = await shoot();
-    expect(close(shot.solid, [255, 0, 0], 8)).toBe(true);
-  }, T);
+  test(
+    "opens on acrylic from vn.config.json: DWM's own, read back, and nothing advised",
+    async () => {
+      await sleep(500);
+      const s = await state();
+      expect(s.backdrop).toBe("acrylic");
+      expect(s.system).toBe(DWMSBT.acrylic);
+      const { entries } = await app.logs(0);
+      expect(entries.filter((l) => l.kind === "advisory" && /acrylic/.test(l.text))).toEqual([]);
+      const shot = await shoot();
+      expect(close(shot.solid, [255, 0, 0], 8)).toBe(true);
+    },
+    T,
+  );
 
   test("every pair of materials, both orders: DWM reads back the one asked for, and its pixels do not depend on the one before", async () => {
     const ref: Record<string, Rgb> = {};
@@ -104,7 +109,8 @@ describe("backdrop", () => {
         const { mean } = await shoot();
         if (s.backdrop !== b || s.system !== DWMSBT[b]) bad.push(`${a} -> ${b}: read back ${s.backdrop} / ${s.system}`);
         // `transparent` is the desktop behind, which PrintWindow does not carry.
-        if (b !== "transparent" && !close(mean, ref[b]!)) bad.push(`${a} -> ${b}: ${mean} where ${b} alone is ${ref[b]}`);
+        if (b !== "transparent" && !close(mean, ref[b]!))
+          bad.push(`${a} -> ${b}: ${mean} where ${b} alone is ${ref[b]}`);
       }
     }
     expect(bad).toEqual([]);
@@ -136,14 +142,26 @@ describe("backdrop", () => {
         return (await shoot()).mean;
       };
       expect(await agree(() => activeAfter("none", "acrylic"), inactive, false)).toBe("ok");
-      expect(await agree(() => activeAfter("none", "acrylic"), () => activeAfter("none", "mica"), false)).toBe("ok");
+      expect(
+        await agree(
+          () => activeAfter("none", "acrylic"),
+          () => activeAfter("none", "mica"),
+          false,
+        ),
+      ).toBe("ok");
       for (const [from, to] of [
         ["mica", "acrylic"],
         ["mica-alt", "acrylic"],
         ["acrylic", "mica"],
         ["acrylic", "mica-alt"],
       ]) {
-        expect(await agree(() => activeAfter(from!, to!), () => activeAfter("none", to!), true)).toBe("ok");
+        expect(
+          await agree(
+            () => activeAfter(from!, to!),
+            () => activeAfter("none", to!),
+            true,
+          ),
+        ).toBe("ok");
       }
     } finally {
       await activeFrame(false);
@@ -153,34 +171,42 @@ describe("backdrop", () => {
     expect(user32.symbols.GetForegroundWindow()).not.toBe(hwnd);
   }, 120_000);
 
-  test("acrylic follows appWindow.theme, dark and light, active or not", async () => {
-    const read = async () => {
-      await activeFrame(false);
-      const inactive = (await shoot()).mean;
-      const active = await activeAfter("acrylic", "acrylic");
-      await activeFrame(false);
-      return { inactive, active, dark: (await state()).dark };
-    };
-    await setBackdrop("acrylic");
-    await setTheme("dark");
-    const dark = await read();
-    await setTheme("light");
-    const light = await read();
-    await setTheme("system");
-    expect(dark.dark).toBe(true);
-    expect(light.dark).toBe(false);
-    expect(luma(dark.inactive)).toBeLessThan(128);
-    expect(luma(light.inactive)).toBeGreaterThan(128);
-    expect(luma(light.active) - luma(dark.active)).toBeGreaterThan(40);
-  }, T);
+  test(
+    "acrylic follows appWindow.theme, dark and light, active or not",
+    async () => {
+      const read = async () => {
+        await activeFrame(false);
+        const inactive = (await shoot()).mean;
+        const active = await activeAfter("acrylic", "acrylic");
+        await activeFrame(false);
+        return { inactive, active, dark: (await state()).dark };
+      };
+      await setBackdrop("acrylic");
+      await setTheme("dark");
+      const dark = await read();
+      await setTheme("light");
+      const light = await read();
+      await setTheme("system");
+      expect(dark.dark).toBe(true);
+      expect(light.dark).toBe(false);
+      expect(luma(dark.inactive)).toBeLessThan(128);
+      expect(luma(light.inactive)).toBeGreaterThan(128);
+      expect(luma(light.active) - luma(dark.active)).toBeGreaterThan(40);
+    },
+    T,
+  );
 
-  test("frameless, the material reaches the top edge as it fills the middle", async () => {
-    await setBackdrop("acrylic");
-    const inactive = await shoot();
-    await activeFrame(true);
-    const active = await shoot();
-    await activeFrame(false);
-    expect(close(inactive.top, inactive.mean, 10)).toBe(true);
-    expect(close(active.top, active.mean, 10)).toBe(true);
-  }, T);
+  test(
+    "frameless, the material reaches the top edge as it fills the middle",
+    async () => {
+      await setBackdrop("acrylic");
+      const inactive = await shoot();
+      await activeFrame(true);
+      const active = await shoot();
+      await activeFrame(false);
+      expect(close(inactive.top, inactive.mean, 10)).toBe(true);
+      expect(close(active.top, active.mean, 10)).toBe(true);
+    },
+    T,
+  );
 });

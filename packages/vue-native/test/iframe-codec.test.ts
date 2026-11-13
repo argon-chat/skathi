@@ -14,7 +14,15 @@ describe("what crosses", () => {
   });
 
   test("what JSON loses survives: undefined, holes, NaN, infinities, -0, bigint", () => {
-    const out = cross({ u: undefined, n: NaN, i: Infinity, m: -Infinity, z: -0, big: 2n ** 70n, hole: [1, , 3] }) as Record<string, unknown>;
+    const out = cross({
+      u: undefined,
+      n: NaN,
+      i: Infinity,
+      m: -Infinity,
+      z: -0,
+      big: 2n ** 70n,
+      hole: [1, , 3],
+    }) as Record<string, unknown>;
     expect("u" in out && out.u === undefined).toBe(true);
     expect(Number.isNaN(out.n)).toBe(true);
     expect([out.i, out.m]).toEqual([Infinity, -Infinity]);
@@ -25,7 +33,10 @@ describe("what crosses", () => {
 
   test("dates, maps and sets keep their kind", () => {
     const when = new Date(1_700_000_000_000);
-    const out = cross({ when, bad: new Date(NaN), m: new Map([[1, { a: 1 }]]), s: new Set(["x", "y"]) }) as Record<string, unknown>;
+    const out = cross({ when, bad: new Date(NaN), m: new Map([[1, { a: 1 }]]), s: new Set(["x", "y"]) }) as Record<
+      string,
+      unknown
+    >;
     expect(out.when).toEqual(when);
     expect(Number.isNaN((out.bad as Date).getTime())).toBe(true);
     expect(out.m).toEqual(new Map([[1, { a: 1 }]]));
@@ -34,7 +45,12 @@ describe("what crosses", () => {
 
   test("buffers and their views, by kind and by window", () => {
     const bytes = new Uint8Array([0, 1, 2, 253, 254, 255]);
-    const back = cross({ buf: bytes.buffer, view: new Uint8Array(bytes.buffer, 2, 3), f: new Float32Array([1.5, -2.25]), d: new DataView(bytes.buffer, 1, 2) }) as Record<string, unknown>;
+    const back = cross({
+      buf: bytes.buffer,
+      view: new Uint8Array(bytes.buffer, 2, 3),
+      f: new Float32Array([1.5, -2.25]),
+      d: new DataView(bytes.buffer, 1, 2),
+    }) as Record<string, unknown>;
     expect(new Uint8Array(back.buf as ArrayBuffer)).toEqual(bytes);
     expect(back.view).toEqual(new Uint8Array([2, 253, 254]));
     expect(back.f).toEqual(new Float32Array([1.5, -2.25]));
@@ -43,7 +59,10 @@ describe("what crosses", () => {
 
   test("a class instance crosses as its own properties, as a browser clones it", () => {
     class Point {
-      constructor(public x: number, public y: number) {}
+      constructor(
+        public x: number,
+        public y: number,
+      ) {}
       norm() {
         return Math.hypot(this.x, this.y);
       }

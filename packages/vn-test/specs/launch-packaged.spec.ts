@@ -95,78 +95,107 @@ async function untilEvents(n: number, ms = 5_000): Promise<Record_> {
 }
 
 describe("the packaged exe", () => {
-  test("carries the launch keys in its payload and holds the lock", async () => {
-    // The payload that was stamped, read back: META's `launch` is what the host enforces before
-    // anything else exists.
-    const v = readVnpk(new Uint8Array(readFileSync(p.result.vnpk)));
-    const meta = v.find(KIND.META, NAMES.META);
-    bunExpect(meta).toBeDefined();
-    const launchMeta = JSON.parse(new TextDecoder().decode(v.bytes(meta!))).launch;
-    bunExpect(launchMeta).toMatchObject({ id, singleInstance: true, raiseOnSecondInstance: true, protocols: [scheme] });
-    const r = await rec();
-    bunExpect(r.own.singleInstance).toBe(true);
-    bunExpect(r.params).toEqual([{ targetURL: null, files: 0 }]);
-  }, T);
+  test(
+    "carries the launch keys in its payload and holds the lock",
+    async () => {
+      // The payload that was stamped, read back: META's `launch` is what the host enforces before
+      // anything else exists.
+      const v = readVnpk(new Uint8Array(readFileSync(p.result.vnpk)));
+      const meta = v.find(KIND.META, NAMES.META);
+      bunExpect(meta).toBeDefined();
+      const launchMeta = JSON.parse(new TextDecoder().decode(v.bytes(meta!))).launch;
+      bunExpect(launchMeta).toMatchObject({
+        id,
+        singleInstance: true,
+        raiseOnSecondInstance: true,
+        protocols: [scheme],
+      });
+      const r = await rec();
+      bunExpect(r.own.singleInstance).toBe(true);
+      bunExpect(r.params).toEqual([{ targetURL: null, files: 0 }]);
+    },
+    T,
+  );
 
-  test("registered its declared protocol at startup: per user, our marker, no dev slot", async () => {
-    const key = keyOf(scheme);
-    bunExpect(regValue(key, null)).toBe(`URL:${scheme}`);
-    bunExpect(regValue(key, "URL Protocol")).toBe("");
-    bunExpect(regValue(key, "VnOwner")).toBe(id);
-    bunExpect(regValue(`${key}\\DefaultIcon`, null)?.toLowerCase()).toBe(`"${p.exe.toLowerCase()}",0`);
-    const command = regValue(`${key}\\shell\\open\\command`, null) ?? "";
-    bunExpect(command.toLowerCase()).toBe(`"${p.exe.toLowerCase()}" --vn-protocol-launch -- "%1"`);
-    bunExpect(await app.eval(`__VN_TEST_LAUNCH__.api.isRegistered(${JSON.stringify(scheme)})`)).toBe(true);
-    const { entries } = await app.logs(0);
-    bunExpect(entries.some((e) => e.text.includes(`registered ${scheme}://`))).toBe(true);
-  }, T);
+  test(
+    "registered its declared protocol at startup: per user, our marker, no dev slot",
+    async () => {
+      const key = keyOf(scheme);
+      bunExpect(regValue(key, null)).toBe(`URL:${scheme}`);
+      bunExpect(regValue(key, "URL Protocol")).toBe("");
+      bunExpect(regValue(key, "VnOwner")).toBe(id);
+      bunExpect(regValue(`${key}\\DefaultIcon`, null)?.toLowerCase()).toBe(`"${p.exe.toLowerCase()}",0`);
+      const command = regValue(`${key}\\shell\\open\\command`, null) ?? "";
+      bunExpect(command.toLowerCase()).toBe(`"${p.exe.toLowerCase()}" --vn-protocol-launch -- "%1"`);
+      bunExpect(await app.eval(`__VN_TEST_LAUNCH__.api.isRegistered(${JSON.stringify(scheme)})`)).toBe(true);
+      const { entries } = await app.logs(0);
+      bunExpect(entries.some((e) => e.text.includes(`registered ${scheme}://`))).toBe(true);
+    },
+    T,
+  );
 });
 
 describe("a second launch of the packaged exe", () => {
-  test("forwards its argv, cwd and paths to the running one and exits 0", async () => {
-    const r = spawnSync(p.exe, ["--open", doc], { cwd: scratch, env: secondEnv(), timeout: 15_000 });
-    bunExpect(r.status).toBe(0);
-    const got = await untilEvents(1);
-    bunExpect(got.events.length).toBe(1);
-    const ev = got.events[0];
-    bunExpect(ev.source).toBe("second-instance");
-    bunExpect(ev.argv.slice(1)).toEqual(["--open", doc]);
-    bunExpect(ev.cwd.toLowerCase()).toBe(scratch.toLowerCase());
-    bunExpect(ev.paths).toEqual([doc]);
-    await expect(app.locator(".fixture")).toHaveText("forwarded launches: 1");
-  }, T);
+  test(
+    "forwards its argv, cwd and paths to the running one and exits 0",
+    async () => {
+      const r = spawnSync(p.exe, ["--open", doc], { cwd: scratch, env: secondEnv(), timeout: 15_000 });
+      bunExpect(r.status).toBe(0);
+      const got = await untilEvents(1);
+      bunExpect(got.events.length).toBe(1);
+      const ev = got.events[0];
+      bunExpect(ev.source).toBe("second-instance");
+      bunExpect(ev.argv.slice(1)).toEqual(["--open", doc]);
+      bunExpect(ev.cwd.toLowerCase()).toBe(scratch.toLowerCase());
+      bunExpect(ev.paths).toEqual([doc]);
+      await expect(app.locator(".fixture")).toHaveText("forwarded launches: 1");
+    },
+    T,
+  );
 
-  test("a link to its scheme, opened through the SHELL, reaches the running instance", async () => {
-    const before = (await rec()).events.length;
-    // (Quotes and spaces byte-exact are launch.spec's, through a hand-built command line: what the
-    // shell itself does to them is Windows' business.)
-    const url = `${scheme}://open/item?id=7&q=x`;
-    await app.eval(`__VN_TEST_LAUNCH__.api.open(${JSON.stringify(url)})`);
-    const got = await untilEvents(before + 1, 15_000);
-    bunExpect(got.opened.at(-1)).toBe("ok");
-    bunExpect(got.events.length).toBe(before + 1);
-    bunExpect(got.events.at(-1)!.url).toBe(url);
-    bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
-  }, T);
+  test(
+    "a link to its scheme, opened through the SHELL, reaches the running instance",
+    async () => {
+      const before = (await rec()).events.length;
+      // (Quotes and spaces byte-exact are launch.spec's, through a hand-built command line: what the
+      // shell itself does to them is Windows' business.)
+      const url = `${scheme}://open/item?id=7&q=x`;
+      await app.eval(`__VN_TEST_LAUNCH__.api.open(${JSON.stringify(url)})`);
+      const got = await untilEvents(before + 1, 15_000);
+      bunExpect(got.opened.at(-1)).toBe("ok");
+      bunExpect(got.events.length).toBe(before + 1);
+      bunExpect(got.events.at(-1)!.url).toBe(url);
+      bunExpect(got.params.at(-1)).toEqual({ targetURL: url, files: 0 });
+    },
+    T,
+  );
 });
 
 describe("uninstalling", () => {
-  test("--vn-unregister-protocols removes the exe's keys and exits without a window", async () => {
-    const r = spawnSync(p.exe, ["--vn-unregister-protocols"], {
-      cwd: REPO,
-      env: secondEnv(),
-      encoding: "utf8",
-      timeout: 15_000,
-    });
-    bunExpect(r.status).toBe(0);
-    bunExpect(r.stdout).toContain(`unregistered ${scheme}:`);
-    bunExpect(regExists(keyOf(scheme))).toBe(false);
-    bunExpect(await app.eval(`__VN_TEST_LAUNCH__.api.isRegistered(${JSON.stringify(scheme)})`)).toBe(false);
-  }, T);
+  test(
+    "--vn-unregister-protocols removes the exe's keys and exits without a window",
+    async () => {
+      const r = spawnSync(p.exe, ["--vn-unregister-protocols"], {
+        cwd: REPO,
+        env: secondEnv(),
+        encoding: "utf8",
+        timeout: 15_000,
+      });
+      bunExpect(r.status).toBe(0);
+      bunExpect(r.stdout).toContain(`unregistered ${scheme}:`);
+      bunExpect(regExists(keyOf(scheme))).toBe(false);
+      bunExpect(await app.eval(`__VN_TEST_LAUNCH__.api.isRegistered(${JSON.stringify(scheme)})`)).toBe(false);
+    },
+    T,
+  );
 
-  test("nothing went wrong in the primary", async () => {
-    await app.expectNoErrors();
-  }, T);
+  test(
+    "nothing went wrong in the primary",
+    async () => {
+      await app.expectNoErrors();
+    },
+    T,
+  );
 
   test("the hive is clean", () => {
     bunExpect(regExists(keyOf(scheme))).toBe(false);

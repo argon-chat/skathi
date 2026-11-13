@@ -43,21 +43,38 @@ document.addEventListener("paste", (e) => {
 createApp({
   setup() {
     return () =>
-      h("div", { id: "root", style: { padding: "12px", display: "flex", flexDirection: "column", gap: "12px", background: "#ffffff" } }, [
-        h("input", {
-          id: "field",
-          style: { width: "240px" },
-          onPaste: record("field", true),
-          onCopy: record("field", false),
-          onCut: record("field", false),
-          onKeydown: (e: KeyboardEvent) => {
-            if (e.ctrlKey && e.key === "x") {
-              events.push("keydown@field|cancelled ctrl+x");
-              e.preventDefault();
-            }
-          },
-        }),
-        h("div", { id: "pad", tabindex: 0, style: { width: "240px", height: "40px", background: "#eeeeee" }, onPaste: record("pad", true), onCopy: record("pad", false) }, "pad"),
-      ]);
+      h(
+        "div",
+        {
+          id: "root",
+          style: { padding: "12px", display: "flex", flexDirection: "column", gap: "12px", background: "#ffffff" },
+        },
+        [
+          h("input", {
+            id: "field",
+            style: { width: "240px" },
+            onPaste: record("field", true),
+            onCopy: record("field", false),
+            onCut: record("field", false),
+            onKeydown: (e: KeyboardEvent) => {
+              if (e.ctrlKey && e.key === "x") {
+                events.push("keydown@field|cancelled ctrl+x");
+                e.preventDefault();
+              }
+            },
+          }),
+          h(
+            "div",
+            {
+              id: "pad",
+              tabindex: 0,
+              style: { width: "240px", height: "40px", background: "#eeeeee" },
+              onPaste: record("pad", true),
+              onCopy: record("pad", false),
+            },
+            "pad",
+          ),
+        ],
+      );
   },
 }).mount();

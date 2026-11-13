@@ -13,7 +13,8 @@ function argument(name: string): string {
   if (index < 0 || !value || value.startsWith("--")) throw new Error(`${name} needs a path`);
   return resolve(value);
 }
-const root = argument("--bun-source"), out = argument("--out");
+const root = argument("--bun-source"),
+  out = argument("--out");
 const sdk = resolve(import.meta.dir, "../..");
 const revision = Bun.spawnSync(["git", "-C", root, "rev-parse", "HEAD"]);
 if (revision.exitCode || revision.stdout.toString().trim() !== FRONTEND) {
@@ -24,17 +25,19 @@ if (clean.exitCode !== 0) throw new Error("Bun tracked source checkout is modifi
 const engine = resolve(sdk, "vendor/redjs/prebuilt/bun-webkit/Source/JavaScriptCore/aot");
 const generated = resolve(sdk, "vendor/redjs/prebuilt/bun-webkit/include/JavaScriptCore/aot");
 const pins = readFileSync(resolve(sdk, "vendor/redjs/pins.txt"), "utf8");
-if (!pins.includes(`webkit.version = ${WEBKIT}`)) throw new Error("Review the frontend/engine pin together before regenerating");
+if (!pins.includes(`webkit.version = ${WEBKIT}`))
+  throw new Error("Review the frontend/engine pin together before regenerating");
 // The upstream parsers require exact LF data, even on Windows. Do not silently
 // rewrite a user's source checkout or accept a table generated from CRLF text.
 for (const name of ["module-exports.txt", "own-properties.txt"]) {
   const path = resolve(root, "src/codegen/builtins/data", name);
-  if (readFileSync(path, "utf8").includes("\r")) throw new Error(`Checkout ${path} with core.autocrlf=false (LF required)`);
+  if (readFileSync(path, "utf8").includes("\r"))
+    throw new Error(`Checkout ${path} with core.autocrlf=false (LF required)`);
 }
 process.env.AOT_ENGINE_DIRECTORY = engine;
 const { generate } = await import(resolve(root, "src/codegen/builtins/index.ts"));
 const files: string[] = [...new Bun.Glob("src/**/*.bind.ts").scanSync({ cwd: root, absolute: true })];
-const sources = files.map(file => {
+const sources = files.map((file) => {
   for (let directory = dirname(file); directory !== dirname(directory); directory = dirname(directory)) {
     const manifest = resolve(directory, "Cargo.toml");
     if (!existsSync(manifest)) continue;
@@ -44,9 +47,12 @@ const sources = files.map(file => {
   throw new Error(`No Cargo package for ${file}`);
 });
 const result = await generate({
-  bunRoot: root, javaScriptCore: null, prebuiltGenerated: generated,
-  target: "windows", bindgenSources: sources,
-  typesOnly: files.filter(file => file.endsWith("_test.bind.ts")).map(file => basename(file)),
+  bunRoot: root,
+  javaScriptCore: null,
+  prebuiltGenerated: generated,
+  target: "windows",
+  bindgenSources: sources,
+  typesOnly: files.filter((file) => file.endsWith("_test.bind.ts")).map((file) => basename(file)),
 });
 mkdirSync(out, { recursive: true });
 for (const [name, code] of result.codegen) {

@@ -2,15 +2,7 @@
 // manifest it produced. 2.
 
 import { spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { reapOrphans } from "./reap";
 
@@ -148,9 +140,7 @@ let exeCopy: string | null = null;
 export function stagedExe(source = DEFAULT_EXE): string {
   if (exeCopy) return exeCopy;
   if (!existsSync(source)) {
-    throw new Error(
-      `${source} is missing — build the host first:\n  cargo build -p vn-app   (in ${REPO})`,
-    );
+    throw new Error(`${source} is missing — build the host first:\n  cargo build -p vn-app   (in ${REPO})`);
   }
   const dir = join(WORK_DIR, "bin");
   mkdirSync(dir, { recursive: true });
@@ -175,8 +165,7 @@ export function releaseStagedExe() {
   if (!exeCopy) return;
   try {
     rmSync(exeCopy);
-  } catch {
-  }
+  } catch {}
   exeCopy = null;
 }
 

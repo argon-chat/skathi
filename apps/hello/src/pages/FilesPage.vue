@@ -6,7 +6,8 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 defineOptions({ name: "FilesPage" });
 
 const describe = (e: unknown) => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
-const size = (n: number) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1048576).toFixed(1)} MiB`);
+const size = (n: number) =>
+  n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1048576).toFixed(1)} MiB`;
 
 type Picked = { name: string; size: number; type: string; rel: string };
 const picked = ref<Picked[]>([]);
@@ -41,7 +42,9 @@ const onCancel = () => (inputLog.value = [...inputLog.value, "cancel"].slice(-4)
 const handle = ref<VnFileSystemFileHandle | null>(null);
 const text = ref("");
 const fsaStatus = ref("");
-const TEXT_TYPES = [{ description: "Text", accept: { "text/plain": [".txt", ".md", ".log"], "application/json": [".json"] } }];
+const TEXT_TYPES = [
+  { description: "Text", accept: { "text/plain": [".txt", ".md", ".log"], "application/json": [".json"] } },
+];
 
 async function openFile() {
   try {
@@ -72,7 +75,11 @@ async function save() {
 
 async function saveAs() {
   try {
-    const h = await showSaveFilePicker({ id: "hello-files", suggestedName: handle.value?.name ?? "notes.txt", types: TEXT_TYPES });
+    const h = await showSaveFilePicker({
+      id: "hello-files",
+      suggestedName: handle.value?.name ?? "notes.txt",
+      types: TEXT_TYPES,
+    });
     await writeTo(h);
     handle.value = h;
     fsaStatus.value = `saved as ${h.name}`;
@@ -174,9 +181,8 @@ onBeforeUnmount(() => URL.revokeObjectURL(blobUrl.value));
         </a>
       </div>
       <div class="note">
-        A browser saves to Downloads without asking (unless "Ask where to save
-        each file" is on); here it is a Save As that starts in Downloads, and
-        the host says so once (D-F6).
+        A browser saves to Downloads without asking (unless "Ask where to save each file" is on); here it is a Save As
+        that starts in Downloads, and the host says so once (D-F6).
       </div>
     </section>
   </div>

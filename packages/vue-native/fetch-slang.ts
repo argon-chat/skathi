@@ -120,8 +120,7 @@ async function main() {
 
     const total = wanted.reduce((sum, n) => sum + statSync(join(DEST, n)).size, 0);
     console.log(
-      `slangc ${manifest.version} -> ${DEST}\n  ` +
-        `${wanted.join(", ")} (${(total / 1024 / 1024).toFixed(1)} MB)`,
+      `slangc ${manifest.version} -> ${DEST}\n  ` + `${wanted.join(", ")} (${(total / 1024 / 1024).toFixed(1)} MB)`,
     );
     if (manifest.knownIssues?.length) {
       console.log("\nknown slangc CLI issues shaders.ts already works around:");

@@ -60,11 +60,7 @@ interface VnEventTarget {
     listener: (ev: VnEvent) => void,
     options?: boolean | { capture?: boolean; once?: boolean },
   ): void;
-  removeEventListener(
-    type: string,
-    listener: (ev: VnEvent) => void,
-    options?: boolean | { capture?: boolean },
-  ): void;
+  removeEventListener(type: string, listener: (ev: VnEvent) => void, options?: boolean | { capture?: boolean }): void;
   dispatchEvent(ev: VnEvent): boolean;
 }
 declare var EventTarget: {
@@ -114,8 +110,7 @@ interface VnPointerEvent extends VnMouseEvent {
 }
 /** Engine-revision-dependent — probe before constructing. */
 declare var PointerEvent:
-  | { new (type: string, init?: VnPointerEventInit): VnPointerEvent; prototype: VnPointerEvent }
-  | undefined;
+  { new (type: string, init?: VnPointerEventInit): VnPointerEvent; prototype: VnPointerEvent } | undefined;
 
 interface VnKeyboardEvent extends VnEvent, Required<VnModifierInit> {
   readonly key: string;
@@ -143,9 +138,7 @@ declare var WheelEvent:
     }
   | undefined;
 
-declare var FocusEvent:
-  | { new (type: string, init?: VnEventInit): VnEvent; prototype: VnEvent }
-  | undefined;
+declare var FocusEvent: { new (type: string, init?: VnEventInit): VnEvent; prototype: VnEvent } | undefined;
 
 interface VnInputEvent extends VnEvent {
   readonly data: string | null;
@@ -163,10 +156,7 @@ interface VnTransitionEvent extends VnEvent {
 }
 declare var TransitionEvent:
   | {
-      new (
-        type: string,
-        init?: VnEventInit & { propertyName?: string; elapsedTime?: number },
-      ): VnTransitionEvent;
+      new (type: string, init?: VnEventInit & { propertyName?: string; elapsedTime?: number }): VnTransitionEvent;
       prototype: VnTransitionEvent;
     }
   | undefined;
@@ -177,10 +167,7 @@ interface VnAnimationEvent extends VnEvent {
 }
 declare var AnimationEvent:
   | {
-      new (
-        type: string,
-        init?: VnEventInit & { animationName?: string; elapsedTime?: number },
-      ): VnAnimationEvent;
+      new (type: string, init?: VnEventInit & { animationName?: string; elapsedTime?: number }): VnAnimationEvent;
       prototype: VnAnimationEvent;
     }
   | undefined;
@@ -233,9 +220,7 @@ interface VnFetchResponse {
   json(): Promise<unknown>;
   text?(): Promise<string>;
 }
-declare var fetch:
-  | ((url: string, init?: Record<string, unknown>) => Promise<VnFetchResponse>)
-  | undefined;
+declare var fetch: ((url: string, init?: Record<string, unknown>) => Promise<VnFetchResponse>) | undefined;
 
 interface VnURL {
   readonly href: string;
@@ -292,7 +277,9 @@ interface VnNativeAudioWorkletOptions {
   channelInterpretation?: "speakers" | "discrete";
   parameterData?: Record<string, number>;
 }
-interface VnNativeAudioMessage<T = unknown> extends VnEvent { readonly data: T }
+interface VnNativeAudioMessage<T = unknown> extends VnEvent {
+  readonly data: T;
+}
 interface VnNativeAudioWorkletPort extends VnEventTarget {
   onmessage: ((event: VnNativeAudioMessage) => void) | null;
   start(): void;
@@ -305,7 +292,10 @@ interface VnNativeAudioWorkletNode extends VnAudioNode {
 }
 
 interface VnAudioContext {
-  loadNativeAudioWorklet(name: VnNativeAudioProcessorName, options?: VnNativeAudioWorkletOptions): VnNativeAudioWorkletNode;
+  loadNativeAudioWorklet(
+    name: VnNativeAudioProcessorName,
+    options?: VnNativeAudioWorkletOptions,
+  ): VnNativeAudioWorkletNode;
   readonly destination: VnAudioNode;
   createRedStreamSource(options?: VnRedStreamSourceOptions): VnRedStreamSourceNode;
   createGain(): VnGainNode;

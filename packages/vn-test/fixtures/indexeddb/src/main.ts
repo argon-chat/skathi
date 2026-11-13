@@ -115,7 +115,8 @@ const scenarios: Record<string, () => Promise<string>> = {
 
   async constraint() {
     const open = indexedDB.open("vn-test-unique", 1);
-    open.onupgradeneeded = () => open.result.createObjectStore("u", { keyPath: "k" }).createIndex("byMail", "mail", { unique: true });
+    open.onupgradeneeded = () =>
+      open.result.createObjectStore("u", { keyPath: "k" }).createIndex("byMail", "mail", { unique: true });
     const udb = await req(open);
     const tx = udb.transaction("u", "readwrite");
     const s = tx.objectStore("u");
@@ -212,7 +213,9 @@ createApp({
         h(
           "div",
           { id: "notes" },
-          notes.value.map((n) => h("div", { class: "note", key: n.id }, `${n.id}:${n.title}${n.done ? " (done)" : ""}`)),
+          notes.value.map((n) =>
+            h("div", { class: "note", key: n.id }, `${n.id}:${n.title}${n.done ? " (done)" : ""}`),
+          ),
         ),
       ]);
   },

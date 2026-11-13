@@ -1,5 +1,4 @@
 <script setup lang="ts">
-
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref } from "vue";
 
 const supported = typeof AudioContext !== "undefined";
@@ -423,24 +422,19 @@ const surface = computed<[string, string, string][]>(() => {
       <div class="advisory">
         <div class="ahead">AudioContext is not defined in this build.</div>
         <div>
-          The host was compiled with --no-default-features (or vn-runtime/audio
-          off), so the Web Audio implementation is not linked in at all. It is
-          deliberately absent rather than stubbed: a feature probe for
-          AudioContext is the standard way to ask, and a silent fake would make
-          it lie.
+          The host was compiled with --no-default-features (or vn-runtime/audio off), so the Web Audio implementation is
+          not linked in at all. It is deliberately absent rather than stubbed: a feature probe for AudioContext is the
+          standard way to ask, and a silent fake would make it lie.
         </div>
       </div>
     </div>
 
     <template v-else>
       <div class="card">
-        <div class="title">
-          oscillator → analyser → gain → analyser → destination
-        </div>
+        <div class="title">oscillator → analyser → gain → analyser → destination</div>
         <div class="sub">
-          Firewheel under a browser-shaped AudioContext. The gain starts at 0 —
-          the bars below are tapped BEFORE it, so they move while nothing leaves
-          the graph.
+          Firewheel under a browser-shaped AudioContext. The gain starts at 0 — the bars below are tapped BEFORE it, so
+          they move while nothing leaves the graph.
         </div>
 
         <div class="bars">
@@ -456,13 +450,7 @@ const surface = computed<[string, string, string][]>(() => {
         <div class="row">
           <div class="group">
             <span class="lbl">wave</span>
-            <div
-              v-for="w in WAVES"
-              :key="w"
-              class="chip"
-              :class="{ on: wave === w }"
-              @click="setWave(w)"
-            >{{ w }}</div>
+            <div v-for="w in WAVES" :key="w" class="chip" :class="{ on: wave === w }" @click="setWave(w)">{{ w }}</div>
           </div>
           <div class="group">
             <div class="btn" :class="{ primary: !playing }" @click="playing ? stopTone() : startTone()">
@@ -515,9 +503,15 @@ const surface = computed<[string, string, string][]>(() => {
       <div class="card">
         <div class="title">AudioContext — state, clock, device</div>
         <div class="kv">
-          <div><span class="k">state</span><span class="v">{{ state.ctxState }}</span></div>
-          <div><span class="k">sampleRate</span><span class="v">{{ state.sampleRate }} Hz</span></div>
-          <div><span class="k">currentTime</span><span class="v">{{ state.currentTime.toFixed(2) }} s</span></div>
+          <div>
+            <span class="k">state</span><span class="v">{{ state.ctxState }}</span>
+          </div>
+          <div>
+            <span class="k">sampleRate</span><span class="v">{{ state.sampleRate }} Hz</span>
+          </div>
+          <div>
+            <span class="k">currentTime</span><span class="v">{{ state.currentTime.toFixed(2) }} s</span>
+          </div>
           <div>
             <span class="k">output stream</span>
             <span class="v">{{ state.running ? "running (clock advancing)" : "none (clock frozen)" }}</span>
@@ -531,19 +525,17 @@ const surface = computed<[string, string, string][]>(() => {
         <div v-if="!state.running" class="advisory">
           <div class="ahead">No output device.</div>
           <div>
-            The graph API still works — nodes connect, params take,
-            decodeAudioData decodes — but currentTime never advances, so
-            anything scheduled at an absolute future time never fires. This is
-            the headless case, and it degrades rather than crashing.
+            The graph API still works — nodes connect, params take, decodeAudioData decodes — but currentTime never
+            advances, so anything scheduled at an absolute future time never fires. This is the headless case, and it
+            degrades rather than crashing.
           </div>
         </div>
         <div class="advisory soft">
           <div class="ahead">Deviation: suspend() mutes, it does not pause.</div>
           <div>
-            The master bus goes to zero but the stream keeps running, so
-            currentTime keeps advancing while suspended. The pre-gain analyser
-            above keeps seeing the oscillator for the same reason — it sits
-            upstream of the master.
+            The master bus goes to zero but the stream keeps running, so currentTime keeps advancing while suspended.
+            The pre-gain analyser above keeps seeing the oscillator for the same reason — it sits upstream of the
+            master.
           </div>
         </div>
       </div>
@@ -551,32 +543,28 @@ const surface = computed<[string, string, string][]>(() => {
       <div class="card">
         <div class="title">AudioBuffer — a chirp synthesized in JS</div>
         <div class="sub">
-          createBuffer(2, n, rate) + copyToChannel(), then an
-          AudioBufferSourceNode. A 180 Hz → 2.4 kHz exponential sweep,
-          Hann-windowed, right channel at 0.4× the left.
+          createBuffer(2, n, rate) + copyToChannel(), then an AudioBufferSourceNode. A 180 Hz → 2.4 kHz exponential
+          sweep, Hann-windowed, right channel at 0.4× the left.
         </div>
         <div class="row">
           <div class="btn" @click="buildChirp">build buffer</div>
           <div class="btn primary" :class="{ off: !chirp.buffer }" @click="playChirp">play</div>
           <span v-if="chirp.buffer" class="val">
-            {{ chirp.buffer.numberOfChannels }}ch ·
-            {{ chirp.buffer.length }} frames ·
-            {{ chirp.buffer.sampleRate }} Hz ·
-            {{ chirp.buffer.duration.toFixed(2) }}s · peak {{ chirp.peak }}
+            {{ chirp.buffer.numberOfChannels }}ch · {{ chirp.buffer.length }} frames · {{ chirp.buffer.sampleRate }} Hz
+            · {{ chirp.buffer.duration.toFixed(2) }}s · peak {{ chirp.peak }}
           </span>
         </div>
         <div class="sub">
-          Watch the bars sweep left→right while post-gain RMS stays 0.000 at
-          gain 0 — the sweep is real signal that nobody can hear.
+          Watch the bars sweep left→right while post-gain RMS stays 0.000 at gain 0 — the sweep is real signal that
+          nobody can hear.
         </div>
       </div>
 
       <div class="card">
         <div class="title">decodeAudioData — a WAV off disk</div>
         <div class="sub">
-          fetch("assets/chirp-mono-22k.wav") → arrayBuffer() →
-          decodeAudioData(). The decoder is symphonia; the fixture is 16-bit
-          mono PCM at 22 050 Hz.
+          fetch("assets/chirp-mono-22k.wav") → arrayBuffer() → decodeAudioData(). The decoder is symphonia; the fixture
+          is 16-bit mono PCM at 22 050 Hz.
         </div>
         <div class="row">
           <div class="btn" @click="loadFixture">fetch + decode</div>
@@ -584,18 +572,27 @@ const surface = computed<[string, string, string][]>(() => {
           <span class="val">{{ decoded.status }}</span>
         </div>
         <div v-if="decoded.status === 'decoded'" class="kv">
-          <div><span class="k">channels</span><span class="v">{{ decoded.channels }}</span></div>
-          <div><span class="k">frames</span><span class="v">{{ decoded.frames }}</span></div>
-          <div><span class="k">sampleRate</span><span class="v">{{ decoded.rate }} Hz</span></div>
-          <div><span class="k">duration</span><span class="v">{{ decoded.seconds }} s</span></div>
-          <div><span class="k">peak</span><span class="v">{{ decoded.peak }}</span></div>
+          <div>
+            <span class="k">channels</span><span class="v">{{ decoded.channels }}</span>
+          </div>
+          <div>
+            <span class="k">frames</span><span class="v">{{ decoded.frames }}</span>
+          </div>
+          <div>
+            <span class="k">sampleRate</span><span class="v">{{ decoded.rate }} Hz</span>
+          </div>
+          <div>
+            <span class="k">duration</span><span class="v">{{ decoded.seconds }} s</span>
+          </div>
+          <div>
+            <span class="k">peak</span><span class="v">{{ decoded.peak }}</span>
+          </div>
         </div>
         <div v-if="decoded.status === 'decoded' && decoded.rate !== 22050" class="advisory soft">
           <div class="ahead">Resampled on decode.</div>
           <div>
-            The file is 22 050 Hz; the buffer comes back at {{ decoded.rate }} Hz
-            because that is the output stream's rate. duration is preserved,
-            length is not the file's frame count. Browsers do the same thing.
+            The file is 22 050 Hz; the buffer comes back at {{ decoded.rate }} Hz because that is the output stream's
+            rate. duration is preserved, length is not the file's frame count. Browsers do the same thing.
           </div>
         </div>
       </div>
@@ -606,30 +603,32 @@ const surface = computed<[string, string, string][]>(() => {
           <div class="tag">not a browser API</div>
         </div>
         <div class="sub">
-          The seam a native producer pushes decoded frames into: a LiveKit
-          remote track, a decoder, a capture bridge. Named with a Red prefix on
-          purpose — the browser's createMediaStreamSource presumes a MediaStream
-          the engine PULLS from, and this runtime has neither.
+          The seam a native producer pushes decoded frames into: a LiveKit remote track, a decoder, a capture bridge.
+          Named with a Red prefix on purpose — the browser's createMediaStreamSource presumes a MediaStream the engine
+          PULLS from, and this runtime has neither.
         </div>
         <div class="sub">
-          Rust side: redjs::webapi::pcm::sink(streamId).push_interleaved(&amp;[f32])
-          — Send + Sync, non-blocking, and it never touches the JS context or
-          the graph. Below, the same pipe is driven from JS with a shorter cable,
-          paced by the wall clock the way a real track is.
+          Rust side: redjs::webapi::pcm::sink(streamId).push_interleaved(&amp;[f32]) — Send + Sync, non-blocking, and it
+          never touches the JS context or the graph. Below, the same pipe is driven from JS with a shorter cable, paced
+          by the wall clock the way a real track is.
         </div>
         <div class="row">
           <div class="btn" :class="{ primary: !stream.open }" @click="stream.open ? closeStream() : openStream()">
             {{ stream.open ? "close" : "open + feed 660 Hz" }}
           </div>
           <span v-if="stream.open" class="val">
-            streamId {{ stream.id }} · pushed {{ stream.pushed }} frames ·
-            queued {{ stream.queued }} ms · {{ stream.ready ? "consuming" : "not consuming" }}
+            streamId {{ stream.id }} · pushed {{ stream.pushed }} frames · queued {{ stream.queued }} ms ·
+            {{ stream.ready ? "consuming" : "not consuming" }}
           </span>
         </div>
         <div v-if="stream.under || stream.over" class="advisory soft">
           <div class="ahead">Backpressure observed since this stream opened</div>
-          <div v-if="stream.under">underflow — the producer fell behind the device, and silence was inserted to re-establish the latency target</div>
-          <div v-if="stream.over">overflow — the producer ran ahead, and frames were dropped rather than blocking the pushing thread</div>
+          <div v-if="stream.under">
+            underflow — the producer fell behind the device, and silence was inserted to re-establish the latency target
+          </div>
+          <div v-if="stream.over">
+            overflow — the producer ran ahead, and frames were dropped rather than blocking the pushing thread
+          </div>
         </div>
       </div>
 
@@ -646,18 +645,14 @@ const surface = computed<[string, string, string][]>(() => {
         <div class="advisory">
           <div class="ahead">createMediaElementSource returns a SILENT pass-through.</div>
           <div>
-            It is neither faked nor thrown. A &lt;video&gt; or &lt;audio&gt;
-            element decodes AND plays out inside the platform media engine
-            (IMFMediaEngine on Windows), which owns its own output stream and
-            never hands the graph a sample; routing it here would mean decoding
-            the file a second time, out of sync with the picture.
+            It is neither faked nor thrown. A &lt;video&gt; or &lt;audio&gt; element decodes AND plays out inside the
+            platform media engine (IMFMediaEngine on Windows), which owns its own output stream and never hands the
+            graph a sample; routing it here would mean decoding the file a second time, out of sync with the picture.
           </div>
           <div class="gap">
-            The node still connects, because try/catch around this call is the
-            standard capability probe and throwing would send callers down the
-            wrong branch — but everything downstream sees zeros, and the host
-            prints this same advisory on stderr the first time you call it. For
-            audio you want inside the graph: decodeAudioData, or
+            The node still connects, because try/catch around this call is the standard capability probe and throwing
+            would send callers down the wrong branch — but everything downstream sees zeros, and the host prints this
+            same advisory on stderr the first time you call it. For audio you want inside the graph: decodeAudioData, or
             createRedStreamSource.
           </div>
         </div>
@@ -754,7 +749,9 @@ const surface = computed<[string, string, string][]>(() => {
   color: #ffffffaa;
   background: #ffffff0d;
   cursor: pointer;
-  transition: background-color 150ms ease, color 150ms ease;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
 }
 .chip:hover {
   background: #ffffff22;

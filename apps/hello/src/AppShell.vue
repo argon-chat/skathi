@@ -12,29 +12,29 @@ const excluded = ["LabPage"];
   <div class="frame">
     <Titlebar />
     <div class="shell">
-    <div class="bar">
-      <div class="nav">
-        <RouterLink class="tab" to="/">Forms</RouterLink>
-        <RouterLink class="tab" to="/list">List</RouterLink>
-        <RouterLink class="tab" to="/motion">Motion</RouterLink>
-        <RouterLink class="tab" to="/media">Media</RouterLink>
-        <RouterLink class="tab" to="/audio">Audio</RouterLink>
-        <RouterLink class="tab" to="/styles">Styles</RouterLink>
-        <RouterLink class="tab" to="/window">Window</RouterLink>
-        <RouterLink class="tab" to="/permissions">Perms</RouterLink>
-        <RouterLink class="tab" to="/storage">Storage</RouterLink>
-        <RouterLink class="tab" to="/lab">Lab</RouterLink>
-        <!-- After Lab, so the specs' tab indices (hello, hover, engine) still hold. -->
-        <RouterLink class="tab" to="/desktop">Files</RouterLink>
+      <div class="bar">
+        <div class="nav">
+          <RouterLink class="tab" to="/">Forms</RouterLink>
+          <RouterLink class="tab" to="/list">List</RouterLink>
+          <RouterLink class="tab" to="/motion">Motion</RouterLink>
+          <RouterLink class="tab" to="/media">Media</RouterLink>
+          <RouterLink class="tab" to="/audio">Audio</RouterLink>
+          <RouterLink class="tab" to="/styles">Styles</RouterLink>
+          <RouterLink class="tab" to="/window">Window</RouterLink>
+          <RouterLink class="tab" to="/permissions">Perms</RouterLink>
+          <RouterLink class="tab" to="/storage">Storage</RouterLink>
+          <RouterLink class="tab" to="/lab">Lab</RouterLink>
+          <!-- After Lab, so the specs' tab indices (hello, hover, engine) still hold. -->
+          <RouterLink class="tab" to="/desktop">Files</RouterLink>
+        </div>
+        <div class="store">pinia · session · {{ session.badge }}</div>
       </div>
-      <div class="store">pinia · session · {{ session.badge }}</div>
-    </div>
 
-    <RouterView v-slot="{ Component }">
-      <KeepAlive :exclude="excluded">
-        <component :is="Component" />
-      </KeepAlive>
-    </RouterView>
+      <RouterView v-slot="{ Component }">
+        <KeepAlive :exclude="excluded">
+          <component :is="Component" />
+        </KeepAlive>
+      </RouterView>
     </div>
   </div>
 </template>
@@ -71,7 +71,9 @@ const excluded = ["LabPage"];
   color: #ffffffaa;
   background: #ffffff0d;
   cursor: pointer;
-  transition: background-color 150ms ease, color 150ms ease;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
 }
 .tab:hover {
   background: #ffffff22;

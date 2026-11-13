@@ -67,7 +67,8 @@ function readBuilderAssets(path: string): BuilderAsset[] {
   const list = JSON.parse(readFileSync(path, "utf8")) as unknown;
   if (!Array.isArray(list)) throw new Error(`${path}: not a list`);
   return list.filter(
-    (a): a is BuilderAsset => !!a && typeof (a as BuilderAsset).key === "string" && typeof (a as BuilderAsset).path === "string",
+    (a): a is BuilderAsset =>
+      !!a && typeof (a as BuilderAsset).key === "string" && typeof (a as BuilderAsset).path === "string",
   );
 }
 
@@ -131,7 +132,10 @@ export interface BuiltPack {
 }
 
 /** Deals the assets out to the packs in order; what no pack takes stays in the payload. */
-export function splitPacks(files: AssetFile[], packs: PackConfig[]): { own: AssetFile[]; packs: { name: string; files: AssetFile[] }[] } {
+export function splitPacks(
+  files: AssetFile[],
+  packs: PackConfig[],
+): { own: AssetFile[]; packs: { name: string; files: AssetFile[] }[] } {
   let left = files;
   const dealt = packs.map((p) => {
     const globs = p.match?.map((m) => new Bun.Glob(m));
@@ -144,12 +148,18 @@ export function splitPacks(files: AssetFile[], packs: PackConfig[]): { own: Asse
 
 /** An asset pack's blob: assets only, data page-aligned in the file (the host maps it from offset 0), and its id. */
 export function writePack(name: string, files: AssetFile[]): BuiltPack {
-  const inputs: VnpkInput[] = files.map((f) => ({ name: f.key, kind: KIND.ASSET, data: new Uint8Array(readFileSync(f.path)) }));
+  const inputs: VnpkInput[] = files.map((f) => ({
+    name: f.key,
+    kind: KIND.ASSET,
+    data: new Uint8Array(readFileSync(f.path)),
+  }));
   const unskewed = writeVnpk(inputs);
   const header = readHeader(unskewed);
   const skew = skewFor(0, header);
   const blob = skew ? writeVnpk(inputs, { skew }) : unskewed;
-  const id = createHash("sha256").update(blob.subarray(0, header.namesOff + header.namesLen)).digest("hex");
+  const id = createHash("sha256")
+    .update(blob.subarray(0, header.namesOff + header.namesLen))
+    .digest("hex");
   return { name, file: `${name}.vnpk`, id, blob, assets: files };
 }
 
@@ -301,7 +311,9 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     ? null
     : resolveHost({ host: options.host, variant, allowMismatch: options.allowHostMismatch, platform, log });
   if (host) {
-    log(`[vn] host: ${host.exe} (${host.source}; ${host.info.variant}, vue-native ${host.info.vueNative}, ${host.info.profile})`);
+    log(
+      `[vn] host: ${host.exe} (${host.source}; ${host.info.variant}, vue-native ${host.info.vueNative}, ${host.info.profile})`,
+    );
     if (host.unverified) warnings.push(host.unverified);
   }
 
@@ -316,7 +328,10 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     ...(config.configPath ? [`--config=${config.configPath}`] : []),
     ...(options.aotInputs ? [`--aot-inputs=${join(work, "aot-inputs")}`] : []),
   ];
-  const r = spawnSync(process.execPath, [PROD_TS, config.entry, jsOut, ...pathArgs, ...defineArgs], { cwd: PKG_DIR, encoding: "utf8" });
+  const r = spawnSync(process.execPath, [PROD_TS, config.entry, jsOut, ...pathArgs, ...defineArgs], {
+    cwd: PKG_DIR,
+    encoding: "utf8",
+  });
   if (r.status !== 0 || !existsSync(jsOut)) {
     throw new Error(`bun prod.ts failed for ${config.entry}\n${r.stdout ?? ""}${r.stderr ?? ""}`);
   }
@@ -335,7 +350,9 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     const prev = known.get(a.key);
     if (prev) {
       if (resolve(prev.path) !== resolve(a.path)) {
-        warnings.push(`${JSON.stringify(a.key)}: an import refers to ${a.path}, but "assets" packages ${prev.path} under that key — the import's file wins`);
+        warnings.push(
+          `${JSON.stringify(a.key)}: an import refers to ${a.path}, but "assets" packages ${prev.path} under that key — the import's file wins`,
+        );
         prev.path = a.path;
         prev.size = statSync(a.path).size;
       }
@@ -368,7 +385,11 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     packs.push(writePack(p.name, p.files));
   }
   const inputs: VnpkInput[] = [
-    { name: NAMES.META, kind: KIND.META, data: enc.encode(appMeta(config, variant, host, collected.files.length, packs)) },
+    {
+      name: NAMES.META,
+      kind: KIND.META,
+      data: enc.encode(appMeta(config, variant, host, collected.files.length, packs)),
+    },
     { name: NAMES.WINDOW, kind: KIND.WINDOW, data: windowJson },
     { name: NAMES.SCRIPT, kind: KIND.SCRIPT, data: script },
     ...split.own.map((f) => ({ name: f.key, kind: KIND.ASSET, data: new Uint8Array(readFileSync(f.path)) })),
@@ -403,7 +424,12 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     bundleBytes: script.length,
     aotInputs: options.aotInputs ? join(work, "aot-inputs", "manifest.json") : null,
     payloadBytes: packaged?.payload.length ?? readFileSync(vnpk).length,
-    packs: packs.map((p) => ({ name: p.name, path: join(work, p.file), bytes: p.blob.length, assets: p.assets.length })),
+    packs: packs.map((p) => ({
+      name: p.name,
+      path: join(work, p.file),
+      bytes: p.blob.length,
+      assets: p.assets.length,
+    })),
     warnings,
     ms: {
       bundle: Math.round(msBundle),
@@ -420,7 +446,8 @@ const kib = (n: number) => `${(n / 1024).toFixed(0)} KiB`;
 export function summary(r: BuildResult): string {
   const lines: string[] = [];
   const c = r.config;
-  const storage = r.platform === "macos" ? `~/Library/Application Support/${c.name}/storage` : `%LOCALAPPDATA%\\${c.name}\\storage`;
+  const storage =
+    r.platform === "macos" ? `~/Library/Application Support/${c.name}/storage` : `%LOCALAPPDATA%\\${c.name}\\storage`;
   lines.push(`${c.productName} ${c.version} — name "${c.name}" (storage: ${storage})`);
   lines.push(`  bundle   ${kib(r.bundleBytes)} in ${r.ms.bundle} ms`);
   lines.push(`  assets   ${r.assets.length} file(s), ${kib(r.assets.reduce((n, a) => n + a.size, 0))}`);
@@ -437,7 +464,8 @@ export function summary(r: BuildResult): string {
   if (r.bundle) {
     const b = r.bundle;
     const icon = b.iconSizes.length ? `icon ${b.iconSizes.join("/")} px` : "no icon";
-    const signed = b.signed === "-" ? "signed ad hoc" : b.signed ? `signed as ${JSON.stringify(b.signed)}` : "NOT signed";
+    const signed =
+      b.signed === "-" ? "signed ad hoc" : b.signed ? `signed as ${JSON.stringify(b.signed)}` : "NOT signed";
     lines.push(`  app      ${b.app} — ${mib(b.bytes)}, ${r.variant} host, ${b.bundleId}, ${icon}, ${signed}`);
     if (b.signNote) lines.push(`           ${b.signNote}`);
     lines.push(`  package  ${b.ms.total} ms (copy ${b.ms.copy})`);

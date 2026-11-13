@@ -113,8 +113,7 @@ function makeWorld(): World {
     // The read-back calls answer plausibly: a `""` from `__vn_bounds` would short-circuit `rectOf` and under-count.
     __vn_query: (() => (bump("__vn_query"), "")) as never,
     __vn_bounds: (() => (bump("__vn_bounds"), "0,0,100,20")) as never,
-    __vn_computed_style: (() =>
-      (bump("__vn_computed_style"), "display=block\ntransition-duration=0s")) as never,
+    __vn_computed_style: (() => (bump("__vn_computed_style"), "display=block\ntransition-duration=0s")) as never,
     __vn_media_state: (() => (bump("__vn_media_state"), "")) as never,
     __vn_media_call: (() => (bump("__vn_media_call"), true)) as never,
     __vn_media_can_play: (() => (bump("__vn_media_can_play"), "")) as never,
@@ -165,10 +164,9 @@ function makeWorld(): World {
     ...HOST_FNS.map((n) => stub[n]),
   ];
 
-  const exported = new Function(
-    ...params,
-    `${body}\nreturn { createApp };`,
-  )(...args) as { createApp: World["createApp"] };
+  const exported = new Function(...params, `${body}\nreturn { createApp };`)(...args) as {
+    createApp: World["createApp"];
+  };
 
   return {
     createApp: exported.createApp,
@@ -207,8 +205,7 @@ function row(state: { items: { id: number; label: string }[]; hot: number }, i: 
 
 async function main() {
   const results: { name: string; note: string; counts: Counts }[] = [];
-  const record = (name: string, note: string, counts: Counts) =>
-    results.push({ name, note, counts });
+  const record = (name: string, note: string, counts: Counts) => results.push({ name, note, counts });
 
   const world = makeWorld();
   const state = reactive({

@@ -8,7 +8,18 @@ const name = (e: unknown): string => {
 };
 
 const log: string[] = [];
-const types = ["pointerdown", "mousedown", "pointerup", "mouseup", "click", "contextmenu", "focus", "blur", "focusin", "focusout"];
+const types = [
+  "pointerdown",
+  "mousedown",
+  "pointerup",
+  "mouseup",
+  "click",
+  "contextmenu",
+  "focus",
+  "blur",
+  "focusin",
+  "focusout",
+];
 for (const t of types) {
   document.addEventListener(
     t,
@@ -61,24 +72,38 @@ const App = {
       "div",
       {
         id: "page",
-        style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", padding: "8px", background: "#fff", alignContent: "start" },
+        style: {
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "6px",
+          padding: "8px",
+          background: "#fff",
+          alignContent: "start",
+        },
       },
       [
         h("input", { id: "field", style: { width: "200px" } }),
         h("span", { id: "tag", style: box, onFocus: () => log.push("tag-listener") }, "tag with focus listener"),
         h("div", { id: "keys", style: box, onKeydown: () => log.push("keys-listener") }, "div with keydown listener"),
         h("div", { id: "minus", tabindex: -1, style: box }, "tabindex -1"),
-        h("div", { id: "outer", tabindex: 0, style: box }, ["focusable outer ", h("span", { id: "inner" }, "inner span")]),
+        h("div", { id: "outer", tabindex: 0, style: box }, [
+          "focusable outer ",
+          h("span", { id: "inner" }, "inner span"),
+        ]),
         h("button", { id: "btn" }, "button"),
         h("div", { id: "plain", style: box }, "plain div"),
         h("div", { id: "menu-row", style: box, onContextmenu: () => log.push("row-menu") }, "row with contextmenu"),
         h("button", { id: "prevent", onMousedown: (e: MouseEvent) => e.preventDefault() }, "mousedown cancelled"),
         h("button", { id: "steal", onMousedown: () => byId("field").focus() }, "mousedown focuses the field"),
         h("button", { id: "steal2", onMousedown: () => byId("btn").focus() }, "mousedown focuses btn"),
-        showGone.value ? h("button", { id: "gone", onMousedown: removeLater(showGone, "gone") }, "removed by a microtask") : h("div", { style: box }, "-"),
+        showGone.value
+          ? h("button", { id: "gone", onMousedown: removeLater(showGone, "gone") }, "removed by a microtask")
+          : h("div", { style: box }, "-"),
         h("div", { id: "wrapper", tabindex: 0, style: box }, [
           "wrapper ",
-          showGone2.value ? h("button", { id: "gone2", onMousedown: removeLater(showGone2, "gone2") }, "removed inside") : null,
+          showGone2.value
+            ? h("button", { id: "gone2", onMousedown: removeLater(showGone2, "gone2") }, "removed inside")
+            : null,
         ]),
         h("a", { id: "link", href: "#x", style: box }, "link"),
         h("a", { id: "nolink", style: box }, "anchor without href"),

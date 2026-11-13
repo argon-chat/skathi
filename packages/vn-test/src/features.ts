@@ -88,9 +88,7 @@ function run(cmd: string, args: string[], log: (l: string) => void) {
     );
   }
   if (out.status !== 0) {
-    throw new Error(
-      `${cmd} ${args.join(" ")} failed with ${out.status}\n${out.stdout ?? ""}\n${out.stderr ?? ""}`,
-    );
+    throw new Error(`${cmd} ${args.join(" ")} failed with ${out.status}\n${out.stdout ?? ""}\n${out.stderr ?? ""}`);
   }
 }
 

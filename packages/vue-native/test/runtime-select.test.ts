@@ -154,7 +154,13 @@ describe("the host's pick", () => {
 });
 
 describe("v-model", () => {
-  function mount(rt: Rt, model: { value: unknown }, options: [unknown, string][], mods: Record<string, boolean> = {}, multiple = false) {
+  function mount(
+    rt: Rt,
+    model: { value: unknown },
+    options: [unknown, string][],
+    mods: Record<string, boolean> = {},
+    multiple = false,
+  ) {
     let el: El = null;
     rt.createApp({
       render: () =>
@@ -177,7 +183,11 @@ describe("v-model", () => {
   test(".number with numeric :value — the Argon client's settings selects", async () => {
     const rt = createRuntime();
     const model = ref<unknown>(1);
-    const options: [unknown, string][] = [[0, "Everybody"], [1, "Contacts"], [2, "Nobody"]];
+    const options: [unknown, string][] = [
+      [0, "Everybody"],
+      [1, "Contacts"],
+      [2, "Nobody"],
+    ];
     let el: El = null;
     rt.createApp({
       render: () =>
@@ -206,7 +216,11 @@ describe("v-model", () => {
     const rt = createRuntime();
     const a = { id: 1 };
     const model = { value: { id: 2 } as unknown };
-    const el = mount(rt, model, [[a, "A"], [{ id: 2 }, "B"], [3, "C"]]);
+    const el = mount(rt, model, [
+      [a, "A"],
+      [{ id: 2 }, "B"],
+      [3, "C"],
+    ]);
     expect(el.selectedIndex).toBe(1);
     pick(rt, el, 2);
     expect(model.value).toBe(3);
@@ -215,16 +229,18 @@ describe("v-model", () => {
     const rt2 = createRuntime();
     const m2 = { value: "Pear" as unknown };
     let el2: El = null;
-    rt2.createApp({
-      render: () =>
-        withDirectives(
-          h("select", { ref: (e: unknown) => (el2 = e), "onUpdate:modelValue": (v: unknown) => (m2.value = v) }, [
-            h("option", "Apple"),
-            h("option", "Pear"),
-          ]),
-          [[rt2.vModelSelect as never, m2.value]],
-        ),
-    }).mount();
+    rt2
+      .createApp({
+        render: () =>
+          withDirectives(
+            h("select", { ref: (e: unknown) => (el2 = e), "onUpdate:modelValue": (v: unknown) => (m2.value = v) }, [
+              h("option", "Apple"),
+              h("option", "Pear"),
+            ]),
+            [[rt2.vModelSelect as never, m2.value]],
+          ),
+      })
+      .mount();
     expect(el2.selectedIndex).toBe(1);
     pick(rt2, el2, 0);
     expect(m2.value).toBe("Apple");
@@ -232,7 +248,10 @@ describe("v-model", () => {
 
   test("a model value no option has selects nothing", () => {
     const rt = createRuntime();
-    const el = mount(rt, { value: "zzz" }, [["a", "A"], ["b", "B"]]);
+    const el = mount(rt, { value: "zzz" }, [
+      ["a", "A"],
+      ["b", "B"],
+    ]);
     expect(el.selectedIndex).toBe(-1);
     expect(shown(rt, el.__vnId)).toBe("-1");
   });
@@ -240,7 +259,17 @@ describe("v-model", () => {
   test("multiple: an array or a Set of the selected values", () => {
     const rt = createRuntime();
     const model = { value: ["b", "c"] as unknown };
-    const el = mount(rt, model, [["a", "A"], ["b", "B"], ["c", "C"]], {}, true);
+    const el = mount(
+      rt,
+      model,
+      [
+        ["a", "A"],
+        ["b", "B"],
+        ["c", "C"],
+      ],
+      {},
+      true,
+    );
     expect(Array.from(el.selectedOptions).map((o: El) => o.value)).toEqual(["b", "c"]);
     expect(el.type).toBe("select-multiple");
     expect(rt.advisories().some((a: string) => a.includes("list box"))).toBe(true);
@@ -248,7 +277,16 @@ describe("v-model", () => {
     expect(model.value).toEqual(["a"]);
     const rt2 = createRuntime();
     const m2 = { value: new Set(["a"]) as unknown };
-    const el2 = mount(rt2, m2, [["a", "A"], ["b", "B"]], {}, true);
+    const el2 = mount(
+      rt2,
+      m2,
+      [
+        ["a", "A"],
+        ["b", "B"],
+      ],
+      {},
+      true,
+    );
     expect(el2.selectedIndex).toBe(0);
     pick(rt2, el2, 1);
     expect(m2.value).toEqual(new Set(["b"]));

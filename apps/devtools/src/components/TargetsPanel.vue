@@ -3,21 +3,12 @@
 // processes, and which of its three windows" is a table, not a pill row.
 import { computed } from "vue";
 import type { Target } from "../protocol";
-import {
-  attach,
-  bestTarget,
-  capture,
-  detach,
-  refreshTargets,
-  refreshWindows,
-  selectWindow,
-  state,
-} from "../store";
+import { attach, bestTarget, capture, detach, refreshTargets, refreshWindows, selectWindow, state } from "../store";
 
 const props = defineProps<{ height: number }>();
 
 const activeWindow = computed(() =>
-  state.window === null ? state.windows.find((w) => w.kind === "main")?.id ?? null : state.window,
+  state.window === null ? (state.windows.find((w) => w.kind === "main")?.id ?? null) : state.window,
 );
 
 async function rescan(): Promise<void> {
@@ -84,9 +75,9 @@ function pickWindow(id: number): void {
           </span>
         </div>
         <div v-if="!state.targets.length" class="empty">
-          No devtools handshake found. A host publishes one into its dist slot at boot
-          (<b class="mono">&lt;slot&gt;/devtools.json</b>) — start an app, and this list picks it up
-          within a few seconds.
+          No devtools handshake found. A host publishes one into its dist slot at boot (<b class="mono"
+            >&lt;slot&gt;/devtools.json</b
+          >) — start an app, and this list picks it up within a few seconds.
         </div>
       </div>
 
@@ -116,9 +107,7 @@ function pickWindow(id: number): void {
           <span class="c-state">
             <span v-if="w.focused" class="badge focus">focused</span>
             <span v-if="w.hovered" class="badge">pointer</span>
-            <span v-if="inspectorFor(w.id)" class="badge insp"
-              >inspector pid {{ inspectorFor(w.id) }}</span
-            >
+            <span v-if="inspectorFor(w.id)" class="badge insp">inspector pid {{ inspectorFor(w.id) }}</span>
           </span>
         </div>
         <div v-if="!state.windows.length" class="empty">Not attached.</div>
@@ -140,9 +129,8 @@ function pickWindow(id: number): void {
           <div v-if="state.shot.note" class="note">{{ state.shot.note }}</div>
         </div>
         <div v-else class="empty">
-          A capture of the selected window's client area — unfocused, occluded, never raised. On
-          demand only: a live preview would cost the target more than every other command here put
-          together.
+          A capture of the selected window's client area — unfocused, occluded, never raised. On demand only: a live
+          preview would cost the target more than every other command here put together.
         </div>
       </div>
     </div>

@@ -99,9 +99,27 @@ describe("MCP parity", () => {
 
 describe("CLI parity", () => {
   test("actual mouse argv preserves held and shift switches without consuming following flags", () => {
-    const { positional, flags } = splitArgs(["--json", "mouse", "--x", "35", "--y", "45", "--kind", "move", "--held", "--shift"]);
+    const { positional, flags } = splitArgs([
+      "--json",
+      "mouse",
+      "--x",
+      "35",
+      "--y",
+      "45",
+      "--kind",
+      "move",
+      "--held",
+      "--shift",
+    ]);
     expect(flags.json).toBe(true);
-    expect(buildRequest(positional, flags)).toEqual({ cmd: "mouse", x: 35, y: 45, kind: "move", held: true, shift: true });
+    expect(buildRequest(positional, flags)).toEqual({
+      cmd: "mouse",
+      x: 35,
+      y: 45,
+      kind: "move",
+      held: true,
+      shift: true,
+    });
   });
 
   test("wheel modifiers and IME commit use their declared boolean types", () => {
@@ -189,17 +207,34 @@ describe("no front-end may grow a command list of its own", () => {
 });
 
 describe("paged recordings and native inspection arguments", () => {
-  const parse = (argv: string[]) => { const parts = splitArgs(argv); return buildRequest(parts.positional, parts.flags); };
+  const parse = (argv: string[]) => {
+    const parts = splitArgs(argv);
+    return buildRequest(parts.positional, parts.flags);
+  };
   test("legacy trace spellings keep their payloads", () => {
     expect(parse(["trace", "start", "--cap", "20000"])).toEqual({ cmd: "trace", op: "start", cap: 20000 });
     expect(parse(["trace", "stop", "--frames"])).toEqual({ cmd: "trace", op: "stop", frames: true });
-    expect(parse(["trace", "mark", "drag", "completed"])).toEqual({ cmd: "trace", op: "mark", label: "drag completed" });
+    expect(parse(["trace", "mark", "drag", "completed"])).toEqual({
+      cmd: "trace",
+      op: "mark",
+      label: "drag completed",
+    });
     expect(parse(["trace"])).toEqual({ cmd: "trace", op: "peek" });
   });
   test("ordered trace pages map kebab flags onto the wire without losing zero offsets", () => {
-    expect(parse(["trace", "frame", "--frame-id", "42", "--offset", "0", "--limit", "400"])).toEqual({ cmd: "trace", op: "frame", frameId: 42, offset: 0, limit: 400 });
+    expect(parse(["trace", "frame", "--frame-id", "42", "--offset", "0", "--limit", "400"])).toEqual({
+      cmd: "trace",
+      op: "frame",
+      frameId: 42,
+      offset: 0,
+      limit: 400,
+    });
     expect(parse(["trace", "frames", "--limit", "240"])).toEqual({ cmd: "trace", op: "frames", limit: 240 });
-    expect(parse(["trace", "recording-start", "--cap", "1200"])).toEqual({ cmd: "trace", op: "recording-start", cap: 1200 });
+    expect(parse(["trace", "recording-start", "--cap", "1200"])).toEqual({
+      cmd: "trace",
+      op: "recording-start",
+      cap: 1200,
+    });
     expect(parse(["trace", "recording-stop"])).toEqual({ cmd: "trace", op: "recording-stop" });
     expect(() => parse(["trace", "frame"])).toThrow(/frame-id/);
     expect(() => parse(["trace", "frame", "--frame-id", "1.5"])).toThrow(UsageError);
@@ -214,26 +249,61 @@ describe("paged recordings and native inspection arguments", () => {
     expect(() => parse(["pick", "click"])).toThrow(UsageError);
   });
   test("IndexedDB keys and cursor remain strings, including empty legal names", () => {
-    expect(parse(["indexeddb", "records", "chat", "messages", "--index", "by-author", "--after", "00ff10", "--limit", "50"])).toEqual({ cmd: "indexeddb", op: "records", database: "chat", store: "messages", index: "by-author", after: "00ff10", limit: 50 });
-    expect(buildRequest(["indexeddb", "schema"], { database: "" })).toEqual({ cmd: "indexeddb", op: "schema", database: "" });
+    expect(
+      parse(["indexeddb", "records", "chat", "messages", "--index", "by-author", "--after", "00ff10", "--limit", "50"]),
+    ).toEqual({
+      cmd: "indexeddb",
+      op: "records",
+      database: "chat",
+      store: "messages",
+      index: "by-author",
+      after: "00ff10",
+      limit: 50,
+    });
+    expect(buildRequest(["indexeddb", "schema"], { database: "" })).toEqual({
+      cmd: "indexeddb",
+      op: "schema",
+      database: "",
+    });
     expect(() => parse(["indexeddb", "records", "chat"])).toThrow(/object store/);
     expect(() => parse(["indexeddb", "records", "chat", "messages", "--after", "bad-cursor"])).toThrow(/hexadecimal/);
     expect(() => parse(["indexeddb", "records", "chat", "messages", "--limit", "101"])).toThrow(UsageError);
     expect(() => parse(["indexeddb", "records", "chat", "messages", "--search", "x".repeat(257)])).toThrow(/256/);
-    expect(parse(["indexeddb", "records", "chat", "messages", "--search", "🙂".repeat(256)]).search).toBe("🙂".repeat(256));
+    expect(parse(["indexeddb", "records", "chat", "messages", "--search", "🙂".repeat(256)]).search).toBe(
+      "🙂".repeat(256),
+    );
   });
   test("allocation filtering and bounded sampling reject invalid capture scopes", () => {
-    expect(parse(["allocations", "start", "--sample-every", "16", "--max-events", "65536"])).toEqual({ cmd: "allocations", op: "start", sampleEvery: 16, maxEvents: 65536 });
-    expect(parse(["allocations", "snapshot", "--min-size", "0", "--max-size", "4096", "--site", "text", "--limit", "100"])).toEqual({ cmd: "allocations", op: "snapshot", minSize: 0, maxSize: 4096, site: "text", limit: 100 });
+    expect(parse(["allocations", "start", "--sample-every", "16", "--max-events", "65536"])).toEqual({
+      cmd: "allocations",
+      op: "start",
+      sampleEvery: 16,
+      maxEvents: 65536,
+    });
+    expect(
+      parse(["allocations", "snapshot", "--min-size", "0", "--max-size", "4096", "--site", "text", "--limit", "100"]),
+    ).toEqual({ cmd: "allocations", op: "snapshot", minSize: 0, maxSize: 4096, site: "text", limit: 100 });
     expect(() => parse(["allocations", "start", "--sample-every", "0"])).toThrow(UsageError);
     expect(() => parse(["allocations", "snapshot", "--min-size", "100", "--max-size", "10"])).toThrow(/exceeds/);
     expect(() => parse(["allocations", "start", "--max-events", "65537"])).toThrow(UsageError);
   });
   test("MCP passes the same paged fields and cannot smuggle undeclared arguments", () => {
     const tools = mcpTools();
-    expect(tools.find(tool => tool.name === "vn_trace")!.build({ op: "frame", frameId: 42, offset: 0, limit: 400, extra: true })).toEqual({ cmd: "trace", op: "frame", frameId: 42, offset: 0, limit: 400 });
-    expect(tools.find(tool => tool.name === "vn_indexeddb")!.build({ op: "records", database: "chat", store: "messages", index: "by-author" })).toEqual({ cmd: "indexeddb", op: "records", database: "chat", store: "messages", index: "by-author" });
-    expect(tools.find(tool => tool.name === "vn_allocations")!.build({ op: "start", sampleEvery: 16 })).toEqual({ cmd: "allocations", op: "start", sampleEvery: 16 });
-    expect(tools.find(tool => tool.name === "vn_pick")!.build({ op: "start" })).toEqual({ cmd: "pick", op: "start" });
+    expect(
+      tools
+        .find((tool) => tool.name === "vn_trace")!
+        .build({ op: "frame", frameId: 42, offset: 0, limit: 400, extra: true }),
+    ).toEqual({ cmd: "trace", op: "frame", frameId: 42, offset: 0, limit: 400 });
+    expect(
+      tools
+        .find((tool) => tool.name === "vn_indexeddb")!
+        .build({ op: "records", database: "chat", store: "messages", index: "by-author" }),
+    ).toEqual({ cmd: "indexeddb", op: "records", database: "chat", store: "messages", index: "by-author" });
+    expect(tools.find((tool) => tool.name === "vn_allocations")!.build({ op: "start", sampleEvery: 16 })).toEqual({
+      cmd: "allocations",
+      op: "start",
+      sampleEvery: 16,
+    });
+    expect(tools.find((tool) => tool.name === "vn_pick")!.build({ op: "start" })).toEqual({ cmd: "pick", op: "start" });
   });
 });

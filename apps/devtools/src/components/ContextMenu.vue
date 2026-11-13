@@ -26,11 +26,7 @@ function run(item: MenuItem): void {
 <template>
   <template v-if="ui.menu">
     <div class="menu-shield" @mousedown="closeMenu()"></div>
-    <div
-      class="menu"
-      :style="{ left: at.left + 'px', top: at.top + 'px', width: WIDTH + 'px' }"
-      @mousedown.stop
-    >
+    <div class="menu" :style="{ left: at.left + 'px', top: at.top + 'px', width: WIDTH + 'px' }" @mousedown.stop>
       <div
         v-for="(item, i) in ui.menu.items"
         :key="i"

@@ -3,7 +3,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { installWaapi } from "../src/waapi";
-import { createReferenceWaapiCore, parseEasing, referenceEffect, referenceValues } from "./fixtures/waapi-core-reference";
+import {
+  createReferenceWaapiCore,
+  parseEasing,
+  referenceEffect,
+  referenceValues,
+} from "./fixtures/waapi-core-reference";
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -126,7 +131,14 @@ describe("Element.animate()", () => {
     w.el(1).animate({ opacity: [0, 1] }, 100);
     w.el(2).animate({ opacity: [0, 1] }, 100);
     expect(w.warnings).toEqual(["waapi:placement"]);
-    for (const name of ["Animation", "KeyframeEffect", "AnimationEffect", "DocumentTimeline", "AnimationTimeline", "AnimationPlaybackEvent"]) {
+    for (const name of [
+      "Animation",
+      "KeyframeEffect",
+      "AnimationEffect",
+      "DocumentTimeline",
+      "AnimationTimeline",
+      "AnimationPlaybackEvent",
+    ]) {
       expect(typeof w.globals[name]).toBe("function");
     }
     expect((w.doc.timeline as Any).currentTime).toBe(w.now);
@@ -167,8 +179,19 @@ describe("Element.animate()", () => {
     });
     const set = w.last("set");
     expect(set.node).toBe(7);
-    expect(set.frames.map((f: Any) => [f.computed, f.props])).toEqual([[0, [["transform", "translateY(-100px)"]]], [1, [["transform", "translateY(-120px)"]]]]);
-    expect(set.timing).toMatchObject({ delay: 0, endDelay: 0, duration: 900, iterations: 1, iterationStart: 0, direction: "normal", fill: "auto" });
+    expect(set.frames.map((f: Any) => [f.computed, f.props])).toEqual([
+      [0, [["transform", "translateY(-100px)"]]],
+      [1, [["transform", "translateY(-120px)"]]],
+    ]);
+    expect(set.timing).toMatchObject({
+      delay: 0,
+      endDelay: 0,
+      duration: 900,
+      iterations: 1,
+      iterationStart: 0,
+      direction: "normal",
+      fill: "auto",
+    });
     expect(set.easing).toBe("cubic-bezier(0.34, 1.56, 0.64, 1)");
     expect(a.pending).toBe(true);
     expect(a.playState).toBe("running");
@@ -330,7 +353,15 @@ describe("Element.animate()", () => {
     const sets = w.calls.filter((c) => c.op === "set").length;
     a.effect.updateTiming({ duration: 300, delay: 50 });
     expect(w.calls.filter((c) => c.op === "set").length).toBe(sets + 1);
-    expect(w.last("set").timing).toMatchObject({ delay: 50, endDelay: 0, duration: 300, iterations: 1, iterationStart: 0, direction: "normal", fill: "forwards" });
+    expect(w.last("set").timing).toMatchObject({
+      delay: 50,
+      endDelay: 0,
+      duration: 300,
+      iterations: 1,
+      iterationStart: 0,
+      direction: "normal",
+      fill: "forwards",
+    });
     expect(a.effect.getComputedTiming()).toMatchObject({ duration: 300, delay: 50, endTime: 350, activeDuration: 300 });
     w.values = "opacity\u001d0.5\u001ctransform\u001dtranslate(0px, -20px)";
     a.commitStyles();
@@ -369,7 +400,13 @@ describe("keyframes and timing", () => {
     const e = new E(null, [{ opacity: 0 }, { opacity: 0.2 }, { opacity: 0.4, offset: 0.8 }, { opacity: 1 }]);
     expect(e.getKeyframes().map((k: Any) => k.computedOffset)).toEqual([0, 0.4, 0.8, 1]);
     expect(e.getKeyframes()[2].offset).toBe(0.8);
-    expect(() => new E(null, [{ opacity: 0, offset: 0.5 }, { opacity: 1, offset: 0.2 }])).toThrow(TypeError);
+    expect(
+      () =>
+        new E(null, [
+          { opacity: 0, offset: 0.5 },
+          { opacity: 1, offset: 0.2 },
+        ]),
+    ).toThrow(TypeError);
     expect(() => new E(null, [{ opacity: 0, offset: 1.5 }])).toThrow(TypeError);
     expect(new E(null, [{ opacity: 1 }]).getKeyframes()[0].computedOffset).toBe(1);
   });
@@ -394,19 +431,26 @@ describe("keyframes and timing", () => {
     expect(() => node.animate({ opacity: 0 }, { fill: "sideways" })).toThrow(TypeError);
     expect(() => node.animate({ opacity: 0 }, { iterations: NaN })).toThrow(TypeError);
     expect(() => node.animate([{ opacity: 0, easing: "bounce" }])).toThrow(TypeError);
-    expect(() => node.animate({ opacity: 0 }, { duration: "auto", direction: "alternate", iterations: Infinity })).not.toThrow();
+    expect(() =>
+      node.animate({ opacity: 0 }, { duration: "auto", direction: "alternate", iterations: Infinity }),
+    ).not.toThrow();
   });
 
   test("hyphenated names are ignored with an advisory, camelCase becomes CSS", () => {
     const w = world();
     w.el(1).animate({ "background-color": ["red", "blue"], backgroundColor: ["red", "blue"] } as Any, 100);
-    expect(w.last("set").frames.map((f: Any) => [f.computed, f.props])).toEqual([[0, [["background-color", "red"]]], [1, [["background-color", "blue"]]]]);
+    expect(w.last("set").frames.map((f: Any) => [f.computed, f.props])).toEqual([
+      [0, [["background-color", "red"]]],
+      [1, [["background-color", "blue"]]],
+    ]);
     expect(w.warnings).toContain("waapi:hyphen:background-color");
   });
 
   test("the timing model: delay, fill, iterations, direction", async () => {
     const w = world();
-    const a = w.el(1).animate({ opacity: [0, 1] }, { duration: 100, delay: 50, iterations: 3, direction: "alternate", fill: "both" });
+    const a = w
+      .el(1)
+      .animate({ opacity: [0, 1] }, { duration: 100, delay: 50, iterations: 3, direction: "alternate", fill: "both" });
     a.pause();
     const t = (ms: number) => {
       a.currentTime = ms;

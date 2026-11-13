@@ -5,7 +5,9 @@ import { state, currentWindow, setTab } from "../store";
 
 const isMac = navigator.platform.startsWith("Mac");
 const isFullscreen = ref(appWindow.isFullscreen());
-const onFullscreenChanged = () => { isFullscreen.value = appWindow.isFullscreen(); };
+const onFullscreenChanged = () => {
+  isFullscreen.value = appWindow.isFullscreen();
+};
 onMounted(() => appWindow.addEventListener("fullscreenchange", onFullscreenChanged));
 onBeforeUnmount(() => appWindow.removeEventListener("fullscreenchange", onFullscreenChanged));
 
@@ -105,7 +107,9 @@ const statusText = computed(() => {
   border-color: #232c3a;
   window-drag: none;
   cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
 }
 .what:hover {
   background: #1a2330;

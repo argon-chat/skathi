@@ -38,7 +38,10 @@ const List = defineComponent({
         [
           h(
             "div",
-            { id: `bubble-${props.stage}`, style: { width: `${Math.round(width.value * 0.6)}px`, height: "24px", background: "#3a7bd5" } },
+            {
+              id: `bubble-${props.stage}`,
+              style: { width: `${Math.round(width.value * 0.6)}px`, height: "24px", background: "#3a7bd5" },
+            },
             "hi",
           ),
           h("div", { style: { height: "24px", background: "#555555" } }, "row"),

@@ -3,18 +3,7 @@
 import { computed, onMounted, onUnmounted, watch } from "vue";
 import { onKeydown } from "../keys";
 import { NET_COLS_H, NET_H, PANE_HEAD_H, SPLIT, viewport } from "../layout";
-import {
-  clearNet,
-  copyText,
-  detailFor,
-  flash,
-  openMenu,
-  refreshNet,
-  selectNet,
-  state,
-  ui,
-  visibleNet,
-} from "../store";
+import { clearNet, copyText, detailFor, flash, openMenu, refreshNet, selectNet, state, ui, visibleNet } from "../store";
 import { asCurl, asFetch, bodyAsText, headersText, responseHeaderRows } from "../netfmt";
 import { useVirtual } from "../virtual";
 import NetDetail from "./NetDetail.vue";
@@ -280,7 +269,12 @@ onUnmounted(() => {
         <div class="list" :style="{ height: listHeight + 'px' }" @wheel="list.onWheel($event)">
           <div class="viewport" :style="{ marginTop: list.padTop + 'px' }">
             <template v-for="entry in slice" :key="entry.seq">
-              <div v-if="isMarker(entry)" class="row mono marker" :title="markerTitle(entry)" @mousedown="onRowDown(entry, $event)">
+              <div
+                v-if="isMarker(entry)"
+                class="row mono marker"
+                :title="markerTitle(entry)"
+                @mousedown="onRowDown(entry, $event)"
+              >
                 <span class="c-kind reload">reload</span>
                 <span class="c-url mark-text">{{ markerText(entry) }}</span>
               </div>
@@ -305,11 +299,19 @@ onUnmounted(() => {
                   :title="statusTitle(entry)"
                   >{{ protoText(entry) }}</span
                 >
-                <span v-if="!open" class="c-conn" :class="{ fresh: entry.conn !== undefined && !entry.reused }" :title="connTitle(entry)">{{
-                  entry.conn === undefined ? "" : "#" + entry.conn
+                <span
+                  v-if="!open"
+                  class="c-conn"
+                  :class="{ fresh: entry.conn !== undefined && !entry.reused }"
+                  :title="connTitle(entry)"
+                  >{{ entry.conn === undefined ? "" : "#" + entry.conn }}</span
+                >
+                <span class="c-status" :class="statusClass(entry)" :title="statusTitle(entry)">{{
+                  statusText(entry)
                 }}</span>
-                <span class="c-status" :class="statusClass(entry)" :title="statusTitle(entry)">{{ statusText(entry) }}</span>
-                <span v-if="!open" class="c-time">{{ entry.ms === undefined ? "" : Math.round(entry.ms) + " ms" }}</span>
+                <span v-if="!open" class="c-time">{{
+                  entry.ms === undefined ? "" : Math.round(entry.ms) + " ms"
+                }}</span>
               </div>
             </template>
           </div>
@@ -319,13 +321,12 @@ onUnmounted(() => {
             :style="{ top: list.thumb.top + 'px', height: list.thumb.height + 'px' }"
           ></div>
           <div v-if="!rows.length" class="empty">
-            Nothing yet. Every <b>fetch()</b>, <b>XMLHttpRequest</b> and <b>WebSocket</b> the app opens is
-            recorded here from boot — including the ones it made before you opened this panel. Click a row
-            for its headers, payload, response body and timing; right-click to copy it as curl or fetch.<br />
+            Nothing yet. Every <b>fetch()</b>, <b>XMLHttpRequest</b> and <b>WebSocket</b> the app opens is recorded here
+            from boot — including the ones it made before you opened this panel. Click a row for its headers, payload,
+            response body and timing; right-click to copy it as curl or fetch.<br />
             <span class="t-faint"
-              >WebSocket messages are counted rather than logged: a chatty socket would evict every other entry
-              in the ring within seconds. Bodies are kept for the most recent requests only (12 MB in all, 256
-              KB each).</span
+              >WebSocket messages are counted rather than logged: a chatty socket would evict every other entry in the
+              ring within seconds. Bodies are kept for the most recent requests only (12 MB in all, 256 KB each).</span
             >
           </div>
         </div>

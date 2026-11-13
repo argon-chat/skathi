@@ -184,7 +184,9 @@ describe("a same-realm reload", () => {
     expect(g.__VN_HOST_STATE__).toBe("host");
     expect(typeof g.__vn_host_fn).toBe("function");
     expect(g.pinned).toBe(1);
-    expect(first.advisories().some((l: string) => l.includes("1 global(s) the old app declared cannot be deleted"))).toBe(true);
+    expect(
+      first.advisories().some((l: string) => l.includes("1 global(s) the old app declared cannot be deleted")),
+    ).toBe(true);
   });
 
   test("the process's own launch reaches launchQueue once, not again after a reload", async () => {

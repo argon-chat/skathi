@@ -120,7 +120,8 @@ export function readPe(path: string): PeInfo {
     const optSize = r.u16(coff + 16);
     const opt = coff + 20;
     const magic = r.u16(opt);
-    if (magic !== 0x20b && magic !== 0x10b) throw new Error(`${path}: unknown optional-header magic 0x${magic.toString(16)}`);
+    if (magic !== 0x20b && magic !== 0x10b)
+      throw new Error(`${path}: unknown optional-header magic 0x${magic.toString(16)}`);
     const is64 = magic === 0x20b;
     const sizeOfImage = r.u32(opt + 56);
     const subsystemOffset = opt + 68;
@@ -287,7 +288,9 @@ export class Win32Error extends Error {
     readonly fn: string,
     readonly code: number,
   ) {
-    super(`${fn} failed with Win32 error ${code}${code === ERROR_SHARING_VIOLATION ? " (sharing violation — another process has the file open)" : ""}`);
+    super(
+      `${fn} failed with Win32 error ${code}${code === ERROR_SHARING_VIOLATION ? " (sharing violation — another process has the file open)" : ""}`,
+    );
   }
 }
 
@@ -317,7 +320,14 @@ export class ResourceUpdate {
 
   set(type: ResId, name: ResId, lang: number, data: Uint8Array) {
     this.#keep.push(data);
-    const ok = kernel32().UpdateResourceW(this.#h, this.#id(type), this.#id(name), lang, data.length ? P(data) : 0n, data.length);
+    const ok = kernel32().UpdateResourceW(
+      this.#h,
+      this.#id(type),
+      this.#id(name),
+      lang,
+      data.length ? P(data) : 0n,
+      data.length,
+    );
     if (!ok) throw new Win32Error(`UpdateResourceW(${type}/${name}/${lang})`, kernel32().GetLastError());
   }
 

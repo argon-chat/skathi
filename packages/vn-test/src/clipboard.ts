@@ -21,7 +21,9 @@ const kernel32 = dlopen("kernel32.dll", {
 
 const GMEM_MOVEABLE = 0x0002;
 /** Formats whose data is a GDI handle, not a memory block. */
-const HANDLE_FORMATS = new Set([2 /* BITMAP */, 3 /* METAFILEPICT */, 9 /* PALETTE */, 14 /* ENHMETAFILE */, 0x80, 0x82, 0x83, 0x8e]);
+const HANDLE_FORMATS = new Set([
+  2 /* BITMAP */, 3 /* METAFILEPICT */, 9 /* PALETTE */, 14 /* ENHMETAFILE */, 0x80, 0x82, 0x83, 0x8e,
+]);
 const isHandleFormat = (f: number) => HANDLE_FORMATS.has(f) || (f >= 0x200 && f <= 0x3ff);
 
 export const CF_UNICODETEXT = 13;
@@ -105,7 +107,13 @@ export function clipboardRestore(snapshot: ClipboardSnapshot): void {
 }
 
 /** A DIB's header, as another app reads it: size, depth, and the compression. */
-export function dibHeader(dib: Uint8Array): { headerSize: number; width: number; height: number; bits: number; compression: number } {
+export function dibHeader(dib: Uint8Array): {
+  headerSize: number;
+  width: number;
+  height: number;
+  bits: number;
+  compression: number;
+} {
   const v = new DataView(dib.buffer, dib.byteOffset, dib.byteLength);
   return {
     headerSize: v.getUint32(0, true),

@@ -145,7 +145,8 @@ const general = computed<KV[]>(() => {
   } else {
     rows.push({ name: "Status", value: "pending", faint: true });
   }
-  if (res?.url && res.url !== e.url) rows.push({ name: "Final URL", value: res.url, note: res.redirected ? "after a redirect" : undefined });
+  if (res?.url && res.url !== e.url)
+    rows.push({ name: "Final URL", value: res.url, note: res.redirected ? "after a redirect" : undefined });
   else if (res?.redirected) rows.push({ name: "Redirected", value: "yes" });
   if (res?.type) rows.push({ name: "Response Type", value: res.type });
   if (res?.responseType !== undefined) rows.push({ name: "responseType", value: res.responseType || '"" (text)' });
@@ -175,7 +176,10 @@ const general = computed<KV[]>(() => {
     ].filter(Boolean);
     if (bits.length) rows.push({ name: "Request Options", value: bits.join(" · ") });
   }
-  rows.push({ name: "Initiator", value: e.kind === "xhr" ? "XMLHttpRequest" : e.kind === "ws" ? "WebSocket" : "fetch()" });
+  rows.push({
+    name: "Initiator",
+    value: e.kind === "xhr" ? "XMLHttpRequest" : e.kind === "ws" ? "WebSocket" : "fetch()",
+  });
   return rows;
 });
 
@@ -199,7 +203,11 @@ const headerSections = computed<Section[]>(() => {
     title: "Response Headers",
     rows: resRows.value,
     copy: () => headersText(resRows.value),
-    empty: det?.error ? "No response — the request failed." : res?.status === undefined ? "Waiting for the response…" : "None.",
+    empty: det?.error
+      ? "No response — the request failed."
+      : res?.status === undefined
+        ? "Waiting for the response…"
+        : "None.",
   });
   out.push({
     id: "req",
@@ -237,7 +245,9 @@ const headerNotes = computed<string[]>(() => {
   return out;
 });
 
-const query = computed<KV[]>(() => (entry.value ? queryOf(entry.value.url).map(([name, value]) => ({ name, value })) : []));
+const query = computed<KV[]>(() =>
+  entry.value ? queryOf(entry.value.url).map(([name, value]) => ({ name, value })) : [],
+);
 
 const formFields = computed<KV[]>(() => {
   const info = d.value?.request?.bodyInfo;
@@ -296,9 +306,7 @@ const payloadTablesH = computed(() => {
 });
 const payloadBodyH = computed(() => Math.max(BODY_BAR_H + 16, contentH.value - payloadTablesH.value - SEC_HEAD_H));
 
-const noPayload = computed(
-  () => recorded.value && !payloadSections.value.length && !reqBody.value,
-);
+const noPayload = computed(() => recorded.value && !payloadSections.value.length && !reqBody.value);
 
 const errorText = computed(() => {
   const det = d.value;
@@ -337,8 +345,10 @@ const timing = computed<KV[]>(() => {
     if (w.lastAt) rows.push({ name: "Last message", value: clock(w.lastAt) });
     return rows;
   }
-  if (t.headersMs !== undefined) rows.push({ name: "Response", value: formatMs(t.headersMs), note: "the promise settled" });
-  if (t.bodyMs !== undefined) rows.push({ name: "Body read", value: formatMs(t.bodyMs), note: "the tee finished reading its clone" });
+  if (t.headersMs !== undefined)
+    rows.push({ name: "Response", value: formatMs(t.headersMs), note: "the promise settled" });
+  if (t.bodyMs !== undefined)
+    rows.push({ name: "Body read", value: formatMs(t.bodyMs), note: "the tee finished reading its clone" });
   if (t.failedMs !== undefined) rows.push({ name: "Failed after", value: formatMs(t.failedMs), tone: "bad" });
   if (e.ms !== undefined) rows.push({ name: "Total", value: formatMs(e.ms) });
   if (errorText.value) rows.push({ name: "Error", value: errorText.value, tone: "bad" });
@@ -488,7 +498,12 @@ function reload(): void {
           <span class="sec-title">{{ s.title }}</span>
           <span v-if="s.id !== 'general'" class="n">{{ s.rows.length }}</span>
           <div class="spacer"></div>
-          <div v-if="s.copy && s.rows.length" class="mini" :title="'Copy ' + s.title.toLowerCase()" @click.stop="copySection(s)">
+          <div
+            v-if="s.copy && s.rows.length"
+            class="mini"
+            :title="'Copy ' + s.title.toLowerCase()"
+            @click.stop="copySection(s)"
+          >
             ⧉
           </div>
         </div>
@@ -499,7 +514,7 @@ function reload(): void {
               <span
                 class="vt mono"
                 :class="[kv.tone, { faint: kv.faint, masked: kv.sensitive && !revealed[s.id + ':' + i] }]"
-                >{{ shown(kv, s.id + ':' + i) }}</span
+                >{{ shown(kv, s.id + ":" + i) }}</span
               >
               <span v-if="kv.note" class="vn">{{ kv.note }}</span>
             </div>
@@ -528,13 +543,15 @@ function reload(): void {
               <span class="sec-title">{{ s.title }}</span>
               <span class="n">{{ s.rows.length }}</span>
               <div class="spacer"></div>
-              <div v-if="s.copy" class="mini" :title="'Copy ' + s.title.toLowerCase()" @click.stop="copySection(s)">⧉</div>
+              <div v-if="s.copy" class="mini" :title="'Copy ' + s.title.toLowerCase()" @click.stop="copySection(s)">
+                ⧉
+              </div>
             </div>
             <template v-if="!collapsed[s.id]">
               <div v-for="(kv, i) in s.rows" :key="i" class="kv">
                 <span class="k mono" :style="{ width: nameW + 'px' }">{{ nameOf(kv) }}</span>
                 <div class="v">
-                  <span class="vt mono" :class="{ faint: kv.faint }">{{ shown(kv, s.id + ':' + i) }}</span>
+                  <span class="vt mono" :class="{ faint: kv.faint }">{{ shown(kv, s.id + ":" + i) }}</span>
                   <span v-if="kv.note" class="vn">{{ kv.note }}</span>
                 </div>
                 <span class="eye-gap"></span>
@@ -595,7 +612,7 @@ function reload(): void {
         <div v-for="(kv, i) in timing" :key="i" class="kv">
           <span class="k mono" :style="{ width: nameW + 'px' }">{{ nameOf(kv) }}</span>
           <div class="v">
-            <span class="vt mono" :class="[kv.tone, { faint: kv.faint }]">{{ shown(kv, 't:' + i) }}</span>
+            <span class="vt mono" :class="[kv.tone, { faint: kv.faint }]">{{ shown(kv, "t:" + i) }}</span>
             <span v-if="kv.note" class="vn">{{ kv.note }}</span>
           </div>
           <span class="eye-gap"></span>
@@ -603,9 +620,9 @@ function reload(): void {
       </div>
       <div class="notes">
         <div class="note-line">
-          Times are measured by the tee in the app's own thread, from the call to fetch(). The transport does
-          not report a DNS / connect / TLS breakdown, and in this engine a response settles once its body has
-          arrived — so "Response" includes the download.
+          Times are measured by the tee in the app's own thread, from the call to fetch(). The transport does not report
+          a DNS / connect / TLS breakdown, and in this engine a response settles once its body has arrived — so
+          "Response" includes the download.
         </div>
       </div>
     </div>
@@ -625,7 +642,7 @@ function reload(): void {
               <span
                 class="vt mono"
                 :class="[kv.tone, { faint: kv.faint, masked: kv.sensitive && !revealed[s.id + ':' + i] }]"
-                >{{ shown(kv, s.id + ':' + i) }}</span
+                >{{ shown(kv, s.id + ":" + i) }}</span
               >
               <span v-if="kv.note" class="vn">{{ kv.note }}</span>
             </div>

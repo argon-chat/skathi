@@ -35,17 +35,10 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
 <template>
   <div class="card">
     <div class="title">Motion — CSS transitions + &lt;lottie&gt; playback</div>
-    <div
-      class="anim"
-      :class="{ wide }"
-      @click="wide = !wide"
-      @transitionend="onTransitionEnd"
-    >
+    <div class="anim" :class="{ wide }" @click="wide = !wide" @transitionend="onTransitionEnd">
       transition: {{ wide ? "wide" : "narrow" }} — click me
     </div>
-    <div class="hint">
-      transitionend fired {{ ends }}× — last: {{ lastEnd }} (a real event, not a timer)
-    </div>
+    <div class="hint">transitionend fired {{ ends }}× — last: {{ lastEnd }} (a real event, not a timer)</div>
 
     <div class="kf-row">
       <div class="pulse">pulse</div>
@@ -74,8 +67,8 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
       </div>
     </div>
     <div class="hint">
-      animation events: start {{ animStarts }} · end {{ animEnds }} · cancel {{ animCancels }} —
-      click the spinner to toggle animation-play-state ({{ spinning ? "running" : "paused" }})
+      animation events: start {{ animStarts }} · end {{ animEnds }} · cancel {{ animCancels }} — click the spinner to
+      toggle animation-play-state ({{ spinning ? "running" : "paused" }})
     </div>
 
     <div class="tx-row">
@@ -85,15 +78,13 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
       </div>
       <div class="tx-spin-box">spin</div>
       <div class="tx-scale">scale on :hover</div>
-      <div class="tx-hover" @click="tilted = !tilted" :class="{ tilted }">
-        click to tilt<br />(transition)
-      </div>
+      <div class="tx-hover" @click="tilted = !tilted" :class="{ tilted }">click to tilt<br />(transition)</div>
     </div>
     <div class="hint">
-      1: transform: rotate(15deg) on a &lt;div&gt; — text, border and shadow turn with it. 2:
-      @keyframes spin on a &lt;div&gt; rather than an &lt;svg&gt;. 3: scale(1.25) on :hover, with
-      transition: transform. 4: click to transition rotate+scale+translate. Layout does not move —
-      the row keeps its four upright slots, which is the browser's rule.
+      1: transform: rotate(15deg) on a &lt;div&gt; — text, border and shadow turn with it. 2: @keyframes spin on a
+      &lt;div&gt; rather than an &lt;svg&gt;. 3: scale(1.25) on :hover, with transition: transform. 4: click to
+      transition rotate+scale+translate. Layout does not move — the row keeps its four upright slots, which is the
+      browser's rule.
     </div>
 
     <!-- That is CSS 2.1 Appendix E's rule, and it costs no layout because an absolutely positioned
@@ -105,14 +96,7 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
     </div>
 
     <div class="lottie-row">
-      <lottie
-        class="sticker"
-        src="assets/sticker.tgs"
-        loop
-        :autoplay="playing"
-        :speed="speed"
-        @loopComplete="onLoop"
-      />
+      <lottie class="sticker" src="assets/sticker.tgs" loop :autoplay="playing" :speed="speed" @loopComplete="onLoop" />
       <div class="lottie-side">
         <div class="lottie-title">.tgs Telegram sticker · 512×512 · 60 fps</div>
         <div class="row">
@@ -124,8 +108,8 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
           <div class="btn ghost" :class="{ on: speed === 2 }" @click="speed = 2">2×</div>
         </div>
         <div class="hint loops">
-          @loopComplete fired {{ loops }}× · {{ lastLoopFrame }} frames per pass · speed
-          {{ speed }}× · {{ playing ? "playing" : "paused" }}
+          @loopComplete fired {{ loops }}× · {{ lastLoopFrame }} frames per pass · speed {{ speed }}× ·
+          {{ playing ? "playing" : "paused" }}
         </div>
       </div>
     </div>
@@ -133,8 +117,8 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
     <Counter />
     <div class="label">MotionPage-scoped .label — must be BLUE</div>
     <div class="hint keep">
-      &lt;KeepAlive&gt;: the counter's setInterval is never cleared on a tab switch — and neither is
-      the sticker's clock. Leave, wait, come back: both have advanced.
+      &lt;KeepAlive&gt;: the counter's setInterval is never cleared on a tab switch — and neither is the sticker's
+      clock. Leave, wait, come back: both have advanced.
     </div>
   </div>
 </template>
@@ -294,7 +278,10 @@ onDeactivated(() => console.log("[app] MotionPage DEACTIVATED (Counter keeps tic
   color: #1c1917;
 }
 .anim {
-  transition: width 350ms ease, background-color 350ms ease, border-radius 350ms ease;
+  transition:
+    width 350ms ease,
+    background-color 350ms ease,
+    border-radius 350ms ease;
   width: 170px;
   padding: 8px;
   background: #4f8cff59;

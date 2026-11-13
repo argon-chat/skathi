@@ -4,24 +4,22 @@ import FrameTimeline from "./FrameTimeline.vue";
 import AllocationsPanel from "./AllocationsPanel.vue";
 import type { InspectorRequest } from "../inspector-model";
 import { forceGc, measureResident, refreshMem, refreshPerf, state } from "../store";
-import {
-  GPU_COLOR,
-  formatMem,
-  historyColumns,
-  itemsOf,
-  memColor,
-  percent,
-  segments,
-  totalLabel,
-} from "../memfmt";
+import { GPU_COLOR, formatMem, historyColumns, itemsOf, memColor, percent, segments, totalLabel } from "../memfmt";
 
 const props = defineProps<{ height: number; request?: InspectorRequest; sessionKey?: string | number }>();
 const emit = defineEmits<{ (event: "recording-change", active: boolean): void }>();
 const mode = ref<"overview" | "frames" | "allocations">("overview");
-const frameRecording = ref(false), allocationRecording = ref(false);
+const frameRecording = ref(false),
+  allocationRecording = ref(false);
 const recording = computed(() => frameRecording.value || allocationRecording.value);
-function frameRecordingChanged(active: boolean) { frameRecording.value = active; emit("recording-change", recording.value); }
-function allocationRecordingChanged(active: boolean) { allocationRecording.value = active; emit("recording-change", recording.value); }
+function frameRecordingChanged(active: boolean) {
+  frameRecording.value = active;
+  emit("recording-change", recording.value);
+}
+function allocationRecordingChanged(active: boolean) {
+  allocationRecording.value = active;
+  emit("recording-change", recording.value);
+}
 
 const perf = computed(() => state.perf);
 const samples = computed(() => state.perfHistory);
@@ -87,56 +85,106 @@ function residentTitle(key: string): string {
   <section class="pane perf" :style="{ height: props.height + 'px' }">
     <header class="pane-head">
       <span class="label">Performance</span>
-      <span class="chip" :title="mode === 'overview' ? 'The rolling frame clock is always on' : 'Record CPU work without restarting the target'"
-        >{{ mode === 'overview' ? 'live frame clock' : 'CPU capture' }}</span
+      <span
+        class="chip"
+        :title="
+          mode === 'overview' ? 'The rolling frame clock is always on' : 'Record CPU work without restarting the target'
+        "
+        >{{ mode === "overview" ? "live frame clock" : "CPU capture" }}</span
       >
       <div class="spacer"></div>
-      <span v-if="mode === 'overview' && perf && !perf.phases" class="chip" title="VN_PERF=1 in the target's environment"
+      <span
+        v-if="mode === 'overview' && perf && !perf.phases"
+        class="chip"
+        title="VN_PERF=1 in the target's environment"
         >phase breakdown off · VN_PERF</span
       >
       <span v-else-if="mode === 'overview' && perf" class="chip ok">VN_PERF on · see the target's stderr</span>
-      <button v-if="mode === 'overview'" class="btn" :disabled="recording || state.captureActive" @click="refreshPerf()" aria-label="Refresh frame clock">Refresh</button>
+      <button
+        v-if="mode === 'overview'"
+        class="btn"
+        :disabled="recording || state.captureActive"
+        @click="refreshPerf()"
+        aria-label="Refresh frame clock"
+      >
+        Refresh
+      </button>
     </header>
 
     <nav class="perf-tabs" aria-label="Performance views">
-      <button class="btn" :class="{ on: mode === 'overview' }" :disabled="recording && mode !== 'overview'" :aria-pressed="mode === 'overview'" @click="mode = 'overview'">Overview</button>
-      <button class="btn" :class="{ on: mode === 'frames' }" :disabled="recording && mode !== 'frames'" :aria-pressed="mode === 'frames'" @click="mode = 'frames'">Frames</button>
-      <button class="btn" :class="{ on: mode === 'allocations' }" :disabled="recording && mode !== 'allocations'" :aria-pressed="mode === 'allocations'" @click="mode = 'allocations'">Allocations</button>
+      <button
+        class="btn"
+        :class="{ on: mode === 'overview' }"
+        :disabled="recording && mode !== 'overview'"
+        :aria-pressed="mode === 'overview'"
+        @click="mode = 'overview'"
+      >
+        Overview
+      </button>
+      <button
+        class="btn"
+        :class="{ on: mode === 'frames' }"
+        :disabled="recording && mode !== 'frames'"
+        :aria-pressed="mode === 'frames'"
+        @click="mode = 'frames'"
+      >
+        Frames
+      </button>
+      <button
+        class="btn"
+        :class="{ on: mode === 'allocations' }"
+        :disabled="recording && mode !== 'allocations'"
+        :aria-pressed="mode === 'allocations'"
+        @click="mode = 'allocations'"
+      >
+        Allocations
+      </button>
       <span v-if="recording" class="recording-note">Stop the recording before switching views</span>
     </nav>
-    <FrameTimeline v-if="mode === 'frames'" :height="Math.max(0, props.height - 57)" :request="request" :session-key="sessionKey" @recording-change="frameRecordingChanged" />
-    <AllocationsPanel v-else-if="mode === 'allocations'" :height="Math.max(0, props.height - 57)" :request="request" :session-key="sessionKey" @recording-change="allocationRecordingChanged" />
+    <FrameTimeline
+      v-if="mode === 'frames'"
+      :height="Math.max(0, props.height - 57)"
+      :request="request"
+      :session-key="sessionKey"
+      @recording-change="frameRecordingChanged"
+    />
+    <AllocationsPanel
+      v-else-if="mode === 'allocations'"
+      :height="Math.max(0, props.height - 57)"
+      :request="request"
+      :session-key="sessionKey"
+      @recording-change="allocationRecordingChanged"
+    />
     <div v-else class="body scroll" :style="{ height: Math.max(0, props.height - 57) + 'px' }">
       <div v-if="!perf" class="empty">
-        Waiting for the first frame sample. If this stays empty the push channel is not connected —
-        the titlebar says <b>polling</b> when that happens.
+        Waiting for the first frame sample. If this stays empty the push channel is not connected — the titlebar says
+        <b>polling</b> when that happens.
       </div>
 
       <template v-else>
         <div class="stats">
           <div class="stat big">
-            <span class="v">{{ perf.fps.toFixed(1) }}</span><span class="u">fps</span>
+            <span class="v">{{ perf.fps.toFixed(1) }}</span
+            ><span class="u">fps</span>
             <span class="k">average over the ring</span>
           </div>
           <div class="stat">
-            <span class="v">{{ perf.p50Ms.toFixed(2) }}</span><span class="u">ms</span>
+            <span class="v">{{ perf.p50Ms.toFixed(2) }}</span
+            ><span class="u">ms</span>
             <span class="k">p50 frame</span>
           </div>
           <div v-if="perf.budgetMs" class="stat">
-            <span class="v">{{ perf.budgetMs.toFixed(2) }}</span><span class="u">ms</span>
+            <span class="v">{{ perf.budgetMs.toFixed(2) }}</span
+            ><span class="u">ms</span>
             <span class="k">frame budget · display</span>
           </div>
           <div class="stat">
-            <span class="v" :class="{ warn: perf.p95Ms > reference * 1.6 }">{{
-              perf.p95Ms.toFixed(2)
-            }}</span
+            <span class="v" :class="{ warn: perf.p95Ms > reference * 1.6 }">{{ perf.p95Ms.toFixed(2) }}</span
             ><span class="u">ms</span>
             <span class="k">p95 frame</span>
           </div>
           <div class="stat">
-            <span class="v" :class="{ bad: perf.maxMs > reference * 3 }">{{
-              perf.maxMs.toFixed(2)
-            }}</span
+            <span class="v" :class="{ bad: perf.maxMs > reference * 3 }">{{ perf.maxMs.toFixed(2) }}</span
             ><span class="u">ms</span>
             <span class="k">worst frame</span>
           </div>
@@ -177,8 +225,8 @@ function residentTitle(key: string): string {
           </div>
         </div>
         <div class="legend">
-          one bar per push · four a second · a bar is amber past 1.6× the median frame and red past
-          3×, because a hitch is relative to what this machine has been managing
+          one bar per push · four a second · a bar is amber past 1.6× the median frame and red past 3×, because a hitch
+          is relative to what this machine has been managing
         </div>
       </template>
 
@@ -191,9 +239,7 @@ function residentTitle(key: string): string {
             title="Windows: the commit charge (Task Manager: Commit size). macOS: the kernel's physical footprint (Activity Monitor: Memory)"
             >private {{ formatMem(mem.privateBytes) }}</span
           >
-          <span
-            class="chip"
-            title="Windows: Task Manager's Memory column. macOS: anonymous memory in RAM (internal)"
+          <span class="chip" title="Windows: Task Manager's Memory column. macOS: anonymous memory in RAM (internal)"
             >private working set {{ formatMem(mem.privateWorkingSetBytes) }}</span
           >
           <span class="chip">working set {{ formatMem(mem.workingSetBytes) }}</span>
@@ -205,7 +251,14 @@ function residentTitle(key: string): string {
           >
         </template>
         <div class="spacer"></div>
-        <button class="btn" :disabled="recording || state.captureActive || !state.target" @click="refreshMem()" title="Request a fresh memory breakdown">Refresh memory</button>
+        <button
+          class="btn"
+          :disabled="recording || state.captureActive || !state.target"
+          @click="refreshMem()"
+          title="Request a fresh memory breakdown"
+        >
+          Refresh memory
+        </button>
         <span v-if="mem" class="chip" title="How long the target took to compute the breakdown"
           >{{ state.memCollectMs.toFixed(1) }} ms · on request</span
         >
@@ -312,15 +365,18 @@ function residentTitle(key: string): string {
             <template v-if="open.gpu">
               <div class="row sub">
                 <span class="tw"></span><span class="name">dedicated (VRAM)</span>
-                <span class="num">{{ formatMem(mem.gpu.dedicatedBytes) }}</span><span class="pct"></span><span class="num res"></span>
+                <span class="num">{{ formatMem(mem.gpu.dedicatedBytes) }}</span
+                ><span class="pct"></span><span class="num res"></span>
               </div>
               <div class="row sub">
                 <span class="tw"></span><span class="name">shared (system memory)</span>
-                <span class="num">{{ formatMem(mem.gpu.sharedBytes) }}</span><span class="pct"></span><span class="num res"></span>
+                <span class="num">{{ formatMem(mem.gpu.sharedBytes) }}</span
+                ><span class="pct"></span><span class="num res"></span>
               </div>
               <div v-for="(it, j) in mem.gpu.items" :key="'g' + j" class="row sub info">
                 <span class="tw"></span><span class="name">{{ it.label }}</span>
-                <span class="num">{{ formatMem(it.bytes) }}</span><span class="pct"></span><span class="num res"></span>
+                <span class="num">{{ formatMem(it.bytes) }}</span
+                ><span class="pct"></span><span class="num res"></span>
               </div>
             </template>
           </div>
@@ -354,11 +410,33 @@ function residentTitle(key: string): string {
 </template>
 
 <style scoped>
-.perf-tabs { min-height: 30px; display: flex; align-items: center; gap: 5px; padding: 4px 8px; box-sizing: border-box; border-bottom: 1px solid #232c3a; background: #0f1620; }
-.perf-tabs button { font-family: inherit; cursor: pointer; }
-.perf-tabs button:disabled { opacity: 0.45; cursor: default; }
-.perf-tabs button:focus-visible { outline: 2px solid #6cb6ff; outline-offset: -2px; }
-.recording-note { color: #e3b341; font-size: 10px; margin-left: auto; }
+.perf-tabs {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  box-sizing: border-box;
+  border-bottom: 1px solid #232c3a;
+  background: #0f1620;
+}
+.perf-tabs button {
+  font-family: inherit;
+  cursor: pointer;
+}
+.perf-tabs button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.perf-tabs button:focus-visible {
+  outline: 2px solid #6cb6ff;
+  outline-offset: -2px;
+}
+.recording-note {
+  color: #e3b341;
+  font-size: 10px;
+  margin-left: auto;
+}
 
 .perf {
   flex: 1;

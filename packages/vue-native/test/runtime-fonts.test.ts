@@ -81,10 +81,18 @@ function fakeHost(css: Partial<Rec>[] = []) {
     __vn_fonts_match(font: string, text: string) {
       const m = /\d+px\s+(.*)$/.exec(font);
       if (!m) return null;
-      const fams = m[1]!.split(",").map((s) => s.trim().replace(/^["']|["']$/g, "").toLowerCase());
+      const fams = m[1]!.split(",").map((s) =>
+        s
+          .trim()
+          .replace(/^["']|["']$/g, "")
+          .toLowerCase(),
+      );
       return faces
         .filter((f) => f.inSet && fams.includes(f.family.toLowerCase()))
-        .filter((f) => !f.range || [...text].some((c) => c.codePointAt(0)! >= f.range![0] && c.codePointAt(0)! <= f.range![1]))
+        .filter(
+          (f) =>
+            !f.range || [...text].some((c) => c.codePointAt(0)! >= f.range![0] && c.codePointAt(0)! <= f.range![1]),
+        )
         .map((f) => f.id)
         .join(",");
     },
@@ -124,7 +132,10 @@ describe("font behavior oracle (test only)", () => {
   });
 
   test("the sheet's faces are document.fonts, load when text asks, and ready waits for that", async () => {
-    const h = fakeHost([{ family: "Lato", weight: "700" }, { family: "Alcarin Tengwar", unicodeRange: "U+E000-E0FF", range: [0xe000, 0xe0ff] }]);
+    const h = fakeHost([
+      { family: "Lato", weight: "700" },
+      { family: "Alcarin Tengwar", unicodeRange: "U+E000-E0FF", range: [0xe000, 0xe0ff] },
+    ]);
     expect(h.doc.fonts).toBe(h.set);
     expect(String(h.set)).toBe("[object FontFaceSet]");
     expect(h.set instanceof EventTarget).toBe(true);
@@ -184,7 +195,13 @@ describe("font behavior oracle (test only)", () => {
     const F = h.g.FontFace;
     const face = new F("Brand", "url(https://cdn.example/brand.woff2)", { weight: "300 700", style: "italic" });
     expect(face.status).toBe("unloaded");
-    expect(h.calls[0]).toEqual(["create", "Brand", "url(https://cdn.example/brand.woff2)", "italic|300 700|normal||auto", false]);
+    expect(h.calls[0]).toEqual([
+      "create",
+      "Brand",
+      "url(https://cdn.example/brand.woff2)",
+      "italic|300 700|normal||auto",
+      false,
+    ]);
     expect(h.set.has(face)).toBe(false);
     const loaded = face.load();
     expect(face.status).toBe("loading");

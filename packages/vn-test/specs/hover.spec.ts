@@ -12,105 +12,133 @@ const liveAlpha = async (selector: string, index = 0) => {
 };
 
 describe("hover", () => {
-  test("the pointer really lands on the element", async () => {
-    const tab = app.locator(".tab").nth(1);
-    await expect(tab).toHaveText("List");
-    await expect(tab).not.toBeHovered();
+  test(
+    "the pointer really lands on the element",
+    async () => {
+      const tab = app.locator(".tab").nth(1);
+      await expect(tab).toHaveText("List");
+      await expect(tab).not.toBeHovered();
 
-    await tab.hover();
+      await tab.hover();
 
-    // The host's hit test put the tab on the hover path — z-order, content masks and
-    // `pointer-events` all had their vote before this could be true.
-    await expect(tab).toBeHovered();
-  }, T);
+      // The host's hit test put the tab on the hover path — z-order, content masks and
+      // `pointer-events` all had their vote before this could be true.
+      await expect(tab).toBeHovered();
+    },
+    T,
+  );
 
-  test("the :hover rule lands on the computed style", async () => {
-    const tab = app.locator(".tab").nth(1);
+  test(
+    "the :hover rule lands on the computed style",
+    async () => {
+      const tab = app.locator(".tab").nth(1);
 
-    await tab.unhover();
-    await expect(tab).not.toBeHovered();
-    await expect(tab).toHaveComputedStyle("background", "a: 0.050980393");
+      await tab.unhover();
+      await expect(tab).not.toBeHovered();
+      await expect(tab).toHaveComputedStyle("background", "a: 0.050980393");
 
-    await tab.hover();
+      await tab.hover();
 
-    // The assertion retries, which is exactly why it does not need to know that.
-    await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
-    await expect(tab).toHaveComputedStyle("color", "a: 1.0");
+      // The assertion retries, which is exactly why it does not need to know that.
+      await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
+      await expect(tab).toHaveComputedStyle("color", "a: 1.0");
 
-    // The RUNG was there all along — this is the control that shows `live` is reporting something
-    // the static buckets cannot.
-    const { computed } = await tab.styles();
-    expect(styleValue(computed.hover ?? [], "background")).toContain("a: 0.13333334");
-    expect(styleValue(computed.base ?? [], "background")).toContain("a: 0.050980393");
-  }, T);
+      // The RUNG was there all along — this is the control that shows `live` is reporting something
+      // the static buckets cannot.
+      const { computed } = await tab.styles();
+      expect(styleValue(computed.hover ?? [], "background")).toContain("a: 0.13333334");
+      expect(styleValue(computed.base ?? [], "background")).toContain("a: 0.050980393");
+    },
+    T,
+  );
 
-  test("moving away puts it back", async () => {
-    const tab = app.locator(".tab").nth(1);
-    await tab.hover();
-    await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
+  test(
+    "moving away puts it back",
+    async () => {
+      const tab = app.locator(".tab").nth(1);
+      await tab.hover();
+      await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
 
-    await tab.unhover();
+      await tab.unhover();
 
-    await expect(tab).not.toBeHovered();
-    await expect(tab).toHaveComputedStyle("background", "a: 0.050980393");
-  }, T);
+      await expect(tab).not.toBeHovered();
+      await expect(tab).toHaveComputedStyle("background", "a: 0.050980393");
+    },
+    T,
+  );
 
-  test("only the element under the pointer is hovered", async () => {
-    const list = app.locator(".tab").nth(1);
-    const motion = app.locator(".tab").nth(2);
+  test(
+    "only the element under the pointer is hovered",
+    async () => {
+      const list = app.locator(".tab").nth(1);
+      const motion = app.locator(".tab").nth(2);
 
-    await list.hover();
-    await expect(list).toBeHovered();
-    await expect(motion).not.toBeHovered();
-    expect(await liveAlpha(".tab", 2)).toBeCloseTo(0.050980393, 5);
+      await list.hover();
+      await expect(list).toBeHovered();
+      await expect(motion).not.toBeHovered();
+      expect(await liveAlpha(".tab", 2)).toBeCloseTo(0.050980393, 5);
 
-    // One move, two edges: gpui reports the leave and the enter together.
-    await motion.hover();
-    await expect(motion).toBeHovered();
-    await expect(list).not.toBeHovered();
-    await expect(motion).toHaveComputedStyle("background", "a: 0.13333334");
-    await expect(list).toHaveComputedStyle("background", "a: 0.050980393");
-  }, T);
+      // One move, two edges: gpui reports the leave and the enter together.
+      await motion.hover();
+      await expect(motion).toBeHovered();
+      await expect(list).not.toBeHovered();
+      await expect(motion).toHaveComputedStyle("background", "a: 0.13333334");
+      await expect(list).toHaveComputedStyle("background", "a: 0.050980393");
+    },
+    T,
+  );
 
-  test("a hover on a different rule shape works too", async () => {
-    const btn = app.locator(".store-row .btn").first();
-    await btn.unhover();
-    await expect(btn).toHaveComputedStyle("background", "a: 0.34901962");
+  test(
+    "a hover on a different rule shape works too",
+    async () => {
+      const btn = app.locator(".store-row .btn").first();
+      await btn.unhover();
+      await expect(btn).toHaveComputedStyle("background", "a: 0.34901962");
 
-    await btn.hover();
-    await expect(btn).toBeHovered();
-    await expect(btn).toHaveComputedStyle("background", "a: 0.8");
+      await btn.hover();
+      await expect(btn).toBeHovered();
+      await expect(btn).toHaveComputedStyle("background", "a: 0.8");
 
-    await btn.unhover();
-    await expect(btn).toHaveComputedStyle("background", "a: 0.34901962");
-  }, T);
+      await btn.unhover();
+      await expect(btn).toHaveComputedStyle("background", "a: 0.34901962");
+    },
+    T,
+  );
 
-  test("a hand on the mouse cannot decide the result", async () => {
-    const tab = app.locator(".tab").nth(1);
-    await tab.hover();
-    await expect(tab).toBeHovered();
+  test(
+    "a hand on the mouse cannot decide the result",
+    async () => {
+      const tab = app.locator(".tab").nth(1);
+      await tab.hover();
+      await expect(tab).toBeHovered();
 
-    await app.send("mouse", { x: 900, y: 700, kind: "move" });
+      await app.send("mouse", { x: 900, y: 700, kind: "move" });
 
-    // The assertion still holds, because reading the hover state re-places the pointer this spec
-    // asked for first.
-    await expect(tab).toBeHovered();
-    await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
+      // The assertion still holds, because reading the hover state re-places the pointer this spec
+      // asked for first.
+      await expect(tab).toBeHovered();
+      await expect(tab).toHaveComputedStyle("background", "a: 0.13333334");
 
-    // And the same in the other direction: `unhover()` owns the pointer too, so a stray move ONTO
-    // the element cannot make "not hovered" fail.
-    await tab.unhover();
-    await app.send("mouse", { selector: ".tab", index: 1, kind: "move" });
-    await expect(tab).not.toBeHovered();
-  }, T);
+      // And the same in the other direction: `unhover()` owns the pointer too, so a stray move ONTO
+      // the element cannot make "not hovered" fail.
+      await tab.unhover();
+      await app.send("mouse", { selector: ".tab", index: 1, kind: "move" });
+      await expect(tab).not.toBeHovered();
+    },
+    T,
+  );
 
-  test("hovering is not clicking", async () => {
-    // A `mouse move` must not fire the handler. If it did, every `hover()` in this file would have
-    // been silently bumping the store.
-    const bump = app.locator(".store-row .btn").first();
-    const before = await bump.textContent();
-    await bump.hover();
-    await bump.unhover();
-    await expect(bump).toHaveText(before);
-  }, T);
+  test(
+    "hovering is not clicking",
+    async () => {
+      // A `mouse move` must not fire the handler. If it did, every `hover()` in this file would have
+      // been silently bumping the store.
+      const bump = app.locator(".store-row .btn").first();
+      const before = await bump.textContent();
+      await bump.hover();
+      await bump.unhover();
+      await expect(bump).toHaveText(before);
+    },
+    T,
+  );
 });

@@ -23,7 +23,11 @@ prepare();
 
 /** A fresh, collision-free path inside the artifacts directory. */
 export function artifactPath(label: string, ext: string): string {
-  const slug = label.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "artifact";
+  const slug =
+    label
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "artifact";
   return join(ARTIFACTS_DIR, `${String(++seq).padStart(3, "0")}-${slug}.${ext}`);
 }
 

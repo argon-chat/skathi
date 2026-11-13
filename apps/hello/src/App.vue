@@ -136,8 +136,8 @@ onUnmounted(wsClose);
     <div class="ka">
       <div class="ka-title">local component state vs pinia store state</div>
       <div class="hint">
-        local: mount id <span class="bad">{{ mountId }}</span> — a fresh random per instance, so it
-        changes on every visit ({{ localVisits }} mount on this one)
+        local: mount id <span class="bad">{{ mountId }}</span> — a fresh random per instance, so it changes on every
+        visit ({{ localVisits }} mount on this one)
       </div>
       <input class="field" v-model="scratch" tabindex="6" placeholder="type — this is NOT kept" />
       <div class="hint">local scratch: "{{ scratch }}" (empty again on every visit)</div>
@@ -174,9 +174,7 @@ onUnmounted(wsClose);
 
       <!-- :focus on a plain tabbable div rides gpui's .focus() rung; :focus-visible only lights up
            when focus arrived from the KEYBOARD, exactly as in a browser. -->
-      <div class="r5-box" tabindex="4">
-        plain div, tabindex=4 — blue on :focus, amber on :focus-visible (Tab)
-      </div>
+      <div class="r5-box" tabindex="4">plain div, tabindex=4 — blue on :focus, amber on :focus-visible (Tab)</div>
 
       <div class="r5-row">
         <input class="field r5-input" :disabled="locked" :value="locked ? 'locked' : 'editable'" />
@@ -193,9 +191,16 @@ onUnmounted(wsClose);
       <div class="r5-dark">@media (prefers-color-scheme: dark) — AMBER while the OS theme is dark</div>
       <div class="r5-motion">@media (prefers-reduced-motion: reduce) — RED when the OS asks for less motion</div>
 
-      <div class="flex flex-col gap-2 p-3 rounded-lg bg-white/5 border border-white/20 text-xs text-white/60 sm:text-sky-300 lg:text-emerald-300 dark:bg-amber-400/10">
+      <div
+        class="flex flex-col gap-2 p-3 rounded-lg bg-white/5 border border-white/20 text-xs text-white/60 sm:text-sky-300 lg:text-emerald-300 dark:bg-amber-400/10"
+      >
         <div class="font-mono">tailwind: sm:text-sky-300 · lg:text-emerald-300 · dark:bg-amber-400/10</div>
-        <input class="field focus:border-sky-400 disabled:opacity-40" tabindex="5" :disabled="locked" placeholder="tailwind focus: + disabled:" />
+        <input
+          class="field focus:border-sky-400 disabled:opacity-40"
+          tabindex="5"
+          :disabled="locked"
+          placeholder="tailwind focus: + disabled:"
+        />
       </div>
     </div>
   </div>

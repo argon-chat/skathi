@@ -353,7 +353,9 @@ export function createRuntime(
       documentElement: {},
       head: {},
       createElement(tag: string) {
-        elementProto ??= worldExports ? Object.getPrototypeOf(worldExports.nodeOps.createElement("div")) : Object.prototype;
+        elementProto ??= worldExports
+          ? Object.getPrototypeOf(worldExports.nodeOps.createElement("div"))
+          : Object.prototype;
         return Object.assign(Object.create(elementProto), { tagName: String(tag).toUpperCase() });
       },
     },
@@ -550,7 +552,11 @@ export function createRuntime(
     },
     detach(id: number) {
       const p = tree.parent.get(id) ?? 0;
-      if (p) tree.children.set(p, tree.children.get(p)!.filter((c) => c !== id));
+      if (p)
+        tree.children.set(
+          p,
+          tree.children.get(p)!.filter((c) => c !== id),
+        );
       tree.parent.set(id, 0);
     },
     free(id: number) {
@@ -679,7 +685,10 @@ export function createRuntime(
       host.focus.calls.push({ id, op });
       return host.focus.answer(id, op);
     },
-    (id) => { host.inputSelectCalls.push(id); return host.inputSelectAnswer; },
+    (id) => {
+      host.inputSelectCalls.push(id);
+      return host.inputSelectAnswer;
+    },
     () => {
       host.reloads++;
     },
@@ -695,8 +704,21 @@ export function createRuntime(
     () => "",
     (id, prop) => {
       host.mediaPropReads.push([id, prop]);
-      const names = ["currentTime", "duration", "paused", "ended", "seeking", "readyState", "networkState",
-        "volume", "muted", "playbackRate", "loop", "videoWidth", "videoHeight"];
+      const names = [
+        "currentTime",
+        "duration",
+        "paused",
+        "ended",
+        "seeking",
+        "readyState",
+        "networkState",
+        "volume",
+        "muted",
+        "playbackRate",
+        "loop",
+        "videoWidth",
+        "videoHeight",
+      ];
       const raw = host.mediaById.get(id);
       const line = raw?.split("\n").find((l) => l.startsWith(`${names[prop]}=`));
       if (line === undefined) return undefined;
@@ -785,7 +807,11 @@ export function createRuntime(
     (types, options) => shellCall("screenSources", JSON.parse(types), JSON.parse(options)),
     (url, content) => {
       if (content && !/^(https?|mailto):/i.test(url)) {
-        return JSON.stringify({ error: "content links only open http, https and mailto", name: "NotAllowedError", code: "ESCHEME" });
+        return JSON.stringify({
+          error: "content links only open http, https and mailto",
+          name: "NotAllowedError",
+          code: "ESCHEME",
+        });
       }
       return shellCall("openExternal", url, content);
     },
@@ -795,17 +821,25 @@ export function createRuntime(
     () => JSON.stringify(host.desktop.launch),
     (scheme) => {
       const s = String(scheme).toLowerCase();
-      if (!/^[a-z][a-z0-9+.-]{0,62}$/.test(s) || ["http", "https", "file", "mailto"].includes(s) || s.startsWith("ms-")) {
+      if (
+        !/^[a-z][a-z0-9+.-]{0,62}$/.test(s) ||
+        ["http", "https", "file", "mailto"].includes(s) ||
+        s.startsWith("ms-")
+      ) {
         return JSON.stringify({ error: `registerProtocol: "${scheme}" cannot be registered`, name: "TypeError" });
       }
       const owner = host.desktop.protocols.get(s);
       if (owner !== undefined && owner !== "test") {
-        return JSON.stringify({ error: `registerProtocol: the "${s}" scheme is registered to ${owner}`, name: "TypeError" });
+        return JSON.stringify({
+          error: `registerProtocol: the "${s}" scheme is registered to ${owner}`,
+          name: "TypeError",
+        });
       }
       host.desktop.protocols.set(s, "test");
       return JSON.stringify({ ok: true, wrote: owner === undefined, scheme: s });
     },
-    (scheme) => host.desktop.protocols.get(String(scheme).toLowerCase()) === "test" &&
+    (scheme) =>
+      host.desktop.protocols.get(String(scheme).toLowerCase()) === "test" &&
       host.desktop.protocols.delete(String(scheme).toLowerCase()),
     (scheme) => host.desktop.protocols.get(String(scheme).toLowerCase()) === "test",
     (fn) => {
@@ -885,17 +919,23 @@ export function createRuntime(
       return true;
     },
     loadInstallWaapi(),
-    options.anim === false ? undefined : {
-      ...createReferenceWaapiCore(),
-      setEffect(id: number, node: number, frames: any[], timing: any) {
-        const projected = referenceEffect(frames, host.anim.notes);
-        host.anim.calls.push(["set", id, node, projected.frames, { ...timing }, timing.easing]);
-        return projected.notes;
-      },
-      clock: (id: number, start: number, hold: number, rate: number) => host.anim.calls.push(["clock", id, start, hold, rate]),
-      drop: (id: number) => host.anim.calls.push(["drop", id]),
-      values(id: number) { host.anim.calls.push(["values", id]); return referenceValues(host.anim.values); },
-    },
+    options.anim === false
+      ? undefined
+      : {
+          ...createReferenceWaapiCore(),
+          setEffect(id: number, node: number, frames: any[], timing: any) {
+            const projected = referenceEffect(frames, host.anim.notes);
+            host.anim.calls.push(["set", id, node, projected.frames, { ...timing }, timing.easing]);
+            return projected.notes;
+          },
+          clock: (id: number, start: number, hold: number, rate: number) =>
+            host.anim.calls.push(["clock", id, start, hold, rate]),
+          drop: (id: number) => host.anim.calls.push(["drop", id]),
+          values(id: number) {
+            host.anim.calls.push(["values", id]);
+            return referenceValues(host.anim.values);
+          },
+        },
     Teleport,
     ...VNWINDOW_STANDINS(),
   ];

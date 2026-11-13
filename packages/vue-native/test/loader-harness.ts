@@ -96,7 +96,10 @@ function factoryPreamble(world, id, requires) {
 
 export function definePlain(world, id, requires, version) {
   const run = factoryPreamble(world, id, requires);
-  world.VN.setDeps(id, requires.map((r) => r.id));
+  world.VN.setDeps(
+    id,
+    requires.map((r) => r.id),
+  );
   world.VN.define(
     id,
     function (require, module, exports) {
@@ -111,7 +114,10 @@ export function definePlain(world, id, requires, version) {
 export function defineComponent(world, id, requires, version, css) {
   const run = factoryPreamble(world, id, requires);
   if (css !== undefined) world.VN.setCss(id, css);
-  world.VN.setDeps(id, requires.map((r) => r.id));
+  world.VN.setDeps(
+    id,
+    requires.map((r) => r.id),
+  );
   world.VN.define(
     id,
     function (require, module, exports) {

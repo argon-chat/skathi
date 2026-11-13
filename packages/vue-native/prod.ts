@@ -19,13 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { asciiOnly, checkAscii, nonAsciiCount } from "./ascii";
 import { AotInputs, aotEngineIdentity } from "./aot-inputs";
 import { pruneVendorPrefixes } from "./css-prefixes";
-import {
-  TW_ID,
-  declaresUtilities,
-  findConfig,
-  generate as generateTailwind,
-  needsTailwindPass,
-} from "./tailwind";
+import { TW_ID, declaresUtilities, findConfig, generate as generateTailwind, needsTailwindPass } from "./tailwind";
 import {
   GLOB_TRIPWIRE,
   SFC_FS,
@@ -129,8 +123,7 @@ const APP_PKG = APP_ROOT === PKG_DIR ? null : readPackageJson(APP_ROOT);
 try {
   const ts = appRequire("typescript");
   registerTS(() => ts);
-} catch {
-}
+} catch {}
 
 const toId = (abs: string) => relative(WS_ROOT, abs).split(sep).join("/");
 const J = (v: unknown) => JSON.stringify(v);
@@ -156,8 +149,7 @@ for (const [k, v] of Object.entries(APP_DEFINES.defines)) {
   if (!k.startsWith("import.meta.env.")) continue;
   try {
     VITE_ENV_PROD[k.slice("import.meta.env.".length)] = JSON.parse(v);
-  } catch {
-  }
+  } catch {}
 }
 
 const DEFINES: Record<string, string> = {
@@ -200,7 +192,11 @@ function writeAtomic(path: string, text: string) {
 const INDEX_HTML = join(VN_CONFIG_DIR, "index.html");
 const LIFTED: LiftedHtml | null = existsSync(INDEX_HTML) ? liftIndexHtml(INDEX_HTML, VN_CONFIG_DIR) : null;
 const HTML_PRELUDE =
-  LIFTED && (LIFTED.scripts.length || LIFTED.rootClasses.length || Object.keys(LIFTED.rootAttrs).length || LIFTED.svgDefinitions?.length)
+  LIFTED &&
+  (LIFTED.scripts.length ||
+    LIFTED.rootClasses.length ||
+    Object.keys(LIFTED.rootAttrs).length ||
+    LIFTED.svgDefinitions?.length)
     ? htmlPreludeModule(LIFTED)
     : null;
 if (LIFTED) {
@@ -333,7 +329,13 @@ async function compileVue(absPath: string, source: string): Promise<{ contents: 
   }
   if (cssChunks.length) cssById.set(id, cssChunks.join("\n"));
 
-  AOT_INPUTS?.vue(absPath, source, code, isTS ? "ts" : "js", [descriptor.script?.content, descriptor.scriptSetup?.content].filter(Boolean).join("\n"));
+  AOT_INPUTS?.vue(
+    absPath,
+    source,
+    code,
+    isTS ? "ts" : "js",
+    [descriptor.script?.content, descriptor.scriptSetup?.content].filter(Boolean).join("\n"),
+  );
   return { contents: code, loader: isTS ? "ts" : "js" };
 }
 
@@ -383,19 +385,28 @@ function appAliases(raw: unknown): Map<string, string> {
 }
 const APP_ALIASES = appAliases(VN_CONFIG.aliases);
 
-const AOT_INPUTS = aotInputsDir ? new AotInputs({
-  out: aotInputsDir,
-  appRoot: VN_CONFIG_DIR,
-  entry: ENTRY_ABS,
-  typescript: runtimeRequire("typescript"),
-  aliases: { vue: RUNTIME_ENTRY, "vue-native": RUNTIME_ENTRY, ...Object.fromEntries(APP_ALIASES), ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])) },
-  sourceRoots: { sdk: PKG_DIR },
-  declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: join(PKG_DIR, "src"), absolute: true })],
-}) : null;
+const AOT_INPUTS = aotInputsDir
+  ? new AotInputs({
+      out: aotInputsDir,
+      appRoot: VN_CONFIG_DIR,
+      entry: ENTRY_ABS,
+      typescript: runtimeRequire("typescript"),
+      aliases: {
+        vue: RUNTIME_ENTRY,
+        "vue-native": RUNTIME_ENTRY,
+        ...Object.fromEntries(APP_ALIASES),
+        ...Object.fromEntries([...FRAMEWORK].map(([name, dependency]) => [name, dependency.path])),
+      },
+      sourceRoots: { sdk: PKG_DIR },
+      declarations: [...new Bun.Glob("*.d.ts").scanSync({ cwd: join(PKG_DIR, "src"), absolute: true })],
+    })
+  : null;
 
 const SHAPE_NOTES = new Map<string, number>();
 const SHAPES = {
-  sourceLoaded: AOT_INPUTS ? (file: string, source: string, transformed: string) => AOT_INPUTS.source(file, source, transformed) : undefined,
+  sourceLoaded: AOT_INPUTS
+    ? (file: string, source: string, transformed: string) => AOT_INPUTS.source(file, source, transformed)
+    : undefined,
   docRoot: VN_CONFIG_DIR,
   wsRoot: WS_ROOT,
   svgDefault: svgDefaultOf(APP_PKG),
@@ -571,7 +582,13 @@ async function build() {
   if (AOT_INPUTS) {
     const pinsPath = join(WS_ROOT, "vendor", "redjs", "pins.txt");
     const engine = aotEngineIdentity(existsSync(pinsPath) ? readFileSync(pinsPath, "utf8") : null);
-    const manifest = AOT_INPUTS.write({ script: out, scriptUrl: "vn://app.prod.js", defines: DEFINES, engine, sdkVersion: runtimeRequire("./package.json").version });
+    const manifest = AOT_INPUTS.write({
+      script: out,
+      scriptUrl: "vn://app.prod.js",
+      defines: DEFINES,
+      engine,
+      sdkVersion: runtimeRequire("./package.json").version,
+    });
     console.log(`[prod] typed AOT inputs: ${manifest} (source archive; native AOT compilation not enabled)`);
   }
 

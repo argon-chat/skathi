@@ -32,7 +32,9 @@ let discovery: Promise<TargetList> | null = null;
 
 export function listTargets(): Promise<TargetList> {
   if (!discovery) {
-    discovery = discoverTargets().finally(() => { discovery = null; });
+    discovery = discoverTargets().finally(() => {
+      discovery = null;
+    });
   }
   return discovery;
 }
@@ -46,22 +48,33 @@ interface Queued {
   background: boolean;
   run: () => Promise<void>;
 }
-interface Lane { running: boolean; pending: Queued[] }
+interface Lane {
+  running: boolean;
+  pending: Queued[];
+}
 const lanes = new Map<string, Lane>();
 
 /** Order commands per target; a slow old target never blocks a new attachment. */
 function enqueue<T>(target: Target, run: () => Promise<T>, options: SendOptions): Promise<T> {
   const key = `${target.pid}:${target.port}:${target.token}`;
   let lane = lanes.get(key);
-  if (!lane) { lane = { running: false, pending: [] }; lanes.set(key, lane); }
+  if (!lane) {
+    lane = { running: false, pending: [] };
+    lanes.set(key, lane);
+  }
   const queue = lane;
   return new Promise<T>((resolve, reject) => {
-    queue.pending.push({ background: options.priority === "background", run: async () => {
-      try {
-        if (options.isCurrent && !options.isCurrent()) throw new Error("attachment changed");
-        resolve(await run());
-      } catch (error) { reject(error); }
-    } });
+    queue.pending.push({
+      background: options.priority === "background",
+      run: async () => {
+        try {
+          if (options.isCurrent && !options.isCurrent()) throw new Error("attachment changed");
+          resolve(await run());
+        } catch (error) {
+          reject(error);
+        }
+      },
+    });
     if (!queue.running) void drain();
     async function drain(): Promise<void> {
       queue.running = true;
@@ -87,12 +100,7 @@ export function send<T>(
   return enqueue(target, () => request<T>(target, cmd, args, timeoutMs), options);
 }
 
-async function request<T>(
-  target: Target,
-  cmd: string,
-  args: Record<string, unknown>,
-  timeoutMs: number,
-): Promise<T> {
+async function request<T>(target: Target, cmd: string, args: Record<string, unknown>, timeoutMs: number): Promise<T> {
   const body = JSON.stringify({ token: target.token, cmd, ...args });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -127,9 +135,7 @@ async function request<T>(
   try {
     reply = JSON.parse(text);
   } catch {
-    throw new Error(
-      `${cmd}: the host answered with something that is not JSON: ${text.slice(0, 200)}`,
-    );
+    throw new Error(`${cmd}: the host answered with something that is not JSON: ${text.slice(0, 200)}`);
   }
   if (!reply.ok) throw new Error(reply.error || `${cmd}: the host refused the command`);
   return reply.data as T;
@@ -146,10 +152,13 @@ export class Push {
   private socket: VnWebSocket | null = null;
   private closed = false;
 
-  constructor(target: Target, since: number, streams: PushStream[], private handlers: PushHandlers) {
-    const url = `ws://127.0.0.1:${target.port}/?token=${encodeURIComponent(
-      target.token,
-    )}&since=${since}`;
+  constructor(
+    target: Target,
+    since: number,
+    streams: PushStream[],
+    private handlers: PushHandlers,
+  ) {
+    const url = `ws://127.0.0.1:${target.port}/?token=${encodeURIComponent(target.token)}&since=${since}`;
     if (typeof WebSocket !== "function") {
       handlers.onClose?.("this host has no WebSocket");
       return;
@@ -170,8 +179,7 @@ export class Push {
       if (this.closed) return;
       try {
         handlers.onMessage(JSON.parse(String(event.data)) as PushMessage);
-      } catch {
-      }
+      } catch {}
     };
     socket.onerror = () => {
       if (!this.closed) handlers.onClose?.("the push socket errored");
@@ -187,8 +195,7 @@ export class Push {
     if (!this.socket || this.socket.readyState !== 1) return;
     try {
       this.socket.send(JSON.stringify(msg));
-    } catch {
-    }
+    } catch {}
   }
 
   subscribe(streams: PushStream[]): void {
@@ -199,8 +206,7 @@ export class Push {
     this.closed = true;
     try {
       this.socket?.close();
-    } catch {
-    }
+    } catch {}
     this.socket = null;
   }
 

@@ -109,7 +109,12 @@ describe("the popup", () => {
       expect(r2.y).toBeGreaterThan((await box("#groups")).y);
       await click(r2.x, r2.y);
       expect(await until(log, (l) => l.length >= 2)).toEqual(["input", "change:2"]);
-      expect(await until(() => text("#out"), (t) => t === "model 2")).toBe("model 2");
+      expect(
+        await until(
+          () => text("#out"),
+          (t) => t === "model 2",
+        ),
+      ).toBe("model 2");
       expect(await popupAt(below.x, below.y, false)).toBe(false);
       expect(await active()).toBe("model");
     },
@@ -129,7 +134,12 @@ describe("the popup", () => {
       expect(await text("#behind")).toBe("behind 0");
       expect(await active()).toBe("model");
       await app.locator("#behind").click({ real: true });
-      expect(await until(() => text("#behind"), (t) => t === "behind 1")).toBe("behind 1");
+      expect(
+        await until(
+          () => text("#behind"),
+          (t) => t === "behind 1",
+        ),
+      ).toBe("behind 1");
     },
     T,
   );
@@ -170,20 +180,50 @@ describe("the popup", () => {
       expect(await popupAt(x, last, true)).toBe(true);
       expect(lit((await shoot()).at(x, first))).toBe(true);
       await app.press("End");
-      expect(await until(async () => lit((await shoot()).at(x, last)), (v) => v)).toBe(true);
+      expect(
+        await until(
+          async () => lit((await shoot()).at(x, last)),
+          (v) => v,
+        ),
+      ).toBe(true);
       expect(yellow((await shoot()).at(x, first))).toBe(true);
       await app.press("Home");
-      expect(await until(async () => lit((await shoot()).at(x, first)), (v) => v)).toBe(true);
+      expect(
+        await until(
+          async () => lit((await shoot()).at(x, first)),
+          (v) => v,
+        ),
+      ).toBe(true);
       // The pointer it comes with rests on row 0, the highlighted one, so the highlight stays.
       await app.send("wheel", { x, y: first, dy: 120 });
-      expect(await until(async () => yellow((await shoot()).at(x, first)), (v) => v)).toBe(true);
+      expect(
+        await until(
+          async () => yellow((await shoot()).at(x, first)),
+          (v) => v,
+        ),
+      ).toBe(true);
       expect(yellow((await shoot()).at(x, last))).toBe(true);
       await app.press("Home");
-      expect(await until(async () => lit((await shoot()).at(x, first)), (v) => v)).toBe(true);
+      expect(
+        await until(
+          async () => lit((await shoot()).at(x, first)),
+          (v) => v,
+        ),
+      ).toBe(true);
       await app.send("mouse", { x, y: first + ROW * 3, kind: "move" });
-      expect(await until(async () => lit((await shoot()).at(x, first + ROW * 3)), (v) => v)).toBe(true);
+      expect(
+        await until(
+          async () => lit((await shoot()).at(x, first + ROW * 3)),
+          (v) => v,
+        ),
+      ).toBe(true);
       await app.press("ArrowDown");
-      expect(await until(async () => lit((await shoot()).at(x, first + ROW * 4)), (v) => v)).toBe(true);
+      expect(
+        await until(
+          async () => lit((await shoot()).at(x, first + ROW * 4)),
+          (v) => v,
+        ),
+      ).toBe(true);
       await app.press("Escape");
       expect(await popupAt(x, last, false)).toBe(false);
       expect(await value("#long")).toBe("0");
@@ -200,11 +240,26 @@ describe("the keyboard", () => {
       await app.locator("#model").focus();
       const before = (await log()).length;
       await app.press("ArrowUp");
-      expect(await until(() => text("#out"), (t) => t === "model 1")).toBe("model 1");
+      expect(
+        await until(
+          () => text("#out"),
+          (t) => t === "model 1",
+        ),
+      ).toBe("model 1");
       await app.press("End");
-      expect(await until(() => text("#out"), (t) => t === "model 2")).toBe("model 2");
+      expect(
+        await until(
+          () => text("#out"),
+          (t) => t === "model 2",
+        ),
+      ).toBe("model 2");
       await app.press("e");
-      expect(await until(() => text("#out"), (t) => t === "model 0")).toBe("model 0");
+      expect(
+        await until(
+          () => text("#out"),
+          (t) => t === "model 0",
+        ),
+      ).toBe("model 0");
       expect((await log()).slice(before)).toEqual(["input", "change:1", "input", "change:2", "input", "change:0"]);
     },
     T,
@@ -226,7 +281,12 @@ describe("the keyboard", () => {
       expect(yellow((await shoot()).at(row(m, 1).x, row(m, 1).y))).toBe(false);
       await app.press("Enter");
       expect(await popupAt(below.x, below.y, false)).toBe(false);
-      expect(await until(() => text("#out"), (t) => t === "model 1")).toBe("model 1");
+      expect(
+        await until(
+          () => text("#out"),
+          (t) => t === "model 1",
+        ),
+      ).toBe("model 1");
       // Space opens, once no type-ahead search is going on (Space would be part of the search).
       await sleep(1_100);
       await app.press("Space");
@@ -246,9 +306,19 @@ describe("the keyboard", () => {
     async () => {
       await app.locator("#groups").focus();
       await app.press("ArrowDown");
-      expect(await until(() => value("#groups"), (v) => v === "c")).toBe("c");
+      expect(
+        await until(
+          () => value("#groups"),
+          (v) => v === "c",
+        ),
+      ).toBe("c");
       await app.press("ArrowUp");
-      expect(await until(() => value("#groups"), (v) => v === "a")).toBe("a");
+      expect(
+        await until(
+          () => value("#groups"),
+          (v) => v === "a",
+        ),
+      ).toBe("a");
     },
     T,
   );
@@ -261,7 +331,12 @@ describe("the keyboard", () => {
       await sleep(200);
       expect(await value("#guarded")).toBe("0");
       await app.press("End");
-      expect(await until(() => value("#guarded"), (v) => v === "1")).toBe("1");
+      expect(
+        await until(
+          () => value("#guarded"),
+          (v) => v === "1",
+        ),
+      ).toBe("1");
     },
     T,
   );

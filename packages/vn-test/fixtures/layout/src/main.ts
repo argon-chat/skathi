@@ -27,23 +27,19 @@ const bubble = () =>
         h("span", { id: "m-trigger" }, [
           h("div", { class: "m-rowbody" }, [
             h("div", { id: "m-wrap", class: "m-wrap" }, [
-              h(
-                "div",
-                { id: "m-media", class: "m-media", style: "max-width: calc(var(--chat-width, 600px) * 0.8)" },
-                [
-                  h("div", { id: "m-bubble", class: "m-bubble" }, [
-                    h("div", { id: "m-text", class: "m-text" }, [
-                      h("button", { id: "m-mention", type: "button" }, [
-                        h("span", { class: "mention" }, [
-                          h("span", { id: "m-at", class: "mention-icon" }, "@"),
-                          h("span", { id: "m-name", class: "mention-name" }, "owner"),
-                        ]),
+              h("div", { id: "m-media", class: "m-media", style: "max-width: calc(var(--chat-width, 600px) * 0.8)" }, [
+                h("div", { id: "m-bubble", class: "m-bubble" }, [
+                  h("div", { id: "m-text", class: "m-text" }, [
+                    h("button", { id: "m-mention", type: "button" }, [
+                      h("span", { class: "mention" }, [
+                        h("span", { id: "m-at", class: "mention-icon" }, "@"),
+                        h("span", { id: "m-name", class: "mention-name" }, "owner"),
                       ]),
-                      " hello there",
                     ]),
+                    " hello there",
                   ]),
-                ],
-              ),
+                ]),
+              ]),
             ]),
           ]),
         ]),

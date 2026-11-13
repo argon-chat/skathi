@@ -11,12 +11,11 @@ const hot = ref(false);
     <div class="head">
       <div class="h1">shaderlab — user-authored `--shading` effects</div>
       <div class="h2 app">
-        app effects — ripple · aurora: compiled from apps/shaderlab/shaders/*.slang
-        by `bun shaders.ts --app … --out …`, loaded at startup from $VN_EFFECTS_DIR.
+        app effects — ripple · aurora: compiled from apps/shaderlab/shaders/*.slang by `bun shaders.ts --app … --out …`,
+        loaded at startup from $VN_EFFECTS_DIR.
       </div>
       <div class="h2 core">
-        built-ins — frost · glow: the effects that ship with the engine, on the
-        same registry and unchanged.
+        built-ins — frost · glow: the effects that ship with the engine, on the same registry and unchanged.
       </div>
     </div>
 
@@ -172,12 +171,24 @@ const hot = ref(false);
   width: 78px;
   height: 124px;
 }
-.s1 { background: #ff3b30; }
-.s2 { background: #ffcc00; }
-.s3 { background: #34c759; }
-.s4 { background: #00c7ff; }
-.s5 { background: #5e5ce6; }
-.s6 { background: #ff2d95; }
+.s1 {
+  background: #ff3b30;
+}
+.s2 {
+  background: #ffcc00;
+}
+.s3 {
+  background: #34c759;
+}
+.s4 {
+  background: #00c7ff;
+}
+.s5 {
+  background: #5e5ce6;
+}
+.s6 {
+  background: #ff2d95;
+}
 
 .over {
   position: absolute;

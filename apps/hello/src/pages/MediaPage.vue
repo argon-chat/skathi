@@ -109,13 +109,13 @@ const progress = computed(() => {
 });
 
 const CODECS: [label: string, mime: string][] = [
-  ['H.264 + AAC (MP4)', 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'],
-  ['HEVC / H.265 (MP4)', 'video/mp4; codecs="hev1.1.6.L93.B0"'],
-  ['AV1 (MP4)', 'video/mp4; codecs="av01.0.05M.08"'],
-  ['VP9 (WebM)', 'video/webm; codecs="vp9"'],
-  ['VP8 + Vorbis (WebM)', 'video/webm; codecs="vp8, vorbis"'],
-  ['Ogg Theora', 'video/ogg; codecs="theora"'],
-  ['FFV1 in MKV (a codec the probe does not know)', 'video/x-matroska; codecs="ffv1"'],
+  ["H.264 + AAC (MP4)", 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'],
+  ["HEVC / H.265 (MP4)", 'video/mp4; codecs="hev1.1.6.L93.B0"'],
+  ["AV1 (MP4)", 'video/mp4; codecs="av01.0.05M.08"'],
+  ["VP9 (WebM)", 'video/webm; codecs="vp9"'],
+  ["VP8 + Vorbis (WebM)", 'video/webm; codecs="vp8, vorbis"'],
+  ["Ogg Theora", 'video/ogg; codecs="theora"'],
+  ["FFV1 in MKV (a codec the probe does not know)", 'video/x-matroska; codecs="ffv1"'],
 ];
 const probe = ref<{ label: string; answer: string }[]>([]);
 onMounted(() => {
@@ -182,8 +182,7 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
 
         <div class="side">
           <div class="meta">
-            {{ media.videoWidth }}×{{ media.videoHeight }} · H.264 High + AAC ·
-            readyState {{ media.readyState }}
+            {{ media.videoWidth }}×{{ media.videoHeight }} · H.264 High + AAC · readyState {{ media.readyState }}
           </div>
 
           <div class="row">
@@ -206,7 +205,10 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
 
           <div
             class="track"
-            @mousedown="scrubbing = true; seekFromEvent($event)"
+            @mousedown="
+              scrubbing = true;
+              seekFromEvent($event);
+            "
             @mousemove="scrubbing && seekFromEvent($event)"
             @mouseup="scrubbing = false"
             @mouseleave="scrubbing = false"
@@ -215,8 +217,8 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
           </div>
 
           <div class="readout">
-            {{ formatTime(media.currentTime) }} / {{ formatTime(media.duration) }}
-            · {{ stopped ? "paused" : "playing" }}
+            {{ formatTime(media.currentTime) }} / {{ formatTime(media.duration) }} ·
+            {{ stopped ? "paused" : "playing" }}
             <span v-if="media.ended"> · ended</span>
             <span v-if="media.seeking"> · seeking</span>
           </div>
@@ -229,12 +231,7 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
       <div class="title">The error path — a source this machine cannot decode</div>
       <div class="stage">
         <div class="frame small">
-          <video
-            ref="brokenEl"
-            class="video"
-            src="assets/unsupported-codec.mkv"
-            @error="onBrokenError"
-          />
+          <video ref="brokenEl" class="video" src="assets/unsupported-codec.mkv" @error="onBrokenError" />
         </div>
         <div class="side">
           <div class="meta bad" v-if="brokenError">MediaError code {{ brokenError.code }}</div>
@@ -243,11 +240,10 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
             {{ brokenError ? brokenError.message : "no error yet" }}
           </div>
           <div class="hint">
-            FFV1 (a lossless archival codec) in a Matroska container: MF reads the container fine
-            and has no decoder for the codec, which is the interesting half of the failure. A
-            browser answers MEDIA_ERR_SRC_NOT_SUPPORTED and stops; here the same error also names
-            which decoders THIS machine has and what to re-encode to. The identical text goes to
-            the compat advisory channel, once, whether or not anyone bound @error.
+            FFV1 (a lossless archival codec) in a Matroska container: MF reads the container fine and has no decoder for
+            the codec, which is the interesting half of the failure. A browser answers MEDIA_ERR_SRC_NOT_SUPPORTED and
+            stops; here the same error also names which decoders THIS machine has and what to re-encode to. The
+            identical text goes to the compat advisory channel, once, whether or not anyone bound @error.
           </div>
         </div>
       </div>
@@ -259,35 +255,35 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
         <div class="src-cell">
           <video class="mini" :src="tinyClip" autoplay loop muted />
           <div class="src-label">
-            data: URI — 6 KB of MP4 inlined in the bundle. Staged to a content-hashed file in
-            the OS temp directory, because SetSourceFromByteStream OPENS the URL it is given
-            rather than reading the stream.
+            data: URI — 6 KB of MP4 inlined in the bundle. Staged to a content-hashed file in the OS temp directory,
+            because SetSourceFromByteStream OPENS the URL it is given rather than reading the stream.
           </div>
         </div>
         <div class="src-cell">
           <video class="mini" :src="httpClip" autoplay loop muted />
           <div class="src-label">
-            http(s) — Media Foundation's own network source streams and range-seeks it, so a
-            long clip starts playing while it is still arriving.
+            http(s) — Media Foundation's own network source streams and range-seeks it, so a long clip starts playing
+            while it is still arriving.
           </div>
         </div>
         <div class="src-cell">
           <img class="mini" :src="httpImage" alt="http image" />
           <div class="src-label">
-            &lt;img&gt; over http — gpui's asset loader fetches it through the ReqwestClient the
-            host installs, asynchronously: alt text for a frame, then the picture.
+            &lt;img&gt; over http — gpui's asset loader fetches it through the ReqwestClient the host installs,
+            asynchronously: alt text for a frame, then the picture.
           </div>
         </div>
         <div class="src-cell">
           <img class="mini relative-img" src="assets/clip-1080p.poster.png" alt="relative image" />
           <div class="src-label">
-            &lt;img&gt; by relative URL — the app root in dev, the exe's own payload once packaged. The same key either way, so the two cannot disagree.
+            &lt;img&gt; by relative URL — the app root in dev, the exe's own payload once packaged. The same key either
+            way, so the two cannot disagree.
           </div>
         </div>
       </div>
       <div class="hint">
-        {{ httpOrigin }} is a local origin. An unreachable one renders the alt text (img) or
-        raises MediaError code 2/4 with an advisory (video) — it never hangs and never lies.
+        {{ httpOrigin }} is a local origin. An unreachable one renders the alt text (img) or raises MediaError code 2/4
+        with an advisory (video) — it never hangs and never lies.
       </div>
     </div>
 
@@ -300,9 +296,9 @@ const httpImage = `${httpOrigin}/clip-1080p.poster.png`;
         </div>
       </div>
       <div class="hint">
-        Only the first row is guaranteed: H.264 + AAC in MP4 is what Windows ships inbox. Every
-        other line depends on Store codec extensions that may not be installed — which is why this
-        is a runtime probe and never a compiled-in table.
+        Only the first row is guaranteed: H.264 + AAC in MP4 is what Windows ships inbox. Every other line depends on
+        Store codec extensions that may not be installed — which is why this is a runtime probe and never a compiled-in
+        table.
       </div>
     </div>
   </div>

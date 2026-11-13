@@ -43,7 +43,14 @@ const box = (left: number, w: number, hgt: number) => ({
 createApp({
   render: () =>
     h("div", { id: "root", style: { position: "relative", width: "100%", height: "100%", background: "#fff" } }, [
-      h("video", { id: "vid", src: "/src/clip-tiny.mp4", autoplay: true, loop: true, muted: true, style: box(20, 160, 90) }),
+      h("video", {
+        id: "vid",
+        src: "/src/clip-tiny.mp4",
+        autoplay: true,
+        loop: true,
+        muted: true,
+        style: box(20, 160, 90),
+      }),
       h("canvas", { id: "cv", width: 64, height: 64, style: box(220, 64, 64) }),
     ]),
 }).mount();

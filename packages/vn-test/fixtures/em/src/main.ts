@@ -8,9 +8,7 @@ createApp({
   render: () =>
     h("div", { class: "page" }, [
       h("div", { id: "chip", class: "chip" }, [h("i", { id: "chip-a" }), h("i", { id: "chip-b" })]),
-      h("div", { id: "l1", class: "l1" }, [
-        h("div", { id: "l2", class: "l2" }, [h("div", { id: "l3", class: "l3" })]),
-      ]),
+      h("div", { id: "l1", class: "l1" }, [h("div", { id: "l2", class: "l2" }, [h("div", { id: "l3", class: "l3" })])]),
       h("div", { id: "rem", class: "rem" }),
       h("div", { class: "lh-num" }, [h("div", { id: "lh-num" }, "number")]),
       h("div", { class: "lh-em" }, [h("div", { id: "lh-em" }, "em")]),

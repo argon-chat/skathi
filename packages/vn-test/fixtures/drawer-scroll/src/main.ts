@@ -24,7 +24,11 @@ createApp({
             "div",
             { id: "content", class: "content" },
             Array.from({ length: ROWS }, (_, i) =>
-              h("div", { class: i === ROWS - 1 ? "row last" : "row", id: i === ROWS - 1 ? "last" : undefined }, `Row ${i + 1}`),
+              h(
+                "div",
+                { class: i === ROWS - 1 ? "row last" : "row", id: i === ROWS - 1 ? "last" : undefined },
+                `Row ${i + 1}`,
+              ),
             ),
           ),
         ]),

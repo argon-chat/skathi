@@ -49,7 +49,10 @@ function dumpbin(): string {
   if (process.env.DUMPBIN) return process.env.DUMPBIN;
   const vswhere = "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe";
   if (!existsSync(vswhere)) die("no vswhere.exe; set DUMPBIN=<path to dumpbin.exe>");
-  const installs = Bun.spawnSync([vswhere, "-all", "-products", "*", "-property", "installationPath"]).stdout.toString().split(/\r?\n/).filter(Boolean);
+  const installs = Bun.spawnSync([vswhere, "-all", "-products", "*", "-property", "installationPath"])
+    .stdout.toString()
+    .split(/\r?\n/)
+    .filter(Boolean);
   const found: [string, string][] = [];
   for (const install of installs) {
     const tools = join(install, "VC", "Tools", "MSVC");
@@ -59,7 +62,11 @@ function dumpbin(): string {
       if (existsSync(exe)) found.push([version, exe]);
     }
   }
-  const versionKey = (v: string) => v.split(".").map((n) => n.padStart(6, "0")).join(".");
+  const versionKey = (v: string) =>
+    v
+      .split(".")
+      .map((n) => n.padStart(6, "0"))
+      .join(".");
   found.sort((a, b) => versionKey(b[0]).localeCompare(versionKey(a[0])));
   return found[0]?.[1] ?? die("no dumpbin.exe under Visual Studio; set DUMPBIN=");
 }
@@ -69,7 +76,12 @@ function build(config: string, prefixed: boolean): string {
   const target = join(repo, "target", "vn-vpx-symbols", config);
   const env = { ...process.env, VN_VPX_CONFIG: config, CARGO_TARGET_DIR: target, VN_VPX_PREFIX: prefixed ? "1" : "0" };
   console.log(`cargo build -p vn-vpx-sys (${config}, ${prefixed ? "prefixed" : "not prefixed"})`);
-  const cargo = Bun.spawnSync(["cargo", "build", "-p", "vn-vpx-sys", "--quiet"], { cwd: repo, env, stdout: "inherit", stderr: "inherit" });
+  const cargo = Bun.spawnSync(["cargo", "build", "-p", "vn-vpx-sys", "--quiet"], {
+    cwd: repo,
+    env,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
   if (cargo.exitCode !== 0) die(`cargo build failed (${config})`);
   const libs: string[] = [];
   const walk = (dir: string) => {
@@ -161,10 +173,14 @@ for (const config of CONFIGS) {
     if (bad.length) die(`symbols a #define cannot rename (${config}): ${bad.join(", ")}`);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, header(config, names));
-    console.log(`config/prefix/${config}.h: ${names.length} symbols (and ${own.length} of the crate's own ${OWN}*, kept)`);
+    console.log(
+      `config/prefix/${config}.h: ${names.length} symbols (and ${own.length} of the crate's own ${OWN}*, kept)`,
+    );
   }
   if (!existsSync(file)) die(`no ${file}; run without --check`);
-  const listed = readFileSync(file, "utf8").split("\n").filter((l) => l.startsWith("#define ") && !l.includes("VN_VPX_PREFIX_H_")).length;
+  const listed = readFileSync(file, "utf8")
+    .split("\n")
+    .filter((l) => l.startsWith("#define ") && !l.includes("VN_VPX_PREFIX_H_")).length;
   const after = [...colliding(build(config, true), exe)];
   const unprefixed = after.filter((n) => !n.startsWith(PREFIX) && !n.startsWith(OWN)).sort();
   const prefixed = after.filter((n) => n.startsWith(PREFIX)).length;
@@ -172,7 +188,9 @@ for (const config of CONFIGS) {
     console.error(`${config}: ${unprefixed.length} symbols not prefixed: ${unprefixed.join(", ")}`);
     failed = true;
   } else {
-    console.log(`${config}: ${prefixed} symbols, all ${PREFIX}* (the header lists ${listed}); no unprefixed global symbol`);
+    console.log(
+      `${config}: ${prefixed} symbols, all ${PREFIX}* (the header lists ${listed}); no unprefixed global symbol`,
+    );
   }
 }
 if (failed) die("the headers are stale: run without --check");

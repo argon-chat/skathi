@@ -34,6 +34,9 @@ bun run shaders:check
 
 End-to-end: `bun test specs` in `packages/vn-test`, after `cargo build -p vn-app`.
 
+Formatting, from the repo root: `bun fmt` (`bun fmt --check` to verify). Settings are in `bunfig.toml`,
+exclusions in `.prettierignore`. Rust is `cargo fmt`'s.
+
 ## Rules
 
 - **Comments only when necessary.** Write one when the code cannot say it: a non-obvious reason,

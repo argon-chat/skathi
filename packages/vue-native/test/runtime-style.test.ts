@@ -114,7 +114,7 @@ describe("the style attribute is the inline declaration block", () => {
     const { el } = setup();
     el.setAttribute(
       "style",
-      "background: url(\"data:image/png;base64,AAA=\") /* a;b */ no-repeat; 0: d; : x; color: ; --x: 3; width: 1px; width: 2px",
+      'background: url("data:image/png;base64,AAA=") /* a;b */ no-repeat; 0: d; : x; color: ; --x: 3; width: 1px; width: 2px',
     );
     expect(el.style.background).toBe('url("data:image/png;base64,AAA=")   no-repeat');
     expect(el.style.getPropertyValue("--x")).toBe("3");
@@ -285,7 +285,12 @@ describe(":style is runtime-dom's patchStyle", () => {
     const { rt, el, hostStyle } = setup();
     rt.patchProp(el, "style", null, { color: "red", width: "1px", height: "2px" });
     const before = rt.host.styles.length;
-    rt.patchProp(el, "style", { color: "red", width: "1px", height: "2px" }, { color: "red", width: null, opacity: 0.5 });
+    rt.patchProp(
+      el,
+      "style",
+      { color: "red", width: "1px", height: "2px" },
+      { color: "red", width: null, opacity: 0.5 },
+    );
     expect(hostStyle()).toEqual([
       ["color", "red"],
       ["opacity", "0.5"],
@@ -304,7 +309,10 @@ describe(":style is runtime-dom's patchStyle", () => {
   test("string → record clears what the string declared and the record lacks", () => {
     const { rt, el, hostStyle } = setup();
     rt.patchProp(el, "style", null, "color: red; width: 1px; background-color: blue");
-    rt.patchProp(el, "style", "color: red; width: 1px; background-color: blue", { width: "2px", backgroundColor: "green" });
+    rt.patchProp(el, "style", "color: red; width: 1px; background-color: blue", {
+      width: "2px",
+      backgroundColor: "green",
+    });
     expect(hostStyle()).toEqual([
       ["width", "2px"],
       ["background-color", "green"],

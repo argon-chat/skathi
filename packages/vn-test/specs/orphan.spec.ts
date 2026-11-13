@@ -69,32 +69,40 @@ async function startRunner(keep: boolean): Promise<Run> {
 }
 
 describe.skipIf(process.platform !== "win32")("orphans", () => {
-  test("a host whose runner is killed outright goes with it", async () => {
-    const run = await startRunner(false);
-    expect(alive(run.host)).toBe(true);
-    terminate(run.runner);
-    expect(await goneWithin(run.host, 5_000)).toBe(true);
-  }, T);
+  test(
+    "a host whose runner is killed outright goes with it",
+    async () => {
+      const run = await startRunner(false);
+      expect(alive(run.host)).toBe(true);
+      terminate(run.runner);
+      expect(await goneWithin(run.host, 5_000)).toBe(true);
+    },
+    T,
+  );
 
-  test("the reap takes an orphan and leaves a live run's host alone", async () => {
-    // The live run first: its own `launch()` reaps at startup, and it must not get to the orphan
-    // before this test has looked at it.
-    const live = await startRunner(false);
-    const orphan = await startRunner(true);
+  test(
+    "the reap takes an orphan and leaves a live run's host alone",
+    async () => {
+      // The live run first: its own `launch()` reaps at startup, and it must not get to the orphan
+      // before this test has looked at it.
+      const live = await startRunner(false);
+      const orphan = await startRunner(true);
 
-    terminate(orphan.runner);
-    await sleep(1_500);
-    expect(alive(orphan.host)).toBe(true);
+      terminate(orphan.runner);
+      await sleep(1_500);
+      expect(alive(orphan.host)).toBe(true);
 
-    const found = findOrphans().map((o) => o.pid);
-    expect(found).toContain(orphan.host);
-    expect(found).not.toContain(live.host);
+      const found = findOrphans().map((o) => o.pid);
+      expect(found).toContain(orphan.host);
+      expect(found).not.toContain(live.host);
 
-    reapOrphans();
-    expect(await goneWithin(orphan.host, 5_000)).toBe(true);
-    expect(alive(live.host)).toBe(true);
+      reapOrphans();
+      expect(await goneWithin(orphan.host, 5_000)).toBe(true);
+      expect(alive(live.host)).toBe(true);
 
-    terminate(live.runner);
-    expect(await goneWithin(live.host, 5_000)).toBe(true);
-  }, T);
+      terminate(live.runner);
+      expect(await goneWithin(live.host, 5_000)).toBe(true);
+    },
+    T,
+  );
 });

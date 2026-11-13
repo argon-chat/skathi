@@ -86,9 +86,7 @@ describe("appDevtools", () => {
 
     rt.host.devtools.openError = "the devtools are disabled in this process";
     expect(rt.appDevtools.open()).toBe(false);
-    expect(rt.advisories().some((a: string) => /open\(\) did not open an inspector/.test(a))).toBe(
-      true,
-    );
+    expect(rt.advisories().some((a: string) => /open\(\) did not open an inspector/.test(a))).toBe(true);
   });
 
   test("info() is the host's own object, field for field", () => {

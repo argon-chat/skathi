@@ -376,8 +376,7 @@ declare global {
     createWritable(options?: { keepExistingData?: boolean }): Promise<VnFileSystemWritableFileStream>;
   }
   interface VnFileSystemDirectoryHandle
-    extends VnFileSystemHandle,
-      AsyncIterable<[string, VnFileSystemFileHandle | VnFileSystemDirectoryHandle]> {
+    extends VnFileSystemHandle, AsyncIterable<[string, VnFileSystemFileHandle | VnFileSystemDirectoryHandle]> {
     readonly kind: "directory";
     getFileHandle(name: string, options?: { create?: boolean }): Promise<VnFileSystemFileHandle>;
     getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<VnFileSystemDirectoryHandle>;
@@ -406,7 +405,10 @@ declare global {
   var FileSystemHandle: { new (): VnFileSystemHandle; prototype: VnFileSystemHandle };
   var FileSystemFileHandle: { new (): VnFileSystemFileHandle; prototype: VnFileSystemFileHandle };
   var FileSystemDirectoryHandle: { new (): VnFileSystemDirectoryHandle; prototype: VnFileSystemDirectoryHandle };
-  var FileSystemWritableFileStream: { new (): VnFileSystemWritableFileStream; prototype: VnFileSystemWritableFileStream };
+  var FileSystemWritableFileStream: {
+    new (): VnFileSystemWritableFileStream;
+    prototype: VnFileSystemWritableFileStream;
+  };
 
   type VnWellKnownDirectory = "desktop" | "documents" | "downloads" | "music" | "pictures" | "videos";
   interface VnFilePickerAcceptType {
@@ -440,7 +442,10 @@ declare global {
     readonly total: number;
   }
   var ProgressEvent: {
-    new (type: string, init?: VnEventInit & { lengthComputable?: boolean; loaded?: number; total?: number }): VnProgressEvent;
+    new (
+      type: string,
+      init?: VnEventInit & { lengthComputable?: boolean; loaded?: number; total?: number },
+    ): VnProgressEvent;
     prototype: VnProgressEvent;
   };
 

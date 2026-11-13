@@ -36,7 +36,13 @@ function chrome(target: string, to: string | null | "kept", last: "click" | "con
           `focusout:field rel=${to} active=BODY`,
           ...(to ? [`focus:${to} rel=field active=${to}`, `focusin:${to} rel=field active=${to}`] : []),
         ];
-  return [...down, ...moved, `pointerup:${target} active=${now}`, `mouseup:${target} active=${now}`, `${last}:${target} active=${now}`];
+  return [
+    ...down,
+    ...moved,
+    `pointerup:${target} active=${now}`,
+    `mouseup:${target} active=${now}`,
+    `${last}:${target} active=${now}`,
+  ];
 }
 
 describe("a press focuses the nearest focusable area, before its mouseup", () => {

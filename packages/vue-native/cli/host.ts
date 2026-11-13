@@ -15,7 +15,18 @@
 // (`--allow-host-mismatch` is for maintainers).
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { cargoFeatureArgs, OPTIONAL, partsLeftOut, type Variant } from "./config";
@@ -70,11 +81,16 @@ function formatProblem(exe: string, platform: Platform): string | null {
   if (platform !== "macos") return null;
   const archs = machOArchs(exe);
   if (!archs) return `${exe} is not a Mach-O executable — a macOS bundle needs a macOS vn-app`;
-  if (!archs.some((a) => a === "arm64" || a === "x86_64")) return `${exe} is a Mach-O for ${archs.join(", ")}, not arm64 or x86_64`;
+  if (!archs.some((a) => a === "arm64" || a === "x86_64"))
+    return `${exe} is a Mach-O for ${archs.join(", ")}, not arm64 or x86_64`;
   return null;
 }
 
-export function crossHostInfo(exe: string, variant: Variant, platform: Platform): { info: HostInfo; unverified: string } {
+export function crossHostInfo(
+  exe: string,
+  variant: Variant,
+  platform: Platform,
+): { info: HostInfo; unverified: string } {
   const problem = formatProblem(exe, platform);
   if (problem) throw new HostError(problem);
   const sidecar = join(dirname(exe), "host.json");
@@ -201,7 +217,8 @@ export function resolveHost(options: ResolveOptions): ResolvedHost {
     const source = options.host ? "--host" : "VN_HOST";
     if (cross) {
       if (!existsSync(exe)) throw new HostError(`${exe} does not exist`);
-      if (isStamped(exe)) throw new HostError(`${exe} is a packaged app, not a bare host (its bundle already carries an app.vnpk)`);
+      if (isStamped(exe))
+        throw new HostError(`${exe} is a packaged app, not a bare host (its bundle already carries an app.vnpk)`);
       const { info, unverified } = crossHostInfo(exe, options.variant, platform);
       const problem = checkHost(exe, info, options.variant, allow);
       if (problem) throw new HostError(problem);
@@ -295,7 +312,10 @@ function cargo(): string {
 }
 
 /** MAINTAINERS ONLY, in a checkout: builds the bare host for `variant` and imports it into the cache. */
-export function buildHost(variant: Variant, log: (line: string) => void = console.log): { path: string; info: HostInfo; ms: number } {
+export function buildHost(
+  variant: Variant,
+  log: (line: string) => void = console.log,
+): { path: string; info: HostInfo; ms: number } {
   if (!REPO_ROOT || !REPO_RELEASE_EXE) {
     throw new HostError("vn host build runs from a vue-native checkout; elsewhere, use vn host add <exe>");
   }

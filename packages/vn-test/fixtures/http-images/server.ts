@@ -137,7 +137,10 @@ export function serveImages(): ImageServer {
           "last-modified": LAST_MODIFIED,
         };
         const validators = "etag" in headers || "last-modified" in headers;
-        if (validators && (req.headers.get("if-none-match") === etag || req.headers.get("if-modified-since") === LAST_MODIFIED)) {
+        if (
+          validators &&
+          (req.headers.get("if-none-match") === etag || req.headers.get("if-modified-since") === LAST_MODIFIED)
+        ) {
           seen.notModified++;
           note(304);
           return new Response(null, { status: 304, headers });

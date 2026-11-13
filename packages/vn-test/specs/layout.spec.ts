@@ -47,7 +47,14 @@ describe("#1 group-hover that changes `display`", () => {
       const under = await until(() => box("#ts-8"), shown);
       bunExpect(shown(under)).toBe(true);
       bunExpect(under?.w).toBe(36);
-      bunExpect(shown(await until(() => box("#ts-2"), (b) => !shown(b)))).toBe(false);
+      bunExpect(
+        shown(
+          await until(
+            () => box("#ts-2"),
+            (b) => !shown(b),
+          ),
+        ),
+      ).toBe(false);
     },
     T,
   );
@@ -122,108 +129,158 @@ describe("#14 background-image: url()", () => {
     return until(read, (got) => got.every((c, i) => near(c, want[i])));
   }
 
-  test("emojix's pixel sprite shows its cell", async () => {
-    const got = await colours("#bg-px", [[10, 10]], [BLUE]);
-    bunExpect(near(got[0], BLUE)).toBe(true);
-  }, T);
+  test(
+    "emojix's pixel sprite shows its cell",
+    async () => {
+      const got = await colours("#bg-px", [[10, 10]], [BLUE]);
+      bunExpect(near(got[0], BLUE)).toBe(true);
+    },
+    T,
+  );
 
-  test("emojix's percentage sprite shows its cell", async () => {
-    const got = await colours("#bg-pct", [[10, 10]], [BLUE]);
-    bunExpect(near(got[0], BLUE)).toBe(true);
-  }, T);
+  test(
+    "emojix's percentage sprite shows its cell",
+    async () => {
+      const got = await colours("#bg-pct", [[10, 10]], [BLUE]);
+      bunExpect(near(got[0], BLUE)).toBe(true);
+    },
+    T,
+  );
 
-  test("`cover` scales the image over the box and `center` centres it", async () => {
-    const got = await colours("#bg-cover", [[30, 5], [30, 25]], [RED, BLUE]);
-    bunExpect(near(got[0], RED)).toBe(true);
-    bunExpect(near(got[1], BLUE)).toBe(true);
-  }, T);
+  test(
+    "`cover` scales the image over the box and `center` centres it",
+    async () => {
+      const got = await colours(
+        "#bg-cover",
+        [
+          [30, 5],
+          [30, 25],
+        ],
+        [RED, BLUE],
+      );
+      bunExpect(near(got[0], RED)).toBe(true);
+      bunExpect(near(got[1], BLUE)).toBe(true);
+    },
+    T,
+  );
 
-  test("`repeat-x` tiles along the box", async () => {
-    const points: [number, number][] = [[5, 10], [15, 10], [25, 10], [35, 10], [45, 10], [55, 10]];
-    const want = [RED, BLUE, RED, BLUE, RED, BLUE];
-    const got = await colours("#bg-tile", points, want);
-    got.forEach((c, i) => bunExpect(near(c, want[i])).toBe(true));
-  }, T);
+  test(
+    "`repeat-x` tiles along the box",
+    async () => {
+      const points: [number, number][] = [
+        [5, 10],
+        [15, 10],
+        [25, 10],
+        [35, 10],
+        [45, 10],
+        [55, 10],
+      ];
+      const want = [RED, BLUE, RED, BLUE, RED, BLUE];
+      const got = await colours("#bg-tile", points, want);
+      got.forEach((c, i) => bunExpect(near(c, want[i])).toBe(true));
+    },
+    T,
+  );
 
-  test("a gradient written above an image paints over it", async () => {
-    const got = await colours("#bg-over", [[10, 10]], [LIME]);
-    bunExpect(near(got[0], LIME)).toBe(true);
-  }, T);
+  test(
+    "a gradient written above an image paints over it",
+    async () => {
+      const got = await colours("#bg-over", [[10, 10]], [LIME]);
+      bunExpect(near(got[0], LIME)).toBe(true);
+    },
+    T,
+  );
 });
 
 describe("#18 backdrop-filter under a transform", () => {
-  test("the blur is drawn where the box is drawn, and nowhere else", async () => {
-    const stage = await app.locator("#bd-stage").boundingBox();
-    const shot = readPng(await app.screenshot());
-    const grey = (luma: number) => luma > 50 && luma < 205;
-    const region = (dx: number, dy: number) => ({ x: stage.x + dx, y: stage.y + dy, w: 40, h: 20 });
-    const drawn = shot.count(region(110, 60), grey);
-    bunExpect(drawn).toBeGreaterThan(40 * 20 * 0.8);
-    // Before the fix the blur was drawn here instead.
-    const ghost = shot.count(region(10, 10), grey);
-    bunExpect(ghost).toBeLessThan(40 * 20 * 0.2);
-  }, T);
+  test(
+    "the blur is drawn where the box is drawn, and nowhere else",
+    async () => {
+      const stage = await app.locator("#bd-stage").boundingBox();
+      const shot = readPng(await app.screenshot());
+      const grey = (luma: number) => luma > 50 && luma < 205;
+      const region = (dx: number, dy: number) => ({ x: stage.x + dx, y: stage.y + dy, w: 40, h: 20 });
+      const drawn = shot.count(region(110, 60), grey);
+      bunExpect(drawn).toBeGreaterThan(40 * 20 * 0.8);
+      // Before the fix the blur was drawn here instead.
+      const ghost = shot.count(region(10, 10), grey);
+      bunExpect(ghost).toBeLessThan(40 * 20 * 0.2);
+    },
+    T,
+  );
 });
 
 describe("#36 a radio's dot", () => {
-  test("is drawn in the inherited colour, in the middle of the circle", async () => {
-    // It is centred only because a button centres its content vertically, and it is lime only
-    // because an absolutely positioned (deferred) <svg> paints under its ancestors' text colour.
-    const b = await app.locator("#radio").boundingBox();
-    const lime = ([r, g, bl]: [number, number, number]) => g > 150 && r < 120 && bl < 120;
-    const read = async () => {
-      const shot = readPng(await app.screenshot());
-      let n = 0;
-      let sx = 0;
-      let sy = 0;
-      for (let y = Math.floor(b.y) - 8; y < b.y + b.h + 8; y++) {
-        for (let x = Math.floor(b.x) - 8; x < b.x + b.w + 8; x++) {
-          if (lime(shot.at(x, y))) {
-            n++;
-            sx += x + 0.5;
-            sy += y + 0.5;
+  test(
+    "is drawn in the inherited colour, in the middle of the circle",
+    async () => {
+      // It is centred only because a button centres its content vertically, and it is lime only
+      // because an absolutely positioned (deferred) <svg> paints under its ancestors' text colour.
+      const b = await app.locator("#radio").boundingBox();
+      const lime = ([r, g, bl]: [number, number, number]) => g > 150 && r < 120 && bl < 120;
+      const read = async () => {
+        const shot = readPng(await app.screenshot());
+        let n = 0;
+        let sx = 0;
+        let sy = 0;
+        for (let y = Math.floor(b.y) - 8; y < b.y + b.h + 8; y++) {
+          for (let x = Math.floor(b.x) - 8; x < b.x + b.w + 8; x++) {
+            if (lime(shot.at(x, y))) {
+              n++;
+              sx += x + 0.5;
+              sy += y + 0.5;
+            }
           }
         }
-      }
-      return { n, cx: n ? sx / n : 0, cy: n ? sy / n : 0 };
-    };
-    const got = await until(read, (g) => g.n >= 30);
-    bunExpect(got.n).toBeGreaterThanOrEqual(30);
-    bunExpect(Math.abs(got.cx - (b.x + b.w / 2))).toBeLessThanOrEqual(1);
-    bunExpect(Math.abs(got.cy - (b.y + b.h / 2))).toBeLessThanOrEqual(1);
-  }, T);
+        return { n, cx: n ? sx / n : 0, cy: n ? sy / n : 0 };
+      };
+      const got = await until(read, (g) => g.n >= 30);
+      bunExpect(got.n).toBeGreaterThanOrEqual(30);
+      bunExpect(Math.abs(got.cx - (b.x + b.w / 2))).toBeLessThanOrEqual(1);
+      bunExpect(Math.abs(got.cy - (b.y + b.h / 2))).toBeLessThanOrEqual(1);
+    },
+    T,
+  );
 });
 
 describe("the gradient-border mask (the Ultima price card)", () => {
-  test("paints the lime in the padding ring and leaves the text uncovered", async () => {
-    // Before the fix the mask was dropped, and the lime covered the whole card, text included.
-    const b = await app.locator("#ring-card").boundingBox();
-    const lime = ([r, g, bl]: [number, number, number]) => g > 200 && r < 100 && bl < 100;
-    const read = async () => {
-      const shot = readPng(await app.screenshot());
-      let inner = 0;
-      let ring = 0;
-      for (let y = Math.ceil(b.y); y < b.y + b.h; y++) {
-        for (let x = Math.ceil(b.x); x < b.x + b.w; x++) {
-          if (!lime(shot.at(x, y))) continue;
-          const edge = Math.min(x - b.x, b.x + b.w - x, y - b.y, b.y + b.h - y);
-          if (edge > 7) inner++;
-          else ring++;
+  test(
+    "paints the lime in the padding ring and leaves the text uncovered",
+    async () => {
+      // Before the fix the mask was dropped, and the lime covered the whole card, text included.
+      const b = await app.locator("#ring-card").boundingBox();
+      const lime = ([r, g, bl]: [number, number, number]) => g > 200 && r < 100 && bl < 100;
+      const read = async () => {
+        const shot = readPng(await app.screenshot());
+        let inner = 0;
+        let ring = 0;
+        for (let y = Math.ceil(b.y); y < b.y + b.h; y++) {
+          for (let x = Math.ceil(b.x); x < b.x + b.w; x++) {
+            if (!lime(shot.at(x, y))) continue;
+            const edge = Math.min(x - b.x, b.x + b.w - x, y - b.y, b.y + b.h - y);
+            if (edge > 7) inner++;
+            else ring++;
+          }
         }
-      }
-      return { inner, ring };
-    };
-    const got = await until(read, (g) => g.ring > 100);
-    bunExpect(got.ring).toBeGreaterThan(300);
-    bunExpect(got.inner).toBe(0);
-  }, T);
+        return { inner, ring };
+      };
+      const got = await until(read, (g) => g.ring > 100);
+      bunExpect(got.ring).toBeGreaterThan(300);
+      bunExpect(got.inner).toBe(0);
+    },
+    T,
+  );
 });
 
 describe("#10 (b) the hidden attribute", () => {
-  test("hides the box, until-found too, unless the author sets a display", async () => {
-    const flex = await until(() => box("#hid-flex"), shown);
-    bunExpect(flex).toMatchObject({ w: 20, h: 20 });
-    bunExpect(shown(await box("#hid"))).toBe(false);
-    bunExpect(shown(await box("#hid-found"))).toBe(false);
-  }, T);
+  test(
+    "hides the box, until-found too, unless the author sets a display",
+    async () => {
+      const flex = await until(() => box("#hid-flex"), shown);
+      bunExpect(flex).toMatchObject({ w: 20, h: 20 });
+      bunExpect(shown(await box("#hid"))).toBe(false);
+      bunExpect(shown(await box("#hid-found"))).toBe(false);
+    },
+    T,
+  );
 });

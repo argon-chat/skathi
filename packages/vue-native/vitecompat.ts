@@ -131,7 +131,9 @@ export function assetKey(absPath: string, docRoot: string): { key: string; url: 
   const rel = relative(docRoot, absPath);
   let key: string;
   if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
-    const h = Bun.hash(posix(resolve(absPath)).toLowerCase()).toString(16).slice(0, 8);
+    const h = Bun.hash(posix(resolve(absPath)).toLowerCase())
+      .toString(16)
+      .slice(0, 8);
     key = `_vn/fs/${h}/${basename(absPath)}`;
   } else {
     key = posix(rel);
@@ -449,8 +451,7 @@ function notSupportedError(what: string, why: string): string {
   );
 }
 
-const WORKERS_WHY =
-  "vue-native has no Web Workers yet — run the work on the main thread for now";
+const WORKERS_WHY = "vue-native has no Web Workers yet — run the work on the main thread for now";
 
 export function workerStubModule(id: string, url = false): string {
   if (url) {
@@ -478,9 +479,7 @@ export function stubWorkerUrls(src: string, file: string): { code: string; count
   return count ? { code, count } : null;
 }
 
-const WASM_WHY =
-  "WebAssembly is out of scope for vue-native; " +
-  "the native replacement is a host binding";
+const WASM_WHY = "WebAssembly is out of scope for vue-native; " + "the native replacement is a host binding";
 
 export function wasmStubModule(id: string, query: Set<string>): string {
   const advise = `console.warn(${J(`${ADVISE} ${id}: not bundled — ${WASM_WHY}`)});\n`;
@@ -596,7 +595,12 @@ export function viteShapesPlugin(o: ShapesOptions) {
       build.onResolve({ filter: /\?[\w&=.-]+$/ }, (args: any) => {
         const q = args.path.lastIndexOf("?");
         const bare = args.path.slice(0, q);
-        const params = new Set(args.path.slice(q + 1).split("&").map((p: string) => p.split("=")[0]));
+        const params = new Set(
+          args.path
+            .slice(q + 1)
+            .split("&")
+            .map((p: string) => p.split("=")[0]),
+        );
         if (![...params].some((p) => KINDS.includes(p as string))) return undefined;
         const real = resolveImport(bare, importerDir(args, o.docRoot));
         if (real === null) return undefined; // let Bun report the unresolvable import itself
@@ -606,7 +610,12 @@ export function viteShapesPlugin(o: ShapesOptions) {
       build.onLoad({ filter: /.*/, namespace: NS }, async (args: any) => {
         const q = args.path.lastIndexOf("?");
         const file = args.path.slice(0, q);
-        const params = new Set<string>(args.path.slice(q + 1).split("&").map((p: string) => p.split("=")[0]));
+        const params = new Set<string>(
+          args.path
+            .slice(q + 1)
+            .split("&")
+            .map((p: string) => p.split("=")[0]),
+        );
         const id = idOf(file);
         const isWasm = /\.wasm$/i.test(file);
         if (params.has("worker") || params.has("sharedworker")) {
@@ -627,10 +636,14 @@ export function viteShapesPlugin(o: ShapesOptions) {
         }
         if (params.has("inline")) {
           note(o, `?inline`);
-          if (/\.css$/i.test(file)) return { contents: `export default ${J(await Bun.file(file).text())};\n`, loader: "js" };
+          if (/\.css$/i.test(file))
+            return { contents: `export default ${J(await Bun.file(file).text())};\n`, loader: "js" };
           const bytes = Buffer.from(await Bun.file(file).arrayBuffer());
           const mime = Bun.file(file).type.split(";")[0] || "application/octet-stream";
-          return { contents: `export default ${J(`data:${mime};base64,${bytes.toString("base64")}`)};\n`, loader: "js" };
+          return {
+            contents: `export default ${J(`data:${mime};base64,${bytes.toString("base64")}`)};\n`,
+            loader: "js",
+          };
         }
         note(o, `?url (packed as an asset)`);
         return { contents: urlModule(file), loader: "js" };
@@ -654,7 +667,8 @@ export function viteShapesPlugin(o: ShapesOptions) {
       });
       build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async (args: any) => {
         const src = await Bun.file(args.path).text();
-        const code = src.includes("import.meta.glob") || src.includes("new URL") ? transformSource(src, args.path, o) : null;
+        const code =
+          src.includes("import.meta.glob") || src.includes("new URL") ? transformSource(src, args.path, o) : null;
         o.sourceLoaded?.(args.path, src, code ?? src);
         return code === null ? undefined : { contents: code, loader: loaderOf(args.path) };
       });
@@ -735,7 +749,7 @@ export function tagModuleNamespaces(bundle: string): { code: string; count: numb
   if (count === 0 && BUN_EXPORT_SIGNATURE.test(bundle)) {
     throw new Error(
       "the bundle's __export helper is not in the shape vitecompat.ts tagModuleNamespaces knows: " +
-        "namespace objects would lack Symbol.toStringTag \"Module\", and defineAsyncComponent(() => import(…)) " +
+        'namespace objects would lack Symbol.toStringTag "Module", and defineAsyncComponent(() => import(…)) ' +
         "would render nothing — update BUN_EXPORT_HELPER for this Bun version",
     );
   }
@@ -791,7 +805,11 @@ export function rebaseCssUrls(css: string, from: string, docRoot: string, assets
       return i < 0 ? [u, ""] : [u.slice(0, i), u.slice(i)];
     })();
     let decoded: string;
-    try { decoded = decodeURIComponent(path); } catch { return whole; }
+    try {
+      decoded = decodeURIComponent(path);
+    } catch {
+      return whole;
+    }
     const abs = u.startsWith("/") ? resolve(docRoot, "." + decoded) : resolve(dir, decoded);
     if (assets && existsSync(abs) && statSync(abs).isFile()) {
       const { key, url: packedUrl } = assetKey(abs, docRoot);
@@ -819,29 +837,32 @@ export function inlineCssImports(
 ): string {
   css = rebaseCssUrls(css, from, docRoot, assets);
   if (!css.includes("@import")) return css;
-  return css.replace(IMPORT_RULE, (whole, _q1, urlSpec: string | undefined, _q2, strSpec: string | undefined, media: string) => {
-    const spec = (urlSpec ?? strSpec ?? "").trim();
-    if (/^(https?:)?\/\//i.test(spec) || spec.startsWith("data:")) return whole;
-    let target: string | null = null;
-    const clean = spec.replace(/^~/, "").replace(/[?#].*$/, "");
-    try {
-      if (clean.startsWith("/")) target = join(docRoot, clean);
-      else if (clean.startsWith(".")) target = resolve(dirname(from), clean);
-      else target = resolveImport(clean, dirname(from));
-    } catch {
-      target = null;
-    }
-    if (!target || !existsSync(target)) {
-      warn(`${from}: @import ${J(spec)} does not resolve to a file — dropped`);
-      return "";
-    }
-    const abs = resolve(target);
-    if (seen.has(abs)) return ""; // a cycle, or a second import of the same sheet: postcss-import skips it too
-    seen.add(abs);
-    const inner = inlineCssImports(readFileSync(abs, "utf8"), abs, docRoot, warn, seen, assets);
-    const m = media.trim();
-    return m && !/^(layer|supports)\b/.test(m) ? `@media ${m} {\n${inner}\n}` : inner;
-  });
+  return css.replace(
+    IMPORT_RULE,
+    (whole, _q1, urlSpec: string | undefined, _q2, strSpec: string | undefined, media: string) => {
+      const spec = (urlSpec ?? strSpec ?? "").trim();
+      if (/^(https?:)?\/\//i.test(spec) || spec.startsWith("data:")) return whole;
+      let target: string | null = null;
+      const clean = spec.replace(/^~/, "").replace(/[?#].*$/, "");
+      try {
+        if (clean.startsWith("/")) target = join(docRoot, clean);
+        else if (clean.startsWith(".")) target = resolve(dirname(from), clean);
+        else target = resolveImport(clean, dirname(from));
+      } catch {
+        target = null;
+      }
+      if (!target || !existsSync(target)) {
+        warn(`${from}: @import ${J(spec)} does not resolve to a file — dropped`);
+        return "";
+      }
+      const abs = resolve(target);
+      if (seen.has(abs)) return ""; // a cycle, or a second import of the same sheet: postcss-import skips it too
+      seen.add(abs);
+      const inner = inlineCssImports(readFileSync(abs, "utf8"), abs, docRoot, warn, seen, assets);
+      const m = media.trim();
+      return m && !/^(layer|supports)\b/.test(m) ? `@media ${m} {\n${inner}\n}` : inner;
+    },
+  );
 }
 
 export interface CssPiece {
@@ -901,7 +922,10 @@ export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
     const sink = inBody(at) ? out.bodyCss : out.headCss;
     if (m[0].toLowerCase().startsWith("<style")) {
       const a = attrsOf(`<style${m[1]}>`);
-      const text = raw.slice(at, at + m[0].length).replace(/^<style\b[^>]*>/i, "").replace(/<\/style\s*>$/i, "");
+      const text = raw
+        .slice(at, at + m[0].length)
+        .replace(/^<style\b[^>]*>/i, "")
+        .replace(/<\/style\s*>$/i, "");
       sink.push({ text: a.media ? `@media ${a.media} {\n${text}\n}` : text, from: `${htmlPath}?style@${label(at)}` });
     } else if (m[0].toLowerCase().startsWith("<link")) {
       const a = attrsOf(m[0]);
@@ -909,7 +933,9 @@ export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
       if (!rel.includes("stylesheet")) continue; // icons, manifest, preconnect: nothing to lift
       const href = a.href ?? "";
       if (/^(https?:)?\/\//i.test(href)) {
-        out.advisories.push(`${label(at)}: remote stylesheet ${href} is not loaded — vue-native has no network stylesheets`);
+        out.advisories.push(
+          `${label(at)}: remote stylesheet ${href} is not loaded — vue-native has no network stylesheets`,
+        );
         continue;
       }
       const clean = href.replace(/[?#].*$/, "");
@@ -924,15 +950,21 @@ export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
       const a = attrsOf(`<script${m[3]}>`);
       const type = (a.type ?? "").toLowerCase();
       if (a.src !== undefined) {
-        if (type !== "module") out.advisories.push(`${label(at)}: <script src=${J(a.src)}> is not run — only the entry module is`);
+        if (type !== "module")
+          out.advisories.push(`${label(at)}: <script src=${J(a.src)}> is not run — only the entry module is`);
         continue; // the module entry: vue-native already knows its entry
       }
-      const text = raw.slice(at, at + m[0].length).replace(/^<script\b[^>]*>/i, "").replace(/<\/script\s*>$/i, "");
+      const text = raw
+        .slice(at, at + m[0].length)
+        .replace(/^<script\b[^>]*>/i, "")
+        .replace(/<\/script\s*>$/i, "");
       if (!text.trim()) continue;
       if (type === "" || type === "text/javascript" || type === "application/javascript") {
         out.scripts.push({ text, label: label(at) });
       } else if (type === "module") {
-        out.advisories.push(`${label(at)}: an inline <script type="module"> is not run — move it into the entry module`);
+        out.advisories.push(
+          `${label(at)}: an inline <script type="module"> is not run — move it into the entry module`,
+        );
       }
     }
   }
@@ -943,8 +975,10 @@ export function liftIndexHtml(htmlPath: string, docRoot: string): LiftedHtml {
     .filter((match) => inBody(match.index ?? 0) && /<(?:defs|filter)\b/i.test(match[0]))
     .map((match) => raw.slice(match.index!, match.index! + match[0].length));
   if (bodyTag) {
-    const body = html.slice(bodyTag.index + bodyTag[0].length).replace(re, "")
-      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg\s*>/gi, (svg) => /<(?:defs|filter)\b/i.test(svg) ? "" : svg);
+    const body = html
+      .slice(bodyTag.index + bodyTag[0].length)
+      .replace(re, "")
+      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg\s*>/gi, (svg) => (/<(?:defs|filter)\b/i.test(svg) ? "" : svg));
     const tags = new Set<string>();
     for (const t of body.matchAll(/<([a-zA-Z][\w-]*)\b([^>]*)>/g)) {
       if (/\bid\s*=\s*["']app["']/i.test(t[2] ?? "")) continue;
@@ -972,7 +1006,11 @@ function staticSvgDom(svg: string): string {
   }
   const wrapper = descriptor.template?.ast?.children.find((node) => node.type === 1);
   if (!wrapper || wrapper.type !== 1) throw new Error("index.html: SVG definitions have no root");
-  const namespaces = ["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg", "http://www.w3.org/1998/Math/MathML"];
+  const namespaces = [
+    "http://www.w3.org/1999/xhtml",
+    "http://www.w3.org/2000/svg",
+    "http://www.w3.org/1998/Math/MathML",
+  ];
   const lines = ["{"];
   let next = 0;
   const append = (node: StaticSvgNode, parent: string): void => {
@@ -983,12 +1021,19 @@ function staticSvgDom(svg: string): string {
         if (prop.type !== 6) continue;
         const key = prop.name;
         const value = prop.value?.content ?? "";
-        const namespace = key === "xmlns" || key.startsWith("xmlns:") ? "http://www.w3.org/2000/xmlns/"
-          : key.startsWith("xlink:") ? "http://www.w3.org/1999/xlink"
-          : key.startsWith("xml:") ? "http://www.w3.org/XML/1998/namespace" : null;
-        lines.push(namespace
-          ? `${name}.setAttributeNS(${J(namespace)}, ${J(key)}, ${J(value)});`
-          : `${name}.setAttribute(${J(key)}, ${J(value)});`);
+        const namespace =
+          key === "xmlns" || key.startsWith("xmlns:")
+            ? "http://www.w3.org/2000/xmlns/"
+            : key.startsWith("xlink:")
+              ? "http://www.w3.org/1999/xlink"
+              : key.startsWith("xml:")
+                ? "http://www.w3.org/XML/1998/namespace"
+                : null;
+        lines.push(
+          namespace
+            ? `${name}.setAttributeNS(${J(namespace)}, ${J(key)}, ${J(value)});`
+            : `${name}.setAttribute(${J(key)}, ${J(value)});`,
+        );
       }
       for (const child of node.children) append(child, name);
       lines.push(`${parent}.appendChild(${name});`);

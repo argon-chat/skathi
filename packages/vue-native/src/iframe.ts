@@ -182,7 +182,12 @@ export function decodeMessage(wire: unknown): unknown {
       const out: Record<string, unknown> = {};
       for (const [k, v] of a as [string, unknown][]) {
         // `__proto__` as an own key, not as the prototype setter.
-        Object.defineProperty(out, k, { value: decodeMessage(v), enumerable: true, writable: true, configurable: true });
+        Object.defineProperty(out, k, {
+          value: decodeMessage(v),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
       }
       return out;
     }
@@ -195,7 +200,9 @@ export function decodeMessage(wire: unknown): unknown {
     case "t": {
       if (!(VIEWS as readonly string[]).includes(a as string)) throw new TypeError("iframe message: unknown view");
       const bytes = fromBase64(b as string);
-      const Ctor = (globalThis as unknown as Record<string, new (buf: ArrayBufferLike, off?: number, len?: number) => unknown>)[a as string];
+      const Ctor = (
+        globalThis as unknown as Record<string, new (buf: ArrayBufferLike, off?: number, len?: number) => unknown>
+      )[a as string];
       const width = (Ctor as unknown as { BYTES_PER_ELEMENT?: number }).BYTES_PER_ELEMENT ?? 1;
       return new Ctor(bytes.buffer, 0, bytes.byteLength / width);
     }

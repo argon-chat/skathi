@@ -15,7 +15,9 @@ const user32 = dlopen("user32.dll", {
   ReleaseDC: { args: [FFIType.u64, FFIType.u64], returns: FFIType.i32 },
   EnumDisplayMonitors: { args: [FFIType.u64, FFIType.ptr, FFIType.function, FFIType.i64], returns: FFIType.i32 },
 });
-const gdi32 = dlopen("gdi32.dll", { GetPixel: { args: [FFIType.u64, FFIType.i32, FFIType.i32], returns: FFIType.u32 } });
+const gdi32 = dlopen("gdi32.dll", {
+  GetPixel: { args: [FFIType.u64, FFIType.i32, FFIType.i32], returns: FFIType.u32 },
+});
 user32.symbols.SetProcessDpiAwarenessContext(-4n);
 
 const WM_MOUSEACTIVATE = 0x0021;
@@ -109,112 +111,136 @@ const overlayInForeground = async (): Promise<string | null> => {
 };
 
 describe("overlay", () => {
-  test("opens as a tool window that is never activated: no taskbar button, no NonRudeHWND, not owned", async () => {
-    const hud = await win("HUD");
-    await sleep(500);
-    expect(hud.shown).toBe(true);
-    expect(hud.focusable).toBe(false);
-    expect(hud.toolWindow).toBe(true);
-    expect(hud.appWindow).toBe(false);
-    expect(hud.noActivate).toBe(true);
-    expect(hud.nonRude).toBe(false);
-    expect(hud.ownedByMain).toBe(false);
-    expect(hud.foreground).toBe(false);
-    expect(await overlayInForeground()).toBeNull();
-    expect((await app.logs(0)).entries.filter((l) => l.kind === "advisory" && /VnWindow/.test(l.text))).toEqual([]);
-  }, T);
-
-  test("a click would not activate it; one on an ordinary gpui window would", async () => {
-    const hud = BigInt((await win("HUD")).hwnd);
-    const main = BigInt((await app.send("screenshot", { backend: "print_window" })).hwnd);
-    expect(mouseActivate(hud, hud)).toBe(MA_NOACTIVATE);
-    expect(mouseActivate(main, main)).toBe(MA_ACTIVATE);
-    expect(await overlayInForeground()).toBeNull();
-  }, T);
-
-  test("click-through: layered + transparent, a click lands on the window under it, and back, live", async () => {
-    let hud = await win("HUD");
-    const h = BigInt(hud.hwnd);
-    expect(hud.ignoreMouseEvents).toBe(true);
-    expect(hud.layered).toBe(true);
-    expect(hud.transparent).toBe(true);
-    const box = screenPoint(h, 24, 24);
-    expect(under(box)).not.toBe(h);
-
-    await set("S.ignore = false");
-    hud = await win("HUD");
-    expect(hud.layered).toBe(false);
-    expect(hud.transparent).toBe(false);
-    expect(under(box)).toBe(h);
-
-    await set("S.ignore = true");
-    expect(under(box)).not.toBe(h);
-    expect(await overlayInForeground()).toBeNull();
-  }, T);
-
-  test("capture leaves it out; without contentProtection the screen shows it, and its new frames, while it is click-through", async () => {
-    let hud = await win("HUD");
-    const h = BigInt(hud.hwnd);
-    const box = screenPoint(h, 24, 24);
-    const clear = screenPoint(h, 120, 70);
-    expect(hud.displayAffinity).toBe(WDA_EXCLUDEFROMCAPTURE);
-    expect(pixel(box)).not.toBe("#ff0000");
-
-    await set("S.protect = false");
-    hud = await win("HUD");
-    expect(hud.displayAffinity).toBe(0);
-    expect(pixel(box)).toBe("#ff0000");
-    await set('S.color = "#00ff00"');
-    expect(pixel(box)).toBe("#00ff00");
-    // The unpainted rest is the transparent backdrop: what is under the window, which is never the
-    // box's colour.
-    expect(["#ff0000", "#00ff00"]).not.toContain(pixel(clear));
-
-    await set("S.protect = true");
-    expect((await win("HUD")).displayAffinity).toBe(WDA_EXCLUDEFROMCAPTURE);
-    expect(pixel(box)).not.toBe("#00ff00");
-  }, T);
-
-  test("focusable is creation-time: changing it advises and changes nothing", async () => {
-    const since = (await app.logs(0)).next;
-    await set("S.focusable = true");
-    const { entries } = await app.logs(since);
-    expect(entries.some((l) => l.kind === "advisory" && /VnWindow focusable/.test(l.text))).toBe(true);
-    const hud = await win("HUD");
-    expect(hud.toolWindow).toBe(true);
-    expect(hud.noActivate).toBe(true);
-    expect(mouseActivate(BigInt(hud.hwnd), BigInt(hud.hwnd))).toBe(MA_NOACTIVATE);
-    await set("S.focusable = false");
-  }, T);
-
-  test("a cover overlay covers the monitor asked for by index, moves live, and falls back out loud", async () => {
-    const all = monitors();
-    expect(all.length).toBeGreaterThan(0);
-    await set("S.monitor = 0; S.coverVisible = true");
-    await sleep(500);
-    let cover = await win("Cover");
-    expect(cover.shown).toBe(true);
-    expect(cover.rect).toEqual(all[0]!);
-    expect(cover.toolWindow).toBe(true);
-    expect(cover.transparent).toBe(true);
-    expect(await overlayInForeground()).toBeNull();
-
-    if (all.length > 1) {
-      await set("S.monitor = 1");
+  test(
+    "opens as a tool window that is never activated: no taskbar button, no NonRudeHWND, not owned",
+    async () => {
+      const hud = await win("HUD");
       await sleep(500);
-      expect((await win("Cover")).rect).toEqual(all[1]!);
-    }
+      expect(hud.shown).toBe(true);
+      expect(hud.focusable).toBe(false);
+      expect(hud.toolWindow).toBe(true);
+      expect(hud.appWindow).toBe(false);
+      expect(hud.noActivate).toBe(true);
+      expect(hud.nonRude).toBe(false);
+      expect(hud.ownedByMain).toBe(false);
+      expect(hud.foreground).toBe(false);
+      expect(await overlayInForeground()).toBeNull();
+      expect((await app.logs(0)).entries.filter((l) => l.kind === "advisory" && /VnWindow/.test(l.text))).toEqual([]);
+    },
+    T,
+  );
 
-    const since = (await app.logs(0)).next;
-    await set("S.monitor = 99");
-    await sleep(500);
-    const { entries } = await app.logs(since);
-    expect(entries.some((l) => l.kind === "advisory" && /there is no monitor 99/.test(l.text))).toBe(true);
-    cover = await win("Cover");
-    expect(cover.rect).toEqual(cover.mainMonitor);
+  test(
+    "a click would not activate it; one on an ordinary gpui window would",
+    async () => {
+      const hud = BigInt((await win("HUD")).hwnd);
+      const main = BigInt((await app.send("screenshot", { backend: "print_window" })).hwnd);
+      expect(mouseActivate(hud, hud)).toBe(MA_NOACTIVATE);
+      expect(mouseActivate(main, main)).toBe(MA_ACTIVATE);
+      expect(await overlayInForeground()).toBeNull();
+    },
+    T,
+  );
 
-    await set("S.coverVisible = false");
-    expect((await win("Cover")).shown).toBe(false);
-    expect(await overlayInForeground()).toBeNull();
-  }, T);
+  test(
+    "click-through: layered + transparent, a click lands on the window under it, and back, live",
+    async () => {
+      let hud = await win("HUD");
+      const h = BigInt(hud.hwnd);
+      expect(hud.ignoreMouseEvents).toBe(true);
+      expect(hud.layered).toBe(true);
+      expect(hud.transparent).toBe(true);
+      const box = screenPoint(h, 24, 24);
+      expect(under(box)).not.toBe(h);
+
+      await set("S.ignore = false");
+      hud = await win("HUD");
+      expect(hud.layered).toBe(false);
+      expect(hud.transparent).toBe(false);
+      expect(under(box)).toBe(h);
+
+      await set("S.ignore = true");
+      expect(under(box)).not.toBe(h);
+      expect(await overlayInForeground()).toBeNull();
+    },
+    T,
+  );
+
+  test(
+    "capture leaves it out; without contentProtection the screen shows it, and its new frames, while it is click-through",
+    async () => {
+      let hud = await win("HUD");
+      const h = BigInt(hud.hwnd);
+      const box = screenPoint(h, 24, 24);
+      const clear = screenPoint(h, 120, 70);
+      expect(hud.displayAffinity).toBe(WDA_EXCLUDEFROMCAPTURE);
+      expect(pixel(box)).not.toBe("#ff0000");
+
+      await set("S.protect = false");
+      hud = await win("HUD");
+      expect(hud.displayAffinity).toBe(0);
+      expect(pixel(box)).toBe("#ff0000");
+      await set('S.color = "#00ff00"');
+      expect(pixel(box)).toBe("#00ff00");
+      // The unpainted rest is the transparent backdrop: what is under the window, which is never the
+      // box's colour.
+      expect(["#ff0000", "#00ff00"]).not.toContain(pixel(clear));
+
+      await set("S.protect = true");
+      expect((await win("HUD")).displayAffinity).toBe(WDA_EXCLUDEFROMCAPTURE);
+      expect(pixel(box)).not.toBe("#00ff00");
+    },
+    T,
+  );
+
+  test(
+    "focusable is creation-time: changing it advises and changes nothing",
+    async () => {
+      const since = (await app.logs(0)).next;
+      await set("S.focusable = true");
+      const { entries } = await app.logs(since);
+      expect(entries.some((l) => l.kind === "advisory" && /VnWindow focusable/.test(l.text))).toBe(true);
+      const hud = await win("HUD");
+      expect(hud.toolWindow).toBe(true);
+      expect(hud.noActivate).toBe(true);
+      expect(mouseActivate(BigInt(hud.hwnd), BigInt(hud.hwnd))).toBe(MA_NOACTIVATE);
+      await set("S.focusable = false");
+    },
+    T,
+  );
+
+  test(
+    "a cover overlay covers the monitor asked for by index, moves live, and falls back out loud",
+    async () => {
+      const all = monitors();
+      expect(all.length).toBeGreaterThan(0);
+      await set("S.monitor = 0; S.coverVisible = true");
+      await sleep(500);
+      let cover = await win("Cover");
+      expect(cover.shown).toBe(true);
+      expect(cover.rect).toEqual(all[0]!);
+      expect(cover.toolWindow).toBe(true);
+      expect(cover.transparent).toBe(true);
+      expect(await overlayInForeground()).toBeNull();
+
+      if (all.length > 1) {
+        await set("S.monitor = 1");
+        await sleep(500);
+        expect((await win("Cover")).rect).toEqual(all[1]!);
+      }
+
+      const since = (await app.logs(0)).next;
+      await set("S.monitor = 99");
+      await sleep(500);
+      const { entries } = await app.logs(since);
+      expect(entries.some((l) => l.kind === "advisory" && /there is no monitor 99/.test(l.text))).toBe(true);
+      cover = await win("Cover");
+      expect(cover.rect).toEqual(cover.mainMonitor);
+
+      await set("S.coverVisible = false");
+      expect((await win("Cover")).shown).toBe(false);
+      expect(await overlayInForeground()).toBeNull();
+    },
+    T,
+  );
 });

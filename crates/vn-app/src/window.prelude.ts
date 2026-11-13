@@ -25,7 +25,10 @@
   const ro = (obj: object, name: string, get: () => unknown) =>
     Object.defineProperty(obj, name, { get, configurable: true, enumerable: true });
 
-  const normalizeTitle = (v: unknown) => String(v).replace(/[\t\n\f\r ]+/g, " ").replace(/^ | $/g, "");
+  const normalizeTitle = (v: unknown) =>
+    String(v)
+      .replace(/[\t\n\f\r ]+/g, " ")
+      .replace(/^ | $/g, "");
   let titleSlot = normalizeTitle(S.title);
   Object.defineProperty(document, "title", {
     get: () => titleSlot,
@@ -52,11 +55,17 @@
   }
 
   // Best-effort and clamped to the display's working area; a refused call is a silent no-op.
-  const BOUNDS_X = 1, BOUNDS_Y = 2, BOUNDS_W = 4, BOUNDS_H = 8, BOUNDS_CONTENT = 16;
+  const BOUNDS_X = 1,
+    BOUNDS_Y = 2,
+    BOUNDS_W = 4,
+    BOUNDS_H = 8,
+    BOUNDS_CONTENT = 16;
   const finite = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : undefined);
   const setBounds = (r: Partial<VnWindowRect> | null | undefined, content: boolean) => {
-    const x = finite(r && r.x), y = finite(r && r.y);
-    const w = finite(r && r.width), h = finite(r && r.height);
+    const x = finite(r && r.x),
+      y = finite(r && r.y);
+    const w = finite(r && r.width),
+      h = finite(r && r.height);
     let mask = content ? BOUNDS_CONTENT : 0;
     if (x !== undefined) mask |= BOUNDS_X;
     if (y !== undefined) mask |= BOUNDS_Y;
@@ -68,8 +77,7 @@
   globalThis.resizeBy = (dw, dh) =>
     setBounds({ width: S.innerWidth + (dw || 0), height: S.innerHeight + (dh || 0) }, true);
   globalThis.moveTo = (x, y) => setBounds({ x, y }, false);
-  globalThis.moveBy = (dx, dy) =>
-    setBounds({ x: S.outer.x + (dx || 0), y: S.outer.y + (dy || 0) }, false);
+  globalThis.moveBy = (dx, dy) => setBounds({ x: S.outer.x + (dx || 0), y: S.outer.y + (dy || 0) }, false);
 
   // `pagehide` fires once per close (a WM_CLOSE the app did not veto, or `close()`), as on any
   // unload. `beforeunload` is not asked again.
@@ -90,7 +98,7 @@
     if (!raise) {
       warn(
         "focus",
-        '`window.focus()` requested attention instead of raising the window — this host is ' +
+        "`window.focus()` requested attention instead of raising the window — this host is " +
           'configured not to steal focus. Set `window.focus: "raise"` in vn.config.json (or ' +
           "VN_WINDOW_FOCUS=raise) to allow raising.",
       );
@@ -112,7 +120,10 @@
   ro(orientation, "type", () => (S.screen.width >= S.screen.height ? "landscape-primary" : "portrait-primary"));
   ro(orientation, "angle", () => 0);
   orientation.lock = () => {
-    warn("orientation.lock", "`ScreenOrientation.lock()` rejects with NotSupportedError, as it does in every desktop browser.");
+    warn(
+      "orientation.lock",
+      "`ScreenOrientation.lock()` rejects with NotSupportedError, as it does in every desktop browser.",
+    );
     const e = new Error("screen.orientation.lock() is not available on this device.");
     e.name = "NotSupportedError";
     return Promise.reject(e);
@@ -180,8 +191,12 @@
   let fsOwnerRoot = 0;
   let fsOwnerElement: VnFullscreenTarget | null = null;
   const fsOwnerIsLive = () => fsOwnerRoot === 0 || fsOwnerElement?.__vnId === fsOwnerRoot;
-  const fsWindowState = () => !fsOwnerIsLive() ? false : typeof __vn_fullscreen_window === "function"
-    ? __vn_fullscreen_window(fsOwnerRoot) : refresh().fullscreen;
+  const fsWindowState = () =>
+    !fsOwnerIsLive()
+      ? false
+      : typeof __vn_fullscreen_window === "function"
+        ? __vn_fullscreen_window(fsOwnerRoot)
+        : refresh().fullscreen;
   const setFsWindow = (on: boolean) => {
     if (!fsOwnerIsLive()) return;
     if (typeof __vn_fullscreen_window === "function") __vn_fullscreen_window(fsOwnerRoot, on);
@@ -209,12 +224,21 @@
     if (viewport && (viewport.width <= 0 || viewport.height <= 0)) return false;
     if (viewport && fsOwnerRoot === 0) {
       const native = refresh();
-      if (target && native.clientWidth > 0 && native.clientHeight > 0 &&
-          !sameFsSize(viewport, { width: native.clientWidth, height: native.clientHeight })) return false;
+      if (
+        target &&
+        native.clientWidth > 0 &&
+        native.clientHeight > 0 &&
+        !sameFsSize(viewport, { width: native.clientWidth, height: native.clientHeight })
+      )
+        return false;
       // The native resize flag can precede the retained root's next paint.
       // Wait for the subsequent viewport publication as well as the layout.
-      if (globalThis.innerWidth > 0 && globalThis.innerHeight > 0 &&
-          !sameFsSize(viewport, { width: globalThis.innerWidth, height: globalThis.innerHeight })) return false;
+      if (
+        globalThis.innerWidth > 0 &&
+        globalThis.innerHeight > 0 &&
+        !sameFsSize(viewport, { width: globalThis.innerWidth, height: globalThis.innerHeight })
+      )
+        return false;
     }
     if (target) {
       const bounds = fsBox(target);
@@ -259,7 +283,10 @@
   const syncFsElement = () => {
     const target = fsStack[fsStack.length - 1];
     if (typeof __vn_fullscreen_element === "function") __vn_fullscreen_element(target?.__vnId ?? 0);
-    if (!target) { fsObserver?.disconnect(); fsObserver = null; }
+    if (!target) {
+      fsObserver?.disconnect();
+      fsObserver = null;
+    }
   };
   const leaveFsWindow = () => {
     if (!fsStack.length && !fsWindowWasFullscreen) setFsWindow(false);
@@ -275,8 +302,14 @@
   };
   const observeFsRemoval = () => {
     if (fsObserver) return;
-    const Observer = (globalThis as unknown as { MutationObserver?: new (callback: () => void) =>
-      { observe(target: unknown, options: object): void; disconnect(): void } }).MutationObserver;
+    const Observer = (
+      globalThis as unknown as {
+        MutationObserver?: new (callback: () => void) => {
+          observe(target: unknown, options: object): void;
+          disconnect(): void;
+        };
+      }
+    ).MutationObserver;
     if (!Observer) return;
     fsObserver = new Observer(() => {
       const previous = fsStack[fsStack.length - 1];
@@ -307,8 +340,8 @@
     if (fsStack[fsStack.length - 1] === el) return Promise.resolve();
     if (options?.keyboardLock) warn("fs.keyboardLock", "`keyboardLock` is ignored — there is no browser UI to lock.");
     if (options?.screen) warn("fs.screen", "The `screen` option needs the Window Management API.");
-    const ownerElement = el.ownerDocument && el.ownerDocument !== document
-      ? el.ownerDocument.documentElement ?? null : null;
+    const ownerElement =
+      el.ownerDocument && el.ownerDocument !== document ? (el.ownerDocument.documentElement ?? null) : null;
     const ownerRoot = ownerElement?.__vnId ?? 0;
     if (ownerElement && !ownerRoot) return Promise.reject(new TypeError("This element's window was closed"));
     if (fsStack.length && ownerRoot !== fsOwnerRoot) {
@@ -339,7 +372,8 @@
     return promise;
   };
   if (typeof Element === "function" && Element.prototype) Element.prototype.requestFullscreen = requestFullscreen;
-  if (document!.documentElement) (document!.documentElement as VnFullscreenTarget).requestFullscreen = requestFullscreen;
+  if (document!.documentElement)
+    (document!.documentElement as VnFullscreenTarget).requestFullscreen = requestFullscreen;
 
   // The area available to app content; `x` is non-zero when the controls sit on the left.
   // redjs creates `navigator` lazily.
@@ -349,9 +383,17 @@
   wco.getTitlebarAreaRect = () => {
     const r = S.titleBarArea;
     return {
-      x: r.x, y: r.y, width: r.width, height: r.height,
-      top: r.y, left: r.x, right: r.x + r.width, bottom: r.y + r.height,
-      toJSON() { return { ...r }; },
+      x: r.x,
+      y: r.y,
+      width: r.width,
+      height: r.height,
+      top: r.y,
+      left: r.x,
+      right: r.x + r.width,
+      bottom: r.y + r.height,
+      toJSON() {
+        return { ...r };
+      },
     };
   };
   wco.ongeometrychange = null;
@@ -431,8 +473,7 @@
   appWindow.startResizeDragging = () =>
     warn(
       "startResizeDragging",
-      "`startResizeDragging()` is not implemented — the window already has live resize borders on " +
-        "all four edges.",
+      "`startResizeDragging()` is not implemented — the window already has live resize borders on " + "all four edges.",
     );
   for (const name of ["setProgressBar", "setOverlayIcon", "setBadgeCount", "setSkipTaskbar", "setIcon"] as const) {
     appWindow[name] = () =>
@@ -449,7 +490,10 @@
   });
   Object.defineProperty(appWindow, "backdrop", {
     get: () => S.backdrop,
-    set: (v: unknown) => { __vn_window_set_backdrop(String(v)); refresh(); },
+    set: (v: unknown) => {
+      __vn_window_set_backdrop(String(v));
+      refresh();
+    },
     configurable: true,
     enumerable: true,
   });
@@ -460,13 +504,19 @@
   // and `prefers-color-scheme`. Read back as `backdrop` is.
   Object.defineProperty(appWindow, "theme", {
     get: () => S.theme,
-    set: (v: unknown) => { __vn_window_set_theme(String(v)); refresh(); },
+    set: (v: unknown) => {
+      __vn_window_set_theme(String(v));
+      refresh();
+    },
     configurable: true,
     enumerable: true,
   });
   Object.defineProperty(appWindow, "alwaysOnTop", {
     get: () => S.alwaysOnTop,
-    set: (v: unknown) => { __vn_window_set_always_on_top(!!v); refresh(); },
+    set: (v: unknown) => {
+      __vn_window_set_always_on_top(!!v);
+      refresh();
+    },
     configurable: true,
     enumerable: true,
   });
@@ -486,9 +536,19 @@
 
   // gpui fixes these at window creation.
   const CREATION_ONLY = [
-    "width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight",
-    "resizable", "minimizable", "maximizable", "closable", "movable",
-    "titleBarFallback", "focus",
+    "width",
+    "height",
+    "minWidth",
+    "minHeight",
+    "maxWidth",
+    "maxHeight",
+    "resizable",
+    "minimizable",
+    "maximizable",
+    "closable",
+    "movable",
+    "titleBarFallback",
+    "focus",
   ];
   // These need a different window style; changing it mid-session desyncs gpui's border_offset and
   // hit-test flags.
@@ -496,11 +556,26 @@
   const defineWindow = (opts: Record<string, unknown> | null | undefined) => {
     if (!opts || typeof opts !== "object") return;
     for (const key of Object.keys(opts)) {
-      if (key === "title") { document!.title = opts.title as string; continue; }
-      if (key === "backdrop") { appWindow.backdrop = opts.backdrop as string; continue; }
-      if (key === "alwaysOnTop") { appWindow.alwaysOnTop = opts.alwaysOnTop as boolean; continue; }
-      if (key === "titleBarHeight") { setOverlay(opts.titleBarHeight, -1); continue; }
-      if (key === "titleBarOverlay") { appWindow.setTitleBarOverlay(opts.titleBarOverlay as boolean); continue; }
+      if (key === "title") {
+        document!.title = opts.title as string;
+        continue;
+      }
+      if (key === "backdrop") {
+        appWindow.backdrop = opts.backdrop as string;
+        continue;
+      }
+      if (key === "alwaysOnTop") {
+        appWindow.alwaysOnTop = opts.alwaysOnTop as boolean;
+        continue;
+      }
+      if (key === "titleBarHeight") {
+        setOverlay(opts.titleBarHeight, -1);
+        continue;
+      }
+      if (key === "titleBarOverlay") {
+        appWindow.setTitleBarOverlay(opts.titleBarOverlay as boolean);
+        continue;
+      }
       if (STYLE_ONLY.includes(key)) {
         warn(
           `style-only:${key}`,
@@ -598,8 +673,7 @@
     refresh,
     warn,
     // Debug hook: WM_NCHITTEST cannot be synthesised, so this reports the last painted frame's hitboxes.
-    controlHitboxes: (windowId?: number): VnWindowHitbox[] =>
-      JSON.parse(__vn_window_hitboxes(windowId)),
+    controlHitboxes: (windowId?: number): VnWindowHitbox[] => JSON.parse(__vn_window_hitboxes(windowId)),
     cursorPos: (): VnWindowCursorPos => JSON.parse(__vn_window_cursor()),
     state: () => S,
   };

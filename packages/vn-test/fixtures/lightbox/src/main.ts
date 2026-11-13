@@ -1,4 +1,15 @@
-import { createApp, defineComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, Teleport, VnWindow } from "vue-native";
+import {
+  createApp,
+  defineComponent,
+  h,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  Teleport,
+  VnWindow,
+} from "vue-native";
 
 interface Item {
   thumb: string;
@@ -50,7 +61,9 @@ const S = reactive({
 
 const lb = ref<HTMLElement | null>(null);
 const pic = ref<HTMLElement | null>(null);
-const viewer = ref<{ mapFromMain(el: unknown): { x: number; y: number; width: number; height: number } | null } | null>(null);
+const viewer = ref<{ mapFromMain(el: unknown): { x: number; y: number; width: number; height: number } | null } | null>(
+  null,
+);
 const thumbs: HTMLElement[] = [];
 
 function open(i: number) {
@@ -100,7 +113,14 @@ function frame() {
   const box = pic.value?.parentElement?.getBoundingClientRect();
   const view = lb.value?.getBoundingClientRect();
   if (!box || !view || !(box.width > 0) || !(view.width > 0)) return null;
-  return { cx: box.left + box.width / 2, cy: box.top + box.height / 2, w: box.width, h: box.height, vw: view.width, vh: view.height };
+  return {
+    cx: box.left + box.width / 2,
+    cy: box.top + box.height / 2,
+    w: box.width,
+    h: box.height,
+    vw: view.width,
+    vh: view.height,
+  };
 }
 
 function zoomReset() {
@@ -209,7 +229,9 @@ async function savePicture() {
   S.menu = null;
   if (!item) return;
   try {
-    const handle = await (globalThis as unknown as { showSaveFilePicker(o: unknown): Promise<FileSystemFileHandle> }).showSaveFilePicker({
+    const handle = await (
+      globalThis as unknown as { showSaveFilePicker(o: unknown): Promise<FileSystemFileHandle> }
+    ).showSaveFilePicker({
       suggestedName: `picture-${S.index}.png`,
       types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
     });
@@ -338,7 +360,16 @@ function lightbox() {
       id: "lb",
       ref: lb,
       tabindex: 0,
-      style: { position: "absolute", left: "0", top: "0", right: "0", bottom: "0", background: "rgba(0, 0, 0, 0.85)", outline: "none", overflow: "hidden" },
+      style: {
+        position: "absolute",
+        left: "0",
+        top: "0",
+        right: "0",
+        bottom: "0",
+        background: "rgba(0, 0, 0, 0.85)",
+        outline: "none",
+        overflow: "hidden",
+      },
       onKeydown,
       onClick: onDimClick,
       onMousedown: () => (dragged = false),
@@ -347,8 +378,16 @@ function lightbox() {
       onMouseup: onRelease,
     },
     [
-      h("div", { id: "lb-stage", style: { position: "absolute", left: "5%", top: "5%", width: "90%", height: "90%" } }, [content]),
-      h("div", { id: "lb-counter", style: { position: "absolute", left: "16px", bottom: "16px", color: "#fff" } }, `${index + 1} / ${S.items.length}`),
+      h(
+        "div",
+        { id: "lb-stage", style: { position: "absolute", left: "5%", top: "5%", width: "90%", height: "90%" } },
+        [content],
+      ),
+      h(
+        "div",
+        { id: "lb-counter", style: { position: "absolute", left: "16px", bottom: "16px", color: "#fff" } },
+        `${index + 1} / ${S.items.length}`,
+      ),
       hint(),
       menu(),
     ],
@@ -390,7 +429,14 @@ const InlineVideo = defineComponent({
 createApp({
   setup() {
     const onShow = (e: Shown) =>
-      S.events.push({ kind: "show", index: S.index, firstFrameMs: e.firstFrameMs, jsMs: performance.now() - S.t0, width: e.width, height: e.height });
+      S.events.push({
+        kind: "show",
+        index: S.index,
+        firstFrameMs: e.firstFrameMs,
+        jsMs: performance.now() - S.t0,
+        width: e.width,
+        height: e.height,
+      });
     const onHide = () => S.events.push({ kind: "hide", index: S.index, jsMs: performance.now() - S.t0 });
     return () =>
       h("div", { id: "app", style: { padding: "12px", display: "flex", flexDirection: "column", gap: "8px" } }, [
@@ -447,7 +493,9 @@ createApp({
           },
           {
             default: () =>
-              S.pinOpen && S.pinSrc ? h("img", { id: "pin-img", src: S.pinSrc, style: { width: "200px", height: "150px" } }) : null,
+              S.pinOpen && S.pinSrc
+                ? h("img", { id: "pin-img", src: S.pinSrc, style: { width: "200px", height: "150px" } })
+                : null,
           },
         ),
       ]);

@@ -10,7 +10,9 @@ const results: Record<string, unknown> = {};
 const showLate = ref(false);
 const face = (family: string) => [...fonts].find((f: Any) => f.family === family);
 for (const type of ["loading", "loadingdone", "loadingerror"]) {
-  fonts.addEventListener(type, (e: Any) => events.push(`${type}:${[...e.fontfaces].map((f: Any) => f.family).join(",")}`));
+  fonts.addEventListener(type, (e: Any) =>
+    events.push(`${type}:${[...e.fontfaces].map((f: Any) => f.family).join(",")}`),
+  );
 }
 
 const scenarios: Record<string, () => Promise<unknown>> = {
@@ -20,7 +22,13 @@ const scenarios: Record<string, () => Promise<unknown>> = {
     const first = face.status;
     await face.loaded;
     fonts.add(face);
-    return { first, status: face.status, has: fonts.has(face), size: fonts.size, check: fonts.check("16px 'VN Script'") };
+    return {
+      first,
+      status: face.status,
+      has: fonts.has(face),
+      size: fonts.size,
+      check: fonts.check("16px 'VN Script'"),
+    };
   },
   async check() {
     const tengwar = await fonts.load("16px 'VN Tengwar'", "");

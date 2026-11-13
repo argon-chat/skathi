@@ -74,19 +74,35 @@ const flat = (s: Stats, ref: number) => {
 };
 
 describe("a 1080 px checkerboard at 40 px is the reference grey", () => {
-  test("<img>", async () => {
-    flat(await settle("#img"), await reference());
-  }, T);
+  test(
+    "<img>",
+    async () => {
+      flat(await settle("#img"), await reference());
+    },
+    T,
+  );
 
-  test("CSS background-image", async () => {
-    flat(await settle("#bg"), await reference());
-  }, T);
+  test(
+    "CSS background-image",
+    async () => {
+      flat(await settle("#bg"), await reference());
+    },
+    T,
+  );
 
-  test("a still <canvas>", async () => {
-    flat(await settle("#cv"), await reference());
-  }, T);
+  test(
+    "a still <canvas>",
+    async () => {
+      flat(await settle("#cv"), await reference());
+    },
+    T,
+  );
 
-  test("a 1531 px <img>, whose copy is made off the painting thread", async () => {
-    flat(await settle("#big"), await reference());
-  }, T);
+  test(
+    "a 1531 px <img>, whose copy is made off the painting thread",
+    async () => {
+      flat(await settle("#big"), await reference());
+    },
+    T,
+  );
 });

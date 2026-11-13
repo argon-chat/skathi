@@ -62,7 +62,8 @@ export function parseParts(list: unknown, where: string): Part[] {
   if (!Array.isArray(items)) throw new ConfigError(`${where} must be a list of parts (${OPTIONAL.join(", ")})`);
   const out = new Set<Part>();
   for (const p of items) {
-    if (!isPart(p)) throw new ConfigError(`${where}: ${JSON.stringify(p)} is not a part — known parts are ${OPTIONAL.join(", ")}`);
+    if (!isPart(p))
+      throw new ConfigError(`${where}: ${JSON.stringify(p)} is not a part — known parts are ${OPTIONAL.join(", ")}`);
     out.add(p);
   }
   return OPTIONAL.filter((p) => out.has(p));
@@ -164,14 +165,24 @@ function parsePacks(raw: unknown): PackConfig[] {
     if (!p || typeof p !== "object" || Array.isArray(p)) throw bad(`entry ${i} must be an object`);
     const { name, match, ...rest } = p as Record<string, unknown>;
     const extra = Object.keys(rest).filter((k) => !k.startsWith("$"));
-    if (extra.length) throw bad(`entry ${i} has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")} — known keys are name, match`);
+    if (extra.length)
+      throw bad(
+        `entry ${i} has unknown key(s) ${extra.map((k) => JSON.stringify(k)).join(", ")} — known keys are name, match`,
+      );
     if (typeof name !== "string" || !PACK_NAME.test(name) || name === "app") {
-      throw bad(`entry ${i}: "name" must be lowercase letters, digits, "-" or "_" (and not "app") — it names the file <name>.vnpk`);
+      throw bad(
+        `entry ${i}: "name" must be lowercase letters, digits, "-" or "_" (and not "app") — it names the file <name>.vnpk`,
+      );
     }
     if (seen.has(name)) throw bad(`two packs are named ${JSON.stringify(name)}`);
     seen.add(name);
-    if (match !== undefined && (!Array.isArray(match) || !match.length || match.some((m) => typeof m !== "string" || !m.trim()))) {
-      throw bad(`${JSON.stringify(name)}: "match" must be a non-empty array of globs over asset keys, or left out to take the rest`);
+    if (
+      match !== undefined &&
+      (!Array.isArray(match) || !match.length || match.some((m) => typeof m !== "string" || !m.trim()))
+    ) {
+      throw bad(
+        `${JSON.stringify(name)}: "match" must be a non-empty array of globs over asset keys, or left out to take the rest`,
+      );
     }
     return { name, match: match === undefined ? null : (match as string[]).map((m) => m.trim()) };
   });
@@ -207,7 +218,18 @@ const TOP_LEVEL = new Set([
 const SCHEME = /^[a-z][a-z0-9+.-]{0,62}$/;
 /** Schemes an app may never claim; the host refuses them too, this makes it a build error. */
 const RESERVED_SCHEMES = new Set([
-  "http", "https", "file", "ftp", "mailto", "tel", "data", "blob", "javascript", "about", "vbscript", "search-ms",
+  "http",
+  "https",
+  "file",
+  "ftp",
+  "mailto",
+  "tel",
+  "data",
+  "blob",
+  "javascript",
+  "about",
+  "vbscript",
+  "search-ms",
 ]);
 /** An id names a kernel object and a registry value: keep it to a safe alphabet. */
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -230,14 +252,19 @@ function readLaunch(raw: Record<string, unknown>, name: string): LaunchConfig {
   }
   const protocols: string[] = [];
   if (raw.protocols !== undefined) {
-    if (!Array.isArray(raw.protocols)) throw new ConfigError('vn.config.json "protocols" must be an array of scheme names');
+    if (!Array.isArray(raw.protocols))
+      throw new ConfigError('vn.config.json "protocols" must be an array of scheme names');
     for (const p of raw.protocols) {
       const s = typeof p === "string" ? p.trim().toLowerCase().replace(/:\/*$/, "") : "";
       if (!SCHEME.test(s)) {
-        throw new ConfigError(`vn.config.json "protocols": ${JSON.stringify(p)} is not a URL scheme (a letter, then letters, digits, "+", "-" or ".")`);
+        throw new ConfigError(
+          `vn.config.json "protocols": ${JSON.stringify(p)} is not a URL scheme (a letter, then letters, digits, "+", "-" or ".")`,
+        );
       }
       if (RESERVED_SCHEMES.has(s) || s.startsWith("ms-")) {
-        throw new ConfigError(`vn.config.json "protocols": "${s}" belongs to the browser or to Windows and cannot be registered by an app`);
+        throw new ConfigError(
+          `vn.config.json "protocols": "${s}" belongs to the browser or to Windows and cannot be registered by an app`,
+        );
       }
       if (!protocols.includes(s)) protocols.push(s);
     }
@@ -249,7 +276,17 @@ function readLaunch(raw: Record<string, unknown>, name: string): LaunchConfig {
     protocols,
   };
 }
-const WINDOWS_KEYS = new Set(["exeName", "icon", "company", "copyright", "description", "console", "host", "features", "without"]);
+const WINDOWS_KEYS = new Set([
+  "exeName",
+  "icon",
+  "company",
+  "copyright",
+  "description",
+  "console",
+  "host",
+  "features",
+  "without",
+]);
 const MACOS_KEYS = new Set([
   "bundleId",
   "exeName",
@@ -277,7 +314,9 @@ function readMacos(
   for (const key of Object.keys(m)) {
     if (key.startsWith("$")) continue;
     if (!MACOS_KEYS.has(key)) {
-      throw new ConfigError(`vn.config.json "macos": unknown key ${JSON.stringify(key)} — known keys are ${[...MACOS_KEYS].join(", ")}`);
+      throw new ConfigError(
+        `vn.config.json "macos": unknown key ${JSON.stringify(key)} — known keys are ${[...MACOS_KEYS].join(", ")}`,
+      );
     }
   }
   const where = (k: string) => `vn.config.json macos.${k}`;
@@ -306,7 +345,9 @@ function readMacos(
 
   const min = str(m.minimumSystemVersion, where("minimumSystemVersion")) ?? MACOS_MINIMUM;
   if (!/^\d+(\.\d+){0,2}$/.test(min)) {
-    throw new ConfigError(`vn.config.json "macos.minimumSystemVersion": ${JSON.stringify(min)} is not a version like "13.0"`);
+    throw new ConfigError(
+      `vn.config.json "macos.minimumSystemVersion": ${JSON.stringify(min)} is not a version like "13.0"`,
+    );
   }
   const [maj = 0, minor = 0] = min.split(".").map(Number);
   const [wantMaj = 0, wantMinor = 0] = MACOS_MINIMUM.split(".").map(Number);
@@ -322,7 +363,9 @@ function readMacos(
     if (m.sign === false) sign = false;
     else if (typeof m.sign === "string" && m.sign.trim()) sign = m.sign.trim();
     else {
-      throw new ConfigError('vn.config.json "macos.sign" must be a codesign identity, "-" (ad hoc) or false (leave unsigned)');
+      throw new ConfigError(
+        'vn.config.json "macos.sign" must be a codesign identity, "-" (ad hoc) or false (leave unsigned)',
+      );
     }
   }
 
@@ -334,7 +377,9 @@ function readMacos(
   }
 
   const exeName =
-    sanitizeExeName(str(m.exeName, where("exeName")) ?? fallback.productName) || sanitizeExeName(fallback.name) || "app";
+    sanitizeExeName(str(m.exeName, where("exeName")) ?? fallback.productName) ||
+    sanitizeExeName(fallback.name) ||
+    "app";
   return {
     bundleId,
     bundleIdFrom: explicitId ? "macos.bundleId" : "id",
@@ -371,7 +416,10 @@ export function resolveApp(target: string): { appRoot: string; entry: string } {
 }
 
 export function sanitizeExeName(name: string): string {
-  let s = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "").trim().replace(/[. ]+$/, "");
+  let s = name
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "")
+    .trim()
+    .replace(/[. ]+$/, "");
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(s)) s += "-app";
   return s.slice(0, 120);
 }
@@ -457,13 +505,20 @@ export function loadAppConfig(target: string, options: { configPath?: string; pl
   // Vite's `publicDir`, opt-in here: on by default it would re-key a package that already ships a public/ directory.
   let publicDir: string | null = null;
   if (raw.publicDir !== undefined && raw.publicDir !== false) {
-    const p = typeof raw.publicDir === "string" ? raw.publicDir.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "") : "";
+    const p =
+      typeof raw.publicDir === "string"
+        ? raw.publicDir.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "")
+        : "";
     if (!p || p.startsWith("/") || /^[a-zA-Z]:/.test(p) || p.split("/").includes("..")) {
-      throw new ConfigError('vn.config.json "publicDir" must be a directory relative to the app root, inside it (or false)');
+      throw new ConfigError(
+        'vn.config.json "publicDir" must be a directory relative to the app root, inside it (or false)',
+      );
     }
     const abs = join(appRoot, p);
     if (!existsSync(abs) || !statSync(abs).isDirectory()) {
-      warnings.push(`vn.config.json "publicDir": ${JSON.stringify(p)} is not a directory — nothing is packaged from it`);
+      warnings.push(
+        `vn.config.json "publicDir": ${JSON.stringify(p)} is not a directory — nothing is packaged from it`,
+      );
     }
     publicDir = p;
   }
@@ -486,17 +541,19 @@ export function loadAppConfig(target: string, options: { configPath?: string; pl
         );
       }
     }
-    windows.exeName = str(w.exeName, where('windows.exeName'));
-    windows.icon = str(w.icon, where('windows.icon'));
-    windows.company = str(w.company, where('windows.company'));
-    windows.copyright = str(w.copyright, where('windows.copyright'));
-    windows.description = str(w.description, where('windows.description'));
+    windows.exeName = str(w.exeName, where("windows.exeName"));
+    windows.icon = str(w.icon, where("windows.icon"));
+    windows.company = str(w.company, where("windows.company"));
+    windows.copyright = str(w.copyright, where("windows.copyright"));
+    windows.description = str(w.description, where("windows.description"));
     if (w.console !== undefined) {
-      if (typeof w.console !== "boolean") throw new ConfigError('vn.config.json "windows.console" must be true or false');
+      if (typeof w.console !== "boolean")
+        throw new ConfigError('vn.config.json "windows.console" must be true or false');
       windows.console = w.console;
     }
     if (w.host !== undefined) {
-      if (typeof w.host !== "string") throw new ConfigError('vn.config.json "windows.host" must be a host variant, e.g. "no-devtools"');
+      if (typeof w.host !== "string")
+        throw new ConfigError('vn.config.json "windows.host" must be a host variant, e.g. "no-devtools"');
       try {
         partsLeftOut(w.host);
       } catch (e) {
@@ -531,10 +588,14 @@ export function loadAppConfig(target: string, options: { configPath?: string; pl
   );
   if (options.platform === "macos") {
     if (!macos.iconPath) {
-      warnings.push('no icon: set vn.config.json "macos.icon" (or "windows.icon") to a square .png or an .icns — the app gets the generic macOS icon');
+      warnings.push(
+        'no icon: set vn.config.json "macos.icon" (or "windows.icon") to a square .png or an .icns — the app gets the generic macOS icon',
+      );
     }
   } else if (!windows.icon) {
-    warnings.push('no icon: set vn.config.json "windows.icon" to an .ico or a square .png — the exe gets the default Windows icon');
+    warnings.push(
+      'no icon: set vn.config.json "windows.icon" to an .ico or a square .png — the exe gets the default Windows icon',
+    );
   }
 
   return {

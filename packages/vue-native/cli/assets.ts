@@ -67,7 +67,9 @@ export function collectAssets(
   for (const pattern of patterns) {
     const clean = pattern.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
     if (!clean || clean.startsWith("/") || /^[a-zA-Z]:/.test(clean) || clean.split("/").includes("..")) {
-      throw new Error(`vn.config.json "assets": ${JSON.stringify(pattern)} must be relative to the app root and stay inside it`);
+      throw new Error(
+        `vn.config.json "assets": ${JSON.stringify(pattern)} must be relative to the app root and stay inside it`,
+      );
     }
     const matched: string[] = [];
     if (GLOB.test(clean)) {
@@ -87,7 +89,9 @@ export function collectAssets(
       if (key.startsWith("..") || excluded(key)) continue;
       kept++;
       if (fromPublic.has(key)) {
-        warnings.push(`${JSON.stringify(key)} is both in "${publicDir}/" and in "assets" — the ${publicDir}/ file is packaged`);
+        warnings.push(
+          `${JSON.stringify(key)} is both in "${publicDir}/" and in "assets" — the ${publicDir}/ file is packaged`,
+        );
         fromPublic.delete(key);
         continue;
       }

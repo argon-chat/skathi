@@ -56,10 +56,9 @@ const BUILTIN_ORDER = ["frost", "noise", "glow"];
 const PARAM_SLOTS = 8;
 
 function findSlangc(): string {
-  const candidates = [
-    process.env.VN_SLANGC_PATH,
-    join(REPO, "tools/slang/win-x64/slangc.exe"),
-  ].filter(Boolean) as string[];
+  const candidates = [process.env.VN_SLANGC_PATH, join(REPO, "tools/slang/win-x64/slangc.exe")].filter(
+    Boolean,
+  ) as string[];
   for (const c of candidates) if (existsSync(c)) return c;
   throw new Error(
     "slangc not found. Run `bun fetch-slang.ts` (sha256-pinned download) or set VN_SLANGC_PATH.\n" +
@@ -195,9 +194,7 @@ function parseDiagnostics(text: string, userLines: number, file: string): Diagno
 
 function renderDiagnostics(diags: Diagnostic[], fallback: string): string {
   if (!diags.length) return `  ${fallback.trim()}`;
-  return diags
-    .map((d) => `  ${d.file}:${d.line}${d.col ? `:${d.col}` : ""}: ${d.severity} ${d.message}`)
-    .join("\n");
+  return diags.map((d) => `  ${d.file}:${d.line}${d.col ? `:${d.col}` : ""}: ${d.severity} ${d.message}`).join("\n");
 }
 
 function sha256(text: string): string {
@@ -217,9 +214,7 @@ function readReflection(path: string): any {
     return JSON.parse(text);
   } catch (first) {
     const repaired = text.replace(/"(?:[^"\\\n]|\\.)*"/g, (match) =>
-      match
-        .replace(/\\'/g, "'")
-        .replace(/\\(?!["\\/bfnrtu])/g, "\\\\"),
+      match.replace(/\\'/g, "'").replace(/\\(?!["\\/bfnrtu])/g, "\\\\"),
     );
     try {
       return JSON.parse(repaired);
@@ -252,15 +247,21 @@ function runSlangc(
   }
 
   const args = [
-    "-target", "hlsl",
-    "-profile", "sm_5_0",
-    "-stage", "fragment",
-    "-entry", entry,
+    "-target",
+    "hlsl",
+    "-profile",
+    "sm_5_0",
+    "-stage",
+    "fragment",
+    "-entry",
+    entry,
     // Pinned even though no effect takes a matrix yet: slangc 2026.14 flipped this default.
     "-matrix-layout-row-major",
     ...includes.flatMap((dir) => ["-I", dir]),
-    "-reflection-json", reflectionPath,
-    "-o", output,
+    "-reflection-json",
+    reflectionPath,
+    "-o",
+    output,
     input,
   ];
   const run = spawnSync(slangc, args, { encoding: "utf8" });
@@ -387,7 +388,11 @@ function fieldComponents(type: any, where: string): number {
 
 const COMPONENT_SUFFIX = ["x", "y", "z", "w"];
 
-function buildSchema(reflection: any, structName: string, source: string): {
+function buildSchema(
+  reflection: any,
+  structName: string,
+  source: string,
+): {
   effect: EffectSchema;
   fields: Field[];
 } {
@@ -638,14 +643,7 @@ function compile(
   const { effect, fields } = buildSchema(probe.reflection, effectSource.struct, basename(effectSource.file));
 
   const wrapper = realWrapper(effect, fields);
-  const real = runSlangc(
-    slangc,
-    includes,
-    `${userSource}\n${wrapper}`,
-    "effect_fragment",
-    workdir,
-    stem,
-  );
+  const real = runSlangc(slangc, includes, `${userSource}\n${wrapper}`, "effect_fragment", workdir, stem);
   if (!real.ok) {
     throw new Error(
       `slangc failed for ${basename(effectSource.file)}:\n` +
@@ -750,8 +748,11 @@ function builtins(slangc: string, check: boolean) {
   }
 
   const ordered = BUILTIN_ORDER.map((n) => byName.get(n)!);
-  const compiled = compileAll(slangc, ordered, [MODULES], (s) =>
-    `crates/vn-effects/shaders/${basename(s.file)}+wrapper`,
+  const compiled = compileAll(
+    slangc,
+    ordered,
+    [MODULES],
+    (s) => `crates/vn-effects/shaders/${basename(s.file)}+wrapper`,
   );
   for (const c of compiled) {
     const stem = basename(c.file).replace(/\.slang$/, "");
@@ -765,22 +766,17 @@ function builtins(slangc: string, check: boolean) {
 
   const preludeSha = sha256(readFileSync(join(MODULES, "vn.slang"), "utf8"));
   const wanted: Array<[string, string]> = [
-    ...compiled.map((c) => [
-      join(GENERATED, `${basename(c.file).replace(/\.slang$/, "")}.hlsl`),
-      c.hlsl,
-    ] as [string, string]),
+    ...compiled.map(
+      (c) => [join(GENERATED, `${basename(c.file).replace(/\.slang$/, "")}.hlsl`), c.hlsl] as [string, string],
+    ),
     [
       join(GENERATED, "effects.json"),
-      manifestText("builtin", compiled, preludeSha, (f) =>
-        `crates/vn-effects/shaders/${basename(f)}`,
-      ),
+      manifestText("builtin", compiled, preludeSha, (f) => `crates/vn-effects/shaders/${basename(f)}`),
     ],
   ];
 
   if (check) {
-    const stale = wanted.filter(([path, text]) =>
-      !existsSync(path) || readFileSync(path, "utf8") !== text,
-    );
+    const stale = wanted.filter(([path, text]) => !existsSync(path) || readFileSync(path, "utf8") !== text);
     if (stale.length) {
       console.error("generated shader artifacts are stale — run `bun shaders.ts`:");
       for (const [path] of stale) console.error(`  ${path}`);
@@ -836,8 +832,7 @@ function appOnce(slangc: string, shadersDir: string, out: string): number {
     const previous = seen.get(c.effect.name);
     if (previous) {
       throw new Error(
-        `[VnEffect("${c.effect.name}")] is declared twice: ${basename(previous)} and ` +
-          basename(c.file),
+        `[VnEffect("${c.effect.name}")] is declared twice: ${basename(previous)} and ` + basename(c.file),
       );
     }
     seen.set(c.effect.name, c.file);
@@ -863,10 +858,7 @@ function appOnce(slangc: string, shadersDir: string, out: string): number {
 function app(slangc: string, appDir: string, out: string, watchMode: boolean) {
   const shadersDir = join(appDir, "shaders");
   if (!existsSync(shadersDir) || !statSync(shadersDir).isDirectory()) {
-    throw new Error(
-      `${appDir} has no shaders/ directory. An app's effects live in ` +
-        `${shadersDir}/<name>.slang`,
-    );
+    throw new Error(`${appDir} has no shaders/ directory. An app's effects live in ` + `${shadersDir}/<name>.slang`);
   }
 
   const once = () => {

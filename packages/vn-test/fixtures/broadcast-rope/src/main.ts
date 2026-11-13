@@ -89,7 +89,12 @@ const Connectors = {
       paths.value.length > 0
         ? h(
             "svg",
-            { id: "rope", class: "broadcast-connectors", "aria-hidden": "true", style: { height: `${height.value}px` } },
+            {
+              id: "rope",
+              class: "broadcast-connectors",
+              "aria-hidden": "true",
+              style: { height: `${height.value}px` },
+            },
             paths.value.map((p) => h("path", { key: p.from, d: p.d, "data-from": p.from })),
           )
         : null;

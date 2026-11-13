@@ -105,7 +105,13 @@ describe.skipIf(!isWindows)("stamping a real PE", () => {
     expect(mapped).not.toBeNull();
     expect(mapped!.length).toBe(stamped.payloadBytes);
     const pk = readVnpk(mapped!);
-    expect(pk.entries.map((e) => e.name)).toEqual([NAMES.META, NAMES.WINDOW, NAMES.SCRIPT, "assets/big.bin", "assets/hello.txt"]);
+    expect(pk.entries.map((e) => e.name)).toEqual([
+      NAMES.META,
+      NAMES.WINDOW,
+      NAMES.SCRIPT,
+      "assets/big.bin",
+      "assets/hello.txt",
+    ]);
     const hello = pk.find(KIND.ASSET, "assets/hello.txt")!;
     expect(new TextDecoder().decode(pk.bytes(hello))).toBe("hello from one\n");
     expect(stamped.dataAligned).toBe(true);

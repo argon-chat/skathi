@@ -36,11 +36,12 @@ import {
 } from "./store";
 
 const SELECT_REFRESH_MS = 4000;
-const request = computed(() => { void state.session; return panelRequest(); });
+const request = computed(() => {
+  void state.session;
+  return panelRequest();
+});
 
-const mainH = computed(() =>
-  mainHeight(state.consoleOpen, state.consoleHeight, !!state.error),
-);
+const mainH = computed(() => mainHeight(state.consoleOpen, state.consoleHeight, !!state.error));
 
 const dragFrom = ref(0);
 const dragBase = ref(0);
@@ -49,8 +50,7 @@ function startDrag(which: "tree" | "console" | "net", event: VnMouseEvent): void
   if (event.button !== 0) return;
   state.dragging = which;
   dragFrom.value = which === "console" ? event.clientY : event.clientX;
-  dragBase.value =
-    which === "tree" ? state.treeWidth : which === "net" ? state.netListWidth : state.consoleHeight;
+  dragBase.value = which === "tree" ? state.treeWidth : which === "net" ? state.netListWidth : state.consoleHeight;
 }
 
 function onDrag(event: VnMouseEvent): void {
@@ -91,13 +91,15 @@ function onKey(event: VnKeyboardEvent): void {
   }
   if (ctrl && "12345".includes(event.key)) {
     event.preventDefault();
-    setTab((["elements", "network", "performance", "storage", "targets"] as const)[
-      Number(event.key) - 1
-    ]);
+    setTab((["elements", "network", "performance", "storage", "targets"] as const)[Number(event.key) - 1]);
     return;
   }
   if (event.key === "Escape") {
-    if (state.picking) { event.preventDefault(); void cancelPick(); return; }
+    if (state.picking) {
+      event.preventDefault();
+      void cancelPick();
+      return;
+    }
     if (ui.menu) {
       closeMenu();
       return;
@@ -130,7 +132,9 @@ onMounted(async () => {
 
   every(150, () => pickStep());
   every(3000, captureHeartbeat);
-  every(3000, () => { void refreshTargets(); });
+  every(3000, () => {
+    void refreshTargets();
+  });
   every(SELECT_REFRESH_MS, () => {
     if (state.selected !== null && state.status === "attached" && !state.picking) {
       highlight(state.selected, SELECT_REFRESH_MS + 2000);
@@ -145,7 +149,6 @@ onMounted(async () => {
   });
   every(1000, () => pollFallback());
   // Heap/address-space walks are explicit snapshots, never a periodic UI task.
-
 });
 
 onUnmounted(() => {
@@ -177,8 +180,19 @@ onUnmounted(() => {
         <StylesPanel :height="mainH" />
       </template>
       <NetworkPanel v-else-if="state.tab === 'network'" :height="mainH" @drag="startDrag('net', $event)" />
-      <PerfPanel v-else-if="state.tab === 'performance'" :height="mainH" :request="request" :session-key="state.session" @recording-change="setCaptureActive" />
-      <StoragePanel v-else-if="state.tab === 'storage'" :height="mainH" :request="request" :session-key="state.session" />
+      <PerfPanel
+        v-else-if="state.tab === 'performance'"
+        :height="mainH"
+        :request="request"
+        :session-key="state.session"
+        @recording-change="setCaptureActive"
+      />
+      <StoragePanel
+        v-else-if="state.tab === 'storage'"
+        :height="mainH"
+        :request="request"
+        :session-key="state.session"
+      />
       <TargetsPanel v-else :height="mainH" />
     </div>
 
@@ -191,21 +205,15 @@ onUnmounted(() => {
     <ConsolePanel v-if="state.consoleOpen" :height="state.consoleHeight" />
 
     <footer class="statusbar mono">
-      <span v-if="state.picking" class="mode">
-        ⌖ click an element in the app · Esc to cancel
-      </span>
+      <span v-if="state.picking" class="mode"> ⌖ click an element in the app · Esc to cancel </span>
       <span v-else-if="ui.flash" class="flash" :class="{ bad: ui.flashBad }">{{ ui.flash }}</span>
       <span v-else class="hint">
         Ctrl+Shift+C inspect · Ctrl+F find · Esc console · Ctrl+1…5 panels · Ctrl+` prompt · Ctrl+C copy row
       </span>
       <span class="spacer"></span>
-      <span v-if="state.tab === 'elements' && state.selected !== null" class="fact"
-        >node {{ state.selected }}</span
-      >
+      <span v-if="state.tab === 'elements' && state.selected !== null" class="fact">node {{ state.selected }}</span>
       <span class="fact">{{ state.rows.length }} rows</span>
-      <span class="fact" :class="{ live: state.pushLive }">{{
-        state.pushLive ? "push" : "poll"
-      }}</span>
+      <span class="fact" :class="{ live: state.pushLive }">{{ state.pushLive ? "push" : "poll" }}</span>
     </footer>
 
     <div v-if="state.dragging" class="shield" @mousemove="onDrag" @mouseup="endDrag"></div>

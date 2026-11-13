@@ -1,12 +1,12 @@
 # Vendored libvpx
 
-| | |
-| --- | --- |
-| upstream | <https://chromium.googlesource.com/webm/libvpx> (mirror <https://github.com/webmproject/libvpx>) |
-| release | **v1.17.0** "Yellowbilled Duck" (2026-08-07), commit `6df3ec34557879fff673706f4a1d9fbd0f3a6f0e` |
-| tarball | `https://github.com/webmproject/libvpx/archive/refs/tags/v1.17.0.tar.gz` |
-| sha256 | `1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a` |
-| licence | BSD 3-Clause (`libvpx/LICENSE`) plus Google's Additional IP Rights Grant for the WebM codecs (`libvpx/PATENTS`); contributors in `libvpx/AUTHORS` |
+|          |                                                                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| upstream | <https://chromium.googlesource.com/webm/libvpx> (mirror <https://github.com/webmproject/libvpx>)                                                  |
+| release  | **v1.17.0** "Yellowbilled Duck" (2026-08-07), commit `6df3ec34557879fff673706f4a1d9fbd0f3a6f0e`                                                   |
+| tarball  | `https://github.com/webmproject/libvpx/archive/refs/tags/v1.17.0.tar.gz`                                                                          |
+| sha256   | `1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a`                                                                                |
+| licence  | BSD 3-Clause (`libvpx/LICENSE`) plus Google's Additional IP Rights Grant for the WebM codecs (`libvpx/PATENTS`); contributors in `libvpx/AUTHORS` |
 
 `libvpx/` is **pristine**: every file in it is byte-for-byte upstream, and
 nothing in it is edited. What this crate changes about libvpx it changes from
@@ -24,11 +24,11 @@ decodes the same files with.
 
 ## What is vendored
 
-| what | |
-| --- | --- |
-| `sources.txt` | the 53 C files `build.rs` compiles: 44 for every target, 9 x86 intrinsics files |
-| the headers those reach | 81, found by following `#include "..."` from the sources and from the generated headers |
-| `LICENSE`, `PATENTS`, `AUTHORS` | the licence terms, next to the code they cover |
+| what                            |                                                                                         |
+| ------------------------------- | --------------------------------------------------------------------------------------- |
+| `sources.txt`                   | the 53 C files `build.rs` compiles: 44 for every target, 9 x86 intrinsics files         |
+| the headers those reach         | 81, found by following `#include "..."` from the sources and from the generated headers |
+| `LICENSE`, `PATENTS`, `AUTHORS` | the licence terms, next to the code they cover                                          |
 
 137 files, 1.5 MB, out of the release's 27 MB. **Not** vendored:
 
@@ -49,11 +49,11 @@ configurations, both made by libvpx's own `configure` with
 `--disable-vp8 --disable-vp9-encoder --enable-vp9-decoder --disable-multithread --size-limit=4096x4096`
 (plus the usual `--disable-examples/tools/docs/unit-tests/webm-io/libyuv/postproc`):
 
-| `config/` | target | what it is |
-| --- | --- | --- |
-| `x86_64-msvc/` | `configure --target=x86_64-win64-vs17` | x86_64 with MSVC: SSE2…AVX2 intrinsics, runtime CPU detection |
-| `generic/` | `configure --target=generic-gnu` | every other target: C only |
-| `vpx_version.h` | `build/make/version.sh` | shared |
+| `config/`       | target                                 | what it is                                                    |
+| --------------- | -------------------------------------- | ------------------------------------------------------------- |
+| `x86_64-msvc/`  | `configure --target=x86_64-win64-vs17` | x86_64 with MSVC: SSE2…AVX2 intrinsics, runtime CPU detection |
+| `generic/`      | `configure --target=generic-gnu`       | every other target: C only                                    |
+| `vpx_version.h` | `build/make/version.sh`                | shared                                                        |
 
 `VN_VPX_CONFIG=generic` forces the C build on x86_64 MSVC as well: the tests
 use it as the reference (below).

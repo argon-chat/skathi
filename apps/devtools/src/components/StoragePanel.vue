@@ -73,7 +73,12 @@ function size(value: string): string {
       </button>
     </header>
 
-    <IndexedDbPanel v-if="indexed" :height="Math.max(0, props.height - PANE_HEAD_H - 1)" :request="request" :session-key="sessionKey" />
+    <IndexedDbPanel
+      v-if="indexed"
+      :height="Math.max(0, props.height - PANE_HEAD_H - 1)"
+      :request="request"
+      :session-key="sessionKey"
+    />
     <div v-else-if="state.storageError" class="empty t-red">{{ state.storageError }}</div>
 
     <div v-else class="body">
@@ -101,9 +106,7 @@ function size(value: string): string {
             </span>
           </template>
           <template v-else>
-            <span class="c-val" :title="entry.value" @click="startEdit(entry.key, entry.value)">{{
-              entry.value
-            }}</span>
+            <span class="c-val" :title="entry.value" @click="startEdit(entry.key, entry.value)">{{ entry.value }}</span>
             <span class="c-size">{{ size(entry.value) }}</span>
             <span class="c-act">
               <span class="btn" @click="startEdit(entry.key, entry.value)">edit</span>
@@ -113,8 +116,8 @@ function size(value: string): string {
         </div>
         <div v-if="!state.storage.length" class="empty">
           This area is empty. Add a key below, or run
-          <b class="mono">localStorage.setItem("k","v")</b> in the console — both write to the same
-          place, because this panel goes through the app's own JS.
+          <b class="mono">localStorage.setItem("k","v")</b> in the console — both write to the same place, because this
+          panel goes through the app's own JS.
         </div>
       </div>
 
@@ -141,8 +144,15 @@ function size(value: string): string {
 </template>
 
 <style scoped>
-button.area { border: 0; background: transparent; cursor: pointer; }
-button:focus-visible { outline: 2px solid #6cb6ff; outline-offset: -2px; }
+button.area {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+button:focus-visible {
+  outline: 2px solid #6cb6ff;
+  outline-offset: -2px;
+}
 
 .storage {
   flex: 1;

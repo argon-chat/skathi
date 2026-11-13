@@ -99,175 +99,261 @@ beforeAll(async () => {
 }, HOST_T);
 
 describe("vn build", () => {
-  test("hello and shadcn each become one exe with no Rust toolchain on the machine", () => {
-    built.hello = cliBuild("hello", standardHost, "standard", "hello");
-    built.shadcn = cliBuild("shadcn", standardHost, "standard", "shadcn");
-    console.log(
-      `[package.spec] vn build: hello ${built.hello.ms} ms (stamp ${built.hello.json.stamp.ms.total} ms), ` +
-        `shadcn ${built.shadcn.ms} ms (stamp ${built.shadcn.json.stamp.ms.total} ms)`,
-    );
+  test(
+    "hello and shadcn each become one exe with no Rust toolchain on the machine",
+    () => {
+      built.hello = cliBuild("hello", standardHost, "standard", "hello");
+      built.shadcn = cliBuild("shadcn", standardHost, "standard", "shadcn");
+      console.log(
+        `[package.spec] vn build: hello ${built.hello.ms} ms (stamp ${built.hello.json.stamp.ms.total} ms), ` +
+          `shadcn ${built.shadcn.ms} ms (stamp ${built.shadcn.json.stamp.ms.total} ms)`,
+      );
 
-    const cases = [
-      { key: "hello", file: "Hello.exe", product: "Hello", version: "0.1.0.0" },
-      { key: "shadcn", file: "ShadcnGallery.exe", product: "shadcn-vue gallery", version: "0.0.1.0" },
-    ];
-    for (const c of cases) {
-      const exe = built[c.key]!.exe;
-      bunExpect(exe.endsWith(c.file)).toBe(true);
-      const pe = readPe(exe);
-      bunExpect(pe.subsystem).toBe(SUBSYSTEM.GUI);
-      const has = (type: number, name: number | string) => pe.resources.some((r) => r.type === type && r.name === name);
-      bunExpect(has(RT.RCDATA, PAYLOAD_NAME)).toBe(true);
-      // gpui's window class loads icon 1 — the taskbar and Alt-Tab icon.
-      bunExpect(has(RT.GROUP_ICON, 1)).toBe(true);
-      bunExpect(shellIconCount(exe)).toBeGreaterThanOrEqual(1);
-      bunExpect(versionString(exe, "ProductName")).toBe(c.product);
-      bunExpect(versionString(exe, "FileDescription")).toBe(c.product);
-      bunExpect(versionString(exe, "FileVersion")).toBe(c.version);
-      bunExpect(versionString(exe, "OriginalFilename")).toBe(c.file);
-      bunExpect(built[c.key]!.json.stamp.dataAligned).toBe(true);
-    }
-    bunExpect(built.hello!.json.assets).toBeGreaterThan(0);
-  }, T);
+      const cases = [
+        { key: "hello", file: "Hello.exe", product: "Hello", version: "0.1.0.0" },
+        { key: "shadcn", file: "ShadcnGallery.exe", product: "shadcn-vue gallery", version: "0.0.1.0" },
+      ];
+      for (const c of cases) {
+        const exe = built[c.key]!.exe;
+        bunExpect(exe.endsWith(c.file)).toBe(true);
+        const pe = readPe(exe);
+        bunExpect(pe.subsystem).toBe(SUBSYSTEM.GUI);
+        const has = (type: number, name: number | string) =>
+          pe.resources.some((r) => r.type === type && r.name === name);
+        bunExpect(has(RT.RCDATA, PAYLOAD_NAME)).toBe(true);
+        // gpui's window class loads icon 1 — the taskbar and Alt-Tab icon.
+        bunExpect(has(RT.GROUP_ICON, 1)).toBe(true);
+        bunExpect(shellIconCount(exe)).toBeGreaterThanOrEqual(1);
+        bunExpect(versionString(exe, "ProductName")).toBe(c.product);
+        bunExpect(versionString(exe, "FileDescription")).toBe(c.product);
+        bunExpect(versionString(exe, "FileVersion")).toBe(c.version);
+        bunExpect(versionString(exe, "OriginalFilename")).toBe(c.file);
+        bunExpect(built[c.key]!.json.stamp.dataAligned).toBe(true);
+      }
+      bunExpect(built.hello!.json.assets).toBeGreaterThan(0);
+    },
+    T,
+  );
 });
 
 describe("a packaged hello", () => {
   let app: VnApp;
   let exe = "";
 
-  test("starts from its payload and publishes its handshake under %TEMP%, never beside the exe", async () => {
-    exe = runnable(built.hello!.exe, "hello");
-    app = await launch({ app: "hello", exe, packaged: "hello", window: [980, 720], label: "pkg-hello" });
-    opened.push(app);
-    bunExpect(app.slotDir).toBe(packagedSlot("hello", app.pid));
-    bunExpect(app.slotDir.startsWith(join(tmpdir(), "vue-native", "apps", "hello"))).toBe(true);
-    bunExpect(existsSync(join(dirname(exe), "devtools.json"))).toBe(false);
-    bunExpect(await app.eval("typeof globalThis.__VN__")).toBe("undefined");
-  }, T);
+  test(
+    "starts from its payload and publishes its handshake under %TEMP%, never beside the exe",
+    async () => {
+      exe = runnable(built.hello!.exe, "hello");
+      app = await launch({ app: "hello", exe, packaged: "hello", window: [980, 720], label: "pkg-hello" });
+      opened.push(app);
+      bunExpect(app.slotDir).toBe(packagedSlot("hello", app.pid));
+      bunExpect(app.slotDir.startsWith(join(tmpdir(), "vue-native", "apps", "hello"))).toBe(true);
+      bunExpect(existsSync(join(dirname(exe), "devtools.json"))).toBe(false);
+      bunExpect(await app.eval("typeof globalThis.__VN__")).toBe("undefined");
+    },
+    T,
+  );
 
-  test("fetch() reads relative assets out of the payload; a miss is a 404 with an advisory", async () => {
-    const text = await evalAsync(app, "fetch('assets/hello.txt').then(r => r.text()).then(t => globalThis.__pkgText = t)", "__pkgText");
-    bunExpect(text).toBe(readFileSync(join(REPO, "apps", "hello", "assets", "hello.txt"), "utf8"));
-    const dotted = await evalAsync(app, "fetch('./assets/hello.txt?v=2').then(r => r.status).then(s => globalThis.__pkgDot = s)", "__pkgDot");
-    bunExpect(dotted).toBe(200);
-    const miss = await evalAsync(app, "fetch('assets/not-packaged.txt').then(r => r.status).then(s => globalThis.__pkgMiss = s)", "__pkgMiss");
-    bunExpect(miss).toBe(404);
-    // `launch()` starts the exe with the REPO as its cwd, where Cargo.toml exists: a miss must not
-    // fall through to the working directory.
-    bunExpect(existsSync(join(REPO, "Cargo.toml"))).toBe(true);
-    const cwd = await evalAsync(app, "fetch('Cargo.toml').then(r => r.status).then(s => globalThis.__pkgCwd = s)", "__pkgCwd");
-    bunExpect(cwd).toBe(404);
-    const { entries } = await app.logs(0);
-    bunExpect(entries.some((e) => e.kind === "advisory" && e.text.includes("not in this app's package"))).toBe(true);
-  }, T);
+  test(
+    "fetch() reads relative assets out of the payload; a miss is a 404 with an advisory",
+    async () => {
+      const text = await evalAsync(
+        app,
+        "fetch('assets/hello.txt').then(r => r.text()).then(t => globalThis.__pkgText = t)",
+        "__pkgText",
+      );
+      bunExpect(text).toBe(readFileSync(join(REPO, "apps", "hello", "assets", "hello.txt"), "utf8"));
+      const dotted = await evalAsync(
+        app,
+        "fetch('./assets/hello.txt?v=2').then(r => r.status).then(s => globalThis.__pkgDot = s)",
+        "__pkgDot",
+      );
+      bunExpect(dotted).toBe(200);
+      const miss = await evalAsync(
+        app,
+        "fetch('assets/not-packaged.txt').then(r => r.status).then(s => globalThis.__pkgMiss = s)",
+        "__pkgMiss",
+      );
+      bunExpect(miss).toBe(404);
+      // `launch()` starts the exe with the REPO as its cwd, where Cargo.toml exists: a miss must not
+      // fall through to the working directory.
+      bunExpect(existsSync(join(REPO, "Cargo.toml"))).toBe(true);
+      const cwd = await evalAsync(
+        app,
+        "fetch('Cargo.toml').then(r => r.status).then(s => globalThis.__pkgCwd = s)",
+        "__pkgCwd",
+      );
+      bunExpect(cwd).toBe(404);
+      const { entries } = await app.logs(0);
+      bunExpect(entries.some((e) => e.kind === "advisory" && e.text.includes("not in this app's package"))).toBe(true);
+    },
+    T,
+  );
 
-  test("<img> and <video> resolve relative srcs out of the payload", async () => {
-    await app.locator(".tab").nth(3).click();
-    await until("the 1080p clip's metadata", async () => /1920×1080/.test(await app.locator(".meta").first().textContent()));
-    await app.eval("document.querySelector('.relative-img').scrollIntoView(); 'ok'");
-    await sleep(600);
-    const box = (await app.query(".relative-img")).nodes[0]!.bounds!;
-    const shot = readPng(await app.screenshot());
-    const scale = shot.width / Number(await app.eval("window.innerWidth"));
-    const rect = { x: (box.x + 6) * scale, y: (box.y + 6) * scale, w: (box.w - 12) * scale, h: (box.h - 12) * scale };
-    const saturated = shot.count(rect, (_l, [r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) > 80);
-    bunExpect(saturated / (rect.w * rect.h)).toBeGreaterThan(0.25);
-    const { entries } = await app.logs(0);
-    bunExpect(entries.filter((e) => e.kind === "advisory" && e.text.includes('src="assets/'))).toEqual([]);
-  }, T);
+  test(
+    "<img> and <video> resolve relative srcs out of the payload",
+    async () => {
+      await app.locator(".tab").nth(3).click();
+      await until("the 1080p clip's metadata", async () =>
+        /1920×1080/.test(await app.locator(".meta").first().textContent()),
+      );
+      await app.eval("document.querySelector('.relative-img').scrollIntoView(); 'ok'");
+      await sleep(600);
+      const box = (await app.query(".relative-img")).nodes[0]!.bounds!;
+      const shot = readPng(await app.screenshot());
+      const scale = shot.width / Number(await app.eval("window.innerWidth"));
+      const rect = { x: (box.x + 6) * scale, y: (box.y + 6) * scale, w: (box.w - 12) * scale, h: (box.h - 12) * scale };
+      const saturated = shot.count(rect, (_l, [r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) > 80);
+      bunExpect(saturated / (rect.w * rect.h)).toBeGreaterThan(0.25);
+      const { entries } = await app.logs(0);
+      bunExpect(entries.filter((e) => e.kind === "advisory" && e.text.includes('src="assets/'))).toEqual([]);
+    },
+    T,
+  );
 
-  test("<lottie> plays a .tgs out of the payload", async () => {
-    await app.locator(".tab").nth(2).click();
-    await until("a completed lottie loop", async () => /fired [1-9]\d*×/.test(await app.locator(".loops").textContent()), 20_000);
-  }, T);
+  test(
+    "<lottie> plays a .tgs out of the payload",
+    async () => {
+      await app.locator(".tab").nth(2).click();
+      await until(
+        "a completed lottie loop",
+        async () => /fired [1-9]\d*×/.test(await app.locator(".loops").textContent()),
+        20_000,
+      );
+    },
+    T,
+  );
 
-  test("localStorage lives under %LOCALAPPDATA%\\<vn.config name>\\storage, not the exe's name", async () => {
-    const info = JSON.parse(await app.eval("__vn_storage_info()"));
-    bunExpect(info.folder.toLowerCase().endsWith("\\hello\\storage")).toBe(true);
-    bunExpect(info.folder.toLowerCase()).not.toContain("vn-app-vntest");
-  }, T);
+  test(
+    "localStorage lives under %LOCALAPPDATA%\\<vn.config name>\\storage, not the exe's name",
+    async () => {
+      const info = JSON.parse(await app.eval("__vn_storage_info()"));
+      bunExpect(info.folder.toLowerCase().endsWith("\\hello\\storage")).toBe(true);
+      bunExpect(info.folder.toLowerCase()).not.toContain("vn-app-vntest");
+    },
+    T,
+  );
 
-  test("the app logged nothing broken", async () => {
-    await app.expectNoErrors({ ignore: [/not in this app's package/, /127\.0\.0\.1:8731/] });
-  }, T);
+  test(
+    "the app logged nothing broken",
+    async () => {
+      await app.expectNoErrors({ ignore: [/not in this app's package/, /127\.0\.0\.1:8731/] });
+    },
+    T,
+  );
 });
 
 describe("two packaged apps side by side", () => {
-  test("hello and shadcn run at once with separate storage", async () => {
-    const hello = await launch({ app: "hello", exe: runnable(built.hello!.exe, "hello-b"), packaged: "hello", label: "pkg-hello-b" });
-    opened.push(hello);
-    const shadcn = await launch({ app: "shadcn", exe: runnable(built.shadcn!.exe, "shadcn"), packaged: "shadcn", label: "pkg-shadcn" });
-    opened.push(shadcn);
-    try {
-      bunExpect(hello.slotDir).not.toBe(shadcn.slotDir);
-      const hi = JSON.parse(await hello.eval("__vn_storage_info()"));
-      const sh = JSON.parse(await shadcn.eval("__vn_storage_info()"));
-      bunExpect(sh.folder.toLowerCase().endsWith("\\shadcn\\storage")).toBe(true);
-      bunExpect(hi.folder).not.toBe(sh.folder);
+  test(
+    "hello and shadcn run at once with separate storage",
+    async () => {
+      const hello = await launch({
+        app: "hello",
+        exe: runnable(built.hello!.exe, "hello-b"),
+        packaged: "hello",
+        label: "pkg-hello-b",
+      });
+      opened.push(hello);
+      const shadcn = await launch({
+        app: "shadcn",
+        exe: runnable(built.shadcn!.exe, "shadcn"),
+        packaged: "shadcn",
+        label: "pkg-shadcn",
+      });
+      opened.push(shadcn);
+      try {
+        bunExpect(hello.slotDir).not.toBe(shadcn.slotDir);
+        const hi = JSON.parse(await hello.eval("__vn_storage_info()"));
+        const sh = JSON.parse(await shadcn.eval("__vn_storage_info()"));
+        bunExpect(sh.folder.toLowerCase().endsWith("\\shadcn\\storage")).toBe(true);
+        bunExpect(hi.folder).not.toBe(sh.folder);
 
-      await hello.eval(`localStorage.setItem(${JSON.stringify(PROBE_KEY)}, 'from hello'); __vn_storage_flush()`);
-      bunExpect(await hello.eval(`localStorage.getItem(${JSON.stringify(PROBE_KEY)})`)).toBe("from hello");
-      bunExpect(await shadcn.eval(`String(localStorage.getItem(${JSON.stringify(PROBE_KEY)}))`)).toBe("null");
-      const after = JSON.parse(await hello.eval("__vn_storage_info()"));
-      if (!after.encrypted) {
-        bunExpect(readFileSync(after.file, "utf8")).toContain(PROBE_KEY);
-        const shFile = JSON.parse(await shadcn.eval("__vn_storage_info()")).file;
-        bunExpect(existsSync(shFile) ? readFileSync(shFile, "utf8") : "").not.toContain(PROBE_KEY);
+        await hello.eval(`localStorage.setItem(${JSON.stringify(PROBE_KEY)}, 'from hello'); __vn_storage_flush()`);
+        bunExpect(await hello.eval(`localStorage.getItem(${JSON.stringify(PROBE_KEY)})`)).toBe("from hello");
+        bunExpect(await shadcn.eval(`String(localStorage.getItem(${JSON.stringify(PROBE_KEY)}))`)).toBe("null");
+        const after = JSON.parse(await hello.eval("__vn_storage_info()"));
+        if (!after.encrypted) {
+          bunExpect(readFileSync(after.file, "utf8")).toContain(PROBE_KEY);
+          const shFile = JSON.parse(await shadcn.eval("__vn_storage_info()")).file;
+          bunExpect(existsSync(shFile) ? readFileSync(shFile, "utf8") : "").not.toContain(PROBE_KEY);
+        }
+      } finally {
+        await hello.eval(`localStorage.removeItem(${JSON.stringify(PROBE_KEY)}); __vn_storage_flush()`).catch(() => {});
+        await hello.close();
+        await shadcn.close();
       }
-    } finally {
-      await hello.eval(`localStorage.removeItem(${JSON.stringify(PROBE_KEY)}); __vn_storage_flush()`).catch(() => {});
-      await hello.close();
-      await shadcn.close();
-    }
-  }, T);
+    },
+    T,
+  );
 });
 
 describe("re-stamping", () => {
-  test("a stamped exe takes a new payload and keeps its icon and version info", async () => {
-    const fixture = join(REPO, "packages", "vn-test", "fixtures", "devtools-on");
-    const work = join(OUT, "restamp");
-    const r = await buildApp({ target: fixture, out: work, payloadOnly: true, log: () => {} });
-    const v = readVnpk(new Uint8Array(readFileSync(r.vnpk)));
-    const inputs: VnpkInput[] = v.entries.map((e) => ({ name: e.name, kind: e.kind, data: v.bytes(e), alignLog2: e.alignLog2 }));
-    const out = join(work, "Hello-restamped.exe");
-    const s = stamp({ host: built.hello!.exe, out, payload: (skew) => writeVnpk(inputs, { skew }) });
-    bunExpect(s.dataAligned).toBe(true);
-    bunExpect(versionString(out, "ProductName")).toBe("Hello");
-    bunExpect(shellIconCount(out)).toBeGreaterThanOrEqual(1);
-    bunExpect(readPe(out).subsystem).toBe(SUBSYSTEM.GUI);
+  test(
+    "a stamped exe takes a new payload and keeps its icon and version info",
+    async () => {
+      const fixture = join(REPO, "packages", "vn-test", "fixtures", "devtools-on");
+      const work = join(OUT, "restamp");
+      const r = await buildApp({ target: fixture, out: work, payloadOnly: true, log: () => {} });
+      const v = readVnpk(new Uint8Array(readFileSync(r.vnpk)));
+      const inputs: VnpkInput[] = v.entries.map((e) => ({
+        name: e.name,
+        kind: e.kind,
+        data: v.bytes(e),
+        alignLog2: e.alignLog2,
+      }));
+      const out = join(work, "Hello-restamped.exe");
+      const s = stamp({ host: built.hello!.exe, out, payload: (skew) => writeVnpk(inputs, { skew }) });
+      bunExpect(s.dataAligned).toBe(true);
+      bunExpect(versionString(out, "ProductName")).toBe("Hello");
+      bunExpect(shellIconCount(out)).toBeGreaterThanOrEqual(1);
+      bunExpect(readPe(out).subsystem).toBe(SUBSYSTEM.GUI);
 
-    const app = await launch({ app: "devtools-on", exe: runnable(out, "restamped"), packaged: "devtools-on", label: "pkg-restamp" });
-    opened.push(app);
-    try {
-      await until("the fixture's text", async () => /devtools: on/.test(await app.locator(".fixture").textContent()));
-      bunExpect(await app.eval("typeof globalThis.__VN_TEST_DEVTOOLS__")).toBe("object");
-    } finally {
-      await app.close();
-    }
-  }, T);
+      const app = await launch({
+        app: "devtools-on",
+        exe: runnable(out, "restamped"),
+        packaged: "devtools-on",
+        label: "pkg-restamp",
+      });
+      opened.push(app);
+      try {
+        await until("the fixture's text", async () => /devtools: on/.test(await app.locator(".fixture").textContent()));
+        bunExpect(await app.eval("typeof globalThis.__VN_TEST_DEVTOOLS__")).toBe("object");
+      } finally {
+        await app.close();
+      }
+    },
+    T,
+  );
 });
 
 describe("the no-devtools host", () => {
-  test("publishes no handshake, listens on no port, and does not contain the inspector", async () => {
-    const nd = cliBuild("hello", noDevtoolsHost, "no-devtools", "hello-nodev");
-    bunExpect(nd.json.variant).toBe("no-devtools");
-    bunExpect(await fileContains(built.hello!.exe, MARKER)).toBe(true);
-    bunExpect(await fileContains(nd.exe, MARKER)).toBe(false);
+  test(
+    "publishes no handshake, listens on no port, and does not contain the inspector",
+    async () => {
+      const nd = cliBuild("hello", noDevtoolsHost, "no-devtools", "hello-nodev");
+      bunExpect(nd.json.variant).toBe("no-devtools");
+      bunExpect(await fileContains(built.hello!.exe, MARKER)).toBe(true);
+      bunExpect(await fileContains(nd.exe, MARKER)).toBe(false);
 
-    const exe = runnable(nd.exe, "hello-nodev");
-    const env: Record<string, string> = { ...(process.env as Record<string, string>), VN_OWNER_PID: String(process.pid) };
-    for (const k of ["VN_DIST", "VN_APP_ROOT", "VN_PAYLOAD"]) delete env[k];
-    const child = spawn(exe, [], { env, stdio: "ignore" });
-    strays.push(child);
-    await sleep(8000);
-    bunExpect(child.exitCode).toBeNull();
-    const slot = packagedSlot("hello", child.pid!);
-    bunExpect(existsSync(join(slot, "devtools.json"))).toBe(false);
-    const net = spawnSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf8" }).stdout ?? "";
-    const listening = net
-      .split(/\r?\n/)
-      .filter((l) => /LISTENING/.test(l) && l.trim().split(/\s+/).pop() === String(child.pid));
-    bunExpect(listening).toEqual([]);
-    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-  }, T);
+      const exe = runnable(nd.exe, "hello-nodev");
+      const env: Record<string, string> = {
+        ...(process.env as Record<string, string>),
+        VN_OWNER_PID: String(process.pid),
+      };
+      for (const k of ["VN_DIST", "VN_APP_ROOT", "VN_PAYLOAD"]) delete env[k];
+      const child = spawn(exe, [], { env, stdio: "ignore" });
+      strays.push(child);
+      await sleep(8000);
+      bunExpect(child.exitCode).toBeNull();
+      const slot = packagedSlot("hello", child.pid!);
+      bunExpect(existsSync(join(slot, "devtools.json"))).toBe(false);
+      const net = spawnSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf8" }).stdout ?? "";
+      const listening = net
+        .split(/\r?\n/)
+        .filter((l) => /LISTENING/.test(l) && l.trim().split(/\s+/).pop() === String(child.pid));
+      bunExpect(listening).toEqual([]);
+      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    },
+    T,
+  );
 });

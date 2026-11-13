@@ -36,7 +36,11 @@ globalThis.history = {
       const method = source[name];
       return typeof method === "function" ? method.bind(target) : undefined;
     };
-    const native = Object.freeze({ add: bind("addEventListener"), remove: bind("removeEventListener"), dispatch: bind("dispatchEvent") });
+    const native = Object.freeze({
+      add: bind("addEventListener"),
+      remove: bind("removeEventListener"),
+      dispatch: bind("dispatchEvent")
+    });
     let delegate;
     const slot = Object.freeze({
       native,
@@ -48,7 +52,11 @@ globalThis.history = {
           delegate = undefined;
       }
     });
-    for (const [name, key] of [["addEventListener", "add"], ["removeEventListener", "remove"], ["dispatchEvent", "dispatch"]]) {
+    for (const [name, key] of [
+      ["addEventListener", "add"],
+      ["removeEventListener", "remove"],
+      ["dispatchEvent", "dispatch"]
+    ]) {
       Object.defineProperty(target, name, {
         value: (...args) => {
           const method = delegate?.[key] ?? native[key];

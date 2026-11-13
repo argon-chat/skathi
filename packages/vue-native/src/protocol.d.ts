@@ -172,7 +172,12 @@ type VnEventCode =
 /** The document selection: `"anchor,anchorOffset,anchorOwn,focus,focusOffset,focusOwn"` (UTF-16 offsets), `""` for none. `own` 1 is an offset into an element's OWN text, which the runtime turns into a Text child. */
 declare function __vn_selection_get(): string;
 /** Sets anchor and focus; anchor 0 empties it. Answers whether both named live, attached nodes. */
-declare function __vn_selection_set(anchor: VnNodeId, anchorOffset: number, focus: VnNodeId, focusOffset: number): boolean;
+declare function __vn_selection_set(
+  anchor: VnNodeId,
+  anchorOffset: number,
+  focus: VnNodeId,
+  focusOffset: number,
+): boolean;
 declare function __vn_selection_text(): string;
 /** `element`'s own text became the Text child `text`: a boundary in it moves with it. */
 declare function __vn_selection_rebase(element: VnNodeId, text: VnNodeId): void;
@@ -205,11 +210,7 @@ declare function __vn_scroll(id: VnNodeId, op: VnScrollOp, x: number, y: number)
 type VnScrollAlign = 0 | 1 | 2 | 3;
 
 /** `scrollIntoView({ block, inline })` through every scrollable ancestor: `""` ran, `"stale"` ran on a frame-old layout, `"!<advisory>"` could not run. */
-declare function __vn_scroll_into_view(
-  id: VnNodeId,
-  block: VnScrollAlign,
-  inline: VnScrollAlign,
-): string;
+declare function __vn_scroll_into_view(id: VnNodeId, block: VnScrollAlign, inline: VnScrollAlign): string;
 
 /**
  * `el.focus()` (op 0) / `el.blur()` (op 1). Focus answers `"moved:<old id>"` (the runtime fires blur/focusout on the
@@ -323,13 +324,7 @@ declare var __VN_DEVTOOLS_ARGS__:
 
 type VnPermissionState = "granted" | "denied" | "prompt" | "unsupported";
 type VnPermissionName =
-  | "microphone"
-  | "camera"
-  | "display-capture"
-  | "notifications"
-  | "clipboard-read"
-  | "clipboard-write"
-  | "geolocation";
+  "microphone" | "camera" | "display-capture" | "notifications" | "clipboard-read" | "clipboard-write" | "geolocation";
 
 declare function __vn_permissions_platform(): string;
 declare function __vn_permissions_query(name: string): VnPermissionState | "";
@@ -338,9 +333,7 @@ declare function __vn_permissions_list(): VnJson;
 declare function __vn_permissions_request(name: string): VnJson;
 /** Where the user turns a refused permission back on (macOS screen recording); `""` where the platform adds nothing. */
 declare function __vn_permissions_hint(name: string): string;
-declare function __vn_permissions_set_dispatcher(
-  fn: (token: number, state: VnPermissionState) => void,
-): void;
+declare function __vn_permissions_set_dispatcher(fn: (token: number, state: VnPermissionState) => void): void;
 
 /** `{ path }` or `{ error }`. Creates nothing — a path is not a directory. */
 declare function __vn_storage_user_folder(kind: string, subfolder: string): VnJson;

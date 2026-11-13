@@ -53,8 +53,7 @@ async function bitmap(source: unknown): Promise<string> {
 
 const shown = ref(false);
 
-const img = (id: string, src: string) =>
-  h("img", { id, src, alt: id, style: { width: "96px", height: "96px" } });
+const img = (id: string, src: string) => h("img", { id, src, alt: id, style: { width: "96px", height: "96px" } });
 
 createApp({
   setup() {
