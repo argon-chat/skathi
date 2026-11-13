@@ -77,11 +77,8 @@ impl Options {
     }
 }
 
-pub fn start_sources(types: &str, options: &str) -> String {
-    let options = match Options::parse(types, options) {
-        Ok(options) => options,
-        Err(error) => return error.to_sync_json(),
-    };
+pub fn start_sources(types: &str, options: &str) -> Result<u32, Fail> {
+    let options = Options::parse(types, options)?;
     let token = crate::next_token();
     let enumerate = move || {
         crate::pool::submit(token, move || {
@@ -101,10 +98,10 @@ pub fn start_sources(types: &str, options: &str) -> String {
         if asked.is_err() {
             crate::settle(token, Err(Fail::new("OperationError", "could not start the screen recording check")));
         }
-        return json!({"token": token}).to_string();
+        return Ok(token);
     }
     enumerate();
-    json!({"token": token}).to_string()
+    Ok(token)
 }
 
 pub fn sources(options: Options) -> Result<Vec<Value>, Fail> {
@@ -284,7 +281,7 @@ mod tests {
         let image = image::load_from_memory(&data).unwrap().into_rgba8();
         assert_eq!(image.dimensions(), (2, 1));
         assert_eq!(image.as_raw(), &[240, 20, 40, 255, 10, 200, 30, 255]);
-        let token = crate::tests::token_of(&start_sources("[]", "{}"));
+        let token = start_sources("[]", "{}").unwrap();
         let got = crate::tests::wait_for_settles(&[token]);
         assert_eq!(got[&token], (true, "[]".into()));
     }

@@ -89,16 +89,6 @@ function loadInstallSelection(): unknown {
   return installSelectionFn;
 }
 
-export const PERMISSION_NAMES = [
-  "microphone",
-  "camera",
-  "display-capture",
-  "notifications",
-  "clipboard-read",
-  "clipboard-write",
-  "geolocation",
-];
-
 const IMPORT_LINE = /^\s*import\s+\{[^}]*\}\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 const STAR_REEXPORT = /^\s*export\s+\*\s+from\s+["'][^"']+["'];?[^\S\n]*$/gm;
 /** `export { A, B } from "./mod";`: dropped, since every name handed back is a parameter or in the harness's own `return`. */
@@ -239,12 +229,7 @@ interface RuntimeExports extends Pick<
   | "appWindow"
   | "defineWindow"
   | "getCurrentWindow"
-  | "appPermissions"
-  | "appStorage"
   | "appDevtools"
-  | "appShell"
-  | "appCapture"
-  | "appLaunch"
   | "vModelText"
   | "vModelSelect"
   | "vShow"
@@ -310,16 +295,6 @@ interface ScrollState {
   width: number;
   height: number;
 }
-interface LaunchInfo {
-  argv: string[];
-  cwd: string;
-  url: string | null;
-  paths: string[];
-  singleInstance: boolean;
-  id: string;
-  name: string;
-}
-
 interface TreeModel {
   parent: Map<number, number>;
   children: Map<number, number[]>;
@@ -382,32 +357,6 @@ interface RuntimeHost {
   mediaPropReads: number[][];
   mediaCalls: { id: number; verb: unknown; arg: unknown }[];
   canPlayByType: Map<string, string>;
-  permissions: {
-    platform: string;
-    states: Map<string, string>;
-    requests: string[];
-    pendingToken: number | null;
-    dispatcher: ((token: number, state: string) => unknown) | null;
-    hints: Map<string, string>;
-    bySystem: Set<string>;
-    statuses: Map<string, EventTarget>;
-    settle(token: number, state: string): unknown;
-    move(name: string, state: string): void;
-  };
-  storage: {
-    folders: Map<string, string>;
-    folder: string;
-    encrypted: boolean;
-    provider: string;
-    bytes: number;
-    pending: boolean;
-    flushes: number;
-    error: string | null;
-    refuse: string | null;
-    flushError: string | null;
-    folderCalls: { kind: string; sub: string }[];
-    setCalls: { path: string; encrypted: string }[];
-  };
   devtools: {
     enabled: boolean;
     locked: boolean;
@@ -423,9 +372,6 @@ interface RuntimeHost {
     calls: { op: string; args: unknown[] }[];
     nextToken: number;
     refuse: Json | null;
-    protocols: Map<string, string>;
-    launch: LaunchInfo;
-    forward(launch: Partial<LaunchInfo>): unknown;
     settle(token: number, ok?: boolean, payload?: unknown, value?: unknown): unknown;
     fs: {
       calls: FsCallRecord[];
@@ -441,16 +387,14 @@ interface RuntimeHost {
   tree: TreeModel;
 }
 
-/** `storage` / `devtools` / `desktop` `false` build a world without those `__vn_*` slots (an older or `--no-default-features` host); `MouseEvent` hands the world an event class (bun has none). */
+/** `devtools` / `desktop` `false` build a world without those `__vn_*` slots (an older or `--no-default-features` host); `MouseEvent` hands the world an event class (bun has none). */
 export function createRuntime(
   options: {
-    storage?: boolean;
     devtools?: boolean;
     desktop?: boolean;
     MouseEvent?: unknown;
     globals?: Record<string, unknown>;
     beforeRuntime?: (global: Record<string, unknown>) => void;
-    launch?: Record<string, unknown>;
     styleAccepts?: boolean;
     layoutWatch?: boolean;
     selection?: boolean;
@@ -459,7 +403,6 @@ export function createRuntime(
     navigator?: Record<string, unknown>;
   } = {},
 ) {
-  const withStorage = options.storage !== false;
   const withDevtools = options.devtools !== false;
   const raw = readTsSource(RUNTIME_PATH);
   if (!IMPORT_LINE.test(raw)) {
@@ -629,41 +572,6 @@ export function createRuntime(
     mediaPropReads: [],
     mediaCalls: [],
     canPlayByType: new Map(),
-    permissions: {
-      platform: "TestOS",
-      states: new Map(),
-      requests: [],
-      pendingToken: null,
-      dispatcher: null,
-      hints: new Map(),
-      bySystem: new Set(),
-      statuses: new Map(),
-      settle: (token, state) => host.permissions.dispatcher?.(token, state),
-      move: (name, state) => {
-        host.permissions.states.set(name, state);
-        host.permissions.statuses.get(name)?.dispatchEvent(new Event("change"));
-      },
-    },
-    storage: {
-      folders: new Map([
-        ["APPDATA", "C:\\Users\\test\\AppData\\Roaming"],
-        ["LOCALAPPDATA", "C:\\Users\\test\\AppData\\Local"],
-        ["TEMP", "C:\\Users\\test\\AppData\\Local\\Temp"],
-        ["DOCUMENTS", "C:\\Users\\test\\Documents"],
-        ["HOME", "C:\\Users\\test"],
-      ]),
-      folder: "C:\\Users\\test\\AppData\\Local\\hello\\storage",
-      encrypted: false,
-      provider: "Windows DPAPI (per-user)",
-      bytes: 0,
-      pending: false,
-      flushes: 0,
-      error: null,
-      refuse: null,
-      flushError: null,
-      folderCalls: [],
-      setCalls: [],
-    },
     devtools: {
       enabled: true,
       locked: false,
@@ -679,19 +587,6 @@ export function createRuntime(
       calls: [],
       nextToken: 1,
       refuse: null,
-      protocols: new Map(),
-      launch: {
-        argv: ["C:\\apps\\Test.exe"],
-        cwd: "C:\\work",
-        url: null,
-        paths: [],
-        singleInstance: false,
-        id: "test",
-        name: "test",
-        ...(options.launch ?? {}),
-      },
-      forward: (launch) =>
-        host.desktop.dispatcher?.(0, true, JSON.stringify({ kind: "launch", source: "second-instance", ...launch })),
       settle: (token, ok = true, payload = {}, value = undefined) =>
         host.desktop.dispatcher?.(token, ok, JSON.stringify(payload), value),
       fs: {
@@ -722,14 +617,26 @@ export function createRuntime(
     }
     return JSON.stringify({ token });
   };
-  const shellCall = (op: string, ...rest: unknown[]): string => {
-    host.desktop.calls.push({ op, args: rest });
-    if (host.desktop.refuse) {
-      const r = host.desktop.refuse;
-      host.desktop.refuse = null;
-      return JSON.stringify(r);
-    }
-    return JSON.stringify({ token: host.desktop.nextToken++ });
+  // vn-desktop's `__VN_SHELL__`, as far as links and `window.open` use it.
+  const shellHost =
+    options.desktop === false
+      ? null
+      : {
+          openContent(url: string): Promise<void> {
+            host.desktop.calls.push({ op: "openExternal", args: [url, true] });
+            const r = host.desktop.refuse;
+            if (!r) return Promise.resolve();
+            host.desktop.refuse = null;
+            return Promise.reject(Object.assign(new Error(String(r.error)), { name: r.name, code: r.code }));
+          },
+        };
+  // compat.ts, per world: each world has its own console.
+  const warned = new Set<string>();
+  const hasWarned = (key: string): boolean => warned.has(key);
+  const warnCompat = (key: string, msg: string): void => {
+    if (warned.has(key)) return;
+    warned.add(key);
+    host.logs.push(`[vue-native compat] ${msg}`);
   };
   const intern = (name: string): number => {
     let i = host.names.indexOf(name);
@@ -771,30 +678,7 @@ export function createRuntime(
     ...(options.globals ?? {}),
   };
 
-  const permState = (name: string): string => host.permissions.states.get(name) ?? "unsupported";
-  // The standard tier, faked: `PermissionStatus` is an EventTarget whose `state` is the three-word web
-  // projection of the four-state answer (redjs's `PermissionState::web_state`).
-  const fakeNavigator = {
-    permissions: {
-      query({ name }: { name: string }) {
-        if (!PERMISSION_NAMES.includes(name)) {
-          return Promise.reject(new TypeError(`'${name}' is not a valid enum value`));
-        }
-        let status = host.permissions.statuses.get(name);
-        if (!status) {
-          status = Object.assign(new EventTarget(), {
-            name,
-            get state() {
-              const s = permState(name);
-              return s === "unsupported" ? "denied" : s;
-            },
-          });
-          host.permissions.statuses.set(name, status);
-        }
-        return Promise.resolve(status);
-      },
-    },
-  };
+  const fakeNavigator = {};
 
   const params = [
     "createRenderer",
@@ -850,29 +734,10 @@ export function createRuntime(
     "__vn_media_can_play",
     "__vn_media_events",
     "__vn_media_prop",
-    "__vn_permissions_platform",
-    "__vn_permissions_query",
-    "__vn_permissions_list",
-    "__vn_permissions_request",
-    "__vn_permissions_hint",
-    "__vn_permissions_set_dispatcher",
-    "__vn_storage_user_folder",
-    "__vn_storage_set_folder",
-    "__vn_storage_info",
-    "__vn_storage_flush",
     "__vn_devtools_state",
     "__vn_devtools_set_enabled",
     "__vn_devtools_open",
     "__vn_desktop_set_dispatcher",
-    "__vn_desktop_get_screen_sources",
-    "__vn_shell_open_external",
-    "__vn_shell_open_path",
-    "__vn_shell_show_item",
-    "__vn_shell_trash",
-    "__vn_launch_info",
-    "__vn_launch_register_protocol",
-    "__vn_launch_unregister_protocol",
-    "__vn_launch_is_protocol_registered",
     "__vn_fs_set_handle_factory",
     "__vn_fs_release",
     "__vn_fs_get_file",
@@ -916,6 +781,9 @@ export function createRuntime(
     "VnWindow",
     "WINDOW_ROOT",
     "windowRoots",
+    "shellHost",
+    "hasWarned",
+    "warnCompat",
   ];
   const devtoolsState = () => ({
     enabled: host.devtools.enabled,
@@ -1045,64 +913,6 @@ export function createRuntime(
       const v = line.slice(line.indexOf("=") + 1);
       return v === "true" ? 1 : v === "false" ? 0 : Number(v);
     },
-    () => host.permissions.platform,
-    (name: string) => (PERMISSION_NAMES.includes(name) ? permState(name) : ""),
-    () =>
-      JSON.stringify(
-        PERMISSION_NAMES.map((name) => ({
-          name,
-          state: permState(name),
-          canRequest: permState(name) === "denied" || permState(name) === "prompt",
-          deniedBySystem: permState(name) === "denied" && host.permissions.bySystem.has(name),
-        })),
-      ),
-    (name: string) => {
-      host.permissions.requests.push(name);
-      if (!PERMISSION_NAMES.includes(name)) {
-        return JSON.stringify({ error: `${name} is not a permission name` });
-      }
-      if (host.permissions.pendingToken !== null) {
-        return JSON.stringify({ token: host.permissions.pendingToken });
-      }
-      return JSON.stringify({ state: permState(name) });
-    },
-    (name: string) => host.permissions.hints.get(name) ?? "",
-    (fn: (token: number, state: string) => unknown) => {
-      host.permissions.dispatcher = fn;
-    },
-    (kind: string, sub: string) => {
-      host.storage.folderCalls.push({ kind, sub });
-      const base = host.storage.folders.get(kind);
-      if (!base) return JSON.stringify({ error: `"${kind}" is not a user folder kind` });
-      if (sub.includes("..")) return JSON.stringify({ error: `subfolder "${sub}" must not …` });
-      return JSON.stringify({ path: sub ? `${base}\\${sub.replace(/\//g, "\\")}` : base });
-    },
-    (path: string, encrypted: string) => {
-      host.storage.setCalls.push({ path, encrypted });
-      if (host.storage.refuse) return JSON.stringify({ error: host.storage.refuse });
-      host.storage.folder = path;
-      if (encrypted !== "keep") host.storage.encrypted = encrypted === "true";
-      return JSON.stringify({ path });
-    },
-    () =>
-      JSON.stringify({
-        folder: host.storage.folder,
-        file: `${host.storage.folder}\\localStorage.${host.storage.encrypted ? "sealed" : "json"}`,
-        encrypted: host.storage.encrypted,
-        bytes: host.storage.bytes,
-        loaded: true,
-        pending: host.storage.pending,
-        provider: host.storage.provider,
-        kinds: [...host.storage.folders.keys()],
-        error: host.storage.error,
-      }),
-    () => {
-      if (host.storage.flushError) return JSON.stringify({ error: host.storage.flushError });
-      const wrote = host.storage.pending;
-      host.storage.pending = false;
-      host.storage.flushes++;
-      return JSON.stringify({ wrote });
-    },
     () => JSON.stringify(devtoolsState()),
     (on: boolean) => {
       host.devtools.setCalls.push(on);
@@ -1124,44 +934,6 @@ export function createRuntime(
     (fn: DesktopDispatcher) => {
       host.desktop.dispatcher = fn;
     },
-    (types: string, options: string) => shellCall("screenSources", JSON.parse(types), JSON.parse(options)),
-    (url: string, content: boolean) => {
-      if (content && !/^(https?|mailto):/i.test(url)) {
-        return JSON.stringify({
-          error: "content links only open http, https and mailto",
-          name: "NotAllowedError",
-          code: "ESCHEME",
-        });
-      }
-      return shellCall("openExternal", url, content);
-    },
-    (path: string, allow: boolean) => shellCall("openPath", path, allow),
-    (path: string) => shellCall("showItem", path),
-    (path: string) => shellCall("trash", path),
-    () => JSON.stringify(host.desktop.launch),
-    (scheme: string) => {
-      const s = String(scheme).toLowerCase();
-      if (
-        !/^[a-z][a-z0-9+.-]{0,62}$/.test(s) ||
-        ["http", "https", "file", "mailto"].includes(s) ||
-        s.startsWith("ms-")
-      ) {
-        return JSON.stringify({ error: `registerProtocol: "${scheme}" cannot be registered`, name: "TypeError" });
-      }
-      const owner = host.desktop.protocols.get(s);
-      if (owner !== undefined && owner !== "test") {
-        return JSON.stringify({
-          error: `registerProtocol: the "${s}" scheme is registered to ${owner}`,
-          name: "TypeError",
-        });
-      }
-      host.desktop.protocols.set(s, "test");
-      return JSON.stringify({ ok: true, wrote: owner === undefined, scheme: s });
-    },
-    (scheme: string) =>
-      host.desktop.protocols.get(String(scheme).toLowerCase()) === "test" &&
-      host.desktop.protocols.delete(String(scheme).toLowerCase()),
-    (scheme: string) => host.desktop.protocols.get(String(scheme).toLowerCase()) === "test",
     (fn: Fn) => {
       host.desktop.fs.factory = fn;
     },
@@ -1263,16 +1035,15 @@ export function createRuntime(
         },
     Teleport,
     ...VNWINDOW_STANDINS(),
+    shellHost,
+    hasWarned,
+    warnCompat,
   ];
   if (options.selection === false) {
     const first = params.indexOf("__vn_selection_get");
     for (let i = first; i < first + 4; i++) args[i] = undefined;
   }
 
-  if (!withStorage) {
-    const first = params.indexOf("__vn_storage_user_folder");
-    for (let i = first; i < first + 4; i++) args[i] = undefined;
-  }
   if (!withDevtools) {
     const first = params.indexOf("__vn_devtools_state");
     for (let i = first; i < first + 3; i++) args[i] = undefined;
@@ -1289,8 +1060,8 @@ export function createRuntime(
     ...params,
     `${body}\nreturn { patchProp, nodeOps, EV_CODES, DERIVED, canonicalEvent, hyphenate,
        createApp, handlers, nodesById, nodeById, looseById, looseRoots, sweepLoose, Transition, TransitionGroup, resolveTransitionProps,
-       writeClass, appWindow, defineWindow, getCurrentWindow, appPermissions, appStorage,
-       appDevtools, appShell, appCapture, appLaunch, vModelText, vModelSelect, vShow, desktopApi, activation, noteActivation,
+       writeClass, appWindow, defineWindow, getCurrentWindow,
+       appDevtools, vModelText, vModelSelect, vShow, desktopApi, activation, noteActivation,
        render, useCssVars, useCssModule, VueElement, defineCustomElement, createSSRApp, hydrate,
        useHost, useShadowRoot, initDirectivesForSSR };`,
   )(...args);

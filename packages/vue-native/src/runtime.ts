@@ -28,7 +28,12 @@ import {
 import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
 import { installDesktop } from "./desktop";
 import "./apphost";
-import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWire } from "./desktop";
+import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle } from "./desktop";
+import { shellHost } from "./appapi";
+import type { AppDesktopError } from "./appapi";
+import { hasWarned, warnCompat } from "./compat";
+export { appCapture, appLaunch, appPermissions, appShell, appStorage } from "./appapi";
+export type { AppDesktopError, CapturePermission, CaptureSource, ScreenCaptureSource, VnLaunchEvent } from "./appapi";
 import { adoptCanvas } from "./canvas";
 import { decodeMessage, encodeMessage } from "./iframe";
 import { installFonts } from "./fonts";
@@ -677,14 +682,6 @@ function forgetDeep(n: MirrorNode): void {
     else if (looseById.size) looseById.delete(d.__vnId);
     d.__vnId = 0;
   });
-}
-
-// One-shot compat advisories: never silently drop behavior a browser has; say what to use instead.
-const warned = new Set<string>();
-function warnCompat(key: string, msg: string) {
-  if (warned.has(key)) return;
-  warned.add(key);
-  console.warn(`[vue-native compat] ${msg}`);
 }
 
 // Mirrors sit on HTMLElement.prototype so `instanceof HTMLElement`/`Node` checks in reused browser components pass.
@@ -3688,10 +3685,10 @@ function activateLabel(label: MirrorElement, target: MirrorNode): void {
 
 function adviseJsSourced(el: MirrorElement, name: string, via: string): void {
   const key = `event:${name}`;
-  if (warned.has(key)) return;
+  if (hasWarned(key)) return;
   queueMicrotask(() => {
     if (
-      warned.has(key) ||
+      hasWarned(key) ||
       firstInTree(
         el,
         (n) =>
@@ -4044,7 +4041,7 @@ function adviseNoNavigation(via: string): void {
 }
 
 function adviseNoValidation(form: MirrorElement): void {
-  if (warned.has("form:validation")) return;
+  if (hasWarned("form:validation")) return;
   const constrained = formControls(form).some(
     (c) =>
       ["required", "pattern", "min", "max", "minlength", "maxlength"].some((a) => c.attrs?.[a] != null) ||
@@ -9464,417 +9461,64 @@ export const appWindow: VnAppWindow = windowHost ? windowHost.appWindow : (inert
 export const defineWindow: (options: Record<string, unknown>) => void = windowHost ? windowHost.defineWindow : missing;
 export const getCurrentWindow = (): VnAppWindow => appWindow;
 
-// `appPermissions` extends `navigator.permissions` with what the web lacks: requesting outside a
-// capture call, and the fourth state "unsupported" (which the standard API must report as "denied").
-interface PermissionsHost {
-  query: typeof __vn_permissions_query;
-  list: typeof __vn_permissions_list;
-  request: typeof __vn_permissions_request;
-  platform: typeof __vn_permissions_platform;
-  setDispatcher: typeof __vn_permissions_set_dispatcher;
-}
+// File System Access calls answer `{token}` and settle through one dispatcher in the frame pump; a
+// settle may carry a host-made value (a `File`, a `FileList`).
 
-interface PermissionRow {
-  name: string;
-  state: VnPermissionState;
-  canRequest: boolean;
-  deniedBySystem?: boolean;
-}
-
-interface AppPermissions extends VnEventTarget {
-  readonly platform: string;
-  readonly names: string[];
-  query(name: string): VnPermissionState;
-  list(): PermissionRow[];
-  request(name: string): Promise<VnPermissionState>;
-}
-
-const permHost: PermissionsHost | null =
-  typeof __vn_permissions_query === "function"
+const fsHost: DesktopFsHost | null =
+  typeof __vn_dialog_open === "function"
     ? {
-        query: __vn_permissions_query,
-        list: __vn_permissions_list,
-        request: __vn_permissions_request,
-        platform: __vn_permissions_platform,
-        setDispatcher: __vn_permissions_set_dispatcher,
+        setHandleFactory: __vn_fs_set_handle_factory,
+        release: __vn_fs_release,
+        getFile: __vn_fs_get_file,
+        child: __vn_fs_child,
+        remove: __vn_fs_remove,
+        same: __vn_fs_same,
+        resolve: __vn_fs_resolve,
+        dirOpen: __vn_fs_dir_open,
+        dirNext: __vn_fs_dir_next,
+        dirClose: __vn_fs_dir_close,
+        writableOpen: __vn_fs_writable_open,
+        writableWrite: __vn_fs_writable_write,
+        writableSeek: __vn_fs_writable_seek,
+        writableTruncate: __vn_fs_writable_truncate,
+        writableClose: __vn_fs_writable_close,
+        writableAbort: __vn_fs_writable_abort,
+        refuseClone: __vn_fs_refuse_clone,
+        setSerializer: __vn_fs_set_serializer,
+        permission: __vn_fs_permission,
+        dialogOpen: __vn_dialog_open,
+        download: __vn_download,
       }
     : null;
 
-const PERMISSION_NAMES: VnPermissionName[] = [
-  "microphone",
-  "camera",
-  "display-capture",
-  "notifications",
-  "clipboard-read",
-  "clipboard-write",
-  "geolocation",
-];
+const desktopPending = new Map<number, { resolve: (v: DesktopSettle) => void; reject: (e: unknown) => void }>();
 
-function createPermissions(host: PermissionsHost): AppPermissions {
-  const target = new EventTarget();
-  const pending = new Map<number, (state: VnPermissionState) => void>();
-  host.setDispatcher((token, state) => {
-    const resolve = pending.get(token);
-    if (!resolve) return;
-    pending.delete(token);
-    resolve(state);
-  });
-
-  // One `change` stream re-broadcast from the standard objects: a second native subscription would
-  // race for the same queue. Best-effort; without `navigator.permissions` query/request still work.
-  const statuses = new Map<string, VnPermissionStatus>();
-  if (typeof navigator === "object" && navigator && navigator.permissions) {
-    for (const name of PERMISSION_NAMES) {
-      navigator.permissions.query({ name } as never).then(
-        (status) => {
-          statuses.set(name, status);
-          status.addEventListener("change", () => {
-            target.dispatchEvent(Object.assign(new Event("change"), { name, state: host.query(name) }));
-          });
-        },
-        () => {},
-      );
-    }
-  }
-
-  const advised = new Set<string>();
-  const adviseUnsupported = (name: string) => {
-    if (advised.has(name)) return;
-    advised.add(name);
-    warnCompat(
-      `appPermissions:${name}`,
-      `the '${name}' permission has no equivalent on ${host.platform()} — ` +
-        `appPermissions.query('${name}') is 'unsupported' and request() is a no-op.`,
-    );
-  };
-
-  return Object.assign(target, {
-    get platform() {
-      return host.platform();
-    },
-    get names() {
-      return PERMISSION_NAMES.slice();
-    },
-    query(name: string) {
-      const state = host.query(name);
-      if (!state) throw new TypeError(`'${name}' is not a permission name`);
-      if (state === "unsupported") adviseUnsupported(name);
-      return state;
-    },
-    list(): PermissionRow[] {
-      const rows = JSON.parse(host.list()) as PermissionRow[];
-      for (const r of rows) if (r.state === "unsupported") adviseUnsupported(r.name);
-      return rows;
-    },
-    /** Asks for a permission and resolves with a fresh OS read, never optimistically (Windows: opens Settings, resolves when the toggle moves or on timeout). */
-    request(name: string): Promise<VnPermissionState> {
-      const out = JSON.parse(host.request(name)) as {
-        error?: string;
-        state?: VnPermissionState;
-        token?: number;
-      };
-      if (out.error) return Promise.reject(new TypeError(out.error));
-      if (out.state !== undefined) {
-        if (out.state === "unsupported") adviseUnsupported(name);
-        return Promise.resolve(out.state);
-      }
-      return new Promise((resolve) => pending.set(out.token!, resolve));
-    },
-  });
-}
-
-const inertPermissions = new Proxy(
-  {},
-  {
-    get(_t, key) {
-      warnCompat(
-        "appPermissions",
-        "the permissions host is missing (vn_permissions::install did not run) — " +
-          "`appPermissions` is inert and every capability reads as 'unsupported'.",
-      );
-      if (key === "platform") return "this platform";
-      if (key === "names") return PERMISSION_NAMES.slice();
-      if (key === "query") return () => "unsupported";
-      if (key === "list")
-        return () => PERMISSION_NAMES.map((name) => ({ name, state: "unsupported", canRequest: false }));
-      if (key === "request") return () => Promise.resolve("unsupported");
-      return () => undefined;
-    },
-  },
-);
-
-export const appPermissions: AppPermissions = permHost
-  ? createPermissions(permHost)
-  : (inertPermissions as unknown as AppPermissions);
-
-// `appStorage` extends `localStorage` with where the bytes go and whether they are encrypted at
-// rest. Synchronous: boot-time calls with no real wait. Not named `app`, which would collide with
-// the `const app = createApp(...)` of a typical entry module.
-interface StorageHost {
-  userFolder: typeof __vn_storage_user_folder;
-  setFolder: typeof __vn_storage_set_folder;
-  info: typeof __vn_storage_info;
-  flush: typeof __vn_storage_flush;
-}
-
-/** IndexedDB's half of `appStorage.info()`: databases live in `<folder>\indexeddb`. `mode` is null until the first `indexedDB` use, which latches folder and key for the run; `null` as a whole without on-disk IndexedDB. */
-interface IndexedDbInfo {
-  folder: string;
-  started: boolean;
-  mode: "plaintext" | "encrypted" | "decrypting" | "refused" | null;
-  encrypted: boolean | null;
-  key: boolean;
-  error: string | null;
-}
-
-/** The cookie jar's half of `appStorage.info()`: always sealed; session cookies are never written. `file` is null with no jar backend. */
-interface CookieJarInfo {
-  file: string | null;
-  sealed: true;
-  bytes: number;
-  persisted: number;
-  pending: boolean;
-  error: string | null;
-}
-
-interface StorageInfo {
-  folder: string;
-  file: string;
-  encrypted: boolean;
-  bytes: number;
-  loaded: boolean;
-  pending: boolean;
-  provider: string;
-  kinds: string[];
-  error: string | null;
-  indexedDB: IndexedDbInfo | null;
-  cookies?: CookieJarInfo;
-}
-
-interface AppStorage {
-  readonly kinds: string[];
-  readonly folder: string;
-  readonly encrypted: boolean;
-  getUserFolder(kind: string, subfolder?: string): string;
-  setStorageFolder(path: string, options?: { encrypted?: boolean }): string;
-  info(): StorageInfo;
-  flush(): boolean;
-}
-
-const storageHost: StorageHost | null =
-  typeof __vn_storage_info === "function"
-    ? {
-        userFolder: __vn_storage_user_folder,
-        setFolder: __vn_storage_set_folder,
-        info: __vn_storage_info,
-        flush: __vn_storage_flush,
-      }
-    : null;
-
-/** Every host fn here answers `{...}` or `{"error":"..."}`. One unwrapper. */
-function storageResult<T extends object>(json: VnJson, what: string): T {
-  const out = JSON.parse(json) as T & { error?: string };
-  if (out.error) throw new TypeError(`appStorage.${what}: ${out.error}`);
-  return out;
-}
-
-function createStorage(host: StorageHost): AppStorage {
-  return {
-    get kinds() {
-      return (JSON.parse(host.info()) as StorageInfo).kinds;
-    },
-    get folder() {
-      return (JSON.parse(host.info()) as StorageInfo).folder;
-    },
-    get encrypted() {
-      return (JSON.parse(host.info()) as StorageInfo).encrypted;
-    },
-    /** Absolute path for a folder kind; creates nothing. Throws TypeError for an unknown kind or a `subfolder` that climbs out. */
-    getUserFolder(kind: string, subfolder = "") {
-      return storageResult<{ path: string }>(host.userFolder(String(kind), String(subfolder)), "getUserFolder").path;
-    },
-    /**
-     * Points `localStorage` at `path`, creating it; returns the canonical path.
-     * `{ encrypted: true }` encrypts at rest (Windows: DPAPI) and migrates an existing plaintext area;
-     * omitting it keeps the current format, and a platform with no provider throws.
-     * IndexedDB follows the same folder and encryption but latches both at its first use, so call
-     * this before the first `indexedDB` call. The HTTP cache follows `encrypted` but not `path`.
-     */
-    setStorageFolder(path: string, options: { encrypted?: boolean } = {}) {
-      // No `encrypted` means "keep the format", never "plaintext": a folder change must not silently decrypt.
-      const said = options ? options.encrypted : undefined;
-      const encrypted = said === undefined ? "keep" : said ? "true" : "false";
-      return storageResult<{ path: string }>(host.setFolder(String(path), encrypted), "setStorageFolder").path;
-    },
-    info(): StorageInfo {
-      return JSON.parse(host.info()) as StorageInfo;
-    },
-    flush() {
-      return storageResult<{ wrote: boolean }>(host.flush(), "flush").wrote;
-    },
-  };
-}
-
-const inertStorage = new Proxy(
-  {},
-  {
-    get(_t, key) {
-      warnCompat(
-        "appStorage",
-        "the storage host is missing (vn_storage::install did not run, or the host was built " +
-          "without the `storages` feature) — `appStorage` is inert and localStorage does not " +
-          "persist.",
-      );
-      if (key === "kinds") return [];
-      if (key === "folder") return "";
-      if (key === "encrypted") return false;
-      if (key === "info")
-        return () => ({
-          folder: "",
-          file: "",
-          encrypted: false,
-          bytes: 0,
-          loaded: false,
-          pending: false,
-          provider: "",
-          kinds: [],
-          error: "no storage host",
-        });
-      if (key === "flush") return () => false;
-      // A wrong path is worse than none: the app would write somewhere real.
-      return () => {
-        throw new TypeError(`appStorage.${String(key)} is unavailable: no storage host`);
-      };
-    },
-  },
-);
-
-export const appStorage: AppStorage = storageHost
-  ? createStorage(storageHost)
-  : (inertStorage as unknown as AppStorage);
-
-// Async desktop calls answer `{token}` and settle through one dispatcher in the frame pump. Token 0
-// is an unsolicited host event; a settle may carry a host-made value (a `File`, a `FileList`).
-
-interface DesktopHost {
-  setDispatcher: typeof __vn_desktop_set_dispatcher;
-  screenSources: typeof __vn_desktop_get_screen_sources | null;
-  openExternal: typeof __vn_shell_open_external;
-  openPath: typeof __vn_shell_open_path;
-  showItem: typeof __vn_shell_show_item;
-  trash: typeof __vn_shell_trash;
-  fs: DesktopFsHost | null;
-}
-
-const desktopHost: DesktopHost | null =
-  typeof __vn_desktop_set_dispatcher === "function"
-    ? {
-        setDispatcher: __vn_desktop_set_dispatcher,
-        screenSources: typeof __vn_desktop_get_screen_sources === "function" ? __vn_desktop_get_screen_sources : null,
-        openExternal: __vn_shell_open_external,
-        openPath: __vn_shell_open_path,
-        showItem: __vn_shell_show_item,
-        trash: __vn_shell_trash,
-        fs:
-          typeof __vn_dialog_open === "function"
-            ? {
-                setHandleFactory: __vn_fs_set_handle_factory,
-                release: __vn_fs_release,
-                getFile: __vn_fs_get_file,
-                child: __vn_fs_child,
-                remove: __vn_fs_remove,
-                same: __vn_fs_same,
-                resolve: __vn_fs_resolve,
-                dirOpen: __vn_fs_dir_open,
-                dirNext: __vn_fs_dir_next,
-                dirClose: __vn_fs_dir_close,
-                writableOpen: __vn_fs_writable_open,
-                writableWrite: __vn_fs_writable_write,
-                writableSeek: __vn_fs_writable_seek,
-                writableTruncate: __vn_fs_writable_truncate,
-                writableClose: __vn_fs_writable_close,
-                writableAbort: __vn_fs_writable_abort,
-                refuseClone: __vn_fs_refuse_clone,
-                setSerializer: __vn_fs_set_serializer,
-                permission: __vn_fs_permission,
-                dialogOpen: __vn_dialog_open,
-                download: __vn_download,
-              }
-            : null,
-      }
-    : null;
-
-interface DesktopFailure {
-  name: string;
-  message?: string;
-  error?: string;
-  code?: string;
-  osError?: number;
-}
-
-/** A tier-2 desktop rejection: `name` is DOMException-style, `code` Node-style, `osError` the raw Win32 code. */
-export interface AppDesktopError extends Error {
-  code?: string;
-  osError?: number;
-}
-
-function desktopError(f: DesktopFailure): AppDesktopError {
-  const message = f.message ?? f.error ?? f.name;
-  const e: AppDesktopError = f.name === "TypeError" ? new TypeError(message) : new Error(message);
-  if (f.name !== "TypeError") e.name = f.name;
-  if (f.code) e.code = f.code;
-  if (typeof f.osError === "number") e.osError = f.osError;
-  return e;
-}
-
-/**
- * A pending call. `raw` ones (desktop.ts's) resolve `{payload, value}` and reject with the host's
- * failure object; the rest resolve the payload and reject with `desktopError`.
- */
-const desktopPending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void; raw: boolean }>();
-const desktopEvents = new Map<string, (payload: Record<string, unknown>) => void>();
-
-if (desktopHost) {
-  desktopHost.setDispatcher((token, ok, json, value) => {
+if (typeof __vn_desktop_set_dispatcher === "function") {
+  __vn_desktop_set_dispatcher((token, ok, json, value) => {
     let payload: Record<string, unknown> = {};
     try {
       payload = JSON.parse(json) as Record<string, unknown>;
     } catch {
       /* a malformed payload settles with {} rather than leaving the promise hanging */
     }
-    if (token === 0) {
-      desktopEvents.get(String(payload.kind))?.(payload);
-      return;
-    }
     const p = desktopPending.get(token);
     if (!p) return;
     desktopPending.delete(token);
-    if (ok) p.resolve(p.raw ? ({ payload, value } satisfies DesktopSettle) : payload);
-    else p.reject(p.raw ? payload : desktopError(payload as unknown as DesktopFailure));
+    if (ok) p.resolve({ payload, value } satisfies DesktopSettle);
+    else p.reject(payload);
   });
 }
 
-function desktopCall(json: VnJson): Promise<Record<string, unknown>> {
-  return desktopAwait(json, false) as Promise<Record<string, unknown>>;
-}
-
 function desktopCallRaw(json: VnJson): Promise<DesktopSettle> {
-  return desktopAwait(json, true) as Promise<DesktopSettle>;
-}
-
-function desktopAwait(json: VnJson, raw: boolean): Promise<unknown> {
-  let out: { token?: number } & Partial<DesktopFailure>;
+  let out: { token?: number; name?: string; error?: string };
   try {
     out = JSON.parse(json) as typeof out;
   } catch {
     return Promise.reject(new Error(`the desktop host answered something that is not JSON: ${json}`));
   }
-  if (out.error !== undefined || out.token === undefined) {
-    const f = { name: out.name ?? "Error", ...out };
-    return Promise.reject(raw ? f : desktopError(f));
-  }
+  if (out.error !== undefined || out.token === undefined) return Promise.reject({ name: out.name ?? "Error", ...out });
   const token = out.token;
-  return new Promise((resolve, reject) => desktopPending.set(token, { resolve, reject, raw }));
+  return new Promise((resolve, reject) => desktopPending.set(token, { resolve, reject }));
 }
 
 // Transient activation: a keydown or mousedown the host delivered in the last five seconds
@@ -9916,7 +9560,7 @@ if (typeof navigator !== "undefined" && navigator && vacant(navigator, "userActi
 }
 
 const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<string, unknown>, {
-  host: desktopHost?.fs ?? null,
+  host: fsHost,
   engine: globalThis as unknown as DesktopEngine,
   call: desktopCallRaw,
   warnCompat,
@@ -9929,7 +9573,7 @@ const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<st
  * neither side alone is the security line. Never throws; a failure is a console warning.
  */
 function openContentUrl(url: string, via: string): void {
-  if (!desktopHost) {
+  if (!shellHost) {
     warnCompat(
       "shell:absent",
       `${via}: the desktop host is missing (vn_desktop::install did not run) — the link was not ` + `opened.`,
@@ -9942,7 +9586,7 @@ function openContentUrl(url: string, via: string): void {
   } catch {
     /* not a parseable URL: the host validates and refuses */
   }
-  desktopCall(desktopHost.openExternal(href, true)).catch((e: AppDesktopError) => {
+  shellHost.openContent(href).catch((e: AppDesktopError) => {
     if (e && e.code === "ESCHEME") return void adviseScheme(SCHEME_RE.exec(href)?.[1] ?? "?", via);
     console.warn(`[vue-native] ${via}: could not open ${href} — ${e && e.message}`);
   });
@@ -9969,311 +9613,6 @@ function openContentUrl(url: string, via: string): void {
     return prior ? prior(url, target, features) : null;
   };
 }
-
-// `appShell`: what a browser cannot do. Like Electron's `shell`, with two safer differences:
-// `openPath` refuses programs and scripts unless `{ allowExecutable: true }`, and `openExternal`
-// refuses `file:`, so a URL is never a way around that guard. Calls reject on failure
-// (`ENOENT`, `ENOASSOC`) instead of resolving an error string.
-
-interface AppShell {
-  openExternal(url: string): Promise<void>;
-  openPath(path: string, options?: { allowExecutable?: boolean }): Promise<void>;
-  showItemInFolder(path: string): Promise<void>;
-  trashItem(path: string): Promise<void>;
-}
-
-function createShell(host: DesktopHost): AppShell {
-  const done = (p: Promise<unknown>): Promise<void> => p.then(() => undefined);
-  return {
-    /** Opens `url` with the system handler for its scheme (any but `file:`); resolves once the shell accepts it. */
-    openExternal(url: string) {
-      return done(desktopCall(host.openExternal(String(url), false)));
-    },
-    /** Opens a file or folder with its default app; `path` must be absolute. Programs and scripts are refused (`EEXECUTABLE`) unless `allowExecutable`. */
-    openPath(path: string, options: { allowExecutable?: boolean } = {}) {
-      return done(desktopCall(host.openPath(String(path), !!(options && options.allowExecutable))));
-    },
-    showItemInFolder(path: string) {
-      return done(desktopCall(host.showItem(String(path))));
-    },
-    /** Moves `path` to the Recycle Bin, never a permanent delete: rejects (`ENOTRASH`) when there is none. */
-    trashItem(path: string) {
-      return done(desktopCall(host.trash(String(path))));
-    },
-  };
-}
-
-const inertShell = new Proxy(
-  {},
-  {
-    get(_t, key) {
-      warnCompat(
-        "appShell",
-        "the desktop host is missing (vn_desktop::install did not run) — `appShell` is inert and " +
-          "every call rejects.",
-      );
-      return () =>
-        Promise.reject(
-          desktopError({
-            name: "NotSupportedError",
-            message: `appShell.${String(key)}: no desktop host`,
-            code: "ENOSYS",
-          }),
-        );
-    },
-  },
-);
-
-export const appShell: AppShell = desktopHost ? createShell(desktopHost) : (inertShell as unknown as AppShell);
-
-export interface ScreenCaptureSource {
-  id: string;
-  name: string;
-  thumbnailDataUrl: string;
-  appIconDataUrl: string | null;
-  displayId: string;
-  [key: string]: unknown;
-}
-export type CaptureSource = "microphone" | "camera" | "screen_share";
-export interface CapturePermission {
-  state: VnPermissionState;
-  canRequest: boolean;
-  deniedBySystem: boolean;
-}
-const CAPTURE_PERMISSIONS: Record<CaptureSource, VnPermissionName> = {
-  microphone: "microphone",
-  camera: "camera",
-  screen_share: "display-capture",
-};
-function capturePermissionName(source: unknown): VnPermissionName {
-  const name = Object.prototype.hasOwnProperty.call(CAPTURE_PERMISSIONS, source as string)
-    ? CAPTURE_PERMISSIONS[source as CaptureSource]
-    : undefined;
-  if (!name) throw new TypeError("unknown capture source");
-  return name;
-}
-export const appCapture = {
-  permission(source: CaptureSource): CapturePermission {
-    const name = capturePermissionName(source);
-    if (typeof __vn_permissions_list !== "function")
-      return { state: "unsupported", canRequest: false, deniedBySystem: false };
-    const row = (JSON.parse(__vn_permissions_list()) as PermissionRow[]).find((r) => r.name === name);
-    return {
-      state: row ? row.state : "unsupported",
-      canRequest: !!row?.canRequest,
-      deniedBySystem: !!row?.deniedBySystem,
-    };
-  },
-  /** Asks for the source: the app's own prompt, or the platform's settings page after a platform denial. */
-  async requestPermission(source: CaptureSource): Promise<VnPermissionState> {
-    return appPermissions.request(capturePermissionName(source));
-  },
-  permissionHint(source: CaptureSource): string {
-    const name = capturePermissionName(source);
-    if (typeof __vn_permissions_hint !== "function") return "";
-    return __vn_permissions_hint(name);
-  },
-  async getSources(
-    types: string[] = ["screen", "window"],
-    options: Record<string, unknown> = {},
-  ): Promise<ScreenCaptureSource[]> {
-    if (!Array.isArray(types) || types.some((t) => t !== "screen" && t !== "window")) {
-      throw new TypeError("capture source types must be screen or window");
-    }
-    if (!desktopHost?.screenSources) {
-      throw desktopError({
-        name: "NotSupportedError",
-        message: "this host has no desktop capture backend",
-        code: "ENOSYS",
-      });
-    }
-    const result: unknown = await desktopCall(
-      desktopHost.screenSources(JSON.stringify(types), JSON.stringify(options)),
-    );
-    if (!Array.isArray(result)) throw new TypeError("the desktop capture host returned an invalid source list");
-    return result as ScreenCaptureSource[];
-  },
-  setPendingSource(sourceId: string, includeAudio = false): boolean {
-    if (typeof sourceId !== "string" || !/^(screen|window):[0-9]+$/.test(sourceId)) {
-      throw new TypeError("capture source must be a screen or window ID from getSources()");
-    }
-    (globalThis as { __VN_SCREEN_SOURCE__?: { sourceId: string; includeAudio: boolean } }).__VN_SCREEN_SOURCE__ = {
-      sourceId,
-      includeAudio: !!includeAudio,
-    };
-    return true;
-  },
-};
-(globalThis as { __VN_CAPTURE__?: typeof appCapture }).__VN_CAPTURE__ = mark(appCapture);
-
-// Tier 1 is the Launch Handler API (`launchQueue.setConsumer`): this process's own launch is
-// buffered until a consumer is set, and every launch a second process forwards (`singleInstance`)
-// is another. Tier 2, `appLaunch`, adds what a browser cannot say: raw argv, cwd, existing-path
-// arguments, the single-instance lock, the `launch` event. Deep links and argv are untrusted input.
-
-interface LaunchInfo {
-  argv: string[];
-  cwd: string;
-  url: string | null;
-  paths: string[];
-  handles?: HandleWire[];
-  singleInstance: boolean;
-  id?: string;
-  name?: string;
-}
-
-export interface VnLaunchEvent extends VnEvent {
-  readonly argv: readonly string[];
-  readonly cwd: string;
-  readonly url: string | null;
-  readonly paths: readonly string[];
-  readonly source: "second-instance" | "open-url" | "reopen";
-}
-
-interface AppLaunch extends VnEventTarget {
-  readonly argv: readonly string[];
-  readonly cwd: string;
-  readonly url: string | null;
-  readonly paths: readonly string[];
-  readonly singleInstance: boolean;
-  registerProtocol(scheme: string): void;
-  unregisterProtocol(scheme: string): boolean;
-  isProtocolRegistered(scheme: string): boolean;
-}
-
-const launchInfo: LaunchInfo = (() => {
-  const empty: LaunchInfo = { argv: [], cwd: "", url: null, paths: [], singleInstance: false };
-  if (typeof __vn_launch_info !== "function") return empty;
-  try {
-    return { ...empty, ...(JSON.parse(__vn_launch_info()) as Partial<LaunchInfo>) };
-  } catch {
-    return empty;
-  }
-})();
-
-/** `LaunchParams`: `targetURL` is the raw deep link; `files` holds a handle per existing path argument. */
-class LaunchParams {
-  readonly targetURL: string | null;
-  readonly files: readonly unknown[];
-  constructor(targetURL: string | null, files: readonly unknown[] = []) {
-    this.targetURL = targetURL;
-    this.files = Object.freeze(files.slice());
-  }
-}
-
-type LaunchConsumer = (params: LaunchParams) => unknown;
-
-class LaunchQueue {
-  #consumer: LaunchConsumer | null = null;
-  #pending: LaunchParams[] = [];
-
-  setConsumer(consumer: LaunchConsumer): void {
-    if (typeof consumer !== "function") {
-      throw new TypeError("Failed to execute 'setConsumer' on 'LaunchQueue': parameter 1 is not a function.");
-    }
-    this.#consumer = consumer;
-    const queued = this.#pending.splice(0);
-    for (const p of queued) this.#deliver(p);
-  }
-
-  _enqueue(params: LaunchParams): void {
-    if (this.#consumer) this.#deliver(params);
-    else this.#pending.push(params);
-  }
-
-  #deliver(params: LaunchParams): void {
-    try {
-      void this.#consumer!(params);
-    } catch (e) {
-      // A consumer that throws must not take the next launch with it.
-      console.error(`[vue-native] launchQueue consumer threw: ${e instanceof Error ? (e.stack ?? e.message) : e}`);
-    }
-  }
-}
-
-function launchParamsFor(url: string | null, handles: unknown): LaunchParams {
-  const files = Array.isArray(handles)
-    ? (handles as HandleWire[]).filter((w) => w && typeof w.h === "number").map((w) => desktopApi.handleFrom(w))
-    : [];
-  return new LaunchParams(url, files);
-}
-
-const launchQueue = new LaunchQueue();
-{
-  const g = globalThis as unknown as { launchQueue?: unknown; LaunchParams?: unknown; LaunchQueue?: unknown };
-  if (vacant(g, "launchQueue")) {
-    g.launchQueue = mark(launchQueue);
-    g.LaunchParams = mark(LaunchParams);
-    g.LaunchQueue = mark(LaunchQueue);
-  }
-}
-// This process's own launch, once per process: a reload is not a launch.
-if (typeof __vn_launch_info === "function" && REALM.runs === 1) {
-  launchQueue._enqueue(launchParamsFor(launchInfo.url, launchInfo.handles));
-}
-
-function createLaunch(): AppLaunch {
-  const target = new EventTarget();
-  const frozen = <T>(v: T[]): readonly T[] => Object.freeze(v.slice());
-  const argv = frozen(launchInfo.argv);
-  const paths = frozen(launchInfo.paths);
-  desktopEvents.set("launch", (p) => {
-    const evArgv = frozen(Array.isArray(p.argv) ? (p.argv as string[]) : []);
-    const evPaths = frozen(Array.isArray(p.paths) ? (p.paths as string[]) : []);
-    const url = typeof p.url === "string" ? p.url : null;
-    const ev = new Event("launch");
-    for (const [k, v] of Object.entries({
-      argv: evArgv,
-      cwd: typeof p.cwd === "string" ? p.cwd : "",
-      url,
-      paths: evPaths,
-      source: typeof p.source === "string" ? p.source : "second-instance",
-    })) {
-      Object.defineProperty(ev, k, { value: v, enumerable: true, configurable: true });
-    }
-    try {
-      target.dispatchEvent(ev);
-    } finally {
-      launchQueue._enqueue(launchParamsFor(url, p.handles));
-    }
-  });
-  return Object.defineProperties(target, {
-    argv: { get: () => argv, enumerable: true },
-    cwd: { get: () => launchInfo.cwd, enumerable: true },
-    /** The deep link this process was started for (`myapp://…`), or null. UNTRUSTED. */
-    url: { get: () => launchInfo.url, enumerable: true },
-    paths: { get: () => paths, enumerable: true },
-    /** Does THIS process hold the single-instance lock (`"singleInstance": true` and it was first)? */
-    singleInstance: { get: () => launchInfo.singleInstance, enumerable: true },
-    /**
-     * Registers `scheme://` for this exe, per user (HKCU). Throws TypeError for an invalid or
-     * reserved scheme or one another app owns. In a dev host it points the scheme at the dev slot.
-     */
-    registerProtocol: {
-      value(scheme: string): void {
-        if (typeof __vn_launch_register_protocol !== "function") {
-          throw new TypeError("appLaunch.registerProtocol is unavailable: no desktop host");
-        }
-        const out = JSON.parse(__vn_launch_register_protocol(String(scheme))) as Partial<DesktopFailure>;
-        if (out.error !== undefined) throw desktopError({ name: out.name ?? "TypeError", ...out });
-      },
-    },
-    unregisterProtocol: {
-      value(scheme: string): boolean {
-        return typeof __vn_launch_unregister_protocol === "function" && __vn_launch_unregister_protocol(String(scheme));
-      },
-    },
-    isProtocolRegistered: {
-      value(scheme: string): boolean {
-        return (
-          typeof __vn_launch_is_protocol_registered === "function" && __vn_launch_is_protocol_registered(String(scheme))
-        );
-      },
-    },
-  }) as AppLaunch;
-}
-
-export const appLaunch: AppLaunch = createLaunch();
 
 // `appDevtools` lets an app turn the devtools off at runtime (`disable()`, or `"devtools": false` in vn.config.json):
 // the listener closes, inspectors detach, the token is blanked and the handshake file deleted; `enable()` binds a

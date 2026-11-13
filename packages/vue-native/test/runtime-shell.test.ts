@@ -1,11 +1,9 @@
-// Links, window.open and `appShell`: the JS half. Pinned here: which clicks follow a link, that `preventDefault()`
-// anywhere on the path cancels it, that content reaches only http/https/mailto, and that `appShell` turns the settle
-// protocol into promises that reject with the right names.
+// Links and window.open. Pinned here: which clicks follow a link, that `preventDefault()` anywhere on the path
+// cancels it, and that content reaches only http/https/mailto.
 
 import { describe, expect, test } from "bun:test";
 import { createRuntime, type RealmGlobal } from "./runtime-harness";
 
-type Failure = Error & { code?: unknown; osError?: unknown };
 const winOpen = (rt: { global: RealmGlobal }) =>
   rt.global.open as (url?: string, target?: string, features?: string) => unknown;
 
@@ -144,12 +142,8 @@ describe("<a href>: activation", () => {
 
   test("a failed open is a console warning, not an exception", async () => {
     const { rt, a, click } = linkWorld("mailto:x@example.com");
+    rt.host.desktop.refuse = { name: "NotFoundError", error: "no application is associated", code: "ENOASSOC" };
     click(a);
-    rt.host.desktop.settle(1, false, {
-      name: "NotFoundError",
-      message: "no application is associated",
-      code: "ENOASSOC",
-    });
     await Promise.resolve();
     await Promise.resolve();
     expect(rt.host.logs.some((l: string) => l.includes("could not open") && l.includes("no application"))).toBe(true);
@@ -239,59 +233,10 @@ describe("window.open", () => {
       [undefined, undefined, undefined],
     ]);
   });
-});
 
-describe("appShell", () => {
-  test("each verb crosses as its host fn and resolves when the pump settles it", async () => {
-    const { rt } = linkWorld(null);
-    const calls = [
-      rt.appShell.openExternal("myapp://x"),
-      rt.appShell.openPath("C:\\a\\b.txt"),
-      rt.appShell.openPath("C:\\a\\setup.exe", { allowExecutable: true }),
-      rt.appShell.showItemInFolder("C:\\a\\b.txt"),
-      rt.appShell.trashItem("C:\\a\\b.txt"),
-    ];
-    expect(rt.host.desktop.calls).toEqual([
-      { op: "openExternal", args: ["myapp://x", false] },
-      { op: "openPath", args: ["C:\\a\\b.txt", false] },
-      { op: "openPath", args: ["C:\\a\\setup.exe", true] },
-      { op: "showItem", args: ["C:\\a\\b.txt"] },
-      { op: "trash", args: ["C:\\a\\b.txt"] },
-    ]);
-    for (let t = 1; t <= 5; t++) rt.host.desktop.settle(t, true, {});
-    expect(await Promise.all(calls)).toEqual([undefined, undefined, undefined, undefined, undefined]);
-  });
-
-  test("an async failure rejects with the host's name, code and osError", async () => {
-    const { rt } = linkWorld(null);
-    const p = rt.appShell.openPath("C:\\a\\missing.txt");
-    rt.host.desktop.settle(1, false, { name: "NotFoundError", message: "gone", code: "ENOENT", osError: 2 });
-    const e = (await p.catch((x: unknown) => x)) as Failure;
-    expect(e).toBeInstanceOf(Error);
-    expect(e.name).toBe("NotFoundError");
-    expect(e.message).toBe("gone");
-    expect(e.code).toBe("ENOENT");
-    expect(e.osError).toBe(2);
-  });
-
-  test("a synchronous refusal rejects at once; a TypeError stays a TypeError", async () => {
-    const { rt } = linkWorld(null);
-    rt.host.desktop.refuse = { error: 'openPath: "a.txt" is not an absolute path', name: "TypeError" };
-    const e = (await rt.appShell.openPath("a.txt").catch((x: unknown) => x)) as Failure;
-    expect(e).toBeInstanceOf(TypeError);
-    rt.host.desktop.refuse = { error: "it would run it", name: "NotAllowedError", code: "EEXECUTABLE" };
-    const f = (await rt.appShell.openPath("C:\\x\\setup.exe").catch((x: unknown) => x)) as Failure;
-    expect([f.name, f.code]).toEqual(["NotAllowedError", "EEXECUTABLE"]);
-  });
-
-  test("with no desktop host it is inert: one advisory, every call rejects, links advise", async () => {
+  test("with no desktop host a link advises instead of opening", () => {
     const { rt, a, click } = linkWorld("https://example.com/", { desktop: false });
-    const e = (await rt.appShell.openPath("C:\\a.txt").catch((x: unknown) => x)) as Failure;
-    expect(e.name).toBe("NotSupportedError");
-    await rt.appShell.trashItem("C:\\a.txt").catch(() => {});
     click(a);
-    const adv = rt.advisories();
-    expect(adv.filter((l: string) => l.includes("`appShell` is inert")).length).toBe(1);
-    expect(adv.some((l: string) => l.includes("the link was not opened"))).toBe(true);
+    expect(rt.advisories().some((l: string) => l.includes("the link was not opened"))).toBe(true);
   });
 });

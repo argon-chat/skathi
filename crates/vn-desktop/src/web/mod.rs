@@ -1,31 +1,49 @@
-//! The navigator system APIs as native classes: badging, screen wake lock, media session, Web Share and
-//! passkeys. A promise for host work is settled from the desktop queue by [`deliver`], before the JS
-//! dispatcher sees the token.
+//! The JS surface of vn-desktop as native objects: `appShell`, `appLaunch` with `launchQueue`,
+//! `appCapture`, and on Windows badging, screen wake lock, media session, Web Share and passkeys.
+//! A promise for host work is settled from the desktop queue by [`deliver`].
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
 
-use vn_runtime::redjs::ffi::{redjs_promise_create, redjs_protect, redjs_unprotect};
+use vn_runtime::host::{self, Settler};
 use vn_runtime::redjs::glue;
-use vn_runtime::redjs::webapi::domexception;
 use vn_runtime::redjs::webapi::util::*;
 
 use crate::Fail;
 
+mod app_capture;
+mod app_launch;
+mod app_shell;
+#[cfg(target_os = "windows")]
 mod badge;
+#[cfg(target_os = "windows")]
 mod credentials;
+#[cfg(target_os = "windows")]
 mod media_session;
+#[cfg(target_os = "windows")]
 mod share;
+#[cfg(target_os = "windows")]
 mod wake_lock;
+
+pub(crate) use vn_runtime::host::{error, global, rejected, rejected_with};
 
 /// Turns a settled payload into the value the promise resolves with, or the rejection.
 pub(crate) type Convert = unsafe fn(*mut c_void, u32, &serde_json::Value) -> Result<u64, u64>;
 
+/// How a host failure reaches JS.
+#[derive(Clone, Copy)]
+pub(crate) enum Errors {
+    /// A `DOMException` named by the failure, or a `TypeError`.
+    Dom,
+    /// An `Error` (or `TypeError`) whose `name` is the failure's, with Node-style `code` and the raw `osError`.
+    Desktop,
+}
+
 struct Pending {
-    resolve: u64,
-    reject: u64,
+    settler: Settler,
     convert: Convert,
+    errors: Errors,
 }
 
 thread_local! {
@@ -34,54 +52,42 @@ thread_local! {
     static HANDLERS: Cell<usize> = const { Cell::new(0) };
 }
 
-pub(crate) unsafe fn global(g: *mut c_void) -> u64 {
-    glue::rjs_global(g)
-}
-
-/// A `TypeError` or a `DOMException` named `name`, as a value.
-pub(crate) unsafe fn error(g: *mut c_void, name: &str, msg: &str) -> u64 {
-    if name == "TypeError" {
-        let ctor = get(g, global(g), "TypeError");
-        return call(g, ctor, UNDEF, &[js_string(g, msg)]).unwrap_or(UNDEF);
+unsafe fn failure(g: *mut c_void, errors: Errors, name: &str, message: &str, code: Option<&str>, os_error: Option<f64>) -> u64 {
+    match errors {
+        Errors::Dom => error(g, name, message),
+        Errors::Desktop => {
+            let ctor = get(g, global(g), if name == "TypeError" { "TypeError" } else { "Error" });
+            let e = call(g, ctor, UNDEF, &[js_string(g, message)]).unwrap_or(UNDEF);
+            if name != "TypeError" {
+                define(g, e, "name", js_string(g, name), 2);
+            }
+            if let Some(c) = code {
+                define(g, e, "code", js_string(g, c), 0);
+            }
+            if let Some(n) = os_error {
+                define(g, e, "osError", enc_f64(n), 0);
+            }
+            e
+        }
     }
-    domexception::create(g, name, msg)
 }
 
-pub(crate) unsafe fn deferred(g: *mut c_void) -> (u64, u64, u64) {
-    let (mut resolve, mut reject, mut promise) = (UNDEF, UNDEF, UNDEF);
-    redjs_promise_create(g, &mut resolve, &mut reject, &mut promise);
-    (promise, resolve, reject)
-}
-
-pub(crate) unsafe fn rejected(g: *mut c_void, name: &str, msg: &str) -> u64 {
-    rejected_with(g, error(g, name, msg))
-}
-
-pub(crate) unsafe fn rejected_with(g: *mut c_void, reason: u64) -> u64 {
-    let (p, _, reject) = deferred(g);
-    let _ = call(g, reject, UNDEF, &[reason]);
-    p
+pub(crate) unsafe fn fail_value(g: *mut c_void, errors: Errors, f: &Fail) -> u64 {
+    failure(g, errors, f.name, &f.message, f.code, f.os_error.map(f64::from))
 }
 
 /// The promise for host work that settles `token`.
 pub(crate) unsafe fn awaiting(g: *mut c_void, started: Result<u32, Fail>, convert: Convert) -> u64 {
+    awaiting_with(g, started, convert, Errors::Dom)
+}
+
+pub(crate) unsafe fn awaiting_with(g: *mut c_void, started: Result<u32, Fail>, convert: Convert, errors: Errors) -> u64 {
     let token = match started {
         Ok(t) => t,
-        Err(f) => return rejected(g, f.name, &f.message),
+        Err(f) => return rejected_with(g, fail_value(g, errors, &f)),
     };
-    let (p, resolve, reject) = deferred(g);
-    redjs_protect(g, resolve);
-    redjs_protect(g, reject);
-    PENDING.with(|m| {
-        m.borrow_mut().insert(
-            token,
-            Pending {
-                resolve,
-                reject,
-                convert,
-            },
-        )
-    });
+    let (p, settler) = host::deferred(g);
+    PENDING.with(|m| m.borrow_mut().insert(token, Pending { settler, convert, errors }));
     p
 }
 
@@ -92,9 +98,7 @@ pub(crate) fn is_pending(token: u32) -> bool {
 /// Rejects `token`'s promise now; the host's own answer is dropped when it comes.
 pub(crate) unsafe fn abandon(g: *mut c_void, token: u32, reason: u64) {
     if let Some(p) = PENDING.with(|m| m.borrow_mut().remove(&token)) {
-        let _ = call(g, p.reject, UNDEF, &[reason]);
-        redjs_unprotect(g, p.resolve);
-        redjs_unprotect(g, p.reject);
+        p.settler.reject(g, reason);
     }
 }
 
@@ -103,6 +107,11 @@ pub(crate) unsafe fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str
     let value: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
     if token == 0 {
         return match value["kind"].as_str() {
+            Some("launch") => {
+                app_launch::on_launch(g, &value);
+                true
+            }
+            #[cfg(target_os = "windows")]
             Some("mediasession") => {
                 media_session::on_action(g, &value);
                 true
@@ -116,30 +125,18 @@ pub(crate) unsafe fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str
     let outcome = if ok {
         (p.convert)(g, token, &value)
     } else {
-        let s = |k: &str| value[k].as_str().unwrap_or("").to_string();
-        Err(error(
-            g,
-            value["name"].as_str().unwrap_or("NotAllowedError"),
-            &s("message"),
-        ))
+        let name = value["name"].as_str().unwrap_or("Error");
+        let message = value["message"].as_str().or(value["error"].as_str()).unwrap_or(name);
+        Err(failure(g, p.errors, name, message, value["code"].as_str(), value["osError"].as_f64()))
     };
-    let _ = match outcome {
-        Ok(v) => call(g, p.resolve, UNDEF, &[v]),
-        Err(e) => call(g, p.reject, UNDEF, &[e]),
-    };
-    redjs_unprotect(g, p.resolve);
-    redjs_unprotect(g, p.reject);
+    p.settler.settle(g, outcome);
     true
 }
 
 /// The `on<event>` handler attributes of objects made here.
 pub(crate) unsafe fn handler_get(g: *mut c_void, this: u64, name: &str) -> u64 {
     let bag = get_a(g, this, HANDLERS.with(|h| h.get()) as *mut c_void);
-    let v = if is_cell(bag) {
-        get(g, bag, name)
-    } else {
-        NULL
-    };
+    let v = if is_cell(bag) { get(g, bag, name) } else { NULL };
     if is_cell(v) {
         v
     } else {
@@ -161,13 +158,10 @@ pub(crate) unsafe fn handler_set(g: *mut c_void, this: u64, name: &str, v: u64) 
 }
 
 /// `navigator`'s prototype, where the members go as in a browser.
+#[cfg(target_os = "windows")]
 unsafe fn navigator_proto(g: *mut c_void) -> u64 {
     let ctor = get(g, global(g), "Navigator");
-    let proto = if is_cell(ctor) {
-        get(g, ctor, "prototype")
-    } else {
-        UNDEF
-    };
+    let proto = if is_cell(ctor) { get(g, ctor, "prototype") } else { UNDEF };
     if is_cell(proto) {
         proto
     } else {
@@ -180,28 +174,29 @@ pub(crate) unsafe fn install(g: *mut c_void) {
         return;
     }
     HANDLERS.with(|h| h.set(atom_priv(g, "vn#handlers") as usize));
-    let nav = navigator_proto(g);
     let event_target = get(g, get(g, global(g), "EventTarget"), "prototype");
-    badge::install(g, nav);
-    wake_lock::install(g, nav, event_target);
-    media_session::install(g, nav);
-    share::install(g, nav);
-    credentials::install(g, nav);
+    app_shell::install(g);
+    app_launch::install(g, event_target);
+    app_capture::install(g);
+    #[cfg(target_os = "windows")]
+    {
+        let nav = navigator_proto(g);
+        badge::install(g, nav);
+        wake_lock::install(g, nav, event_target);
+        media_session::install(g, nav);
+        share::install(g, nav);
+        credentials::install(g, nav);
+    }
 }
 
-/// A `navigator` getter returning one object for the context.
+/// A getter returning one object for the context.
 pub(crate) unsafe fn define_getter(g: *mut c_void, proto: u64, name: &str, f: HostFn) {
     let object = get(g, global(g), "Object");
     let desc = new_object(g, UNDEF);
     define(g, desc, "get", make_fn(g, name, 0, f), 0);
     define(g, desc, "enumerable", TRUE, 0);
     define(g, desc, "configurable", TRUE, 0);
-    let _ = call(
-        g,
-        get(g, object, "defineProperty"),
-        object,
-        &[proto, js_string(g, name), desc],
-    );
+    let _ = call(g, get(g, object, "defineProperty"), object, &[proto, js_string(g, name), desc]);
 }
 
 #[cfg(test)]
@@ -209,7 +204,7 @@ pub(crate) mod testing {
     use vn_runtime::redjs::api::Value;
     use vn_runtime::JsRuntime;
 
-    /// Runs `src` with the classes installed, settles every queued host answer, and returns `globalThis.out`.
+    /// Runs `src` with the objects installed, settles every queued host answer, and returns `globalThis.out`.
     pub fn run(src: &str) -> String {
         vn_runtime::testing::on_js_thread({
             let src = src.to_string();
@@ -217,15 +212,11 @@ pub(crate) mod testing {
                 JsRuntime::with(|rt| unsafe {
                     super::install(rt.raw());
                     rt.ctx().eval(&format!("globalThis.out = undefined; (async () => {{ {src} }})().then(v => {{ out = String(v); }}, e => {{ out = 'threw ' + (e && e.name) + ': ' + (e && e.message); }});")).unwrap();
-                    for _ in 0..200 {
+                    for _ in 0..400 {
                         rt.ctx().drain_microtasks();
                         drain(rt.raw());
                         rt.ctx().drain_microtasks();
-                        let out = rt
-                            .ctx()
-                            .eval("String(globalThis.out)")
-                            .and_then(|v: Value| rt.ctx().to_rust_string(v))
-                            .unwrap_or_default();
+                        let out = rt.ctx().eval("String(globalThis.out)").and_then(|v: Value| rt.ctx().to_rust_string(v)).unwrap_or_default();
                         if out != "undefined" {
                             return out;
                         }

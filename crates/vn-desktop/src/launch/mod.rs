@@ -491,8 +491,8 @@ pub fn register_declared() {
     }
 }
 
-pub fn js_register(raw: &str) -> String {
-    let fail = |m: String| crate::Fail::type_error(format!("registerProtocol: {m}")).to_sync_json();
+pub fn js_register(raw: &str) -> Result<(), crate::Fail> {
+    let fail = |m: String| Err(crate::Fail::type_error(format!("registerProtocol: {m}")));
     let scheme = match protocol::validate_scheme(raw) {
         Ok(s) => s,
         Err(m) => return fail(m),
@@ -511,14 +511,14 @@ pub fn js_register(raw: &str) -> String {
             ));
         }
         match protocol_win::register(&protocol_win::Hive::user(), &scheme, &b.identity.id, &own_exe(), b.dev_slot.as_deref()) {
-            Ok(wrote) => json!({ "ok": true, "wrote": wrote, "scheme": scheme }).to_string(),
+            Ok(_) => Ok(()),
             Err(m) => fail(m),
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (b, scheme);
-        crate::Fail::new("NotSupportedError", "registerProtocol is not implemented on this platform yet").to_sync_json()
+        Err(crate::Fail::new("NotSupportedError", "registerProtocol is not implemented on this platform yet"))
     }
 }
 

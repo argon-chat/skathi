@@ -1,5 +1,5 @@
 //! The bytes half of Web Storage: the `localStorage` file, its folder, optional encryption at rest, and
-//! the `__vn_storage_*` host fns behind `appStorage`. The browser-facing surface and the `StorageHost`
+//! vue-native's `appStorage`. The browser-facing surface and the `StorageHost`
 //! trait live in redjs; IndexedDB (feature `indexeddb`) shares this folder and encryption setting.
 //!
 //! Default folder: `%LOCALAPPDATA%\<app name>\storage` (local, not roaming: DPAPI sealing does not survive
@@ -18,8 +18,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use vn_runtime::redjs::webapi::storage::{self as api, StorageHost};
-use vn_runtime::redjs::webapi::util::read_string;
-use vn_runtime::{host_fn, JsRuntime};
+use vn_runtime::redjs::webapi::util::*;
+use vn_runtime::{host, host_fn, JsRuntime};
 
 pub mod cookies;
 pub mod crypt;
@@ -448,40 +448,73 @@ pub(crate) fn json_escape(s: &str) -> String {
     out
 }
 
-fn err_json(msg: &str) -> String {
-    format!("{{\"error\":\"{}\"}}", json_escape(msg))
+unsafe fn fail(g: *mut c_void, what: &str, e: &str) -> u64 {
+    host::throw(g, "TypeError", &format!("appStorage.{what}: {e}"))
 }
 
-host_fn!(fn vn_storage_user_folder(g, args) {
-    let kind = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let sub = unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default();
-    let json = match folders::user_folder(&kind, &sub) {
-        Ok(p) => format!("{{\"path\":\"{}\"}}", json_escape(&p.display().to_string())),
-        Err(e) => err_json(&e),
-    };
-    JsRuntime::with(|rt| rt.ctx().string(&json).0)
-});
+unsafe fn path_value(g: *mut c_void, p: &Path) -> u64 {
+    js_string(g, &p.display().to_string())
+}
 
-// `encrypted` is "true", "false" or "keep".
-host_fn!(fn vn_storage_set_folder(g, args) {
-    let path = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let encrypted = match unsafe { read_string(g, args.arg(1).0) }.unwrap_or_default().as_str() {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    };
-    let json = if path.trim().is_empty() {
-        err_json("setStorageFolder needs a path")
-    } else {
-        match set_storage_folder(Path::new(&path), encrypted) {
-            Ok(p) => format!("{{\"path\":\"{}\"}}", json_escape(&p.display().to_string())),
-            Err(e) => err_json(&e),
+host_fn!(fn get_user_folder(g, args) {
+    unsafe {
+        let kind = host::string_arg(g, args.arg(0).0).unwrap_or_default();
+        let sub = host::string_arg(g, args.arg(1).0).unwrap_or_default();
+        match folders::user_folder(&kind, &sub) {
+            Ok(p) => path_value(g, &p),
+            Err(e) => fail(g, "getUserFolder", &e),
         }
-    };
-    JsRuntime::with(|rt| rt.ctx().string(&json).0)
+    }
 });
 
-host_fn!(fn vn_storage_info(_g, _args) {
+// Points `localStorage` (and IndexedDB, before its first use) at `path`. No `encrypted` keeps the
+// current format, never "plaintext": a folder change must not silently decrypt.
+host_fn!(fn set_storage_folder_fn(g, args) {
+    unsafe {
+        let path = host::string_arg(g, args.arg(0).0).unwrap_or_default();
+        let options = args.arg(1).0;
+        let said = if is_cell(options) { get(g, options, "encrypted") } else { UNDEF };
+        let encrypted = (said != UNDEF).then(|| host::truthy(g, said));
+        if path.trim().is_empty() {
+            return fail(g, "setStorageFolder", "setStorageFolder needs a path");
+        }
+        match set_storage_folder(Path::new(&path), encrypted) {
+            Ok(p) => path_value(g, &p),
+            Err(e) => fail(g, "setStorageFolder", &e),
+        }
+    }
+});
+
+host_fn!(fn info_fn(g, _args) {
+    unsafe { host::to_js(g, &info()) }
+});
+
+host_fn!(fn kinds_fn(g, _args) {
+    unsafe { host::to_js(g, &info()["kinds"]) }
+});
+
+host_fn!(fn folder_fn(g, _args) {
+    unsafe { host::to_js(g, &info()["folder"]) }
+});
+
+host_fn!(fn encrypted_fn(g, _args) {
+    unsafe { host::to_js(g, &info()["encrypted"]) }
+});
+
+host_fn!(fn flush_fn(g, _args) {
+    unsafe {
+        match flush() {
+            Ok(wrote) => enc_bool(wrote),
+            Err(e) => fail(g, "flush", &e),
+        }
+    }
+});
+
+fn info() -> serde_json::Value {
+    serde_json::from_str(&info_json()).unwrap_or_default()
+}
+
+fn info_json() -> String {
     let st = storage().state.lock().unwrap();
     let folder = if st.folder.as_os_str().is_empty() {
         default_folder(embedder_app_name().as_deref())
@@ -514,16 +547,8 @@ host_fn!(fn vn_storage_info(_g, _args) {
         indexed_db,
         cookie_jar,
     );
-    JsRuntime::with(|rt| rt.ctx().string(&json).0)
-});
-
-host_fn!(fn vn_storage_flush(_g, _args) {
-    let json = match flush() {
-        Ok(wrote) => format!("{{\"wrote\":{wrote}}}"),
-        Err(e) => err_json(&e),
-    };
-    JsRuntime::with(|rt| rt.ctx().string(&json).0)
-});
+    json
+}
 
 static APP_NAME: Mutex<Option<String>> = Mutex::new(None);
 
@@ -545,14 +570,16 @@ pub fn install(rt: &JsRuntime, app_name: Option<String>) {
     cookies::install(current_folder());
     #[cfg(feature = "indexeddb")]
     idb::install();
-    let fns: &[(&str, u32, *const c_void)] = &[
-        ("__vn_storage_user_folder", 2, vn_storage_user_folder as *const _),
-        ("__vn_storage_set_folder", 2, vn_storage_set_folder as *const _),
-        ("__vn_storage_info", 0, vn_storage_info as *const _),
-        ("__vn_storage_flush", 0, vn_storage_flush as *const _),
-    ];
-    for (name, arity, f) in fns {
-        rt.register(name, *arity, *f);
+    unsafe {
+        let g = rt.raw();
+        let obj = host::install_object(g, "__VN_STORAGE__", UNDEF);
+        host::getter(g, obj, "kinds", kinds_fn);
+        host::getter(g, obj, "folder", folder_fn);
+        host::getter(g, obj, "encrypted", encrypted_fn);
+        host::method(g, obj, "getUserFolder", 1, get_user_folder);
+        host::method(g, obj, "setStorageFolder", 1, set_storage_folder_fn);
+        host::method(g, obj, "info", 0, info_fn);
+        host::method(g, obj, "flush", 0, flush_fn);
     }
 }
 
@@ -673,7 +700,22 @@ mod tests {
         assert_eq!(json_escape("say \"hi\""), "say \\\"hi\\\"");
         assert_eq!(json_escape("a\nb"), "a\\nb");
         assert_eq!(json_escape("\u{1}"), "\\u0001");
-        assert!(err_json(r"C:\a").starts_with("{\"error\":\"C:\\\\a\""));
+    }
+
+    #[test]
+    fn app_storage_answers_paths_info_and_type_errors() {
+        let out = vn_runtime::testing::on_js_thread(|| {
+            vn_runtime::JsRuntime::with(|rt| {
+                install(rt, Some("vn-storage-js-test".into()));
+                let src = "const s = __VN_STORAGE__; const r = [typeof s.folder, s.kinds.length > 0, typeof s.encrypted, typeof s.info().bytes, \
+                           s.info().kinds.join() === s.kinds.join()]; \
+                           try { s.getUserFolder('nope'); } catch (e) { r.push(e instanceof TypeError, e.message.startsWith('appStorage.getUserFolder: ')); } \
+                           try { s.setStorageFolder('  '); } catch (e) { r.push(e.message); } \
+                           r.push(typeof s.flush()); r.join('|')";
+                rt.ctx().eval(src).and_then(|v| rt.ctx().to_rust_string(v)).unwrap_or_else(|_| "<threw>".into())
+            })
+        });
+        assert_eq!(out, "string|true|boolean|number|true|true|true|appStorage.setStorageFolder: setStorageFolder needs a path|boolean");
     }
 
     struct Temp(PathBuf);

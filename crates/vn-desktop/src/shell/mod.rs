@@ -191,48 +191,31 @@ pub fn fail_from_io(e: &std::io::Error, what: &str, target: &str) -> Fail {
     }
 }
 
-fn token_json(token: u32) -> String {
-    format!("{{\"token\":{token}}}")
+pub fn start_open_external(url: &str, content: bool) -> Result<u32, Fail> {
+    Ok(submit(Op::OpenExternal(validate_external(url, content)?)))
 }
 
-pub fn start_open_external(url: &str, content: bool) -> String {
-    match validate_external(url, content) {
-        Ok(url) => token_json(submit(Op::OpenExternal(url))),
-        Err(f) => f.to_sync_json(),
-    }
-}
-
-pub fn start_open_path(path: &str, allow_executable: bool) -> String {
-    let p = match validate_path(path, "openPath") {
-        Ok(p) => p,
-        Err(f) => return f.to_sync_json(),
-    };
+pub fn start_open_path(path: &str, allow_executable: bool) -> Result<u32, Fail> {
+    let p = validate_path(path, "openPath")?;
     if !allow_executable && is_executable(&p, std::env::var("PATHEXT").ok().as_deref()) {
-        return Fail::new(
+        return Err(Fail::new(
             "NotAllowedError",
             format!(
                 "openPath refused {path:?}: it is a program or a script, and opening it would run it — \
                  pass {{ allowExecutable: true }} if that is intended"
             ),
         )
-        .code("EEXECUTABLE")
-        .to_sync_json();
+        .code("EEXECUTABLE"));
     }
-    token_json(submit(Op::OpenPath(p)))
+    Ok(submit(Op::OpenPath(p)))
 }
 
-pub fn start_show_item(path: &str) -> String {
-    match validate_path(path, "showItemInFolder") {
-        Ok(p) => token_json(submit(Op::ShowItem(p))),
-        Err(f) => f.to_sync_json(),
-    }
+pub fn start_show_item(path: &str) -> Result<u32, Fail> {
+    Ok(submit(Op::ShowItem(validate_path(path, "showItemInFolder")?)))
 }
 
-pub fn start_trash(path: &str) -> String {
-    match validate_path(path, "trashItem") {
-        Ok(p) => token_json(submit(Op::Trash(p))),
-        Err(f) => f.to_sync_json(),
-    }
+pub fn start_trash(path: &str) -> Result<u32, Fail> {
+    Ok(submit(Op::Trash(validate_path(path, "trashItem")?)))
 }
 
 struct Job {
@@ -383,12 +366,9 @@ mod tests {
 
     #[test]
     fn a_refused_call_answers_synchronously_without_a_token() {
-        let v: serde_json::Value = serde_json::from_str(&start_open_external("file:///x", false)).unwrap();
-        assert_eq!(v["name"], "TypeError");
-        assert!(v.get("token").is_none());
+        assert_eq!(start_open_external("file:///x", false).unwrap_err().name, "TypeError");
         let setup = if cfg!(windows) { r"C:\x\setup.exe" } else { "/x/setup.exe" };
-        let v: serde_json::Value = serde_json::from_str(&start_open_path(setup, false)).unwrap();
-        assert_eq!(v["name"], "NotAllowedError");
-        assert_eq!(v["code"], "EEXECUTABLE");
+        let f = start_open_path(setup, false).unwrap_err();
+        assert_eq!((f.name, f.code), ("NotAllowedError", Some("EEXECUTABLE")));
     }
 }

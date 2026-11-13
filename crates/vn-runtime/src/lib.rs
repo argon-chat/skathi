@@ -13,6 +13,7 @@
 
 pub mod bridge;
 pub mod frames;
+pub mod host;
 pub mod runtime;
 pub mod testing;
 

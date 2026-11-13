@@ -34,7 +34,6 @@ pub mod power;
 pub mod share;
 pub mod shell;
 pub mod tray;
-#[cfg(target_os = "windows")]
 mod web;
 #[cfg(target_os = "windows")]
 pub mod webauthn;
@@ -204,7 +203,7 @@ unsafe fn src_inflight(g: *mut c_void) -> bool {
 }
 
 unsafe fn src_ready(g: *mut c_void) -> bool {
-    is_ours(g) && SETTLES_QUEUED.load(Ordering::Acquire) != 0 && DISPATCHER.with(|d| d.get()) != 0
+    is_ours(g) && SETTLES_QUEUED.load(Ordering::Acquire) != 0
 }
 
 unsafe fn src_drain(g: *mut c_void) -> usize {
@@ -233,7 +232,6 @@ unsafe fn src_drain(g: *mut c_void) -> usize {
 }
 
 fn deliver(g: *mut c_void, token: u32, ok: bool, payload: &str, make: Option<Maker>) {
-    #[cfg(target_os = "windows")]
     if unsafe { web::deliver(g, token, ok, payload) } {
         return;
     }
@@ -305,34 +303,6 @@ host_fn!(fn vn_desktop_set_dispatcher(g, args) {
     Value::undefined().0
 });
 
-host_fn!(fn vn_shell_open_external(g, args) {
-    let url = read_arg_string(g, args.arg(0).0);
-    let content = args.arg(1).as_bool().unwrap_or(true);
-    js_string(&shell::start_open_external(&url, content))
-});
-
-host_fn!(fn vn_shell_open_path(g, args) {
-    let path = read_arg_string(g, args.arg(0).0);
-    let allow = args.arg(1).as_bool().unwrap_or(false);
-    js_string(&shell::start_open_path(&path, allow))
-});
-
-host_fn!(fn vn_shell_show_item(g, args) {
-    let path = read_arg_string(g, args.arg(0).0);
-    js_string(&shell::start_show_item(&path))
-});
-
-host_fn!(fn vn_shell_trash(g, args) {
-    let path = read_arg_string(g, args.arg(0).0);
-    js_string(&shell::start_trash(&path))
-});
-
-host_fn!(fn vn_desktop_get_screen_sources(g, args) {
-    let types = read_arg_string(g, args.arg(0).0);
-    let options = read_arg_string(g, args.arg(1).0);
-    js_string(&capture::start_sources(&types, &options))
-});
-
 fn arg_id(args: &vn_runtime::redjs::api::HostArgs, i: u32) -> u64 {
     args.arg(i).as_number().filter(|n| n.is_finite() && *n >= 0.0).map(|n| n as u64).unwrap_or(0)
 }
@@ -358,7 +328,7 @@ unsafe fn drop_handle_hook(g: *mut c_void, path: &std::path::Path, is_dir: bool)
     make_handle(g, &fs::granted_handle_json(path.to_path_buf(), kind))
 }
 
-unsafe fn make_handle(g: *mut c_void, wire: &serde_json::Value) -> Result<u64, u64> {
+pub(crate) unsafe fn make_handle(g: *mut c_void, wire: &serde_json::Value) -> Result<u64, u64> {
     use vn_runtime::redjs::webapi::util;
     let factory = HANDLE_FACTORY.with(|h| h.get());
     let id = wire["h"].as_u64().unwrap_or(0);
@@ -529,37 +499,9 @@ host_fn!(fn vn_download(g, args) {
     js_string(&dialog::start_download(data, name))
 });
 
-host_fn!(fn vn_launch_info(_g, _args) {
-    js_string(&launch::info_json())
-});
-
-host_fn!(fn vn_launch_register_protocol(g, args) {
-    let scheme = read_arg_string(g, args.arg(0).0);
-    js_string(&launch::js_register(&scheme))
-});
-
-host_fn!(fn vn_launch_unregister_protocol(g, args) {
-    let scheme = read_arg_string(g, args.arg(0).0);
-    Value::boolean(launch::js_unregister(&scheme)).0
-});
-
-host_fn!(fn vn_launch_is_protocol_registered(g, args) {
-    let scheme = read_arg_string(g, args.arg(0).0);
-    Value::boolean(launch::js_is_registered(&scheme)).0
-});
-
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_desktop_set_dispatcher", 1, vn_desktop_set_dispatcher as *const _),
-        ("__vn_desktop_get_screen_sources", 2, vn_desktop_get_screen_sources as *const _),
-        ("__vn_shell_open_external", 2, vn_shell_open_external as *const _),
-        ("__vn_shell_open_path", 2, vn_shell_open_path as *const _),
-        ("__vn_shell_show_item", 1, vn_shell_show_item as *const _),
-        ("__vn_shell_trash", 1, vn_shell_trash as *const _),
-        ("__vn_launch_info", 0, vn_launch_info as *const _),
-        ("__vn_launch_register_protocol", 1, vn_launch_register_protocol as *const _),
-        ("__vn_launch_unregister_protocol", 1, vn_launch_unregister_protocol as *const _),
-        ("__vn_launch_is_protocol_registered", 1, vn_launch_is_protocol_registered as *const _),
         ("__vn_fs_set_handle_factory", 1, vn_fs_set_handle_factory as *const _),
         ("__vn_fs_release", 1, vn_fs_release as *const _),
         ("__vn_fs_get_file", 1, vn_fs_get_file as *const _),
@@ -586,10 +528,7 @@ pub fn install(rt: &JsRuntime) {
         rt.register(name, *arity, *f);
     }
     let g = rt.raw();
-    #[cfg(target_os = "windows")]
-    unsafe {
-        web::install(g)
-    };
+    unsafe { web::install(g) };
     RT_G.store(g as usize, Ordering::Release);
     if let Some(id) = vn_runtime::redjs::context::id_of(g) {
         RT_ID.store(id.0, Ordering::Release);
@@ -603,13 +542,13 @@ pub fn install(rt: &JsRuntime) {
 }
 
 pub fn pump() {
-    let dispatcher = DISPATCHER.with(|d| d.get());
+    let installed = RT_G.load(Ordering::Acquire) != 0;
     let batch: Vec<Item> = {
         let Ok(mut q) = QUEUE.try_lock() else { return };
         if q.is_empty() {
             return;
         }
-        if dispatcher == 0 {
+        if !installed {
             let mut logs = Vec::new();
             q.retain(|item| match item {
                 Item::Log { kind, text } => {

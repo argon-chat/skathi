@@ -7491,6 +7491,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "redjs",
+ "serde_json",
 ]
 
 [[package]]
@@ -7513,6 +7514,7 @@ dependencies = [
  "oo7",
  "ring",
  "security-framework",
+ "serde_json",
  "vn-runtime",
  "windows 0.62.2",
 ]

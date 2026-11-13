@@ -1,19 +1,18 @@
-//! Platform backends for `navigator.permissions` and the `__vn_permissions_*` host fns behind
-//! vue-native's `appPermissions`. `appPermissions.request(name)` is an extension (the web has no
-//! standalone request) and adds a fourth state, `unsupported`.
+//! Platform backends for `navigator.permissions` and vue-native's `appPermissions`.
+//! `appPermissions.request(name)` is an extension (the web has no standalone request) and adds a
+//! fourth state, `unsupported`.
 
-use std::ffi::c_void;
-
-use vn_runtime::redjs::api::Value;
 use vn_runtime::redjs::webapi::permissions::{
     self as api, Capability, PermissionHost, PermissionState, RequestOutcome,
 };
-use vn_runtime::redjs::webapi::util::read_string;
-use vn_runtime::{host_fn, JsRuntime};
+use vn_runtime::JsRuntime;
 
 pub mod consent;
 pub mod decisions;
+mod js;
 pub mod stub;
+
+pub use js::request as request_promise;
 
 #[cfg(target_os = "windows")]
 pub mod win;
@@ -28,10 +27,6 @@ pub use consent::{set_app_name, set_asker, set_camera_capture, Asker, Question};
 pub use vn_runtime::redjs::webapi::permissions::{Capability as Cap, PermissionState as State};
 
 const DRAIN_CAP: usize = 16;
-
-thread_local! {
-    static DISPATCHER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
 
 /// The backend for this build: the platform's, with the app's own prompt on top ([`consent`]).
 fn backend() -> &'static consent::AppConsent {
@@ -256,74 +251,11 @@ fn platform() -> &'static dyn PermissionHost {
     }
 }
 
-host_fn!(fn vn_permissions_platform(_g, _args) {
-    let name = api::host().map(|h| h.platform()).unwrap_or("this platform");
-    JsRuntime::with(|rt| rt.ctx().string(name).0)
-});
-
-host_fn!(fn vn_permissions_query(g, args) {
-    let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let state = Capability::from_web_name(&name).map(state_of).map(PermissionState::as_str).unwrap_or("");
-    JsRuntime::with(|rt| rt.ctx().string(state).0)
-});
-
-host_fn!(fn vn_permissions_list(_g, _args) {
-    let mut s = String::from("[");
-    for (i, cap) in Capability::ALL.iter().copied().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        let state = state_of(cap);
-        let by_system = state == PermissionState::Denied && api::host().is_some_and(|h| h.denied_by_system(cap));
-        s.push_str(&format!(
-            "{{\"name\":\"{}\",\"state\":\"{}\",\"canRequest\":{},\"deniedBySystem\":{}}}",
-            cap.web_name(),
-            state.as_str(),
-            can_request_state(state),
-            by_system,
-        ));
-    }
-    s.push(']');
-    JsRuntime::with(|rt| rt.ctx().string(&s).0)
-});
-
-host_fn!(fn vn_permissions_request(g, args) {
-    let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let json = request_json(&name, api::host());
-    JsRuntime::with(|rt| rt.ctx().string(&json).0)
-});
-
-fn request_json(name: &str, host: Option<&dyn PermissionHost>) -> String {
-    match Capability::from_web_name(name) {
-        None => format!("{{\"error\":{}}}", json_string(&format!("{name} is not a permission name"))),
-        Some(cap) => match host {
-            None => format!("{{\"state\":\"{}\"}}", PermissionState::Unsupported.as_str()),
-            Some(h) => match h.request(cap) {
-                RequestOutcome::Settled(st) => format!("{{\"state\":\"{}\"}}", st.as_str()),
-                RequestOutcome::Pending(token) => format!("{{\"token\":{token}}}"),
-            },
-        },
-    }
-}
-
-host_fn!(fn vn_permissions_hint(g, args) {
-    let name = unsafe { read_string(g, args.arg(0).0) }.unwrap_or_default();
-    let hint = Capability::from_web_name(&name).and_then(refusal_hint).unwrap_or_default();
-    JsRuntime::with(|rt| rt.ctx().string(&hint).0)
-});
-
-host_fn!(fn vn_permissions_set_dispatcher(g, args) {
-    let f = args.arg(0);
-    unsafe { vn_runtime::redjs::ffi::redjs_protect(g, f.0) };
-    if let Some(old) = replace_dispatcher(f.0) {
-        unsafe { vn_runtime::redjs::ffi::redjs_unprotect(g, old) };
-    }
-    Value::undefined().0
-});
-
-fn replace_dispatcher(new: u64) -> Option<u64> {
-    let old = DISPATCHER.with(|d| d.replace(new));
-    (old != 0 && old != new).then_some(old)
+/// `(state, canRequest, deniedBySystem)` for `cap`.
+pub fn describe(cap: Capability) -> (PermissionState, bool, bool) {
+    let state = state_of(cap);
+    let by_system = state == PermissionState::Denied && api::host().is_some_and(|h| h.denied_by_system(cap));
+    (state, can_request_state(state), by_system)
 }
 
 fn state_of(cap: Capability) -> PermissionState {
@@ -337,26 +269,12 @@ fn can_request_state(state: PermissionState) -> bool {
 pub fn install(rt: &JsRuntime) {
     let host: &'static dyn PermissionHost = backend();
     api::set_host(host);
-    let fns: &[(&str, u32, *const c_void)] = &[
-        ("__vn_permissions_platform", 0, vn_permissions_platform as *const _),
-        ("__vn_permissions_query", 1, vn_permissions_query as *const _),
-        ("__vn_permissions_list", 0, vn_permissions_list as *const _),
-        ("__vn_permissions_request", 1, vn_permissions_request as *const _),
-        ("__vn_permissions_hint", 1, vn_permissions_hint as *const _),
-        ("__vn_permissions_set_dispatcher", 1, vn_permissions_set_dispatcher as *const _),
-    ];
-    for (name, arity, f) in fns {
-        rt.register(name, *arity, *f);
-    }
+    unsafe { js::install(rt.raw()) };
 }
 
 /// Settles finished requests into JS, inside the frame's Commit publication.
 pub fn pump() {
-    let dispatcher = DISPATCHER.with(|d| d.get());
-    if dispatcher == 0 {
-        return;
-    }
-    if api::host().is_none() {
+    if !js::installed() || api::host().is_none() {
         return;
     }
     // Not the host's `drain_settled`: that queue also carries requests redjs settles itself.
@@ -364,19 +282,10 @@ pub fn pump() {
     if settled.is_empty() {
         return;
     }
-
     JsRuntime::with(|rt| {
-        for (token, state) in settled {
-            let st = rt.ctx().string(state.as_str());
-            let args = [Value::int32(token as i32), st];
-            if let Err(vn_runtime::redjs::api::Error::Exception(e)) =
-                rt.ctx().call(Value(dispatcher), Value::undefined(), &args)
-            {
-                let err = rt.describe(e);
-                eprintln!("[permissions dispatch] {}\n{}", err.header, err.stack);
-            }
+        if unsafe { js::settle(rt.raw(), settled) } {
+            rt.ctx().drain_microtasks();
         }
-        rt.ctx().drain_microtasks();
     });
 }
 
@@ -536,28 +445,6 @@ mod tests {
         assert_eq!(refusal_message(true, Some("Turn it on.".into())), "Permission denied by system. Turn it on.");
         assert_eq!(refusal_message(true, None), "Permission denied by system");
         assert_eq!(refusal_message(false, Some("Turn it on.".into())), "Permission denied");
-    }
-
-    #[test]
-    fn a_request_for_an_unknown_name_answers_an_escaped_error() {
-        let json = request_json("mic\",\"state\":\"granted", None);
-        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-        let obj = v.as_object().unwrap();
-        assert_eq!(obj.len(), 1, "no field injected: {json}");
-        assert_eq!(obj["error"], "mic\",\"state\":\"granted is not a permission name");
-        assert_eq!(request_json("microphone", None), "{\"state\":\"unsupported\"}");
-        let h = StubHost::scripted("test", &[(Capability::Camera, PermissionState::Granted)]);
-        assert_eq!(request_json("camera", Some(&h)), "{\"state\":\"granted\"}");
-    }
-
-    #[test]
-    fn a_new_dispatcher_lets_the_old_one_go() {
-        // A reload sets a second dispatcher: the first must be unprotected, the same one must not be.
-        assert_eq!(replace_dispatcher(11), None);
-        assert_eq!(replace_dispatcher(11), None, "the same function is kept");
-        assert_eq!(replace_dispatcher(12), Some(11));
-        assert_eq!(DISPATCHER.with(|d| d.get()), 12);
-        DISPATCHER.with(|d| d.set(0));
     }
 
     #[test]

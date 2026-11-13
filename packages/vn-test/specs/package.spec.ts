@@ -227,7 +227,7 @@ describe("a packaged hello", () => {
   test(
     "localStorage lives under %LOCALAPPDATA%\\<vn.config name>\\storage, not the exe's name",
     async () => {
-      const info = JSON.parse(await app.eval("__vn_storage_info()"));
+      const info = JSON.parse(await app.eval("JSON.stringify(__VN_STORAGE__.info())"));
       bunExpect(info.folder.toLowerCase().endsWith("\\hello\\storage")).toBe(true);
       bunExpect(info.folder.toLowerCase()).not.toContain("vn-app-vntest");
     },
@@ -263,22 +263,24 @@ describe("two packaged apps side by side", () => {
       opened.push(shadcn);
       try {
         bunExpect(hello.slotDir).not.toBe(shadcn.slotDir);
-        const hi = JSON.parse(await hello.eval("__vn_storage_info()"));
-        const sh = JSON.parse(await shadcn.eval("__vn_storage_info()"));
+        const hi = JSON.parse(await hello.eval("JSON.stringify(__VN_STORAGE__.info())"));
+        const sh = JSON.parse(await shadcn.eval("JSON.stringify(__VN_STORAGE__.info())"));
         bunExpect(sh.folder.toLowerCase().endsWith("\\shadcn\\storage")).toBe(true);
         bunExpect(hi.folder).not.toBe(sh.folder);
 
-        await hello.eval(`localStorage.setItem(${JSON.stringify(PROBE_KEY)}, 'from hello'); __vn_storage_flush()`);
+        await hello.eval(`localStorage.setItem(${JSON.stringify(PROBE_KEY)}, 'from hello'); __VN_STORAGE__.flush()`);
         bunExpect(await hello.eval(`localStorage.getItem(${JSON.stringify(PROBE_KEY)})`)).toBe("from hello");
         bunExpect(await shadcn.eval(`String(localStorage.getItem(${JSON.stringify(PROBE_KEY)}))`)).toBe("null");
-        const after = JSON.parse(await hello.eval("__vn_storage_info()"));
+        const after = JSON.parse(await hello.eval("JSON.stringify(__VN_STORAGE__.info())"));
         if (!after.encrypted) {
           bunExpect(readFileSync(after.file, "utf8")).toContain(PROBE_KEY);
-          const shFile = JSON.parse(await shadcn.eval("__vn_storage_info()")).file;
+          const shFile = JSON.parse(await shadcn.eval("JSON.stringify(__VN_STORAGE__.info())")).file;
           bunExpect(existsSync(shFile) ? readFileSync(shFile, "utf8") : "").not.toContain(PROBE_KEY);
         }
       } finally {
-        await hello.eval(`localStorage.removeItem(${JSON.stringify(PROBE_KEY)}); __vn_storage_flush()`).catch(() => {});
+        await hello
+          .eval(`localStorage.removeItem(${JSON.stringify(PROBE_KEY)}); __VN_STORAGE__.flush()`)
+          .catch(() => {});
         await hello.close();
         await shadcn.close();
       }

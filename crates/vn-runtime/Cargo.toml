@@ -31,3 +31,4 @@ net-h2 = ["redjs/net-h2"]
 # `svg-images` and `canvas` are always on.
 redjs = { path = "../../vendor/redjs/redjs", default-features = false, features = ["svg-images", "canvas"] }
 gpui = { path = "../../vendor/zed/crates/gpui", default-features = false }
+serde_json = "1"

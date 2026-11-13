@@ -125,7 +125,7 @@ describe("IndexedDB in a Vue app", () => {
   test(
     "the databases are on disk under the storage folder, and nothing says 'memory only'",
     async () => {
-      const info = JSON.parse((await app.eval("__vn_storage_info()")) as string) as {
+      const info = JSON.parse((await app.eval("JSON.stringify(__VN_STORAGE__.info())")) as string) as {
         folder: string;
         indexedDB: { folder: string; started: boolean; mode: string };
       };

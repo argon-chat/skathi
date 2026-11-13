@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 # `StorageHost` lives in redjs (`redjs::webapi::storage`); this crate supplies only the bytes.
 vn-runtime = { path = "../vn-runtime", default-features = false, features = ["storages"] }
+serde_json = "1"
 
 [features]
 # IndexedDB on disk (src/idb.rs), encrypted at rest whenever the storage is.

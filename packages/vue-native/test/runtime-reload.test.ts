@@ -86,7 +86,6 @@ describe("a same-realm reload", () => {
       "DOMRect",
       "SubmitEvent",
       "ClipboardEvent",
-      "launchQueue",
     ];
     const before = Object.fromEntries(names.map((n) => [n, g[n]]));
     for (const n of names) expect([n, typeof before[n]]).not.toEqual([n, "undefined"]);
@@ -190,20 +189,5 @@ describe("a same-realm reload", () => {
     expect(
       first.advisories().some((l: string) => l.includes("1 global(s) the old app declared cannot be deleted")),
     ).toBe(true);
-  });
-
-  test("the process's own launch reaches launchQueue once, not again after a reload", async () => {
-    const launch = { url: "argon://invite/abc" };
-    const first = createRuntime({ launch });
-    const got: unknown[] = [];
-    const lq = () => first.global.launchQueue as { setConsumer(fn: (p: { targetURL: unknown }) => void): void };
-    lq().setConsumer((p) => got.push(p.targetURL));
-    await Promise.resolve();
-    expect(got).toEqual(["argon://invite/abc"]);
-    (first.global.__VN_UNLOAD__ as () => void)();
-    createRuntime({ realm: first.global, launch });
-    lq().setConsumer((p) => got.push(p.targetURL));
-    await new Promise((r) => setTimeout(r, 5));
-    expect(got).toEqual(["argon://invite/abc"]);
   });
 });

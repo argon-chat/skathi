@@ -326,22 +326,6 @@ type VnPermissionState = "granted" | "denied" | "prompt" | "unsupported";
 type VnPermissionName =
   "microphone" | "camera" | "display-capture" | "notifications" | "clipboard-read" | "clipboard-write" | "geolocation";
 
-declare function __vn_permissions_platform(): string;
-declare function __vn_permissions_query(name: string): VnPermissionState | "";
-declare function __vn_permissions_list(): VnJson;
-/** Starts a request: `{ "error" }` (not a permission name), `{ "state" }` (settled synchronously) or `{ "token" }` (settled later through the dispatcher). */
-declare function __vn_permissions_request(name: string): VnJson;
-/** Where the user turns a refused permission back on (macOS screen recording); `""` where the platform adds nothing. */
-declare function __vn_permissions_hint(name: string): string;
-declare function __vn_permissions_set_dispatcher(fn: (token: number, state: VnPermissionState) => void): void;
-
-/** `{ path }` or `{ error }`. Creates nothing — a path is not a directory. */
-declare function __vn_storage_user_folder(kind: string, subfolder: string): VnJson;
-/** Points `localStorage` at `path`, creating it. `"keep"`: the app did not say, so the format stays (encryption is sticky). */
-declare function __vn_storage_set_folder(path: string, encrypted: "true" | "false" | "keep"): VnJson;
-declare function __vn_storage_info(): VnJson;
-declare function __vn_storage_flush(): VnJson;
-
 // appHost: registered ONLY when another program embeds vue-native; otherwise `appHost.available` is false.
 
 /** The one callback calls settle and events arrive through: `(token, ok, text)`. Token `0` is an event (`text` is `{"event", "data"}`); else `ok` true means `text` is the JSON result, false the host's message. */
@@ -350,22 +334,10 @@ declare function __vn_host_call(name: string, argsJson: string): number;
 declare function __vn_host_functions(): string;
 declare const __VN_HOST__: import("./apphost").AppHost;
 
-/** The one callback the per-frame pump settles every desktop call through: `(token, ok, payloadJson, value)`. `ok` false: `payloadJson` is `{ name, message, code?, osError? }`. `value` is a JS value the host made (a path-backed `File`, a `FileList`). Token `0` is an UNSOLICITED host event whose `payload.kind` names it (`"launch"`). */
+/** The one callback the per-frame pump settles File System Access calls through: `(token, ok, payloadJson, value)`. `ok` false: `payloadJson` is `{ name, message, code?, osError? }`. `value` is a JS value the host made (a path-backed `File`, a `FileList`). */
 declare function __vn_desktop_set_dispatcher(
   fn: (token: number, ok: boolean, payloadJson: VnJson, value: unknown) => void,
 ): void;
-/** `{ token }`, or a synchronous refusal `{ error, name, code? }`. `content` true is the `<a href>` / `window.open` path (http, https, mailto only); false (`appShell.openExternal`) takes any scheme but `file:`. */
-declare function __vn_shell_open_external(url: string, content: boolean): VnJson;
-/** `{ token }` or `{ error, name, code? }`. Executables refused unless `allowExecutable`. */
-declare function __vn_shell_open_path(path: string, allowExecutable: boolean): VnJson;
-declare function __vn_shell_show_item(path: string): VnJson;
-declare function __vn_shell_trash(path: string): VnJson;
-/** This process's launch, resolved before the window existed: `{ argv, cwd, url, paths, singleInstance, id, name }`. Forwarded launches arrive later as token-0 `kind: "launch"` events. */
-declare function __vn_launch_info(): VnJson;
-/** Registers `scheme://` for this exe under HKCU: `{ ok, wrote, scheme }`, or `{ error, name: "TypeError" }` (invalid, reserved, foreign-owned). */
-declare function __vn_launch_register_protocol(scheme: string): VnJson;
-declare function __vn_launch_unregister_protocol(scheme: string): boolean;
-declare function __vn_launch_is_protocol_registered(scheme: string): boolean;
 
 // File System Access and dialogs: every handle argument is a NUMBER into the host's handle table (no path crosses).
 // `{ token }` answers settle through the dispatcher above; `{ error, name, code? }` is a synchronous refusal.
@@ -399,7 +371,6 @@ declare function __vn_fs_permission(h: number, request: boolean): "granted" | "p
 declare function __vn_dialog_open(requestJson: VnJson, currentFiles: unknown): VnJson;
 /** Save As for a `blob:`/`data:` URL, resolved at the call. Settles `{ saved }` or `{ cancelled }`. */
 declare function __vn_download(url: string, downloadAttribute: string): VnJson;
-declare function __vn_desktop_get_screen_sources(typesJson: string, optionsJson: string): VnJson;
 
 /** Every SFC's `<style>` block, collected at module-eval time and joined into the first stylesheet by `mount()`. */
 declare var __VN_CSS__: string[] | undefined;
