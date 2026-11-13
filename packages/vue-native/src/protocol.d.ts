@@ -400,6 +400,10 @@ declare function __vn_dialog_open(requestJson: VnJson, currentFiles: unknown): V
 /** Save As for a `blob:`/`data:` URL, resolved at the call. Settles `{ saved }` or `{ cancelled }`. */
 declare function __vn_download(url: string, downloadAttribute: string): VnJson;
 declare function __vn_desktop_get_screen_sources(typesJson: string, optionsJson: string): VnJson;
+/** `-1` a flag, `0` none, otherwise the count. Windows only, like the next one. */
+declare function __vn_badge_set(contents: number): void;
+/** Takes or drops the keep-the-screen-on request; false when the system refused. */
+declare function __vn_wake_lock_hold(on: boolean): boolean;
 
 /** Every SFC's `<style>` block, collected at module-eval time and joined into the first stylesheet by `mount()`. */
 declare var __VN_CSS__: string[] | undefined;

@@ -18,12 +18,16 @@ use vn_runtime::redjs::api::Value;
 use vn_runtime::{host_fn, JsRuntime};
 
 pub mod args;
+#[cfg(target_os = "windows")]
+pub mod badge;
 pub mod capture;
 pub mod dialog;
 pub mod fs;
 pub mod launch;
 pub mod network;
 mod pool;
+#[cfg(target_os = "windows")]
+pub mod power;
 pub mod shell;
 pub mod tray;
 
@@ -532,6 +536,20 @@ host_fn!(fn vn_launch_is_protocol_registered(g, args) {
     Value::boolean(launch::js_is_registered(&scheme)).0
 });
 
+#[cfg(target_os = "windows")]
+host_fn!(fn vn_badge_set(_g, args) {
+    let contents = args.arg(0).as_number().filter(|n| n.is_finite()).unwrap_or(0.0) as i64;
+    if let Some(owner) = dialog::current_owner() {
+        badge::set(owner.hwnd, contents);
+    }
+    Value::undefined().0
+});
+
+#[cfg(target_os = "windows")]
+host_fn!(fn vn_wake_lock_hold(_g, args) {
+    Value::boolean(power::hold_screen(args.arg(0).as_bool().unwrap_or(false))).0
+});
+
 pub fn install(rt: &JsRuntime) {
     let fns: &[(&str, u32, *const c_void)] = &[
         ("__vn_desktop_set_dispatcher", 1, vn_desktop_set_dispatcher as *const _),
@@ -568,6 +586,11 @@ pub fn install(rt: &JsRuntime) {
     ];
     for (name, arity, f) in fns {
         rt.register(name, *arity, *f);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        rt.register("__vn_badge_set", 1, vn_badge_set as *const _);
+        rt.register("__vn_wake_lock_hold", 1, vn_wake_lock_hold as *const _);
     }
     let g = rt.raw();
     RT_G.store(g as usize, Ordering::Release);

@@ -27,6 +27,9 @@ import {
 } from "@vue/runtime-core";
 import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
 import { installDesktop } from "./desktop";
+import { installBadge } from "./badge";
+import { installWakeLock } from "./wakelock";
+import type { WakeLockDeps } from "./wakelock";
 import "./apphost";
 import type { DesktopApi, DesktopEngine, DesktopFsHost, DesktopSettle, HandleWire } from "./desktop";
 import { adoptCanvas } from "./canvas";
@@ -9923,6 +9926,30 @@ const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<st
   activation,
   realm: { vacant, mark },
 });
+
+if (typeof navigator !== "undefined" && navigator) {
+  if (typeof __vn_badge_set === "function" && vacant(navigator, "setAppBadge")) {
+    installBadge(navigator, { set: __vn_badge_set });
+  }
+  if (typeof __vn_wake_lock_hold === "function" && vacant(navigator, "wakeLock")) {
+    let hidden = false;
+    const hiddenListeners: (() => void)[] = [];
+    const hide = (): void => {
+      hidden = true;
+      for (const fn of hiddenListeners) fn();
+    };
+    (globalThis as unknown as Partial<VnEventTarget>).addEventListener?.("pagehide", hide);
+    const appWindow = globalThis.__VN_WINDOW__?.appWindow;
+    appWindow?.addEventListener("minimize", hide);
+    appWindow?.addEventListener("restore", () => void (hidden = false));
+    installWakeLock(navigator, {
+      host: { hold: __vn_wake_lock_hold },
+      engine: globalThis as unknown as WakeLockDeps["engine"],
+      isHidden: () => hidden || appWindow?.isMinimized() === true,
+      onHidden: (fn) => void hiddenListeners.push(fn),
+    });
+  }
+}
 
 /**
  * Hands a content URL to the system. The caller's allowlist is applied again by the host, so

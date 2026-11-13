@@ -398,6 +398,10 @@ pub fn set_owner_resolver(f: fn() -> Option<Owner>) {
     let _ = RESOLVER.set(f);
 }
 
+pub(crate) fn current_owner() -> Option<Owner> {
+    RESOLVER.get().and_then(|f| f())
+}
+
 #[derive(Default)]
 struct OwnerState {
     closed: AtomicBool,
