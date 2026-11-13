@@ -4,7 +4,7 @@
 // build-app.ts's `PACKAGERS`. Any OS that is not macOS keeps the Windows row.
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ConfigError } from "./config";
 
 export type Platform = "windows" | "macos";
@@ -53,6 +53,10 @@ export function hostsFor(platform: Platform, arch: string = process.arch): Platf
   };
 }
 
+/** Where cargo puts the checkout's host: under CARGO_TARGET_DIR when that is set, as cargo does. */
 export function repoHostExe(repoRoot: string, hosts: PlatformHosts, profile: "release" | "debug"): string {
-  return join(repoRoot, "target", hosts.triple, profile, hosts.exeFile);
+  const target = process.env.CARGO_TARGET_DIR
+    ? resolve(repoRoot, process.env.CARGO_TARGET_DIR)
+    : join(repoRoot, "target");
+  return join(target, hosts.triple, profile, hosts.exeFile);
 }

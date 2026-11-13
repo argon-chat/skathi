@@ -24,21 +24,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  hosts:
-    name: Hosts (${{ matrix.platform }})
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - platform: windows
-            os: windows-latest
-          - platform: macos
-            os: macos-latest
-    runs-on: ${{ matrix.os }}
+  windows:
+    name: Hosts (Windows x64)
+    runs-on: [self-hosted, Windows]
     timeout-minutes: 180
     defaults:
       run:
-        shell: bash
+        shell: pwsh
+    env:
+      # Outside the workspace: checkout's clean would otherwise drop the incremental build.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../vue-native-release-target
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -48,61 +43,97 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Discover installed LLVM
+        run: |
+          $llvm = Join-Path $env:ProgramFiles 'LLVM/bin'
+          if (Test-Path -LiteralPath $llvm) { Add-Content -LiteralPath $env:GITHUB_PATH -Value $llvm }
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --target x86_64-pc-windows-msvc
       - name: Install JS dependencies
         working-directory: packages/vue-native
         run: bun install --frozen-lockfile
       - name: Check the tag
-        run: bun packages/vue-native/scripts/release-hosts.ts --check-tag "$TAG"
-      - name: Put clang-cl on PATH
-        if: matrix.platform == 'windows'
-        run: command -v clang-cl || echo "C:\\Program Files\\LLVM\\bin" >> "$GITHUB_PATH"
-      - name: Install Xcode's Metal toolchain
-        if: matrix.platform == 'macos'
-        run: xcrun -f metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
-      - name: Set up Rust
-        run: rustup show active-toolchain || rustup toolchain install
-      - name: Add the macOS target
-        if: matrix.platform == 'macos'
-        run: rustup target add aarch64-apple-darwin
-      - name: Cache pinned native dependencies
+        run: bun packages/vue-native/scripts/release-hosts.ts --check-tag $env:TAG
+      - name: Cache verified native inputs
         uses: actions/cache@v4
         with:
           path: |
             vendor/redjs/prebuilt
             vendor/redjs/redjs/cpp/mimalloc
-          key: redjs-native-${{ matrix.platform }}-${{ runner.arch }}-${{ hashFiles('vendor/redjs/pins.txt') }}
-      - name: Fetch and verify native dependencies (Windows)
-        if: matrix.platform == 'windows'
-        shell: pwsh
+          key: windows-native-inputs-${{ hashFiles('vendor/redjs/pins.txt') }}
+      - name: Fetch and verify native dependencies
         run: ./vendor/redjs/setup.ps1
-      - name: Fetch and verify native dependencies (macOS)
-        if: matrix.platform == 'macos'
-        run: bash vendor/redjs/setup.sh
       - name: Cache the native AOT toolchain
-        if: matrix.platform == 'windows'
         uses: actions/cache@v4
         with:
-          path: .aot-cache
-          key: native-aot-${{ hashFiles('scripts/aot/toolchain.lock.json') }}
+          path: .tools/native-aot
+          key: windows-native-inspector-${{ hashFiles('scripts/aot/toolchain.lock.json', 'scripts/aot/generate-table.ts', 'vendor/redjs/pins.txt') }}
       - name: Prepare the native inspector image
-        if: matrix.platform == 'windows'
-        run: bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .aot-cache --target-dir target
+        run: bun scripts/aot/prepare-inspector.ts --out release-inspector --cache .tools/native-aot --target-dir $env:CARGO_TARGET_DIR
       - name: Build and pack the hosts
         working-directory: packages/vue-native
-        run: |
-          inspector=()
-          if [ -f ../../release-inspector/build.json ]; then inspector=(--native-inspector ../../release-inspector/build.json); fi
-          bun scripts/release-hosts.ts --out ../../release-hosts "${inspector[@]}"
+        run: bun scripts/release-hosts.ts --out ../../release-hosts --native-inspector ../../release-inspector/build.json
       - uses: actions/upload-artifact@v4
         with:
-          name: hosts-${{ matrix.platform }}
+          name: hosts-windows
+          path: release-hosts/
+          if-no-files-found: error
+
+  macos:
+    name: Hosts (macOS arm64)
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 180
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../vue-native-release-target
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Install the pinned Rust toolchain
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install 1.97.1 --profile minimal --target aarch64-apple-darwin
+      - name: Install the Metal toolchain
+        run: xcrun -f metal >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+      - name: Install JS dependencies
+        working-directory: packages/vue-native
+        run: bun install --frozen-lockfile
+      - name: Check the tag
+        run: bun packages/vue-native/scripts/release-hosts.ts --check-tag "$TAG"
+      - name: Cache verified native inputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/redjs/prebuilt
+            vendor/redjs/redjs/cpp/mimalloc
+          key: macos-arm64-native-inputs-${{ hashFiles('vendor/redjs/pins.txt') }}
+      - name: Fetch and verify native dependencies
+        run: bash vendor/redjs/setup.sh
+      - name: Build and pack the hosts
+        working-directory: packages/vue-native
+        run: bun scripts/release-hosts.ts --out ../../release-hosts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hosts-macos
           path: release-hosts/
           if-no-files-found: error
 
   publish:
     name: Publish
-    needs: hosts
-    runs-on: ubuntu-latest
+    needs: [windows, macos]
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
     steps:
@@ -124,9 +155,11 @@ jobs:
       - name: Write hosts.json
         run: bun packages/vue-native/scripts/release-hosts.ts --merge release-hosts
       - name: Create or update the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --verify-tag
-          gh release upload "$TAG" release-hosts/*.gz release-hosts/hosts.json --repo "$GITHUB_REPOSITORY" --clobber
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          generate_release_notes: true
+          overwrite_files: true
+          files: |
+            release-hosts/*.gz
+            release-hosts/hosts.json
