@@ -28,6 +28,7 @@ import {
 import type { App, ComponentPublicInstance, RendererOptions, VNode } from "@vue/runtime-core";
 import { installDesktop } from "./desktop";
 import { installBadge } from "./badge";
+import { installMediaSession } from "./mediasession";
 import { installWakeLock } from "./wakelock";
 import type { WakeLockDeps } from "./wakelock";
 import "./apphost";
@@ -9930,6 +9931,18 @@ const desktopApi: DesktopApi = installDesktop(globalThis as unknown as Record<st
 if (typeof navigator !== "undefined" && navigator) {
   if (typeof __vn_badge_set === "function" && vacant(navigator, "setAppBadge")) {
     installBadge(navigator, { set: __vn_badge_set });
+  }
+  if (typeof __vn_media_session_update === "function" && vacant(navigator, "mediaSession")) {
+    installMediaSession(navigator, {
+      host: { update: __vn_media_session_update },
+      resolveUrl: (src) => new URL(src, (globalThis as { location?: { href: string } }).location?.href).href,
+      fetchBytes: (url) =>
+        (globalThis.fetch as unknown as (u: string) => Promise<{ arrayBuffer(): Promise<ArrayBuffer> }>)(url).then(
+          (r) => r.arrayBuffer(),
+        ),
+      onAction: (fn) => void desktopEvents.set("mediasession", fn),
+      reportError: (e) => (globalThis as { reportError?: (e: unknown) => void }).reportError?.(e),
+    });
   }
   if (typeof __vn_wake_lock_hold === "function" && vacant(navigator, "wakeLock")) {
     let hidden = false;

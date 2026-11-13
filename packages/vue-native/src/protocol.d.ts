@@ -404,6 +404,8 @@ declare function __vn_desktop_get_screen_sources(typesJson: string, optionsJson:
 declare function __vn_badge_set(contents: number): void;
 /** Takes or drops the keep-the-screen-on request; false when the system refused. */
 declare function __vn_wake_lock_hold(on: boolean): boolean;
+/** `{ metadata: { title, artist, album, artworkUrl? } | null, playbackState, actions, position }`; `artwork` the image bytes when it is not http(s). Button presses come back as token-0 `kind: "mediasession"` events. */
+declare function __vn_media_session_update(stateJson: string, artwork: ArrayBuffer | undefined): void;
 
 /** Every SFC's `<style>` block, collected at module-eval time and joined into the first stylesheet by `mount()`. */
 declare var __VN_CSS__: string[] | undefined;
