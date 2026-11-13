@@ -322,9 +322,9 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
   const platform = options.platform ?? currentPlatform();
   const config = loadAppConfig(options.target, { configPath: options.configPath, platform });
   const warnings = [...config.warnings];
-  const variant: Variant = options.variant ?? modeVariant(config, options.mode);
-  partsLeftOut(variant);
-  warnings.push(...variantWarnings(variant));
+  const asked: Variant = options.variant ?? modeVariant(config, options.mode);
+  partsLeftOut(asked);
+  warnings.push(...variantWarnings(asked));
   const outDir = resolve(options.out ?? join(config.appRoot, "dist", ...(options.mode ? [options.mode] : [])));
   const work = join(outDir, ".vn");
   mkdirSync(work, { recursive: true });
@@ -334,7 +334,7 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
     ? null
     : await resolveOrFetchHost({
         host: options.host,
-        variant,
+        variant: asked,
         allowMismatch: options.allowHostMismatch,
         platform,
         log,
@@ -344,7 +344,10 @@ export async function buildApp(options: BuildOptions): Promise<BuildResult> {
       `[vn] host: ${host.exe} (${host.source}; ${host.info.variant}, vue-native ${host.info.vueNative}, ${host.info.profile})`,
     );
     if (host.unverified) warnings.push(host.unverified);
+    if (host.substitute) warnings.push(host.substitute);
   }
+  // The payload names the host it runs on, which a stand-in changes.
+  const variant: Variant = host?.substitute ? host.info.variant : asked;
 
   const jsOut = join(work, "app.prod.js");
   const assetsJson = join(work, "assets.json");

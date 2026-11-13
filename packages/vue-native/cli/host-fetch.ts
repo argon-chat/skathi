@@ -8,7 +8,7 @@
 
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Variant } from "./config";
+import { partsLeftOut, VARIANTS, type Variant } from "./config";
 import {
   CLI_VERSION,
   cachedHost,
@@ -132,14 +132,42 @@ export async function fetchHost(options: FetchOptions): Promise<{ path: string; 
   return { path: dest, info: entry.info };
 }
 
-/** {@link resolveHost}, and when it finds nothing for this OS and no host was named, a download into the cache first. VN_HOST_OFFLINE=1 turns the download off. */
-export async function resolveOrFetchHost(options: ResolveOptions): Promise<ResolvedHost> {
+/**
+ * The published variant that can stand in for `variant`: devtools exactly as asked, and every other
+ * part the app may use, with the fewest extra. A host with a part the app does not use only costs size.
+ */
+export function standIn(variant: Variant, published: readonly Variant[] = VARIANTS): Variant | null {
+  const off = new Set(partsLeftOut(variant));
+  const fits = published.filter((v) => {
+    const o = partsLeftOut(v);
+    return o.includes("devtools") === off.has("devtools") && o.every((p) => off.has(p));
+  });
+  return fits.sort((a, b) => partsLeftOut(b).length - partsLeftOut(a).length)[0] ?? null;
+}
+
+/**
+ * {@link resolveHost}, and when it finds nothing for this OS and no host was named, a download into the
+ * cache first. A variant no release carries falls back to its {@link standIn}, with `substitute` saying
+ * so. VN_HOST_OFFLINE=1 turns the download off.
+ */
+export async function resolveOrFetchHost(options: ResolveOptions): Promise<ResolvedHost & { substitute?: string }> {
   try {
     return resolveHost(options);
   } catch (e) {
     const named = options.host ?? process.env.VN_HOST;
     const cross = (options.platform ?? currentPlatform()) !== currentPlatform();
     if (!(e instanceof HostError) || named || cross || process.env.VN_HOST_OFFLINE === "1") throw e;
+    const instead = VARIANTS.includes(options.variant) ? null : standIn(options.variant);
+    if (instead) {
+      const host = await resolveOrFetchHost({ ...options, variant: instead });
+      const extra = partsLeftOut(instead).length < partsLeftOut(options.variant).length;
+      return {
+        ...host,
+        substitute:
+          `no prebuilt ${options.variant} host: using ${instead}` +
+          (extra ? ", which also carries parts this app leaves out (vn host build makes an exact one)" : ""),
+      };
+    }
     try {
       await fetchHost({ variant: options.variant, ...(options.log && { log: options.log }) });
     } catch (f) {

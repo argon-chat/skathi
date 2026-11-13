@@ -17,7 +17,7 @@ import {
 import { dev } from "./dev";
 import { addHost, buildHost, CLI_VERSION, DEV_HOST, HostError, hostInfo, resolveHost } from "./host";
 import { fetchHost } from "./host-fetch";
-import { create } from "./create";
+import { createCommand } from "./create";
 import { currentPlatform, parsePlatform } from "./platform";
 
 const USAGE = `vn ${CLI_VERSION} — package a vue-native app as a Windows exe or a macOS .app
@@ -42,7 +42,14 @@ usage
   vn host build [selection | --variant both]
                                maintainers, in a checkout: cargo-build the bare host(s)
                                (no selection: standard and no-devtools)
-  vn create <dir> [--name n]   a new app: vn.config.json, src/main.ts, src/App.vue, assets/
+  vn create  [dir] [options]   a new app; in a terminal it asks for what the options leave open
+    --name <n>                 the app's name (default: the directory's)
+    --os windows,macos         what vn publish packages for (default: this OS)
+    --without audio,…          engine parts to leave out (${OPTIONAL.filter((p) => p !== "devtools").join(", ")})
+    --devtools | --no-devtools whether vn publish keeps devtools (default: no)
+    --router | --no-router     vue-router and pinia (asked: yes; with --yes: no)
+    --pm bun|npm|pnpm|yarn     the package manager (default: the one running this, else bun)
+    --yes, -y                  ask nothing; defaults for the rest
 
   [app] is an app directory (default: .), its entry module, or its vn.config.json.
 
@@ -80,7 +87,20 @@ build and publish options
 `;
 
 type Flags = Record<string, string | boolean>;
-const BOOLEAN = new Set(["console", "payload-only", "allow-host-mismatch", "aot-inputs", "help", "json", "no-sign"]);
+const BOOLEAN = new Set([
+  "console",
+  "payload-only",
+  "allow-host-mismatch",
+  "aot-inputs",
+  "help",
+  "json",
+  "no-sign",
+  "yes",
+  "devtools",
+  "no-devtools",
+  "router",
+  "no-router",
+]);
 const REPEATABLE = new Set(["define"]);
 
 function parse(argv: string[]): {
@@ -100,6 +120,7 @@ function parse(argv: string[]): {
       break;
     }
     if (a === "-h") flags.help = true;
+    else if (a === "-y") flags.yes = true;
     else if (a.startsWith("--")) {
       // Split at the FIRST "=" only: `--define=K=V` keeps its own "=".
       const body = a.slice(2);
@@ -265,9 +286,17 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (command === "create") {
-    if (!args[0]) throw new ConfigError("vn create <dir>");
-    create(args[0], { name: typeof flags.name === "string" ? flags.name : undefined });
-    return 0;
+    const str = (k: string) => (typeof flags[k] === "string" ? (flags[k] as string) : undefined);
+    const yesNo = (k: string) => (flags[k] ? true : flags[`no-${k}`] ? false : undefined);
+    return await createCommand(args[0], {
+      name: str("name"),
+      os: str("os"),
+      without: str("without"),
+      devtools: yesNo("devtools"),
+      router: yesNo("router"),
+      pm: str("pm"),
+      yes: flags.yes === true,
+    });
   }
 
   console.error(`unknown command ${JSON.stringify(command)}\n\n${USAGE}`);

@@ -11,10 +11,10 @@ The CLI needs bun, not Rust: the hosts it runs and stamps come from the GitHub r
 version (`vn host fetch`, or on demand) and are cached; `--host <exe>` stamps one of your own.
 
 ```sh
-vn create my-app    # a new app
-vn dev my-app       # run it with hot reload
-vn build my-app     # a debug exe: devtools in, not minified (dist/debug)
-vn publish my-app   # the release exe (dist/release)
+vn create     # a new app, asked for step by step
+vn dev        # in the app: run it with hot reload
+vn build      # a debug exe: devtools in, not minified (dist/debug)
+vn publish    # the release exe (dist/release)
 ```
 
 `vn publish` leaves devtools out unless `vn.config.json` selects the engine parts and keeps them.

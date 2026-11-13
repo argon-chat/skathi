@@ -13,6 +13,7 @@
     "vn": "./cli/vn.ts"
   },
   "dependencies": {
+    "@clack/prompts": "^1.9.0",
     "@vue/compiler-sfc": "^3.5.41",
     "@vue/runtime-core": "^3.5.0",
     "pinia": "^4.0.3",

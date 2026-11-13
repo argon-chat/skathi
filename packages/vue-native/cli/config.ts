@@ -150,6 +150,8 @@ export interface AppConfig {
   iconPath: string | null;
   id: string;
   launch: LaunchConfig;
+  /** The OSes `vn publish` packages for; null: this OS only. */
+  platforms: Platform[] | null;
   warnings: string[];
 }
 
@@ -202,6 +204,7 @@ export interface LaunchConfig {
 
 const TOP_LEVEL = new Set([
   "name",
+  "platforms",
   "productName",
   "version",
   "window",
@@ -626,6 +629,17 @@ export function loadAppConfig(
     iconPath,
     id: launch.id,
     launch,
+    platforms: readPlatforms(raw.platforms),
     warnings,
   };
+}
+
+const PLATFORM_NAMES: readonly Platform[] = ["windows", "macos"];
+
+function readPlatforms(v: unknown): Platform[] | null {
+  if (v === undefined) return null;
+  if (!Array.isArray(v) || !v.length || !v.every((p): p is Platform => PLATFORM_NAMES.includes(p as Platform))) {
+    throw new ConfigError(`vn.config.json "platforms" must be a non-empty list of ${PLATFORM_NAMES.join(", ")}`);
+  }
+  return [...new Set(v)];
 }
