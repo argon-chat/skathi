@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { buildApp } from "../cli/build-app";
 import { ConfigError, loadAppConfig, MACOS_MINIMUM } from "../cli/config";
 import { cachedHost, crossHostInfo, HostError, isStamped, resolveHost } from "../cli/host";
@@ -512,7 +512,6 @@ describe('vn.config.json "macos"', () => {
 describe("hosts per platform", () => {
   test("the Windows row is the paths vn build always used", () => {
     const w = hostsFor("windows", "x64");
-    expect(repoHostExe("R", w, "release")).toBe(join("R", "target", "x86_64-pc-windows-msvc", "release", "vn-app.exe"));
     expect(w.cargoTarget).toEqual([]);
     if (process.env.LOCALAPPDATA) {
       expect(cachedHost("1.2.3", "standard", "windows")).toBe(
@@ -524,12 +523,35 @@ describe("hosts per platform", () => {
   test("macOS: the triple follows the CPU; the cache lives in ~/Library/Caches", () => {
     expect(hostsFor("macos", "arm64").triple).toBe("aarch64-apple-darwin");
     expect(hostsFor("macos", "x64").triple).toBe("x86_64-apple-darwin");
-    const m = hostsFor("macos", "arm64");
-    expect(repoHostExe("R", m, "debug")).toBe(join("R", "target", "aarch64-apple-darwin", "debug", "vn-app"));
-    expect(m.cargoTarget).toEqual(["--target", "aarch64-apple-darwin"]);
+    expect(hostsFor("macos", "arm64").cargoTarget).toEqual(["--target", "aarch64-apple-darwin"]);
     expect(cachedHost("1.2.3", "no-audio", "macos")).toMatch(
       /Library[\\/]Caches[\\/]vue-native[\\/]hosts[\\/]1\.2\.3[\\/]no-audio[\\/]vn-host$/,
     );
+  });
+
+  test("a repo host is under the cargo target dir: <repo>/target, or CARGO_TARGET_DIR when set", () => {
+    const saved = process.env.CARGO_TARGET_DIR;
+    try {
+      delete process.env.CARGO_TARGET_DIR;
+      const w = hostsFor("windows", "x64");
+      expect(repoHostExe("R", w, "release")).toBe(
+        join("R", "target", "x86_64-pc-windows-msvc", "release", "vn-app.exe"),
+      );
+      expect(repoHostExe("R", hostsFor("macos", "arm64"), "debug")).toBe(
+        join("R", "target", "aarch64-apple-darwin", "debug", "vn-app"),
+      );
+      process.env.CARGO_TARGET_DIR = "out";
+      expect(repoHostExe("R", w, "debug")).toBe(
+        join(resolve("R", "out"), "x86_64-pc-windows-msvc", "debug", "vn-app.exe"),
+      );
+      process.env.CARGO_TARGET_DIR = resolve(dir, "shared-target");
+      expect(repoHostExe("R", w, "debug")).toBe(
+        join(dir, "shared-target", "x86_64-pc-windows-msvc", "debug", "vn-app.exe"),
+      );
+    } finally {
+      if (saved === undefined) delete process.env.CARGO_TARGET_DIR;
+      else process.env.CARGO_TARGET_DIR = saved;
+    }
   });
 
   test("--platform spellings", () => {
